@@ -5,6 +5,7 @@ import type { ProfileSamples } from '../api/profileSamples';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
 import { axes } from '../results/chartAxes';
 import { useDesignStore, type DesignDocument } from '../stores/design';
+import { SelectRow } from './SelectRow';
 import { parameterPanelValidity } from './parameterPanelValidity';
 
 type Plane = 'both' | 'H' | 'V';
@@ -81,15 +82,15 @@ export function ProfileInspection({ design, identity, revision, invalidDraft = f
   const error = failure?.key === key ? failure.message : undefined;
   const stale = visible?.key !== key || invalidDraft || Boolean(error);
   const option = useMemo(() => visible ? profileChartOption(visible.samples, plane, width, 260, tokens) : null, [visible, plane, width, tokens]);
-  return <div ref={host} className="profile-inspection" aria-label="Generated bore profile">
-    <p>Generated bore profile — scaling, morph and supported extensions applied. Inspection only.{design.scale !== 1 && ` Plot in scaled mm (Scale = ${design.scale}).`}</p>
-    <label>Show <select aria-label="Profile planes" value={plane} onChange={(event) => setPlane(event.target.value as Plane)}>
+  return <div ref={host} className="profile-inspection" role="group" aria-label="Generated bore profile">
+    {design.scale !== 1 && <p>Plot in scaled mm (Scale = {design.scale}).</p>}
+    <SelectRow text="Choose which generated profile planes to inspect."><label htmlFor="freeform-profile-planes">Show</label><select id="freeform-profile-planes" aria-label="Profile planes" value={plane} onChange={(event) => setPlane(event.target.value as Plane)}>
       <option value="both">H and V</option><option value="H">Horizontal (H)</option><option value="V">Vertical (V)</option>
-    </select></label>
+    </select></SelectRow>
     <div role="status" aria-live="polite">{invalidDraft ? `Invalid input${visible ? ' — last valid profile' : ''}. Correct the marked values.`
       : error ? `Invalid: ${error}${visible ? ' — last valid profile' : ''}`
         : visible?.key !== key ? `Updating…${visible ? ' — last valid profile' : ''}`
-          : equalProfiles(visible.samples) ? 'H = V' : 'H and V profiles'}</div>
+          : ''}</div>
     {option && <div className="profile-inspection-chart" data-stale={stale || undefined} style={{ height: 260, opacity: stale ? .45 : 1 }}>
       <EChart option={option} label={`Generated bore profile${stale ? ' — last valid' : ''}`} live />
     </div>}

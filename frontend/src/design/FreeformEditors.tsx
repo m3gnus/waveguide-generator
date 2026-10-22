@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
-import { useDesignStore, type CrossSectionStation, type DesignValue, type FreeformPoint } from '../stores/design';
+import { useId, useMemo, useState } from 'react';
+import { useDesignStore, type CrossSectionStation, type DesignDocument, type DesignValue, type FreeformPoint } from '../stores/design';
+import { ToggleRow } from './SolveOptionsSections';
 import type { ParameterDefinition } from './parameterRegistry';
 import { HelpTipHeading } from './HelpTip';
 import { formatBound, NumberField } from './NumberField';
@@ -45,6 +46,7 @@ export function parsePointPaste(text: string): ParsedPointPaste {
     const H = parsed.map(([z, h]) => ({ z: z * 10, r: h * 10 }));
     const V = parsed.map(([z, _h, v]) => ({ z: z * 10, r: v * 10 }));
     validate(H); validate(V);
+    if (H[0].z === 0 && H[0].r !== V[0].r) throw new Error('The throat must be one circle. Use the same throat radius in H and V at z = 0.');
     const importedLength = H.at(-1)!.z;
     if (!(importedLength > 0)) throw new Error('Imported length must be greater than 0.');
     const normalize = (points: typeof H): FreeformPoint[] => points.map(({ z, ...point }) => ({ t: z / importedLength, ...point }));
@@ -127,7 +129,7 @@ export function EditableLookupTable({ field, points }: { field: ParameterDefinit
     const pair: [number, number] = [(left[0] + right[0]) / 2, (left[1] + right[1]) / 2];
     updateValue('lookup_profile', [...points.slice(0, gap + 1), pair, ...points.slice(gap + 1)]);
   };
-  return <div className="editable-parameter-table" aria-label={field.label}>
+  return <div className="editable-parameter-table" role="group" aria-label={field.label}>
     <div className="readonly-table-head"><HelpTipHeading title={field.label} text={field.description}>{field.label}</HelpTipHeading><span>{points.length} points</span></div>
     <table><thead><tr><th>z mm</th><th>r mm</th><th /></tr></thead><tbody>
       {points.map(([z, r], index) => <tr key={index}>
@@ -160,43 +162,72 @@ export function normalizedImportedPoints(imported: FreeformPoint[], current: Fre
   return [{ ...throat, t: 0 }, ...interior, { ...mouth, t: 1 }];
 }
 
-function PointPaste({ plane, points }: { plane: 'H' | 'V'; points: FreeformPoint[] }) {
+export const FREEFORM_POSITION_NOTE = 'Point and station positions are measured from the throat along Length, before Scale. Changing Length stretches them proportionally.';
+export const FREEFORM_IMPORT_HINT = 'One point per line in mm: z r [angle °]. Use spaces or commas. Lines starting with # are ignored. A row at z = 0 sets the throat radius; the last row sets the mouth radius and the length. Two planes at once: z;H;V in centimetres.';
+
+export function freeformAngleOverride(field: ParameterDefinition, design: DesignDocument): string | undefined {
+  if (design.formula !== 'FREEFORM') return undefined;
+  if (field.id === 'freeform.throatAngle' && [design.profile_h, design.profile_v].some((profile) => profile?.points[0]?.angle_deg !== undefined)) {
+    return 'Overridden by the angle on the imported throat point.';
+  }
+  const plane = field.id === 'freeform.mouthAngleH' ? design.profile_h : field.id === 'freeform.mouthAngleV' ? design.profile_v : undefined;
+  return plane?.points.at(-1)?.angle_deg !== undefined ? 'Overridden by the angle on the imported mouth point.' : undefined;
+}
+
+export function FreeformPointImport() {
   const updateValues = useDesignStore((state) => state.updateValues);
-  const other = useDesignStore((state) => plane === 'H' ? state.design.profile_v!.points : state.design.profile_h!.points);
+  const horizontal = useDesignStore((state) => state.design.profile_h!.points);
+  const vertical = useDesignStore((state) => state.design.profile_v!.points);
   const currentLength = useDesignStore((state) => state.design.length ?? 120);
+  const id = useId();
   const [text, setText] = useState('');
-  const [applyBoth, setApplyBoth] = useState(false);
+  const [target, setTarget] = useState<'H' | 'V' | 'both'>('H');
   const [adoptLength, setAdoptLength] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState('');
   const parsed = useMemo(() => {
     try { return text.trim() ? parsePointPaste(text) : null; } catch (reason) { return reason instanceof Error ? reason : new Error(String(reason)); }
   }, [text]);
+  const valid = parsed && !(parsed instanceof Error) ? parsed : null;
+  const bothPlanes = Boolean(valid?.pointsByPlane);
+  const effectiveTarget = bothPlanes ? 'both' : target;
+  const targetLabel = effectiveTarget === 'both' ? 'both profiles' : effectiveTarget === 'H' ? 'the horizontal profile' : 'the vertical profile';
+  const targetLength = valid && adoptLength ? valid.importedLength : currentLength;
+  const error = parsed instanceof Error ? parsed.message : valid && (targetLength < 20 || targetLength > 1_000) ? 'Imported length must be between 20 and 1000 mm.' : undefined;
+  const disabledReason = error ?? (!valid ? 'Paste valid points to import.' : undefined);
   const apply = () => {
-    if (!parsed || parsed instanceof Error) return;
-    const targetLength = adoptLength ? parsed.importedLength : currentLength;
-    if (targetLength < 20 || targetLength > 1_000) { setError('Imported length must be between 20 and 1000 mm.'); return; }
-    const source = parsed.pointsByPlane?.[plane] ?? parsed.points;
-    const updates: Record<string, DesignValue> = {
-      [`profile_${plane.toLowerCase()}.points`]: normalizedImportedPoints(source, points),
-    };
-    if (adoptLength) updates.length = parsed.importedLength;
-    if (applyBoth) {
-      const otherPlane = plane === 'H' ? 'V' : 'H';
-      const otherSource = parsed.pointsByPlane?.[otherPlane] ?? parsed.points;
-      updates[`profile_${otherPlane.toLowerCase()}.points`] = normalizedImportedPoints(otherSource, other);
-    }
+    if (!valid || disabledReason) return;
+    const H = effectiveTarget === 'V' ? structuredClone(horizontal) : normalizedImportedPoints(valid.pointsByPlane?.H ?? valid.points, horizontal);
+    const V = effectiveTarget === 'H' ? structuredClone(vertical) : normalizedImportedPoints(valid.pointsByPlane?.V ?? valid.points, vertical);
+    // Every compression driver has one circular throat, even when only one
+    // profile is replaced. Preserve all other points in the untargeted plane.
+    const throatRadius = effectiveTarget === 'V' ? V[0].r : H[0].r;
+    H[0].r = throatRadius;
+    V[0].r = throatRadius;
+    const updates: Record<string, DesignValue> = { 'profile_h.points': H, 'profile_v.points': V };
+    if (adoptLength) updates.length = valid.importedLength;
     updateValues(updates);
-    setError(null);
+    setText('');
+    setNotice(`Imported ${valid.points.length} points into ${targetLabel}. Undo restores the previous profile.`);
   };
-  const parseError = parsed instanceof Error ? parsed.message : null;
-  return <div className="point-paste">
-    <textarea aria-label={`Paste ${plane} points`} rows={4} value={text} onChange={(event) => setText(event.target.value)} placeholder={'z r [angle]\n# or z_cm;r_h_cm;r_v_cm'} />
-    <div className="paste-meta">Imported length <b>{parsed && !(parsed instanceof Error) ? `${parsed.importedLength} mm` : '—'}</b> · current <b>{currentLength} mm</b></div>
-    <label><input type="checkbox" checked={applyBoth} onChange={(event) => setApplyBoth(event.target.checked)} /> Apply to both H and V</label>
-    <label><input type="radio" checked={adoptLength} onChange={() => setAdoptLength(true)} /> Use imported length</label>
-    <label><input type="radio" checked={!adoptLength} onChange={() => setAdoptLength(false)} /> Keep current length</label>
-    {(parseError || error) && <div className="field-error" role="alert">{parseError ?? error}</div>}
-    <button type="button" disabled={!parsed || parsed instanceof Error} onClick={apply}>Import points</button>
+  return <div className="point-paste" role="group" aria-label="Import profile points" data-control-reveal-id="control.freeformImport">
+    <textarea aria-label="Paste profile points" aria-describedby={`${id}-hint`} rows={4} value={text} onChange={(event) => { setText(event.target.value); setNotice(''); }} placeholder={'z r [angle]\n0 12.7\n120 200'} />
+    <p className="section-note" id={`${id}-hint`}>{FREEFORM_IMPORT_HINT}</p>
+    <fieldset className="point-paste-choices">
+      <legend>Import into:</legend>
+      {([['H', 'Horizontal'], ['V', 'Vertical'], ['both', 'Both']] as const).map(([value, label]) => <label className="ui-check" key={value}>
+        <input type="radio" name={`${id}-target`} value={value} checked={effectiveTarget === value} disabled={bothPlanes} onChange={() => { setTarget(value); setNotice(''); }} />{label}
+      </label>)}
+    </fieldset>
+    {bothPlanes && <p className="section-note">This z;H;V paste contains both planes, so it imports into Both.</p>}
+    {valid && <div className="paste-meta">{valid.points.length} points · pasted length {valid.importedLength} mm · current {currentLength} mm</div>}
+    {valid && valid.importedLength !== currentLength && <fieldset className="point-paste-choices">
+      <legend>Length</legend>
+      <label className="ui-check"><input type="radio" name={`${id}-length`} checked={adoptLength} onChange={() => setAdoptLength(true)} />Use pasted length ({valid.importedLength} mm)</label>
+      <label className="ui-check"><input type="radio" name={`${id}-length`} checked={!adoptLength} onChange={() => setAdoptLength(false)} />Keep {currentLength} mm and stretch the pasted points to fit</label>
+    </fieldset>}
+    {disabledReason && <div id={`${id}-reason`} className={error ? 'field-error' : 'disabled-reason'} role={error ? 'alert' : undefined}>{disabledReason}</div>}
+    <button type="button" disabled={Boolean(disabledReason)} aria-describedby={disabledReason ? `${id}-reason` : undefined} onClick={apply}>Import into {targetLabel}</button>
+    {notice && <p className="section-note" role="status">{notice}</p>}
   </div>;
 }
 
@@ -240,23 +271,23 @@ export function EditablePointTable({ field, points }: { field: ParameterDefiniti
     const r = left.r + ((t - left.t) / (right.t - left.t || 1)) * (right.r - left.r);
     updateValue(path, [...points.slice(0, gapIndex + 1), { t, r }, ...points.slice(gapIndex + 1)]);
   };
-  return <div className="editable-parameter-table" aria-label={field.label}>
-    <div className="readonly-table-head"><HelpTipHeading title={field.label} text={field.description}>{field.label}</HelpTipHeading><span>{interior.length} / 62 interior</span></div>
-    <p className="position-note">Positions are along the design length, before Scale. Changing length moves point and station positions proportionally.</p>
-    <label><input type="checkbox" checked={showDistance} onChange={(event) => setShowDistance(event.target.checked)} /> Distance from previous point</label>
-    <table><thead><tr><th>z mm</th>{showDistance && <th>distance mm</th>}<th>r mm</th><th>angle</th><th /></tr></thead>
+  return <div className="editable-parameter-table" role="group" aria-label={field.label}>
+    <div className="readonly-table-head"><HelpTipHeading title={field.label} text={field.description}>{field.label}</HelpTipHeading><span>{interior.length} points</span></div>
+    <ToggleRow id={`freeform-spacing-${plane}`} label="Show spacing column" help="Distance from the previous point along Length, before Scale." checked={showDistance} onChange={setShowDistance} />
+    {interior.length === 0 && <p className="section-note">No spline points. The curve runs from throat to mouth, shaped by the throat and mouth angles. Add point inserts one in the largest gap.</p>}
+    <table><thead><tr><th>z (mm)</th>{showDistance && <th>Spacing (mm)</th>}<th>r (mm)</th><th>Angle (°)</th><th /></tr></thead>
       <tbody>{interior.map((point, index) => <tr key={index}>
         <td><NumberField label={`${plane} point ${index + 1} z`} value={positionMm(point.t, length)} min={1} max={length - 1} step={.1} precision={4} unit="mm" validate={(value) => positionMessage(index, value)} onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => update(index, 'z', value)} /></td>
         {showDistance && <td><NumberField label={`${plane} point ${index + 1} distance from previous`} value={positionMm(point.t - points[index].t, length)} step={.1} precision={4} unit="mm"
           validate={(value) => positionMessage(index, positionMm(points[index].t, length) + value)}
           onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => update(index, 'z', positionMm(points[index].t, length) + value)} /></td>}
         <td><NumberField label={`${plane} point ${index + 1} radius`} value={point.r} min={0} step={.1} precision={4} unit="mm" validate={(value) => value <= 0 ? 'Must be greater than 0 mm.' : undefined} onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => update(index, 'r', value)} /></td>
-        <td><NumberField label={`${plane} point ${index + 1} angle`} value={point.angle_deg} min={-90} max={90} step={.1} precision={2} unit="°" optional validate={(value) => value <= -90 || value >= 90 ? 'Must be greater than −90 and less than 90°.' : undefined} onClear={() => update(index, 'angle_deg', undefined)} onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => update(index, 'angle_deg', value)} /></td>
-        <td><button aria-label={`Remove ${plane} point ${index + 1}`} onClick={() => updateValue(path, points.filter((_point, pointIndex) => pointIndex !== index + 1))}>−</button></td>
+        <td><NumberField label={`${plane} point ${index + 1} angle`} value={point.angle_deg} min={-90} max={90} step={.1} precision={2} unit="°" optional placeholder="auto" validate={(value) => value <= -90 || value >= 90 ? 'Must be greater than −90 and less than 90°.' : undefined} onClear={() => update(index, 'angle_deg', undefined)} onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => update(index, 'angle_deg', value)} /></td>
+        <td><button type="button" aria-label={`Remove ${plane} point ${index + 1}`} onClick={() => updateValue(path, points.filter((_point, pointIndex) => pointIndex !== index + 1))}>−</button></td>
       </tr>)}</tbody>
     </table>
     <button type="button" disabled={interior.length >= 62} onClick={add}>Add point</button>
-    <PointPaste plane={plane} points={points} />
+    {interior.length >= 62 && <p className="disabled-reason">A profile supports at most 62 spline points. Remove a point before adding another.</p>}
   </div>;
 }
 
@@ -319,9 +350,8 @@ export function EditableStationTable({ field, stations }: { field: ParameterDefi
     const station = { t: (stations[gap].t + stations[gap + 1].t) / 2, shape: 'ellipse' as const };
     updateValue('cross_sections', [...stations, station].sort((a, b) => a.t - b.t));
   };
-  return <div className="editable-parameter-table" aria-label={field.label}>
+  return <div className="editable-parameter-table" role="group" aria-label={field.label}>
     <div className="readonly-table-head"><HelpTipHeading title={field.label} text={field.description}>{field.label}</HelpTipHeading><span>{stations.length} / 32 stations</span></div>
-    <p className="position-note">Positions are along the design length, before Scale. Changing length moves point and station positions proportionally.</p>
     <table><thead><tr><th>mm from throat / %</th><th>shape</th><th>n / radius</th><th /></tr></thead><tbody>
       {stations.map((station, index) => <tr key={index}>
         <td><NumberField label={`Station ${index + 1} position`} value={positionMm(station.t, length)} min={0} max={length} step={.1} precision={15} displayPrecision={4} unit="mm" disabled={index === 0 || index === stations.length - 1}
@@ -337,7 +367,7 @@ export function EditableStationTable({ field, stations }: { field: ParameterDefi
             default exponent, or an empty required corner radius, which it has no
             default for and rejects the station without. */}
         <td>{station.shape === 'superellipse' ? <NumberField label={`Station ${index + 1} exponent`} value={station.exponent ?? MESHER_SUPERELLIPSE_EXPONENT} min={2} max={16} step={.1} precision={2} onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => update(index, { exponent: value })} /> : station.shape === 'rounded_rectangle' ? <NumberField label={`Station ${index + 1} corner radius`} value={station.corner_radius_mm} min={1} step={1} precision={2} unit="mm" onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => update(index, { corner_radius_mm: value })} /> : '—'}</td>
-        <td><button aria-label={`Remove station ${index + 1}`} disabled={stations.length <= 2 || index === 0 || index === stations.length - 1} onClick={() => updateValue('cross_sections', stations.filter((_station, item) => item !== index))}>−</button></td>
+        <td><button type="button" aria-label={`Remove station ${index + 1}`} disabled={stations.length <= 2 || index === 0 || index === stations.length - 1} onClick={() => updateValue('cross_sections', stations.filter((_station, item) => item !== index))}>−</button></td>
       </tr>)}
     </tbody></table>
     <button type="button" disabled={stations.length >= 32} onClick={add}>Add station</button>

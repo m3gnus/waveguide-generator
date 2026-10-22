@@ -91,8 +91,9 @@ describe('profile freshness', () => {
 
   it.each([1, 1.7, 0.5])('labels scaled plot coordinates when Scale is %s', (scale) => {
     act(() => root.render(<ProfileInspection design={{ ...design, scale }} identity="a" revision={1} />));
-    const caption = host.querySelector('p')!.textContent;
-    expect(caption).toContain('Generated bore profile — scaling, morph and supported extensions applied. Inspection only.');
+    const caption = host.querySelector('p')?.textContent ?? '';
+    expect(host.textContent).not.toContain('Inspection only.');
+    expect(host.querySelector('.select-row')).not.toBeNull();
     if (scale === 1) expect(caption).not.toContain('Plot in scaled mm');
     else expect(caption).toContain(`Plot in scaled mm (Scale = ${scale}).`);
   });
@@ -106,7 +107,7 @@ describe('profile freshness', () => {
     const accepted = trace();
     await respond(0, fixtures[0].csv);
     expect(trace()).toEqual(accepted);
-    expect(host.textContent).toContain('H and V profiles');
+    expect(host.querySelector('[role="status"]')!.textContent).toBe('');
   });
 
   it('hides the old document immediately and never accepts its late response after opening another', async () => {
@@ -117,7 +118,8 @@ describe('profile freshness', () => {
     await respond(1, fixtures[1].csv);
     expect(host.querySelector('[role="img"]')).toBeNull();
     await tick(); await respond(2, fixtures[0].csv);
-    expect(host.textContent).toContain('H = V');
+    expect(host.querySelector('[role="status"]')!.textContent).toBe('');
+    expect(trace()).toBeTruthy();
   });
 
   it('dims last-valid data while updating, reports build errors and recovers', async () => {
@@ -155,6 +157,7 @@ describe('profile freshness', () => {
     });
     expect(host.querySelector('[role="img"]')).toBeNull();
     await tick(); await respond(1, fixtures[0].csv);
-    expect(host.textContent).toContain('H = V');
+    expect(host.querySelector('[role="status"]')!.textContent).toBe('');
+    expect(trace()).toBeTruthy();
   });
 });

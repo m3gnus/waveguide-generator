@@ -132,8 +132,8 @@ describe('complete parameter registry', () => {
     expect(PARAMETER_REGISTRY.map((field) => field.id).sort()).toEqual(LEGACY_PARAMETER_REGISTRY.map((field) => field.id).sort());
     for (const original of LEGACY_PARAMETER_REGISTRY) {
       const moved = PARAMETER_REGISTRY.find((field) => field.id === original.id)!;
-      const { section: _oldSection, label: _oldLabel, description: oldDescription, visibleWhen: oldVisibility, ...oldSemantics } = original;
-      const { section: _section, label: _label, description, visibleWhen: visibility, ...semantics } = moved;
+      const { section: _oldSection, label: _oldLabel, description: oldDescription, group: _oldGroup, visibleWhen: oldVisibility, ...oldSemantics } = original;
+      const { section: _section, label: _label, description, group: _group, visibleWhen: visibility, ...semantics } = moved;
       expect(semantics, original.id).toEqual(oldSemantics);
       if (original.id === 'simulation.sim_type') {
         // The Mounting select names its own choices instead of the old Free-standing option.

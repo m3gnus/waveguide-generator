@@ -29,10 +29,20 @@ export interface ParameterSectionContext {
   waveguideLinked: boolean;
 }
 
+export interface ParameterGroupDefinition {
+  title: string;
+  description?: string;
+  fieldOrder?: readonly string[];
+  visibleWhen?: (design: DesignDocument) => boolean;
+  summary?: (design: DesignDocument) => string;
+}
+
 export interface ParameterSectionDefinition {
   title: ParameterSection;
   tab: ParameterTab;
   description: string;
+  descriptionWhen?: (design: DesignDocument) => string | undefined;
+  groups?: readonly ParameterGroupDefinition[];
   /** Complete presentation order, including custom-control slots. Legacy consumers ignore it. */
   fieldOrder?: readonly string[];
   /** Section policy is deliberately data-aware rather than a mode list. CAD
@@ -93,7 +103,7 @@ export interface ParameterDefinition {
   exclusiveMin?: boolean;
   /** Hint for an empty optional field; defaults to "Unset". */
   placeholderWhen?: (design: DesignDocument) => string | undefined;
-  group?: 'Advanced ICW';
+  group?: string | ((design: DesignDocument) => string | undefined);
   visibleWhen?: (design: DesignDocument) => boolean;
   disabledWhen?: (design: DesignDocument) => string | undefined;
 }
@@ -154,6 +164,8 @@ export const ICW_ADVANCED_FIELD_IDS = [
 const icwInputReason = (design: DesignDocument) => design.icw_seed != null
   ? 'Imported seed mode fits the seed profile; target controls are ignored.'
   : design.icw_coeffs != null ? 'Imported coefficients define the curve directly; target controls are ignored.' : undefined;
+const FREEFORM_IMPORT_GROUP: ParameterGroupDefinition = { title: 'Import points', visibleWhen: (design) => design.formula === 'FREEFORM', fieldOrder: ['control.freeformImport'] };
+const ICW_ADVANCED_GROUP = { title: 'Advanced ICW', description: 'Optional native ICW inputs. Blank uses the mesher default.' };
 const advancedIcw = { families: ['ICW'] as DesignFamily[], optional: true, group: 'Advanced ICW' as const };
 const rollbackIcwReason = (design: DesignDocument) => icwInputReason(design)
   ?? (design.termination !== 'rollback' ? 'Used only for rollback termination.' : undefined);
@@ -290,7 +302,7 @@ export const LEGACY_PARAMETER_REGISTRY: ParameterDefinition[] = [
 
   { id: 'lookup.profile', legacyKey: 'lookupProfile', path: 'lookup_profile', section: profile, label: 'Lookup profile points', kind: 'table', families: ['LOOKUP'], description: 'Experimental whole meridian in millimetres, linearly interpolated between [z, r] samples. Supply at least two finite pairs with strictly increasing z. Include any extension or adapter in this table. Radius may rise or fall.' },
   number('lookup.a0', 'lookupSourceAngle', 'a0', profile, 'Automatic source-cap angle', { families: ['LOOKUP'], unit: '°', min: -90, max: 90, description: 'Angle used for the automatic source cap; it does not reshape the lookup meridian.' }),
-  number('freeform.length', 'length', 'length', profile, 'Length', { families: ['FREEFORM'], unit: 'mm', min: 20, max: 1_000, step: 1, description: 'Axial length shared by the horizontal and vertical profiles, spanned by both splines from throat to mouth. Interior anchors are stored as fractions of it, so changing it moves them all proportionally.' }),
+  number('freeform.length', 'length', 'length', profile, 'Length', { families: ['FREEFORM'], unit: 'mm', min: 20, max: 1_000, step: 1, description: 'Axial distance from the throat to the mouth, shared by both profile planes.' }),
   number('freeform.throatRadius', 'throatRadius', 'profile_h.points.0.r', profile, 'Throat radius', { families: ['FREEFORM'], mirrorPaths: ['profile_v.points.0.r'], unit: 'mm', min: .1, max: 200, description: 'Radius at the throat. Shared by both profile planes, so the throat stays circular.' }),
   number('freeform.throatAngle', 'throatAngle', 'profile_h.throat_angle_deg', profile, 'Throat angle', { families: ['FREEFORM'], mirrorPaths: ['profile_v.throat_angle_deg'], unit: '°', min: -90, max: 90, description: 'Wall angle leaving the driver exit, shared by both profile planes, fixing the spline tangent at the throat. An angle set on the first point of a plane overrides it for that plane.' }),
   number('freeform.mouthRadiusH', 'mouthRadiusH', 'profile_h.points.$last.r', profile, 'Horizontal mouth radius', { families: ['FREEFORM'], unit: 'mm', min: .1, max: 1_000, step: 1, description: 'Half-width of the mouth in the horizontal plane.' }),
@@ -447,6 +459,7 @@ export const TRACEABILITY_PARAMETER_INVENTORY = [
 export const CAD_PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[] = [
   {
     title: 'Profile Dimensions',
+    groups: [ICW_ADVANCED_GROUP, FREEFORM_IMPORT_GROUP],
     tab: 'geometry',
     description: 'Primary dimensions for the selected horn family. OSSE and R-OSSE labels carry their ATH formula symbol in parentheses.',
     visibleWhen: waveguideDefinitionOnly,
@@ -523,6 +536,37 @@ function importedValueIsVisible(field: ParameterDefinition, design: DesignDocume
     value && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined, document);
   return read(design) !== read(designForFamily(design.formula));
 }
+export function parameterGroup(field: ParameterDefinition, design: DesignDocument): string | undefined {
+  return typeof field.group === 'function' ? field.group(design) : field.group;
+}
+
+const freeformGroups: Record<string, string> = {
+  'freeform.length': 'Throat and length', 'freeform.throatRadius': 'Throat and length', 'freeform.throatAngle': 'Throat and length',
+  'freeform.mouthRadiusH': 'Horizontal profile', 'freeform.mouthAngleH': 'Horizontal profile', 'freeform.interiorH': 'Horizontal profile',
+  'freeform.mouthRadiusV': 'Vertical profile', 'freeform.mouthAngleV': 'Vertical profile', 'freeform.interiorV': 'Vertical profile',
+  'freeform.crossSections': 'Cross-section',
+};
+function freeformSummary(design: DesignDocument, plane: 'H' | 'V'): string {
+  const h = design.profile_h!; const v = design.profile_v!;
+  if (plane === 'V' && h.throat_angle_deg === v.throat_angle_deg && h.mouth_angle_deg === v.mouth_angle_deg
+    && h.points.length === v.points.length && h.points.every((point, index) => {
+      const other = v.points[index];
+      return point.t === other.t && point.r === other.r && point.angle_deg === other.angle_deg;
+    })) return 'matches horizontal';
+  const points = (plane === 'H' ? h : v).points;
+  return `${points.at(-1)!.r} mm · ${points.length - 2} points`;
+}
+const freeformOnly = (design: DesignDocument) => design.formula === 'FREEFORM';
+const PROFILE_GROUPS: readonly ParameterGroupDefinition[] = [
+  ICW_ADVANCED_GROUP,
+  { title: 'Throat and length', visibleWhen: freeformOnly },
+  { title: 'Horizontal profile', visibleWhen: freeformOnly, summary: (design) => freeformSummary(design, 'H') },
+  { title: 'Vertical profile', visibleWhen: freeformOnly, summary: (design) => freeformSummary(design, 'V') },
+  { title: 'Cross-section', visibleWhen: freeformOnly },
+  FREEFORM_IMPORT_GROUP,
+  { title: 'Generated profile', visibleWhen: freeformOnly, fieldOrder: ['control.freeformInspection'], description: 'Generated bore profile — scaling, morph and supported extensions applied. Inspection only.' },
+];
+
 const parametricFields: ParameterDefinition[] = LEGACY_PARAMETER_REGISTRY.map((field) => {
   let section = sectionMoves[field.section] ?? field.section;
   if (['common.s1', 'common.s2', 'source.shape', 'source.radius', 'source.curvature'].includes(field.id)) section = 'Throat';
@@ -532,6 +576,8 @@ const parametricFields: ParameterDefinition[] = LEGACY_PARAMETER_REGISTRY.map((f
   if (field.id === 'simulation.sim_type') section = 'Mounting';
   if (importedOnlyIds.has(field.id)) section = 'Imported ATH values';
   return { ...field, section,
+    ...(freeformGroups[field.id] ? { group: freeformGroups[field.id] } : {}),
+    ...(field.id === 'common.scale' ? { group: (design: DesignDocument) => freeformOnly(design) ? 'Throat and length' : undefined } : {}),
     ...(field.id === 'simulation.sim_type' ? { label: 'Mounting', description: 'How the horn is mounted. Bare shell, Thickened waveguide and Waveguide in enclosure solve the whole body in open air with that body. Infinite baffle mounts the mouth flush in an unbounded rigid wall, ignoring the wall and enclosure and removing all cabinet-edge diffraction; availability follows the solver capabilities reported by this host.' } : {}),
     ...(field.section === 'Frequency Sweep' ? { description: field.description?.replaceAll('Solve options', 'Frequency sweep') } : {}),
     ...(field.id === 'osse.throat_profile' ? { description: field.description?.replace('For a terminating arc on a new design, select OSSE features → Mouth end → Terminating arc.', 'Circular arc profiles are retained for editing existing designs. For a terminating arc on a new design, select OSSE features → Mouth end → Terminating arc.') } : {}),
@@ -540,7 +586,7 @@ const parametricFields: ParameterDefinition[] = LEGACY_PARAMETER_REGISTRY.map((f
 });
 
 export const PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[] = [
-  { title: 'Profile', fieldOrder: [...parametricFields.filter((field) => field.section === 'Profile' && !field.group).map((field) => field.id), ...ICW_ADVANCED_FIELD_IDS], tab: 'geometry', description: 'Primary dimensions for the selected horn family. OSSE and R-OSSE labels carry their ATH formula symbol in parentheses.', visibleWhen: waveguideDefinitionOnly },
+  { title: 'Profile', groups: PROFILE_GROUPS, descriptionWhen: (design) => freeformOnly(design) ? 'Horizontal and vertical spline profiles with a shared circular throat, length and cross-section stations.' : undefined, fieldOrder: [...parametricFields.filter((field) => field.section === 'Profile' && field.group !== 'Advanced ICW').map((field) => field.id), ...ICW_ADVANCED_FIELD_IDS, 'control.freeformImport', 'control.freeformInspection'], tab: 'geometry', description: 'Primary dimensions for the selected horn family. OSSE and R-OSSE labels carry their ATH formula symbol in parentheses.', visibleWhen: waveguideDefinitionOnly },
   { title: 'Throat', fieldOrder: ['common.s1', 'common.s2', 'common.throat_ext_angle', 'common.throat_ext_length', 'common.slot_length', 'common.length_mode', 'source.shape', 'source.radius', 'source.curvature'], tab: 'geometry', description: 'Throat stretch, extension, straight slot and source surface cap.', visibleWhen: waveguideDefinitionOnly },
   { title: 'Mouth', fieldOrder: ['morph.target_shape', 'morph.target_width', 'morph.target_height', 'morph.target_exponent', 'morph.corner_radius', 'morph.rate', 'morph.fixed_part', 'morph.allow_shrinkage', 'mesh.ath_roundover', 'mesh.ath_roundover.radius', 'mesh.ath_roundover.segments'], tab: 'geometry', description: CAD_PARAMETER_SECTION_DEFINITIONS.find((section) => section.title === 'Morph Target')!.description, visibleWhen: waveguideDefinitionOnly },
   { title: 'Cross-section', tab: 'geometry', description: 'Base cross-section shape and OSSE guiding-curve controls.', visibleWhen: waveguideDefinitionOnly },

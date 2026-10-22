@@ -1205,6 +1205,26 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).toContain('Effective grid −180° … 180°');
   });
 
+  it('keeps the single FREEFORM importer available for a linked design in CAD mode', () => {
+    act(() => {
+      useDesignStore.getState().setFamily('FREEFORM');
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+    });
+    expect(host.querySelector('[data-section="Profile Dimensions"]')).not.toBeNull();
+    expect(host.querySelectorAll('[data-section="Import points"]')).toHaveLength(1);
+    act(() => host.querySelector<HTMLButtonElement>('[data-section="Import points"] .section-head')!.click());
+    expect(host.querySelectorAll('.point-paste textarea')).toHaveLength(1);
+    const textarea = host.querySelector('textarea')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, '0 18\n120 180');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => host.querySelector<HTMLButtonElement>('.point-paste button')!.click());
+    expect(useDesignStore.getState().design.profile_h!.points.at(-1)!.r).toBe(180);
+    expect(useDesignStore.getState().design.profile_v!.points[0].r).toBe(18);
+  });
+
   it('drops the waveguide definition for geometry that was authored in CAD', () => {
     act(() => {
       useDesignStore.getState().setFamily('OSSE');
@@ -2187,13 +2207,53 @@ describe('ParamPanel inventory UX', () => {
     });
     expect(host.querySelector('[aria-label="Generated bore profile"]')).not.toBeNull();
     expect(host.querySelectorAll('.editable-parameter-table')).toHaveLength(3);
-    expect(host.querySelectorAll('.point-paste textarea')).toHaveLength(2);
+    expect(host.querySelectorAll('.point-paste textarea')).toHaveLength(0);
+    expect(host.querySelector('[data-section="Import points"] .section-head')?.getAttribute('aria-expanded')).toBe('false');
+    act(() => host.querySelector<HTMLButtonElement>('[data-section="Import points"] .section-head')!.click());
+    expect(host.querySelectorAll('.point-paste textarea')).toHaveLength(1);
     expect(host.textContent).not.toContain('tangent scale');
     expect(host.textContent).not.toContain('Spline overshoot');
     expect(host.querySelector('input[aria-label$=" strength"]')).toBeNull();
     expect(host.querySelector<HTMLSelectElement>('select[aria-label="Station 1 shape"]')?.value).toBe('ellipse');
     act(() => useDesignStore.getState().setFamily('OSSE'));
     expect(host.querySelector('[aria-label="Generated bore profile"]')).toBeNull();
+  });
+
+  it('groups FREEFORM controls in order, summarizes each plane and leaves saved designs unchanged', () => {
+    act(() => useDesignStore.getState().setFamily('FREEFORM'));
+    const before = serializeDesign(useDesignStore.getState().design);
+    const profile = host.querySelector('[data-section="Profile"]')!;
+    expect([...profile.querySelectorAll('[data-section]')].map((group) => group.getAttribute('data-section'))).toEqual([
+      'Throat and length', 'Horizontal profile', 'Vertical profile', 'Cross-section', 'Import points', 'Generated profile',
+    ]);
+    expect(profile.querySelectorAll('[role="group"][data-section]')).toHaveLength(6);
+    for (const [group, ids] of [
+      ['Throat and length', ['common.scale', 'freeform.length', 'freeform.throatRadius', 'freeform.throatAngle']],
+      ['Horizontal profile', ['freeform.mouthRadiusH', 'freeform.mouthAngleH', 'freeform.interiorH']],
+      ['Vertical profile', ['freeform.mouthRadiusV', 'freeform.mouthAngleV', 'freeform.interiorV']],
+      ['Cross-section', ['freeform.crossSections']],
+    ] as const) {
+      expect([...profile.querySelectorAll(`[data-section="${group}"] [data-parameter-id]`)].map((field) => field.getAttribute('data-parameter-id'))).toEqual(ids);
+    }
+    expect(profile.querySelector('[data-section="Horizontal profile"] .section-summary')?.textContent).toBe('140 mm · 0 points');
+    expect(profile.querySelector('[data-section="Vertical profile"] .section-summary')?.textContent).toBe('matches horizontal');
+    expect(profile.querySelectorAll('.position-note')).toHaveLength(1);
+    expect(profile.querySelector('.profile-inspection > p')).toBeNull();
+    act(() => host.querySelector<HTMLButtonElement>('[data-section="Generated profile"] .section-head')!.click());
+    expect(profile.querySelector('.profile-inspection')).toBeNull();
+    expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
+    act(() => useDesignStore.getState().updateValue('profile_v.points', [{ t: 0, r: 12.7 }, { t: .5, r: 60 }, { t: 1, r: 100 }]));
+    expect(profile.querySelector('[data-section="Vertical profile"] .section-summary')?.textContent).toBe('100 mm · 1 points');
+  });
+
+  it('explains imported endpoint angle overrides beside the affected FREEFORM fields (B4)', () => {
+    act(() => {
+      useDesignStore.getState().setFamily('FREEFORM');
+      useDesignStore.getState().updateValue('profile_v.points', [{ t: 0, r: 12.7, angle_deg: 15 }, { t: 1, r: 100, angle_deg: 65 }]);
+    });
+    expect(host.querySelector('[data-parameter-id="freeform.throatAngle"]')?.textContent).toContain('Overridden by the angle on the imported throat point.');
+    expect(host.querySelector('[data-parameter-id="freeform.mouthAngleV"]')?.textContent).toContain('Overridden by the angle on the imported mouth point.');
+    expect(host.querySelector('[data-parameter-id="freeform.mouthAngleH"]')?.textContent).not.toContain('Overridden');
   });
 
   it('states the λ/6 mesh limit for the sweep this design will actually solve', () => {
@@ -2242,7 +2302,7 @@ describe('ParamPanel inventory UX', () => {
     expect(useDesignStore.getState().design.length).toBe(60);
     expect(useDesignStore.getState().design.profile_h!.points).toEqual(before);
     expect(useDesignStore.getState().design.cross_sections).toEqual(stationsBefore);
-    expect(host.textContent).toContain('Positions are along the design length, before Scale. Changing length moves point and station positions proportionally.');
+    expect(host.textContent).toContain('Point and station positions are measured from the throat along Length, before Scale. Changing Length stretches them proportionally.');
   });
 });
 

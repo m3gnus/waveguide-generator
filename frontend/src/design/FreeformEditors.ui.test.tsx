@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore, type CrossSectionStation, type FreeformPoint } from '../stores/design';
 import type { ParameterDefinition } from './parameterRegistry';
-import { EditableLookupTable, EditablePointTable, EditableStationTable } from './FreeformEditors';
+import { EditableLookupTable, EditablePointTable, EditableStationTable, FreeformPointImport, FREEFORM_IMPORT_HINT } from './FreeformEditors';
 
 const pointField: ParameterDefinition = {
   id: 'freeform.pointsH', legacyKey: 'profile_h.points', section: 'Profile',
@@ -141,7 +141,7 @@ describe('FREEFORM numeric tables', () => {
     const points: FreeformPoint[] = [{ t: 0, r: 12.7 }, { t: .5, r: 60 }, { t: 1, r: 140 }];
     const updateValue = vi.spyOn(useDesignStore.getState(), 'updateValue');
     act(() => root.render(<EditablePointTable field={pointField} points={points}/>));
-    expect(host.querySelector('.position-note')?.textContent).toBe('Positions are along the design length, before Scale. Changing length moves point and station positions proportionally.');
+    expect(host.querySelector('.position-note')).toBeNull();
     const z = inputWithLabel(host, 'H point 1 z');
 
     act(() => enterDraft(z, '999'));
@@ -165,7 +165,7 @@ describe('FREEFORM numeric tables', () => {
     ];
     const updateValue = vi.spyOn(useDesignStore.getState(), 'updateValue');
     act(() => root.render(<EditableStationTable field={stationField} stations={stations}/>));
-    expect(host.querySelector('.position-note')?.textContent).toBe('Positions are along the design length, before Scale. Changing length moves point and station positions proportionally.');
+    expect(host.querySelector('.position-note')).toBeNull();
     const exponent = inputWithLabel(host, 'Station 2 exponent');
 
     act(() => enterDraft(exponent, '20'));
@@ -347,4 +347,148 @@ describe('FREEFORM numeric tables', () => {
     expect(useDesignStore.getState().design).toEqual(initial);
   });
 
+});
+
+describe('FREEFORM shared import and point controls', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  const paste = (text: string) => act(() => {
+    const textarea = host.querySelector('textarea')!;
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, text);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  const importButton = () => host.querySelector<HTMLButtonElement>('.point-paste button')!;
+  const choose = (value: string) => act(() => host.querySelector<HTMLInputElement>(`input[value="${value}"]`)!.click());
+  beforeEach(() => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    resetDesignStore();
+    useDesignStore.getState().setFamily('FREEFORM');
+    useDesignStore.temporal.getState().clear();
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+    act(() => root.render(<FreeformPointImport />));
+  });
+  afterEach(() => { act(() => root.unmount()); host.remove(); });
+
+  it('explains the format and disabled import, and shows no summary before a valid parse (B2, B7)', () => {
+    expect(host.textContent).toContain(FREEFORM_IMPORT_HINT);
+    expect(importButton().disabled).toBe(true);
+    expect(host.textContent).toContain('Paste valid points to import.');
+    expect(importButton().getAttribute('aria-describedby')).toBe(host.querySelector('.disabled-reason')!.id);
+    expect(host.querySelector('.paste-meta')).toBeNull();
+    paste('not points');
+    expect(host.querySelector('[role="alert"]')).not.toBeNull();
+    expect(host.querySelector('.paste-meta')).toBeNull();
+    expect(host.textContent).not.toContain('—');
+  });
+
+  it('clears parse and length errors as the paste or length choice changes (B1)', () => {
+    paste('0 12.7\n10 30');
+    expect(importButton().disabled).toBe(true);
+    expect(host.textContent).toContain('Imported length must be between 20 and 1000 mm.');
+    act(() => host.querySelectorAll<HTMLInputElement>('fieldset')[1].querySelectorAll('input')[1].click());
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(importButton().disabled).toBe(false);
+    paste('0 bad\n120 200');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('non-numeric');
+    paste('0 12.7\n120 200');
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(importButton().disabled).toBe(false);
+  });
+
+  it('forces Both for compact two-plane data and retains both distinct profiles (B3)', () => {
+    choose('V');
+    paste('0;1.5;1.5\n6;5;4\n12;20;10');
+    expect(host.textContent).toContain('This z;H;V paste contains both planes, so it imports into Both.');
+    expect(host.querySelector<HTMLInputElement>('input[value="both"]')!.checked).toBe(true);
+    expect([...host.querySelectorAll<HTMLInputElement>('fieldset:first-of-type input')].every((input) => input.disabled)).toBe(true);
+    expect(importButton().textContent).toBe('Import into both profiles');
+    act(() => importButton().click());
+    const design = useDesignStore.getState().design;
+    expect(design.profile_h!.points).toEqual([{ t: 0, r: 15 }, { t: .5, r: 50 }, { t: 1, r: 200 }]);
+    expect(design.profile_v!.points).toEqual([{ t: 0, r: 15 }, { t: .5, r: 40 }, { t: 1, r: 100 }]);
+  });
+
+  it('explains conflicting compact throat radii without changing the design (B5)', () => {
+    const before = serializeDesign(useDesignStore.getState().design);
+    paste('0;1.5;2\n12;20;10');
+    expect(host.textContent).toContain('The throat must be one circle.');
+    expect(importButton().disabled).toBe(true);
+    expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
+  });
+
+  it.each(['H', 'V'])('mirrors a %s-only imported throat, preserves the other plane and undoes atomically (B5, B8)', (plane) => {
+    const before = structuredClone(useDesignStore.getState().design);
+    choose(plane);
+    paste('0 18 15\n50 60\n200 180 65');
+    act(() => importButton().click());
+    const design = useDesignStore.getState().design;
+    const selected = plane === 'H' ? design.profile_h! : design.profile_v!;
+    const other = plane === 'H' ? design.profile_v! : design.profile_h!;
+    const oldOther = plane === 'H' ? before.profile_v! : before.profile_h!;
+    expect(selected.points).toEqual([{ t: 0, r: 18, angle_deg: 15 }, { t: .25, r: 60 }, { t: 1, r: 180, angle_deg: 65 }]);
+    expect(other.points).toEqual([{ ...oldOther.points[0], r: 18 }, ...oldOther.points.slice(1)]);
+    expect(design.length).toBe(200);
+    expect(host.querySelector('textarea')!.value).toBe('');
+    expect(host.textContent).toContain(`Imported 3 points into the ${plane === 'H' ? 'horizontal' : 'vertical'} profile. Undo restores the previous profile.`);
+    expect(importButton().disabled).toBe(true);
+    act(() => importButton().click());
+    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
+    act(() => useDesignStore.getState().undo());
+    expect(useDesignStore.getState().design).toEqual(before);
+  });
+
+  it('groups named radios, hides equal-length choices and stretches normalized points to the kept length (B6)', () => {
+    paste('0 12.7\n60 60\n120 200');
+    expect(host.querySelectorAll('fieldset')).toHaveLength(1);
+    paste('0 12.7\n100 60\n200 200');
+    const fieldsets = [...host.querySelectorAll('fieldset')];
+    expect(fieldsets).toHaveLength(2);
+    for (const fieldset of fieldsets) {
+      const names = [...fieldset.querySelectorAll('input')].map((input) => input.name);
+      expect(names[0]).toBeTruthy(); expect(new Set(names).size).toBe(1);
+      expect(fieldset.querySelector('legend')).not.toBeNull();
+      expect(fieldset.querySelectorAll('.ui-check').length).toBe(names.length);
+    }
+    expect(fieldsets[0].querySelector('input')!.name).not.toBe(fieldsets[1].querySelector('input')!.name);
+    expect(host.textContent).toContain('Use pasted length (200 mm)');
+    expect(host.textContent).toContain('Keep 120 mm and stretch the pasted points to fit');
+    act(() => fieldsets[1].querySelectorAll('input')[1].click());
+    act(() => importButton().click());
+    expect(useDesignStore.getState().design.length).toBe(120);
+    expect(useDesignStore.getState().design.profile_h!.points[1].t).toBe(.5);
+  });
+
+  it('can apply single-plane data to Both without changing stations', () => {
+    const stations = structuredClone(useDesignStore.getState().design.cross_sections);
+    choose('both'); paste('0 16\n60 45\n120 200');
+    act(() => importButton().click());
+    const design = useDesignStore.getState().design;
+    expect(design.profile_h!.points).toEqual(design.profile_v!.points);
+    expect(design.cross_sections).toEqual(stations);
+  });
+
+  it('shows the empty state, inserts in the largest gap and uses auto angles and a ToggleRow', () => {
+    const render = () => act(() => root.render(<EditablePointTable field={pointField} points={useDesignStore.getState().design.profile_h!.points} />));
+    render();
+    expect(host.querySelector('[role="group"]')?.getAttribute('aria-label')).toBe(pointField.label);
+    expect(host.textContent).toContain('No spline points. The curve runs from throat to mouth, shaped by the throat and mouth angles. Add point inserts one in the largest gap.');
+    expect([...host.querySelectorAll('th')].map((th) => th.textContent)).toEqual(['z (mm)', 'r (mm)', 'Angle (°)', '']);
+    expect(host.querySelector('.point-paste')).toBeNull();
+    act(() => host.querySelector<HTMLButtonElement>('.editable-parameter-table > button')!.click());
+    render();
+    expect(useDesignStore.getState().design.profile_h!.points[1].t).toBe(.5);
+    expect(host.textContent).not.toContain('No spline points.');
+    expect(inputWithLabel(host, 'H point 1 angle').placeholder).toBe('auto');
+    expect(host.querySelector('.toggle-row')?.textContent).toContain('Show spacing column');
+    act(() => host.querySelector<HTMLInputElement>('.toggle-row input')!.click());
+    expect(host.querySelector('th:nth-child(2)')?.textContent).toBe('Spacing (mm)');
+    expect(host.querySelector('button[aria-label="Remove H point 1"]')?.getAttribute('type')).toBe('button');
+  });
+
+  it('explains why Add point is disabled at the limit (B7)', () => {
+    const points = Array.from({ length: 64 }, (_, index) => ({ t: index / 63, r: 12.7 + index }));
+    act(() => root.render(<EditablePointTable field={pointField} points={points} />));
+    expect(host.querySelector<HTMLButtonElement>('.editable-parameter-table > button')!.disabled).toBe(true);
+    expect(host.textContent).toContain('A profile supports at most 62 spline points. Remove a point before adding another.');
+  });
 });

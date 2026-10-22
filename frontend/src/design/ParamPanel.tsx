@@ -39,7 +39,7 @@ import { SolveOptionsStoreProvider, useScopedSolveOptions } from '../stores/solv
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { AdaptiveFrequencyControls, FrequencySweepControls, MeshValidationControl, DirectivityMapControls, SolveOptionsControls, ToggleRow } from './SolveOptionsSections';
 import { ExperimentalBadge } from './ExperimentalBadge';
-import { EditableLookupTable, EditablePointTable, EditableStationTable } from './FreeformEditors';
+import { EditableLookupTable, EditablePointTable, EditableStationTable, FreeformPointImport, FREEFORM_POSITION_NOTE, freeformAngleOverride } from './FreeformEditors';
 import { lambdaSixthHint } from './lambdaLimit';
 import { NumberField } from './NumberField';
 import { SelectRow } from './SelectRow';
@@ -57,6 +57,7 @@ import {
   fieldOptionsForBackend,
   fieldUnsupportedFeature,
   parameterSectionIsVisible,
+  parameterGroup,
   throatStretchError,
   type ParameterDefinition,
   type ParameterSectionDefinition,
@@ -147,7 +148,7 @@ migrateLegacySectionKeys();
 
 function storedSectionState(title: string): boolean {
   const stored = readSectionMap()[title];
-  return stored === undefined ? !['Export', 'Experimental', 'Advanced ICW'].includes(title) : stored;
+  return stored === undefined ? !['Export', 'Experimental', 'Advanced ICW', 'Import points'].includes(title) : stored;
 }
 
 function writeSectionState(title: string, open: boolean): void {
@@ -200,7 +201,7 @@ function Section({ title, summary, description, children, forceOpen, revealId }:
     writeSectionState(title, next);
   };
   return (
-    <section className={`param-section${shownOpen ? '' : ' closed'}`} data-section={title} data-control-reveal-id={revealId}>
+    <section role="group" aria-label={title} className={`param-section${shownOpen ? '' : ' closed'}`} data-section={title} data-control-reveal-id={revealId}>
       {/* A real heading wrapping the disclosure button. The rail is the primary
           way into ~119 parameters and had no headings at all, so a screen
           reader offered no structure to navigate by and the only way to reach a
@@ -1346,6 +1347,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
 
   const renderField = (field: ParameterDefinition) => <div className="parameter-entry" data-parameter-id={field.id} data-parameter-key={field.legacyKey} tabIndex={field.kind === 'indicator' ? -1 : undefined} key={field.id}>
     <FieldControl field={field} design={design} serverError={previewErrorForParameter(field, currentPreviewFields)} />
+    {freeformAngleOverride(field, design) && <p className="section-note warning">{freeformAngleOverride(field, design)}</p>}
     {field.kind !== 'number' && previewErrorForParameter(field, currentPreviewFields) && <div className="field-error" role="alert">{previewErrorForParameter(field, currentPreviewFields)}</div>}
   </div>;
 
@@ -1355,11 +1357,6 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
 
   const renderRegistrySection = (definition: ParameterSectionDefinition) => {
     const fields = fieldsBySection.get(definition.title) ?? [];
-    const advancedIcwFields = fields.filter((field) => field.group === 'Advanced ICW');
-    // A collapsed group would hide the very field that needs fixing.
-    const advancedIcwHasError = advancedIcwFields.some((field) => Boolean(
-      previewErrorForParameter(field, currentPreviewFields) || validationMessage(field, design) || storedValueError(field, design),
-    ));
     const showSolveDomain = definition.title === PARAMETRIC_CONTROLS.solveDomain.section
       && (!searching || matchingParametricSections.has(definition.title));
     const showOuterBodyMode = ['Wall & Enclosure', 'Mounting'].includes(definition.title) && !isNativeFamily(design.formula)
@@ -1375,11 +1372,10 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
     return <Section
       key={definition.title}
       title={definition.title}
-      description={definition.description}
+      description={definition.descriptionWhen?.(design) ?? definition.description}
       forceOpen={searching || (definition.title === 'Imported ATH values' && design.text_import_version === 'ath-2026-09a-v2')}
       revealId={workspaceMode === 'parametric' ? `parametric.section.${definition.title}` : undefined}
     >
-      {workspaceMode === 'parametric' && design.formula === 'FREEFORM' && definition.title === 'Profile' && !searching && <FreeformProfileInspection />}
       {showOuterBodyMode && <WallEnclosureModeControl design={design} mounting={workspaceMode === 'parametric'} serverError={workspaceMode === 'parametric' ? previewErrorForParameter(PARAMETER_REGISTRY.find((field) => field.id === 'simulation.sim_type')!, currentPreviewFields) : undefined} />}
       {/* Domain is an execution option, not a saved design parameter. Keeping
           it independent of mesh.quadrants prevents the round-trip-only ATH
@@ -1389,16 +1385,32 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
         if (id === 'control.solveDomain') return showSolveDomain ? <SolveDomainControl key={id} design={design} /> : null;
         if (id === 'control.meshValidation') return showCustom ? <MeshValidationControl key={id} /> : null;
         const field = fields.find((candidate) => candidate.id === id);
-        return field && !field.group && (workspaceMode === 'cad' || id !== 'simulation.sim_type') ? <Fragment key={id}>{renderField(field)}</Fragment> : null;
+        return field && !parameterGroup(field, design) && (workspaceMode === 'cad' || id !== 'simulation.sim_type') ? <Fragment key={id}>{renderField(field)}</Fragment> : null;
       })}
-      {advancedIcwFields.length > 0 && <Section title="Advanced ICW" forceOpen={searching || advancedIcwHasError} description="Optional native ICW inputs. Blank uses the mesher default.">
-        {advancedIcwFields.map(renderField)}
-        {(design.icw_seed != null || design.icw_coeffs != null) && <div className="parameter-entry">
-          <button type="button" className="secondary" data-action="clear-imported-icw"
-            title="Remove the imported seed and direct coefficients, so the target controls apply again."
-            onClick={() => updateValues({ icw_seed: null, icw_coeffs: null, icw_S: null })}>Clear imported seed / coefficients</button>
-        </div>}
-      </Section>}
+      {definition.groups?.filter((group) => !group.visibleWhen || group.visibleWhen(design)).map((group) => {
+        const groupFields = fields.filter((field) => parameterGroup(field, design) === group.title);
+        const groupSlots = group.fieldOrder ?? groupFields.map((field) => field.id);
+        const hasCustomSlot = (showCustom || (workspaceMode === 'cad' && !searching)) && groupSlots.some((id) => id.startsWith('control.freeform'));
+        if (groupFields.length === 0 && !hasCustomSlot) return null;
+        // Search and errors reveal grouped inputs through the same mechanism
+        // used for the optional ICW controls.
+        const hasError = groupFields.some((field) => Boolean(previewErrorForParameter(field, currentPreviewFields)
+          || validationMessage(field, design) || storedValueError(field, design)));
+        return <Section key={group.title} title={group.title} summary={group.summary?.(design)} description={group.description} forceOpen={searching || hasError}>
+          {groupSlots.map((id) => {
+            if (id === 'control.freeformImport') return hasCustomSlot ? <FreeformPointImport key={id} /> : null;
+            if (id === 'control.freeformInspection') return hasCustomSlot ? <FreeformProfileInspection key={id} /> : null;
+            const field = groupFields.find((candidate) => candidate.id === id);
+            return field ? renderField(field) : null;
+          })}
+          {group.title === 'Throat and length' && <p className="position-note">{FREEFORM_POSITION_NOTE}</p>}
+          {group.title === 'Advanced ICW' && (design.icw_seed != null || design.icw_coeffs != null) && <div className="parameter-entry">
+            <button type="button" className="secondary" data-action="clear-imported-icw"
+              title="Remove the imported seed and direct coefficients, so the target controls apply again."
+              onClick={() => updateValues({ icw_seed: null, icw_coeffs: null, icw_S: null })}>Clear imported seed / coefficients</button>
+          </div>}
+        </Section>;
+      })}
       {custom}
       {definition.title === 'Imported ATH values' && importedAthValues}
       {searching && fields.some((field) => !fieldIsVisible(field, design)) && <p className="filter-note">Some matches are normally hidden by the active mode; they are shown here for discoverability.</p>}
