@@ -24,7 +24,7 @@ def wall_fold_message(config: Mapping[str, Any], detail: str) -> str | None:
     return (
         f"The {wall} is thicker than the tightest bend of the horn allows, "
         "so the outer wall would fold over itself. Reduce Wall thickness, "
-        "reduce the mouth angle, or use Bare shell / Infinite baffle."
+        "soften that bend (for example the throat or mouth angle), or use Bare shell / Infinite baffle."
     )
 
 

@@ -35,7 +35,7 @@ def test_all_offset_folds_share_message_and_preserve_diagnostic(family, diagnost
     message = mesher_error_message(config, detail)
     assert message.startswith("The 2.75 mm wall is thicker than the tightest bend")
     assert "Reduce Wall thickness" in message
-    assert "reduce the mouth angle" in message
+    assert "throat or mouth angle" in message
     assert "Bare shell / Infinite baffle" in message
     assert "azimuth" not in message
     assert detail in caplog.text
