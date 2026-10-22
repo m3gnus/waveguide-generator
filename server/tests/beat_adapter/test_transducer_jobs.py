@@ -212,7 +212,8 @@ def test_job_route_keeps_rms_pressure_all_coupled_traces_and_matrix(solid, recor
     assert result["_field_trace_unavailable_reason"]
 
 
-def test_metal_wire_precision_echo_and_mixed_quantity_dtypes(solid, record, monkeypatch):
+@pytest.mark.parametrize("frequency", [100.1234567, 162.725, 162.72506099369238])
+def test_metal_wire_precision_echo_and_mixed_quantity_dtypes(solid, record, monkeypatch, frequency):
     from server.solver.beat_adapter.observations import build_observations
     from server.solver.beat_adapter.transducers import build_transducer_request
     from server.tests.beat_adapter.conftest import wire
@@ -223,18 +224,36 @@ def test_metal_wire_precision_echo_and_mixed_quantity_dtypes(solid, record, monk
         drivers=jobs.drivers_for(record, request().geometry.drive_channels),
         layout=build_observations(sphere_grid=None),
         frame=frame,
-        frequencies_hz=[100.1234567],
+        frequencies_hz=[frequency],
         backend="metal",
         precision="float32",
     )
-    data = raw(compiled, float(np.float32(100.1234567)))
+    data = raw(compiled, float(str(np.float32(frequency))))
     for quantity in data["quantities"]:
         if quantity["quantity"] == "exterior_pressure":
             shape = quantity["values"]["shape"]
             quantity["values"] = wire(np.full(shape, 2 + 3j), "float32")
-    row = parse_transducer_frequency(data, compiled, 100.1234567)
-    assert row.frequency_hz == 100.1234567
+    row = parse_transducer_frequency(data, compiled, frequency)
+    assert row.frequency_hz == frequency
     assert row.current_rms_a.dtype == np.complex128
+
+
+@pytest.mark.parametrize("echoed", [163., None])
+def test_metal_transducer_wrong_or_missing_frequency_is_refused(solid, record, echoed):
+    from server.solver.beat_adapter.observations import build_observations
+    from server.solver.beat_adapter.results import ResultFrequencyMismatch
+    from server.solver.beat_adapter.transducers import build_transducer_request
+    from server.tests.beat_adapter.test_transducers import FRAME
+
+    compiled = build_transducer_request(
+        solid, drivers=jobs.drivers_for(record, request().geometry.drive_channels),
+        layout=build_observations(sphere_grid=None), frame=FRAME,
+        frequencies_hz=[162.725], backend="metal", precision="float32")
+    data = raw(compiled, echoed)
+    if echoed is None:
+        data.pop("freq_hz")
+    with pytest.raises(ResultFrequencyMismatch, match="result_frequency_mismatch"):
+        parse_transducer_frequency(data, compiled, 162.725)
 
 
 def test_capability_requires_official_provider(monkeypatch):

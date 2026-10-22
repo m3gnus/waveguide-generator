@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from server.solver.beat_adapter.results import (
-    ResultContractError, acceleration_scale, decode_complex_values,
+    ResultContractError, ResultFrequencyMismatch, acceleration_scale, decode_complex_values,
     mean_pressure_from_force, parse_frequency,
 )
 from .conftest import EventStream, wire
@@ -24,6 +24,41 @@ def parse(raw, layout, **kwargs):
                  "excitation_port_id": "source", "precision": "float64", "trace_counts": (4, 2)}
     arguments.update(kwargs)
     return parse_frequency(raw, **arguments)
+
+
+def test_float32_shortest_json_frequency_keeps_requested_float64(layout, raw_result):
+    frequency = 162.72506099369238
+    echoed = float(str(np.float32(frequency)))
+    assert echoed != float(np.float32(frequency))
+    row = parse(raw_result(echoed, precision="float32"), layout,
+                frequency_hz=frequency, precision="float32")
+    assert row.frequency_hz == frequency
+
+
+@pytest.mark.parametrize("echoed", [None, True, "162.72507", 0., -162.72507,
+                                     float("nan"), float("inf"), 163.])
+def test_wrong_or_missing_frequency_has_named_error(layout, raw_result, echoed):
+    data = raw_result(precision="float32")
+    data["freq_hz"] = echoed
+    if echoed is None:
+        data.pop("freq_hz")
+    with pytest.raises(ResultFrequencyMismatch, match="result_frequency_mismatch"):
+        parse(data, layout, frequency_hz=162.72506099369238, precision="float32")
+
+
+def test_float64_does_not_accept_float32_rounding(layout, raw_result):
+    with pytest.raises(ResultFrequencyMismatch):
+        parse(raw_result(162.72507), layout, frequency_hz=162.72506099369238)
+
+
+@pytest.mark.parametrize("precision", ["float32", "float64"])
+@pytest.mark.parametrize("direction", [0., float("inf")])
+def test_adjacent_solver_frequency_is_still_wrong(layout, raw_result, precision, direction):
+    scalar = np.float32 if precision == "float32" else np.float64
+    echoed = float(np.nextafter(scalar(100.), scalar(direction)))
+    with pytest.raises(ResultFrequencyMismatch):
+        parse(raw_result(echoed, precision=precision), layout,
+              frequency_hz=100., precision=precision)
 
 
 @pytest.mark.parametrize("symmetry,copies", [("off", 1), ("x", 2), ("xy", 4), ("ground", 1)])

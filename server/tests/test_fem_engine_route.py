@@ -1145,7 +1145,7 @@ def test_bridge_rejects_tampered_interior_options_before_worker(runtime, monkeyp
 @pytest.mark.parametrize("change,message", [
     ("backend", "Coupled result physics changed"),
     ("dtype", "Coupled quantity identity, unit or precision changed"),
-    ("frequency", "Coupled result frequency, version or excitation identity changed"),
+    ("frequency", "result_frequency_mismatch:.*"),
     ("voltage", "Coupled reference voltage changed"),
 ])
 def test_coupled_float32_result_rejects_backend_dtype_frequency_and_voltage_changes(change, message):

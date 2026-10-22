@@ -23,6 +23,37 @@ class ResultContractError(RuntimeError):
     """An official result or sweep differs from the requested contract."""
 
 
+class ResultFrequencyMismatch(ResultContractError):
+    """A result omits or differs from the frequency expected at its sweep index."""
+
+    reason_code = "result_frequency_mismatch"
+
+
+def match_result_frequency(echoed: Any, requested: float, *, precision: str) -> float:
+    """Validate an indexed echo and return the original requested Float64 value.
+
+    Float32 JSON may use a shortest decimal (e.g. 162.72507), rather than the
+    exact Float32 value expanded to Float64. Allow half a solver-precision ULP
+    toward zero, so shortest decimals match but adjacent representable solver
+    frequencies do not. The tolerance scales with frequency and precision.
+    """
+    if precision not in {"float32", "float64"}:
+        raise ValueError("Result precision must be float32 or float64")
+    scalar = np.float32 if precision == "float32" else np.float64
+    with np.errstate(over="ignore", under="ignore"):
+        wire_frequency = scalar(requested)
+    if not np.isfinite(wire_frequency) or wire_frequency <= 0:
+        raise ValueError("Frequency is invalid at solver precision")
+    tolerance = (float(wire_frequency) - float(np.nextafter(wire_frequency, scalar(0)))) / 2
+    if (type(echoed) not in {float, int} or not math.isfinite(echoed) or echoed <= 0
+            or not math.isclose(echoed, float(wire_frequency),
+                                rel_tol=0., abs_tol=tolerance)):
+        raise ResultFrequencyMismatch(
+            f"result_frequency_mismatch: Result frequency is out of order; "
+            f"expected {requested!r} Hz, received {echoed!r}")
+    return float(requested)
+
+
 def real_source_copy_count(symmetry: str) -> int:
     """Rigid ground images are fictitious; x/xy copies are physical sources."""
     try:
@@ -149,15 +180,7 @@ def parse_frequency(
     if (not isinstance(result, dict) or type(result.get("schema_version")) is not int
             or result["schema_version"] != 2):
         raise ResultContractError("Expected system_result schema version 2")
-    echoed = result.get("freq_hz")
-    scalar = np.float32 if precision == "float32" else np.float64
-    with np.errstate(over="ignore", under="ignore"):
-        wire_frequency = scalar(frequency_hz)
-    if not np.isfinite(wire_frequency) or wire_frequency <= 0:
-        raise ValueError("Frequency is invalid at solver precision")
-    if (type(echoed) not in {float, int} or not math.isfinite(echoed)
-            or scalar(echoed) != wire_frequency):
-        raise ResultContractError("Result frequency is out of order")
+    frequency_hz = match_result_frequency(result.get("freq_hz"), frequency_hz, precision=precision)
     ports = excitation_port_ids or (excitation_port_id,)
     channel_ports = channel_port_ids or (excitation_port_id,)
     if (len(set(ports)) != len(ports) or not channel_ports
@@ -494,11 +517,10 @@ def map_coupled_sweep(events, request, *, progress_callback=None, on_frequency_r
                 raw = event.get("result")
                 if (index >= len(frequencies) or not isinstance(raw, dict)
                         or type(raw.get("schema_version")) is not int or raw["schema_version"] != 2
-                        or type(raw.get("freq_hz")) not in {int, float}
-                        or not math.isfinite(raw["freq_hz"])
-                        or scalar(raw["freq_hz"]) != scalar(frequencies[index])
                         or raw.get("excitation_port_ids") != ports):
                     raise ResultContractError("Coupled result frequency, version or excitation identity changed")
+                match_result_frequency(raw.get("freq_hz"), frequencies[index],
+                                       precision=request.wire["solver_options"]["precision"])
                 diagnostics = raw.get("diagnostics")
                 expected = request.wire["solver_options"]
                 backend_key = ("bem_backend" if any(r["kind"] == "unbounded_air"

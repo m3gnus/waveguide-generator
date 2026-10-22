@@ -21,7 +21,7 @@ from .observations import ObservationLayout
 from .preflight import UnsupportedPhysics, validate_exterior_physics
 from .request import SourceBasis, build_request, _axis, _image_frame
 from server.solver.component_symmetry import SYMMETRY_FIELDS, infer_component_symmetry
-from .results import ResultContractError, decode_complex_values
+from .results import ResultContractError, decode_complex_values, match_result_frequency
 
 DRIVER_SCALARS = ("re_ohm", "le_h", "bl_n_per_a", "mmd_kg", "cms_m_per_n", "rms_n_s_per_m")
 MATRIX_DEFINITION = "force_per_unit_velocity; per-row physical-copy weighting in row_weights"
@@ -501,10 +501,11 @@ def parse_transducer_frequency(raw: Any, request: TransducerRequest, frequency_h
     wire = request.wire
     ports, drivers, matrix_ids = wire["excitation_port_ids"], request.transducer_ids, request.matrix_ids
     if (not isinstance(raw, dict) or type(raw.get("schema_version")) is not int
-            or raw["schema_version"] != 2 or type(raw.get("freq_hz")) not in (float, int)
-            or raw["freq_hz"] != float(np.asarray(frequency_hz, dtype=wire["solver_options"]["precision"]))
+            or raw["schema_version"] != 2
             or raw.get("excitation_port_ids") != ports):
         raise ResultContractError("Transducer result version, frequency or excitation order changed")
+    frequency_hz = match_result_frequency(raw.get("freq_hz"), frequency_hz,
+                                        precision=wire["solver_options"]["precision"])
     diagnostics = raw.get("diagnostics")
     if not isinstance(diagnostics, dict) or any(diagnostics.get(k) != wire["solver_options"][k]
             for k in ("precision", "bem_backend", "symmetry", "phasor_convention")):
