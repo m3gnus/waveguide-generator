@@ -6,7 +6,8 @@ import type { ParameterDefinition } from './parameterRegistry';
 
 export function parseEnclosureResolution(text: string): number | number[] | undefined {
   const parts = text.split(',');
-  if (parts.length !== 1 && parts.length !== 4) return undefined;
+  // One to four values, matching the server's ResolutionExpr: "8,12" means 8,12,12,12.
+  if (parts.length < 1 || parts.length > 4) return undefined;
   const parsed = parts.map((part) => parseDecimalInput(part, { allowCommaDecimal: false }));
   if (parsed.some((part) => part.kind !== 'number')) return undefined;
   const values = parsed.map((part) => part.kind === 'number' ? part.value : NaN);
@@ -25,7 +26,7 @@ export function EnclosureResolutionField({ field, design, value, onCommit }: {
   const [draft, setDraft] = useState(displayed);
   useEffect(() => setDraft(displayed), [displayed]);
   const parsed = parseEnclosureResolution(draft);
-  const error = parsed === undefined ? 'Enter one number or exactly four numbers. Use dots for decimals and commas between values.' : undefined;
+  const error = parsed === undefined ? 'Enter one to four numbers. Use dots for decimals and commas between values.' : undefined;
   return <HelpTipRow className="field-row param-text-row" text={field.description}>
     <label htmlFor={`parameter-${field.id}`}>{field.label} (mm)</label>
     <input id={`parameter-${field.id}`} value={draft} aria-invalid={Boolean(error)}
