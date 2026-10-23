@@ -432,7 +432,15 @@ def _record_for_model(store: Any, model_id: str, record: Mapping[str, Any], revi
     """
 
     if model_id != UNFILED_MODEL_ID:
-        store.record_model_setup(model_id, inventory_sha256(record.get("sources") or []), revision_id)
+        inventory = inventory_sha256(record.get("sources") or [])
+        standing = store.get_model_setup(model_id, inventory)
+        # Preserve user ownership when an old automatic run is selected
+        # again, including a user setup recorded before the sticky provenance
+        # table existed. Merely solving unedited defaults is not a user edit.
+        user_choice = not _is_defaults(store, revision_id) or (
+            standing is not None and not _is_defaults(store, standing["revision_id"])
+        )
+        store.record_model_setup(model_id, inventory, revision_id, user_choice=user_choice)
 
 
 # -- the press and the job it is answered with ----------------------------------

@@ -240,7 +240,7 @@ def test_a_reassigned_source_identity_does_not_inherit_the_project_setup(harness
 
     # Not the other source's settings: WG's defaults, for the new inventory.
     assert (summary["state"], summary["setupDefaults"]) == ("accepted", True)
-    assert harness.submitted[-1].geometry.mesh.rigid_size_mm == 4.0
+    assert harness.submitted[-1].geometry.mesh.rigid_size_mm == 25.0
     assert harness.store.get_model_setup(
         lineage, inventory_sha256([{"id": "cad-source-17", "role": "HF", "required": True}])
     )["revision_id"] != summary["setupRevisionId"]
@@ -357,9 +357,9 @@ def test_a_model_with_no_recorded_setup_is_solved_with_wg_defaults_and_remembers
     assert (first["state"], first["jobId"]) == ("accepted", "job-1")
     assert (first["setupDefaults"], first["message"]) == (True, DEFAULT_SETTINGS_NOTE)
     request = harness.submitted[-1]
-    # The shared solver selection, and the model's own suggested mesh size.
+    # The shared solver selection and the current role's mesh defaults.
     assert (request.options.engine, request.options.accuracy) == ("metal", "accurate")
-    assert request.geometry.mesh.source_size_mm == {"source-hf": 4.0}
+    assert request.geometry.mesh.source_size_mm == {"source-hf": 6.0}
     revision = json.loads(harness.store.get_setup_revision(first["setupRevisionId"])["setup_json"])
     assert revision["origin"] == "wg_defaults"
     # Recorded as the project's setup for these sources ...

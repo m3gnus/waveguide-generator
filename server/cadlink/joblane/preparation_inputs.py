@@ -19,6 +19,7 @@ from server.cadlink.intake.ingest import (
 )
 from server.cadlink.joblane.default_setup import (
     SolveDefaultsDamaged,
+    default_mesh,
     default_setup,
 )
 from server.cadlink.joblane.project_setup import (
@@ -161,12 +162,58 @@ def _load_setup(
         row = ctx.store.get_setup_revision(revision_id)
         if row is None:
             return None
-        return validate_setup(json.loads(row["setup_json"])), str(row["revision_id"])
+        loaded = validate_setup(json.loads(row["setup_json"])), str(row["revision_id"])
+        if loaded[0].origin != DEFAULTS_ORIGIN:
+            return loaded
     manifest = read_snapshot(str(retained["retained_path"]), retained=True).manifest
     lineage_id = snapshot_project(ctx.store, manifest)
     if lineage_id is None:
-        return None
-    return project_setup(ctx.store, lineage_id, manifest.get("sources") or [])
+        return loaded if revision_id else None
+    if not revision_id:
+        loaded = project_setup(ctx.store, lineage_id, manifest.get("sources") or [])
+    if loaded is None or loaded[0].origin != DEFAULTS_ORIGIN:
+        return loaded
+    setup, old_revision_id = loaded
+    inventory = inventory_sha256(manifest.get("sources") or [])
+    standing = ctx.store.get_model_setup(lineage_id, inventory)
+    if (
+        standing is None or standing["revision_id"] != old_revision_id
+        or ctx.store.model_setup_has_user_choice(lineage_id, inventory)
+    ):
+        # Origin alone is insufficient for an older explicit revision: a
+        # person may have saved a successor. No project selection means the
+        # edit status is unknown. A restored run also keeps a person's choice
+        # sticky even when it selects an automatic revision again.
+        return loaded
+    mesh = default_mesh(manifest, use_role_defaults=True)
+    old_mesh = dict(setup.geometry.get("mesh") or {})
+    # Only sizes already belonging to this setup; keep skipped sources and
+    # every other mesh/geometry/solve setting exactly as recorded.
+    source_sizes = old_mesh.get("source_size_mm") or {}
+    if any(mesh["source_size_mm"].get(source_id) is None for source_id in source_sizes):
+        return loaded
+    mesh["source_size_mm"] = {
+        source_id: mesh["source_size_mm"][source_id] for source_id in source_sizes
+    }
+    updated = validate_setup({
+        **json.loads(setup_content(setup)),
+        "geometry": {**setup.geometry, "mesh": {**old_mesh, **mesh}},
+    })
+    if setup_digest(updated) == setup_digest(setup):
+        return loaded
+    revision = ctx.store.create_setup_revision(setup_content(updated), setup_digest(updated))
+    new_revision_id = str(revision["revision_id"])
+    if not ctx.store.replace_model_setup_if_current(
+        lineage_id, inventory, old_revision_id, new_revision_id,
+    ):
+        # A user save or another refresh won the race. Use what stands now;
+        # never overwrite their selection or mesh with the stale sizes.
+        return project_setup(ctx.store, lineage_id, manifest.get("sources") or []) or loaded
+    logger.info(
+        "Recomputed automatic CAD mesh sizes for model %s: setup %s -> %s, mesh %s -> %s.",
+        lineage_id, old_revision_id, new_revision_id, old_mesh, mesh,
+    )
+    return updated, new_revision_id
 
 
 def _retained_manifest(retained: Mapping[str, Any]) -> Mapping[str, Any] | None:

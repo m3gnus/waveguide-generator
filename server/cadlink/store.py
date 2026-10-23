@@ -272,6 +272,17 @@ _SCHEMA = (
       updated_at TEXT NOT NULL
     )
     """,
+    # A person saved or explicitly solved a setup for these sources. Sticky:
+    # restoring an older automatic run must never make it unedited again.
+    # Separate and additive so older releases can still insert project rows.
+    """
+    CREATE TABLE IF NOT EXISTS cad_project_setup_user_choices (
+      lineage_id TEXT NOT NULL,
+      inventory_sha256 TEXT NOT NULL,
+      recorded_at TEXT NOT NULL,
+      PRIMARY KEY (lineage_id, inventory_sha256)
+    )
+    """,
     # The solver frame the user confirmed for an unlinked model, per project
     # (or per snapshot when it belongs to none), under the frame requirement it
     # was confirmed for (server/cadlink/interpretation/solver_frame.py). Additive: an older
@@ -1576,9 +1587,15 @@ class CadLinkStore:
         )
 
     def record_model_setup(
-        self, lineage_id: str, inventory_sha256: str, revision_id: str
+        self, lineage_id: str, inventory_sha256: str, revision_id: str,
+        *, user_choice: bool = True,
     ) -> dict[str, Any]:
-        """Make a setup revision the one a project is prepared with, for these sources."""
+        """Record a person's setup choice, including an explicitly restored run.
+
+        Automatic first-use defaults use ``record_project_setup_if_absent``.
+        A solve with unedited WG defaults passes ``user_choice=False``; it
+        cannot clear an earlier user choice, including a restored run's.
+        """
 
         if not lineage_id or not inventory_sha256 or not revision_id:
             raise ValueError("a project setup names a lineage, an inventory and a revision")
@@ -1586,6 +1603,12 @@ class CadLinkStore:
             raise ValueError(f"{UNFILED_MODEL_ID!r} is reserved and names no model")
         self.initialize()
         with self._lock, self._transaction() as conn:
+            if user_choice:
+                conn.execute(
+                    "INSERT OR IGNORE INTO cad_project_setup_user_choices "
+                    "(lineage_id, inventory_sha256, recorded_at) VALUES (?, ?, ?)",
+                    (lineage_id, inventory_sha256, utc_now()),
+                )
             conn.execute(
                 "INSERT INTO cad_project_setups (lineage_id, inventory_sha256, revision_id, "
                 "updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (lineage_id, inventory_sha256) "
@@ -1598,6 +1621,33 @@ class CadLinkStore:
                 (lineage_id, inventory_sha256),
             ).fetchone()
         return dict(row)
+
+    def replace_model_setup_if_current(
+        self, lineage_id: str, inventory_sha256: str,
+        expected_revision_id: str, revision_id: str,
+    ) -> bool:
+        """Advance an automatic setup without overwriting a concurrent user save."""
+
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE cad_project_setups SET revision_id = ?, updated_at = ? "
+                "WHERE lineage_id = ? AND inventory_sha256 = ? AND revision_id = ? "
+                "AND NOT EXISTS (SELECT 1 FROM cad_project_setup_user_choices "
+                "WHERE lineage_id = ? AND inventory_sha256 = ?)",
+                (revision_id, utc_now(), lineage_id, inventory_sha256, expected_revision_id,
+                 lineage_id, inventory_sha256),
+            )
+        return cursor.rowcount == 1
+
+    def model_setup_has_user_choice(self, lineage_id: str, inventory_sha256: str) -> bool:
+        """Whether a person ever recorded a setup for this model's source inventory."""
+
+        self.initialize()
+        return self._read_one(
+            "SELECT 1 FROM cad_project_setup_user_choices WHERE lineage_id = ? AND inventory_sha256 = ?",
+            (lineage_id, inventory_sha256),
+        ) is not None
 
     def record_project_setup_if_absent(
         self, lineage_id: str, inventory_sha256: str, revision_id: str

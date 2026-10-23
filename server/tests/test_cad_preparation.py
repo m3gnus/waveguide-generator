@@ -263,7 +263,8 @@ def test_a_first_cad_authored_model_is_solved_with_wg_default_settings(harness: 
 
 
 @pytest.mark.parametrize("origin", [None, "wg_defaults"])
-def test_saved_mesh_sizes_are_never_replaced_by_new_defaults(harness: Harness, origin) -> None:
+def test_user_or_unknown_ownership_mesh_sizes_are_not_replaced(harness: Harness, origin) -> None:
+    """No project selection: even a defaults origin cannot prove edit status."""
     _received(harness)
     saved = _setup(rigid=4)
     saved["geometry"]["mesh"] = {
