@@ -4,7 +4,8 @@ import { runDocumentName, runSourceLabel, runSourceText } from '../jobs/runIdent
 import { RunModelDetails } from './RunModelDetails';
 import { retryBlockedExport } from '../jobs/autoExportOwner';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
+import { createPortal } from 'react-dom';
+import { isActiveJobStatus, JobModelProtectionError, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { useWorkspaceFolder } from './WorkspaceFolderControls';
 import { compareSelection } from '../api/results';
 import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
@@ -22,6 +23,7 @@ import { middleEllipsis } from './ResultsPanel';
 import { cadJobOperationId } from '../jobs/cadSolve';
 import { CadSolveInputs } from './CadSolveInputs';
 import { SolveProgressView, useSolveClock } from './solveProgress';
+import { useModalDialogFocus } from './dialogFocus';
 
 /** Show the effective Runs folder and choose the shared WG folder. */
 function OutputFolderBar() {
@@ -317,6 +319,10 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
   const preferences = usePreferences();
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [exportPreferencesOpen, setExportPreferencesOpen] = useState(false);
+  const [blockedDeletion, setBlockedDeletion] = useState<{ job: JobItem; reason: string } | null>(null);
+  const [deletingAnyway, setDeletingAnyway] = useState(false);
+  const closeDeletion = useCallback(() => { if (!deletingAnyway) setBlockedDeletion(null); }, [deletingAnyway]);
+  const deletionDialog = useModalDialogFocus<HTMLDivElement>({ open: blockedDeletion !== null, onClose: closeDeletion });
   const preferencesAnchor = useRef<HTMLButtonElement | null>(null);
   const { query, source, project, model } = useRunFilters();
   const setQuery = (query: string) => useRunFilters.setState({ query });
@@ -359,8 +365,23 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
 
   const remove = useCallback((job: JobItem) => {
     if (!window.confirm(`Remove “${runDisplayName(job)}” and its saved results?`)) return;
-    void jobsSocket.deleteJob(job.id).catch((error) => coordinator.reportError(String(error)));
+    void jobsSocket.deleteJob(job.id).catch((error) => {
+      if (error instanceof JobModelProtectionError) setBlockedDeletion({ job, reason: error.message });
+      else coordinator.reportError(String(error));
+    });
   }, [coordinator.reportError]);
+  const deleteAnyway = async () => {
+    if (!blockedDeletion || deletingAnyway) return;
+    setDeletingAnyway(true);
+    try {
+      await jobsSocket.deleteJob(blockedDeletion.job.id, { skipModelProtection: true });
+      setBlockedDeletion(null);
+    } catch (error) {
+      coordinator.reportError(String(error));
+    } finally {
+      setDeletingAnyway(false);
+    }
+  };
   const openExportSettings = useCallback(() => {
     setPreferencesOpen(false);
     setExportPreferencesOpen(true);
@@ -373,6 +394,17 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
   };
 
   return <div className="jobs-panel panel-scroll">
+    {blockedDeletion && createPortal(<div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) closeDeletion(); }}>
+      <div ref={deletionDialog} className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-run-title" aria-describedby="delete-run-reason delete-run-consequence">
+        <header><h2 id="delete-run-title">Delete “{runDisplayName(blockedDeletion.job)}” anyway?</h2></header>
+        <div className="settings-scroll">
+          <p id="delete-run-reason">{blockedDeletion.reason}</p>
+          <p id="delete-run-consequence">Delete anyway removes this run and its saved results from job history without protecting its Fusion model. No files on disk will be deleted.</p>
+          <button disabled={deletingAnyway} onClick={closeDeletion}>Cancel</button>
+          <button disabled={deletingAnyway} onClick={() => void deleteAnyway()}>{deletingAnyway ? 'Deleting…' : 'Delete anyway'}</button>
+        </div>
+      </div>
+    </div>, document.body)}
     <OutputFolderBar/>
     {/* Only when there is something to report. This rail used to carry a
         permanent "0 active · connected · 31/31 shown" strip: a zero, a state

@@ -432,6 +432,14 @@ def record_run_segment(conn: sqlite3.Connection, job_id: str) -> None:
         )
 
 
+class RunFolderUnavailableError(OSError):
+    def __init__(self, root: Path) -> None:
+        super().__init__(
+            f"The folder for this run is not available: {root}. Reconnect it and try again, "
+            "or delete the run without protecting its Fusion model."
+        )
+
+
 def claim_run_write_path(jobs: Any, row: Mapping[str, Any], current_root: Any,
                          cad_source: Mapping[str, Any] | None = None) -> Path:
     """Pin first write; later writes use that absolute location or fail offline.
@@ -447,11 +455,11 @@ def claim_run_write_path(jobs: Any, row: Mapping[str, Any], current_root: Any,
             path = Path(previous)
             root = path.parent.parent
             if not path.is_absolute() or not root.is_dir():
-                raise OSError("This run’s recorded archive location is unavailable. Reconnect its drive or folder and retry.")
+                raise RunFolderUnavailableError(root)
         else:
             root = Path(current_root())
             if not root.is_dir():
-                raise OSError("The Runs folder is unavailable. Reconnect its drive or folder and retry.")
+                raise RunFolderUnavailableError(root)
             path = root / location.folder / location.run
             jobs.mutate_job_metadata(row["id"], {"archived_path": str(path.absolute())})
         return path
@@ -466,7 +474,7 @@ def complete_archive(
     if root is None:
         return previous
     if previous and not root.is_dir():
-        raise OSError("This run’s recorded archive location is unavailable. Reconnect its drive or folder and retry.")
+        raise RunFolderUnavailableError(root)
     path = write_project_record(root, row, store, cad_source)
     return previous or str(path.absolute())
 

@@ -605,7 +605,7 @@ def test_recorded_absolute_path_wins_over_repaired_mirror_at_completion(tmp_path
     assert not (root / "Horn-2").exists()
     assert list(current.iterdir()) == []
     root.rename(tmp_path / "offline")
-    with pytest.raises(OSError, match="recorded archive location is unavailable"):
+    with pytest.raises(OSError, match="The folder for this run is not available"):
         identity.complete_archive(store, old)
     assert not root.exists()
 

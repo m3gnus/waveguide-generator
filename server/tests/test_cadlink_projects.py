@@ -825,7 +825,7 @@ def test_run_document_placement_uses_recorded_root_and_refuses_offline(tmp_path)
     root_a.rename(tmp_path / "offline")
     result = asyncio.run(archive_run_document(request, SimpleNamespace(app=app)))
     assert result["placed"] is False and result["retryable"] is True
-    assert "recorded archive location is unavailable" in result["reason"]
+    assert f"The folder for this run is not available: {root_a}" in result["reason"]
     assert not root_a.exists()
     assert list(root_b.iterdir()) == []
 

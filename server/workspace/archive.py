@@ -440,13 +440,13 @@ def pin_cad_document(
                 not _unlinked_archive_path(old_pin, runs_root)
                 or not _sidecar_matches_digest(old_pin, return_state_hash)
             ):
-                return None
+                raise OSError(f"The protected Fusion model record conflicts with this run: {old_pin}.")
             if source.stem.endswith(".pinned"):
                 if not old_pin.exists():
                     os.rename(ordinary, old_pin)
                 elif ordinary.exists():
                     if ordinary.read_bytes() != old_pin.read_bytes():
-                        raise OSError("The protected Fusion model has conflicting records.")
+                        raise OSError(f"The protected Fusion model has conflicting records: {ordinary} and {old_pin}.")
                     ordinary.unlink()
                 return source.relative_to(folder).as_posix()
             destination = source.with_name(source.stem + ".pinned" + source.suffix)
@@ -456,10 +456,10 @@ def pin_cad_document(
             # Never replace a model or sidecar already occupying the pin name.
             # A matching orphan sidecar can be left by an interrupted pin.
             if destination.exists() or destination.is_symlink():
-                raise OSError("The protected Fusion model filename is already occupied.")
+                raise OSError(f"The protected Fusion model filename is already occupied: {destination}.")
             if pinned.exists() or pinned.is_symlink():
                 if not _unlinked_archive_path(pinned, runs_root) or pinned.read_bytes() != raw:
-                    raise OSError("The protected Fusion model record is already occupied.")
+                    raise OSError(f"The protected Fusion model record is already occupied: {pinned}.")
             else:
                 _write_json_atomic(pinned, raw)
             # Publish identification first. If interrupted before this rename,

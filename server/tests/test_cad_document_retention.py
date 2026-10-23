@@ -522,6 +522,130 @@ def test_deleting_a_completed_job_before_archive_permanently_protects_its_versio
     assert len(list((runs / STEM).rglob("*.f3d"))) == 2
 
 
+@pytest.mark.parametrize("recorded", [False, True])
+def test_delete_unavailable_root_explains_location_and_requires_explicit_bypass(tmp_path, recorded):
+    from server.jobs.runtime import JobProtectionError
+
+    app, runs = app_with_runs(tmp_path)
+    capture_directly(app, runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
+    imported_run(app, "job-a", "aaa", status="complete")
+    runtime = app.state.jobs_runtime
+    if recorded:
+        runtime.store.mutate_job_metadata("job-a", {"archived_path": str(runs / STEM / "1_run")})
+    offline = runs.with_name("offline")
+    runs.rename(offline)
+    # Selecting another root must not silently redirect a recorded run.
+    if recorded:
+        replacement = tmp_path / "replacement"
+        replacement.mkdir()
+        app.state.workspace.select(replacement)
+    before = {p.relative_to(offline): p.read_bytes() for p in offline.rglob("*") if p.is_file()}
+
+    async def scenario():
+        try:
+            with pytest.raises(JobProtectionError) as error:
+                await runtime.delete("job-a")
+            assert str(error.value) == (
+                f"The folder for this run is not available: {runs}. Reconnect it and try again, "
+                "or delete the run without protecting its Fusion model."
+            )
+            assert runtime.store.get_job_row("job-a") is not None
+            await runtime.delete("job-a", skip_model_protection=True)
+            assert runtime.store.get_job_row("job-a") is None
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+    assert {p.relative_to(offline): p.read_bytes() for p in offline.rglob("*") if p.is_file()} == before
+
+
+def test_delete_conflict_reports_file_and_bypass_does_not_touch_it(tmp_path):
+    from server.jobs.runtime import JobProtectionError
+
+    app, runs = app_with_runs(tmp_path)
+    capture_directly(app, runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
+    imported_run(app, "job-a", "aaa", status="complete")
+    conflict = runs / STEM / "cad" / "Tritonia_260820-0900_aaa.pinned.f3d"
+    conflict.write_bytes(b"unrelated")
+    before = {p: p.read_bytes() for p in runs.rglob("*") if p.is_file()}
+
+    async def scenario():
+        runtime = app.state.jobs_runtime
+        try:
+            with pytest.raises(JobProtectionError) as error:
+                await runtime.delete("job-a")
+            assert str(conflict) in str(error.value)
+            assert "occupied" in str(error.value)
+            assert runtime.store.get_job_row("job-a") is not None
+            await runtime.delete("job-a", skip_model_protection=True)
+            assert runtime.store.get_job_row("job-a") is None
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+    assert {p: p.read_bytes() for p in runs.rglob("*") if p.is_file()} == before
+
+
+def test_root_io_failure_exposes_the_cause_and_allows_confirmed_bypass(tmp_path, monkeypatch):
+    from server.jobs.runtime import JobProtectionError
+
+    app, runs = app_with_runs(tmp_path)
+    imported_run(app, "job-a", "aaa", status="complete")
+
+    def unreadable():
+        raise PermissionError(13, "Permission denied", str(runs))
+
+    monkeypatch.setattr(app.state.workspace, "path", unreadable)
+
+    async def scenario():
+        runtime = app.state.jobs_runtime
+        try:
+            with pytest.raises(JobProtectionError) as error:
+                await runtime.delete("job-a")
+            assert str(runs) in str(error.value)
+            assert "Permission denied" in str(error.value)
+            await runtime.delete("job-a", skip_model_protection=True)
+            assert runtime.store.get_job_row("job-a") is None
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("protect_via", ["archive_document", "archive_metadata", "legacy_archive"])
+def test_already_protected_run_can_be_deleted_with_its_root_offline(tmp_path, protect_via):
+    app, runs = app_with_runs(tmp_path)
+    capture_directly(app, runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
+    imported_run(app, "job-a", "aaa", status="complete")
+
+    async def scenario():
+        runtime = app.state.jobs_runtime
+        try:
+            if protect_via == "archive_document":
+                answer = await archive_run_document(ArchiveRunDocumentRequest(jobId="job-a"), SimpleNamespace(app=app))
+                assert answer["placed"] is True
+            else:
+                await runtime.patch_metadata("job-a", {"archived_at": "now"})
+                if protect_via == "legacy_archive":
+                    # Older versions recorded completion without a pin receipt.
+                    runtime.store.mutate_job_metadata("job-a", {"cad_document_protection": None})
+            offline = runs.with_name("offline")
+            runs.rename(offline)
+            # Reload from persistence; a pin receipt must survive runtime restart.
+            row = runtime.store.get_job_row("job-a")
+            if protect_via != "legacy_archive":
+                assert row["task_metadata"]["cad_document_protection"]["return_state_hash"] == "sha256:aaa"
+            else:
+                assert row["task_metadata"]["archived_at"] == "now"
+            await runtime.delete("job-a")
+            assert runtime.store.get_job_row("job-a") is None
+            assert (offline / STEM / "cad" / "Tritonia_260820-0900_aaa.pinned.f3d").read_bytes() == b"model-aaa"
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_marking_archive_complete_also_protects_the_used_version(tmp_path):
     app, runs = app_with_runs(tmp_path)
     capture_directly(app, runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")

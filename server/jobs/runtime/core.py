@@ -490,6 +490,10 @@ class JobConflictError(RuntimeError):
     """Requested mutation conflicts with the persisted lifecycle state."""
 
 
+class JobProtectionError(JobConflictError):
+    """Deletion can proceed only if the caller explicitly skips model protection."""
+
+
 class JobResourceUnavailableError(RuntimeError):
     """Requested job result or artifact is not persisted."""
 
@@ -3216,16 +3220,19 @@ class JobRuntime:
             try:
                 await self.protect_cad_document(row)
             except OSError as exc:
-                raise JobConflictError("The Fusion model could not be protected. Retry when its folder is available.") from exc
+                raise JobProtectionError(str(exc)) from exc
 
-    async def delete(self, job_id: str) -> None:
+    async def delete(self, job_id: str, *, skip_model_protection: bool = False) -> None:
         await self.start()
         row = self._require_job(job_id)
         if row["status"] in ACTIVE_STATUSES:
             raise JobConflictError("Cannot delete active job")
-        if row["status"] == "complete" or row.get("has_results"):
+        # Legacy runs have no pin receipt, but archive completion already made
+        # the protection decision before releasing their retention reference.
+        archived = (row.get("task_metadata") or {}).get("archived_at")
+        if not skip_model_protection and not archived and (row["status"] == "complete" or row.get("has_results")):
             await self._protect_cad_document(row)
-        deleted, event = self.store.delete_job_with_event(job_id)
+        deleted, event = self.store.delete_job_with_event(job_id, preserve_files=skip_model_protection)
         if not deleted or event is None:
             raise JobNotFoundError(job_id)
         self._remove_from_queue(job_id)
@@ -4938,6 +4945,7 @@ __all__ = [
     "EventBroker",
     "ImportedSolveRefusal",
     "JobConflictError",
+    "JobProtectionError",
     "JobMeshDiscardedError",
     "JobNotFoundError",
     "JobResourceUnavailableError",

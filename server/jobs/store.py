@@ -2726,8 +2726,8 @@ class JobStore:
         )
 
 
-    def delete_job_with_event(self, job_id: str) -> tuple[bool, dict[str, Any] | None]:
-        """Delete one row and retain a terminal deleted event."""
+    def delete_job_with_event(self, job_id: str, *, preserve_files: bool = False) -> tuple[bool, dict[str, Any] | None]:
+        """Delete one row and retain a terminal deleted event, optionally keeping disk files."""
 
         with self._lock, self._transaction() as conn:
             trace_rows = conn.execute(
@@ -2742,10 +2742,11 @@ class JobStore:
             if cur.rowcount <= 0:
                 return False, None
             event = self._append_event(conn, job_id, "deleted", {})
-        for row in trace_rows:
-            self._remove_field_trace_path(job_id, self._field_trace_path(str(row["path"])))
-        self.delete_fem_field(job_id)
-        self._delete_job_logs([job_id])
+        if not preserve_files:
+            for row in trace_rows:
+                self._remove_field_trace_path(job_id, self._field_trace_path(str(row["path"])))
+            self.delete_fem_field(job_id)
+            self._delete_job_logs([job_id])
         return True, event
 
     def delete_jobs_by_status_with_events(

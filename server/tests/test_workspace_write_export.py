@@ -2126,7 +2126,7 @@ def test_run_writes_follow_recorded_location_across_root_selection(tmp_path, suf
     assert list(root_b.iterdir()) == []
     # Missing recorded root is explicit, and cannot recreate or redirect it.
     root_a.rename(tmp_path / "offline")
-    with pytest.raises(HTTPException, match="recorded archive location is unavailable") as exc:
+    with pytest.raises(HTTPException, match="The folder for this run is not available") as exc:
         asyncio.run(write())
     assert exc.value.status_code == 409
     assert not root_a.exists()

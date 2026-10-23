@@ -37,11 +37,12 @@ from server.platform.process import background_process_kwargs
 from server.workspace.api import (
     CadWorkspaceState,
     WorkspaceState,
+    WorkspaceUnavailableError,
     _path_segments,
     _strictly_inside,
     open_folder_command,
 )
-from server.workspace.archive_identity import project_folder, job_archive_location, claim_run_write_path
+from server.workspace.archive_identity import project_folder, job_archive_location, claim_run_write_path, RunFolderUnavailableError
 from server.workspace.archive import (
     archive_cad_document,
     archive_folder_slug,
@@ -1279,13 +1280,17 @@ def _project_archive_stem(store: CadLinkStore, lineage_id: str, filename: str) -
     return project_folder(store, lineage_id, filename)
 
 
-def _runs_root(request: Request) -> Path:
+def _runs_root(request: Request, *, for_protection: bool = False) -> Path:
     runs: WorkspaceState | None = getattr(request.app.state, "workspace", None)
     if runs is None:
         raise HTTPException(status_code=409, detail="No run archive folder is available.")
     try:
         return runs.path()
     except Exception as exc:
+        if for_protection and isinstance(exc, WorkspaceUnavailableError):
+            raise RunFolderUnavailableError(exc.path) from exc
+        if for_protection and isinstance(exc, OSError):
+            raise
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
@@ -1544,7 +1549,7 @@ async def archive_run_document(
     if _RETURN_STATE_HASH.fullmatch(digest) is None:
         return {"placed": False, "retryable": False, "reason": "Model state not recorded."}
     try:
-        path = await asyncio.to_thread(claim_run_write_path, jobs.store, row, lambda: _runs_root(request), source)
+        path = await asyncio.to_thread(claim_run_write_path, jobs.store, row, lambda: _runs_root(request, for_protection=True), source)
     except OSError as exc:
         return {"placed": False, "retryable": True, "reason": str(exc)}
     root = path.parent.parent
@@ -1602,15 +1607,25 @@ async def _pin_job_document(
     digest = str(source.get("return_state_hash") or "")
     if _RETURN_STATE_HASH.fullmatch(digest) is None:
         return None
+    # This receipt is written only after a verified pin succeeds. Deletion must
+    # not need the original drive again once protection is already in place.
+    protection = (row.get("task_metadata") or {}).get("cad_document_protection") or {}
+    if protection.get("return_state_hash") == digest and protection.get("relative_path"):
+        return str(protection["relative_path"])
     await _await_cad_document_capture(digest)
     if path is None:
-        path = await asyncio.to_thread(claim_run_write_path, jobs.store, row, lambda: _runs_root(request), source)
-    return await asyncio.to_thread(
+        path = await asyncio.to_thread(claim_run_write_path, jobs.store, row, lambda: _runs_root(request, for_protection=True), source)
+    relative = await asyncio.to_thread(
         pin_cad_document, path.parent.parent, path.parent.name, digest,
         verify_document=lambda document: _verified_run_document(
             request, str(source.get("lineage_id") or ""), digest, document, strict_io=True,
         ),
     )
+    if relative is not None:
+        await asyncio.to_thread(jobs.store.mutate_job_metadata, row["id"], {
+            "cad_document_protection": {"return_state_hash": digest, "relative_path": relative},
+        })
+    return relative
 
 
 async def _reclaim_captured_documents(request: Request, root: Path, stem: str) -> None:

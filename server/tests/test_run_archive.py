@@ -461,6 +461,22 @@ def test_two_runs_share_one_pinned_file_and_reingestion_is_a_noop(tmp_path: Path
     assert not original.with_suffix(".json").exists()
 
 
+@pytest.mark.parametrize("conflict_kind", ["model", "sidecar", "legacy_sidecar"])
+def test_pin_conflict_names_the_file_and_preserves_all_bytes(tmp_path, conflict_kind):
+    runs = tmp_path / "runs"
+    relative = archive_cad_document(bundle_with_document(tmp_path), record_for(), runs, "Big Horn")
+    source = runs / "Big_Horn" / relative
+    destination = source.with_name(source.stem + ".pinned.f3d")
+    conflict = {"model": destination, "sidecar": destination.with_suffix(".cad.json"),
+                "legacy_sidecar": source.with_suffix(".cad.json")}[conflict_kind]
+    conflict.write_bytes(b"unrelated file")
+    before = {p: p.read_bytes() for p in runs.rglob("*") if p.is_file()}
+    with pytest.raises(OSError) as error:
+        pin_cad_document(runs, "Big Horn", "sha256:abc123", verify_document=lambda _path: True)
+    assert str(conflict) in str(error.value)
+    assert {p: p.read_bytes() for p in runs.rglob("*") if p.is_file()} == before
+
+
 @pytest.mark.parametrize("legacy_pin", [False, True])
 def test_a_pinned_version_survives_actual_v035_recapture_and_prune(tmp_path: Path, legacy_pin) -> None:
     from server.tests.fixtures import archive_v035 as older
@@ -502,7 +518,8 @@ def test_pinning_requires_verified_bytes_and_never_overwrites_a_pin(tmp_path: Pa
     pinned = original.with_suffix(".cad.json")
     pinned.write_text('{"returnStateHash":"sha256:other"}')
     before = pinned.read_bytes()
-    assert pin_cad_document(runs, "Big Horn", "sha256:abc123", verify_document=lambda _path: True) is None
+    with pytest.raises(OSError, match=re.escape(str(pinned))):
+        pin_cad_document(runs, "Big Horn", "sha256:abc123", verify_document=lambda _path: True)
     assert pinned.read_bytes() == before
 
 

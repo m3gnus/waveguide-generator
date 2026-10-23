@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isActiveJobStatus, JobsSocketManager, type JobItem, type JobsWebSocketLike } from '../api/jobsSocket';
+import { isActiveJobStatus, JobModelProtectionError, JobsSocketManager, type JobItem, type JobsWebSocketLike } from '../api/jobsSocket';
 import { compareSelection, provisionalResults } from '../api/results';
 
 class MockSocket implements JobsWebSocketLike {
@@ -37,6 +37,24 @@ async function flush(): Promise<void> { await Promise.resolve(); await Promise.r
 describe('jobs websocket state machine', () => {
   beforeEach(() => { vi.useFakeTimers(); compareSelection.clear(); provisionalResults.clear(); });
   afterEach(() => { provisionalResults.clear(); vi.useRealTimers(); });
+
+  it('keeps a protection-blocked run until deletion explicitly bypasses protection', async () => {
+    const socket = new MockSocket();
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(json({ detail: { code: 'model_protection_failed', message: 'Conflicting file: archive.pinned.f3d' } }, 409))
+      .mockResolvedValueOnce(json({ deleted: true }));
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [job({ status: 'complete' })] });
+    await expect(manager.deleteJob('job-1')).rejects.toBeInstanceOf(JobModelProtectionError);
+    expect(fetcher).toHaveBeenNthCalledWith(1, '/api/jobs/job-1', { method: 'DELETE' });
+    expect(manager.getSnapshot().jobs).toHaveLength(1);
+    await manager.deleteJob('job-1', { skipModelProtection: true });
+    expect(fetcher).toHaveBeenNthCalledWith(2, '/api/jobs/job-1?skip_model_protection=true', { method: 'DELETE' });
+    expect(manager.getSnapshot().jobs).toHaveLength(0);
+    manager.stop();
+  });
 
   it.each(['interior-fem', 'coupled-fem-bem'] as const)('accepts a completed %s job snapshot', (solvePath) => {
     const socket = new MockSocket();

@@ -393,6 +393,62 @@ def test_solve_body_validation_uses_versioned_error_envelope(tmp_path: Path) -> 
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("status", ["complete", "running"])
+def test_delete_protection_bypass_is_explicit_preserves_files_and_keeps_active_guard(tmp_path, status):
+    from fastapi import FastAPI
+
+    async def scenario():
+        app = create_app(data_dir=tmp_path)
+        runtime = app.state.jobs_runtime
+        runtime.store.initialize()
+        await runtime.start()
+        row = _complete_job("protected")
+        row["status"] = status
+        runtime.store.create_job(row)
+        log = runtime.store._job_log_path("protected")
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_bytes(b"retained log")
+        fem = runtime.store._fem_field_path("protected")
+        fem.parent.mkdir(parents=True, exist_ok=True)
+        fem.write_bytes(b"retained field")
+        protected = []
+        cleanup = []
+
+        async def fail_protection(row):
+            protected.append(row["id"])
+            raise OSError("Conflicting file: example.pinned.f3d")
+
+        runtime.protect_cad_document = fail_protection
+        api = FastAPI()
+        api.include_router(create_jobs_router(runtime, after_delete=lambda: cleanup.append(True)))
+        try:
+            for query in ("", "skip_model_protection=false"):
+                code, raw = await _request(api, "DELETE", "/api/jobs/protected", query=query)
+                assert code == 409
+                detail = json.loads(raw)["detail"]
+                if status == "complete":
+                    assert detail == {"code": "model_protection_failed", "message": "Conflicting file: example.pinned.f3d"}
+                else:
+                    assert detail == "Cannot delete active job"
+                assert runtime.store.get_job_row("protected") is not None
+            code, raw = await _request(api, "DELETE", "/api/jobs/protected", query="skip_model_protection=true")
+            if status == "complete":
+                assert code == 200 and json.loads(raw)["deleted"] is True
+                assert runtime.store.get_job_row("protected") is None
+                assert protected == ["protected", "protected"]
+            else:
+                assert code == 409
+                assert runtime.store.get_job_row("protected") is not None
+                assert not protected
+            assert log.read_bytes() == b"retained log"
+            assert fem.read_bytes() == b"retained field"
+            assert not cleanup
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_dryrun_http_lifecycle_metadata_results_and_delete(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -5,7 +5,7 @@ import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
+import { JobModelProtectionError, jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
@@ -831,6 +831,34 @@ describe('jobs panel run list', () => {
     expect(preferencesStore.getSnapshot().minRating).toBe(0);
     act(() => toggle.click());
     expect(preferencesStore.getSnapshot().minRating).toBe(4);
+  });
+
+  it.each(['cancel', 'confirm'] as const)('requires explicit confirmation after protection fails: %s', async (action) => {
+    const run = job(1, 'Offline run');
+    publishJobs([run]);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const reason = 'The folder for this run is not available: /lost/Runs. Reconnect it and try again, or delete the run without protecting its Fusion model.';
+    const remove = vi.spyOn(jobsSocket, 'deleteJob')
+      .mockRejectedValueOnce(new JobModelProtectionError(reason))
+      .mockImplementation(async () => publishJobs([]));
+    await act(async () => root.render(<JobsPanel/>));
+    await act(async () => host.querySelector<HTMLButtonElement>('.job-remove')!.click());
+    expect(remove).toHaveBeenCalledExactlyOnceWith(run.id);
+    expect(host.querySelectorAll('.job-card')).toHaveLength(1);
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog.textContent).toContain(reason);
+    expect(dialog.textContent).toContain('No files on disk will be deleted.');
+    const label = action === 'cancel' ? 'Cancel' : 'Delete anyway';
+    const button = [...dialog.querySelectorAll('button')].find(button => button.textContent === label)!;
+    await act(async () => button.click());
+    if (action === 'cancel') {
+      expect(remove).toHaveBeenCalledOnce();
+      expect(host.querySelectorAll('.job-card')).toHaveLength(1);
+    } else {
+      expect(remove).toHaveBeenLastCalledWith(run.id, { skipModelProtection: true });
+      expect(host.querySelectorAll('.job-card')).toHaveLength(0);
+    }
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it('confirms the global failed count including failures hidden by search', async () => {

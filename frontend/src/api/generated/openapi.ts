@@ -8653,7 +8653,10 @@ export interface operations {
     };
     delete_job_api_jobs__job_id__delete: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Delete without protecting the Fusion model, only after explicit user confirmation. Leaves all files on disk untouched. */
+                skip_model_protection?: boolean;
+            };
             header?: never;
             path: {
                 job_id: string;

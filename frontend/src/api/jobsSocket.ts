@@ -755,11 +755,17 @@ function jobsUrl(): string {
   return `${protocol}//${window.location.host}/ws/jobs`;
 }
 
+export class JobModelProtectionError extends Error {}
+
 async function responseError(response: Response): Promise<Error> {
   let detail = `${response.status} ${response.statusText}`.trim();
   try {
-    const body = await response.json() as { detail?: string };
-    if (body.detail) detail = body.detail;
+    const body = await response.json() as { detail?: string | { code?: string; message?: string } };
+    if (typeof body.detail === 'string') detail = body.detail;
+    else if (body.detail?.message) {
+      if (body.detail.code === 'model_protection_failed') return new JobModelProtectionError(body.detail.message);
+      detail = body.detail.message;
+    }
   } catch {
     // A non-JSON response still has a useful status.
   }
@@ -869,8 +875,9 @@ export class JobsSocketManager {
     this.update({ jobs: this.snapshot.jobs.filter((job) => !deleted.has(job.id)) });
   }
 
-  async deleteJob(jobId: string): Promise<void> {
-    const response = await this.fetcher(`/api/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
+  async deleteJob(jobId: string, options?: { skipModelProtection: boolean }): Promise<void> {
+    const query = options?.skipModelProtection ? '?skip_model_protection=true' : '';
+    const response = await this.fetcher(`/api/jobs/${encodeURIComponent(jobId)}${query}`, { method: 'DELETE' });
     if (!response.ok) throw await responseError(response);
     this.invalidateJob(jobId);
     provisionalResults.remove(jobId);

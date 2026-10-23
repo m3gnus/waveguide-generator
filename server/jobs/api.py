@@ -65,6 +65,7 @@ from server.jobs.runtime import (
     JobConflictError,
     JobMeshDiscardedError,
     JobNotFoundError,
+    JobProtectionError,
     JobResourceUnavailableError,
     JobRuntime,
     RemovedSolverError,
@@ -1126,14 +1127,24 @@ def create_jobs_router(
         )
 
     @router.delete("/api/jobs/{job_id}", response_model=DeleteResponse)
-    async def delete_job(job_id: str) -> DeleteResponse:
+    async def delete_job(
+        job_id: str,
+        skip_model_protection: bool = Query(
+            False,
+            description="Delete without protecting the Fusion model, only after explicit user confirmation. Leaves all files on disk untouched.",
+        ),
+    ) -> DeleteResponse:
         try:
-            await runtime.delete(job_id)
+            await runtime.delete(job_id, skip_model_protection=skip_model_protection)
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
+        except JobProtectionError as exc:
+            raise HTTPException(status_code=409, detail={
+                "code": "model_protection_failed", "message": str(exc),
+            }) from exc
         except JobConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if after_delete is not None:
+        if not skip_model_protection and after_delete is not None:
             after_delete()
         return DeleteResponse(deleted=True, job_id=job_id)
 

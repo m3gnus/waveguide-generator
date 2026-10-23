@@ -17,6 +17,7 @@ from .core import (  # noqa: E402
     JobConflictError as JobConflictError,
     JobMeshDiscardedError as JobMeshDiscardedError,
     JobNotFoundError as JobNotFoundError,
+    JobProtectionError as JobProtectionError,
     JobResourceUnavailableError as JobResourceUnavailableError,
     JobRuntime as JobRuntime,
     RemovedSolverError as RemovedSolverError,

@@ -15731,6 +15731,18 @@
               "title": "Job Id",
               "type": "string"
             }
+          },
+          {
+            "description": "Delete without protecting the Fusion model, only after explicit user confirmation. Leaves all files on disk untouched.",
+            "in": "query",
+            "name": "skip_model_protection",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Delete without protecting the Fusion model, only after explicit user confirmation. Leaves all files on disk untouched.",
+              "title": "Skip Model Protection",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
