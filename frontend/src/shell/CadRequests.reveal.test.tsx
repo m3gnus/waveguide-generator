@@ -2,6 +2,7 @@ import { act, useSyncExternalStore } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket } from '../api/jobsSocket';
+import type { CadReturnIngestRecord } from '../api/cadlink';
 import { cadJobFixture, migratedCadRequestFixture, publishCadJobs } from '../jobs/cadSolve.fixtures';
 import { cadJobSummary } from '../jobs/cadSolve';
 import { cadRecoveryNoticesStore } from '../stores/cadRecoveryNotices';
@@ -82,28 +83,41 @@ describe('Show reveals the requests it counts', () => {
     expect(workspaceNavigation.getRevealTarget()).toBeNull();
   });
 
-  it('counts exactly the refused and recovery rows while active jobs have Stop and survive Clear all', async () => {
-    workspaceModeStore.setMode('cad'); workspaceModeStore.setImportedInput('file');
+  it.each((['preparing', 'queued', 'running'] as const).flatMap(status =>
+    (['current', 'earlier', 'parametric', 'file'] as const).map(location => ({ status, location })),
+  ))('gives a $status restart-held job Stop at $location and preserves it through Clear all', async ({ status, location }) => {
+    workspaceModeStore.setMode(location === 'parametric' ? 'parametric' : 'cad');
+    workspaceModeStore.setImportedInput(location === 'file' ? 'file' : 'cad');
     const refused = migratedCadRequestFixture();
-    const active = cadJobFixture({ ...cadJobSummary(refused), jobId: 'active-job', operationId: 'active-operation', state: 'processing', reason: null });
+    const active = cadJobFixture({ ...cadJobSummary(refused), jobId: 'active-job', operationId: 'active-operation',
+      state: 'needs_user_input', reason: 'update_restart_pending',
+      snapshot: { manifestSha256: 'restart-held-snapshot', documentName: 'Restart-held document' },
+    }, { status });
     publishCadJobs([refused, active]);
     const recovery = { id: 'recovery', kind: 'update_link' as const, document_id: null, document_name: 'Other', created_at: '2026-10-01', sequence: 1, active_document: false };
     cadRecoveryNoticesStore.setState({ notices: { recovery } });
-    const dismissNotice = vi.spyOn(cadRecoveryNoticesStore.getState(), 'dismiss').mockResolvedValue();
-    const stopped = vi.spyOn(jobsSocket, 'stopJob').mockResolvedValue();
+    const dismissNotice = vi.spyOn(cadRecoveryNoticesStore.getState(), 'dismiss').mockResolvedValue().mockClear();
+    const stopped = vi.spyOn(jobsSocket, 'stopJob').mockResolvedValue().mockClear();
     vi.spyOn(jobsSocket, 'refresh').mockResolvedValue();
     const fetcher = vi.fn(async () => json({})); vi.stubGlobal('fetch', fetcher);
-    await act(async () => root.render(<Surface/>));
+    const record = { manifest_sha256: location === 'current' ? 'restart-held-snapshot' : 'other-snapshot' } as CadReturnIngestRecord;
+    await act(async () => root.render(location === 'current' || location === 'earlier'
+      ? <><AttentionNotices/><OnScreenSolveStatus record={record}/><CadOperationsSection record={record} solves={false}/></>
+      : <Surface/>));
     expect(host.querySelector('.attention-waiting')?.textContent).toBe('2 CAD requests need you · Show');
+    await act(async () => host.querySelector<HTMLButtonElement>('.attention-waiting')!.click());
     const rows = host.querySelectorAll('.cad-earlier-requests li');
     expect(rows).toHaveLength(2);
-    const stop = host.querySelector<HTMLButtonElement>('button[aria-label="Stop: kleinuhringur v1"]')!;
+    const stop = host.querySelector<HTMLButtonElement>('button[aria-label="Stop: Restart-held document"]')!;
     expect(stop).not.toBeNull();
+    expect(host.querySelectorAll('[data-request-id="active-job"]')).toHaveLength(1);
+    expect(host.querySelector('.cad-earlier-requests [data-request-id="active-job"]')).toBeNull();
     expect(stop.closest('.cad-operation')?.querySelector('[aria-label^="Dismiss"]')).toBeNull();
     await act(async () => { [...host.querySelectorAll('button')].find(button => button.textContent === 'Clear all')!.click(); });
     expect(fetcher).toHaveBeenCalledExactlyOnceWith(`/api/jobs/${refused.id}/dismiss`, expect.anything());
     expect(dismissNotice).toHaveBeenCalledExactlyOnceWith('recovery');
     expect(stopped).not.toHaveBeenCalled();
+    expect(jobsSocket.getSnapshot().jobs).toContain(active);
     await act(async () => stop.click());
     expect(stopped).toHaveBeenCalledExactlyOnceWith('active-job');
   });

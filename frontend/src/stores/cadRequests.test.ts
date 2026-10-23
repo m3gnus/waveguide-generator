@@ -126,6 +126,26 @@ it('Clear all skips active solves even when passed alongside refused solves and 
   expect(dismissJob.mock.calls[0]).toEqual([expect.objectContaining({ id: 'job:refused' })]);
 });
 
+it.each(['preparing', 'queued', 'running'] as const)('keeps a %s restart-held job active in either document and safe from dismissal', async (status) => {
+  const active = cadJobFixture({ ...operation('restart-held'), reason: 'update_restart_pending' }, { status });
+  const recovery = createCadRecoveryNoticesStore();
+  const dismissNotice = vi.spyOn(recovery.getState(), 'dismiss').mockResolvedValue();
+  const dismissJob = vi.fn(async () => undefined);
+  const actions = createCadRequestActions({ recovery, dismissJob, openProject: vi.fn() });
+  for (const manifest of ['screen', 'elsewhere']) {
+    const requests = selectCadRequests({ jobs: [active, cadJobFixture(operation('refused', 'refused-snapshot'))],
+      notices: { mutation: notice }, record: { manifest_sha256: manifest } as CadReturnIngestRecord });
+    expect(requests.current).toEqual([]);
+    expect(requests.earlier.map(item => item.id)).toEqual(['mutation', 'job:refused']);
+    expect(requests.active.map(item => item.id)).toEqual(['job:restart-held']);
+    expect(requests.active[0].onScreen).toBe(manifest === 'elsewhere');
+    await actions.dismiss(requests.active[0]);
+    await actions.clearAll([...requests.current, ...requests.earlier, ...requests.active]);
+  }
+  expect(dismissNotice).toHaveBeenCalledExactlyOnceWith('mutation');
+  expect(dismissJob).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: 'job:refused' }));
+});
+
 it('retries only the failed row after a partial Clear all failure', async () => {
   const recovery = createCadRecoveryNoticesStore();
   const dismissNotice = vi.spyOn(recovery.getState(), 'dismiss').mockResolvedValue();

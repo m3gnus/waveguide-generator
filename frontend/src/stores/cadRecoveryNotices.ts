@@ -4,7 +4,7 @@ import type { components } from '../api/generated/openapi';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { isPendingCadOperation, operationNeedsUser } from '../api/cadOperations';
 import { jsonRequest, type CadReturnIngestRecord } from '../api/cadlink';
-import { jobsSocket, type JobItem, type JobsSocketManager } from '../api/jobsSocket';
+import { isActiveJobStatus, jobsSocket, type JobItem, type JobsSocketManager } from '../api/jobsSocket';
 import { cadJobSummary, latestCadJobs, dismissCadJob } from '../jobs/cadSolve';
 import { useCadDeliveryHealthStore } from './cadDeliveryHealth';
 import { useCadConnectionStore, type CadConnectionStore } from './cadConnection';
@@ -157,11 +157,15 @@ export function selectCadRequests({ jobs, notices, record }: {
   // (now notices) preceded jobs, and each owner's order stays intact.
   requests.unshift(...recovery.values());
   requests.sort((a, b) => (a.operation.createdAt ?? '').localeCompare(b.operation.createdAt ?? ''));
-  return {
-    current: requests.filter((item) => operationNeedsUser(item.operation) && item.onScreen),
-    earlier: requests.filter((item) => operationNeedsUser(item.operation) && !item.onScreen),
-    active: requests.filter((item) => !operationNeedsUser(item.operation)),
-  };
+  const current: CadRequest[] = [], earlier: CadRequest[] = [], active: CadRequest[] = [];
+  for (const request of requests) {
+    // Restart-held jobs can need user input while still active and stoppable.
+    // Job status takes precedence over the CAD state used for refusal actions.
+    if (request.source === 'job' && isActiveJobStatus(request.job.status)) active.push(request);
+    else if (operationNeedsUser(request.operation)) (request.onScreen ? current : earlier).push(request);
+    else active.push(request);
+  }
+  return { current, earlier, active };
 }
 
 /** Capture named requests at the press. Late binding never redirects a dismiss
