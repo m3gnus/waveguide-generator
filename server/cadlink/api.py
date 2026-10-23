@@ -46,9 +46,10 @@ from server.workspace.archive import (
     archive_cad_document,
     archive_folder_slug,
     captured_cad_document,
+    cad_document_sidecar,
     cad_document_sidecars,
     design_archive_folder,
-    place_run_cad_document,
+    pin_cad_document,
     reclaim_captured_documents,
 )
 
@@ -1325,10 +1326,13 @@ async def _project_folder(request: Request, lineage_id: str) -> tuple[Path, str]
 def _verified_run_document(
     request: Request, lineage_id: str, digest: str, document: Path
 ) -> bool:
-    """Match run bytes to the retained ingestion manifest and owning lineage."""
+    """Verify every archive candidate against its retained manifest and lineage."""
 
     try:
-        sidecar = json.loads(document.with_suffix(".cad.json").read_text(encoding="utf-8"))
+        sidecar_path = cad_document_sidecar(document, digest)
+        if sidecar_path is None:
+            return False
+        sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
         record = get_ingestion_record(request.app.state.cadlink_store, str(sidecar["ingestId"]))
         if not record or (record.get("project") or {}).get("lineage_id") != lineage_id:
             return False
@@ -1374,7 +1378,7 @@ async def _project_documents(folder: Path, request: Request, lineage_id: str) ->
         items: list[dict[str, Any]] = []
         records: dict[str, tuple[Mapping[str, Any], list[Path]]] = {}
         archived = _archived_project_runs(request, lineage_id)
-        all_sidecars = [*cad_document_sidecars(folder), *(s for run in archived for s in cad_document_sidecars(run))]
+        all_sidecars = [*cad_document_sidecars(folder), *(s for parent in sorted({run.parent for run in archived}) for s in cad_document_sidecars(parent))]
         for sidecar in all_sidecars:
             try:
                 payload = json.loads(sidecar.read_text(encoding="utf-8"))
@@ -1449,7 +1453,7 @@ async def _resolve_project_document(
             ),
         )
     try:
-        roots = [folder, *archived]
+        roots = [folder, *archived, *(run.parent / "cad" for run in archived)]
         if not any(document.resolve().is_relative_to(root.resolve()) for root in roots):
             raise ValueError("CAD document is outside its recorded archive")
     except ValueError as exc:
@@ -1517,25 +1521,10 @@ class ArchiveRunDocumentRequest(BaseModel):
 async def archive_run_document(
     payload: ArchiveRunDocumentRequest, request: Request
 ) -> dict[str, Any]:
-    """File a run's CAD document beside the run, when the mode asks for it.
+    """Pin the run's verified Fusion version and return its model-relative path."""
 
-    Advisory throughout: the run archive is already written by the time this is
-    called, and a missing convenience copy must never make a good run look
-    failed. But it must not go missing quietly either -- the answer says why a
-    copy is absent and whether asking again can still produce it, and the
-    caller reports what it could not file.
-    """
-
-    cad_workspace: CadWorkspaceState | None = getattr(
-        request.app.state, "cad_workspace", None
-    )
+    cad_workspace: CadWorkspaceState | None = getattr(request.app.state, "cad_workspace", None)
     mode = cad_workspace.capture_mode if cad_workspace is not None else "run"
-    if mode != "run":
-        return {
-            "placed": False,
-            "retryable": False,
-            "reason": f"Capture mode is {mode}.",
-        }
     jobs = request.app.state.jobs_runtime
     row = await asyncio.to_thread(jobs.store.get_job_row, payload.jobId)
     if row is None:
@@ -1551,56 +1540,55 @@ async def archive_run_document(
         return {"placed": False, "retryable": True, "reason": str(exc)}
     root = path.parent.parent
     location = location._replace(folder=path.parent.name, run=path.name)
+    # A retry must reproduce an existing immutable run.json, including older
+    # records which predate modelFile. Reads never rewrite or move that record.
+    has_record = False
+    previous_model_file = None
+    # The archive writer preserves an unrelated file and displaces its own
+    # record into archive/run.json. Only a matching WG record is authoritative.
+    for record_path in (path / "run.json", path / "archive" / "run.json"):
+        try:
+            if not record_path.is_file() or path_has_reparse_point(record_path, root=root):
+                continue
+            previous = json.loads(record_path.read_text(encoding="utf-8"))
+            if (previous.get("schemaVersion") == 1
+                    and previous["run"]["jobId"] == payload.jobId
+                    and previous["cad"]["returnStateHash"] == digest):
+                previous_model_file = previous["cad"].get("modelFile")
+                has_record = True
+                break
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue  # The existing writer owns collision handling.
     await _await_cad_document_capture(digest)
     try:
         relative = await asyncio.to_thread(
-            place_run_cad_document,
-            root,
-            location.folder,
-            location.run,
-            location.run,
-            digest,
+            pin_cad_document, root, location.folder, digest,
+            verify_document=lambda document: _verified_run_document(
+                request, str(source.get("lineage_id") or ""), digest, document,
+            ),
         )
     except OSError as exc:
         logger.warning(
-            "Could not place the CAD document for %s: %s", location.run, exc
+            "Could not pin the CAD document for %s: %s", location.run, exc
         )
         return {"placed": False, "retryable": True, "reason": str(exc)}
     if relative is None:
-        source = await asyncio.to_thread(
-            captured_cad_document, root, location.folder, digest
-        )
-        missing = source is None
-        logger.warning(
-            "No CAD document was filed for run %s from model state %s",
-            location.run,
-            digest,
-        )
         return {
-            "placed": False,
-            "relativePath": None,
-            # A capture that has not arrived can still arrive; a run folder
-            # already holding a different file under that name cannot resolve
-            # itself, so asking again would only repeat the refusal.
-            "retryable": missing,
+            "placed": False, "relativePath": None, "retryable": False,
+            "modelFile": previous_model_file,
             "reason": (
-                "The CAD model this run was solved from is not in the project archive."
-                if missing
-                else "A different file already occupies the run's CAD document name."
+                "Keep the Fusion model is set to Don't keep."
+                if mode == "off" else
+                "The CAD model this run was solved from is not in the project archive, or could not be verified."
             ),
         }
     await _reclaim_captured_documents(request, root, location.folder)
-    return {"placed": True, "relativePath": relative}
+    return {"placed": True, "relativePath": relative,
+            "modelFile": previous_model_file if has_record else relative}
 
 
 async def _reclaim_captured_documents(request: Request, root: Path, stem: str) -> None:
-    """Let go of superseded captures now that one more run has its own copy.
-
-    The other half of the retention rule: a model state is kept in the project
-    folder while runs still have to be archived from it, and dropped once they
-    have been, so the project keeps showing one current model instead of
-    accumulating every state a run ever referenced.
-    """
+    """Reclaim unused unpinned states; pinned versions outlive job history."""
 
     jobs = getattr(request.app.state, "jobs_runtime", None)
     store = getattr(request.app.state, "cadlink_store", None)

@@ -469,9 +469,11 @@ plane supports only the default 45° inclination.
    on a fine ripple or a high-frequency feature.
 4. Export the run's report, FRD/polar files for VituixCAD, CSVs or retained solve
    mesh from the run export menu. Open the project folder for its saved files.
-   **Settings → CAD Link → Keep a copy of the Fusion model** controls document
-   retention; do not assume a reopenable Fusion document was captured when that
-   option is disabled.
+   **Settings → CAD Link → Keep the Fusion model: Keep / Don't keep** controls
+   document capture. Keep saves each version once in the model folder's `cad/`.
+   Versions used by runs are never deleted automatically; unused older versions
+   are removed when a new version arrives. Don't keep affects new returns;
+   models already kept remain available.
 
 Returned snapshots appear under **Model versions** in CAD Link; completed
 solves appear in the shared **Runs** view. **View project runs** opens that

@@ -27,6 +27,7 @@ from server.cadlink.api import (
     list_project_documents,
 )
 from server.workspace.archive import archive_cad_document
+from server.tests.cad_document_fixtures import identify_document
 
 
 def project(app, *, filename: str = "Tritonia.cfg") -> tuple[str, str]:
@@ -42,11 +43,11 @@ def project(app, *, filename: str = "Tritonia.cfg") -> tuple[str, str]:
     return saved["identity"].design_id, saved["identity"].lineage_id
 
 
-def capture(runs: Path, tmp_path: Path, stem: str, digest: str, *, at: str) -> None:
+def capture(app, runs: Path, tmp_path: Path, stem: str, digest: str, *, at: str) -> None:
     bundle = tmp_path / "wgreturn" / f"{digest}.wgreturn"
     bundle.mkdir(parents=True, exist_ok=True)
     (bundle / "document.f3d").write_bytes(f"model-{digest}".encode())
-    archive_cad_document(
+    relative = archive_cad_document(
         bundle,
         {
             "ingest_id": f"wgi_{digest}",
@@ -62,6 +63,10 @@ def capture(runs: Path, tmp_path: Path, stem: str, digest: str, *, at: str) -> N
         runs,
         stem,
     )
+
+    projects = app.state.cadlink_store.list_designs()
+    lineage = projects[0]["lineage_id"] if projects else app.state.cadlink_store.list_cad_document_projects()[0]["lineage_id"]
+    identify_document(app, runs / stem / relative, lineage, f"sha256:{digest}")
 
 
 def app_with_runs(tmp_path: Path):
@@ -81,8 +86,8 @@ def test_a_project_lists_only_its_newest_captured_model(tmp_path: Path) -> None:
 
     app, runs = app_with_runs(tmp_path)
     _design_id, lineage_id = project(app)
-    capture(runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
-    capture(runs, tmp_path, "Tritonia", "bbb", at="2026-08-21T09:00:00Z")
+    capture(app, runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
+    capture(app, runs, tmp_path, "Tritonia", "bbb", at="2026-08-21T09:00:00Z")
 
     listing = asyncio.run(list_project_documents(lineage_id, SimpleNamespace(app=app)))
 
@@ -103,7 +108,7 @@ def test_a_model_whose_file_was_removed_is_still_listed_as_unavailable(
 
     app, runs = app_with_runs(tmp_path)
     _design_id, lineage_id = project(app)
-    capture(runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
+    capture(app, runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
     (runs / "Tritonia" / "cad" / "Tritonia_260820-0900_aaa.f3d").unlink()
 
     listing = asyncio.run(list_project_documents(lineage_id, SimpleNamespace(app=app)))
@@ -112,7 +117,7 @@ def test_a_model_whose_file_was_removed_is_still_listed_as_unavailable(
         {
             "returnStateHash": "sha256:aaa",
             "documentName": "Tritonia",
-            "ingestId": "wgi_aaa",
+            "ingestId": json.loads((runs / "Tritonia" / "cad" / "Tritonia_260820-0900_aaa.json").read_text())["ingestId"],
             "returnId": "wgr_aaa",
             "capturedAt": "2026-08-20T09:00:00Z",
             "filename": None,
@@ -124,7 +129,7 @@ def test_a_model_whose_file_was_removed_is_still_listed_as_unavailable(
 def test_downloading_a_model_hands_back_the_archived_file(tmp_path: Path) -> None:
     app, runs = app_with_runs(tmp_path)
     _design_id, lineage_id = project(app)
-    capture(runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
+    capture(app, runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
 
     response = asyncio.run(
         download_project_document(lineage_id, "sha256:aaa", SimpleNamespace(app=app))
@@ -196,39 +201,33 @@ def test_an_older_project_is_found_beyond_the_recent_design_head_cap(
     assert listing["items"] == []
 
 
-def test_the_run_copy_is_filed_only_in_run_mode(tmp_path: Path) -> None:
+def test_run_and_project_modes_both_pin_the_shared_version(tmp_path: Path) -> None:
     app, runs = app_with_runs(tmp_path)
-    project(app)
-    capture(runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
+    _design, lineage = project(app)
+    capture(app, runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
     app.state.jobs_runtime.store.initialize()
     app.state.jobs_runtime.store.create_job({
         "id": "run-14", "status": "complete", "created_at": "now", "updated_at": "now",
         "queued_at": "now", "config_json": {"geometry": {"type": "imported"}}, "config_summary_json": {},
         "task_metadata": {"archive": {"key": "lineage:test", "folder": "Tritonia", "run": "14_Tritonia"},
-                          "imported_geometry": {"document": {"return_state_hash": "sha256:aaa"}}},
+                          "imported_geometry": {"anchor_lineage_id": lineage, "document": {"return_state_hash": "sha256:aaa"}}},
     })
     request = ArchiveRunDocumentRequest(jobId="run-14")
 
     app.state.cad_workspace.set_capture_mode("project")
-    declined = asyncio.run(archive_run_document(request, SimpleNamespace(app=app)))
-    assert declined == {
-        "placed": False,
-        "retryable": False,
-        "reason": "Capture mode is project.",
-    }
-    assert not (runs / "Tritonia" / "14_Tritonia").exists()
-
+    first = asyncio.run(archive_run_document(request, SimpleNamespace(app=app)))
     app.state.cad_workspace.set_capture_mode("run")
-    placed = asyncio.run(archive_run_document(request, SimpleNamespace(app=app)))
-
-    assert placed == {"placed": True, "relativePath": "14_Tritonia/14_Tritonia.f3d"}
-    assert (runs / "Tritonia" / "14_Tritonia" / "14_Tritonia.f3d").read_bytes() == b"model-aaa"
+    again = asyncio.run(archive_run_document(request, SimpleNamespace(app=app)))
+    assert first == again == {"placed": True, "relativePath": "cad/Tritonia_260820-0900_aaa.f3d", "modelFile": "cad/Tritonia_260820-0900_aaa.f3d"}
+    assert not (runs / "Tritonia" / "14_Tritonia").exists()
+    assert len(list((runs / "Tritonia").rglob("*.f3d"))) == 1
+    assert (runs / "Tritonia" / "cad" / "Tritonia_260820-0900_aaa.cad.json").is_file()
 
 
 def test_a_run_subdirectory_that_escapes_the_archive_is_refused(tmp_path: Path) -> None:
     app, runs = app_with_runs(tmp_path)
     project(app)
-    capture(runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
+    capture(app, runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
     app.state.cad_workspace.set_capture_mode("run")
 
     with pytest.raises(ValueError):
@@ -267,7 +266,7 @@ def test_the_capture_and_the_run_agree_on_one_folder_after_a_rename(
     # a second folder: the first claim is the project's folder for good.
     assert store.claim_archive_stem(lineage_id, preferred="Tritonia rev B") == "Tritonia"
 
-    capture(runs, tmp_path, claimed, "aaa", at="2026-08-20T09:00:00Z")
+    capture(app, runs, tmp_path, claimed, "aaa", at="2026-08-20T09:00:00Z")
     listing = asyncio.run(list_project_documents(lineage_id, SimpleNamespace(app=app)))
 
     assert listing["archiveStem"] == "Tritonia"
@@ -306,7 +305,7 @@ def test_the_project_folder_is_revealed_only_once_it_exists(tmp_path: Path) -> N
 def test_a_sidecar_that_cannot_be_read_is_skipped_not_fatal(tmp_path: Path) -> None:
     app, runs = app_with_runs(tmp_path)
     _design_id, lineage_id = project(app)
-    capture(runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
+    capture(app, runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
     (runs / "Tritonia" / "cad" / "broken.json").write_text("{not json", encoding="utf-8")
 
     listing = asyncio.run(list_project_documents(lineage_id, SimpleNamespace(app=app)))
@@ -378,7 +377,7 @@ def test_a_cad_only_project_is_listed_and_its_folder_resolves(tmp_path: Path) ->
     assert entry["archiveStem"] == "PartyMEH"
 
     # It has no design row, so the folder used to 404 rather than resolve.
-    capture(runs, tmp_path, "PartyMEH", "ccc", at="2026-08-23T09:00:00Z")
+    capture(app, runs, tmp_path, "PartyMEH", "ccc", at="2026-08-23T09:00:00Z")
     documents = asyncio.run(list_project_documents(lineage_id, SimpleNamespace(app=app)))
     assert documents["archiveStem"] == "PartyMEH"
     assert [item["returnStateHash"] for item in documents["items"]] == ["sha256:ccc"]
@@ -459,7 +458,7 @@ def test_a_cad_authored_run_joins_the_project_its_document_owns(
     assert asyncio.run(_cad_authored_project(store, unknown)) == (None, None)
 
 
-def legacy_capture(runs: Path, stem: str, digest: str, *, content: bytes) -> None:
+def legacy_capture(app, runs: Path, stem: str, digest: str, *, content: bytes) -> None:
     """Write a document exactly as the pre-friendly-name archiver did.
 
     Real legacy files predate this test suite's ``capture`` helper, so this
@@ -486,6 +485,9 @@ def legacy_capture(runs: Path, stem: str, digest: str, *, content: bytes) -> Non
         encoding="utf-8",
     )
 
+    lineage = app.state.cadlink_store.list_designs()[0]["lineage_id"]
+    identify_document(app, directory / f"sha256_{digest}.f3d", lineage, f"sha256:{digest}")
+
 
 def test_downloading_a_legacy_named_model_serves_its_own_filename(tmp_path: Path) -> None:
     """A document captured before the friendly-name change stays readable.
@@ -497,7 +499,7 @@ def test_downloading_a_legacy_named_model_serves_its_own_filename(tmp_path: Path
 
     app, runs = app_with_runs(tmp_path)
     _design_id, lineage_id = project(app)
-    legacy_capture(runs, "Tritonia", "aaa", content=b"legacy-model-aaa")
+    legacy_capture(app, runs, "Tritonia", "aaa", content=b"legacy-model-aaa")
 
     response = asyncio.run(
         download_project_document(lineage_id, "sha256:aaa", SimpleNamespace(app=app))
@@ -512,9 +514,9 @@ def test_a_second_capture_of_a_legacy_document_is_a_no_op(tmp_path: Path) -> Non
 
     app, runs = app_with_runs(tmp_path)
     project(app)
-    legacy_capture(runs, "Tritonia", "aaa", content=b"legacy-model-aaa")
+    legacy_capture(app, runs, "Tritonia", "aaa", content=b"legacy-model-aaa")
 
-    capture(runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
+    capture(app, runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
 
     assert sorted(path.name for path in (runs / "Tritonia" / "cad").iterdir()) == [
         "sha256_aaa.f3d",
@@ -523,46 +525,21 @@ def test_a_second_capture_of_a_legacy_document_is_a_no_op(tmp_path: Path) -> Non
 
 
 def older_run_document(tmp_path: Path):
-    from server.workspace.archive import place_run_cad_document
+    import shutil
 
     app, runs = app_with_runs(tmp_path)
     _design, lineage = project(app)
-    capture(runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
-    relative = place_run_cad_document(runs, "Tritonia", "68_cad-import", "68_cad-import", "sha256:aaa")
-    capture(runs, tmp_path, "Tritonia", "bbb", at="2026-08-21T09:00:00Z")
+    capture(app, runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
+    relative = "68_cad-import/68_cad-import.f3d"
+    old = runs / "Tritonia" / relative
+    old.parent.mkdir()
+    source = runs / "Tritonia" / "cad" / "Tritonia_260820-0900_aaa.f3d"
+    shutil.copy2(source, old)
+    shutil.copy2(source.with_suffix(".json"), old.with_suffix(".cad.json"))
+    capture(app, runs, tmp_path, "Tritonia", "bbb", at="2026-08-21T09:00:00Z")
     document = runs / "Tritonia" / relative
     document.with_suffix(".csv").write_text("frequency,spl\n100,90\n")
-    # Retention omits the document bytes but preserves their checksum and size.
-    manifest = {
-        "assembly": {"signature_hash": "sha256:aaa"},
-        "files": {"document.f3d": {
-            "purpose": "cad-document",
-            "sha256": "sha256:" + hashlib.sha256(document.read_bytes()).hexdigest(),
-            "size_bytes": document.stat().st_size,
-        }},
-    }
-    raw = json.dumps(manifest).encode()
-    manifest_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
-    from server.cadlink.intake.ingest import retained_snapshot_path
-
-    retained = retained_snapshot_path(app.state.data_dir, manifest_hash)
-    retained.mkdir(parents=True)
-    (retained / "wgreturn.json").write_bytes(raw)
-    row = app.state.cadlink_store.allocate_ingest(
-        manifest_sha256=manifest_hash,
-        artifact_sha256="sha256:unused",
-        record_builder=lambda ingest_id, created_at: json.dumps({
-            "ingest_id": ingest_id,
-            "created_at": created_at,
-            "manifest_sha256": manifest_hash,
-            "project": {"lineage_id": lineage},
-            "document": {"return_state_hash": "sha256:aaa"},
-        }),
-    )
-    sidecar = document.with_suffix(".cad.json")
-    payload = json.loads(sidecar.read_text())
-    payload["ingestId"] = row["ingest_id"]
-    sidecar.write_text(json.dumps(payload))
+    identify_document(app, document, lineage, "sha256:aaa")
     return app, lineage, document
 
 
@@ -822,8 +799,8 @@ def test_recorded_run_path_finds_verified_model_after_root_override(tmp_path: Pa
 
 def test_run_document_placement_uses_recorded_root_and_refuses_offline(tmp_path):
     app, root_a = app_with_runs(tmp_path)
-    project(app)
-    capture(root_a, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
+    _design, lineage = project(app)
+    capture(app, root_a, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
     old_run = root_a / "Tritonia" / "14_Tritonia"
     old_run.mkdir()
     jobs = app.state.jobs_runtime.store
@@ -833,7 +810,7 @@ def test_run_document_placement_uses_recorded_root_and_refuses_offline(tmp_path)
         "queued_at": "now", "config_json": {"geometry": {"type": "imported"}}, "config_summary_json": {},
         "task_metadata": {"archived_path": str(old_run),
                           "archive": {"key": "lineage:test", "folder": "Tritonia", "run": "14_Tritonia"},
-                          "imported_geometry": {"document": {"return_state_hash": "sha256:aaa"}}},
+                          "imported_geometry": {"anchor_lineage_id": lineage, "document": {"return_state_hash": "sha256:aaa"}}},
     })
     root_b = tmp_path / "new-runs"
     root_b.mkdir()
@@ -841,8 +818,9 @@ def test_run_document_placement_uses_recorded_root_and_refuses_offline(tmp_path)
     app.state.cad_workspace.set_capture_mode("run")
     request = ArchiveRunDocumentRequest(jobId="run-14")
     result = asyncio.run(archive_run_document(request, SimpleNamespace(app=app)))
-    assert result == {"placed": True, "relativePath": "14_Tritonia/14_Tritonia.f3d"}
-    assert (old_run / "14_Tritonia.f3d").read_bytes() == b"model-aaa"
+    assert result == {"placed": True, "relativePath": "cad/Tritonia_260820-0900_aaa.f3d", "modelFile": "cad/Tritonia_260820-0900_aaa.f3d"}
+    assert (old_run.parent / result["relativePath"]).read_bytes() == b"model-aaa"
+    assert list(old_run.iterdir()) == []
     assert list(root_b.iterdir()) == []
     root_a.rename(tmp_path / "offline")
     result = asyncio.run(archive_run_document(request, SimpleNamespace(app=app)))
@@ -850,3 +828,83 @@ def test_run_document_placement_uses_recorded_root_and_refuses_offline(tmp_path)
     assert "recorded archive location is unavailable" in result["reason"]
     assert not root_a.exists()
     assert list(root_b.iterdir()) == []
+
+
+@pytest.mark.parametrize("pinned", [False, True])
+@pytest.mark.parametrize("operation", ["list", "download", "open", "pin"])
+def test_every_cad_candidate_requires_the_retained_checksum(tmp_path, monkeypatch, pinned, operation):
+    from server.cadlink import api
+    from server.workspace.archive import pin_cad_document
+
+    app, runs = app_with_runs(tmp_path)
+    _design, lineage = project(app)
+    capture(app, runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
+    document = runs / "Tritonia" / "cad" / "Tritonia_260820-0900_aaa.f3d"
+    if pinned:
+        document.with_suffix(".json").rename(document.with_suffix(".cad.json"))
+    document.write_bytes(b"forged-aa")  # same size, same genuine sidecar
+    request = SimpleNamespace(app=app)
+    monkeypatch.setattr(api, "open_cad_document", lambda _path: pytest.fail("Tampered model opened"))
+    if operation == "list":
+        listing = asyncio.run(api.list_project_documents(lineage, request))
+        assert listing["items"][0]["filename"] is None
+    elif operation == "pin":
+        assert pin_cad_document(runs, "Tritonia", "sha256:aaa", verify_document=lambda path: api._verified_run_document(request, lineage, "sha256:aaa", path)) is None
+    else:
+        handler = api.download_project_document if operation == "download" else api.open_project_document
+        with pytest.raises(HTTPException) as refused:
+            asyncio.run(handler(lineage, "sha256:aaa", request))
+        assert refused.value.status_code == 404
+
+
+@pytest.mark.parametrize("operation", ["list", "download", "open"])
+def test_recorded_root_finds_pinned_cad_file_after_runs_override(tmp_path, monkeypatch, operation):
+    from server.cadlink import api
+
+    app, runs = app_with_runs(tmp_path)
+    _design, lineage = project(app)
+    capture(app, runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
+    document = runs / "Tritonia" / "cad" / "Tritonia_260820-0900_aaa.f3d"
+    document.with_suffix(".json").rename(document.with_suffix(".cad.json"))
+    old_run = runs / "Tritonia" / "14_Tritonia"
+    old_run.mkdir()
+    jobs = app.state.jobs_runtime.store
+    jobs.initialize()
+    jobs.create_job({
+        "id": "old-run", "status": "complete", "created_at": "then", "updated_at": "then", "queued_at": "then",
+        "config_json": {"geometry": {"type": "imported"}}, "config_summary_json": {},
+        "task_metadata": {"archived_path": str(old_run), "archived_at": "then",
+                          "imported_geometry": {"anchor_lineage_id": lineage, "document": {"return_state_hash": "sha256:aaa"}}},
+    })
+    override = tmp_path / "override-runs"
+    override.mkdir()
+    app.state.workspace.select(override)
+    request = SimpleNamespace(app=app)
+    opened = []
+    monkeypatch.delenv("WG2_CAD_LAUNCH", raising=False)
+    monkeypatch.setattr(api, "open_cad_document", opened.append)
+    if operation == "list":
+        listing = asyncio.run(api.list_project_documents(lineage, request))
+        assert listing["items"][0]["filename"] == document.name
+    elif operation == "download":
+        assert Path(asyncio.run(api.download_project_document(lineage, "sha256:aaa", request)).path) == document
+    else:
+        assert asyncio.run(api.open_project_document(lineage, "sha256:aaa", request))["status"] == "opened"
+        assert opened == [document]
+    assert list(override.iterdir()) == []
+
+
+def test_lookup_prefers_verified_cad_then_legacy_run_copy(tmp_path):
+    from server.cadlink import api
+    from server.workspace.archive import captured_cad_document
+
+    app, lineage, old = older_run_document(tmp_path)
+    directory = old.parent.parent / "cad"
+    current = directory / "Tritonia_260820-0900_aaa.f3d"
+    current.write_bytes(old.read_bytes())
+    current.with_suffix(".cad.json").write_bytes(old.with_suffix(".cad.json").read_bytes())
+    request = SimpleNamespace(app=app)
+    verify = lambda path: api._verified_run_document(request, lineage, "sha256:aaa", path)
+    assert captured_cad_document(directory.parent.parent, "Tritonia", "sha256:aaa", verify_run_document=verify) == current
+    current.write_bytes(b"forged-aa")
+    assert captured_cad_document(directory.parent.parent, "Tritonia", "sha256:aaa", verify_run_document=verify) == old

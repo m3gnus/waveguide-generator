@@ -236,7 +236,7 @@ describe('SettingsDialog', () => {
   });
 
   it('chooses where the Fusion model is filed and reflects a refused write', async () => {
-    let stored = 'run';
+    let stored = 'project';
     const failNext = { value: false };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
@@ -256,18 +256,19 @@ describe('SettingsDialog', () => {
     const cad = host.querySelector<HTMLElement>('#settings-cad')!;
     const choice = (label: string) => [...cad.querySelectorAll<HTMLInputElement>('input[type=radio]')]
       .find((input) => input.closest('label')?.textContent?.includes(label))!;
-    // Filed with each run by default: that is where people look for it.
-    expect(choice('With every run').checked).toBe(true);
-
-    await act(async () => choice('Once per project').click());
-    expect(stored).toBe('project');
-    expect(choice('Once per project').checked).toBe(true);
+    // A legacy project setting is Keep; only two choices remain.
+    expect(choice('Keep').checked).toBe(true);
+    expect(cad.querySelectorAll('input[name="cad-capture-mode"]')).toHaveLength(2);
+    expect(cad.textContent).toContain('Keep the Fusion model:');
+    await act(async () => choice("Don't keep").click());
+    expect(stored).toBe('off');
+    expect(choice("Don't keep").checked).toBe(true);
 
     // A refused write must not leave the radio disagreeing with the file the
     // Fusion add-in reads.
     failNext.value = true;
-    await act(async () => choice('Don\u2019t keep one').click());
-    expect(choice('Once per project').checked).toBe(true);
+    await act(async () => choice('Keep').click());
+    expect(choice("Don't keep").checked).toBe(true);
     expect(cad.textContent).toContain('disk is read-only');
   });
 
@@ -296,8 +297,8 @@ describe('SettingsDialog', () => {
       .find((input) => input.closest('label')?.textContent?.includes(label))!;
 
     await act(async () => {
-      choice('Don\u2019t keep one').click();
-      choice('With every run').click();
+      choice("Don't keep").click();
+      choice('Keep').click();
       await Promise.resolve();
     });
 
@@ -314,7 +315,7 @@ describe('SettingsDialog', () => {
       await secondWrite.promise;
       await Promise.resolve();
     });
-    expect(choice('With every run').checked).toBe(true);
+    expect(choice('Keep').checked).toBe(true);
   });
 
   /** Open Settings with the CAD application switched to Onshape, serving one

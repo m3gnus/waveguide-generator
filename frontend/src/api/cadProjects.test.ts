@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   listCadProjects,
-  placeRunCadDocument,
+  pinRunCadDocument,
   runProjectLineage,
   runReturnStateHash,
   runsForProject,
@@ -113,11 +113,12 @@ describe('filing a run’s CAD document', () => {
       reason: 'A different file already occupies the run’s CAD document name.',
     }), { status: 200 }));
 
-    const outcome = await placeRunCadDocument(
+    const outcome = await pinRunCadDocument(
       cadRun('Tritonia', 'sha256:aaa'), fetcher, async () => {},
     );
 
     expect(outcome.requested).toBe(true);
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({ jobId: 'run-1' });
     expect(outcome.placed).toBe(false);
     expect(outcome.reason).toContain('already occupies');
     // Not retryable: asking again would only repeat the refusal.
@@ -127,19 +128,19 @@ describe('filing a run’s CAD document', () => {
   it('asks again for a copy the server says may still be coming', async () => {
     const answers = [
       { placed: false, retryable: true, reason: 'not in the project archive' },
-      { placed: true, relativePath: '14_Tritonia/14_Tritonia.f3d' },
+      { placed: true, relativePath: 'cad/Tritonia_260820-0900_aaa.f3d' },
     ];
     const fetcher = vi.fn<typeof fetch>(
       async () => new Response(JSON.stringify(answers.shift()), { status: 200 }),
     );
 
-    const outcome = await placeRunCadDocument(
+    const outcome = await pinRunCadDocument(
       cadRun('Tritonia', 'sha256:aaa'), fetcher, async () => {},
     );
 
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(outcome).toEqual({
-      placed: true, relativePath: '14_Tritonia/14_Tritonia.f3d', requested: true,
+      placed: true, relativePath: 'cad/Tritonia_260820-0900_aaa.f3d', requested: true,
     });
   });
 
@@ -148,7 +149,7 @@ describe('filing a run’s CAD document', () => {
       placed: false, retryable: true, reason: 'not in the project archive',
     }), { status: 200 }));
 
-    const outcome = await placeRunCadDocument(
+    const outcome = await pinRunCadDocument(
       cadRun('Tritonia', 'sha256:aaa'), fetcher, async () => {},
     );
 
@@ -160,7 +161,7 @@ describe('filing a run’s CAD document', () => {
   it('asks for nothing when the run has no CAD model state', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response('{}', { status: 200 }));
 
-    const outcome = await placeRunCadDocument(
+    const outcome = await pinRunCadDocument(
       cadRun('Tritonia', null), fetcher, async () => {},
     );
 

@@ -1,16 +1,4 @@
-"""A newer CAD return must not erase the model a pending run still needs.
-
-The project-level ``cad/`` folder deliberately shows one current model state,
-and it is also the only place a run's own copy is made from. Those two facts
-used to be in direct conflict: ingesting a changed model pruned the previous
-one, so a run queued from the previous model was archived without any model at
-all -- and the route said so with an HTTP 200 that nothing read.
-
-The rule these tests hold to is that a captured model state survives while any
-queued, running or unarchived run still has to be archived from it, is
-reclaimed once they have been, and that a run archive waits for a capture that
-is still copying instead of concluding there is nothing to place.
-"""
+"""Pending states survive until pinning; pins survive job-history removal."""
 
 from __future__ import annotations
 
@@ -20,10 +8,13 @@ from pathlib import Path
 import threading
 from types import SimpleNamespace
 
+import pytest
+
 from server.app import create_app
 from server.cadlink import api as cadlink_api
 from server.cadlink.api import ArchiveRunDocumentRequest, archive_run_document
 from server.workspace.archive import archive_cad_document
+from server.tests.cad_document_fixtures import retained_document_record
 
 
 STEM = "Tritonia"
@@ -34,6 +25,7 @@ def app_with_runs(tmp_path: Path):
     runs = tmp_path / "runs"
     runs.mkdir()
     app.state.workspace.select(runs)
+    app.state.cadlink_store.claim_cad_document_lineage("urn:synthetic:tritonia", STEM)
     app.state.cad_workspace.set_capture_mode("run")
     return app, runs
 
@@ -45,9 +37,12 @@ def bundle_for(tmp_path: Path, digest: str) -> Path:
     return bundle
 
 
-def record_for(digest: str, *, at: str) -> dict[str, object]:
+def record_for(app, digest: str, *, at: str) -> dict[str, object]:
+    lineage = app.state.cadlink_store.list_cad_document_projects()[0]["lineage_id"]
+    evidence = retained_document_record(app, f"model-{digest}".encode(), f"sha256:{digest}", lineage)
     return {
-        "ingest_id": f"wgi_{digest}",
+        **evidence,
+        "ingest_id": evidence["ingest_id"],
         "return_id": f"wgr_{digest}",
         "created_at": at,
         "document": {
@@ -56,14 +51,14 @@ def record_for(digest: str, *, at: str) -> dict[str, object]:
             "return_state_hash": f"sha256:{digest}",
             "file": "document.f3d",
         },
-        "project": {"archive_stem": STEM},
+        "project": {"archive_stem": STEM, "lineage_id": lineage},
     }
 
 
-def capture_directly(runs: Path, tmp_path: Path, digest: str, *, at: str) -> None:
+def capture_directly(app, runs: Path, tmp_path: Path, digest: str, *, at: str) -> None:
     """A capture with no retention input, as the very first one always is."""
 
-    archive_cad_document(bundle_for(tmp_path, digest), record_for(digest, at=at), runs, STEM)
+    archive_cad_document(bundle_for(tmp_path, digest), record_for(app, digest, at=at), runs, STEM)
 
 
 def imported_run(
@@ -80,6 +75,7 @@ def imported_run(
     metadata: dict[str, object] = {
         "imported_geometry": {
             "ingest_id": f"wgi_{digest}",
+            "anchor_lineage_id": app.state.cadlink_store.list_cad_document_projects()[0]["lineage_id"],
             "archive_stem": STEM,
             "document": {"name": STEM, "return_state_hash": f"sha256:{digest}"},
         },
@@ -119,7 +115,7 @@ def capture_through_the_app(app, tmp_path: Path, digest: str, *, at: str) -> Non
             app.state.jobs_runtime,
             app.state.cadlink_store,
             bundle_for(tmp_path, digest),
-            record_for(digest, at=at),
+            record_for(app, digest, at=at),
         )
     )
 
@@ -148,7 +144,7 @@ def test_a_queued_run_keeps_its_model_when_a_changed_one_is_ingested(
     """
 
     app, runs = app_with_runs(tmp_path)
-    capture_directly(runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
+    capture_directly(app, runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
     imported_run(app, "job-a", "aaa", status="queued")
 
     capture_through_the_app(app, tmp_path, "bbb", at="2026-08-21T09:00:00Z")
@@ -165,11 +161,11 @@ def test_a_queued_run_keeps_its_model_when_a_changed_one_is_ingested(
         archive_run_document(archive_request(app, "aaa"), SimpleNamespace(app=app))
     )
 
-    assert placed == {"placed": True, "relativePath": "14_Tritonia/14_Tritonia.f3d"}
-    run_folder = runs / STEM / "14_Tritonia"
-    assert run_folder.joinpath("14_Tritonia.f3d").read_bytes() == b"model-aaa"
+    assert placed == {"placed": True, "relativePath": "cad/Tritonia_260820-0900_aaa.f3d", "modelFile": "cad/Tritonia_260820-0900_aaa.f3d"}
+    run_folder = runs / STEM / "cad"
+    assert run_folder.joinpath("Tritonia_260820-0900_aaa.f3d").read_bytes() == b"model-aaa"
     sidecar = json.loads(
-        run_folder.joinpath("14_Tritonia.cad.json").read_text(encoding="utf-8")
+        run_folder.joinpath("Tritonia_260820-0900_aaa.cad.json").read_text(encoding="utf-8")
     )
     assert sidecar["returnStateHash"] == "sha256:aaa"
 
@@ -200,7 +196,7 @@ def test_a_run_archived_before_its_capture_finishes_still_gets_the_copy(
                 app.state,
                 app.state.cadlink_store,
                 bundle_for(tmp_path, "ccc"),
-                record_for("ccc", at="2026-08-22T09:00:00Z"),
+                record_for(app, "ccc", at="2026-08-22T09:00:00Z"),
             )
             # Let the capture reach the worker thread and block there.
             for _ in range(50):
@@ -225,9 +221,9 @@ def test_a_run_archived_before_its_capture_finishes_still_gets_the_copy(
 
     placed = asyncio.run(scenario())
 
-    assert placed == {"placed": True, "relativePath": "15_Tritonia/15_Tritonia.f3d"}
+    assert placed == {"placed": True, "relativePath": "cad/Tritonia_260822-0900_ccc.f3d", "modelFile": "cad/Tritonia_260822-0900_ccc.f3d"}
     assert (
-        runs / STEM / "15_Tritonia" / "15_Tritonia.f3d"
+        runs / STEM / "cad" / "Tritonia_260822-0900_ccc.f3d"
     ).read_bytes() == b"model-ccc"
 
 
@@ -241,7 +237,7 @@ def test_archiving_a_run_twice_never_substitutes_the_newer_model(
     """
 
     app, runs = app_with_runs(tmp_path)
-    capture_directly(runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
+    capture_directly(app, runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
     imported_run(app, "job-a", "aaa", status="complete")
     capture_through_the_app(app, tmp_path, "bbb", at="2026-08-21T09:00:00Z")
 
@@ -254,9 +250,10 @@ def test_archiving_a_run_twice_never_substitutes_the_newer_model(
 
     assert first == again == {
         "placed": True,
-        "relativePath": "14_Tritonia/14_Tritonia.f3d",
+        "relativePath": "cad/Tritonia_260820-0900_aaa.f3d",
+        "modelFile": "cad/Tritonia_260820-0900_aaa.f3d",
     }
-    document = runs / STEM / "14_Tritonia" / "14_Tritonia.f3d"
+    document = runs / STEM / "cad" / "Tritonia_260820-0900_aaa.f3d"
     assert document.read_bytes() == b"model-aaa"
     assert document.read_bytes() != b"model-bbb"
     sidecar = json.loads(
@@ -276,7 +273,7 @@ def test_a_superseded_model_is_dropped_once_every_run_has_released_it(
     """
 
     app, runs = app_with_runs(tmp_path)
-    capture_directly(runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
+    capture_directly(app, runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
     imported_run(
         app, "job-a", "aaa", status="complete", archived_at="2026-08-20T13:00:00Z"
     )
@@ -289,7 +286,7 @@ def test_a_superseded_model_is_dropped_once_every_run_has_released_it(
     ]
 
 
-def test_placing_a_run_copy_reclaims_the_states_nothing_needs_any_more(
+def test_pinned_versions_remain_after_all_runs_release_them(
     tmp_path: Path,
 ) -> None:
     """A released state does not have to wait for another ingestion to go.
@@ -299,7 +296,7 @@ def test_placing_a_run_copy_reclaims_the_states_nothing_needs_any_more(
     """
 
     app, runs = app_with_runs(tmp_path)
-    capture_directly(runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
+    capture_directly(app, runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
     imported_run(app, "job-a", "aaa", status="complete")
     capture_through_the_app(app, tmp_path, "bbb", at="2026-08-21T09:00:00Z")
 
@@ -315,14 +312,14 @@ def test_placing_a_run_copy_reclaims_the_states_nothing_needs_any_more(
         )
     )
 
+    app.state.jobs_runtime.store.delete_job_with_event("job-a")
+    capture_through_the_app(app, tmp_path, "ccc", at="2026-08-22T09:00:00Z")
     assert sorted(path.name for path in (runs / STEM / "cad").iterdir()) == [
-        "Tritonia_260821-0900_bbb.f3d",
-        "Tritonia_260821-0900_bbb.json",
+        "Tritonia_260820-0900_aaa.cad.json", "Tritonia_260820-0900_aaa.f3d",
+        "Tritonia_260821-0900_bbb.cad.json", "Tritonia_260821-0900_bbb.f3d",
+        "Tritonia_260822-0900_ccc.f3d", "Tritonia_260822-0900_ccc.json",
     ]
-    # The first run keeps the model it was actually solved from.
-    assert (
-        runs / STEM / "14_Tritonia" / "14_Tritonia.f3d"
-    ).read_bytes() == b"model-aaa"
+    assert len(list((runs / STEM).rglob("*.f3d"))) == 3
 
 
 def test_a_missing_model_is_reported_rather_than_answered_as_a_success(
@@ -338,7 +335,7 @@ def test_a_missing_model_is_reported_rather_than_answered_as_a_success(
     )
 
     assert answer["placed"] is False
-    assert answer["retryable"] is True
+    assert answer["retryable"] is False
     assert "not in the project archive" in str(answer["reason"])
 
 
@@ -368,3 +365,80 @@ def test_only_runs_that_still_owe_an_archive_retain_a_model(tmp_path: Path) -> N
         "sha256:ccc",
     ]
     assert {row["archive_stem"] for row in rows} == {STEM}
+
+
+def test_dont_keep_captures_nothing(tmp_path):
+    app, runs = app_with_runs(tmp_path)
+    app.state.cad_workspace.set_capture_mode("off")
+    capture_through_the_app(app, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
+    assert list(runs.iterdir()) == []
+    answer = asyncio.run(archive_run_document(archive_request(app, "aaa"), SimpleNamespace(app=app)))
+    assert answer["placed"] is False
+    assert answer["retryable"] is False
+    assert "Don't keep" in answer["reason"]
+    assert list(runs.iterdir()) == []
+
+
+def test_two_different_runs_pin_one_file_even_after_dont_keep(tmp_path):
+    app, runs = app_with_runs(tmp_path)
+    capture_directly(app, runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
+    for job_id, number in [("job-a", 14), ("job-b", 15)]:
+        imported_run(app, job_id, "aaa", status="complete")
+        app.state.jobs_runtime.store.mutate_job_metadata(job_id, {"archive": {"key": "name:Tritonia", "folder": STEM, "run": f"{number}_Tritonia"}})
+        answer = asyncio.run(archive_run_document(ArchiveRunDocumentRequest(jobId=job_id), SimpleNamespace(app=app)))
+        assert answer == {"placed": True, "relativePath": "cad/Tritonia_260820-0900_aaa.f3d", "modelFile": "cad/Tritonia_260820-0900_aaa.f3d"}
+        app.state.cad_workspace.set_capture_mode("off")
+    assert len(list((runs / STEM).rglob("*.f3d"))) == 1
+
+
+def test_switching_to_keep_does_not_block_archiving_an_uncaptured_state(tmp_path):
+    app, runs = app_with_runs(tmp_path)
+    app.state.cad_workspace.set_capture_mode("off")
+    capture_through_the_app(app, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
+    app.state.cad_workspace.set_capture_mode("run")
+    result = asyncio.run(archive_run_document(archive_request(app, "aaa"), SimpleNamespace(app=app)))
+    assert result["placed"] is False
+    assert result["retryable"] is False
+    assert result["modelFile"] is None
+    assert list(runs.iterdir()) == []
+
+
+@pytest.mark.parametrize("old_reference", [None, "cad/Tritonia_260820-0900_aaa.f3d"])
+@pytest.mark.parametrize("displaced", [False, True])
+def test_archive_retry_preserves_the_existing_run_record_model_reference(tmp_path, old_reference, displaced):
+    app, runs = app_with_runs(tmp_path)
+    request = archive_request(app, "aaa")
+    run = runs / STEM / "14_Tritonia"
+    run.mkdir(parents=True)
+    record = {"schemaVersion": 1, "run": {"jobId": request.jobId}, "cad": {"returnStateHash": "sha256:aaa"}}
+    if old_reference:
+        record["cad"]["modelFile"] = old_reference
+    if displaced:
+        (run / "run.json").write_text("user-owned content")
+        run = run / "archive"
+        run.mkdir()
+    record_path = run / "run.json"
+    raw = json.dumps(record).encode()
+    record_path.write_bytes(raw)
+    # The first archive had no model, or its model was removed after archiving.
+    before = asyncio.run(archive_run_document(request, SimpleNamespace(app=app)))
+    assert before["modelFile"] == old_reference
+    capture_directly(app, runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
+    after = asyncio.run(archive_run_document(request, SimpleNamespace(app=app)))
+    assert after["placed"] is True
+    assert after["modelFile"] == old_reference
+    assert record_path.read_bytes() == raw
+
+
+@pytest.mark.parametrize("content", ["user-owned content", '{"schemaVersion":1,"run":{"jobId":"another"}}'])
+def test_unrelated_run_record_is_left_to_the_existing_collision_writer(tmp_path, content):
+    app, runs = app_with_runs(tmp_path)
+    request = archive_request(app, "aaa")
+    run = runs / STEM / "14_Tritonia"
+    run.mkdir(parents=True)
+    (run / "run.json").write_text(content)
+    capture_directly(app, runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
+    result = asyncio.run(archive_run_document(request, SimpleNamespace(app=app)))
+    assert result["placed"] is True
+    assert result["modelFile"] == "cad/Tritonia_260820-0900_aaa.f3d"
+    assert (run / "run.json").read_text() == content

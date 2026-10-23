@@ -651,13 +651,7 @@ export interface paths {
         put?: never;
         /**
          * Archive Run Document
-         * @description File a run's CAD document beside the run, when the mode asks for it.
-         *
-         *     Advisory throughout: the run archive is already written by the time this is
-         *     called, and a missing convenience copy must never make a good run look
-         *     failed. But it must not go missing quietly either -- the answer says why a
-         *     copy is absent and whether asking again can still produce it, and the
-         *     caller reports what it could not file.
+         * @description Pin the run's verified Fusion version and return its model-relative path.
          */
         post: operations["archive_run_document_api_cadlink_runs_archive_document_post"];
         delete?: never;

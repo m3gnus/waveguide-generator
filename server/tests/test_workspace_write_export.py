@@ -973,13 +973,13 @@ def test_filing_the_cad_document_per_project_still_asks_the_addin_to_capture(
         capture_endpoint(state)(workspace_api.CaptureDocumentRequest(mode="project"))
     )
 
-    assert result == {"captureDocument": True, "captureMode": "project"}
+    assert result == {"captureDocument": True, "captureMode": "run"}
     assert json.loads((data / "cadlink_settings.json").read_text()) == {
         "schemaVersion": 1,
         "captureDocument": True,
-        "captureMode": "project",
+        "captureMode": "run",
     }
-    assert workspace_api.CadWorkspaceState(data).capture_mode == "project"
+    assert workspace_api.CadWorkspaceState(data).capture_mode == "run"
 
 
 def test_a_settings_file_that_only_knew_the_boolean_reads_as_a_mode(
@@ -2135,3 +2135,18 @@ def test_run_writes_follow_recorded_location_across_root_selection(tmp_path, suf
     jobs.create_job({**row(run="2_Horn"), "id": "new-run", "status": "complete", "created_at": "then", "updated_at": "then", "queued_at": "then", "config_summary_json": {}})
     result = asyncio.run(write("new-run", "Horn/2_Horn"))
     assert result["directory"].startswith(str(root_b))
+
+
+@pytest.mark.parametrize("old_mode, expected", [("run", "run"), ("project", "run"), ("off", "off")])
+def test_keep_setting_migrates_legacy_modes_and_mirrors_for_older_wg(tmp_path, old_mode, expected):
+    data = tmp_path / "data"
+    data.mkdir()
+    settings = data / "cadlink_settings.json"
+    settings.write_text(json.dumps({"captureMode": old_mode, "captureDocument": old_mode != "off", "extra": "kept"}))
+    state = workspace_api.CadWorkspaceState(data)
+    assert state.capture_mode == expected
+    state.set_capture_mode(state.capture_mode)
+    saved = json.loads(settings.read_text())
+    assert saved["captureMode"] == expected
+    assert saved["captureDocument"] is (expected != "off")
+    assert saved["extra"] == "kept"

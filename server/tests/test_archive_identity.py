@@ -373,7 +373,7 @@ def test_recovered_legacy_stem_and_hash_keep_exact_existing_browser_location(tmp
     from server.cadlink.api import ArchiveRunDocumentRequest, archive_run_document
     from types import SimpleNamespace
 
-    capture(root, tmp_path, "Older_v10", "aaa", at="2026-08-20T09:00:00Z")
+    capture(app, root, tmp_path, "Older_v10", "aaa", at="2026-08-20T09:00:00Z")
     jobs = app.state.jobs_runtime.store
     jobs.initialize()
     jobs.create_job(
@@ -388,7 +388,8 @@ def test_recovered_legacy_stem_and_hash_keep_exact_existing_browser_location(tmp
     result = asyncio.run(
         archive_run_document(ArchiveRunDocumentRequest(jobId="old"), SimpleNamespace(app=app))
     )
-    assert result == {"placed": True, "relativePath": "1_cad-import/1_cad-import.f3d"}
+    assert result == {"placed": True, "relativePath": "cad/Tritonia_260820-0900_aaa.f3d",
+                      "modelFile": "cad/Tritonia_260820-0900_aaa.f3d"}
     assert "archive" not in jobs.get_job_row("old")["task_metadata"]
 
 

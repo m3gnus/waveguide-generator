@@ -2,16 +2,10 @@ import { httpErrorMessage } from './httpError';
 import { deadlineFetch } from './deadlineFetch';
 import { selectFolderRoot } from './folders';
 
-/**
- * Where a captured CAD document is filed in the run archive.
- *
- * `run` puts the model beside the run it produced, which is where people look
- * for it and is never pruned; `project` keeps only the newest model state for
- * the whole project -- archiving a later state deletes the last, which costs
- * less when one geometry is swept many times; `off` asks the add-in not to
- * carry the document at all.
+/** Keep each Fusion version once in the model's cad/ folder, or capture nothing.
+ * `run` is the compatibility spelling of Keep for older WG.
  */
-export type CadCaptureMode = 'off' | 'project' | 'run';
+export type CadCaptureMode = 'off' | 'run';
 
 export interface CadWorkspacePath {
   selected: boolean;
@@ -19,7 +13,7 @@ export interface CadWorkspacePath {
   missingPath?: string | null;
   /** Whether returns carry a copy of the CAD document they were taken from. */
   captureDocument?: boolean;
-  captureMode?: CadCaptureMode;
+  captureMode?: CadCaptureMode | 'project';
 }
 
 export async function getCadWorkspace(
@@ -69,5 +63,6 @@ export async function setCaptureMode(
     body: JSON.stringify({ mode }),
   });
   if (!response.ok) throw new Error(await httpErrorMessage(response, 'WGLink folder request failed'));
-  return ((await response.json()) as { captureMode: CadCaptureMode }).captureMode;
+  const saved = ((await response.json()) as { captureMode: CadCaptureMode | 'project' }).captureMode;
+  return saved === 'off' ? 'off' : 'run';
 }

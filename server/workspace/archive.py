@@ -23,6 +23,7 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+import threading
 from typing import Any, Callable, Collection, Mapping, NamedTuple
 import unicodedata
 
@@ -42,6 +43,8 @@ _EDGES = re.compile(r"^[._-]+|[._-]+$")
 # collide by fragment alone -- and a sidecar check backs it up regardless.
 _DIGEST_FRAGMENT_LENGTH = 12
 _FALLBACK_STAMP = "000000-0000"
+# Capture publication, pinning and pruning must not race in worker threads.
+_CAD_DOCUMENT_LOCK = threading.RLock()
 
 
 def archive_folder_slug(name: object, fallback: str = UNTITLED_SLUG) -> str:
@@ -126,31 +129,33 @@ def _sidecar_matches_digest(sidecar: Path, digest: str) -> bool:
     return str(payload.get("returnStateHash") or "") == digest
 
 
-def _find_captured_document(directory: Path, digest: str) -> Path | None:
-    """The archived file for one return state, new-style or legacy.
+def cad_document_sidecar(document: Path, digest: str) -> Path | None:
+    """The identifying capture record, for both current and legacy files."""
 
-    New captures are named ``<name>_<stamp>_<fragment>.<ext>``: a fragment
-    match is only ever trusted once the file's own sidecar confirms the full
-    digest, since two designs' digests can share a twelve-character prefix.
-    Legacy captures are named ``sha256_<full digest>.<ext>`` -- the whole
-    digest is already in the name, so no sidecar check is needed to trust it.
-    """
+    for sidecar in (document.with_suffix(".cad.json"), document.with_suffix(".json")):
+        if sidecar.is_file() and _sidecar_matches_digest(sidecar, digest):
+            return sidecar
+    return None
+
+
+def _find_captured_document(
+    directory: Path, digest: str,
+    verify_document: Callable[[Path], bool] | None = None,
+) -> Path | None:
+    """Find the full return hash behind a friendly or legacy capture name."""
 
     if directory.is_symlink() or not directory.is_dir():
         return None
     fragment = _digest_fragment(digest)
-    if fragment:
-        for candidate in sorted(directory.glob(f"*_{fragment}.*")):
-            if candidate.suffix == ".json" or candidate.is_symlink() or not candidate.is_file():
-                continue
-            sidecar = candidate.with_suffix(".json")
-            if sidecar.is_file() and _sidecar_matches_digest(sidecar, digest):
-                return candidate
     legacy_name = archive_folder_slug(digest, "return")
-    for candidate in sorted(directory.glob(f"{legacy_name}.*")):
+    candidates = sorted(set(directory.glob(f"*_{fragment}.*")) | set(directory.glob(f"{legacy_name}.*")))
+    for candidate in candidates:
         if candidate.suffix == ".json" or candidate.is_symlink() or not candidate.is_file():
             continue
-        return candidate
+        if cad_document_sidecar(candidate, digest) is None:
+            continue
+        if verify_document is None or verify_document(candidate):
+            return candidate
     return None
 
 
@@ -204,21 +209,10 @@ def _prune_captured_documents(
     keep_names: Collection[str],
     retained_return_states: Collection[str],
 ) -> None:
-    """Remove captured documents that are neither current nor still needed.
+    """Prune only superseded, unpinned states no pending run still needs.
 
-    The project-level ``cad/`` folder is meant to show one current model
-    state, and each run folder keeps its own permanent copy via
-    ``place_run_cad_document``. But that run copy is made *from this folder*,
-    so a capture may only be dropped once every run that still has to be given
-    it has taken it: ``retained_return_states`` names those, and a document
-    whose return state is in it survives however superseded it is. Without
-    that, ingesting a changed model deleted the only source the previous
-    model's queued or unarchived runs could ever be archived from.
-
-    A file is only ever removed once its own sidecar identifies it, new-style
-    name or legacy ``sha256_<digest>`` alike. A deletion that fails is logged
-    and otherwise ignored: the document that was just written is what matters,
-    not the tidying afterwards.
+    Pinned records use .cad.json and are deliberately absent from
+    _captured_documents, including when older WG runs that enumerator.
     """
 
     retained = {_digest_hex(value) for value in retained_return_states if value}
@@ -239,26 +233,15 @@ def _prune_captured_documents(
 def reclaim_captured_documents(
     runs_root: Path, stem: object, retained_return_states: Collection[str] = ()
 ) -> None:
-    """Drop superseded captures once every run that referenced them let go.
+    """Drop released unpinned captures, preserving the newest and all pins."""
 
-    Retention is what keeps an older model state alive while a run still needs
-    to be archived from it; this is the other half of that decision, so the
-    folder returns to one current model as soon as the last of those runs has
-    its own copy. It is called after a run copy is placed, and the ordinary
-    case is that it deletes nothing.
-
-    Deliberately conservative about which capture is current: it acts only
-    when every identified capture in the folder carries a capture time, so a
-    legacy folder with no timestamps is left for the next ingestion to prune,
-    which knows exactly what it just wrote.
-    """
-
-    directory = design_archive_folder(runs_root, stem) / CAD_SUBDIRECTORY
-    entries = _captured_documents(directory)
-    if len(entries) < 2 or any(not entry.captured_at for entry in entries):
-        return
-    newest = max(entries, key=lambda entry: (entry.captured_at, entry.document.name))
-    _prune_captured_documents(directory, {newest.document.name}, retained_return_states)
+    with _CAD_DOCUMENT_LOCK:
+        directory = design_archive_folder(runs_root, stem) / CAD_SUBDIRECTORY
+        entries = _captured_documents(directory)
+        if len(entries) < 2 or any(not entry.captured_at for entry in entries):
+            return
+        newest = max(entries, key=lambda entry: (entry.captured_at, entry.document.name))
+        _prune_captured_documents(directory, {newest.document.name}, retained_return_states)
 
 
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
@@ -280,69 +263,58 @@ def archive_cad_document(
     stem: object,
     retained_return_states: Collection[str] = (),
 ) -> str | None:
-    """Copy a return's captured CAD document into the design's archive.
+    """Capture once per return state; prune only unused superseded versions.
 
-    Only the newest model state and the states runs have not released are kept
-    here, not one file per return: a Fusion archive is tens of megabytes, so a
-    project swept many times must not grow one project-level copy per solve.
-    Writing a new state prunes the captured documents this design folder held,
-    new-style or legacy-named alike -- except any named in
-    ``retained_return_states``, which are the states queued, running or
-    unarchived runs still have to be archived from. An already-archived run's
-    own copy survives regardless, since ``place_run_cad_document`` puts that
-    one beside the run itself, outside this pruning. Re-ingesting a return
-    already stored here is a no-op that prunes nothing, since nothing new
-    arrived.
-
-    Returns the path relative to the design folder, or ``None`` when there is
-    nothing to archive.
+    A run pins the original in cad/ permanently. Re-ingesting an existing
+    version (including a pinned version) changes neither bytes nor sidecar.
     """
 
-    document = record.get("document")
-    document = document if isinstance(document, Mapping) else {}
-    member = str(document.get("file") or "")
-    digest = str(document.get("return_state_hash") or "")
-    if not member or not digest:
-        return None
-    bundle_root = Path(bundle_path).resolve()
-    member_path = bundle_root / member
-    source = member_path.resolve()
-    if bundle_root not in source.parents or member_path.is_symlink() or not source.is_file():
-        return None
+    with _CAD_DOCUMENT_LOCK:
+        document = record.get("document")
+        document = document if isinstance(document, Mapping) else {}
+        member = str(document.get("file") or "")
+        digest = str(document.get("return_state_hash") or "")
+        if not member or not digest:
+            return None
+        bundle_root = Path(bundle_path).resolve()
+        member_path = bundle_root / member
+        source = member_path.resolve()
+        if bundle_root not in source.parents or member_path.is_symlink() or not source.is_file():
+            return None
 
-    destination_directory = design_archive_folder(runs_root, stem) / CAD_SUBDIRECTORY
-    existing = _find_captured_document(destination_directory, digest)
-    if existing is not None:
-        return f"{CAD_SUBDIRECTORY}/{existing.name}"
+        destination_directory = design_archive_folder(runs_root, stem) / CAD_SUBDIRECTORY
+        existing = _find_captured_document(destination_directory, digest)
+        if existing is not None:
+            return f"{CAD_SUBDIRECTORY}/{existing.name}"
 
-    filename_stem = _captured_document_stem(document.get("name"), record.get("created_at"), digest)
-    destination = destination_directory / f"{filename_stem}{source.suffix}"
-    relative = f"{CAD_SUBDIRECTORY}/{destination.name}"
+        filename_stem = _captured_document_stem(document.get("name"), record.get("created_at"), digest)
+        destination = destination_directory / f"{filename_stem}{source.suffix}"
+        relative = f"{CAD_SUBDIRECTORY}/{destination.name}"
 
-    destination_directory.mkdir(parents=True, exist_ok=True)
-    staging = publish_staging_directory(destination_directory, ".wg2-cad-document-")
-    try:
-        staged = staging / destination.name
-        shutil.copy2(source, staged)
-        os.replace(staged, destination)
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
-    _write_json_atomic(
-        destination.with_suffix(".json"),
-        {
-            "schemaVersion": 1,
-            "documentName": document.get("name") or None,
-            "nativeId": document.get("native_id") or None,
-            "returnStateHash": digest,
-            "ingestId": record.get("ingest_id"),
-            "returnId": record.get("return_id"),
-            "capturedAt": record.get("created_at"),
-        },
-    )
-    _prune_captured_documents(
-        destination_directory, {destination.name}, retained_return_states
-    )
-    return relative
+        destination_directory.mkdir(parents=True, exist_ok=True)
+        staging = publish_staging_directory(destination_directory, ".wg2-cad-document-")
+        try:
+            staged = staging / destination.name
+            shutil.copy2(source, staged)
+            os.replace(staged, destination)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+        _write_json_atomic(
+            destination.with_suffix(".json"),
+            {
+                "schemaVersion": 1,
+                "documentName": document.get("name") or None,
+                "nativeId": document.get("native_id") or None,
+                "returnStateHash": digest,
+                "ingestId": record.get("ingest_id"),
+                "returnId": record.get("return_id"),
+                "capturedAt": record.get("created_at"),
+            },
+        )
+        _prune_captured_documents(
+            destination_directory, {destination.name}, retained_return_states
+        )
+        return relative
 
 
 def _unlinked_archive_path(path: Path, root: Path) -> bool:
@@ -378,8 +350,8 @@ def captured_cad_document(
 ) -> Path | None:
     """The exact archived model, preferring cad/ then an identified run copy.
 
-    HTTP callers supply trusted ingestion verification for run-folder candidates.
-    Internal archive placement keeps its existing sidecar-based retry behaviour."""
+    HTTP callers supply the same trusted ingestion verifier for every candidate.
+    """
 
     digest = str(return_state_hash or "").strip()
     if not digest:
@@ -388,11 +360,11 @@ def captured_cad_document(
     if folder.exists() and not _unlinked_archive_path(folder, runs_root):
         return None
     directory = folder / CAD_SUBDIRECTORY
-    document = _find_captured_document(directory, digest) if _unlinked_archive_path(directory, runs_root) else None
+    document = _find_captured_document(directory, digest, verify_run_document) if _unlinked_archive_path(directory, runs_root) else None
     if document is not None and _unlinked_archive_path(document, runs_root):
         return document
     for sidecar in cad_document_sidecars(folder) if sidecars is None else sidecars:
-        if not sidecar.name.endswith(".cad.json") or not _unlinked_archive_path(sidecar, runs_root):
+        if sidecar.parent == directory or not sidecar.name.endswith(".cad.json") or not _unlinked_archive_path(sidecar, runs_root):
             continue
         document = _placed_run_document(sidecar.parent, sidecar.name[:-len(".cad.json")], digest)
         if (document is not None and _unlinked_archive_path(document, runs_root)
@@ -403,6 +375,10 @@ def captured_cad_document(
     for run in archived_paths:
         if not _unlinked_archive_path(run, Path(run.anchor)):
             continue
+        directory = run.parent / CAD_SUBDIRECTORY
+        document = _find_captured_document(directory, digest, verify_run_document) if _unlinked_archive_path(directory, Path(run.anchor)) else None
+        if document is not None and verify_run_document is not None:
+            return document
         for sidecar in cad_document_sidecars(run):
             if not sidecar.name.endswith('.cad.json'):
                 continue
@@ -436,86 +412,36 @@ def _placed_run_document(
     return None
 
 
-def place_run_cad_document(
-    runs_root: Path,
-    stem: object,
-    run_subdirectory: str,
-    run_stem: str,
-    return_state_hash: str,
+def pin_cad_document(
+    runs_root: Path, stem: object, return_state_hash: str,
+    *, verify_document: Callable[[Path], bool],
 ) -> str | None:
-    """Put the run's CAD document beside the run, for the ``run`` capture mode.
+    """Pin the verified original; several runs share it without copying bytes.
 
-    The project-level ``cad/`` copy stays the content-addressed original: a
-    return that is ingested and never solved still has to keep its document
-    somewhere. This adds the copy people actually look for -- open the folder
-    for run 14 and the model that produced it is in it.
-
-    A plain copy, deliberately. Hard-linking would make this free, but the
-    archive commonly lives in a cloud-synced folder, where a shared inode is
-    either desynchronised or silently propagates an edit of one file to the
-    other; these are archives, and an archive that changes underneath you is
-    worse than a second copy of a small file.
-
-    Refuses to overwrite a file that is already there with different content,
-    so re-archiving a run cannot clobber a document the user replaced. Returns
-    the path relative to the design folder, or ``None`` when there is nothing
-    to place.
+    Legacy per-run copies remain readable in place. Renaming a cad/ sidecar
+    protects its model even from the older WG prune enumerator.
     """
 
-    design_folder = design_archive_folder(runs_root, stem)
-    segments = [segment for segment in str(run_subdirectory).split("/") if segment]
-    if not segments or any(segment in {".", ".."} for segment in segments):
-        return None
-    destination_directory = design_folder.joinpath(*segments)
-    source = captured_cad_document(runs_root, stem, return_state_hash)
-    if source is None:
-        # The project-level copy has been reclaimed since this run was first
-        # archived. If the run already holds its own copy of that exact model
-        # state, the archive is complete and saying so is the truth; a retry
-        # must not report a copy it already made as missing.
-        already = _placed_run_document(
-            destination_directory, run_stem, return_state_hash
+    with _CAD_DOCUMENT_LOCK:
+        folder = design_archive_folder(runs_root, stem)
+        source = captured_cad_document(
+            runs_root, stem, return_state_hash, verify_run_document=verify_document,
         )
-        return f"{'/'.join(segments)}/{already.name}" if already is not None else None
-    destination = destination_directory / f"{archive_folder_slug(run_stem, 'run')}{source.suffix}"
-    source_sidecar = source.with_suffix(".json" if source.parent == design_folder / CAD_SUBDIRECTORY else ".cad.json")
-    destination_sidecar = destination.with_suffix(".cad.json")
-    relative = f"{'/'.join(segments)}/{destination.name}"
-    resolved_root = design_folder.resolve()
-    if resolved_root not in destination_directory.resolve().parents and destination_directory.resolve() != resolved_root:
-        return None
-    if destination.is_symlink():
-        return None
-    if destination_sidecar.is_symlink():
-        return None
-    if destination.is_file():
-        # Byte-identical means the archive already holds it: a retried archive
-        # after a restart must be a no-op, not a second write.
-        if destination.read_bytes() != source.read_bytes():
+        if source is None:
             return None
-    if source_sidecar.is_file() and destination_sidecar.is_file():
-        # A CAD sidecar is part of the same immutable archive copy. Refuse a
-        # collision rather than replacing metadata that may belong to a file
-        # the user put there.
-        if destination_sidecar.read_bytes() != source_sidecar.read_bytes():
-            return None
-
-    if destination.is_file():
-        if source_sidecar.is_file() and not destination_sidecar.is_file():
-            shutil.copy2(source_sidecar, destination_sidecar)
-        return relative
-
-    destination_directory.mkdir(parents=True, exist_ok=True)
-    staging = publish_staging_directory(destination_directory, ".wg2-run-document-")
-    try:
-        staged = staging / destination.name
-        shutil.copy2(source, staged)
-        os.replace(staged, destination)
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
-    if source_sidecar.is_file():
-        shutil.copy2(source_sidecar, destination_sidecar)
-    return relative
+        if source.parent == folder / CAD_SUBDIRECTORY:
+            ordinary = source.with_suffix(".json")
+            pinned = source.with_suffix(".cad.json")
+            if pinned.exists():
+                if not _unlinked_archive_path(pinned, runs_root) or not _sidecar_matches_digest(pinned, return_state_hash):
+                    return None
+                if ordinary.exists():
+                    if ordinary.read_bytes() != pinned.read_bytes():
+                        return None
+                    ordinary.unlink()
+            else:
+                os.rename(ordinary, pinned)
+        return source.relative_to(folder).as_posix()
 
 
 __all__ = [
@@ -525,6 +451,7 @@ __all__ = [
     "captured_cad_document",
     "cad_document_sidecars",
     "design_archive_folder",
-    "place_run_cad_document",
+    "pin_cad_document",
+    "cad_document_sidecar",
     "reclaim_captured_documents",
 ]

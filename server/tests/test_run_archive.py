@@ -13,7 +13,7 @@ from server.workspace.archive import (
     archive_cad_document,
     archive_folder_slug,
     captured_cad_document,
-    place_run_cad_document,
+    pin_cad_document,
     reclaim_captured_documents,
 )
 
@@ -172,7 +172,7 @@ def test_re_ingesting_a_return_already_filed_under_the_legacy_name_is_a_no_op(
 def test_archiving_a_new_model_state_prunes_the_previous_one(tmp_path: Path) -> None:
     """The project-level cad/ folder keeps only the newest model state.
 
-    Each run folder keeps its own copy forever via ``place_run_cad_document``,
+    Each run folder keeps its own copy forever as a pinned shared version,
     so an older run stays reopenable even after the shared project-level copy
     it was solved from is superseded and removed.
     """
@@ -230,10 +230,8 @@ def test_a_retained_model_state_survives_a_newer_capture(tmp_path: Path) -> None
         "Big_Horn_v7_260820-1130_bbb222.json",
     ]
     # The retained state is still the one its own runs will be given.
-    placed = place_run_cad_document(
-        runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:aaa111"
-    )
-    assert placed == "14_Big_Horn/14_Big_Horn.f3d"
+    placed = pin_cad_document(runs, "Big Horn", "sha256:aaa111", verify_document=lambda path: path.read_bytes() == b"first-bytes")
+    assert placed == "cad/Big_Horn_v7_260819-1000_aaa111.f3d"
     assert (runs / "Big_Horn" / placed).read_bytes() == b"first-bytes"
 
 
@@ -444,149 +442,56 @@ def test_the_stored_bundle_copy_leaves_the_captured_document_behind(tmp_path: Pa
     assert (bundle_path / "document.f3d").read_bytes() == document
 
 
-def test_the_run_copy_lands_beside_the_run_that_produced_it(tmp_path: Path) -> None:
+def test_two_runs_share_one_pinned_file_and_reingestion_is_a_noop(tmp_path: Path) -> None:
     bundle = bundle_with_document(tmp_path)
     runs = tmp_path / "runs"
-    archive_cad_document(bundle, record_for(), runs, "Big Horn")
-
-    relative = place_run_cad_document(
-        runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:abc123"
-    )
-
-    assert relative == "14_Big_Horn/14_Big_Horn.f3d"
-    placed = runs / "Big_Horn" / relative
-    assert placed.read_bytes() == b"f3d-bytes"
-    # The sidecar travels with it: a bare .f3d in a run folder says nothing
-    # about which model state it is.
-    assert json.loads(placed.with_suffix(".cad.json").read_text(encoding="utf-8"))[
-        "returnStateHash"
-    ] == "sha256:abc123"
-    # The project-level original stays: a return that is never solved still has
-    # to keep its document somewhere.
-    assert (runs / "Big_Horn" / "cad" / "Big_Horn_v7_260819-1000_abc123.f3d").is_file()
+    relative = archive_cad_document(bundle, record_for(), runs, "Big Horn")
+    original = runs / "Big_Horn" / relative
+    before = original.stat().st_mtime_ns
+    for _run in (14, 15):
+        assert pin_cad_document(runs, "Big Horn", "sha256:abc123", verify_document=lambda path: path.read_bytes() == b"f3d-bytes") == relative
+    assert archive_cad_document(bundle, record_for(), runs, "Big Horn") == relative
+    assert original.stat().st_mtime_ns == before
+    assert list((runs / "Big_Horn").rglob("*.f3d")) == [original]
+    assert original.with_suffix(".cad.json").is_file()
+    assert not original.with_suffix(".json").exists()
 
 
-def test_the_run_sidecar_does_not_replace_the_solver_result_json(tmp_path: Path) -> None:
-    bundle = bundle_with_document(tmp_path)
+def test_a_pinned_version_survives_capture_and_older_wg_prune(tmp_path: Path) -> None:
+    from server.workspace.archive import _captured_documents
+
     runs = tmp_path / "runs"
-    archive_cad_document(bundle, record_for(), runs, "Big Horn")
-    run_directory = runs / "Big_Horn" / "14_Big_Horn"
-    run_directory.mkdir()
-    result = run_directory / "14_Big_Horn.json"
-    result_bytes = b'{"channels":{"left":{"spl":[91.5]}}}\n'
-    result.write_bytes(result_bytes)
-
-    relative = place_run_cad_document(
-        runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:abc123"
-    )
-
-    assert relative == "14_Big_Horn/14_Big_Horn.f3d"
-    assert result.read_bytes() == result_bytes
-    assert json.loads(
-        (run_directory / "14_Big_Horn.cad.json").read_text(encoding="utf-8")
-    )["returnStateHash"] == "sha256:abc123"
+    first = archive_cad_document(bundle_with_document(tmp_path), record_for(), runs, "Big Horn")
+    pin_cad_document(runs, "Big Horn", "sha256:abc123", verify_document=lambda _path: True)
+    later = record_for()
+    later["document"]["return_state_hash"] = "sha256:later"
+    archive_cad_document(bundle_with_document(tmp_path / "later"), later, runs, "Big Horn")
+    # Older WG only enumerates ordinary .json sidecars; mimic deleting all it sees.
+    for entry in _captured_documents(runs / "Big_Horn" / "cad"):
+        entry.document.unlink()
+        entry.sidecar.unlink()
+    assert (runs / "Big_Horn" / first).read_bytes() == b"f3d-bytes"
+    reclaim_captured_documents(runs, "Big Horn")
+    assert (runs / "Big_Horn" / first).is_file()
 
 
-def test_an_existing_different_run_sidecar_is_never_clobbered(tmp_path: Path) -> None:
-    bundle = bundle_with_document(tmp_path)
+def test_pinning_requires_verified_bytes_and_never_overwrites_a_pin(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
-    archive_cad_document(bundle, record_for(), runs, "Big Horn")
-    run_directory = runs / "Big_Horn" / "14_Big_Horn"
-    run_directory.mkdir()
-    sidecar = run_directory / "14_Big_Horn.cad.json"
-    sidecar.write_bytes(b'{"user":"metadata"}\n')
-
-    assert place_run_cad_document(
-        runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:abc123"
-    ) is None
-    assert sidecar.read_bytes() == b'{"user":"metadata"}\n'
-    assert not (run_directory / "14_Big_Horn.f3d").exists()
+    relative = archive_cad_document(bundle_with_document(tmp_path), record_for(), runs, "Big Horn")
+    original = runs / "Big_Horn" / relative
+    assert pin_cad_document(runs, "Big Horn", "sha256:abc123", verify_document=lambda _path: False) is None
+    assert original.with_suffix(".json").exists()
+    pinned = original.with_suffix(".cad.json")
+    pinned.write_text('{"returnStateHash":"sha256:other"}')
+    before = pinned.read_bytes()
+    assert pin_cad_document(runs, "Big Horn", "sha256:abc123", verify_document=lambda _path: True) is None
+    assert pinned.read_bytes() == before
 
 
-def test_placing_the_run_copy_again_is_a_no_op(tmp_path: Path) -> None:
-    bundle = bundle_with_document(tmp_path)
+def test_pinning_an_uncaptured_model_does_nothing(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
-    archive_cad_document(bundle, record_for(), runs, "Big Horn")
-    first = place_run_cad_document(
-        runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:abc123"
-    )
-    placed = runs / "Big_Horn" / str(first)
-    before = placed.stat().st_mtime_ns
-
-    again = place_run_cad_document(
-        runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:abc123"
-    )
-
-    assert again == first
-    assert placed.stat().st_mtime_ns == before
-
-
-def test_placing_again_after_the_project_copy_was_reclaimed_is_a_no_op(
-    tmp_path: Path,
-) -> None:
-    """A retry must not call a copy it already made missing.
-
-    Once every run has its own copy the project-level state is reclaimed, so a
-    later re-archive of that run finds no source. The run's own copy is the
-    archive, and it is identified by its sidecar rather than by its name.
-    """
-
-    bundle = bundle_with_document(tmp_path)
-    runs = tmp_path / "runs"
-    archive_cad_document(bundle, record_for(), runs, "Big Horn")
-    first = place_run_cad_document(
-        runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:abc123"
-    )
-    for path in (runs / "Big_Horn" / "cad").iterdir():
-        path.unlink()
-
-    again = place_run_cad_document(
-        runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:abc123"
-    )
-
-    assert again == first == "14_Big_Horn/14_Big_Horn.f3d"
-    # A different model state is still absent, not answered with this one.
-    assert place_run_cad_document(
-        runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:other"
-    ) is None
-
-
-def test_a_replaced_run_document_is_never_clobbered(tmp_path: Path) -> None:
-    """Re-archiving after a restart must not overwrite the user's own file."""
-
-    bundle = bundle_with_document(tmp_path)
-    runs = tmp_path / "runs"
-    archive_cad_document(bundle, record_for(), runs, "Big Horn")
-    place_run_cad_document(runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:abc123")
-    placed = runs / "Big_Horn" / "14_Big_Horn" / "14_Big_Horn.f3d"
-    placed.write_bytes(b"the-users-own-edited-model")
-
-    assert place_run_cad_document(
-        runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:abc123"
-    ) is None
-    assert placed.read_bytes() == b"the-users-own-edited-model"
-
-
-def test_placing_a_run_copy_of_an_uncaptured_model_does_nothing(tmp_path: Path) -> None:
-    runs = tmp_path / "runs"
-
-    assert place_run_cad_document(
-        runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:never-captured"
-    ) is None
-    assert place_run_cad_document(runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "") is None
+    assert pin_cad_document(runs, "Horn", "sha256:missing", verify_document=lambda _path: True) is None
     assert not runs.exists()
-
-
-def test_a_run_folder_that_escapes_the_project_is_refused(tmp_path: Path) -> None:
-    bundle = bundle_with_document(tmp_path)
-    runs = tmp_path / "runs"
-    archive_cad_document(bundle, record_for(), runs, "Big Horn")
-
-    for escape in ("..", "../elsewhere", "", "."):
-        assert place_run_cad_document(
-            runs, "Big Horn", escape, "14_Big_Horn", "sha256:abc123"
-        ) is None
-    assert not (tmp_path / "runs" / "elsewhere").exists()
 
 
 def test_the_captured_document_is_found_by_its_return_state(tmp_path: Path) -> None:
@@ -675,17 +580,12 @@ def test_capture_refuses_members_outside_bundle(tmp_path, member):
     assert not runs.exists()
 
 
-def test_run_copy_remains_a_source_with_its_original_sidecar_after_pruning(tmp_path: Path) -> None:
-    bundle = bundle_with_document(tmp_path)
+def test_legacy_run_copy_remains_a_verified_source_without_creating_copies(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
-    archive_cad_document(bundle, record_for(), runs, "Big Horn")
-    relative = place_run_cad_document(runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:abc123")
-    original = runs / "Big_Horn" / relative
-    original_sidecar = original.with_suffix(".cad.json").read_bytes()
-    for path in (runs / "Big_Horn" / "cad").iterdir():
-        path.unlink()
-    assert captured_cad_document(runs, "Big Horn", "sha256:abc123") == original
-    # A later run and a retried archive still work after project retention.
-    assert place_run_cad_document(runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:abc123") == relative
-    copied = place_run_cad_document(runs, "Big Horn", "15_Big_Horn", "15_Big_Horn", "sha256:abc123")
-    assert (runs / "Big_Horn" / copied).with_suffix(".cad.json").read_bytes() == original_sidecar
+    old = runs / "Big_Horn" / "14_Big_Horn" / "14_Big_Horn.f3d"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(b"legacy")
+    old.with_suffix(".cad.json").write_text(json.dumps({"returnStateHash": "sha256:abc123"}))
+    assert captured_cad_document(runs, "Big Horn", "sha256:abc123", verify_run_document=lambda path: path.read_bytes() == b"legacy") == old
+    assert pin_cad_document(runs, "Big Horn", "sha256:abc123", verify_document=lambda path: path.read_bytes() == b"legacy") == "14_Big_Horn/14_Big_Horn.f3d"
+    assert list((runs / "Big_Horn").rglob("*.f3d")) == [old]

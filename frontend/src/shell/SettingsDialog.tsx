@@ -132,22 +132,17 @@ function WorkspaceSettings() {
   </section>;
 }
 
-/** The three places a returned Fusion model can end up, in plain terms. */
+/** One shared file per model version, kept permanently when a run uses it. */
 const CAPTURE_CHOICES: Array<{ mode: CadCaptureMode; label: string; detail: string }> = [
   {
     mode: 'run',
-    label: 'With every run',
-    detail: 'In each run folder, beside the results it produced. Easiest to find; one copy per solve.',
-  },
-  {
-    mode: 'project',
-    label: 'Once per project',
-    detail: 'In runs/<project>/cad/, only the newest model state -- archiving a later one deletes the last. Saves space when sweeping one geometry; each run folder keeps its own copy regardless.',
+    label: 'Keep',
+    detail: "Each Fusion model version is saved once in the model folder’s cad/ folder. Versions used by runs are never deleted automatically. Unused older versions are removed when a new version arrives.",
   },
   {
     mode: 'off',
-    label: 'Don\u2019t keep one',
-    detail: 'Returns carry no model. Older runs cannot be reopened in Fusion from WG.',
+    label: "Don't keep",
+    detail: 'New returns carry no Fusion model. Models already kept remain available.',
   },
 ];
 
@@ -166,7 +161,7 @@ function CadFolderSettings() {
       (value) => {
         if (request !== requestGeneration.current) return;
         if (captureRequest === captureGeneration.current) {
-          const mode = value.captureMode ?? (value.captureDocument === false ? 'off' : 'run');
+          const mode = value.captureMode === 'off' || (!value.captureMode && value.captureDocument === false) ? 'off' : 'run';
           confirmedCapture.current = mode;
           setCapture(mode);
         }
@@ -208,7 +203,7 @@ function CadFolderSettings() {
     <RootFolderControls cadlinkOnly/>
     <p className="cad-settings-note">WG creates <code>wglink</code> and <code>wgreturn</code> inside the WGLink folder.</p>
     <fieldset className="cad-settings-capture">
-      <legend>Keep a copy of the Fusion model</legend>
+      <legend>Keep the Fusion model:</legend>
       {CAPTURE_CHOICES.map(({ mode, label, detail }) => <label key={mode} className="ui-check">
         <input
           type="radio"

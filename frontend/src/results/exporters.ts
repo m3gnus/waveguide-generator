@@ -9,7 +9,7 @@ import {
   type ConfirmReplacements,
 } from '../api/exportDestination';
 import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
-import { placeRunCadDocument } from '../api/cadProjects';
+import { pinRunCadDocument } from '../api/cadProjects';
 import { fetchJobArchiveSnapshot, fetchRadiationImpedancePresentation, type RadiationImpedancePresentation } from '../api/results';
 import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { buildRunRecord } from '../jobs/runArchive';
@@ -1220,30 +1220,20 @@ export async function archiveRunToWorkspace(
     ...[...prepared.values()].map(({ filename }) => filename),
     ...(snapshot.mesh_artifact ? [`${exportStemForJob(archiveJob)}.msh`] : []),
   ];
+  // Pin before publishing run.json so every successful reference is permanent.
+  let modelFile: string | undefined;
+  const pin = await pinRunCadDocument(archiveJob, fetcher);
+  if (pin.requested && !pin.placed) {
+    const reason = pin.reason ?? 'the server did not say why';
+    if (pin.retryable) throw new Error(reason);
+    console.warn(`Could not keep the run’s CAD document for ${exportStemForJob(archiveJob)}: ${reason}`);
+  }
+  modelFile = pin.modelFile === undefined ? pin.relativePath ?? undefined : pin.modelFile ?? undefined;
   const record = await writeArchiveMembers(
     subdirectory,
-    [textFile(buildRunRecord(archiveJob, (filename) => moved.get(filename) ?? filename, written, replay))],
+    [textFile(buildRunRecord(archiveJob, (filename) => moved.get(filename) ?? filename, written, replay, modelFile))],
     fetcher,
     job.id,
   );
-  // The captured Fusion model, when the capture setting files one per run. It
-  // is a convenience copy of something already archived at project level, so a
-  // failure here is reported and dropped rather than failing the archive. It is
-  // reported either way: the request can succeed as HTTP while placing nothing,
-  // and that answer used to be discarded, which is how a run could be marked
-  // archived without the model it was solved from.
-  try {
-    const placement = await placeRunCadDocument(
-      archiveJob, fetcher,
-    );
-    if (placement.requested && !placement.placed) {
-      console.warn(
-        `Could not file the run\u2019s CAD document for ${exportStemForJob(archiveJob)}: `
-        + (placement.reason ?? 'the server did not say why'),
-      );
-    }
-  } catch (error) {
-    console.warn('Could not file the run\u2019s CAD document', error);
-  }
   return [...results.files, ...mesh.files, ...record.files];
 }

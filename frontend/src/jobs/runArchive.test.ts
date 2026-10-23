@@ -97,13 +97,14 @@ describe('run archive layout', () => {
         ingest_id: 'i1', design_id: 'd1', lineage_id: 'l1', archive_stem: 'Big_Horn',
         manifest_sha256: 'sha256:aa', document_name: 'Big Horn v7', return_state_hash: 'sha256:bb',
       },
-    })).text);
+    }), undefined, [], undefined, 'cad/Big_Horn_260820-0900_bb.f3d').text);
 
     expect(record.cad).toEqual({
       ingestId: 'i1',
       manifestSha256: 'sha256:aa',
       documentName: 'Big Horn v7',
       returnStateHash: 'sha256:bb',
+      modelFile: 'cad/Big_Horn_260820-0900_bb.f3d',
     });
   });
 

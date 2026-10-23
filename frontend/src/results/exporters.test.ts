@@ -1105,7 +1105,7 @@ describe('result exporters', () => {
     ))).toEqual(['/api/jobs/archive-cardioid/archive-snapshot']);
   });
 
-  it('reports a CAD document the archive asked for and did not get', async () => {
+  it.each(['missing', 'pinned', 'legacy-record', 'retryable'])('preserves the CAD reference before publishing run.json (%s)', async (outcome) => {
     // The placement answer used to be discarded, so a run could be marked
     // archived without the model it was solved from and nothing said so.
     const job = {
@@ -1124,27 +1124,47 @@ describe('result exporters', () => {
       raw_results_file: null, mesh_artifact_file: null, log_tail: [],
     } as unknown as JobItem;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const records: Record<string, unknown>[] = [];
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       const path = String(input);
       if (path === '/api/jobs/archive-cad/archive-snapshot') return new Response(JSON.stringify({
         schema_version: 1, results: finalResult, results_sha256: 'c'.repeat(64),
         mesh_artifact: null, pressure_bases: [], radiation_impedance: null,
       }), { status: 200 });
-      if (path === '/api/cadlink/runs/archive-document') return new Response(JSON.stringify({
-        placed: false, retryable: false, reason: 'The CAD model this run was solved from is not in the project archive.',
-      }), { status: 200 });
+      if (path === '/api/cadlink/runs/archive-document') {
+        expect(records).toHaveLength(0);
+        expect(JSON.parse(String(init?.body))).toEqual({ jobId: job.id });
+        return new Response(JSON.stringify(outcome === 'pinned' || outcome === 'legacy-record' ? {
+          placed: true, relativePath: 'cad/Tritonia_260820-0900_aaa.f3d',
+          modelFile: outcome === 'pinned' ? 'cad/Tritonia_260820-0900_aaa.f3d' : null,
+        } : {
+          placed: false, retryable: outcome === 'retryable', reason: 'The CAD model this run was solved from is not in the project archive.',
+        }), { status: 200 });
+      }
       const payload = workspacePayload(init);
+      for (const member of payload.members) {
+        if (member.relative_path === 'run.json') records.push(JSON.parse(await member.blob.text()));
+      }
       return new Response(JSON.stringify({
         directory: `/workspace/${payload.subdirectory}`,
         files: payload.members.map(({ relative_path }) => `/workspace/${payload.subdirectory}/${relative_path}`),
       }), { status: 200 });
     });
 
+    if (outcome === 'retryable') {
+      await expect(archiveRunToWorkspace(job, preferencesStore.getSnapshot(), fetcher)).rejects.toThrow('not in the project archive');
+      expect(records).toHaveLength(0);
+      warn.mockRestore();
+      return;
+    }
     await archiveRunToWorkspace(job, preferencesStore.getSnapshot(), fetcher);
+    expect(records).toHaveLength(1);
+    expect((records[0].cad as { modelFile?: string }).modelFile)
+      .toBe(outcome === 'pinned' ? 'cad/Tritonia_260820-0900_aaa.f3d' : undefined);
 
     expect(fetcher.mock.calls.map(([input]) => String(input)))
       .toContain('/api/cadlink/runs/archive-document');
-    expect(warn).toHaveBeenCalledWith(
+    if (outcome === 'missing') expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('not in the project archive'),
     );
     warn.mockRestore();

@@ -42,6 +42,7 @@ export function buildRunRecord(
   nameOf: (filename: string) => string = (filename) => filename,
   members: readonly string[] = [],
   meshReplay?: { filename: string | null; reason?: string },
+  modelFile?: string,
 ): WorkspaceTextFile {
   if (job.run_number === null) throw new Error('A run number is required to archive a solve');
   const cad = job.cad_source ?? null;
@@ -73,6 +74,7 @@ export function buildRunRecord(
         manifestSha256: cad.manifest_sha256,
         documentName: cad.document_name,
         returnStateHash: cad.return_state_hash,
+        ...(modelFile ? { modelFile } : {}),
         ...(cad.identity ? { identity: cad.identity } : {}),
       },
       solve: {

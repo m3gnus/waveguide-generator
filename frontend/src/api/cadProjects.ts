@@ -142,31 +142,33 @@ export async function revealProjectFolder(
   return ((await response.json()) as { path: string }).path;
 }
 
-/** What the server did, or did not, do with a run's requested CAD copy. */
-export interface RunCadDocumentPlacement {
+/** What the server did, or did not, do with a run's requested CAD version. */
+export interface RunCadDocumentPinning {
   placed: boolean;
   relativePath?: string | null;
+  /** Immutable run.json reference; null preserves an older record without one. */
+  modelFile?: string | null;
   reason?: string;
-  /** The server says the copy may simply not have arrived yet. */
+  /** The server says the capture may simply not have arrived yet. */
   retryable?: boolean;
 }
 
 /**
- * Ask the server to file this run's CAD document beside the run.
+ * Ask the server to pin this run's shared CAD document.
  *
  * The server reads the immutable location and model state from the stored run.
  */
 export async function archiveRunCadDocument(
   request: { jobId: string },
   fetcher: typeof fetch = fetch,
-): Promise<RunCadDocumentPlacement> {
+): Promise<RunCadDocumentPinning> {
   const response = await fetcher('/api/cadlink/runs/archive-document', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
   });
   if (!response.ok) throw await failure(response);
-  return response.json() as Promise<RunCadDocumentPlacement>;
+  return response.json() as Promise<RunCadDocumentPinning>;
 }
 
 /** The CAD model state a run was solved from, or null for a run without one. */
@@ -192,34 +194,26 @@ export function runsForProject(jobs: JobItem[], lineageId: string | null): JobIt
   return jobs.filter((job) => runProjectLineage(job) === lineageId);
 }
 
-/** The outcome of asking for a run's CAD copy, including "never asked". */
-export interface RunCadDocumentOutcome extends RunCadDocumentPlacement {
+/** The outcome of asking for a run's CAD version, including "never asked". */
+export interface RunCadDocumentOutcome extends RunCadDocumentPinning {
   /** False for a run with no CAD model state: nothing was ever requested. */
   requested: boolean;
 }
 
 /**
- * Further attempts at a copy the server says may still be coming, and the wait
+ * Further attempts to pin a version the server says may still be coming, and the wait
  * before each. The server already joins an in-flight capture, so these are for
  * the case where it had nothing to join -- a restart between the ingestion and
  * the run archive -- rather than for the ordinary race.
  */
-const PLACEMENT_RETRY_DELAYS_MS = [0, 300];
+const PIN_RETRY_DELAYS_MS = [0, 300];
 
 const pause = (milliseconds: number) => new Promise<void>((resolve) => {
   setTimeout(resolve, milliseconds);
 });
 
-/**
- * File a completed run's CAD document beside the run, when the setting asks.
- *
- * Advisory by construction: the run archive is already written by the time this
- * runs, and a missing convenience copy must never make a good run look failed.
- * It is not silent, though — the outcome is returned so the caller can say what
- * it could not file, and a copy the server calls retryable is asked for again
- * rather than written off on the first answer.
- */
-export async function placeRunCadDocument(
+/** Pin the shared model before run.json is written; retry an in-flight capture. */
+export async function pinRunCadDocument(
   job: JobItem,
   fetcher: typeof fetch = fetch,
   wait: (milliseconds: number) => Promise<void> = pause,
@@ -228,7 +222,7 @@ export async function placeRunCadDocument(
   if (!returnStateHash) return { placed: false, requested: false };
   const request = { jobId: job.id };
   let result = await archiveRunCadDocument(request, fetcher);
-  for (const delay of PLACEMENT_RETRY_DELAYS_MS) {
+  for (const delay of PIN_RETRY_DELAYS_MS) {
     if (result.placed || result.retryable !== true) break;
     await wait(delay);
     result = await archiveRunCadDocument(request, fetcher);

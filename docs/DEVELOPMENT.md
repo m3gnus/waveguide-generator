@@ -45,8 +45,8 @@ design text/UI -> typed design -> HornLab mesher -> preview or solver artifact
 `server/workspace/archive_identity.py` owns project folder allocation and run
 locations. New runs use the current Runs root until their first workspace write.
 That write pins an absolute `task_metadata.archived_path`, even when the first
-write is an automatic export or CAD placement before archive completion. Later
-workspace exports, archive retries, and per-run CAD placement resolve through
+write is an automatic export or CAD pinning before archive completion. Later
+workspace exports, archive retries, and CAD pinning resolve through
 that stored path. Selecting a different WG folder affects runs with no recorded
 location; it does not move existing runs. An explicit export destination chosen
 by the user still receives that export's files and does not change the run location.
@@ -58,6 +58,23 @@ back to the current root. A missing project/run child under an available root
 can be recreated for a retry. Workspace write requests for a run carry `job_id`;
 the server validates the logical project/run path and resolves its absolute root.
 The browser never supplies an absolute archive destination.
+
+Fusion versions live once per return state in `<model>/cad/`. Capture writes a
+`.json` sidecar; `/api/cadlink/runs/archive-document` accepts only `jobId`, verifies
+the captured bytes against the retained manifest, and pins the original by
+renaming its sidecar to `.cad.json`. Pinned versions are never pruned, including
+after their jobs leave history. The rename also excludes pins from older WG's
+ordinary-sidecar prune enumerator. Keep mirrors `captureMode: "run"`; the legacy
+`project` setting migrates to Keep, and Don't keep mirrors `"off"`.
+
+The archive writer pins before publishing `run.json` and records the returned
+model-relative path as `cad.modelFile`. A retry preserves that field's original
+presence/value from the matching record, including a record displaced into
+`archive/run.json` by existing collision handling. Missing or unverified models
+are reported without preventing result archival. Download and Open in Fusion
+share checksum verification and look in `cad/`, legacy run copies, then recorded
+run locations (including the older project's `cad/`). No existing run or model
+file is moved automatically.
 
 Every allocation, alias adoption, and registered-key reuse checks portable path
 validation and available on-disk ownership, including run records. Reservations

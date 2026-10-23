@@ -186,13 +186,8 @@ class UseRootFolderRequest(BaseModel):
     expectedCurrentPath: str | None = Field(default=None, min_length=1, max_length=4096)
 
 
-#: Where a captured CAD document is filed in the run archive.
-#:
-#: ``project`` keeps only the newest model state under
-#: ``runs/<project>/cad/`` -- archiving a later state deletes the last;
-#: ``run`` additionally places that document beside the run that was solved
-#: from it, which is where people look for it and is never pruned; ``off``
-#: asks the add-in not to carry the document at all.
+#: Keep is mirrored as run for older WG; off captures nothing. The legacy
+#: project input is accepted and normalized to run.
 CaptureMode = Literal["off", "project", "run"]
 CAPTURE_MODES: tuple[str, ...] = ("off", "project", "run")
 
@@ -816,16 +811,21 @@ class CadWorkspaceState(WorkspaceState):
         # means "off" when it was switched off and the default otherwise.
         stored_mode = str(payload.get(self.CAPTURE_MODE_KEY) or "").strip()
         if stored_mode in CAPTURE_MODES:
-            self._capture_mode = stored_mode  # type: ignore[assignment]
+            self._capture_mode = "off" if stored_mode == "off" else "run"
         else:
             self._capture_mode = "off" if payload.get(self.CAPTURE_KEY) is False else "run"
         raw_path = str(payload.get(self.SETTINGS_KEY) or "").strip()
-        if not raw_path:
-            return
-        candidate = Path(raw_path).expanduser().absolute()
-        self._selected = candidate
-        if not candidate.is_dir():
-            logger.warning("Persisted WGLink path is unavailable: %s", candidate)
+        if raw_path:
+            candidate = Path(raw_path).expanduser().absolute()
+            self._selected = candidate
+            if not candidate.is_dir():
+                logger.warning("Persisted WGLink path is unavailable: %s", candidate)
+        # Keep is mirrored as run for older WG; project is an accepted legacy input.
+        if stored_mode == "project" and not (self.folders is not None and self.folders.read_only):
+            try:
+                self._persist()
+            except OSError:
+                logger.warning("Could not update the legacy Fusion capture setting", exc_info=True)
 
     def select(self, path: Path) -> None:
         if self.folders is not None:
@@ -842,7 +842,7 @@ class CadWorkspaceState(WorkspaceState):
 
     @property
     def capture_mode(self) -> CaptureMode:
-        """Where a captured CAD document is filed, or ``off`` for not at all.
+        """Keep (``run``) or Don't keep (``off``), with lazy settings loading.
 
         Reading loads the settings file first: the stored value used to be
         readable only after something else happened to trigger the lazy load,
@@ -872,7 +872,7 @@ class CadWorkspaceState(WorkspaceState):
             raise ValueError(f"Unknown capture mode: {mode}")
         if not self._loaded:
             self._load()
-        self._capture_mode = mode
+        self._capture_mode = "off" if mode == "off" else "run"
         self._persist()
 
     def _persist(self) -> None:
@@ -886,7 +886,7 @@ class CadWorkspaceState(WorkspaceState):
             **read_settings(self.settings_path),
             "schemaVersion": 1,
             # Written together and always: the add-in reads only the boolean,
-            # so it must never be absent just because WG learned a third mode.
+            # so it must always agree with the two-way Keep setting.
             self.CAPTURE_KEY: self._capture_mode != "off",
             self.CAPTURE_MODE_KEY: self._capture_mode,
         }
