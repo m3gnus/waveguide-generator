@@ -145,7 +145,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
       // A mutable folder entry must not substitute a different snapshot for
       // the one this receipt accepted. The ingest record is the verified hash.
       if (receipt.manifest_sha256 && record.manifest_sha256 !== receipt.manifest_sha256) {
-        report(receipt, 'unreadable', `The WGLink entry for ${name} changed after this Send. Send it again from Fusion.`);
+        report(receipt, 'unreadable', `The WGLink folder entry for ${name} changed after this Send. Send it again from Fusion.`);
         display.enterCadWorkspace();
         return true;
       }

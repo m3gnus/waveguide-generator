@@ -60,7 +60,7 @@ cannot alter an existing run.
 
 Select **Imported mesh**, then press **Import mesh…** in the top bar. The design
 file menu also offers import and replay. No CAD
-application, add-in or CAD Link folder is needed. The first importer accepts
+application, add-in or WGLink folder is needed. The first importer accepts
 ASCII Gmsh 2.2 linear triangular surface meshes, up to 16 MiB.
 
 In **Geometry**, choose the file's units and forward/up axes. Under **Radiating
@@ -687,7 +687,7 @@ retained in that shared job database and the command prints a retention warning.
 ## CAD link
 
 Follow [Finish a speaker in Fusion and solve it in WG](CAD-LINK-GUIDE.md) for
-WGLink installation, explicit Send and Solve, source-face marking, driver data,
+installation of the Waveguide Generator add-in in Fusion, explicit Send and Solve, source-face marking, driver data,
 ports, full/half/quarter symmetry, solver choice and refusal remedies. It also
 explains the limits of STEP input from another CAD program, startup add-in
 updates and registration checks, exchange folders, multiple placements, waiting
@@ -697,7 +697,7 @@ WG installs and updates the add-in at startup only if you chose it in setup,
 installed it from WG, or have received a model from Fusion through the link.
 WG also keeps updating a copy this installation already owns. Otherwise, use
 **Install add-in** in the **CAD Link** panel; that action also repairs the copy.
-The Windows WGLink setup task records your choice even if Fusion is absent or
+The Windows setup task for the Waveguide Generator add-in in Fusion records your choice even if Fusion is absent or
 the add-in installation fails; leaving it unticked on a later upgrade preserves that choice.
 Opening the panel, opening or uploading a `.wgreturn` by hand, exporting from WG,
 and link metadata in a design file do not enable automatic installation.
@@ -749,7 +749,7 @@ remembers between sessions. That last one lives there rather than in the browser
 on purpose: browser storage is tied to the exact address a window was opened from,
 so a shifted port, a browser set to clear site data on exit, or simply opening WG
 in a different browser used to lose the lot. The uninstallers preserve the data
-directory unless `--data` is explicitly requested. WGLink uninstall removes only
+directory unless `--data` is explicitly requested. Uninstalling the Waveguide Generator add-in in Fusion removes only
 the add-in registration owned by that installation. It preserves shared runtime
 payloads and the package cache, even when no other installation remains, because
 another add-in can reference the same payloads.

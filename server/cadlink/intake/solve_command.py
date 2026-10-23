@@ -128,8 +128,8 @@ def _held(error: OSError) -> bool:
 SOLVE_REQUESTS_DIRECTORY = ".wg-solve-requests"
 SCHEMA_VERSION = 3
 OUTDATED_ADDIN_REASON = (
-    "This solve request came from a WGLink add-in older than this Waveguide "
-    "Generator, which it no longer accepts. Restart Fusion so it loads the WGLink "
+    "This solve request came from the Waveguide Generator add-in in Fusion, which is older than this WG "
+    "installation accepts. Restart Fusion so it loads the Waveguide Generator add-in in Fusion "
     "that WG installed, then use Solve in WG again."
 )
 # The submission key a solve command's job is submitted under: by the backend's

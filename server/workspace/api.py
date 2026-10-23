@@ -1005,7 +1005,7 @@ def create_cad_workspace_router(state: CadWorkspaceState) -> APIRouter:
             except OSError as exc:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Could not create the CAD Link folder: {exc}",
+                    detail=f"Could not create the WGLink folder: {exc}",
                 ) from exc
         if not selected:
             current = state.selected_path()

@@ -50,8 +50,8 @@ describe('why a request from Fusion is not moving', () => {
   });
 
   it('says why the last pass started nothing', () => {
-    const [line] = deliveryHealthLines(status({ declined: 'No CAD Link folder is selected.' }), NOW);
-    expect(line.text).toBe('Requests from Fusion are waiting: No CAD Link folder is selected.');
+    const [line] = deliveryHealthLines(status({ declined: 'No WGLink folder is selected.' }), NOW);
+    expect(line.text).toBe('Requests from Fusion are waiting: No WGLink folder is selected.');
   });
 
   it('reports a pass that hung after earlier passes completed', () => {
@@ -122,7 +122,7 @@ describe('the CAD Link panel section', () => {
 
   it.each([
     ['disabled', status({ consumer: 'disabled' }), 'WG2_CAD_DELIVERY=0'],
-    ['declining', status({ declined: 'No CAD Link folder is selected.' }), 'No CAD Link folder is selected.'],
+    ['declining', status({ declined: 'No WGLink folder is selected.' }), 'No WGLink folder is selected.'],
     ['hung', status({ passHung: true }), 'has not finished a pass since'],
     ['healthy idle', status(), ''],
   ])('the shell owns %s delivery health without the coordinator or operation store', async (_name, projection, text) => {
@@ -214,14 +214,14 @@ describe('the CAD Link panel section', () => {
     const atMount = reads;
     await act(async () => { await vi.advanceTimersByTimeAsync(10 * WAITING_READ_MS); });
     expect(reads).toBe(atMount);
-    answer = status({ declined: 'No CAD Link folder is selected.' });
+    answer = status({ declined: 'No WGLink folder is selected.' });
     await act(async () => {
       isVisible = true;
       listeners.forEach((listener) => listener());
       await vi.advanceTimersByTimeAsync(10);
     });
     expect(reads).toBe(atMount + 1);
-    expect(host.textContent).toContain('No CAD Link folder is selected.');
+    expect(host.textContent).toContain('No WGLink folder is selected.');
   });
 
   it('counts a jobs-channel refusal once in the unseen badge with the coordinator mounted', async () => {

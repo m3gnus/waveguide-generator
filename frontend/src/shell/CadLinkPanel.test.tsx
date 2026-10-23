@@ -165,7 +165,7 @@ describe('CadLinkPanel', () => {
   it('offers install and repair before any signal or selected folder', async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      if (path.endsWith('/install-addin')) return json({ verdict: 'pending', detail: 'Close Fusion to finish installing WGLink.' });
+      if (path.endsWith('/install-addin')) return json({ verdict: 'pending', detail: 'Close Fusion to finish installing the Waveguide Generator add-in in Fusion.' });
       if (path.endsWith('/fusion-status')) return json({ ...closedFusion, cadFolderConfigured: false, addinRefresh: { verdict: 'not-in-use', detail: 'No signal' } });
       if (path.endsWith('/returns')) return json({ items: [], cadFolderConfigured: false, coordination: 'off' });
       return json(record);
@@ -177,12 +177,12 @@ describe('CadLinkPanel', () => {
     expect(install.disabled).toBe(false);
     await act(async () => { install.click(); await Promise.resolve(); await Promise.resolve(); });
     expect(fetcher).toHaveBeenCalledWith('/api/cadlink/install-addin', { method: 'POST' });
-    expect(host.textContent).toContain('Close Fusion to finish installing WGLink.');
+    expect(host.textContent).toContain('Close Fusion to finish installing the Waveguide Generator add-in in Fusion.');
     expect(install.disabled).toBe(false);
   });
 
   it('replaces a deferred install answer with the status once the add-in is installed', async () => {
-    let refresh = { verdict: 'pending', detail: 'Close Fusion to finish installing WGLink.' };
+    let refresh = { verdict: 'pending', detail: 'Close Fusion to finish installing the Waveguide Generator add-in in Fusion.' };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       if (path.endsWith('/install-addin')) return json(refresh);
@@ -194,15 +194,15 @@ describe('CadLinkPanel', () => {
     const install = Array.from(host.querySelectorAll('button')).find((button) => button.textContent === 'Install add-in')!;
     await act(async () => { install.click(); await Promise.resolve(); await Promise.resolve(); });
     const notice = () => host.querySelector('.cad-link-actions [role="status"]')?.textContent;
-    expect(notice()).toBe('Close Fusion to finish installing WGLink.');
+    expect(notice()).toBe('Close Fusion to finish installing the Waveguide Generator add-in in Fusion.');
 
     // Fusion closes and the start-up pass installs it with no further click.
-    refresh = { verdict: 'installed', detail: 'WGLink 0.3.3 was installed.' };
+    refresh = { verdict: 'installed', detail: 'The Waveguide Generator add-in in Fusion 0.3.3 was installed.' };
     await act(async () => {
       window.dispatchEvent(new Event('focus'));
       for (let turn = 0; turn < 8; turn += 1) await Promise.resolve();
     });
-    expect(notice()).toBe('WGLink 0.3.3 was installed.');
+    expect(notice()).toBe('The Waveguide Generator add-in in Fusion 0.3.3 was installed.');
   });
 
   const openHistory = () => {
@@ -1239,7 +1239,7 @@ describe('CadLinkPanel', () => {
       state: 'addin-offline', action: null,
     });
     expect(fusionWorkflowView({ ...currentFusion, cadConnectionIssue: 'folder_unreadable' })).toMatchObject({
-      headline: 'WGLink cannot access the selected folder', action: null,
+      headline: 'The Waveguide Generator add-in in Fusion cannot access the selected folder', action: null,
     });
     expect(fusionWorkflowView({ ...currentFusion, cadConnectionIssue: 'folder_mismatch' }).detail).toContain(
       'clear within a few seconds',
@@ -1342,8 +1342,8 @@ describe('CadLinkPanel', () => {
     expect(view.detail).toContain('predates full WG config synchronization');
     expect(view.detail).toContain('2 managed Fusion parameters have local edits');
     // And the freshness caveat is still there, with its remedy.
-    expect(view.detail).toContain('moved on since WGLink measured it');
-    expect(view.detail).toContain('WGLink measures the model as it exports it');
+    expect(view.detail).toContain('moved on since the Waveguide Generator add-in in Fusion measured it');
+    expect(view.detail).toContain('the Waveguide Generator add-in in Fusion measures the model as it exports it');
 
     // Never measured at all, with the same WG-side change.
     const unmeasured = fusionWorkflowView({ ...both, observationFreshness: 'none' as const });
@@ -1369,13 +1369,13 @@ describe('CadLinkPanel', () => {
     // prompt names what WG already did: installed its own, or could not.
     const outdated = { ...currentFusion, state: 'addin_outdated' as const };
     expect(fusionWorkflowView({
-      ...outdated, addinRefresh: { verdict: 'updated', detail: 'updated WGLink; restart Fusion' },
+      ...outdated, addinRefresh: { verdict: 'updated', detail: 'updated the Waveguide Generator add-in in Fusion; restart Fusion' },
     })).toMatchObject({
-      state: 'addin-outdated', headline: 'WGLink add-in is out of date', action: null,
+      state: 'addin-outdated', headline: 'The Waveguide Generator add-in in Fusion is out of date', action: null,
     });
     expect(fusionWorkflowView({
-      ...outdated, addinRefresh: { verdict: 'failed', detail: 'the bundled WGLink package is missing' },
-    }).detail).toContain('the bundled WGLink package is missing');
+      ...outdated, addinRefresh: { verdict: 'failed', detail: 'the bundled package for the Waveguide Generator add-in in Fusion is missing' },
+    }).detail).toContain('the bundled package for the Waveguide Generator add-in in Fusion is missing');
     expect(fusionWorkflowView({
       ...outdated, addinRefresh: { verdict: 'external', detail: 'managed by another Waveguide Generator' },
     }).detail).toContain('another Waveguide Generator installation');
@@ -1391,9 +1391,9 @@ describe('CadLinkPanel', () => {
       fusionWorkflowView({ ...outdated, addinRefresh }).detail;
 
     // Pending: WG never replaces the add-in while Fusion is open.
-    const pending = detail({ verdict: 'pending', detail: 'WGLink activation is pending until Fusion closes' });
-    expect(pending).toContain('WGLink activation is pending until Fusion closes');
-    expect(pending).toContain('Close Fusion to finish updating WGLink');
+    const pending = detail({ verdict: 'pending', detail: 'Activation of the Waveguide Generator add-in in Fusion is pending until Fusion closes' });
+    expect(pending).toContain('Activation of the Waveguide Generator add-in in Fusion is pending until Fusion closes');
+    expect(pending).toContain('Close Fusion to finish updating the Waveguide Generator add-in in Fusion');
     expect(pending).not.toMatch(/Restart Fusion/);
 
     // Activated: installed on disk for Fusion's next start, never "running".
@@ -1404,24 +1404,24 @@ describe('CadLinkPanel', () => {
     }
 
     // Superseded: pending work from another build is named, and never installed.
-    const superseded = 'a pending WGLink activation was discarded: it was staged by build 0.3.4 (bbbb), and this is 0.3.3 (aaaa)';
-    expect(detail({ verdict: 'current', detail: 'WGLink is at the pinned aaaa', superseded }))
-      .toContain('A pending WGLink activation was discarded: it was staged by build 0.3.4');
+    const superseded = 'a pending activation of the Waveguide Generator add-in in Fusion was discarded: it was staged by build 0.3.4 (bbbb), and this is 0.3.3 (aaaa)';
+    expect(detail({ verdict: 'current', detail: 'the Waveguide Generator add-in in Fusion is at the pinned aaaa', superseded }))
+      .toContain('A pending activation of the Waveguide Generator add-in in Fusion was discarded: it was staged by build 0.3.4');
     expect(detail({ verdict: 'superseded', detail: 'the installed Waveguide Generator is now 0.3.4' }))
       .toContain('Restart Waveguide Generator');
 
     // Failed, with the reason.
-    expect(detail({ verdict: 'failed', detail: 'could not update WGLink: disk full' }))
-      .toContain('could not update WGLink: disk full');
+    expect(detail({ verdict: 'failed', detail: 'could not update the Waveguide Generator add-in in Fusion: disk full' }))
+      .toContain('could not update the Waveguide Generator add-in in Fusion: disk full');
 
     // Waiting for this start to be confirmed.
     expect(detail({ verdict: 'awaiting-startup', detail: 'update transaction t1 is open' }))
       .toContain('only once this start is confirmed');
 
     // Fusion's own registry is reported, never edited.
-    const registration = { state: 'duplicate', detail: 'Fusion has WGLink registered 2 times.' };
+    const registration = { state: 'duplicate', detail: 'Fusion has the Waveguide Generator add-in in Fusion registered 2 times.' };
     expect(detail({ verdict: 'updated', detail: '', registration }))
-      .toContain('Fusion has WGLink registered 2 times.');
+      .toContain('Fusion has the Waveguide Generator add-in in Fusion registered 2 times.');
   });
 
   it('carries a pending or failed WGLink activation into every other state', () => {
@@ -1429,27 +1429,27 @@ describe('CadLinkPanel', () => {
     expect(fusionWorkflowView({ ...closed, addinRefresh: { verdict: 'updated', detail: '' } }).detail)
       .toContain('Fusion loads it when it next starts');
     expect(fusionWorkflowView({ ...currentFusion, addinRefresh: { verdict: 'pending', detail: '' } }).detail)
-      .toContain('WGLink activation is pending until Fusion closes');
+      .toContain('Activation of the Waveguide Generator add-in in Fusion is pending until Fusion closes');
     expect(fusionWorkflowView({ ...currentFusion, addinRefresh: { verdict: 'failed', detail: 'lock held' } }).detail)
-      .toContain('WG could not update WGLink (lock held)');
+      .toContain('WG could not update the Waveguide Generator add-in in Fusion (lock held)');
     // Nothing to say is nothing added.
     expect(fusionWorkflowView({ ...currentFusion, addinRefresh: { verdict: 'current', detail: '' } }).detail)
       .toBe(fusionWorkflowView(currentFusion).detail);
     // A registry problem is named where WGLink is not working.
-    const manual = { state: 'manual', detail: 'Tick Run on Startup for WGLink.' };
+    const manual = { state: 'manual', detail: 'Tick Run on Startup for WGLink under Utilities → Scripts and Add-Ins.' };
     expect(fusionWorkflowView({ ...closed, addinRefresh: { verdict: 'current', detail: '', registration: manual } }).detail)
-      .toContain('Tick Run on Startup for WGLink.');
+      .toContain('Tick Run on Startup for WGLink under Utilities → Scripts and Add-Ins.');
   });
 
-  it('names a pending WGLink activation even with no CAD folder chosen', () => {
+  it('names a pending activation of the Waveguide Generator add-in in Fusion even with no CAD folder chosen', () => {
     // WG updates WGLink whether or not a CAD folder is set, so a user without
     // one must still learn that Fusion has to close to finish it (the updater
     // review §3.8).
     const unconfigured = { ...closedFusion, cadFolderConfigured: false };
     const view = fusionWorkflowView({ ...unconfigured, addinRefresh: { verdict: 'pending', detail: '' } });
     expect(view).toMatchObject({ state: 'not-configured', action: null });
-    expect(view.detail).toContain('close Fusion to finish updating WGLink');
-    expect(fusionWorkflowView(unconfigured).detail).not.toContain('WGLink activation');
+    expect(view.detail).toContain('close Fusion to finish updating the Waveguide Generator add-in in Fusion');
+    expect(fusionWorkflowView(unconfigured).detail).not.toContain('Activation of the Waveguide Generator add-in in Fusion');
   });
 
   it('says an interrupted update needs recovery before anything else about the link', () => {
@@ -1906,8 +1906,8 @@ describe('CadLinkPanel', () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     // Informational only, so it is a hover on the card, not a line in it.
     const summary = () => host.querySelector('.cad-link-quiet > summary')!;
-    expect(summary().getAttribute('title')).toContain('WGLink add-in 0.1.1');
-    expect(host.querySelector('.cad-link-card')!.textContent).not.toContain('WGLink add-in');
+    expect(summary().getAttribute('title')).toContain('The Waveguide Generator add-in in Fusion 0.1.1');
+    expect(host.querySelector('.cad-link-card')!.textContent).not.toContain('The Waveguide Generator add-in in Fusion');
     // It must not turn into a connection problem: the workflow state is untouched.
     expect(host.querySelector('.cad-connection-dot-current')).not.toBeNull();
 
@@ -1915,7 +1915,7 @@ describe('CadLinkPanel', () => {
     root = createRoot(host);
     withFusion({ ...currentFusion, adapterVersion: null });
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
-    expect(summary().getAttribute('title')).not.toContain('WGLink add-in');
+    expect(summary().getAttribute('title')).not.toContain('The Waveguide Generator add-in in Fusion');
   });
 
   it('selects the newest readable return when CAD Link first mounts', async () => {
@@ -2664,8 +2664,8 @@ describe('CadLinkPanel', () => {
     expect(buttons(card)).not.toContain('Open in Fusion 360');
     expect(buttons(card)).not.toContain('Send to Fusion');
     // The add-in version is a hover, not a line.
-    expect(card.textContent).not.toContain('WGLink add-in');
-    expect(card.querySelector('.cad-link-quiet > summary')?.getAttribute('title')).toContain('WGLink add-in 0.1.1');
+    expect(card.textContent).not.toContain('The Waveguide Generator add-in in Fusion');
+    expect(card.querySelector('.cad-link-quiet > summary')?.getAttribute('title')).toContain('The Waveguide Generator add-in in Fusion 0.1.1');
 
     // Positive control: with a WG-linked model on screen, not_linked is the
     // parametric design's state, and opening it in Fusion is the action.

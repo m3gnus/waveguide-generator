@@ -251,13 +251,13 @@ def _verified_shipped_package(
             return None, "this build has no valid Waveguide Generator version"
         archive = Path(installer.shipped_package(root, version, pin))
     except (AttributeError, OSError, UnicodeError, ValueError, TypeError) as exc:
-        return None, f"the bundled WGLink package could not be located: {exc}"
+        return None, f"the bundled package for the Waveguide Generator add-in in Fusion could not be located: {exc}"
     if not archive.is_file():
-        return None, f"the bundled WGLink package is missing: {archive.name}"
+        return None, f"the bundled package for the Waveguide Generator add-in in Fusion is missing: {archive.name}"
     try:
         installer.verify_package(archive, root=root)
     except Exception as exc:  # noqa: BLE001 - package verification is a user verdict
-        return None, f"the bundled WGLink package failed verification: {exc}"
+        return None, f"the bundled package for the Waveguide Generator add-in in Fusion failed verification: {exc}"
     return archive, None
 
 
@@ -481,7 +481,7 @@ def _discard_pending(path: Path, reason: str) -> str:
     except OSError as exc:
         log.warning("Could not remove the superseded WGLink activation %s: %s", path, exc)
     log.info("WGLink activation superseded -- %s", reason)
-    return f"a pending WGLink activation was discarded: {reason}"
+    return f"a pending activation of the Waveguide Generator add-in in Fusion was discarded: {reason}"
 
 
 def _remove_quietly(path: Path) -> None:
@@ -508,11 +508,11 @@ def _stale_reason(
         return f"it was staged by build {_describe(staged)}, and this is {_describe(build)}"
     if record["requiredCommit"] != pin:
         return (
-            f"it was staged for WGLink {str(record['requiredCommit'])[:12]}, "
+            f"it was staged for the Waveguide Generator add-in in Fusion {str(record['requiredCommit'])[:12]}, "
             f"and this build pins {pin[:12]}"
         )
     if _normalized(record["target"]) != _normalized(target):
-        return f"it was staged for {record['target']}, and Fusion's WGLink is now {target}"
+        return f"it was staged for {record['target']}, and the Waveguide Generator add-in in Fusion is now {target}"
     return None
 
 
@@ -541,8 +541,8 @@ def _package_changed(package: Mapping[str, str], root: Path) -> str | None:
         if _sha256(path) == package["sha256"]:
             return None
     except OSError:
-        return f"the WGLink package staged for activation is missing: {path.name}"
-    return f"the WGLink package staged for activation changed after it was verified: {path.name}"
+        return f"the package for the Waveguide Generator add-in in Fusion staged for activation is missing: {path.name}"
+    return f"the package for the Waveguide Generator add-in in Fusion staged for activation changed after it was verified: {path.name}"
 
 
 def _stage_pending(
@@ -613,13 +613,13 @@ def _registration_finding(entries: list[tuple[Path, object]], target: Path) -> d
     if not entries:
         return {
             "state": "unregistered",
-            "detail": "Fusion has not registered WGLink yet; it reads the add-in's own "
+            "detail": "Fusion has not registered the Waveguide Generator add-in in Fusion yet; it reads the add-in's own "
             "manifest the first time it loads it.",
         }
     if len(entries) > 1:
         return {
             "state": "duplicate",
-            "detail": f"Fusion has WGLink registered {len(entries)} times, and two "
+            "detail": f"Fusion has the Waveguide Generator add-in in Fusion registered {len(entries)} times, and two "
             "registrations load two copies that break each other's panel. In Fusion, open "
             "Utilities → Scripts and Add-Ins and keep only the WGLink in "
             f"{folder_name}.",
@@ -628,18 +628,18 @@ def _registration_finding(entries: list[tuple[Path, object]], target: Path) -> d
     if _normalized(_resolved(folder)) != _normalized(_resolved(target)):
         return {
             "state": "elsewhere",
-            "detail": f"Fusion loads WGLink from {folder}, not from the copy WG manages at "
+            "detail": f"Fusion loads the Waveguide Generator add-in in Fusion from {folder}, not from the copy WG manages at "
             f"{target}, so what WG installs is not what Fusion runs. In Fusion, open "
             f"Utilities → Scripts and Add-Ins and keep only the WGLink in {folder_name}.",
         }
     if run_on_startup is not True:
         return {
             "state": "manual",
-            "detail": "Fusion's own record does not start WGLink with Fusion, and that "
+            "detail": "Fusion's own record does not start the Waveguide Generator add-in in Fusion with Fusion, and that "
             "record overrides the add-in's manifest. In Fusion, tick Run on Startup for "
             "WGLink under Utilities → Scripts and Add-Ins.",
         }
-    return {"state": "registered", "detail": "Fusion starts the WGLink copy WG manages."}
+    return {"state": "registered", "detail": "Fusion starts the copy of the Waveguide Generator add-in in Fusion that WG manages."}
 
 
 #: Registry findings that change whether Fusion loads what WG activates.
@@ -679,21 +679,21 @@ def fusion_registration(target: Path) -> dict[str, str] | None:
 
 def _change_text(plan: _Plan, pin: str, target: Path) -> str:
     if plan.change == "install":
-        return f"install WGLink {pin[:12]} at {target}"
+        return f"install the Waveguide Generator add-in in Fusion {pin[:12]} at {target}"
     if plan.change == "replace":
-        return f"replace a WGLink no Waveguide Generator manages with {pin[:12]}"
+        return f"replace an unmanaged copy of the Waveguide Generator add-in in Fusion with {pin[:12]}"
     was = plan.current[:12] if plan.current else "an unrecorded commit"
-    return f"update WGLink from {was} to {pin[:12]}"
+    return f"update the Waveguide Generator add-in in Fusion from {was} to {pin[:12]}"
 
 
 def _activated_text(plan: _Plan, pin: str, installed: Path) -> str:
     later = "Fusion loads it the next time it starts"
     if plan.change == "install":
-        return f"installed WGLink {pin[:12]} at {installed}; {later}"
+        return f"installed the Waveguide Generator add-in in Fusion {pin[:12]} at {installed}; {later}"
     if plan.change == "replace":
-        return f"replaced a WGLink no Waveguide Generator managed with {pin[:12]}; {later}"
+        return f"replaced an unmanaged copy of the Waveguide Generator add-in in Fusion with {pin[:12]}; {later}"
     was = plan.current[:12] if plan.current else "an unrecorded commit"
-    return f"updated WGLink from {was} to {pin[:12]}; {later}"
+    return f"updated the Waveguide Generator add-in in Fusion from {was} to {pin[:12]}; {later}"
 
 
 def _plan(
@@ -709,15 +709,15 @@ def _plan(
 
     if not (target.exists() or target.is_symlink()):
         if not install_absent:
-            return _Plan("absent", "no WGLink is installed for Fusion; installation was not requested")
+            return _Plan("absent", "the Waveguide Generator add-in in Fusion is not installed; installation was not requested")
         if not fusion_installed():
             return _Plan(
                 "not-detected",
-                "Fusion 360 is not installed for this user; WGLink was not installed",
+                "Fusion 360 is not installed for this user; the Waveguide Generator add-in in Fusion was not installed",
             )
         return _Plan("installed", "", change="install")
     if target.is_symlink() or not target.is_dir():
-        return _Plan("external", f"{target} is an external WGLink target; left alone")
+        return _Plan("external", f"{target} is an external target for the Waveguide Generator add-in in Fusion; left alone")
     if (target / DEV_MARKER).is_file():
         return _Plan("developer", f"{target} is a developer sync; left alone")
     if not installer.is_managed_target(target, root):
@@ -730,7 +730,7 @@ def _plan(
         return _Plan("replaced", "", change="replace")
     current = installed_commit(target)
     if current == pin:
-        return _Plan("current", f"WGLink is at the pinned {pin[:12]}")
+        return _Plan("current", f"the Waveguide Generator add-in in Fusion is at the pinned {pin[:12]}")
     return _Plan("updated", "", change="update", current=current)
 
 
@@ -767,10 +767,10 @@ def _pending_text(plan: _Plan, pin: str, target: Path, state: str) -> str:
     will = f"WG will {_change_text(plan, pin, target)} once Fusion is closed"
     if state == FUSION_UNKNOWN:
         return (
-            "WGLink activation is pending until Fusion closes: WG could not tell whether "
+            "activation of the Waveguide Generator add-in in Fusion is pending until Fusion closes: WG could not tell whether "
             f"Fusion is running, so it treats Fusion as open; {will}"
         )
-    return f"WGLink activation is pending until Fusion closes: {will}"
+    return f"activation of the Waveguide Generator add-in in Fusion is pending until Fusion closes: {will}"
 
 
 def _moved_under(root: Path, pin: str, build: Mapping[str, str | None]) -> str | None:
@@ -779,14 +779,14 @@ def _moved_under(root: Path, pin: str, build: Mapping[str, str | None]) -> str |
     now_pin = pinned_commit(root)
     if now_pin != pin:
         return (
-            f"this build's WGLink pin changed to {(now_pin or 'none')[:12]} while WG was "
+            f"this build's pin for the Waveguide Generator add-in in Fusion changed to {(now_pin or 'none')[:12]} while WG was "
             f"about to install {pin[:12]}; nothing was replaced"
         )
     now_build = build_identity(root)
     if now_build != dict(build):
         return (
             f"the installed Waveguide Generator changed to {_describe(now_build)} while WG "
-            "was about to install WGLink; nothing was replaced, and its next start decides"
+            "was about to install the Waveguide Generator add-in in Fusion; nothing was replaced, and its next start decides"
         )
     return None
 
@@ -822,7 +822,7 @@ def activate_wglink(
             confirmed=confirmed,
         )
     except Exception as exc:  # noqa: BLE001 - never let this stop the app starting
-        return Activation("failed", f"WGLink activation stopped: {exc}")
+        return Activation("failed", f"activation of the Waveguide Generator add-in in Fusion stopped: {exc}")
 
 
 def _activate(
@@ -849,7 +849,7 @@ def _activate(
     try:
         installer = _installer(root)
     except Exception as exc:  # noqa: BLE001 - a WG that cannot read its own installer
-        return Activation("unavailable", f"the WGLink installer is not readable: {exc}")
+        return Activation("unavailable", f"the installer for the Waveguide Generator add-in in Fusion is not readable: {exc}")
 
     directory = addins_dir or installer.default_addins_dir(installer._platform_name())
     if directory is None:
@@ -872,7 +872,7 @@ def _activate(
                     pass
         return cadlink_in_use(data_dir=data, owned_addin=owned)
 
-    unused = Activation("not-in-use", "WGLink automatic activation is off until CAD Link is used")
+    unused = Activation("not-in-use", "automatic activation of the Waveguide Generator add-in in Fusion is off until CAD Link is used")
     if not in_use():
         # Even the operation lock creates a file in Fusion's AddIns folder.
         return unused
@@ -880,7 +880,7 @@ def _activate(
     ready, why = is_confirmed()
     if not ready:
         return Activation(
-            "awaiting-startup", f"WGLink is changed only once this start is confirmed: {why}"
+            "awaiting-startup", f"the Waveguide Generator add-in in Fusion is changed only once this start is confirmed: {why}"
         )
 
     # The build this process runs, captured the first time anything asks. What
@@ -905,7 +905,7 @@ def _activate(
 
         pin = pinned_commit(root)
         if pin is None:
-            return finish("unavailable", "this build declares no WGLink pin")
+            return finish("unavailable", "this build declares no pin for the Waveguide Generator add-in in Fusion")
         build = build_identity(root)
         if build != started:
             # Only the build that is installed may decide. If the app on disk
@@ -913,7 +913,7 @@ def _activate(
             return finish(
                 "superseded",
                 f"the installed Waveguide Generator is now {_describe(build)}, not "
-                f"{_describe(started)}, which this process runs; its next start decides WGLink",
+                f"{_describe(started)}, which this process runs; its next start decides the Waveguide Generator add-in in Fusion",
             )
         record, problem = read_pending(record_file)
         if problem is not None:
@@ -959,7 +959,7 @@ def _activate(
             if package_error is not None or archive is None:
                 return finish(
                     "unavailable" if shipped_only else "failed",
-                    package_error or "the bundled WGLink package is unavailable",
+                    package_error or "the bundled package for the Waveguide Generator add-in in Fusion is unavailable",
                 )
             package = _package_entry(archive, root)
         _stage_pending(
@@ -990,7 +990,7 @@ def _activate(
         ready, why = is_confirmed()
         if not ready:
             return finish(
-                "awaiting-startup", f"WGLink is changed only once this start is confirmed: {why}"
+                "awaiting-startup", f"the Waveguide Generator add-in in Fusion is changed only once this start is confirmed: {why}"
             )
         if not in_use():
             # Reached only when the evidence went away between the two checks
@@ -1011,7 +1011,7 @@ def _activate(
             try:
                 installer._recover_install_transaction(addins, root)
             except Exception as exc:  # noqa: BLE001 - startup must never raise
-                return finish("failed", f"could not recover the WGLink installation: {exc}")
+                return finish("failed", f"could not recover the Waveguide Generator add-in in Fusion installation: {exc}")
         plan = plan_now(pin, state)
         if plan.change is None:
             return unchanged(plan, record)
@@ -1034,7 +1034,7 @@ def _activate(
             archive, package_error = _verified_shipped_package(root, installer, pin)
             if package_error is not None or archive is None:
                 return finish(
-                    "unavailable", package_error or "the bundled WGLink package is unavailable"
+                    "unavailable", package_error or "the bundled package for the Waveguide Generator add-in in Fusion is unavailable"
                 )
             kwargs["archive_path"] = archive
             kwargs["replace_external"] = plan.change == "replace"
@@ -1070,7 +1070,7 @@ def _activate(
             status, installed = installer._install_unlocked(**kwargs)
         except Exception as exc:  # noqa: BLE001 - never let this stop the app starting
             if plan.change == "install":
-                return finish("failed", f"could not install WGLink to {target}: {exc}")
+                return finish("failed", f"could not install the Waveguide Generator add-in in Fusion to {target}: {exc}")
             return finish("failed", f"could not {_change_text(plan, pin, target)}: {exc}")
         if status == "deferred":
             kind, reason = deferred[-1] if deferred else (FUSION_UNKNOWN, "")
@@ -1079,7 +1079,7 @@ def _activate(
             return stage(plan, pin, build, record, kind)
         if status != "installed":
             suffix = " for an absent add-in" if plan.change == "install" else ""
-            return finish("failed", f"the WGLink installer returned {status!r}{suffix}")
+            return finish("failed", f"the installer for the Waveguide Generator add-in in Fusion returned {status!r}{suffix}")
         _remove_quietly(record_file)
         installed_target = Path(installed) if installed is not None else target
         return finish(plan.verdict, _activated_text(plan, pin, installed_target))
@@ -1220,7 +1220,7 @@ async def _activate_after_confirmed_start() -> None:
             _record(
                 Activation(
                     "awaiting-startup",
-                    f"WGLink is changed only once this start is confirmed: {why}",
+                    f"the Waveguide Generator add-in in Fusion is changed only once this start is confirmed: {why}",
                 )
             )
             await asyncio.sleep(delay)

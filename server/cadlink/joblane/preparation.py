@@ -97,7 +97,7 @@ class PreparationContext(SnapshotContext):
 #: itself, so without one there is no command to read -- which is a stopped
 #: consumer, not an idle one, and the user is the only one who can end it.
 NO_WORKSPACE_REASON = (
-    "No CAD Link folder is selected, so Waveguide Generator cannot collect the "
+    "No WGLink folder is selected, so Waveguide Generator cannot collect the "
     "solve commands Fusion sends. Choose the folder in CAD Link settings."
 )
 

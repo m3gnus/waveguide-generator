@@ -434,7 +434,7 @@ def test_fusion_open_stages_a_pending_activation_instead_of_replacing(
     )
 
     assert activation.verdict == "pending"
-    assert "WGLink activation is pending until Fusion closes" in activation.detail
+    assert "activation of the Waveguide Generator add-in in Fusion is pending until Fusion closes" in activation.detail
     assert calls == []
     assert addin_update.installed_commit(target) == OLD
     record_path = addin_update.pending_path(data, root)
@@ -542,7 +542,7 @@ def test_the_fusion_status_route_polls_activation_and_reports_it(
     monkeypatch.setattr(
         addin_update,
         "_report",
-        addin_update.Activation("pending", "WGLink activation is pending until Fusion closes").report(),
+        addin_update.Activation("pending", "activation of the Waveguide Generator add-in in Fusion is pending until Fusion closes").report(),
     )
     response = asyncio.run(fusion_status(payload, SimpleNamespace(app=app)))
 
@@ -591,7 +591,7 @@ def test_stale_pending_work_from_another_build_never_installs(
     calls: list[dict[str, object]] = []
     _fake_installer(monkeypatch, calls)
 
-    # WG build B prepares its matching WGLink package...
+    # WG build B prepares its matching package for the Waveguide Generator add-in in Fusion...
     _build(root, BUILD_B, PIN_B)
     staged = addin_update.activate_wglink(
         root=root, addins_dir=addins, data_dir=data,
@@ -691,7 +691,7 @@ def test_the_process_must_still_be_the_installed_build(tmp_path: Path, monkeypat
     )
 
     assert activation.verdict == "superseded"
-    assert "its next start decides WGLink" in activation.detail
+    assert "its next start decides the Waveguide Generator add-in in Fusion" in activation.detail
     assert calls == []
     assert addin_update.installed_commit(target) == OLD
 
@@ -864,7 +864,7 @@ def test_a_first_install_waits_for_a_confirmed_start_and_a_closed_fusion(
         root=root, data_dir=data, fusion_running=FUSION_OPEN, confirmed=CONFIRMED,
     )
     assert pending.verdict == "pending"
-    assert "install WGLink" in pending.detail
+    assert "install the Waveguide Generator add-in in Fusion" in pending.detail
     assert _pending(data, root)["ownership"] == "absent"
     assert _pending(data, root)["package"]["sha256"] == hashlib.sha256(archive.read_bytes()).hexdigest()
     # Nothing was created where Fusion looks: no folder, no lock file.
@@ -927,7 +927,7 @@ def _load(path: Path, name: str):
 
 
 def _real_package(base: Path, root: Path, pin: str) -> Path:
-    """Build a real, verifiable WGLink package for ``pin`` and pin ``root`` to it."""
+    """Build a real, verifiable package for the Waveguide Generator add-in in Fusion for ``pin`` and pin ``root`` to it."""
 
     source = base / "wglink"
     addin = source / "fusion-addins" / "WGLink"
@@ -1122,7 +1122,7 @@ def test_a_pin_that_moves_before_the_installer_runs_is_superseded(
     )
 
     assert activation.verdict == "superseded"
-    assert "pin changed" in activation.detail
+    assert "pin for the Waveguide Generator add-in in Fusion changed" in activation.detail
     assert asked == []  # the installer never ran
     assert addin_update.installed_commit(target) == OLD
 
@@ -1446,7 +1446,7 @@ def test_a_failed_activation_is_retried_by_the_startup_pass_with_no_status_poll(
             if attempts["lock"] == 1:
                 # What the real lock raises after its 30 s wait.
                 raise module.InstallError(
-                    "Another WGLink install, update, or uninstall is still running; "
+                    "Another install, update, or uninstall of the Waveguide Generator add-in in Fusion is still running; "
                     "try again when it finishes."
                 )
             with real_lock(addins_dir, **kwargs):

@@ -830,7 +830,7 @@ async def request_fusion_return(
     if not status.get("running") or not session_id:
         raise HTTPException(
             status_code=409,
-            detail="Fusion is running, but WGLink is offline. Restart WGLink in Fusion first.",
+            detail="Fusion is running, but the Waveguide Generator add-in in Fusion is offline. Restart the Waveguide Generator add-in in Fusion first.",
         )
     if status.get("state") == "addin_outdated":
         raise HTTPException(status_code=409, detail=ADDIN_OUTDATED_MESSAGE)

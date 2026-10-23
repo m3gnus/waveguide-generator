@@ -411,7 +411,7 @@ function RecoveryOperationCard({ request, requestActions }: { request: CadReques
     <div>
       <b>Update interrupted — recovery required{documentName ? ` · ${documentName}` : ''}</b>
       <span>Fusion has no transaction covering these edits. Use Undo in Fusion to recover the document, or repair the link; do not continue modelling on a partially failed rebuild.</span>
-      <span>Dismissing this card does not repair Fusion, and WGLink will not repeat the update.</span>
+      <span>Dismissing this card does not repair Fusion, and the Waveguide Generator add-in in Fusion will not repeat the update.</span>
       {error && <span role="alert">{error}</span>}
     </div>
     <div className="cad-confirm-actions">

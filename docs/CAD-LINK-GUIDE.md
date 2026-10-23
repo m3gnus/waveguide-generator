@@ -5,18 +5,18 @@ then send the finished geometry back for an acoustic solve. You can also start
 with a model drawn entirely in Fusion. WG solves the geometry you send; CAD
 edits do not turn into editable waveguide parameters in WG.
 
-This guide describes the current WG and its bundled WGLink add-in. Fusion runs
+This guide describes the current WG and the bundled Waveguide Generator add-in in Fusion. Fusion runs
 on Windows and macOS. See the [general user guide](USER-GUIDE.md) for launching
 WG and using the results viewer.
 
-## 1. Install and enable WGLink
+## 1. Install and enable the Waveguide Generator add-in in Fusion
 
 1. Install Fusion and WG on the same computer. Close Fusion during add-in
    installation or replacement.
-2. On Windows, select **Install the WGLink add-in for Autodesk Fusion** in WG's
+2. On Windows, select the add-in installation task in WG's
    installer. The task is preselected when Fusion's AddIns folder exists;
    a silent install must opt in with `/TASKS="wglink"`. Setup reports whether
-   WGLink was installed, updated, not selected, not detected, preserved or
+   the Waveguide Generator add-in in Fusion was installed, updated, not selected, not detected, preserved or
    failed, and records the outcome in its setup log.
    WG installs and updates the add-in at startup only if you chose it in setup,
    installed it from WG, or have received a model from Fusion through the link.
@@ -27,10 +27,11 @@ WG and using the results viewer.
    exporting from WG, or having link metadata in a design file does not count.
    No separate scientific Python installation is needed for the packaged copy.
    For a source installation, use WG's installer; the add-in packaging details
-   are in the [WGLink integration notes](../integrations/wglink/README.md).
+   are in the [add-in integration notes](../integrations/wglink/README.md).
 3. Start Fusion. Under **Utilities → Scripts and Add-Ins → Add-Ins**, select
    **WGLink**, run it if needed, and tick **Run on Startup**. Its commands appear
-   in the **WGLink** panel under **Utilities**. Keep only one WGLink registration.
+   in the **Waveguide Generator** panel under **Utilities**. Keep only one **WGLink**
+   entry in **Scripts and Add-Ins**.
 4. In WG, open **Settings → CAD Link**, then **Choose WG folder…**. The default is
    `Documents/Waveguide Generator`: its `cadlink/` child is the **WGLink folder**,
    containing `wglink/` for outgoing bundles and `wgreturn/` for returns. Its
@@ -43,9 +44,9 @@ WG and using the results viewer.
 5. Keep WG running while using **Send to WG** or **Solve in WG**. These commands
    hand a request to WG; they do not launch WG for you.
 
-If WG says **“WGLink activation is pending until Fusion closes”**, close Fusion
+If WG says **“Activation of the Waveguide Generator add-in in Fusion is pending until Fusion closes”**, close Fusion
 and leave WG running, or restart WG with Fusion closed. Then reopen Fusion.
-After a healthy startup, packaged WG installs or updates WGLink for CAD Link
+After a healthy startup, packaged WG installs or updates the Waveguide Generator add-in in Fusion for CAD Link
 users to the exact add-in revision bundled with that WG release, without a
 network connection.
 For those users it replaces a hand-copied add-in that no WG installation manages.
@@ -71,7 +72,7 @@ copy and tick the checkbox in Fusion.
    to send that run's saved design. WG writes the bundle and starts or raises
    Fusion. The CAD Link connection indicator shows when the add-in's heartbeat
    is online: WG has heard from the running add-in.
-2. In Fusion, use WGLink's **Insert** to choose the exported `.wglink` bundle
+2. Use **Insert** in the **Waveguide Generator** panel in Fusion to choose the exported `.wglink` bundle
    if it has not been inserted. Automatic insertion and continuous updates are
    off by default; opening Fusion is not proof that the model was inserted.
 3. Save and name the Fusion document. That name identifies its CAD runs in WG.
@@ -80,10 +81,10 @@ copy and tick the checkbox in Fusion.
    that the sound encounters, including the added baffle and walls, in the
    exported assembly.
 
-WGLink inserts native Fusion features, with managed throat/mouth interface
+The Waveguide Generator add-in in Fusion inserts native Fusion features, with managed throat/mouth interface
 sketches and datums: reference planes and axes that locate the horn's openings.
 Build added features from these references where possible. Move or joint the
-whole WGLink wrapper component to place the horn; moving its managed body away
+whole wrapper component created by the Waveguide Generator add-in in Fusion to place the horn; moving its managed body away
 from those references can make **Update** refuse it.
 If you later change the waveguide in WG, send it again and explicitly use
 **Update** in Fusion. Inspect your own downstream features after rebuilding.
@@ -103,13 +104,13 @@ to bring those edits into WG; the apps do not continuously synchronize geometry.
    is an acoustic surface. Use **Exclude — leave this body out of the return**
    for modelling aids, then hide those excluded bodies or their occurrences.
    Fusion can otherwise include them in a component export, so a visible
-   excluded body is refused. **Declare Body…** is in the WGLink management dropdown.
+   excluded body is refused. **Declare Body…** is in the **Manage Link…** dropdown in the **Waveguide Generator** panel in Fusion.
 3. Do not include construction air solids as ordinary speaker bodies. An air
    volume is not a rigid wall. Mesh bodies are not an acoustic replacement for
    the solid and surface geometry this export expects.
 4. Check that hiding or excluding a body has not removed part of a source.
    Component exports are checked against what Fusion actually puts in STEP;
-   WGLink refuses a scope that cannot safely leave its unwanted bodies out.
+   the Waveguide Generator add-in in Fusion refuses a scope that cannot safely leave its unwanted bodies out.
 
 Closed solids are the simplest starting point. Open shells need particular care:
 BEMPP refuses free edges away from mirror planes. A fully enclosed void inside a
@@ -120,13 +121,13 @@ opened to the outside or as separate boundary shells, as the error advises.
 
 FEM regions solve the bounded air inside chambers and ports, with interfaces
 coupled to the exterior BEM field. They are available by default in CAD Link.
-In Fusion, create one closed solid air body per region and use WGLink's
-**Declare FEM Region…** command. Set the region mesh size and group its faces
+In Fusion, create one closed solid air body per region and use
+**Declare FEM Region…** in the **Waveguide Generator** panel. Set the region mesh size and group its faces
 as moving diaphragms, exterior interfaces, plane-wave terminations or rigid
 walls. Ungrouped faces are rigid. Hide each declared air body before Send/Solve
 so it is exported separately from the speaker assembly. Check Pre-flight.
 Rigid FEM face groups can carry Miki absorbing lining: specify its positive
-thickness in mm and airflow resistivity in Pa·s/m² in WGLink. Moving groups can
+thickness in mm and airflow resistivity in Pa·s/m² with the Waveguide Generator add-in in Fusion. Moving groups can
 set relative motion from -120 to 0 dB (0 dB means full motion). WG lists these
 settings beside each prepared group and retains them in the ingest evidence.
 The coupled route also passes positive patch weights of painted sources to the
@@ -191,7 +192,7 @@ and refuses FEM intake and coupled jobs. Unset the override to enable it again.
 ## 4. Mark the faces that produce sound
 
 1. Select the throat or diaphragm face that drives the air, rather than a magnet,
-   basket or mounting flange. A WGLink-inserted waveguide already has its managed
+   basket or mounting flange. A waveguide inserted by the Waveguide Generator add-in in Fusion already has its managed
    throat source; check that it survives your edits.
 2. For added drivers, choose **Set WG Source…**, select the face or faces, and
    choose **LF**, **MF** or **HF**. For example, use HF for the compression-driver
@@ -202,7 +203,7 @@ and refuses FEM intake and coupled jobs. Unset the override to enable it again.
 4. To remove an accidental marking, select the faces and use
    **Set WG Source… → Clear WG source**. After splitting, copying, deleting or
    repainting a source face, select all its intended faces and mark them again
-   if WGLink asks. Recheck the driver settings in WG after reassignment.
+   if the Waveguide Generator add-in in Fusion asks. Recheck the driver settings in WG after reassignment.
 
 The command applies an appearance named exactly after the role and stamps the
 faces with a persistent source identity, so later sends refer to the same source.
@@ -213,7 +214,7 @@ An appearance called `HF drive` or `MF_L` does not create a source in this add-i
 
 Extra, painted faces of the same role form **one source**, even when they are
 disconnected. Mark all four identical midrange diaphragms MF to drive them as a
-group. A managed WGLink throat has its own identity per inserted instance.
+group. A throat managed by the Waveguide Generator add-in in Fusion has its own identity per inserted instance.
 Extra painted HF faces are separate from that managed throat source. The add-in
 has no control for inventing independent `MF1`, `MF2`, etc. sources or giving
 same-role painted drivers separate gains and delays. Use the supported group
@@ -440,7 +441,7 @@ with the tooltip **Refresh the CAD return listing**) lists bundles already in
 the exchange folder; it does not export fresh geometry from Fusion. When the
 link card offers **Bring in & solve**, it asks Fusion for its current model,
 prepares it and starts the solve. The command palette's **Pull from Fusion &
-Solve** does the same. These requests need WGLink running in Fusion.
+Solve** does the same. These requests need the Waveguide Generator add-in in Fusion running.
 
 If a request needs your input, the Solve card shows **Fusion asked for a solve**
 and the reason it is waiting. Correct the settings or review the findings, then
@@ -508,7 +509,7 @@ for retention and export details.
 ## 10. Common refusals and remedies
 
 These are exact messages or excerpts. WG shows the messages unless a row says
-**Fusion shows**; those rows come from the bundled WGLink add-in, not WG.
+**Fusion shows**; those rows come from the bundled Waveguide Generator add-in in Fusion, not WG.
 Variable source names and measurements are omitted from excerpts. The cut-plane
 examples show x = 0; the same checks apply at y = 0.
 
@@ -548,7 +549,7 @@ This is not standalone STEP import. The CAD solve route still accepts a
 validated return bundle containing geometry and source information.
 
 1. Export STEP from your other CAD program and open it in Fusion.
-2. Inspect the imported bodies, mark the source faces with WGLink, and save the
+2. Inspect the imported bodies, mark the source faces with the Waveguide Generator add-in in Fusion, and save the
    Fusion document.
 3. Follow Send/Solve above as a model authored in CAD. A plain STEP imported this
    way has no WG-managed parametric link.

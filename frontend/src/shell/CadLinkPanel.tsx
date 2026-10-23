@@ -376,7 +376,7 @@ export function CadCoordinationNote() {
   return <p className="cad-detail cad-coordination-state" data-coordination={state}>
     {inbox
       ? 'Background coordination: off. WG checks CAD Link returns and Fusion status only while CAD work is in flight, and when you act.'
-      : 'Background coordination: off, but this WGLink needs the listing to pick up Send: it does not send through WG\u2019s request inbox, so WG keeps checking the CAD Link folder on a timer.'}
+      : 'Background coordination: off, but this build of the Waveguide Generator add-in in Fusion needs the listing to pick up Send: it does not send through WG\u2019s request inbox, so WG keeps checking the WGLink folder on a timer.'}
   </p>;
 }
 
@@ -575,7 +575,7 @@ export function CadLinkPanel() {
     try {
       detail = (await installCadLinkAddin()).detail;
     } catch (error) {
-      detail = error instanceof Error ? error.message : 'Could not install WGLink. Try again.';
+      detail = error instanceof Error ? error.message : 'Could not install the Waveguide Generator add-in in Fusion. Try again.';
     }
     setAddinReply({ detail, under: cadWorkspace.getSnapshot().fusionStatus });
     setInstallingAddin(false);
@@ -748,7 +748,7 @@ export function CadLinkPanel() {
     && DOCUMENT_LINK_STATES.has(workflow.state);
   const quietLink = fusionConnected || workflow.state === 'current' || workflow.state === 'checking';
   const addinVersion = !onshape && fusionStatus?.running && fusionStatus.adapterVersion
-    ? `WGLink add-in ${fusionStatus.adapterVersion}`
+    ? `The Waveguide Generator add-in in Fusion ${fusionStatus.adapterVersion}`
     : undefined;
   const solvesOnScreen = onScreenSolves(cadJobSummaries(jobs), record);
   const fusionBothChanged = Boolean(fusionStatus?.wgChangesAvailable && fusionStatus.fusionChangesAvailable);
@@ -804,7 +804,7 @@ export function CadLinkPanel() {
     <CadProjectHeader/>
     {!onshape && <div className="cad-link-actions">
       <button className="link-button" disabled={installingAddin} onClick={() => void installAddin()}
-        title="Install or repair WGLink. WG keeps it up to date after you choose this.">
+        title="Install or repair the Waveguide Generator add-in in Fusion. WG keeps it up to date after you choose this.">
         {installingAddin ? 'Installing…' : 'Install add-in'}
       </button>
       {addinNotice && <span role="status">{addinNotice}</span>}

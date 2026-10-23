@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install WGLink from its exact pinned source using WG's existing runtime."""
+"""Install the Waveguide Generator add-in in Fusion from its exact pinned source using WG's existing runtime."""
 
 from __future__ import annotations
 
@@ -203,7 +203,7 @@ def _safe_member(info: zipfile.ZipInfo) -> bool:
         return False
     try:
         for component in pure.parts:
-            validate_relative_name(component, what="WGLink archive component")
+            validate_relative_name(component, what="archive component for the Waveguide Generator add-in in Fusion")
     except UnsafeName:
         return False
     return True
@@ -220,24 +220,24 @@ def verify_package(
     try:
         archive = zipfile.ZipFile(archive_path)
     except (OSError, zipfile.BadZipFile) as exc:
-        raise InstallError(f"WGLink package is not a readable zip archive: {exc}") from exc
+        raise InstallError(f"package for the Waveguide Generator add-in in Fusion is not a readable zip archive: {exc}") from exc
     with archive:
         infos = archive.infolist()
         names = [info.filename for info in infos]
         if not infos or len(infos) > MAX_MEMBERS or len(names) != len({collision_key(name) for name in names}):
-            raise InstallError("WGLink package has an invalid or duplicate member inventory")
+            raise InstallError("package for the Waveguide Generator add-in in Fusion has an invalid or duplicate member inventory")
         if any(not _safe_member(info) for info in infos):
-            raise InstallError("REFUSING TO EXTRACT: WGLink package has an unsafe member")
+            raise InstallError("REFUSING TO EXTRACT: package for the Waveguide Generator add-in in Fusion has an unsafe member")
         expanded = sum(info.file_size for info in infos)
         if expanded > MAX_EXPANDED_BYTES:
-            raise InstallError("WGLink package exceeds its expanded-size limit")
+            raise InstallError("package for the Waveguide Generator add-in in Fusion exceeds its expanded-size limit")
         try:
             payloads = {info.filename: archive.read(info) for info in infos}
             provenance = json.loads(payloads["wglink/provenance.json"])
         except (KeyError, UnicodeError, json.JSONDecodeError) as exc:
-            raise InstallError(f"WGLink package provenance is missing or invalid: {exc}") from exc
+            raise InstallError(f"package for the Waveguide Generator add-in in Fusion provenance is missing or invalid: {exc}") from exc
     if not isinstance(provenance, dict) or provenance.get("schema") != 1:
-        raise InstallError("WGLink package provenance must use schema 1")
+        raise InstallError("package for the Waveguide Generator add-in in Fusion provenance must use schema 1")
     expected_fields = {
         "sourceRepository": expected_source["repository"],
         "sourceCommit": expected_source["commit"],
@@ -248,20 +248,20 @@ def verify_package(
     for name, expected in expected_fields.items():
         if provenance.get(name) != expected:
             raise InstallError(
-                f"WGLink package {name} is {provenance.get(name)!r}, expected {expected!r}"
+                f"package for the Waveguide Generator add-in in Fusion {name} is {provenance.get(name)!r}, expected {expected!r}"
             )
     files = provenance.get("files")
     if not isinstance(files, dict):
-        raise InstallError("WGLink package provenance has no files table")
+        raise InstallError("package for the Waveguide Generator add-in in Fusion provenance has no files table")
     actual_names = set(payloads).difference({"wglink/provenance.json"})
     if actual_names != set(files):
-        raise InstallError("WGLink package inventory does not match its provenance")
+        raise InstallError("package for the Waveguide Generator add-in in Fusion inventory does not match its provenance")
     for name, expected in files.items():
         if not isinstance(expected, str):
-            raise InstallError(f"WGLink package has no digest for {name}")
+            raise InstallError(f"package for the Waveguide Generator add-in in Fusion has no digest for {name}")
         actual = hashlib.sha256(payloads[name]).hexdigest()
         if actual != expected:
-            raise InstallError(f"REFUSING TO EXTRACT: WGLink package hash mismatch for {name}")
+            raise InstallError(f"REFUSING TO EXTRACT: package for the Waveguide Generator add-in in Fusion hash mismatch for {name}")
     return provenance, payloads
 
 
@@ -285,11 +285,11 @@ def _fetch_package(root: Path, state: Path, *, offline_only: bool = False) -> Pa
         except InstallError as exc:
             if offline_only:
                 raise InstallError(
-                    f"Bundled WGLink package failed verification: {shipped}"
+                    f"Bundled package for the Waveguide Generator add-in in Fusion failed verification: {shipped}"
                 ) from exc
     elif offline_only:
         raise InstallError(
-            f"This Waveguide Generator bundle does not contain its WGLink package: {shipped}"
+            f"This Waveguide Generator bundle does not contain its package for the Waveguide Generator add-in in Fusion: {shipped}"
         )
     cached = _cache_path(state, version, commit)
     if cached.is_file():
@@ -326,7 +326,7 @@ def _fetch_package(root: Path, state: Path, *, offline_only: bool = False) -> Pa
             completed = subprocess.run(command, check=False)
             if completed.returncode != 0:
                 raise InstallError(
-                    "Could not fetch the pinned WGLink source commit; check the network "
+                    "Could not fetch the pinned source commit for the Waveguide Generator add-in in Fusion; check the network "
                     "connection and re-run the installer."
                 )
         # Build beside the cache, not in the system temporary directory: a
@@ -360,7 +360,7 @@ def _runtime_matches(
     payloads: dict[str, bytes],
 ) -> bool:
     try:
-        installed = _read_json(root / "provenance.json", "installed WGLink provenance")
+        installed = _read_json(root / "provenance.json", "installed provenance for the Waveguide Generator add-in in Fusion")
         if installed != provenance:
             return False
         expected = set(payloads).difference({"wglink/provenance.json"})
@@ -417,7 +417,7 @@ def _materialize_runtime(
         for name, data in payloads.items():
             path = staging.joinpath(*PurePosixPath(name).parts)
             if not path.resolve().is_relative_to(staging.resolve()):
-                raise InstallError("REFUSING TO EXTRACT: member escapes WGLink staging")
+                raise InstallError("REFUSING TO EXTRACT: member escapes staging for the Waveguide Generator add-in in Fusion")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
         (staging / "wglink" / "provenance.json").write_text(
@@ -511,13 +511,13 @@ def _set_file_lock(handle, *, acquire: bool) -> None:
 
 def _open_lock_file(lock_path: Path):
     if lock_path.is_symlink():
-        raise InstallError(f"WGLink operation lock is unsafe: {lock_path}")
+        raise InstallError(f"operation lock for the Waveguide Generator add-in in Fusion is unsafe: {lock_path}")
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(lock_path, flags, 0o600)
         handle = os.fdopen(descriptor, "r+b")
     except OSError as exc:
-        raise InstallError(f"Could not open WGLink operation lock {lock_path}: {exc}") from exc
+        raise InstallError(f"Could not open operation lock for the Waveguide Generator add-in in Fusion {lock_path}: {exc}") from exc
     try:
         if os.fstat(handle.fileno()).st_size == 0:
             handle.write(b"\0")
@@ -552,7 +552,7 @@ def _acquire_operation_lock(lock_path: Path, timeout: float):
                 except OSError as exc:
                     if time.monotonic() >= deadline:
                         raise InstallError(
-                            "Another WGLink install, update, or uninstall is still running; "
+                            "Another install, update, or uninstall of the Waveguide Generator add-in in Fusion is still running; "
                             "try again when it finishes."
                         ) from exc
                     time.sleep(min(0.05, max(deadline - time.monotonic(), 0.0)))
@@ -676,7 +676,7 @@ def _write_transaction(path: Path, transaction: dict[str, object]) -> None:
 def _file_inventory(root: Path) -> dict[str, str]:
     paths = list(root.rglob("*"))
     if any(path.is_symlink() for path in paths):
-        raise InstallError(f"WGLink replacement payload contains a symlink: {root}")
+        raise InstallError(f"replacement payload for the Waveguide Generator add-in in Fusion contains a symlink: {root}")
     return {
         path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in paths
@@ -724,8 +724,8 @@ def _allowed_generated_bytecode(name: str, expected: Mapping[str, str]) -> bool:
 
 def _read_transaction(path: Path, addins_dir: Path, root: Path) -> dict[str, object]:
     if path.is_symlink() or not path.is_file():
-        raise InstallError(f"WGLink replacement journal is not a regular file: {path}")
-    transaction = _read_json(path, "WGLink replacement journal")
+        raise InstallError(f"replacement journal for the Waveguide Generator add-in in Fusion is not a regular file: {path}")
+    transaction = _read_json(path, "replacement journal for the Waveguide Generator add-in in Fusion")
     if (
         transaction.get("schema") != TRANSACTION_SCHEMA
         or transaction.get("managedBy") != MANAGED_BY
@@ -735,28 +735,28 @@ def _read_transaction(path: Path, addins_dir: Path, root: Path) -> dict[str, obj
         or not isinstance(transaction.get("expectedMarker"), dict)
         or not _valid_file_inventory(transaction.get("expectedFiles"))
     ):
-        raise InstallError(f"WGLink replacement journal is invalid: {path}")
+        raise InstallError(f"replacement journal for the Waveguide Generator add-in in Fusion is invalid: {path}")
     try:
         recorded_root = Path(str(transaction.get("waveguideGeneratorRoot"))).resolve()
     except (OSError, RuntimeError, ValueError) as exc:
-        raise InstallError(f"WGLink replacement journal has an invalid owner: {path}") from exc
+        raise InstallError(f"replacement journal for the Waveguide Generator add-in in Fusion has an invalid owner: {path}") from exc
     if recorded_root != root.resolve():
         raise InstallError(
-            "WGLink replacement journal belongs to a different Waveguide Generator "
+            "replacement journal for the Waveguide Generator add-in in Fusion belongs to a different Waveguide Generator "
             f"installation: {path}"
         )
     if not _valid_install_marker(transaction["expectedMarker"], root):
-        raise InstallError(f"WGLink replacement journal has an invalid marker: {path}")
+        raise InstallError(f"replacement journal for the Waveguide Generator add-in in Fusion has an invalid marker: {path}")
     workspace_name = transaction.get("workspace")
     if (
         not isinstance(workspace_name, str)
         or Path(workspace_name).name != workspace_name
         or not workspace_name.startswith(".WGLink-install-")
     ):
-        raise InstallError(f"WGLink replacement journal has an unsafe workspace: {path}")
+        raise InstallError(f"replacement journal for the Waveguide Generator add-in in Fusion has an unsafe workspace: {path}")
     workspace = addins_dir / workspace_name
     if _path_present(workspace) and (workspace.is_symlink() or not workspace.is_dir()):
-        raise InstallError(f"WGLink replacement workspace is unsafe: {workspace}")
+        raise InstallError(f"replacement workspace for the Waveguide Generator add-in in Fusion is unsafe: {workspace}")
     return transaction
 
 
@@ -783,7 +783,7 @@ def _matches_transaction_target(
             for name in actual.keys() - expected.keys()
         ):
             return False
-        runtime = _read_json(target / RUNTIME_FILE, "installed WGLink runtime")
+        runtime = _read_json(target / RUNTIME_FILE, "installed runtime for the Waveguide Generator add-in in Fusion")
         runtime_root = Path(str(runtime.get("root")))
         python = Path(str(runtime.get("python")))
         return (
@@ -828,12 +828,12 @@ def _recover_install_transaction(addins_dir: Path, root: Path) -> None:
             _sync_directory(addins_dir)
         elif transaction["hadPrevious"]:
             raise InstallError(
-                "WGLink replacement was interrupted and its prior installation is "
+                "Replacement of the Waveguide Generator add-in in Fusion was interrupted and its prior installation is "
                 f"missing from {workspace}; preserving the journal for manual recovery."
             )
         elif transaction["phase"] == "published":
             raise InstallError(
-                "WGLink replacement was published but its installed target is missing; "
+                "Replacement of the Waveguide Generator add-in in Fusion was published but its installed target is missing; "
                 f"preserving the journal at {journal}."
             )
         _finish_transaction(journal, workspace)
@@ -852,7 +852,7 @@ def _recover_install_transaction(addins_dir: Path, root: Path) -> None:
             )
         ):
             raise InstallError(
-                "WGLink replacement recovery found an unexpected installed target; "
+                "Replacement recovery for the Waveguide Generator add-in in Fusion found an unexpected installed target; "
                 f"preserving both it and the prior copy in {workspace}."
             )
         _remove_entry(previous)
@@ -861,7 +861,7 @@ def _recover_install_transaction(addins_dir: Path, root: Path) -> None:
     ):
         if not _matches_transaction_target(target, root, transaction):
             raise InstallError(
-                "WGLink replacement recovery found an unexpected installed target; "
+                "Replacement recovery for the Waveguide Generator add-in in Fusion found an unexpected installed target; "
                 f"preserving it and the journal at {journal}."
             )
 
@@ -960,7 +960,7 @@ def _install_unlocked(
     python = (python or _venv_python(root)).resolve()
     if not python.is_file():
         raise InstallError(
-            f"WGLink needs Waveguide Generator's prepared Python environment: {python}"
+            f"The Waveguide Generator add-in in Fusion needs WG's prepared Python environment: {python}"
         )
     state = state_root(root, data_dir=data_dir)
     archive_path = (
@@ -972,7 +972,7 @@ def _install_unlocked(
     source_addin = runtime_root / "fusion-addins" / "WGLink"
     resampler = runtime_root / "scripts" / "wglink_resample.py"
     if not (source_addin / "WGLink.py").is_file() or not resampler.is_file():
-        raise InstallError("WGLink package is missing its add-in or resampler")
+        raise InstallError("package for the Waveguide Generator add-in in Fusion is missing its add-in or resampler")
 
     addins_dir.mkdir(parents=True, exist_ok=True)
     staging_parent = publish_staging_directory(addins_dir, ".WGLink-install-")
@@ -1144,16 +1144,16 @@ def _managed_target_unlocked(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_mutually_exclusive_group()
-    actions.add_argument("--record-setup-choice", action="store_true", help="record the selected setup task without installing WGLink")
+    actions.add_argument("--record-setup-choice", action="store_true", help="record the selected setup task without installing the Waveguide Generator add-in in Fusion")
     parser.add_argument("--archive", type=Path, help="install a locally built package")
     parser.add_argument(
         "--offline-only",
         action="store_true",
-        help="require the WGLink package shipped in this application bundle",
+        help="require the package for the Waveguide Generator add-in in Fusion shipped in this application bundle",
     )
     parser.add_argument("--addins-dir", type=Path, help="override Fusion's AddIns directory")
     parser.add_argument("--platform", choices=("auto", "macos", "windows", "linux"), default="auto")
-    parser.add_argument("--replace-external", action="store_true", help="replace a non-WG-managed WGLink")
+    parser.add_argument("--replace-external", action="store_true", help="replace a non-WG-managed copy of the Waveguide Generator add-in in Fusion")
     actions.add_argument("--uninstall", action="store_true", help="remove only this WG install's managed copy")
     actions.add_argument("--print-managed-target", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--yes", action="store_true", help="confirm --uninstall")
@@ -1184,9 +1184,9 @@ def main(argv: list[str] | None = None) -> int:
         try:
             record_usage(data_paths().root, "setup-task")
         except OSError as exc:
-            print(f"Could not record WGLink setup choice: {_os_error_text(exc)}", file=sys.stderr)
+            print(f"Could not record the setup choice for the Waveguide Generator add-in in Fusion: {_os_error_text(exc)}", file=sys.stderr)
             return 1
-        print("WGLink: recorded the setup task choice.")
+        print("The Waveguide Generator add-in in Fusion: recorded the setup task choice.")
         return 0
     try:
         if args.print_managed_target:
@@ -1214,16 +1214,16 @@ def main(argv: list[str] | None = None) -> int:
                 offline_only=args.offline_only,
             )
     except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
-        print(f"Could not install WGLink: {exc}", file=sys.stderr)
+        print(f"Could not install the Waveguide Generator add-in in Fusion: {exc}", file=sys.stderr)
         return 2
     if status == "unsupported":
-        print("WGLink: skipped (Fusion 360 is supported on macOS and Windows).")
+        print("The Waveguide Generator add-in in Fusion: skipped (Fusion 360 is supported on macOS and Windows).")
     elif status == "preserved-external":
-        print(f"WGLink: preserved the existing non-WG install at {target}.")
+        print(f"The Waveguide Generator add-in in Fusion: preserved the existing non-WG install at {target}.")
     elif status == "removed":
-        print(f"WGLink: removed {target}; preserved shared runtime payloads and package cache.")
+        print(f"The Waveguide Generator add-in in Fusion: removed {target}; preserved shared runtime payloads and package cache.")
     else:
-        print(f"WGLink: installed {target}. Restart Fusion and enable Run on Startup.")
+        print(f"The Waveguide Generator add-in in Fusion: installed {target}. Restart Fusion and enable Run on Startup.")
     return 0
 
 

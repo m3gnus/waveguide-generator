@@ -192,7 +192,7 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
     stops.push(useCadReturnStore.subscribe(changed), useDesignStore.subscribe(changed),
       useDocumentStore.subscribe(changed), connection.subscribe(changed), subscribeRevision(changed));
     deadline = setTimeout(() => operation.finish(null, new Error(
-      'Fusion did not return the requested model within 60 seconds. Check Fusion for a WGLink message, then retry.',
+      'Fusion did not return the requested model within 60 seconds. Check Fusion for a message from the Waveguide Generator add-in in Fusion, then retry.',
     )), FUSION_RETURN_TIMEOUT_MS);
     options.noteCadActivity?.();
     void (async () => {

@@ -38,7 +38,7 @@ from server.cadlink.store import CadLinkStore
 
 LEGACY = ".wg-solve-request.json"
 V2_DIR = ".wg-solve-requests"
-OLDER_ADDIN = "older than this Waveguide Generator"
+OLDER_ADDIN = "older than this WG installation accepts"
 
 
 @pytest.fixture
@@ -963,7 +963,7 @@ def test_an_idle_pass_is_not_reported_as_a_blocked_one(data_dir, workspace, stor
 
 def test_a_stopped_consumer_is_reported_once_not_every_second():
     reporter = DeliveryPassReporter()
-    reason = "No CAD Link folder is selected."
+    reason = "No WGLink folder is selected."
 
     assert reporter.observe(reason) == reason
     assert [reporter.observe(reason) for _ in range(5)] == [None] * 5

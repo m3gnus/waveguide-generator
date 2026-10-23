@@ -139,7 +139,7 @@ def test_install_endpoint_records_choice_before_deferred_or_failed_activation(tm
     from server.cadlink.fusion import addin_update
     def activate(data):
         assert usage.read_usage(data)["reason"] == "install-action"
-        return "pending", "Close Fusion to finish installing WGLink."
+        return "pending", "Close Fusion to finish installing the Waveguide Generator add-in in Fusion."
     monkeypatch.setattr(addin_update, "refresh_and_log", activate)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(data_dir=tmp_path)))
     result = asyncio.run(post_install_addin(request))

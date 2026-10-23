@@ -91,7 +91,7 @@ def test_setup_choice_write_failure_returns_one(
     monkeypatch.setenv("WG2_DATA_DIR", str(blocked))
     assert installer.main(["--record-setup-choice"]) == 1
     output = capsys.readouterr()
-    assert not output.out and "Could not record WGLink setup choice:" in output.err
+    assert not output.out and "Could not record the setup choice for the Waveguide Generator add-in in Fusion:" in output.err
     assert str(blocked) in output.err
     assert blocked.read_text(encoding="utf-8") == "keep"
 
@@ -1220,7 +1220,7 @@ def test_offline_only_refuses_cache_when_the_shipped_package_is_missing(
     shutil.copy2(archive, cached)
     addins = short_tmp_path / "AddIns"
 
-    with pytest.raises(installer.InstallError, match="does not contain its WGLink package"):
+    with pytest.raises(installer.InstallError, match="does not contain its package for the Waveguide Generator add-in in Fusion"):
         installer.install(root=root, addins_dir=addins, offline_only=True)
 
     assert cached.is_file()

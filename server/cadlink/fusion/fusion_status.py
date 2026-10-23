@@ -37,15 +37,15 @@ _LEGACY_SIGNATURE_EXPLANATION = (
     "and carries no document signature"
 )
 ADDIN_OUTDATED_MESSAGE = (
-    "Fusion is running a WGLink add-in older than this Waveguide Generator. Restart "
-    "Fusion so it loads the WGLink that WG installed, then try again."
+    "The Waveguide Generator add-in in Fusion is older than this WG installation. Restart "
+    "Fusion so it loads the Waveguide Generator add-in in Fusion that WG installed, then try again."
 )
 _SCOPED_SELECTION_EXPLANATION = (
     "stale detection unavailable: this return covers a selected assembly "
     "subtree, and Fusion reports its document signature for the whole root"
 )
 _EARLIER_OBSERVATION_EXPLANATION = (
-    "stale detection unavailable: the Fusion model has moved since WGLink last "
+    "stale detection unavailable: the Fusion model has moved since the Waveguide Generator add-in in Fusion last "
     "measured it, so WG holds an observation of an earlier revision"
 )
 #: WGLink with its automatic coordination off publishes status only when it runs
@@ -53,12 +53,12 @@ _EARLIER_OBSERVATION_EXPLANATION = (
 #: commands its heartbeat ages past ``FUSION_STATUS_TTL`` while Fusion and the
 #: add-in are both fine. That is not an offline add-in, and not a closed Fusion.
 _NOT_OBSERVED_EXPLANATION = (
-    "stale detection unavailable: WGLink reports status only when it runs a "
+    "stale detection unavailable: the Waveguide Generator add-in in Fusion reports status only when it runs a "
     "command (its automatic coordination is off), so WG has not observed Fusion "
     "since the last one"
 )
 _NO_OBSERVATION_EXPLANATION = (
-    "stale detection unavailable: WGLink has not measured this Fusion "
+    "stale detection unavailable: the Waveguide Generator add-in in Fusion has not measured this Fusion "
     "document's geometry yet"
 )
 

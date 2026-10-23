@@ -1565,7 +1565,7 @@ def test_required_fem_volume_needs_exterior_only_override(tmp_path: Path, eviden
                 assert "required FEM air volumes" in str(caught.value)
             message = " ".join(str(caught.value).split())
             remedy = ("Send the return again so WG can prepare its FEM regions" if evidence.get("fem_regions")
-                      else "Declare these volumes as FEM regions in WGLink and send again")
+                      else "Declare these volumes as FEM regions with the Waveguide Generator add-in in Fusion and send again")
             assert f"{remedy}, or choose exterior-only to solve without the FEM air." in message
             request = _request(ingest_id, exterior_only=True)
             assert await runtime.submit(request)

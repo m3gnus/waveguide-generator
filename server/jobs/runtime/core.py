@@ -695,7 +695,7 @@ def _refuse_imported_fem(
             # Declared, but ingested by a WG that did not mesh FEM regions.
             remedy = "Send the return again so WG can prepare its FEM regions, "
         else:
-            remedy = "Declare these volumes as FEM regions in WGLink and send again, "
+            remedy = "Declare these volumes as FEM regions with the Waveguide Generator add-in in Fusion and send again, "
         declared = "required FEM air volumes and FEM regions" if required_fem and regions else (
             "FEM regions" if regions else "required FEM air volumes"
         )

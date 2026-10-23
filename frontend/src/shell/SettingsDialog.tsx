@@ -297,15 +297,15 @@ function CadSettings() {
     </select></label>}
     <p className="cad-settings-note">{onshape
       ? 'WG connects directly to your Onshape account. No local exchange folder or add-in is needed.'
-      : 'Fusion uses the WGLink add-in and one local exchange folder. Complete these steps once; WGLink then opens and updates designs from the CAD Link panel.'}</p>
+      : 'WG connects through the Waveguide Generator add-in in Fusion and one local exchange folder. Complete these steps once; the add-in then opens and updates designs from the CAD Link panel.'}</p>
     {onshape ? <ol className="cad-setup-steps" aria-label="Set up Onshape">
       <li><b>Create an Onshape API key</b><span>In Onshape, open <b>My account → Developer → API keys</b>, create a key for this personal connection, and copy both values before closing the dialog. <a href="https://cad.onshape.com/help/Content/Plans/my_account_developer.htm" target="_blank" rel="noreferrer noopener">Onshape instructions</a></span></li>
       <li><b>Store the key in WG’s private credential file</b><span>Save <code>ONSHAPE_ACCESS_KEY=…</code> and <code>ONSHAPE_SECRET_KEY=…</code> in <code>{onshapeSetup?.credentialsPath ?? 'the credential file shown after the connection check'}</code>. Keep it out of synced or shared folders. WG reads it locally and never returns either value to the browser.</span></li>
       <li><b>Verify the account</b><span>The check reports the account and plan that will own new CAD documents.</span><OnshapeConnectionStatus onConnection={rememberOnshapeConnection}/></li>
     </ol> : <ol className="cad-setup-steps" aria-label="Set up Autodesk Fusion 360">
-      <li><b>Install and start WGLink</b><span>Install the WGLink add-in once, restart Fusion, then confirm <b>Utilities → Scripts and Add-Ins → WGLink</b> is set to run on startup. <a href="https://github.com/m3gnus/wglink/tree/main/fusion-addins/WGLink#install" target="_blank" rel="noreferrer noopener">WGLink install guide</a></span></li>
+      <li><b>Install and start the Waveguide Generator add-in in Fusion</b><span>Install the Waveguide Generator add-in in Fusion once, restart Fusion, then confirm <b>Utilities → Scripts and Add-Ins → WGLink</b> is set to run on startup. <a href="https://github.com/m3gnus/wglink/tree/main/fusion-addins/WGLink#install" target="_blank" rel="noreferrer noopener">Add-in install guide</a></span></li>
       <li><b>WGLink folder</b><span>WG and Fusion use this WGLink folder.</span><CadFolderSettings/></li>
-      <li><b>Open a design in Fusion</b><span>Close Settings, open <b>CAD Link</b>, and choose <b>Open in Fusion 360</b>. WG writes the bundle, starts Fusion, and the connection card confirms when WGLink is online.</span></li>
+      <li><b>Open a design in Fusion</b><span>Close Settings, open <b>CAD Link</b>, and choose <b>Open in Fusion 360</b>. WG writes the bundle, starts Fusion, and the connection card confirms when the Waveguide Generator add-in in Fusion is online.</span></li>
     </ol>}
   </section>;
 }

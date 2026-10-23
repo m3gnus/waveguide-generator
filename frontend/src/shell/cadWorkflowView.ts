@@ -139,36 +139,36 @@ function outdatedAddinDetail(status: FusionCadStatus): string {
   const verdict = refresh?.verdict ?? null;
   const notes = activationFootnotes(refresh, true);
   if (verdict === null) {
-    return 'WG is still checking Fusion\'s WGLink add-in. Until Fusion runs the WGLink that matches this Waveguide Generator, they exchange nothing.';
+    return 'WG is still checking the Waveguide Generator add-in in Fusion. Until Fusion runs the add-in that matches this Waveguide Generator, they exchange nothing.';
   }
   if (verdict === 'pending') {
-    return `WGLink activation is pending until Fusion closes. Close Fusion to finish updating WGLink: WG installs the add-in that matches it once Fusion is closed, and says here when Fusion can be reopened. ${EXCHANGE_NOTHING}${notes}`;
+    return `Activation of the Waveguide Generator add-in in Fusion is pending until Fusion closes. Close Fusion to finish updating the Waveguide Generator add-in in Fusion: WG installs the add-in that matches it once Fusion is closed, and says here when Fusion can be reopened. ${EXCHANGE_NOTHING}${notes}`;
   }
   if (ACTIVATED_VERDICTS.has(verdict)) {
-    return `WG has installed the WGLink add-in that matches it, and Fusion loads it the next time it starts. ${EXCHANGE_NOTHING}${notes}`;
+    return `WG has installed the Waveguide Generator add-in in Fusion that matches it, and Fusion loads it the next time it starts. ${EXCHANGE_NOTHING}${notes}`;
   }
   if (verdict === 'current') {
-    return `Fusion's WGLink folder already holds the add-in that matches WG, but Fusion is running an older one. Restart Fusion 360 so it loads the installed copy. ${EXCHANGE_NOTHING}${notes}`;
+    return `The add-in installation folder in Fusion already holds the add-in that matches WG, but Fusion is running an older one. Restart Fusion 360 so it loads the installed copy. ${EXCHANGE_NOTHING}${notes}`;
   }
   if (verdict === 'awaiting-startup') {
-    return `WG changes Fusion's WGLink only once this start is confirmed, so an update that rolls back never leaves its add-in behind (${refresh?.detail ?? ''}). ${EXCHANGE_NOTHING}${notes}`;
+    return `WG changes the Waveguide Generator add-in in Fusion only once this start is confirmed, so an update that rolls back never leaves its add-in behind (${refresh?.detail ?? ''}). ${EXCHANGE_NOTHING}${notes}`;
   }
   if (verdict === 'superseded') {
-    return `WG did not change Fusion's WGLink: ${refresh?.detail ?? ''}. Restart Waveguide Generator so the installed build finishes updating it. ${EXCHANGE_NOTHING}${notes}`;
+    return `WG did not change the Waveguide Generator add-in in Fusion: ${refresh?.detail ?? ''}. Restart Waveguide Generator so the installed build finishes updating it. ${EXCHANGE_NOTHING}${notes}`;
   }
   if (verdict === 'external') {
-    return `Fusion's WGLink belongs to another Waveguide Generator installation, which is older than this one. Update or remove that installation, then restart Fusion 360. (${refresh?.detail ?? ''})${notes}`;
+    return `The Waveguide Generator add-in in Fusion belongs to another Waveguide Generator installation, which is older than this one. Update or remove that installation, then restart Fusion 360. (${refresh?.detail ?? ''})${notes}`;
   }
   if (verdict === 'developer') {
-    return `Fusion is running a developer copy of WGLink that is older than this Waveguide Generator. Sync it again, then restart WGLink in Fusion.${notes}`;
+    return `The developer copy of the Waveguide Generator add-in in Fusion is older than this WG installation. Sync it again, then restart the Waveguide Generator add-in in Fusion.${notes}`;
   }
   if (verdict === 'failed' || verdict === 'unavailable' || verdict === 'not-detected') {
-    return `WG could not install the WGLink add-in that matches it: ${refresh?.detail ?? 'no detail'}. Reinstall Waveguide Generator, then restart Fusion 360.${notes}`;
+    return `WG could not install the Waveguide Generator add-in in Fusion that matches it: ${refresh?.detail ?? 'no detail'}. Reinstall Waveguide Generator, then restart Fusion 360.${notes}`;
   }
   if (verdict === 'disabled') {
-    return `WG does not update WGLink here (${refresh?.detail ?? ''}). Install the WGLink that matches this Waveguide Generator, then restart Fusion 360.${notes}`;
+    return `WG does not update the Waveguide Generator add-in in Fusion here (${refresh?.detail ?? ''}). Install the Waveguide Generator add-in in Fusion that matches this Waveguide Generator, then restart Fusion 360.${notes}`;
   }
-  return `Fusion is running a WGLink add-in older than this Waveguide Generator, and WG did not replace it (${refresh?.detail ?? verdict}). ${EXCHANGE_NOTHING}${notes}`;
+  return `The Waveguide Generator add-in in Fusion is older than this WG installation, and WG did not replace it (${refresh?.detail ?? verdict}). ${EXCHANGE_NOTHING}${notes}`;
 }
 
 /** What every other state adds about WGLink activation, or '' when there is nothing to add. */
@@ -178,13 +178,13 @@ function activationNote(state: CadWorkflowView['state'], refresh: WgLinkRefreshR
   const troubled = state === 'addin-offline' || state === 'closed';
   const notes = activationFootnotes(refresh, troubled);
   if (verdict === 'pending') {
-    return `WGLink activation is pending until Fusion closes: close Fusion to finish updating WGLink.${notes}`;
+    return `Activation of the Waveguide Generator add-in in Fusion is pending until Fusion closes: close Fusion to finish updating the Waveguide Generator add-in in Fusion.${notes}`;
   }
   if (verdict === 'failed') {
-    return `WG could not update WGLink (${refresh?.detail ?? 'no detail'}).${notes}`;
+    return `WG could not update the Waveguide Generator add-in in Fusion (${refresh?.detail ?? 'no detail'}).${notes}`;
   }
   if (verdict !== null && ACTIVATED_VERDICTS.has(verdict) && state === 'closed') {
-    return `WG has installed the WGLink add-in that matches it; Fusion loads it when it next starts.${notes}`;
+    return `WG has installed the Waveguide Generator add-in in Fusion that matches it; Fusion loads it when it next starts.${notes}`;
   }
   return troubled ? activationFootnotes(refresh, true).trim() : '';
 }
@@ -204,7 +204,7 @@ function notObservedView(view: CadWorkflowView, status: FusionCadStatus): CadWor
   return {
     ...view,
     headline: `Fusion 360 · last reported${when}`,
-    detail: `WGLink reports only when it runs a command (its automatic coordination is off), so WG has not observed Fusion since${when ? ` then` : ''}. Send, Solve and Refresh still work: each checks Fusion when it runs. As of that report: ${view.detail}`,
+    detail: `The Waveguide Generator add-in in Fusion reports only when it runs a command (its automatic coordination is off), so WG has not observed Fusion since${when ? ` then` : ''}. Send, Solve and Refresh still work: each checks Fusion when it runs. As of that report: ${view.detail}`,
   };
 }
 
@@ -225,7 +225,7 @@ function fusionConnectionView(status: FusionCadStatus | null): CadWorkflowView {
   if (status === null) return {
     state: 'checking',
     headline: 'Checking Fusion 360…',
-    detail: 'WG is looking for the WGLink add-in and its active document.',
+    detail: 'WG is looking for the Waveguide Generator add-in in Fusion and its active document.',
     action: 'open',
   };
   if (status.cadFolderConfigured === false) return {
@@ -239,50 +239,50 @@ function fusionConnectionView(status: FusionCadStatus | null): CadWorkflowView {
   // outright, so nothing it reports about the document is acted on.
   if (status.state === 'addin_outdated') return {
     state: 'addin-outdated',
-    headline: 'WGLink add-in is out of date',
+    headline: 'The Waveguide Generator add-in in Fusion is out of date',
     detail: outdatedAddinDetail(status),
     action: null,
   };
   if (status.cadConnectionIssue === 'addin_upgrade_required') return {
     state: 'addin-offline',
-    headline: 'WGLink needs to be updated',
-    detail: 'Fusion is running an older WGLink build that cannot confirm the selected exchange folder. Update the add-in, restart Fusion, and check again.',
+    headline: 'The Waveguide Generator add-in in Fusion needs to be updated',
+    detail: 'The Waveguide Generator add-in in Fusion is an older build that cannot confirm the selected exchange folder. Update the add-in, restart Fusion, and check again.',
     action: null,
   };
   if (status.cadConnectionIssue === 'folder_unreadable') return {
     state: 'addin-offline',
-    headline: 'WGLink cannot access the selected folder',
+    headline: 'The Waveguide Generator add-in in Fusion cannot access the selected folder',
     detail: 'Check that the folder still exists and that Fusion is running as the same user as WG. Then choose it again in Settings → CAD Link if needed.',
     action: null,
   };
   if (status.cadConnectionIssue === 'folder_mismatch') return {
     state: 'addin-offline',
     headline: 'WG and Fusion are using different folders',
-    detail: 'WGLink reloads this setting automatically; it should clear within a few seconds. If it remains, update the add-in and restart Fusion.',
+    detail: 'The Waveguide Generator add-in in Fusion reloads this setting automatically; it should clear within a few seconds. If it remains, update the add-in and restart Fusion.',
     action: null,
   };
   if (status.recoveryRequired) return {
     state: 'recovery-required',
     headline: `Update interrupted — recovery required${status.documentName ? ` · ${status.documentName}` : ''}`,
-    detail: `A WG ${status.recoveryRequired.kind === 'insert' ? 'insert' : 'update'} started changing this Fusion model and did not finish, so WGLink will not repeat it. Fusion has no transaction covering these edits. Use Undo in Fusion to recover the document, or repair the link; do not continue modelling on a partially failed rebuild. Dismissing WG's recovery notice does not repair Fusion.`,
+    detail: `A WG ${status.recoveryRequired.kind === 'insert' ? 'insert' : 'update'} started changing this Fusion model and did not finish, so the Waveguide Generator add-in in Fusion will not repeat it. Fusion has no transaction covering these edits. Use Undo in Fusion to recover the document, or repair the link; do not continue modelling on a partially failed rebuild. Dismissing WG's recovery notice does not repair Fusion.`,
     action: null,
   };
   if (status.state === 'closed') return {
     state: 'closed',
     headline: 'Fusion 360 is closed',
-    detail: 'Open this WG design in Fusion 360. WG will start Fusion and WGLink will create a Design document if needed.',
+    detail: 'Open this WG design in Fusion 360. WG will start Fusion and the Waveguide Generator add-in in Fusion will create a Design document if needed.',
     action: 'open',
   };
   if (status.state === 'addin_offline') return {
     state: 'addin-offline',
-    headline: 'Fusion 360 is open · WGLink add-in is offline',
-    detail: 'Fusion is running, but its WGLink add-in has not reported in. In Fusion, open Utilities → Scripts and Add-Ins, then stop and run WGLink.',
+    headline: 'Fusion 360 is open · the Waveguide Generator add-in in Fusion is offline',
+    detail: 'Fusion is running, but the Waveguide Generator add-in in Fusion has not reported in. In Fusion, open Utilities → Scripts and Add-Ins, then stop and run WGLink.',
     action: null,
   };
   if (status.state === 'no_document') return {
     state: 'no-document',
     headline: 'Fusion 360 is open · no Design document',
-    detail: 'WGLink will create a Design document and insert this waveguide.',
+    detail: 'The Waveguide Generator add-in in Fusion will create a Design document and insert this waveguide.',
     action: 'open',
   };
   if (status.state === 'not_linked') return {
@@ -340,19 +340,19 @@ function fusionConnectionView(status: FusionCadStatus | null): CadWorkflowView {
     // review finding D5, handed to A6: `action` stayed `update`, so the only
     // thing lost was the copy that says what actually changed.
     const wgCopy = status.wgChangesAvailable ? ` ${wgChangeDetail()}` : '';
-    const remedy = ' Bring the Fusion geometry into WG to find out: WGLink measures the model as it exports it.';
+    const remedy = ' Bring the Fusion geometry into WG to find out: the Waveguide Generator add-in in Fusion measures the model as it exports it.';
     const headline = (unknownHalf: string): string => (
       status.wgChangesAvailable ? `WG design changed${named}` : `${unknownHalf}${named}`
     );
     return freshness === 'none' ? {
       state: 'unmeasured',
       headline: headline('Fusion geometry not measured yet'),
-      detail: explainedStaleDetail(status, `WGLink has not measured this document's geometry, so WG cannot tell whether it still matches what was returned.${wgCopy}${remedy}`),
+      detail: explainedStaleDetail(status, `The Waveguide Generator add-in in Fusion has not measured this document's geometry, so WG cannot tell whether it still matches what was returned.${wgCopy}${remedy}`),
       action: status.wgChangesAvailable ? 'update' : null,
     } : {
       state: 'refresh-needed',
       headline: headline('Fusion geometry may have changed'),
-      detail: explainedStaleDetail(status, `The Fusion model has moved on since WGLink measured it, so WG cannot tell whether its geometry still matches what was returned.${wgCopy}${remedy}`),
+      detail: explainedStaleDetail(status, `The Fusion model has moved on since the Waveguide Generator add-in in Fusion measured it, so WG cannot tell whether its geometry still matches what was returned.${wgCopy}${remedy}`),
       action: status.wgChangesAvailable ? 'update' : null,
     };
   }

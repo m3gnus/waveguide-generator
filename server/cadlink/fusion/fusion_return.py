@@ -43,7 +43,7 @@ def publish_return_request(
     """
 
     if not session_id:
-        raise ValueError("Fusion return request requires an active WGLink session.")
+        raise ValueError("Fusion return request requires an active session of the Waveguide Generator add-in in Fusion.")
     if not design_id or not document_id or not instance_id:
         raise ValueError("Fusion return request requires an exact document and link target.")
     if not expected_return_state_hash:

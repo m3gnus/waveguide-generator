@@ -193,7 +193,7 @@ def test_an_unmanaged_add_in_is_left_when_no_verified_package_ships(
     _recording_installer(monkeypatch, addins, calls)
     monkeypatch.setattr(
         addin_update, "_verified_shipped_package",
-        lambda *_args: (None, "the bundled WGLink package is missing: wglink.zip"),
+        lambda *_args: (None, "the bundled package for the Waveguide Generator add-in in Fusion is missing: wglink.zip"),
     )
 
     verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
@@ -372,7 +372,7 @@ def test_a_verified_package_failure_is_reported_without_installing(tmp_path: Pat
     monkeypatch.setattr(
         addin_update,
         "_verified_shipped_package",
-        lambda *_args: (None, "the bundled WGLink package failed verification: bad hash"),
+        lambda *_args: (None, "the bundled package for the Waveguide Generator add-in in Fusion failed verification: bad hash"),
     )
 
     verdict, detail = addin_update.refresh_wglink(
@@ -422,7 +422,7 @@ def test_a_bundled_managed_update_never_fetches_when_its_package_is_missing(
     verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
 
     assert verdict == "failed"
-    assert "does not contain its WGLink package" in detail
+    assert "does not contain its package for the Waveguide Generator add-in in Fusion" in detail
 
 
 def test_a_bundled_managed_update_refuses_a_tampered_shipped_package(
@@ -440,7 +440,7 @@ def test_a_bundled_managed_update_refuses_a_tampered_shipped_package(
     verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
 
     assert verdict == "failed"
-    assert "Bundled WGLink package failed verification" in detail
+    assert "Bundled package for the Waveguide Generator add-in in Fusion failed verification" in detail
 
 
 def test_an_installer_failure_is_reported_and_never_raised(tmp_path: Path, monkeypatch) -> None:
