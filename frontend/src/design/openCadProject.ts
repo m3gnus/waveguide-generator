@@ -1,3 +1,4 @@
+import { mintDesignUid } from '../stores/designUid';
 import { getCadLinkedDesign } from '../api/cadlink';
 import { hydrateDesignDocument, openDesignText, type CadLinkOpenState } from '../api/designIo';
 import { currentDocumentLoad, useDesignStore, type DesignLoadSource } from '../stores/design';
@@ -43,7 +44,9 @@ export function applyOpenedDesign(
   const document = useDocumentStore.getState();
   // One name for the whole document: the opened file's, unless the file's own
   // Report.Title is that same name spelled more fully.
+  document.setDesignUid(opened.designUid ?? mintDesignUid());
   document.setDesignName(designNameForOpenedFile(filename, openedDesign.extra_blocks));
+  document.setLegacyDesignName(opened.designUid ? undefined : useDocumentStore.getState().designName || undefined);
   document.setCadLink(editableIdentity(opened.cadlink?.identity), opened.cadlink?.classification ?? 'missing');
   // Last, once the design, its settings and its name have all applied: the
   // design as opened is one a later replacement can count as kept.

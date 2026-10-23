@@ -818,6 +818,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/design/choose": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Choose Endpoint */
+        post: operations["choose_endpoint_api_design_choose_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/design/import-report": {
         parameters: {
             query?: never;
@@ -4515,8 +4532,12 @@ export interface components {
             /** Created At */
             created_at: string;
             design_availability: components["schemas"]["DesignAvailability"];
+            /** Design Name */
+            design_name?: string | null;
             /** Design Revision */
             design_revision: number;
+            /** Design Uid */
+            design_uid?: string | null;
             /** Error Message */
             error_message: string | null;
             /** Exported Files */
@@ -4713,8 +4734,12 @@ export interface components {
             /** Created At */
             created_at: string;
             design_availability: components["schemas"]["DesignAvailability"];
+            /** Design Name */
+            design_name?: string | null;
             /** Design Revision */
             design_revision: number;
+            /** Design Uid */
+            design_uid?: string | null;
             /** Error Message */
             error_message: string | null;
             /** Exported Files */
@@ -6136,6 +6161,12 @@ export interface components {
              * @description Durable submission key: an identical replay returns the original job; the same key with a different normalized request is refused.
              */
             client_request_id?: string | null;
+            /** Design Id */
+            design_id?: string | null;
+            /** Design Name */
+            design_name?: string | null;
+            /** Design Uid */
+            design_uid?: string | null;
             /** Geometry */
             geometry: components["schemas"]["ParametricGeometrySource"] | components["schemas"]["ImportedGeometrySource"];
             /** Label */
@@ -6379,6 +6410,8 @@ export interface components {
             design: components["schemas"]["DesignConfig"];
             /** Designrevision */
             designRevision: number;
+            /** Designuid */
+            designUid?: string | null;
             /** Expectedfusiondocumentid */
             expectedFusionDocumentId?: string | null;
             /** Expectedfusioninstanceid */
@@ -7828,6 +7861,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    choose_endpoint_api_design_choose_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };

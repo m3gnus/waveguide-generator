@@ -528,6 +528,9 @@ def _submission_identity(request: SolveRequest) -> dict[str, Any]:
     """
 
     identity = request.model_dump(mode="json")
+    for identity_field in ("design_uid", "design_id", "design_name"):
+        if identity[identity_field] is None:
+            identity.pop(identity_field)
     # Preserve durable identities from before this default-off option existed.
     if not request.options.adaptive_frequency_sampling:
         identity["options"].pop("adaptive_frequency_sampling", None)
@@ -1763,6 +1766,9 @@ class JobRuntime:
             "solver_plan": symmetry_metadata.get("solver_plan"),
             "log_tail": [],
             "design_revision": request.design_revision,
+            "design_uid": request.design_uid,
+            "design_name": request.design_name,
+            "design_id": request.design_id,
             "polar_grid": polar_grid,
             "symmetry": symmetry_metadata,
             "has_pressure_basis_artifact": False,
@@ -4803,6 +4809,8 @@ class JobRuntime:
                 ),
             }
         item = {
+            "design_uid": stored_config.get("design_uid"),
+            "design_name": stored_config.get("design_name"),
             "id": row.get("id"),
             "client_request_id": stored_config.get("client_request_id"),
             "client_metadata": stored_config.get("client_metadata") or {},

@@ -17,7 +17,7 @@ import { designWireWithSolveSettings, wgSolveSettingsFromStore } from '../stores
 import { designFilename } from '../stores/designName';
 import type { WgSolveSettings } from '../stores/wgSolveBlock';
 import type { PolarConfig } from '../stores/solveOptions';
-import type { CadLinkClassification, DesignIdentity } from '../stores/document';
+import { useDocumentStore, type CadLinkClassification, type DesignIdentity } from '../stores/document';
 import { writeToOutputFolder, type OutputFolderWrite } from './workspace';
 import type { ConfirmReplacements } from './exportDestination';
 import { solveAttention } from '../shell/solveAttention';
@@ -63,6 +63,7 @@ export interface InspectDesignResponse extends ImportReport {
 }
 
 export interface OpenDesignResponse extends InspectDesignResponse {
+  designUid?: string | null;
   design: Record<string, unknown>;
 }
 
@@ -109,6 +110,15 @@ async function postText<T>(path: string, text: string, fetcher: typeof fetch): P
   return response.json() as Promise<T>;
 }
 
+export async function chooseDesignFile(fetcher: typeof fetch = fetch): Promise<{
+  selected: boolean; filename?: string; source?: string; text?: string;
+} | null> {
+  const response = await fetcher('/api/design/choose', { method: 'POST' });
+  if (response.status === 404) return null; // older server: retain the browser picker
+  if (!response.ok) throw new Error(await errorMessage(response));
+  return response.json();
+}
+
 export function openDesignText(text: string, fetcher: typeof fetch = fetch): Promise<OpenDesignResponse> {
   return postText('/api/design/open', text, fetcher);
 }
@@ -131,6 +141,7 @@ export async function serializeDesignDocument(
   fetcher: typeof fetch = fetch,
   polarConfig?: PolarConfig,
   solveSettings: WgSolveSettings | null = wgSolveSettingsFromStore(),
+  designUid = useDocumentStore.getState().designUid,
 ): Promise<SerializeDesignResponse> {
   const response = await fetcher('/api/design/serialize', {
     method: 'POST',
@@ -138,6 +149,7 @@ export async function serializeDesignDocument(
     body: JSON.stringify({
       design: designWireWithSolveSettings(serializeDesign(design), polarConfig, solveSettings, designName),
       filename: designFilename(designName, design.formula),
+      designUid,
     }),
   });
   if (!response.ok) throw new Error(await errorMessage(response));
@@ -159,6 +171,7 @@ export async function sendDesignToCad(
   } | null = null,
   polarConfig?: unknown,
   solveSettings: WgSolveSettings | null = wgSolveSettingsFromStore(),
+  designUid?: string,
 ): Promise<WgLinkExportResponse> {
   const bindAttention = solveAttention.captureOperationArm();
   // No save gate here. The server commits the design on screen into the
@@ -186,6 +199,7 @@ export async function sendDesignToCad(
       designRevision,
       baseName,
       identity,
+      designUid,
       expectedFusionDocumentId: fusionTarget?.documentId ?? null,
       expectedFusionInstanceId: fusionTarget?.instanceId ?? null,
       expectedFusionReturnStateHash: fusionTarget?.returnStateHash ?? null,

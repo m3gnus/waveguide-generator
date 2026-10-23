@@ -1,3 +1,4 @@
+import { mintDesignUid } from './designUid';
 import { create } from 'zustand';
 import { designFilename, normalizeDesignName } from './designName';
 import { advanceEditorMutation } from './editorMutation';
@@ -11,6 +12,12 @@ export interface DesignIdentity {
 export type CadLinkClassification = 'current' | 'stale_copy' | 'externally_edited' | 'foreign' | 'missing';
 
 export interface DocumentState {
+  designUid?: string;
+  /** Original undecorated name of an unstamped import, for F2’s first folder claim. */
+  legacyDesignName?: string;
+  setLegacyDesignName: (name: string | undefined) => void;
+  setDesignUid: (uid: string) => void;
+  duplicateAsNewDesign: () => void;
   /**
    * The design's one name, as the user typed it.
    *
@@ -48,7 +55,7 @@ export interface DocumentState {
   adoptSavedIdentity: (identity: DesignIdentity) => void;
   restoreDocumentState: (
     state: Pick<DocumentState, 'identity' | 'classification'>
-      & Partial<Pick<DocumentState, 'designName' | 'openedContentKey'>>,
+      & Partial<Pick<DocumentState, 'designName' | 'openedContentKey' | 'designUid' | 'legacyDesignName'>>,
   ) => void;
 }
 
@@ -56,6 +63,13 @@ export const useDocumentStore = create<DocumentState>((set) => ({
   // Untitled. The name used to be a specific .cfg -- someone's test fixture --
   // so a fresh window claimed that document was open when what was on screen
   // was the built-in default design.
+  designUid: mintDesignUid(),
+  setDesignUid: (designUid) => set({ designUid }),
+  setLegacyDesignName: (legacyDesignName) => set({ legacyDesignName }),
+  duplicateAsNewDesign: () => {
+    set({ designUid: mintDesignUid(), legacyDesignName: undefined, identity: null, classification: null, openedContentKey: null });
+    advanceEditorMutation();
+  },
   designName: '',
   filename: '',
   openedContentKey: null,
@@ -69,10 +83,12 @@ export const useDocumentStore = create<DocumentState>((set) => ({
   setCadLink: (identity, classification) => set({ identity, classification }),
   adoptSavedIdentity: (identity) => set({ identity, classification: 'current' }),
   restoreDocumentState: ({
-    designName, openedContentKey, identity, classification,
+    designName, openedContentKey, identity, classification, designUid, legacyDesignName,
   }) => {
     const name = normalizeDesignName(designName);
     set({
+      designUid: designUid ?? mintDesignUid(),
+      legacyDesignName: designUid ? legacyDesignName : name || undefined,
       designName: name,
       filename: name ? designFilename(name) : '',
       // Only ever the key the caller recorded beside the draft, never one
@@ -93,6 +109,8 @@ useDocumentStore.subscribe((state, previous) => {
 
 export function resetDocumentStore(): void {
   useDocumentStore.setState({
+    designUid: mintDesignUid(),
+    legacyDesignName: undefined,
     designName: '',
     filename: '',
     openedContentKey: null,

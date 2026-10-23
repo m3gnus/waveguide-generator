@@ -1,7 +1,11 @@
+import { mintDesignUid } from '../stores/designUid';
+import { inspectDesignFile, rememberDesignFile, designFileSource } from './designFiles';
+import { SharedDesignIdDialog, type SharedDesignQuestion } from './SharedDesignIdDialog';
 import { nativeCadLimitation } from './nativeFamilies';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   buildGeometryExport,
+  chooseDesignFile,
   exportGeometryToOutputFolder,
   inspectDesignText,
   openDesignText,
@@ -27,7 +31,7 @@ import {
   rememberWrittenCopy,
   replacingWouldLose,
 } from './replacementCheck';
-import { designNameSlug } from '../stores/designName';
+import { designNameSlug, designNameFromFilename } from '../stores/designName';
 import { usePreferences } from '../prefs/preferences';
 import { Icon } from '../shell/icons';
 import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
@@ -134,6 +138,7 @@ export function DesignFileMenu() {
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
   const designName = useDocumentStore((state) => state.designName);
+  const designUid = useDocumentStore((state) => state.designUid);
   const classification = useDocumentStore((state) => state.classification);
   const setCadLink = useDocumentStore((state) => state.setCadLink);
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
@@ -144,6 +149,9 @@ export function DesignFileMenu() {
   const [projects, setProjects] = useState<CadLinkedDesignSummary[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [adoptionCandidate, setAdoptionCandidate] = useState<CadLinkOpenState['adoptionCandidate']>(null);
+  const [sharedQuestion, setSharedQuestion] = useState<SharedDesignQuestion | null>(null);
+  const pendingSharedQuestion = useRef<SharedDesignQuestion | null>(null);
+  useEffect(() => () => pendingSharedQuestion.current?.settle(null), []);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const openInput = useRef<HTMLInputElement>(null);
@@ -179,11 +187,35 @@ export function DesignFileMenu() {
   async function readSelected(input: HTMLInputElement, reportOnly: boolean) {
     const file = input.files?.[0];
     input.value = '';
+    if (file) await readDesign(file, reportOnly);
+  }
+
+  async function chooseLocalDesign() {
+    if (busyRef.current) return;
+    // Reserve the open before showing the native dialog, just like a browser
+    // selection reserves it before reading the file.
+    const ticket = takeDesignOpenTicket();
+    await act(async () => {
+      const chosen = await chooseDesignFile();
+      if (chosen === null) { openInput.current?.click(); return; }
+      if (!chosen.selected || !chosen.filename || chosen.text === undefined) return;
+      await readDesign({
+        name: chosen.filename, path: chosen.source,
+        text: async () => chosen.text!,
+      }, false, ticket);
+    });
+  }
+
+  async function readDesign(
+    file: { name: string; path?: string; webkitRelativePath?: string; text: () => Promise<string> },
+    reportOnly: boolean,
+    nativeTicket?: ReturnType<typeof takeDesignOpenTicket>,
+  ) {
     // `busyRef` guards re-entrancy the same way `mayReplace` does, and before
     // the ticket: a call that is about to be a no-op (`act` below refuses it
     // too) must not still bump the open-request counter and make a real
     // in-flight open look superseded by nothing.
-    if (!file || busyRef.current) return;
+    if (!file || (busyRef.current && !nativeTicket)) return;
     // Taken now, before the first await, so an open asked for earlier --
     // including one already in flight for this same input -- becomes stale.
     // The other opens (the CAD-linked project switcher, `openProject` above)
@@ -191,8 +223,8 @@ export function DesignFileMenu() {
     // this one used to ask "the design changed while loading, replace it?"
     // instead, which let whichever answer arrived last win the race no
     // matter which was actually newer.
-    const ticket = takeDesignOpenTicket();
-    await act(async () => {
+    const ticket = nativeTicket ?? takeDesignOpenTicket();
+    const operation = async () => {
       const text = await file.text();
       if (reportOnly) {
         setMessage(reportText(await inspectDesignText(text)));
@@ -213,8 +245,36 @@ export function DesignFileMenu() {
       // one was in flight. Immediately before the write, so nothing between
       // here and `applyOpenedDesign` can race it.
       assertDesignOpenCurrent(ticket, file.name);
+      const source = designFileSource(file);
+      const stamp = opened.designUid;
+      if (stamp) {
+        const known = inspectDesignFile(stamp, source);
+        let uid = known.uid;
+        if (known.originalName) {
+          const choice = await new Promise<'keep' | 'new' | null>((resolve) => {
+            const question: SharedDesignQuestion = {
+              name: known.originalName!,
+              settle: (answer) => {
+                pendingSharedQuestion.current = null;
+                setSharedQuestion(null);
+                resolve(answer);
+              },
+            };
+            pendingSharedQuestion.current = question;
+            setSharedQuestion(question);
+          });
+          if (choice === null) return;
+          if (choice === 'new') uid = mintDesignUid();
+        }
+        assertDesignOpenCurrent(ticket, file.name);
+        rememberDesignFile(stamp, source, designNameFromFilename(file.name), uid);
+        opened.designUid = uid;
+        if (uid !== stamp) opened.cadlink = { identity: null, classification: 'missing', adoptionCandidate: null };
+      }
       applyOpenedDesign(opened, file.name);
-    });
+    };
+    if (nativeTicket) await operation();
+    else await act(operation);
   }
 
   function applyOpenedDesign(opened: Awaited<ReturnType<typeof openDesignText>>, filename: string) {
@@ -328,8 +388,9 @@ export function DesignFileMenu() {
       const polarConfig = polarConfigFromUi(solveState.polar);
       // Taken before the awaits, so it describes exactly what is written.
       const writtenKey = keptContentKeyOf(design);
+      const writtenUid = designUid;
       const response = await serializeDesignDocument(
-        design, designName, fetch, polarConfig, wgSolveSettingsFromStore(solveState),
+        design, designName, fetch, polarConfig, wgSolveSettingsFromStore(solveState), writtenUid,
       );
       const written = await writeToOutputFolder(designNameSlug(designName), [{
         filename: response.suggestedFilename,
@@ -337,6 +398,12 @@ export function DesignFileMenu() {
       }], fetch, 'confirm', destination.token, askToReplaceExports);
       // A file now holds this design, so replacing it later loses nothing.
       rememberWrittenCopy(writtenKey);
+      if (writtenUid) {
+        const source = written.files[0] ?? `${written.directory}/${response.suggestedFilename}`;
+        rememberDesignFile(writtenUid, source, designName || response.suggestedFilename);
+        // The browser fallback cannot expose a path; remember its visible name too.
+        rememberDesignFile(writtenUid, response.suggestedFilename, designName || response.suggestedFilename);
+      }
       setMessage(
         `Exported a copy as ${response.suggestedFilename} to ${written.directory}`
         + replacedNotice(written.replaced),
@@ -352,6 +419,14 @@ export function DesignFileMenu() {
     // meant retyping the same measurement rig for every new design.
     resetDocumentStore();
     setMessage('New design');
+    setAdoptionCandidate(null);
+    setOpen(false);
+  }
+
+  function duplicateDesign() {
+    useDesignStore.getState().replaceDocument(design);
+    useDocumentStore.getState().duplicateAsNewDesign();
+    setMessage('Duplicated as new design');
     setAdoptionCandidate(null);
     setOpen(false);
   }
@@ -437,9 +512,10 @@ export function DesignFileMenu() {
     <input ref={reportInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, true)}/>
     <input ref={meshInput} hidden tabIndex={-1} type="file" accept=".msh,text/plain" aria-label="Import Gmsh mesh file" onChange={(event) => void readMesh(event.currentTarget)}/>
     <input ref={replayInput} hidden tabIndex={-1} type="file" accept=".wgreplay,application/json" aria-label="Open mesh replay file" onChange={(event) => void readReplay(event.currentTarget)}/>
+    <SharedDesignIdDialog question={sharedQuestion}/>
     {open && <div role="menu" aria-label="Design file menu" className="design-menu-popover">
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void newDesign()}><span>New</span><kbd>cfg</kbd></button>
-      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => openInput.current?.click()}><span>Open…</span><kbd>cfg</kbd></button>
+      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void chooseLocalDesign()}><span>Open…</span><kbd>cfg</kbd></button>
       <button role="menuitem" aria-expanded={projectsOpen} className="design-menu-item" disabled={busy} onClick={() => void toggleProjects()}><span>CAD-linked designs</span><span>{projectsOpen ? '⌄' : '›'}</span></button>
       {projectsOpen && <div role="menu" aria-label="CAD-linked designs" className="design-menu-nested">
         {projects.length === 0
@@ -448,6 +524,7 @@ export function DesignFileMenu() {
             <span>{project.filename}</span><span>v{project.editVersion} · {project.exportCount} export{project.exportCount === 1 ? '' : 's'} · {cadProjectReference(project)}</span>
           </button>)}
       </div>}
+      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={duplicateDesign}><span>Duplicate as new design</span></button>
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportCopy()}><span>Export a copy</span><kbd>{design.formula === 'LOOKUP' ? 'mwg' : 'cfg'}</kbd></button>
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => reportInput.current?.click()}><span>Import report…</span><span>›</span></button>
       <div className="design-menu-divider"/>

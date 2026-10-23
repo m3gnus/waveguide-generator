@@ -131,3 +131,39 @@ it('opens retained imported inputs independently of parametric design readabilit
   expect(canOpenJobModel({ script_snapshot: null, config_summary: { geometry_type: 'imported' } })).toBe(true);
   expect(canOpenJobModel({ script_snapshot: null, config_summary: {} })).toBe(false);
 });
+
+it('restores a run identity and keeps document identity paired through undo and redo', async () => {
+  const { resetDocumentStore, useDocumentStore } = await import('../stores/document');
+  resetDocumentStore();
+  resetDesignStore();
+  useDocumentStore.getState().setDesignName('Working B');
+  const beforeUid = useDocumentStore.getState().designUid;
+  const job = {
+    design_uid: 'wgu_01K00000000000000000000000', design_name: 'Run A',
+    script_snapshot: { version: 1, design: { formula: 'OSSE', R: 180 } },
+  };
+  expect(replaceWithJobDesign(job, { keepHistory: true })).toBe(true);
+  expect(useDocumentStore.getState()).toMatchObject({ designUid: job.design_uid, designName: 'Run A', identity: null });
+  useDesignStore.getState().undo();
+  expect(useDocumentStore.getState()).toMatchObject({ designUid: beforeUid, designName: 'Working B' });
+  useDesignStore.getState().redo();
+  expect(useDocumentStore.getState().designUid).toBe(job.design_uid);
+  expect(replaceWithJobDesign({ script_snapshot: job.script_snapshot })).toBe(true);
+  expect(useDocumentStore.getState().designUid).not.toBe(job.design_uid);
+});
+
+it('keeps the live CAD link when browsing an older run of the same permanent design', async () => {
+  const { useDocumentStore } = await import('../stores/document');
+  resetDesignStore();
+  const uid = 'wgu_01K00000000000000000000000';
+  const identity = { designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 7 };
+  useDocumentStore.getState().setDesignUid(uid);
+  useDocumentStore.getState().setDesignName('Renamed A');
+  useDocumentStore.getState().setCadLink(identity, 'current');
+  expect(replaceWithJobDesign({ design_uid: uid, design_name: 'Old A',
+    script_snapshot: { version: 1, design: { formula: 'OSSE', R: 191 } },
+  }, { keepHistory: true })).toBe(true);
+  expect(useDocumentStore.getState()).toMatchObject({ designUid: uid, identity, designName: 'Renamed A' });
+  useDesignStore.getState().undo();
+  expect(useDocumentStore.getState()).toMatchObject({ designUid: uid, identity, classification: 'current' });
+});

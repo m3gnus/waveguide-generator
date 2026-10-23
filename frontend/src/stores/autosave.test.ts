@@ -272,3 +272,18 @@ describe('design autosave', () => {
     workspaceModeStore.setMode('parametric');
   });
 });
+
+it('retains a permanent id in autosave and mints one for older drafts', () => {
+  resetDocumentStore();
+  const uid = useDocumentStore.getState().designUid;
+  writeAutosave();
+  resetDocumentStore();
+  expect(restoreAutosave()).toBe(true);
+  expect(useDocumentStore.getState().designUid).toBe(uid);
+  const old = JSON.parse(localStorage.getItem(AUTOSAVE_KEY)!);
+  delete old.designUid;
+  localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(old));
+  expect(restoreAutosave()).toBe(true);
+  expect(useDocumentStore.getState().designUid).toMatch(/^wgu_/);
+  expect(useDocumentStore.getState().designUid).not.toBe(uid);
+});

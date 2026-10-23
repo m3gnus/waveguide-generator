@@ -448,13 +448,20 @@ def _picker_start_directory(start_in: Path | None) -> Path | None:
 def _select_workspace_folder(
     prompt: str = "Select output folder", start_in: Path | None = None
 ) -> str | None:
-    """Open a native folder picker and return its selection, if any.
+    return select_workspace_path(prompt, start_in=start_in)
+
+
+def select_workspace_path(
+    prompt: str, start_in: Path | None = None, *, file: bool = False,
+) -> str | None:
+    """Open a native path picker and return its selection, if any.
 
     ``start_in`` only positions the dialog. Opening it on the folder the
     application would suggest saves the user from navigating to a location they
     are about to accept, and costs nothing when the location does not exist.
     """
 
+    # Prompts are supplied by application code, never by a request body.
     system = platform.system()
     opening = _picker_start_directory(start_in)
     commands: list[list[str]]
@@ -466,32 +473,32 @@ def _select_workspace_folder(
             [
                 "osascript",
                 "-e",
-                "set theFolder to POSIX path of (choose folder with prompt "
+                f"POSIX path of (choose {'file' if file else 'folder'} with prompt "
                 f'"{prompt}"{location})',
             ]
         ]
     elif system == "Windows":
         selected_path = (
-            f"$f.SelectedPath = '{opening}'; " if opening is not None else ""
+            f"$f.{'InitialDirectory' if file else 'SelectedPath'} = '{opening}'; " if opening is not None else ""
         )
         commands = [
             [
                 "powershell",
                 "-Command",
                 "Add-Type -AssemblyName System.Windows.Forms; "
-                "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
-                f"$f.Description = '{prompt}'; "
+                f"$f = New-Object System.Windows.Forms.{'OpenFileDialog' if file else 'FolderBrowserDialog'}; "
+                f"$f.{'Title' if file else 'Description'} = '{prompt}'; "
                 f"{selected_path}"
-                "if ($f.ShowDialog() -eq 'OK') { $f.SelectedPath }",
+                f"if ($f.ShowDialog() -eq 'OK') {{ $f.{'FileName' if file else 'SelectedPath'} }}",
             ]
         ]
     else:
-        zenity = ["zenity", "--file-selection", "--directory", f"--title={prompt}"]
+        zenity = ["zenity", "--file-selection", *([] if file else ["--directory"]), f"--title={prompt}"]
         if opening is not None:
             zenity.append(f"--filename={opening}/")
         commands = [
             zenity,
-            ["kdialog", "--getexistingdirectory", str(opening or ".")],
+            ["kdialog", "--getopenfilename" if file else "--getexistingdirectory", str(opening or ".")],
         ]
     for command in commands:
         try:
@@ -504,6 +511,9 @@ def _select_workspace_folder(
             )
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             continue
+        if file and result.returncode in {0, 1}:
+            # A cancelled file dialog is final, never a second fallback dialog.
+            return (result.stdout.strip() or None) if result.returncode == 0 else None
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip().rstrip("/")
     try:
@@ -513,7 +523,8 @@ def _select_workspace_folder(
         root = tk.Tk()
         root.withdraw()
         root.attributes("-topmost", True)
-        selected = filedialog.askdirectory(
+        select = filedialog.askopenfilename if file else filedialog.askdirectory
+        selected = select(
             title=prompt,
             **({"initialdir": str(opening)} if opening is not None else {}),
         )

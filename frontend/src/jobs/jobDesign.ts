@@ -1,3 +1,5 @@
+import { mintDesignUid } from '../stores/designUid';
+import { useDocumentStore } from '../stores/document';
 import { hydrateDesignDocument } from '../api/designIo';
 import type { JobItem } from '../api/jobsSocket';
 import { useDesignStore, type DesignDocument } from '../stores/design';
@@ -42,12 +44,22 @@ export function hydrateJobDesign(job: Pick<JobItem, 'script_snapshot'>): DesignD
 }
 
 export function replaceWithJobDesign(
-  job: Pick<JobItem, 'script_snapshot'>,
+  job: Pick<JobItem, 'script_snapshot'> & Partial<Pick<JobItem, 'design_uid' | 'design_name'>>,
   options?: { keepHistory?: boolean },
 ): boolean {
   const design = hydrateJobDesign(job);
   if (!design) return false;
+  const sameDocument = job.design_uid != null
+    && job.design_uid === useDocumentStore.getState().designUid;
   useDesignStore.getState().replaceDocument(design, options);
+  // Browsing an earlier run of this same document keeps its current name,
+  // saved-copy key and CAD edit identity. A different document owns none of them.
+  if (!sameDocument) useDocumentStore.getState().restoreDocumentState({
+    designUid: job.design_uid ?? mintDesignUid(),
+    designName: job.design_name ?? '',
+    identity: null,
+    classification: null,
+  });
   return true;
 }
 

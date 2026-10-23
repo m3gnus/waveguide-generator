@@ -96,6 +96,7 @@ export const SETTINGS_NAMESPACE_EFFECTS: Record<SettingsNamespace, PreferenceEff
   // because the namespace list has to be answered exhaustively, and a design
   // change is the most solve-affecting thing there is.
   designDraft: 'solve-affecting',
+  designFiles: 'inert',
   sourceContourDraft: 'inert',
   sourceAssemblyDraft: 'inert',
   sourceAssemblyAuthoring: 'inert',

@@ -50,6 +50,8 @@ type JobNullableFields = Pick<components['schemas']['JobItem'],
 >;
 
 export interface JobItem extends JobNullableFields {
+  design_uid?: string | null;
+  design_name?: string | null;
   id: string;
   /** The submission key; `cad-solve:<operation id>` for a solve CAD Link submitted. */
   client_request_id?: string | null;

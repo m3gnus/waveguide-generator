@@ -105,6 +105,7 @@ def build_request(
     *,
     overlay: Path | None = None,
     engine: str | None = None,
+    design_name: str | None = None,
 ) -> RequestBuild:
     """Resolve file blocks, overlay, and engine flag in authoritative order."""
 
@@ -124,6 +125,9 @@ def build_request(
     request = SolveRequest.model_validate(
         {
             "design": parsed.semantic_data(),
+            "design_uid": parsed.design_uid,
+            "design_name": design_name,
+            "design_id": parsed.cadlink.design_id if parsed.cadlink else None,
             "options": options.model_dump(mode="json"),
         }
     )

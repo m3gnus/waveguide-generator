@@ -13,6 +13,7 @@ from server.contracts.canonical import canonical_utf8_strict_json
 from server.contracts import DriverSpec as DriverSpec, JobModel as JobModel
 from server.design.defaults import default_sweep_start_hz
 from server.design.schema import DesignConfig
+from server.design.uid import DesignUid
 
 
 # Serializer return annotations intentionally remain absent: Pydantic uses them
@@ -1110,6 +1111,10 @@ GeometrySource = Annotated[
 
 
 class SolveRequest(JobModel):
+    # Document identity is separate from geometry and CadLink edit versions.
+    design_uid: DesignUid | None = None
+    design_name: str | None = None
+    design_id: str | None = None
     geometry: GeometrySource
     options: SolveOptions = Field(default_factory=SolveOptions)
     label: str | None = None
@@ -1460,6 +1465,8 @@ class SolveExecution(ChannelSolveExecution):
 
 
 class JobItem(JobModel):
+    design_uid: DesignUid | None = None
+    design_name: str | None = None
     id: str
     client_request_id: str | None = None
     client_metadata: dict[str, Any]

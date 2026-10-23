@@ -274,6 +274,8 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
       undefined,
       null,
       job.solve_options.polar_config,
+      undefined,
+      job.design_uid ?? undefined,
     );
     return { notice: sentToCadMessage(result) };
   });

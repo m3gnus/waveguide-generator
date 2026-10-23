@@ -435,10 +435,11 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       const options = useSolveOptionsStore.getState().options();
       const symmetryError = nativeSymmetryLimitation(nextDesign.formula, options.symmetry);
       if (symmetryError) throw new Error(symmetryError);
+      const document = useDocumentStore.getState();
       await planSolveDesign(nextDesign, options);
-      designName = useDocumentStore.getState().designName;
+      designName = document.designName;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
-      return submitDesign(nextDesign, options, fetch, { label, designRevision: nextRevision });
+      return submitDesign(nextDesign, options, fetch, { label, designRevision: nextRevision, designUid: document.designUid, designId: document.identity?.designId, designName, legacyDesignName: document.legacyDesignName });
     }, { onAccepted: () => acceptSubmittedLabel(designName) });
   }, [acceptSubmission, now, revision]);
 

@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from server.preview.errors import mesher_error_message
 from server.preview.translate import design_to_mesher_config
+from server.design.uid import DesignUid
 from server.cadlink.identity import CadLink, SaveIdentity, design_hash
 from server.cadlink.limits import MAX_STEP_INPUT_BYTES
 from server.cadlink.store import CadLinkStore
@@ -48,6 +49,7 @@ class ExportRequest(BaseModel):
 
 
 class WgLinkExportRequest(ExportRequest):
+    design_uid: DesignUid | None = Field(default=None, alias="designUid")
     identity: SaveIdentity | None = None
     expected_fusion_document_id: str | None = Field(
         default=None, alias="expectedFusionDocumentId"
@@ -231,6 +233,7 @@ def _commit_design_for_export(
     design: DesignConfig,
     current_design_hash: str,
     design_name: str,
+    design_uid: str | None = None,
 ) -> SaveIdentity:
     """Return an identity whose registry head is exactly this design state.
 
@@ -242,6 +245,8 @@ def _commit_design_for_export(
     export that instead of demanding the download first.
     """
 
+    from server.design.textcfg import parse
+
     head = store.get_design(requested.design_id) if requested is not None else None
     filename = f"{design_name}.cfg"
     if (
@@ -251,6 +256,7 @@ def _commit_design_for_export(
         and int(head["edit_version"]) == requested.base_edit_version
         and str(head["design_hash"]) == current_design_hash
         and str(head["filename"]) == filename
+        and (design_uid is None or parse(str(head["snapshot_text"])).design_uid == design_uid)
     ):
         return requested
 
@@ -270,7 +276,7 @@ def _commit_design_for_export(
                     "sending it to CAD."
                 ),
             )
-        if str(head["filename"]) == filename:
+        if str(head["filename"]) == filename and (design_uid is None or parse(str(head["snapshot_text"])).design_uid == design_uid):
             return SaveIdentity(
                 designId=str(head["design_id"]),
                 lineageId=str(head["lineage_id"]),
@@ -283,7 +289,7 @@ def _commit_design_for_export(
         )
 
     def snapshot(link: CadLink) -> str:
-        return serialize(design, cadlink=link)
+        return serialize(design, cadlink=link, design_uid=design_uid)
 
     try:
         committed = store.save(
@@ -414,7 +420,7 @@ def _export_wglink_sync(
     design_name = _base_name(request.base_name)
     current_design_hash = design_hash(request.design)
     identity = _commit_design_for_export(
-        store, request.identity, request.design, current_design_hash, design_name
+        store, request.identity, request.design, current_design_hash, design_name, request.design_uid
     )
     instance_slug = _instance_slug(store, identity.lineage_id, design_name)
 

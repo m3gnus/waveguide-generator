@@ -8,6 +8,8 @@ import sys
 
 import pytest
 
+from server.tests import freeform_oldconfig_support as support
+from server.design.textcfg import parse, serialize
 from server.tests.freeform_oldconfig_support import (
     CASES,
     DATA,
@@ -18,6 +20,28 @@ from server.tests.freeform_oldconfig_support import (
     observe_artifact,
     roundtrip_state,
 )
+
+
+@pytest.fixture(params=[False, True], ids=["original", "design-id"])
+def stamped_corpus(request, monkeypatch):
+    if not request.param:
+        return
+    original = support.load_case
+
+    def load_stamped(case):
+        path = DATA / case["file"]
+        stamp = "; Waveguide Generator design-id: wgu_01K00000000000000000000000\n"
+        if path.suffix == ".json":
+            # JSON DesignConfig cannot carry comments. Prove stamp isolation on
+            # its text representation, then retain the original typed input for
+            # frozen builds (a text rewrite materializes compatibility defaults).
+            design = original(case)
+            text = serialize(design)
+            assert parse(stamp + text).semantic_data() == parse(text).semantic_data()
+            return design
+        return parse(stamp + path.read_text()).design
+
+    monkeypatch.setattr(support, "load_case", load_stamped)
 
 
 def expected(case, kind):
@@ -33,7 +57,7 @@ def bounded_native_builds(monkeypatch):
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case["name"])
-def test_resolved_config_and_no_silent_migration(case):
+def test_resolved_config_and_no_silent_migration(case, stamped_corpus):
     frozen = expected(case, "config")
     assert canonical(config_snapshot(case)) == canonical(frozen), f"{case['name']}: config differs"
     if "error" not in frozen:
@@ -49,14 +73,14 @@ def test_resolved_config_and_no_silent_migration(case):
         for case in CASES
     ],
 )
-def test_solve_mesh_bytes(case):
+def test_solve_mesh_bytes(case, stamped_corpus):
     actual = asyncio.run(observe_artifact(case, "mesh"))
     assert actual == expected(case, "mesh"), f"{case['name']}: mesh differs: {actual}"
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case["name"])
-def test_step_bytes(case):
+def test_step_bytes(case, stamped_corpus):
     actual = asyncio.run(observe_artifact(case, "step"))
     assert actual == expected(case, "step"), f"{case['name']}: STEP differs: {actual}"
 

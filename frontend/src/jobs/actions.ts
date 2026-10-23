@@ -98,7 +98,7 @@ export interface SolvePlan {
   engine_substitution?: EngineSubstitution | null;
   adjustments?: PlanAdjustment[];
 }
-export interface SolveSubmissionMetadata { label: string; designRevision: number }
+export interface SolveSubmissionMetadata { label: string; designRevision: number; designUid?: string; designId?: string; designName?: string; legacyDesignName?: string }
 export interface ImportedGeometrySubmission {
   type: 'imported';
   required_features?: string[];
@@ -486,6 +486,12 @@ export async function submitDesign(
       design: wire,
       options,
       label: metadata.label,
+      design_uid: metadata.designUid,
+      design_name: metadata.designName,
+      // F2 can join an unstamped import to its old name without also joining
+      // deliberate new designs or duplicates that happen to have that name.
+      ...(metadata.legacyDesignName ? { client_metadata: { legacy_design_name: metadata.legacyDesignName } } : {}),
+      design_id: metadata.designId,
       design_revision: metadata.designRevision,
       design_snapshot: { version: 1, design: wire },
     }),

@@ -1,0 +1,190 @@
+"""A document id is a comment, never geometry or a CadLink edit identity."""
+
+import asyncio
+
+import pytest
+from fastapi import HTTPException
+
+from server.cadlink.identity import design_hash
+from server.cli.request import build_request
+from server.design.schema import DesignConfig
+from server.design.textcfg import TextConfigError, parse, serialize
+from server.design_io.api import open_design, serialize_design
+from server.tests.test_textcfg import SOURCE
+from server.tests.textcfg_035_lexer import _lex as lex_035
+from server.tests.test_native_formulas import FAMILIES, design_payload
+
+UID = "wgu_01K00000000000000000000000"
+OTHER = "wgu_01K00000000000000000000001"
+STAMP = f"; Waveguide Generator design-id: {UID}\n"
+
+
+def test_stamp_is_outside_design_hash_and_semantic_fingerprint():
+    plain = parse(SOURCE)
+    stamped = parse(STAMP + SOURCE)
+    assert stamped.design_uid == UID
+    assert stamped.semantic_data() == plain.semantic_data()
+    assert stamped._initial_fingerprint == plain._initial_fingerprint
+    assert design_hash(stamped.design) == design_hash(plain.design)
+    assert serialize(stamped) == STAMP + SOURCE
+    emitted = serialize(stamped, design_uid=OTHER)
+    assert emitted.count("Waveguide Generator design-id:") == 1
+    assert parse(emitted).design_uid == OTHER
+    assert parse(emitted).semantic_data() == plain.semantic_data()
+    canonical = serialize(plain.design, design_uid=UID)
+    assert "; Waveguide Generator design-format: 2\n" in canonical
+    assert parse(canonical).design_uid == UID
+    stamped.design.root.mesh.vertical_offset = 12
+    rewritten = serialize(stamped)
+    assert rewritten.count("Waveguide Generator design-id:") == 1
+    assert parse(rewritten).design_uid == UID
+
+
+def test_035_lexer_ignores_stamp_and_preserves_it_as_a_comment():
+    before = lex_035(SOURCE)
+    after = lex_035(STAMP + SOURCE)
+    assert after[0] == before[0]  # assignments
+    assert after[1] == before[1]  # blocks, including verbatim entries
+    assert after[3] == before[3]  # raw values
+    assert after[2] == [STAMP.strip(), *before[2]]
+    # The old parser's semantic input is byte-for-byte the same.
+    assert parse(STAMP + SOURCE).semantic_data() == parse(SOURCE).semantic_data()
+
+
+@pytest.mark.parametrize("formula", FAMILIES)
+def test_native_stamp_opens_without_new_design_format(formula):
+    design = DesignConfig.model_validate(design_payload(formula))
+    text = serialize(design, design_uid=UID)
+    opened = asyncio.run(open_design(text))
+    assert opened["designUid"] == UID
+    assert DesignConfig.model_validate(opened["design"]) == design
+    assert "design-format: 2" in text
+
+
+def test_open_and_serialize_carry_uid_beside_design():
+    plain = asyncio.run(open_design(SOURCE))
+    assert plain["designUid"] is None
+    saved = asyncio.run(serialize_design({"design": plain["design"], "designUid": UID}))
+    opened = asyncio.run(open_design(saved["text"]))
+    assert opened["designUid"] == UID
+    assert opened["design"] == parse(saved["text"]).semantic_data()
+    assert "designUid" not in opened["design"]
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(serialize_design({"design": plain["design"], "designUid": "wgd_invalid"}))
+    assert exc.value.status_code == 422
+
+
+def test_cli_carries_uid_and_keeps_unstamped_name_fallback():
+    stamped = build_request(parse(STAMP + SOURCE)).request
+    plain = build_request(parse(SOURCE)).request
+    assert stamped.design_uid == UID
+    assert plain.design_uid is None
+    assert stamped.design == plain.design
+
+
+@pytest.mark.parametrize("stamp", [
+    "; Waveguide Generator design-id: wgd_01K00000000000000000000000\n",
+    "; Waveguide Generator design-id: wgu_Z1K00000000000000000000000\n",
+    STAMP + f"; Waveguide Generator design-id: {OTHER}\n",
+])
+def test_invalid_or_conflicting_uid_is_refused(stamp):
+    with pytest.raises(TextConfigError, match="design-id"):
+        parse(stamp + SOURCE)
+
+
+def test_stamp_preserves_saved_design_hash_and_current_classification(tmp_path):
+    from server.cadlink.store import CadLinkStore
+    from server.design_io.api import save_design
+
+    store = CadLinkStore(tmp_path / 'cadlink.db')
+    try:
+        saved = asyncio.run(save_design({"design": parse(SOURCE).semantic_data(), "designUid": UID}, store=store))
+        parsed = parse(saved["text"])
+        assert parsed.design_uid == UID
+        assert parsed.cadlink is not None
+        before_hash = parsed.cadlink.saved_design_hash
+        restamped = serialize(parsed, design_uid=OTHER)
+        reopened = asyncio.run(open_design(restamped, store=store))
+        assert reopened["cadlink"]["classification"] == "current"
+        assert reopened["cadlink"]["identity"]["savedDesignHash"] == before_hash
+        assert parse(restamped).cadlink == parsed.cadlink
+    finally:
+        store.close()
+
+
+def test_lookup_json_copy_omits_uid_but_mwg_retains_it():
+    from server.tests.test_lookup import design
+
+    payload = {"design": design().model_dump(mode="json"), "designUid": UID}
+    json_copy = asyncio.run(serialize_design({**payload, "filename": "lookup.json"}))
+    assert parse(json_copy["text"]).design_uid is None
+    assert parse(serialize(parse(json_copy["text"]), design_uid=UID)).design_uid == UID
+    mwg = asyncio.run(serialize_design({**payload, "filename": "lookup.mwg"}))
+    assert parse(mwg["text"]).design_uid == UID
+
+
+def test_native_open_picker_returns_a_path_and_cancellation_is_side_effect_free(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from server.design_io import api
+    from server.cadlink.store import CadLinkStore
+
+    source = tmp_path / 'same-name.cfg'
+    source.write_text(STAMP + SOURCE)
+    store = CadLinkStore(':memory:')
+    application = FastAPI()
+    application.include_router(api.create_design_io_router(store))
+    monkeypatch.setattr(api, 'select_workspace_path', lambda *args, **kwargs: str(source))
+    with TestClient(application) as client:
+        chosen = client.post('/api/design/choose').json()
+        assert chosen == {'selected': True, 'source': str(source.resolve()), 'filename': source.name, 'text': STAMP + SOURCE}
+        monkeypatch.setattr(api, 'select_workspace_path', lambda *args, **kwargs: None)
+        assert client.post('/api/design/choose').json() == {'selected': False}
+    store.close()
+
+
+@pytest.mark.parametrize('system', ['Darwin', 'Windows', 'Linux'])
+def test_file_picker_reuses_platform_adapter_and_cancel_does_not_open_twice(system, monkeypatch):
+    import subprocess
+    from server.workspace import api
+
+    commands = []
+    monkeypatch.setattr(api.platform, 'system', lambda: system)
+
+    def run(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0 if system == 'Windows' else 1, '', '')
+
+    monkeypatch.setattr(api.subprocess, 'run', run)
+    assert api.select_workspace_path('Open design', file=True) is None
+    assert len(commands) == 1
+    serialized = ' '.join(commands[0])
+    if system == 'Darwin':
+        assert 'choose file' in serialized
+    elif system == 'Windows':
+        assert 'OpenFileDialog' in serialized
+    else:
+        assert '--directory' not in commands[0]
+
+
+def test_solve_submission_persists_document_identity_outside_geometry(tmp_path, monkeypatch):
+    import json
+    from server.app import create_app
+    from server.tests.test_jobs_api import _request, _solve_body
+
+    monkeypatch.setenv('WG2_ENABLE_DRYRUN', '1')
+
+    async def scenario():
+        app = create_app(data_dir=tmp_path)
+        body = {**_solve_body(), 'design_uid': UID, 'design_id': 'wgd_01K00000000000000000000000'}
+        status, raw = await _request(app, 'POST', '/api/solve', body=body)
+        assert status == 200, raw
+        job_id = json.loads(raw)['job_id']
+        await app.state.jobs_runtime.wait_idle()
+        row = app.state.jobs_runtime.store.get_job_row(job_id)
+        assert row['task_metadata']['design_uid'] == UID
+        assert row['task_metadata']['design_id'] == body['design_id']
+        assert 'design_uid' not in row['config_json']['geometry']['design']
+        await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())

@@ -1,3 +1,4 @@
+import { useDocumentStore, type DocumentState } from './document';
 import { create } from 'zustand';
 import { temporal } from 'zundo';
 import { findParameterByPath } from '../design/parameterRegistry';
@@ -943,6 +944,23 @@ export const useDesignStore = create<DesignStore>()(
     },
   ),
 );
+
+type HistoryDocument = Pick<DocumentState, 'designUid' | 'designName' | 'identity' | 'classification' | 'openedContentKey' | 'legacyDesignName'>;
+const historyDocuments = new WeakMap<DesignDocument, HistoryDocument>();
+function rememberHistoryDocument(design: DesignDocument): void {
+  const { designUid, designName, identity, classification, openedContentKey, legacyDesignName } = useDocumentStore.getState();
+  historyDocuments.set(design, { designUid, designName, identity, classification, openedContentKey, legacyDesignName });
+}
+rememberHistoryDocument(useDesignStore.getState().design);
+useDocumentStore.subscribe(() => rememberHistoryDocument(useDesignStore.getState().design));
+useDesignStore.subscribe((state, previous) => {
+  if (state.dragSnapshot && state.dragSnapshot !== previous.dragSnapshot) rememberHistoryDocument(state.dragSnapshot);
+  if (state.design === previous.design) return;
+  const recorded = historyDocuments.get(state.design);
+  if (recorded && recorded.designUid !== useDocumentStore.getState().designUid) {
+    useDocumentStore.getState().restoreDocumentState(recorded);
+  } else if (!recorded) rememberHistoryDocument(state.design);
+});
 
 export function resetDesignStore(): void {
   // New starts a document, so the one it replaces must not become an undo step

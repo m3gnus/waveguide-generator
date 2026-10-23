@@ -19,6 +19,7 @@ from pydantic import ValidationError
 
 from server.contracts.canonical import canonical_ascii_json
 
+from .uid import validate_design_uid
 from .ath_import_defaults import apply_ath_import_defaults
 from .migrate import MigrationApplication, apply_migrations
 from .text_import import TEXT_IMPORT_VERSION, TEXT_IMPORT_VERSIONS, NATIVE_GEOMETRY_VERSION, GEOMETRY_STAMP_LABEL
@@ -60,6 +61,7 @@ _MACHINE_SOLVE_ADVICE: tuple[tuple[str, str, str], ...] = (
 )
 _MACHINE_SOLVE_KEYS = frozenset(key for key, _why, _choose in _MACHINE_SOLVE_ADVICE)
 _DESIGN_FORMAT_STAMP = re.compile(r"\bdesign-format\s*:\s*(\d+)\b", re.IGNORECASE)
+_DESIGN_UID_STAMP = re.compile(r"^;\s*Waveguide Generator design-id:\s*(\S*)\s*$", re.IGNORECASE)
 _GEOMETRY_STAMP = re.compile(r"^;\s*Waveguide Generator geometry-interpretation:\s*(\S+)\s*$", re.IGNORECASE)
 
 
@@ -115,11 +117,19 @@ class ParsedDesign:
     comments: list[str] = field(default_factory=list)
     raw_values: dict[str, str] = field(default_factory=dict)
     cadlink: CadLink | None = None
+    design_uid: str | None = None
     source_text: str | None = None
     _initial_fingerprint: str = ""
     ignored_profile: list[IgnoredSetting] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        stamps = {match[1] for comment in self.comments if (match := _DESIGN_UID_STAMP.fullmatch(comment))}
+        if len(stamps) > 1:
+            raise TextConfigError("conflicting design-id stamps")
+        try:
+            self.design_uid = validate_design_uid(self.design_uid or next(iter(stamps), None))
+        except ValueError as exc:
+            raise TextConfigError("design-id must be a wgu_ ULID") from exc
         if not self._initial_fingerprint:
             self._initial_fingerprint = _semantic_fingerprint(self.design)
 
@@ -1777,6 +1787,7 @@ def _serialize_canonical(
     design: DesignConfig,
     comments: list[str] | None = None,
     cadlink: CadLink | None = None,
+    design_uid: str | None = None,
 ) -> str:
     config = design.root
     lines = [
@@ -1784,10 +1795,12 @@ def _serialize_canonical(
         f"; Waveguide Generator design-format: {_DESIGN_FORMAT}",
         f"; {GEOMETRY_STAMP_LABEL} {config.text_import_version or NATIVE_GEOMETRY_VERSION}",
     ]
+    if design_uid is not None:
+        lines.append(f"; Waveguide Generator design-id: {validate_design_uid(design_uid)}")
     if config.ath_axial_sampling_rule == "ath-v2025-06":
         lines.append("; Ath version V2025-06")
     for comment in comments or []:
-        if comment not in lines and "Generated:" not in comment and not _GEOMETRY_STAMP.match(comment):
+        if comment not in lines and "Generated:" not in comment and not _GEOMETRY_STAMP.match(comment) and not _DESIGN_UID_STAMP.match(comment):
             if _LINE_BREAK.search(comment) is not None or not comment.lstrip().startswith(";"):
                 raise TextConfigError("unsafe preserved config comment")
             lines.append(comment)
@@ -1997,28 +2010,44 @@ def _serialize_canonical(
 
 
 def serialize(
-    design: ParsedDesign | DesignConfig, *, cadlink: CadLink | None = None
+    design: ParsedDesign | DesignConfig, *, cadlink: CadLink | None = None,
+    design_uid: str | None = None,
 ) -> str:
     """Serialize in stable v1 writer order, returning exact bytes when pristine."""
 
+    design_uid = validate_design_uid(design_uid)
     if isinstance(design, ParsedDesign):
+        uid = design_uid or design.design_uid
         if (
             design.source_text is not None
             and not any(
                 item.name == "004_freeform_solved_tangent_contract"
                 for item in design.migrations
             )
+            and not (uid and design.source_text.lstrip("\ufeff \t\r\n").startswith("{"))
             and (cadlink is None or cadlink == design.cadlink)
             and _semantic_fingerprint(design.design) == design._initial_fingerprint
         ):
-            return design.source_text
+            if uid == parse(design.source_text).design_uid:
+                return design.source_text
+            # An identity-only change preserves every geometry byte and comment.
+            lines = design.source_text.splitlines(keepends=True)
+            lines = [line for line in lines if not _DESIGN_UID_STAMP.fullmatch(line.strip())]
+            index = next((i + 1 for i, line in reversed(list(enumerate(lines)))
+                          if _GEOMETRY_STAMP.match(line.strip()) or _DESIGN_FORMAT_STAMP.search(line)), 0)
+            newline = "\r\n" if "\r\n" in design.source_text else "\n"
+            if index and not lines[index - 1].endswith(("\n", "\r")):
+                lines[index - 1] += newline
+            lines.insert(index, f"; Waveguide Generator design-id: {uid}{newline}")
+            return "".join(lines)
         return _serialize_canonical(
             design.design,
             design.comments,
             design.cadlink if cadlink is None else cadlink,
+            uid,
         )
     if isinstance(design, DesignConfig):
-        return _serialize_canonical(design, cadlink=cadlink)
+        return _serialize_canonical(design, cadlink=cadlink, design_uid=design_uid)
     raise TypeError("serialize expects ParsedDesign or DesignConfig")
 
 

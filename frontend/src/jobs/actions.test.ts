@@ -221,3 +221,32 @@ describe('server solve blocker messages', () => {
     await expect(submitDesign(designForFamily('OSSE'), undefined, fetcher)).rejects.toThrow(blocker.message);
   });
 });
+
+it('submits permanent document identity and undecorated name outside design data', async () => {
+  let payload: Record<string, unknown> = {};
+  const fetcher = (async (_url, init) => {
+    payload = JSON.parse(String(init?.body));
+    return Response.json({ job_id: 'id-run' });
+  }) as typeof fetch;
+  await submitDesign(designForFamily('OSSE'), undefined, fetcher, {
+    label: 'horn12', designRevision: 3, designUid: 'wgu_01K00000000000000000000000',
+    designId: 'wgd_existing', designName: 'horn',
+  });
+  expect(payload).toMatchObject({ design_uid: 'wgu_01K00000000000000000000000', design_id: 'wgd_existing', design_name: 'horn' });
+  expect(payload.design).not.toHaveProperty('design_uid');
+  expect((payload.design_snapshot as { design: unknown }).design).toEqual(payload.design);
+});
+
+it('gives F2 an explicit legacy name only for an unstamped import', async () => {
+  let payload: Record<string, unknown> = {};
+  const fetcher = (async (_url, init) => {
+    payload = JSON.parse(String(init?.body));
+    return Response.json({ job_id: 'legacy' });
+  }) as typeof fetch;
+  await submitDesign(designForFamily('OSSE'), undefined, fetcher, {
+    label: 'renamed1', designRevision: 1, designName: 'renamed', legacyDesignName: 'original',
+  });
+  expect(payload.client_metadata).toEqual({ legacy_design_name: 'original' });
+  await submitDesign(designForFamily('OSSE'), undefined, fetcher, { label: 'duplicate1', designRevision: 1 });
+  expect(payload).not.toHaveProperty('client_metadata');
+});

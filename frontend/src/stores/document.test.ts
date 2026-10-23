@@ -44,3 +44,29 @@ describe('the design name owns the filename', () => {
     expect(useDocumentStore.getState()).toMatchObject({ designName: '', filename: '' });
   });
 });
+
+describe('permanent document identity', () => {
+  it('mints on New and Duplicate, and preserves identity on rename', () => {
+    resetDocumentStore();
+    const original = useDocumentStore.getState().designUid;
+    expect(original).toMatch(/^wgu_[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
+    useDocumentStore.getState().setDesignName('Renamed');
+    expect(useDocumentStore.getState().designUid).toBe(original);
+    useDocumentStore.getState().setCadLink(opened, 'current');
+    useDocumentStore.getState().duplicateAsNewDesign();
+    expect(useDocumentStore.getState()).toMatchObject({ designName: 'Renamed', identity: null, openedContentKey: null });
+    expect(useDocumentStore.getState().designUid).not.toBe(original);
+    const duplicate = useDocumentStore.getState().designUid;
+    resetDocumentStore();
+    expect(useDocumentStore.getState().designUid).not.toBe(duplicate);
+  });
+});
+
+it('keeps the old unstamped name through rename, and clears the legacy alias for a deliberate duplicate', () => {
+  resetDocumentStore();
+  useDocumentStore.getState().setLegacyDesignName('original');
+  useDocumentStore.getState().setDesignName('renamed');
+  expect(useDocumentStore.getState().legacyDesignName).toBe('original');
+  useDocumentStore.getState().duplicateAsNewDesign();
+  expect(useDocumentStore.getState().legacyDesignName).toBeUndefined();
+});

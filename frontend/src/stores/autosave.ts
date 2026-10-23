@@ -1,3 +1,4 @@
+import { isDesignUid } from './designUid';
 import { NATIVE_FAMILIES, useDesignStore, type DesignDocument } from './design';
 import { DESIGN_CONTENT_KEY_VERSION } from './designContentKey';
 import { durableSettings, namespaceStorage } from './durableSettings';
@@ -22,6 +23,8 @@ interface AutosaveRecord {
   filename: string;
   /** Absent in drafts written before the design carried one name. */
   designName?: string;
+  designUid?: string;
+  legacyDesignName?: string;
   designRevision: number;
   /** Retired baseline; v1 readers still require this wire field. */
   savedRevision: number | null;
@@ -54,6 +57,8 @@ function isRecord(value: unknown): value is AutosaveRecord {
   const record = value as Record<string, unknown>;
   const design = record.design as Record<string, unknown> | undefined;
   return record.version === 1
+    && (record.designUid === undefined || isDesignUid(record.designUid))
+    && (record.legacyDesignName === undefined || typeof record.legacyDesignName === 'string')
     && typeof record.filename === 'string'
     && Number.isInteger(record.designRevision) && Number(record.designRevision) > 0
     && (record.savedRevision === null || (Number.isInteger(record.savedRevision) && Number(record.savedRevision) > 0))
@@ -100,13 +105,15 @@ export function writeAutosave(storage: DraftStorage | null = defaultStorage()): 
   if (!storage) return false;
   const { design, designRevision } = useDesignStore.getState();
   const {
-    designName, filename, openedContentKey, identity, classification,
+    designName, filename, openedContentKey, identity, classification, designUid, legacyDesignName,
   } = useDocumentStore.getState();
   const record: AutosaveRecord = {
     version: 1,
     savedAt: new Date().toISOString(),
     filename,
     designName,
+    designUid,
+    legacyDesignName,
     designRevision,
     savedRevision: null,
     identity: identity ? { ...identity } : null,
@@ -143,6 +150,8 @@ export function restoreAutosave(storage: DraftStorage | null = defaultStorage())
         ? record.designName
         : designNameFromFilename(record.filename),
       openedContentKey: storedOpenedContentKey(record),
+      designUid: record.designUid,
+      legacyDesignName: record.legacyDesignName,
       identity: record.identity ? { ...record.identity } : null,
       classification: record.classification ?? null,
     });
@@ -206,7 +215,9 @@ export function startAutosave(
     if (state.designRevision !== previous.designRevision) schedule();
   });
   const unsubscribeDocument = useDocumentStore.subscribe((state, previous) => {
-    if (state.designName !== previous.designName
+    if (state.legacyDesignName !== previous.legacyDesignName
+      || state.designUid !== previous.designUid
+      || state.designName !== previous.designName
       || state.filename !== previous.filename
       // Export a copy and Send to CAD change only this: the draft must record
       // the copy they wrote, or a restart forgets it.

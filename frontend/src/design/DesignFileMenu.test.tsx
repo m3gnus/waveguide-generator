@@ -1430,3 +1430,76 @@ it('clears a superseded file-read busy state without taking the newer viewport',
   expect(useMeshImportStore.getState().busy).toBe(false);
   act(() => root.unmount());
 });
+
+describe('permanent design id lifecycle in the File menu', () => {
+  const uid = 'wgu_01K00000000000000000000000';
+
+  it('adopts stamped opens and mints on unstamped opens', () => {
+    applyOpenedDocument({ ...openedResponse(150), dialect: 'mwg', designUid: uid } as never, 'original.cfg');
+    expect(useDocumentStore.getState().designUid).toBe(uid);
+    applyOpenedDocument(openedResponse(150) as never, 'legacy.cfg');
+    expect(useDocumentStore.getState().designUid).not.toBe(uid);
+    expect(useDocumentStore.getState().designUid).toMatch(/^wgu_/);
+  });
+
+  it('duplicates the design without changing geometry and clears the CAD edit identity', async () => {
+    const before = structuredClone(useDesignStore.getState().design);
+    const original = useDocumentStore.getState().designUid;
+    useDocumentStore.getState().setCadLink({ designId: 'wgd_test', lineageId: 'wgl_test', baseEditVersion: 1 }, 'current');
+    act(() => root.render(<DesignFileMenu/>));
+    const buttons = open();
+    await act(async () => { buttons.find((button) => button.textContent === 'Duplicate as new design')!.click(); });
+    expect(useDesignStore.getState().design).toEqual(before);
+    expect(useDocumentStore.getState().designUid).not.toBe(original);
+    expect(useDocumentStore.getState().identity).toBeNull();
+  });
+
+  it.each(['Keep with original', 'New design'])('asks once for a copy and remembers %s', async (answer) => {
+    const { durableSettings } = await import('../stores/durableSettings');
+    durableSettings.set('designFiles', null);
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url) === '/api/design/open') return Response.json({ ...openedResponse(150), designUid: uid });
+      return Response.json({ items: [] });
+    }));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    act(() => root.render(<DesignFileMenu/>));
+    await chooseLocalDesign({ name: 'original.cfg', text: async () => 'original' });
+    await chooseLocalDesign({ name: 'copy.cfg', text: async () => 'copy' });
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain("This looks like a copy of original. Keep it with the original's runs, or start it as a new design?");
+    await act(async () => { [...dialog.querySelectorAll('button')].find((button) => button.textContent === answer)!.click(); });
+    const chosen = useDocumentStore.getState().designUid;
+    expect(chosen === uid).toBe(answer === 'Keep with original');
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    await chooseLocalDesign({ name: 'copy.cfg', text: async () => 'copy' });
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(useDocumentStore.getState().designUid).toBe(chosen);
+  });
+});
+
+it('uses the native picker path to distinguish same-name copies', async () => {
+  const { durableSettings } = await import('../stores/durableSettings');
+  durableSettings.set('designFiles', null);
+  const uid = 'wgu_01K00000000000000000000000';
+  let source = '/original/same.cfg';
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    if (String(url) === '/api/design/choose') return Response.json({ selected: true, filename: 'same.cfg', source, text: 'cfg' });
+    if (String(url) === '/api/design/open') return Response.json({ ...openedResponse(150), designUid: uid });
+    return Response.json({ items: [] });
+  }));
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  act(() => root.render(<DesignFileMenu/>));
+  const nativeOpen = async () => {
+    const button = open().find((candidate) => candidate.textContent?.startsWith('Open…'))!;
+    await act(async () => button.click());
+  };
+  await nativeOpen();
+  source = '/copy/same.cfg';
+  await nativeOpen();
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(dialog.textContent).toContain('copy of same.');
+  await act(async () => { [...dialog.querySelectorAll('button')].find((button) => button.textContent === 'Keep with original')!.click(); });
+  await nativeOpen();
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(useDocumentStore.getState().designUid).toBe(uid);
+});

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import re
 from typing import Any
@@ -11,6 +12,8 @@ from pydantic import ValidationError
 
 from server.cadlink.identity import SaveIdentity, classify_open, design_hash
 from server.cadlink.store import CadLinkStore
+from server.workspace.api import select_workspace_path
+from server.design.uid import validate_design_uid
 from server.design.schema import DesignConfig
 from server.design.textcfg import ParsedDesign, TextConfigError, parse, serialize
 
@@ -113,6 +116,7 @@ async def save_design(
     filename = payload.get("filename") if "design" in payload else None
     try:
         design = DesignConfig.model_validate(design_payload)
+        design_uid = validate_design_uid(payload.get("designUid") if "design" in payload else None)
         requested = (
             SaveIdentity.model_validate(payload["identity"])
             if "design" in payload and payload.get("identity") is not None
@@ -127,7 +131,7 @@ async def save_design(
             requested=requested,
             design_hash=hashed,
             filename=suggested_filename,
-            snapshot_builder=lambda identity: serialize(design, cadlink=identity),
+            snapshot_builder=lambda identity: serialize(design, cadlink=identity, design_uid=design_uid),
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -153,6 +157,7 @@ async def serialize_design(payload: dict[str, Any]) -> dict[str, Any]:
     filename = payload.get("filename") if "design" in payload else None
     try:
         design = DesignConfig.model_validate(design_payload)
+        design_uid = validate_design_uid(payload.get("designUid") if "design" in payload else None)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
     suggested_filename = _design_filename(filename, design)
@@ -160,7 +165,7 @@ async def serialize_design(payload: dict[str, Any]) -> dict[str, Any]:
     if json_copy:
         suggested_filename = str(Path(suggested_filename).with_suffix(".json"))
     return {
-        "text": design.model_dump_json(indent=2) + "\n" if json_copy else serialize(design),
+        "text": design.model_dump_json(indent=2) + "\n" if json_copy else serialize(design, design_uid=design_uid),
         "suggestedFilename": suggested_filename,
     }
 
@@ -173,6 +178,7 @@ async def open_design(
     parsed = _parse_text(text)
     return {
         "design": parsed.semantic_data(),
+        "designUid": parsed.design_uid,
         **_report(parsed),
         "cadlink": _open_cadlink(parsed, store or _DIRECT_STORE),
     }
@@ -192,6 +198,26 @@ async def import_report(
 
 def create_design_io_router(store: CadLinkStore) -> APIRouter:
     router = APIRouter(prefix="/api/design", tags=["design-io"])
+
+    @router.post("/choose")
+    async def choose_endpoint() -> dict[str, Any]:
+        # Only the native picker grants a path: callers cannot ask this endpoint
+        # to read an arbitrary server file. Paths distinguish same-name copies.
+        selected = await asyncio.to_thread(select_workspace_path, "Open design", file=True)
+        if not selected:
+            return {"selected": False}
+        path = Path(selected).resolve()
+        try:
+            if path.suffix.lower() not in {".cfg", ".mwg", ".txt", ".json"}:
+                raise ValueError("Choose a .cfg, .mwg, .txt or .json design file")
+            with path.open("rb") as stream:
+                content = stream.read(16 * 1024 * 1024 + 1)
+            if len(content) > 16 * 1024 * 1024:
+                raise ValueError("Design exceeds the 16 MiB open limit")
+            text = content.decode("utf-8-sig")
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"selected": True, "filename": path.name, "source": str(path), "text": text}
 
     @router.post("/save")
     async def save_endpoint(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:

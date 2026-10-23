@@ -236,7 +236,7 @@ def _read_request(args: argparse.Namespace):
         parsed = parse(source)
     except (TextConfigError, TypeError, ValueError) as exc:
         raise ValueError(str(exc)) from exc
-    return build_request(parsed, overlay=args.overlay, engine=args.engine).request
+    return build_request(parsed, overlay=args.overlay, engine=args.engine, design_name=path.stem).request
 
 
 async def _wait_for_terminal(runtime: JobRuntime | BackendClient, job_id: str) -> dict[str, Any]:

@@ -319,6 +319,7 @@ describe('RunExportControl', () => {
     };
     const job = completeJob({
       solve_options: { polar_config: polarConfig } as unknown as JobItem['solve_options'],
+      design_uid: 'wgu_01K00000000000000000000000',
     });
     render(job);
     openMenu();
@@ -338,6 +339,8 @@ describe('RunExportControl', () => {
       undefined,
       null,
       polarConfig,
+      undefined,
+      job.design_uid,
     );
     expect(mocks.fetchJobResults).not.toHaveBeenCalled();
     expect(mocks.runWorkspaceExportBundle).not.toHaveBeenCalled();

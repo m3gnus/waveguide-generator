@@ -535,3 +535,21 @@ it('downloads a LOOKUP native copy with a .mwg filename', async () => {
   expect(request.filename).toBe('lookup.mwg');
   expect(request.design.lookup_profile).toEqual([[0, 12.7], [120, 140]]);
 });
+
+it('uses an explicitly supplied CAD document uid and never borrows the live document uid', async () => {
+  const { useDocumentStore } = await import('../stores/document');
+  useDocumentStore.getState().setDesignUid('wgu_01K00000000000000000000000');
+  const payloads: Record<string, unknown>[] = [];
+  const fetcher = (async (url, init) => {
+    if (String(url) === '/api/export/wglink') {
+      payloads.push(JSON.parse(String(init?.body)));
+      return Response.json({ sequence: 1 });
+    }
+    return Response.json({ selected: true, directory: '/workspace', available: true });
+  }) as typeof fetch;
+  const historical = 'wgu_01K00000000000000000000001';
+  await sendDesignToCad(designForFamily('OSSE'), 1, 'run', null, fetcher, 'history-1', null, undefined, null, historical);
+  await sendDesignToCad(designForFamily('OSSE'), 1, 'old-run', null, fetcher, 'history-2');
+  expect(payloads[0].designUid).toBe(historical);
+  expect(payloads[1]).not.toHaveProperty('designUid');
+});

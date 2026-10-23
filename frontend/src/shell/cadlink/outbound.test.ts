@@ -141,7 +141,7 @@ describe('outbound commands without a mounted coordinator (row 17)', () => {
     expect(fetcher.mock.calls.filter(([path]) => String(path).endsWith('/select'))).toHaveLength(1);
     expect(exportsFrom(fetcher)).toHaveLength(1);
   });
-  it.each(['document', 'identity', 'newer send', 'dispose'] as const)('fences late identity adoption after %s', async (change) => {
+  it.each(['document', 'identity', 'duplicate', 'newer send', 'dispose'] as const)('fences late identity adoption after %s', async (change) => {
     const old = deferred<Response>(); let writes = 0;
     const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/wglink')
       ? ++writes === 1 ? old.promise : json({ ...exported, sequence: 2, identity: { ...identity, baseEditVersion: 3 } })
@@ -149,6 +149,7 @@ describe('outbound commands without a mounted coordinator (row 17)', () => {
     const { controller } = setup(status(), fetcher);
     const first = controller.sendWgToFusion(); await vi.waitFor(() => expect(writes).toBe(1));
     if (change === 'document') useDesignStore.getState().replaceDocument(designForFamily('ICW'));
+    if (change === 'duplicate') useDocumentStore.getState().duplicateAsNewDesign();
     if (change === 'identity') useDocumentStore.getState().setCadLink({ ...identity, designId: 'wgd_new' }, 'current');
     if (change === 'newer send') await controller.sendWgToFusion();
     if (change === 'dispose') controller.dispose();

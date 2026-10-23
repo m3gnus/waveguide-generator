@@ -6445,9 +6445,32 @@
           "design_availability": {
             "$ref": "#/components/schemas/DesignAvailability"
           },
+          "design_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Design Name"
+          },
           "design_revision": {
             "title": "Design Revision",
             "type": "integer"
+          },
+          "design_uid": {
+            "anyOf": [
+              {
+                "pattern": "^wgu_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Design Uid"
           },
           "error_message": {
             "anyOf": [
@@ -7127,9 +7150,32 @@
           "design_availability": {
             "$ref": "#/components/schemas/DesignAvailability"
           },
+          "design_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Design Name"
+          },
           "design_revision": {
             "title": "Design Revision",
             "type": "integer"
+          },
+          "design_uid": {
+            "anyOf": [
+              {
+                "pattern": "^wgu_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Design Uid"
           },
           "error_message": {
             "anyOf": [
@@ -11738,6 +11784,40 @@
             "description": "Durable submission key: an identical replay returns the original job; the same key with a different normalized request is refused.",
             "title": "Client Request Id"
           },
+          "design_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Design Id"
+          },
+          "design_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Design Name"
+          },
+          "design_uid": {
+            "anyOf": [
+              {
+                "pattern": "^wgu_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Design Uid"
+          },
           "geometry": {
             "discriminator": {
               "mapping": {
@@ -12484,6 +12564,18 @@
             "minimum": 0.0,
             "title": "Designrevision",
             "type": "integer"
+          },
+          "designUid": {
+            "anyOf": [
+              {
+                "pattern": "^wgu_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Designuid"
           },
           "expectedFusionDocumentId": {
             "anyOf": [
@@ -14509,6 +14601,29 @@
           }
         },
         "summary": "Capabilities"
+      }
+    },
+    "/api/design/choose": {
+      "post": {
+        "operationId": "choose_endpoint_api_design_choose_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Choose Endpoint Api Design Choose Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Choose Endpoint",
+        "tags": [
+          "design-io"
+        ]
       }
     },
     "/api/design/import-report": {

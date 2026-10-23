@@ -118,19 +118,20 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
           }
           conflict = null;
           const { design, designRevision } = useDesignStore.getState();
-          const { identity, designName } = useDocumentStore.getState();
+          const { identity, designName, designUid } = useDocumentStore.getState();
           const polar = polarConfigFromUi(useSolveOptionsStore.getState().polar);
           const sentKey = keptContentKeyOf(design);
           exportedIdentity = identity;
           const result = await sendDesignToCad(design, designRevision, designNameSlug(designName),
-            identity, fetcher, undefined, target ?? null, polar);
+            identity, fetcher, undefined, target ?? null, polar, undefined, designUid);
           if (active && result.cadHandoffRequestId && result.cadHandoff !== 'failed') {
             const id = result.cadHandoffRequestId;
             // A terminal push may have beaten the export response.
             if (!store.getState().requests[id]) store.setState({ requests: { ...store.getState().requests, [id]: 'received' } });
           }
           const adopt = current() && isCurrentDocumentLoad(load)
-            && useDocumentStore.getState().identity === identity;
+            && useDocumentStore.getState().identity === identity
+            && useDocumentStore.getState().designUid === designUid;
           rememberSentCopy(sentKey, result.identity?.designId, adopt);
           if (!current()) return result;
           if (!adopt) {
