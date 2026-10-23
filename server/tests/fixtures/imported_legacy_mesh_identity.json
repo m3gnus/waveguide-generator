@@ -121,6 +121,79 @@
       "options": {},
       "msh_sha256": "56a6c58a2e3b82c02989c93196c5c8e59e28f7048aba4d9b4e43c2d39307693b",
       "triangles": 6480
+    },
+    {
+      "name": "native-rigid-face-size",
+      "geometry": "synthetic-f1",
+      "sizes": {
+        "rigid_size_mm": 30,
+        "transition_mm": 30,
+        "source_size_mm": {
+          "hf": 6
+        }
+      },
+      "options": {
+        "rigid_face_sizes_mm": {
+          "342": 12
+        },
+        "symmetry_mode": "full"
+      },
+      "msh_sha256": "af4e3a82b04f507a01e4003d635dedf5a5fad83c6883b7f8ae2c19622e57005f",
+      "triangles": 5618
+    },
+    {
+      "name": "native-source-size-limits",
+      "geometry": "synthetic-f1",
+      "sizes": {
+        "rigid_size_mm": 30,
+        "transition_mm": 30,
+        "source_size_mm": {
+          "hf": 6
+        }
+      },
+      "options": {
+        "native_source_size_limits": true,
+        "symmetry_mode": "full"
+      },
+      "msh_sha256": "aac6bcb7f8178170a5cf2b03edaae6d81803e3bf851916ef2d4c4e5916e0945e",
+      "triangles": 3472
+    },
+    {
+      "name": "native-rigid-and-source-limits",
+      "geometry": "synthetic-f1",
+      "sizes": {
+        "rigid_size_mm": 30,
+        "transition_mm": 30,
+        "source_size_mm": {
+          "hf": 6
+        }
+      },
+      "options": {
+        "rigid_face_sizes_mm": {
+          "342": 12
+        },
+        "native_source_size_limits": true,
+        "symmetry_mode": "full"
+      },
+      "msh_sha256": "5c5f7d80033e98f19c2f16accf3f73e02e8d98d504f865d12bfd67a17e139797",
+      "triangles": 5618
+    },
+    {
+      "name": "coupled-box",
+      "geometry": "coupled-box",
+      "sizes": {
+        "rigid_size_mm": 12,
+        "transition_mm": 12,
+        "source_size_mm": {}
+      },
+      "options": {
+        "symmetry_mode": "full"
+      },
+      "msh_sha256": "5b98527f8d8298e7225d4b431b5aa26435cae63703fd8051ecaffddda2bff0c2",
+      "triangles": 308,
+      "region_msh_sha256": {
+        "rear-chamber": "f7507040daae6367f315a214c15bc1acc629aca7c9cd1ea144e41ba33eadc7aa"
+      }
     }
   ]
 }

@@ -30,6 +30,10 @@ from server.mesh.fem_regions import (
 from server.mesh.imported import (
     _geometry_fingerprint,
     _import_occ_root_bodies,
+    _restricted_surface_size,
+    _restrict_sizing_field,
+    _surface_group_size_targets,
+    _surface_group_sizing_fields,
     apply_occ_healing_options,
     apply_rigid_normalisation,
     declared_step_bodies,
@@ -844,6 +848,12 @@ def build_coupled_mesh(
             name: [ordered[int(index)] for index in spec["indices"]]
             for name, spec in exterior_names.items()
         }
+        sizing_groups = recipe.get("surface_sizing_groups") or {}
+        memberships = {("source", name): tags for name, tags in source_surfaces.items()}
+        memberships.update({
+            ("surface-group", name): [ordered[int(index)] for index in spec["indices"]]
+            for name, spec in sizing_groups.items()
+        })
         region_data = []
         region_sizes: dict[str, tuple[float, float]] = {}
         for path, region in regions:
@@ -880,14 +890,14 @@ def build_coupled_mesh(
         # Copy painted assembly faces as explicit tools. Passing constituent
         # faces alongside their parent volume yields empty ancestry for some
         # unchanged outer faces in OCC; independent copies retain that map.
-        source_copies = {
+        exterior_copies = {
             name: [
                 int(copy_tag)
                 for tag in tags
                 for dim, copy_tag in gmsh.model.occ.copy([(2, tag)])
                 if dim == 2
             ]
-            for name, tags in source_surfaces.items()
+            for name, tags in memberships.items()
         }
         objects = assembly
         tools = [
@@ -896,7 +906,7 @@ def build_coupled_mesh(
             for dim, tags in ((3, volumes), (2, boundary))
             for tag in tags
         ]
-        tools.extend((2, tag) for tags in source_copies.values() for tag in tags)
+        tools.extend((2, tag) for tags in exterior_copies.values() for tag in tags)
         descendants = fragment_fundamental_domain(gmsh, objects, tools, domain_planes)
         material_volumes = set().union(
             *(descendants[(3, tag)] for dim, tag in assembly if dim == 3)
@@ -907,10 +917,12 @@ def build_coupled_mesh(
         exterior_surfaces = {
             tag for tag in exterior_surfaces if len(gmsh.model.getAdjacencies(2, tag)[0]) < 2
         }
-        source_descendants = {
+        exterior_descendants = {
             name: set().union(*(descendants[(2, tag)] for tag in tags))
-            for name, tags in source_copies.items()
+            for name, tags in exterior_copies.items()
         }
+        source_descendants = {name: faces for (kind, name), faces in exterior_descendants.items()
+                              if kind == "source"}
         exterior_groups: dict[str, set[int]] = {}
         kinds: dict[str, dict[str, str]] = {}
         prepared = []
@@ -1094,32 +1106,52 @@ def build_coupled_mesh(
             exterior_groups["wg-coupled-v1|rigid"] = rigid
             kinds["wg-coupled-v1|rigid"] = {"kind": "rigid"}
 
+        group_surfaces = {}
+        for name in sizing_groups:
+            selected = exterior_descendants[("surface-group", name)] & rigid
+            if not selected:
+                raise FemRegionMeshError(f"Surface group {name!r} disappeared from the coupled exterior.")
+            group_surfaces[name] = sorted(selected)
+        exterior_targets = (_surface_group_size_targets(
+            sizes, (spec["size_mm"] for spec in sizing_groups.values()),
+        ) if sizing_groups else [float(sizes["rigid_size_mm"]),
+                                 *map(float, sizes["source_size_mm"].values())])
         all_sizes = [
-            float(sizes["rigid_size_mm"]),
-            *map(float, sizes["source_size_mm"].values()),
+            *exterior_targets,
             *(float(region["mesh_size_mm"]) for region, *_rest in prepared),
             *(size for _tags, size, _base, _boundary_tags, _volumes, _moving in sizing),
         ]
         gmsh.option.setNumber("Mesh.MeshSizeMin", min(all_sizes))
         gmsh.option.setNumber("Mesh.MeshSizeMax", max(all_sizes))
-        gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1 if sizing_groups else 0)
         gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
         gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
         gmsh.option.setNumber("Mesh.ElementOrder", 1)
         fields = []
 
         def constant(size, surfaces, volumes=()):
-            value = gmsh.model.mesh.field.add("MathEval")
-            gmsh.model.mesh.field.setString(value, "F", str(size))
-            restrict = gmsh.model.mesh.field.add("Restrict")
-            gmsh.model.mesh.field.setNumber(restrict, "InField", value)
-            gmsh.model.mesh.field.setNumbers(restrict, "SurfacesList", sorted(surfaces))
-            gmsh.model.mesh.field.setNumbers(restrict, "VolumesList", list(volumes))
-            fields.append(restrict)
+            fields.append(_restricted_surface_size(gmsh, sorted(surfaces), size, volumes=list(volumes)))
 
-        constant(float(sizes["rigid_size_mm"]), exterior_surfaces)
-        for name, spec in exterior_names.items():
-            constant(float(spec["size_mm"]), exterior_groups[name])
+        if sizing_groups:
+            grouped = set().union(*group_surfaces.values())
+            # Keep the existing wall ceiling on interfaces as well as the
+            # ungrouped rigid skin; FEM fields can refine them further.
+            source_faces = set().union(*(exterior_groups[name] for name in exterior_names))
+            exterior_fields, _targets = _surface_group_sizing_fields(
+                gmsh,
+                rigid_sizes=[(sorted(exterior_surfaces - grouped - source_faces), float(sizes["rigid_size_mm"])), *(
+                    (group_surfaces[name], float(spec["size_mm"]))
+                    for name, spec in sizing_groups.items()
+                )],
+                source_sizes=[(sorted(exterior_groups[name]), float(spec["size_mm"]))
+                              for name, spec in exterior_names.items()],
+                sizes=sizes, size_max_mm=max(exterior_targets), surface_only_grading=True,
+            )
+            fields.extend(exterior_fields)
+        else:
+            constant(float(sizes["rigid_size_mm"]), exterior_surfaces)
+            for name, spec in exterior_names.items():
+                constant(float(spec["size_mm"]), exterior_groups[name])
         for region, volumes, boundary, _groups in prepared:
             constant(float(region["mesh_size_mm"]), boundary, volumes)
         for tags, size in port_sizes:
@@ -1143,11 +1175,7 @@ def build_coupled_mesh(
             if not touching_regions or not moving:
                 fields.append(threshold)
                 continue
-            restrict = gmsh.model.mesh.field.add('Restrict')
-            gmsh.model.mesh.field.setNumber(restrict, 'InField', threshold)
-            gmsh.model.mesh.field.setNumbers(restrict, 'SurfacesList', sorted(boundary))
-            gmsh.model.mesh.field.setNumbers(restrict, 'VolumesList', volumes)
-            fields.append(restrict)
+            fields.append(_restrict_sizing_field(gmsh, threshold, sorted(boundary), volumes=volumes))
         minimum = gmsh.model.mesh.field.add("Min")
         gmsh.model.mesh.field.setNumbers(minimum, "FieldsList", fields)
         gmsh.model.mesh.field.setAsBackgroundMesh(minimum)
@@ -1261,6 +1289,12 @@ def build_coupled_mesh(
                     }
                     for index, name in enumerate(sorted(exterior_blocks), 1)
                 },
+                **({"surface_group_resolution": {
+                    name: {"size_mm": float(sizing_groups[name]["size_mm"]),
+                           "retained_surfaces": tags,
+                           "retained_area_mm2": sum(float(gmsh.model.occ.getMass(2, tag)) for tag in tags)}
+                    for name, tags in group_surfaces.items()
+                }} if sizing_groups else {}),
                 "normalisation_matrix": total.tolist(),
                 "stats": {"triangles": len(oriented), "open_edges": open_edges(oriented),
                           "domain_planes": list(domain_planes)},

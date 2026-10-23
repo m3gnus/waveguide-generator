@@ -829,6 +829,7 @@ def _cache_key(
         "sizes": sizes,
         "skipped_source_ids": sorted(skipped_source_ids),
         "prep_options": options,
+        **({"surface_sizing_contract": "wg-surface-sizing-v1"} if options.get("surface_groups") else {}),
         "tags": allocate_imported_tags(
             manifest["sources"], skipped_source_ids=skipped_source_ids
         ),
@@ -860,6 +861,7 @@ def _cache_lookup_key(
                 "sizes": sizes,
                 "skipped_source_ids": sorted(skipped_source_ids),
                 "options": options,
+                **({"surface_sizing_contract": "wg-surface-sizing-v1"} if options.get("surface_groups") else {}),
                 "mesher_version": _package_version("hornlab-waveguide-mesher"),
                 "mesher_identity": mesher_identity(),
                 "gmsh_version": _package_version("gmsh"),
@@ -2270,6 +2272,8 @@ def _mesh_coupled_regions(
                     "mesh_content_sha256": digest, "mesh_size_bytes": len(built["msh_text"].encode("utf-8")),
                     "stats": built["stats"], "physical_names": built["physical_names"],
                     "normalisation_matrix": built["normalisation_matrix"]}
+        if "surface_group_resolution" in built:
+            retained["surface_group_resolution"] = built["surface_group_resolution"]
         read_verified_import_mesh(retained)
     except Exception as exc:
         raise IngestRefusal(

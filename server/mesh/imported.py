@@ -983,6 +983,7 @@ def resolve_user_source(
     connected_components: int,
     vocabulary: Mapping[str, Iterable[str]] | None = None,
     allow_area_drift: bool = False,
+    selection_kind: str = "source",
 ) -> dict[str, Any]:
     """Resolve all declared user selectors with agreement and drift gates."""
 
@@ -995,7 +996,7 @@ def resolve_user_source(
             shells = ", ".join(sorted(vocab.get("shell_names", ()))) or "(none)"
             styles = ", ".join(sorted(vocab.get("appearance_labels", ()))) or "(none)"
             raise RoleResolutionError(
-                f"role resolution: required source {source_id!r} is missing. "
+                f"role resolution: required {selection_kind} {source_id!r} is missing. "
                 f"Available shell names: {shells}. Available style names: {styles}"
             )
         return {"source_id": source_id, "skipped": True, "reason": "optional source selectors matched no faces"}
@@ -1003,31 +1004,31 @@ def resolve_user_source(
     if any(faces != sets[0] for faces in sets[1:]):
         detail = {name: sorted(faces) for name, faces in resolved.items()}
         raise RoleResolutionError(
-            f"role resolution: source {source_id!r} selector mechanisms disagree: {detail}"
+            f"role resolution: {selection_kind} {source_id!r} selector mechanisms disagree: {detail}"
         )
     faces = sorted(sets[0])
     expected_components = int(source["expected_connected_components"])
     if connected_components != expected_components:
         raise RoleResolutionError(
-            f"role resolution: source {source_id!r} has {connected_components} connected components; "
+            f"role resolution: {selection_kind} {source_id!r} has {connected_components} connected components; "
             f"expected {expected_components} for {source['patch_policy']}"
         )
     observed = source["observed"]
     if len(faces) != int(observed["face_count"]):
         raise RoleResolutionError(
-            f"role resolution: source {source_id!r} face count changed from "
+            f"role resolution: {selection_kind} {source_id!r} face count changed from "
             f"{observed['face_count']} to {len(faces)}"
         )
     area = sum(float(face_areas_mm2[face]) for face in faces)
     expected_area = float(observed["total_area_mm2"])
     if not math.isfinite(expected_area) or expected_area <= 0:
-        raise RoleResolutionError(f"role resolution: source {source_id!r} expected area must be finite and positive")
+        raise RoleResolutionError(f"role resolution: {selection_kind} {source_id!r} expected area must be finite and positive")
     drift = abs(area - expected_area) / expected_area
     if drift > AREA_REL_TOLERANCE and not allow_area_drift:
         raise RoleResolutionError(
-            f"role resolution: source {source_id!r} area drift is {drift:.3%} "
+            f"role resolution: {selection_kind} {source_id!r} area drift is {drift:.3%} "
             f"({expected_area:.9g} -> {area:.9g} mm^2), exceeding 1%",
-            area_drift_sources=[source_id],
+            area_drift_sources=[source_id] if selection_kind == "source" else [],
         )
     return {
         "source_id": source_id,
@@ -1489,32 +1490,111 @@ def _face_components(gmsh: Any, faces: Iterable[int]) -> int:
     faces = {int(face) for face in faces}
     if not faces:
         return 0
-    edges = {
-        face: {abs(tag) for dim, tag in gmsh.model.getBoundary([(2, face)], oriented=False) if dim == 1}
-        for face in faces
-    }
+    # Each edge is consumed once. Scanning all remaining faces for every
+    # visited face was quadratic for large disconnected surface groups.
+    edge_faces: dict[int, set[int]] = {}
+    face_edges: dict[int, list[int]] = {}
+    for face in faces:
+        face_edges[face] = [abs(tag) for dim, tag in
+                            gmsh.model.getBoundary([(2, face)], oriented=False) if dim == 1]
+        for edge in face_edges[face]:
+            edge_faces.setdefault(edge, set()).add(face)
     count = 0
     remaining = set(faces)
     while remaining:
         count += 1
         stack = [remaining.pop()]
         while stack:
-            current = stack.pop()
-            neighbors = {other for other in remaining if edges[current] & edges[other]}
-            remaining -= neighbors
-            stack.extend(neighbors)
+            for edge in face_edges[stack.pop()]:
+                neighbors = edge_faces.pop(edge, set()) & remaining
+                remaining -= neighbors
+                stack.extend(neighbors)
     return count
 
 
-def _restricted_surface_size(gmsh: Any, surfaces: Sequence[int], size_mm: float) -> int:
-    """Constant target on these surfaces; infinity elsewhere for the Min field."""
+def _restrict_sizing_field(
+    gmsh: Any, field: int, surfaces: Sequence[int], *, volumes: Sequence[int] | None = None,
+) -> int:
+    """Keep a sizing field on its declared mesh entities."""
+    restricted = gmsh.model.mesh.field.add("Restrict")
+    gmsh.model.mesh.field.setNumber(restricted, "InField", field)
+    gmsh.model.mesh.field.setNumbers(restricted, "SurfacesList", surfaces)
+    if volumes is not None:
+        gmsh.model.mesh.field.setNumbers(restricted, "VolumesList", volumes)
+    return restricted
 
+
+def _restricted_surface_size(
+    gmsh: Any, surfaces: Sequence[int], size_mm: float, *, volumes: Sequence[int] | None = None,
+) -> int:
+    """Constant target on these surfaces; infinity elsewhere for the Min field."""
     constant = gmsh.model.mesh.field.add("MathEval")
     gmsh.model.mesh.field.setString(constant, "F", str(size_mm))
-    restricted = gmsh.model.mesh.field.add("Restrict")
-    gmsh.model.mesh.field.setNumber(restricted, "InField", constant)
-    gmsh.model.mesh.field.setNumbers(restricted, "SurfacesList", surfaces)
-    return restricted
+    return _restrict_sizing_field(gmsh, constant, surfaces, volumes=volumes)
+
+
+def _source_size_field(
+    gmsh: Any, surfaces: Sequence[int], *, size_min: float, size_max: float, transition_mm: float,
+) -> int:
+    """Grade from a source target to the exterior ceiling over its transition.
+
+    ``transition_mm`` is the gmsh DistMax grading distance in mm from the source
+    to wall sizing, not a target element size.
+    """
+    distance = gmsh.model.mesh.field.add("Distance")
+    gmsh.model.mesh.field.setNumbers(distance, "SurfacesList", surfaces)
+    threshold = gmsh.model.mesh.field.add("Threshold")
+    for key, value in {
+        "InField": distance, "SizeMin": size_min, "SizeMax": size_max,
+        "DistMin": 0.0, "DistMax": transition_mm,
+    }.items():
+        gmsh.model.mesh.field.setNumber(threshold, key, value)
+    return threshold
+
+
+def _surface_group_size_targets(sizes: Mapping[str, Any], group_sizes: Iterable[float]) -> list[float]:
+    """Effective exterior targets: groups can coarsen; sources clamp to walls."""
+    wall = float(sizes["rigid_size_mm"])
+    return [wall, *(min(float(size), wall) for size in sizes["source_size_mm"].values()),
+            *map(float, group_sizes)]
+
+
+def _surface_group_sizing_fields(
+    gmsh: Any, *, rigid_sizes: Sequence[tuple[Sequence[int], float]],
+    source_sizes: Sequence[tuple[Sequence[int], float]], sizes: Mapping[str, Any],
+    size_max_mm: float, surface_only_grading: bool = False,
+) -> tuple[list[int], dict[int, float]]:
+    """One sizing owner for plain and coupled exteriors with surface groups.
+
+    Memberships must be disjoint and already remapped through OCC operations.
+    Shared points use the finer adjacent target. Source grading may refine a
+    nearby rigid group, but never caps every coarse group at the wall target.
+    """
+    fields: list[int] = []
+    targets: dict[int, float] = {}
+    wall = float(sizes["rigid_size_mm"])
+    clamped_sources = [(surfaces, min(float(size), wall)) for surfaces, size in source_sizes]
+    for surfaces, size in [*rigid_sizes, *clamped_sources]:
+        fields.append(_restricted_surface_size(gmsh, surfaces, size))
+        targets.update(dict.fromkeys(surfaces, size))
+    point_sizes: dict[int, float] = {}
+    for surface, target in targets.items():
+        for dim, point in gmsh.model.getBoundary([(2, surface)], recursive=True, oriented=False):
+            if dim == 0:
+                point_sizes[point] = min(point_sizes.get(point, target), target)
+    for point, target in point_sizes.items():
+        gmsh.model.mesh.setSize([(0, point)], target)
+    for surfaces, size in clamped_sources:
+        field = _source_size_field(
+            gmsh, surfaces, size_min=size, size_max=size_max_mm,
+            transition_mm=float(sizes["transition_mm"]),
+        )
+        # Coupled air volumes have their own sizing. Exterior source grading
+        # must not impose its distant ceiling throughout those volumes.
+        if surface_only_grading:
+            field = _restrict_sizing_field(gmsh, field, sorted(targets))
+        fields.append(field)
+    return fields, targets
 
 
 def _selector_mechanisms(
@@ -2818,10 +2898,9 @@ def build_imported_mesh(
         deviation_mm=_validated_surface_deviation(options.get("surface_deviation_mm")),
     )
     if surface_groups:
-        targets = [normalized_sizes["rigid_size_mm"],
-                   *(min(size, normalized_sizes["rigid_size_mm"])
-                     for size in normalized_sizes["source_size_mm"].values()),
-                   *(float(group["size_mm"]) for group in surface_groups)]
+        targets = _surface_group_size_targets(
+            normalized_sizes, (group["size_mm"] for group in surface_groups),
+        )
         tessellation["mesh_size_max_mm"] = max(targets)
         tessellation["mesh_size_min_mm"] = min(targets) / IMPORTED_CURVATURE_REFINEMENT_LIMIT
     symmetry_mode = str(options.get("symmetry_mode") or "auto")
@@ -3427,10 +3506,11 @@ def build_imported_mesh(
             # Unlike sources, a wall group can contain any number of disconnected
             # patches. Selector agreement, face count and area gates are shared.
             resolution = resolve_user_source(
-                {**group, "id": surface_names[group_id], "required": True,
+                {**group, "id": group_id, "required": True,
                  "expected_connected_components": components},
                 mechanisms, face_areas_mm2=areas, connected_components=components,
                 vocabulary={"shell_names": named, "appearance_labels": styled},
+                selection_kind="surface group",
             )
             selected = set(resolution["surfaces"])
             if selected & claimed:
@@ -3614,27 +3694,15 @@ def build_imported_mesh(
         fields: list[int] = []
         surface_targets: dict[int, float] = {}
         if surface_groups:
-            surface_specs = [StepFaceGroup(
-                "rigid", StepLabelSelector("rigid"), OccSurfaceRole("rigid"),
-                tag=RIGID_TAG, resolution_mm=normalized_sizes["rigid_size_mm"],
-            )]
-            surface_specs.extend(StepFaceGroup(
-                surface_names[group["group_id"]], StepLabelSelector(surface_names[group["group_id"]]),
-                OccSurfaceRole("rigid"), tag=RIGID_TAG, resolution_mm=float(group["size_mm"]),
-            ) for group in surface_groups)
-            for spec in [*surface_specs, *step_specs]:
-                selected = cut_groups[spec.name]
-                target = (min(spec.resolution_mm, normalized_sizes["rigid_size_mm"])
-                          if spec.tag != RIGID_TAG else spec.resolution_mm)
-                fields.append(_restricted_surface_size(gmsh, selected, target))
-                surface_targets.update(dict.fromkeys(selected, target))
-            point_sizes: dict[int, float] = {}
-            for surface, target in surface_targets.items():
-                for dim, point in gmsh.model.getBoundary([(2, surface)], recursive=True, oriented=False):
-                    if dim == 0:
-                        point_sizes[point] = min(point_sizes.get(point, target), target)
-            for point, target in point_sizes.items():
-                gmsh.model.mesh.setSize([(0, point)], target)
+            fields, surface_targets = _surface_group_sizing_fields(
+                gmsh,
+                rigid_sizes=[(cut_groups["rigid"], normalized_sizes["rigid_size_mm"]), *(
+                    (cut_groups[surface_names[group["group_id"]]], float(group["size_mm"]))
+                    for group in surface_groups
+                )],
+                source_sizes=[(cut_groups[spec.name], spec.resolution_mm) for spec in step_specs],
+                sizes=normalized_sizes, size_max_mm=tessellation["mesh_size_max_mm"],
+            )
         else:
             all_points = [tag for dim, tag in gmsh.model.getEntities(0) if dim == 0]
             if all_points:
@@ -3665,23 +3733,12 @@ def build_imported_mesh(
                 # distance on the very surface they refine. An exact Restrict
                 # field binds the native hard limit to its resolved source faces.
                 fields.append(_restricted_surface_size(gmsh, surfaces_for_source, spec.resolution_mm))
-            distance = gmsh.model.mesh.field.add("Distance")
-            gmsh.model.mesh.field.setNumbers(distance, "SurfacesList", surfaces_for_source)
-            threshold = gmsh.model.mesh.field.add("Threshold")
-            gmsh.model.mesh.field.setNumber(threshold, "InField", distance)
-            gmsh.model.mesh.field.setNumber(
-                threshold, "SizeMin", min(spec.resolution_mm, normalized_sizes["rigid_size_mm"])
-                if surface_groups else spec.resolution_mm,
-            )
-            gmsh.model.mesh.field.setNumber(
-                threshold, "SizeMax", tessellation["mesh_size_max_mm"]
-                if surface_groups else normalized_sizes["rigid_size_mm"],
-            )
-            gmsh.model.mesh.field.setNumber(threshold, "DistMin", 0.0)
-            # transition_mm is the gmsh DistMax grading distance in mm from
-            # each source to wall sizing, not a target element size.
-            gmsh.model.mesh.field.setNumber(threshold, "DistMax", normalized_sizes["transition_mm"])
-            fields.append(threshold)
+            if surface_groups:
+                continue
+            fields.append(_source_size_field(
+                gmsh, surfaces_for_source, size_min=spec.resolution_mm,
+                size_max=normalized_sizes["rigid_size_mm"], transition_mm=normalized_sizes["transition_mm"],
+            ))
         # The sagitta view samples each surface's own parameter grid and never
         # meshes anything -- the throwaway-coarse-mesh route was tried and
         # rejected for making the field depend on absolute position, as
@@ -3773,6 +3830,15 @@ def build_imported_mesh(
         }
         if surface_groups:
             state["surface_group_resolution"] = surface_resolutions
+            # Replay addresses the original ordered faces, before either the
+            # exterior cut or the coupled material/air fragmentation.
+            state["viewport_recipe"]["surface_sizing_groups"] = {
+                group["group_id"]: {
+                    "indices": [surface_order_index[face]
+                                for face in surface_resolutions[group["group_id"]]["surfaces"]],
+                    "size_mm": float(group["size_mm"]),
+                } for group in surface_groups
+            }
         if mesh_error is not None:
             return state
 
