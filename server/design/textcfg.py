@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import math
 import re
 from dataclasses import dataclass, field
@@ -36,6 +37,9 @@ from .schema import (
 
 if TYPE_CHECKING:
     from server.cadlink.identity import CadLink
+
+
+logger = logging.getLogger(__name__)
 
 
 _BLOCK_START = re.compile(r"^([\w.:-]+)\s*=\s*\{$")
@@ -125,7 +129,9 @@ class ParsedDesign:
     def __post_init__(self) -> None:
         stamps = {match[1] for comment in self.comments if (match := _DESIGN_UID_STAMP.fullmatch(comment))}
         if len(stamps) > 1:
-            raise TextConfigError("conflicting design-id stamps")
+            logger.warning("Conflicting design-id stamps; treating file as unstamped")
+            stamps.clear()
+            self.design_uid = None
         try:
             self.design_uid = validate_design_uid(self.design_uid or next(iter(stamps), None))
         except ValueError as exc:
@@ -1795,8 +1801,6 @@ def _serialize_canonical(
         f"; Waveguide Generator design-format: {_DESIGN_FORMAT}",
         f"; {GEOMETRY_STAMP_LABEL} {config.text_import_version or NATIVE_GEOMETRY_VERSION}",
     ]
-    if design_uid is not None:
-        lines.append(f"; Waveguide Generator design-id: {validate_design_uid(design_uid)}")
     if config.ath_axial_sampling_rule == "ath-v2025-06":
         lines.append("; Ath version V2025-06")
     for comment in comments or []:
@@ -1818,7 +1822,7 @@ def _serialize_canonical(
                 _emit_block(lines, name, block)
         encoded = json.dumps(payload, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
         _block(lines, "WG.NativeDesign", [("Payload", encoded.replace(";", "\\u003b"))])
-        return "\n".join(lines) + "\n"
+        return _with_design_uid_stamp("\n".join(lines) + "\n", design_uid)
     controls: dict[str, Any] = {}
     if config.cross_section.exponent != 2 or config.cross_section.aspect_ratio != 1:
         controls["cross_section"] = config.cross_section.model_dump()
@@ -2006,14 +2010,41 @@ def _serialize_canonical(
         if name == _REPORT_BLOCK:
             continue
         _emit_block(lines, name, block)
-    return "\n".join(lines) + "\n"
+    return _with_design_uid_stamp("\n".join(lines) + "\n", design_uid)
+
+
+def _with_design_uid_stamp(text: str, uid: str | None) -> str:
+    """Remove every whole-line/inline stamp, then emit one canonical header."""
+
+    lines = []
+    for line in text.splitlines(keepends=True):
+        prefix, separator, comment = line.partition(";")
+        if separator and _DESIGN_UID_STAMP.fullmatch(";" + comment.strip()):
+            if prefix.strip():
+                newline = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+                lines.append(prefix + newline)
+        else:
+            lines.append(line)
+    if uid is not None:
+        index = 0
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped and not stripped.startswith(";"):
+                break
+            if _GEOMETRY_STAMP.match(stripped) or _DESIGN_FORMAT_STAMP.search(stripped):
+                index = i + 1
+        newline = "\r\n" if "\r\n" in text else "\n"
+        if index and not lines[index - 1].endswith(("\n", "\r")):
+            lines[index - 1] += newline
+        lines.insert(index, f"; Waveguide Generator design-id: {uid}{newline}")
+    return "".join(lines)
 
 
 def serialize(
     design: ParsedDesign | DesignConfig, *, cadlink: CadLink | None = None,
-    design_uid: str | None = None,
+    design_uid: str | None = None, detach_cadlink: bool = False,
 ) -> str:
-    """Serialize in stable v1 writer order, returning exact bytes when pristine."""
+    """Serialize in stable v1 order, preserving pristine source except id stamps."""
 
     design_uid = validate_design_uid(design_uid)
     if isinstance(design, ParsedDesign):
@@ -2028,26 +2059,30 @@ def serialize(
             and (cadlink is None or cadlink == design.cadlink)
             and _semantic_fingerprint(design.design) == design._initial_fingerprint
         ):
-            if uid == parse(design.source_text).design_uid:
-                return design.source_text
-            # An identity-only change preserves every geometry byte and comment.
-            lines = design.source_text.splitlines(keepends=True)
-            lines = [line for line in lines if not _DESIGN_UID_STAMP.fullmatch(line.strip())]
-            index = next((i + 1 for i, line in reversed(list(enumerate(lines)))
-                          if _GEOMETRY_STAMP.match(line.strip()) or _DESIGN_FORMAT_STAMP.search(line)), 0)
-            newline = "\r\n" if "\r\n" in design.source_text else "\n"
-            if index and not lines[index - 1].endswith(("\n", "\r")):
-                lines[index - 1] += newline
-            lines.insert(index, f"; Waveguide Generator design-id: {uid}{newline}")
-            return "".join(lines)
+            source = design.source_text
+            if detach_cadlink and design.cadlink is not None:
+                # Reuse the lexer's block grammar; only CadLink's strict block
+                # is removed. Geometry and every other source byte stay intact.
+                lines = []
+                skipping = False
+                for line in source.splitlines(keepends=True):
+                    match = _BLOCK_START.fullmatch(_without_comment(line))
+                    if match and match[1] == "CadLink":
+                        skipping = True
+                    elif skipping and _without_comment(line) == "}":
+                        skipping = False
+                    elif not skipping:
+                        lines.append(line)
+                source = "".join(lines)
+            return _with_design_uid_stamp(source, uid)
         return _serialize_canonical(
             design.design,
             design.comments,
-            design.cadlink if cadlink is None else cadlink,
+            None if detach_cadlink else design.cadlink if cadlink is None else cadlink,
             uid,
         )
     if isinstance(design, DesignConfig):
-        return _serialize_canonical(design, cadlink=cadlink, design_uid=design_uid)
+        return _serialize_canonical(design, cadlink=None if detach_cadlink else cadlink, design_uid=design_uid)
     raise TypeError("serialize expects ParsedDesign or DesignConfig")
 
 

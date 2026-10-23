@@ -1454,7 +1454,7 @@ describe('permanent design id lifecycle in the File menu', () => {
     expect(useDocumentStore.getState().identity).toBeNull();
   });
 
-  it.each(['Keep with original', 'New design'])('asks once for a copy and remembers %s', async (answer) => {
+  it.each(['Keep with original', 'New design'])('asks again for a browser copy whose %s choice cannot be written', async (answer) => {
     const { durableSettings } = await import('../stores/durableSettings');
     durableSettings.set('designFiles', null);
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
@@ -1472,7 +1472,8 @@ describe('permanent design id lifecycle in the File menu', () => {
     expect(chosen === uid).toBe(answer === 'Keep with original');
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     await chooseLocalDesign({ name: 'copy.cfg', text: async () => 'copy' });
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    await answerSharedCopy('Cancel');
     expect(useDocumentStore.getState().designUid).toBe(chosen);
   });
 });
@@ -1483,7 +1484,7 @@ it('uses the native picker path to distinguish same-name copies', async () => {
   const uid = 'wgu_01K00000000000000000000000';
   let source = '/original/same.cfg';
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-    if (String(url) === '/api/design/choose') return Response.json({ selected: true, filename: 'same.cfg', source, text: 'cfg' });
+    if (String(url) === '/api/design/choose') return Response.json({ selected: true, filename: 'same.cfg', source, fileKey: source === '/original/same.cfg' ? '1:1' : '1:2', text: 'cfg' });
     if (String(url) === '/api/design/open') return Response.json({ ...openedResponse(150), designUid: uid });
     return Response.json({ items: [] });
   }));
@@ -1502,4 +1503,97 @@ it('uses the native picker path to distinguish same-name copies', async () => {
   await nativeOpen();
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(useDocumentStore.getState().designUid).toBe(uid);
+});
+
+
+async function nativeOpen() {
+  const button = open().find((candidate) => candidate.textContent?.startsWith('Open…'))!;
+  await act(async () => { button.click(); await new Promise(resolve => setTimeout(resolve, 0)); });
+}
+
+async function answerSharedCopy(answer: string) {
+  const dialog = document.querySelector('[role="dialog"]')!;
+  await act(async () => {
+    [...dialog.querySelectorAll('button')].find(button => button.textContent === answer)!.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+}
+
+it('writes New design to the copy, recognizes it after a move, and asks about another copy at the old path', async () => {
+  const { durableSettings } = await import('../stores/durableSettings');
+  durableSettings.set('designFiles', null);
+  const uid = 'wgu_01K00000000000000000000000';
+  let diskUid = uid;
+  let source = '/original/design.cfg';
+  let fileKey = '1:1';
+  const saves: unknown[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (String(url) === '/api/design/choose') return Response.json({
+      selected: true, filename: source.split('/').pop(), source, fileKey, selectedFile: 'grant', text: 'cfg',
+    });
+    if (String(url) === '/api/design/open') return Response.json({ ...openedResponse(150), designUid: diskUid });
+    if (String(url) === '/api/design/save') {
+      const payload = JSON.parse(init!.body as string);
+      saves.push(payload);
+      diskUid = payload.designUid;
+      fileKey = '1:3'; // the atomic writer publishes a new inode
+      return Response.json({ text: 'new stamp', fileKey });
+    }
+    return Response.json({ items: [] });
+  }));
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  await nativeOpen();
+  source = '/copy/design.cfg'; fileKey = '1:2';
+  await nativeOpen();
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  expect(saves).toHaveLength(0);
+  await answerSharedCopy('New design');
+  const newUid = useDocumentStore.getState().designUid;
+  expect(newUid).not.toBe(uid);
+  expect(saves).toEqual([{ selectedFile: 'grant', designUid: newUid }]);
+  source = '/moved/renamed.cfg';
+  await nativeOpen();
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(useDocumentStore.getState().designUid).toBe(newUid);
+  source = '/copy/design.cfg'; diskUid = uid; fileKey = '1:4';
+  await nativeOpen();
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  expect(useDocumentStore.getState().designUid).toBe(newUid);
+  await answerSharedCopy('Cancel');
+  expect(saves).toHaveLength(1);
+});
+
+it.each(['read-only', 'disk full'])('asks again when the new-design copy cannot be written: %s', async (detail) => {
+  const { durableSettings } = await import('../stores/durableSettings');
+  durableSettings.set('designFiles', null);
+  const uid = 'wgu_01K00000000000000000000000';
+  let source = '/original/design.cfg';
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    if (String(url) === '/api/design/choose') return Response.json({
+      selected: true, filename: 'design.cfg', source, fileKey: source, selectedFile: 'grant', text: 'cfg',
+    });
+    if (String(url) === '/api/design/open') return Response.json({ ...openedResponse(150), designUid: uid });
+    if (String(url) === '/api/design/save') return Response.json({ detail }, { status: 409 });
+    return Response.json({ items: [] });
+  }));
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  await nativeOpen();
+  source = '/copy/design.cfg';
+  await nativeOpen();
+  await answerSharedCopy('New design');
+  expect(useDocumentStore.getState().designUid).not.toBe(uid);
+  expect(container.querySelector('[role="status"]')?.textContent).toContain('You will be asked again next time');
+  await nativeOpen();
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  await answerSharedCopy('Cancel');
+});
+
+it.each([404, 405, 500, 'unavailable', 'cancelled'])('Open uses the browser input unless the native result is a real cancel: %s', async result => {
+  vi.stubGlobal('fetch', vi.fn(async () => typeof result === 'number'
+    ? new Response('', { status: result })
+    : Response.json({ selected: false, outcome: result })));
+  act(() => root.render(<DesignFileMenu/>));
+  const click = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => undefined);
+  await nativeOpen();
+  expect(click).toHaveBeenCalledTimes(result === 'cancelled' ? 0 : 1);
 });

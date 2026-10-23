@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { resetDesignStore, serializeSolveDesign, useDesignStore } from '../stores/design';
+import { resetDesignStore, serializeDesign, serializeSolveDesign, useDesignStore } from '../stores/design';
 import parentLegacySubmission from './fixtures/legacySidecar.parent.solve.json?raw';
 import {
   canLoadJobDesign,
@@ -166,4 +166,36 @@ it('keeps the live CAD link when browsing an older run of the same permanent des
   expect(useDocumentStore.getState()).toMatchObject({ designUid: uid, identity, designName: 'Renamed A' });
   useDesignStore.getState().undo();
   expect(useDocumentStore.getState()).toMatchObject({ designUid: uid, identity, classification: 'current' });
+});
+
+
+it('records an identity boundary for identical geometry, and undoes it before earlier geometry', async () => {
+  const { resetDocumentStore, useDocumentStore } = await import('../stores/document');
+  resetDocumentStore();
+  resetDesignStore();
+  const original = structuredClone(useDesignStore.getState().design);
+  const identity = { designId: 'wgd_a', lineageId: 'wgl_a', baseEditVersion: 4 };
+  useDocumentStore.getState().setDesignName('A');
+  useDocumentStore.getState().setCadLink(identity, 'current');
+  useDesignStore.getState().updateField('a', original.a! + 1);
+  const beforeRecall = structuredClone(useDesignStore.getState().design);
+  const geometry = serializeDesign(beforeRecall);
+  const uidA = useDocumentStore.getState().designUid;
+  const uidB = 'wgu_01K00000000000000000000001';
+  expect(replaceWithJobDesign({ design_uid: uidB, design_name: 'B',
+    script_snapshot: { version: 1, design: geometry },
+  }, { keepHistory: true })).toBe(true);
+  expect(useDesignStore.getState().design).toEqual(beforeRecall);
+  expect(serializeDesign(useDesignStore.getState().design)).toEqual(geometry);
+  expect(useDocumentStore.getState()).toMatchObject({ designUid: uidB, designName: 'B', identity: null });
+  useDesignStore.getState().undo();
+  expect(serializeDesign(useDesignStore.getState().design)).toEqual(geometry);
+  expect(useDocumentStore.getState()).toMatchObject({ designUid: uidA, designName: 'A', identity });
+  useDesignStore.getState().redo();
+  expect(useDocumentStore.getState()).toMatchObject({ designUid: uidB, designName: 'B', identity: null });
+  expect(serializeDesign(useDesignStore.getState().design)).toEqual(geometry);
+  useDesignStore.getState().undo();
+  useDesignStore.getState().undo();
+  expect(useDesignStore.getState().design.a).toBe(original.a);
+  expect(useDocumentStore.getState().designUid).toBe(uidA);
 });

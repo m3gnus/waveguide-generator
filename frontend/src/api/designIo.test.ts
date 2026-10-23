@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { convertDesignToFreeform, exportGeometryToOutputFolder, freeformFromProfileCsv, hydrateDesignDocument, sendDesignToCad, serializeDesignDocument } from './designIo';
+import { chooseDesignFile, saveSelectedDesignIdentity, convertDesignToFreeform, exportGeometryToOutputFolder, freeformFromProfileCsv, hydrateDesignDocument, sendDesignToCad, serializeDesignDocument } from './designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
 
 describe('design hydration', () => {
@@ -552,4 +552,39 @@ it('uses an explicitly supplied CAD document uid and never borrows the live docu
   await sendDesignToCad(designForFamily('OSSE'), 1, 'old-run', null, fetcher, 'history-2');
   expect(payloads[0].designUid).toBe(historical);
   expect(payloads[1]).not.toHaveProperty('designUid');
+});
+
+
+describe('native Open and browser fallback', () => {
+  it('returns a chosen native file and explicit cancellation', async () => {
+    for (const chosen of [
+      { selected: true, outcome: 'chosen', filename: 'horn.cfg', source: '/horn.cfg', text: 'cfg' },
+      { selected: false, outcome: 'cancelled' },
+    ]) {
+      expect(await chooseDesignFile(vi.fn(async () => Response.json(chosen)))).toEqual(chosen);
+    }
+  });
+
+  it.each([404, 405, 422, 500, 503])('falls back to browser Open on HTTP %s', async (status) => {
+    expect(await chooseDesignFile(vi.fn(async () => new Response('', { status })))).toBeNull();
+  });
+
+  it.each([
+    { selected: false, outcome: 'unavailable' }, { selected: false },
+    { selected: true }, null,
+  ])('falls back unless the reply is a valid chosen file or explicit cancel: %j', async (reply) => {
+    expect(await chooseDesignFile(vi.fn(async () => Response.json(reply)))).toBeNull();
+  });
+
+  it('falls back on transport or reply decoding errors', async () => {
+    expect(await chooseDesignFile(vi.fn().mockRejectedValue(new Error('offline')))).toBeNull();
+    expect(await chooseDesignFile(vi.fn(async () => new Response('not json')))).toBeNull();
+  });
+
+  it('saves an explicit copy identity to the selected-file grant only', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({ text: 'new stamp', fileKey: '1:2' }));
+    expect(await saveSelectedDesignIdentity('grant', 'wgu_new', fetcher)).toEqual({ text: 'new stamp', fileKey: '1:2' });
+    expect(JSON.parse(fetcher.mock.calls[0][1]!.body as string)).toEqual({ selectedFile: 'grant', designUid: 'wgu_new' });
+    await expect(saveSelectedDesignIdentity('grant', 'wgu_new', vi.fn(async () => Response.json({ detail: 'read-only' }, { status: 409 })))).rejects.toThrow('read-only');
+  });
 });

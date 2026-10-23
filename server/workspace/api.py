@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections import OrderedDict
 from collections.abc import Sequence
+from dataclasses import dataclass
 import base64
 import binascii
 import hashlib
@@ -448,12 +449,18 @@ def _picker_start_directory(start_in: Path | None) -> Path | None:
 def _select_workspace_folder(
     prompt: str = "Select output folder", start_in: Path | None = None
 ) -> str | None:
-    return select_workspace_path(prompt, start_in=start_in)
+    return select_workspace_path(prompt, start_in=start_in).path
+
+
+@dataclass(frozen=True)
+class PathPickerResult:
+    outcome: Literal["chosen", "cancelled", "unavailable"]
+    path: str | None = None
 
 
 def select_workspace_path(
     prompt: str, start_in: Path | None = None, *, file: bool = False,
-) -> str | None:
+) -> PathPickerResult:
     """Open a native path picker and return its selection, if any.
 
     ``start_in`` only positions the dialog. Opening it on the folder the
@@ -463,6 +470,8 @@ def select_workspace_path(
 
     # Prompts are supplied by application code, never by a request body.
     system = platform.system()
+    if system not in {"Darwin", "Windows"} and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return PathPickerResult("unavailable")
     opening = _picker_start_directory(start_in)
     commands: list[list[str]]
     if system == "Darwin":
@@ -489,7 +498,8 @@ def select_workspace_path(
                 f"$f = New-Object System.Windows.Forms.{'OpenFileDialog' if file else 'FolderBrowserDialog'}; "
                 f"$f.{'Title' if file else 'Description'} = '{prompt}'; "
                 f"{selected_path}"
-                f"if ($f.ShowDialog() -eq 'OK') {{ $f.{'FileName' if file else 'SelectedPath'} }}",
+                f"if ($f.ShowDialog() -eq 'OK') {{ $f.{'FileName' if file else 'SelectedPath'} }} "
+                "else { Write-Output 'WG_PICKER_CANCELLED' }",
             ]
         ]
     else:
@@ -511,11 +521,19 @@ def select_workspace_path(
             )
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             continue
-        if file and result.returncode in {0, 1}:
-            # A cancelled file dialog is final, never a second fallback dialog.
-            return (result.stdout.strip() or None) if result.returncode == 0 else None
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip().rstrip("/")
+        selected = result.stdout.strip()
+        if result.returncode == 0 and selected and selected != "WG_PICKER_CANCELLED":
+            return PathPickerResult("chosen", selected if file else selected.rstrip("/"))
+        # Exit code 1 alone is ambiguous: display/utility failures use it too.
+        # Only each utility's documented cancel signal ends the picker chain.
+        cancelled = (
+            (system == "Darwin" and result.returncode == 1 and "(-128)" in result.stderr)
+            or (system == "Windows" and result.returncode == 0 and selected == "WG_PICKER_CANCELLED")
+            or (system not in {"Darwin", "Windows"} and result.returncode == 1
+                and not selected and not result.stderr.strip())
+        )
+        if cancelled:
+            return PathPickerResult("cancelled")
     try:
         import tkinter as tk
         from tkinter import filedialog
@@ -524,14 +542,16 @@ def select_workspace_path(
         root.withdraw()
         root.attributes("-topmost", True)
         select = filedialog.askopenfilename if file else filedialog.askdirectory
-        selected = select(
-            title=prompt,
-            **({"initialdir": str(opening)} if opening is not None else {}),
-        )
-        root.destroy()
-        return str(selected) if selected else None
+        try:
+            selected = select(
+                title=prompt,
+                **({"initialdir": str(opening)} if opening is not None else {}),
+            )
+        finally:
+            root.destroy()
+        return PathPickerResult("chosen", str(selected)) if selected else PathPickerResult("cancelled")
     except Exception:
-        return None
+        return PathPickerResult("unavailable")
 
 
 class WorkspaceState:

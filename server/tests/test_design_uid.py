@@ -85,22 +85,22 @@ def test_cli_carries_uid_and_keeps_unstamped_name_fallback():
 @pytest.mark.parametrize("stamp", [
     "; Waveguide Generator design-id: wgd_01K00000000000000000000000\n",
     "; Waveguide Generator design-id: wgu_Z1K00000000000000000000000\n",
-    STAMP + f"; Waveguide Generator design-id: {OTHER}\n",
 ])
-def test_invalid_or_conflicting_uid_is_refused(stamp):
+def test_invalid_uid_is_refused(stamp):
     with pytest.raises(TextConfigError, match="design-id"):
         parse(stamp + SOURCE)
 
 
-def test_stamp_preserves_saved_design_hash_and_current_classification(tmp_path):
+@pytest.mark.parametrize("extra", ["", STAMP, f"; Waveguide Generator design-id: {OTHER}\n"])
+def test_stamp_preserves_saved_design_hash_and_current_classification(tmp_path, extra):
     from server.cadlink.store import CadLinkStore
     from server.design_io.api import save_design
 
     store = CadLinkStore(tmp_path / 'cadlink.db')
     try:
         saved = asyncio.run(save_design({"design": parse(SOURCE).semantic_data(), "designUid": UID}, store=store))
-        parsed = parse(saved["text"])
-        assert parsed.design_uid == UID
+        parsed = parse(extra + saved["text"])
+        assert parsed.design_uid == (None if OTHER in extra else UID)
         assert parsed.cadlink is not None
         before_hash = parsed.cadlink.saved_design_hash
         restamped = serialize(parsed, design_uid=OTHER)
@@ -123,48 +123,179 @@ def test_lookup_json_copy_omits_uid_but_mwg_retains_it():
     assert parse(mwg["text"]).design_uid == UID
 
 
-def test_native_open_picker_returns_a_path_and_cancellation_is_side_effect_free(tmp_path, monkeypatch):
+@pytest.fixture
+def picker_client(tmp_path, monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from server.design_io import api
     from server.cadlink.store import CadLinkStore
+    from server.workspace.api import PathPickerResult
 
-    source = tmp_path / 'same-name.cfg'
+    source = tmp_path / "same-name.cfg"
     source.write_text(STAMP + SOURCE)
-    store = CadLinkStore(':memory:')
+    store = CadLinkStore(":memory:")
     application = FastAPI()
     application.include_router(api.create_design_io_router(store))
-    monkeypatch.setattr(api, 'select_workspace_path', lambda *args, **kwargs: str(source))
+    monkeypatch.setattr(api, "select_workspace_path", lambda *args, **kwargs: PathPickerResult("chosen", str(source)))
     with TestClient(application) as client:
-        chosen = client.post('/api/design/choose').json()
-        assert chosen == {'selected': True, 'source': str(source.resolve()), 'filename': source.name, 'text': STAMP + SOURCE}
-        monkeypatch.setattr(api, 'select_workspace_path', lambda *args, **kwargs: None)
-        assert client.post('/api/design/choose').json() == {'selected': False}
+        yield client, source
     store.close()
 
 
-@pytest.mark.parametrize('system', ['Darwin', 'Windows', 'Linux'])
-def test_file_picker_reuses_platform_adapter_and_cancel_does_not_open_twice(system, monkeypatch):
+def test_native_open_picker_returns_a_path_and_distinct_outcomes(picker_client, monkeypatch):
+    from server.design_io import api
+    from server.workspace.api import PathPickerResult
+
+    client, source = picker_client
+    chosen = client.post("/api/design/choose").json()
+    assert chosen.items() >= {"selected": True, "outcome": "chosen", "source": str(source.resolve()),
+                              "filename": source.name, "text": STAMP + SOURCE}.items()
+    assert chosen["fileKey"]
+    assert chosen["selectedFile"]
+    for outcome in ("cancelled", "unavailable"):
+        monkeypatch.setattr(api, "select_workspace_path", lambda *args, **kwargs: PathPickerResult(outcome))
+        assert client.post("/api/design/choose").json() == {"selected": False, "outcome": outcome}
+
+
+@pytest.mark.parametrize("system", ["Darwin", "Windows", "Linux"])
+def test_file_picker_explicit_cancel_does_not_open_twice(system, monkeypatch):
     import subprocess
     from server.workspace import api
 
     commands = []
-    monkeypatch.setattr(api.platform, 'system', lambda: system)
+    monkeypatch.setattr(api.platform, "system", lambda: system)
+    monkeypatch.setenv("DISPLAY", ":test")
 
     def run(command, **kwargs):
         commands.append(command)
-        return subprocess.CompletedProcess(command, 0 if system == 'Windows' else 1, '', '')
+        return subprocess.CompletedProcess(command, 0 if system == "Windows" else 1,
+                                           "WG_PICKER_CANCELLED" if system == "Windows" else "",
+                                           "User canceled. (-128)" if system == "Darwin" else "")
 
-    monkeypatch.setattr(api.subprocess, 'run', run)
-    assert api.select_workspace_path('Open design', file=True) is None
+    monkeypatch.setattr(api.subprocess, "run", run)
+    assert api.select_workspace_path("Open design", file=True) == api.PathPickerResult("cancelled")
     assert len(commands) == 1
-    serialized = ' '.join(commands[0])
-    if system == 'Darwin':
-        assert 'choose file' in serialized
-    elif system == 'Windows':
-        assert 'OpenFileDialog' in serialized
+    serialized = " ".join(commands[0])
+    assert ("choose file" if system == "Darwin" else "OpenFileDialog" if system == "Windows" else "--file-selection") in serialized
+
+
+@pytest.mark.parametrize("failure", ["error", "missing", "timeout"])
+@pytest.mark.parametrize("system", ["Darwin", "Windows", "Linux"])
+def test_headless_picker_failure_is_unavailable_not_cancel(failure, system, monkeypatch):
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+    from server.workspace import api
+
+    monkeypatch.setattr(api.platform, "system", lambda: system)
+    monkeypatch.setenv("DISPLAY", ":test")
+
+    def run(command, **kwargs):
+        if failure == "missing":
+            raise FileNotFoundError()
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(command, 120)
+        return subprocess.CompletedProcess(command, 1, "", "cannot open display")
+
+    def no_display():
+        raise RuntimeError("no display")
+
+    monkeypatch.setattr(api.subprocess, "run", run)
+    monkeypatch.setitem(sys.modules, "tkinter", SimpleNamespace(Tk=no_display, filedialog=SimpleNamespace()))
+    assert api.select_workspace_path("Open design", file=True) == api.PathPickerResult("unavailable")
+
+
+@pytest.mark.parametrize("system", ["Darwin", "Windows", "Linux"])
+def test_working_native_picker_chooses_file(system, monkeypatch):
+    import subprocess
+    from server.workspace import api
+
+    monkeypatch.setattr(api.platform, "system", lambda: system)
+    monkeypatch.setenv("DISPLAY", ":test")
+    monkeypatch.setattr(api.subprocess, "run", lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "/chosen/design.cfg\n", ""))
+    assert api.select_workspace_path("Open design", file=True) == api.PathPickerResult("chosen", "/chosen/design.cfg")
+
+
+@pytest.mark.parametrize("selected", ["", "/chosen/design.cfg"])
+def test_tk_picker_distinguishes_selection_and_cancel(selected, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from server.workspace import api
+
+    monkeypatch.setenv("DISPLAY", ":test")
+    destroyed = []
+    root = SimpleNamespace(withdraw=lambda: None, attributes=lambda *args: None, destroy=lambda: destroyed.append(True))
+    monkeypatch.setattr(api.subprocess, "run", lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setitem(sys.modules, "tkinter", SimpleNamespace(Tk=lambda: root, filedialog=SimpleNamespace(askopenfilename=lambda **kwargs: selected)))
+    expected = api.PathPickerResult("chosen", selected) if selected else api.PathPickerResult("cancelled")
+    assert api.select_workspace_path("Open design", file=True) == expected
+    assert destroyed == [True]
+
+
+def test_copy_new_identity_is_written_and_survives_a_move(picker_client):
+    client, source = picker_client
+    before = parse(source.read_text())
+    chosen = client.post("/api/design/choose").json()
+    saved = client.post("/api/design/save", json={"selectedFile": chosen["selectedFile"], "designUid": OTHER})
+    assert saved.status_code == 200, saved.text
+    after = parse(source.read_text())
+    assert after.design_uid == OTHER
+    assert after.semantic_data() == before.semantic_data()
+    assert design_hash(after.design) == design_hash(before.design)
+    key = saved.json()["fileKey"]
+    moved = source.with_name("moved.cfg")
+    source.rename(moved)
+    source.write_text(STAMP + SOURCE)
+    assert parse(moved.read_text()).design_uid == OTHER
+    assert key == f"{moved.stat().st_dev}:{moved.stat().st_ino}"
+    assert client.post("/api/design/choose").json()["fileKey"] != key
+    assert parse(source.read_text()).design_uid == UID
+    assert client.post("/api/design/save", json={"selectedFile": chosen["selectedFile"], "designUid": OTHER}).status_code == 409
+
+
+@pytest.mark.parametrize("failure", ["read-only", "changed", "write-error"])
+def test_copy_identity_write_refuses_unwritable_or_changed_file(picker_client, monkeypatch, failure):
+    from server.design_io import api
+
+    client, source = picker_client
+    chosen = client.post("/api/design/choose").json()
+    if failure == "read-only":
+        source.chmod(0o444)
+    elif failure == "changed":
+        source.write_text(STAMP + SOURCE + "; changed\n")
     else:
-        assert '--directory' not in commands[0]
+        monkeypatch.setattr(api, "_write_export_sync", lambda *args: (_ for _ in ()).throw(OSError("disk full")))
+    before = source.read_bytes()
+    response = client.post("/api/design/save", json={"selectedFile": chosen["selectedFile"], "designUid": OTHER})
+    assert response.status_code == 409
+    assert source.read_bytes() == before
+    source.chmod(0o644)
+
+
+@pytest.mark.parametrize("inline", [False, True])
+@pytest.mark.parametrize("conflicting", [False, True])
+def test_duplicate_and_inline_stamps_normalize_without_geometry_or_hash_changes(inline, conflicting, caplog):
+    first = parse(SOURCE)
+    extra = f"; Waveguide Generator design-id: {OTHER if conflicting else UID}\n"
+    text = STAMP + (SOURCE.replace("Throat.Diameter = 25.4", "Throat.Diameter = 25.4 " + extra.rstrip()) if inline else extra + SOURCE)
+    parsed = parse(text)
+    assert parsed.design_uid == (None if conflicting else UID)
+    if conflicting:
+        assert "Conflicting design-id stamps" in caplog.text
+        assert asyncio.run(open_design(text))["designUid"] is None
+    assert parsed.semantic_data() == first.semantic_data()
+    assert parsed._initial_fingerprint == first._initial_fingerprint
+    assert design_hash(parsed.design) == design_hash(first.design)
+    for uid in [UID, OTHER]:
+        normalized = serialize(parsed, design_uid=uid)
+        assert normalized.count("Waveguide Generator design-id:") == 1
+        assert f"; Waveguide Generator design-id: {uid}\n" in normalized.splitlines(keepends=True)
+        reopened = parse(normalized)
+        assert reopened.design_uid == uid
+        assert reopened.semantic_data() == first.semantic_data()
+        assert design_hash(reopened.design) == design_hash(first.design)
+    if not conflicting:
+        assert serialize(parsed).count("Waveguide Generator design-id:") == 1
 
 
 def test_solve_submission_persists_document_identity_outside_geometry(tmp_path, monkeypatch):
@@ -188,3 +319,47 @@ def test_solve_submission_persists_document_identity_outside_geometry(tmp_path, 
         await app.state.jobs_runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_new_design_copy_detaches_cadlink_without_changing_geometry(picker_client):
+    from server.cadlink.store import CadLinkStore
+    from server.design_io.api import save_design
+
+    client, source = picker_client
+    store = CadLinkStore(":memory:")
+    try:
+        linked = asyncio.run(save_design({"design": parse(SOURCE).semantic_data(), "designUid": UID}, store=store))
+        source.write_text(linked["text"])
+        before = parse(linked["text"])
+        chosen = client.post("/api/design/choose").json()
+        saved = client.post("/api/design/save", json={"selectedFile": chosen["selectedFile"], "designUid": OTHER})
+        assert saved.status_code == 200, saved.text
+        after = parse(source.read_text())
+        assert before.cadlink is not None
+        assert after.cadlink is None
+        assert after.design_uid == OTHER
+        assert after.semantic_data() == before.semantic_data()
+        assert design_hash(after.design) == design_hash(before.design)
+        assert design_hash(after.design).startswith(before.cadlink.saved_design_hash)
+    finally:
+        store.close()
+
+
+def test_headless_linux_never_misreads_a_silent_picker_failure_as_cancel(monkeypatch):
+    from server.workspace import api
+
+    monkeypatch.setattr(api.platform, "system", lambda: "Linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setattr(api.subprocess, "run", lambda *args, **kwargs: pytest.fail("no display: skip native utilities"))
+    assert api.select_workspace_path("Open design", file=True) == api.PathPickerResult("unavailable")
+
+
+def test_native_payload_cannot_relocate_stamp_inside_a_block():
+    payload = design_payload(FAMILIES[0])
+    payload["extra_keys"] = {"Future.Key": "design-format: 2"}
+    design = DesignConfig.model_validate(payload)
+    text = serialize(design, design_uid=UID)
+    assert parse(text).design_uid == UID
+    assert text.count("Waveguide Generator design-id:") == 1
+    assert parse(text).semantic_data() == design.model_dump(mode="json")

@@ -110,11 +110,36 @@ async function postText<T>(path: string, text: string, fetcher: typeof fetch): P
   return response.json() as Promise<T>;
 }
 
-export async function chooseDesignFile(fetcher: typeof fetch = fetch): Promise<{
-  selected: boolean; filename?: string; source?: string; text?: string;
-} | null> {
-  const response = await fetcher('/api/design/choose', { method: 'POST' });
-  if (response.status === 404) return null; // older server: retain the browser picker
+export interface ChosenDesignFile {
+  selected: boolean;
+  outcome?: 'chosen' | 'cancelled' | 'unavailable';
+  selectedFile?: string;
+  fileKey?: string;
+  filename?: string;
+  source?: string;
+  text?: string;
+}
+
+/** Null asks the caller to use the browser input; only explicit cancel stops Open. */
+export async function chooseDesignFile(fetcher: typeof fetch = fetch): Promise<ChosenDesignFile | null> {
+  try {
+    const response = await fetcher('/api/design/choose', { method: 'POST' });
+    if (!response.ok) return null;
+    const chosen = await response.json() as ChosenDesignFile;
+    if (chosen.outcome === 'cancelled') return chosen;
+    if (chosen.selected && chosen.filename && typeof chosen.text === 'string') return chosen;
+  } catch { /* unavailable picker, network, or malformed reply: retain browser Open */ }
+  return null;
+}
+
+/** Persist the explicit New design decision to the exact native-selected file. */
+export async function saveSelectedDesignIdentity(
+  selectedFile: string, designUid: string, fetcher: typeof fetch = fetch,
+): Promise<{ text: string; fileKey: string }> {
+  const response = await fetcher('/api/design/save', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ selectedFile, designUid }),
+  });
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json();
 }

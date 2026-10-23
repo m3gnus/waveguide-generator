@@ -715,6 +715,7 @@ interface DesignStore {
    */
   replaceDocument: (design: DesignDocument, options?: {
     keepHistory?: boolean;
+    documentState?: HistoryDocument;
     loadSource?: DesignLoadSource;
     revision?: number;
   }) => void;
@@ -887,8 +888,11 @@ export const useDesignStore = create<DesignStore>()(
       replaceDocument: (design, options) => {
         cancelRevisionTimers();
         get().endDrag();
+        const nextDesign = structuredClone(design);
+        // Bind identity before zundo compares the before/after documents.
+        if (options?.documentState) historyDocuments.set(nextDesign, options.documentState);
         set((state) => ({
-          design: structuredClone(design),
+          design: nextDesign,
           designRevision: options?.revision ?? state.designRevision + 1,
           loadGeneration: state.loadGeneration + 1,
         }));
@@ -939,7 +943,8 @@ export const useDesignStore = create<DesignStore>()(
     }),
     {
       partialize: (state) => ({ design: state.design }),
-      equality: (past, current) => JSON.stringify(past.design) === JSON.stringify(current.design),
+      equality: (past, current) => JSON.stringify(past.design) === JSON.stringify(current.design)
+        && historyIdentity(past.design) === historyIdentity(current.design),
       limit: 100,
     },
   ),
@@ -947,6 +952,10 @@ export const useDesignStore = create<DesignStore>()(
 
 type HistoryDocument = Pick<DocumentState, 'designUid' | 'designName' | 'identity' | 'classification' | 'openedContentKey' | 'legacyDesignName'>;
 const historyDocuments = new WeakMap<DesignDocument, HistoryDocument>();
+function historyIdentity(design: DesignDocument): string {
+  const state = historyDocuments.get(design);
+  return JSON.stringify([state?.designUid, state?.designName, state?.identity]);
+}
 function rememberHistoryDocument(design: DesignDocument): void {
   const { designUid, designName, identity, classification, openedContentKey, legacyDesignName } = useDocumentStore.getState();
   historyDocuments.set(design, { designUid, designName, identity, classification, openedContentKey, legacyDesignName });
@@ -957,7 +966,9 @@ useDesignStore.subscribe((state, previous) => {
   if (state.dragSnapshot && state.dragSnapshot !== previous.dragSnapshot) rememberHistoryDocument(state.dragSnapshot);
   if (state.design === previous.design) return;
   const recorded = historyDocuments.get(state.design);
-  if (recorded && recorded.designUid !== useDocumentStore.getState().designUid) {
+  if (recorded && historyIdentity(state.design) !== JSON.stringify([
+    useDocumentStore.getState().designUid, useDocumentStore.getState().designName, useDocumentStore.getState().identity,
+  ])) {
     useDocumentStore.getState().restoreDocumentState(recorded);
   } else if (!recorded) rememberHistoryDocument(state.design);
 });

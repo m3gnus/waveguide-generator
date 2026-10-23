@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   buildGeometryExport,
   chooseDesignFile,
+  saveSelectedDesignIdentity,
   exportGeometryToOutputFolder,
   inspectDesignText,
   openDesignText,
@@ -200,14 +201,14 @@ export function DesignFileMenu() {
       if (chosen === null) { openInput.current?.click(); return; }
       if (!chosen.selected || !chosen.filename || chosen.text === undefined) return;
       await readDesign({
-        name: chosen.filename, path: chosen.source,
+        name: chosen.filename, path: chosen.source, fileKey: chosen.fileKey, selectedFile: chosen.selectedFile,
         text: async () => chosen.text!,
       }, false, ticket);
     });
   }
 
   async function readDesign(
-    file: { name: string; path?: string; webkitRelativePath?: string; text: () => Promise<string> },
+    file: { name: string; path?: string; webkitRelativePath?: string; fileKey?: string; selectedFile?: string; text: () => Promise<string> },
     reportOnly: boolean,
     nativeTicket?: ReturnType<typeof takeDesignOpenTicket>,
   ) {
@@ -247,9 +248,12 @@ export function DesignFileMenu() {
       assertDesignOpenCurrent(ticket, file.name);
       const source = designFileSource(file);
       const stamp = opened.designUid;
+      let identityWriteNotice: string | undefined;
       if (stamp) {
-        const known = inspectDesignFile(stamp, source);
+        const known = inspectDesignFile(stamp, source, file.fileKey);
         let uid = known.uid;
+        let fileKey = file.fileKey;
+        let persisted = true;
         if (known.originalName) {
           const choice = await new Promise<'keep' | 'new' | null>((resolve) => {
             const question: SharedDesignQuestion = {
@@ -264,14 +268,30 @@ export function DesignFileMenu() {
             setSharedQuestion(question);
           });
           if (choice === null) return;
-          if (choice === 'new') uid = mintDesignUid();
+          assertDesignOpenCurrent(ticket, file.name);
+          if (choice === 'new') {
+            uid = mintDesignUid();
+            persisted = false;
+            if (file.selectedFile) {
+              try {
+                const saved = await saveSelectedDesignIdentity(file.selectedFile, uid);
+                fileKey = saved.fileKey;
+                persisted = true;
+              } catch (error) {
+                identityWriteNotice = `Opened as a new design, but could not save its id: ${error instanceof Error ? error.message : String(error)}. You will be asked again next time.`;
+              }
+            } else {
+              identityWriteNotice = 'Opened as a new design. Export a copy to keep its new id; this browser cannot update the selected file. You will be asked again next time.';
+            }
+          }
         }
         assertDesignOpenCurrent(ticket, file.name);
-        rememberDesignFile(stamp, source, designNameFromFilename(file.name), uid);
+        if (persisted) rememberDesignFile(uid, source, designNameFromFilename(file.name), fileKey);
         opened.designUid = uid;
         if (uid !== stamp) opened.cadlink = { identity: null, classification: 'missing', adoptionCandidate: null };
       }
       applyOpenedDesign(opened, file.name);
+      if (identityWriteNotice) setMessage(identityWriteNotice);
     };
     if (nativeTicket) await operation();
     else await act(operation);

@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
+import os
+import secrets
+import time
 from pathlib import Path
 import re
 from typing import Any
@@ -12,7 +16,7 @@ from pydantic import ValidationError
 
 from server.cadlink.identity import SaveIdentity, classify_open, design_hash
 from server.cadlink.store import CadLinkStore
-from server.workspace.api import select_workspace_path
+from server.workspace.api import select_workspace_path, _write_export_sync
 from server.design.uid import validate_design_uid
 from server.design.schema import DesignConfig
 from server.design.textcfg import ParsedDesign, TextConfigError, parse, serialize
@@ -198,15 +202,47 @@ async def import_report(
 
 def create_design_io_router(store: CadLinkStore) -> APIRouter:
     router = APIRouter(prefix="/api/design", tags=["design-io"])
+    # A bounded, short-lived grant to the exact file read by the native picker.
+    # Saving a copy decision cannot name an arbitrary path or overwrite a file
+    # changed since the question was shown.
+    selected_files: OrderedDict[str, tuple[Path, bytes, float]] = OrderedDict()
+
+    def file_key(path: Path) -> str:
+        stat = path.stat()
+        return f"{stat.st_dev}:{stat.st_ino}"
+
+    def save_selected_file(payload: dict[str, Any]) -> dict[str, Any]:
+        selection = selected_files.pop(str(payload.get("selectedFile")), None)
+        if selection is None or time.monotonic() - selection[2] > 600:
+            raise HTTPException(status_code=409, detail="Open the copy again before saving its identity")
+        path, original, _ = selection
+        try:
+            uid = validate_design_uid(payload.get("designUid"))
+            if uid is None:
+                raise ValueError("A new design id is required")
+            if path.read_bytes() != original:
+                raise ValueError("The selected file changed; open it again")
+            # Atomic replacement needs directory write access and could otherwise
+            # replace a read-only file. Respect the file's own read-only intent.
+            if not path.stat().st_mode & 0o222 or not os.access(path, os.W_OK):
+                raise PermissionError("The selected file is read-only")
+            parsed = _parse_text(original.decode("utf-8-sig"))
+            # New design detaches CadLink edit identity, using the same serializer
+            # and atomic export writer as the ordinary save/export path.
+            text = serialize(parsed, design_uid=uid, detach_cadlink=True)
+            _write_export_sync(path.parent, "", "overwrite", [(path.name, text.encode("utf-8"))])
+            return {"text": text, "fileKey": file_key(path)}
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.post("/choose")
     async def choose_endpoint() -> dict[str, Any]:
         # Only the native picker grants a path: callers cannot ask this endpoint
         # to read an arbitrary server file. Paths distinguish same-name copies.
         selected = await asyncio.to_thread(select_workspace_path, "Open design", file=True)
-        if not selected:
-            return {"selected": False}
-        path = Path(selected).resolve()
+        if selected.outcome != "chosen":
+            return {"selected": False, "outcome": selected.outcome}
+        path = Path(selected.path).resolve()
         try:
             if path.suffix.lower() not in {".cfg", ".mwg", ".txt", ".json"}:
                 raise ValueError("Choose a .cfg, .mwg, .txt or .json design file")
@@ -217,10 +253,17 @@ def create_design_io_router(store: CadLinkStore) -> APIRouter:
             text = content.decode("utf-8-sig")
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return {"selected": True, "filename": path.name, "source": str(path), "text": text}
+        token = secrets.token_urlsafe(18)
+        selected_files[token] = (path, content, time.monotonic())
+        while len(selected_files) > 32:
+            selected_files.popitem(last=False)
+        return {"selected": True, "outcome": "chosen", "filename": path.name,
+                "source": str(path), "text": text, "selectedFile": token, "fileKey": file_key(path)}
 
     @router.post("/save")
     async def save_endpoint(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        if "selectedFile" in payload:
+            return await asyncio.to_thread(save_selected_file, payload)
         return await save_design(payload, store=store)
 
     @router.post("/serialize")

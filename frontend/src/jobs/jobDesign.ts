@@ -51,14 +51,18 @@ export function replaceWithJobDesign(
   if (!design) return false;
   const sameDocument = job.design_uid != null
     && job.design_uid === useDocumentStore.getState().designUid;
-  useDesignStore.getState().replaceDocument(design, options);
   // Browsing an earlier run of this same document keeps its current name,
   // saved-copy key and CAD edit identity. A different document owns none of them.
-  if (!sameDocument) useDocumentStore.getState().restoreDocumentState({
-    designUid: job.design_uid ?? mintDesignUid(),
-    designName: job.design_name ?? '',
-    identity: null,
-    classification: null,
+  useDesignStore.getState().replaceDocument(design, {
+    ...options,
+    documentState: sameDocument ? undefined : {
+      designUid: job.design_uid ?? mintDesignUid(),
+      designName: job.design_name ?? '',
+      identity: null,
+      classification: null,
+      openedContentKey: null,
+      legacyDesignName: undefined,
+    },
   });
   return true;
 }
