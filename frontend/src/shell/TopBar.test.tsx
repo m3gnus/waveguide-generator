@@ -6,7 +6,7 @@ import { preferencesStore } from '../prefs/preferences';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { WorkspaceModeSwitch, workspaceModePaletteEntries } from './TopBar';
+import { buildParameterPaletteEntries, WorkspaceModeSwitch, workspaceModePaletteEntries } from './TopBar';
 import { workspaceNavigation } from './Workspace';
 
 function solvedParametricJob(id: string, design: ReturnType<typeof designForFamily>): JobItem {
@@ -124,6 +124,21 @@ describe('workspace mode switch', () => {
     expect(useDesignStore.getState().design.L).toBe(321);
     expect(snapshotSpy).not.toHaveBeenCalled();
     resetDesignStore();
+  });
+
+  it.each(['cad', 'file'] as const)('only changes the input revision when connection search leaves %s input', (input) => {
+    act(() => workspaceModeStore.setImportedInput(input));
+    const revision = workspaceModeStore.getSnapshot().inputRevision;
+    const reveal = vi.spyOn(workspaceNavigation, 'reveal').mockReturnValue(true);
+    vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
+    const entry = buildParameterPaletteEntries(undefined, { mode: 'cad' }).find((item) => item.id === 'cad-link-connection')!;
+
+    act(() => entry.run());
+
+    expect(workspaceModeStore.getSnapshot()).toMatchObject({
+      mode: 'cad', importedInput: 'cad', inputRevision: revision + (input === 'cad' ? 0 : 1),
+    });
+    expect(reveal).toHaveBeenCalledExactlyOnceWith('cad-link');
   });
 
   it('registers both palette commands', () => {

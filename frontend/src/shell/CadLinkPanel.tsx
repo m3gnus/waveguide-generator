@@ -1,4 +1,6 @@
 import { buildCadProjectSetup, useCadFeedbackError } from './cadSetupPublisher';
+import { nativeCadLimitation } from '../design/nativeFamilies';
+import { useCadConnectionStore } from '../stores/cadConnection';
 import { ExperimentalBadge } from '../design/ExperimentalBadge';
 import { useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useEffect } from 'react';
@@ -18,7 +20,7 @@ import { choosableForImportedGeometry } from '../design/backendSupport';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { returnBelongsToProject } from './cadlink/arrivals';
-import { fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView } from './cadWorkflowView';
+import { fusionLinkDisplayName, fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView } from './cadWorkflowView';
 import { Icon } from './icons';
 import { fullTime, pluralized, relativeTime } from './cadTime';
 import { CadProjectHeader, CadProjectHistory } from './CadProjectPanel';
@@ -518,6 +520,18 @@ function ModelVersions({ projectBundles, unlinkedReturns, otherProjectReturns, s
   </CadDrawer>;
 }
 
+/** Exact managed parameter names reported by newer WGLink builds. The workflow
+ * detail owns the aggregate count for older add-ins. */
+function FusionParameterDrift({ parameterDriftCount, driftedParameters }: {
+  parameterDriftCount: number;
+  driftedParameters?: readonly string[];
+}) {
+  if (parameterDriftCount <= 0 || !driftedParameters?.length) return null;
+  return <ul aria-label="Locally edited Fusion parameters">
+    {driftedParameters.map((name) => <li key={name}><code>{name}</code></li>)}
+  </ul>;
+}
+
 export function CadLinkPanel() {
   const connection = useRef<HTMLElement>(null);
   const visible = usePanelVisible();
@@ -533,6 +547,8 @@ export function CadLinkPanel() {
   const state = useCadReturnStore();
   const preferences = usePreferences();
   const design = useDesignStore((current) => current.design);
+  const cadLimitation = nativeCadLimitation(design.formula);
+  const observedFusionStatus = useCadConnectionStore((current) => current.fusionStatus);
   const designRevision = useDesignStore((current) => current.designRevision);
   const documentName = useDocumentStore((current) => current.designName);
   const identity = useDocumentStore((current) => current.identity);
@@ -653,7 +669,10 @@ export function CadLinkPanel() {
     void cadWorkspaceView.pullFromFusion().catch(() => undefined);
   };
 
-  const sendToFusion = () => { void cadWorkspaceView.sendWgToFusion().catch(() => undefined); };
+  const sendToFusion = () => {
+    if (cadLimitation) return;
+    void cadWorkspaceView.sendWgToFusion().catch(() => undefined);
+  };
 
   // Forget this design's link to its Onshape document. The document itself
   // is left exactly as it is; the next send creates a new one.
@@ -735,6 +754,14 @@ export function CadLinkPanel() {
     onClick={() => setConfirmUnlink(true)}
   >{unlinkingOnshape ? 'Unlinking…' : 'Unlink'}</button>;
 
+  const workflowDetail = <>
+    <p>{workflow.detail}</p>
+    {!onshape && <FusionParameterDrift
+      parameterDriftCount={fusionStatus?.link?.parameterDriftCount ?? 0}
+      driftedParameters={fusionStatus?.link?.driftedParameters}
+    />}
+  </>;
+
   const linkActions = onshape
     ? <>
       <button className="link-button" disabled={sendingToOnshape} onClick={() => void sendToOnshape()}>Send to Onshape</button>
@@ -743,7 +770,7 @@ export function CadLinkPanel() {
       {linkedDocument && unlinkButton}
     </>
     : <>
-      <button className="link-button" disabled={sendingToFusion} title="Rebuild the linked Fusion waveguide from the current WG design." onClick={sendToFusion}>Send to Fusion</button>
+      <button className="link-button" disabled={sendingToFusion || Boolean(cadLimitation)} title={cadLimitation ?? "Rebuild the linked Fusion waveguide from the current WG design."} onClick={sendToFusion}>Send to Fusion</button>
       <button className="link-button" disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} title="Ask Fusion for the active document's current geometry and source tags." onClick={() => void bringFromFusion()}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring geometry into WG'}</button>
     </>;
 
@@ -788,7 +815,7 @@ export function CadLinkPanel() {
             <span className="cad-link-meta">{onshape ? linkedDocument?.documentName ?? '' : fusionStatus?.documentName ?? ''}</span>
           </summary>
           <div className="cad-link-quiet-body">
-            {!fusionConnected && <p>{workflow.detail}</p>}
+            {!fusionConnected && workflowDetail}
             <CadCoordinationNote/>
             <div className="cad-link-actions">
               {!fusionConnected && linkActions}
@@ -799,21 +826,9 @@ export function CadLinkPanel() {
         : <>
           <div className={`cad-connection cad-connection-${workflow.state}`}>
             <span className="cad-connection-dot" aria-hidden="true"/>
-            <div><h4 title={addinVersion}>{workflow.headline}</h4><p>{workflow.detail}</p><CadCoordinationNote/></div>
+            <div><h4 title={addinVersion}>{workflow.headline}</h4>{workflowDetail}<CadCoordinationNote/></div>
             <button className="link-button cad-link-settings" onClick={() => requestSettings('cad')}>Settings</button>
           </div>
-          {!onshape && matchingFusionLinks.length > 1 && workflow.state === 'instance-selection' && <label className="field-row linked-instance-selection">
-            <span>Managed Fusion link</span>
-            <select
-              aria-label="Linked Fusion instance"
-              value={fusionStatus?.link?.instanceId ?? ''}
-              onChange={(event) => cadWorkspaceView.selectFusionInstance(event.target.value)}
-            >
-              <option value="" disabled>Choose an instance</option>
-              {matchingFusionLinks.map((link) => <option value={link.instanceId} key={link.instanceId}>{link.instanceId}</option>)}
-            </select>
-            <small>Freshness, geometry requests and updates use this exact managed body.</small>
-          </label>}
           {onshape && matchingOnshapeLinks.length > 1 && <label className="field-row linked-instance-selection">
             <span>Managed Onshape link</span>
             <select
@@ -830,14 +845,14 @@ export function CadLinkPanel() {
           </label>}
           {/* Fusion: the actions that resolve the out-of-sync state, and only those. */}
           {!onshape && workflow.state === 'not-configured' && <button className="primary cad-primary-action" onClick={() => requestSettings('cad')}>Set up Fusion connection</button>}
-          {!onshape && !unlinkedOnScreen && workflow.action === 'open' && <button className="primary cad-primary-action" disabled={sendingToFusion} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Open in Fusion 360'}</button>}
+          {!onshape && !unlinkedOnScreen && workflow.action === 'open' && <button className="primary cad-primary-action" disabled={sendingToFusion || Boolean(cadLimitation)} title={cadLimitation} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Open in Fusion 360'}</button>}
           {!onshape && fusionStatus?.fusionChangesAvailable && !fusionStatus.wgChangesAvailable && <div className="cad-confirm-actions">
             <button disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} onClick={() => void bringFromFusion()}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring in'}</button>
             <button className="primary" disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} title="Bring the current Fusion geometry into WG, prepare it, and start the solve." onClick={() => { void cadWorkspaceView.pullAndSolve(); }}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring in & solve'}</button>
           </div>}
           {!onshape && !unlinkedOnScreen && workflow.action === 'update' && <div className={fusionBothChanged ? 'cad-confirm-actions' : undefined}>
             {fusionBothChanged && <button disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} title="Keep the Fusion edits: bring the Fusion geometry into WG instead of overwriting it." onClick={() => void bringFromFusion()}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring Fusion changes in'}</button>}
-            <button className="primary cad-primary-action" disabled={sendingToFusion} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Send WG changes to Fusion'}</button>
+            <button className="primary cad-primary-action" disabled={sendingToFusion || Boolean(cadLimitation)} title={cadLimitation} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Send WG changes to Fusion'}</button>
           </div>}
           {/* Onshape: the same card carries its send/return pair. */}
           {onshape && workflow.state !== 'not-configured' && !confirmPublicDocument && workflow.action && <button className="primary cad-primary-action" disabled={sendingToOnshape} onClick={() => void sendToOnshape()}>{sendingToOnshape ? (workflow.action === 'update' ? 'Updating…' : 'Creating…') : onshapeActionLabel}</button>}
@@ -845,6 +860,24 @@ export function CadLinkPanel() {
           {onshape && linkedDocument?.documentUrl && <a className="link-button cad-onshape-open" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open {linkedDocument.documentName} in Onshape</a>}
           {onshape && linkedDocument && workflow.state !== 'not-configured' && unlinkButton}
         </>}
+      {!onshape && matchingFusionLinks.length > 1 && <label className="field-row linked-instance-selection">
+        <span>Managed Fusion link</span>
+        <select
+          aria-label="Linked Fusion instance"
+          value={fusionStatus?.selectedInstanceId ?? fusionStatus?.link?.instanceId ?? ''}
+          onChange={(event) => cadWorkspaceView.selectFusionInstance(event.target.value)}
+        >
+          <option value="" disabled>Choose an instance</option>
+          {matchingFusionLinks.map((link) => {
+            const name = fusionLinkDisplayName(observedFusionStatus?.matchingLinks?.find((item) => item.instanceId === link.instanceId) ?? link);
+            return <option value={link.instanceId} key={link.instanceId}>
+              {name ? `${name} · ` : ''}{link.instanceId}
+            </option>;
+          })}
+        </select>
+        <small>Freshness, geometry requests and updates use this exact managed body.</small>
+      </label>}
+      {!onshape && cadLimitation && <p className="section-note">{cadLimitation}</p>}
       {onshape && publicOnly && !confirmPublicDocument && <div className="cad-alert cad-alert-notice" role="status"><b>This Onshape plan creates public documents.</b> {onshapeConnection?.plan?.name ?? 'The Free plan'} makes every document world-readable — anyone with the link can view this waveguide. Confidential designs belong in Fusion 360 or on a paid Onshape plan.</div>}
       {onshape && onshapeConnection?.insecureKeyFile && <div className="cad-alert cad-alert-error" role="alert">The Onshape key file at {onshapeConnection.credentialsPath} is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.</div>}
       {onshape && confirmPublicDocument && <div className="cad-direction-alert" role="alert"><div><b>This document will be public</b><span>{confirmPublicDocument}</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmPublicDocument(null)}>Cancel</button><button className="primary" disabled={sendingToOnshape} onClick={() => void sendToOnshape(true)}>Continue: create a public document</button></div></div>}

@@ -158,7 +158,7 @@ export function buildParameterPaletteEntries(family?: DesignFamily, context: Par
     detail: 'Connection',
     keywords: 'Linked design Fusion Onshape connection sync send rebuild',
     run: () => {
-      workspaceModeStore.setImportedInput('cad');
+      if (workspaceModeStore.getSnapshot().importedInput !== 'cad') workspaceModeStore.setImportedInput('cad');
       activateWorkspaceMode('cad');
       workspaceNavigation.reveal('cad-link');
     },
