@@ -7,7 +7,6 @@ import { createCadOutboundController, isOutboundSupersededError, OutboundSuperse
 import { deferred, json } from './selection.fixtures';
 import { exported, identity, link, status } from './outbound.fixtures';
 import menuSource from '../../design/DesignFileMenu.tsx?raw';
-import paramSource from '../../design/ParamPanel.tsx?raw';
 import panelSource from '../CadLinkPanel.tsx?raw';
 import coordinatorSource from '../CadWorkspaceOwners.tsx?raw';
 import projectSource from '../CadProjectPanel.tsx?raw';
@@ -194,10 +193,11 @@ describe('outbound commands without a mounted coordinator (row 17)', () => {
 });
 
 it('inventories every editable-design send entry point behind the shared guard boundary', () => {
-  for (const source of [menuSource, paramSource, panelSource]) {
+  for (const source of [menuSource, panelSource, coordinatorSource]) {
     expect(source).toContain('.sendWgToFusion('); expect(source).not.toContain('sendDesignToCad');
   }
   expect(coordinatorSource).toContain('createCadOutboundController(');
+  expect(coordinatorSource).toContain('sendWgToFusion: outbound.sendWgToFusion');
   expect(coordinatorSource).toContain('state.sendWgToFusion({ confirmed: true })');
   expect(projectSource).not.toContain('sendWgToFusion'); expect(projectSource).not.toContain('sendDesignToCad');
   // Historical immutable run export is separate and deliberately adopts no identity.

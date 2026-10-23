@@ -167,11 +167,14 @@ describe('F8: a blocked operation reaches the user in either mode', () => {
     expect(notice?.title).toContain('solver frame');
 
     // Reviewing the request preserves the user's working mode.
+    const generation = navigationGeneration();
     act(() => notice!.click());
     expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
-    expect(activations.at(-1)).toBe('geometry');
-    expect(navigationGeneration()).toBeGreaterThan(0);
-    expect(host.querySelector('.attention-waiting')).toBeNull();
+    expect(activations).toEqual(['geometry']);
+    expect(workspaceNavigation.isVisible('geometry')).toBe(true);
+    expect(navigationGeneration()).toBeGreaterThan(generation);
+    // The request still waits, and can be below the fold even with Geometry visible.
+    expect(host.querySelector('.attention-waiting')?.textContent).toContain('A solve is waiting for you');
   });
 
   it('does not yank a user who navigated after the request arrived; the notice is their route', () => {
