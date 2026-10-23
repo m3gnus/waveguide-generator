@@ -546,7 +546,7 @@ class BeatEngine:
         cancel_cb()
         execution_metadata = record.get("_execution_metadata") or {}
         plan = execution_metadata.get("solver_plan") or {}
-        precision = "float64" if plan.get("requested") in {"auto", "beat"} else None
+        precision = plan.get("precision")
         from server.solver.imported import imported_symmetry_from_cut_planes, imported_domain_planes
 
         symmetry = imported_symmetry_from_cut_planes(imported_domain_planes(record))

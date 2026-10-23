@@ -61,7 +61,7 @@ it('drops a stale plan while a changed engine is being resolved', async () => {
   act(() => root.render(<QueryClientProvider client={client}><Subject /></QueryClientProvider>));
   await flushReact();
   act(() => useSolveOptionsStore.getState().setEngine('beat-cpu'));
-  expect(host.textContent).toBe('beat-cpu / pending');
+  expect(host.textContent).toBe(' / pending');
   await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_DEBOUNCE_MS); });
   await flushReact();
   expect(host.textContent).toBe('metal / metal');

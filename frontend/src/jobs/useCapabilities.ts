@@ -6,14 +6,11 @@ import {
   type EngineCapability,
   type EngineSelection,
 } from './actions';
-import {
-  activeBackendCapability,
-  migratedLegacyBeatEngine,
-  plannedBackendCapabilities,
-} from '../design/backendSupport';
 import { capabilityFingerprint } from './capabilityFingerprint';
 import { preferencesStore } from '../prefs/preferences';
 import { useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { useSolveControlBackend } from './useSolveControlBackend';
+import { activeBackendCapability, plannedBackendCapabilities } from '../design/backendSupport';
 import { useScopedSolveOptions } from '../stores/solveOptionsContext';
 
 /**
@@ -170,58 +167,44 @@ function qualificationPending(engine: EngineCapability): boolean {
   );
 }
 
-/** Full capability record for controls whose support is version-dependent. */
+/** The active request's server-resolved capability. */
 export function useActiveBackendCapability(): EngineCapability | null {
-  const engine = useScopedSolveOptions((state) => state.engine);
-  const accuracy = useScopedSolveOptions((state) => state.accuracy);
-  const { engines, engineSelection } = useCapabilities();
-  return activeBackendCapability(accuracyEngine(engine, accuracy, engines), engines, engineSelection);
+  const planned = useSolveControlBackend().capability;
+  const requested = useScopedSolveOptions((state) => state.engine);
+  const { engines } = useCapabilities();
+  // An explicit choice has declared feature support even while its plan is
+  // pending or refused. This lookup never resolves Auto or a family to a backend.
+  return planned ?? (requested === 'auto' ? null : activeBackendCapability(requested, engines));
 }
 
-/** Match the server's BEAT GPU readiness order for UI capability previews. */
-export function accuracyEngine(engine: string, accuracy: 'fast' | 'accurate', engines: readonly EngineCapability[]): string {
-  if (engine !== 'auto' || accuracy === 'fast') return engine;
-  return ['beat-metal', 'beat-cuda', 'beat-rocm', 'beat-cpu']
-    .find((name) => engines.some((item) => item.name === name && item.available)) ?? 'beat-cpu';
-}
-
-/** Candidates the server may select for the current explicit/AUTO request. */
+/** Host candidates for feature controls; this list never chooses an engine. */
 export function usePlannedBackendCapabilities(): readonly EngineCapability[] {
   const engine = useScopedSolveOptions((state) => state.engine);
   const accuracy = useScopedSolveOptions((state) => state.accuracy);
   const { engines, engineSelection } = useCapabilities();
-  return plannedBackendCapabilities(accuracyEngine(engine, accuracy, engines), engines, engineSelection);
+  const candidates = plannedBackendCapabilities(engine, engines, engineSelection);
+  // Enumerate family support without choosing a backend; routing is server-owned.
+  return engine === 'auto' && accuracy === 'accurate'
+    ? candidates.filter((item) => item.name.startsWith('beat-')) : candidates;
 }
 
-/**
- * Rewrite a stored bare `beat` selection to the BEAT variant it means here.
- *
- * BEAT's execution backends became separately selectable engines, so the one
- * name that used to cover all of them no longer matches any option the server
- * advertises. Left alone, the picker would render with nothing selected while
- * the store still said `beat` -- and the status bar would report an engine that
- * is not in the capability list. Submission itself is safe either way: the
- * server accepts the legacy name and resolves it the same way this does.
- *
- * Runs once per capability answer rather than on a timer, and only ever
- * narrows `beat` to a `beat-*`, so it cannot fight a user who then picks
- * something else.
- */
+/** Migrate a legacy family alias only after this model has a server plan. */
 export function useLegacyBeatEngineMigration(): void {
   const engine = useSolveOptionsStore((state) => state.engine);
   const setEngine = useSolveOptionsStore((state) => state.setEngine);
   const importedEngine = useImportedSolveOptionsStore((state) => state.engine);
   const setImportedEngine = useImportedSolveOptionsStore((state) => state.setEngine);
-  const { engines, engineSelection } = useCapabilities();
+  const parametric = useSolveControlBackend('parametric');
+  const imported = useSolveControlBackend('cad');
   useEffect(() => {
-    const migrated = migratedLegacyBeatEngine(engine, engines, engineSelection);
+    const migrated = engine === 'beat' ? parametric.plan?.engine ?? null : null;
     if (migrated !== null) setEngine(migrated);
-  }, [engine, engines, engineSelection, setEngine]);
+  }, [engine, parametric.plan, setEngine]);
   // The imported instance can carry the same legacy name from a saved setup.
   useEffect(() => {
-    const migrated = migratedLegacyBeatEngine(importedEngine, engines, engineSelection);
+    const migrated = importedEngine === 'beat' ? imported.plan?.engine ?? null : null;
     if (migrated !== null) setImportedEngine(migrated);
-  }, [importedEngine, engines, engineSelection, setImportedEngine]);
+  }, [importedEngine, imported.plan, setImportedEngine]);
 }
 
 /**

@@ -251,3 +251,43 @@ def test_invalid_geometry_precedes_engine_readiness_in_plan_and_solve(tmp_path):
     assert planned.status_code == submitted.status_code == 422
     assert planned.json()["detail"] == submitted.json()["detail"]
     assert "Forced symmetry mode 'quarter' is invalid" in planned.json()["detail"]
+
+
+@pytest.mark.parametrize("case", ["unknown", "removed", "symmetry", "mounting", "unavailable", "accurate-auto"])
+def test_parametric_plan_reports_every_submission_refusal(tmp_path, case):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from server.jobs.api import create_jobs_router
+    from server.jobs.runtime import JobRuntime
+    from server.jobs.store import JobStore
+
+    req = request("parametric")
+    rows = [info("beat-metal")]
+    if case == "unknown":
+        req.options.engine = "unknown"
+    elif case == "removed":
+        req.options.engine = "axisym"
+    elif case == "symmetry":
+        req.options.symmetry = "quarter"
+        req.options.ground_plane.enabled = True
+    elif case == "mounting":
+        req.design.root.simulation.sim_type = "infinite-baffle"
+    elif case == "unavailable":
+        rows = [info("beat-metal", "disabled")]
+    else:
+        req.options.engine, req.options.accuracy = "auto", "accurate"
+        rows = [info("metal")]
+    store = JobStore(tmp_path / "jobs.db")
+    runtime = JobRuntime(store, engine_registry=registry(*rows))
+    app = FastAPI()
+    app.include_router(create_jobs_router(runtime))
+    with TestClient(app) as client:
+        body = req.model_dump(mode="json")
+        planned = client.post("/api/solve/plan", json=body)
+        submitted = client.post("/api/solve", json=body)
+        assert submitted.status_code in {422, 503}
+        if planned.status_code == 200:
+            assert planned.json()["readiness"] == submitted.json()["error"]["details"]["blocker"]
+        else:
+            assert planned.json()["detail"] == submitted.json()["detail"]
+        assert store.list_jobs()[1] == 0

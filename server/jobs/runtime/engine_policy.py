@@ -66,6 +66,15 @@ class EngineSelection:
     passed_over: list[str] = field(default_factory=list)
     fallback_reason: str | None = None
 
+    @property
+    def precision(self) -> str | None:
+        """The selected BEAT backend fixes execution precision, including Auto."""
+        if self.engine == "beat-cpu":
+            return "float64"
+        if self.engine in {"beat-metal", "beat-cuda", "beat-rocm"}:
+            return "float32"
+        return None
+
 
 ACCURATE_CPU_FALLBACK = "Accurate ran on BEAT CPU because no GPU backend was ready"
 

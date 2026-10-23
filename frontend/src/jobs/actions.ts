@@ -268,26 +268,6 @@ export function plannedEngineNames(
   return plan.requested === 'auto' ? plan.full3dOrder : [plan.requested];
 }
 
-export function resolveEngine(
-  engine: string,
-  capabilities: {
-    engines: readonly EngineCapability[];
-    engineSelection?: Readonly<EngineSelection>;
-  },
-): string {
-  const plan = engineModePlan(engine, capabilities);
-  const selection = capabilities.engineSelection;
-  if (plan.requested !== 'auto') return plan.requested;
-  const order = plan.full3dOrder;
-  const resolvedDefault = selection?.resolvedDefault?.toLowerCase() ?? null;
-  const available = capabilities.engines.find((item) => item.available
-    && item.name.toLowerCase() === resolvedDefault)
-    ?? order.flatMap((name) => capabilities.engines.filter((item) => item.available
-      && item.name.toLowerCase() === name))[0];
-  if (available) return available.name.toLowerCase();
-  throw new Error('No full-3D solver backend is currently available');
-}
-
 export async function fetchSymmetry(
   design: DesignDocument,
   fetcher: typeof fetch = fetch,

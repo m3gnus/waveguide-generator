@@ -1,13 +1,9 @@
 import { useSyncExternalStore } from 'react';
 import { previewSocket } from '../api/previewSocket';
 import { compactFrequency } from '../design/lambdaLimit';
-import {
-  resolveEngine,
-  type EngineCapability,
-  type EngineSelection,
-} from '../jobs/actions';
-import { accuracyEngine, useCapabilities } from '../jobs/useCapabilities';
-import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
+import type { EngineCapability } from '../jobs/actions';
+import { useCapabilities } from '../jobs/useCapabilities';
+import { useSolveControlBackend } from '../jobs/useSolveControlBackend';
 import { usePreferences, type Preferences } from '../prefs/preferences';
 import { useMeshImportStore } from '../stores/meshImport';
 import { useImportedModelStore } from '../stores/importedModel';
@@ -70,19 +66,14 @@ export function cadSolveSummary(
 
 export function engineStatusLabel(
   engines: readonly EngineCapability[],
-  engineSelection: Readonly<EngineSelection>,
-  selectedEngine: string,
-  isLoading = false,
+  resolvedEngine: string | null | undefined,
+  error: string | null,
+  isPending: boolean,
 ): string {
-  let effectiveEngine = selectedEngine.toLowerCase();
-  try {
-    effectiveEngine = resolveEngine(selectedEngine, { engines, engineSelection });
-  } catch {
-    return `${effectiveEngine.toUpperCase()} · INVALID`;
-  }
-  const engine = engines.find((item) => item.name.toLowerCase() === effectiveEngine);
-  if (engine) return `${engine.name.toUpperCase()} · ${engine.available ? engine.version ?? 'READY' : 'OFFLINE'}`;
-  return isLoading ? `${effectiveEngine.toUpperCase()}…` : `${effectiveEngine.toUpperCase()} · OFFLINE`;
+  if (error) return `SOLVE BLOCKED · ${error}`;
+  if (!resolvedEngine) return isPending ? 'Checking solve engine…' : 'No solve plan';
+  const engine = engines.find((item) => item.name === resolvedEngine);
+  return `${resolvedEngine.toUpperCase()} · ${engine?.version ?? 'READY'}`;
 }
 
 export function documentLabel(filename: string, family?: string): string {
@@ -93,7 +84,7 @@ export function documentLabel(filename: string, family?: string): string {
 }
 
 export function StatusBar() {
-  const { engines, engineSelection, isLoading } = useCapabilities();
+  const { engines } = useCapabilities();
   const preview = useSyncExternalStore(previewSocket.subscribe, previewSocket.getSnapshot, previewSocket.getSnapshot);
   const design = useDesignStore((state) => state.design);
   const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
@@ -103,22 +94,13 @@ export function StatusBar() {
   const fileActive = mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file';
   const cadReturn = useCadReturnStore();
   const filename = useDocumentStore((state) => state.filename);
-  const selectedEngine = useScopedSolveOptions((state) => state.engine);
-  const accuracy = useScopedSolveOptions((state) => state.accuracy);
   const frequencyMode = useScopedSolveOptions((state) => state.frequencyMode);
   const frequencyListText = useScopedSolveOptions((state) => state.frequencyListText);
   const fileSweep = useScopedSolveOptions((state) => `${state.sweepStartHz}/${state.sweepEndHz}/${state.sweepCount}`);
   const preferences = usePreferences();
-  // A CAD solve runs on the user's engine choice, always in full 3-D. Once the
-  // server has said where that choice lands for this return, the bar names
-  // that engine -- or says the return cannot be solved as set up, rather than
-  // naming an engine that would refuse it.
-  const cadPlan = useImportedSolvePlan(mode === 'cad').plan;
-  const engineLabel = mode !== 'cad'
-    ? engineStatusLabel(engines, engineSelection, accuracyEngine(selectedEngine, accuracy, engines), isLoading)
-    : cadPlan && cadPlan.engine === null
-      ? `${selectedEngine.toUpperCase()} · NO IMPORTED SOLVE`
-      : engineStatusLabel(engines, engineSelection, cadPlan?.engine ?? selectedEngine, isLoading);
+  const backend = useSolveControlBackend();
+  const refusal = backend.error ?? (backend.plan?.engine === null ? backend.plan.reason : null);
+  const engineLabel = engineStatusLabel(engines, backend.plan?.engine, refusal, backend.isPending);
   const previewError = preview.error ? previewErrorMessage(preview.error) : null;
   const meshMetrics = previewMeshMetrics(preview.frame);
   const cadTriangles = cadReturn.ingestRecord?.mesh?.stats.triangle_count;

@@ -709,3 +709,42 @@ def test_held_fusion_engine_blocker_is_continued_only_by_model_solve(harness) ->
     assert child["parent_job_id"] == held_id
     assert child["status"] == "queued"
     assert _job_count(harness) == 2
+
+
+
+def test_imported_active_solve_recovers_before_fresh_admission(tmp_path, monkeypatch):
+    from server.jobs.model_solve import submit_imported_request
+    from server.jobs.runtime import EngineUnavailableError
+
+    async def scenario(store, app, runtime):
+        record = register_mesh(store, tmp_path, registration())
+        request = file_request(record)
+        request.client_request_id = None
+        first = await submit_imported_request(runtime, request)
+        async def unavailable(*args, **kwargs):
+            raise EngineUnavailableError("The runtime became unavailable")
+        monkeypatch.setattr(runtime, "validate_submission", unavailable)
+        assert await submit_imported_request(runtime, request) == first
+        runtime.store.update_job(first, status="complete")
+        with pytest.raises(EngineUnavailableError):
+            await submit_imported_request(runtime, request)
+    _file_scenario(tmp_path, scenario)
+
+
+def test_refused_imported_request_does_not_record_setup(tmp_path, monkeypatch):
+    from server.jobs.model_solve import submit_imported_request
+    from server.jobs.runtime import ImportedSolveRefusal
+
+    async def scenario(store, app, runtime):
+        record = register_mesh(store, tmp_path, registration())
+        request = file_request(record)
+        request.options.polar_config.inclination = 30
+        request.options.polar_config.enabled_axes = ["horizontal", "vertical", "diagonal"]
+        def unexpected(*args, **kwargs):
+            pytest.fail("refused input must not create a setup revision")
+        monkeypatch.setattr(store, "create_setup_revision", unexpected)
+        with pytest.raises(ImportedSolveRefusal) as error:
+            await submit_imported_request(runtime, request)
+        assert error.value.reason_code == "imported_diagonal_inclination_unsupported"
+        assert runtime.store.list_jobs()[1] == 0
+    _file_scenario(tmp_path, scenario)

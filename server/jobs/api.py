@@ -70,7 +70,6 @@ from server.jobs.runtime import (
     RemovedSolverError,
     SymmetryValidationError,
     UnknownEngineError,
-    resolve_submission,
 )
 from server.jobs.store import JobStore, SubmissionConflictError
 from server.cadlink.operations import TERMINAL_STATES
@@ -453,7 +452,10 @@ def create_jobs_router(
         """Resolve the submitted design without allocating or persisting a job."""
 
         try:
-            resolved = await resolve_submission(body, runtime.engine_registry, preview=True)
+            validation = await runtime.validate_submission(body, preview=True)
+            resolved = validation.resolved
+            if resolved is None:
+                raise ValueError("Use the imported plan endpoint for imported geometry")
             plan = resolved.symmetry_metadata["solver_plan"]
             if plan.get("refusal") and not plan.get("readiness"):
                 raise SymmetryValidationError(plan["refusal"])
@@ -666,6 +668,8 @@ def create_jobs_router(
         "/api/jobs/{job_id}/retry",
         response_model=SolveAccepted,
         responses={
+            422: {"model": ErrorEnvelope, "description": "Solve request refused"},
+            503: {"model": ErrorEnvelope, "description": "Engine unavailable"},
             409: {
                 "model": ErrorEnvelope,
                 "description": (
@@ -688,22 +692,21 @@ def create_jobs_router(
             # A job with no solve request to replay (one still being prepared, or a
             # run with no stored design): the message says which.
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except RemovedSolverError as exc:
-            return _error_response(
-                422,
-                code=exc.code,
-                stage="retry",
-                message=str(exc),
-            )
         except (
+            RemovedSolverError,
             UnknownEngineError,
             SymmetryValidationError,
             ImportedSolveRefusal,
             ValueError,
+            EngineUnavailableError,
         ) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except EngineUnavailableError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+            from server.jobs.model_solve import refusal_from
+
+            refusal = refusal_from(exc)
+            return _error_response(
+                refusal.status, code=refusal.code, stage="retry",
+                message=str(refusal), details=refusal.details,
+            )
 
     @router.get("/api/status/{job_id}", response_model=JobStatusResponse)
     async def job_status(job_id: str) -> JobStatusResponse:

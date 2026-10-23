@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { designForFamily } from '../stores/design';
 import {
-  activeBackendName,
   symmetryDomainLimitation,
   backendLimitation,
   backendSupports,
   isBeatBackendEngine,
-  migratedLegacyBeatEngine,
   plannedBackendCapabilities,
   type BackendIdentity,
 } from './backendSupport';
@@ -40,21 +38,6 @@ const field = (id: string) => {
 const labels = (id: string, value: unknown, backend: BackendIdentity) =>
   fieldOptionsForBackend(field(id), value, backend).map((option) => option.label);
 
-describe('active backend resolution', () => {
-  it('resolves AUTO to the first available backend in preference order', () => {
-    expect(activeBackendName('auto', [engine('metal', true), engine('bempp', true)], selection)).toBe('metal');
-    expect(activeBackendName('auto', [engine('metal', false), engine('bempp', true)], { ...selection, resolvedDefault: 'bempp' })).toBe('bempp');
-  });
-
-  it('honours an explicit selection without consulting availability', () => {
-    expect(activeBackendName('bempp', [engine('metal', true)])).toBe('bempp');
-  });
-
-  it('returns null rather than throwing when nothing is available', () => {
-    expect(activeBackendName('auto', [], { ...selection, resolvedDefault: null })).toBeNull();
-    expect(activeBackendName('auto', [engine('metal', false)], { ...selection, resolvedDefault: null })).toBeNull();
-  });
-});
 
 describe('backend feature support', () => {
   it('grants Metal full-3D mounting/import features but keeps meridian separate', () => {
@@ -149,39 +132,7 @@ describe('aperture mesh scale', () => {
 });
 
 
-describe('legacy beat engine migration', () => {
-  const beatSelection: EngineSelection = {
-    default: 'auto',
-    resolvedDefault: 'metal',
-    full3dOrder: ['metal', 'beat-cuda', 'beat-rocm', 'beat-metal', 'beat-cpu', 'bempp', 'dryrun'],
-    };
-
-  it('narrows a stored beat to the best variant this host can run', () => {
-    // "beat" meant "the family, and let the probe choose". It still means
-    // that, resolved against the same order AUTO uses -- so a design file
-    // written before the split does not quietly become a different solver.
-    const engines = [engine('beat-cuda', false), engine('beat-metal', true), engine('beat-cpu', true)];
-    expect(migratedLegacyBeatEngine('beat', engines, beatSelection)).toBe('beat-metal');
-  });
-
-  it('lands on an advertised variant even when none is available', () => {
-    // A greyed-out BEAT row carrying its reason tells the user why their saved
-    // choice cannot run here. Jumping silently to AUTO would not.
-    const engines = [engine('beat-cuda', false), engine('beat-cpu', false), engine('metal', true)];
-    expect(migratedLegacyBeatEngine('beat', engines, beatSelection)).toBe('beat-cuda');
-  });
-
-  it('leaves everything else alone', () => {
-    const engines = [engine('beat-cpu', true), engine('metal', true)];
-    expect(migratedLegacyBeatEngine('metal', engines, beatSelection)).toBeNull();
-    expect(migratedLegacyBeatEngine('auto', engines, beatSelection)).toBeNull();
-    expect(migratedLegacyBeatEngine('beat-cpu', engines, beatSelection)).toBeNull();
-    // Capabilities not loaded, or a server too old to advertise the variants:
-    // the bare name is still the right thing to have selected.
-    expect(migratedLegacyBeatEngine('beat', [], beatSelection)).toBeNull();
-    expect(migratedLegacyBeatEngine('beat', [engine('beat', true)], beatSelection)).toBeNull();
-  });
-
+describe('BEAT engine identity', () => {
   it('recognises the per-backend names', () => {
     expect(isBeatBackendEngine('beat-cpu')).toBe(true);
     expect(isBeatBackendEngine('beat')).toBe(false);

@@ -302,7 +302,7 @@ def test_job_refusals(monkeypatch, change, code):
 
 @pytest.mark.parametrize("accuracy", ["fast", "accurate"])
 @pytest.mark.parametrize("cpu_ready", [True, False])
-def test_auto_fem_prefers_ready_cpu_and_uses_ready_gpu_when_needed(monkeypatch, tmp_path, accuracy, cpu_ready):
+def test_auto_fem_prefers_ready_cpu_and_uses_ready_gpu_when_needed(runtime, monkeypatch, tmp_path, accuracy, cpu_ready):
     import asyncio
     from server.jobs.runtime.core import resolve_imported_submission
     from server.engines.registry import EngineInfo
@@ -313,7 +313,17 @@ def test_auto_fem_prefers_ready_cpu_and_uses_ready_gpu_when_needed(monkeypatch, 
     path = tmp_path / "exterior.msh"
     path.write_text(MESH)
     record = _record(path)
-    record["fem_regions"] = [region_input(channel="left").record]
+    region = region_input(channel="left", interface=True)
+    record["fem_regions"] = [region.record]
+    record["normalisation"] = {"assembly_frame_is_solver_frame": True}
+    record["coupled_exterior"] = {"physical_names": {
+        name: {"kind": "interface"} if "interface" in name else {"kind": "moving", "drive_channel_id": "left"}
+        for name in region.domain.surfaces}}
+    from server.solver.beat_adapter import coupled_request
+    monkeypatch.setattr(coupled_request, "read_verified_fem_region_mesh", lambda *a: "verified")
+    monkeypatch.setattr(coupled_request, "read_fem_region_domain", lambda *a: region.domain)
+    monkeypatch.setattr(coupled_request, "read_verified_coupled_exterior_mesh", lambda *a: "verified")
+    monkeypatch.setattr(coupled_request, "read_coupled_exterior", lambda *a: (region.domain.points_mm, region.domain.surfaces))
     record["symmetry"] = {"applied": {"cut_planes": [], "quadrants": 1234}}
     infos = [EngineInfo(name=name, version=None, available=name != "beat-cpu" or cpu_ready, reason="fixture", geometry_sources=("imported",),
                        imported_features=features, symmetry_domains=("full",))
@@ -324,11 +334,25 @@ def test_auto_fem_prefers_ready_cpu_and_uses_ready_gpu_when_needed(monkeypatch, 
         async def get_engine(self, name):
             return SimpleNamespace(name=name)
     request = _request("wgi_" + "0" * 26)
+    from server.jobs.models import DriveChannel
+    request.geometry.drive_channels = [DriveChannel(id="left", source_ids=["source-a", "source-b", "source-c"])]
     request.options.engine = "auto"
     request.options.accuracy = accuracy
     resolution = asyncio.run(resolve_imported_submission(request, Registry(),
         imported_record=record, imported_msh_text=MESH, symmetry_metadata={"resolved_quadrants": 1234}))
     assert resolution.request.options.engine == ("beat-cpu" if cpu_ready else "beat-metal")
+
+    precision = "float64" if cpu_ready else "float32"
+    assert resolution.symmetry_metadata["solver_plan"]["precision"] == precision
+    from server.solver.beat import BeatEngine, beat_engine_backend
+    runtime.mutate = lambda raw: (raw.clear(), raw.update(coupled_result(
+        runtime.requests[-1], runtime.requests[-1]["frequencies_hz"][runtime.result_count % len(runtime.requests[-1]["frequencies_hz"])])))
+    outcome = asyncio.run(BeatEngine(beat_engine_backend(resolution.engine_name)).run(
+        resolution.request, cancel_cb=lambda: None, stage_cb=lambda *a: None,
+        imported_record={**record, "_execution_metadata": resolution.symmetry_metadata}))
+    assert runtime.requests[-1]["solver_options"]["precision"] == precision
+    assert runtime.requests[-1]["solver_options"]["bem_backend"] == ("cpu" if cpu_ready else "metal")
+    assert outcome.results["channels"]["left"]["frequencies"]
 
 
 @pytest.mark.parametrize("engine", ["bempp"])
@@ -461,7 +485,7 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
     def build(*args, **kwargs):
         assert kwargs["resolved_quadrants"] == 1234
         assert kwargs["backend"] == backend
-        assert kwargs["precision"] == ("float64" if engine_choice == "auto" else None)
+        assert kwargs["precision"] == precision
         return built
     monkeypatch.setattr(coupled_request, "build_imported_coupled_request", build)
     def mutate(raw):

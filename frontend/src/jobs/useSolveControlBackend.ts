@@ -6,7 +6,7 @@ import type { SolveOptions } from '../stores/solveOptions';
 import { solveOptionsStoreForMode } from '../stores/solveOptionsContext';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
 import { activeBackendCapability } from '../design/backendSupport';
-import { accuracyEngine, useCapabilities } from './useCapabilities';
+import { useCapabilities } from './useCapabilities';
 import { useSolvePlan } from './useSolvePlan';
 import { useImportedSolvePlan } from './useImportedSolvePlan';
 
@@ -24,7 +24,7 @@ export function useSolveControlBackend(modeOverride?: WorkspaceMode) {
     frequencyListText: state.frequencyListText, polar: state.polar,
     groundPlane: state.groundPlane, options: state.options,
   })));
-  const { engines, engineSelection } = useCapabilities();
+  const { engines } = useCapabilities();
   const options = useMemo<SolveOptions | null>(() => {
     try { return store.options(); } catch { return null; }
   }, [store]);
@@ -40,11 +40,9 @@ export function useSolveControlBackend(modeOverride?: WorkspaceMode) {
   }, [snapshot.plan, routingKey]);
   const engine = snapshot.plan?.engine
     ?? (snapshot.isPending && settled.current?.key === routingKey ? settled.current.engine : null)
-    ?? accuracyEngine(store.engine, store.accuracy, engines);
+    ?? null;
   return {
     ...snapshot,
-    capability: snapshot.isPending && !snapshot.plan && settled.current?.key !== routingKey
-      && store.engine === 'auto' && store.accuracy === 'fast'
-      ? null : activeBackendCapability(engine, engines, engineSelection),
+    capability: snapshot.error || !engine ? null : activeBackendCapability(engine, engines),
   };
 }

@@ -123,6 +123,7 @@ describe('solve and directivity control help', () => {
       default: 'auto', resolvedDefault: 'bempp', full3dOrder: ['beat-cuda', 'beat-cpu', 'bempp'],
     } };
     queryClient.setQueryData(CAPABILITIES_QUERY_KEY, payload);
+    parametricPlan.current = { plan: { engine: 'bempp', formulation: 'full-3d', reason: 'Ready', eligibility_reasons: [] }, error: null, isPending: false };
     importedPlan.current = { plan: { ingest_id: 'cad-test', requested: 'auto', engine: 'bempp', reason: 'Ready', engines: [] }, error: null, isPending: false };
     render(<SolveOptionsControls mode={mode} />);
     const notices = () => [...host.querySelectorAll('p[role="status"]')]
@@ -364,7 +365,7 @@ describe('solve and directivity control help', () => {
     expect(hoverText(select.closest('.select-row')!)).toBe('Fast: BEAT CPU. Good for locating resonances.');
     act(() => { select.value = 'accurate'; select.dispatchEvent(new Event('change', { bubbles: true })); });
     expect(useSolveOptionsStore.getState().options().accuracy).toBe('accurate');
-    expect(hoverText(select.closest('.select-row')!)).toBe('Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions. Runs via BEAT CPU — slower; no GPU backend ready.');
+    expect(hoverText(select.closest('.select-row')!)).toBe('Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions. Runs via BEAT CPU.');
     expect(host.textContent).toContain('Accurate will use BEAT CPU');
     render(<SolveOptionsControls mode="cad" />);
     expect(host.querySelector<HTMLSelectElement>('#solve-accuracy')?.value).toBe('accurate');
@@ -427,19 +428,20 @@ describe('solve and directivity control help', () => {
     };
 
     resetSolveOptionsStore();
-    parametricPlan.current = { plan: null, error: null, isPending: false };
+    parametricPlan.current = { plan: { engine: platform.resolvedDefault, formulation: 'full-3d', reason: 'Server plan', eligibility_reasons: [] }, error: null, isPending: false };
     importedPlan.current = importedPlanFor(platform.cadFastEngine);
     render(<SolveOptionsControls mode="parametric" />);
     const accuracy = host.querySelector<HTMLSelectElement>('#solve-accuracy')!;
     expect(hoverText(accuracy.closest('.select-row')!)).toBe(platform.parametricFast);
     act(() => {
+      parametricPlan.current = { plan: platform.accurateEngine ? { engine: platform.accurateEngine, formulation: 'full-3d', reason: 'Server accurate plan', eligibility_reasons: [] } : null, error: null, isPending: false };
       importedPlan.current = importedPlanFor(platform.cadAccurateEngine);
       accuracy.value = 'accurate';
       accuracy.dispatchEvent(new Event('change', { bubbles: true }));
     });
     const accurateText = hoverText(accuracy.closest('.select-row')!);
     if (platform.accurateEngine === 'beat-cpu') {
-      expect(accurateText).toContain('Runs via BEAT CPU — slower; no GPU backend ready.');
+      expect(accurateText).toContain('Runs via BEAT CPU.');
     } else if (platform.accurateEngine) {
       const label = platform.accurateEngine === 'beat-metal' ? 'BEAT Metal'
         : platform.accurateEngine === 'beat-cuda' ? 'BEAT CUDA' : 'BEAT ROCm';
@@ -466,7 +468,7 @@ describe('solve and directivity control help', () => {
     });
     const cadAccurateText = hoverText(cadAccuracy.closest('.select-row')!);
     if (platform.cadAccurateEngine === 'beat-cpu') {
-      expect(cadAccurateText).toContain('Runs via BEAT CPU — slower; no GPU backend ready.');
+      expect(cadAccurateText).toContain('Runs via BEAT CPU.');
     } else if (platform.cadAccurateEngine) {
       const label = platform.cadAccurateEngine === 'beat-metal' ? 'BEAT Metal'
         : platform.cadAccurateEngine === 'beat-cuda' ? 'BEAT CUDA' : 'BEAT ROCm';
@@ -474,6 +476,19 @@ describe('solve and directivity control help', () => {
     } else {
       expect(cadAccurateText).toContain('No BEAT backend can solve this CAD return');
     }
+  });
+
+  it.each(['parametric', 'cad'] as const)('keeps a refused legacy BEAT choice visible in %s', (mode) => {
+    useSolveOptionsStore.getState().setEngine('beat');
+    parametricPlan.current = { plan: null, error: 'BEAT needs preparing', isPending: false };
+    importedPlan.current = {
+      plan: { ingest_id: 'legacy', requested: 'beat', engine: null, reason: 'BEAT needs preparing', engines: [] },
+      error: null, isPending: false,
+    };
+    render(<SolveOptionsControls mode={mode} />);
+    const select = host.querySelector<HTMLSelectElement>(mode === 'cad' ? '#cad-solve-engine' : '#solve-engine')!;
+    expect(select.value).toBe('beat');
+    expect(select.selectedOptions[0].textContent).toContain('BEAT');
   });
 
   it('keeps design and CAD-import sweep ids unique with working labels', () => {
@@ -716,10 +731,11 @@ describe('solve and directivity control help', () => {
       {
         engine: 'beat-cpu', ready: ['beat-cpu'],
         fast: 'on this machine Fast runs on BEAT CPU, which already uses the Burton–Miller formulation', fastKind: 'burton-miller',
-        accurate: 'Runs through BEAT CPU, because no BEAT GPU backend is ready here;',
+        accurate: 'Runs through BEAT CPU;',
       },
-    ])('names the resolved $engine engine in parametric mode', ({ engine, ready, fast, fastKind, accurate }) => {
+    ])('names the resolved $engine engine in parametric mode', ({ engine, ready, fast, fastKind }) => {
       setReady(ready, engine);
+      parametricPlan.current = { plan: { engine, formulation: 'full-3d', reason: 'Server geometry routing', eligibility_reasons: [] }, error: null, isPending: false };
       render(<SolveOptionsControls mode="parametric" />);
       const [fastText, accurateText, when, measured] = paragraphs();
       expect(fastText.startsWith('Fast (default) — ')).toBe(true);
@@ -735,7 +751,7 @@ describe('solve and directivity control help', () => {
       expect(accurateText).toContain('Burton–Miller combined formulation');
       expect(accurateText).toContain('normal-derivative equation');
       expect(accurateText).toContain('without adding damping');
-      expect(accurateText).toContain(accurate);
+      expect(accurateText).toContain('Runs through BEAT — a GPU backend when one is ready, otherwise BEAT CPU;');
       expect(accurateText).toContain(fastKind === 'complex-k' ? 'it can cost more than Fast' : 'Accurate costs about the same as Fast');
       expect(accurateText).toContain('first solve waits while BEAT starts up');
       expect(when).toBe('When to pick Accurate: sheltered chambers or cavities driven near their resonance.');
@@ -745,7 +761,8 @@ describe('solve and directivity control help', () => {
       const select = host.querySelector<HTMLSelectElement>('#solve-accuracy')!;
       act(() => { select.value = 'accurate'; select.dispatchEvent(new Event('change', { bubbles: true })); });
       expect(useSolveOptionsStore.getState().options().accuracy).toBe('accurate');
-      expect(paragraphs()).toEqual([fastText, accurateText, when, measured]);
+      expect(paragraphs()[0]).toContain('Fast (default)');
+      expect(paragraphs().slice(2)).toEqual([when, measured]);
     });
 
     it('describes the modes the same way in CAD Link mode, naming only the engine the plan resolved', () => {
@@ -763,7 +780,7 @@ describe('solve and directivity control help', () => {
       [fastText, accurateText] = paragraphs();
       expect(fastText).toContain('complex-wavenumber BEM (Metal or BEMPP):');
       expect(fastText).toContain('Where Fast runs on a BEAT backend it uses Burton–Miller instead.');
-      expect(accurateText).toContain('Runs through BEAT CPU, because no BEAT GPU backend is ready here;');
+      expect(accurateText).toContain('Runs through BEAT CPU;');
     });
 
     it('is a collapsed native disclosure beside the select, with no wrapper around the rows', () => {

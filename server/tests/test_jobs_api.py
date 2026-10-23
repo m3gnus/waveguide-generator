@@ -751,3 +751,34 @@ def test_completed_fem_job_status_and_list_preserve_solve_path(tmp_path, solve_p
         finally:
             await runtime.shutdown()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("state", ["unavailable", "unprepared", "disabled"])
+def test_retry_saved_beat_metal_preserves_engine_blocker(tmp_path, state):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from server.jobs.runtime import JobRuntime
+    from server.jobs.store import JobStore
+    from server.tests.test_engine_policy import info, registry, request
+
+    engines = registry(info("beat-metal", state), info("beat-cpu"))
+    store = JobStore(tmp_path / "jobs.db")
+    runtime = JobRuntime(store, engine_registry=engines)
+    app = FastAPI()
+    app.include_router(create_jobs_router(runtime))
+    saved_request = request("parametric")
+    with TestClient(app) as client:
+        store.create_job(_complete_job("saved-metal", request=saved_request))
+        plan = client.post("/api/solve/plan", json=saved_request.model_dump(mode="json"))
+        retry = client.post("/api/jobs/saved-metal/retry")
+        assert retry.status_code == 503
+        error = retry.json()["error"]
+        assert error["stage"] == "retry"
+        blocker = error["details"]["blocker"]
+        assert blocker == plan.json()["readiness"]
+        assert blocker["engine"] == "beat-metal"
+        prepare = next((r for r in blocker["remedies"] if r["kind"] == "prepare"), None)
+        assert bool(prepare) == (state != "unavailable")
+        if prepare:
+            assert bool(prepare["disabled_reason"]) == (state == "disabled")
+        assert store.list_jobs()[1] == 1

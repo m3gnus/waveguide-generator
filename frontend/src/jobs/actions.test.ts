@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { hydrateDesignDocument } from '../api/designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
 import type { SolveOptions } from '../stores/solveOptions';
-import { fetchSymmetry, formatApiDetail, getCapabilities, planSolveDesign, postSolvePlan, postImportedSolvePlan, postSymmetry, resolveEngine, solveModel, SolveSubmissionRefused, submitDesign, toSolveDesign } from './actions';
+import { fetchSymmetry, formatApiDetail, getCapabilities, planSolveDesign, postSolvePlan, postImportedSolvePlan, postSymmetry, solveModel, SolveSubmissionRefused, submitDesign, toSolveDesign } from './actions';
 
 describe('API validation errors', () => {
   it('surfaces nested solve request validation instead of the generic envelope', async () => {
@@ -25,31 +25,6 @@ describe('API validation errors', () => {
 });
 
 describe('solve submission', () => {
-  it('never lets AUTO silently select Axisym when no full-3D engine exists', () => {
-    // A capability payload from a server that predates the Axisymmetric
-    // removal still lists the runner; AUTO must never pick it.
-    const axisymOnly = { engines: [
-      { name: 'axisym', available: true, reason: null, version: '1', fast_paths: ['axisymmetric-meridian'] },
-      { name: 'bempp', available: false, reason: 'not installed', version: null, fast_paths: [] },
-    ], engineSelection: {
-      default: 'auto', resolvedDefault: null, full3dOrder: ['bempp'], axisymmetricRunner: 'axisym',
-    } };
-    expect(() => resolveEngine('auto', axisymOnly)).toThrow('No full-3D solver backend');
-
-    // A full-3D backend still wins when the host has one, and a host with
-    // nothing available still refuses rather than inventing an engine.
-    const withBempp = { engines: [
-      ...axisymOnly.engines.slice(0, 1),
-      { name: 'bempp', available: true, reason: null, version: '1', fast_paths: [] },
-    ], engineSelection: {
-      ...axisymOnly.engineSelection,
-      resolvedDefault: 'bempp',
-    } };
-    expect(resolveEngine('auto', withBempp)).toBe('bempp');
-    expect(() => resolveEngine('auto', { engines: [] })).toThrow('No full-3D solver backend is currently available');
-    expect(() => resolveEngine('removed-engine', withBempp)).toThrow('Unknown solve engine');
-  });
-
   it('submits every solve option and the G1 polar_config contract without forcing dryrun', async () => {
     const options: SolveOptions = {
       engine: 'auto', symmetry: 'quarter', mesh_validation_mode: 'strict', verbose: true, frequency_spacing: 'linear',

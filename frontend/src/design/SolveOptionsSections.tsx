@@ -4,15 +4,11 @@ import { OpenclUnavailableHook } from './OpenclUnavailableHook';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
-import { resolveEngine } from '../jobs/actions';
-import type { EngineCapability, EngineSelection } from '../jobs/actions';
-import { accuracyEngine, useCapabilities } from '../jobs/useCapabilities';
+import { useActiveBackendCapability, useCapabilities, usePlannedBackendCapabilities } from '../jobs/useCapabilities';
 import {
-  activeBackendCapability,
   backendLimitation,
   choosableForImportedGeometry,
   engineDisplayName,
-  plannedBackendCapabilities,
 } from './backendSupport';
 import { useSolveControlBackend } from '../jobs/useSolveControlBackend';
 import { useCadReturnStore } from '../stores/cadReturn';
@@ -40,32 +36,6 @@ import { useDesignStore } from '../stores/design';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
 
 const ACCURATE_HELP = 'Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions.';
-
-function fastEngineForParametric(
-  requested: string,
-  engines: readonly EngineCapability[],
-  engineSelection: Readonly<EngineSelection>,
-): string | null {
-  let resolved: string;
-  try {
-    resolved = resolveEngine(requested, { engines, engineSelection });
-  } catch {
-    return null;
-  }
-  return engines.some((engine) => engine.available && engine.name.toLowerCase() === resolved.toLowerCase())
-    ? resolved.toLowerCase()
-    : null;
-}
-
-function accurateEngineForParametric(
-  requested: string,
-  engines: readonly EngineCapability[],
-): string | null {
-  const resolved = accuracyEngine(requested, 'accurate', engines);
-  return engines.some((engine) => engine.available && engine.name.toLowerCase() === resolved.toLowerCase())
-    ? resolved.toLowerCase()
-    : null;
-}
 
 // The BEM adapters choose their formulation in server/solver/formulation.py:
 // complex_k everywhere except a coupled infinite baffle, which runs real k.
@@ -101,7 +71,7 @@ export function accuracyExplainer(fastEngine: string | null, accurateEngine: str
       + 'Where Fast runs on a BEAT backend it uses Burton–Miller instead.';
   }
   const runsOn = accurateEngine === 'beat-cpu'
-    ? 'Runs through BEAT CPU, because no BEAT GPU backend is ready here'
+    ? 'Runs through BEAT CPU'
     : accurateEngine?.startsWith('beat-')
       ? `Runs through ${engineDisplayName(accurateEngine)}`
       : 'Runs through BEAT — a GPU backend when one is ready, otherwise BEAT CPU';
@@ -170,7 +140,7 @@ function accurateHelp(
       ? `${ACCURATE_HELP} Checking which BEAT backend is ready…`
       : `${ACCURATE_HELP} No BEAT backend is ready here; Accurate cannot run on this machine.`;
   }
-  if (engine === 'beat-cpu') return `${ACCURATE_HELP} Runs via BEAT CPU — slower; no GPU backend ready.`;
+  if (engine === 'beat-cpu') return `${ACCURATE_HELP} Runs via BEAT CPU.`;
   return `${ACCURATE_HELP} Runs via ${engineDisplayName(engine)}.`;
 }
 
@@ -247,7 +217,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
   showOpenclGuidance?: boolean;
 } = {}) {
   const store = useScopedSolveOptions();
-  const { engines, engineSelection, hostPlatform, error, isLoading: capabilitiesLoading,
+  const { engines, hostPlatform, error, isLoading: capabilitiesLoading,
     qualificationRefreshNeeded, refreshCapabilities } = useCapabilities();
   const backendEngines = engines;
   const controlBackend = useSolveControlBackend(mode);
@@ -260,21 +230,10 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
   const importedEngine = importedPlan.plan?.engine
     ? verdicts.get(importedPlan.plan.engine)?.label || importedPlan.plan.engine
     : null;
-  const parametricFastEngine = fastEngineForParametric(store.engine, engines, engineSelection);
-  const parametricAccurateEngine = accurateEngineForParametric(store.engine, engines);
-  const helpEngine = mode === 'cad'
-    ? importedPlan.plan?.engine ?? null
-    : controlBackend.plan?.engine ?? (store.accuracy === 'accurate' ? parametricAccurateEngine : parametricFastEngine);
-  const helpPending = capabilitiesLoading || (mode === 'cad' && importedPlan.isPending);
-  // The explainer describes what each choice runs under AUTO, since picking
-  // Fast or Accurate clears an engine override. CAD Link only knows the engine
-  // of the selected choice, from the imported plan.
-  const explainerFast = mode === 'cad'
-    ? (store.accuracy === 'fast' && store.engine === 'auto' ? importedPlan.plan?.engine ?? null : null)
-    : fastEngineForParametric('auto', engines, engineSelection);
-  const explainerAccurate = mode === 'cad'
-    ? (store.accuracy === 'accurate' && store.engine === 'auto' ? importedPlan.plan?.engine ?? null : null)
-    : accurateEngineForParametric('auto', engines);
+  const helpEngine = controlBackend.plan?.engine ?? null;
+  const helpPending = capabilitiesLoading || controlBackend.isPending;
+  const explainerFast = store.accuracy === 'fast' && store.engine === 'auto' ? helpEngine : null;
+  const explainerAccurate = store.accuracy === 'accurate' && store.engine === 'auto' ? helpEngine : null;
   const accuracyHelp = store.accuracy === 'accurate'
     ? accurateHelp(helpEngine, mode, helpPending, importedPlan.plan !== null, importedPlan.plan?.reason)
     : fastHelp(helpEngine, mode, helpPending, importedPlan.plan !== null);
@@ -283,8 +242,6 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
     : importedPlan.isPending
       ? 'Checking which engines can solve this CAD model…'
       : importedPlan.plan?.reason ?? importedPlan.error ?? 'Prepare the CAD return to see which engines can solve it.';
-  const beatGpu = engines.find((engine) => ['beat-metal', 'beat-cuda', 'beat-rocm'].includes(engine.name) && engine.available);
-  const beatCpu = engines.find((engine) => engine.name === 'beat-cpu' && engine.available);
   return <>
     <SelectRow revealId="solve-accuracy" text={accuracyHelp}><label htmlFor="solve-accuracy">Solve accuracy</label><select id="solve-accuracy" value={store.accuracy} onChange={(event) => store.setAccuracy(event.target.value as 'fast' | 'accurate')}><option value="fast">Fast</option><option value="accurate">Accurate</option></select></SelectRow>
     <AccuracyExplainer fastEngine={explainerFast} accurateEngine={explainerAccurate} />
@@ -292,11 +249,12 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
       && engines.some((engine) => engine.name.startsWith('beat-') && engine.runtime_state === 'preparing')
       && <p className="section-note" role="status">Solves use BEMPP until BEAT is ready.</p>}
     {includeSampling && <AdaptiveFrequencyControls mode={mode} />}
-    {store.accuracy === 'accurate' && !beatGpu && beatCpu && <p className="section-note" role="status">No BEAT GPU backend is ready; Accurate will use BEAT CPU.</p>}
+    {store.accuracy === 'accurate' && helpEngine === 'beat-cpu' && <p className="section-note" role="status">Accurate will use BEAT CPU.</p>}
     {store.engine !== 'auto' && <p className="section-note">Advanced engine override: {store.engine}. This engine takes precedence. Selecting Fast or Accurate clears the override.</p>}
     {mode === 'parametric' ? <>
     <SelectRow revealId="solve-engine" text="Advanced engine override. AUTO follows the Fast or Accurate choice. An explicit engine takes precedence."><label htmlFor="solve-engine">Advanced backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
         <option value="auto">Automatic — follow accuracy</option>
+        {store.engine === 'beat' && <option value="beat">BEAT — legacy family selection</option>}
         {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available && engine.qualification !== 'pending'}>{engine.label || engine.name}{engine.qualification === 'pending' ? qualificationRefreshNeeded || error ? '' : ' · checking OpenCL…' : engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${!engine.name.startsWith('beat-') && engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
       </select></SelectRow>
     </> : <>
@@ -306,6 +264,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
           imported geometry is listed, disabled, with that reason. */}
       <HelpTipRow className="select-row" text="Advanced engine override for this imported model. AUTO follows Fast or Accurate; an explicit engine takes precedence."><label htmlFor="cad-solve-engine">Advanced backend</label><select id="cad-solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
         <option value="auto">Automatic — follow accuracy</option>
+        {store.engine === 'beat' && <option value="beat">BEAT — legacy family selection</option>}
         {backendEngines.map((engine) => {
           const verdict = verdicts.get(engine.name.toLowerCase());
           const imported = choosableForImportedGeometry(engine);
@@ -355,16 +314,15 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
  */
 export function GroundPlaneControls() {
   const store = useScopedSolveOptions();
-  const { engines, engineSelection } = useCapabilities();
   const ground = store.groundPlane;
-  const backend = activeBackendCapability(accuracyEngine(store.engine, store.accuracy, engines), engines, engineSelection);
+  const backend = useActiveBackendCapability();
   // Judged against the whole plan, as the coupled-baffle control is. With
   // engine AUTO the "active" backend is only the first candidate the server
   // would walk -- Metal on a Mac -- so limiting on it alone reported "METAL
   // does not support a rigid ground plane" for a solve the server routes to
   // BEMPP and runs. A warning that fires on a solve which succeeds teaches a
   // user to ignore the warning.
-  const plan = plannedBackendCapabilities(accuracyEngine(store.engine, store.accuracy, engines), engines, engineSelection);
+  const plan = usePlannedBackendCapabilities();
   const limitation = backendLimitation(backend, 'ground-plane', plan);
   const belowGround = ground.enabled ? belowGroundNote(ground.height_m, store.polar) : undefined;
   // The union over the plan, for the same reason the limitation is plan-based:

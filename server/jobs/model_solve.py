@@ -502,20 +502,21 @@ def _lane_target(
     )
 
 
-def _request_revision(store: Any, request: SolveRequest, record: Mapping[str, Any] | None) -> str | None:
-    """The setup revision an exact imported request is, stored once (content-named).
-
-    None when the request is not a setup, or when its setup cannot be known
-    exactly without the prepared record (``setup_of_request``): no revision
-    is better than one that solves differently.
-    """
-
+def _request_setup(request: SolveRequest, record: Mapping[str, Any] | None) -> CadSolveSetup | None:
+    """Read the exact setup represented by a request, without persisting it."""
     content, exact = setup_of_request(request.model_dump(mode="json"), record)
     if not exact:
         return None
     try:
-        setup = validate_setup(content)
+        return validate_setup(content)
     except ValueError:
+        return None
+
+
+def _request_revision(store: Any, request: SolveRequest, record: Mapping[str, Any] | None) -> str | None:
+    """Record the exact request setup, after submission validation succeeds."""
+    setup = _request_setup(request, record)
+    if setup is None:
         return None
     return str(store.create_setup_revision(setup_content(setup), setup_digest(setup))["revision_id"])
 
@@ -789,25 +790,45 @@ async def submit_imported_request(
     row = await asyncio.to_thread(store.get_ingest, geometry.ingest_id) if store is not None else None
     if row is None:
         return await runtime.submit(request, cad_provenance=cad_provenance, setup_revision_id=setup_revision_id)
+    if request.client_request_id is not None and await asyncio.to_thread(
+        runtime.store.job_for_submission_key, request.client_request_id
+    ) is not None:
+        return await runtime.submit(request, cad_provenance=cad_provenance, setup_revision_id=setup_revision_id)
     record = json.loads(row["record_json"])
-    if setup_revision_id is None and not (cad_provenance or {}).get("setup"):
-        setup_revision_id = await asyncio.to_thread(_request_revision, store, request, record)
+    revision = setup_revision_id or recorded_setup_revision({"task_metadata": {"cad": dict(cad_provenance or {})}})
+
+    async def submit_new() -> str:
+        # Resolve inside the model lock, after recovering an existing intention.
+        validation = await runtime.validate_submission(request)
+        effective_revision = revision
+        if effective_revision is None:
+            effective_revision = await asyncio.to_thread(_request_revision, store, request, record)
+        return await runtime.submit(
+            request, cad_provenance=cad_provenance,
+            setup_revision_id=effective_revision, _validation=validation,
+        )
+
     model_id = row.get("model_id") or None
     if model_id is None:
-        return await runtime.submit(request, cad_provenance=cad_provenance, setup_revision_id=setup_revision_id)
-    revision = setup_revision_id or recorded_setup_revision({"task_metadata": {"cad": dict(cad_provenance or {})}})
+        return await submit_new()
     async with _model_lock(model_id):
         replay = request.client_request_id is not None and await asyncio.to_thread(
             runtime.store.job_for_submission_key, request.client_request_id
         ) is not None
+        if replay:
+            # Exact transport replay recovers even if readiness has since changed.
+            return await runtime.submit(request, cad_provenance=cad_provenance, setup_revision_id=revision)
         inputs = _revision_inputs(store, revision, {})
-        if not replay and inputs is not None:
+        if inputs is None and revision is None:
+            setup = _request_setup(request, record)
+            inputs = inputs_digest(setup) if setup is not None else None
+        if inputs is not None:
             frame, domain = record_identity(record)
             target = SolveTarget(inputs=inputs, frame=frame, domain=domain, compare_domain=True)
             active = await asyncio.to_thread(active_model_job, runtime, store, model_id, record, target)
             if active is not None:
                 return active
-        return await runtime.submit(request, cad_provenance=cad_provenance, setup_revision_id=setup_revision_id)
+        return await submit_new()
 
 __all__ = [
     "ModelSolveRefusal",

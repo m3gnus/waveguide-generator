@@ -1742,6 +1742,22 @@ def test_malformed_fem_evidence_does_not_crash_result_metadata(tmp_path: Path, e
     ("mutate_request", "record_changes", "reason"),
     [
         (
+            lambda value, _record: value.geometry.__setattr__("skipped_source_ids", ["unknown"]),
+            {}, "unknown_skipped_source",
+        ),
+        (
+            lambda value, _record: (
+                value.geometry.__setattr__("skipped_source_ids", ["source-a"]),
+                value.geometry.drive_channels[0].source_ids.remove("source-a"),
+                value.geometry.mesh.source_size_mm.pop("source-a"),
+            ),
+            {}, "required_source_skipped",
+        ),
+        (lambda _value, _record: None, {"mesh_sizes": None}, "ingest_record_incomplete"),
+        (lambda _value, _record: None, {"identity": []}, "cad_identity_invalid"),
+        (lambda _value, _record: None, {"identity": {"schema_version": 99}}, "cad_identity_unsupported"),
+        (lambda _value, _record: None, _unlinked_changes(), "frame_confirmation_required"),
+        (
             lambda value, _record: value.geometry.__setattr__("manifest_sha256", "sha256:" + "9" * 64),
             {},
             "ingest_sha_mismatch",
@@ -1839,17 +1855,50 @@ def test_malformed_fem_evidence_does_not_crash_result_metadata(tmp_path: Path, e
 )
 def test_imported_submit_refusals(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     mutate_request: Any,
     record_changes: dict[str, Any],
     reason: str,
 ) -> None:
     async def scenario() -> None:
         runtime, ingest_id, record = await _runtime_fixture(tmp_path, record_changes)
+        runtime.engine_registry = _AlwaysRegistry(SimpleNamespace(name="metal"))
         try:
             request = _request(ingest_id)
             mutate_request(request, record)
+            # Neither a refused plan nor a refused submit may compose provenance.
+            async def unexpected_allocation(*args, **kwargs):
+                pytest.fail("refusal must precede archive and job composition")
+            monkeypatch.setattr(runtime, "_prepare_imported_submission", unexpected_allocation)
+            planning_error = None
+            try:
+                plan = await runtime.plan_imported(request)
+            except (ImportedSolveRefusal, EngineUnavailableError) as exc:
+                planning_error = exc
             with pytest.raises((ImportedSolveRefusal, EngineUnavailableError)) as caught:
                 await runtime.submit(request)
+            if planning_error is not None:
+                assert type(planning_error) is type(caught.value)
+                assert str(planning_error) == str(caught.value)
+                assert planning_error.details == caught.value.details
+            else:
+                assert plan["engine"] is None
+                assert plan["reason"] == str(caught.value)
+                assert plan["readiness"] == caught.value.details.get("blocker")
+            assert runtime.store.list_jobs()[1] == 0
+            app = FastAPI()
+            app.include_router(create_jobs_router(runtime))
+            body = request.model_dump(mode="json")
+            status, planned = await _asgi_post(app, "/api/solve/imported-plan", body)
+            submitted_status, submitted = await _asgi_post(app, "/api/solve", body)
+            assert submitted_status in {422, 503}
+            if status == 200:
+                assert planned["engine"] is None
+                assert planned["reason"] == submitted["detail"]
+            else:
+                assert status == submitted_status
+                assert planned["detail"] == submitted["detail"]
+            assert runtime.store.list_jobs()[1] == 0
             if reason == "imported_engine_unsupported":
                 assert caught.value.blocker.engine == request.options.engine
             else:
@@ -4615,7 +4664,13 @@ def test_imported_outcomes_follow_from_each_engines_declared_capability(
                 predicted = declared and (
                     not callable(preflight) or preflight(record, _POSITIVE_MESH) is None
                 )
-                plan = await runtime.plan_imported(request)
+                # Isolate declarations and preflight; setup admission has a parity table.
+                from server.jobs.runtime.core import plan_imported_submission
+                plan = await plan_imported_submission(
+                    request, registry,
+                    symmetry_metadata=_imported_symmetry_metadata(record, "auto"),
+                    imported_record=record, imported_msh_text=_POSITIVE_MESH,
+                )
                 verdict = next(
                     (entry for entry in plan["engines"] if entry["name"] == info.name),
                     {},
@@ -5065,7 +5120,7 @@ def test_imported_geometry_wait_is_off_loop_cancellable_and_holds_no_lane(monkey
             async def prepared(*args):
                 return SimpleNamespace(record={}, msh_text=None, symmetry_metadata={})
             monkeypatch.setattr(runtime, 'start', started_runtime)
-            monkeypatch.setattr(runtime, '_prepare_imported_submission', prepared)
+            monkeypatch.setattr(runtime, '_validate_imported_submission', prepared)
             task = asyncio.create_task(runtime.submit(request))
         else:
             task = asyncio.create_task(getattr(core, entrypoint)(request, registry))

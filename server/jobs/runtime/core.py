@@ -623,6 +623,21 @@ class SubmissionResolution:
     symmetry_metadata: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class _ImportedValidation:
+    record: dict[str, Any]
+    msh_text: str
+    symmetry_metadata: dict[str, Any]
+    identity: dict[str, Any] | None
+
+
+@dataclass(frozen=True)
+class SubmissionValidation:
+    resolved: SubmissionResolution | None
+    imported: _ImportedValidation | None = None
+    imported_plan: dict[str, Any] | None = None
+
+
 def _design_quadrants_text(request: SolveRequest) -> str | None:
     quadrants = request.design.root.mesh.quadrants
     return quadrants.text() if quadrants is not None else None
@@ -1053,6 +1068,8 @@ async def resolve_imported_submission(
         "reason": reason,
         "eligibility_reasons": passed_over,
     }
+    if fem:
+        metadata["solver_plan"]["precision"] = selection.precision
     if cpu_fallback is not None:
         metadata["solver_plan"]["fallback_reason"] = cpu_fallback
     return SubmissionResolution(
@@ -1612,6 +1629,7 @@ class JobRuntime:
         *,
         cad_provenance: Mapping[str, Any] | None = None,
         setup_revision_id: str | None = None,
+        _validation: SubmissionValidation | None = None,
     ) -> str:
         """Queue a solve.
 
@@ -1643,7 +1661,7 @@ class JobRuntime:
             )
             if existing_job_id is not None:
                 return existing_job_id
-        composed = await self._compose_job(request, cad_provenance, setup_revision_id)
+        composed = await self._compose_job(request, cad_provenance, setup_revision_id, validation=_validation)
         imported = composed.imported
 
         job_id = str(uuid.uuid4())
@@ -1701,6 +1719,7 @@ class JobRuntime:
         request: SolveRequest,
         cad_provenance: Mapping[str, Any] | None,
         setup_revision_id: str | None = None,
+        *, validation: SubmissionValidation | None = None,
     ) -> "_ComposedJob":
         """Everything a job stores of one request, after every submission check.
 
@@ -1711,18 +1730,13 @@ class JobRuntime:
         store the same things.
         """
 
-        imported: _ImportedSubmission | None = None
-        if isinstance(request.geometry, ImportedGeometrySource):
-            imported = await self._prepare_imported_submission(request)
-            resolved = await resolve_imported_submission(
-                request,
-                self.engine_registry,
-                symmetry_metadata=imported.symmetry_metadata,
-                imported_record=imported.record,
-                imported_msh_text=imported.msh_text,
-            )
-        else:
-            resolved = await resolve_submission(request, self.engine_registry)
+        validation = validation or await self.validate_submission(request)
+        resolved = validation.resolved
+        assert resolved is not None
+        imported = (
+            await self._prepare_imported_submission(request, validated=validation.imported)
+            if validation.imported is not None else None
+        )
         request = resolved.request
         symmetry_metadata = resolved.symmetry_metadata
 
@@ -1930,40 +1944,44 @@ class JobRuntime:
             raise ImportedSolveRefusal("native_source_engine", "native source contours currently require the Metal consumer")
         return record
 
-    async def plan_imported(self, request: SolveRequest) -> dict[str, Any]:
-        """Every engine's verdict on one ingested CAD return, without a job.
+    async def validate_submission(
+        self, request: SolveRequest, *, preview: bool = False,
+    ) -> SubmissionValidation:
+        """All admission checks, with no job, archive claim or persistence.
 
-        Reads the ingestion record, its domain and its verified mesh -- what
-        engine choice depends on -- and none of what a submission writes: no
-        archive stem is claimed and no job is allocated. A submission still
-        validates the rest of the request (drive channels, findings, mesh
-        sizes) when it is made.
+        Plans and job composition use this same boundary. Only the presentation
+        of an engine refusal differs in a preview: it includes readiness and,
+        for imported geometry, the per-engine verdicts.
         """
-
         _refuse_removed_solver(request)
-        geometry = request.geometry
-        if not isinstance(geometry, ImportedGeometrySource):
-            raise ValueError("the imported plan resolves imported geometry only")
-        record = await self._prepared_model_record(request)
-        symmetry_metadata = _imported_symmetry_metadata(
-            record, request.options.symmetry, _ground_plane_axis(request)
-        )
-        try:
-            msh_text = await asyncio.to_thread(read_verified_import_mesh, record)
-        except ImportedMeshArtifactError as exc:
-            raise ImportedSolveRefusal("ingest_mesh_unavailable", str(exc)) from exc
-        await asyncio.to_thread(_refuse_inverted_reduced_mesh, record, msh_text)
-        return await plan_imported_submission(
-            request,
-            self.engine_registry,
-            symmetry_metadata=symmetry_metadata,
-            imported_record=record,
-            imported_msh_text=msh_text,
-        )
+        if isinstance(request.geometry, ImportedGeometrySource):
+            imported = await self._validate_imported_submission(request)
+            inputs = dict(
+                symmetry_metadata=imported.symmetry_metadata,
+                imported_record=imported.record, imported_msh_text=imported.msh_text,
+            )
+            if preview:
+                plan = await plan_imported_submission(request, self.engine_registry, **inputs)
+                return SubmissionValidation(None, imported, plan)
+            resolved = await resolve_imported_submission(request, self.engine_registry, **inputs)
+            return SubmissionValidation(resolved, imported)
+        resolved = await resolve_submission(request, self.engine_registry, preview=preview)
+        # This also validates any effective observation grid before allocation.
+        effective_polar_grid(resolved.request)
+        return SubmissionValidation(resolved)
 
-    async def _prepare_imported_submission(
-        self, request: SolveRequest
-    ) -> _ImportedSubmission:
+    async def plan_imported(self, request: SolveRequest) -> dict[str, Any]:
+        """The submission verdict and engine choices, without writing anything."""
+        if not isinstance(request.geometry, ImportedGeometrySource):
+            raise ValueError("the imported plan resolves imported geometry only")
+        validation = await self.validate_submission(request, preview=True)
+        assert validation.imported_plan is not None
+        return validation.imported_plan
+
+    async def _validate_imported_submission(
+        self, request: SolveRequest,
+    ) -> _ImportedValidation:
+        """Read and validate the exact prepared inputs a submission would use."""
         geometry = request.geometry
         assert isinstance(geometry, ImportedGeometrySource)
         record = await self._prepared_model_record(request)
@@ -2048,6 +2066,21 @@ class JobRuntime:
                 str(exc),
             ) from exc
         await asyncio.to_thread(_refuse_inverted_reduced_mesh, record, msh_text)
+        effective_polar_grid(request)
+        # Validate provenance before any archive identity is claimed as well.
+        identity = _cad_identity_provenance(record, geometry)
+        return _ImportedValidation(dict(record), msh_text, symmetry_metadata, identity)
+
+    async def _prepare_imported_submission(
+        self, request: SolveRequest, *, validated: _ImportedValidation | None = None,
+    ) -> _ImportedSubmission:
+        """Compose persisted provenance only after read-only admission succeeds."""
+        validated = validated or await self._validate_imported_submission(request)
+        geometry = request.geometry
+        assert isinstance(geometry, ImportedGeometrySource)
+        record, msh_text = validated.record, validated.msh_text
+        symmetry_metadata = validated.symmetry_metadata
+        file_mesh = record.get("producer") == "mesh-file"
         mesh_record = record.get("mesh")
         mesh_stats = (
             dict(mesh_record.get("stats") or {})
@@ -2115,7 +2148,7 @@ class JobRuntime:
             )
         if file_mesh:
             archive_stem = str(record["archive_stem"])
-        identity = _cad_identity_provenance(record, geometry)
+        identity = validated.identity
         return _ImportedSubmission(
             record=dict(record),
             msh_text=msh_text,

@@ -26,11 +26,11 @@ vi.mock('../jobs/useCapabilities', () => ({
   }),
 }));
 
-// No return has been judged by the server here: the bar names the user's
-// own engine choice.
-vi.mock('../jobs/useImportedSolvePlan', () => ({
-  useImportedSolvePlan: () => ({ plan: null, error: null, isPending: false }),
+const backend = vi.hoisted(() => ({
+  plan: { engine: 'bempp' } as { engine: string | null; reason?: string } | null,
+  error: null as string | null, isPending: false,
 }));
+vi.mock('../jobs/useSolveControlBackend', () => ({ useSolveControlBackend: () => backend }));
 vi.mock('../api/previewSocket', () => ({
   previewSocket: {
     subscribe: () => () => undefined,
@@ -46,6 +46,7 @@ describe('StatusBar workspace modes', () => {
 
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    backend.plan = { engine: 'bempp' }; backend.error = null; backend.isPending = false;
     preferencesStore.resetForTests();
     resetCadReturnStore();
     resetDesignStore();
@@ -84,11 +85,10 @@ describe('StatusBar workspace modes', () => {
       workspaceModeStore.setMode('cad');
     });
 
-    // The CAD solve runs on the user's own choice, as a design's does. Until the
-    // server has judged this return, the bar names that choice.
+    // The server plan remains authoritative when the visible choice is Auto.
     expect(host.textContent).toContain('BEMPP · 2.0');
     act(() => { useImportedSolveOptionsStore.getState().setEngine('auto'); });
-    expect(host.textContent).toContain('METAL · 1.0');
+    expect(host.textContent).toContain('BEMPP · 2.0');
     // Grouped in the runner's locale, not en-US — see summary.test.ts.
     expect(host.textContent).toContain(`CAD mesh ${(12_345).toLocaleString()} solved tri`);
     expect(host.textContent).toContain('next CAD solve 250 Hz – 18 kHz · 31 f');
@@ -97,4 +97,17 @@ describe('StatusBar workspace modes', () => {
     expect(host.textContent).not.toContain('parametric-design.cfg');
     expect(host.textContent).not.toContain('preview no frame');
   });
+  it('shows pending and refused plans without guessing from ready capabilities', () => {
+    act(() => { backend.plan = null; backend.isPending = true; root.render(<StatusBar/>); });
+    expect(host.textContent).toContain('Checking solve engine…');
+    expect(host.textContent).not.toContain('METAL · 1.0');
+    act(() => { backend.isPending = false; backend.error = 'BEAT Metal needs preparing'; root.render(<StatusBar/>); });
+    expect(host.textContent).toContain('SOLVE BLOCKED · BEAT Metal needs preparing');
+  });
+
+  it('shows the refusal reason returned by an imported plan', () => {
+    act(() => { backend.plan = { engine: null, reason: 'Prepare BEAT Metal' }; root.render(<StatusBar/>); });
+    expect(host.textContent).toContain('SOLVE BLOCKED · Prepare BEAT Metal');
+  });
+
 });
