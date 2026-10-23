@@ -535,7 +535,7 @@ describe('solve invocation mutex', () => {
       useCadReturnStore.setState({ driveChannels: [
         { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
         { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
-      ], sourceSizesMm: { 'source-mf': 4, 'source-hf': 4 },
+      ], meshSizes: { ...useCadReturnStore.getState().meshSizes, source_size_mm: { 'source-mf': 4, 'source-hf': 4 } },
         combineSpec: expandLegacy(['drive-mf', 'drive-hf'], [100]), combineEnabled: true });
       latestCombine.publish({ jobId: 'shown', channelId: 'combined', canApply: true, blockedReason: null, recall: null,
         solvedBandHz: [200, 20000], onApplied: () => undefined,
@@ -608,7 +608,7 @@ describe('solve invocation mutex', () => {
     if (changed === 'settings changed') act(() => {
       useImportedSolveOptionsStore.getState().setSweep({ startHz: 123, endHz: 456, count: 5 });
       useImportedSolveOptionsStore.getState().setEngine('bempp');
-      useCadReturnStore.setState({ rigidSizeMm: 17 });
+      useCadReturnStore.setState({ meshSizes: { ...useCadReturnStore.getState().meshSizes, rigid_size_mm: 17 } });
     });
     act(() => { mocks.capabilities.engines = [{ ...mocks.capabilities.engines[0], runtime_state: 'preparing' } as EngineCapability]; });
     await act(async () => preparation.resolve(json({}, 202)));
