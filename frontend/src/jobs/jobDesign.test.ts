@@ -168,6 +168,29 @@ it('keeps the live CAD link when browsing an older run of the same permanent des
   expect(useDocumentStore.getState()).toMatchObject({ designUid: uid, identity, classification: 'current' });
 });
 
+it.each([{}, { design_uid: null, design_name: null }])(
+  'keeps the current name for a legacy run and pairs its detached identity through undo and redo: %j',
+  async (legacyIdentity) => {
+    const { resetDocumentStore, useDocumentStore } = await import('../stores/document');
+    resetDocumentStore();
+    resetDesignStore();
+    useDocumentStore.getState().setDesignName('keep-me');
+    const identity = { designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 7 };
+    useDocumentStore.getState().setCadLink(identity, 'current');
+    const beforeUid = useDocumentStore.getState().designUid;
+    expect(replaceWithJobDesign({ ...legacyIdentity,
+      script_snapshot: { version: 1, design: { formula: 'OSSE', R: 191 } },
+    }, { keepHistory: true })).toBe(true);
+    const recalledUid = useDocumentStore.getState().designUid;
+    expect(recalledUid).not.toBe(beforeUid);
+    expect(useDocumentStore.getState()).toMatchObject({ designName: 'keep-me', identity: null });
+    useDesignStore.getState().undo();
+    expect(useDocumentStore.getState()).toMatchObject({ designUid: beforeUid, designName: 'keep-me', identity });
+    useDesignStore.getState().redo();
+    expect(useDocumentStore.getState()).toMatchObject({ designUid: recalledUid, designName: 'keep-me', identity: null });
+  },
+);
+
 
 it('records an identity boundary for identical geometry, and undoes it before earlier geometry', async () => {
   const { resetDocumentStore, useDocumentStore } = await import('../stores/document');

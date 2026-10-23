@@ -301,7 +301,13 @@ def test_duplicate_and_inline_stamps_normalize_without_geometry_or_hash_changes(
         assert serialize(parsed).count("Waveguide Generator design-id:") == 1
 
 
-def test_solve_submission_persists_document_identity_outside_geometry(tmp_path, monkeypatch):
+@pytest.mark.parametrize("identity", [
+    {},
+    {"design_uid": None, "design_name": None, "design_id": None},
+    {"design_uid": UID, "design_name": "Run A", "design_id": "wgd_01K00000000000000000000000"},
+    {"design_uid": UID, "design_name": ""},
+])
+def test_solve_submission_persists_document_identity_outside_geometry(tmp_path, monkeypatch, identity):
     import json
     from server.app import create_app
     from server.tests.test_jobs_api import _request, _solve_body
@@ -310,14 +316,29 @@ def test_solve_submission_persists_document_identity_outside_geometry(tmp_path, 
 
     async def scenario():
         app = create_app(data_dir=tmp_path)
-        body = {**_solve_body(), 'design_uid': UID, 'design_id': 'wgd_01K00000000000000000000000'}
+        body = {**_solve_body(), **identity}
         status, raw = await _request(app, 'POST', '/api/solve', body=body)
         assert status == 200, raw
         job_id = json.loads(raw)['job_id']
         await app.state.jobs_runtime.wait_idle()
         row = app.state.jobs_runtime.store.get_job_row(job_id)
-        assert row['task_metadata']['design_uid'] == UID
-        assert row['task_metadata']['design_id'] == body['design_id']
+        expected = {key: value for key, value in identity.items() if value is not None}
+        identity_fields = {"design_uid", "design_name", "design_id"}
+        for container in (row['task_metadata'], row['config_json']):
+            assert {key: container[key] for key in identity_fields & container.keys()} == expected
+        for path in (f'/api/status/{job_id}', '/api/jobs', f'/api/jobs/{job_id}/requests'):
+            status, raw = await _request(app, 'GET', path)
+            assert status == 200, raw
+            response = json.loads(raw)
+            if path == '/api/jobs':
+                response = response['items'][0]
+            containers = ([response['effective_request'], response['execution_request']]
+                          if path.endswith('/requests') else [response])
+            for container in containers:
+                fields = identity_fields if path.endswith('/requests') else identity_fields - {'design_id'}
+                assert {key: container[key] for key in fields & container.keys()} == {
+                    key: value for key, value in expected.items() if key in fields
+                }
         assert 'design_uid' not in row['config_json']['geometry']['design']
         await app.state.jobs_runtime.shutdown()
 

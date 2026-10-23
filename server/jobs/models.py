@@ -1110,11 +1110,15 @@ GeometrySource = Annotated[
 ]
 
 
-class SolveRequest(JobModel):
+class JobDesignIdentity(JobModel):
     # Document identity is separate from geometry and CadLink edit versions.
-    design_uid: DesignUid | None = None
-    design_name: str | None = None
-    design_id: str | None = None
+    # Omit absent identity fields in every encoding, including nested models.
+    design_uid: DesignUid | None = Field(default=None, exclude_if=lambda value: value is None)
+    design_name: str | None = Field(default=None, exclude_if=lambda value: value is None)
+
+
+class SolveRequest(JobDesignIdentity):
+    design_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
     geometry: GeometrySource
     options: SolveOptions = Field(default_factory=SolveOptions)
     label: str | None = None
@@ -1464,9 +1468,7 @@ class SolveExecution(ChannelSolveExecution):
     fallback_reason: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
-class JobItem(JobModel):
-    design_uid: DesignUid | None = None
-    design_name: str | None = None
+class JobItem(JobDesignIdentity):
     id: str
     client_request_id: str | None = None
     client_metadata: dict[str, Any]

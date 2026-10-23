@@ -53,11 +53,12 @@ export function replaceWithJobDesign(
     && job.design_uid === useDocumentStore.getState().designUid;
   // Browsing an earlier run of this same document keeps its current name,
   // saved-copy key and CAD edit identity. A different document owns none of them.
+  // Legacy runs without a recorded name keep the name already on screen.
   useDesignStore.getState().replaceDocument(design, {
     ...options,
     documentState: sameDocument ? undefined : {
       designUid: job.design_uid ?? mintDesignUid(),
-      designName: job.design_name ?? '',
+      designName: job.design_name ?? useDocumentStore.getState().designName,
       identity: null,
       classification: null,
       openedContentKey: null,
