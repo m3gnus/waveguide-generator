@@ -1,3 +1,5 @@
+import { useOptionalSolveControl } from '../shell/JobsCoordinator';
+import { CurrentModelStatus } from '../shell/CurrentModelStatus';
 import { SelectRow } from './SelectRow';
 import { BeatRuntimePreparation } from './BeatRuntimePreparation';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
@@ -101,46 +103,14 @@ function AccuracyExplainer({ fastEngine, accurateEngine }: { fastEngine: string 
   </details>;
 }
 
-function fastHelp(
-  engine: string | null,
-  mode: WorkspaceMode,
-  pending: boolean,
-  hasImportedPlan: boolean,
-): string {
-  if (mode === 'cad' && !engine) {
-    if (pending) return 'Fast: Checking which backend can solve this CAD return…';
-    return hasImportedPlan
-      ? 'Fast: No backend can solve this CAD return.'
-      : 'Fast: Prepare the CAD return to see which backend will run.';
-  }
-  if (!engine) {
-    return pending
-      ? 'Fast: Checking which solver backend is ready on this machine…'
-      : 'Fast: No ready solver backend is available on this machine.';
-  }
-
+function fastHelp(engine: string | null, pending: boolean): string {
+  if (!engine) return `Fast: Good for locating resonances.${pending ? ' Checking solve readiness…' : ''}`;
   const complexK = usesComplexK(engine);
   return `Fast: ${engineDisplayName(engine)}${complexK ? ', complex-k (numerical shift 0.005)' : ''}. Good for locating resonances${complexK ? '; sharp chamber resonances may look milder' : ''}.`;
 }
 
-function accurateHelp(
-  engine: string | null,
-  mode: WorkspaceMode,
-  pending: boolean,
-  hasImportedPlan: boolean,
-  importedPlanReason?: string,
-): string {
-  if (!engine) {
-    if (mode === 'cad') {
-      if (pending) return `${ACCURATE_HELP} Checking which BEAT backend can solve this CAD return…`;
-      if (hasImportedPlan) return `${ACCURATE_HELP} No BEAT backend can solve this CAD return${importedPlanReason ? `: ${importedPlanReason}` : ''}.`;
-      return `${ACCURATE_HELP} Prepare the CAD return to see whether a BEAT backend can solve it.`;
-    }
-    return pending
-      ? `${ACCURATE_HELP} Checking which BEAT backend is ready…`
-      : `${ACCURATE_HELP} No BEAT backend is ready here; Accurate cannot run on this machine.`;
-  }
-  if (engine === 'beat-cpu') return `${ACCURATE_HELP} Runs via BEAT CPU.`;
+function accurateHelp(engine: string | null, pending: boolean): string {
+  if (!engine) return `${ACCURATE_HELP}${pending ? ' Checking solve readiness…' : ''}`;
   return `${ACCURATE_HELP} Runs via ${engineDisplayName(engine)}.`;
 }
 
@@ -216,6 +186,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
   /** A caller that already renders driver guidance can suppress duplicates. */
   showOpenclGuidance?: boolean;
 } = {}) {
+  const solve = useOptionalSolveControl();
   const store = useScopedSolveOptions();
   const { engines, hostPlatform, error, isLoading: capabilitiesLoading,
     qualificationRefreshNeeded, refreshCapabilities } = useCapabilities();
@@ -235,21 +206,12 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
   const explainerFast = store.accuracy === 'fast' && store.engine === 'auto' ? helpEngine : null;
   const explainerAccurate = store.accuracy === 'accurate' && store.engine === 'auto' ? helpEngine : null;
   const accuracyHelp = store.accuracy === 'accurate'
-    ? accurateHelp(helpEngine, mode, helpPending, importedPlan.plan !== null, importedPlan.plan?.reason)
-    : fastHelp(helpEngine, mode, helpPending, importedPlan.plan !== null);
-  const runsOn = importedEngine
-    ? `${importedEngine} · full 3-D · free space`
-    : importedPlan.isPending
-      ? 'Checking which engines can solve this CAD model…'
-      : importedPlan.plan?.reason ?? importedPlan.error ?? 'Prepare the CAD return to see which engines can solve it.';
+    ? accurateHelp(helpEngine, helpPending)
+    : fastHelp(helpEngine, helpPending);
   return <>
     <SelectRow revealId="solve-accuracy" text={accuracyHelp}><label htmlFor="solve-accuracy">Solve accuracy</label><select id="solve-accuracy" value={store.accuracy} onChange={(event) => store.setAccuracy(event.target.value as 'fast' | 'accurate')}><option value="fast">Fast</option><option value="accurate">Accurate</option></select></SelectRow>
     <AccuracyExplainer fastEngine={explainerFast} accurateEngine={explainerAccurate} />
-    {store.engine === 'auto' && store.accuracy === 'fast' && explainerFast === 'bempp'
-      && engines.some((engine) => engine.name.startsWith('beat-') && engine.runtime_state === 'preparing')
-      && <p className="section-note" role="status">Solves use BEMPP until BEAT is ready.</p>}
     {includeSampling && <AdaptiveFrequencyControls mode={mode} />}
-    {store.accuracy === 'accurate' && helpEngine === 'beat-cpu' && <p className="section-note" role="status">Accurate will use BEAT CPU.</p>}
     {store.engine !== 'auto' && <p className="section-note">Advanced engine override: {store.engine}. This engine takes precedence. Selecting Fast or Accurate clears the override.</p>}
     {mode === 'parametric' ? <>
     <SelectRow revealId="solve-engine" text="Advanced engine override. AUTO follows the Fast or Accurate choice. An explicit engine takes precedence."><label htmlFor="solve-engine">Advanced backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
@@ -278,16 +240,17 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
           return <option key={engine.name} value={engine.name.toLowerCase()} disabled={refused}>{engine.label || engine.name}{note}</option>;
         })}
       </select></HelpTipRow>
-      <p className={`cad-solve-fact${importedEngine ? '' : ' cad-solve-fact-unavailable'}`}><b>Runs on</b><span>{runsOn}</span></p>
+      <p className="cad-solve-fact"><b>Runs on</b><span>{importedEngine ? `${importedEngine} · full 3-D · free space` : 'See solve readiness below.'}</span></p>
       <p className="cad-solve-fact"><b>Ingested cut planes</b><span>{ingestRecord?.symmetry.cut_planes?.length ? ingestRecord.symmetry.cut_planes.join(', ') : 'none · full domain'}</span></p>
     </>}
-    <BeatRuntimePreparation engines={engines} selected={store.engine} refreshCapabilities={refreshCapabilities} />
+    {!solve?.readiness && <BeatRuntimePreparation engines={engines} selected={store.engine} refreshCapabilities={refreshCapabilities} />}
     {error ? <span className="section-note" role="status">Capability refresh failed. Check the backend connection. <button type="button" onClick={refreshCapabilities}>Refresh</button></span> : qualificationRefreshNeeded
       ? <span className="section-note" role="status">BEMPP · <button type="button" onClick={refreshCapabilities}>Refresh</button></span>
       : engines.some((engine) => engine.name === 'bempp' && engine.qualification === 'pending')
       && <span className="section-note" role="status">BEMPP · checking OpenCL…</span>}
     {showOpenclGuidance && <OpenclUnavailableHook platform={hostPlatform}
       engine={engines.find((engine) => engine.name === 'bempp')} />}
+    <CurrentModelStatus/>
     {includeSampling && <MeshValidationControl />}
     {mode === 'parametric' && <GroundPlaneControls />}
     {includeSampling && <FrequencySweepControls idPrefix={mode === 'cad' ? 'cad-solve' : 'design-solve'} context={mode === 'cad' ? 'imported' : 'design'} />}

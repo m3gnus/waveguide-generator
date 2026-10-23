@@ -13,7 +13,7 @@ import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 
 vi.mock('../jobs/useCapabilities', () => ({
-  useCapabilities: () => ({ error: null }),
+  useCapabilities: () => ({ error: null, engines: [], refreshCapabilities: async () => undefined }),
   useCapabilityRefreshOnReconnect: () => undefined,
   useLegacyBeatEngineMigration: () => undefined,
 }));

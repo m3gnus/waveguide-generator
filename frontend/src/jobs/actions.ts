@@ -324,7 +324,7 @@ export function solvePlanRequestBody(
 export class SolvePlanRefused extends Error {
   readonly status: number;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, readonly readiness: SolveBlocker | null = null) {
     super(message);
     this.name = 'SolvePlanRefused';
     this.status = status;
@@ -388,7 +388,7 @@ export async function postSolvePlan(
   ) {
     throw new Error('Solve plan response is invalid');
   }
-  if (plan.readiness) throw new SolvePlanRefused(plan.readiness.message, 422);
+  if (plan.readiness) throw new SolvePlanRefused(plan.readiness.message, 422, plan.readiness);
   return plan as SolvePlan;
 }
 

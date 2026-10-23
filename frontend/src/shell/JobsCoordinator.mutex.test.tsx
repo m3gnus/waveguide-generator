@@ -18,6 +18,7 @@ import type { CadOperationSummary, CadSolveSetup } from '../api/cadOperations';
 import { compareSelection } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import { CadLinkApiError, type CadReturnIngestRecord } from '../api/cadlink';
+import type { SolveBlocker, EngineCapability } from '../jobs/actions';
 import { SolvePlanRefused, SolveSubmissionRefused, type ImportedSolveSubmission, type ModelSolvePress } from '../jobs/actions';
 import { SOLVE_PLAN_DEBOUNCE_MS } from '../jobs/planQueryPolicy';
 import { bundleIdentity, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
@@ -42,8 +43,10 @@ import {
   useSolveControl,
   useOptionalSolveControl,
 } from './JobsCoordinator';
+import { CurrentModelStatus as CurrentReadiness } from './CurrentModelStatus';
 import { SolveActions, TopBar } from './TopBar';
 import { CadSolveCard } from './CadSolveCard';
+import { SolveOptionsControls } from '../design/SolveOptionsSections';
 import { CadCrossover } from '../design/CrossoverSection';
 import { latestCombine } from '../results/latestCombine';
 import { toWire } from '../results/crossoverSpec';
@@ -54,6 +57,7 @@ import { ResultsPanel } from './ResultsPanel';
 import { resetSolveAttentionForTests, solveAttention } from './solveAttention';
 
 const mocks = vi.hoisted(() => ({
+  refreshCapabilities: vi.fn(),
   planSolveDesign: vi.fn(),
   submitDesign: vi.fn(),
   solveModel: vi.fn(),
@@ -72,6 +76,7 @@ const mocks = vi.hoisted(() => ({
     plan: {
       ingest_id: 'wgi_test', requested: 'auto', engine: 'metal' as string | null, code: null,
       reason: 'AUTO selected the first available engine', domain: 'full',
+      readiness: null as SolveBlocker | null,
       engines: [{ name: 'metal', label: 'Metal', solves: true }],
     },
     error: null as string | null,
@@ -106,6 +111,7 @@ vi.mock('../jobs/useCapabilities', () => ({
     engines: mocks.capabilities.engines,
     engineSelection: mocks.capabilities.engineSelection,
     error: null,
+    refreshCapabilities: mocks.refreshCapabilities,
     isLoading: false,
   }),
   useCapabilityRefreshOnReconnect: () => undefined,
@@ -250,6 +256,10 @@ describe('solve invocation mutex', () => {
 
   beforeEach(async () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    mocks.refreshCapabilities.mockReset().mockResolvedValue(undefined);
+    mocks.importedPlan.plan.readiness = null;
+    mocks.importedPlan.plan.engine = 'metal';
+    mocks.importedPlan.plan.reason = 'AUTO selected the first available engine';
     mocks.useRealImportedPlan = false;
     mocks.useRealSolvePlan = false;
     preferencesStore.resetForTests();
@@ -499,6 +509,128 @@ describe('solve invocation mutex', () => {
     tableClient.clear();
   });
 
+  const blocker: SolveBlocker = { code: 'engine_unavailable', engine: 'beat-metal',
+    message: 'BEAT Metal needs preparing.', remedies: [
+      { kind: 'prepare', engine: 'beat-metal', disabled_reason: null },
+      { kind: 'use_engine', engine: 'metal', label: 'Use Metal-BEM (different solver — results will differ)', same_solver: false },
+      { kind: 'use_engine', engine: 'beat-cpu', label: 'Use BEAT CPU', same_solver: true },
+      { kind: 'settings', section: 'simulation' },
+    ] };
+  function blockedCad(held = false) {
+    const record = readyCad('wgi_readiness');
+    record.model_id = 'wgl_readiness';
+    record.symmetry = { cut_planes: [] } as CadReturnIngestRecord['symmetry'];
+    workspaceModeStore.setMode('cad');
+    mocks.importedPlan.plan = { ...mocks.importedPlan.plan, engine: null, reason: blocker.message, readiness: blocker };
+    if (held) publishJobs([cadJobFixture(operation('held-fusion', 'needs_user_input', {
+      reason: 'engine_unavailable', message: blocker.message,
+    }))]);
+    return record;
+  }
+  it.each(['top bar', 'Results empty', 'CAD card', 'crossover', 'Simulation'])('readiness parity: %s shows the shared blocker and ordered remedies', async surface => {
+    let record!: CadReturnIngestRecord;
+    act(() => {
+      record = blockedCad();
+      useCadReturnStore.setState({ driveChannels: [
+        { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
+        { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
+      ], sourceSizesMm: { 'source-mf': 4, 'source-hf': 4 },
+        combineSpec: expandLegacy(['drive-mf', 'drive-hf'], [100]), combineEnabled: true });
+      latestCombine.publish({ jobId: 'shown', channelId: 'combined', canApply: true, blockedReason: null, recall: null,
+        solvedBandHz: [200, 20000], onApplied: () => undefined,
+        combine: { ...toWire(expandLegacy(['drive-mf', 'drive-hf'], [100])), crossovers_hz: [100] } } as never);
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => root.render(<QueryClientProvider client={client}><JobsCoordinator>
+      {surface === 'top bar' ? <SolveActions/> : surface === 'Results empty' ? <ResultsPanel/>
+        : surface === 'CAD card' ? <CadSolveCard record={record} label="Speaker"/>
+          : surface === 'crossover' ? <CadCrossover/> : <SolveOptionsControls mode="cad" ingestRecord={record}/>}
+    </JobsCoordinator></QueryClientProvider>));
+    const readiness = host.querySelector('.solve-readiness')!;
+    expect(readiness).not.toBeNull();
+    expect(readiness.querySelector('span')?.textContent).toBe(blocker.message);
+    expect([...readiness.querySelectorAll('button')].map(button => button.textContent)).toEqual([
+      'Prepare BEAT Metal', 'Use BEAT CPU', 'Use Metal-BEM (different solver — results will differ)', 'Open settings',
+    ]);
+    const solve = host.querySelector<HTMLButtonElement>('.solve-button, [data-action="solve"], .crossover-recall');
+    if (solve) expect(solve.disabled).toBe(true);
+    expect(readiness.textContent).toContain(blocker.message); // visible text, outside the disabled button
+    latestCombine.publish(null);
+    client.clear();
+  });
+  it.each([
+    { name: 'disabled preparation', readiness: { ...blocker, remedies: [{ kind: 'prepare' as const, engine: 'beat-metal', disabled_reason: 'Preparation is disabled by this installation.' }] }, expected: 'Preparation is disabled by this installation.', buttons: [] },
+    { name: 'waiting', readiness: { ...blocker, message: 'BEAT Metal is still preparing.', remedies: [{ kind: 'wait' as const }, { kind: 'settings' as const, section: 'simulation' }] }, expected: 'BEAT Metal is still preparing.', buttons: ['Wait', 'Open settings'] },
+    { name: 'mesh too large', readiness: { code: 'mesh_too_large', message: 'This mesh is too large to solve.' }, expected: 'This mesh is too large to solve.', buttons: [] },
+  ])('$name renders its message and only the declared remedies', async ({ readiness, expected, buttons }) => {
+    act(() => { blockedCad(); mocks.importedPlan.plan.readiness = readiness as SolveBlocker; });
+    await act(async () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>));
+    const view = host.querySelector('.solve-readiness')!;
+    expect(view.textContent).toContain(expected);
+    expect([...view.querySelectorAll('button')].map(button => button.textContent)).toEqual(buttons);
+    expect(host.querySelector<HTMLButtonElement>('.solve-button')!.disabled).toBe(true);
+  });
+  it('prepares once across two surfaces and refreshes, without solving', async () => {
+    act(() => blockedCad());
+    const response = deferred<Response>();
+    const fetcher = vi.fn((url: RequestInfo | URL) => String(url).endsWith('/prepare') ? response.promise : Promise.resolve(json({})));
+    vi.stubGlobal('fetch', fetcher);
+    await act(async () => root.render(<JobsCoordinator><SolveActions/><CurrentReadiness/></JobsCoordinator>));
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>('button')].filter(button => button.textContent === 'Prepare BEAT Metal');
+    expect(buttons).toHaveLength(2);
+    await act(async () => { buttons[0].click(); buttons[1].click(); });
+    await act(async () => response.resolve(json({}, 202)));
+    expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/prepare'))).toEqual([['/api/runtimes/beat/metal/prepare', { method: 'POST' }]]);
+    expect(mocks.refreshCapabilities).toHaveBeenCalledOnce();
+    expect(mocks.solveModel).not.toHaveBeenCalled();
+  });
+  it.each([false, true])('held Fusion: explicit prepare and solve continues once; changed model=%s', async changed => {
+    const actions = await vi.importActual<typeof import('../jobs/actions')>('../jobs/actions');
+    mocks.solveModel.mockImplementation(actions.solveModel);
+    const posts: string[] = [];
+    const preparation = deferred<Response>();
+    vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url).endsWith('/prepare')) return preparation.promise;
+      if (init?.method === 'POST') posts.push(String(url));
+      return json({ job_id: 'held-fusion' });
+    }));
+    act(() => {
+      blockedCad(true);
+      mocks.capabilities.engines = [{ name: 'beat-metal', label: 'BEAT Metal', available: false,
+        runtime_state: 'unprepared', runtime_preparable: true, reason: null, version: null, fast_paths: [] } as EngineCapability];
+    });
+    await act(async () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>));
+    const readiness = host.querySelector('.solve-readiness')!;
+    expect([...readiness.querySelectorAll('button')].map(button => button.textContent)).toEqual(['Prepare BEAT Metal and solve']);
+    await act(async () => readiness.querySelector<HTMLButtonElement>('button')!.click());
+    if (changed) act(() => readyCad('wgi_different'));
+    act(() => { mocks.capabilities.engines = [{ ...mocks.capabilities.engines[0], runtime_state: 'preparing' } as EngineCapability]; });
+    await act(async () => preparation.resolve(json({}, 202)));
+    expect(posts).toEqual([]);
+    act(() => { mocks.capabilities.engines = [{ ...mocks.capabilities.engines[0], available: true, runtime_state: 'ready' } as EngineCapability]; });
+    await act(async () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>));
+    expect(posts).toEqual(changed ? [] : ['/api/models/wgl_readiness/solve']);
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
+    await act(async () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>));
+    expect(posts).toHaveLength(changed ? 0 : 1);
+  });
+  it('Use engine changes the visible option and re-plans the imported request', async () => {
+    act(() => blockedCad());
+    mocks.useRealImportedPlan = true;
+    mocks.postImportedSolvePlan.mockReset().mockResolvedValue(mocks.importedPlan.plan);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const render = () => root.render(<QueryClientProvider client={client}><JobsCoordinator><SolveActions/></JobsCoordinator></QueryClientProvider>);
+    await act(async () => render());
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+    const button = [...host.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Use BEAT CPU')!;
+    expect(button).toBeTruthy();
+    await act(async () => button.click());
+    expect(useImportedSolveOptionsStore.getState().engine).toBe('beat-cpu');
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, SOLVE_PLAN_DEBOUNCE_MS + 30)); });
+    expect(JSON.parse(mocks.postImportedSolvePlan.mock.calls.at(-1)![0]).options.engine).toBe('beat-cpu');
+    expect(mocks.postImportedSolvePlan).toHaveBeenCalledTimes(2);
+    client.clear();
+  });
   it('regression: Results Solve continues the refused CAD model, never the open parametric design', async () => {
     const actions = await vi.importActual<typeof import('../jobs/actions')>('../jobs/actions');
     mocks.solveModel.mockImplementation(actions.solveModel);
@@ -536,13 +668,14 @@ describe('solve invocation mutex', () => {
       expect(await solveControlStore.getSnapshot()!.solve()).toBe('busy');
     });
     expect(retry).not.toHaveBeenCalled();
-    expect(fetcher).toHaveBeenCalledOnce();
+    const jobRequests = () => fetcher.mock.calls.filter(([url]) => String(url).startsWith('/api/jobs/'));
+    expect(jobRequests()).toHaveLength(1);
     expect(solveAttention.operationArmed('refused-parent')).toBe(true);
     await act(async () => {
       approval.resolve(outcome === 'approval refused' ? json({ detail: 'wrong preparation' }, 422) : json({}));
       await continuation;
     });
-    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(outcome === 'approval refused'
+    expect(jobRequests().map(([url]) => url)).toEqual(outcome === 'approval refused'
       ? ['/api/jobs/refused-parent/approvals'] : ['/api/jobs/refused-parent/approvals', '/api/jobs/refused-parent/solve-again']);
     if (outcome === 'accepted') {
       expect(compareSelection.getSnapshot().awaiting).toBe('approved-child');
@@ -737,7 +870,7 @@ describe('solve invocation mutex', () => {
       if (mode === 'parametric') {
         expect(mocks.submitDesign).toHaveBeenCalledOnce();
         expect(mocks.submitDesign.mock.calls[0][1].engine).toBe('bempp');
-        expect(JSON.parse(fetcher.mock.calls[1][1]!.body as string).options.engine).toBe('bempp');
+        expect(JSON.parse(fetcher.mock.calls.filter(([url]) => String(url) === '/api/solve/plan').at(-1)![1]!.body as string).options.engine).toBe('bempp');
       } else {
         expect(mocks.solveModel).toHaveBeenCalledOnce();
         expect((mocks.solveModel.mock.calls[0][1].setup as CadSolveSetup).options.engine).toBe('bempp');

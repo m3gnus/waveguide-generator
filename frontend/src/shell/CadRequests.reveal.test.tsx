@@ -12,7 +12,7 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { PanelVisibilityContext } from './panelVisibility';
 import { AttentionNotices } from './TopBar';
 import { ImportedWorkspacePanel } from './ImportedWorkspacePanel';
-import { CadOperationsSection, OnScreenSolveStatus } from './CadOperationsSection';
+import { CadOperationsSection, CurrentModelRequests } from './CadOperationsSection';
 import { bindWorkspaceNavigation, publishVisiblePanels, resetWorkspaceNavigationForTests, workspaceNavigation } from './workspaceNavigation';
 
 const coordinator = vi.hoisted(() => ({ reportError: vi.fn(), reportStatus: vi.fn(), fusionStatus: null }));
@@ -105,7 +105,7 @@ describe('Show reveals the requests it counts', () => {
     const fetcher = vi.fn(async () => json({})); vi.stubGlobal('fetch', fetcher);
     const record = { manifest_sha256: location === 'current' ? 'restart-held-snapshot' : 'other-snapshot' } as CadReturnIngestRecord;
     await act(async () => root.render(location === 'current' || location === 'earlier'
-      ? <><AttentionNotices/><OnScreenSolveStatus record={record}/><CadOperationsSection record={record} solves={false}/></>
+      ? <><AttentionNotices/><CurrentModelRequests record={record}/><CadOperationsSection record={record} solves={false}/></>
       : <Surface/>));
     expect(host.querySelector('.attention-waiting')?.textContent).toBe('2 CAD requests need you · Show');
     await act(async () => host.querySelector<HTMLButtonElement>('.attention-waiting')!.click());
@@ -144,7 +144,7 @@ describe('Show reveals the requests it counts', () => {
     const record = { manifest_sha256: job.cad_state!.snapshot!.manifest_sha256 } as never;
     vi.stubGlobal('fetch', vi.fn(async () => json({ findings: [] })));
     await act(async () => root.render(<div className="cadlink-panel">
-      <OnScreenSolveStatus record={record}/><CadOperationsSection record={record} solves={false}/>
+      <CurrentModelRequests record={record}/><CadOperationsSection record={record} solves={false}/>
     </div>));
     await act(async () => { workspaceNavigation.reveal('cad-requests'); });
     expect(document.activeElement).toBe(host.querySelector('.cad-operation'));

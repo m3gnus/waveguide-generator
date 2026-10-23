@@ -1,4 +1,4 @@
-import { SolveProgressView } from './solveProgress';
+import { CurrentModelStatus } from './CurrentModelStatus';
 import { selectJob } from '../jobs/selectJob';
 import { samplingNotes } from '../results/sampling';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -48,7 +48,7 @@ import { trapDialogFocus } from './dialogFocus';
 import { useRunNormAngle } from '../stores/solveOptionsContext';
 import { useObservationStore } from '../viewport/observationStore';
 import { MAX_MEASURED_OVERLAYS, useMeasuredOverlayStore, type MeasuredOverlay } from '../stores/measuredOverlays';
-import { RUN_VERDICT_MARKER, RUN_VERDICT_SENTENCE, runContextMarker, runVerdict, modelForRun, shownResult, currentModelStatus, useCurrentModel } from '../model/currentModel';
+import { RUN_VERDICT_MARKER, RUN_VERDICT_SENTENCE, runContextMarker, runVerdict, modelForRun, shownResult, useCurrentModel } from '../model/currentModel';
 import { AnchoredPanel } from '../prefs/AnchoredPanel';
 import { radiationImpedanceTraces } from '../results/radiationImpedance';
 import { powerAgreementHealth, powerCheckMessage } from '../results/radiatedPower';
@@ -2592,15 +2592,8 @@ export function ResultsPanel() {
     setMeasuredError(problems.length ? problems.join(' ') : null);
   }, []);
 
-  const modelStatus = currentModelStatus(coherenceContext, jobs, solve?.disabled ? solve.title : null);
-  // Slice 4 plugs shared readiness controls into this one empty-state surface.
   const emptyModel = <div className="empty-state" role="status">
-    <b>{{ solved: 'Loading results', running: 'Solving', preparing: 'Preparing', refused: 'Solve refused', failed: 'Solve failed', 'never-solved': 'Not solved yet' }[modelStatus.kind]}</b>
-    <span>{modelStatus.message}</span>
-    {(modelStatus.kind === 'preparing' || modelStatus.kind === 'running') && modelStatus.job && <SolveProgressView job={modelStatus.job} variant="compact"/>}
-    {modelStatus.kind === 'failed' && modelStatus.job
-      ? <button type="button" onClick={() => void coordinator.continueRun(modelStatus.job!.id).catch(() => undefined)}>Retry</button>
-      : <button type="button" className="solve-button" disabled={!solve || solve.disabled} title={solve?.title ?? 'Solve is not available here.'} onClick={() => void solve?.solve()}>Solve</button>}
+    <CurrentModelStatus actions/>
     {primaryJob && resolved.verdict !== 'current' && <button type="button" onClick={showPrimaryModel}>Show that run's model</button>}
   </div>;
 

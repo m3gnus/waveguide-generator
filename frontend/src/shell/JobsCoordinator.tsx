@@ -1,4 +1,7 @@
-import { currentModel, useCurrentModel } from '../model/currentModel';
+import { usePrepareEngine } from '../jobs/usePrepareEngine';
+import { useHeldSolvePreparation } from '../jobs/useHeldSolvePreparation';
+import { messageBlocker, type SolveReadinessState } from '../jobs/solveReadiness';
+import { currentModel, currentModelStatus, useCurrentModel } from '../model/currentModel';
 import { importedModelBlocker, importedModelId, unchangedSetup, useImportedModelStore } from '../stores/importedModel';
 import { nativeSymmetryLimitation } from '../design/nativeFamilies';
 import { fileMeshSetup, fileMeshSubmission, registeredMesh, useMeshImportStore } from '../stores/meshImport';
@@ -65,6 +68,12 @@ interface SolveControl {
   label: string;
   title: string;
   notice: SolveNotice | null;
+  readiness: SolveReadinessState | null;
+  prepareEngine(engine: string): Promise<boolean>;
+  prepareAndSolve(engine: string): Promise<void>;
+  useEngine(engine: string): void;
+  preparationError: string | null;
+  preparingEngine: string | null;
 }
 
 /** No engine on this machine can solve imported geometry right now. The server
@@ -84,7 +93,7 @@ interface SubmissionAcceptanceOptions {
   busyMessage?: string;
 }
 
-export type ContinueRunPatch = RerunPatch & Pick<CadSolvePress, 'approvals'>;
+export type ContinueRunPatch = RerunPatch & Pick<CadSolvePress, 'approvals'> & { resumeModel?: boolean };
 
 interface CoordinatorBridgeSnapshot {
   available: boolean;
@@ -283,8 +292,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const preferences = usePreferences();
   const automation = useRef(new JobAutomation()).current;
   const {
-    error: capabilityError,
+    error: capabilityError, engines, refreshCapabilities,
   } = useCapabilities();
+  const preparation = usePrepareEngine(engines, refreshCapabilities);
   const [actionError, setActionError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const submissionInFlight = useRef(false);
@@ -345,7 +355,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const {
     plan: solvePlan,
     error: solvePlanError,
-    isPending: solvePlanPending,
+    isPending: solvePlanPending, readiness: parametricReadiness,
   } = useSolvePlan(
     design,
     currentOptions,
@@ -459,6 +469,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   // makes one call; the server prepares, continues or answers the job in flight.
   const solveCurrentCadImport = useCallback(async (
     clicked?: { cad: ReturnType<typeof useCadReturnStore.getState>; checkPlan: () => Promise<void> },
+    expectedModelKey?: string | null,
   ) => {
     if (submissionInFlight.current) return 'busy' as const;
     const cad = clicked?.cad ?? useCadReturnStore.getState();
@@ -494,6 +505,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         ...(frameAxis ? { frame_axis: frameAxis } : {}),
         ...(approvals ? { approvals } : {}),
       };
+      if (expectedModelKey && (currentModel().key !== expectedModelKey || !currentModel().viewportShowing)) return 'blocked' as const;
       // The completion claim exists before HTTP: an event may beat the response.
       rememberCadSolve(key, designName, ingestId);
       solveAttention.bindOperation(key);
@@ -520,6 +532,17 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [completeCadSolve, now]);
 
   const continueRun = useCallback(async (jobId: string, patch: ContinueRunPatch = {}) => {
+    if (patch.resumeModel) {
+      const status = currentModelStatus(currentModel(), jobsSocket.getSnapshot().jobs);
+      if (status.job?.id !== jobId || status.job.cad_state?.state !== 'needs_user_input' || !currentModel().viewportShowing) return null;
+      try {
+        await solveCurrentCadImport(undefined, currentModel().key);
+        return jobId;
+      } catch (error) {
+        setActionError(error instanceof Error ? error.message : String(error));
+        throw error;
+      }
+    }
     const cad = patch.approvals !== undefined;
     return acceptSubmission(async () => {
       if (cad) {
@@ -550,7 +573,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         }
       },
     });
-  }, [acceptSubmission, completeCadSolve]);
+  }, [acceptSubmission, completeCadSolve, solveCurrentCadImport]);
 
   const reportError = useCallback((message: string) => setActionError(message), []);
   // An empty `?job=` names no run; drop it at once.
@@ -698,7 +721,19 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     }),
     [cadGeometryActive, fileGeometryActive, crossoverDraftError, solveOptionsError, solvePlan, solvePlanError, solvePlanPending],
   );
+  const prepareAndSolve = useHeldSolvePreparation(model, engines, preparation.prepare,
+    useCallback((id: string) => continueRun(id, { resumeModel: true }), [continueRun]));
+  const serverReadiness = cadGeometryActive || fileGeometryActive ? importedPlan.plan?.readiness : parametricReadiness;
+  const readiness = solveBlocker || solveOptionsError
+    ? messageBlocker(solveBlocker || solveOptionsError!)
+    : serverReadiness ?? (planError ? messageBlocker(planError) : null);
   const control = useMemo<SolveControl>(() => ({
+    readiness,
+    prepareEngine: preparation.prepare,
+    prepareAndSolve,
+    preparationError: preparation.error,
+    preparingEngine: preparation.starting ?? engines.find(engine => engine.runtime_state === 'preparing')?.name ?? null,
+    useEngine: (engine: string) => solveOptions.setEngine(engine),
     plan: solvePlan,
     planPending: solvePlanPending,
     solve,
@@ -707,7 +742,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     notice,
     submitting,
     label: 'Solve',
-    title: submitting
+    title: readiness?.message ?? (submitting
       ? 'Submitting solve…'
       : fileGeometryActive
         ? fileBlocker ?? planError ?? (planPending ? 'Checking the imported mesh…' : 'Solve the prepared imported mesh')
@@ -719,8 +754,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
               ? solvePlanTitle(solvePlan, selectedEngine)
               : cadGeometryActive
                 ? capabilityError ?? importedUnavailable ?? 'No engine can solve imported CAD geometry here'
-                : parametricUnavailable,
-  }), [cadGeometryActive, capabilityError, fileBlocker, fileGeometryActive, importedUnavailable, importedEngineLabel, notice, parametricUnavailable, planError, planPending, selectedEngine, solve, solveEnabled, solveBlocker, solvePlan, solvePlanPending, submitting]);
+                : parametricUnavailable),
+  }), [engines, readiness, preparation.prepare, preparation.error, preparation.starting, prepareAndSolve, solveOptions, cadGeometryActive, capabilityError, fileBlocker, fileGeometryActive, importedUnavailable, importedEngineLabel, notice, parametricUnavailable, planError, planPending, selectedEngine, solve, solveEnabled, solveBlocker, solvePlan, solvePlanPending, submitting]);
 
   useEffect(() => {
     publishSolveControl(control);

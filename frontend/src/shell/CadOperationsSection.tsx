@@ -1,3 +1,5 @@
+import { SolveReadiness } from './SolveReadiness';
+import { messageBlocker } from '../jobs/solveReadiness';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { isActiveJobStatus, jobsSocket } from '../api/jobsSocket';
 import { getIngest, type CadReturnFinding, type CadReturnIngestRecord } from '../api/cadlink';
@@ -41,8 +43,6 @@ const REASON_COPY: Record<string, string> = {
   setup_required: 'needs its solve settings',
   findings_need_review: 'blocking findings to review',
   preparation_failed: 'preparation failed',
-  engine_unavailable: 'the selected engine cannot solve it',
-  engine_cannot_solve_return: 'the selected engine cannot solve this return',
   submission_refused: 'the jobs system refused it',
   interrupted: 'interrupted',
   ready_to_solve: 'ready to solve',
@@ -206,29 +206,14 @@ interface Guidance {
 /** What the user can do about the reason an operation waits. A card is only
  * ever shown for the model on screen (`CadOperationsSection`). */
 function guidance(operation: CadOperationSummary): Guidance {
+  if (operation.reason?.startsWith('engine_') || operation.reason === 'submission_refused') {
+    return { text: null, simulation: false, action: null };
+  }
   switch (operation.reason) {
     case 'setup_required':
       return {
         text: 'This model is on screen: check the settings above, then press Solve. WG remembers them for this project.',
         simulation: false,
-        action: null,
-      };
-    case 'engine_cannot_solve_return':
-      return {
-        text: 'Choose one of the engines it names, or Accurate where it says so, in the solver selector in Simulation, then press Solve. WG never switches engines for you.',
-        simulation: true,
-        action: null,
-      };
-    case 'engine_unavailable':
-      return {
-        text: 'Pick one of the engines it names in the solver selector, in Simulation, then press Solve. WG never switches engines for you.',
-        simulation: true,
-        action: null,
-      };
-    case 'submission_refused':
-      return {
-        text: 'If it names engines that can solve this model, pick one in the solver selector, in Simulation; then press Solve. WG never switches engines for you.',
-        simulation: true,
         action: null,
       };
     case 'findings_need_review':
@@ -311,14 +296,15 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
   };
   // The stage is the backend's bookkeeping ("validating"); the state and the
   // reason are what the user acts on.
+  const engineReason = operation.reason?.startsWith('engine_') || operation.reason === 'submission_refused';
   const status = [
     STATE_COPY[operation.state] ?? operation.state,
-    operation.reason ? REASON_COPY[operation.reason] ?? operation.reason : null,
+    operation.reason && !engineReason ? REASON_COPY[operation.reason] ?? operation.reason : null,
   ].filter(Boolean).join(' · ');
   // For the model on screen the card's own guidance and controls say what the
   // backend's message says, which named menus for a model not on screen.
-  const message = SAID_BY_THE_CARD.has(operation.reason ?? '') || (!showStatus && !waiting) ? null : operation.message;
-  const ladder = solveGateLadder(operation, review.error ? null : review);
+  const message = engineReason || SAID_BY_THE_CARD.has(operation.reason ?? '') || (!showStatus && !waiting) ? null : operation.message;
+  const ladder = engineReason ? [] : solveGateLadder(operation, review.error ? null : review);
   const header = solve
     ? manual ? waiting ? 'Your solve is waiting' : 'Your solve is in progress' : 'Fusion asked for a solve'
     : `CAD operation · ${operation.kind}`;
@@ -327,6 +313,7 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
       <b>{header}{documentName ? ` · ${documentName}` : ''}</b>
       {showStatus && <span role="status">{status}</span>}
       {message && <span>{message}</span>}
+      {engineReason && showStatus && <SolveReadiness readiness={operation.blocker ?? messageBlocker(operation.message || 'Solve refused.')}/>}
       {ladder.length > 0 && <ol className="cad-operation-ladder" aria-label="What this solve still needs">
         {ladder.map((step) => <li
           key={step.gate}
@@ -514,7 +501,7 @@ export function onScreenSolves(
 /** The waiting or running solves of the model on screen, as the Solve card
  * shows them: what each still needs, in words, with only the actions Solve
  * does not take -- approving a finding, dismissing the request. */
-export function OnScreenSolveStatus({ record }: { record: CadReturnIngestRecord | null }) {
+export function CurrentModelRequests({ record }: { record: CadReturnIngestRecord | null }) {
   const jobs = useCadJobs();
   const solves = onScreenSolves(cadJobSummaries(jobs), record);
   if (!solves.length) return null;

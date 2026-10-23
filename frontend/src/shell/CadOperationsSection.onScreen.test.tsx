@@ -29,7 +29,7 @@ vi.mock('../stores/cadWorkspace', () => ({
 vi.mock('./CadSolveInputs', () => ({ CadSolveInputs: () => null }));
 vi.mock('./CadProjectPanel', () => ({ openCadProject: vi.fn() }));
 
-const { CadOperationsSection, OnScreenSolveStatus } = await import('./CadOperationsSection');
+const { CadOperationsSection, CurrentModelRequests } = await import('./CadOperationsSection');
 
 const ON_SCREEN = `sha256:${'a'.repeat(64)}`;
 const ELSEWHERE = `sha256:${'b'.repeat(64)}`;
@@ -118,7 +118,7 @@ describe('operation cards for the model on screen', () => {
   it('keeps waiting guidance and actions without a second solve status', async () => {
     stubReview();
     setRequests({ operations: { 'op-screen': solve() } });
-    await act(async () => root.render(<OnScreenSolveStatus record={record}/>));
+    await act(async () => root.render(<CurrentModelRequests record={record}/>));
     expect(host.querySelector('.cad-operation [role="status"]')).toBeNull();
     expect(host.querySelector('.cad-operation')?.textContent).not.toContain('Waiting for you');
     expect(host.querySelector('.cad-operation')?.textContent).toContain('check the settings above');
@@ -211,7 +211,8 @@ describe('operation cards for the model on screen', () => {
   it('names an engine that cannot solve the return by what it is, not as unavailable', async () => {
     await show([solve({ reason: 'engine_cannot_solve_return', message: 'BEAT · CUDA solves CAD returns only in Accurate. Choose Accurate, or Metal / AUTO.' })]);
     const text = cards()[0].textContent ?? '';
-    expect(text).toContain('the selected engine cannot solve this return');
+    expect(text).not.toContain('the selected engine cannot solve this return');
+    expect(cards()[0].querySelector('.solve-readiness')).not.toBeNull();
     expect(text).toContain('Choose Accurate, or Metal / AUTO.');
   });
 

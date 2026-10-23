@@ -1470,3 +1470,13 @@ textarea:disabled { opacity: .48; }
 .imported-workspace h3, .imported-workspace h4 { margin-bottom: 8px; font-weight: 600; }
 .imported-workspace .imported-input-toggle { width: fit-content; }
 .imported-input-toggle button { width: auto; padding-inline: 10px; white-space: nowrap; }
+
+/* Blocked Solve is actionable at every window width, including the top bar. */
+.current-model-status { min-width: 0; font-size: var(--text-sm); }
+.solve-readiness.solve-notice { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; max-width: none; overflow: visible; white-space: normal; }
+.solve-readiness > span:first-child { flex-basis: 100%; }
+.solve-readiness button { white-space: normal; text-align: left; }
+.app-shell:has(.topbar .solve-readiness) { grid-template-rows: auto minmax(0, 1fr) 28px; }
+.topbar:has(.solve-readiness) { min-height: 48px; }
+.topbar-main:has(.solve-readiness) { flex-wrap: wrap; padding-block: 8px; }
+.topbar .current-model-status:has(.solve-readiness) { flex: 1 0 100%; order: 10; }

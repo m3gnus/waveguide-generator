@@ -22,7 +22,7 @@ import { resetCadReturnStore } from '../stores/cadReturn';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { resetSolveStageClocksForTests } from './solveProgress';
 
-vi.mock('./CadOperationsSection', () => ({ OnScreenSolveStatus: () => null }));
+vi.mock('./CadOperationsSection', () => ({ CurrentModelRequests: () => null }));
 vi.mock('../jobs/useImportedSolvePlan', () => ({ useImportedSolvePlan: () => ({ plan: null }) }));
 
 const { CadSolveCard } = await import('./CadSolveCard');

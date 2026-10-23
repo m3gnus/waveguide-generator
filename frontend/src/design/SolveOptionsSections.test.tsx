@@ -114,7 +114,7 @@ describe('solve and directivity control help', () => {
 
   it.each([
     ['parametric', 'Windows'], ['parametric', 'Linux'], ['cad', 'Windows'], ['cad', 'Linux'],
-  ] as const)('shows one temporary BEMPP notice in %s on %s until BEAT is ready', (mode, hostPlatform) => {
+  ] as const)('uses the planned backend without a separate preparation notice in %s on %s', (mode, hostPlatform) => {
     const engines = [
       { name: 'bempp', available: true, formulations: ['full-3d'], geometry_sources: ['parametric', 'imported'] },
       ...['beat-cpu', 'beat-cuda'].map((name) => ({ name, available: false, runtime_state: 'preparing' })),
@@ -128,7 +128,8 @@ describe('solve and directivity control help', () => {
     render(<SolveOptionsControls mode={mode} />);
     const notices = () => [...host.querySelectorAll('p[role="status"]')]
       .filter((node) => node.textContent === 'Solves use BEMPP until BEAT is ready.');
-    expect(notices()).toHaveLength(1);
+    expect(notices()).toHaveLength(0);
+    expect(hoverText(host.querySelector('#solve-accuracy')!.closest('.select-row')!)).toContain('Fast: BEMPP');
     act(() => {
       queryClient.setQueryData(CAPABILITIES_QUERY_KEY, { ...payload,
         engines: engines.map((engine) => ({ ...engine, available: true, runtime_state: 'ready' })),
@@ -366,11 +367,11 @@ describe('solve and directivity control help', () => {
     act(() => { select.value = 'accurate'; select.dispatchEvent(new Event('change', { bubbles: true })); });
     expect(useSolveOptionsStore.getState().options().accuracy).toBe('accurate');
     expect(hoverText(select.closest('.select-row')!)).toBe('Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions. Runs via BEAT CPU.');
-    expect(host.textContent).toContain('Accurate will use BEAT CPU');
+    expect(host.textContent).not.toContain('Accurate will use BEAT CPU');
     render(<SolveOptionsControls mode="cad" />);
     expect(host.querySelector<HTMLSelectElement>('#solve-accuracy')?.value).toBe('accurate');
     expect(host.querySelector('#cad-solve-engine')).not.toBeNull();
-    expect(hoverText(host.querySelector('#solve-accuracy')!.closest('.select-row')!)).toContain('Prepare the CAD return');
+    expect(hoverText(host.querySelector('#solve-accuracy')!.closest('.select-row')!)).toContain('Real-k Burton–Miller.');
   });
 
   it.each([
@@ -447,7 +448,7 @@ describe('solve and directivity control help', () => {
         : platform.accurateEngine === 'beat-cuda' ? 'BEAT CUDA' : 'BEAT ROCm';
       expect(accurateText).toContain(`Runs via ${label}.`);
     } else {
-      expect(accurateText).toContain('No BEAT backend is ready here; Accurate cannot run on this machine.');
+      expect(accurateText).not.toContain('No BEAT backend');
     }
 
     resetSolveOptionsStore();
@@ -456,7 +457,7 @@ describe('solve and directivity control help', () => {
     render(<SolveOptionsControls mode="cad" />);
     const cadAccuracy = host.querySelector<HTMLSelectElement>('#solve-accuracy')!;
     const expectedCadFast = platform.cadFastEngine === null
-      ? 'Fast: No backend can solve this CAD return.'
+      ? 'Fast: Good for locating resonances.'
       : platform.cadFastEngine === 'metal'
         ? 'Fast: Metal, complex-k (numerical shift 0.005). Good for locating resonances; sharp chamber resonances may look milder.'
         : 'Fast: BEAT CPU. Good for locating resonances.';
@@ -474,7 +475,7 @@ describe('solve and directivity control help', () => {
         : platform.cadAccurateEngine === 'beat-cuda' ? 'BEAT CUDA' : 'BEAT ROCm';
       expect(cadAccurateText).toContain(`Runs via ${label}.`);
     } else {
-      expect(cadAccurateText).toContain('No BEAT backend can solve this CAD return');
+      expect(cadAccurateText).not.toContain('No BEAT backend');
     }
   });
 

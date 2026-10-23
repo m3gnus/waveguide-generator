@@ -1,3 +1,4 @@
+import type { components } from './generated/openapi';
 import { jsonRequest } from './cadlink';
 
 /**
@@ -24,6 +25,7 @@ export interface CadOperationSummary {
   /** A reason code ("Outcomes"), or null. */
   reason: string | null;
   message: string | null;
+  blocker?: components['schemas']['SolveBlocker'] | null;
   /** Solved with WG's default settings, because none were recorded for the
    * model: `message` says so, and where to change them. Absent from older
    * backends. */

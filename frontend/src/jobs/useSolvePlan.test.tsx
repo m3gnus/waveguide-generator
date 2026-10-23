@@ -87,6 +87,20 @@ describe('useSolvePlan', () => {
 
   const text = () => host.querySelector('[data-tag="subject"]')?.textContent ?? '';
 
+  it('retains a refused parametric plan blocker for the shared readiness UI', async () => {
+    const readiness = { code: 'engine_unavailable', engine: 'beat-metal', message: 'BEAT Metal needs preparing.',
+      remedies: [{ kind: 'prepare', engine: 'beat-metal', disabled_reason: null }] };
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ ...PLAN, readiness })));
+    let snapshot: ReturnType<typeof useSolvePlan> | undefined;
+    function Readiness() { snapshot = useSolvePlan(design, OPTIONS); return null; }
+    await act(async () => root.render(<QueryClientProvider client={client}><Readiness/></QueryClientProvider>));
+    await flushReact();
+    expect(snapshot?.readiness).toEqual(readiness);
+    expect(snapshot?.error).toBe(readiness.message);
+    expect(snapshot?.plan).toBeNull();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it('hides the previous plan on a select change followed immediately by Solve', async () => {
     const onSolve = vi.fn();
     await act(async () => {

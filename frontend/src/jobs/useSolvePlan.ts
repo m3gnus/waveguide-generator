@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { postSolvePlan, SolvePlanRefused, solvePlanRequestBody, type SolvePlan } from './actions';
+import { postSolvePlan, SolvePlanRefused, solvePlanRequestBody, type SolvePlan, type SolveBlocker } from './actions';
 import type { DesignDocument } from '../stores/design';
 import type { SolveOptions } from '../stores/solveOptions';
 
@@ -21,6 +21,7 @@ export {
 export interface SolvePlanSnapshot {
   plan: SolvePlan | null;
   error: string | null;
+  readiness?: SolveBlocker | null;
   isPending: boolean;
 }
 
@@ -75,6 +76,7 @@ export function useSolvePlan(
   });
   const currentIsSettled = currentBody !== null && currentBody === settledBody;
   return {
+    readiness: currentIsSettled && query.error instanceof SolvePlanRefused ? query.error.readiness : null,
     plan: currentIsSettled ? query.data ?? null : null,
     error: currentIsSettled && query.error
       ? query.error instanceof Error ? query.error.message : String(query.error)

@@ -1,21 +1,16 @@
-import { useSyncExternalStore, type ReactNode } from 'react';
 import type { CadReturnIngestRecord } from '../api/cadlink';
-import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
-import { cadJobSummary, latestCadJobs } from '../jobs/cadSolve';
 import { useCadReturnStore } from '../stores/cadReturn';
-import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { parseFrequencyList } from '../stores/frequencyList';
 import { useImportedSolveOptionsStore } from '../stores/solveOptions';
-import { OnScreenSolveStatus } from './CadOperationsSection';
+import { CurrentModelStatus } from './CurrentModelStatus';
 import { CadDomainInterpretation } from './CadDomainInterpretation';
 import { CadSolverFrame } from './CadSolverFrameConfirm';
-import { automaticAxisNote, defaultSettingsNote } from './CadSolveInputs';
 import type { DomainInterpretation } from '../api/domainInterpretation';
 import { recordDomainDecision } from '../api/domainDecision';
 import { pluralized } from './cadTime';
 import { useOptionalSolveControl } from './JobsCoordinator';
-import { clearSolveStageClock, resolveEngineLabel, SolveProgressView } from './solveProgress';
+import { resolveEngineLabel } from './solveProgress';
 import { workspaceNavigation } from './workspaceNavigation';
 
 const ROLE_ORDER = ['LF', 'MF', 'HF', 'PORT_EXIT', 'PASSIVE_CARDIOID'];
@@ -116,63 +111,6 @@ function SettingsLine({ record }: { record: CadReturnIngestRecord }) {
   </p>;
 }
 
-function RunLine({ record }: { record: CadReturnIngestRecord }) {
-  const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
-  const latestJob = latestCadJobs(jobs).find((job) => job.cad_state?.snapshot?.manifest_sha256 === record.manifest_sha256);
-  const latest = latestJob ? cadJobSummary(latestJob) : null;
-  if (!latest) return null;
-  let tone: 'ok' | 'info' | 'warn' = 'info';
-  let body: ReactNode;
-  if (latest.state === 'rejected') {
-    body = `Refused: ${latest.message ?? latest.reason ?? 'no reason given'}`;
-    tone = 'warn';
-  } else if (latest.state === 'cancelled') {
-    body = 'Dismissed before it was solved.';
-  } else if (latest.state !== 'accepted') {
-    // Preparing and refused intents use the job's CAD stage and gate;
-    // bound requests below use the same progress vocabulary for execution.
-    if (latest.state === 'needs_user_input') tone = 'warn';
-    body = <SolveProgressView operation={latest} variant="compact"/>;
-  } else {
-    const job: JobItem = latestJob!;
-    switch (job.status) {
-      case 'preparing':
-      case 'queued':
-        body = <SolveProgressView job={job} variant="compact"/>;
-        break;
-      case 'running':
-        // The same progress component JobsPanel's run cards use, in its
-        // compact form -- one design for both CAD Link and parametric mode,
-        // fed by nothing but this job's own state (works the same whether
-        // this browser pressed Solve or a waiting Fusion request advanced).
-        body = <SolveProgressView job={job} variant="compact"/>;
-        break;
-      case 'complete': clearSolveStageClock(job.id); body = <SolveProgressView job={job} variant="compact"/>; tone = 'ok'; break;
-      case 'error': clearSolveStageClock(job.id); body = <SolveProgressView job={job} variant="compact"/>; tone = 'warn'; break;
-      case 'cancelled': clearSolveStageClock(job.id); body = <SolveProgressView job={job} variant="compact"/>; tone = 'warn'; break;
-    }
-  }
-  return <>
-    <p className={`cad-solve-run cad-solve-run-${tone}`} role="status" data-run-operation-id={latest.operationId}>{body}</p>
-    {/* No settings were recorded for this model, so WG solved it with its
-        defaults; the backend's own words say so and where to change them. */}
-    {latest.state === 'accepted' && latest.setupDefaults
-      && <p className="cad-detail cad-solve-defaults" data-setup-defaults="true">
-        {defaultSettingsNote(latest.message, latestJob?.status === 'complete')}
-      </p>}
-    {/* WG was confident which way the model faces and solved along that axis
-        without asking; the frame card above has the Change. */}
-    {latest.state === 'accepted' && latest.frameAxisAutomatic
-      && <p className="cad-detail cad-solve-frame-automatic" data-frame-axis-automatic={latest.frameAxisAutomatic}>
-        {automaticAxisNote(latest.frameAxisAutomatic, latestJob?.status)}
-        {' \u00b7 '}<button
-          className="link-button"
-          data-action="change-automatic-frame"
-          onClick={() => useCadSolverFrameStore.getState().requestChange(record.ingest_id)}
-        >Change</button>
-      </p>}
-  </>;
-}
 
 /**
  * The one Solve card of a CAD model (PLAN.md M1b, with M1e's frame line).
@@ -207,8 +145,7 @@ export function CadSolveCard({ record, label, fetcher }: {
     />}
     {unlinked && <CadSolverFrame ingestId={record.ingest_id} manifestSha256={record.manifest_sha256} label={label} fetcher={fetcher}/>}
     <SettingsLine record={record}/>
-    <OnScreenSolveStatus record={record}/>
-    <RunLine record={record}/>
+    <CurrentModelStatus record={record}/>
     <div className="cad-solve-actions">
       <button
         className="primary cad-primary-action"
@@ -220,7 +157,7 @@ export function CadSolveCard({ record, label, fetcher }: {
         onClick={() => solve?.solve()}
       >{solve?.submitting ? 'Solving…' : 'Solve'}</button>
       {/* A disabled button cannot be hovered usefully: the reason is on screen. */}
-      {available && solve!.disabled && !solve!.submitting && <span className="cad-detail cad-solve-blocker">{solve!.title}</span>}
+
     </div>
   </section>;
 }

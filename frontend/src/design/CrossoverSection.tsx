@@ -1,3 +1,4 @@
+import { CurrentModelStatus } from '../shell/CurrentModelStatus';
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { namespaceStorage } from '../stores/durableSettings';
 import { CAD_CONTROLS } from './cadControlRegistry';
@@ -289,7 +290,8 @@ function LiveNote({ shown, live, busy, error, members, outside }: {
   }
   if (outside !== null && outside !== undefined && shown.solvedBandHz) {
     const [start, end] = shown.solvedBandHz;
-    return <p className="section-note warning" role="status" aria-live="polite">
+    return <div className="section-note warning" role="status" aria-live="polite">
+      <CurrentModelStatus/>
       The {outside} Hz crossover is outside the solved band [{start}, {end}] Hz. The combined response cannot update until that frequency is solved.{' '}
       <button type="button" className="crossover-recall" disabled={!solve || solve.disabled} title={solve?.title ?? 'Solve is not available here.'} onClick={() => {
         const cad = useCadReturnStore.getState();
@@ -298,7 +300,7 @@ function LiveNote({ shown, live, busy, error, members, outside }: {
         // Render the changed sweep first; Solve retains the intent while its plan refreshes.
         setSweepSolve(true);
       }}>Re-solve with sweep {outside < start ? 'from' : 'to'} {outside} Hz</button>
-    </p>;
+    </div>;
   }
   return <p className={error ? 'section-note warning' : 'section-note'} role="status" aria-live="polite">
     {error ?? (busy ? 'Updating the shown run…' : 'Changes apply to the shown combined result immediately — no new solve is needed.')}

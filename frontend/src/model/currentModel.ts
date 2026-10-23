@@ -1,3 +1,4 @@
+import { latestCadJobs } from '../jobs/cadSolve';
 import { previewSocket } from '../api/previewSocket';
 import { useSyncExternalStore } from 'react';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
@@ -193,7 +194,9 @@ export function spatialResult(model: CurrentModel, selection: ResultSelection, j
 
 /** Existing job data only; slice 4 can supply readiness at this single seam. */
 export function currentModelStatus(model: CurrentModel, jobs: readonly JobItem[], readiness?: string | null) {
-  const job = jobs.find(job => runVerdict(job, { ...model, viewportShowing: true }) === 'current'
+  const candidates = [...latestCadJobs([...jobs]), ...jobs.filter(job => !job.cad_state)]
+    .sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''));
+  const job = candidates.find(job => runVerdict(job, { ...model, viewportShowing: true }) === 'current'
     // An unbound Fusion intent has no run identity yet; its captured return
     // manifest ties preparation/refusal to this source, never charts.
     || (model.kind === 'cad' && !job.cad_source && !job.has_results && !!model.manifestSha256
