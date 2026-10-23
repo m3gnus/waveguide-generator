@@ -88,6 +88,7 @@ interface SubmissionAcceptanceOptions {
 export type ContinueRunPatch = RerunPatch & Pick<CadSolvePress, 'approvals'>;
 
 interface CoordinatorBridgeSnapshot {
+  available: boolean;
   /** Continue a specific run, under the same lock and attention as Solve. */
   continueRun(jobId: string, patch?: ContinueRunPatch): Promise<string | null>;
   reportError(message: string): void;
@@ -96,6 +97,7 @@ interface CoordinatorBridgeSnapshot {
 
 const unavailableRun = async () => { throw new Error('Solve coordinator is unavailable'); };
 let bridgeSnapshot: CoordinatorBridgeSnapshot = {
+  available: false,
   continueRun: unavailableRun,
   reportError: () => undefined,
   actionError: null,
@@ -579,8 +581,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     clearJobLink();
   }, [jobs, jobsLoaded, reportError]);
   useEffect(() => {
-    publishBridge({ continueRun, reportError, actionError });
+    publishBridge({ available: true, continueRun, reportError, actionError });
     return () => publishBridge({
+      available: false,
       continueRun: unavailableRun,
       reportError: () => undefined,
       actionError: null,

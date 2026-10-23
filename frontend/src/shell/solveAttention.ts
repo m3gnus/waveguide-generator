@@ -82,11 +82,6 @@ export const solveAttention = {
     const arm = operationArms.get(from);
     if (arm !== undefined) operationArms.set(jobId, arm);
   },
-  /** A command given on an operation now: an action on its card. */
-  armOperation(operationId: string): void {
-    operationArms.set(operationId, navigationGeneration());
-    setReadyRun(null);
-  },
   /** Capture before submission awaits; bind the server's mutation id later. */
   captureOperationArm(): (operationId: string) => void {
     const submitted = navigationGeneration();

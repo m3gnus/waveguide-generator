@@ -146,7 +146,7 @@ describe('the needs_user_input ladder', () => {
   it('at the findings gate, names the findings and offers Approve and solve', async () => {
     stubBackend();
     const continueRun = vi.fn(async () => 'child');
-    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({ ...jobsCoordinatorBridge.getSnapshot(), continueRun });
+    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({ ...jobsCoordinatorBridge.getSnapshot(), available: true, continueRun });
     // The backend's own message names the findings by id (preparation.py).
     const ladder = await show(operation('findings_need_review', {
       attemptGeneration: 2, message: `Review the preparation's findings before solving: ${FINDING}`,

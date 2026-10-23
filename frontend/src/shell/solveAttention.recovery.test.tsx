@@ -36,7 +36,7 @@ describe('recovery attention without the coordinator', () => {
   const arrive = (item: CadRecoveryNotice) => act(() => store.setState({ notices: { [item.id]: item } }));
 
   it('fronts a newly actionable active-document recovery only once', () => {
-    solveAttention.armOperation('mutation');
+    solveAttention.captureOperationArm()('mutation');
     arrive(notice()); arrive(notice());
     expect(activations).toEqual(['geometry']);
   });
@@ -63,7 +63,7 @@ describe('recovery attention without the coordinator', () => {
     expect(host.textContent).toContain('Recovery notices (1)');
   });
   it('keeps recovery changes discoverable after navigation without yanking the user', () => {
-    solveAttention.armOperation('mutation');
+    solveAttention.captureOperationArm()('mutation');
     act(() => workspaceNavigation.navigate('geometry')); activations.length = 0;
     arrive(notice());
     expect(activations).toEqual([]);
@@ -76,7 +76,7 @@ describe('recovery attention without the coordinator', () => {
     expect(host.querySelector('button')).toBeNull();
   });
   it('keeps earlier-document recovery quiet but discoverable, then fronts when active', () => {
-    solveAttention.armOperation('mutation');
+    solveAttention.captureOperationArm()('mutation');
     arrive(notice({ active_document: false }));
     expect(activations).toEqual([]);
     expect(host.textContent).toContain('Recovery notices (1)');

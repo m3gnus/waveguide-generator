@@ -211,8 +211,8 @@ describe('CadLinkPanel', () => {
     return disclosure;
   };
 
-  const renderAndSelect = async () => {
-    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+  const renderAndSelect = async (withOwner = false) => {
+    await act(async () => { root.render(withOwner ? <FullCadLinkTestSurface/> : <CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     openHistory();
     const bundle = host.querySelector<HTMLButtonElement>('.cad-bundle-list button')!;
     act(() => bundle.click());
@@ -611,7 +611,7 @@ describe('CadLinkPanel', () => {
   });
 
   it('recovers missing job preparation details and approves its blocking findings on that preparation only', async () => {
-    await renderAndSelect();
+    await renderAndSelect(true);
     await clickIngest();
     const posted = recordOperationRequests({
       detailFailures: 1,
@@ -651,6 +651,68 @@ describe('CadLinkPanel', () => {
     });
   });
 
+  it.each([false, true])('explains an absent owner and releases a busy Approve press (owner=%s)', async (withOwner) => {
+    workspaceModeStore.setMode('cad');
+    const base = vi.mocked(fetch).getMockImplementation()!;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/api/capabilities')) return json({
+        engines: [{ name: 'metal', available: true, reason: null, version: null, fast_paths: [], formulations: ['full-3d'] }],
+      });
+      if (path === '/api/solve/imported-plan') return json({
+        ingest_id: record.ingest_id, requested: 'auto', engine: 'metal', code: null, reason: 'AUTO', domain: 'full',
+        engines: [{ name: 'metal', label: 'Metal', solves: true }],
+      });
+      if (path.endsWith('/mesh') || path.endsWith('/viewport-mesh')) return new Response(meshFixture, { status: 200 });
+      return base(input, init);
+    }));
+    await renderAndSelect(withOwner);
+    await clickIngest();
+    const posted = recordOperationRequests({
+      detail: {
+        ...cadOperation({ operationId: 'op-busy', reason: 'findings_need_review', preparationId: 'wgp_7' }),
+        approvals: [],
+        preparation: {
+          preparationId: 'wgp_7', ingestId: record.ingest_id, snapshotSha256: 'sha256:s', setupRevisionId: 'wgs_1',
+          reportSha256: record.report_sha256, blockingFindingIds: ['finding-a'], attemptGeneration: 1,
+        },
+      },
+    });
+    act(() => applyCadRequest(cadOperation({ operationId: 'op-busy', reason: 'findings_need_review', preparationId: 'wgp_7' })));
+    const card = operationCard('op-busy');
+    await vi.waitFor(() => expect(buttonIn(card, 'Approve and solve')).toBeDefined());
+    const approve = () => buttonIn(card, 'Approve and solve')!;
+    if (!withOwner) {
+      expect(approve().disabled).toBe(true);
+      expect(card.textContent).toContain('Solve coordinator is unavailable.');
+      await act(async () => approve().click());
+      expect(posted).toEqual([]);
+      return;
+    }
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const backend = vi.mocked(fetch).getMockImplementation()!;
+    const submitting = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (/^\/api\/models\/[^/]+\/solve$/.test(String(input))) await pending;
+      return backend(input, init);
+    });
+    vi.stubGlobal('fetch', submitting);
+    const solve = () => host.querySelector<HTMLButtonElement>('.cad-solve-card button[data-action="solve"]')!;
+    await vi.waitFor(() => expect(solve().disabled).toBe(false));
+    await act(async () => solve().click());
+    await vi.waitFor(() => expect(submitting.mock.calls.some(([path]) => String(path).endsWith('/solve'))).toBe(true));
+    await act(async () => approve().click());
+    await vi.waitFor(() => expect(host.textContent).toContain('Another solve is being submitted. Try again in a moment.'));
+    expect(approve().disabled).toBe(false);
+    expect(posted).toEqual([]);
+    await act(async () => { finish(); });
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    await act(async () => approve().click());
+    await vi.waitFor(() => expect(posted).toHaveLength(3));
+    expect(posted.slice(1).map(({ path }) => path)).toEqual(['/api/jobs/job%3Aop-busy/approvals', '/api/jobs/job%3Aop-busy/solve-again']);
+    expect(approve().disabled).toBe(true); // Accepted presses stay held until the job advances.
+  });
+
   /** A continuation -- an approval, a frame confirmation, a retry -- keeps the
    * setup revision the operation already holds, which the backend reuses. It
    * used to rebuild the settings from the controls: a different revision (no
@@ -666,7 +728,7 @@ describe('CadLinkPanel', () => {
       if (path.endsWith('/recovery-notices')) return json({ notices: [] });
       return json({ ...record, project: { lineage_id: 'wgl_speaker' } });
     }));
-    await renderAndSelect();
+    await renderAndSelect(true);
     await clickIngest();
     const manual = 'manual-solve:op-wg';
     const posted = recordOperationRequests({

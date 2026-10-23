@@ -1,3 +1,4 @@
+import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { buildCadProjectSetup, useCadFeedbackError } from './cadSetupPublisher';
 import { nativeCadLimitation } from '../design/nativeFamilies';
 import { useCadConnectionStore } from '../stores/cadConnection';
@@ -596,7 +597,8 @@ export function CadLinkPanel() {
     onshapeStatus,
     onshapeConnection,
   } = cadWorkspaceView;
-  const error = useCadFeedbackError(actionError);
+  const coordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
+  const error = useCadFeedbackError(coordinator.actionError ?? actionError);
   const addinNotice = addinReply === null ? null
     : fusionStatus !== addinReply.under && fusionStatus?.addinRefresh
       ? fusionStatus.addinRefresh.detail

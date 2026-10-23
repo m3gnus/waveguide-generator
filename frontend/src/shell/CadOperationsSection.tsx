@@ -260,6 +260,8 @@ function guidance(operation: CadOperationSummary): Guidance {
 
 function CadOperationCard({ operation, showStatus = true }: { operation: CadOperationSummary; showStatus?: boolean }) {
   const jobs = useCadJobs();
+  const owner = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
+  const approvalUnavailable = owner.available ? null : 'Solve coordinator is unavailable. Reopen this workspace to approve and solve.';
   const job = jobs.find((item) => item.id === operation.jobId)!;
   // The action asked for, and the operation as it stood then. The answer is
   // the row as it was before the backend claimed it, so that action stays held
@@ -288,15 +290,22 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
   // reuses the setup revision the operation holds and the approvals given on
   // its preparation still apply. Everything else this request waits for is
   // the Solve card's one Solve, which continues this very request.
-  const ask = (action: OperationAction, request: () => Promise<void>) => {
+  const ask = (action: OperationAction, request: () => Promise<unknown>) => {
     const held = askedRef.current;
     if (held?.action === action && held.jobId === job.id && held.preparationId === operation.preparationId && held.state === operation.state) return;
     const press = { action, jobId: job.id, preparationId: operation.preparationId, state: operation.state };
     askedRef.current = press;
     setAsked(press);
-    void request().catch((reason: unknown) => {
+    const release = () => {
+      if (askedRef.current !== press) return;
       askedRef.current = null;
       setAsked(null);
+    };
+    void request().then((result) => {
+      // A busy owner accepted nothing; the user can press again.
+      if (result === null) release();
+    }).catch((reason: unknown) => {
+      release();
       jobsCoordinatorBridge.getSnapshot().reportError(reason instanceof Error ? reason.message : String(reason));
     });
   };
@@ -357,16 +366,16 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
         aria-label={`Open Simulation for ${label}`}
         onClick={() => workspaceNavigation.navigate('simulation')}
       >Open Simulation</button>}
-      {waiting && help.action === 'approve' && reviewedPreparation && <button
+      {waiting && help.action === 'approve' && reviewedPreparation && <>
+        {approvalUnavailable && <span role="status">{approvalUnavailable}</span>}
+        <button
         className="primary"
-        disabled={heldAction === 'approve'}
+        disabled={heldAction === 'approve' || approvalUnavailable !== null}
         aria-label={`Approve and solve: ${label}`}
-        onClick={() => ask('approve', async () => {
-          await jobsCoordinatorBridge.getSnapshot().continueRun(job.id, {
-            approvals: { preparation_id: reviewedPreparation, finding_ids: review.findingIds },
-          });
-        })}
-      >Approve and solve</button>}
+        onClick={() => ask('approve', () => jobsCoordinatorBridge.getSnapshot().continueRun(job.id, {
+          approvals: { preparation_id: reviewedPreparation, finding_ids: review.findingIds },
+        }))}
+      >Approve and solve</button></>}
     </div>
   </div>;
 }
