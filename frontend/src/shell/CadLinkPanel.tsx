@@ -20,7 +20,7 @@ import { choosableForImportedGeometry } from '../design/backendSupport';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { returnBelongsToProject } from './cadlink/arrivals';
-import { fusionLinkDisplayName, fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView } from './cadWorkflowView';
+import { fusionLinkDisplayName, fusionParameterDriftDetail, fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView } from './cadWorkflowView';
 import { Icon } from './icons';
 import { fullTime, pluralized, relativeTime } from './cadTime';
 import { CadProjectHeader, CadProjectHistory } from './CadProjectPanel';
@@ -520,16 +520,21 @@ function ModelVersions({ projectBundles, unlinkedReturns, otherProjectReturns, s
   </CadDrawer>;
 }
 
-/** Exact managed parameter names reported by newer WGLink builds. The workflow
- * detail owns the aggregate count for older add-ins. */
-function FusionParameterDrift({ parameterDriftCount, driftedParameters }: {
+/** Keep the count before any names, including when the workflow detail does
+ * not mention parameter edits (for example, Fusion-only geometry changes). */
+function FusionParameterDrift({ parameterDriftCount, driftedParameters, workflowDetail }: {
   parameterDriftCount: number;
   driftedParameters?: readonly string[];
+  workflowDetail: string;
 }) {
-  if (parameterDriftCount <= 0 || !driftedParameters?.length) return null;
-  return <ul aria-label="Locally edited Fusion parameters">
-    {driftedParameters.map((name) => <li key={name}><code>{name}</code></li>)}
-  </ul>;
+  const detail = fusionParameterDriftDetail(parameterDriftCount);
+  if (!detail) return null;
+  return <>
+    {!workflowDetail.includes(detail) && <p>{detail}</p>}
+    {!!driftedParameters?.length && <ul aria-label="Locally edited Fusion parameters">
+      {driftedParameters.map((name) => <li key={name}><code>{name}</code></li>)}
+    </ul>}
+  </>;
 }
 
 export function CadLinkPanel() {
@@ -759,6 +764,7 @@ export function CadLinkPanel() {
     {!onshape && <FusionParameterDrift
       parameterDriftCount={fusionStatus?.link?.parameterDriftCount ?? 0}
       driftedParameters={fusionStatus?.link?.driftedParameters}
+      workflowDetail={workflow.detail}
     />}
   </>;
 

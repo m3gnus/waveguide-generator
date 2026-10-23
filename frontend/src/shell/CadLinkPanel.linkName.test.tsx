@@ -147,4 +147,30 @@ describe('CadLinkPanel Fusion connection', () => {
     if (names) expect([...lists[0].querySelectorAll('li code')].map((item) => item.textContent)).toEqual(names);
   });
 
+  it.each([
+    { fusionChangesAvailable: true, names: undefined },
+    { fusionChangesAvailable: false, names: undefined },
+    { fusionChangesAvailable: true, names: ['wg_depth', 'wg_mouth_overshoot'] },
+    { fusionChangesAvailable: false, names: ['wg_depth', 'wg_mouth_overshoot'] },
+    { fusionChangesAvailable: false, names: [] },
+  ])('shows one drift count before any names for Fusion-only changes: $fusionChangesAvailable, $names', ({ fusionChangesAvailable, names }) => {
+    const status = fusionStatus();
+    render({ ...status, state: 'stale', wgChangesAvailable: false, fusionChangesAvailable, link: {
+      ...status.link!, parameterDriftCount: 2, driftedParameters: names,
+    } });
+    const card = host.querySelector('.cad-link-card')!;
+    expect(card.textContent?.match(/2 managed Fusion parameters have local edits\./g)).toHaveLength(1);
+    const list = card.querySelector('[aria-label="Locally edited Fusion parameters"]');
+    expect(list ? [...list.querySelectorAll('li code')].map((item) => item.textContent) : []).toEqual(names ?? []);
+    if (names?.length) expect(card.textContent!.indexOf('2 managed Fusion parameters')).toBeLessThan(card.textContent!.indexOf(names[0]));
+  });
+
+  it('uses the singular count for one locally edited Fusion parameter without names', () => {
+    const status = fusionStatus();
+    render({ ...status, state: 'stale', wgChangesAvailable: false, link: {
+      ...status.link!, parameterDriftCount: 1,
+    } });
+    expect(host.querySelector('.cad-link-card')?.textContent).toContain('1 managed Fusion parameter has local edits.');
+  });
+
 });

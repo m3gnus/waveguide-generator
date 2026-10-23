@@ -6,6 +6,11 @@ export function fusionLinkDisplayName(link: FusionCadLink & { linkName?: string 
   return link.linkName?.trim() || link.designName || null;
 }
 
+/** Shared by the workflow detail and the panel's parameter-name list. */
+export function fusionParameterDriftDetail(count: number): string {
+  return count > 0 ? `${count} managed Fusion parameter${count === 1 ? ' has' : 's have'} local edits.` : '';
+}
+
 /** Shared by the CAD Link panel, the rail card, and the coordinator's send
  * path, so every surface derives the same outbound action from one status. */
 export interface CadWorkflowView {
@@ -307,8 +312,9 @@ function fusionConnectionView(status: FusionCadStatus | null): CadWorkflowView {
     const configCopy = status.link?.configPresent
       ? ''
       : ' This link also predates full WG config synchronization.';
-    const localEditCopy = status.link?.parameterDriftCount
-      ? ` ${status.link.parameterDriftCount} managed Fusion parameter${status.link.parameterDriftCount === 1 ? ' has' : 's have'} local edits.`
+    const driftDetail = fusionParameterDriftDetail(status.link?.parameterDriftCount ?? 0);
+    const localEditCopy = driftDetail
+      ? ` ${driftDetail}`
       : status.link?.localBodyState && status.link.localBodyState !== 'unmodified'
         ? ` The managed Fusion body is ${status.link.localBodyState}.`
         : '';
