@@ -1,3 +1,4 @@
+import { showUnreadableRun } from '../model/currentModel';
 import type { JobItem } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { canOpenJobModel } from './jobDesign';
@@ -17,6 +18,7 @@ import { showJobModel } from './showJobModel';
 export function selectJob(job: JobItem, onError?: (message: string) => void): void {
   // A finished run whose results were cleaned up is still the selected run: the
   // dock says so instead of leaving the previous run's charts under its card.
+  if (job.config_summary.geometry_type !== 'imported' && !canOpenJobModel(job)) showUnreadableRun(job);
   if (job.has_results || job.status === 'complete') compareSelection.setPrimary(job.id);
   // Nothing readable to show for a cleaned-up run: select it, and stop there.
   if (job.status === 'complete' && !job.has_results && !canOpenJobModel(job)) return;

@@ -13,7 +13,7 @@ import { placeRunCadDocument } from '../api/cadProjects';
 import { fetchJobArchiveSnapshot, fetchRadiationImpedancePresentation, type RadiationImpedancePresentation } from '../api/results';
 import { archiveFolderForJob, exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { buildDesignRecord, buildRunRecord } from '../jobs/runArchive';
-import { resultExportSnapshot } from './exportContext';
+import { resultExportSelection, resultExportSnapshot } from './exportContext';
 import { serializeDesign, type DesignDocument } from '../stores/design';
 import { designFileExtension } from '../stores/designName';
 import { designWireWithSolveSettings } from '../stores/designWire';
@@ -31,6 +31,8 @@ import { buildVituixCadProjectFiles, buildZma, hasElectricalImpedance } from './
 
 export interface ExportContext {
   result?: ResultPayload;
+  /** Present for a run-scoped export; validated by the same selection owner as Results. */
+  selectedRun?: JobItem;
   /** Job owning server-retained artifacts such as complex pressure bases. */
   jobId?: string;
   channelId?: string;
@@ -829,6 +831,7 @@ export async function runExportBundle(inputContext: ExportContext, formats = inp
 }
 
 async function runAttributedExportBundle(inputContext: ExportContext, formats: readonly ExportFormat[]): Promise<FormatAttributedBundle> {
+  if (inputContext.selectedRun) resultExportSelection(inputContext.selectedRun);
   // One re-reference for the whole bundle, at the top, so the polar CSV, the
   // polar FRD set and the rendered heatmap PNG cannot disagree about where 0 dB
   // is -- and so each of them states the same angle in its own header.

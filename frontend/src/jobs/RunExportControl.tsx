@@ -8,7 +8,7 @@ import { sendDesignToCad } from '../api/designIo';
 import { ActionMenu, type ActionMenuItem } from '../design/ActionMenu';
 import { sentToCadMessage } from '../design/useSendToCad';
 import { usePreferences, type ExportFormat } from '../prefs/preferences';
-import { resultExportSnapshot } from '../results/exportContext';
+import { resultExportSelection, resultExportSnapshot } from '../results/exportContext';
 import {
   runWorkspaceExportBundle,
   type ExportBundleResult,
@@ -162,18 +162,22 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
   const designUnavailableReason = designAvailability.reason ?? designState.reason ?? 'This run has no recoverable design.';
   const formatReason = (item: CatalogItem) => unavailableFormatReason(item, job, designExportable, designUnavailableReason, cadRun);
 
-  const buildContext = async (formats: readonly ExportFormat[]): Promise<ExportContext> => ({
-    ...(needsResults(formats) ? { result: result ?? await fetchJobResults(job.id) as ResultPayload } : {}),
-    ...resultExportSnapshot(job),
-    ...(channelId ? { channelId } : {}),
-    jobId: job.id,
-    jobStem: exportStemForJob(job),
-    hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
-    workspaceSubdirectory: exportSubdirectoryForJob(job),
-    designName: job.label ?? undefined,
-    normalizationAngle: solveOptionsStoreForJob(job).getState().polar.normAngle,
-    preferences,
-  });
+  const buildContext = async (formats: readonly ExportFormat[]): Promise<ExportContext> => {
+    const selected = resultExportSelection(job);
+    return {
+      ...(needsResults(formats) ? { result: result ?? await fetchJobResults(selected.id) as ResultPayload } : {}),
+      ...resultExportSnapshot(selected),
+      selectedRun: selected,
+      ...(channelId ? { channelId } : {}),
+      jobId: job.id,
+      jobStem: exportStemForJob(job),
+      hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
+      workspaceSubdirectory: exportSubdirectoryForJob(job),
+      designName: job.label ?? undefined,
+      normalizationAngle: solveOptionsStoreForJob(job).getState().polar.normAngle,
+      preferences,
+    };
+  };
 
   const recordFiles = async (files: string[]) => {
     if (!files.length) return;

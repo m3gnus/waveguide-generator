@@ -361,7 +361,7 @@ describe('results dock view switch', () => {
     expect(member.combine.members).toEqual(['drive-mf', 'drive-hf']);
   });
 
-  it('says why a reopened session may not recombine the run, and offers its model', async () => {
+  it('hides results and recombination until the reopened model is loaded', async () => {
     // A session that has not ingested is exactly what a browser refresh leaves
     // behind: the project's settings are restored, but no ingestion owns them.
     useCadReturnStore.setState({ ingestRecord: null });
@@ -369,10 +369,10 @@ describe('results dock view switch', () => {
     compareSelection.setPrimary('primary');
     await render();
 
-    const shown = latestCombine.getSnapshot()!;
-    expect(shown.canApply).toBe(false);
-    expect(shown.blockedReason).toContain('without re-solving');
-    expect(shown.recall).not.toBeNull();
+    expect(latestCombine.getSnapshot()).toBeNull();
+    expect(host.querySelector('[data-result-primary]')).toBeNull();
+    expect(host.textContent).toContain('Not solved yet');
+    expect(host.textContent).toContain("Show that run's model");
   });
 
   it('names the shown channel on the summary card', async () => {

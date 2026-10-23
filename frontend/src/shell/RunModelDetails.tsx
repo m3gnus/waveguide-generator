@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { runDocumentName, runSourceLabel } from '../jobs/runIdentity';
 import { runSourceForJob } from '../jobs/exportNaming';
-import { runModelKey } from '../jobs/runFilters';
+import { modelForRun } from '../model/currentModel';
 import type { JobItem } from '../api/jobsSocket';
 import { listProjectDocuments, openProjectDocument, projectDocumentUrl, type CadProjectDocument } from '../api/cadProjects';
 
 /** Optional CAD attachments decorate the shared run; their failure cannot hide it. */
 export function RunModelDetails({ job }: { job: JobItem }) {
+  const runModel = modelForRun(job);
   const lineage = job.cad_source?.lineage_id ?? job.cad_state?.snapshot?.project_lineage_id;
   const hash = job.cad_source?.return_state_hash;
   const [state, setState] = useState<{ key: string; document: CadProjectDocument | null; error: string | null; launchDisabled?: boolean; fileManager?: string } | null>(null);
@@ -64,7 +65,7 @@ export function RunModelDetails({ job }: { job: JobItem }) {
     <dl>
       <dt>Document</dt><dd>{document}</dd>
       <dt>Source</dt><dd>{runSourceLabel(job)}</dd>
-      <dt>Model</dt><dd>{job.cad_source?.model_id || runModelKey(job)}</dd>
+      <dt>Model</dt><dd>{runModel.lineage || runModel.key || 'Not recorded'}</dd>
       <dt>Model hash</dt><dd>{modelHash || 'Not recorded'}</dd>
     </dl>
     {runSourceForJob(job) !== 'mesh-file' && attachment}

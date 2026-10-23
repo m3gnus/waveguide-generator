@@ -1,3 +1,4 @@
+import refusedCad from '../jobs/cadRefusedJob.fixture.json';
 import { workspaceNavigation } from './workspaceNavigation';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -9,7 +10,7 @@ import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { preferencesStore } from '../prefs/preferences';
-import { solveControlStore } from './JobsCoordinator';
+import { jobsCoordinatorBridge, solveControlStore } from './JobsCoordinator';
 import { ResultsPanel } from './ResultsPanel';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 
@@ -191,7 +192,7 @@ describe('results run coherence', () => {
     expect(host.querySelector('[data-result-primary]')?.getAttribute('data-result-primary')).toBe('first');
   });
 
-  it('opens on the newest drawable run when no model is loaded yet', async () => {
+  it('keeps charts empty when no model is loaded instead of opening another model’s run', async () => {
     // A refreshed window restores its CAD project's return but not an
     // ingestion, so nothing matches the context and the dock would sit on
     // "Loading results" with nothing selected for the rest of the session.
@@ -203,15 +204,11 @@ describe('results run coherence', () => {
     await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
 
     expect(useCadReturnStore.getState().ingestRecord).toBeNull();
-    // Pinned, not followed: nothing can match the context, so a followed slot
-    // would be released again on the very next pass.
-    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'cad', following: false });
-    // Shown, but never passed off as the model in the viewport.
-    expect(host.querySelector('button.result-context-marker')?.textContent).toBe('Different CAD return');
-
-    // And it stays: re-rendering must not hand the slot back to nothing.
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: null, following: true });
+    expect(host.querySelector('[data-result-primary]')).toBeNull();
+    expect(host.textContent).toContain('Not solved yet');
     await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
-    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'cad' });
+    expect(compareSelection.getSnapshot().primary).toBeNull();
   });
 
   it('leaves the dock empty when a model family with no runs is entered', async () => {
@@ -230,6 +227,8 @@ describe('results run coherence', () => {
   });
 
   it('marks an edited-since run on its chip and offers restore and solve', async () => {
+    const actual = await vi.importActual<typeof import('../jobs/showJobModel')>('../jobs/showJobModel');
+    modelMocks.showJobModel.mockImplementation(actual.showJobModel);
     const solved = designForFamily('OSSE');
     solved.L = 321;
     const older = job('archive', 4, solved);
@@ -240,6 +239,8 @@ describe('results run coherence', () => {
     vi.spyOn(solveControlStore, 'getSnapshot').mockReturnValue({ solve: run, disabled: false } as unknown as NonNullable<ReturnType<typeof solveControlStore.getSnapshot>>);
 
     await act(async () => { root.render(<ResultsPanel/>); });
+    expect(host.querySelector('[data-result-primary]')).toBeNull();
+    expect(host.textContent).toContain('Not solved yet');
     const chip = host.querySelector('.result-chip.stale')!;
     expect(chip.getAttribute('title')).toContain('The design has been edited since this run was solved.');
     const marker = host.querySelector<HTMLButtonElement>('button.result-context-marker.stale')!;
@@ -331,6 +332,64 @@ describe('results run coherence', () => {
     await act(async () => { offer.click(); await Promise.resolve(); });
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'elsewhere' });
     expect(toolbarButton(host, 'New · #13 → Show')).toBeUndefined();
+  });
+
+  it('hides results immediately after editing the model that produced them', async () => {
+    const solved = job('edited', 20, liveDesign());
+    publishJobs([solved]); compareSelection.setPrimary(solved.id);
+    await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
+    expect(host.querySelector('[data-result-primary]')).not.toBeNull();
+    await act(async () => { useDesignStore.getState().updateField('L', 999); });
+    expect(host.querySelector('[data-result-primary]')).toBeNull();
+    expect(host.querySelector('.result-grid')).toBeNull();
+    expect(host.textContent).toContain('Not solved yet');
+  });
+
+  it('hides the old charts on a new Fusion version of the same registered model', async () => {
+    const solved = job('fusion-version', 21, null, true);
+    solved.cad_source = { ...solved.cad_source!, model_id: 'speaker', solve_model_sha256: 'version-a' };
+    publishJobs([solved]); compareSelection.setPrimary(solved.id);
+    workspaceModeStore.setMode('cad');
+    useCadReturnStore.setState({ ingestRecord: { ingest_id: solved.cad_source.ingest_id, model_id: 'speaker', solve_model_sha256: 'version-a' } as never });
+    importedMeshStore.setCad({ source: 'cad', ingestId: solved.cad_source.ingest_id } as never);
+    await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
+    expect(host.querySelector('[data-result-primary]')).not.toBeNull();
+    await act(async () => {
+      useCadReturnStore.setState({ ingestRecord: { ingest_id: 'version-b-ingest', model_id: 'speaker', solve_model_sha256: 'version-b' } as never });
+      importedMeshStore.setCad({ source: 'cad', ingestId: 'version-b-ingest' } as never);
+    });
+    expect(host.querySelector('[data-result-primary]')).toBeNull();
+    expect(host.querySelector('.result-grid')).toBeNull();
+    expect(host.textContent).toContain('Not solved yet');
+  });
+
+  it('shows a refused on-screen CAD solve using the server message', async () => {
+    const ingestId = refusedCad.cad_intent.bundle_path.split('/').at(-1)!;
+    const refused = { ...job('refused', 22, null, true), ...refusedCad, cad_source: null, status: 'preparing', has_results: false } as JobItem;
+    workspaceModeStore.setMode('cad');
+    useCadReturnStore.setState({ ingestRecord: { ingest_id: ingestId } as never });
+    importedMeshStore.setCad({ source: 'cad', ingestId } as never);
+    publishJobs([refused]);
+    await act(async () => { root.render(<ResultsPanel/>); });
+    expect(host.textContent).toContain('Solve refused');
+    expect(host.textContent).toContain(refusedCad.cad_state.message);
+    expect(host.querySelector('.result-grid')).toBeNull();
+  });
+
+  it.each(['preparing', 'running', 'error'] as const)('shows the current parametric model’s %s state', async status => {
+    const pending = { ...job('pending', 23, liveDesign()), status, has_results: false, progress: .4, error_message: 'The server solve failed.' };
+    const continueRun = vi.fn().mockRejectedValue(new Error('Retry refused'));
+    const bridge = { ...jobsCoordinatorBridge.getSnapshot(), continueRun };
+    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue(bridge);
+    publishJobs([pending]);
+    await act(async () => { root.render(<ResultsPanel/>); });
+    expect(host.textContent).toContain(status === 'error' ? 'The server solve failed.' : status === 'preparing' ? 'Preparing' : 'Solving');
+    expect(host.querySelector('.result-grid')).toBeNull();
+    if (status === 'error') {
+      expect(toolbarButton(host, 'Retry')).toBeDefined();
+      await act(async () => { toolbarButton(host, 'Retry')!.click(); });
+      expect(continueRun).toHaveBeenCalledWith(pending.id);
+    }
   });
 
   it('marks the run unqualified only for an in-band difference above the threshold', async () => {

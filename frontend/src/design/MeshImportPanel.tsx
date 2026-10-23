@@ -4,7 +4,7 @@ import { editMeshImport, prepareMeshFile, saveMeshSetup, setMeshMotion, useMeshI
 import { useImportedModelStore } from '../stores/importedModel';
 import type { RegisteredMesh } from '../api/meshImport';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { restoreParametricWorkingDesign } from '../jobs/showJobModel';
+import { restoreParametricWorkingDesign } from '../model/currentModel';
 import { noteExplicitNavigation } from '../shell/workspaceNavigation';
 import { useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { SolveOptionsStoreProvider } from '../stores/solveOptionsContext';

@@ -1,8 +1,10 @@
+import { SolveProgressView } from './solveProgress';
+import { selectJob } from '../jobs/selectJob';
 import { samplingNotes } from '../results/sampling';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import type { EChartsOption } from 'echarts';
-import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
+import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, type JobResults, type RadiationImpedancePresentation, type ResultData } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
 import { axes, LABEL_FONT, type ChartDensity } from '../results/chartAxes';
@@ -27,8 +29,7 @@ import { MAX_MEASUREMENT_ANGLES, measurementAnchorRefusal, measurementAngleLabel
 import { ResultViewSwitch } from '../results/ResultViewSwitch';
 import { FemPortsPanel } from '../results/FemPortsPanel';
 import { resolveResultView, resultViewStore, useResultView } from '../stores/resultView';
-import { useCadReturnStore } from '../stores/cadReturn';
-import { hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
+import { hydrateJobDesign } from '../jobs/jobDesign';
 import { workspaceNavigation } from './workspaceNavigation';
 import { showJobModel } from '../jobs/showJobModel';
 import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
@@ -47,7 +48,7 @@ import { trapDialogFocus } from './dialogFocus';
 import { useRunNormAngle } from '../stores/solveOptionsContext';
 import { useObservationStore } from '../viewport/observationStore';
 import { MAX_MEASURED_OVERLAYS, useMeasuredOverlayStore, type MeasuredOverlay } from '../stores/measuredOverlays';
-import { RUN_VERDICT_MARKER, RUN_VERDICT_SENTENCE, runContextMarker, runDisplayVerdict, runMatchesContext, useRunContext } from '../results/runCoherence';
+import { RUN_VERDICT_MARKER, RUN_VERDICT_SENTENCE, runContextMarker, runVerdict, modelForRun, shownResult, currentModelStatus, useCurrentModel } from '../model/currentModel';
 import { AnchoredPanel } from '../prefs/AnchoredPanel';
 import { radiationImpedanceTraces } from '../results/radiationImpedance';
 import { powerAgreementHealth, powerCheckMessage } from '../results/radiatedPower';
@@ -2247,7 +2248,7 @@ export function ResultsPanel() {
   const provisional = useSyncExternalStore(provisionalResults.subscribe, provisionalResults.getSnapshot, provisionalResults.getSnapshot);
   const coordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
   const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
-  const coherenceContext = useRunContext();
+  const coherenceContext = useCurrentModel();
   const preferences = usePreferences();
   const tokens = useChartTokens();
   const [display, setDisplay] = useState<ResultDisplaySnapshot | null>(null);
@@ -2267,110 +2268,30 @@ export function ResultsPanel() {
   const [measuredError, setMeasuredError] = useState<string | null>(null);
   const measuredInput = useRef<HTMLInputElement | null>(null);
 
-  // Jobs arrive newest-first. A running solve becomes displayable as soon as
-  // its first frequency arrives; before that, keep the last complete result.
-  const displayable = useCallback((job: JobItem) => (
-    (job.status === 'complete' && job.has_results)
-    || (isActiveJobStatus(job.status) && Boolean(provisional.entries[job.id]))
-  ), [provisional]);
-  const latest = useMemo(() => jobs.find((job) => (
-    runDisplayVerdict(job, coherenceContext) === 'current' && displayable(job)
-  )) ?? null, [coherenceContext.fileIngestId, coherenceContext.designFingerprint, coherenceContext.designId, coherenceContext.ingestId, coherenceContext.displayedIngestId, coherenceContext.displayedSolveModelSha256, coherenceContext.mode, displayable, jobs]);
-  // The newest run that can be drawn at all, whatever model it belongs to.
-  // Only the opening selection falls back to this; see the effect below.
-  const newestDrawable = useMemo(
-    () => jobs.find(displayable) ?? null,
-    [displayable, jobs],
-  );
-  const openingSelection = useRef(true);
   const resultsSeenFor = useRef<string | null>(null);
+  const held = jobs.find(job => job.id === selection.primary);
+  if (held?.has_results) resultsSeenFor.current = held.id;
+  else if (held?.id !== resultsSeenFor.current) resultsSeenFor.current = null;
+  const resolved = shownResult(coherenceContext, { ...selection, resultsSeenFor: resultsSeenFor.current }, jobs, provisional.entries);
+  const latest = resolved.latest;
+  const effectivePrimary = resolved.job?.id ?? null;
   useEffect(() => {
-    // A solve the user started outranks a pinned comparison: the run submitted
-    // for it takes the primary slot as soon as its results exist, and only
-    // then, so the pinned result stays on screen while the solve runs. A run
-    // that ends without ever producing results releases the claim, leaving the
-    // pin where it was.
-    if (selection.awaiting) {
-      const awaited = jobs.find((job) => job.id === selection.awaiting) ?? null;
-      if (awaited && (awaited.has_results || Boolean(provisional.entries[awaited.id]))) {
-        // The run stays owned by the input it was submitted with. When a newer
-        // model has been put on screen while it ran, following it would hand
-        // the slot straight on (the release rule below), so the run the user
-        // asked for is pinned instead, and carries its own `other model` marker.
-        if (runMatchesContext(awaited, coherenceContext) === 'other-model') compareSelection.setPrimary(awaited.id);
-        else compareSelection.followLatest(awaited.id);
-        // Here, where the claim resolves, and not where it was made: reveal
-        // Results if the user is still waiting for this run, otherwise say it
-        // is ready (shell/solveAttention).
-        solveAttention.resultsReady(awaited.id);
-        return;
-      }
-      if (awaited && (awaited.status === 'error' || awaited.status === 'cancelled')) {
-        compareSelection.awaitRun(null);
-        return;
-      }
+    if (resolved.releaseSelection || ((!selection.primary || selection.following) && selection.primary !== effectivePrimary)) {
+      resultsSeenFor.current = null;
+      compareSelection.followLatest(effectivePrimary);
     }
-    // A run that finished without being asked for never replaces what is on
-    // screen; the toolbar offers it as `New · #NN` instead. The slot is only
-    // taken over when what it holds cannot be shown: nothing chosen yet at the
-    // start of a session, a run that has disappeared, or -- while no run has
-    // been chosen by hand -- a run belonging to the model family the workspace
-    // has just left.
-    const held = selection.primary ? jobs.find((job) => job.id === selection.primary) ?? null : null;
-    // Retention that lands while a run is on screen releases it as it always
-    // did; only a run picked after its results were gone is held.
-    // The ref only ever names the run now held: moving to another run forgets it.
-    if (held?.has_results) resultsSeenFor.current = held.id;
-    else if (resultsSeenFor.current !== (held?.id ?? null)) resultsSeenFor.current = null;
-    if (
-      held
-      && (
-        held.has_results
-        || Boolean(provisional.entries[held.id])
-        // A run picked by hand whose results were cleaned up stays selected:
-        // the dock says so, and releasing it would put the latest run back
-        // under the card the user just clicked.
-        || (!selection.following && Boolean(held.results_discarded_at) && resultsSeenFor.current !== held.id)
-      )
-      && (!selection.following || (coherenceContext.mode === 'cad'
-        ? runDisplayVerdict(held, coherenceContext) === 'current'
-        : runMatchesContext(held, coherenceContext) !== 'other-model'))
-    ) return;
-    // Released: forget that its results were seen, so a later hand-pick of the
-    // same cleaned-up run is held rather than released again.
-    if (held && !held.has_results && resultsSeenFor.current === held.id) resultsSeenFor.current = null;
-    // Opening the app is the one time an out-of-context run is better than an
-    // empty dock. A restored CAD project selects its return but does not
-    // prepare it, so there is no ingestion yet and every imported run reads as
-    // `other-model`: the dock used to sit on "Fetching the selected run" with
-    // nothing selected, for the whole session, until the user prepared a model
-    // by hand. The run it shows instead carries its own `other model` marker,
-    // so it is labelled rather than silently passed off as the current model.
-    // Every later selection follows the ordinary rules, which is what keeps
-    // leaving a model family from dragging some unrelated run onto the charts.
-    if (latest) {
-      openingSelection.current = false;
-      if (latest.id !== selection.primary) compareSelection.followLatest(latest.id);
-      return;
-    }
-    const opening = openingSelection.current ? newestDrawable : null;
-    if (opening) {
-      // Pinned rather than followed. The rule above releases a followed slot
-      // whose run belongs to a model family the workspace has left -- which is
-      // this run, every time, since there is no loaded model for it to match.
-      // Following it would hand it over on the next pass and put the dock
-      // straight back to showing nothing.
-      openingSelection.current = false;
-      compareSelection.setPrimary(opening.id);
-      return;
-    }
-    if (selection.primary !== null) compareSelection.followLatest(null);
-  }, [
-    coherenceContext.fileIngestId, coherenceContext.designFingerprint, coherenceContext.ingestId, coherenceContext.displayedIngestId, coherenceContext.displayedSolveModelSha256, coherenceContext.mode,
-    jobs, latest, newestDrawable, provisional, selection.awaiting, selection.following, selection.primary,
-  ]);
-
-  const ids = useMemo(() => [selection.primary, ...selection.overlays].filter((id): id is string => Boolean(id)), [selection]);
+  }, [effectivePrimary, selection.primary, selection.following, resolved.releaseSelection]);
+  // Awaiting is lifecycle/attention state; result identity belongs to shownResult.
+  useEffect(() => {
+    if (!selection.awaiting) return;
+    const awaited = jobs.find(job => job.id === selection.awaiting);
+    if (awaited && (awaited.has_results || provisional.entries[awaited.id])) {
+      if (runVerdict(awaited, coherenceContext) === 'current') compareSelection.followLatest(awaited.id);
+      else compareSelection.setPrimary(awaited.id);
+      solveAttention.resultsReady(awaited.id);
+    } else if (awaited && (awaited.status === 'error' || awaited.status === 'cancelled')) compareSelection.awaitRun(null);
+  }, [selection.awaiting, jobs, provisional, coherenceContext.key, coherenceContext.viewportShowing]);
+  const ids = resolved.ids;
   const selectionKey = ids.join('\u0000');
   const resultSourceKey = ids.map((id) => {
     const job = jobs.find((item) => item.id === id);
@@ -2380,11 +2301,11 @@ export function ResultsPanel() {
   useEffect(() => {
     let live = true;
     const requestedIds = selectionKey ? selectionKey.split('\u0000') : [];
-    if (!requestedIds.length || !selection.primary) { setDisplay(null); setFetchError(null); return; }
+    if (!requestedIds.length || !effectivePrimary) { setDisplay(null); setFetchError(null); return; }
     setFetchError(null);
     // Results that were cleaned up are gone from disk: asking for them is a
     // 404. Clear the outgoing charts and let the dock say why instead.
-    const primaryRun = jobs.find((item) => item.id === selection.primary);
+    const primaryRun = jobs.find((item) => item.id === effectivePrimary);
     if (primaryRun && primaryRun.status === 'complete' && !primaryRun.has_results && !provisional.entries[primaryRun.id]) {
       setDisplay(null);
       return;
@@ -2421,7 +2342,7 @@ export function ResultsPanel() {
         if (!live) return;
         setDisplay({
           key: selectionKey,
-          primaryId: selection.primary!,
+          primaryId: effectivePrimary!,
           ids: requestedIds,
           results: Object.fromEntries(pairs.map(({ id, result }) => [id, result])),
           provisionalIds: pairs.filter(({ isProvisional }) => isProvisional).map(({ id }) => id),
@@ -2444,11 +2365,11 @@ export function ResultsPanel() {
         });
       });
     return () => { live = false; };
-  }, [selection.primary, selectionKey, resultSourceKey, fetchAttempt]);
+  }, [effectivePrimary, selectionKey, resultSourceKey, fetchAttempt]);
 
   const currentDisplay = display?.key === selectionKey ? display : null;
-  const primaryRaw = selection.primary && currentDisplay
-    ? currentDisplay.results[selection.primary]
+  const primaryRaw = effectivePrimary && currentDisplay
+    ? currentDisplay.results[effectivePrimary]
     : undefined;
   // One view for the whole dock: the chosen channel where the run has it, its
   // combined sum otherwise, and its first channel when it has neither. The
@@ -2461,7 +2382,8 @@ export function ResultsPanel() {
   // One keyed snapshot owns the primary and every overlay. During a transition
   // the complete outgoing set may remain visible, but no incoming result is
   // combined with it; the whole set swaps only after Promise.all succeeds.
-  const shownRaw = selection.primary && display
+  const displayed = shownResult(coherenceContext, { primary: display?.primaryId ?? null, overlays: display?.ids.slice(1) }, jobs, provisional.entries);
+  const shownRaw = effectivePrimary && display && displayed.canRender && displayed.job?.id === display.primaryId
     ? display.results[display.primaryId]
     : undefined;
   const shownActiveChannel = shownRaw ? resolveResultView(shownRaw, view) : null;
@@ -2495,8 +2417,7 @@ export function ResultsPanel() {
   const displayLabels = display?.ids.map((id) => labelFor(id, jobs)).join('\u0000') ?? '';
   const named = useMemo(
     () => display?.ids.flatMap((id, index) => {
-      const job = jobs.find((item) => item.id === id);
-      if (coherenceContext.mode === 'cad' && (!job || runDisplayVerdict(job, coherenceContext) !== 'current')) return [];
+      if (!shownRaw || !displayed.ids.includes(id)) return [];
       // `ids` is [primary, ...overlays], so index 0 is the run the panel is
       // built around. Flagging its entries here is what lets every chart find
       // the primary without trusting its own, possibly filtered, ordering.
@@ -2508,13 +2429,13 @@ export function ResultsPanel() {
       );
       return index === 0 ? channels.map((entry) => ({ ...entry, primary: true })) : channels;
     }) ?? NO_NAMED_RESULTS,
-    [display, displayLabels, view, jobs, coherenceContext],
+    [display, displayLabels, view, jobs, selectionKey, coherenceContext.key, coherenceContext.kind, coherenceContext.viewportShowing, coherenceContext.unloadedRunId],
   );
   const error = fetchError?.key === selectionKey ? fetchError.message : null;
   const showingPrevious = Boolean(selection.primary && display && display.key !== selectionKey && !error);
   const available = useMemo(() => jobs.filter((job) => job.status === 'complete' && job.has_results && !ids.includes(job.id)), [ids, jobs]);
-  const primaryJob = useMemo(() => jobs.find((job) => job.id === selection.primary) ?? null, [jobs, selection.primary]);
-  const primaryVerdict = primaryJob ? runDisplayVerdict(primaryJob, coherenceContext) : 'current';
+  const primaryJob = jobs.find(job => job.id === selection.primary) ?? resolved.job;
+  const primaryVerdict = primaryJob ? runVerdict(primaryJob, coherenceContext) : 'current';
   // The selected run finished but its results were cleaned up: nothing to
   // fetch or draw, and the dock says so rather than showing another run.
   const cleanedUpRun = primaryJob && primaryJob.status === 'complete' && !primaryJob.has_results && !provisional.entries[primaryJob.id]
@@ -2534,24 +2455,12 @@ export function ResultsPanel() {
     return newer ? latest : null;
   }, [dismissedNewRun, latest, primaryJob, selection.primary]);
   const selectedJob = useMemo(() => jobs.find((job) => job.id === display?.primaryId) ?? null, [display?.primaryId, jobs]);
-  const cadResultMatchesViewport = coherenceContext.mode !== 'cad'
-    || Boolean((selectedJob ?? cleanedUpRun) && runDisplayVerdict((selectedJob ?? cleanedUpRun)!, coherenceContext) === 'current');
+  const cadResultMatchesViewport = Boolean(resolved.job && shownRaw);
   useEffect(() => {
-    useObservationStore.getState().adopt(cadResultMatchesViewport ? shownRaw : undefined, cadResultMatchesViewport ? shownLabel : null);
-  }, [cadResultMatchesViewport, shownLabel, shownRaw]);
-  const activeIngestId = useCadReturnStore((store) => store.ingestRecord?.ingest_id ?? null);
-  const recombineIngestId = selectedJob && runMatchesContext(selectedJob, coherenceContext) === 'current'
-    ? selectedJob.cad_source?.ingest_id ?? null
-    : null;
+    useObservationStore.getState().adopt(shownRaw, shownRaw ? shownLabel : null);
+  }, [shownLabel, shownRaw]);
   const primaryIsProvisional = Boolean(display?.provisionalIds.includes(display.primaryId));
-  // The rail may only repaint the run it is actually the rail for. Two CAD
-  // returns can name their drive channels identically, so matching channel ids
-  // are not lineage; the run has to carry the active return's immutable ingest
-  // id, the same identity the dock's own strip checked before it was replaced.
-  const shownIsActiveReturn = cadResultMatchesViewport && Boolean(selectedJob && activeIngestId
-    && (recombineIngestId === activeIngestId
-      || (coherenceContext.displayedSolveModelSha256
-        && selectedJob.cad_source?.solve_model_sha256 === coherenceContext.displayedSolveModelSha256)));
+  const shownIsActiveReturn = Boolean(shownRaw && resolved.job && coherenceContext.kind !== 'parametric' && !resolved.modelNotLoaded);
   const shownCanApply = selectedJob?.status === 'complete'
     && !primaryIsProvisional
     && shownIsActiveReturn;
@@ -2659,10 +2568,6 @@ export function ResultsPanel() {
     : null;
   const powerFlags = shown ? powerQualificationOf(shown, shownRaw ?? shown) : null;
   const powerChannelName = useCallback((id: string) => shownRaw ? channelLabel(shownRaw, id) : id, [shownRaw]);
-  const restorePrimaryDesign = useCallback(() => {
-    if (!primaryJob || replaceWithJobDesign(primaryJob, { keepHistory: true })) return;
-    coordinator.reportError('This result has no readable design snapshot, so its design cannot be restored.');
-  }, [coordinator, primaryJob]);
   const solve = useOptionalSolveControl();
   // Everything above keeps following the solve while this panel is covered --
   // results are still fetched, combined and labelled, so the panel is never
@@ -2692,9 +2597,16 @@ export function ResultsPanel() {
     setMeasuredError(problems.length ? problems.join(' ') : null);
   }, []);
 
-  if (coherenceContext.mode !== 'cad' && !selection.primary && !jobs.some((job) => job.has_results)) return <div className="results-panel panel-scroll">
-    <ResultsHeader identity={null} controls={<button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>}/>
-    {preferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}<div className="empty-state" role="status"><b>No results yet</b><span>Solve the current design, or select a finished run in the Jobs rail, to fill these charts.</span></div>
+  const modelStatus = currentModelStatus(coherenceContext, jobs, solve?.disabled ? solve.title : null);
+  // Slice 4 plugs shared readiness controls into this one empty-state surface.
+  const emptyModel = <div className="empty-state" role="status">
+    <b>{{ solved: 'Loading results', running: 'Solving', preparing: 'Preparing', refused: 'Solve refused', failed: 'Solve failed', 'never-solved': 'Not solved yet' }[modelStatus.kind]}</b>
+    <span>{modelStatus.message}</span>
+    {(modelStatus.kind === 'preparing' || modelStatus.kind === 'running') && modelStatus.job && <SolveProgressView job={modelStatus.job} variant="compact"/>}
+    {modelStatus.kind === 'failed' && modelStatus.job
+      ? <button type="button" onClick={() => void coordinator.continueRun(modelStatus.job!.id).catch(() => undefined)}>Retry</button>
+      : <button type="button" className="solve-button" disabled={!solve || solve.disabled} title={solve?.title ?? 'Solve is not available here.'} onClick={() => void solve?.solve()}>Solve</button>}
+    {primaryJob && resolved.verdict !== 'current' && <button type="button" onClick={showPrimaryModel}>Show that run's model</button>}
   </div>;
 
   return <div
@@ -2703,7 +2615,7 @@ export function ResultsPanel() {
     data-result-set={shown && cadResultMatchesViewport ? display?.key : undefined}
   >
     <ResultsHeader identity={<>
-      {ids.map((id, index) => {
+      {(selection.primary ? [selection.primary, ...selection.overlays] : ids).map((id, index) => {
         const job = jobs.find((item) => item.id === id);
         // The shown run is the only one whose coherence is actionable, and its
         // own chip is where it belongs: the banner this replaces spent the
@@ -2744,7 +2656,7 @@ export function ResultsPanel() {
       })()}
       {shown && samplingNotes(shown).length > 0 && <span className="pill accent" role="note" title={samplingNotes(shown).join("\n")}>{samplingNotes(shown)[1]} · reconstructed estimates; narrow resonances can be missed</span>}
       {primaryIsProvisional && <span className="pill accent" role="status">Live · {liveCompleted}{liveExpected ? `/${liveExpected}` : ''} frequencies</span>}
-      <select className="result-compare-add" aria-label="Add comparison result" value="" onChange={(event) => { if (event.target.value) compareSelection.toggleOverlay(event.target.value); }}><option value="">+ compare</option>{available.map((job) => {
+      <select className="result-compare-add" aria-label="Add comparison result" value="" onChange={(event) => { if (event.target.value) { const job = jobs.find(job => job.id === event.target.value); if (job && runVerdict(job, coherenceContext) !== 'current') selectJob(job); else compareSelection.toggleOverlay(event.target.value); } }}><option value="">+ compare</option>{available.map((job) => {
         const marker = runContextMarker(job, coherenceContext);
         return <option key={job.id} value={job.id}>{labelFor(job.id, jobs)}{marker ? ` · ${marker}` : ''}</option>;
       })}</select>
@@ -2752,7 +2664,7 @@ export function ResultsPanel() {
         type="button"
         className="result-new-run"
         title={`${runDisplayName(newRun)} finished. Click to show it; nothing else replaces the run on screen.`}
-        onClick={() => { setDismissedNewRun(newRun.id); compareSelection.followLatest(newRun.id); }}
+        onClick={() => { setDismissedNewRun(newRun.id); selectJob(newRun); }}
       ><i/>{newRunBadgeLabel(newRun.run_number)} → Show</button>}
       {/* Left of the spacer on purpose: this chip comes and goes on its own,
           and the controls on the right must not move under the cursor. */}
@@ -2781,7 +2693,7 @@ export function ResultsPanel() {
         onClick={() => measuredInput.current?.click()}
       >Overlay measured…</button>
       {primaryJob ? <RunExportControl
-        job={primaryJob}
+        job={resolved.job ?? primaryJob}
         result={primaryRaw ?? primary}
         channelId={activeChannel ?? undefined}
         disabledReason={primaryIsProvisional ? 'Export is available when the solve finishes'
@@ -2806,8 +2718,8 @@ export function ResultsPanel() {
       label={`${runDisplayName(primaryJob)} coherence`}
     >
       <p>{RUN_VERDICT_SENTENCE[primaryVerdict]}</p>
-      {primaryVerdict === 'older-revision'
-        ? <button type="button" onClick={() => { setCoherenceOpen(false); restorePrimaryDesign(); }}>Restore this run&apos;s design</button>
+      {primaryVerdict === 'earlier-version' && modelForRun(primaryJob).kind === 'parametric'
+        ? <button type="button" onClick={() => { setCoherenceOpen(false); showPrimaryModel(); }}>Restore this run&apos;s design</button>
         : <><button type="button" onClick={() => { setCoherenceOpen(false); showPrimaryModel(); }} disabled={modelLoad === 'loading'}>{modelLoad === 'loading' ? 'Loading…' : 'Show this model'}</button><button type="button" onClick={() => { setCoherenceOpen(false); compareSelection.followLatest(latest?.id ?? null); }}>Show newest run</button></>}
       <button type="button" disabled={!solve || solve.disabled} title={solve?.title ?? 'Solve is not available here.'} onClick={() => { setCoherenceOpen(false); void solve?.solve(); }}>Solve this version</button>
     </AnchoredPanel>}
@@ -2822,18 +2734,9 @@ export function ResultsPanel() {
     {/* Three different empty docks, said apart: a failed fetch, a fetch still
         in flight, and nothing selected at all. The last used to claim it was
         loading, which is how a dock with no selection looked like a hang. */}
-    {coherenceContext.mode === 'cad' && !cadResultMatchesViewport && !cleanedUpRun
-      ? <div className="empty-state" role="status"><b>Not solved yet</b><span>The model in the viewport has no selected solved result.</span><button type="button" className="solve-button" disabled={!solve || solve.disabled} title={solve?.title ?? 'Solve is not available here.'} onClick={() => void solve?.solve()}>Solve</button></div>
-      : charts ?? (cleanedUpRun ? <div className="empty-state" role="status">
-        <b>Results cleaned up</b>
-        <span>{cleanedUpMessage(cleanedUpRun)}</span>
-      </div> : <div className="empty-state" role="status">
-      <b>{error ? 'Results unavailable' : selection.primary ? 'Loading results' : 'No run selected'}</b>
-      <span>{error
-        ? 'Retry above, or select another run in the Jobs rail.'
-        : selection.primary
-          ? 'Fetching the selected run…'
-          : jobs.length ? 'Choose a run in the Jobs rail.' : 'Solve a design to see its results here.'}</span>
-    </div>)}
+    {resolved.modelNotLoaded && <div role="status">Run model not loaded</div>}
+    {!resolved.job ? emptyModel : charts ?? (cleanedUpRun ? <div className="empty-state" role="status">
+      <b>Results cleaned up</b><span>{cleanedUpMessage(cleanedUpRun)}</span>
+    </div> : error ? <div className="empty-state" role="status"><b>Results unavailable</b><span>Retry above, or select another run in the Jobs rail.</span></div> : emptyModel)}
   </div>;
 }

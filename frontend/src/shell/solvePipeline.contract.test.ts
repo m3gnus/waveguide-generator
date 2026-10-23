@@ -130,3 +130,54 @@ describe('one Solve owner', () => {
     expect(bridge).toContain('continueRun(');
   });
 });
+
+/** Display identities and verdict vocabulary have one owner. Lifecycle ingestion
+ * reads (loading/adopting artifacts) and run-list grouping are not display verdicts. */
+function displayVerdictViolations(raw: string): string[] {
+  const source = raw.replace(literalsAndComments, token => token.startsWith('//') || token.startsWith('/*') ? ' ' : token);
+  const problems: string[] = [];
+  if (/\b(?:function|const|type|interface)\s+(?:runVerdict|runDisplayVerdict|runMatchesContext|RunContext|RunContextVerdict)\b/.test(source)) problems.push('private verdict definition');
+  const identities = ['(?:\\w+\\??\\.)?cad_source(?:\\??\\.\\s*(?:ingest_id|solve_model_sha256))?', 'jobDesignFingerprint\\([^)]*\\)'];
+  // Follow local aliases too, so splitting a raw identity comparison over two
+  // statements does not turn it into an allowed display selector.
+  for (let pass = 0; pass < 3; pass += 1) {
+    for (const match of source.matchAll(/\b(?:const|let)\s+(\w+)\s*=\s*([^;\n]+)/g)) {
+      if (identities.some(identity => new RegExp(identity).test(match[2])) && !identities.includes(`\\b${match[1]}\\b(?:\\??\\.(?:ingest_id|solve_model_sha256))?`)) identities.push(`\\b${match[1]}\\b(?:\\??\\.(?:ingest_id|solve_model_sha256))?`);
+    }
+  }
+  const liveIdentity = '(?:context|model|viewport|coherenceContext)\\??\\.\\s*(?:key|ingestId|displayedIngestId|displayedSolveModelSha256|designFingerprint)';
+  for (const identity of identities) {
+    if (new RegExp(`(?:${identity})\\s*[!=]==?\\s*${liveIdentity}|${liveIdentity}\\s*[!=]==?\\s*(?:${identity})`).test(source)) problems.push('private run-versus-viewport comparison');
+  }
+  return problems;
+}
+
+describe('one current model and shown result owner', () => {
+  it('keeps run-versus-viewport verdicts in currentModel/runCoherence', () => {
+    const owners = ['../model/currentModel.ts', '../results/runCoherence.ts'];
+    expect(production.filter(([path]) => !owners.includes(path)).flatMap(([path, source]) =>
+      displayVerdictViolations(source).map(problem => `${path}: ${problem}`))).toEqual([]);
+  });
+
+  it.each([
+    `function runDisplayVerdict(job, context) { return 'current'; }`,
+    `const match = job.cad_source?.ingest_id === model.ingestId;`,
+    `const ingest = job.cad_source?.ingest_id; return ingest === context.ingestId;`,
+    `const source = job.cad_source; const ingest = source.ingest_id; return viewport.ingestId === ingest;`,
+    `return jobDesignFingerprint(job) === context.designFingerprint;`,
+  ])('rejects a private display verdict: %s', source => {
+    expect(displayVerdictViolations(source)).not.toEqual([]);
+  });
+
+  it('routes every result consumer to the shared selector', () => {
+    for (const path of ['./ResultsPanel.tsx', '../viewport/Viewport.tsx', '../results/exportContext.ts']) {
+      expect(sources[path]).toMatch(/\bshownResult\(/);
+    }
+    for (const path of ['../jobs/RunExportControl.tsx', '../jobs/autoExportRun.ts', '../results/exporters.ts']) {
+      expect(sources[path]).toMatch(/\bresultExportSelection\(/);
+    }
+    expect(sources['./JobsCoordinator.tsx']).toMatch(/\bcurrentModel\(/);
+    expect(sources['./JobsCoordinator.tsx']).not.toMatch(/cadViewportGeometry|viewportGeometry\.cad/);
+    expect(sources['../viewport/Viewport.tsx']).toMatch(/currentModelScene\(/);
+  });
+});

@@ -13,7 +13,7 @@ import { selectJob } from '../jobs/selectJob';
 import { canExportRun, RunExportControl } from '../jobs/RunExportControl';
 import { applyJobPreferences, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
-import { runProvenanceMarker } from '../results/runCoherence';
+import { runProvenanceMarker } from '../model/currentModel';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { Icon } from './icons';

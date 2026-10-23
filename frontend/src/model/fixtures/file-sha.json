@@ -1,0 +1,36 @@
+{
+  "id": "legacy-file-sha",
+  "run_number": 1,
+  "parent_job_id": null,
+  "status": "complete",
+  "progress": 1,
+  "stage": null,
+  "stage_message": null,
+  "created_at": "2026-09-01T00:00:00Z",
+  "queued_at": "2026-09-01T00:00:00Z",
+  "started_at": null,
+  "completed_at": null,
+  "config_summary": {
+    "geometry_type": "imported",
+    "import_origin": "mesh-file"
+  },
+  "solve_options": {},
+  "has_results": true,
+  "has_mesh_artifact": true,
+  "label": "Legacy run",
+  "error_message": null,
+  "cancellation_requested": false,
+  "mesh_stats": null,
+  "script_snapshot": null,
+  "design_revision": 1,
+  "polar_grid": {},
+  "rating": null,
+  "exported_files": [],
+  "auto_export_formats": {},
+  "log_tail": [],
+  "cad_source": {
+    "ingest_id": "ingest-file-sha",
+    "model_id": "model-file-sha",
+    "solve_model_sha256": "file-sha"
+  }
+}

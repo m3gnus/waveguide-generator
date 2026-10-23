@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../../api/cadlink';
 import type { JobItem } from '../../api/jobsSocket';
-import { runContext, runContextMarker, runDisplayVerdict } from '../../results/runCoherence';
+import { currentModel, runContextMarker, runVerdict } from '../../model/currentModel';
 import { resetCadReturnStore, useCadReturnStore } from '../../stores/cadReturn';
 import { useCadSolverFrameStore } from '../../stores/cadSolverFrame';
 import { resetDocumentStore } from '../../stores/document';
@@ -91,7 +91,7 @@ describe('the model a CAD solve prepared', () => {
     onScreen(received);
     const solved = run('job-solved', prepared);
     // The defect: a solve of the model on screen, called another model.
-    expect(runContextMarker(solved, runContext())).toBe('Different CAD return');
+    expect(runContextMarker(solved, currentModel())).toBe('Different CAD return');
 
     await expect(adoptSolvedCadModel(solved, { manifestSha256: MANIFEST, sourceIngestId: received.ingest_id }, display, serving(prepared)))
       .resolves.toBe('adopted');
@@ -99,8 +99,8 @@ describe('the model a CAD solve prepared', () => {
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(prepared.ingest_id);
     expect(useCadReturnStore.getState().needsIngest).toBe(false);
     expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(prepared.ingest_id);
-    expect(runDisplayVerdict(solved, runContext())).toBe('current');
-    expect(runContextMarker(solved, runContext())).toBeNull();
+    expect(runVerdict(solved, currentModel())).toBe('current');
+    expect(runContextMarker(solved, currentModel())).toBeNull();
   });
 
   it('adopts once the claimed run names its preparation, and only once', async () => {
@@ -139,7 +139,7 @@ describe('the model a CAD solve prepared', () => {
       .resolves.toBe('declined');
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(received.ingest_id);
     expect(useCadReturnStore.getState().sourceSizesMm['source-hf']).toBe(2);
-    expect(runContextMarker(solved, runContext())).toBe('Different CAD return');
+    expect(runContextMarker(solved, currentModel())).toBe('Different CAD return');
   });
 
   it('yields to an ingest the user started while the prepared record was read', async () => {

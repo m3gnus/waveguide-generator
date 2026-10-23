@@ -20,6 +20,8 @@ export interface ImportedMeshScene {
   /** Changes whenever the underlying artifact changes, even if its triangle
    * count and display name happen to match an earlier scene. */
   artifactToken: string;
+  /** Parametric content captured when this solver artifact was requested. */
+  modelKey?: string;
 }
 
 export interface ImportedMeshSceneOptions {

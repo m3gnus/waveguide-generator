@@ -1,3 +1,4 @@
+import { currentModel, useCurrentModel } from '../model/currentModel';
 import { importedModelBlocker, unchangedSetup, useImportedModelStore } from '../stores/importedModel';
 import { nativeSymmetryLimitation } from '../design/nativeFamilies';
 import { fileMeshSubmission, registeredMesh, useMeshImportStore } from '../stores/meshImport';
@@ -35,7 +36,6 @@ import { frameSolveBlocker, frameReadInFlight, useCadSolverFrameStore } from '..
 import { polarValidationError, useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 import { solveOptionsStoreForJob, useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { importedMeshStore } from '../viewport/importedMeshStore';
 import { buildCadProjectSetup } from './cadSetupPublisher';
 import { getCrossoverDraftError, useCrossoverDraftError } from '../design/crossoverDrafts';
 import { solveAttention, useJobAttention, useRecoveryNoticeAttention } from './solveAttention';
@@ -192,9 +192,8 @@ function cadInputBlockerNow(): string | null {
   const opening = importedModelBlocker('cad');
   if (opening) return opening;
   const cadReturn = useCadReturnStore.getState();
-  const cad = importedMeshStore.getSnapshot().cad;
-  if (cadReturn.ingestRecord !== null && cad !== null
-    && (!cad.ingestId || cad.ingestId !== cadReturn.ingestRecord.ingest_id)) {
+  const model = currentModel();
+  if (cadReturn.ingestRecord !== null && !model.viewportShowing) {
     return CAD_VIEWPORT_MISMATCH;
   }
   return importedSubmissionBlocker(cadReturn);
@@ -283,11 +282,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const selectedEngine = solveOptions.engine;
   useImportedModelStore();
   const cadReturn = useCadReturnStore();
-  const viewportGeometry = useSyncExternalStore(
-    importedMeshStore.subscribe,
-    importedMeshStore.getSnapshot,
-    importedMeshStore.getSnapshot,
-  );
+  const model = useCurrentModel();
   const workspaceMode = useSyncExternalStore(
     workspaceModeStore.subscribe,
     workspaceModeStore.getSnapshot,
@@ -367,8 +362,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   // Mode owns solve intent. The viewport CAD slot is evidence for the mismatch
   // guard only; an empty slot must still route to the imported blocker so CAD
   // mode can truthfully say that an ingest is required.
-  const fileGeometryActive = workspaceMode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file';
-  const cadGeometryActive = workspaceMode === 'cad' && !fileGeometryActive;
+  const fileGeometryActive = model.kind === 'file';
+  const cadGeometryActive = model.kind === 'cad';
   const crossoverDraftError = useCrossoverDraftError();
   useMeshImportStore();
   let fileSubmission: ImportedSolveSubmission | null = null;
@@ -377,11 +372,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     try { fileSubmission = fileMeshSubmission(); }
     catch (error) { fileBlocker = error instanceof Error ? error.message : String(error); }
   }
-  const cadViewportGeometry = viewportGeometry.cad;
-  const cadGeometryMismatch = cadGeometryActive && cadReturn.ingestRecord !== null && cadViewportGeometry !== null && (
-    !cadViewportGeometry.ingestId
-    || cadViewportGeometry.ingestId !== cadReturn.ingestRecord?.ingest_id
-  );
+  const cadGeometryMismatch = cadGeometryActive && model.key !== null && !model.viewportShowing;
   const cadSolveBlocker = cadGeometryMismatch
     ? CAD_VIEWPORT_MISMATCH
     : cadGeometryActive

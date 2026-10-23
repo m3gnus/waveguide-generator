@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { compareSelection } from '../../api/results';
 import { cadSolveClaim, rememberCadSolve } from '../../jobs/cadSolve';
-import { runContext, runDisplayVerdict } from '../../results/runCoherence';
+import { currentModel, runVerdict } from '../../model/currentModel';
 import { resetCadReturnStore, useCadReturnStore } from '../../stores/cadReturn';
 import { resetDesignStore, useDesignStore } from '../../stores/design';
 import { resetDocumentStore } from '../../stores/document';
@@ -50,7 +50,7 @@ it('loads the exact solved model when WG first sees a Fusion job already accepte
   expect(cadSolveClaim(run)).toBeNull();
   await f.observe([run]);
   expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);
-  expect(runDisplayVerdict(run, runContext())).toBe('current');
+  expect(runVerdict(run, currentModel())).toBe('current');
   expect(compareSelection.getSnapshot().awaiting).toBe(run.id);
   expect(cadSolveClaim(run)?.completionAcknowledged).toBe(true);
   await f.observe([run]);
@@ -144,6 +144,6 @@ it('follows an approved external continuation whose parent has only an empty Fus
   const child = { ...external('child'), parent_job_id: parent.id };
   await f.observe([child, parent]);
   expect(f.display.showIngestedMesh).toHaveBeenCalledOnce();
-  expect(runDisplayVerdict(child, runContext())).toBe('current');
+  expect(runVerdict(child, currentModel())).toBe('current');
   expect(compareSelection.getSnapshot().awaiting).toBe(child.id);
 });

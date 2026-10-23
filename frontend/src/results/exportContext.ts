@@ -1,3 +1,4 @@
+import { modelForRun, shownResult, type CurrentModel, type ResultSelection } from '../model/currentModel';
 import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
 import { hydrateJobDesign } from '../jobs/jobDesign';
 import type { DesignDocument } from '../stores/design';
@@ -25,4 +26,12 @@ export function resultExportSnapshot(
     solveSettings: wgSolveSettingsFromSolveOptions(job?.solve_options),
     ...(job?.cad_source?.identity ? { cadIdentity: job.cad_source.identity } : {}),
   };
+}
+
+/** A Results export uses the live selection; Jobs/automatic exports name an immutable run model. */
+export function resultExportSelection(job: JobItem, model: CurrentModel = modelForRun(job),
+  selection: ResultSelection = { primary: job.id }, jobs: readonly JobItem[] = [job]): JobItem {
+  const shown = shownResult(model, selection, jobs).job;
+  if (!shown || shown.id !== job.id) throw new Error('This result is not shown for the selected model.');
+  return shown;
 }

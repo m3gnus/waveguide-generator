@@ -75,6 +75,7 @@ const previewSnapshot: PreviewSnapshot = {
   errorRevision: 0,
 };
 
+const initialPreviewSnapshot = { ...previewSnapshot };
 const refreshCalls: number[] = [];
 
 function setInputValue(input: HTMLInputElement, value: string): void {
@@ -84,9 +85,14 @@ function setInputValue(input: HTMLInputElement, value: string): void {
 // Run coherence is decided by the design a run stored, so a run that stands
 // for "the model in the viewport" has to carry the design that is on screen.
 function completeJob(id: string, fieldPlaneAvailable: boolean): JobItem {
+  // Field controls exercise the shown result: its model is also the accepted
+  // viewport frame, rather than the stale/error frame used by preview tests.
+  const revision = useDesignStore.getState().designRevision;
+  Object.assign(previewSnapshot, { frame: { ...frame, documentLoad: currentDocumentLoad(), header: { ...frame.header, designRevision: revision } },
+    displayedRevision: revision, awaitingDocumentFrame: false, stale: false, error: null });
   return {
     id,
-    status: 'complete',
+    status: 'complete', has_results: true,
     config_summary: {},
     design_revision: 1,
     script_snapshot: { version: 1, design: serializeDesign(useDesignStore.getState().design) },
@@ -152,6 +158,8 @@ describe('Viewport preview errors', () => {
 
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    Object.assign(previewSnapshot, initialPreviewSnapshot);
+    delete previewSnapshot.awaitingDocumentFrame;
     resetDesignStore();
     resetCadReturnStore();
     compareSelection.clear();
@@ -413,7 +421,7 @@ describe('Viewport preview errors', () => {
       if (reason === 'running') job.status = 'running';
       if (reason === 'stale') job.script_snapshot = null;
       act(() => {
-        publishJobs([job]);
+        publishJobs(reason === 'unselected' ? [job, completeJob('other', false)] : [job]);
         compareSelection.setPrimary(reason === 'unselected' ? 'other' : 'fem');
         useFieldPlaneStore.getState().enableFem('fem', fieldPlane);
       });
@@ -896,6 +904,8 @@ describe('Viewport geometry warnings', () => {
 
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    Object.assign(previewSnapshot, initialPreviewSnapshot);
+    delete previewSnapshot.awaitingDocumentFrame;
     resetDesignStore();
     resetCadReturnStore();
     workspaceModeStore.setMode('parametric');
@@ -1038,6 +1048,8 @@ describe('BEMPP wall plan-adjustment note', () => {
 
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    Object.assign(previewSnapshot, initialPreviewSnapshot);
+    delete previewSnapshot.awaitingDocumentFrame;
     resetDesignStore();
     resetCadReturnStore();
     workspaceModeStore.setMode('parametric');

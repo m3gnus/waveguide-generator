@@ -5,9 +5,8 @@ import { designForFamily, resetDesignStore, serializeDesign, useDesignStore, typ
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
-import {
-  designFingerprint, displayedCadIngestId, runContext, runContextMarker, runDisplayVerdict, runMatchesContext, runProvenanceMarker, type RunContext,
-} from './runCoherence';
+import { designFingerprint } from './runCoherence';
+import { displayedCadIngestId, currentModel, runContextMarker, runVerdict, runProvenanceMarker, type CurrentModel } from '../model/currentModel';
 
 let nextJob = 0;
 
@@ -33,15 +32,8 @@ function cad(ingestId: string | null): JobItem {
   } as unknown as JobItem;
 }
 
-function contextFor(design: DesignDocument, overrides: Partial<RunContext> = {}): RunContext {
-  return {
-    mode: 'parametric',
-    designRevision: 7,
-    designFingerprint: designFingerprint(design),
-    ingestId: null,
-    designId: 'wgd_live',
-    ...overrides,
-  };
+function contextFor(design: DesignDocument, overrides: Partial<CurrentModel> = {}): CurrentModel {
+  return { kind: 'parametric', key: designFingerprint(design), lineage: 'wgd_live', label: 'Test', viewportShowing: true, ...overrides };
 }
 
 describe('run coherence', () => {
@@ -56,21 +48,21 @@ describe('run coherence', () => {
   it('classifies a parametric run by the design it was solved from', () => {
     const design = designForFamily('OSSE');
     const run = parametric(design);
-    expect(runMatchesContext(run, contextFor(design))).toBe('current');
+    expect(runVerdict(run, contextFor(design))).toBe('current');
     // The revision counter moves on every edit, undo and file open; the
     // verdict must not, or only the newest solve could ever read current.
-    expect(runMatchesContext(run, contextFor(design, { designRevision: 4_000 }))).toBe('current');
+    expect(runVerdict(run, contextFor(design, {}))).toBe('current');
   });
 
   it('reads current again once an edit is undone back to what was solved', () => {
     const run = parametric(useDesignStore.getState().design);
-    expect(runMatchesContext(run, contextFor(useDesignStore.getState().design))).toBe('current');
+    expect(runVerdict(run, contextFor(useDesignStore.getState().design))).toBe('current');
 
     useDesignStore.getState().updateField('R', 180);
-    expect(runMatchesContext(run, contextFor(useDesignStore.getState().design))).toBe('older-revision');
+    expect(runVerdict(run, contextFor(useDesignStore.getState().design))).toBe('earlier-version');
 
     useDesignStore.getState().undo();
-    expect(runMatchesContext(run, contextFor(useDesignStore.getState().design))).toBe('current');
+    expect(runVerdict(run, contextFor(useDesignStore.getState().design))).toBe('current');
   });
 
   it('ignores expression spelling and the machine-local solver path', () => {
@@ -86,57 +78,56 @@ describe('run coherence', () => {
     const edited = structuredClone(design);
     edited.L = (edited.L ?? 0) + 1;
     expect(designFingerprint(edited)).not.toBe(designFingerprint(design));
-    expect(runMatchesContext(parametric(design), contextFor(edited))).toBe('older-revision');
+    expect(runVerdict(parametric(design), contextFor(edited))).toBe('earlier-version');
   });
 
-  it('refuses a run whose stored design cannot be read back', () => {
-    expect(runMatchesContext(parametric(null), contextFor(designForFamily('OSSE')))).toBe('older-revision');
+  it('does not mistake an unreadable snapshot for the editor model', () => {
+    expect(runVerdict(parametric(null), contextFor(designForFamily('OSSE')))).toBe('other-model');
   });
 
   it('classifies imported runs by the ingestion in the viewport', () => {
     const design = designForFamily('OSSE');
-    const cadContext = contextFor(design, { mode: 'cad', ingestId: 'wgi_live', displayedIngestId: 'wgi_live' });
-    expect(runMatchesContext(cad('wgi_live'), cadContext)).toBe('current');
-    expect(runMatchesContext(cad('wgi_other'), cadContext)).toBe('other-model');
-    expect(runMatchesContext(cad(null), { ...cadContext, ingestId: null })).toBe('other-model');
-    expect(runMatchesContext(cad('wgi_live'), contextFor(design))).toBe('other-model');
-    expect(runMatchesContext(parametric(design), cadContext)).toBe('other-model');
+    const cadContext = contextFor(design, { kind: 'cad', key: 'wgi_live', ingestId: 'wgi_live' });
+    expect(runVerdict(cad('wgi_live'), cadContext)).toBe('current');
+    expect(runVerdict(cad('wgi_other'), cadContext)).toBe('other-model');
+    expect(runVerdict(cad(null), { ...cadContext, key: null, ingestId: null })).toBe('other-model');
+    expect(runVerdict(cad('wgi_live'), contextFor(design))).toBe('other-model');
+    expect(runVerdict(parametric(design), cadContext)).toBe('other-model');
   });
 
   it('matches unchanged re-sends and rejects both old geometry-hash collisions', () => {
     const design = designForFamily('OSSE');
     const current = contextFor(design, {
-      mode: 'cad', ingestId: 'wgi_new', displayedIngestId: 'wgi_new',
-      displayedSolveModelSha256: 'prepared-a',
+      kind: 'cad', key: 'prepared-a', ingestId: 'wgi_new',
     });
     const run = cad('wgi_old');
     run.cad_source!.transformed_geometry_hash = 'same-centre-area';
     run.cad_source!.solve_model_sha256 = 'prepared-a';
-    expect(runDisplayVerdict(run, current)).toBe('current');
+    expect(runVerdict(run, current)).toBe('current');
 
     // Declared mirrored half versus undeclared open shell: identical STEP and
     // viewport fingerprint, but the effective solve domain differs.
     run.cad_source!.solve_model_sha256 = 'mirrored-half';
-    expect(runDisplayVerdict(run, current)).toBe('other-model');
+    expect(runVerdict(run, current)).toBe('other-model');
     // 2x2 versus 4x1 faces: equal centres and areas, different prepared mesh.
     run.cad_source!.solve_model_sha256 = 'four-by-one';
-    expect(runDisplayVerdict(run, current)).toBe('other-model');
+    expect(runVerdict(run, current)).toBe('other-model');
     // Legacy hashes cannot prove cross-ingestion equality.
     run.cad_source!.solve_model_sha256 = null;
-    expect(runDisplayVerdict(run, current)).toBe('other-model');
+    expect(runVerdict(run, current)).toBe('other-model');
     run.cad_source!.solve_model_sha256 = 'prepared-a';
-    expect(runDisplayVerdict(run, { ...current, displayedIngestId: null })).not.toBe('current');
+    expect(runVerdict(run, { ...current, viewportShowing: false })).not.toBe('current');
   });
 
   it('keeps the marker through a restore until the mesh is visible, including failure', () => {
     const design = designForFamily('OSSE');
     const run = cad('wgi_archive');
-    const before = contextFor(design, { mode: 'cad', ingestId: 'wgi_live', displayedIngestId: 'wgi_live' });
-    expect(runDisplayVerdict(run, before)).toBe('other-model');
-    const loading = { ...before, ingestId: 'wgi_archive', displayedIngestId: null };
+    const before = contextFor(design, { kind: 'cad', key: 'wgi_live', ingestId: 'wgi_live' });
+    expect(runVerdict(run, before)).toBe('other-model');
+    const loading = { ...before, key: 'wgi_archive', ingestId: 'wgi_archive', viewportShowing: false };
     expect(runContextMarker(run, loading)).toBe('Run model not loaded');
     expect(runContextMarker(run, loading)).toBe('Run model not loaded'); // failed load retains the marker
-    expect(runContextMarker(run, { ...loading, displayedIngestId: 'wgi_archive' })).toBeNull();
+    expect(runContextMarker(run, { ...loading, viewportShowing: true })).toBeNull();
   });
 
   it('recognizes the selected CAD fallback while a prior solve mesh is cached', () => {
@@ -151,7 +142,7 @@ describe('run coherence', () => {
   it('marks only the provenance that differs from the workspace mode', () => {
     const design = designForFamily('OSSE');
     const parametricContext = contextFor(design);
-    const cadContext = contextFor(design, { mode: 'cad', ingestId: 'wgi_live', displayedIngestId: 'wgi_live' });
+    const cadContext = contextFor(design, { kind: 'cad', key: 'wgi_live', ingestId: 'wgi_live' });
     expect(runContextMarker(cad('wgi_live'), parametricContext)).toBe('CAD');
     expect(runContextMarker(cad('wgi_live'), cadContext)).toBeNull();
     expect(runContextMarker(cad('wgi_other'), cadContext)).toBe('Different CAD return');
@@ -174,23 +165,17 @@ describe('run coherence', () => {
     useDocumentStore.setState({ identity: { designId: 'wgd_store', lineageId: 'wgl_store', baseEditVersion: 2 } });
     workspaceModeStore.setMode('cad');
 
-    expect(runContext()).toEqual({
-      mode: 'cad',
-      designRevision: 14,
-      designFingerprint: designFingerprint(useDesignStore.getState().design),
-      ingestId: 'wgi_store',
-      displayedIngestId: null,
-      displayedSolveModelSha256: null,
-      designId: 'wgd_store',
-    });
+    expect(currentModel()).toMatchObject({
+      kind: 'cad', key: 'wgi_store', lineage: 'wgi_store', ingestId: 'wgi_store', viewportShowing: false,
+    });;
   });
 });
 
 it('matches file runs in Imported mesh even when an unrelated CAD return is retained', () => {
-  const context = { ...contextFor(designForFamily('OSSE')), mode: 'cad' as const, ingestId: 'wgi_cad', displayedIngestId: 'wgi_cad', fileIngestId: 'wgi_file' };
+  const context = { ...contextFor(designForFamily('OSSE')), kind: 'file' as const, key: 'wgi_file', ingestId: 'wgi_file' };
   const file = { ...cad('wgi_file'), config_summary: { geometry_type: 'imported', import_origin: 'mesh-file' } } as JobItem;
-  expect(runMatchesContext(file, context)).toBe('current');
-  expect(runDisplayVerdict(file, context)).toBe('current');
-  expect(runDisplayVerdict(cad('wgi_cad'), context)).toBe('other-model');
-  expect(runDisplayVerdict(file, { ...context, fileIngestId: null })).toBe('other-model');
+  expect(runVerdict(file, context)).toBe('current');
+  expect(runVerdict(file, context)).toBe('current');
+  expect(runVerdict(cad('wgi_cad'), context)).toBe('other-model');
+  expect(runVerdict(file, { ...context, key: null, ingestId: null })).toBe('other-model');
 });

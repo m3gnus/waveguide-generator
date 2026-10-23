@@ -1,7 +1,7 @@
 import type { JobItem } from '../api/jobsSocket';
 import { fetchJobResults } from '../api/results';
 import type { ExportFormat, Preferences } from '../prefs/preferences';
-import { resultExportSnapshot } from '../results/exportContext';
+import { resultExportSelection, resultExportSnapshot } from '../results/exportContext';
 import { runAutomaticWorkspaceExport, type ExportBundleResult } from '../results/exporters';
 import type { ResultPayload } from '../results/types';
 import { autoExportSubdirectoryForJob, exportStemForJob } from './exportNaming';
@@ -26,10 +26,12 @@ export async function exportRunAutomatically(
   formats: readonly ExportFormat[],
   { preferences, fetcher, normalizationAngle }: AutomaticRunExportOptions,
 ): Promise<ExportBundleResult> {
+  job = resultExportSelection(job);
   return runAutomaticWorkspaceExport({
     fetcher,
     result: await fetchJobResults(job.id, fetcher) as ResultPayload,
     ...resultExportSnapshot(job),
+    selectedRun: job,
     jobId: job.id,
     jobStem: exportStemForJob(job),
     hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,

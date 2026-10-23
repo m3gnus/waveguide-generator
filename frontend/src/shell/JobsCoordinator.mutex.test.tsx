@@ -423,7 +423,8 @@ describe('solve invocation mutex', () => {
     }));
     act(() => publishJobs([refused]));
     await act(async () => root.render(<JobsCoordinator><ResultsPanel/></JobsCoordinator>));
-    expect(host.textContent).toContain('Not solved yet');
+    expect(host.textContent).toContain('Solve refused');
+    expect(host.textContent).toContain('BEAT Metal needs preparing.');
     const solve = host.querySelector<HTMLButtonElement>('.empty-state .solve-button')!;
     expect(solve.disabled).toBe(false);
     await act(async () => solve.click());

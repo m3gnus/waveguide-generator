@@ -13,7 +13,7 @@ import type { RegisteredMesh, MeshSummary } from '../api/meshImport';
 import type { ImportedSetup } from '../jobs/importedSetup';
 import type { JobItem } from '../api/jobsSocket';
 import { runSourceForJob } from '../jobs/exportNaming';
-import { runMatchesContext, runContext } from '../results/runCoherence';
+import { runVerdict, currentModel } from '../model/currentModel';
 
 const MSH = new TextDecoder().decode(readFileSync('../server/tests/fixtures/mesh_import/tetra.msh'));
 const summary: MeshSummary = { node_count: 4, triangle_count: 4, dimensions: [100, 100, 100], dimensions_mm: [100, 100, 100],
@@ -296,8 +296,8 @@ describe('a reopened file run', () => {
     expect(useMeshImportStore.getState().original).toBeNull();
     expect(fileMeshSubmission().options.frequencies_hz).toEqual([100, 200]);
     expect(runSourceForJob(job)).toBe('mesh-file');
-    expect(runMatchesContext(job, runContext())).toBe('current');
-    expect(runMatchesContext({ ...job, config_summary: {} }, runContext())).toBe('other-model');
+    expect(runVerdict(job, currentModel())).toBe('current');
+    expect(runVerdict({ ...job, config_summary: {} }, currentModel())).toBe('other-model');
   });
 
   it('is editable: it is prepared again from the original the server retained', async () => {

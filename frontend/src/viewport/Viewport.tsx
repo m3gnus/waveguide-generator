@@ -1,3 +1,4 @@
+import { designFingerprint } from '../results/runCoherence';
 import { importedModelBlocker, useImportedModelStore } from '../stores/importedModel';
 import { useShallow } from 'zustand/react/shallow';
 import { LiveDimensions } from '../design/LiveDimensions';
@@ -5,8 +6,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { DecodedFrame } from '../api/frame';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
-import { compareSelection } from '../api/results';
-import { runContext, runMatchesContext, useRunContext, type RunContext } from '../results/runCoherence';
+import { compareSelection, provisionalResults } from '../api/results';
+import { currentModel, currentModelScene, currentCadScenes, shownResult, useCurrentModel, type CurrentModel } from '../model/currentModel';
 import { postSymmetry, toSolveDesign } from '../jobs/actions';
 import { planAdjustmentNotice } from '../jobs/planAdjustments';
 import { useOptionalSolveControl } from '../shell/JobsCoordinator';
@@ -288,21 +289,23 @@ function FieldPlaneProbeTooltip({ fieldMaxSplDb }: { fieldMaxSplDb: number | nul
 export function fieldPlaneJob(
   jobs: readonly JobItem[],
   selectedJobId: string | null,
-  context: RunContext = runContext(),
+  context: CurrentModel = currentModel(),
+  provisional = provisionalResults.getSnapshot().entries,
 ): JobItem | null {
-  const candidate = jobs.find((job) => job.id === selectedJobId && job.status === 'complete');
-  return candidate?.field_plane_available === true && runMatchesContext(candidate, context) === 'current'
+  const candidate = shownResult(context, { primary: selectedJobId }, jobs, provisional).job;
+  return candidate?.field_plane_available === true && candidate.status === 'complete'
     ? candidate
     : null;
 }
 
 export function femFieldJob(
-  jobs: readonly JobItem[], selectedJobId: string | null, context: RunContext = runContext(),
+  jobs: readonly JobItem[], selectedJobId: string | null, context: CurrentModel = currentModel(),
+  provisional = provisionalResults.getSnapshot().entries,
 ): JobItem | null {
-  const candidate = jobs.find((job) => job.id === selectedJobId && job.status === 'complete');
+  const candidate = shownResult(context, { primary: selectedJobId }, jobs, provisional).job;
   // The server projects this marker from task metadata AND WG2_FEM_REGIONS.
   // Geometry with declared FEM regions alone does not advertise a field.
-  return candidate?.has_fem_field_artifact === true && runMatchesContext(candidate, context) === 'current'
+  return candidate?.has_fem_field_artifact === true && candidate.status === 'complete'
     ? candidate : null;
 }
 
@@ -420,14 +423,15 @@ export function Viewport() {
     cadApplication,
   });
   const resultSelection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
-  const coherenceContext = useRunContext();
+  const coherenceContext = useCurrentModel();
+  const provisional = useSyncExternalStore(provisionalResults.subscribe, provisionalResults.getSnapshot, provisionalResults.getSnapshot);
   const availableFieldJob = useMemo(
-    () => fieldPlaneJob(jobs, resultSelection.primary, coherenceContext),
-    [coherenceContext.designId, coherenceContext.designRevision, coherenceContext.ingestId, coherenceContext.fileIngestId, coherenceContext.mode, jobs, resultSelection.primary],
+    () => fieldPlaneJob(jobs, resultSelection.primary, coherenceContext, provisional.entries),
+    [coherenceContext.key, coherenceContext.lineage, coherenceContext.kind, coherenceContext.viewportShowing, jobs, resultSelection.primary, provisional.entries],
   );
   const availableFemJob = useMemo(
-    () => femFieldJob(jobs, resultSelection.primary, coherenceContext),
-    [coherenceContext.designId, coherenceContext.designRevision, coherenceContext.ingestId, coherenceContext.fileIngestId, coherenceContext.mode, jobs, resultSelection.primary],
+    () => femFieldJob(jobs, resultSelection.primary, coherenceContext, provisional.entries),
+    [coherenceContext.key, coherenceContext.lineage, coherenceContext.kind, coherenceContext.viewportShowing, jobs, resultSelection.primary, provisional.entries],
   );
   const availablePlaneJob = availableFemJob ?? availableFieldJob;
   const observationVisible = useObservationStore((state) => state.visible);
@@ -528,23 +532,11 @@ export function Viewport() {
     importedMeshStore.getSnapshot,
     importedMeshStore.getSnapshot,
   );
-  const cadMesh = cadRecord && importedMeshState.cad?.ingestId === cadRecord.ingest_id
-    ? importedMeshState.cad
-    : null;
-  const cadSolverMesh = cadRecord && importedMeshState.cadSolver?.ingestId === cadRecord.ingest_id
-    ? importedMeshState.cadSolver
-    : null;
+  const cadSolverMesh = currentCadScenes(coherenceContext, importedMeshState).solver;
   const solverViewSelected = workspaceMode === 'parametric' && importedMeshState.showing === 'solver';
   const cadSolverViewSelected = workspaceMode === 'cad' && importedMeshState.showing === 'cadSolver';
-  const fileInputActive = workspaceMode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file';
-  const importedMesh = fileInputActive ? importedMeshState.file : workspaceMode === 'cad'
-    // While the solve artifact is still being fetched the tessellated display
-    // mesh stays on screen rather than blanking the viewport, exactly as the
-    // parametric view keeps its smooth preview until the build lands.
-    ? (cadSolverViewSelected ? cadSolverMesh ?? cadMesh : cadMesh)
-    : solverViewSelected
-        ? importedMeshState.solver
-        : null;
+  const fileInputActive = coherenceContext.kind === 'file';
+  const importedMesh = currentModelScene(coherenceContext, importedMeshState);
   const [cadSolverLoading, setCadSolverLoading] = useState(false);
   const [cadSolverError, setCadSolverError] = useState<string | null>(null);
   const [cadSolverRetry, setCadSolverRetry] = useState(0);
@@ -594,8 +586,10 @@ export function Viewport() {
         const started = performance.now();
         try {
           const settings = useSolveOptionsStore.getState();
+          const modelDesign = useDesignStore.getState().design;
+          const modelKey = designFingerprint(modelDesign);
           const body = JSON.stringify({
-            design: toSolveDesign(useDesignStore.getState().design),
+            design: toSolveDesign(modelDesign),
             options: solverMeshOptions(settings),
           });
           const result = await postSolverMesh(body, fetch, signal);
@@ -604,9 +598,9 @@ export function Viewport() {
           const token = solverMeshArtifactToken(result.stats.mesh_cache_key);
           const current = importedMeshStore.getSnapshot().solver;
           // Keep the scene object when the resolved artifact is unchanged.
-          if (current?.artifactToken !== token) {
+          if (current?.artifactToken !== token || current.modelKey !== modelKey) {
             importedMeshStore.setSolver(
-              solverMeshScene('Simulation mesh', result),
+              current?.artifactToken === token ? { ...current, modelKey } : { ...solverMeshScene('Simulation mesh', result), modelKey },
               generation,
               importedMeshStore.getSnapshot().showing === 'solver',
             );

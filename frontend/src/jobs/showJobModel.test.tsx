@@ -1,3 +1,4 @@
+import { currentModel, shownResult } from '../model/currentModel';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -85,8 +86,20 @@ describe('history selection keeps the current panel visible', () => {
       expect(unchangedSetup(input, record.ingest_id)).toEqual({ setup_revision_id: 'wgs_archived' });
     }
     expect(workspaceModeStore.getSnapshot().mode).toBe(input === 'parametric' ? 'parametric' : 'cad');
+    expect(shownResult(currentModel(), compareSelection.getSnapshot(), [run]).job?.id).toBe(run.id);
     expect(activations).toEqual([]);
     expect(workspaceNavigation.isVisible('jobs')).toBe(true);
+  });
+
+  it.each([['cad', false], ['cad', true], ['file', false], ['file', true]] as const)('opens legacy %s results with hash=%s through actual workspace responses', async (input, withHash) => {
+    const run = input === 'file' ? fileRun() : cadRun();
+    if (withHash) run.cad_source = { ...run.cad_source!, solve_model_sha256: 'saved-model-sha' };
+    // Public retained file records omit solve_model_sha256; same-ingest
+    // correspondence still proves that this is the immutable saved model.
+    if (input === 'file') vi.stubGlobal('fetch', vi.fn(async () => json(fileWorkspace())));
+    selectJob(run);
+    await vi.waitFor(() => expect(useImportedModelStore.getState().phase).toBe('ready'));
+    expect(shownResult(currentModel(), compareSelection.getSnapshot(), [run]).job?.id).toBe(run.id);
   });
 
   it.each(['success', 'failure'] as const)('keeps B after rapid A → B selection and a late A %s', async (outcome) => {

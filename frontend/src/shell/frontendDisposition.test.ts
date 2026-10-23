@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
-import { latestSolvedParametricJob } from '../jobs/showJobModel';
+import { latestSolvedParametricJob } from '../model/currentModel';
 import { preferencesStore } from '../prefs/preferences';
 import { useDocumentStore } from '../stores/document';
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';

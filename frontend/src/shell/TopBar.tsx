@@ -1,13 +1,13 @@
+import { selectJob } from '../jobs/selectJob';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { jobsSocket } from '../api/jobsSocket';
-import { compareSelection } from '../api/results';
 import { CAD_CONTROL_DESCRIPTORS, cadControlIsAvailable, cadControlMatchesQuery } from '../design/cadControlRegistry';
 import { DesignFileMenu } from '../design/DesignFileMenu';
 import { CAD_PARAMETER_SECTION_DEFINITIONS, LEGACY_PARAMETER_REGISTRY, PARAMETER_REGISTRY, fieldIsVisible, PARAMETER_SECTION_DEFINITIONS, fieldAppliesToFamily, fieldMatchesQuery, parameterSectionIsVisible, type ParameterTab } from '../design/parameterRegistry';
 import { PARAMETRIC_CONTROL_DESCRIPTORS, parametricControlIsAvailable, parametricControlMatchesQuery } from '../design/parametricControlRegistry';
-import { restoreParametricWorkingDesign } from '../jobs/showJobModel';
+import { restoreParametricWorkingDesign } from '../model/currentModel';
 import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { waveguideDefinitionAppliesNow } from '../stores/waveguideLink';
@@ -418,7 +418,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       detail: job.has_results ? 'Show in Results' : `${job.status} · no results`,
       keywords: `${job.id} ${job.status}`,
       disabled: !job.has_results,
-      run: () => { compareSelection.setPrimary(job.id); workspaceNavigation.navigate('results'); },
+      run: () => { selectJob(job); workspaceNavigation.navigate('results'); },
     }));
     const commands: PaletteEntry[] = [
       { id: 'solve', kind: 'Commands', label: solve.label, detail: solve.title, disabled: solve.disabled, run: solve.solve },

@@ -1,3 +1,7 @@
+import { serializeDesign, useDesignStore, resetDesignStore } from '../stores/design';
+import { workspaceModeStore } from '../stores/workspaceMode';
+import { useCadReturnStore } from '../stores/cadReturn';
+import { importedMeshStore } from '../viewport/importedMeshStore';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -24,7 +28,7 @@ function job(id: string): JobItem {
     queued_at: '2026-08-08T00:00:00Z', started_at: null,
     completed_at: '2026-08-08T00:00:01Z', config_summary: {}, solve_options: {} as JobItem['solve_options'],
     has_results: true, has_mesh_artifact: false, error_message: null,
-    cancellation_requested: false, mesh_stats: null, script_snapshot: null,
+    cancellation_requested: false, mesh_stats: null, script_snapshot: { version: 1, design: serializeDesign(useDesignStore.getState().design) },
     design_revision: 1, polar_grid: {}, rating: null, exported_files: [],
     auto_export_completed_at: null, auto_export_formats: {}, raw_results_file: null,
     mesh_artifact_file: null, log_tail: [],
@@ -81,6 +85,7 @@ describe('atomic results display transitions', () => {
 
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    resetDesignStore(); workspaceModeStore.setMode('parametric'); importedMeshStore.clear();
     useRunExportStore.getState().resetForTests();
     resultViewStore.resetForTests();
     resultsCache.clear();
@@ -365,7 +370,10 @@ describe('atomic results display transitions', () => {
   it('exports available preferences with skipped reasons and the shared CAD menu in the Results toolbar', async () => {
     vi.spyOn(jobsSocket, 'patchMetadata').mockResolvedValue(undefined);
     preferencesStore.update({ exportFormats: ['csv', 'step'] });
-    publishJobs([{ ...job('old'), script_snapshot: null,
+    workspaceModeStore.setImportedInput('cad'); workspaceModeStore.setMode('cad');
+    useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_old' } as never });
+    importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_old' } as never);
+    publishJobs([{ ...job('old'), script_snapshot: null, cad_source: { ingest_id: 'wgi_old' } as JobItem['cad_source'],
       config_summary: { formula_type: 'cad-import', geometry_type: 'imported' },
       design_availability: { reopenable: false, source: 'cad-import', reason_code: 'imported_geometry',
         reason: 'Solved from a Fusion return; there are no WG parameters to edit.', note: null },

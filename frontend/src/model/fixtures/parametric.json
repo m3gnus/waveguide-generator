@@ -1,0 +1,38 @@
+{
+  "id": "legacy-parametric",
+  "run_number": 1,
+  "parent_job_id": null,
+  "status": "complete",
+  "progress": 1,
+  "stage": null,
+  "stage_message": null,
+  "created_at": "2026-09-01T00:00:00Z",
+  "queued_at": "2026-09-01T00:00:00Z",
+  "started_at": null,
+  "completed_at": null,
+  "config_summary": {},
+  "solve_options": {},
+  "has_results": true,
+  "has_mesh_artifact": true,
+  "label": "Legacy run",
+  "error_message": null,
+  "cancellation_requested": false,
+  "mesh_stats": null,
+  "script_snapshot": {
+    "version": 1,
+    "design": {
+      "formula": "OSSE",
+      "L": 120,
+      "a": 45,
+      "a0": 10,
+      "r0": 12.7,
+      "k": 1
+    }
+  },
+  "design_revision": 1,
+  "polar_grid": {},
+  "rating": null,
+  "exported_files": [],
+  "auto_export_formats": {},
+  "log_tail": []
+}
