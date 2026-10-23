@@ -1070,7 +1070,7 @@ def test_recovered_undo_revalidates_before_reversing_project_rename(tmp_path, ch
     if change in {"run", "metadata_only"}:
         _, added = run(manager, root, 2, key=KEY, name="Original", folder="Renamed")
         if change == "metadata_only":
-            # A new history row counts even when no files have been written yet.
+            # A post-start assignment without files follows the recovered undo.
             import shutil
             shutil.rmtree(added)
     else:
@@ -1083,6 +1083,10 @@ def test_recovered_undo_revalidates_before_reversing_project_rename(tmp_path, ch
             target.symlink_to(original, target_is_directory=True)
     manager.after_step = lambda _: None
     report = manager.recover()[0]
+    if change == "metadata_only":
+        assert report["phase"] == "undone", report["error"]
+        assert jobs.get_job_row("job2")["task_metadata"]["archive"]["folder"] == "Original"
+        return
     assert report["error"] and report["phase"] != "undone"
     assert target.exists() and not source.exists()
     assert jobs.get_job_row("job1")["task_metadata"]["archive"]["folder"] == "Renamed"
@@ -1135,8 +1139,13 @@ def test_submissions_return_during_rename_and_reconcile_at_publication(tmp_path,
             other_row = jobs.get_job_row(other_id)
             assert other_row["task_metadata"]["archive"]["folder"] == "Other"
             # Project-level exclusion also applies to a run's first write.
-            with pytest.raises(MoveRefused, match="Runs are being moved"):
-                identity.claim_run_write_path(jobs, jobs.get_job_row(job_ids[0]), lambda: root)
+            if recover:
+                # A failed attempt releases exclusion while awaiting recovery.
+                with archive_write(root / "Original"):
+                    pass
+            else:
+                with pytest.raises(MoveRefused, match="Runs are being moved"):
+                    identity.claim_run_write_path(jobs, jobs.get_job_row(job_ids[0]), lambda: root)
             assert identity.claim_run_write_path(jobs, other_row, lambda: root).parent == root / "Other"
             with archive_write(root / "Other"):
                 pass
@@ -1332,3 +1341,193 @@ def test_cleanup_reports_unknown_file_added_while_unlinking_owned_pointer(tmp_pa
     assert str(foreign) in report["error"]
     assert any(item["path"] == str(foreign) for item in report["leftovers"])
     assert foreign.read_bytes() == b"new unowned contents"
+
+
+def submit_move_job(manager, cad, job_id, *, status="queued", key=KEY):
+    """Use the admission lock and allocator, without starting a scheduler."""
+    config = {"design_uid": "wgu_test", "design_name": "Original"}
+    metadata = {"imported_geometry": {"archive_stem": "Original"}}
+    if key.startswith("lineage:"):
+        metadata["imported_geometry"]["anchor_lineage_id"] = key.removeprefix("lineage:")
+    with moves_module.submission_location(cad, config, metadata):
+        manager.jobs.create_job({"id": job_id, "label": job_id, "status": status,
+                                 "created_at": "then", "updated_at": "then", "queued_at": "then",
+                                 "config_json": config, "config_summary_json": {}, "task_metadata": metadata})
+
+
+@pytest.mark.parametrize("kind,undo", [
+    (kind, undo) for kind in ("move", "rename", "logical_rename", "move_and_logical_rename", "gather_rename")
+    for undo in (False, True)
+] + [("copy_move", False)])
+def test_submission_assignment_invariant_at_every_crash_boundary(tmp_path, monkeypatch, kind, undo):
+    # Enumerate the actual durable/physical hooks, including reference and pointer
+    # publication. Admit jobs before the journal, at process death, while stopped,
+    # and at a second crash during recovery. Every assignment must converge.
+    key = "lineage:wgl_test" if kind == "gather_rename" else KEY
+    rename = kind not in {"move", "copy_move"}
+    if kind == "copy_move":
+        cross_device(monkeypatch, [tmp_path / directory / "WG" / "runs" / "Earlier"
+                                   for directory in ["probe", *map(str, range(200))]])
+    def fixture(directory):
+        manager, root, jobs, cad = setup(directory, key=key, name="Original")
+        if kind != "logical_rename":
+            _, source = run(manager, root, key=key, name="Original", folder="Original" if kind in {"rename", "gather_rename"} else "Earlier")
+            if kind == "gather_rename":
+                document = json.loads((source / "run.json").read_text())
+                document["design"]["lineageId"] = "wgl_test"
+                (source / "run.json").write_text(json.dumps(document))
+                (source / "old.f3d").write_bytes(b"fusion")
+                (source / "old.cad.json").write_bytes(b'{"returnStateHash":"sha256:state"}\r\n')
+                captures = source.parent / "cad"
+                captures.mkdir()
+                (captures / "existing.f3d").write_bytes(b"fusion")
+                (captures / "existing.cad.json").write_bytes(b'{"returnStateHash":"sha256:other"}\r\n')
+                manager.verify_document = lambda lineage, digest, doc: doc.read_bytes() == b"fusion"
+            if kind in {"rename", "gather_rename"}:
+                identity.write_project_record(root, jobs.get_job_row("job1"), cad)
+        submit_move_job(manager, cad, "before", status="cancelled", key=key)
+        plan = move_plan(manager, name="Renamed" if rename else "Original", rename=rename, key=key)
+        if kind == "logical_rename":
+            assert not plan["operations"] and not (root / "Original").exists()
+            assert plan["folder_change"]["after"] == str(root / "Renamed")
+        if undo:
+            assert manager.execute(plan["id"], confirmed=True)["phase"] == "done"
+        return manager, root, jobs, cad, plan
+
+    probe, _, _, _, plan = fixture(tmp_path / "probe")
+    phases = []
+    probe.after_step = phases.append
+    assert (probe.undo(plan["id"]) if undo else probe.execute(plan["id"], confirmed=True))["phase"] == ("undone" if undo else "done")
+    for index, boundary in enumerate(phases):
+        moves_module._BLOCKED.clear()
+        manager, root, jobs, cad, plan = fixture(tmp_path / str(index))
+        count = 0
+        def crash(phase):
+            nonlocal count
+            count += 1
+            if count == index + 1:
+                submit_move_job(manager, cad, "boundary", key=key)
+                raise Crash(phase)
+        manager.after_step = crash
+        with pytest.raises(Crash):
+            (manager.undo(plan["id"]) if undo else manager.execute(plan["id"], confirmed=True))
+        submit_move_job(manager, cad, "stopped", key=key)
+        if manager.read(plan["id"])["phase"] not in {"done", "undone"}:
+            def crash_replay(phase):
+                if phase == "reference_intent":
+                    submit_move_job(manager, cad, "replay", key=key)
+                    raise Crash(phase)
+            manager.after_step = crash_replay
+            with pytest.raises(Crash):
+                manager.recover()
+        manager.after_step = lambda _: None
+        manager.recover()
+        final = manager.read(plan["id"])
+        assert final["phase"] == ("undone" if undo else "done"), (index, boundary, final["error"])
+        folder = "Original" if undo or not rename else "Renamed"
+        assert identity.registered_folder(cad, key) == folder, (index, boundary)
+        if kind == "gather_rename":
+            assert identity.registered_folder(cad, KEY) == folder
+            assert cad.get_lineage_cad_names("wgl_test")["archive_stem"] == folder
+        for job_id in ("before", "boundary", "stopped", "replay"):
+            row = jobs.get_job_row(job_id)
+            if row is None:
+                continue
+            metadata = row["task_metadata"]
+            assert metadata["archive"]["folder"] == folder, (boundary, job_id, metadata)
+            assert metadata["imported_geometry"]["archive_stem"] == folder
+            assert identity.claim_run_write_path(jobs, row, lambda: root).parent == root / folder
+        assert manager.recover() == []
+
+
+@pytest.mark.parametrize("busy", ["running", "archiving", "auto_exporting"])
+def test_undo_recovery_releases_busy_submission_and_retries_after_it_finishes(tmp_path, busy):
+    manager, root, jobs, cad = setup(tmp_path, name="Original")
+    run(manager, root, key=KEY, name="Original", folder="Original")
+    identity.write_project_record(root, jobs.get_job_row("job1"), cad)
+    plan = manager.preview(KEY, "Renamed", rename=True)
+    assert manager.execute(plan["id"], confirmed=True)["phase"] == "done"
+    crash_at(manager, "undo_prepared")
+    with pytest.raises(Crash):
+        manager.undo(plan["id"])
+    submit_move_job(manager, cad, "late", status="running" if busy == "running" else "queued")
+    if busy != "running":
+        jobs.mutate_job_metadata("late", {busy: True})
+    manager.after_step = lambda _: None
+    report = manager.recover()[0]
+    assert "Move needs attention" in report["error"]
+    assert "Wait for it to finish" in report["error"]
+    for folder in ("Original", "Renamed"):
+        with archive_write(root / folder):
+            pass
+    jobs.update_job("late", status="cancelled")
+    if busy != "running":
+        jobs.mutate_job_metadata("late", {busy: False})
+    report = manager.recover()[0]
+    assert report["phase"] == "undone", report["error"]
+    assert jobs.get_job_row("late")["task_metadata"]["archive"]["folder"] == "Original"
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_pending_undo_reconciles_first_submission_including_legacy_journal(tmp_path, legacy):
+    manager, root, jobs, cad = setup(tmp_path, name="Original")
+    run(manager, root, key=KEY, name="Original", folder="Original")
+    identity.write_project_record(root, jobs.get_job_row("job1"), cad)
+    plan = manager.preview(KEY, "Renamed", rename=True)
+    assert manager.execute(plan["id"], confirmed=True)["phase"] == "done"
+    crash_at(manager, "undo_prepared")
+    with pytest.raises(Crash):
+        manager.undo(plan["id"])
+    if legacy:
+        record = manager.read(plan["id"])
+        for key in ("undo_jobs", "journal_jobs", "folder_change"):
+            record.pop(key)
+        moves_module._save(manager._journal_path(plan["id"]), record)
+    submit_move_job(manager, cad, "late")
+    manager.after_step = lambda _: None
+    report = manager.recover()[0]
+    assert report["phase"] == "undone", report["error"]
+    assert jobs.get_job_row("late")["task_metadata"]["archive"]["folder"] == "Original"
+    assert identity.registered_folder(cad, KEY) == "Original"
+
+
+@pytest.mark.parametrize("recover", [False, True])
+def test_logical_rename_reconciles_first_submission_without_physical_operations(tmp_path, recover):
+    manager, root, jobs, cad = setup(tmp_path, name="Original")
+    plan = manager.preview(KEY, "Renamed", rename=True)
+    assert not plan["operations"] and not plan["references"]
+    def submit(phase):
+        if phase == "prepared":
+            submit_move_job(manager, cad, "late")
+            if recover:
+                raise Crash(phase)
+    manager.after_step = submit
+    if recover:
+        with pytest.raises(Crash):
+            manager.execute(plan["id"], confirmed=True)
+        manager.after_step = lambda _: None
+        result = manager.recover()[0]
+    else:
+        result = manager.execute(plan["id"], confirmed=True)
+    assert result["phase"] == "done", result["error"]
+    metadata = jobs.get_job_row("late")["task_metadata"]
+    assert metadata["archive"]["folder"] == metadata["imported_geometry"]["archive_stem"] == "Renamed"
+    assert identity.registered_folder(cad, KEY) == "Renamed"
+    assert not (root / "Original").exists()
+
+
+def test_recovery_keeps_folder_created_during_logical_rename_and_releases_writers(tmp_path):
+    manager, root, _, _ = setup(tmp_path, name="Original")
+    plan = manager.preview(KEY, "Renamed", rename=True)
+    crash_at(manager, "prepared")
+    with pytest.raises(Crash):
+        manager.execute(plan["id"], confirmed=True)
+    original = root / "Original"
+    original.mkdir()
+    (original / "foreign.txt").write_bytes(b"keep")
+    manager.after_step = lambda _: None
+    report = manager.recover()[0]
+    assert "Move needs attention" in report["error"]
+    assert (original / "foreign.txt").read_bytes() == b"keep"
+    with archive_write(original), archive_write(root / "Renamed"):
+        pass

@@ -277,6 +277,27 @@ class RunMoves:
             if busy and any(_overlap(self._location(row, root), path) for path in paths):
                 raise MoveRefused("A run in these folders is queued, solving, archiving or exporting. Wait for it to finish.")
 
+    def _busy_publication(self, record: dict, rows: list[dict], *, undo: bool = False) -> None:
+        known = {ref["job_id"] for ref in record["references"] if not ref.get("reconciled")} | set(record.get("destination_jobs", []))
+        original = set(record.get("undo_jobs" if undo else "journal_jobs", known))
+        if undo and not record.get("undoing"):
+            original = {row["id"] for row in rows}
+        keys = record.get("folder_change", {}).get("keys", [record["key"]])
+        root = Path(record["root"])
+        paths = list(_BLOCKED[record["id"]])
+        busy_rows = []
+        for row in rows:
+            later = row["id"] not in original
+            metadata = row.get("task_metadata") or {}
+            # Later queued jobs have no writer; their assignment can follow the
+            # move. Active solve/archive/export work must finish before replay.
+            if later and row.get("status") == "queued" and not (metadata.get("archiving") or metadata.get("auto_exporting")):
+                continue
+            busy_rows.append(row)
+            if later and identity.job_archive_location(row, self.cad_source(row)).key in keys:
+                paths.append(self._location(row, root).parent)
+        self._busy(busy_rows, paths, root)
+
     def _candidate(self, path: Path, row: dict, root: Path) -> bool:
         if not re.fullmatch(r"\d+_.+", path.name) or path != self._location(row, root):
             return False
@@ -424,6 +445,12 @@ class RunMoves:
                       "destination_jobs": [row["id"] for row in rows if self._location(row, root).parent in {folder, target}],
                       "operations": operations, "candidates": candidates, "selected": [row["id"] for row, _, _ in chosen],
                       "gather": gather, "rename": rename, "error": None, "references": [], "cleanup": []}
+            record["journal_jobs"] = [row["id"] for row in rows]
+            # Assignment publication is independent of filesystem operations: an
+            # allocated project can be renamed before its first archive exists.
+            record["folder_change"] = {"before": str(folder), "after": str(target), "keys": sorted({key, *(
+                str(row[0]) for row in self.cad._connect().execute(
+                    "SELECT owner_key FROM archive_folders WHERE folder=? COLLATE NOCASE", (folder_name,)))})}
             self._references(record, rows)
             moved_sources = {Path(op["src"]) for op in operations if op["kind"] == "run"}
             record["old_folders"] = []
@@ -567,6 +594,17 @@ class RunMoves:
         for row in rows:
             before = self._location(row, Path(record["root"]))
             after = before
+            location = identity.job_archive_location(row, self.cad_source(row))
+            change = record.get("folder_change", {"before": record["folder"], "after": record["target"], "keys": [record["key"]]})
+            source_folder = Path(change["after"] if undo else change["before"])
+            destination_folder = Path(change["before"] if undo else change["after"])
+            original_jobs = record.get("undo_jobs" if undo else "journal_jobs", {
+                ref["job_id"] for ref in record["references"]} | set(record.get("destination_jobs", [])))
+            later = row["id"] not in original_jobs
+            if location.key in change["keys"] and (before.parent == source_folder or later):
+                if later and before.parent != destination_folder and before.exists():
+                    raise MoveRefused("A later run has written an archive outside the final folder. Originals were kept.")
+                after = destination_folder / location.run
             for op in record["operations"]:
                 if op["kind"] in {"rename", "run"}:
                     src = Path(op["dst"] if undo else op["src"])
@@ -582,6 +620,7 @@ class RunMoves:
                     if imported:
                         imported["archive_stem"] = before.parent.name
                 record["references"].append({"job_id": row["id"], "before": str(before), "after": str(after),
+                                             "assignment_only": not self._location(row, Path(record["root"])).exists(),
                                              "archive": archive,
                                              "exported_files": (row.get("task_metadata") or {}).get("exported_files", []),
                                              "source_key": identity.job_archive_location(row, self.cad_source(row)).key,
@@ -619,7 +658,7 @@ class RunMoves:
                         self._owned_cad_only(current_folder, record["key"])
                 for ref in record["references"]:
                     fresh = self.jobs.get_job_row(ref["job_id"])
-                    if fresh and not (fresh.get("task_metadata") or {}).get("archived_path"):
+                    if fresh and not ref.get("assignment_only") and not (fresh.get("task_metadata") or {}).get("archived_path"):
                         fresh = {**fresh, "_move_location": ref["before"]}
                         if Path(ref["before"]).parent.parent not in self._roots(rows, Path(record["root"])) or not self._candidate(Path(ref["before"]), fresh, Path(record["root"])):
                             raise MoveRefused("An earlier run folder is no longer available. Preview it again.")
@@ -632,17 +671,26 @@ class RunMoves:
                 self._step(record, "prepared")
                 self._resume(record)
             except Exception as exc:
-                record["error"] = str(exc)
                 if record["phase"] == "planned":
                     record["phase"] = "refused"
-                    with _GATE:
-                        _BLOCKED.pop(record["id"], None)
-                self._step(record, record["phase"])
+                self._attention(record, exc)
             return record
+
+    def _attention(self, record: dict, exc: Exception) -> None:
+        # Keep the replayable phase, but never strand archive writers behind a
+        # failed attempt. A retry must acquire exclusion and reverify everything.
+        record["error"] = "Move needs attention. " + str(exc)
+        try:
+            _save(self._journal_path(record["id"]), record)
+        finally:
+            with _GATE:
+                _BLOCKED.pop(record["id"], None)
 
     def _resume(self, record: dict) -> None:
         # Publication is replayable from physical evidence; state is always persisted
         # BEFORE mutation. A crash between rename and state update is unambiguous.
+        if record["folder"] != record["target"] and not any(op["kind"] == "rename" for op in record["operations"]) and Path(record["folder"]).exists():
+            raise MoveRefused("The original folder appeared after preview. Its contents were kept; preview the move again.")
         for index, op in enumerate(record["operations"]):
             if op["state"] in {"published", "removed"}:
                 continue
@@ -848,8 +896,10 @@ class RunMoves:
 
     def _commit_references(self, record: dict, *, undo: bool = False) -> None:
         with self.cad._lock:
+            rows = self._rows()
+            self._busy_publication(record, rows, undo=undo)
             known = {ref["job_id"] for ref in record["references"]}
-            self._references(record, [row for row in self._rows() if row["id"] not in known], undo=undo)
+            self._references(record, [row for row in rows if row["id"] not in known], undo=undo)
             for ref in record["references"]:
                 if ref["job_id"] not in known:
                     ref["reconciled"] = True
@@ -859,7 +909,8 @@ class RunMoves:
 
     def _publish_references(self, record: dict, *, undo: bool = False) -> None:
         # Separate SQLite owners: journal replays both transactions idempotently.
-        self._verify_pointer(record, Path(record["folder"] if undo else record["target"]) / "design.json", undo=undo)
+        pointer_folder = record["folder"] if undo and any(op["kind"] == "rename" for op in record["operations"]) else record["target"]
+        self._verify_pointer(record, Path(pointer_folder) / "design.json", undo=undo)
         events = []
         with self.jobs._lock, self.jobs._transaction() as conn:
             for ref in record["references"]:
@@ -906,9 +957,17 @@ class RunMoves:
         new = Path(record["folder"] if undo else record["target"]).name
         with self.cad._transaction() as conn:
             # Aliases move together; mirrors are compatibility readers in older WG.
-            conn.execute("UPDATE archive_folders SET folder=? WHERE folder=? COLLATE NOCASE", (new, old))
-            conn.execute("UPDATE lineage_cad_names SET archive_stem=? WHERE archive_stem=? COLLATE NOCASE", (new, old))
-            conn.execute("UPDATE imported_models SET archive_stem=? WHERE archive_stem=? COLLATE NOCASE", (new, old))
+            # Allocation can repair a temporarily pointerless folder while the
+            # move is stopped. Restore its journaled logical assignment as well.
+            folders = {old}
+            for key in record.get("folder_change", {}).get("keys", [record["key"]]):
+                previous = conn.execute("SELECT folder FROM archive_folders WHERE owner_key=?", (key,)).fetchone()
+                if previous:
+                    folders.add(previous[0])
+            for previous in sorted(folders):
+                conn.execute("UPDATE archive_folders SET folder=? WHERE folder=? COLLATE NOCASE", (new, previous))
+                conn.execute("UPDATE lineage_cad_names SET archive_stem=? WHERE archive_stem=? COLLATE NOCASE", (new, previous))
+                conn.execute("UPDATE imported_models SET archive_stem=? WHERE archive_stem=? COLLATE NOCASE", (new, previous))
         self.after_step("registry_committed")
 
     def _publish_pointers(self, record: dict, *, undo: bool = False) -> None:
@@ -981,6 +1040,8 @@ class RunMoves:
             for path in sorted(path for path in self.directory.iterdir() if path.suffix == ".json"):
                 record = json.loads(path.read_text(encoding="utf-8"))
                 if record["phase"] in {"planned", "done", "undone", "refused"}:
+                    with _GATE:
+                        _BLOCKED.pop(record["id"], None)
                     continue
                 try:
                     self._block(record)
@@ -988,15 +1049,10 @@ class RunMoves:
                         self._undo(record)
                     else:
                         with self.cad._lock:
-                            # Later submissions are reconciled at publication. Their
-                            # writes are excluded, so queued jobs cannot stall recovery.
-                            known = {ref["job_id"] for ref in record["references"] if not ref.get("reconciled")} | set(record.get("destination_jobs", []))
-                            rows = [row for row in self._rows() if row["id"] in known]
-                            self._busy(rows, _BLOCKED[record["id"]], Path(record["root"]))
+                            self._busy_publication(record, self._rows())
                         self._resume(record)
                 except Exception as exc:
-                    record["error"] = str(exc)
-                    _save(path, record)
+                    self._attention(record, exc)
                 reports.append(record)
         if reports:
             self.recovered_reports = reports
@@ -1013,15 +1069,30 @@ class RunMoves:
                 for op in record["operations"]:
                     if op["kind"] in {"run", "rename"} and Path(op["src"]).exists():
                         raise MoveRefused("An original location is occupied. Undo would replace it.")
-                record["undoing"] = True
-                self._step(record, "undo_prepared")
+                with self.cad._lock:
+                    # Snapshot IDs under the submission lock; timestamps from old
+                    # job databases do not provide a reliable chronology. Repeat
+                    # only the job checks here, keeping tree reads outside it.
+                    record["undo_jobs"] = [row["id"] for row in self._verify_undo_jobs(record)]
+                    record["undoing"] = True
+                    self._step(record, "undo_prepared")
                 self._undo(record)
-            except Exception:
-                if not record.get("undoing"):
-                    with _GATE:
-                        _BLOCKED.pop(record["id"], None)
+            except Exception as exc:
+                self._attention(record, exc)
                 raise
             return record
+
+    def _verify_undo_jobs(self, record: dict) -> list[dict]:
+        with self.cad._lock:
+            rows = self._rows()
+            self._busy_publication(record, rows, undo=True)
+            expected_jobs = {ref["job_id"] for ref in record["references"]} | set(record.get("destination_jobs", []))
+            for row in rows:
+                if record.get("undoing") and row["id"] not in record.get("undo_jobs", expected_jobs):
+                    continue  # Admitted after undo began; reconcile at publication.
+                if row["id"] not in expected_jobs and self._location(row, Path(record["root"])).parent in {Path(record["target"]), Path(record["folder"])}:
+                    raise MoveRefused("Another run has used this folder since the move.")
+            return rows
 
     def _verify_undo(self, record: dict) -> None:
         """Validate the final tree plus only the journal's landed undo mutations.
@@ -1029,13 +1100,7 @@ class RunMoves:
         Build one current manifest so startup and interactive undo use the same
         checks, including a rename that landed before its completion was saved.
         """
-        with self.cad._lock:
-            rows = self._rows()
-            self._busy(rows, _BLOCKED[record["id"]], Path(record["root"]))
-        expected_jobs = {ref["job_id"] for ref in record["references"]} | set(record.get("destination_jobs", []))
-        for row in rows:
-            if row["id"] not in expected_jobs and self._location(row, Path(record["root"])).parent in {Path(record["target"]), Path(record["folder"])}:
-                raise MoveRefused("Another run has used this folder since the move.")
+        self._verify_undo_jobs(record)
         self._verify_cleanup_paths(record)
         files, directories, roots = {}, set(), set()
         for value, manifest in record["final"].items():
