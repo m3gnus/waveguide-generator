@@ -1506,6 +1506,53 @@ def _face_components(gmsh: Any, faces: Iterable[int]) -> int:
     return count
 
 
+def _restricted_surface_size(gmsh: Any, surfaces: Sequence[int], size_mm: float) -> int:
+    """Constant target on these surfaces; infinity elsewhere for the Min field."""
+
+    constant = gmsh.model.mesh.field.add("MathEval")
+    gmsh.model.mesh.field.setString(constant, "F", str(size_mm))
+    restricted = gmsh.model.mesh.field.add("Restrict")
+    gmsh.model.mesh.field.setNumber(restricted, "InField", constant)
+    gmsh.model.mesh.field.setNumbers(restricted, "SurfacesList", surfaces)
+    return restricted
+
+
+def _selector_mechanisms(
+    selectors: Mapping[str, Any],
+    *,
+    styled: Mapping[str, list[int]],
+    named: Mapping[str, list[int]],
+    face_order: Sequence[int],
+    ordered_surfaces: Sequence[int],
+    requested_appearance_labels: Sequence[str],
+    requested_shell_names: Sequence[str],
+) -> dict[str, set[int]]:
+    """One STEP selector lookup for sources and rigid sizing groups."""
+
+    mechanisms: dict[str, set[int]] = {}
+    if selectors.get("appearance_labels"):
+        mechanisms["appearance_labels"] = _lookup_faces(
+            selectors["appearance_labels"],
+            styled,
+            requested_labels=requested_appearance_labels,
+        )
+    if selectors.get("shell_names"):
+        mechanisms["shell_names"] = _lookup_faces(
+            selectors["shell_names"],
+            named,
+            requested_labels=requested_shell_names,
+        )
+    if selectors.get("advanced_face_indices"):
+        mechanisms["advanced_face_indices"] = (
+            _advanced_face_identifier_surfaces(
+                selectors["advanced_face_indices"],
+                face_order,
+                ordered_surfaces,
+            )
+        )
+    return mechanisms
+
+
 def _lookup_faces(
     labels: Iterable[str],
     groups: Mapping[str, list[int]],
@@ -2689,7 +2736,15 @@ def build_imported_mesh(
     options: Mapping[str, Any] | None = None,
     include_viewport_mesh: bool = True,
 ) -> dict[str, Any]:
-    """Build, tag, post-process and inspect one validated CAD-return STEP."""
+    """Build, tag, post-process and inspect one validated CAD-return STEP.
+
+    Internal ``options["surface_groups"]`` is an optional list of
+    ``{group_id, name, size_mm, selectors, observed}``. Selectors and observed
+    use the user-source shape (appearance labels, shell names or STEP face
+    indices; face count and areas). G1 supplies this from the validated snapshot.
+    Membership is resolved before cutting and inherited by every child face.
+    Absent/empty groups retain the legacy field graph and mesh bytes.
+    """
 
     try:
         import gmsh
@@ -2735,10 +2790,40 @@ def build_imported_mesh(
     normalized_sizes = validate_imported_sizes(source_list, sizes, skipped_source_ids=skipped)
     allocation = allocate_imported_tags(source_list, skipped_source_ids=skipped)
     options = dict(options or {})
+    surface_groups = options.get("surface_groups")
+    if surface_groups is None:
+        surface_groups = []
+    if not isinstance(surface_groups, list):
+        raise ImportedMeshError("surface groups must be a list")
+    surface_names: dict[str, str] = {}
+    for group in surface_groups:
+        if not isinstance(group, Mapping):
+            raise ImportedMeshError("surface group must be an object")
+        group_id = group.get("group_id")
+        size = group.get("size_mm")
+        if not isinstance(group_id, str) or not group_id or group_id in surface_names:
+            raise ImportedMeshError("surface group ids must be nonempty and unique")
+        internal_name = f"surface-group:{group_id}"
+        if internal_name in declared:
+            raise ImportedMeshError("surface group identity conflicts with a source")
+        if type(size) not in (int, float) or not math.isfinite(size) or size <= 0:
+            raise ImportedMeshError("surface group size must be finite and positive")
+        if not isinstance(group.get("selectors"), Mapping) or not isinstance(group.get("observed"), Mapping):
+            raise ImportedMeshError("surface group needs selectors and observed face counts and areas")
+        surface_names[group_id] = internal_name
+    if surface_groups and options.get("rigid_face_sizes_mm"):
+        raise ImportedMeshError("surface groups cannot be combined with native rigid face sizes")
     tessellation = imported_tessellation_settings(
         normalized_sizes,
         deviation_mm=_validated_surface_deviation(options.get("surface_deviation_mm")),
     )
+    if surface_groups:
+        targets = [normalized_sizes["rigid_size_mm"],
+                   *(min(size, normalized_sizes["rigid_size_mm"])
+                     for size in normalized_sizes["source_size_mm"].values()),
+                   *(float(group["size_mm"]) for group in surface_groups)]
+        tessellation["mesh_size_max_mm"] = max(targets)
+        tessellation["mesh_size_min_mm"] = min(targets) / IMPORTED_CURVATURE_REFINEMENT_LIMIT
     symmetry_mode = str(options.get("symmetry_mode") or "auto")
     if symmetry_mode not in {"auto", "full"}:
         raise ImportedMeshError("symmetry: symmetryMode must be 'auto' or 'full'")
@@ -2959,7 +3044,7 @@ def build_imported_mesh(
             addressed_faces = sorted(
                 {
                     int(identifier)
-                    for source in source_list
+                    for source in [*source_list, *surface_groups]
                     for identifier in source["selectors"].get("advanced_face_indices", ())
                 }
             )
@@ -3081,12 +3166,12 @@ def build_imported_mesh(
         areas = {surface: float(gmsh.model.occ.getMass(2, surface)) for surface in surfaces}
         requested_appearance_labels = [
             label
-            for source in source_list
+            for source in [*source_list, *surface_groups]
             for label in source["selectors"].get("appearance_labels", ())
         ]
         requested_shell_names = [
             label
-            for source in source_list
+            for source in [*source_list, *surface_groups]
             for label in source["selectors"].get("shell_names", ())
         ]
         for source in source_list:
@@ -3252,27 +3337,12 @@ def build_imported_mesh(
                             f"{candidate['normal_angle_deg']:.9g} deg"
                         )
             else:
-                mechanisms: dict[str, set[int]] = {}
-                if selectors.get("appearance_labels"):
-                    mechanisms["appearance_labels"] = _lookup_faces(
-                        selectors["appearance_labels"],
-                        styled,
-                        requested_labels=requested_appearance_labels,
-                    )
-                if selectors.get("shell_names"):
-                    mechanisms["shell_names"] = _lookup_faces(
-                        selectors["shell_names"],
-                        named,
-                        requested_labels=requested_shell_names,
-                    )
-                if selectors.get("advanced_face_indices"):
-                    mechanisms["advanced_face_indices"] = (
-                        _advanced_face_identifier_surfaces(
-                            selectors["advanced_face_indices"],
-                            face_order,
-                            ordered_surfaces,
-                        )
-                    )
+                mechanisms = _selector_mechanisms(
+                    selectors, styled=styled, named=named, face_order=face_order,
+                    ordered_surfaces=ordered_surfaces,
+                    requested_appearance_labels=requested_appearance_labels,
+                    requested_shell_names=requested_shell_names,
+                )
                 union = set().union(*mechanisms.values()) if mechanisms else set()
                 outcome = resolve_user_source(
                     source,
@@ -3340,6 +3410,43 @@ def build_imported_mesh(
                     # The display role (HF/MF/etc.) is intentionally too broad.
                     OccSurfaceRole(source_id),
                 )
+            )
+
+        surface_resolutions: dict[str, dict[str, Any]] = {}
+        grouped_faces: set[int] = set()
+        for group in surface_groups:
+            group_id = group["group_id"]
+            mechanisms = _selector_mechanisms(
+                group["selectors"], styled=styled, named=named, face_order=face_order,
+                ordered_surfaces=ordered_surfaces,
+                requested_appearance_labels=requested_appearance_labels,
+                requested_shell_names=requested_shell_names,
+            )
+            union = set().union(*mechanisms.values()) if mechanisms else set()
+            components = _face_components(gmsh, union)
+            # Unlike sources, a wall group can contain any number of disconnected
+            # patches. Selector agreement, face count and area gates are shared.
+            resolution = resolve_user_source(
+                {**group, "id": surface_names[group_id], "required": True,
+                 "expected_connected_components": components},
+                mechanisms, face_areas_mm2=areas, connected_components=components,
+                vocabulary={"shell_names": named, "appearance_labels": styled},
+            )
+            selected = set(resolution["surfaces"])
+            if selected & claimed:
+                raise RoleResolutionError(f"surface group {group_id!r} overlaps a source")
+            if selected & grouped_faces:
+                raise RoleResolutionError("a face belongs to more than one surface group")
+            grouped_faces.update(selected)
+            surface_resolutions[group_id] = resolution
+            groups.append(OccSurfaceGroup(
+                surface_names[group_id], OccSurfaceSelector(sorted(selected)),
+                OccSurfaceRole(surface_names[group_id]),
+            ))
+        if surface_groups:
+            groups[0] = OccSurfaceGroup(
+                "rigid", OccSurfaceSelector(sorted(set(rigid) - grouped_faces)),
+                OccSurfaceRole("rigid"),
             )
 
         source_bboxes = {
@@ -3464,8 +3571,20 @@ def build_imported_mesh(
                 predicted_retained_fraction=predicted_fraction,
             )
 
+        for group in surface_groups:
+            group_id = group["group_id"]
+            selected = cut_groups[surface_names[group_id]]
+            surface_resolutions[group_id].update({
+                "size_mm": float(group["size_mm"]), "retained_surfaces": selected,
+                "retained_area_mm2": sum(float(gmsh.model.occ.getMass(2, face)) for face in selected),
+            })
+
         gmsh.model.removePhysicalGroups()
         rigid_surfaces = cut_groups.get("rigid", [])
+        if surface_groups:
+            rigid_surfaces = sorted(set(rigid_surfaces).union(
+                *(cut_groups[surface_names[group["group_id"]]] for group in surface_groups)
+            ))
         if rigid_surfaces:
             gmsh.model.addPhysicalGroup(2, rigid_surfaces, RIGID_TAG)
             gmsh.model.setPhysicalName(2, RIGID_TAG, "wg-import-v1|rigid")
@@ -3492,10 +3611,34 @@ def build_imported_mesh(
                 )
             )
 
-        all_points = [tag for dim, tag in gmsh.model.getEntities(0) if dim == 0]
-        if all_points:
-            gmsh.model.mesh.setSize([(0, point) for point in all_points], normalized_sizes["rigid_size_mm"])
         fields: list[int] = []
+        surface_targets: dict[int, float] = {}
+        if surface_groups:
+            surface_specs = [StepFaceGroup(
+                "rigid", StepLabelSelector("rigid"), OccSurfaceRole("rigid"),
+                tag=RIGID_TAG, resolution_mm=normalized_sizes["rigid_size_mm"],
+            )]
+            surface_specs.extend(StepFaceGroup(
+                surface_names[group["group_id"]], StepLabelSelector(surface_names[group["group_id"]]),
+                OccSurfaceRole("rigid"), tag=RIGID_TAG, resolution_mm=float(group["size_mm"]),
+            ) for group in surface_groups)
+            for spec in [*surface_specs, *step_specs]:
+                selected = cut_groups[spec.name]
+                target = (min(spec.resolution_mm, normalized_sizes["rigid_size_mm"])
+                          if spec.tag != RIGID_TAG else spec.resolution_mm)
+                fields.append(_restricted_surface_size(gmsh, selected, target))
+                surface_targets.update(dict.fromkeys(selected, target))
+            point_sizes: dict[int, float] = {}
+            for surface, target in surface_targets.items():
+                for dim, point in gmsh.model.getBoundary([(2, surface)], recursive=True, oriented=False):
+                    if dim == 0:
+                        point_sizes[point] = min(point_sizes.get(point, target), target)
+            for point, target in point_sizes.items():
+                gmsh.model.mesh.setSize([(0, point)], target)
+        else:
+            all_points = [tag for dim, tag in gmsh.model.getEntities(0) if dim == 0]
+            if all_points:
+                gmsh.model.mesh.setSize([(0, point) for point in all_points], normalized_sizes["rigid_size_mm"])
         # Exact STEP selectors can refine rigid structural faces without
         # promoting them to source roles or refining every planar box face.
         # This internal native adapter option is limited to the full domain;
@@ -3510,12 +3653,9 @@ def build_imported_mesh(
                     or face_to_surface[identifier] not in rigid_surfaces
                     or type(size) not in (int, float) or not math.isfinite(size) or size <= 0):
                 raise ImportedMeshError("rigid face size must address a current rigid STEP face with a positive size")
-            constant = gmsh.model.mesh.field.add("MathEval")
-            gmsh.model.mesh.field.setString(constant, "F", str(min(size, normalized_sizes["rigid_size_mm"])))
-            restricted = gmsh.model.mesh.field.add("Restrict")
-            gmsh.model.mesh.field.setNumber(restricted, "InField", constant)
-            gmsh.model.mesh.field.setNumbers(restricted, "SurfacesList", [face_to_surface[identifier]])
-            fields.append(restricted)
+            fields.append(_restricted_surface_size(
+                gmsh, [face_to_surface[identifier]], min(size, normalized_sizes["rigid_size_mm"])
+            ))
         for spec in step_specs:
             surfaces_for_source = cut_groups[spec.name]
             if options.get("native_source_size_limits", False):
@@ -3524,18 +3664,19 @@ def build_imported_mesh(
                 # Distance fields sample curved surfaces and can report nonzero
                 # distance on the very surface they refine. An exact Restrict
                 # field binds the native hard limit to its resolved source faces.
-                constant = gmsh.model.mesh.field.add("MathEval")
-                gmsh.model.mesh.field.setString(constant, "F", str(spec.resolution_mm))
-                restricted = gmsh.model.mesh.field.add("Restrict")
-                gmsh.model.mesh.field.setNumber(restricted, "InField", constant)
-                gmsh.model.mesh.field.setNumbers(restricted, "SurfacesList", surfaces_for_source)
-                fields.append(restricted)
+                fields.append(_restricted_surface_size(gmsh, surfaces_for_source, spec.resolution_mm))
             distance = gmsh.model.mesh.field.add("Distance")
             gmsh.model.mesh.field.setNumbers(distance, "SurfacesList", surfaces_for_source)
             threshold = gmsh.model.mesh.field.add("Threshold")
             gmsh.model.mesh.field.setNumber(threshold, "InField", distance)
-            gmsh.model.mesh.field.setNumber(threshold, "SizeMin", spec.resolution_mm)
-            gmsh.model.mesh.field.setNumber(threshold, "SizeMax", normalized_sizes["rigid_size_mm"])
+            gmsh.model.mesh.field.setNumber(
+                threshold, "SizeMin", min(spec.resolution_mm, normalized_sizes["rigid_size_mm"])
+                if surface_groups else spec.resolution_mm,
+            )
+            gmsh.model.mesh.field.setNumber(
+                threshold, "SizeMax", tessellation["mesh_size_max_mm"]
+                if surface_groups else normalized_sizes["rigid_size_mm"],
+            )
             gmsh.model.mesh.field.setNumber(threshold, "DistMin", 0.0)
             # transition_mm is the gmsh DistMax grading distance in mm from
             # each source to wall sizing, not a target element size.
@@ -3630,6 +3771,8 @@ def build_imported_mesh(
                 "groups_by_tag": viewport_groups_by_tag,
             },
         }
+        if surface_groups:
+            state["surface_group_resolution"] = surface_resolutions
         if mesh_error is not None:
             return state
 
@@ -3846,8 +3989,9 @@ def build_imported_mesh(
         unique_tags, counts = np.unique(tags, return_counts=True)
         tag_counts = {str(int(tag)): int(count) for tag, count in zip(unique_tags, counts, strict=True)}
         regions = []
-        for surface in cut_groups.get("rigid", []):
-            regions.append(Region(float(gmsh.model.occ.getMass(2, surface)), normalized_sizes["rigid_size_mm"], label="rigid", role="shadow"))
+        for surface in rigid_surfaces:
+            target = surface_targets[surface] if surface_groups else normalized_sizes["rigid_size_mm"]
+            regions.append(Region(float(gmsh.model.occ.getMass(2, surface)), target, label="rigid", role="shadow"))
         for spec in step_specs:
             for surface in cut_groups[spec.name]:
                 regions.append(Region(float(gmsh.model.occ.getMass(2, surface)), spec.resolution_mm, label=spec.name, role="source"))

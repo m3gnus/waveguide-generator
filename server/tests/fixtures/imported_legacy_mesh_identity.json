@@ -1,0 +1,126 @@
+{
+  "base_commit": "9334aa1657ddde9af7d06128fc51ce037f1d384e",
+  "environment": "Python 3.13.1 / gmsh 4.15.2 / hornlab-waveguide-mesher 0.2.7",
+  "cases": [
+    {
+      "name": "automatic-capped-half",
+      "sizes": {
+        "rigid_size_mm": 30,
+        "transition_mm": 30,
+        "source_size_mm": {
+          "throat": 8
+        }
+      },
+      "options": {},
+      "msh_sha256": "ae516fdfb49cf1fb856958abdccc545346cf3187adf71eb3729224e86fdaebfc",
+      "triangles": 516
+    },
+    {
+      "name": "automatic-full",
+      "sizes": {
+        "rigid_size_mm": 30,
+        "transition_mm": 30,
+        "source_size_mm": {
+          "throat": 8
+        }
+      },
+      "options": {},
+      "msh_sha256": "e9d6e75e408126aca0da493a4418da18fe6fa1146de5435f230e00b6e71e17ae",
+      "triangles": 470
+    },
+    {
+      "name": "automatic-half-as-shown",
+      "sizes": {
+        "rigid_size_mm": 30,
+        "transition_mm": 30,
+        "source_size_mm": {
+          "throat": 8
+        }
+      },
+      "options": {},
+      "msh_sha256": "ad4d8580a5618736e22e652811a3f208e4545466d128ed72d0b3303de2e152bd",
+      "triangles": 935
+    },
+    {
+      "name": "automatic-half-provenance",
+      "sizes": {
+        "rigid_size_mm": 30,
+        "transition_mm": 30,
+        "source_size_mm": {
+          "throat": 8
+        }
+      },
+      "options": {},
+      "msh_sha256": "ad4d8580a5618736e22e652811a3f208e4545466d128ed72d0b3303de2e152bd",
+      "triangles": 935
+    },
+    {
+      "name": "automatic-negative-half",
+      "sizes": {
+        "rigid_size_mm": 30,
+        "transition_mm": 30,
+        "source_size_mm": {
+          "throat": 8
+        }
+      },
+      "options": {},
+      "msh_sha256": "d998b43006989dfb502913c40b50d7a0f25059af601585094718c24386b2bc59",
+      "triangles": 937
+    },
+    {
+      "name": "automatic-quarter",
+      "sizes": {
+        "rigid_size_mm": 30,
+        "transition_mm": 30,
+        "source_size_mm": {
+          "throat": 8
+        }
+      },
+      "options": {},
+      "msh_sha256": "fa62db1992aa73f13be1e87080a84f3f9a342fe422d1711b940172fbbcb5a76c",
+      "triangles": 470
+    },
+    {
+      "name": "declared-half",
+      "sizes": {
+        "rigid_size_mm": 30,
+        "transition_mm": 30,
+        "source_size_mm": {
+          "throat": 8
+        }
+      },
+      "options": {},
+      "msh_sha256": "ad4d8580a5618736e22e652811a3f208e4545466d128ed72d0b3303de2e152bd",
+      "triangles": 935
+    },
+    {
+      "name": "synthetic-f1",
+      "sizes": {
+        "rigid_size_mm": 30,
+        "transition_mm": 30,
+        "source_size_mm": {
+          "hf": 6
+        }
+      },
+      "options": {},
+      "msh_sha256": "18da688f6f2eb58492e9af2aadbffbb3dbeb10707331e51a118ec3901c65c5cb",
+      "triangles": 928
+    },
+    {
+      "name": "synthetic-f2",
+      "sizes": {
+        "rigid_size_mm": 30,
+        "transition_mm": 30,
+        "source_size_mm": {
+          "hf": 6,
+          "mf": 15,
+          "lf": 25,
+          "passive_cardioid": 25
+        }
+      },
+      "options": {},
+      "msh_sha256": "56a6c58a2e3b82c02989c93196c5c8e59e28f7048aba4d9b4e43c2d39307693b",
+      "triangles": 6480
+    }
+  ]
+}
