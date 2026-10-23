@@ -20,6 +20,8 @@ export async function showJobModel(
     // A file or a CAD run: its model, prepared mesh and setup, from the server.
     try {
       return await openImported({ kind: 'run', job, display: {
+        // Browsing history changes the model, while the user's panel stays open.
+        enterCadWorkspace: () => workspaceModeStore.setMode('cad'),
         reportStatus: cadWorkspace.getSnapshot().reportStatus,
         reportViewportNotice: cadWorkspace.getSnapshot().reportViewportNotice,
       } });

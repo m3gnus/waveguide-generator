@@ -11,8 +11,8 @@ import { showJobModel } from './showJobModel';
  *
  * Showing the model always goes through `showJobModel`, which also puts the
  * workspace into the run's owning mode — so selecting a parametric run from
- * CAD Link mode brings the parametric workspace back with it, exactly as an
- * imported run selected from parametric mode brings CAD Link back.
+ * CAD Link mode brings the parametric workspace back with it. An imported run
+ * enters imported mode while keeping the current panel visible.
  */
 export function selectJob(job: JobItem, onError?: (message: string) => void): void {
   // A finished run whose results were cleaned up is still the selected run: the
