@@ -186,7 +186,7 @@ export const CAD_CONTROLS = {
     ['CAD mesh', 'surface sizing', 'rebuild mesh', 'ingest'],
   ),
   rigidSize: control(
-    'cad.mesh.rigid-size', 'Cabinet & waveguide', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
+    'cad.mesh.rigid-size', 'Walls', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
     ['rigid CAD surfaces', 'mesh size', 'rigidSizeMm'], 'ingested-return', 'cad.mesh-detail',
   ),
   transitionSize: control(

@@ -47,6 +47,7 @@ from server.contracts.geometry import (
 )
 
 from .cache import SolverMeshArtifactCache, SolverMeshCacheInfo
+from .errors import MeshTooLarge
 from .child import (
     MesherChildError,
     MesherCrashError,
@@ -518,21 +519,13 @@ def _mesh_policy(
 
 
 def _enforce_artifact_triangle_ceiling(
-    triangle_count: int, *, rigid_size_mm: float | None = None
+    triangle_count: int, *, mesh_sizes: Mapping[str, Any] | None = None
 ) -> None:
-    """Repeat the mesher artifact sanity check on the parsed output."""
+    """Enforce the solver's triangle limit on the parsed output."""
 
     if triangle_count > MAX_SOLVER_MESH_ARTIFACT_TRIANGLES:
-        cause = (
-            f"the walls are meshed at {rigid_size_mm:g} mm. "
-            if rigid_size_mm is not None else ""
-        )
-        raise RuntimeError(
-            f"The mesh has {triangle_count:,} triangles "
-            f"(limit {MAX_SOLVER_MESH_ARTIFACT_TRIANGLES:,})"
-            f"{': ' + cause if cause else '. '}"
-            "Larger mesh sizes produce fewer triangles. "
-            "Use coarser wall or source sizes before solving again."
+        raise MeshTooLarge(
+            triangle_count, MAX_SOLVER_MESH_ARTIFACT_TRIANGLES, mesh_sizes=mesh_sizes,
         )
 
 
@@ -928,10 +921,9 @@ def _build_sync(
             # The pinned mesher preserves this type for both estimate and
             # generated-count refusals; neither needs a legacy text fallback.
             raise RuntimeError(
-                "Solver mesh exceeds the non-bypassable actual-domain "
-                f"artifact sanity ceiling of "
-                f"{MAX_SOLVER_MESH_ARTIFACT_TRIANGLES:,} triangles. "
-                "Coarsen the relevant mm mesh resolution before solving."
+                f"WG's triangle limit is {MAX_SOLVER_MESH_ARTIFACT_TRIANGLES:,} "
+                "for the part it solves. Use coarser throat/mouth/rear resolution "
+                "before solving again."
             ) from exc
         except Exception as exc:
             detail = str(exc)

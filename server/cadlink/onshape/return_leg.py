@@ -20,6 +20,7 @@ from typing import Any
 
 
 from server.cadlink.identity import mint_id
+from server.cadlink.joblane.default_setup import solve_defaults
 from server.cadlink.intake.ingest import ingest_bundle
 from server.cadlink.intake.isolated import inspect_returned_step
 from server.cadlink.intake.isolation import ChildRefusal
@@ -381,9 +382,10 @@ def write_and_ingest_return(
     bundle_path = write_return_bundle(
         step_bytes, link=link, export_row=export_row, data_dir=data_dir
     )
+    defaults = solve_defaults()["cad"]["mesh"]
     mesh = {
-        "rigid_size_mm": float(source_policy["suggested_resolution_mm"]),
-        "transition_mm": float(source_policy["suggested_resolution_mm"]),
+        "rigid_size_mm": defaults["rigid_size_mm"],
+        "transition_mm": defaults["transition_mm"],
         "source_size_mm": {
             str(source_policy["id"]): float(source_policy["suggested_resolution_mm"])
         },

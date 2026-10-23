@@ -332,8 +332,10 @@ def test_onshape_return_preserves_identity_source_evidence_and_checksums(tmp_pat
         read_wgreturn(bundle_path)
 
 
-def test_source_bearing_return_passes_the_existing_ingest_pipeline(tmp_path: Path) -> None:
+@pytest.mark.parametrize("source_size", [2.0, 4.0])
+def test_source_bearing_return_passes_the_existing_ingest_pipeline(tmp_path: Path, source_size: float) -> None:
     outbound, step = _outbound(tmp_path)
+    outbound["interface"]["sources"][0]["suggested_resolution_mm"] = source_size
     bundle_path, record = _run_in_gmsh_session(
         write_and_ingest_return,
         step,
@@ -351,7 +353,10 @@ def test_source_bearing_return_passes_the_existing_ingest_pipeline(tmp_path: Pat
     assert bundle_path.is_dir()
     assert record["return_id"] == read_wgreturn(bundle_path).manifest["return"]["id"]
     assert record["sources"][0]["id"] == "source-hf"
-    assert record["mesh_sizes"]["source_size_mm"] == {"source-hf": 4.0}
+    assert record["mesh_sizes"] == {
+        "rigid_size_mm": 25, "transition_mm": 100,
+        "source_size_mm": {"source-hf": source_size},
+    }
 
 
 def test_an_onshape_return_rebuilds_with_the_local_mesh_controls(tmp_path: Path) -> None:
@@ -598,7 +603,7 @@ def test_occ_qualification_then_sewing_does_not_pollute_onshape_returns(tmp_path
             "scripts/run_tests.py",
             "server/tests/test_cadlink_isolation.py::test_occ_parallel_preserves_small_fixture_mesh_arrays",
             "server/tests/test_occ_healing_preserves_solids.py::test_sewing_alone_dissolves_the_solid",
-            "server/tests/test_onshape_return.py::test_source_bearing_return_passes_the_existing_ingest_pipeline",
+            "server/tests/test_onshape_return.py::test_source_bearing_return_passes_the_existing_ingest_pipeline[2.0]",
             "server/tests/test_onshape_return.py::test_an_onshape_return_rebuilds_with_the_local_mesh_controls",
             "-n", "0",
             "-p", "no:randomly",

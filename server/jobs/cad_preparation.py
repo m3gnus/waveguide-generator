@@ -106,6 +106,7 @@ from server.jobs.cad_intent import (
     intent_of,
 )
 from server.jobs.models import SolveRequest
+from server.mesh.errors import MeshTooLarge
 
 logger = logging.getLogger(__name__)
 
@@ -558,6 +559,11 @@ def prepare_job_sync(
             )
         except StaleAttempt as exc:
             raise _Fenced() from exc
+        except MeshTooLarge as exc:
+            return run.refuse("preparation_failed", exc.message({
+                str(source["id"]): str(source["role"])
+                for source in retained_manifest.get("sources") or []
+            }))
         except WgReturnError as exc:
             return run.refuse("snapshot_invalid", str(exc))
         except IngestRefusal as exc:

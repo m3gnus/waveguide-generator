@@ -316,8 +316,8 @@ def test_real_triangle_budget_refusal_preserves_message_and_reason_code(
     # wrapped in the public exception by mesher.build_mesh_with_info.
     assert isinstance(error.__cause__.__cause__, EstimateBudgetExceeded)
     message = (
-        "Solver mesh exceeds the non-bypassable actual-domain artifact sanity "
-        "ceiling of 1 triangles. Coarsen the relevant mm mesh resolution before solving."
+        "WG's triangle limit is 1 for the part it solves. "
+        "Use coarser throat/mouth/rear resolution before solving again."
     )
     assert str(error) == message
     assert len(report["errors"]) == 1
@@ -362,17 +362,30 @@ def test_large_mesh_warning_quantifies_the_cubic_factorisation_cost() -> None:
 
 def test_actual_domain_artifact_ceiling_is_enforced_post_build() -> None:
     _enforce_artifact_triangle_ceiling(MAX_SOLVER_MESH_ARTIFACT_TRIANGLES)
-    with pytest.raises(RuntimeError, match=r"22,001 triangles \(limit 22,000\)"):
+    with pytest.raises(RuntimeError, match=r"22,001 triangles; WG.s limit is 22,000"):
         _enforce_artifact_triangle_ceiling(MAX_SOLVER_MESH_ARTIFACT_TRIANGLES + 1)
 
 
-def test_imported_mesh_refusal_names_count_limit_and_wall_size() -> None:
-    with pytest.raises(RuntimeError) as error:
-        _enforce_artifact_triangle_ceiling(28_944, rigid_size_mm=4)
+def test_imported_mesh_refusal_names_count_limit_and_all_sizes() -> None:
+    from server.mesh.errors import MeshTooLarge
+
+    sizes = {"rigid_size_mm": 4, "transition_mm": 100, "source_size_mm": {"HF": 2, "LF": 30}}
+    with pytest.raises(MeshTooLarge) as error:
+        _enforce_artifact_triangle_ceiling(28_944, mesh_sizes=sizes)
+    assert (error.value.count, error.value.limit, error.value.mesh_sizes) == (28_944, 22_000, sizes)
     assert str(error.value) == (
-        "The mesh has 28,944 triangles (limit 22,000): the walls are meshed at 4 mm. "
-        "Larger mesh sizes produce fewer triangles. "
-        "Use coarser wall or source sizes before solving again."
+        "This model meshes to 28,944 triangles; WG's limit is 22,000 for the part it solves. "
+        "Mesh sizes used: walls 4 mm, grading distance 100 mm, HF source 2 mm, LF source 30 mm. "
+        "Larger sizes give fewer triangles. Use coarser wall or source sizes before solving again."
+    )
+
+
+def test_parametric_artifact_refusal_uses_parametric_control_names() -> None:
+    with pytest.raises(RuntimeError) as error:
+        _enforce_artifact_triangle_ceiling(28_944)
+    assert str(error.value) == (
+        "This model meshes to 28,944 triangles; WG's limit is 22,000 for the part it solves. "
+        "Use coarser throat/mouth/rear resolution before solving again."
     )
 
 

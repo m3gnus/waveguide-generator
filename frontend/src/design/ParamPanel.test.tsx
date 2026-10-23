@@ -1408,7 +1408,7 @@ describe('ParamPanel inventory UX', () => {
     expect(motion).not.toBeNull();
     expect([...motion!.options].map((option) => option.textContent)).toEqual(['Normal', 'Axial (pistonic)']);
     expect(host.textContent).toContain('Normal moves each source face along its own normal. Axial moves the source as a rigid piston along its axis.');
-    expect(host.textContent).toContain('Cabinet & waveguide');
+    expect(host.textContent).toContain('Walls');
     expect(host.textContent).toContain('Grading distance');
     expect(host.textContent).toContain('HF source');
     expect(host.textContent).toContain('MF source');

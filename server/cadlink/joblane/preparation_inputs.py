@@ -185,7 +185,7 @@ def _load_setup(
         # edit status is unknown. A restored run also keeps a person's choice
         # sticky even when it selects an automatic revision again.
         return loaded
-    mesh = default_mesh(manifest, use_role_defaults=True)
+    mesh = default_mesh(manifest)
     old_mesh = dict(setup.geometry.get("mesh") or {})
     # Only sizes already belonging to this setup; keep skipped sources and
     # every other mesh/geometry/solve setting exactly as recorded.

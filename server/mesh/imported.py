@@ -3537,6 +3537,8 @@ def build_imported_mesh(
             gmsh.model.mesh.field.setNumber(threshold, "SizeMin", spec.resolution_mm)
             gmsh.model.mesh.field.setNumber(threshold, "SizeMax", normalized_sizes["rigid_size_mm"])
             gmsh.model.mesh.field.setNumber(threshold, "DistMin", 0.0)
+            # transition_mm is the gmsh DistMax grading distance in mm from
+            # each source to wall sizing, not a target element size.
             gmsh.model.mesh.field.setNumber(threshold, "DistMax", normalized_sizes["transition_mm"])
             fields.append(threshold)
         # The sagitta view samples each surface's own parameter grid and never
@@ -3722,7 +3724,7 @@ def build_imported_mesh(
         if len(triangles) == 0:
             raise ImportedMeshError("meshing: imported mesh contains no triangles")
         _enforce_artifact_triangle_ceiling(
-            int(len(triangles)), rigid_size_mm=normalized_sizes["rigid_size_mm"]
+            int(len(triangles)), mesh_sizes=normalized_sizes
         )
         imported_symmetry = imported_symmetry_from_cut_planes(domain_planes)
         dense = _enforce_dense_solver_memory_ceiling(

@@ -257,17 +257,13 @@ def unsized_sources(manifest: Mapping[str, Any]) -> list[str]:
     ]
 
 
-def default_mesh(
-    manifest: Mapping[str, Any], *, use_role_defaults: bool = False,
-) -> dict[str, Any]:
+def default_mesh(manifest: Mapping[str, Any]) -> dict[str, Any]:
     """Current sizing for first use or an unedited automatic setup.
 
     Replace WGLink's fixed role suggestions with WG's defaults. A different
     suggestion remains an intentional per-source size. Legacy returns carry
     no edit provenance, so a value equal to the old fixed suggestion is treated
     as the role default. Exposed verbatim by the returns API for the frontend.
-    ``use_role_defaults`` recomputes automatic setups by role regardless of
-    the snapshot's old suggestion. Unknown roles retain their suggestion.
     """
 
     mesh = solve_defaults()["cad"]["mesh"]
@@ -280,7 +276,7 @@ def default_mesh(
         policy = mesh["source_roles"].get(role)
         sizes[str(source["id"])] = (
             policy["size_mm"]
-            if policy and (use_role_defaults or suggested == policy["legacy_suggestion_mm"])
+            if policy and suggested == policy["legacy_suggestion_mm"]
             else suggested
         )
     return {

@@ -27,6 +27,7 @@ from server.cadlink.identity import SaveIdentity, design_hash
 from server.cadlink.intake.ingest import IngestRefusal
 from server.cadlink.store import CadLinkStore
 from server.design.schema import DesignConfig
+from server.mesh.errors import MeshTooLarge
 
 from .adapter import (
     OnshapeAdapter,
@@ -122,6 +123,8 @@ def _client(request: Request) -> OnshapeClient:
 
 
 def _onshape_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, MeshTooLarge):
+        return HTTPException(status_code=422, detail=str(exc))
     if isinstance(exc, OnshapePublicDocumentConsent):
         return HTTPException(status_code=428, detail=str(exc))
     if isinstance(exc, OnshapeCredentialsError):

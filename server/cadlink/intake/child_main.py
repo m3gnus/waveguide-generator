@@ -528,6 +528,10 @@ def main(argv: list[str] | None = None) -> int:
             "type": getattr(exc, "error_type", type(exc).__name__),
             "message": str(exc) or type(exc).__name__,
         }
+        from server.mesh.errors import MeshTooLarge
+
+        if isinstance(exc, MeshTooLarge):
+            error.update(count=exc.count, limit=exc.limit, mesh_sizes=exc.mesh_sizes)
         # ``RoleResolutionError`` carries the sources whose area drifted, and
         # ingestion turns that list into an actionable override prompt. It has
         # to survive the boundary or the refusal loses its remedy.

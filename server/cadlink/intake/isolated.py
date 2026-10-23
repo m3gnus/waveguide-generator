@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
 
 from server.cadlink.build_flags import fem_regions_enabled
+from server.mesh.errors import MeshTooLarge
 from server.cadlink.intake.isolation import (
     INSPECT_BUDGET,
     MESH_BUDGET,
@@ -79,6 +80,10 @@ def _reraise_typed(exc: ChildRefusal) -> None:
     for a timeout or a native crash, because those are not geometry verdicts.
     """
 
+    if exc.error_type == "MeshTooLarge":
+        raise MeshTooLarge(
+            exc.details["count"], exc.details["limit"], mesh_sizes=exc.details.get("mesh_sizes"),
+        ) from exc
     if exc.error_type == "ImportedMeshDependencyError":
         raise ImportedMeshDependencyError(exc.detail) from exc
     if exc.error_type == "RoleResolutionError":

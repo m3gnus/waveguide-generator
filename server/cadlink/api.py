@@ -30,6 +30,7 @@ from server.mesh.artifact import (
     read_verified_import_mesh,
     read_verified_import_viewport_mesh,
 )
+from server.mesh.errors import MeshTooLarge
 from server.platform.acl_repair import path_has_reparse_point
 from server.platform.cad_launch import launch_disabled, open_cad_document
 from server.platform.process import background_process_kwargs
@@ -913,7 +914,7 @@ def _ingest_error(exc: Exception) -> HTTPException:
                 "area_drift_sources": list(exc.area_drift_sources),
             }
         return HTTPException(status_code=409 if exc.corruption else 422, detail=detail)
-    if isinstance(exc, (WgReturnError, ValueError, TypeError)):
+    if isinstance(exc, (WgReturnError, ValueError, TypeError, MeshTooLarge)):
         return HTTPException(status_code=422, detail=str(exc))
     if isinstance(exc, (ImportError, RuntimeError)):
         return HTTPException(status_code=503, detail=str(exc))

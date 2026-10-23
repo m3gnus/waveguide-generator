@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from server.cadlink.joblane.default_setup import default_mesh, default_setup
+from server.cadlink.joblane.default_setup import default_setup
 from server.cadlink.joblane.preparation_inputs import SnapshotContext, _load_setup
 from server.cadlink.joblane.project_setup import inventory_sha256
 from server.jobs.imported_setup import setup_content
@@ -48,11 +48,13 @@ def test_only_fixed_role_suggestions_are_replaced(role, suggestion, expected) ->
     }
 
 
-def test_automatic_refresh_uses_current_role_sizes_even_with_old_custom_suggestions() -> None:
-    manifest = {"sources": [_source(role, 4) for role in ("HF", "MF", "LF", "PASSIVE_CARDIOID")]}
-    assert default_mesh(manifest, use_role_defaults=True) == {
-        "rigid_size_mm": 25, "transition_mm": 100,
-        "source_size_mm": {"HF": 6, "MF": 15, "LF": 25, "PASSIVE_CARDIOID": 25},
+def test_fem_region_only_defaults_intentionally_use_25_mm_walls() -> None:
+    # No source exists to suggest a size: FEM-only walls still use the shared default.
+    manifest = {"sources": [], "scope": {"fem_regions": [{
+        "region_id": "air", "surface_groups": [{"kind": "moving", "drive_channel_id": "drive-hf"}],
+    }]}}
+    assert default_setup(manifest).geometry["mesh"] == {
+        "rigid_size_mm": 25, "transition_mm": 100, "source_size_mm": {},
     }
 
 
@@ -74,10 +76,14 @@ def _legacy_automatic(manifest):
     return setup
 
 
-def _existing_setup(harness, *, automatic=True):
+def _existing_setup(harness, *, automatic=True, role="HF", suggestion=4):
     design, lineage = _project(harness, 45)
     bundle, digest = _project_return(harness, "existing", design, lineage)
     manifest = json.loads((harness.workspace / bundle / "wgreturn.json").read_text())
+    manifest["sources"][0].update(role=role, suggested_resolution_mm=suggestion)
+    body = json.dumps(manifest).encode()
+    (harness.workspace / bundle / "wgreturn.json").write_bytes(body)
+    digest = "sha256:" + hashlib.sha256(body).hexdigest()
     setup = _legacy_automatic(manifest)
     if not automatic:
         setup.pop("origin")
@@ -89,19 +95,20 @@ def _existing_setup(harness, *, automatic=True):
 
 
 @pytest.mark.parametrize("named", [False, True])
-def test_next_preparation_revises_only_the_automatic_mesh(harness, caplog, named) -> None:
-    lineage, inventory, old, setup = _existing_setup(harness)
+@pytest.mark.parametrize(("role", "suggestion", "expected"), [("HF", 2, 2), ("HF", 4, 6), ("LF", 30, 25)])
+def test_next_preparation_revises_only_the_automatic_mesh(harness, caplog, named, role, suggestion, expected) -> None:
+    lineage, inventory, old, setup = _existing_setup(harness, role=role, suggestion=suggestion)
     before = harness.store.get_setup_revision(old)
     if named:
         from server.jobs.model_solve import _record_for_model
-        _record_for_model(harness.store, lineage, {"sources": _manifest(b"STEP")["sources"]}, old)
+        _record_for_model(harness.store, lineage, {"sources": [{**_manifest(b"STEP")["sources"][0], "role": role}]}, old)
     with caplog.at_level(logging.INFO):
         summary = harness.prepare(**({"setup_revision_id": old} if named else {}))
     assert summary["state"] == "accepted", summary
     new = summary["setupRevisionId"]
     assert new != old
     updated = json.loads(harness.store.get_setup_revision(new)["setup_json"])
-    expected_mesh = {"rigid_size_mm": 25, "transition_mm": 100, "source_size_mm": {"source-hf": 6}}
+    expected_mesh = {"rigid_size_mm": 25, "transition_mm": 100, "source_size_mm": {"source-hf": expected}}
     assert updated == {**setup, "geometry": {**setup["geometry"], "mesh": expected_mesh}}
     assert harness.submitted[-1].geometry.mesh.model_dump() == expected_mesh
     assert harness.bound_setup_revision() == new
@@ -282,8 +289,9 @@ def test_nowaistbanding_sized_step_mesh_is_well_below_solver_ceiling(tmp_path: P
     assert 0 < stats["triangle_count"] < 6000
 
 
+@pytest.mark.parametrize("fine_walls", [False, True])
 def test_existing_automatic_nowaistbanding_setup_prepares_and_solves_below_ceiling(
-    harness, tmp_path, record_property,
+    harness, tmp_path, record_property, fine_walls,
 ) -> None:
     """Real STEP child, ingest and preparation; the harness queues the resulting solve."""
     from server.cadlink.intake.ingest import ingest_bundle
@@ -306,6 +314,8 @@ def test_existing_automatic_nowaistbanding_setup_prepares_and_solves_below_ceili
     manifest["document"] = {"name": "NoWaistbanding-shaped", "native_id": "urn:mesh-defaults-box"}
     lineage = harness.store.claim_cad_document_lineage("urn:mesh-defaults-box", "NoWaistbanding-shaped")
     setup = _legacy_automatic(manifest)
+    if fine_walls:
+        setup.pop("origin")  # A person deliberately saved the finer sizes.
     old = _revision(harness.store, setup)
     harness.store.record_project_setup_if_absent(lineage, inventory_sha256(manifest["sources"]), old)
     bundle = harness.workspace / "wgreturn/box.wgreturn"
@@ -316,6 +326,16 @@ def test_existing_automatic_nowaistbanding_setup_prepares_and_solves_below_ceili
     _accept(harness.store, "cmd-1", "wgreturn/box.wgreturn", "sha256:" + hashlib.sha256(body).hexdigest())
 
     summary = harness.prepare(ingest=ingest_bundle)
+    if fine_walls:
+        assert summary["reason"] == "preparation_failed", summary
+        message = summary["message"]
+        assert message.startswith("This model meshes to "), message
+        assert "WG's limit is 22,000" in message
+        assert "walls 4 mm, grading distance 4 mm, HF source 4 mm" in message
+        assert "Preparing the mesh failed" not in message
+        assert summary.get("preparationId") is None
+        assert not harness.submitted
+        return
     assert summary["state"] == "accepted", summary
     assert summary["setupRevisionId"] != old
     assert harness.submitted[-1].geometry.mesh.model_dump() == {
@@ -327,3 +347,17 @@ def test_existing_automatic_nowaistbanding_setup_prepares_and_solves_below_ceili
     assert 0 < stats["triangle_count"] < 22000
     assert harness.bound_request()["geometry"]["ingest_id"] == summary["preparationId"]
     assert json.loads(harness.store.get_setup_revision(old)["setup_json"]) == setup
+
+
+def test_mesh_too_large_is_an_actionable_refusal_on_both_ingest_routes() -> None:
+    from server.cadlink.api import _ingest_error
+    from server.cadlink.onshape.api import _onshape_error
+    from server.mesh.errors import MeshTooLarge
+
+    error = MeshTooLarge(28_944, 22_000, mesh_sizes={
+        "rigid_size_mm": 4, "transition_mm": 100, "source_size_mm": {"HF": 2},
+    })
+    for formatter in (_ingest_error, _onshape_error):
+        response = formatter(error)
+        assert response.status_code == 422
+        assert response.detail == str(error)

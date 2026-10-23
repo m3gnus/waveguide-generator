@@ -4445,7 +4445,13 @@ export interface components {
             /** Transitionmm */
             transitionMm: number;
         };
-        /** ImportedMeshSizes */
+        /**
+         * ImportedMeshSizes
+         * @description CAD sizes in mm; ``transition_mm`` is gmsh Threshold's DistMax distance.
+         *
+         *     It is the distance over which source sizing grows to the wall size, not
+         *     another target element size. The stored field name preserves setup digests.
+         */
         ImportedMeshSizes: {
             /** Rigid Size Mm */
             rigid_size_mm: number;

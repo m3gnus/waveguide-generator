@@ -834,6 +834,12 @@ class FieldPlaneRequest(JobModel):
 
 
 class ImportedMeshSizes(JobModel):
+    """CAD sizes in mm; ``transition_mm`` is gmsh Threshold's DistMax distance.
+
+    It is the distance over which source sizing grows to the wall size, not
+    another target element size. The stored field name preserves setup digests.
+    """
+
     rigid_size_mm: float = Field(gt=0, allow_inf_nan=False)
     transition_mm: float = Field(gt=0, allow_inf_nan=False)
     source_size_mm: dict[str, float]
