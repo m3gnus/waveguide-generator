@@ -135,9 +135,12 @@ describe('CAD return store', () => {
       ...meshSnapshot, wall_size_mm: 25, symmetry: 'auto',
     } });
     expect(useCadReturnStore.getState()).toMatchObject({ symmetryMode: 'auto', meshSizes: { rigid_size_mm: 25 } });
-    for (const action of ['setSourceSize', 'setRigidSize', 'setTransition', 'setSymmetryMode']) {
-      expect(useCadReturnStore.getState()).not.toHaveProperty(action);
-    }
+    const before = useCadReturnStore.getState();
+    before.setSourceSize('source-hf', 99);
+    before.setRigidSize(99);
+    before.setTransition(99);
+    before.setSymmetryMode('full');
+    expect(useCadReturnStore.getState()).toBe(before);
   });
 
   it('uses server defaults for newly listed sources while retaining existing choices', () => {

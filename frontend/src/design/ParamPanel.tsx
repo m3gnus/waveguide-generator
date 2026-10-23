@@ -14,7 +14,7 @@ import { importedSubmissionBlocker, importedSubmissionNotices } from '../jobs/im
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
 import { useActiveBackendCapability, useCapabilities, usePlannedBackendCapabilities } from '../jobs/useCapabilities';
 import { displaySymmetry, recordDomainDecision } from '../api/domainDecision';
-import { cadMeshSizing } from '../api/cadMesh';
+import { cadMeshIsEditable, cadMeshSizing } from '../api/cadMesh';
 import { backendLimitation, symmetryDomainLimitation } from './backendSupport';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { CadCrossover } from './CrossoverSection';
@@ -1083,7 +1083,8 @@ function CadPassiveCardioid() {
 function CadMeshSummary() {
   const state = useCadReturnStore();
   const record = state.needsIngest ? null : state.ingestRecord;
-  const snapshot = state.selectedBundle?.meshSnapshot ?? record?.mesh_snapshot;
+  // Provenance survives preparation edits; only measurements become pending.
+  const snapshot = state.selectedBundle?.meshSnapshot ?? state.ingestRecord?.mesh_snapshot;
   const sizes = state.meshSizes;
   const planes = record ? displaySymmetry(record).solvedPlanes : [];
   const fraction = recordDomainDecision(record)?.solver_domain.fraction
@@ -1112,15 +1113,23 @@ function CadMeshDetail() {
     cadWorkspace.getSnapshot,
   );
   const error = useCadFeedbackError(cadWorkspaceView.error);
+  const editable = cadMeshIsEditable(state.selectedBundle);
   const driftSources = new Set([...state.areaDriftSourceIds, ...(state.ingestRecord?.role_findings ?? [])
     .filter((finding) => String(finding.kind).includes('area-drift'))
     .map((finding) => String(finding.source_id))]);
   return <>
-    <CadMeshSummary/>
-    <div className="cad-mesh-intro"><button className="primary" disabled={cadWorkspaceView.ingesting || !state.selectedBundle?.readable} onClick={() => void cadWorkspaceView.ingest()}>{cadWorkspaceView.ingesting ? 'Preparing…' : 'Rebuild mesh'}</button></div>
+    {(state.selectedBundle?.bundleOrigin ?? 'wglink') === 'wglink' && <CadMeshSummary/>}
+    <div className="cad-mesh-intro">{editable && <p>Smaller values are finer. Curved CAD faces receive bounded extra refinement automatically.</p>}<button className="primary" disabled={cadWorkspaceView.ingesting || !state.selectedBundle?.readable} onClick={() => void cadWorkspaceView.ingest()}>{cadWorkspaceView.ingesting ? 'Preparing…' : 'Rebuild mesh'}</button></div>
+    {editable && <>
+      <ToggleRow id="cad-force-full-domain" label="Force full domain" help="Disable automatic x=0/y=0 cutting for this preparation. Use this when a symmetry verdict is doubtful; it costs more memory and solve time but cannot remove a geometric half. A return the CAD author already cut is refused instead: the other half is not in the file." checked={state.symmetryMode === 'full'} onChange={(enabled) => {
+        state.setSymmetryMode(enabled ? 'full' : 'auto');
+      }}/>
+      <NumberField label={CAD_CONTROLS.rigidSize.label} revealId={CAD_CONTROLS.rigidSize.reveal.id} unit="mm" value={state.meshSizes.rigid_size_mm} min={0.01} step={0.5} precision={2} description="Mesh size for every surface that is not a source." onCommit={state.setRigidSize}/>
+      <NumberField label={CAD_CONTROLS.transitionSize.label} revealId={CAD_CONTROLS.transitionSize.reveal.id} unit="mm" value={state.meshSizes.transition_mm} min={0.01} step={0.5} precision={2} description="Distance over which the mesh grows from each source's size to the wall size." onCommit={state.setTransition}/>
+    </>}
     {((state.ingestRecord?.evidence?.fem_air_volumes?.length ?? 0) > 0 || (state.ingestRecord?.evidence?.fem_regions?.length ?? 0) > 0) && <ToggleRow id="cad-exterior-only" label={CAD_CONTROLS.exteriorOnly.label} revealId={CAD_CONTROLS.exteriorOnly.reveal.id} help="Explicitly exclude the returned FEM air volumes and FEM regions. This solves only the exterior free-space problem." checked={state.exteriorOnly} onChange={state.setExteriorOnly}/>}
-    {(state.selectedBundle?.sources ?? []).filter(source => !source.required || driftSources.has(source.id)).map((source) => <div className={`cad-source ${state.skippedSourceIds.includes(source.id) ? 'skipped' : ''}`} key={source.id}>
-      <b>{source.role} source</b>
+    {(state.selectedBundle?.sources ?? []).filter(source => editable || !source.required || driftSources.has(source.id)).map((source) => <div className={`cad-source ${state.skippedSourceIds.includes(source.id) ? 'skipped' : ''}`} key={source.id}>
+      {editable ? <NumberField label={`${source.role} source`} revealId={CAD_CONTROLS.sourceSize.reveal.id} unit="mm" value={state.meshSizes.source_size_mm[source.id] ?? source.suggestedResolutionMm} min={0.01} step={0.25} precision={2} description={`${source.id} · suggested ${source.suggestedResolutionMm} mm`} disabled={state.skippedSourceIds.includes(source.id)} onCommit={(value) => state.setSourceSize(source.id, value)}/> : <b>{source.role} source</b>}
       {!source.required && <ToggleRow id={`skip-${source.id}`} label={CAD_CONTROLS.skipSource.label} revealId={CAD_CONTROLS.skipSource.reveal.id} help="Exclude this optional source from ingestion and the solve. This creates a blocking finding." checked={state.skippedSourceIds.includes(source.id)} onChange={(checked) => state.setSkipped(source.id, checked)}/>}
       {driftSources.has(source.id) && <ToggleRow id={`drift-${source.id}`} label={CAD_CONTROLS.areaDrift.label} revealId={CAD_CONTROLS.areaDrift.reveal.id} help="Explicitly accept the source-area mismatch and re-ingest. The override is recorded as a finding on the prepared model." checked={state.areaDriftOverrides.includes(source.id)} onChange={(checked) => state.setAreaDriftOverride(source.id, checked)}/>}
     </div>)}
@@ -1215,9 +1224,9 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
   })), [definitions, design, query, workspaceMode]);
   const matchingCadSections = useMemo(() => new Set(CAD_CONTROL_DESCRIPTORS
     .filter((descriptor) => workspaceMode === 'cad' && descriptor.tab === tab)
-    .filter((descriptor) => cadControlIsAvailable(descriptor, Boolean(ingestRecord)))
+    .filter((descriptor) => cadControlIsAvailable(descriptor, Boolean(ingestRecord), cadMeshIsEditable(selectedBundle)))
     .filter((descriptor) => cadControlMatchesQuery(descriptor, query))
-    .map((descriptor) => descriptor.section)), [ingestRecord, query, tab, workspaceMode]);
+    .map((descriptor) => descriptor.section)), [ingestRecord, selectedBundle, query, tab, workspaceMode]);
   const cadSectionMatches = (section: CadControlSection) => matchingCadSections.has(section);
   const matchingParametricSections = useMemo(() => new Set(PARAMETRIC_CONTROL_DESCRIPTORS
     .filter((descriptor) => workspaceMode === 'parametric' && descriptor.tab === tab)

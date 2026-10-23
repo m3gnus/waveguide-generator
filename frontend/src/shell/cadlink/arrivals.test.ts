@@ -131,8 +131,17 @@ describe('selection actions without the coordinator', () => {
     expect(useCadReturnStore.getState().selectedBundle?.bundleOrigin).toBe('onshape');
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
     await createCadReturnArrivalReader({}, fetcher).refresh();
+    const state = useCadReturnStore.getState();
+    state.setRigidSize(30);
+    state.setTransition(110);
+    state.setSourceSize('source-hf', 7);
+    state.setSymmetryMode('full');
+    expect(useCadReturnStore.getState().needsIngest).toBe(true);
     await actions.ingestSelected();
-    expect(requests.find((item) => item.path.endsWith('/ingest'))?.body.bundleOrigin).toBe('onshape');
+    expect(requests.find((item) => item.path.endsWith('/ingest'))?.body).toMatchObject({
+      bundleOrigin: 'onshape', symmetryMode: 'full',
+      mesh: { rigidSizeMm: 30, transitionMm: 110, sourceSizeMm: { 'source-hf': 7 } },
+    });
     expect(requests.some((item) => item.path.endsWith('/returns'))).toBe(false);
   });
 

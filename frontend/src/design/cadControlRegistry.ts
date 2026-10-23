@@ -26,7 +26,7 @@ export interface CadControlDescriptor {
   section: CadControlSection;
   tab: ParameterTab;
   keywords: readonly string[];
-  availability: 'cad-mode' | 'ingested-return';
+  availability: 'cad-mode' | 'ingested-return' | 'onshape-return';
   /** The panel owns the DOM target. The palette only queues this semantic id,
    * so a dock panel that has not mounted yet can still claim and reveal it. */
   reveal: { id: string; target: 'control'; fallbackId?: string };
@@ -185,9 +185,21 @@ export const CAD_CONTROLS = {
     'cad.mesh-detail', 'Mesh detail', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
     ['CAD mesh', 'surface sizing', 'Fusion', 'Walls', 'Grading distance', 'Symmetry', 'source size', 'surface group', 'rebuild mesh', 'ingest'], 'cad-mode',
   ),
+  rigidSize: control(
+    'cad.mesh.rigid-size', 'Walls', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
+    ['rigid CAD surfaces', 'mesh size', 'rigidSizeMm'], 'onshape-return', 'cad.mesh-detail',
+  ),
+  transitionSize: control(
+    'cad.mesh.transition', 'Grading distance', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
+    ['mesh regions', 'transitionMm'], 'onshape-return', 'cad.mesh-detail',
+  ),
   exteriorOnly: control(
     'cad.mesh.exterior-only', 'Exterior-only (leave FEM regions out)', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
     ['FEM air volumes', 'free space', 'exteriorOnly'], 'ingested-return', 'cad.mesh-detail',
+  ),
+  sourceSize: control(
+    'cad.mesh.source-size', 'Source mesh size', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
+    ['HF source', 'MF source', 'LF source', 'suggested resolution', 'sourceSizesMm'], 'onshape-return', 'cad.mesh-detail',
   ),
   skipSource: control(
     'cad.mesh.skip-source', 'Skip optional source', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
@@ -365,7 +377,8 @@ export const CAD_CONTROL_DESCRIPTORS: readonly CadControlDescriptor[] = [
   ...CAD_CARDIOID_FIELD_CONTROLS,
 ];
 
-export function cadControlIsAvailable(descriptor: CadControlDescriptor, cadReturnReady: boolean): boolean {
+export function cadControlIsAvailable(descriptor: CadControlDescriptor, cadReturnReady: boolean, editableMesh = false): boolean {
+  if (descriptor.availability === 'onshape-return') return editableMesh;
   return descriptor.availability === 'cad-mode' || cadReturnReady;
 }
 

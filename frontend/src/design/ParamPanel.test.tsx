@@ -1399,6 +1399,38 @@ describe('ParamPanel inventory UX', () => {
     surface_groups: [{ group_id: 'back', name: 'Back', size_mm: 40, observed: { face_count: 3 } }],
   };
 
+  it('keeps Onshape mesh controls and their palette entries editable in WG', () => {
+    act(() => {
+      setCadReady();
+      useCadReturnStore.setState({ selectedBundle: { ...cadBundle, bundleOrigin: 'onshape' } });
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    expect(host.querySelector('.cad-mesh-summary')).toBeNull();
+    const edit = (id: string, value: string) => {
+      const input = host.querySelector<HTMLInputElement>(`[data-control-reveal-id="${id}"] input`)!;
+      expect(input).not.toBeNull();
+      act(() => {
+        input.focus();
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    };
+    edit('cad.mesh.rigid-size', '30');
+    edit('cad.mesh.transition', '110');
+    edit('cad.mesh.source-size', '7');
+    act(() => host.querySelector<HTMLInputElement>('#cad-force-full-domain')!.click());
+    expect(useCadReturnStore.getState()).toMatchObject({ needsIngest: true, symmetryMode: 'full',
+      meshSizes: { rigid_size_mm: 30, transition_mm: 110, source_size_mm: { 'source-hf': 7, 'source-mf': 4 } } });
+    const entries = buildParameterPaletteEntries(undefined, { mode: 'cad', cadReturnReady: true });
+    for (const id of ['cad.mesh.rigid-size', 'cad.mesh.transition', 'cad.mesh.source-size']) {
+      expect(entries.some(entry => entry.id === `cad-control-${id}`)).toBe(true);
+    }
+    act(() => host.querySelector<HTMLInputElement>('#skip-source-mf')!.click());
+    expect(host.querySelectorAll<HTMLInputElement>('[data-control-reveal-id="cad.mesh.source-size"] input')[1].disabled).toBe(true);
+  });
+
   it('shows the Fusion mesh card with sources, groups, measured count and memory', () => {
     act(() => {
       setCadReady();
@@ -1418,6 +1450,11 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).toContain('Triangles 2,140 of 22,000 · memory ≈ 1.1 GB');
     expect(host.textContent).toContain('To change these, open Waveguide Generator ▸ Sources & Mesh… in Fusion and Send again.');
     expect(host.querySelector('.cad-mesh-summary input')).toBeNull();
+    for (const id of ['cad.mesh.rigid-size', 'cad.mesh.transition', 'cad.mesh.source-size']) {
+      expect(host.querySelector(`[data-control-reveal-id="${id}"]`)).toBeNull();
+      expect(buildParameterPaletteEntries(undefined, { mode: 'cad', cadReturnReady: true }).some(entry => entry.id === `cad-control-${id}`)).toBe(false);
+    }
+    expect(host.querySelector('#cad-force-full-domain')).toBeNull();
   });
 
   it.each([false, true])('shows mesh settings and a refusal without an ingest (Fusion: %s)', (fusion) => {
@@ -1440,6 +1477,37 @@ describe('ParamPanel inventory UX', () => {
     if (!fusion) expect(host.textContent).toContain('Sizes saved with this model are kept. To change them, open Sources & Mesh… in Fusion (updated Waveguide Generator add-in) and Send again.');
   });
 
+  it.each(['skip-source-hf', 'drift-source-hf'])('keeps a recalled Fusion snapshot after toggling %s while measurements become pending', async (toggleId) => {
+    const retained = { ...archivedRecord, mesh_snapshot: fusionMesh,
+      sources: archivedRecord.sources.map(source => ({ ...source, required: false })),
+      role_findings: [{ kind: 'source-area-drift', source_id: 'source-hf' }],
+      mesh: { stats: { triangle_count: 2140, artifact_actual_domain_triangle_limit: 22000 } },
+      sizing_estimate: { measured: { n_triangles: 2140, ram_gb: 1.1 } },
+    };
+    await act(async () => {
+      expect(await openImported({ kind: 'run', job: archivedJob() }, (async input => {
+        const path = String(input);
+        if (path.endsWith('/workspace')) return json(workspaceFor());
+        if (path.endsWith('/mesh') || path.endsWith('/viewport-mesh')) return new Response(archivedMesh);
+        return json(retained);
+      }) as typeof fetch)).toBe(true);
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    expect(useCadReturnStore.getState().selectedBundle?.meshSnapshot).toBeUndefined();
+    expect(host.textContent).toContain('Mesh (set in Fusion)');
+    expect(host.textContent).toContain('Triangles 2,140 of 22,000 · memory ≈ 1.1 GB');
+    act(() => host.querySelector<HTMLInputElement>(`#${toggleId}`)!.click());
+    expect(useCadReturnStore.getState().needsIngest).toBe(true);
+    expect(host.textContent).toContain('Mesh (set in Fusion)');
+    expect(host.textContent).toContain('Walls 25 mm · Grading distance 100 mm · Symmetry Automatic');
+    expect(host.textContent).toContain('To change these, open Waveguide Generator ▸ Sources & Mesh… in Fusion and Send again.');
+    expect(host.textContent).toContain('Triangles available after preparing the mesh');
+    expect(host.textContent).not.toContain('older add-in');
+    expect(host.textContent).not.toContain('Triangles 2,140');
+    expect(host.textContent).not.toContain('memory ≈');
+    expect(host.textContent).not.toContain('(solved:');
+  });
+
   it('opens an old run and shows its stored mesh sizes read-only', async () => {
     const request = archivedRequest();
     request.geometry.mesh = { rigid_size_mm: 12, transition_mm: 70, source_size_mm: { 'source-hf': 2.5 } };
@@ -1458,6 +1526,10 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).toContain('HF source 2.5 mm');
     expect(useCadReturnStore.getState().meshSizes).toEqual(request.geometry.mesh);
     expect(host.querySelector('.cad-mesh-summary input')).toBeNull();
+    for (const id of ['cad.mesh.rigid-size', 'cad.mesh.transition', 'cad.mesh.source-size']) {
+      expect(host.querySelector(`[data-control-reveal-id="${id}"]`)).toBeNull();
+      expect(buildParameterPaletteEntries(undefined, { mode: 'cad', cadReturnReady: true }).some(entry => entry.id === `cad-control-${id}`)).toBe(false);
+    }
     expect(host.querySelector('#cad-force-full-domain')).toBeNull();
   });
 

@@ -1,4 +1,9 @@
-import type { CadMeshSnapshot, CadReturnIngestRecord } from './cadlink';
+import type { CadMeshSnapshot, CadReturnBundle, CadReturnIngestRecord } from './cadlink';
+
+/** Fusion owns its mesh settings; Onshape returns still use WG's controls. */
+export function cadMeshIsEditable(bundle: CadReturnBundle | null): boolean {
+  return bundle?.bundleOrigin === 'onshape';
+}
 
 /** Prefer measured cost over the area estimate on curved CAD surfaces. */
 export function cadMeshSizing(record: CadReturnIngestRecord): Record<string, unknown> {
