@@ -88,6 +88,8 @@ def test_upgrade_migrates_every_pending_state_once_without_losing_preparation(h,
     if state == "bound":
         assert job["config_json"] == json.loads(before["request_json"])
         assert job["has_mesh_artifact"]
+        assert len(h.submitted) == 1
+        assert len(h.ingest.calls) == 1  # Migration reuses the retained preparation.
     assert h.row()["state"] == "accepted"
     assert h.row()["attempt_generation"] == before["attempt_generation"]
     assert h.jobs_store.list_jobs()[1] == 1

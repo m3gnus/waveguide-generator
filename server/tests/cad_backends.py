@@ -26,7 +26,7 @@ from server.cadlink.store import CadLinkStore
 from server.jobs.cad_intent import CadSolveIntent
 from server.jobs.cad_preparation import CadPreparationHost, job_operation_view
 from server.jobs.runtime import JobConflictError, JobRuntime
-from server.jobs.runtime.core import _CadLanePort
+from server.jobs.runtime.core import SubmissionValidation, _CadLanePort
 from server.jobs.runtime.cad_lane import _ComposedJob
 from server.jobs.store import JobStore
 
@@ -345,7 +345,12 @@ class JobsHarness(Harness):
     async def _subscribe(self) -> asyncio.Queue[dict[str, Any]]:
         return self.runtime.events.subscribe()
 
-    async def _compose(self, request: Any, cad_provenance: Any, setup_revision_id: Any = None) -> _ComposedJob:
+    async def _compose(
+        self, request: Any, cad_provenance: Any, setup_revision_id: Any = None,
+        *, validation: SubmissionValidation | None = None,
+    ) -> _ComposedJob:
+        # Fake composition accepts the runtime's admission verdict without
+        # repeating production validation of the harness's stand-in inputs.
         label = await self._submit(request, cad_provenance=cad_provenance)
         self._next_label = label
         return _ComposedJob(
