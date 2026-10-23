@@ -11,11 +11,17 @@ import { openImported, reopenLastModel, resetImportedModelStore, unchangedSetup,
 import { readLastModel } from './lastModel';
 import type { RegisteredMesh, MeshSummary } from '../api/meshImport';
 import type { ImportedSetup } from '../jobs/importedSetup';
+import { bindImportedSetup } from '../jobs/importedSetup';
 import type { JobItem } from '../api/jobsSocket';
 import { runSourceForJob } from '../jobs/exportNaming';
 import { runVerdict, currentModel } from '../model/currentModel';
 
 const MSH = new TextDecoder().decode(readFileSync('../server/tests/fixtures/mesh_import/tetra.msh'));
+// Also validated by server/tests/test_imported_setup_edits.py using validate_setup.
+const editContract = JSON.parse(new TextDecoder().decode(readFileSync('../server/tests/fixtures/imported_setup_edits.json'))) as {
+  setups: Record<string, ImportedSetup>;
+  edits: Array<{ name: string; base: string; edit: { source_id?: string; motions?: Array<'normal' | 'axial'>; selected?: number[] }; expected: ImportedSetup }>;
+};
 const summary: MeshSummary = { node_count: 4, triangle_count: 4, dimensions: [100, 100, 100], dimensions_mm: [100, 100, 100],
   groups: [{ tag: 1, name: 'Rigid', triangle_count: 3 }, { tag: 2, name: 'HF', triangle_count: 1 }] };
 const record: RegisteredMesh = { ingest_id: 'wgi_file', model_id: 'mesh-file:sha256:artifact', producer: 'mesh-file', manifest_sha256: 'sha256:manifest',
@@ -373,20 +379,51 @@ describe('a reopened file run', () => {
   });
 });
 
+describe('server-valid file setup edit contract', () => {
+  function meshFor(setup: ImportedSetup): RegisteredMesh {
+    const ids = [...setup.geometry.drive_channels.flatMap(channel => channel.source_ids), ...setup.geometry.skipped_source_ids];
+    const source_tags = Object.fromEntries(ids.map(id => [id, Number(id.slice('group_'.length))]));
+    return { ...record, source_tags, source_file: { ...record.source_file, source_tags: Object.values(source_tags) } };
+  }
+
+  async function expectSavedSetup(setup: ImportedSetup) {
+    const save = vi.fn<typeof fetch>(async () => response({ revision_id: 'wgs_contract' }));
+    await saveMeshSetup(save);
+    expect(save).toHaveBeenCalledOnce();
+    expect(JSON.parse(save.mock.calls[0][1]?.body as string).setup).toEqual({ schema_version: 1, ...setup });
+    const { geometry, options } = setup;
+    expect(fileMeshSubmission()).toEqual(bindImportedSetup(registeredMesh()!, { geometry, options }));
+  }
+
+  it.each(Object.entries(editContract.setups))('saves and solves valid unedited %s', async (_name, setup) => {
+    const mesh = meshFor(setup);
+    await loadMeshReplay('{}', vi.fn(async () => response({ record: mesh, request: bindImportedSetup(mesh, setup) })));
+    // A replay carries wire physics; library provenance belongs to saved setups.
+    await expectSavedSetup({ geometry: setup.geometry, options: setup.options });
+  });
+
+  it.each(editContract.edits)('$name', async ({ base, edit, expected }) => {
+    const setup = editContract.setups[base];
+    await openImported({ kind: 'run', job: fileJob() }, workspaceFetcher(setup, meshFor(setup)));
+    for (const motion of edit.motions ?? []) setMeshMotion(edit.source_id!, motion);
+    if (edit.selected !== undefined) {
+      editMeshImport({ selected: edit.selected });
+      const next: RegisteredMesh = { ...record, ingest_id: 'wgi_reprepared',
+        source_tags: Object.fromEntries(edit.selected.map(tag => [`group_${tag}`, tag])),
+        source_file: { ...record.source_file, source_tags: edit.selected } };
+      await prepareMeshFile(vi.fn(async () => prepared(next)));
+      expect(useMeshImportStore.getState().error).toBeNull();
+    }
+    await expectSavedSetup(expected);
+  });
+});
+
 describe('portable mesh replay', () => {
   const replayRecord: RegisteredMesh = { ...record, source_tags: { group_1: 1, group_2: 2 },
     source_file: { ...record.source_file, source_tags: [1, 2] } };
   function exactRequest() {
     showPrepared(replayRecord);
-    const request = fileMeshSubmission();
-    request.options.frequencies_hz = [137, 211, 3987];
-    request.options.polar_config = { ...request.options.polar_config, distance: 3.7, norm_angle: 17, enabled_axes: ['vertical'] };
-    request.geometry.drive_voltage_v = 4.2;
-    request.geometry.drive_channels = [{ id: 'retained-channel', source_ids: ['group_2'], motion: 'axial',
-      driver: { re_ohm: 6.2, le_mh: 0.1, bl_t_m: 12.4, sd_cm2: 26, mms_g: 2.4, fs_hz: 620 } },
-    { id: 'second-channel', source_ids: ['group_1'], motion: 'normal' }];
-    request.geometry.combine = { members: ['second-channel', 'retained-channel'], crossovers_hz: [620], level_match: false, align: false };
-    return request;
+    return bindImportedSetup(replayRecord, editContract.setups.replay);
   }
   const setupOfRequest = (request: ReturnType<typeof fileMeshSubmission>) => {
     const { type: _t, ingest_id: _i, manifest_sha256: _m, artifact_sha256: _a, acknowledged_findings: _f, ...geometry } = request.geometry;
@@ -439,8 +476,9 @@ describe('portable mesh replay', () => {
     const expected = structuredClone(request);
     expected.options.polar_config.distance = 9;
     expect(fileMeshSubmission()).toEqual(expected);
-    setMeshMotion('group_2', 'normal');
-    expected.geometry.drive_channels[0].motion = 'normal';
+    setMeshMotion('group_2', 'axial');
+    expected.geometry.drive_channels[0].motion = 'axial';
+    delete expected.geometry.drive_channels[0].driver;
     expect(fileMeshSubmission()).toEqual(expected);
     const save = vi.fn<typeof fetch>(async () => response({ revision_id: 'wgs_edited' }));
     await saveMeshSetup(save);

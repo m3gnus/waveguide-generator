@@ -15,6 +15,7 @@ import { beforeSolveSettingsEdit, noteSolveSettingsEdit, subscribeSolveSettingsE
 import { openMeshReplay } from '../api/meshReplay';
 import { bindImportedSetup, importedSetupOf, type ImportedSetup } from '../jobs/importedSetup';
 import { saveImportedSetup } from '../api/importedModels';
+import { withChannelMotion } from './cadReturn';
 import {
   editFileDraft, effectiveImportedSetup, importedModelBlocker, isCurrentOpen, openImported,
   registerImportedSetupControls, registerImportedView, useImportedModelStore,
@@ -83,9 +84,11 @@ export function setMeshMotion(sourceId: string, motion: 'normal' | 'axial'): voi
   beforeSolveSettingsEdit({ source: 'meshImport', control: 'motion' });
   const model = useImportedModelStore.getState();
   const setup = model.setup ?? model.setupEditBase?.retained;
-  const sources = setup?.geometry.drive_channels.find(channel => channel.source_ids.includes(sourceId))?.source_ids ?? [sourceId];
+  const channel = setup?.geometry.drive_channels.find(channel => channel.source_ids.includes(sourceId));
+  const sources = channel?.source_ids ?? [sourceId];
+  const nextMotion = channel ? withChannelMotion(channel, motion).motion : motion;
   useMeshImportStore.setState((state) => ({ motions: { ...state.motions,
-    ...Object.fromEntries(sources.map(id => [id, motion])) } }));
+    ...Object.fromEntries(sources.map(id => [id, nextMotion])) } }));
   noteSolveSettingsEdit({ source: 'meshImport', control: 'motion' });
 }
 
@@ -152,12 +155,25 @@ function setupForPreparedFile(retained: ImportedSetup, record: RegisteredMesh): 
   const available = new Set(Object.keys(record.source_tags));
   setup.geometry.drive_channels = setup.geometry.drive_channels.flatMap(channel => {
     const source_ids = channel.source_ids.filter(id => available.has(id));
-    return source_ids.length ? [{ ...channel, source_ids }] : [];
+    return source_ids.length ? [{ ...channel, source_ids,
+      ...(channel.patch_weights ? { patch_weights: Object.fromEntries(source_ids.map(id => [id, channel.patch_weights![id]])) } : {}),
+    }] : [];
   });
   const assigned = new Set(setup.geometry.drive_channels.flatMap(channel => channel.source_ids));
   setup.geometry.skipped_source_ids = setup.geometry.skipped_source_ids.filter(id => available.has(id));
   for (const id of available) if (!assigned.has(id) && !setup.geometry.skipped_source_ids.includes(id)) {
     setup.geometry.drive_channels.push({ id, source_ids: [id], motion: 'normal' });
+  }
+  const driven = new Set(setup.geometry.drive_channels.flatMap(channel => channel.source_ids));
+  if (setup.geometry.mesh) {
+    setup.geometry.mesh.source_size_mm = Object.fromEntries(Object.entries(setup.geometry.mesh.source_size_mm)
+      .filter(([id]) => driven.has(id)));
+    // Fresh file channels have no generation sizes. Do not invent a size for a new source.
+    if ([...driven].some(id => setup.geometry.mesh!.source_size_mm[id] === undefined)) delete setup.geometry.mesh;
+  }
+  if (setup.driver_references) {
+    setup.driver_references = Object.fromEntries(Object.entries(setup.driver_references)
+      .filter(([id]) => setup.geometry.drive_channels.some(channel => channel.id === id)));
   }
   if (setup.geometry.combine?.members.some(id => !setup.geometry.drive_channels.some(channel => channel.id === id))) {
     delete setup.geometry.combine;
@@ -209,8 +225,12 @@ function fileSetupControls(): ImportedSetup {
     ?? Object.keys(record.source_tags).map(id => ({ id, source_ids: [id], motion: 'normal' as const }));
   return {
     geometry: { skipped_source_ids: [],
-      drive_channels: channels.map(channel => ({ ...channel,
-        motion: channel.source_ids.map(id => state.motions[id]).find(motion => motion !== undefined) ?? channel.motion ?? 'normal' })) },
+      drive_channels: channels.map(channel => {
+        const motion = channel.source_ids.map(id => state.motions[id]).find(value => value !== undefined) ?? channel.motion ?? 'normal';
+        // Keep the before-edit projection exact, including server-valid legacy
+        // fields the fresh editor would not offer. Only a motion edit reconciles them.
+        return motion === channel.motion ? channel : withChannelMotion(channel, motion);
+      }) },
     options,
   };
 }

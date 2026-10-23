@@ -455,6 +455,13 @@ export function channelAcceptsDriver(channel: CadDriveChannel): boolean {
     && channel.physical_source_id === undefined && channel.patch_weights === undefined;
 }
 
+/** Motion edits keep exterior coordinates axial and discard incompatible legacy drivers. */
+export function withChannelMotion<T extends CadDriveChannel & { driver?: unknown }>(channel: T, motion: CadDriveChannel['motion']): T {
+  const next = { ...channel, motion: channel.exterior_transducer ? channel.motion : motion };
+  if (!channelAcceptsDriver(next)) delete next.driver;
+  return next;
+}
+
 /**
  * Drop driver forms whose channel can no longer carry them.
  *
@@ -792,7 +799,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
   },
   setChannelMotion: (channelId, motion) => {
     set((state) => {
-      const driveChannels = state.driveChannels.map((channel) => channel.id === channelId && !channel.exterior_transducer ? { ...channel, motion } : channel);
+      const driveChannels = state.driveChannels.map((channel) => channel.id === channelId ? withChannelMotion(channel, motion) : channel);
       return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
     });
   },

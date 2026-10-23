@@ -66,8 +66,3 @@ export function importedSetupOf(submission: ImportedSolveSubmission): ImportedSe
     acknowledged_findings: _findings, ...geometry } = submission.geometry;
   return structuredClone({ geometry, options: submission.options });
 }
-
-/** The setup a bound submission was made of, as a Solve or a setup save sends it. */
-export function setupOfSubmission(submission: ImportedSolveSubmission): CadSolveSetup {
-  return { schema_version: 1, ...importedSetupOf(submission) } as unknown as CadSolveSetup;
-}

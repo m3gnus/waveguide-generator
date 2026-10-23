@@ -1,0 +1,862 @@
+{
+  "setups": {
+    "replay": {
+      "geometry": {
+        "skipped_source_ids": [],
+        "drive_channels": [
+          {
+            "id": "retained-channel",
+            "source_ids": [
+              "group_2"
+            ],
+            "motion": "normal",
+            "driver": {
+              "re_ohm": 6.2,
+              "le_mh": 0.1,
+              "bl_t_m": 12.4,
+              "sd_cm2": 26,
+              "mms_g": 2.4,
+              "fs_hz": 620
+            }
+          },
+          {
+            "id": "second-channel",
+            "source_ids": [
+              "group_1"
+            ],
+            "motion": "normal"
+          }
+        ],
+        "drive_voltage_v": 4.2,
+        "combine": {
+          "members": [
+            "second-channel",
+            "retained-channel"
+          ],
+          "crossovers_hz": [
+            620
+          ],
+          "level_match": false,
+          "align": false
+        }
+      },
+      "options": {
+        "engine": "auto",
+        "solver_mode": "full_3d",
+        "symmetry": "full",
+        "frequencies_hz": [
+          137,
+          211,
+          3987
+        ],
+        "frequency_spacing": "log",
+        "mesh_validation_mode": "strict",
+        "polar_config": {
+          "angle_range": [
+            0,
+            180,
+            37
+          ],
+          "angle_step": 5,
+          "distance": 3.7,
+          "norm_angle": 17,
+          "inclination": 45,
+          "enabled_axes": [
+            "vertical"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": true
+        }
+      }
+    },
+    "weighted": {
+      "geometry": {
+        "required_features": [
+          "native-source-contour-v1"
+        ],
+        "skipped_source_ids": [],
+        "drive_channels": [
+          {
+            "id": "weighted",
+            "source_ids": [
+              "group_1",
+              "group_2"
+            ],
+            "motion": "normal",
+            "physical_source_id": "diaphragm",
+            "patch_weights": {
+              "group_1": 0.25,
+              "group_2": 0.75
+            }
+          },
+          {
+            "id": "gone",
+            "source_ids": [
+              "group_3"
+            ],
+            "motion": "normal",
+            "driver": {
+              "re_ohm": 6.2,
+              "le_mh": 0.1,
+              "bl_t_m": 12.4,
+              "sd_cm2": 26,
+              "mms_g": 2.4,
+              "fs_hz": 620
+            }
+          }
+        ],
+        "mesh": {
+          "rigid_size_mm": 4,
+          "transition_mm": 2,
+          "source_size_mm": {
+            "group_1": 1,
+            "group_2": 1.5,
+            "group_3": 2
+          }
+        },
+        "combine": {
+          "members": [
+            "weighted",
+            "gone"
+          ],
+          "crossovers_hz": [
+            620
+          ]
+        }
+      },
+      "options": {
+        "engine": "auto",
+        "solver_mode": "full_3d",
+        "symmetry": "full",
+        "frequencies_hz": [
+          137,
+          211,
+          3987
+        ],
+        "frequency_spacing": "log",
+        "mesh_validation_mode": "strict",
+        "polar_config": {
+          "angle_range": [
+            0,
+            180,
+            37
+          ],
+          "angle_step": 5,
+          "distance": 3.7,
+          "norm_angle": 17,
+          "inclination": 45,
+          "enabled_axes": [
+            "vertical"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": true
+        }
+      },
+      "driver_references": {
+        "gone": {
+          "driver_id": "driver-gone"
+        }
+      }
+    },
+    "transducer": {
+      "geometry": {
+        "skipped_source_ids": [],
+        "drive_channels": [
+          {
+            "id": "exterior",
+            "source_ids": [
+              "group_2"
+            ],
+            "motion": "axial",
+            "exterior_transducer": {
+              "version": 1,
+              "re_ohm": 6.2,
+              "le_h": 0.0001,
+              "bl_n_per_a": 12.4,
+              "mmd_kg": 0.0024,
+              "cms_m_per_n": 0.0003,
+              "rms_n_s_per_m": 0.8,
+              "motion_axis": [
+                0,
+                0,
+                1
+              ]
+            }
+          }
+        ],
+        "drive_voltage_v": 4.2
+      },
+      "options": {
+        "engine": "auto",
+        "solver_mode": "full_3d",
+        "symmetry": "full",
+        "frequencies_hz": [
+          137,
+          211,
+          3987
+        ],
+        "frequency_spacing": "log",
+        "mesh_validation_mode": "strict",
+        "polar_config": {
+          "angle_range": [
+            0,
+            180,
+            37
+          ],
+          "angle_step": 5,
+          "distance": 3.7,
+          "norm_angle": 17,
+          "inclination": 45,
+          "enabled_axes": [
+            "vertical"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": true
+        }
+      }
+    },
+    "physical_driver": {
+      "geometry": {
+        "skipped_source_ids": [],
+        "drive_channels": [
+          {
+            "id": "retained-channel",
+            "source_ids": [
+              "group_2"
+            ],
+            "motion": "normal",
+            "driver": {
+              "re_ohm": 6.2,
+              "le_mh": 0.1,
+              "bl_t_m": 12.4,
+              "sd_cm2": 26,
+              "mms_g": 2.4,
+              "fs_hz": 620
+            },
+            "physical_source_id": "diaphragm"
+          },
+          {
+            "id": "second-channel",
+            "source_ids": [
+              "group_1"
+            ],
+            "motion": "normal"
+          }
+        ],
+        "drive_voltage_v": 4.2,
+        "combine": {
+          "members": [
+            "second-channel",
+            "retained-channel"
+          ],
+          "crossovers_hz": [
+            620
+          ],
+          "level_match": false,
+          "align": false
+        },
+        "required_features": [
+          "native-source-contour-v1"
+        ]
+      },
+      "options": {
+        "engine": "auto",
+        "solver_mode": "full_3d",
+        "symmetry": "full",
+        "frequencies_hz": [
+          137,
+          211,
+          3987
+        ],
+        "frequency_spacing": "log",
+        "mesh_validation_mode": "strict",
+        "polar_config": {
+          "angle_range": [
+            0,
+            180,
+            37
+          ],
+          "angle_step": 5,
+          "distance": 3.7,
+          "norm_angle": 17,
+          "inclination": 45,
+          "enabled_axes": [
+            "vertical"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": true
+        }
+      }
+    }
+  },
+  "edits": [
+    {
+      "name": "normal driver to axial",
+      "base": "replay",
+      "edit": {
+        "source_id": "group_2",
+        "motions": [
+          "axial"
+        ]
+      },
+      "expected": {
+        "geometry": {
+          "skipped_source_ids": [],
+          "drive_channels": [
+            {
+              "id": "retained-channel",
+              "source_ids": [
+                "group_2"
+              ],
+              "motion": "axial"
+            },
+            {
+              "id": "second-channel",
+              "source_ids": [
+                "group_1"
+              ],
+              "motion": "normal"
+            }
+          ],
+          "drive_voltage_v": 4.2,
+          "combine": {
+            "members": [
+              "second-channel",
+              "retained-channel"
+            ],
+            "crossovers_hz": [
+              620
+            ],
+            "level_match": false,
+            "align": false
+          }
+        },
+        "options": {
+          "engine": "auto",
+          "solver_mode": "full_3d",
+          "symmetry": "full",
+          "frequencies_hz": [
+            137,
+            211,
+            3987
+          ],
+          "frequency_spacing": "log",
+          "mesh_validation_mode": "strict",
+          "polar_config": {
+            "angle_range": [
+              0,
+              180,
+              37
+            ],
+            "angle_step": 5,
+            "distance": 3.7,
+            "norm_angle": 17,
+            "inclination": 45,
+            "enabled_axes": [
+              "vertical"
+            ],
+            "observation_origin": "mouth",
+            "spherical_sampling": false,
+            "field_plane": true
+          }
+        }
+      }
+    },
+    {
+      "name": "driver does not return after toggling back",
+      "base": "replay",
+      "edit": {
+        "source_id": "group_2",
+        "motions": [
+          "axial",
+          "normal"
+        ]
+      },
+      "expected": {
+        "geometry": {
+          "skipped_source_ids": [],
+          "drive_channels": [
+            {
+              "id": "retained-channel",
+              "source_ids": [
+                "group_2"
+              ],
+              "motion": "normal"
+            },
+            {
+              "id": "second-channel",
+              "source_ids": [
+                "group_1"
+              ],
+              "motion": "normal"
+            }
+          ],
+          "drive_voltage_v": 4.2,
+          "combine": {
+            "members": [
+              "second-channel",
+              "retained-channel"
+            ],
+            "crossovers_hz": [
+              620
+            ],
+            "level_match": false,
+            "align": false
+          }
+        },
+        "options": {
+          "engine": "auto",
+          "solver_mode": "full_3d",
+          "symmetry": "full",
+          "frequencies_hz": [
+            137,
+            211,
+            3987
+          ],
+          "frequency_spacing": "log",
+          "mesh_validation_mode": "strict",
+          "polar_config": {
+            "angle_range": [
+              0,
+              180,
+              37
+            ],
+            "angle_step": 5,
+            "distance": 3.7,
+            "norm_angle": 17,
+            "inclination": 45,
+            "enabled_axes": [
+              "vertical"
+            ],
+            "observation_origin": "mouth",
+            "spherical_sampling": false,
+            "field_plane": true
+          }
+        }
+      }
+    },
+    {
+      "name": "exterior coordinate stays axial",
+      "base": "transducer",
+      "edit": {
+        "source_id": "group_2",
+        "motions": [
+          "normal"
+        ]
+      },
+      "expected": {
+        "geometry": {
+          "skipped_source_ids": [],
+          "drive_channels": [
+            {
+              "id": "exterior",
+              "source_ids": [
+                "group_2"
+              ],
+              "motion": "axial",
+              "exterior_transducer": {
+                "version": 1,
+                "re_ohm": 6.2,
+                "le_h": 0.0001,
+                "bl_n_per_a": 12.4,
+                "mmd_kg": 0.0024,
+                "cms_m_per_n": 0.0003,
+                "rms_n_s_per_m": 0.8,
+                "motion_axis": [
+                  0,
+                  0,
+                  1
+                ]
+              }
+            }
+          ],
+          "drive_voltage_v": 4.2
+        },
+        "options": {
+          "engine": "auto",
+          "solver_mode": "full_3d",
+          "symmetry": "full",
+          "frequencies_hz": [
+            137,
+            211,
+            3987
+          ],
+          "frequency_spacing": "log",
+          "mesh_validation_mode": "strict",
+          "polar_config": {
+            "angle_range": [
+              0,
+              180,
+              37
+            ],
+            "angle_step": 5,
+            "distance": 3.7,
+            "norm_angle": 17,
+            "inclination": 45,
+            "enabled_axes": [
+              "vertical"
+            ],
+            "observation_origin": "mouth",
+            "spherical_sampling": false,
+            "field_plane": true
+          }
+        }
+      }
+    },
+    {
+      "name": "unchanged preparation preserves physics",
+      "base": "weighted",
+      "edit": {
+        "selected": [
+          1,
+          2,
+          3
+        ]
+      },
+      "expected": {
+        "geometry": {
+          "required_features": [
+            "native-source-contour-v1"
+          ],
+          "skipped_source_ids": [],
+          "drive_channels": [
+            {
+              "id": "weighted",
+              "source_ids": [
+                "group_1",
+                "group_2"
+              ],
+              "motion": "normal",
+              "physical_source_id": "diaphragm",
+              "patch_weights": {
+                "group_1": 0.25,
+                "group_2": 0.75
+              }
+            },
+            {
+              "id": "gone",
+              "source_ids": [
+                "group_3"
+              ],
+              "motion": "normal",
+              "driver": {
+                "re_ohm": 6.2,
+                "le_mh": 0.1,
+                "bl_t_m": 12.4,
+                "sd_cm2": 26,
+                "mms_g": 2.4,
+                "fs_hz": 620
+              }
+            }
+          ],
+          "mesh": {
+            "rigid_size_mm": 4,
+            "transition_mm": 2,
+            "source_size_mm": {
+              "group_1": 1,
+              "group_2": 1.5,
+              "group_3": 2
+            }
+          },
+          "combine": {
+            "members": [
+              "weighted",
+              "gone"
+            ],
+            "crossovers_hz": [
+              620
+            ]
+          }
+        },
+        "options": {
+          "engine": "auto",
+          "solver_mode": "full_3d",
+          "symmetry": "full",
+          "frequencies_hz": [
+            137,
+            211,
+            3987
+          ],
+          "frequency_spacing": "log",
+          "mesh_validation_mode": "strict",
+          "polar_config": {
+            "angle_range": [
+              0,
+              180,
+              37
+            ],
+            "angle_step": 5,
+            "distance": 3.7,
+            "norm_angle": 17,
+            "inclination": 45,
+            "enabled_axes": [
+              "vertical"
+            ],
+            "observation_origin": "mouth",
+            "spherical_sampling": false,
+            "field_plane": true
+          }
+        },
+        "driver_references": {
+          "gone": {
+            "driver_id": "driver-gone"
+          }
+        }
+      }
+    },
+    {
+      "name": "remove one weighted source and a whole driver channel",
+      "base": "weighted",
+      "edit": {
+        "selected": [
+          1
+        ]
+      },
+      "expected": {
+        "geometry": {
+          "required_features": [
+            "native-source-contour-v1"
+          ],
+          "skipped_source_ids": [],
+          "drive_channels": [
+            {
+              "id": "weighted",
+              "source_ids": [
+                "group_1"
+              ],
+              "motion": "normal",
+              "physical_source_id": "diaphragm",
+              "patch_weights": {
+                "group_1": 0.25
+              }
+            }
+          ],
+          "mesh": {
+            "rigid_size_mm": 4,
+            "transition_mm": 2,
+            "source_size_mm": {
+              "group_1": 1
+            }
+          }
+        },
+        "options": {
+          "engine": "auto",
+          "solver_mode": "full_3d",
+          "symmetry": "full",
+          "frequencies_hz": [
+            137,
+            211,
+            3987
+          ],
+          "frequency_spacing": "log",
+          "mesh_validation_mode": "strict",
+          "polar_config": {
+            "angle_range": [
+              0,
+              180,
+              37
+            ],
+            "angle_step": 5,
+            "distance": 3.7,
+            "norm_angle": 17,
+            "inclination": 45,
+            "enabled_axes": [
+              "vertical"
+            ],
+            "observation_origin": "mouth",
+            "spherical_sampling": false,
+            "field_plane": true
+          }
+        },
+        "driver_references": {}
+      }
+    },
+    {
+      "name": "remove every source",
+      "base": "weighted",
+      "edit": {
+        "selected": []
+      },
+      "expected": {
+        "geometry": {
+          "required_features": [
+            "native-source-contour-v1"
+          ],
+          "skipped_source_ids": [],
+          "drive_channels": [],
+          "mesh": {
+            "rigid_size_mm": 4,
+            "transition_mm": 2,
+            "source_size_mm": {}
+          }
+        },
+        "options": {
+          "engine": "auto",
+          "solver_mode": "full_3d",
+          "symmetry": "full",
+          "frequencies_hz": [
+            137,
+            211,
+            3987
+          ],
+          "frequency_spacing": "log",
+          "mesh_validation_mode": "strict",
+          "polar_config": {
+            "angle_range": [
+              0,
+              180,
+              37
+            ],
+            "angle_step": 5,
+            "distance": 3.7,
+            "norm_angle": 17,
+            "inclination": 45,
+            "enabled_axes": [
+              "vertical"
+            ],
+            "observation_origin": "mouth",
+            "spherical_sampling": false,
+            "field_plane": true
+          }
+        },
+        "driver_references": {}
+      }
+    },
+    {
+      "name": "replace sources with a fresh channel",
+      "base": "weighted",
+      "edit": {
+        "selected": [
+          4
+        ]
+      },
+      "expected": {
+        "geometry": {
+          "required_features": [
+            "native-source-contour-v1"
+          ],
+          "skipped_source_ids": [],
+          "drive_channels": [
+            {
+              "id": "group_4",
+              "source_ids": [
+                "group_4"
+              ],
+              "motion": "normal"
+            }
+          ]
+        },
+        "options": {
+          "engine": "auto",
+          "solver_mode": "full_3d",
+          "symmetry": "full",
+          "frequencies_hz": [
+            137,
+            211,
+            3987
+          ],
+          "frequency_spacing": "log",
+          "mesh_validation_mode": "strict",
+          "polar_config": {
+            "angle_range": [
+              0,
+              180,
+              37
+            ],
+            "angle_step": 5,
+            "distance": 3.7,
+            "norm_angle": 17,
+            "inclination": 45,
+            "enabled_axes": [
+              "vertical"
+            ],
+            "observation_origin": "mouth",
+            "spherical_sampling": false,
+            "field_plane": true
+          }
+        },
+        "driver_references": {}
+      }
+    },
+    {
+      "name": "physical source driver to axial",
+      "base": "physical_driver",
+      "edit": {
+        "source_id": "group_2",
+        "motions": [
+          "axial"
+        ]
+      },
+      "expected": {
+        "geometry": {
+          "skipped_source_ids": [],
+          "drive_channels": [
+            {
+              "id": "retained-channel",
+              "source_ids": [
+                "group_2"
+              ],
+              "motion": "axial",
+              "physical_source_id": "diaphragm"
+            },
+            {
+              "id": "second-channel",
+              "source_ids": [
+                "group_1"
+              ],
+              "motion": "normal"
+            }
+          ],
+          "drive_voltage_v": 4.2,
+          "combine": {
+            "members": [
+              "second-channel",
+              "retained-channel"
+            ],
+            "crossovers_hz": [
+              620
+            ],
+            "level_match": false,
+            "align": false
+          },
+          "required_features": [
+            "native-source-contour-v1"
+          ]
+        },
+        "options": {
+          "engine": "auto",
+          "solver_mode": "full_3d",
+          "symmetry": "full",
+          "frequencies_hz": [
+            137,
+            211,
+            3987
+          ],
+          "frequency_spacing": "log",
+          "mesh_validation_mode": "strict",
+          "polar_config": {
+            "angle_range": [
+              0,
+              180,
+              37
+            ],
+            "angle_step": 5,
+            "distance": 3.7,
+            "norm_angle": 17,
+            "inclination": 45,
+            "enabled_axes": [
+              "vertical"
+            ],
+            "observation_origin": "mouth",
+            "spherical_sampling": false,
+            "field_plane": true
+          }
+        }
+      }
+    }
+  ]
+}
