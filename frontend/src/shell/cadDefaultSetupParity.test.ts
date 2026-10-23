@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { CadReturnBundle } from '../api/cadlink';
-import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { waitForCadProjectSettings } from '../stores/cadProjectSettings';
 import { resetDocumentStore } from '../stores/document';
@@ -60,7 +59,7 @@ describe('WG default CAD setup parity', () => {
   beforeEach(() => {
     localStorage.clear();
     resetCadReturnStore();
-    resetCadPreparationStore();
+
     resetDocumentStore();
     resetSolveOptionsStore();
   });
@@ -80,7 +79,6 @@ describe('WG default CAD setup parity', () => {
     const built = buildCadProjectSetup(
       useCadReturnStore.getState(),
       useImportedSolveOptionsStore.getState(),
-      useCadPreparationStore.getState(),
       'wgl_model',
     );
 
@@ -97,7 +95,7 @@ describe('WG default CAD setup parity', () => {
       .toEqual([sharedDefaults.sweep.start_hz, sharedDefaults.sweep.end_hz, 36]);
     expect(cad.driveVoltageV).toBe(sharedDefaults.cad.drive_voltage_v);
     expect(cad.exteriorOnly).toBe(sharedDefaults.cad.exterior_only);
-    expect(useCadPreparationStore.getState().symmetryMode).toBe(sharedDefaults.cad.preparation_symmetry_mode);
+    expect(useCadReturnStore.getState().symmetryMode).toBe(sharedDefaults.cad.preparation_symmetry_mode);
     expect(DEFAULT_SOLVE_OPTIONS.polar).toEqual({
       angleStart: sharedDefaults.directivity.angle_start_deg,
       angleEnd: sharedDefaults.directivity.angle_end_deg,

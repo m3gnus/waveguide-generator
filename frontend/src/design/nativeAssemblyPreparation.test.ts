@@ -42,7 +42,7 @@ describe('native assembly imported workspace handoff', () => {
     expect(useCadReturnStore.getState().isIngestSettled()).toBe(true);
     expect(importedSubmissionBlocker()).toBeNull();
     expect(channelAcceptsDriver(useCadReturnStore.getState().driveChannels[0])).toBe(false);
-    expect(buildCadProjectSetup(undefined,undefined,undefined,'unrelated-cad-project')).toBeNull();
+    expect(buildCadProjectSetup(undefined,undefined,'unrelated-cad-project')).toBeNull();
   });
 
   it('hydrates a negotiated horn-only artifact with its signed source weights', async () => {

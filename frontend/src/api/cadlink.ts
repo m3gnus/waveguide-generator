@@ -32,7 +32,29 @@ export interface CadReturnInstanceSummary {
  * 'wglink', which is what every workspace listing item is. */
 export type CadReturnBundleOrigin = 'wglink' | 'onshape' | 'native';
 
+export interface CadMeshSnapshot {
+  wall_size_mm: number;
+  grading_distance_mm: number;
+  symmetry: 'auto' | 'off';
+  source_size_mm: Record<string, number>;
+  surface_groups: Array<{
+    group_id: string;
+    name: string;
+    size_mm: number;
+    observed: { face_count: number };
+  }>;
+  settings_origin: 'defaults' | 'user';
+}
+
+export interface CadMeshSizes {
+  rigid_size_mm: number;
+  transition_mm: number;
+  source_size_mm: Record<string, number>;
+  surface_groups?: CadMeshSnapshot['surface_groups'] | null;
+}
+
 export interface CadReturnBundle {
+  meshSnapshot?: CadMeshSnapshot | null;
   /** Server-owned first-use sizing; never replaces saved setup/run sizes. */
   defaultMesh?: {
     rigid_size_mm: number;
@@ -383,7 +405,8 @@ export interface CadReturnIngestRecord {
     }>;
   };
   sources: CadReturnSource[];
-  mesh_sizes: { rigid_size_mm: number; transition_mm: number; source_size_mm: Record<string, number> };
+  mesh_sizes: CadMeshSizes;
+  mesh_snapshot?: CadMeshSnapshot;
   mesh?: {
     stats: CadMeshTriangleStats;
     metadata?: Record<string, unknown>;

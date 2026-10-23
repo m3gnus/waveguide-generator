@@ -90,14 +90,14 @@ describe('selection actions without the coordinator', () => {
     const reader = createCadReturnArrivalReader({}, (async () => json({ cadFolderConfigured: true, items: [listed] })) as typeof fetch);
     await reader.refresh({ autoOpenNew: true });
     useCadReturnStore.getState().setDriveVoltage(8);
-    useCadReturnStore.getState().setRigidSize(11);
+    useCadReturnStore.setState(s => ({ meshSizes: { ...s.meshSizes, rigid_size_mm: 11 } }));
     listed = { ...bundle, modifiedAt: '2026-08-12T00:00:00Z' };
     await reader.refresh({ autoOpenNew: true });
-    expect(useCadReturnStore.getState()).toMatchObject({ driveVoltageV: 8, rigidSizeMm: 11 });
+    expect(useCadReturnStore.getState()).toMatchObject({ driveVoltageV: 8, meshSizes: { rigid_size_mm: 11 },});
     listed = { ...listed, modifiedAt: '2026-08-13T00:00:00Z', sources: [{ ...bundle.sources[0], role: 'LF' }] };
     await reader.refresh({ autoOpenNew: true });
     expect(useCadReturnStore.getState().driveVoltageV).toBe(2.83);
-    expect(useCadReturnStore.getState().rigidSizeMm).toBe(25);
+    expect(useCadReturnStore.getState().meshSizes.rigid_size_mm).toBe(25);
   });
 
   it('refuses a foreign arrival without replacing design or undo history', async () => {
@@ -172,7 +172,7 @@ it.each(['listing revision', 'mesh edit'] as const)(
     }, (() => pending.promise) as typeof fetch);
     const first = reader.refresh({ background: true });
     if (change === 'listing revision') state.refreshSelectedBundle({ ...bundle, modifiedAt: '2026-08-14T00:00:00Z' });
-    else state.setRigidSize(9);
+    else useCadReturnStore.getState().setAreaDriftOverride('source-hf', true);
     pending.resolve(json({ cadFolderConfigured: true, items: [bundle] })); await first;
     expect(items).toHaveBeenCalledWith([bundle]);
   },

@@ -97,9 +97,9 @@ describe('imported solve submission wire', () => {
     useCadReturnStore.setState({
       selectedBundle: bundle,
       ingestRecord: record,
-      sourceSizesMm: { 'source-hf': 1.75, 'source-mf': 3.5, 'source-lf': 7 },
-      rigidSizeMm: 4.5,
-      transitionMm: 2.5,
+      meshSizes: { ...useCadReturnStore.getState().meshSizes, source_size_mm: { 'source-hf': 1.75, 'source-mf': 3.5, 'source-lf': 7 }, rigid_size_mm: 4.5, transition_mm: 2.5 },
+
+
       skippedSourceIds: ['source-lf'],
       driveChannels: [
         { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
@@ -148,7 +148,7 @@ describe('imported solve submission wire', () => {
     useCadReturnStore.setState({
       selectedBundle: bundle,
       ingestRecord: record,
-      sourceSizesMm: { 'source-hf': 2, 'source-mf': 4 },
+      meshSizes: { ...useCadReturnStore.getState().meshSizes, source_size_mm: { 'source-hf': 2, 'source-mf': 4 } },
       driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
       needsIngest: false,
     });
@@ -165,7 +165,7 @@ describe('imported solve submission wire', () => {
     useCadReturnStore.setState({
       selectedBundle: bundle,
       ingestRecord: record,
-      sourceSizesMm: { 'source-hf': 2, 'source-mf': 4 },
+      meshSizes: { ...useCadReturnStore.getState().meshSizes, source_size_mm: { 'source-hf': 2, 'source-mf': 4 } },
       driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
       channelDrivers: {
         'drive-hf': {

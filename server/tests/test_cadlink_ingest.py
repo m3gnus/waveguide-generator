@@ -749,6 +749,7 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(
     assert result["items"][0] == {
         "name": "speaker.wgreturn",
         "bundlePath": "wgreturn/speaker.wgreturn",
+        "meshSnapshot": None,
         "defaultMesh": {
             "rigid_size_mm": 25, "transition_mm": 100,
             "source_size_mm": {"source-hf": effective},

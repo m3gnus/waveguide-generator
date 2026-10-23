@@ -133,12 +133,12 @@ describe('the model a CAD solve prepared', () => {
 
   it('keeps settings edited since the solve, and the run keeps its marker', async () => {
     onScreen(received);
-    useCadReturnStore.getState().setSourceSize('source-hf', 2);
+    useCadReturnStore.getState().setAreaDriftOverride('source-hf', true);
     const solved = run('job-solved', prepared);
     await expect(adoptSolvedCadModel(solved, { manifestSha256: MANIFEST, sourceIngestId: received.ingest_id }, display, serving(prepared)))
       .resolves.toBe('declined');
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(received.ingest_id);
-    expect(useCadReturnStore.getState().sourceSizesMm['source-hf']).toBe(2);
+    expect(useCadReturnStore.getState().areaDriftOverrides).toContain('source-hf');
     expect(runContextMarker(solved, currentModel())).toBe('Different CAD return');
   });
 

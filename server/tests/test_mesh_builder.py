@@ -375,8 +375,8 @@ def test_imported_mesh_refusal_names_count_limit_and_all_sizes() -> None:
     assert (error.value.count, error.value.limit, error.value.mesh_sizes) == (28_944, 22_000, sizes)
     assert str(error.value) == (
         "This model meshes to 28,944 triangles; WG's limit is 22,000 for the part it solves. "
-        "Mesh sizes used: walls 4 mm, grading distance 100 mm, HF source 2 mm, LF source 30 mm. "
-        "Larger sizes give fewer triangles. Use coarser wall or source sizes before solving again."
+        "In Fusion, open Waveguide Generator ▸ Sources & Mesh…, raise Walls (now 4 mm; default 25 mm) "
+        "or add a Coarse surface group, and Send again."
     )
 
 

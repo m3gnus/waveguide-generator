@@ -178,7 +178,7 @@ describe('receipt-keyed Send display', () => {
     useCadReturnStore.getState().selectArrivedBundle(bundle, 'project-a', serving());
     await waitForCadProjectSettings();
     const state = useCadReturnStore.getState();
-    state.setRigidSize(17); state.setSourceSize('hf', 6); state.setDriveVoltage(4);
+    useCadReturnStore.setState(s => ({ meshSizes: { ...s.meshSizes, rigid_size_mm: 17 } })); useCadReturnStore.setState(s => ({ meshSizes: { ...s.meshSizes, source_size_mm: { ...s.meshSizes.source_size_mm, ['hf']: 6 } } })); state.setDriveVoltage(4);
     state.setSweep({ frequencyStartHz: 80, frequencyEndHz: 9000, frequencyCount: 42 });
     state.setChannelDriverField('drive-hf', 're_ohm', 5); retainCadDraft();
     const before = useCadReturnStore.getState();
@@ -186,7 +186,7 @@ describe('receipt-keyed Send display', () => {
     const store = createCadReceiptsStore(sessionStorage, () => NOW);
     await createReceiptDisplay(renderer(), store, fetcher)(receipt(1, { bundle_path: 'wgreturn/new.wgreturn' }));
     const held = useCadReturnStore.getState();
-    expect(held.rigidSizeMm).toBe(17); expect(held.sourceSizesMm.hf).toBe(6); expect(held.driveVoltageV).toBe(4);
+    expect(held.meshSizes.rigid_size_mm).toBe(17); expect(held.meshSizes.source_size_mm.hf).toBe(6); expect(held.driveVoltageV).toBe(4);
     expect(held.frequencyCount).toBe(42); expect(held.channelDrivers).toEqual(before.channelDrivers);
     expect(held.driveChannels).toEqual(before.driveChannels);
     const request = JSON.parse(String(fetcher.mock.calls.find(([url]) => String(url) === '/api/cadlink/ingest')![1]?.body));
@@ -196,13 +196,13 @@ describe('receipt-keyed Send display', () => {
   it('resets settings when the source inventory changes through cadReturn', async () => {
     useCadReturnStore.getState().selectArrivedBundle(bundle, 'project-a');
     useCadReturnStore.getState().setDriveVoltage(4);
-    useCadReturnStore.getState().setRigidSize(17);
+    useCadReturnStore.setState(s => ({ meshSizes: { ...s.meshSizes, rigid_size_mm: 17 } }));
     useCadReturnStore.getState().setChannelDriverField('drive-hf', 're_ohm', 5);
     const changed = { ...bundle, sources: [{ ...bundle.sources[0], id: 'new-hf' }] };
     const store = createCadReceiptsStore(sessionStorage, () => NOW);
     await createReceiptDisplay(renderer(), store, serving([changed]))(receipt());
     expect(useCadReturnStore.getState().driveVoltageV).not.toBe(4);
-    expect(useCadReturnStore.getState().rigidSizeMm).toBe(25);
+    expect(useCadReturnStore.getState().meshSizes.rigid_size_mm).toBe(25);
     expect(useCadReturnStore.getState().channelDrivers).toEqual({});
   });
 
@@ -376,7 +376,7 @@ it.each(['listing revision', 'mesh edit'] as const)('displays a delayed receipt 
   const item = receipt(); store.getState().merge({ feed_id: 'background', receipts: [item], cursor: 1, has_more: false });
   const display = renderer(); const pending = createReceiptDisplay(display, store, fetcher)(item);
   if (change === 'listing revision') useCadReturnStore.getState().refreshSelectedBundle({ ...bundle, modifiedAt: new Date(NOW + 1_000).toISOString() });
-  else useCadReturnStore.getState().setRigidSize(9);
+  else useCadReturnStore.getState().setAreaDriftOverride('source-hf', true);
   release(new Response(JSON.stringify({ items: [bundle], cadFolderConfigured: true })));
   await pending;
   expect(display.showIngestedMesh).toHaveBeenCalledOnce();

@@ -1,3 +1,4 @@
+import type { CadMeshSizes } from './cadlink';
 import { deadlineFetch } from './deadlineFetch';
 import type { ExteriorTransducerForm } from '../stores/exteriorTransducer';
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
@@ -175,11 +176,7 @@ export interface CadSetup {
   } | null;
   drive_voltage_v?: number;
   max_drive_voltage_v?: number;
-  mesh?: {
-    rigid_size_mm?: number;
-    transition_mm?: number;
-    source_size_mm?: Record<string, number>;
-  };
+  mesh?: Partial<CadMeshSizes>;
   skipped_source_ids?: string[];
   exterior_only?: boolean;
   passive_cardioid_rear_volume_l?: number | null;

@@ -1,7 +1,6 @@
 import { waitForCadProjectSettings } from '../../stores/cadProjectSettings';
 import { CadLinkApiError, ingestReturn, listReturns } from '../../api/cadlink';
 import { useCadReturnStore } from '../../stores/cadReturn';
-import { useCadPreparationStore } from '../../stores/cadPreparation';
 import { cadReceiptsStore, type CadReceipt, type CadReceiptsStore, type ReceiptFeedback } from '../../stores/cadReceipts';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { useDocumentStore } from '../../stores/document';
@@ -134,12 +133,12 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
       phase = 'ingest';
       const record = await ingestReturn({
         bundlePath: bundle.bundlePath, bundleOrigin: bundle.bundleOrigin ?? 'wglink',
-        mesh: { rigidSizeMm: selected.rigidSizeMm, transitionMm: selected.transitionMm,
-          sourceSizeMm: Object.fromEntries(Object.entries(selected.sourceSizesMm).filter(([id]) => !skipped.has(id))) },
+        mesh: { rigidSizeMm: selected.meshSizes.rigid_size_mm, transitionMm: selected.meshSizes.transition_mm,
+          sourceSizeMm: Object.fromEntries(Object.entries(selected.meshSizes.source_size_mm).filter(([id]) => !skipped.has(id))) },
         skippedSourceIds: selected.skippedSourceIds, areaDriftOverrides: selected.areaDriftOverrides,
         expectedDesignId: document.identity?.designId ?? null,
         expectedInstanceId: resolvePreparationTarget(bundle),
-        symmetryMode: useCadPreparationStore.getState().symmetryMode,
+        symmetryMode: useCadReturnStore.getState().symmetryMode,
       }, transport);
       if (!current()) return superseded();
       // A mutable folder entry must not substitute a different snapshot for

@@ -468,7 +468,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     if (blocker) throw new Error(blocker);
     // The settings on screen, or the setup an unedited reopened run was opened with.
     const unchanged = unchangedSetup('cad', ingestId);
-    const built = unchanged ? null : buildCadProjectSetup(cad, undefined, undefined, importedModelId(record));
+    const built = unchanged ? null : buildCadProjectSetup(cad, undefined, importedModelId(record));
     if (!unchanged && !built) throw new Error('The CAD solve settings are incomplete. Review the Simulation settings and try again.');
     const designName = currentRunNameSource().name;
     const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());

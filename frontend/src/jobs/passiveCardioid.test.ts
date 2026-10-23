@@ -50,9 +50,9 @@ function seedReturn(passiveCardioid: PassiveCardioidForm = { ...PASSIVE_CARDIOID
   useCadReturnStore.setState({
     selectedBundle: bundle,
     ingestRecord: record,
-    sourceSizesMm: { MF: 4, PORT_EXIT: 4 },
-    rigidSizeMm: 5,
-    transitionMm: 3,
+    meshSizes: { ...useCadReturnStore.getState().meshSizes, source_size_mm: { MF: 4, PORT_EXIT: 4 }, rigid_size_mm: 5, transition_mm: 3 },
+
+
     driveChannels: [
       { id: 'drive-mf', source_ids: ['MF'], motion: 'normal' },
       { id: 'drive-port', source_ids: ['PORT_EXIT'], motion: 'normal' },

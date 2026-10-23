@@ -573,10 +573,7 @@ def prepare_job_sync(
         except StaleAttempt as exc:
             raise _Fenced() from exc
         except MeshTooLarge as exc:
-            return run.refuse("preparation_failed", exc.message({
-                str(source["id"]): str(source["role"])
-                for source in retained_manifest.get("sources") or []
-            }))
+            return run.refuse("preparation_failed", exc.message())
         except WgReturnError as exc:
             return run.refuse("snapshot_invalid", str(exc))
         except IngestRefusal as exc:

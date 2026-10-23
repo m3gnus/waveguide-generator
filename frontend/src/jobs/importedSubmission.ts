@@ -336,11 +336,12 @@ export function resolveCadImportedSetup(
         }
         : {}),
       mesh: {
-        rigid_size_mm: state.rigidSizeMm,
-        transition_mm: state.transitionMm,
+        rigid_size_mm: state.meshSizes.rigid_size_mm,
+        transition_mm: state.meshSizes.transition_mm,
         source_size_mm: Object.fromEntries(
-          Object.entries(state.sourceSizesMm).filter(([id]) => !state.skippedSourceIds.includes(id)),
+          Object.entries(state.meshSizes.source_size_mm).filter(([id]) => !state.skippedSourceIds.includes(id)),
         ),
+        ...(state.meshSizes.surface_groups != null ? { surface_groups: state.meshSizes.surface_groups } : {}),
       },
       skipped_source_ids: [...state.skippedSourceIds],
       exterior_only: state.exteriorOnly,

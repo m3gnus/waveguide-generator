@@ -212,7 +212,7 @@ it.each(['listing revision', 'mesh settings', 'automatic arrival'] as const)('ke
   const { waiter, setItems } = setup(); useCadReturnStore.getState().selectBundle(bundle);
   const first = waiter.pullFromFusion(); await flush();
   if (change === 'listing revision') useCadReturnStore.getState().refreshSelectedBundle({ ...bundle, modifiedAt: '2026-10-11T12:01:00Z' });
-  if (change === 'mesh settings') useCadReturnStore.getState().setRigidSize(9);
+  if (change === 'mesh settings') useCadReturnStore.getState().setAreaDriftOverride('source-hf', true);
   if (change === 'automatic arrival') useCadReturnStore.getState().selectArrivedBundle(bundle);
   expect(waiter.getState().pullingFromFusion).toBe(true);
   setItems([returned]); await waiter.refresh(); expect(await first).toEqual(returned);

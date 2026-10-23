@@ -423,7 +423,7 @@ export function effectiveImportedSetup(input: ImportedInput, preparedId: string 
 function editedInput(source: string | undefined): ImportedInput {
   if (source === 'meshImport') return 'file';
   if (source === 'importedSolveOptions') return workspaceModeStore.getSnapshot().importedInput;
-  // cadReturn and cadPreparation announce their setters without a source.
+  // cadReturn announces their setters without a source.
   return 'cad';
 }
 

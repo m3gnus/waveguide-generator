@@ -1,7 +1,6 @@
 import { waitForCadProjectSettings } from '../../stores/cadProjectSettings';
 import { currentDocumentLoad, isCurrentDocumentLoad } from '../../stores/design';
 import { returnOnshapeToWg } from '../../api/onshape';
-import { useCadPreparationStore } from '../../stores/cadPreparation';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { workspaceNavigation } from '../workspaceNavigation';
 import { showIngestedMeshInViewport } from './artifactLoader';
@@ -321,15 +320,15 @@ export function createCadArrivalActions(
         // its own root, so this is the only thing that has to be dispatched.
         bundleOrigin: current.selectedBundle.bundleOrigin ?? 'wglink',
         mesh: {
-          rigidSizeMm: current.rigidSizeMm,
-          transitionMm: current.transitionMm,
-          sourceSizeMm: Object.fromEntries(Object.entries(current.sourceSizesMm).filter(([id]) => !skipped.has(id))),
+          rigidSizeMm: current.meshSizes.rigid_size_mm,
+          transitionMm: current.meshSizes.transition_mm,
+          sourceSizeMm: Object.fromEntries(Object.entries(current.meshSizes.source_size_mm).filter(([id]) => !skipped.has(id))),
         },
         skippedSourceIds: current.skippedSourceIds,
         areaDriftOverrides: current.areaDriftOverrides,
         expectedDesignId: useDocumentStore.getState().identity?.designId ?? null,
         expectedInstanceId: resolvePreparationTarget(current.selectedBundle),
-        symmetryMode: useCadPreparationStore.getState().symmetryMode,
+        symmetryMode: useCadReturnStore.getState().symmetryMode,
       }, fetcher, abortController.signal);
       if (!isCurrentDocumentLoad(documentLoad)
         || !useCadReturnStore.getState().applyIngest(record, ingestGeneration)) {

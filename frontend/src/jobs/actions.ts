@@ -1,3 +1,4 @@
+import type { CadMeshSizes } from '../api/cadlink';
 import type { components } from '../api/generated/openapi';
 import type { CadSolveSetup } from '../api/cadOperations';
 import { deadlineSignal, PLAN_TIMEOUT_MS } from '../api/deadlineFetch';
@@ -132,7 +133,7 @@ export interface ImportedGeometrySubmission {
   drive_voltage_v?: number;
   max_drive_voltage_v?: number;
   rg_ohm?: number;
-  mesh?: { rigid_size_mm: number; transition_mm: number; source_size_mm: Record<string, number> };
+  mesh?: CadMeshSizes;
   acknowledged_findings: string[];
   skipped_source_ids: string[];
   exterior_only?: boolean;

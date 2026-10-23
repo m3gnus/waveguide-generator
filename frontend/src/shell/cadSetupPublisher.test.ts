@@ -9,7 +9,6 @@ import { useCadSetupPublisherStore, useCadFeedbackError } from './cadSetupPublis
 import { useCadConnectionStore } from '../stores/cadConnection';
 import { cadReceiptsStore } from '../stores/cadReceipts';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
-import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
@@ -88,7 +87,7 @@ describe('CAD setup publisher', () => {
   beforeEach(() => {
     localStorage.clear();
     resetCadReturnStore();
-    resetCadPreparationStore();
+
     resetDocumentStore();
     resetSolveOptionsStore();
     workspaceModeStore.setMode('cad');
@@ -136,7 +135,7 @@ describe('CAD setup publisher', () => {
       } as unknown as CadReturnIngestRecord,
     });
     useImportedSolveOptionsStore.getState().setEngine('bempp');
-    useCadPreparationStore.getState().setSymmetryMode('full');
+    useCadReturnStore.setState({ symmetryMode: 'full' });
 
     const built = buildCadProjectSetup();
     expect(built).not.toBeNull();
@@ -316,7 +315,7 @@ describe('CAD solver selection publication', () => {
     vi.useFakeTimers();
     localStorage.clear();
     resetCadReturnStore();
-    resetCadPreparationStore();
+
     resetDocumentStore();
     resetSolveOptionsStore();
     workspaceModeStore.setMode('cad');
@@ -497,7 +496,7 @@ describe('CAD setup publisher: what an edit not yet sent does', () => {
   beforeEach(() => {
     localStorage.clear();
     resetCadReturnStore();
-    resetCadPreparationStore();
+
     resetDocumentStore();
     resetSolveOptionsStore();
     workspaceModeStore.setMode('cad');
@@ -647,16 +646,16 @@ describe('CAD setup publisher: what an edit not yet sent does', () => {
     const fetcher = vi.fn<typeof fetch>(async (input) => isSetupPut(String(input)) ? first : json({}));
     const stop = startCadSetupPublisher({ fetcher, debounceMs: 1 });
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
-    useCadReturnStore.getState().setRigidSize(5);
+    useCadReturnStore.getState().setExteriorOnly(true);
     await vi.advanceTimersByTimeAsync(1);
-    useCadReturnStore.getState().setRigidSize(6);
+    useCadReturnStore.getState().setExteriorOnly(false);
     await vi.advanceTimersByTimeAsync(1);
     expect(fetcher.mock.calls.filter(([input]) => isSetupPut(String(input)))).toHaveLength(1);
     window.dispatchEvent(new Event('pagehide'));
     const puts = fetcher.mock.calls.filter(([input]) => isSetupPut(String(input)));
     expect(puts).toHaveLength(2);
     expect(puts[1][1]?.keepalive).toBe(true);
-    expect(JSON.parse(String(puts[1][1]?.body)).setup.geometry.mesh.rigid_size_mm).toBe(6);
+    expect(JSON.parse(String(puts[1][1]?.body)).setup.geometry.exterior_only).toBe(false);
     finish(json({ revision_id: 'wgs_saved' }));
     await vi.advanceTimersByTimeAsync(1);
     expect(fetcher.mock.calls.filter(([input]) => isSetupPut(String(input)))).toHaveLength(2);
@@ -706,7 +705,7 @@ describe('shell-owned CAD setup publisher', () => {
     vi.useFakeTimers();
     localStorage.clear();
     resetCadReturnStore();
-    resetCadPreparationStore();
+
     resetDocumentStore();
     resetSolveOptionsStore();
 

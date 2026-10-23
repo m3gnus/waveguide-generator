@@ -56,6 +56,22 @@ Edits update the live preview. Viewer controls change the display, not the desig
 parameters. A solve always receives a revisioned design snapshot, so later editor changes
 cannot alter an existing run.
 
+### Mesh settings for Fusion models
+
+In Fusion, open **Waveguide Generator ▸ Sources & Mesh…**. Set the source sizes,
+walls, grading distance, surface groups and symmetry, then save and **Send**
+again. The dialog remembers your settings in the Fusion document.
+
+WG shows **Mesh (set in Fusion)** read-only, including the solved fraction,
+triangles and estimated memory. The card appears even if the first mesh fails.
+The limit is 22,000 triangles for the part WG solves. Raise **Walls** or add a
+**Coarse** surface group in Fusion if the mesh is too large.
+
+Older returns keep their saved sizes under **Mesh (set in WG by an older add-in)**.
+Update the add-in and Send again to change them. Old runs retain their own
+requests and sizes. WG still offers **Skip optional source**, **Accept area drift**,
+**Exterior only** and **Rebuild mesh**. See the [CAD Link guide](CAD-LINK-GUIDE.md).
+
 ### Import and solve a mesh
 
 Select **Imported mesh**, then press **Import mesh…** in the top bar. The design
@@ -719,7 +735,7 @@ already exists. Completed solves are listed under **Runs**.
 ### Starting from a model drawn in Fusion
 
 A model drawn entirely in Fusion uses the same workflow. Mark its sources with
-**Set WG Source…**, check the bodies in the Send/Solve pre-flight, and inspect
+**Waveguide Generator ▸ Sources & Mesh…**, check the bodies in the Send/Solve pre-flight, and inspect
 **Radiates along** and the domain line in WG. A confident automatic axis can be
 used directly; WG asks when it cannot decide. See the detailed guide before
 cutting a model in CAD or assigning several drivers to one source.

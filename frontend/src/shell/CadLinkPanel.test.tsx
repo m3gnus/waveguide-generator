@@ -2434,7 +2434,7 @@ describe('CadLinkPanel', () => {
     useCadReturnStore.getState().selectBundle(listing.items[0]);
     useCadReturnStore.getState().applyIngest(record, useCadReturnStore.getState().beginIngestIntent());
     useCadReturnStore.setState({
-      sourceSizesMm: { 'source-hf': 3.25, optional: 9 },
+      meshSizes: { ...useCadReturnStore.getState().meshSizes, source_size_mm: { 'source-hf': 3.25, optional: 9 } },
       skippedSourceIds: ['optional'],
     });
     useCadReturnStore.getState().setSweep({ frequencyStartHz: 250, frequencyEndHz: 12_000, frequencyCount: 31 });
@@ -2543,7 +2543,7 @@ describe('CadLinkPanel', () => {
     }));
     await renderAndSelect();
     await clickIngest();
-    act(() => useCadReturnStore.getState().setSourceSize('source-hf', 2.5));
+    act(() => useCadReturnStore.setState(s => ({ meshSizes: { ...s.meshSizes, source_size_mm: { ...s.meshSizes.source_size_mm, ['source-hf']: 2.5 } } })));
     await act(async () => { await cadWorkspace.getSnapshot().ingest(); });
     const submission = buildImportedSubmission(useCadReturnStore.getState());
     expect(submission.geometry).toMatchObject({
@@ -2567,13 +2567,13 @@ describe('CadLinkPanel', () => {
     }));
     await renderAndSelect();
     await clickIngest();
-    act(() => useCadReturnStore.getState().setSourceSize('source-hf', 2.5));
+    act(() => useCadReturnStore.setState(s => ({ meshSizes: { ...s.meshSizes, source_size_mm: { ...s.meshSizes.source_size_mm, ['source-hf']: 2.5 } } })));
     listingChanged = true;
     const refresh = host.querySelector<HTMLButtonElement>('button[aria-label="Refresh CAD returns"]')!;
     await act(async () => { refresh.click(); await Promise.resolve(); await Promise.resolve(); });
 
     expect(host.textContent).toContain('source inventory or source sizing suggestions changed');
-    expect(useCadReturnStore.getState().sourceSizesMm['source-hf']).toBe(2.5);
+    expect(useCadReturnStore.getState().meshSizes.source_size_mm['source-hf']).toBe(2.5);
     expect(importedSubmissionBlocker()).toContain('source inventory or source sizing suggestions changed');
     expect(host.textContent).not.toContain('Rebuild mesh');
   });

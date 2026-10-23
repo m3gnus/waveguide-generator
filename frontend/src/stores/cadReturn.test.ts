@@ -95,9 +95,9 @@ describe('CAD return store', () => {
   it('initializes complete sizes and one default channel per source', () => {
     useCadReturnStore.getState().selectBundle(bundle);
     const state = useCadReturnStore.getState();
-    expect(state.sourceSizesMm).toEqual({ 'source-mf': 8, 'source-hf': 3 });
-    expect(state.rigidSizeMm).toBe(25);
-    expect(state.transitionMm).toBe(100);
+    expect(state.meshSizes.source_size_mm).toEqual({ 'source-mf': 8, 'source-hf': 3 });
+    expect(state.meshSizes.rigid_size_mm).toBe(25);
+    expect(state.meshSizes.transition_mm).toBe(100);
     expect(state.driveChannels.map(({ id, source_ids }) => ({ id, source_ids }))).toEqual([
       { id: 'drive-mf', source_ids: ['source-mf'] },
       { id: 'drive-hf', source_ids: ['source-hf'] },
@@ -109,9 +109,9 @@ describe('CAD return store', () => {
       ...bundle,
       sources: bundle.sources.map((source, index) => ({ ...source, suggestedResolutionMm: index ? 0.15 : 0.4 })),
     });
-    expect(useCadReturnStore.getState().sourceSizesMm).toEqual({ 'source-mf': 0.4, 'source-hf': 0.15 });
-    expect(useCadReturnStore.getState().rigidSizeMm).toBe(25);
-    expect(useCadReturnStore.getState().transitionMm).toBe(100);
+    expect(useCadReturnStore.getState().meshSizes.source_size_mm).toEqual({ 'source-mf': 0.4, 'source-hf': 0.15 });
+    expect(useCadReturnStore.getState().meshSizes.rigid_size_mm).toBe(25);
+    expect(useCadReturnStore.getState().meshSizes.transition_mm).toBe(100);
   });
 
   it('uses the server default mesh without recomputing source role defaults', () => {
@@ -120,23 +120,39 @@ describe('CAD return store', () => {
       defaultMesh: { rigid_size_mm: 25, transition_mm: 100, source_size_mm: { 'source-mf': 15, 'source-hf': 6 } },
     });
     expect(useCadReturnStore.getState()).toMatchObject({
-      rigidSizeMm: 25, transitionMm: 100, sourceSizesMm: { 'source-mf': 15, 'source-hf': 6 },
+      meshSizes: { rigid_size_mm: 25, transition_mm: 100, source_size_mm: { 'source-mf': 15, 'source-hf': 6 } },
     });
+  });
+
+  it('takes Fusion sizing and symmetry from each snapshot instead of retained legacy sizes', () => {
+    const meshSnapshot = { wall_size_mm: 40, grading_distance_mm: 120, symmetry: 'off' as const,
+      source_size_mm: { 'source-mf': 15, 'source-hf': 6 }, surface_groups: [], settings_origin: 'user' as const };
+    useCadReturnStore.getState().selectBundle({ ...bundle, meshSnapshot });
+    expect(useCadReturnStore.getState()).toMatchObject({ symmetryMode: 'full', meshSizes: {
+      rigid_size_mm: 40, transition_mm: 120, source_size_mm: meshSnapshot.source_size_mm,
+    } });
+    useCadReturnStore.getState().selectArrivedBundle({ ...bundle, meshSnapshot: {
+      ...meshSnapshot, wall_size_mm: 25, symmetry: 'auto',
+    } });
+    expect(useCadReturnStore.getState()).toMatchObject({ symmetryMode: 'auto', meshSizes: { rigid_size_mm: 25 } });
+    for (const action of ['setSourceSize', 'setRigidSize', 'setTransition', 'setSymmetryMode']) {
+      expect(useCadReturnStore.getState()).not.toHaveProperty(action);
+    }
   });
 
   it('uses server defaults for newly listed sources while retaining existing choices', () => {
     useCadReturnStore.getState().selectBundle({ ...bundle, sources: [bundle.sources[0]], sourceCount: 1 });
-    useCadReturnStore.getState().setSourceSize('source-mf', 9);
+    useCadReturnStore.setState(s => ({ meshSizes: { ...s.meshSizes, source_size_mm: { ...s.meshSizes.source_size_mm, ['source-mf']: 9 } } }));
     const refreshed = {
       ...bundle,
       defaultMesh: { rigid_size_mm: 25, transition_mm: 100, source_size_mm: { 'source-mf': 15, 'source-hf': 6 } },
     };
     useCadReturnStore.getState().refreshSelectedBundle(refreshed);
-    expect(useCadReturnStore.getState().sourceSizesMm).toEqual({ 'source-mf': 9, 'source-hf': 6 });
+    expect(useCadReturnStore.getState().meshSizes.source_size_mm).toEqual({ 'source-mf': 9, 'source-hf': 6 });
     // Re-enabling an unsized optional source follows the same server policy.
-    useCadReturnStore.setState({ sourceSizesMm: { 'source-mf': 9 }, skippedSourceIds: ['source-hf'] });
+    useCadReturnStore.setState({ meshSizes: { ...useCadReturnStore.getState().meshSizes, source_size_mm: { 'source-mf': 9 } }, skippedSourceIds: ['source-hf'] });
     useCadReturnStore.getState().setSkipped('source-hf', false);
-    expect(useCadReturnStore.getState().sourceSizesMm).toEqual({ 'source-mf': 9, 'source-hf': 6 });
+    expect(useCadReturnStore.getState().meshSizes.source_size_mm).toEqual({ 'source-mf': 9, 'source-hf': 6 });
   });
 
   it('distinguishes a first arrival from resetting an existing solve setup', () => {
@@ -182,7 +198,7 @@ describe('CAD return store', () => {
     const store = useCadReturnStore.getState();
     store.selectBundle(bundle);
     store.applyIngest(record(), store.beginIngestIntent());
-    store.setSourceSize('source-hf', 2.25);
+    useCadReturnStore.setState(s => ({ meshSizes: { ...s.meshSizes, source_size_mm: { ...s.meshSizes.source_size_mm, ['source-hf']: 2.25 } } }));
     store.setSourceChannel('source-hf', 'drive-mf');
     store.setExteriorOnly(true);
     store.setCombineEnabled(true);
@@ -199,7 +215,7 @@ describe('CAD return store', () => {
 
     const state = useCadReturnStore.getState();
     expect(state.selectedBundle?.documentName).toBe('Speaker v2');
-    expect(state.sourceSizesMm['source-hf']).toBe(2.25);
+    expect(state.meshSizes.source_size_mm['source-hf']).toBe(2.25);
     expect(state.driveChannels).toEqual([
       { id: 'drive-mf', source_ids: ['source-mf', 'source-hf'], motion: 'normal' },
     ]);
@@ -278,7 +294,7 @@ describe('CAD return store', () => {
   it('resets fully when an arrival changes the source inventory', () => {
     const store = useCadReturnStore.getState();
     store.selectBundle(bundle);
-    store.setSourceSize('source-hf', 2.25);
+    useCadReturnStore.setState(s => ({ meshSizes: { ...s.meshSizes, source_size_mm: { ...s.meshSizes.source_size_mm, ['source-hf']: 2.25 } } }));
     store.setCombineEnabled(true);
 
     const arrived = {
@@ -289,7 +305,7 @@ describe('CAD return store', () => {
     };
     expect(useCadReturnStore.getState().selectArrivedBundle(arrived)).toBe('reset');
     const state = useCadReturnStore.getState();
-    expect(state.sourceSizesMm).toEqual({ 'source-mf': 8 });
+    expect(state.meshSizes.source_size_mm).toEqual({ 'source-mf': 8 });
     // The combine choice resets to "none made yet", not to off.
     expect(state.combineEnabled).toBeNull();
   });
@@ -297,7 +313,7 @@ describe('CAD return store', () => {
   it('marks a refreshed changed listing stale while preserving sizing edits', () => {
     useCadReturnStore.getState().selectBundle(bundle);
     useCadReturnStore.getState().applyIngest(record(), useCadReturnStore.getState().beginIngestIntent());
-    useCadReturnStore.getState().setSourceSize('source-hf', 2.25);
+    useCadReturnStore.setState(s => ({ meshSizes: { ...s.meshSizes, source_size_mm: { ...s.meshSizes.source_size_mm, ['source-hf']: 2.25 } } }));
     useCadReturnStore.getState().refreshSelectedBundle({
       ...bundle,
       modifiedAt: '2026-08-11T01:00:00Z',
@@ -308,7 +324,7 @@ describe('CAD return store', () => {
     const state = useCadReturnStore.getState();
     expect(state.needsIngest).toBe(true);
     expect(state.ingestStaleReason).toContain('source inventory or source sizing suggestions changed');
-    expect(state.sourceSizesMm['source-hf']).toBe(2.25);
+    expect(state.meshSizes.source_size_mm['source-hf']).toBe(2.25);
   });
 });
 
@@ -344,7 +360,7 @@ describe('combined output', () => {
     expect(combineWire(useCadReturnStore.getState())).toBeUndefined();
 
     // An unrelated edit must not talk the user back into the default.
-    useCadReturnStore.getState().setSourceSize('source-hf', 2.25);
+    useCadReturnStore.setState(s => ({ meshSizes: { ...s.meshSizes, source_size_mm: { ...s.meshSizes.source_size_mm, ['source-hf']: 2.25 } } }));
     expect(combineEnabledEffective(useCadReturnStore.getState())).toBe(false);
 
     useCadReturnStore.getState().selectBundle({ ...bundle, name: 'other.wgreturn', bundlePath: 'wgreturn/other.wgreturn' });

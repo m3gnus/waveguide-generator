@@ -183,30 +183,18 @@ export const CAD_CONTROLS = {
   ),
   meshDetail: control(
     'cad.mesh-detail', 'Mesh detail', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
-    ['CAD mesh', 'surface sizing', 'rebuild mesh', 'ingest'],
-  ),
-  rigidSize: control(
-    'cad.mesh.rigid-size', 'Walls', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
-    ['rigid CAD surfaces', 'mesh size', 'rigidSizeMm'], 'ingested-return', 'cad.mesh-detail',
-  ),
-  transitionSize: control(
-    'cad.mesh.transition', 'Grading distance', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
-    ['mesh regions', 'transitionMm'], 'ingested-return', 'cad.mesh-detail',
+    ['CAD mesh', 'surface sizing', 'Fusion', 'Walls', 'Grading distance', 'Symmetry', 'source size', 'surface group', 'rebuild mesh', 'ingest'], 'cad-mode',
   ),
   exteriorOnly: control(
     'cad.mesh.exterior-only', 'Exterior-only (leave FEM regions out)', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
     ['FEM air volumes', 'free space', 'exteriorOnly'], 'ingested-return', 'cad.mesh-detail',
-  ),
-  sourceSize: control(
-    'cad.mesh.source-size', 'Source mesh size', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
-    ['HF source', 'MF source', 'LF source', 'suggested resolution', 'sourceSizesMm'], 'ingested-return', 'cad.mesh-detail',
   ),
   skipSource: control(
     'cad.mesh.skip-source', 'Skip optional source', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
     ['exclude source', 'skippedSourceIds'], 'ingested-return', 'cad.mesh-detail',
   ),
   areaDrift: control(
-    'cad.mesh.area-drift', 'Allow recorded area drift', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
+    'cad.mesh.area-drift', 'Accept area drift', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
     ['source area mismatch', 'override', 'areaDriftOverrides'], 'ingested-return', 'cad.mesh-detail',
   ),
 } as const satisfies Record<string, CadControlDescriptor>;

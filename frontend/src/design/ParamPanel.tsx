@@ -13,10 +13,11 @@ import type { CadRealizedDimensions, CadRealizedParameter } from '../api/cadlink
 import { importedSubmissionBlocker, importedSubmissionNotices } from '../jobs/importedSubmission';
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
 import { useActiveBackendCapability, useCapabilities, usePlannedBackendCapabilities } from '../jobs/useCapabilities';
+import { displaySymmetry, recordDomainDecision } from '../api/domainDecision';
+import { cadMeshSizing } from '../api/cadMesh';
 import { backendLimitation, symmetryDomainLimitation } from './backendSupport';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { CadCrossover } from './CrossoverSection';
-import { useCadPreparationStore } from '../stores/cadPreparation';
 import {
   assignableChannelIds,
   channelAcceptsDriver,
@@ -1079,10 +1080,32 @@ function CadPassiveCardioid() {
   </>;
 }
 
+function CadMeshSummary() {
+  const state = useCadReturnStore();
+  const record = state.needsIngest ? null : state.ingestRecord;
+  const snapshot = state.selectedBundle?.meshSnapshot ?? record?.mesh_snapshot;
+  const sizes = state.meshSizes;
+  const planes = record ? displaySymmetry(record).solvedPlanes : [];
+  const fraction = recordDomainDecision(record)?.solver_domain.fraction
+    ?? (record ? planes.length >= 2 ? 'quarter' : planes.length === 1 ? 'half' : 'full' : null);
+  const sizing = record ? cadMeshSizing(record) : null;
+  const triangles = record?.mesh?.stats.triangle_count ?? sizing?.n_triangles;
+  const limit = record?.mesh?.stats.artifact_actual_domain_triangle_limit ?? 22_000;
+  const sources = state.selectedBundle?.sources ?? record?.sources ?? [];
+  return <div className="cad-mesh-summary">
+    <h3>{snapshot ? 'Mesh (set in Fusion)' : 'Mesh (set in WG by an older add-in)'}</h3>
+    <p>Walls {snapshot?.wall_size_mm ?? sizes.rigid_size_mm} mm · Grading distance {snapshot?.grading_distance_mm ?? sizes.transition_mm} mm · Symmetry {(snapshot ? snapshot.symmetry === 'off' : state.symmetryMode === 'full') ? 'Off' : 'Automatic'}{fraction ? ` (solved: ${fraction})` : ''}</p>
+    {sources.map(source => <p key={source.id}>{source.role} source {snapshot?.source_size_mm[source.id] ?? sizes.source_size_mm[source.id]} mm</p>)}
+    {(snapshot?.surface_groups ?? sizes.surface_groups ?? []).map(group => <p key={group.group_id}>{group.name} — surface group {group.size_mm} mm · {group.observed.face_count} {group.observed.face_count === 1 ? 'face' : 'faces'}</p>)}
+    <p>{typeof triangles === 'number' ? `Triangles ${triangles.toLocaleString('en-US')} of ${Number(limit).toLocaleString('en-US')}` : 'Triangles available after preparing the mesh'}{typeof sizing?.ram_gb === 'number' ? ` · memory ≈ ${sizing.ram_gb.toFixed(1)} GB` : ''}</p>
+    <p className="section-note">{snapshot
+      ? 'To change these, open Waveguide Generator ▸ Sources & Mesh… in Fusion and Send again.'
+      : 'Sizes saved with this model are kept. To change them, open Sources & Mesh… in Fusion (updated Waveguide Generator add-in) and Send again.'}</p>
+  </div>;
+}
+
 function CadMeshDetail() {
   const state = useCadReturnStore();
-  const symmetryMode = useCadPreparationStore((current) => current.symmetryMode);
-  const setSymmetryMode = useCadPreparationStore((current) => current.setSymmetryMode);
   const cadWorkspaceView = useSyncExternalStore(
     cadWorkspace.subscribe,
     cadWorkspace.getSnapshot,
@@ -1093,16 +1116,11 @@ function CadMeshDetail() {
     .filter((finding) => String(finding.kind).includes('area-drift'))
     .map((finding) => String(finding.source_id))]);
   return <>
-    <div className="cad-mesh-intro"><p>Smaller values are finer. Curved CAD faces receive bounded extra refinement automatically.</p><button className="primary" disabled={cadWorkspaceView.ingesting || !state.selectedBundle?.readable} onClick={() => void cadWorkspaceView.ingest()}>{cadWorkspaceView.ingesting ? 'Preparing…' : 'Rebuild mesh'}</button></div>
-    <ToggleRow id="cad-force-full-domain" label="Force full domain" help="Disable automatic x=0/y=0 cutting for this preparation. Use this when a symmetry verdict is doubtful; it costs more memory and solve time but cannot remove a geometric half. A return the CAD author already cut is refused instead: the other half is not in the file." checked={symmetryMode === 'full'} onChange={(enabled) => {
-      setSymmetryMode(enabled ? 'full' : 'auto');
-      state.markIngestStale('The CAD symmetry preparation mode changed.');
-    }}/>
-    <NumberField label={CAD_CONTROLS.rigidSize.label} revealId={CAD_CONTROLS.rigidSize.reveal.id} unit="mm" value={state.rigidSizeMm} min={0.01} step={0.5} precision={2} description="Mesh size for every surface that is not a source." onCommit={state.setRigidSize}/>
-    <NumberField label={CAD_CONTROLS.transitionSize.label} revealId={CAD_CONTROLS.transitionSize.reveal.id} unit="mm" value={state.transitionMm} min={0.01} step={0.5} precision={2} description="Distance over which the mesh grows from each source's size to the wall size." onCommit={state.setTransition}/>
+    <CadMeshSummary/>
+    <div className="cad-mesh-intro"><button className="primary" disabled={cadWorkspaceView.ingesting || !state.selectedBundle?.readable} onClick={() => void cadWorkspaceView.ingest()}>{cadWorkspaceView.ingesting ? 'Preparing…' : 'Rebuild mesh'}</button></div>
     {((state.ingestRecord?.evidence?.fem_air_volumes?.length ?? 0) > 0 || (state.ingestRecord?.evidence?.fem_regions?.length ?? 0) > 0) && <ToggleRow id="cad-exterior-only" label={CAD_CONTROLS.exteriorOnly.label} revealId={CAD_CONTROLS.exteriorOnly.reveal.id} help="Explicitly exclude the returned FEM air volumes and FEM regions. This solves only the exterior free-space problem." checked={state.exteriorOnly} onChange={state.setExteriorOnly}/>}
-    {(state.selectedBundle?.sources ?? []).map((source) => <div className={`cad-source ${state.skippedSourceIds.includes(source.id) ? 'skipped' : ''}`} key={source.id}>
-      <NumberField label={`${source.role} source`} revealId={CAD_CONTROLS.sourceSize.reveal.id} unit="mm" value={state.sourceSizesMm[source.id] ?? source.suggestedResolutionMm} min={0.01} step={0.25} precision={2} description={`${source.id} · suggested ${source.suggestedResolutionMm} mm`} disabled={state.skippedSourceIds.includes(source.id)} onCommit={(value) => state.setSourceSize(source.id, value)}/>
+    {(state.selectedBundle?.sources ?? []).filter(source => !source.required || driftSources.has(source.id)).map((source) => <div className={`cad-source ${state.skippedSourceIds.includes(source.id) ? 'skipped' : ''}`} key={source.id}>
+      <b>{source.role} source</b>
       {!source.required && <ToggleRow id={`skip-${source.id}`} label={CAD_CONTROLS.skipSource.label} revealId={CAD_CONTROLS.skipSource.reveal.id} help="Exclude this optional source from ingestion and the solve. This creates a blocking finding." checked={state.skippedSourceIds.includes(source.id)} onChange={(checked) => state.setSkipped(source.id, checked)}/>}
       {driftSources.has(source.id) && <ToggleRow id={`drift-${source.id}`} label={CAD_CONTROLS.areaDrift.label} revealId={CAD_CONTROLS.areaDrift.reveal.id} help="Explicitly accept the source-area mismatch and re-ingest. The override is recorded as a finding on the prepared model." checked={state.areaDriftOverrides.includes(source.id)} onChange={(checked) => state.setAreaDriftOverride(source.id, checked)}/>}
     </div>)}
@@ -1114,7 +1132,7 @@ function CadMeshDetail() {
 
 function CadSimulationEmpty() {
   const cadApplication = cadApplicationName(usePreferences().cadApplication);
-  return <div className="cad-mode-empty" role="status"><b>Prepare CAD geometry to unlock these inputs</b><span>Drivers, crossover, sweep, directivity, solve options, and mesh detail appear here after CAD Link brings the finished geometry back from {cadApplication}.</span><button className="primary" onClick={() => workspaceNavigation.navigate('geometry')}>Open CAD Link setup</button></div>;
+  return <div className="cad-mode-empty" role="status"><b>Prepare CAD geometry to unlock these inputs</b><span>Drivers, crossover, sweep, directivity and solve options appear here after CAD Link brings the finished geometry back from {cadApplication}.</span><button className="primary" onClick={() => workspaceNavigation.navigate('geometry')}>Open CAD Link setup</button></div>;
 }
 
 const osseChoices = [
@@ -1165,6 +1183,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
   const currentPreviewFields = previewErrorRevision === designRevision ? previewErrorFields : null;
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const ingestRecord = useCadReturnStore((state) => state.ingestRecord);
+  const selectedBundle = useCadReturnStore((state) => state.selectedBundle);
   // The campaign needs a port aperture in the geometry. Offering it to a model
   // that has none can only produce a server refusal, so the section is not
   // shown at all -- and the submission drops the form to match.
@@ -1406,6 +1425,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
           {definitions.map(renderRegistrySection)}
           {tab === 'geometry' && cadSectionMatches(CAD_CONTROLS.realizedDimensions.section) && <RealizedDimensionsCard forceOpen={searching}/>}
           {!searching && tab === 'simulation' && !ingestRecord && <CadSimulationEmpty/>}
+          {tab === 'simulation' && (selectedBundle || ingestRecord) && cadSectionMatches(CAD_CONTROLS.meshDetail.section) && <Section title={CAD_CONTROLS.meshDetail.section} description="Mesh settings from Fusion, optional sources, area drift, and mesh regeneration." forceOpen revealId={CAD_CONTROLS.meshDetail.reveal.id}><CadMeshDetail/></Section>}
           {tab === 'simulation' && ingestRecord && <>
             {cadSectionMatches(CAD_CONTROLS.frequencySweep.section) && <Section title={CAD_CONTROLS.frequencySweep.section} description="The explicit range submitted with this imported CAD geometry." forceOpen={searching} revealId={CAD_CONTROLS.frequencySweep.reveal.id}><CadFrequencySweep/></Section>}
             {cadSectionMatches(CAD_CONTROLS.directivityMap.section) && <Section title={CAD_CONTROLS.directivityMap.section} description="Display-plane and angular sampling controls, including the effective imported-CAD grid." forceOpen={searching} revealId={CAD_CONTROLS.directivityMap.reveal.id}><DirectivityMapControls effectiveDerivation={ingestRecord.polar_grid_derivation}/></Section>}
@@ -1413,7 +1433,6 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
             {cadSectionMatches(CAD_CONTROLS.crossover.section) && <Section title={CAD_CONTROLS.crossover.section} description="Optional combined output of adjacent drive channels: a filter family and slope per pair, with automatic or manual level, delay and polarity per channel." forceOpen={searching} revealId={CAD_CONTROLS.crossover.reveal.id}><CadCrossover/></Section>}
             {cardioidSurface && cadSectionMatches(CAD_CONTROLS.passiveCardioid.section) && <Section title={CAD_CONTROLS.passiveCardioid.section} description="Sealed rear chamber vented through a damped port, and the extra radiation-impedance campaign it needs." forceOpen={searching} revealId={CAD_CONTROLS.passiveCardioid.reveal.id}><CadPassiveCardioid/></Section>}
             {cadSectionMatches(CAD_CONTROLS.solveOptions.section) && <Section title={CAD_CONTROLS.solveOptions.section} description="Imported-CAD validation, frequency selection, and diagnostic controls. Geometry fixes the backend and domain." forceOpen={searching} revealId={CAD_CONTROLS.solveOptions.reveal.id}><SolveOptionsControls mode="cad" ingestRecord={ingestRecord}/></Section>}
-            {cadSectionMatches(CAD_CONTROLS.meshDetail.section) && <Section title={CAD_CONTROLS.meshDetail.section} description="Imported-CAD surface sizing, optional-source policy, domain choice, and mesh regeneration." forceOpen={searching} revealId={CAD_CONTROLS.meshDetail.reveal.id}><CadMeshDetail/></Section>}
           </>}
         </>}
       {searching && [...fieldsBySection.values()].every((fields) => fields.length === 0) && matchingCadSections.size === 0 && matchingParametricSections.size === 0 && <div className="parameter-empty">No parameter labels or keys match “{query}”.</div>}

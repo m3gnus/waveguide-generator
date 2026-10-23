@@ -1,3 +1,5 @@
+import { archivedRequest, record as archivedRecord, mesh as archivedMesh, job as archivedJob, workspaceFor, json } from '../shell/cadlink/selection.fixtures';
+import { openImported, resetImportedModelStore } from '../stores/importedModel';
 import { PARAMETER_REGISTRY, PARAMETER_SECTION_DEFINITIONS, fieldIsVisible } from './parameterRegistry';
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -14,7 +16,6 @@ import { CadSetupPublisher, useCadSetupPublisherStore } from '../shell/cadSetupP
 import { buildParameterPaletteEntries } from '../shell/TopBar';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
 import { combineSpecEffective, channelDriverPresent, channelDriverWire, driverEditedKeys, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
 import { resetDriverLibraryStore, useDriverLibraryStore } from '../stores/driverLibrary';
 import { hydrateDesignDocument } from '../api/designIo';
 import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, type OsseFeatures } from './osseFeatures';
@@ -66,9 +67,9 @@ function setCadReady({ cardioidPort = false }: { cardioidPort?: boolean } = {}):
     selectedBundle: cardioidPort ? { ...cadBundle, sources: [...cadBundle.sources, portSource] } : cadBundle,
     ingestRecord: cadRecord,
     needsIngest: false,
-    sourceSizesMm: { 'source-hf': 2, 'source-mf': 4, ...(cardioidPort ? { 'source-port': 4 } : {}) },
-    rigidSizeMm: 5,
-    transitionMm: 4,
+    meshSizes: { ...useCadReturnStore.getState().meshSizes, source_size_mm: { 'source-hf': 2, 'source-mf': 4, ...(cardioidPort ? { 'source-port': 4 } : {}) }, rigid_size_mm: 5, transition_mm: 4 },
+
+
     driveChannels: [
       { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
       { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
@@ -134,7 +135,8 @@ describe('ParamPanel inventory UX', () => {
     localStorage.clear();
     resetDesignStore();
     resetCadReturnStore();
-    resetCadPreparationStore();
+    resetImportedModelStore();
+
     resetSolveOptionsStore();
     resetDriverLibraryStore();
     useCadSetupPublisherStore.setState({ error: null });
@@ -1195,7 +1197,7 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).not.toContain('Mesh');
 
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Drivers', 'Crossover', 'Passive cardioid', 'Solve options', 'Mesh detail']);
+    expect(titles()).toEqual(['Mesh detail', 'Frequency Sweep', 'Directivity Map', 'Drivers', 'Crossover', 'Passive cardioid', 'Solve options']);
     for (const hidden of ['Source Definition', 'Solve & export mesh', 'Output & Passthrough']) expect(host.textContent).not.toContain(hidden);
     expect(host.querySelector('#solve-engine')).toBeNull();
     expect(host.querySelector('#solve-symmetry')).toBeNull();
@@ -1354,7 +1356,7 @@ describe('ParamPanel inventory UX', () => {
       expect(cadWorkspace.getSnapshot().error).toBeNull();
       const alert = () => host.querySelector('[data-section="Mesh detail"] [role="alert"]');
       expect(alert()).toBeNull();
-      act(() => useCadReturnStore.getState().setRigidSize(6));
+      act(() => useCadReturnStore.getState().setExteriorOnly(false));
       await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
       expect(save).toHaveBeenCalledTimes(3);
       expect(alert()?.textContent).toBe('Settings not saved. Edit a setting to retry.');
@@ -1391,6 +1393,74 @@ describe('ParamPanel inventory UX', () => {
     expect(buildImportedSubmission().geometry.exterior_only).toBe(true);
   });
 
+  const fusionMesh = {
+    wall_size_mm: 25, grading_distance_mm: 100, symmetry: 'auto' as const,
+    source_size_mm: { 'source-hf': 6, 'source-mf': 15 }, settings_origin: 'user' as const,
+    surface_groups: [{ group_id: 'back', name: 'Back', size_mm: 40, observed: { face_count: 3 } }],
+  };
+
+  it('shows the Fusion mesh card with sources, groups, measured count and memory', () => {
+    act(() => {
+      setCadReady();
+      useCadReturnStore.setState({ ingestRecord: { ...cadRecord, mesh_snapshot: fusionMesh,
+        symmetry: { cut_planes: ['x0', 'y0'] },
+        mesh: { stats: { triangle_count: 2140, artifact_actual_domain_triangle_limit: 22000 } },
+        sizing_estimate: { n_triangles: 100, ram_gb: 0.1, measured: { n_triangles: 2140, ram_gb: 1.1 } },
+      } });
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    expect(host.textContent).toContain('Mesh (set in Fusion)');
+    expect(host.textContent).toContain('Walls 25 mm · Grading distance 100 mm · Symmetry Automatic (solved: quarter)');
+    expect(host.textContent).toContain('HF source 6 mm');
+    expect(host.textContent).toContain('MF source 15 mm');
+    expect(host.textContent).toContain('Back — surface group 40 mm · 3 faces');
+    expect(host.textContent).toContain('Triangles 2,140 of 22,000 · memory ≈ 1.1 GB');
+    expect(host.textContent).toContain('To change these, open Waveguide Generator ▸ Sources & Mesh… in Fusion and Send again.');
+    expect(host.querySelector('.cad-mesh-summary input')).toBeNull();
+  });
+
+  it.each([false, true])('shows mesh settings and a refusal without an ingest (Fusion: %s)', (fusion) => {
+    const refusal = "This model meshes to 28,944 triangles; WG's limit is 22,000 for the part it solves. In Fusion, open Waveguide Generator ▸ Sources & Mesh…, raise Walls (now 4 mm; default 25 mm) or add a Coarse surface group, and Send again.";
+    vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({ ...cadWorkspace.getSnapshot(), error: refusal });
+    act(() => {
+      useCadReturnStore.setState({ selectedBundle: { ...cadBundle, ...(fusion ? { meshSnapshot: { ...fusionMesh, wall_size_mm: 4 } } : {}) },
+        meshSizes: { rigid_size_mm: 4, transition_mm: 100, source_size_mm: { 'source-hf': 6, 'source-mf': 15 } },
+        ingestRecord: null,
+      });
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    expect(host.textContent).toContain(fusion ? 'Mesh (set in Fusion)' : 'Mesh (set in WG by an older add-in)');
+    expect(host.textContent).toContain('Walls 4 mm · Grading distance 100 mm · Symmetry Automatic');
+    expect(host.textContent).toContain('HF source 6 mm');
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(refusal);
+    expect([...host.querySelectorAll('button')].find(button => button.textContent === 'Rebuild mesh')?.disabled).toBe(false);
+    expect(host.querySelector('#cad-force-full-domain')).toBeNull();
+    if (!fusion) expect(host.textContent).toContain('Sizes saved with this model are kept. To change them, open Sources & Mesh… in Fusion (updated Waveguide Generator add-in) and Send again.');
+  });
+
+  it('opens an old run and shows its stored mesh sizes read-only', async () => {
+    const request = archivedRequest();
+    request.geometry.mesh = { rigid_size_mm: 12, transition_mm: 70, source_size_mm: { 'source-hf': 2.5 } };
+    const retained = { ...archivedRecord, mesh_sizes: request.geometry.mesh };
+    await act(async () => {
+      expect(await openImported({ kind: 'run', job: archivedJob() }, (async input => {
+        const path = String(input);
+        if (path.endsWith('/workspace')) return json(workspaceFor(undefined, request));
+        if (path.endsWith('/mesh') || path.endsWith('/viewport-mesh')) return new Response(archivedMesh);
+        return json(retained);
+      }) as typeof fetch)).toBe(true);
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    expect(host.textContent).toContain('Mesh (set in WG by an older add-in)');
+    expect(host.textContent).toContain('Walls 12 mm · Grading distance 70 mm');
+    expect(host.textContent).toContain('HF source 2.5 mm');
+    expect(useCadReturnStore.getState().meshSizes).toEqual(request.geometry.mesh);
+    expect(host.querySelector('.cad-mesh-summary input')).toBeNull();
+    expect(host.querySelector('#cad-force-full-domain')).toBeNull();
+  });
+
   it('renders every moved CAD control in the Simulation rail and submits its visible crossover state', () => {
     const ingest = vi.spyOn(cadWorkspace.getSnapshot(), 'ingest').mockResolvedValue(undefined);
     act(() => {
@@ -1399,7 +1469,7 @@ describe('ParamPanel inventory UX', () => {
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
 
-    for (const id of ['cad-force-full-domain', 'cad-combine', 'cad-exterior-only', 'skip-source-mf', 'drift-source-mf']) {
+    for (const id of ['cad-combine', 'cad-exterior-only', 'skip-source-mf', 'drift-source-mf']) {
       expect(host.querySelector(`#${id}`), id).not.toBeNull();
     }
     // The grouping select is gone: each source drives its default channel.
@@ -1432,10 +1502,10 @@ describe('ParamPanel inventory UX', () => {
     // before asserting the blocker this test is about.
     expect(importedSubmissionBlocker()).toBeNull();
 
-    const forceFull = host.querySelector<HTMLInputElement>('#cad-force-full-domain')!;
-    act(() => forceFull.click());
-    expect(useCadPreparationStore.getState().symmetryMode).toBe('full');
-    expect(useCadReturnStore.getState().ingestStaleReason).toContain('symmetry preparation mode changed');
+    expect(host.querySelector('#cad-force-full-domain')).toBeNull();
+    expect(host.querySelector('[data-control-reveal-id="cad.mesh.rigid-size"]')).toBeNull();
+    expect(host.querySelector('[data-control-reveal-id="cad.mesh.transition"]')).toBeNull();
+    expect(host.querySelector('[data-control-reveal-id="cad.mesh.source-size"]')).toBeNull();
 
     const rebuild = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Rebuild mesh')!;
     act(() => rebuild.click());
@@ -2418,7 +2488,8 @@ describe('driver picker', () => {
     localStorage.clear();
     resetDesignStore();
     resetCadReturnStore();
-    resetCadPreparationStore();
+    resetImportedModelStore();
+
     resetSolveOptionsStore();
     resetDriverLibraryStore();
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

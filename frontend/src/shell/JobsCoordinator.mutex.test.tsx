@@ -223,7 +223,7 @@ function readyCad(ingestId: string): CadReturnIngestRecord {
     },
     projectLineageId: 'wgl_test', ingestRecord: record, needsIngest: false,
     driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
-    sourceSizesMm: { 'source-hf': 4 }, rigidSizeMm: 8, transitionMm: 12, skippedSourceIds: [],
+    meshSizes: { ...useCadReturnStore.getState().meshSizes, source_size_mm: { 'source-hf': 4 }, rigid_size_mm: 8, transition_mm: 12 },   skippedSourceIds: [],
   });
   importedMeshStore.setCad({ name: 'Fusion speaker', source: 'cad', ingestId } as ImportedMeshScene);
   return record;
@@ -443,7 +443,7 @@ describe('solve invocation mutex', () => {
         useCadReturnStore.setState({ driveChannels: [
           { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
           { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
-        ], sourceSizesMm: { 'source-mf': 4, 'source-hf': 4 },
+        ], meshSizes: { ...useCadReturnStore.getState().meshSizes, source_size_mm: { 'source-mf': 4, 'source-hf': 4 } },
           combineSpec: expandLegacy(['drive-mf', 'drive-hf'], [100]), combineEnabled: true });
       } else if (mode === 'file') {
         workspaceModeStore.setImportedInput('file');
@@ -1065,7 +1065,8 @@ describe('solve invocation mutex', () => {
       if (mode === 'parametric') {
         expect(mocks.submitDesign).toHaveBeenCalledOnce();
         expect(mocks.submitDesign.mock.calls[0][1].engine).toBe('bempp');
-        expect(JSON.parse(fetcher.mock.calls.filter(([url]) => String(url) === '/api/solve/plan').at(-1)![1]!.body as string).options.engine).toBe('bempp');
+        const planning = fetcher.mock.calls.filter(([url]) => String(url) === '/api/solve/plan');
+        expect(JSON.parse(planning.at(-1)![1]!.body as string).options.engine).toBe('bempp');
       } else {
         expect(mocks.solveModel).toHaveBeenCalledOnce();
         expect((mocks.solveModel.mock.calls[0][1].setup as CadSolveSetup).options.engine).toBe('bempp');

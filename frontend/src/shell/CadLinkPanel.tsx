@@ -1,3 +1,4 @@
+import { cadMeshSizing } from '../api/cadMesh';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { buildCadProjectSetup, useCadFeedbackError } from './cadSetupPublisher';
 import { nativeCadLimitation } from '../design/nativeFamilies';
@@ -296,8 +297,7 @@ function recordChecks(record: CadReturnIngestRecord): CheckDescriptor[] {
   // Mesh sizing & cost
   // The measured mesh when the record carries it: the area estimate beside it
   // is a lower bound, several times short on a curved CAD model.
-  const measured = record.sizing_estimate.measured;
-  const sizing = measured && typeof measured === 'object' ? measured as Record<string, unknown> : record.sizing_estimate;
+  const sizing = cadMeshSizing(record);
   const feasibility = typeof sizing.feasibility === 'string' ? sizing.feasibility : null;
   // A time is only a forecast for a known sweep; preparation estimates one frequency.
   const sweepKnown = typeof sizing.freq_count === 'number' && sizing.freq_count > 1;
@@ -930,7 +930,7 @@ export function CadLinkPanel() {
         The round trip still works for building and exporting geometry, and the
         parametric workspace still solves here.
       </div>}
-      {bundle && !state.setupLoading && !buildCadProjectSetup(state, undefined, undefined, state.projectLineageId ?? 'unclaimed') && <p className="cad-detail" role="status">Fusion solves use the last complete setup.</p>}
+      {bundle && !state.setupLoading && !buildCadProjectSetup(state, undefined, state.projectLineageId ?? 'unclaimed') && <p className="cad-detail" role="status">Fusion solves use the last complete setup.</p>}
       {state.setupLoading && <div className="cad-alert cad-alert-notice" role="status">Loading model settings…</div>}
       {state.ingestStaleReason && <div className="cad-alert cad-alert-notice" role="status">{state.ingestStaleReason} Prepare the model again before solving.</div>}
       {viewportNotice && <div className="cad-alert cad-alert-notice" role="status">{viewportNotice}</div>}

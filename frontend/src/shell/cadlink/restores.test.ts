@@ -80,7 +80,7 @@ describe('job and last-model restores without the coordinator', () => {
       ingestRecord: record, driveVoltageV: 8, maxDriveVoltageV: 20, exteriorOnly: true,
       frequencyStartHz: 100, frequencyEndHz: 1000, frequencyCount: 3,
       driveChannels: [{ id: 'archive-hf', source_ids: ['source-hf'], motion: 'normal' }],
-      sourceSizesMm: { 'source-hf': 4 }, needsIngest: false,
+      meshSizes: { source_size_mm: { 'source-hf': 4 } }, needsIngest: false,
     });
     expect(useCadReturnStore.getState().isIngestSettled()).toBe(false);
     expect(useCadReturnStore.getState().selectedBundle?.readable).toBe(false);
@@ -472,7 +472,7 @@ describe('shared historical restoration transaction', () => {
     // An unedited Solve names the run's setup revision.
     expect(unchangedSetup('cad', record.ingest_id)).toEqual({ setup_revision_id: 'wgs_archived' });
     // The rail shows the same setup, so an edit starts from it.
-    const setup = buildCadProjectSetup(undefined, undefined, undefined, 'manual');
+    const setup = buildCadProjectSetup(undefined, undefined, 'manual');
     expect(setup?.setup.geometry).toMatchObject({ drive_channels: [{ driver: { re_ohm: 6 } }], drive_voltage_v: 8 });
     expect(setup?.setup.options).toMatchObject({ engine: 'beat-cpu', accuracy: 'accurate', adaptive_frequency_sampling: true,
       frequencies_hz: [100, 500, 1000] });
@@ -486,7 +486,7 @@ describe('shared historical restoration transaction', () => {
     useImportedSolveOptionsStore.getState().setEngine('beat-cpu');
     expect(unchangedSetup('cad', record.ingest_id)).toBeNull();
     useCadReturnStore.getState().setDriveVoltage(4);
-    expect(buildCadProjectSetup(undefined, undefined, undefined, 'manual')?.setup.geometry.drive_voltage_v).toBe(4);
+    expect(buildCadProjectSetup(undefined, undefined, 'manual')?.setup.geometry.drive_voltage_v).toBe(4);
   });
 
   it('files an unfiled run under no guessed project', async () => {

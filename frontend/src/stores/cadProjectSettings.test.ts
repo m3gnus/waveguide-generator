@@ -6,7 +6,6 @@ import { buildCadProjectSetup, startCadSetupPublisher } from '../shell/cadSetupP
 import { buildImportedSubmission } from '../jobs/importedSubmission';
 import { resetCadReturnStore, sourceInventorySignature, useCadReturnStore } from './cadReturn';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
-import { resetCadPreparationStore } from './cadPreparation';
 import { resetImportedModelStore, openImported, reopenLastModel, unchangedSetup } from './importedModel';
 import { createCadArrivalActions } from '../shell/cadlink/arrivals';
 import { driverValues, channelDriverWire } from './cadReturn';
@@ -45,7 +44,7 @@ function server(setup: unknown = saved) {
   });
 }
 beforeEach(() => {
-  localStorage.clear(); resetDocumentStore(); resetCadReturnStore(); resetSolveOptionsStore(); resetCadPreparationStore();
+  localStorage.clear(); resetDocumentStore(); resetCadReturnStore(); resetSolveOptionsStore();
   workspaceModeStore.setImportedInput('cad'); workspaceModeStore.setMode('cad'); resetImportedModelStore();
 });
 afterEach(() => { stops.splice(0).forEach(stop => stop()); vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -58,7 +57,7 @@ it('restores identical model settings on reopen, selection and arrival, independ
   expect(reopened?.setup.preparation).toEqual(saved.preparation);
   expect(reopened?.setup.geometry.mesh).toEqual(saved.geometry.mesh);
   for (const arrive of [false, true]) {
-    resetCadReturnStore(); resetSolveOptionsStore(); resetCadPreparationStore();
+    resetCadReturnStore(); resetSolveOptionsStore();
     useSolveOptionsStore.getState().updatePolar({ distance: 11 });
     if (arrive) useCadReturnStore.getState().selectArrivedBundle(bundle, model);
     else useCadReturnStore.getState().selectBundle(bundle, model);
@@ -216,7 +215,7 @@ it('holds edits during a setup read and applies them over the fetched baseline b
   useCadReturnStore.getState().setDriveVoltage(7);
   expect(fetcher.mock.calls.some(([, init]) => init?.method === 'PUT' && String(init.body).includes('inventory'))).toBe(false);
   pending.resolve(json({ setup })); await waitForCadProjectSettings();
-  expect(useCadReturnStore.getState()).toMatchObject({ driveVoltageV: 7, rigidSizeMm: 12, setupLoading: false });
+  expect(useCadReturnStore.getState()).toMatchObject({ driveVoltageV: 7, meshSizes: { rigid_size_mm: 12 }, setupLoading: false });
   expect(useImportedSolveOptionsStore.getState().polar.distance).toBe(saved.options.polar_config.distance);
   await vi.waitFor(() => expect(modelDrafts(model)).toBeNull());
   const put = fetcher.mock.calls.find(([input, init]) => String(input).endsWith('/setup') && init?.method === 'PUT')!;

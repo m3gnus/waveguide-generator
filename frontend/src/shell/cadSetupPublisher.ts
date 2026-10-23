@@ -9,7 +9,6 @@ import {
   type CadSolveSetup,
   type CadSourceInventoryEntry,
 } from '../api/cadOperations';
-import { useCadPreparationStore } from '../stores/cadPreparation';
 import {
   hasPassiveCardioidSurface,
   incompleteDriverChannels,
@@ -38,7 +37,6 @@ export interface CadProjectSetup {
 
 type CadReturnSnapshot = ReturnType<typeof useCadReturnStore.getState>;
 type SolveOptionsSnapshot = ReturnType<typeof useImportedSolveOptionsStore.getState>;
-type CadPreparationSnapshot = ReturnType<typeof useCadPreparationStore.getState>;
 
 /** CAD publication only follows CAD input: file-mesh edits are not CAD settings. */
 function cadInputActive(): boolean {
@@ -70,10 +68,9 @@ function projectLineage(state: CadReturnSnapshot): string | null {
 export function buildCadProjectSetup(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
   solveStore: SolveOptionsSnapshot = useImportedSolveOptionsStore.getState(),
-  preparation: CadPreparationSnapshot = useCadPreparationStore.getState(),
   lineageId: string | null = projectLineage(state),
 ): CadProjectSetup | null {
-  const draft = cadProjectSetupControls(state, solveStore, preparation, lineageId);
+  const draft = cadProjectSetupControls(state, solveStore, lineageId);
   if (!draft) return null;
   return { ...draft, setup: { schema_version: 1,
     ...effectiveImportedSetup('cad', state.ingestRecord?.ingest_id, () => draft.setup as unknown as ImportedSetup),
@@ -83,7 +80,6 @@ export function buildCadProjectSetup(
 function cadProjectSetupControls(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
   solveStore: SolveOptionsSnapshot = useImportedSolveOptionsStore.getState(),
-  preparation: CadPreparationSnapshot = useCadPreparationStore.getState(),
   lineageId: string | null = projectLineage(state),
 ): CadProjectSetup | null {
   const bundle = state.selectedBundle;
@@ -117,13 +113,13 @@ function cadProjectSetupControls(
       options: { ...resolved.options },
       preparation: {
         area_drift_overrides: [...state.areaDriftOverrides],
-        symmetry_mode: preparation.symmetryMode,
+        symmetry_mode: state.symmetryMode,
       },
       driver_references: driverReferences,
     },
   };
 }
-registerImportedSetupControls('cad', () => cadProjectSetupControls(undefined, undefined, undefined,
+registerImportedSetupControls('cad', () => cadProjectSetupControls(undefined, undefined,
   useImportedModelStore.getState().modelId)?.setup as unknown as ImportedSetup | null);
 
 /** Which project, inventory and return the settings on screen belong to. */

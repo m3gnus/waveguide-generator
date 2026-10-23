@@ -26,7 +26,7 @@ const displayMesh = mesh.replace('2 1 0 0', '2 2 0 0');
 
 describe('ingest-keyed artifact loading without the coordinator', () => {
   describe.each(['model', 'solver'] as const)('initial %s mesh', (slot) => {
-    it.each(['rigid size', 'source size', 'skipped source', 'stale mark'] as const)(
+    it.each(['area drift', 'exterior only', 'skipped source', 'stale mark'] as const)(
       'finishes through a %s edit to the held ingest', async (edit) => {
         const pending = deferred<Response>();
         const fetcher = (() => pending.promise) as typeof fetch;
@@ -34,8 +34,8 @@ describe('ingest-keyed artifact loading without the coordinator', () => {
           ? showIngestedMeshInViewport(record, 'Speaker', undefined, fetcher)
           : showIngestedSolverMeshInViewport(record, 'Speaker', fetcher);
         const state = useCadReturnStore.getState();
-        if (edit === 'rigid size') state.setRigidSize(9);
-        else if (edit === 'source size') state.setSourceSize('source-hf', 7);
+        if (edit === 'area drift') state.setAreaDriftOverride('source-hf', true);
+        else if (edit === 'exterior only') state.setExteriorOnly(true);
         else if (edit === 'skipped source') state.setSkipped('source-hf', true);
         else state.markIngestStale('Settings changed.');
         expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);

@@ -1,3 +1,4 @@
+import { snapshotMeshSettings } from '../api/cadMesh';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { CadSolveSetup, CadSourceInventoryEntry } from '../api/cadOperations';
 import { workspaceModeStore } from './workspaceMode';
@@ -5,7 +6,6 @@ import { ImportedModelApiError, readCadInventorySetup } from '../api/importedMod
 import type { ImportedSetup } from '../jobs/importedSetup';
 import { cadHistorySetup } from './cadSetupRestore';
 import { useCadReturnStore, sourceInventorySignature } from './cadReturn';
-import { useCadPreparationStore } from './cadPreparation';
 import { durableSettings, type SettingsNamespace } from './durableSettings';
 import { CAD_DRAFTS_NAMESPACE, cadDraftHash, journalKey, mergeCadDrafts, type CadDraftJournal } from './cadDraftJournal';
 import { applyCadOptions, cadOptionsSnapshot, endOpenedSetup, restoreCadImportedSetup } from './importedModel';
@@ -22,7 +22,7 @@ interface CadDraft {
   /** Legacy entries are considered only after checking that the server has no setup. */
   legacy?: boolean;
 }
-const fields = ['sourceSizesMm', 'rigidSizeMm', 'transitionMm', 'skippedSourceIds', 'driveChannels',
+const fields = ['skippedSourceIds', 'driveChannels',
   'exteriorOnly', 'exteriorOnlyRegionIds', 'combineEnabled', 'combineSpec', 'channelDrivers',
   'passiveCardioid', 'driveVoltageV', 'maxDriveVoltageV', 'frequencyStartHz', 'frequencyEndHz', 'frequencyCount'] as const;
 const baseRevisions = new Map<string, string | null>();
@@ -71,9 +71,11 @@ export function retainCadDraft(): { key: string; raw: string } | null {
   const state = useCadReturnStore.getState();
   const draft: CadDraft = structuredClone({
     baseRevisionId: baseRevisions.get(key) ?? null, updatedAt: Math.max(Date.now(), (journal()[key]?.updatedAt ?? -1) + 1),
-    settings: Object.fromEntries(fields.map(field => [field, state[field]])) as PersistedSolveSettings,
+    settings: { ...Object.fromEntries(fields.map(field => [field, state[field]])),
+      sourceSizesMm: state.meshSizes.source_size_mm, rigidSizeMm: state.meshSizes.rigid_size_mm,
+      transitionMm: state.meshSizes.transition_mm } as PersistedSolveSettings,
     options,
-    preparation: { symmetryMode: useCadPreparationStore.getState().symmetryMode, areaDriftOverrides: state.areaDriftOverrides },
+    preparation: { symmetryMode: state.symmetryMode, areaDriftOverrides: state.areaDriftOverrides },
   });
   writeDrafts({ ...drafts(), [key]: draft });
   return { key, raw: JSON.stringify(draft) };
@@ -178,12 +180,13 @@ export function restoreCadProjectSettings(saved: ImportedSetup | null, record: C
     });
     const options = cadOptionsSnapshot() ?? { ...defaultSolveOptions(), sweepStartHz: 50, sweepEndHz: 20_000, sweepCount: 36 };
     applyCadOptions(importedOptionsFromWire(saved.options, options));
-    useCadPreparationStore.setState({ symmetryMode: setup.preparation?.symmetry_mode ?? 'auto' });
   }
   if (draft) {
-    useCadReturnStore.setState({ ...draft.settings, areaDriftOverrides: draft.preparation.areaDriftOverrides });
+    const { sourceSizesMm, rigidSizeMm, transitionMm, ...settings } = draft.settings;
+    useCadReturnStore.setState({ ...settings, meshSizes: {
+      source_size_mm: sourceSizesMm, rigid_size_mm: rigidSizeMm, transition_mm: transitionMm,
+    }, symmetryMode: draft.preparation.symmetryMode, areaDriftOverrides: draft.preparation.areaDriftOverrides });
     applyCadOptions(draft.options);
-    useCadPreparationStore.setState({ symmetryMode: draft.preparation.symmetryMode });
     endOpenedSetup('cad');
     // The publisher is the only writer, and resumes unsent valid edits too.
     const selection = state.captureSelectionIntent();
@@ -192,13 +195,14 @@ export function restoreCadProjectSettings(saved: ImportedSetup | null, record: C
         restoredListeners.forEach(listener => listener());
       }
     });
-  } else if (!saved) {
-    useCadPreparationStore.setState({ symmetryMode: 'auto' });
+  }
+  if (state.selectedBundle?.meshSnapshot) {
+    useCadReturnStore.setState(snapshotMeshSettings(state.selectedBundle.meshSnapshot));
   }
   // A stored mesh choice different from the retained mesh requires preparation.
   const current = useCadReturnStore.getState();
-  if (state.ingestRecord && (JSON.stringify(current.sourceSizesMm) !== JSON.stringify(record.mesh_sizes.source_size_mm)
-    || current.rigidSizeMm !== record.mesh_sizes.rigid_size_mm || current.transitionMm !== record.mesh_sizes.transition_mm
+  if (state.ingestRecord && (JSON.stringify(current.meshSizes.source_size_mm) !== JSON.stringify(record.mesh_sizes.source_size_mm)
+    || current.meshSizes.rigid_size_mm !== record.mesh_sizes.rigid_size_mm || current.meshSizes.transition_mm !== record.mesh_sizes.transition_mm
     || JSON.stringify(current.skippedSourceIds) !== JSON.stringify(record.skipped_source_ids))) {
     useCadReturnStore.setState({ needsIngest: true, ingestStaleReason: 'Prepare the mesh for the restored model settings.' });
   }
@@ -253,7 +257,7 @@ export function loadCadProjectSettings(fetcher: typeof fetch = fetch): Promise<b
   if (!model) {
     resetCadProjectSettingsLoad();
     restoreCadProjectSettings(null, { sources: bundle.sources, skipped_source_ids: state.skippedSourceIds,
-      mesh_sizes: { source_size_mm: state.sourceSizesMm, rigid_size_mm: state.rigidSizeMm, transition_mm: state.transitionMm },
+      mesh_sizes: { source_size_mm: state.meshSizes.source_size_mm, rigid_size_mm: state.meshSizes.rigid_size_mm, transition_mm: state.meshSizes.transition_mm },
     } as unknown as CadReturnIngestRecord);
     return loading;
   }
@@ -270,7 +274,7 @@ export function loadCadProjectSettings(fetcher: typeof fetch = fetch): Promise<b
       const held = useCadReturnStore.getState();
       const record = held.ingestRecord ?? { sources: bundle.sources.map(source => ({ ...source,
         default_drive_channel_id: source.defaultDriveChannelId })), skipped_source_ids: held.skippedSourceIds,
-        mesh_sizes: { source_size_mm: held.sourceSizesMm, rigid_size_mm: held.rigidSizeMm, transition_mm: held.transitionMm },
+        mesh_sizes: { source_size_mm: held.meshSizes.source_size_mm, rigid_size_mm: held.meshSizes.rigid_size_mm, transition_mm: held.meshSizes.transition_mm },
       } as unknown as CadReturnIngestRecord;
       const draft = restoreCadProjectSettings(saved.setup, record, true, saved.revision_id ?? null);
       useCadReturnStore.setState({ setupLoading: false });

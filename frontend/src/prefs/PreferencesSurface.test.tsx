@@ -224,7 +224,7 @@ describe('preferences surfaces', () => {
       },
       ingestRecord: readyCadRecord('wgi_first'), needsIngest: false,
       driveChannels: [{ id: 'drive', source_ids: ['source'], motion: 'normal' }],
-      sourceSizesMm: { source: 2 }, rigidSizeMm: 5, transitionMm: 5,
+      meshSizes: { ...useCadReturnStore.getState().meshSizes, source_size_mm: { source: 2 }, rigid_size_mm: 5, transition_mm: 5 },
     });
     workspaceModeStore.setMode('cad');
     // The parametric design open behind the CAD workspace does not name its runs.

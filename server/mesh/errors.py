@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from server.design.defaults import default_cad_wall_size_mm
+
 
 class MeshTooLarge(RuntimeError):
     """The generated solver artifact exceeds the triangle limit."""
@@ -15,22 +17,17 @@ class MeshTooLarge(RuntimeError):
         self.mesh_sizes = dict(mesh_sizes) if mesh_sizes is not None else None
         super().__init__(self.message())
 
-    def message(self, source_roles: Mapping[str, str] | None = None) -> str:
+    def message(self) -> str:
         message = (
             f"This model meshes to {self.count:,} triangles; WG's limit is "
             f"{self.limit:,} for the part it solves. "
         )
         if self.mesh_sizes is None:
             return message + "Use coarser throat/mouth/rear resolution before solving again."
-        sizes = self.mesh_sizes
-        used = [
-            f"walls {sizes['rigid_size_mm']:g} mm",
-            f"grading distance {sizes['transition_mm']:g} mm",
-        ]
-        for source_id, size in sorted(sizes["source_size_mm"].items()):
-            label = (source_roles or {}).get(source_id, source_id)
-            used.append(f"{label} source {size:g} mm")
+        wall = self.mesh_sizes["rigid_size_mm"]
+        default_wall = default_cad_wall_size_mm()
         return (
-            message + "Mesh sizes used: " + ", ".join(used) + ". "
-            "Larger sizes give fewer triangles. Use coarser wall or source sizes before solving again."
+            message + "In Fusion, open Waveguide Generator ▸ Sources & Mesh…, "
+            f"raise Walls (now {wall:g} mm; default {default_wall:g} mm) "
+            "or add a Coarse surface group, and Send again."
         )

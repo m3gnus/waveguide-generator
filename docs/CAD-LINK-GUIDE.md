@@ -63,6 +63,26 @@ copy and tick the checkbox in Fusion.
 
 **[Screenshot placeholder: WG's CAD Link settings and Fusion's Run on Startup checkbox.]**
 
+## Mesh settings in Fusion
+
+Open **Waveguide Generator ▸ Sources & Mesh…** in Fusion to set sources,
+wall size, grading distance, surface groups and symmetry. The dialog remembers
+these settings in the Fusion document. Save, then **Send** again. Defaults are
+HF 6 mm, MF 15 mm, LF and passive/port 25 mm, walls 25 mm and grading distance
+100 mm. Surface groups can be finer or coarser than the walls (Fine 15 mm,
+Coarse 40 mm). Smaller sizes give more triangles.
+
+WG’s **Mesh (set in Fusion)** card shows the snapshot’s sizes, source and group
+lines, the solved fraction, triangle count and estimated memory. It is visible
+before the first mesh succeeds. The limit is 22,000 triangles for the part WG
+solves. If it is exceeded, raise **Walls** or add a **Coarse** surface group in
+Fusion, then **Send** again.
+
+Older returns show **Mesh (set in WG by an older add-in)**. Stored sizes stay
+read-only; update the add-in and Send from **Sources & Mesh…** to change them.
+Saved runs open with their stored sizes and requests. Standalone **File mesh**
+imports keep their own setup controls in WG.
+
 ## 2. Send the waveguide to Fusion
 
 1. Finish the basic waveguide in WG. From the design menu, choose
@@ -194,16 +214,17 @@ and refuses FEM intake and coupled jobs. Unset the override to enable it again.
 1. Select the throat or diaphragm face that drives the air, rather than a magnet,
    basket or mounting flange. A waveguide inserted by the Waveguide Generator add-in in Fusion already has its managed
    throat source; check that it survives your edits.
-2. For added drivers, choose **Set WG Source…**, select the face or faces, and
-   choose **LF**, **MF** or **HF**. For example, use HF for the compression-driver
-   throat, MF for a group of midrange diaphragms feeding the horn, and LF for
-   woofers on the enclosure baffle.
-3. Save the Fusion document after marking. Check the role, face count and area
-   in Send/Solve's **Pre-flight** summary before exporting.
-4. To remove an accidental marking, select the faces and use
-   **Set WG Source… → Clear WG source**. After splitting, copying, deleting or
-   repainting a source face, select all its intended faces and mark them again
-   if the Waveguide Generator add-in in Fusion asks. Recheck the driver settings in WG after reassignment.
+2. Open **Waveguide Generator ▸ Sources & Mesh…**. Use **Add Source**, choose
+   **LF**, **MF**, **HF** or **PASSIVE_CARDIOID**, select its faces and set its mesh
+   size. For example, use HF for a compression-driver throat and LF for woofers
+   on the enclosure baffle. Sources from a linked WG design are read-only here.
+3. Press **Save**, then save the Fusion document. Reopening the dialog restores
+   the settings and face selections. Check the role, face count and area in
+   Send/Solve's **Pre-flight** summary before exporting.
+4. Correct accidental markings by editing the source’s face selection, or use
+   **Remove Last Source**, then **Save**. After splitting, copying, deleting or
+   repainting a source face, reopen the dialog and check its selections.
+   Recheck the driver settings in WG after reassignment.
 
 The command applies an appearance named exactly after the role and stamps the
 faces with a persistent source identity, so later sends refer to the same source.
@@ -212,23 +233,20 @@ mark sources. Hand-painted appearances with the recognized role names are also
 read, but old paint may need adoption or explicit reassignment before export.
 An appearance called `HF drive` or `MF_L` does not create a source in this add-in.
 
-Extra, painted faces of the same role form **one source**, even when they are
-disconnected. Mark all four identical midrange diaphragms MF to drive them as a
-group. A throat managed by the Waveguide Generator add-in in Fusion has its own identity per inserted instance.
-Extra painted HF faces are separate from that managed throat source. The add-in
-has no control for inventing independent `MF1`, `MF2`, etc. sources or giving
-same-role painted drivers separate gains and delays. Use the supported group
-only when those drivers are meant to share the drive.
+Each source in the dialog has its own identity. Select several diaphragm faces
+for one source when they should share a drive, or add separate sources and
+assign their channels in WG. Legacy hand-painted faces of the same role are
+still read as one source. Recheck their assignment in the dialog before sending.
 
 **Side names:** imported source names, IDs and selector labels such as `MFLeft`,
 `HF_R`, `woofer_L1` or `PORT_EXIT_L` identify a particular side to WG's mirror
 safeguard. WG refuses to mirror a model already cut in CAD if a source belongs
 to the left or right side: a mirror would impersonate the other driver. Send
 the whole model when the sides need independent sources. These names are
-recognized by the safeguard, not offered as source roles by **Set WG Source…**;
+recognized by the safeguard, not offered as source roles by **Sources & Mesh…**;
 renaming a Fusion body does not create separate left/right channels.
 
-**[Screenshot placeholder: selected diaphragm faces in Set WG Source, followed by the Send pre-flight source list.]**
+**[Screenshot placeholder: selected diaphragm faces in Sources & Mesh, followed by the Send pre-flight source list.]**
 
 ## 5. Set up the drivers in WG
 
@@ -356,8 +374,8 @@ loads without a FEM region. Structural vibration and cone breakup are not modell
 3. For a model drawn in CAD, place the throat at the origin and centre the
    speaker on the two planes through its radiation axis if you want WG to
    detect mirror symmetry. Read the domain line on the Solve card. For a whole
-   model, **Mesh detail → Force full domain**, then **Rebuild mesh**, disables WG's automatic cutting
-   when you want to check a doubtful symmetry result.
+   model, **Waveguide Generator ▸ Sources & Mesh…** in Fusion, set **Symmetry**
+   to **Off**, save and **Send** again to disable automatic cutting.
 4. If you cut the model in Fusion, use the YZ or XZ origin plane (x = 0 or y = 0)
    with radiation along model +Z. Leave the acoustic cut boundary open; a flat
    cap there would be solved as a wall. Sources must still be identified, with
@@ -366,7 +384,7 @@ loads without a FEM region. Structural vibration and cone breakup are not modell
    states that on the card. Positive-side cuts are the simplest convention.
 5. Use the domain line's **Change** only for the alternative readings WG offers.
    Solve prepares it again under that choice. An unsafe open half is refused;
-   **Force full domain** cannot restore geometry missing from the file.
+   **Symmetry Off** cannot restore geometry missing from the file.
 
 Front/back cuts, off-origin or oblique cuts, and a CAD-cut model facing an axis
 other than model +Z are not supported for mirror recovery. Send the complete
@@ -393,7 +411,7 @@ combine their voltage bases.
 
 A moving perimeter edge on a mirror plane is treated as a driver cut, including
 an edge that only touches the plane. The driver's motion axis must lie in each
-cutting plane. If it does not, prepare complete geometry with **Force full domain**.
+cutting plane. If it does not, send complete geometry with **Symmetry Off** in Fusion’s **Sources & Mesh…**.
 
 **[Screenshot placeholder: Solve card showing Radiates along, the domain line and Change, with a quarter-model preview.]**
 
@@ -412,8 +430,10 @@ cutting plane. If it does not, prepare complete geometry with **Force full domai
    a repeated design with no selected instance, or a selected instance that
    conflicts with the return's solver anchor.
 2. In WG, review **Frequency Sweep**, **Directivity Map**, **Drivers**,
-   **Crossover** and **Mesh detail**. Smaller mesh sizes are finer. Use
-   **Rebuild mesh** after changing mesh inputs. Review any findings before using
+   **Crossover** and **Mesh detail**. Mesh sizes are read-only here. Set them in
+   Fusion’s **Waveguide Generator ▸ Sources & Mesh…**, save and **Send** again.
+   **Rebuild mesh**, **Skip optional source**, **Accept area drift** and
+   **Exterior only** remain in WG. Review any findings before using
    **Approve and solve**; approving a warning is not a geometry repair.
 3. Choose the solver in **Simulation → Solve options**. **AUTO** chooses among
    compatible available engines. An explicit choice stays yours; WG refuses an
@@ -495,7 +515,7 @@ preparation fails, use **Prepare simulation** to retry, or **Prepare again**
 when that snapshot already has a preparation record.
 
 For returns from the same project with compatible sources (the same source
-IDs, roles and required flags), WG keeps mesh sizing, channel mapping, drivers,
+IDs, roles and required flags), WG keeps channel mapping, drivers,
 combination settings and the frequency sweep. Check them after changing source
 markings; an incompatible source inventory needs its own setup. Retrying the
 same preparation keeps the findings you already approved for it. A different
@@ -517,14 +537,14 @@ examples show x = 0; the same checks apply at y = 0.
 
 | Message | What to do |
 |---|---|
-| **Fusion shows:** “Return export has no drivable source. Paint an included face LF, MF, HF, or PASSIVE_CARDIOID and try again.” | Include the driver face and use **Set WG Source…**. Check Pre-flight again. |
-| **Fusion shows:** “source was split or copied:” | Select all intended faces of that source and run **Set WG Source…** again. Check its driver setup after sending. |
+| **Fusion shows:** “Return export has no drivable source. Paint an included face LF, MF, HF, or PASSIVE_CARDIOID and try again.” | Include the driver face and use **Sources & Mesh…**. Check Pre-flight again. |
+| **Fusion shows:** “source was split or copied:” | Select all intended faces of that source and run **Sources & Mesh…** again. Check its driver setup after sending. |
 | **Fusion shows:** “this export would carry only part of that source” | Include its hidden/excluded members, or clear their source markings if they should no longer belong. |
 | **Fusion shows:** “is declared 'exclude' but is still visible” | Hide the excluded body or its occurrence in Fusion, or clear the declaration to include it. |
 | “a face lies in x = 0 and would solve as a wall across the cut” | Remove the acoustic cap at that cut, or send the whole model. The same rule applies at y = 0. |
 | “no source meets x = 0, so nothing shows it is the speaker's symmetry plane rather than an open side” | Send the whole model or correct the cut and source geometry. Do not invent a source just to pass the check. |
 | “its mirror image would stand in for the other side's own source” | Send the whole model for independently identified sides. Rename only if the name wrongly identifies a shared source as one side's driver. |
-| “Return the whole model from CAD to solve it whole.” | Turn **Force full domain** off for a valid CAD-cut model, or send the complete speaker. |
+| “Return the whole model from CAD to solve it whole.” | Set **Symmetry** to **Automatic** in Fusion’s **Sources & Mesh…** for a valid CAD-cut model, or send the complete speaker. |
 | “Installed hornlab-metal-bem does not support per-source axial axes.” / “Installed hornlab-bempp-bem does not support per-source axial axes.” | The installed Metal or BEMPP package is older than the version WG ships and cannot solve that CAD axial drive. Update the module, choose Normal only if it represents the intended motion, or use an available compatible BEAT route without a driver model. |
 | “BEAT drives axial sources along its z axis” | That source's axis is tilted relative to the radiation axis. Use Normal only if appropriate; BEAT cannot represent that tilted axial drive. |
 | “Complete the driver, or clear it to solve that channel unit-driven.” | Supply the listed missing T/S values, or clear the driver. |

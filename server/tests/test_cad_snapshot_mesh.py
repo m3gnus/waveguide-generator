@@ -252,3 +252,18 @@ def test_shared_fixtures_ingest_at_snapshot_sizes(bundle, tmp_path, monkeypatch)
         assert record['source_tags'] == {s['id']: 101 + i for i, s in enumerate(manifest['sources'])}
     finally:
         with_store.close()
+
+
+@pytest.mark.parametrize('bundle', BUNDLES, ids=lambda p: p.stem)
+def test_listing_exposes_fusion_mesh_before_any_ingest(bundle, tmp_path):
+    from server.cadlink.api import _return_listing
+
+    destination = tmp_path / 'wgreturn' / bundle.name
+    destination.parent.mkdir()
+    shutil.copytree(bundle, destination)
+    store = CadLinkStore(tmp_path / 'cad.sqlite3')
+    try:
+        item = _return_listing(tmp_path, store)[0]
+        assert item['meshSnapshot'] == read_wgreturn(bundle).manifest['mesh']
+    finally:
+        store.close()

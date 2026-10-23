@@ -193,7 +193,7 @@ function readyCad(): CadReturnIngestRecord {
     },
     projectLineageId: 'wgl_test', ingestRecord: record, needsIngest: false,
     driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
-    sourceSizesMm: { 'source-hf': 4 }, rigidSizeMm: 8, transitionMm: 12, skippedSourceIds: [],
+    meshSizes: { ...useCadReturnStore.getState().meshSizes, source_size_mm: { 'source-hf': 4 }, rigid_size_mm: 8, transition_mm: 12 },   skippedSourceIds: [],
   });
   importedMeshStore.setCad({ name: 'Speaker', source: 'cad', ingestId: 'wgi_first' } as ImportedMeshScene);
   return record;

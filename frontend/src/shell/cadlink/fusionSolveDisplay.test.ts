@@ -83,7 +83,7 @@ it.each(['navigation', 'selection', 'edit', 'voltage', 'sweep', 'options', 'desi
     const run = external(); const pending = f.observe([run]);
     if (change === 'navigation') noteExplicitNavigation();
     if (change === 'selection') useCadReturnStore.getState().selectBundle(bundle);
-    if (change === 'edit') useCadReturnStore.getState().setRigidSize(12);
+    if (change === 'edit') useCadReturnStore.getState().setAreaDriftOverride('source-hf', true);
     if (change === 'voltage') useCadReturnStore.getState().setDriveVoltage(7);
     if (change === 'sweep') useCadReturnStore.getState().setSweep({ frequencyCount: 19 });
     if (change === 'options') useSolveOptionsStore.getState().setVerbose(true);

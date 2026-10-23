@@ -1,7 +1,8 @@
+import { snapshotMeshSettings } from '../api/cadMesh';
 import { prefillExteriorDriver, type ExteriorTransducerForm } from './exteriorTransducer';
 import { create } from 'zustand';
 import { withEditSignals } from './solveSettingsEdits';
-import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
+import type { CadReturnBundle, CadReturnIngestRecord, CadMeshSizes } from '../api/cadlink';
 import type { DriverKind } from '../api/drivers';
 import {
   expandLegacy,
@@ -22,6 +23,7 @@ import {
   DEFAULT_EXTERIOR_ONLY,
   DEFAULT_SWEEP,
   DEFAULT_CAD_MESH,
+  DEFAULT_CAD_PREPARATION_SYMMETRY,
 } from './solveDefaults';
 
 export interface CadDriveChannel {
@@ -166,9 +168,9 @@ export const PASSIVE_CARDIOID_DEFAULTS: PassiveCardioidForm = {
 export interface CadReturnState {
   selectedBundle: CadReturnBundle | null;
   ingestRecord: CadReturnIngestRecord | null;
-  sourceSizesMm: Record<string, number>;
-  rigidSizeMm: number;
-  transitionMm: number;
+  /** Retained sizing data for legacy setup/run replay; no mesh editing actions. */
+  meshSizes: CadMeshSizes;
+  symmetryMode: 'auto' | 'full';
   skippedSourceIds: string[];
   driveChannels: CadDriveChannel[];
   areaDriftOverrides: string[];
@@ -232,9 +234,6 @@ export interface CadReturnState {
   /** Restore an immutable job model without writing over a project's saved setup
    * or marking it as settled by current preparation. */
   restoreIngest: (record: CadReturnIngestRecord, generation: number, restored: Partial<CadReturnState>) => boolean;
-  setSourceSize: (sourceId: string, value: number) => void;
-  setRigidSize: (value: number) => void;
-  setTransition: (value: number) => void;
   setSkipped: (sourceId: string, skipped: boolean) => void;
   setSourceChannel: (sourceId: string, channelId: string) => void;
   setExteriorTransducer: (channelId: string, form: ExteriorTransducerForm | undefined) => void;
@@ -273,14 +272,19 @@ function defaultSourceSize(bundle: CadReturnBundle | null, source: CadReturnBund
 
 function initialFromBundle(bundle: CadReturnBundle | null) {
   const sources = bundle?.readable ? bundle.sources : [];
+  const snapshot = bundle?.meshSnapshot;
   const mesh = bundle?.defaultMesh;
   const sourceSizesMm = Object.fromEntries(sources.map((source) => [
-    source.id, defaultSourceSize(bundle, source),
+    source.id, mesh?.source_size_mm[source.id] ?? defaultSourceSize(bundle, source),
   ]));
   return {
-    sourceSizesMm,
-    rigidSizeMm: mesh?.rigid_size_mm ?? DEFAULT_CAD_MESH.rigidSizeMm,
-    transitionMm: mesh?.transition_mm ?? DEFAULT_CAD_MESH.transitionMm,
+    meshSizes: {
+      source_size_mm: sourceSizesMm,
+      rigid_size_mm: mesh?.rigid_size_mm ?? DEFAULT_CAD_MESH.rigidSizeMm,
+      transition_mm: mesh?.transition_mm ?? DEFAULT_CAD_MESH.transitionMm,
+    },
+    symmetryMode: DEFAULT_CAD_PREPARATION_SYMMETRY,
+    ...(snapshot ? snapshotMeshSettings(snapshot) : {}),
     skippedSourceIds: [] as string[],
     driveChannels: groupChannels(sources.map((source) => ({ sourceId: source.id, channelId: source.defaultDriveChannelId, motion: 'normal' as const }))),
     areaDriftOverrides: [] as string[],
@@ -297,6 +301,7 @@ export function bundleIdentity(bundle: CadReturnBundle): string {
     sourceCount: bundle.sourceCount,
     instanceCount: bundle.instanceCount,
     sources: bundle.sources,
+    meshSnapshot: bundle.meshSnapshot,
   });
 }
 
@@ -410,9 +415,10 @@ function currentExteriorChoice(
 
 function reconcileListing(state: CadReturnState, selectedBundle: CadReturnBundle) {
   const ids = new Set(selectedBundle.sources.map((source) => source.id));
+  const snapshotSettings = selectedBundle.meshSnapshot ? initialFromBundle(selectedBundle) : null;
   const sourceSizesMm = Object.fromEntries(selectedBundle.sources.map((source) => [
     source.id,
-    state.sourceSizesMm[source.id] ?? defaultSourceSize(selectedBundle, source),
+    state.meshSizes.source_size_mm[source.id] ?? defaultSourceSize(selectedBundle, source),
   ]));
   const skippedSourceIds = state.skippedSourceIds.filter((id) => ids.has(id));
   const areaDriftOverrides = state.areaDriftOverrides.filter((id) => ids.has(id));
@@ -434,7 +440,9 @@ function reconcileListing(state: CadReturnState, selectedBundle: CadReturnBundle
   });
   return {
     selectedBundle,
-    sourceSizesMm,
+    meshSizes: snapshotSettings ? snapshotSettings.meshSizes
+      : { ...state.meshSizes, source_size_mm: sourceSizesMm },
+    ...(snapshotSettings ? { symmetryMode: snapshotSettings.symmetryMode } : {}),
     skippedSourceIds,
     areaDriftOverrides,
     driveChannels,
@@ -518,7 +526,7 @@ function groupChannels(sourceChannels: Array<{ sourceId: string; channelId: stri
 /** The setters a person drives. Selections, ingestions and restores change the
  * same state without anyone choosing it, and say nothing. */
 const CAD_RETURN_EDITS: ReadonlyArray<keyof CadReturnState> = [
-  'setSourceSize', 'setRigidSize', 'setTransition', 'setSkipped', 'setSourceChannel', 'setChannelMotion', 'setExteriorTransducer',
+  'setSkipped', 'setSourceChannel', 'setChannelMotion', 'setExteriorTransducer',
   'setAreaDriftOverride', 'setExteriorOnly', 'setCombineEnabled', 'setCombineSpec',
   'setChannelDriverField', 'setChannelDriverPreset',
   'clearChannelDriverOverrides', 'setDriveVoltage', 'setMaxDriveVoltage', 'setPassiveCardioid', 'setSweep',
@@ -711,9 +719,8 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       ingestRecord,
       ...currentExteriorChoice(current, ingestRecord),
       projectLineageId: project,
-      sourceSizesMm: { ...ingestRecord.mesh_sizes.source_size_mm },
-      rigidSizeMm: ingestRecord.mesh_sizes.rigid_size_mm,
-      transitionMm: ingestRecord.mesh_sizes.transition_mm,
+      meshSizes: structuredClone(ingestRecord.mesh_sizes),
+      ...(ingestRecord.mesh_snapshot ? { symmetryMode: snapshotMeshSettings(ingestRecord.mesh_snapshot).symmetryMode } : {}),
       skippedSourceIds: [...ingestRecord.skipped_source_ids],
       driveChannels: channels,
       areaDriftSourceIds: [...new Set([
@@ -729,18 +736,6 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
     if (project !== current.projectLineageId) void loadCadProjectSettings();
     return true;
   },
-  setSourceSize: (sourceId, value) => {
-    supersedeIngestIntent();
-    set((state) => ({ sourceSizesMm: { ...state.sourceSizesMm, [sourceId]: value }, needsIngest: true }));
-  },
-  setRigidSize: (rigidSizeMm) => {
-    supersedeIngestIntent();
-    set({ rigidSizeMm, needsIngest: true });
-  },
-  setTransition: (transitionMm) => {
-    supersedeIngestIntent();
-    set({ transitionMm, needsIngest: true });
-  },
   setSkipped: (sourceId, skipped) => {
     supersedeIngestIntent();
     set((state) => {
@@ -754,13 +749,13 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
         if (source) driveChannels = [...driveChannels, { id: source.defaultDriveChannelId, source_ids: [sourceId], motion: 'normal' }];
       }
       const source = state.selectedBundle?.sources.find((item) => item.id === sourceId);
-      const sourceSizesMm = !skipped && source && state.sourceSizesMm[sourceId] === undefined
-        ? { ...state.sourceSizesMm, [sourceId]: defaultSourceSize(state.selectedBundle, source) }
-        : state.sourceSizesMm;
+      const sourceSizesMm = !skipped && source && state.meshSizes.source_size_mm[sourceId] === undefined
+        ? { ...state.meshSizes.source_size_mm, [sourceId]: defaultSourceSize(state.selectedBundle, source) }
+        : state.meshSizes.source_size_mm;
       return {
         skippedSourceIds,
         driveChannels,
-        sourceSizesMm,
+        meshSizes: { ...state.meshSizes, source_size_mm: sourceSizesMm },
         channelDrivers: retainedChannelDrivers(state, driveChannels),
         needsIngest: true,
       };

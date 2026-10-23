@@ -39,10 +39,12 @@ const SUPPORTED_SOLVE_PROFILE_VERSIONS = new Set([1, 2, 3, 4]);
 const MAX_SOLVE_PROFILES = 20;
 
 export type PersistedSolveSettings = Pick<CadReturnState,
-  'sourceSizesMm' | 'rigidSizeMm' | 'transitionMm' | 'skippedSourceIds' | 'driveChannels'
+  'skippedSourceIds' | 'driveChannels'
   | 'exteriorOnly' | 'exteriorOnlyRegionIds' | 'combineEnabled' | 'combineSpec'
   | 'channelDrivers' | 'passiveCardioid' | 'driveVoltageV' | 'maxDriveVoltageV'
-  | 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>;
+  | 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'> & {
+  sourceSizesMm: Record<string, number>; rigidSizeMm: number; transitionMm: number;
+};
 
 interface SourceInventoryEntry {
   id: string;

@@ -521,6 +521,7 @@ def _return_listing(workspace_root: Path, store: CadLinkStore) -> list[dict[str,
             **item,
             "projectLineageId": snapshot_project(store, manifest) if manifest else None,
             "defaultMesh": default_mesh(manifest) if item["readable"] and manifest else None,
+            "meshSnapshot": manifest.get("mesh") if item["readable"] and manifest else None,
         }
         for item, manifest, _path in return_inventory(workspace_root)
     ]

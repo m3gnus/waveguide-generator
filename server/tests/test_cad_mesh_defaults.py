@@ -331,7 +331,9 @@ def test_existing_automatic_nowaistbanding_setup_prepares_and_solves_below_ceili
         message = summary["message"]
         assert message.startswith("This model meshes to "), message
         assert "WG's limit is 22,000" in message
-        assert "walls 4 mm, grading distance 4 mm, HF source 4 mm" in message
+        assert "Waveguide Generator ▸ Sources & Mesh…" in message
+        assert "raise Walls (now 4 mm; default 25 mm)" in message
+        assert "Coarse surface group, and Send again." in message
         assert "Preparing the mesh failed" not in message
         assert summary.get("preparationId") is None
         assert not harness.submitted
