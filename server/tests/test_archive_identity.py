@@ -424,3 +424,86 @@ def test_deliberate_same_name_design_does_not_take_the_legacy_name_alias(tmp_pat
         {},
     )
     assert reopened["folder"] == "Horn"
+
+
+@pytest.mark.parametrize("operation", ["reuse", "first-link"])
+@pytest.mark.parametrize("foreign", ["pointer", "run"])
+def test_offline_registration_rechecks_disk_when_root_returns(tmp_path, operation, foreign):
+    store, root = registry(tmp_path)
+    store.archive_root = lambda: None
+    assert identity.claim_project_folder(store, f"design:{UID}", "Horn") == "Horn"
+    store.archive_root = lambda: root
+    folder = root / "Horn"
+    folder.mkdir()
+    (folder / "design.json").write_text(json.dumps({"designUid": OTHER if foreign == "pointer" else UID}))
+    run = folder / "1_Old"
+    run.mkdir()
+    (run / "run.json").write_text(json.dumps({"design": {"uid": OTHER}}))
+    before = {p: p.read_bytes() for p in folder.rglob("*.json")}
+    if operation == "first-link":
+        result = identity.bind_design_lineage(store, "wgl_new", UID, "Horn")
+    else:
+        result = identity.claim_project_folder(store, f"design:{UID}", "Horn")
+    assert result == "Horn-2"
+    assert all(p.read_bytes() == content for p, content in before.items())
+
+
+def test_downgrade_mirror_collision_backfill_does_not_share_owner(tmp_path, caplog):
+    store, root = registry(tmp_path)
+    assert identity.claim_project_folder(store, f"design:{UID}", "Horn") == "Horn"
+    old_run = root / "Horn" / "1_Old"
+    old_run.mkdir(parents=True)
+    (old_run / "run.json").write_text('{"design":{"lineageId":"wgl_old"}}')
+    with store._transaction() as conn:
+        conn.execute("INSERT INTO lineage_cad_names (lineage_id, archive_stem, created_at, updated_at) VALUES ('wgl_old', 'Horn', 'then', 'then')")
+        identity.initialize_registry(conn)
+    assert identity.registered_folder(store, "lineage:wgl_old") == "Horn-2"
+    assert store.get_lineage_cad_names("wgl_old")["archive_stem"] == "Horn-2"
+    assert identity.claim_project_folder(store, "lineage:wgl_old", "Horn") == "Horn-2"
+    assert old_run.is_dir()
+    assert "mirror ownership conflict" in caplog.text
+    # The design must also avoid the old lineage's on-disk runs on next claim.
+    assert identity.claim_project_folder(store, f"design:{UID}", "Horn") == "Horn-3"
+
+
+@pytest.mark.parametrize("name", ["CON", "CON.txt", "PRN", "AUX", "NUL", "COM1", "COM9.log", "LPT1", "LPT9.txt", "name.", "name ", 'bad:name?', "x" * 300])
+def test_new_allocations_are_portable_and_stable(tmp_path, name):
+    from server.workspace.portable_paths import path_segments
+
+    store, root = registry(tmp_path)
+    folder = identity.claim_project_folder(store, f"design:{UID}", name)
+    assert path_segments(folder, "folder") == [folder]
+    assert identity.claim_project_folder(store, f"design:{UID}", "Renamed") == folder
+
+
+@pytest.mark.parametrize("name", ["CON", "COM1", "name."])
+def test_invalid_persisted_registration_repairs_only_future_runs(tmp_path, name):
+    from server.workspace.portable_paths import path_segments
+
+    store, root = registry(tmp_path)
+    with store._transaction() as conn:
+        conn.execute("INSERT INTO archive_folders VALUES (?, ?, 'then')", (f"design:{UID}", name))
+    old = row(folder=name)
+    folder = identity.claim_project_folder(store, f"design:{UID}", "Renamed")
+    assert folder != name
+    assert path_segments(folder, "folder") == [folder]
+    assert identity.job_archive_location(old).folder == name
+    assert identity.registered_folder(store, f"design:{UID}") == folder
+
+
+def test_recorded_absolute_path_wins_over_repaired_mirror_at_completion(tmp_path):
+    store, root = registry(tmp_path)
+    old = row(folder="Horn-2", run="2_New")
+    old["task_metadata"]["archived_path"] = str(root / "Horn" / "1_Old")
+    current = tmp_path / "new-runs"
+    current.mkdir()
+    store.archive_root = lambda: current
+    assert identity.job_archive_location(old)[1:] == ("Horn", "1_Old")
+    assert identity.complete_archive(store, old) == str(root / "Horn" / "1_Old")
+    assert (root / "Horn" / "design.json").is_file()
+    assert not (root / "Horn-2").exists()
+    assert list(current.iterdir()) == []
+    root.rename(tmp_path / "offline")
+    with pytest.raises(OSError, match="recorded archive location is unavailable"):
+        identity.complete_archive(store, old)
+    assert not root.exists()

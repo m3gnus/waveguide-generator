@@ -40,6 +40,33 @@ design text/UI -> typed design -> HornLab mesher -> preview or solver artifact
                                      +-> CAD/mesh export  +-> backend -> result contract
 ```
 
+## Run archive locations
+
+`server/workspace/archive_identity.py` owns project folder allocation and run
+locations. New runs use the current Runs root until their first workspace write.
+That write pins an absolute `task_metadata.archived_path`, even when the first
+write is an automatic export or CAD placement before archive completion. Later
+workspace exports, archive retries, and per-run CAD placement resolve through
+that stored path. Selecting a different WG folder affects runs with no recorded
+location; it does not move existing runs. An explicit export destination chosen
+by the user still receives that export's files and does not change the run location.
+
+The writer requires the recorded Runs root to be available. If it is missing,
+it reports that the run's recorded archive location is unavailable and asks the
+user to reconnect the drive or folder. It neither recreates that root nor falls
+back to the current root. A missing project/run child under an available root
+can be recreated for a retry. Workspace write requests for a run carry `job_id`;
+the server validates the logical project/run path and resolves its absolute root.
+The browser never supplies an absolute archive destination.
+
+Every allocation, alias adoption, and registered-key reuse checks portable path
+validation and available on-disk ownership, including run records. Reservations
+made while a drive is offline are checked again when it returns. Conflicting
+legacy mirror backfills and invalid persisted registrations receive a safe,
+suffixed folder for future runs, with a warning in the server log. Existing runs'
+sealed metadata, absolute paths, and files stay in place. The workspace writer
+and allocator share `server/workspace/portable_paths.py` as their validator.
+
 ## Names and legacy evidence
 
 The product and GitHub repository are `Waveguide Generator` / `waveguide-generator`.

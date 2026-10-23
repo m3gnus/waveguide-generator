@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import io
 import os
 from pathlib import Path
 import shutil
@@ -2094,3 +2095,43 @@ def test_json_export_applies_cumulative_budget_before_next_decode(monkeypatch):
     with pytest.raises(ValueError, match="binary size limit"):
         api._decode_json_export_request(request)
     assert decoded == ["YWJj"]
+
+
+@pytest.mark.parametrize("suffix", ["", "/exports"])
+@pytest.mark.parametrize("transport", ["json", "multipart"])
+def test_run_writes_follow_recorded_location_across_root_selection(tmp_path, suffix, transport):
+    from server.jobs.store import JobStore
+    from server.tests.test_archive_identity import row
+
+    state, root_a = selected_state(tmp_path)
+    jobs = JobStore(tmp_path / "jobs.db")
+    jobs.initialize()
+    jobs.create_job({**row(), "status": "complete", "created_at": "then", "updated_at": "then", "queued_at": "then", "config_summary_json": {}})
+    runtime = SimpleNamespace(store=jobs, _serialize_job=lambda *args, **kwargs: {})
+    app = SimpleNamespace(state=SimpleNamespace(jobs_runtime=runtime, cadlink_store=None))
+    async def write(job_id="run", directory="Horn/1_Horn"):
+        payload = {"job_id": job_id, "subdirectory": directory + suffix, "existing": "merge_identical", "members": [{"relative_path": "result.txt", "text": "stable"}]}
+        async def body():
+            return json.dumps(payload).encode()
+        async def form():
+            return FormData([("job_id", job_id), ("subdirectory", directory + suffix), ("existing", "merge_identical"), ("relative_path", "result.txt"), ("file", UploadFile(filename="result.txt", file=io.BytesIO(b"stable")))])
+        return await endpoint(state)(SimpleNamespace(app=app, headers={"content-type": "multipart/form-data" if transport == "multipart" else "application/json"}, body=body, form=form))
+    first = asyncio.run(write())
+    pinned = str(root_a / "Horn" / "1_Horn")
+    assert jobs.get_job_row("run")["task_metadata"]["archived_path"] == pinned
+    root_b = tmp_path / "new"
+    root_b.mkdir()
+    state.select(root_b)
+    assert asyncio.run(write())["directory"] == first["directory"]
+    assert list(root_b.iterdir()) == []
+    # Missing recorded root is explicit, and cannot recreate or redirect it.
+    root_a.rename(tmp_path / "offline")
+    with pytest.raises(HTTPException, match="recorded archive location is unavailable") as exc:
+        asyncio.run(write())
+    assert exc.value.status_code == 409
+    assert not root_a.exists()
+    assert list(root_b.iterdir()) == []
+    # A new run with no recorded location follows the current selection.
+    jobs.create_job({**row(run="2_Horn"), "id": "new-run", "status": "complete", "created_at": "then", "updated_at": "then", "queued_at": "then", "config_summary_json": {}})
+    result = asyncio.run(write("new-run", "Horn/2_Horn"))
+    assert result["directory"].startswith(str(root_b))

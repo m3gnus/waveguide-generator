@@ -392,6 +392,7 @@ export async function writeWorkspaceFiles(
   existing: ExistingFilePolicy = 'merge_identical',
   destination?: string,
   confirmReplacements?: ConfirmReplacements,
+  jobId?: string,
 ): Promise<WorkspaceWriteResponse> {
   const compatibleBlobs = await Promise.all(members.map(async ({ blob }) => {
     const crossRealmBlob = blob as unknown as {
@@ -410,6 +411,7 @@ export async function writeWorkspaceFiles(
     body.append('subdirectory', destination ? '' : subdirectory);
     body.append('existing', policy);
     if (destination) body.append('destination', destination);
+    if (jobId) body.append('job_id', jobId);
     members.forEach(({ filename }) => body.append('relative_path', filename));
     members.forEach(({ filename }, index) => body.append('file', compatibleBlobs[index], filename));
     let response: Response;
@@ -663,7 +665,7 @@ async function writeManualPolarFrd(
       blob: new Blob([text], { type: 'text/plain;charset=utf-8' }),
     })),
     fetcher,
-    'reject',
+    'reject', undefined, undefined, context.jobId,
   );
   return written.files;
 }
@@ -954,6 +956,7 @@ export async function runWorkspaceExportBundle(
     existing,
     context.destinationToken,
     context.confirmReplacements,
+    context.jobId,
   );
   return {
     files: written.files,
@@ -993,6 +996,7 @@ export async function runAutomaticWorkspaceExport(
     try {
       const written = await writeWorkspaceFiles(
         workspaceSubdirectory(context), members, context.fetcher ?? fetch, 'merge_identical',
+        undefined, undefined, context.jobId,
       );
       directory = written.directory;
       written.files.forEach((file) => { if (!files.includes(file)) files.push(file); });
@@ -1036,7 +1040,7 @@ export async function saveMeshArtifactToWorkspace(
   let notice: string | undefined;
   await downloadMeshArtifact(job, (message) => { notice = message; }, fetcher, (blob, filename) => { prepared = { blob, filename }; });
   if (!prepared) throw new Error('Mesh artifact returned no file.');
-  const written = await writeWorkspaceFiles(exportSubdirectoryForJob(job), [prepared], fetcher);
+  const written = await writeWorkspaceFiles(exportSubdirectoryForJob(job), [prepared], fetcher, 'merge_identical', undefined, undefined, job.id);
   if (!written.files[0]) throw new Error('Workspace returned no saved mesh path.');
   if (notice) reportNotice(notice);
   return written.files[0];
@@ -1100,9 +1104,10 @@ async function writeArchiveMembers(
   subdirectory: string,
   members: WorkspaceFile[],
   fetcher: typeof fetch,
+  jobId: string,
 ): Promise<ArchiveWrite> {
   try {
-    const written = await writeWorkspaceFiles(subdirectory, members, fetcher, 'confirm');
+    const written = await writeWorkspaceFiles(subdirectory, members, fetcher, 'confirm', undefined, undefined, jobId);
     return { files: written.files, moved: new Map() };
   } catch (error) {
     if (!(error instanceof ExportCollisionError)) throw error;
@@ -1114,7 +1119,7 @@ async function writeArchiveMembers(
       subdirectory,
       members.map((member) => ({ ...member, filename: moved.get(member.filename) ?? member.filename })),
       fetcher,
-      'merge_identical',
+      'merge_identical', undefined, undefined, jobId,
     );
     return { files: written.files, moved };
   }
@@ -1201,13 +1206,13 @@ export async function archiveRunToWorkspace(
     }
   }
   const results = prepared.size
-    ? await writeArchiveMembers(subdirectory, [...prepared.values()], fetcher)
+    ? await writeArchiveMembers(subdirectory, [...prepared.values()], fetcher, job.id)
     : { files: [], moved: new Map<string, string>() };
   const mesh = snapshot.mesh_artifact
     ? await writeArchiveMembers(subdirectory, [{
       filename: `${exportStemForJob(archiveJob)}.msh`,
       blob: new Blob([snapshot.mesh_artifact], { type: 'text/plain;charset=utf-8' }),
-    }], fetcher)
+    }], fetcher, job.id)
     : { files: [], moved: new Map<string, string>() };
   // The record names the artifacts it sits beside, wherever they landed.
   const moved = new Map([...results.moved, ...mesh.moved]);
@@ -1219,6 +1224,7 @@ export async function archiveRunToWorkspace(
     subdirectory,
     [textFile(buildRunRecord(archiveJob, (filename) => moved.get(filename) ?? filename, written, replay))],
     fetcher,
+    job.id,
   );
   // The captured Fusion model, when the capture setting files one per run. It
   // is a convenience copy of something already archived at project level, so a

@@ -26,7 +26,7 @@ export function archiveFolderForJob(job: Pick<JobItem, 'archive_folder'>): strin
   return job.archive_folder;
 }
 
-/** Where a run's files land inside the workspace: `<design>/<run>`. */
+/** Logical run path. Writers also send job_id so the server chooses its recorded root. */
 export function exportSubdirectoryForJob(job: Pick<JobItem, 'archive_folder' | 'archive_run'>): string {
   if (!job.archive_run) throw new Error('The server has not supplied this run’s archive name');
   return `${archiveFolderForJob(job)}/${job.archive_run}`;

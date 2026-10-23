@@ -19196,6 +19196,19 @@
                     "title": "Existing",
                     "type": "string"
                   },
+                  "job_id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Job Id"
+                  },
                   "members": {
                     "items": {
                       "$ref": "#/$defs/ExportMember"
@@ -19241,6 +19254,10 @@
                       "type": "string"
                     },
                     "type": "array"
+                  },
+                  "job_id": {
+                    "description": "Run whose recorded location owns this write.",
+                    "type": "string"
                   },
                   "relative_path": {
                     "items": {

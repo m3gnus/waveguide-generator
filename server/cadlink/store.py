@@ -433,12 +433,6 @@ def _migrate_archive_stems(conn: sqlite3.Connection) -> None:
         )
 
 
-def _allocate_archive_stem(
-    conn: sqlite3.Connection, lineage_id: str, preferred: object
-) -> str:
-    return archive_identity.claim_in_transaction(conn, f"lineage:{lineage_id}", preferred)
-
-
 #: A file model's id: this prefix and the original file's ``sha256:`` digest.
 FILE_MODEL_PREFIX = "mesh-file:"
 #: The model id a Solve names for a prepared mesh filed under no model
@@ -2092,9 +2086,9 @@ class CadLinkStore:
     ) -> dict[str, Any]:
         """Claim a lineage's CAD names, first writer per column winning.
 
-        A recorded name is what an already-linked CAD document depends on, so
-        it is never overwritten -- ``COALESCE`` keeps the existing value and
-        makes a concurrent second export a no-op rather than a rename.
+        Parameter and bundle names retain their first value. The archive owner
+        normally reuses its registration; a collision or invalid registration
+        repairs the archive mirror for future runs without changing old jobs.
         """
 
         self.initialize()
@@ -2126,12 +2120,7 @@ class CadLinkStore:
                   bundle_stem = COALESCE(
                     lineage_cad_names.bundle_stem, excluded.bundle_stem
                   ),
-                  archive_stem = CASE
-                    WHEN lineage_cad_names.archive_stem IS NULL
-                      OR TRIM(lineage_cad_names.archive_stem) = ''
-                    THEN excluded.archive_stem
-                    ELSE lineage_cad_names.archive_stem
-                  END,
+                  archive_stem = COALESCE(excluded.archive_stem, lineage_cad_names.archive_stem),
                   updated_at = excluded.updated_at
                 """,
                 (

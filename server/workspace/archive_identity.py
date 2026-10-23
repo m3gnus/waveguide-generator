@@ -18,6 +18,7 @@ import unicodedata
 
 from server.platform.acl_repair import path_has_reparse_point
 from server.workspace.archive import archive_folder_slug
+from server.workspace.portable_paths import path_segments
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +69,12 @@ def initialize_registry(conn: sqlite3.Connection) -> None:
                 if table == "imported_models" and not identity.startswith("mesh-file:")
                 else prefix + identity
             )
-            conn.execute(
-                "INSERT OR IGNORE INTO archive_folders VALUES (?, ?, ?)", (key, row[1], _now())
-            )
+            if conn.execute("SELECT 1 FROM archive_folders WHERE owner_key=?", (key,)).fetchone():
+                continue
+            folder = claim_in_transaction(conn, key, row[1])
+            if folder != row[1]:
+                logger.warning("Archive mirror ownership conflict for %s; new runs use %s instead of %s", key, folder, row[1])
+                conn.execute(f"UPDATE {table} SET archive_stem=? WHERE {column}=?", (folder, identity))
 
 
 def _now() -> str:
@@ -80,7 +84,8 @@ def _now() -> str:
 def archive_root(store: Any) -> Path | None:
     provider = getattr(store, "archive_root", None)
     try:
-        return Path(provider()) if callable(provider) else Path(provider) if provider else None
+        value = provider() if callable(provider) else provider
+        return Path(value) if value else None
     except (OSError, RuntimeError, ValueError):
         return None
 
@@ -119,22 +124,64 @@ def _record_key(record: Mapping[str, Any]) -> str:
 
 
 def _disk_matches(folder: Path, key: str, aliases: set[str]) -> bool:
-    pointer = folder / "design.json"
+    allowed = {key, *aliases}
     try:
         if folder.is_symlink() or path_has_reparse_point(folder) or not folder.is_dir():
             return False
-        if pointer.exists() or pointer.is_symlink():
+        pointer = folder / "design.json"
+        has_pointer = pointer.exists() or pointer.is_symlink()
+        if has_pointer:
             if pointer.is_symlink():
                 return False
             record = json.loads(pointer.read_text(encoding="utf-8"))
-            return isinstance(record, dict) and _record_key(record) in {key, *aliases}
-        # Only old capture-only folders can be adopted without a pointer.
-        # A directory containing unowned runs is occupied, even for a lineage.
-        return key.startswith("lineage:") and all(
-            p.name in {"cad", ".DS_Store"} for p in folder.iterdir()
-        )
-    except (OSError, ValueError):
+            if not isinstance(record, dict) or _record_key(record) not in allowed:
+                return False
+            if record.get("name"):
+                allowed.add(name_key(record["name"]))
+        # A matching pointer cannot license runs belonging to a different owner.
+        for child in folder.iterdir():
+            if child.name in {"cad", ".DS_Store", "design.json"}:
+                continue
+            if child.is_symlink() or path_has_reparse_point(child):
+                return False
+            run = child / "run.json"
+            if not run.is_file():
+                if not has_pointer:
+                    return False
+                continue
+            if run.is_symlink():
+                return False
+            record = json.loads(run.read_text(encoding="utf-8"))
+            design = record.get("design") or {}
+            lineage = design.get("lineageId")
+            uid = design.get("uid")
+            model = (record.get("importedMesh") or {}).get("modelId")
+            run_key = owner_key(lineage_id=lineage, design_uid=uid, model_id=model)
+            if (lineage or uid or model) and run_key not in allowed:
+                return False
+            if not (lineage or uid or model) and design.get("name") and name_key(design["name"]) not in allowed:
+                return False
+            if not has_pointer:
+                return False
+        return has_pointer or key.startswith("lineage:")
+    except (OSError, ValueError, TypeError, AttributeError):
         return False
+
+
+def _valid_folder(folder: str) -> bool:
+    try:
+        return path_segments(folder, "archive folder") == [folder]
+    except ValueError:
+        return False
+
+
+def _safe_base(preferred: object) -> str:
+    base = archive_folder_slug(preferred, "design")[:230]
+    if not _valid_folder(base):
+        base = base.replace(".", "_").rstrip(" ") + "-design"
+    # Every candidate, including numeric suffixes, is checked before publication.
+    path_segments(base, "archive folder")
+    return base
 
 
 def claim_in_transaction(
@@ -146,80 +193,66 @@ def claim_in_transaction(
     aliases: tuple[str, ...] = (),
     adopt_aliases: tuple[str, ...] = (),
 ) -> str:
-    rows = {
-        str(row[0]): str(row[1])
-        for row in conn.execute("SELECT owner_key, folder FROM archive_folders")
-    }
-    if key in rows:
-        if key.startswith("lineage:"):
-            for alias in aliases:
-                conn.execute(
-                    "INSERT OR IGNORE INTO archive_folders VALUES (?, ?, ?)",
-                    (alias, rows[key], _now()),
-                )
-        return rows[key]
-    adopt = next((rows[a] for a in adopt_aliases if a in rows), None)
-    if (
-        adopt
-        and key.startswith("lineage:")
-        and any(
-            owner.startswith("lineage:") and owner != key and folder.casefold() == adopt.casefold()
-            for owner, folder in rows.items()
-        )
-    ):
-        adopt = None
-        adopt_aliases = ()
-    allowed = {key, *adopt_aliases}
-    base = archive_folder_slug(preferred, "design")
+    rows = {str(r[0]): str(r[1]) for r in conn.execute("SELECT owner_key, folder FROM archive_folders")}
     disk: dict[str, Path] = {}
     if root is not None:
         try:
             disk = {p.name.casefold(): p for p in root.iterdir()}
         except OSError:
-            pass  # An unavailable Runs folder is refused by the archive writer.
+            pass  # Allocation may reserve offline; every later claim rechecks disk.
+    registered = rows.get(key)
+    shared = {owner for owner, folder in rows.items() if registered and folder.casefold() == registered.casefold()}
+    target = registered or next((rows[a] for a in adopt_aliases if a in rows), None)
+    adopted_owners = {owner for owner, folder in rows.items() if target and folder.casefold() == target.casefold()}
+    allowed = {key, *adopt_aliases, *shared, *adopted_owners}
 
     def taken(candidate: str) -> bool:
-        if any(
-            folder.casefold() == candidate.casefold() and owner not in allowed
+        if key.startswith("lineage:") and any(
+            owner.startswith("lineage:") and owner != key and folder.casefold() == candidate.casefold()
             for owner, folder in rows.items()
         ):
             return True
+        if not _valid_folder(candidate):
+            return True
+        if any(folder.casefold() == candidate.casefold() and owner not in allowed for owner, folder in rows.items()):
+            return True
         existing = disk.get(candidate.casefold())
-        return existing is not None and not _disk_matches(existing, key, set(adopt_aliases))
+        return existing is not None and not _disk_matches(existing, key, allowed)
 
-    if not adopt:
+    adopt = registered or next((rows[a] for a in adopt_aliases if a in rows), None)
+    if adopt and taken(adopt):
+        adopt = None
+    base = _safe_base(registered or preferred)
+    if not adopt and not registered:
         for existing in disk.values():
-            if (
-                (existing / "design.json").is_file()
-                and not any(
-                    folder.casefold() == existing.name.casefold() and owner not in allowed
-                    for owner, folder in rows.items()
-                )
-                and _disk_matches(existing, key, set(adopt_aliases))
-            ):
+            if (existing / "design.json").is_file() and not taken(existing.name):
                 adopt = existing.name
                 break
     folder = adopt or base
-    if not adopt:
-        count = 2
-        while taken(folder):
-            folder = f"{base}-{count}"
-            count += 1
-        # Preserve the spelling of an adopted folder on case-sensitive volumes.
-        if folder.casefold() in disk:
-            folder = disk[folder.casefold()].name
-    conn.execute("INSERT INTO archive_folders VALUES (?, ?, ?)", (key, folder, _now()))
+    count = 2
+    # A repaired registration always leaves its old folder for existing runs.
+    if registered and not adopt:
+        folder = f"{base}-{count}"
+        count += 1
+    while taken(folder):
+        folder = f"{base}-{count}"
+        count += 1
+    if folder.casefold() in disk:
+        folder = disk[folder.casefold()].name
+    path_segments(folder, "archive folder")
+    if registered and folder != registered:
+        logger.warning("Archive registration conflict for %s; new runs use %s instead of %s", key, folder, registered)
+        # Move intentional aliases together, but never rewrite a run's sealed metadata.
+        for owner in shared:
+            conn.execute("UPDATE archive_folders SET folder=? WHERE owner_key=?", (folder, owner))
+    conn.execute("INSERT OR REPLACE INTO archive_folders VALUES (?, ?, ?)", (key, folder, _now()))
     for alias in aliases:
-        # An unregistered legacy folder still owns its exact name. A deliberate
-        # new same-name design must not reserve that old file's future alias.
         if alias.startswith("name:") and any(
             existing.name.casefold() != folder.casefold() and _disk_matches(existing, alias, set())
             for existing in disk.values()
         ):
             continue
-        conn.execute(
-            "INSERT OR IGNORE INTO archive_folders VALUES (?, ?, ?)", (alias, folder, _now())
-        )
+        conn.execute("INSERT OR IGNORE INTO archive_folders VALUES (?, ?, ?)", (alias, folder, _now()))
     return folder
 
 
@@ -232,7 +265,7 @@ def claim_project_folder(
     adopt_aliases: tuple[str, ...] = (),
 ) -> str:
     if store is None:
-        return archive_folder_slug(preferred, "design")
+        return _safe_base(preferred)
     store.initialize()
     if key.startswith("lineage:"):
         record = store.record_lineage_cad_names(
@@ -344,6 +377,10 @@ def job_archive_location(
         model_id=imported.get("model_id"),
         name=config.get("design_name") or row.get("label") or summary.get("formula_type"),
     )
+    previous = metadata.get("archived_path")
+    if previous and Path(previous).is_absolute():
+        # Absolute recorded locations also win over subsequently repaired mirrors.
+        folder, run = Path(previous).parent.name, Path(previous).name
     return ArchiveLocation(str(key), str(folder), str(run))
 
 
@@ -370,6 +407,31 @@ def record_run_segment(conn: sqlite3.Connection, job_id: str) -> None:
         )
 
 
+def claim_run_write_path(jobs: Any, row: Mapping[str, Any], current_root: Any,
+                         cad_source: Mapping[str, Any] | None = None) -> Path:
+    """Pin first write; later writes use that absolute location or fail offline.
+
+    Selection changes affect only runs without a recorded write location.
+    Never recreate an unavailable recorded Runs root (for example a missing drive).
+    """
+    with jobs._lock:
+        fresh = jobs.get_job_row(row["id"]) or row
+        previous = (fresh.get("task_metadata") or {}).get("archived_path")
+        location = job_archive_location(fresh, cad_source)
+        if previous:
+            path = Path(previous)
+            root = path.parent.parent
+            if not path.is_absolute() or not root.is_dir():
+                raise OSError("This run’s recorded archive location is unavailable. Reconnect its drive or folder and retry.")
+        else:
+            root = Path(current_root())
+            if not root.is_dir():
+                raise OSError("The Runs folder is unavailable. Reconnect its drive or folder and retry.")
+            path = root / location.folder / location.run
+            jobs.mutate_job_metadata(row["id"], {"archived_path": str(path.absolute())})
+        return path
+
+
 def complete_archive(
     store: Any, row: Mapping[str, Any], cad_source: Mapping[str, Any] | None = None
 ) -> str | None:
@@ -378,6 +440,8 @@ def complete_archive(
     root = Path(previous).parent.parent if previous else archive_root(store)
     if root is None:
         return previous
+    if previous and not root.is_dir():
+        raise OSError("This run’s recorded archive location is unavailable. Reconnect its drive or folder and retry.")
     path = write_project_record(root, row, store, cad_source)
     return previous or str(path.absolute())
 

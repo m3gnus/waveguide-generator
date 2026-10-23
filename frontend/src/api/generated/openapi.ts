@@ -11246,6 +11246,8 @@ export interface operations {
                      * @enum {string}
                      */
                     existing?: "reject" | "merge_identical" | "overwrite" | "confirm";
+                    /** Job Id */
+                    job_id?: string | null;
                     /** Members */
                     members: {
                         /** Content Base64 */
@@ -11270,6 +11272,8 @@ export interface operations {
                      */
                     existing?: "reject" | "merge_identical" | "overwrite" | "confirm";
                     file: string[];
+                    /** @description Run whose recorded location owns this write. */
+                    job_id?: string;
                     relative_path: string[];
                     subdirectory: string;
                 };

@@ -70,6 +70,7 @@ function workspace(jobId: string) {
     if (path === '/api/design/serialize') return json({ text: 'cfg text' });
     if (path !== '/api/workspace/write-export') return new Response('not found', { status: 404 });
     const form = init!.body as FormData;
+    expect(form.get('job_id')).toBe(jobId);
     const subdirectory = String(form.get('subdirectory'));
     const existing = String(form.get('existing'));
     const names = form.getAll('relative_path').map(String);

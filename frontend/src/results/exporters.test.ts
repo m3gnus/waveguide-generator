@@ -88,6 +88,7 @@ function workspacePayload(init?: RequestInit) {
     subdirectory: String(form.get('subdirectory')),
     existing: String(form.get('existing')),
     destination: form.get('destination'),
+    jobId: form.get('job_id'),
     members: paths.map((relative_path, index) => ({
       relative_path,
       blob: files[index] as Blob,
@@ -967,6 +968,7 @@ describe('result exporters', () => {
       result,
       jobStem: 'horn_1',
       workspaceSubdirectory: 'design_a/run_3',
+      jobId: 'stored-run',
       preferences: preferencesStore.getSnapshot(),
       fetcher,
     }, ['csv']);
@@ -974,6 +976,7 @@ describe('result exporters', () => {
     const payload = workspacePayload(requests.find(({ path }) => path === '/api/workspace/write-export')!.init);
     expect(payload.subdirectory).toBe('design_a/run_3');
     expect(payload.destination).toBeNull();
+    expect(payload.jobId).toBe('stored-run');
     expect(payload.existing).toBe('merge_identical');
     // Nothing asked the user anything: a background export that opened a
     // folder dialog would interrupt a solve nobody is watching.
@@ -1062,7 +1065,7 @@ describe('result exporters', () => {
       design_revision: 1, polar_grid: {}, rating: null, exported_files: [], auto_export_completed_at: null,
       auto_export_formats: {}, archived_at: null, raw_results_file: null, mesh_artifact_file: null, log_tail: [],
     };
-    const writes: Array<{ subdirectory: string; members: Array<{ relative_path: string }> }> = [];
+    const writes: Array<{ subdirectory: string; jobId: FormDataEntryValue | null; members: Array<{ relative_path: string }> }> = [];
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       const path = String(input);
       if (path === '/api/jobs/archive-cardioid/archive-snapshot') return new Response(JSON.stringify({
@@ -1085,6 +1088,7 @@ describe('result exporters', () => {
     });
 
     await archiveRunToWorkspace(job, preferencesStore.getSnapshot(), fetcher);
+    expect(writes.every(({ jobId }) => jobId === job.id)).toBe(true);
     expect(writes.flatMap(({ members }) => members.map(({ relative_path }) => relative_path))).not.toContain('design.json');
     expect(writes[0].members.map(({ relative_path }) => relative_path)).toEqual([
       '8_Cardioid.json',

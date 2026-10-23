@@ -71,6 +71,7 @@ export async function writeToOutputFolder(
   existing: 'reject' | 'merge_identical' | 'overwrite' | 'confirm' = 'overwrite',
   destination?: string,
   confirmReplacements?: ConfirmReplacements,
+  jobId?: string,
 ): Promise<OutputFolderWrite> {
   const post = async (policy: string): Promise<OutputFolderWrite> => {
     const body = new FormData();
@@ -80,6 +81,7 @@ export async function writeToOutputFolder(
     body.append('subdirectory', destination ? '' : subdirectory);
     body.append('existing', policy);
     if (destination) body.append('destination', destination);
+    if (jobId) body.append('job_id', jobId);
     members.forEach(({ filename }) => body.append('relative_path', filename));
     members.forEach(({ filename, blob }) => body.append('file', blob, filename));
     const response = await fetcher('/api/workspace/write-export', { method: 'POST', body });

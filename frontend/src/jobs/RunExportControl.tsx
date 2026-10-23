@@ -255,7 +255,7 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
     if (!destination) return { notice: EXPORT_CANCELLED_MESSAGE };
     const result = await declinable(async () => writeToOutputFolder(exportSubdirectoryForJob(job), [{
       filename: `${exportStemForJob(job)}.wgreplay`, blob: await fetchMeshReplay(job.id),
-    }], fetch, 'confirm', destination.token, askToReplaceExports));
+    }], fetch, 'confirm', destination.token, askToReplaceExports, job.id));
     if (!result) return { notice: EXPORT_CANCELLED_MESSAGE };
     await recordFiles(result.files);
     return { notice: workspaceNotice('Mesh replay', result) };

@@ -818,3 +818,35 @@ def test_recorded_run_path_finds_verified_model_after_root_override(tmp_path: Pa
     with pytest.raises(HTTPException) as caught:
         asyncio.run(download_project_document(lineage, 'sha256:aaa', request))
     assert caught.value.status_code == 404
+
+
+def test_run_document_placement_uses_recorded_root_and_refuses_offline(tmp_path):
+    app, root_a = app_with_runs(tmp_path)
+    project(app)
+    capture(root_a, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
+    old_run = root_a / "Tritonia" / "14_Tritonia"
+    old_run.mkdir()
+    jobs = app.state.jobs_runtime.store
+    jobs.initialize()
+    jobs.create_job({
+        "id": "run-14", "status": "complete", "created_at": "now", "updated_at": "now",
+        "queued_at": "now", "config_json": {"geometry": {"type": "imported"}}, "config_summary_json": {},
+        "task_metadata": {"archived_path": str(old_run),
+                          "archive": {"key": "lineage:test", "folder": "Tritonia", "run": "14_Tritonia"},
+                          "imported_geometry": {"document": {"return_state_hash": "sha256:aaa"}}},
+    })
+    root_b = tmp_path / "new-runs"
+    root_b.mkdir()
+    app.state.workspace.select(root_b)
+    app.state.cad_workspace.set_capture_mode("run")
+    request = ArchiveRunDocumentRequest(jobId="run-14")
+    result = asyncio.run(archive_run_document(request, SimpleNamespace(app=app)))
+    assert result == {"placed": True, "relativePath": "14_Tritonia/14_Tritonia.f3d"}
+    assert (old_run / "14_Tritonia.f3d").read_bytes() == b"model-aaa"
+    assert list(root_b.iterdir()) == []
+    root_a.rename(tmp_path / "offline")
+    result = asyncio.run(archive_run_document(request, SimpleNamespace(app=app)))
+    assert result["placed"] is False and result["retryable"] is True
+    assert "recorded archive location is unavailable" in result["reason"]
+    assert not root_a.exists()
+    assert list(root_b.iterdir()) == []

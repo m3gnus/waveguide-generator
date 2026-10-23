@@ -16,7 +16,6 @@ import logging
 import os
 from pathlib import Path
 import platform
-import re
 import secrets
 import shutil
 import subprocess
@@ -30,6 +29,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.datastructures import UploadFile
 
 from server.platform.paths import data_paths, proposed_cadlink_dir, default_folder_root
+from server.workspace.portable_paths import path_segments as _path_segments
+from server.workspace import archive_identity
 from server.workspace.folders import FolderRoot, read_folder_settings, read_settings, stored_path
 from server.platform.process import background_process_kwargs
 from server.platform.acl_repair import Outcome, repair_path
@@ -91,12 +92,6 @@ def _export_collision_response(exc: ExportCollision) -> JSONResponse:
     )
 
 
-_WINDOWS_DEVICE_NAME = re.compile(
-    r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$", re.IGNORECASE
-)
-_WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:")
-
-
 class ExportMember(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -140,6 +135,8 @@ class WriteExportRequest(BaseModel):
     #: folder the user chose for this one export. Absent means the workspace,
     #: which is what every automatic export uses.
     destination: str | None = None
+    #: Run owner. Without a chosen destination, resolve beneath its recorded location.
+    job_id: str | None = Field(default=None, min_length=1, max_length=200)
 
     @model_validator(mode="after")
     def subdirectory_or_destination(self) -> "WriteExportRequest":
@@ -250,7 +247,7 @@ def _member_bytes(member: ExportMember, remaining: int = MAX_EXPORT_BYTES) -> by
 
 def _decode_json_export_request(
     payload: bytes | WriteExportRequest,
-) -> tuple[str, str, list[tuple[str, bytes]], str | None]:
+) -> tuple[str, str, list[tuple[str, bytes]], str | None, str | None]:
     request = (
         payload
         if isinstance(payload, WriteExportRequest)
@@ -267,16 +264,20 @@ def _decode_json_export_request(
         request.existing,
         members,
         request.destination,
+        request.job_id,
     )
 
 
 async def _decode_multipart_export_request(
     request: Request,
-) -> tuple[str, str, list[tuple[str, bytes]], str | None]:
+) -> tuple[str, str, list[tuple[str, bytes]], str | None, str | None]:
     form = await request.form()
     subdirectory = form.get("subdirectory", "")
     existing = form.get("existing", "reject")
     destination = form.get("destination") or None
+    job_id = form.get("job_id") or None
+    if job_id is not None and (not isinstance(job_id, str) or len(job_id) > 200):
+        raise ValueError("job_id must identify a run")
     relative_paths = form.getlist("relative_path")
     files = form.getlist("file")
     if destination is not None and not isinstance(destination, str):
@@ -307,7 +308,7 @@ async def _decode_multipart_export_request(
                 f"Export set exceeds the {MAX_EXPORT_BYTES}-byte binary size limit"
             )
         members.append((relative_path, content))
-    return subdirectory, existing, members, destination
+    return subdirectory, existing, members, destination, job_id
 
 
 def _retry_after_acl_repair(
@@ -358,24 +359,6 @@ def _streaming_file_matches(path: Path, content: bytes) -> bool:
         while chunk := stream.read(1024 * 1024):
             observed.update(chunk)
     return observed.digest() == expected
-
-
-def _path_segments(raw: str, label: str) -> list[str]:
-    if raw.startswith(("/", "\\")) or _WINDOWS_DRIVE.match(raw):
-        raise ValueError(f"{label} must be a relative path")
-    segments = re.split(r"[\\/]", raw)
-    if any(segment in ("", ".", "..") for segment in segments):
-        raise ValueError(f"{label} contains an empty, '.' or '..' path segment")
-    for segment in segments:
-        if len(segment.encode("utf-8")) > 255:
-            raise ValueError(f"{label} contains a path segment exceeding the 255-byte limit")
-        if segment.endswith((".", " ")):
-            raise ValueError(f"{label} contains a segment ending in a dot or space")
-        if any(unicodedata.category(character) == "Cc" for character in segment):
-            raise ValueError(f"{label} contains a control character")
-        if _WINDOWS_DEVICE_NAME.fullmatch(unicodedata.normalize("NFKC", segment)):
-            raise ValueError(f"{label} contains reserved Windows device name {segment!r}")
-    return segments
 
 
 def _portable_path_key(segments: list[str]) -> tuple[str, ...]:
@@ -1204,6 +1187,7 @@ _WRITE_EXPORT_OPENAPI = {
                     "required": ["subdirectory", "relative_path", "file"],
                     "properties": {
                         "subdirectory": {"type": "string"},
+                        "job_id": {"type": "string", "description": "Run whose recorded location owns this write."},
                         "existing": {
                             "type": "string",
                             "enum": [
@@ -1388,24 +1372,43 @@ def create_workspace_router(
             if isinstance(request, WriteExportRequest):
                 # Direct endpoint calls in unit tests retain the legacy model
                 # shape; actual ASGI requests always take one branch below.
-                subdirectory, existing, members, destination = await asyncio.to_thread(
+                subdirectory, existing, members, destination, job_id = await asyncio.to_thread(
                     _decode_json_export_request, request
                 )
             elif request.headers.get("content-type", "").lower().startswith(
                 "multipart/form-data"
             ):
-                subdirectory, existing, members, destination = (
+                subdirectory, existing, members, destination, job_id = (
                     await _decode_multipart_export_request(request)
                 )
             else:
                 raw = await request.body()
-                subdirectory, existing, members, destination = await asyncio.to_thread(
+                subdirectory, existing, members, destination, job_id = await asyncio.to_thread(
                     _decode_json_export_request, raw
                 )
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        if destination is None:
+        if destination is None and job_id is not None:
+            jobs = request.app.state.jobs_runtime
+            row = await asyncio.to_thread(jobs.store.get_job_row, job_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="Run not found")
+            source = jobs._serialize_job(row, cadlink_store=request.app.state.cadlink_store).get("cad_source") or {}
+            location = archive_identity.job_archive_location(row, source)
+            prefix = f"{location.folder}/{location.run}"
+            if subdirectory not in (prefix, prefix + "/exports"):
+                raise HTTPException(status_code=422, detail="Run export must use its assigned folder")
+            suffix = subdirectory[len(prefix):]
+            try:
+                path = await asyncio.to_thread(
+                    archive_identity.claim_run_write_path, jobs.store, row, state.path, source
+                )
+            except OSError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            root = path.parent.parent
+            subdirectory = f"{path.parent.name}/{path.name}{suffix}"
+        elif destination is None:
             # Automatic exports must work on first launch without a native
             # folder picker. Production supplies ``<checkout>/output`` as this
             # fallback; an explicit selection still overrides it.

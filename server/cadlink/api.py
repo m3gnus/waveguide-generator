@@ -41,7 +41,7 @@ from server.workspace.api import (
     _strictly_inside,
     open_folder_command,
 )
-from server.workspace.archive_identity import project_folder, job_archive_location
+from server.workspace.archive_identity import project_folder, job_archive_location, claim_run_write_path
 from server.workspace.archive import (
     archive_cad_document,
     archive_folder_slug,
@@ -1545,7 +1545,12 @@ async def archive_run_document(
     digest = str(source.get('return_state_hash') or '')
     if _RETURN_STATE_HASH.fullmatch(digest) is None:
         return {"placed": False, "retryable": False, "reason": "Model state not recorded."}
-    root = _runs_root(request)
+    try:
+        path = await asyncio.to_thread(claim_run_write_path, jobs.store, row, lambda: _runs_root(request), source)
+    except OSError as exc:
+        return {"placed": False, "retryable": True, "reason": str(exc)}
+    root = path.parent.parent
+    location = location._replace(folder=path.parent.name, run=path.name)
     await _await_cad_document_capture(digest)
     try:
         relative = await asyncio.to_thread(
