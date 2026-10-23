@@ -166,9 +166,9 @@ describe('F8: a blocked operation reaches the user in either mode', () => {
     expect(notice?.textContent).toContain('A solve is waiting for you');
     expect(notice?.title).toContain('solver frame');
 
-    // Following it is the user's own choice, so it may switch the mode.
+    // Reviewing the request preserves the user's working mode.
     act(() => notice!.click());
-    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
+    expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
     expect(activations.at(-1)).toBe('cadlink');
     expect(navigationGeneration()).toBeGreaterThan(0);
     expect(host.querySelector('.attention-waiting')).toBeNull();
@@ -193,7 +193,7 @@ describe('F8: a blocked operation reaches the user in either mode', () => {
     activations.length = 0;
     act(() => publishCadJobs([
       cadJobFixture(waiting('parent')),
-      cadJobFixture(waiting('child', { reason: 'findings_need_review' }), { parent_job_id: 'parent' }),
+      cadJobFixture(waiting('child', { reason: 'findings_need_review' }), { parent_job_id: 'job:parent' }),
     ]));
     expect(activations).toEqual([]);
     expect(host.querySelector('.attention-waiting')?.textContent).toContain('A solve is waiting for you');

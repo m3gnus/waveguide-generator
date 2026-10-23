@@ -2,7 +2,7 @@ import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { cadJobSummary, latestCadJobs } from '../jobs/cadSolve';
 import type { JobItem } from '../api/jobsSocket';
 import type { CadOperationSummary } from '../api/cadOperations';
-import { isPendingCadOperation } from '../api/cadOperations';
+import { isPendingCadOperation, operationNeedsUser } from '../api/cadOperations';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { navigationGeneration, workspaceNavigation } from './workspaceNavigation';
 
@@ -147,14 +147,7 @@ export function useReadyRun(): string | null {
   return useSyncExternalStore(solveAttention.subscribe, solveAttention.getReadyRun, solveAttention.getReadyRun);
 }
 
-/** An operation that cannot move until the user acts: a solve waiting at one of
- * its gates, or a Fusion edit that stopped part-way. The CAD Link panel shows
- * exactly these (CadOperationsSection). */
-export function operationNeedsUser(operation: CadOperationSummary): boolean {
-  if (operation.kind === 'prepare_and_solve') return operation.state === 'needs_user_input';
-  return operation.state === 'recovery_required'
-    && (operation.kind === 'insert_link' || operation.kind === 'update_link');
-}
+export { operationNeedsUser } from '../api/cadOperations';
 
 /** What about an operation needs the user, so a new gate is a new event. */
 function attentionKey(operation: CadOperationSummary): string | null {

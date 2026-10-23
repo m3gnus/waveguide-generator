@@ -3,12 +3,14 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { useMeshImportStore } from '../stores/meshImport';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { noteExplicitNavigation, workspaceNavigation } from './workspaceNavigation';
+import { CadOperationsSection } from './CadOperationsSection';
 import { CadLinkPanel } from './CadLinkPanel';
 
 /** One selected input; CAD connection controls remain specific to CAD Link. */
 export function ImportedWorkspacePanel() {
-  const { importedInput } = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot);
+  const { mode, importedInput } = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot);
   const filename = useMeshImportStore(state => state.filename);
+  if (mode === 'parametric') return <div className="imported-workspace"><CadOperationsSection record={null}/></div>;
   return <div className="imported-workspace">
     <div className="cad-section">
       <h3>Imported mesh</h3>
@@ -26,6 +28,7 @@ export function ImportedWorkspacePanel() {
       <p>Use Import mesh above to open an ASCII Gmsh 2.2 surface mesh. CAD Link is optional.</p>
       <p>In Geometry, choose units and Radiating surfaces, then prepare the mesh.</p>
       <button onClick={() => workspaceNavigation.navigate('geometry')}>Open mesh setup</button>
+      <CadOperationsSection record={null}/>
     </div> : <CadLinkPanel/>}
   </div>;
 }

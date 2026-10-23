@@ -6,8 +6,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DockviewComponent } from 'dockview';
-import { bindDockNavigation, createDefaultLayout } from './Workspace';
+import { bindDockNavigation, createDefaultLayout, syncCadLinkPanel } from './Workspace';
 import { resetSolveAttentionForTests, solveAttention } from './solveAttention';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import { navigationGeneration, resetWorkspaceNavigationForTests, workspaceNavigation } from './workspaceNavigation';
 
 class ResizeObserverStub {
@@ -74,4 +75,18 @@ describe('the dock reports to the navigation seam', () => {
     tab('Jobs').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     expect(navigationGeneration()).toBe(1);
   });
+  it('reveals requests from Parametric without changing mode or duplicating the panel', () => {
+    workspaceModeStore.setMode('parametric');
+    syncCadLinkPanel(dock.api, 'parametric');
+    expect(dock.api.getPanel('cadlink')).toBeUndefined();
+    workspaceNavigation.reveal('cad-requests');
+    expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
+    expect(workspaceNavigation.isVisible('cadlink')).toBe(true);
+    expect(dock.api.getPanel('cadlink')?.api.title).toBe('CAD requests');
+    workspaceNavigation.reveal('cad-requests');
+    expect(dock.api.panels.filter(panel => panel.id === 'cadlink')).toHaveLength(1);
+    syncCadLinkPanel(dock.api, 'cad');
+    expect(dock.api.getPanel('cadlink')?.api.title).toBe('Imported mesh');
+  });
+
 });

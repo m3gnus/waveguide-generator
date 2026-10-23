@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { isActiveJobStatus, jobsSocket } from '../api/jobsSocket';
 import { getIngest, type CadReturnFinding, type CadReturnIngestRecord } from '../api/cadlink';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { listCadProjects } from '../api/cadProjects';
@@ -11,7 +12,10 @@ import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { solveAttention } from './solveAttention';
 import { inFlightWords } from './cadOnScreenSettings';
 import { fullTime, relativeTime } from './cadTime';
+import { usePanelVisible } from './panelVisibility';
 import { workspaceNavigation } from './workspaceNavigation';
+
+const RECOVERY_DISMISSED = 'Dismissed this recovery notice. Fusion still needs Undo or repair before you continue modelling.';
 
 const makeRequestActions = () => createCadRequestActions({
   openProject: async (lineage) => {
@@ -31,7 +35,7 @@ const STATE_COPY: Record<string, string> = {
   processing: 'Preparing',
   needs_user_input: 'Waiting for you',
   recovery_required: 'Needs recovery',
-  cancel_requested: 'Dismissing',
+  cancel_requested: 'Stopping',
 };
 
 const REASON_COPY: Record<string, string> = {
@@ -182,7 +186,7 @@ export function solveGateLadder(
 /** What a waiting request's own card still offers. Solving it is the Solve
  * card's one Solve (PLAN.md M1b): it continues this very request with the
  * settings and frame on screen. Approving a finding stays explicit. */
-type OperationAction = 'approve' | 'dismiss';
+type OperationAction = 'approve' | 'dismiss' | 'stop';
 
 /** Reasons whose backend message the card on screen already says in its own
  * guidance and controls. */
@@ -197,7 +201,7 @@ interface Guidance {
   simulation: boolean;
   /** The action the reason calls for, offered on this card while it waits;
    * null when Solve is the action. */
-  action: Exclude<OperationAction, 'dismiss'> | null;
+  action: 'approve' | null;
 }
 
 /** What the user can do about the reason an operation waits. A card is only
@@ -275,6 +279,7 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
   const solve = operation.kind === 'prepare_and_solve';
   // A received operation is the backend's own loop to prepare.
   const waiting = solve && operation.state === 'needs_user_input';
+  const active = isActiveJobStatus(job.status);
   const label = documentName ?? `operation ${operation.operationId}`;
   // Only the preparation the operation names: an approval never carries to another.
   const reviewedPreparation = review.findingIds.length > 0
@@ -309,7 +314,7 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
   const header = solve
     ? manual ? waiting ? 'Your solve is waiting' : 'Your solve is in progress' : 'Fusion asked for a solve'
     : `CAD operation · ${operation.kind}`;
-  return <div className="cad-direction-alert cad-operation" data-operation-id={operation.operationId}>
+  return <div className="cad-direction-alert cad-operation" data-operation-id={operation.operationId} data-request-id={job.id} tabIndex={-1}>
     <div>
       <b>{header}{documentName ? ` · ${documentName}` : ''}</b>
       {showStatus && <span role="status">{status}</span>}
@@ -337,12 +342,17 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
         && <span className="cad-operation-in-flight">{inFlightWords(operation)}</span>}
     </div>
     <div className="cad-confirm-actions">
-      {operation.state !== 'cancel_requested' && <button
+      {waiting && !active && <button
         disabled={heldAction === 'dismiss'}
         aria-label={`Dismiss: ${label}`}
         title="Dismiss this request. Fusion will not offer it again."
         onClick={() => ask('dismiss', () => dismissCadJob(job))}
       >Dismiss</button>}
+      {active && operation.state !== 'cancel_requested' && <button
+        disabled={heldAction === 'stop'}
+        aria-label={`Stop: ${label}`}
+        onClick={() => ask('stop', () => jobsSocket.stopJob(job.id))}
+      >Stop</button>}
       {review.error && operation.reason === 'findings_need_review' && <button aria-label={`Retry reading the findings for ${label}`} onClick={review.retry}>Retry</button>}
       {help.simulation && <button
         aria-label={`Open Simulation for ${label}`}
@@ -361,6 +371,23 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
   </div>;
 }
 
+/** Request feedback stays with the rows, including outside CAD input. */
+function useRequestAction() {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const busyRef = useRef(false);
+  const ask = (action: () => Promise<void>) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    void action().catch((reason: unknown) => {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }).finally(() => { busyRef.current = false; setBusy(false); });
+  };
+  return { busy, error, ask };
+}
+
 /** An interrupted Fusion update the active document still reports: the one
  * recovery that is about the model in front of the user. */
 function RecoveryOperationCard({ request, requestActions }: { request: CadRequest; requestActions: ReturnType<typeof makeRequestActions> }) {
@@ -368,33 +395,30 @@ function RecoveryOperationCard({ request, requestActions }: { request: CadReques
   const coordinator = useSyncExternalStore(
     cadWorkspace.subscribe, cadWorkspace.getSnapshot, cadWorkspace.getSnapshot,
   );
-  const [asked, setAsked] = useState<'dismiss' | 'reconcile' | null>(null);
+  const { busy, error, ask } = useRequestAction();
   const documentName = operation.snapshot?.documentName ?? coordinator.fusionStatus?.documentName ?? null;
   const label = documentName ?? 'the Fusion document';
-  const ask = (action: 'dismiss' | 'reconcile', request: () => Promise<void>) => {
-    setAsked(action);
-    void request().then(() => setAsked(null), () => setAsked(null));
-  };
-  return <div className="cad-direction-alert cad-operation cad-operation-recovery" data-operation-id={operation.operationId}>
+  return <div className="cad-direction-alert cad-operation cad-operation-recovery" data-operation-id={operation.operationId} data-request-id={request.id} tabIndex={-1}>
     <div>
       <b>Update interrupted — recovery required{documentName ? ` · ${documentName}` : ''}</b>
       <span>Fusion has no transaction covering these edits. Use Undo in Fusion to recover the document, or repair the link; do not continue modelling on a partially failed rebuild.</span>
       <span>Dismissing this card does not repair Fusion, and WGLink will not repeat the update.</span>
+      {error && <span role="alert">{error}</span>}
     </div>
     <div className="cad-confirm-actions">
       <button
-        disabled={asked !== null}
+        disabled={busy}
         aria-label={`Dismiss recovery notice: ${label}`}
-        onClick={() => ask('dismiss', async () => {
+        onClick={() => ask(async () => {
           await requestActions.dismiss(request);
-          coordinator.reportStatus('Dismissed this recovery notice. Fusion still needs Undo or repair before you continue modelling.');
+          coordinator.reportStatus(RECOVERY_DISMISSED);
         })}
       >Dismiss</button>
       <button
         className="primary"
-        disabled={asked !== null}
+        disabled={busy}
         aria-label={`Check Fusion again: ${label}`}
-        onClick={() => ask('reconcile', async () => {
+        onClick={() => ask(async () => {
           await reconcileCadOperation(request.id);
           await coordinator.refresh();
           coordinator.reportStatus('Checked Fusion recovery notices. Use Undo in Fusion or repair the link if its warning remains.');
@@ -413,76 +437,43 @@ function earlierRequestLabel(operation: CadOperationSummary): string {
 
 /** Requests about a model that is not on screen: a line each, never a card. */
 function EarlierRequests({ requests, requestActions }: { requests: CadRequest[]; requestActions: ReturnType<typeof makeRequestActions> }) {
-  const operations = requests.map((item) => item.operation);
-  const coordinator = useSyncExternalStore(
-    cadWorkspace.subscribe, cadWorkspace.getSnapshot, cadWorkspace.getSnapshot,
-  );
-  const [dismissing, setDismissing] = useState<ReadonlySet<string>>(new Set());
-  const [opening, setOpening] = useState(false);
-  const openingRef = useRef(false);
-  const dismiss = (ids: string[]) => {
-    setDismissing((held) => new Set([...held, ...ids]));
-    void (async () => {
-      for (const id of ids) {
-        const request = requests.find((item) => item.id === id);
-        if (request) await requestActions.dismiss(request).then(() => {
-          if (request.source === 'recovery') coordinator.reportStatus('Dismissed this recovery notice. Fusion still needs Undo or repair before you continue modelling.');
-        }).catch(() => undefined);
-      }
-    })().finally(() => setDismissing((held) => new Set([...held].filter((id) => !ids.includes(id)))));
-  };
-  // A solve waiting on its project's settings can still be taken up: opening
-  // its project puts the model on screen, where its card offers the rest. The
-  // project switcher's own open: it asks before discarding a design that
-  // exists nowhere else, and never opens over anything opened since. What the
-  // open found is the coordinator's to say.
-  const openProject = async (operation: CadOperationSummary) => {
-    const lineageId = operation.snapshot?.projectLineageId;
-    // Held from the first click, before the question, as the switcher is.
-    if (!lineageId || openingRef.current) return;
-    openingRef.current = true;
-    setOpening(true);
-    try {
-      const project = (await listCadProjects()).find((item) => item.lineageId === lineageId);
-      if (!project) throw new Error(`This copy of WG does not hold the project ${operation.snapshot?.documentName ?? 'this request'} belongs to.`);
-      await openCadProject(project);
-    } catch (reason) {
-      coordinator.reportError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      openingRef.current = false;
-      setOpening(false);
-    }
-  };
+  const coordinator = useSyncExternalStore(cadWorkspace.subscribe, cadWorkspace.getSnapshot, cadWorkspace.getSnapshot);
+  const { busy, error, ask } = useRequestAction();
   return <details className="cad-earlier-requests">
-    <summary>Earlier requests ({operations.length})</summary>
+    <summary>Earlier requests ({requests.length})</summary>
+    {error && <p role="alert">{error}</p>}
     <ul>
-      {operations.map((operation) => {
+      {requests.map((request) => {
+        const operation = request.operation;
         const label = earlierRequestLabel(operation);
         const name = operation.snapshot?.documentName ?? null;
-        const openable = operation.kind === 'prepare_and_solve' && operation.state === 'needs_user_input'
-          && operation.reason === 'setup_required' && Boolean(operation.snapshot?.projectLineageId);
-        return <li key={operation.operationId} data-operation-id={operation.operationId}>
+        return <li key={`${request.source}:${request.id}`} data-operation-id={operation.operationId} data-request-id={request.id} tabIndex={-1}>
           <span>{label}</span>
           {operation.createdAt && <time dateTime={operation.createdAt} title={fullTime(operation.createdAt)}>{relativeTime(operation.createdAt)}</time>}
-          {openable && <button
+          {operation.reason && <span>{REASON_COPY[operation.reason] ?? operation.reason}</span>}
+          {operation.message && <span>{operation.message}</span>}
+          {request.openable && <button
             className="link-button"
-            disabled={opening}
-            aria-label={`Open ${name ?? 'the project'} to choose its solve settings`}
-            onClick={() => void openProject(operation)}
+            disabled={busy}
+            aria-label={`Open ${name ?? 'the project'} to review ${operation.reason === 'frame_confirmation_required' ? 'its solver frame' : 'its solve settings'}`}
+            onClick={() => ask(() => requestActions.open(request))}
           >Open {name ?? 'its project'}</button>}
-          {operation.state !== 'cancel_requested' && <button
+          <button
             className="link-button"
-            disabled={dismissing.has(operation.operationId)}
+            disabled={busy}
             aria-label={`Dismiss: ${label}`}
-            onClick={() => dismiss([operation.operationId])}
-          >Dismiss</button>}
+            onClick={() => ask(async () => {
+              await requestActions.dismiss(request);
+              if (request.source === 'recovery') coordinator.reportStatus(RECOVERY_DISMISSED);
+            })}
+          >Dismiss</button>
         </li>;
       })}
     </ul>
     <button
       className="link-button"
-      disabled={operations.every((operation) => dismissing.has(operation.operationId))}
-      onClick={() => dismiss(operations.filter((operation) => operation.state !== 'cancel_requested').map((operation) => operation.operationId))}
+      disabled={busy}
+      onClick={() => ask(() => requestActions.clearAll(requests))}
     >Clear all</button>
   </details>;
 }
@@ -529,16 +520,36 @@ export function OnScreenSolveStatus({ record }: { record: CadReturnIngestRecord 
  * (`solves={false}` here) -- and the rest are one quiet line each. */
 export function CadOperationsSection({ record, solves = true }: { record: CadReturnIngestRecord | null; solves?: boolean }) {
   const requestActions = useMemo(makeRequestActions, []);
+  const host = useRef<HTMLDivElement>(null);
+  const visible = usePanelVisible();
+  const navigation = useSyncExternalStore(workspaceNavigation.subscribe, workspaceNavigation.getSnapshot, workspaceNavigation.getSnapshot);
   const notices = useCadRecoveryNotices((state) => state.notices);
   const jobs = useCadJobs();
   const selected = selectCadRequests({ jobs, notices, record });
   const current = selected.current.filter((item) => solves || item.operation.kind !== 'prepare_and_solve');
   const earlier = selected.earlier;
-  if (!current.length && !earlier.length) return null;
-  return <div className="cad-operations">
+  const firstRequestId = earlier[0]?.id ?? selected.current[0]?.id;
+  useEffect(() => {
+    if (!visible || workspaceNavigation.getRevealTarget() !== 'cad-requests' || !firstRequestId || !host.current) return;
+    // The Solve card can own the current request. Earlier rows stay here.
+    const scope = host.current.closest('.cadlink-panel') ?? host.current;
+    const target = [...scope.querySelectorAll<HTMLElement>('[data-request-id]')]
+      .find((element) => element.dataset.requestId === firstRequestId);
+    if (!target) return;
+    const disclosure = target.closest('details');
+    if (disclosure) disclosure.open = true;
+    target.scrollIntoView?.({ block: 'nearest' });
+    target.focus();
+    workspaceNavigation.claimReveal('cad-requests');
+  }, [navigation, firstRequestId, visible]);
+
+  const active = selected.active.filter((item) => solves || !item.onScreen);
+  if (!selected.current.length && !earlier.length && !active.length) return null;
+  return <div className="cad-operations" ref={host}>
     {current.map((request) => request.source === 'job'
       ? <CadOperationCard key={request.id} operation={request.operation}/>
       : <RecoveryOperationCard key={request.id} request={request} requestActions={requestActions}/>)}
+    {active.map((request) => <CadOperationCard key={request.id} operation={request.operation}/>)}
     {earlier.length > 0 && <EarlierRequests requests={earlier} requestActions={requestActions}/>}
   </div>;
 }

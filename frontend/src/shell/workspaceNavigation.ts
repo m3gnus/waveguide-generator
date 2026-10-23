@@ -1,6 +1,11 @@
+export type WorkspaceRevealTarget = 'cad-requests';
+let revealTarget: WorkspaceRevealTarget | null = null;
+let reveals = 0;
+
 export type WorkspacePanel = 'geometry' | 'simulation' | 'viewport' | 'results' | 'jobs' | 'cadlink';
 
 let activateWorkspacePanel = (_panel: WorkspacePanel): boolean => false;
+let revealWorkspaceTarget = (_target: WorkspaceRevealTarget): boolean => activateWorkspacePanel('cadlink');
 
 /**
  * How many times the user has deliberately moved somewhere in the workspace.
@@ -28,6 +33,7 @@ function emit(): void {
 
 export function noteExplicitNavigation(): void {
   explicitNavigations += 1;
+  revealTarget = null;
   emit();
 }
 
@@ -53,6 +59,21 @@ export const workspaceNavigation = {
     noteExplicitNavigation();
     return workspaceNavigation.activate(panel);
   },
+  /** Keep a reveal pending until its content has mounted and taken focus. */
+  reveal(target: WorkspaceRevealTarget): boolean {
+    noteExplicitNavigation();
+    revealTarget = target;
+    reveals += 1;
+    const activated = revealWorkspaceTarget(target);
+    emit();
+    return activated;
+  },
+  getRevealTarget(): WorkspaceRevealTarget | null { return revealTarget; },
+  claimReveal(target: WorkspaceRevealTarget): void {
+    if (revealTarget !== target) return;
+    revealTarget = null;
+    emit();
+  },
   /** Whether the dock shows this panel now: present and not behind a sibling tab. */
   isVisible(panel: WorkspacePanel): boolean {
     return visiblePanels.has(panel);
@@ -63,15 +84,18 @@ export const workspaceNavigation = {
   },
   /** A value that changes whenever visibility or the navigation count does. */
   getSnapshot(): string {
-    return `${explicitNavigations}:${[...visiblePanels].sort().join(',')}`;
+    return `${explicitNavigations}:${reveals}:${revealTarget ?? ''}:${[...visiblePanels].sort().join(',')}`;
   },
 };
 
 export function bindWorkspaceNavigation(
   activate: (panel: WorkspacePanel) => boolean,
+  reveal: (target: WorkspaceRevealTarget) => boolean = () => activate('cadlink'),
 ): () => void {
   activateWorkspacePanel = activate;
+  revealWorkspaceTarget = reveal;
   return () => {
+    if (revealWorkspaceTarget === reveal) revealWorkspaceTarget = () => false;
     if (activateWorkspacePanel === activate) activateWorkspacePanel = () => false;
   };
 }
@@ -79,6 +103,8 @@ export function bindWorkspaceNavigation(
 /** Tests only. */
 export function resetWorkspaceNavigationForTests(): void {
   explicitNavigations = 0;
+  revealTarget = null;
+  reveals = 0;
   visiblePanels = new Set();
   emit();
 }

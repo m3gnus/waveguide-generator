@@ -1,0 +1,85 @@
+{
+  "id": "6509c246-0925-426f-b91e-f34fdaaaec03",
+  "status": "error",
+  "created_at": "2026-10-06T22:02:04.666832",
+  "queued_at": "2026-10-06T22:02:04.666832",
+  "cad_state": {
+    "operation_id": "b6cab5fb-ff2f-4020-82d2-ad7441d79528",
+    "state": "needs_user_input",
+    "stage": "ready",
+    "reason": "frame_confirmation_required",
+    "message": "Confirm this model's solver frame in WG first: choose the axis it radiates along and check the preview, then solve it.",
+    "job_id": null,
+    "snapshot": {
+      "document_name": "kleinuhringur v1",
+      "manifest_sha256": "sha256:4a4625eb43cb91d1e31f668a902222ba0e1cd4acca9a6021540819f29fb79593",
+      "artifact_sha256": "sha256:e737abdae26cb919b1ccd785b560c20872fa2d3ed34f3cf25d7c85f2df4df612",
+      "project_lineage_id": "wgl_01M3WE1VW0VE0R0YHWPSZGES3Z"
+    },
+    "preparation": {
+      "preparation_id": "wgi_01M3WEB0A319DHZ56A9QYR0WDH",
+      "ingest_id": "wgi_01M3WEB0A319DHZ56A9QYR0WDH",
+      "blocking_finding_ids": [],
+      "report_sha256": "sha256:f0da9262622fa71924e8279c27e7054fb066e127d0d9a2d62a13b6de107c9e28"
+    },
+    "approvals": [],
+    "setup_defaults": false,
+    "frame_axis_automatic": null,
+    "received_at": "2026-10-06T22:02:04.666832",
+    "updated_at": "2026-10-06T22:02:04.666832"
+  },
+  "cad_intent": {
+    "type": "cad_intent",
+    "operation_id": "b6cab5fb-ff2f-4020-82d2-ad7441d79528",
+    "manifest_sha256": "sha256:4a4625eb43cb91d1e31f668a902222ba0e1cd4acca9a6021540819f29fb79593",
+    "return_id": "wgr_01M3WEAXS2KC1437PQZ9BFXK9W",
+    "setup_revision_id": "wgs_01M3WEAYASP83ST6XX7J0JH1CP",
+    "submission_key": "cad-solve:b6cab5fb-ff2f-4020-82d2-ad7441d79528"
+  },
+  "cad_provenance": {
+    "operation_id": "b6cab5fb-ff2f-4020-82d2-ad7441d79528",
+    "last_stage": "ready",
+    "snapshot": {
+      "artifact_sha256": "sha256:e737abdae26cb919b1ccd785b560c20872fa2d3ed34f3cf25d7c85f2df4df612",
+      "document_name": "kleinuhringur v1",
+      "manifest_sha256": "sha256:4a4625eb43cb91d1e31f668a902222ba0e1cd4acca9a6021540819f29fb79593",
+      "project_lineage_id": "wgl_01M3WE1VW0VE0R0YHWPSZGES3Z"
+    },
+    "setup": {
+      "revision_id": "wgs_01M3WEAYASP83ST6XX7J0JH1CP",
+      "digest": "sha256:fd014765e305f15ff47f014809892bebfc0df58085b1c4efb798f9fe874b2faa",
+      "origin": "wg_defaults"
+    },
+    "preparation": {
+      "preparation_id": "wgi_01M3WEB0A319DHZ56A9QYR0WDH",
+      "ingest_id": "wgi_01M3WEB0A319DHZ56A9QYR0WDH",
+      "snapshot_sha256": "sha256:4a4625eb43cb91d1e31f668a902222ba0e1cd4acca9a6021540819f29fb79593",
+      "setup_revision_id": "wgs_01M3WEAYASP83ST6XX7J0JH1CP",
+      "report_sha256": "sha256:f0da9262622fa71924e8279c27e7054fb066e127d0d9a2d62a13b6de107c9e28",
+      "meshing_semantics": "sha256:476d21c20c85d17301052ecf8df78fc19f8c42918dcf6c26e74c82e94a1fe9fb",
+      "blocking_finding_ids": [],
+      "approvals": []
+    },
+    "frame": {
+      "axis": "+z",
+      "provenance": "unconfirmed",
+      "confirmed": false,
+      "requirement": {
+        "contract": "cad-solver-frame-v2",
+        "document_up": "+z",
+        "export_frame": "root-component"
+      },
+      "suggestion": {
+        "algorithm": "frame-infer-v1",
+        "status": "ask",
+        "axis": null,
+        "confidence": 0.0
+      }
+    },
+    "return_state_hash": "sha256:d8c53e0a1c2ac1d2657e634fec3a205b0ba07a3e1f473c1c76f4744e19ed58ce",
+    "refusal": {
+      "code": "frame_confirmation_required",
+      "message": "Confirm this model's solver frame in WG first: choose the axis it radiates along and check the preview, then solve it."
+    }
+  }
+}

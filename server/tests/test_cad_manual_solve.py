@@ -452,6 +452,35 @@ def test_f2_job_dismiss_deletes_the_refused_chain_at_once(harness):
     harness._loop.run(flow())
 
 
+def test_dismissed_refused_request_stays_gone_after_restart_and_redelivery(harness):
+    from server.cadlink.joblane.job_shims import accept_operation_solve
+
+    ingest_id, _ = _ingest(harness)
+    revision = _revision(harness.store, _setup(engine="metal"))
+    harness.ingest.findings = [{"id": "review-1", "blocking": True}]
+    _create(harness, ingest_id)
+    harness.prepare("manual-1", setup_revision_id=revision, expected_frame_axis="+z")
+    refused = harness.jobs_store.latest_cad_job("manual-1")
+    assert refused["status"] == "error" and refused["id"] != "manual-1"
+    status, _ = harness._loop.run(
+        _post_job(_jobs_app(harness), f"/api/jobs/{refused['id']}/dismiss", {})
+    )
+    assert status == 200
+    # The harness tracks live jobs separately from the durable receipt ledger.
+    harness._latest.pop("manual-1", None)
+    harness.restart()
+    assert harness.jobs_store.latest_cad_job("manual-1") is None
+    # This is the admission boundary shared by manual and Fusion redelivery.
+    async def redeliver():
+        ctx = api._preparation_context(_request(harness).app.state)
+        return await accept_operation_solve(ctx, "manual-1")
+
+    replay = harness._loop.run(redeliver())
+    assert replay == refused["id"]
+    assert harness.jobs_store.latest_cad_job("manual-1") is None
+    assert harness.jobs_store.get_job_row(refused["id"]) is None
+
+
 def test_f2_job_dismiss_refuses_an_active_or_bound_solve(harness):
     ingest_id, _ = _ingest(harness)
     _create(harness, ingest_id)

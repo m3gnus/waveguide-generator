@@ -590,7 +590,7 @@ describe('CadLinkPanel', () => {
     await act(async () => { engine.querySelector<HTMLButtonElement>('button')!.click(); });
     await vi.waitFor(() => expect(posted).toHaveLength(1));
     expect(posted).toEqual([
-      { path: '/api/jobs/op-engine/dismiss', body: {} },
+      { path: '/api/jobs/job%3Aop-engine/dismiss', body: {} },
     ]);
     jobManager.snapshot = previousJobs;
     expect(useImportedSolveOptionsStore.getState().engine).toBe(engineBefore);
@@ -632,7 +632,7 @@ describe('CadLinkPanel', () => {
     await act(async () => { buttonIn(card, 'Approve and solve')!.click(); });
     await vi.waitFor(() => expect(posted).toHaveLength(2));
     expect(posted[0]).toEqual({
-      path: '/api/jobs/op-review/approvals',
+      path: '/api/jobs/job%3Aop-review/approvals',
       body: { preparation_id: 'wgp_7', finding_ids: ['finding-a'] },
     });
   });
@@ -675,7 +675,7 @@ describe('CadLinkPanel', () => {
     await act(async () => { buttonIn(card, 'Approve and solve')!.click(); });
     await vi.waitFor(() => expect(posted).toHaveLength(2));
     expect(posted[0]).toEqual({
-      path: `/api/jobs/${encodeURIComponent(manual)}/approvals`,
+      path: `/api/jobs/${encodeURIComponent(`job:${manual}`)}/approvals`,
       body: { preparation_id: 'wgp_7', finding_ids: ['finding-a'] },
     });
     // Its progress line is about the user's own solve, not one Fusion sent.
@@ -709,7 +709,7 @@ describe('CadLinkPanel', () => {
     });
     // The backend's own loop prepares an operation nobody has touched: no
     // guidance to act on, and nothing to solve from its card.
-    expect(buttonTexts(operationCard('op-new'))).toEqual(['Dismiss']);
+    expect(buttonTexts(operationCard('op-new'))).toEqual(['Stop']);
     expect(operationCard('op-new').textContent).not.toContain('Press Solve');
     const dismiss = () => buttonIn(operationCard('op-ready'), 'Dismiss')!;
     // A dismissal that fails is offered again.
@@ -718,7 +718,7 @@ describe('CadLinkPanel', () => {
     await vi.waitFor(() => expect(dismiss().disabled).toBe(false));
     await act(async () => { dismiss().click(); });
     await vi.waitFor(() => expect(posted).toHaveLength(1));
-    expect(posted[0]).toEqual({ path: '/api/jobs/op-ready/dismiss', body: {} });
+    expect(posted[0]).toEqual({ path: '/api/jobs/job%3Aop-ready/dismiss', body: {} });
   });
 
   /** The design on screen as it was opened from its own project. */

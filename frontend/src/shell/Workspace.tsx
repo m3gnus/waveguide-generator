@@ -299,12 +299,18 @@ const TAB_NAVIGATION_KEYS: ReadonlySet<string> = new Set(['Enter', ' ', 'ArrowLe
  * when a group merely takes focus, and when the application fronts a panel.
  */
 export function bindDockNavigation(api: DockviewApi, host: HTMLElement): () => void {
-  const unbind = bindWorkspaceNavigation((panel: WorkspacePanel) => {
+  const activate = (panel: WorkspacePanel): boolean => {
     const target = api.getPanel(panel);
     if (!target) return false;
     target.api.setActive();
     publish();
     return true;
+  };
+  const unbind = bindWorkspaceNavigation(activate, () => {
+    // Reviewing a request must not change the viewport's mode or input.
+    syncCadLinkPanel(api, 'cad');
+    if (workspaceModeStore.getSnapshot().mode === 'parametric') api.getPanel('cadlink')?.api.setTitle('CAD requests');
+    return activate('cadlink');
   });
   const publish = () => publishVisiblePanels(api.panels.filter((panel) => panel.api.isVisible).map((panel) => panel.id));
   const onTabInput = (event: Event) => {

@@ -1,3 +1,5 @@
+import migratedRequest from './cadMigratedRequest.fixture.json';
+import { cadJobSummary } from './cadSolve';
 import refusedJob from './cadRefusedJob.fixture.json';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
@@ -5,7 +7,7 @@ import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 /** CAD job shapes as the backend serializer writes them; `cadRefusedJob.fixture.json`
  * is a refused intent serialized by `JobRuntime._serialize_job`. */
 export function cadJobFixture(operation: CadOperationSummary, overrides: Partial<JobItem> = {}): JobItem {
-  const id = operation.jobId ?? operation.operationId;
+  const id = operation.jobId ?? `job:${operation.operationId}`;
   return {
     id, client_request_id: `cad-solve:${operation.operationId}`, parent_job_id: null,
     status: operation.state === 'accepted' ? 'queued'
@@ -49,4 +51,10 @@ export function publishCadSummary(operation: CadOperationSummary): void {
   const job = cadJobFixture(operation);
   const existing = jobsSocket.getSnapshot().jobs;
   publishCadJobs([...existing.filter((item) => item.id !== job.id && item.cad_state?.operation_id !== operation.operationId), job]);
+}
+
+/** Read model of a real schema-6 migrated request; archive locations omitted. */
+export function migratedCadRequestFixture(): JobItem {
+  const stored = migratedRequest as unknown as JobItem;
+  return cadJobFixture(cadJobSummary(stored), stored);
 }

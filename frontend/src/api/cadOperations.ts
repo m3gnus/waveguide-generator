@@ -108,6 +108,13 @@ export function isPendingCadOperation(operation: Pick<CadOperationSummary, 'stat
   return !TERMINAL_STATES.has(operation.state);
 }
 
+/** A request that cannot move until the user acts. Shared by the banner and list. */
+export function operationNeedsUser(operation: Pick<CadOperationSummary, 'kind' | 'state'>): boolean {
+  if (operation.kind === 'prepare_and_solve') return operation.state === 'needs_user_input';
+  return operation.state === 'recovery_required'
+    && (operation.kind === 'insert_link' || operation.kind === 'update_link');
+}
+
 const operationPath = (operationId: string): string =>
   `/api/cadlink/operations/${encodeURIComponent(operationId)}`;
 

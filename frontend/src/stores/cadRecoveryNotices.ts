@@ -2,7 +2,7 @@ import { createStore, type StoreApi } from 'zustand/vanilla';
 import { useStore } from 'zustand';
 import type { components } from '../api/generated/openapi';
 import type { CadOperationSummary } from '../api/cadOperations';
-import { isPendingCadOperation } from '../api/cadOperations';
+import { isPendingCadOperation, operationNeedsUser } from '../api/cadOperations';
 import { jsonRequest, type CadReturnIngestRecord } from '../api/cadlink';
 import { jobsSocket, type JobItem, type JobsSocketManager } from '../api/jobsSocket';
 import { cadJobSummary, latestCadJobs, dismissCadJob } from '../jobs/cadSolve';
@@ -127,7 +127,9 @@ export type CadRequest = {
 function recoverySummary(notice: CadRecoveryNotice): CadOperationSummary {
   return {
     operationId: notice.id, kind: notice.kind, state: 'recovery_required',
-    stage: null, reason: null, message: null, jobId: null, attemptGeneration: 0,
+    stage: null, reason: 'interrupted',
+    message: 'Use Undo in Fusion or repair the link. Dismiss does not repair Fusion.',
+    jobId: null, attemptGeneration: 0,
     preparationId: null, setupRevisionId: null, legacy: false,
     createdAt: notice.created_at, updatedAt: notice.created_at, acceptedSeq: notice.sequence,
     snapshot: { manifestSha256: null, documentName: notice.document_name },
@@ -139,13 +141,13 @@ export function selectCadRequests({ jobs, notices, record }: {
   jobs: JobItem[];
   notices: Record<string, CadRecoveryNotice>;
   record: CadReturnIngestRecord | null;
-}): { current: CadRequest[]; earlier: CadRequest[] } {
+}): { current: CadRequest[]; earlier: CadRequest[]; active: CadRequest[] } {
   const requests: CadRequest[] = latestCadJobs(jobs).flatMap((job) => {
     const operation = cadJobSummary(job);
     if (!isPendingCadOperation(operation)) return [];
     return [{ id: job.id, source: 'job' as const, job, operation,
       onScreen: Boolean(record && operation.snapshot?.manifestSha256 && record.manifest_sha256 === operation.snapshot.manifestSha256),
-      openable: operation.state === 'needs_user_input' && operation.reason === 'setup_required' && Boolean(operation.snapshot?.projectLineageId) }];
+      openable: operation.state === 'needs_user_input' && (operation.reason === 'setup_required' || operation.reason === 'frame_confirmation_required') && Boolean(operation.snapshot?.projectLineageId) }];
   });
   const recovery = new Map<string, CadRequest>();
   Object.values(notices).forEach((notice) => recovery.set(notice.id, {
@@ -155,7 +157,11 @@ export function selectCadRequests({ jobs, notices, record }: {
   // (now notices) preceded jobs, and each owner's order stays intact.
   requests.unshift(...recovery.values());
   requests.sort((a, b) => (a.operation.createdAt ?? '').localeCompare(b.operation.createdAt ?? ''));
-  return { current: requests.filter((item) => item.onScreen), earlier: requests.filter((item) => !item.onScreen) };
+  return {
+    current: requests.filter((item) => operationNeedsUser(item.operation) && item.onScreen),
+    earlier: requests.filter((item) => operationNeedsUser(item.operation) && !item.onScreen),
+    active: requests.filter((item) => !operationNeedsUser(item.operation)),
+  };
 }
 
 /** Capture named requests at the press. Late binding never redirects a dismiss
@@ -170,6 +176,7 @@ export function createCadRequestActions({ recovery = cadRecoveryNoticesStore, di
   const completed = new Set<string>();
   let opening: Promise<void> | null = null;
   const dismiss = (request: CadRequest): Promise<void> => {
+    if (!operationNeedsUser(request.operation) || (request.source === 'job' && request.job.status !== 'error')) return Promise.resolve();
     const key = `${request.source}:${request.id}`;
     if (completed.has(key)) return Promise.resolve();
     const held = pending.get(key);
@@ -183,7 +190,7 @@ export function createCadRequestActions({ recovery = cadRecoveryNoticesStore, di
   return {
     dismiss,
     async clearAll(requests: readonly CadRequest[]) {
-      const results = await Promise.allSettled(requests.filter((item) => item.operation.state !== 'cancel_requested').map(dismiss));
+      const results = await Promise.allSettled(requests.map(dismiss));
       const failed = results.find((result) => result.status === 'rejected');
       if (failed?.status === 'rejected') throw failed.reason;
     },

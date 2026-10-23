@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 import type { components } from '../api/generated/openapi';
 import { jsonRequest } from '../api/cadlink';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import type { CadOperationSummary } from '../api/cadOperations';
+import { operationNeedsUser, type CadOperationSummary } from '../api/cadOperations';
 
 export type CadSolvePress = components['schemas']['CadSolveAgainRequest'];
 /** The completion claims WG keeps for the solves its Solve started (guarantee row 8):
@@ -115,9 +115,12 @@ export async function approveCadJob(job: JobItem, preparationId: string, finding
   await jobsSocket.refresh();
 }
 export async function dismissCadJob(job: JobItem): Promise<void> {
-  if (job.status === 'preparing' || job.status === 'queued' || job.status === 'running') await jobsSocket.stopJob(job.id);
+  const current = jobsSocket.getSnapshot().jobs.find((item) => item.id === job.id) ?? job;
+  if (current.status !== 'error' || !current.cad_state || !operationNeedsUser(cadJobSummary(current))) {
+    throw new Error('Only a refused solve can be dismissed. Use Stop for an active solve.');
+  }
   // The backend deletes the refused chain in one transaction, so a reconnect
   // can never revive a parent this snapshot did not know about.
-  else await post(`/api/jobs/${encodeURIComponent(job.id)}/dismiss`, {});
+  await post(`/api/jobs/${encodeURIComponent(job.id)}/dismiss`, {});
   await jobsSocket.refresh();
 }

@@ -11,10 +11,9 @@ import { restoreParametricWorkingDesign } from '../jobs/showJobModel';
 import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { waveguideDefinitionAppliesNow } from '../stores/waveguideLink';
-import { cadJobSummaries } from '../jobs/cadSolve';
-import { useCadRecoveryNotices } from '../stores/cadRecoveryNotices';
+import { selectCadRequests, useCadRecoveryNotices } from '../stores/cadRecoveryNotices';
 import type { FusionCadStatus } from '../api/cadlink';
-import { operationNeedsUser, solveAttention, useReadyRun } from './solveAttention';
+import { solveAttention, useReadyRun } from './solveAttention';
 import { noteExplicitNavigation } from './workspaceNavigation';
 import { useDesignStore, type DesignDocument, type DesignFamily } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
@@ -267,8 +266,7 @@ export function SolveActions() {
  *
  * A request waiting for the user is announced wherever they are -- including
  * Parametric mode, where the CAD Link panel is not in the dock at all -- and
- * the notice opens it. Choosing that is the user's explicit act, so it may
- * change the workspace mode; nothing here changes it by itself. A solve whose
+ * the notice opens a request view without changing the working input. A solve whose
  * results arrived after the user navigated elsewhere is only indicated.
  */
 export function AttentionNotices() {
@@ -278,16 +276,15 @@ export function AttentionNotices() {
   const unseenRefusals = useCadDeliveryHealthStore((state) => state.unseenRefusals);
   const readyRun = useReadyRun();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
-  const waiting = [
-    ...Object.values(cadJobSummaries(jobs)),
-  ].filter(operationNeedsUser);
-  const waitingCount = waiting.length + Object.keys(notices).length;
-  const showWaiting = waitingCount > 0 && !(mode === 'cad' && workspaceNavigation.isVisible('cadlink'));
+  const requests = selectCadRequests({ jobs, notices, record: null });
+  const waiting = [...requests.earlier, ...requests.current];
+  const waitingCount = waiting.length;
+  const showWaiting = waitingCount > 0 && !workspaceNavigation.isVisible('cadlink');
   const showReady = readyRun !== null && !workspaceNavigation.isVisible('results');
   // A request WG took and refused has no row to wait in; this is its route.
   const showRefused = unseenRefusals > 0 && !(mode === 'cad' && workspaceNavigation.isVisible('cadlink'));
   const readyJob = readyRun ? jobs.find((job) => job.id === readyRun) ?? null : null;
-  const first = waiting[0];
+  const first = waiting[0]?.operation;
   const waitingLabel = !first && !Object.keys(notices).length
     ? ''
     : waitingCount > 1
@@ -299,8 +296,7 @@ export function AttentionNotices() {
       className="attention-notice attention-waiting"
       title={first?.message ?? waitingLabel}
       onClick={() => {
-        if (mode !== 'cad') activateWorkspaceMode('cad');
-        workspaceNavigation.navigate('cadlink');
+        workspaceNavigation.reveal('cad-requests');
       }}
     ><i/>{waitingLabel} · Show</button>}
     {showRefused && <button
