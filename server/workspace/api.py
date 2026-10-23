@@ -1532,12 +1532,13 @@ def mount_workspace(
 ) -> WorkspaceState:
     data_dir = Path(application.state.data_dir)
     known_settings: set[Path] = set()
-    settings, failed = read_folder_settings(data_dir, known_files=known_settings)
+    startup_read = read_folder_settings(data_dir, known_files=known_settings)
+    settings = startup_read.settings
     version = settings["folders.json"].get("schemaVersion")
     unsupported = "schemaVersion" in settings["folders.json"] and (type(version) is not int or version != 1)
     root = settings["folders.json"].get("rootPath")
     recorded_root = isinstance(root, str) and Path(root).is_absolute()
-    allow_adoption = not (failed or unsupported or recorded_root)
+    allow_adoption = not (startup_read.failed or unsupported or recorded_root)
     state = WorkspaceState(
         data_dir,
         default_path=default_path,
@@ -1553,7 +1554,7 @@ def mount_workspace(
         writer=_write_json_atomic,
         create_implicit_runs=create_implicit_runs,
         explicit_runs=explicit_runs,
-        settings_read_failed=failed,
+        startup_read=startup_read,
         known_settings=known_settings,
     )
 

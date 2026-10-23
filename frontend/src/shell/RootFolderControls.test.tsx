@@ -50,6 +50,32 @@ describe('WG folder', () => {
     expect(button('Use this path').disabled).toBe(true);
   });
 
+  it.each(['folders.json', 'cadlink_settings.json', 'workspace_settings.json'])('shows the %s recovery note and enables folder actions', async file => {
+    const notice = `${file} is corrupt. Choosing a WG folder will replace it.`;
+    vi.mocked(getFolderRoot).mockResolvedValue({ ...folder, readOnly: false, notice });
+    await act(async () => root.render(<RootFolderControls/>));
+    expect(host.textContent).toContain(notice);
+    expect(button('Choose WG folder…').disabled).toBe(false);
+    expect(button('Use the WG folder instead').disabled).toBe(false);
+    const input = host.querySelector('input')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '/replacement');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(button('Use this path').disabled).toBe(false);
+    vi.mocked(selectFolderRoot).mockResolvedValue({ ...folder, notice: undefined });
+    await act(async () => button('Use this path').click());
+    expect(selectFolderRoot).toHaveBeenCalledWith('/replacement');
+    expect(host.textContent).not.toContain(notice);
+  });
+
+  it('allows creating a missing WGLink child when settings are corrupt', async () => {
+    vi.mocked(getFolderRoot).mockResolvedValue({ ...folder, cadlinkExists: false, readOnly: false,
+      notice: 'cadlink_settings.json is corrupt. Choosing a WG folder will replace it.' });
+    await act(async () => root.render(<RootFolderControls cadlinkOnly/>));
+    expect(button('Create it').disabled).toBe(false);
+  });
+
   it('clears only after confirmation naming the new destination', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     vi.mocked(useRootFolder).mockResolvedValue({ ...folder, overrides: {}, runs: '/current/root/runs' });
