@@ -52,9 +52,10 @@ def test_retirement_does_not_spin_accepted_work(tmp_path, monkeypatch, broken):
     monkeypatch.setattr(runtime, "_ensure_scheduler", JobRuntime._ensure_scheduler.__get__(runtime))
     real_compose = runtime._compose_job
 
-    async def compose(request, cad_provenance, *args):
+    async def compose(request, cad_provenance, *args, validation=None):
         # Reuse the CAD harness's jobs-system seam; solving the imported mesh is
         # outside this scheduler test, so its bound solve uses the dry-run fake.
+        # The harness composes fake inputs and does not consume admission validation.
         if cad_provenance:
             request = _request(delay_ms=0, count=2)
         return await real_compose(request, cad_provenance, *args)

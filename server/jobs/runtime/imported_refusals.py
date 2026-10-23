@@ -209,7 +209,7 @@ def _imported_capability_blocker(
     missing = sorted(needed_features - set(info.imported_features))
     if missing:
         return (
-            "imported_feature_unsupported_by_engine",
+            "fem_backend_unsupported" if "fem-regions" in missing else "imported_feature_unsupported_by_engine",
             "it does not implement "
             + ", ".join(_IMPORTED_FEATURE_LABELS.get(item, item) for item in missing)
             + " for imported geometry",

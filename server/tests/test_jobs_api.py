@@ -96,6 +96,58 @@ async def _request(
     return status, response_body
 
 
+@pytest.mark.parametrize("hold", ["restart", "retirement", "both"])
+def test_solve_plans_and_submit_share_hold_refusal_without_admission(tmp_path, monkeypatch, hold):
+    from server.tests._asgi import SOLVE_BODY
+    from server.tests.test_imported_jobs import _request as imported_request
+
+    monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")
+
+    async def scenario():
+        app = create_app(data_dir=tmp_path / "data", solver_warmup=False)
+        runtime = app.state.jobs_runtime
+        approval = app.state.update_restart
+        retirement = app.state.retirement_hold
+        if hold in {"retirement", "both"}:
+            retirement.hold("test retirement")
+        if hold in {"restart", "both"}:
+            approval.approve("test-update")
+        expected_message = approval.refusal() or retirement.refusal()
+
+        def unexpected(*_args, **_kwargs):
+            pytest.fail("held plans and submissions must not enter admission or allocate work")
+
+        monkeypatch.setattr(runtime, "validate_submission", unexpected)
+        monkeypatch.setattr(runtime, "plan_imported", unexpected)
+        monkeypatch.setattr(runtime, "submit", unexpected)
+        monkeypatch.setattr(runtime.cadlink_store, "touch_ingest", unexpected)
+        imported = imported_request("wgi_" + "0" * 26).model_dump(mode="json")
+        parametric = {**SOLVE_BODY, "client_request_id": "held-request"}
+        imported["client_request_id"] = "held-request"
+        try:
+            errors = []
+            for path, body in (
+                ("/api/solve/plan", parametric),
+                ("/api/solve/imported-plan", imported),
+                ("/api/solve", parametric),
+                ("/api/solve", imported),
+            ):
+                status, raw = await _request(app, "POST", path, body=body)
+                assert status == 409
+                errors.append(json.loads(raw)["error"])
+            assert all(error == errors[0] for error in errors)
+            assert errors[0]["code"] == "update_restart_pending"
+            assert errors[0]["message"] == expected_message
+            assert errors[0]["retryable"] is True
+            assert errors[0]["client_request_id"] == "held-request"
+            assert approval.pending == ("test-update" if hold != "retirement" else None)
+            assert retirement.held == (hold != "restart")
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_large_archive_snapshot_serialization_keeps_event_loop_responsive() -> None:
     class Runtime:
         async def start(self) -> None:

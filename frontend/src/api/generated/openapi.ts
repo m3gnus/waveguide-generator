@@ -10184,6 +10184,15 @@ export interface operations {
                     "application/json": components["schemas"]["ImportedSolvePlanResponse"];
                 };
             };
+            /** @description A restart or retirement hold is pending */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Imported request refused */
             422: {
                 headers: {
@@ -10215,6 +10224,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SolvePlanResponse"];
+                };
+            };
+            /** @description A restart or retirement hold is pending */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description Solve request refused */

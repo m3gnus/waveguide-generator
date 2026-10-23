@@ -375,8 +375,9 @@ def create_jobs_router(
 
     ``restart_approval`` is the server's restart-approved latch
     (``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.2). While it is set,
-    routes that start work (Solve, Retry and CAD Solve again) refuse with
-    HTTP 409. An exact CAD intake replay can still recover its original job.
+    routes that start work (Solve, Retry and CAD Solve again), and both
+    solve plans, refuse with HTTP 409. An exact CAD intake replay can still
+    recover its original job.
     Read routes and approvals on an existing preparation stay open.
     """
 
@@ -404,6 +405,7 @@ def create_jobs_router(
         "/api/solve/imported-plan",
         response_model=ImportedSolvePlanResponse,
         responses={
+            409: {"model": ErrorEnvelope, "description": "A restart or retirement hold is pending"},
             422: {"model": ErrorEnvelope, "description": "Imported request refused"},
         },
     )
@@ -418,6 +420,9 @@ def create_jobs_router(
         (unknown ingest, mismatched hashes, an unsupported cut set) answers 422.
         """
 
+        refused = restart_refusal(body.client_request_id)
+        if refused is not None:
+            return refused
         try:
             plan = await runtime.plan_imported(body)
         except ImportedSolveRefusal as exc:
@@ -444,6 +449,7 @@ def create_jobs_router(
         "/api/solve/plan",
         response_model=SolvePlanResponse,
         responses={
+            409: {"model": ErrorEnvelope, "description": "A restart or retirement hold is pending"},
             422: {"model": ErrorEnvelope, "description": "Solve request refused"},
             503: {"model": ErrorEnvelope, "description": "Engine unavailable"},
         },
@@ -451,6 +457,9 @@ def create_jobs_router(
     async def plan_solve(body: SolveRequest) -> SolvePlanResponse | JSONResponse:
         """Resolve the submitted design without allocating or persisting a job."""
 
+        refused = restart_refusal(body.client_request_id)
+        if refused is not None:
+            return refused
         try:
             validation = await runtime.validate_submission(body, preview=True)
             resolved = validation.resolved

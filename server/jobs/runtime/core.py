@@ -719,7 +719,8 @@ def _raise_engine_blocker(blocker: SolveBlocker, *, imported: bool = False) -> N
         raise EngineUnavailableError(blocker.message, blocker=blocker)
     if imported:
         raise ImportedSolveRefusal(
-            "imported_engine_unsupported", blocker.message,
+            ("fem_backend_unsupported" if blocker.code == "fem_backend_unsupported"
+             else "imported_engine_unsupported"), blocker.message,
             details={"engine": blocker.engine, "reason_code": blocker.code,
                      "capable_engines": [r.engine for r in blocker.remedies if r.kind == "use_engine"],
                      "blocker": blocker.model_dump(mode="json")},
@@ -1947,7 +1948,11 @@ class JobRuntime:
     async def validate_submission(
         self, request: SolveRequest, *, preview: bool = False,
     ) -> SubmissionValidation:
-        """All admission checks, with no job, archive claim or persistence.
+        """Geometry, engine and setup admission, without a job, archive claim or persistence.
+
+        Plans cover these checks plus the API restart/retirement hold check.
+        Submission-key conflicts are idempotency/transport concerns handled only
+        by submit; plans do not validate or reserve idempotency keys.
 
         Plans and job composition use this same boundary. Only the presentation
         of an engine refusal differs in a preview: it includes readiness and,

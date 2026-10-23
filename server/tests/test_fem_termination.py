@@ -9,8 +9,9 @@ import pytest
 
 from server.cadlink.intake import ingest
 from server.jobs.models import DriveChannel
-from server.jobs.runtime import ImportedSolveRefusal
-from server.jobs.runtime.core import resolve_imported_submission
+from server.engines.registry import EngineInfo
+from server.jobs.runtime import EngineUnavailableError, ImportedSolveRefusal
+from server.jobs.runtime.core import plan_imported_submission, resolve_imported_submission
 from server.jobs.runtime.imported_refusals import _imported_request_refusal
 from server.solver.beat_adapter import coupled_request
 from server.solver.coupled_system import CoupledSystemError, ExteriorSurface, build_coupled_system, solve_kind
@@ -186,9 +187,9 @@ def test_exterior_only_choice_excludes_declared_termination():
 
 @pytest.mark.parametrize("override,engine,code", [
     ({"WG2_FEM_REGIONS": "0"}, "beat-cpu", "fem_required"),
-    ({}, "bempp", "fem_backend_unsupported"),
+    ({}, "bempp", CODE),
 ])
-def test_operator_and_backend_refusals_precede_termination(monkeypatch, override, engine, code):
+def test_operator_disable_precedes_termination_and_termination_precedes_backend(monkeypatch, override, engine, code):
     monkeypatch.setenv("WG2_FEM_REGIONS", "1")
     monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
     for key, value in override.items():
@@ -205,6 +206,47 @@ def test_operator_and_backend_refusals_precede_termination(monkeypatch, override
     assert caught.value.reason_code == code
 
 
+def _unavailable_fem_engines():
+    return [EngineInfo(name=name, available=False, reason="fixture unavailable", version=None,
+                       geometry_sources=("imported",), symmetry_domains=("full",),
+                       imported_features=features)
+            for name, features in (("bempp", ()), ("beat-cpu", ("fem-regions",)))]
+
+
+@pytest.mark.parametrize("engine,code", [
+    ("bempp", "fem_backend_unsupported"), ("beat-cpu", "engine_unavailable"),
+])
+def test_valid_fem_checks_backend_capability_before_availability(monkeypatch, engine, code):
+    monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+    request = _request("wgi_" + "0" * 26)
+    request.options.engine = engine
+    request.geometry.drive_channels = [DriveChannel(id="left", source_ids=["source-a"])]
+    record = {"fem_regions": [region_input(channel="left", interface=True).record],
+              "domain_interpretation": _closed_domain()}
+    assert _imported_request_refusal(request, record) is None
+
+    class Registry:
+        async def capabilities(self):
+            return _unavailable_fem_engines()
+
+        async def get_engine(self, _name):
+            pytest.fail("no unavailable adapter may be constructed")
+
+    kwargs = {"imported_record": record, "symmetry_metadata": {"resolved_quadrants": 1234}}
+    plan = asyncio.run(plan_imported_submission(request, Registry(), **kwargs))
+    assert plan["code"] == code
+    assert plan["readiness"]["code"] == code
+    verdicts = {v["name"]: v for v in plan["engines"]}
+    assert verdicts["bempp"]["code"] == "fem_backend_unsupported"
+    assert verdicts["beat-cpu"]["code"] == "engine_unavailable"
+    with pytest.raises(ImportedSolveRefusal if engine == "bempp" else EngineUnavailableError) as caught:
+        asyncio.run(resolve_imported_submission(request, Registry(), **kwargs))
+    assert caught.value.details["blocker"]["code"] == code
+    if engine == "bempp":
+        assert caught.value.reason_code == code
+
+
 def test_disabled_ingest_precedes_termination(monkeypatch):
     monkeypatch.setenv("WG2_FEM_REGIONS", "0")
     with pytest.raises(ingest.IngestRefusal, match="FEM regions turned off"):
@@ -212,8 +254,8 @@ def test_disabled_ingest_precedes_termination(monkeypatch):
                                   "sources": [{"id": "source-a"}]}, {}, [])
 
 
-@pytest.mark.parametrize("reason", ["termination", "disabled", "backend"])
-def test_recovered_declared_fem_refuses_before_unavailable_engine(tmp_path, monkeypatch, reason):
+@pytest.mark.parametrize("reason", ["termination", "disabled", "termination-with-bempp"])
+def test_recovered_fem_checks_operator_and_physical_validity_before_engine_selection(tmp_path, monkeypatch, reason):
     from datetime import datetime, timezone
     from server.jobs.runtime import JobRuntime
     from server.jobs.store import JobStore
@@ -236,7 +278,7 @@ def test_recovered_declared_fem_refuses_before_unavailable_engine(tmp_path, monk
         })
         await runtime.shutdown()
         request = _request(ingest_id)
-        request.options.engine = "bempp" if reason == "backend" else "beat-cpu"
+        request.options.engine = "bempp" if reason == "termination-with-bempp" else "beat-cpu"
         recovered = JobRuntime(JobStore(tmp_path / "jobs.db"), engine_registry=UnavailableRegistry(),
                                cadlink_store=CadLinkStore(tmp_path / "cadlink.db"))
         recovered.store.initialize()
@@ -253,12 +295,12 @@ def test_recovered_declared_fem_refuses_before_unavailable_engine(tmp_path, monk
             row = recovered.store.get_job_row("fem-queued")
             assert row["status"] == "error"
             code = {"termination": CODE, "disabled": "fem_required",
-                    "backend": "fem_backend_unsupported"}[reason]
+                    "termination-with-bempp": CODE}[reason]
             assert row["error_message"].startswith(code + ":")
             if reason == "disabled":
                 assert "disabled by WG2_FEM_REGIONS" in row["error_message"]
                 assert "send again" not in row["error_message"]
-            if reason == "termination":
+            if reason in {"termination", "termination-with-bempp"}:
                 assert row["error_message"] == f"{CODE}: {MESSAGE}"
             assert calls == []
         finally:

@@ -394,14 +394,14 @@ def test_fem_plan_offers_cpu_despite_incompatible_selected_backend(monkeypatch, 
     assert verdicts["beat-cpu"]["solves"] is True
     for name in ("bempp", "beat-metal"):
         assert verdicts[name]["solves"] is False
-        assert verdicts[name]["code"] == "imported_feature_unsupported_by_engine"
+        assert verdicts[name]["code"] == "fem_backend_unsupported"
         assert "coupled FEM regions (official BEAT)" in verdicts[name]["reason"]
     assert plan["engine"] is None
-    assert plan["code"] == "imported_engine_unsupported"
+    assert plan["code"] == "fem_backend_unsupported"
     assert [r["engine"] for r in plan["readiness"]["remedies"] if r["kind"] == "use_engine"] == ["beat-cpu"]
     with pytest.raises(ImportedSolveRefusal, match="coupled FEM regions") as caught:
         asyncio.run(resolve_imported_submission(request, Registry(), **kwargs))
-    assert caught.value.reason_code == "imported_engine_unsupported"
+    assert caught.value.reason_code == "fem_backend_unsupported"
     assert request.options.engine == engine
 
 
