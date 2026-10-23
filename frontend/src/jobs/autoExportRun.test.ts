@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
 import { preferencesStore } from '../prefs/preferences';
-import { useImportedSolveOptionsStore } from '../stores/solveOptions';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { archiveRunToWorkspace } from '../results/exporters';
 import type { ResultPayload } from '../results/types';
 import { exportRunAutomatically } from './autoExportRun';
+
+afterEach(() => resetSolveOptionsStore());
 
 /**
  * The run archive and automatic export, both on, against one Workspace.
@@ -102,6 +104,18 @@ function workspace(jobId: string) {
 const AUTO_FORMATS = ['step', 'mwg_config', 'csv', 'json', 'html_report', 'txt'] as const;
 
 describe('run archive and automatic export in one Workspace', () => {
+  it.each(['parametric', 'imported'] as const)('automatically exports legacy %s runs with their live kind reference', async (kind) => {
+    const job = completedJob(`legacy-${kind}`);
+    if (kind === 'imported') job.config_summary = { geometry_type: 'imported' };
+    useSolveOptionsStore.getState().updatePolar({ normAngle: 10 });
+    useImportedSolveOptionsStore.getState().updatePolar({ normAngle: 30 });
+    const { files, fetcher } = workspace(job.id);
+    const exported = await exportRunAutomatically(job, ['json'], { preferences: preferencesStore.getSnapshot(), fetcher });
+    expect(exported.failures).toEqual([]);
+    const written = JSON.parse([...files.values()][0]);
+    expect(written.results.metadata.directivity.normalization_angle_degrees).toBe(kind === 'imported' ? 30 : 10);
+  });
+
   it.each(['cad', 'file'] as const)('never regenerates the anchor of a %s run during automatic export', async kind => {
     const job = completedJob(`imported-${kind}`);
     job.config_summary = { geometry_type: 'imported', ...(kind === 'file' ? { import_origin: 'mesh-file' } : {}) };

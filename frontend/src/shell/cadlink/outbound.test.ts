@@ -3,6 +3,7 @@ import { createCadConnectionStore } from '../../stores/cadConnection';
 import { designForFamily, resetDesignStore, useDesignStore } from '../../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../../stores/document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../../stores/solveOptions';
+import { workspaceModeStore } from '../../stores/workspaceMode';
 import { createCadOutboundController, isOutboundSupersededError, OutboundSupersededError } from './outbound';
 import { deferred, json } from './selection.fixtures';
 import { exported, identity, link, status } from './outbound.fixtures';
@@ -16,10 +17,11 @@ const controllers: ReturnType<typeof createCadOutboundController>[] = [];
 const connections: ReturnType<typeof createCadConnectionStore>[] = [];
 beforeEach(() => {
   resetDesignStore(); resetDocumentStore(); resetSolveOptionsStore();
+  workspaceModeStore.setMode('parametric');
   useDocumentStore.getState().setCadLink(identity, 'current');
 });
 afterEach(() => { controllers.forEach((item) => item.dispose()); connections.forEach((item) => item.invalidate());
-  controllers.length = connections.length = 0; vi.restoreAllMocks(); });
+  controllers.length = connections.length = 0; workspaceModeStore.setMode('parametric'); vi.restoreAllMocks(); });
 function setup(initial = status(), custom?: typeof fetch) {
   let current = initial;
   const connection = createCadConnectionStore(); connections.push(connection);
@@ -95,23 +97,23 @@ describe('outbound commands without a mounted coordinator (row 17)', () => {
     else if (change === 'WG settings') useSolveOptionsStore.getState().updatePolar({ distance: 4 });
     else setStatus(status({ fusionChangesAvailable: true, ...(change === 'target'
       ? { documentId: 'another' } : { state: 'addin_outdated' }) }));
-    if (change === 'refusal') await expect(controller.confirmFusionConflict()).rejects.toThrow();
+    if (change === 'refusal' || change === 'WG revision') await expect(controller.confirmFusionConflict()).rejects.toThrow();
     else expect(await controller.confirmFusionConflict()).toBeNull();
     expect(exportsFrom(fetcher)).toHaveLength(0);
   });
-  it('runs all guards against the folder picker result and exports the latest edit and name', async () => {
+  it('runs all guards against the folder picker result and exports the latest name', async () => {
     const pick = deferred<Response>();
     const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/select') ? pick.promise
       : String(input).endsWith('/wglink') ? json(exported) : json({ selected: true }));
     const { controller, reader, setStatus } = setup(status({ cadFolderConfigured: false }), fetcher);
     const sending = controller.sendWgToFusion();
     await vi.waitFor(() => expect(fetcher).toHaveBeenCalled());
-    useDesignStore.getState().updateField('R', 432); useDocumentStore.getState().setDesignName('New horn');
+    useDocumentStore.getState().setDesignName('New horn');
     setStatus(status({ fusionChangesAvailable: true })); pick.resolve(json({ selected: true }));
     expect(await sending).toBeNull(); expect(exportsFrom(fetcher)).toHaveLength(0);
     await controller.confirmFusionConflict();
     const body = JSON.parse(String(exportsFrom(fetcher)[0][1]?.body));
-    expect(body.baseName).toBe('New_horn'); expect(body.design.R).toBe(432);
+    expect(body.baseName).toBe('New_horn'); expect(body.design.R).toBe(useDesignStore.getState().design.R);
     expect(body.designRevision).toBe(useDesignStore.getState().designRevision); expect(reader).toHaveBeenCalledTimes(3);
   });
   it.each(['dismissed', 'unreadable', 'still missing'] as const)('refuses a %s folder choice', async (choice) => {
@@ -179,7 +181,7 @@ describe('outbound commands without a mounted coordinator (row 17)', () => {
     await vi.waitFor(() => expect(exportsFrom(fetcher)).toHaveLength(1));
     useDocumentStore.getState().setCadLink({ ...identity, designId: 'wgd_new' }, 'current');
     old.resolve(json(exported)); await sending;
-    expect(controller.getState().status).toContain('The Fusion link changed');
+    expect(controller.getState().status).toContain('The model changed');
     expect(controller.getState().status).not.toContain('Another design was opened');
   });
   it('leaves polar edits made during export uncommitted', async () => {
@@ -229,4 +231,103 @@ it('exposes supersession distinctly from failures and conflict returns', () => {
   expect(isOutboundSupersededError(new OutboundSupersededError())).toBe(true);
   expect(isOutboundSupersededError(new Error('unavailable'))).toBe(false);
   expect(isOutboundSupersededError(null)).toBe(false);
+});
+
+describe.each(['file', 'cad', 'another parametric model'] as const)('current-model send guard: %s', (replacement) => {
+  function switchModel() {
+    if (replacement === 'another parametric model') useDesignStore.getState().updateField('R', 987);
+    else { workspaceModeStore.setImportedInput(replacement); workspaceModeStore.setMode('cad'); }
+  }
+  function expectStopped(controller: ReturnType<typeof createCadOutboundController>, fetcher: typeof fetch) {
+    expect(exportsFrom(fetcher)).toHaveLength(0);
+    expect(controller.getState()).toMatchObject({ sendingToFusion: false, pendingFusionConflict: false });
+    expect(controller.getState().error).toMatch(/model changed|imported models/i);
+  }
+
+  it('stops after the first Fusion status await', async () => {
+    const pending = deferred<ReturnType<typeof status>>();
+    const { controller, reader, fetcher } = setup();
+    reader.mockReturnValueOnce(pending.promise);
+    const sending = controller.sendWgToFusion();
+    switchModel(); pending.resolve(status());
+    await expect(sending).rejects.toThrow();
+    expectStopped(controller, fetcher);
+  });
+
+  it('stops after the folder dialog, before another status request', async () => {
+    const pending = deferred<Response>();
+    const fetcher = vi.fn(async () => pending.promise);
+    const { controller, reader } = setup(status({ cadFolderConfigured: false }), fetcher);
+    const sending = controller.sendWgToFusion();
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+    switchModel(); pending.resolve(json({ selected: true }));
+    await expect(sending).rejects.toThrow();
+    expect(reader).toHaveBeenCalledOnce();
+    expectStopped(controller, fetcher);
+  });
+
+  it('stops after the post-folder Fusion status await', async () => {
+    const pending = deferred<ReturnType<typeof status>>();
+    const { controller, reader, fetcher } = setup(status({ cadFolderConfigured: false }));
+    reader.mockResolvedValueOnce(status({ cadFolderConfigured: false })).mockReturnValueOnce(pending.promise);
+    const sending = controller.sendWgToFusion();
+    await vi.waitFor(() => expect(reader).toHaveBeenCalledTimes(2));
+    switchModel(); pending.resolve(status());
+    await expect(sending).rejects.toThrow();
+    expectStopped(controller, fetcher);
+  });
+
+  it.each(['response', 'body'] as const)('stops after the transport workspace %s await', async (part) => {
+    const pending = deferred<Response>();
+    const body = deferred<{ selected: boolean }>();
+    const response = json({ selected: true });
+    const readBody = vi.spyOn(response, 'json').mockReturnValue(body.promise);
+    const fetcher = vi.fn(async () => part === 'response' ? pending.promise : response);
+    const { controller } = setup(status(), fetcher);
+    const sending = controller.sendWgToFusion();
+    await vi.waitFor(() => expect(part === 'response' ? fetcher : readBody).toHaveBeenCalledOnce());
+    switchModel(); pending.resolve(json({ selected: true })); body.resolve({ selected: true });
+    await expect(sending).rejects.toThrow();
+    expectStopped(controller, fetcher);
+  });
+
+  it('retains the original model through the conflict dialog', async () => {
+    const { controller, reader, fetcher } = setup(status({ fusionChangesAvailable: true }));
+    expect(await controller.sendWgToFusion()).toBeNull();
+    switchModel();
+    await expect(controller.confirmFusionConflict()).rejects.toThrow();
+    expect(reader).toHaveBeenCalledOnce();
+    expectStopped(controller, fetcher);
+  });
+
+  it('stops after the confirmation status await', async () => {
+    const pending = deferred<ReturnType<typeof status>>();
+    const { controller, reader, fetcher } = setup(status({ fusionChangesAvailable: true }));
+    await controller.sendWgToFusion();
+    reader.mockReturnValueOnce(pending.promise);
+    const sending = controller.confirmFusionConflict();
+    switchModel(); pending.resolve(status({ fusionChangesAvailable: true }));
+    await expect(sending).rejects.toThrow();
+    expectStopped(controller, fetcher);
+  });
+
+  it('does not adopt a link returned after the model changed during transport', async () => {
+    const pending = deferred<Response>();
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/wglink')
+      ? pending.promise : json({ selected: true }));
+    const { controller } = setup(status(), fetcher);
+    const sending = controller.sendWgToFusion();
+    await vi.waitFor(() => expect(exportsFrom(fetcher)).toHaveLength(1));
+    const before = useDocumentStore.getState().identity;
+    switchModel(); pending.resolve(json(exported)); await sending;
+    expect(useDocumentStore.getState().identity).toBe(before);
+    expect(controller.getState().status).toContain('The model changed');
+  });
+});
+
+it.each(['sendWgToFusion', 'confirmFusionConflict'] as const)('refuses %s begun on an imported model', async (entry) => {
+  const { controller, reader, fetcher } = setup();
+  workspaceModeStore.setMode('cad');
+  await expect(controller[entry]()).rejects.toThrow('imported models');
+  expect(reader).not.toHaveBeenCalled(); expect(fetcher).not.toHaveBeenCalled();
 });

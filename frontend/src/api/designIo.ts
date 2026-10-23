@@ -184,6 +184,7 @@ export async function sendDesignToCad(
   polarConfig?: unknown,
   solveSettings: WgSolveSettings | null = wgSolveSettingsFromStore(),
   designUid?: string,
+  assertCurrent?: () => void,
 ): Promise<WgLinkExportResponse> {
   const bindAttention = solveAttention.captureOperationArm();
   // No save gate here. The server commits the design on screen into the
@@ -191,8 +192,10 @@ export async function sendDesignToCad(
   // sends like any other; `identity` is the optimistic-concurrency token when
   // there is one, not a precondition.
   const pathResponse = await deadlineFetch(fetcher, '/api/cad-workspace/path');
+  assertCurrent?.();
   if (!pathResponse.ok) throw new Error(await errorMessage(pathResponse));
   const workspace = await pathResponse.json() as { selected?: boolean; path?: string };
+  assertCurrent?.();
   if (!workspace.selected) {
     throw new Error('Check the WGLink folder in Settings → CAD Link before sending to Fusion.');
   }

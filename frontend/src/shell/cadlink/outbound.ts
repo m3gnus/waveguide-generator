@@ -3,6 +3,8 @@ import { getFusionCadStatus } from '../../api/cadlink';
 import { getCadOperation, type CadOperationSummary } from '../../api/cadOperations';
 import { selectCadWorkspace } from '../../api/cadWorkspace';
 import { sendDesignToCad } from '../../api/designIo';
+import { currentModel, type CurrentModel } from '../../model/currentModel';
+import { assertCurrentModelExport } from '../../results/exportContext';
 import { keptContentKeyOf, rememberSentCopy } from '../../design/replacementCheck';
 import { useCadConnectionStore, type CadConnectionStore, type CadConnectionStatus } from '../../stores/cadConnection';
 import { useCadReturnStore } from '../../stores/cadReturn';
@@ -42,9 +44,9 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
   }));
   let generation = 0;
   let active = true;
-  let folderPick: Promise<CadConnectionStatus | null> | null = null;
+  let folderPick: ReturnType<typeof selectCadWorkspace> | null = null;
   // Confirmation authorizes only the exact target and WG revision displayed.
-  let conflict: string | null = null;
+  let conflict: { evidence: string; model: CurrentModel } | null = null;
   const evidenceKey = (status: CadConnectionStatus | null) => JSON.stringify([
     currentDocumentLoad(), useDesignStore.getState().designRevision, documentSettingsSignature(),
     useDocumentStore.getState().identity,
@@ -67,12 +69,7 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
   };
   const chooseFolder = () => {
     if (folderPick) return folderPick;
-    const picking = (async () => {
-      if (!(await selectCadWorkspace(undefined, fetcher)).selected) {
-        throw new Error('Check the WGLink folder in Settings → CAD Link, then send again.');
-      }
-      return readStatus();
-    })();
+    const picking = selectCadWorkspace(undefined, fetcher);
     folderPick = picking;
     void picking.catch(() => undefined).finally(() => { if (folderPick === picking) folderPick = null; });
     return picking;
@@ -81,27 +78,38 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
     if (!active) throw new OutboundSupersededError('The Fusion command controller was stopped.');
     const request = ++generation;
     const load = currentDocumentLoad();
+    // A conflict confirmation continues the original model's command.
+    const model = command?.confirmed && conflict ? conflict.model : currentModel();
     const current = () => active && request === generation;
     const assertCurrent = () => {
       if (!current() || !isCurrentDocumentLoad(load)) {
         throw new OutboundSupersededError('Another design or command superseded this Fusion send.');
       }
+      assertCurrentModelExport(model, 'step');
     };
     store.setState({ sendingToFusion: true, error: null, status: null });
     options.noteCadActivity?.();
     let evidence: CadConnectionStatus | null = null;
     let exportedIdentity: ReturnType<typeof useDocumentStore.getState>['identity'] | undefined;
     try {
+      assertCurrent();
       return await runGuardedFusionSend({
         current: null, readStatusFirst: true,
         readStatus: async () => { evidence = await readStatus(); assertCurrent(); return evidence; },
-        chooseCadFolder: async () => { evidence = await chooseFolder(); assertCurrent(); return evidence; },
+        chooseCadFolder: async () => {
+          const choice = await chooseFolder();
+          assertCurrent();
+          if (!choice.selected) throw new Error('Check the WGLink folder in Settings → CAD Link, then send again.');
+          evidence = await readStatus();
+          assertCurrent();
+          return evidence;
+        },
         // A confirmation is rechecked after the status read, in setConflict/send.
         confirmed: command?.confirmed,
         refuse: (message) => new Error(message),
         setConflict: (pending) => {
           assertCurrent();
-          if (pending) conflict = evidenceKey(evidence);
+          if (pending) conflict = { evidence: evidenceKey(evidence), model };
           store.setState({ pendingFusionConflict: pending });
         },
         sendToFusion: async (target) => {
@@ -110,8 +118,8 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
             throw new Error('Fusion changed documents. Refresh CAD Link and try again.');
           }
           if (target && evidence?.fusionChangesAvailable
-            && (!command?.confirmed || conflict !== evidenceKey(evidence))) {
-            conflict = evidenceKey(evidence);
+            && (!command?.confirmed || conflict?.evidence !== evidenceKey(evidence))) {
+            conflict = { evidence: evidenceKey(evidence), model };
             store.setState({ pendingFusionConflict: true });
             // Return null through the outer command without reaching transport.
             throw new ConflictChangedError();
@@ -123,19 +131,21 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
           const sentKey = keptContentKeyOf(design);
           exportedIdentity = identity;
           const result = await sendDesignToCad(design, designRevision, designNameSlug(designName),
-            identity, fetcher, undefined, target ?? null, polar, undefined, designUid);
+            identity, fetcher, undefined, target ?? null, polar, undefined, designUid, assertCurrent);
           if (active && result.cadHandoffRequestId && result.cadHandoff !== 'failed') {
             const id = result.cadHandoffRequestId;
             // A terminal push may have beaten the export response.
             if (!store.getState().requests[id]) store.setState({ requests: { ...store.getState().requests, [id]: 'received' } });
           }
-          const adopt = current() && isCurrentDocumentLoad(load)
+          let sameModel = true;
+          try { assertCurrentModelExport(model, 'step'); } catch { sameModel = false; }
+          const adopt = sameModel && current() && isCurrentDocumentLoad(load)
             && useDocumentStore.getState().identity === identity
             && useDocumentStore.getState().designUid === designUid;
           rememberSentCopy(sentKey, result.identity?.designId, adopt);
           if (!current()) return result;
           if (!adopt) {
-            store.setState({ status: `Sent to Fusion 360 · sequence ${result.sequence}. The Fusion link changed while it was sending, so the returned CAD link was not adopted.` });
+            store.setState({ status: `Sent to Fusion 360 · sequence ${result.sequence}. ${sameModel ? 'The Fusion link' : 'The model'} changed while it was sending, so the returned CAD link was not adopted.` });
             return result;
           }
           try {
@@ -156,6 +166,7 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
       });
     } catch (reason) {
       if (reason instanceof ConflictChangedError) return null;
+      if (current()) { conflict = null; store.setState({ pendingFusionConflict: false }); }
       if (exportedIdentity !== undefined) {
         rememberSentCopy(null, exportedIdentity?.designId, current() && isCurrentDocumentLoad(load));
       }

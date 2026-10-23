@@ -1,5 +1,6 @@
 import { modelKindForRun } from '../model/currentModel';
 import { runNormalizationAngle } from '../results/normalization';
+import { solveOptionsStoreForJob } from '../stores/solveOptionsContext';
 import { nativeCadLimitation } from '../design/nativeFamilies';
 import type { JobItem } from '../api/jobsSocket';
 import { jobsSocket } from '../api/jobsSocket';
@@ -174,7 +175,7 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
       hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
       workspaceSubdirectory: exportSubdirectoryForJob(job),
       designName: job.label ?? undefined,
-      normalizationAngle: runNormalizationAngle(job),
+      normalizationAngle: runNormalizationAngle(job, solveOptionsStoreForJob(job).getState().polar.normAngle),
       preferences,
     };
   };

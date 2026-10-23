@@ -1,4 +1,5 @@
 import { runNormalizationAngle } from '../results/normalization';
+import { solveOptionsStoreForJob } from '../stores/solveOptionsContext';
 import type { JobItem } from '../api/jobsSocket';
 import { fetchJobResults } from '../api/results';
 import type { ExportFormat, Preferences } from '../prefs/preferences';
@@ -36,7 +37,7 @@ export async function exportRunAutomatically(
     hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
     workspaceSubdirectory: autoExportSubdirectoryForJob(job),
     designName: job.label ?? undefined,
-    normalizationAngle: runNormalizationAngle(job),
+    normalizationAngle: runNormalizationAngle(job, solveOptionsStoreForJob(job).getState().polar.normAngle),
     preferences,
   }, formats);
 }

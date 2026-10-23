@@ -97,21 +97,21 @@ describe('rendered directivity comparison maps', () => {
     });
   });
 
-  it('references a shown run\'s map to its recorded angle, whatever draft is shown', () => {
+  it.each([false, true])('references the shown run using legacy live or recorded angles (recorded: %s)', (recorded) => {
     resetSolveOptionsStore();
     useSolveOptionsStore.getState().updatePolar({ normAngle: 10 });
     useImportedSolveOptionsStore.getState().updatePolar({ normAngle: 30 });
     const subtitle = () => host.querySelector('.result-subtitle')?.textContent ?? '';
-    const importedRun = { id: 'cad-run', config_summary: { geometry_type: 'imported' }, solve_options: { polar_config: { norm_angle: 0 } } } as unknown as JobItem;
-    const parametricRun = { id: 'design-run', config_summary: { geometry_type: 'osse' }, solve_options: { polar_config: { norm_angle: 17 } } } as unknown as JobItem;
+    const importedRun = { id: 'cad-run', config_summary: { geometry_type: 'imported' },
+      ...(recorded ? { solve_options: { polar_config: { norm_angle: 0 } } } : {}) } as unknown as JobItem;
+    const parametricRun = { id: 'design-run', config_summary: { geometry_type: 'osse' },
+      ...(recorded ? { solve_options: { polar_config: { norm_angle: 17 } } } : {}) } as unknown as JobItem;
     act(() => workspaceModeStore.setMode('parametric'));
     act(() => root.render(<ResultsChartGrid chartTypes={['directivity_map_h']} result={named[0].result} named={[]} tokens={tokens} job={importedRun}/>));
-    // Imported draft says 30 degrees; the run says 0.
-    expect(subtitle()).toContain('0 dB at 0°');
+    expect(subtitle()).toContain(`0 dB at ${recorded ? 0 : 30}°`);
     act(() => workspaceModeStore.setMode('cad'));
     act(() => root.render(<ResultsChartGrid chartTypes={['directivity_map_h']} result={named[0].result} named={[]} tokens={tokens} job={parametricRun}/>));
-    // Parametric draft says 10 degrees; the run says 17.
-    expect(subtitle()).toContain('0 dB at 17°');
+    expect(subtitle()).toContain(`0 dB at ${recorded ? 17 : 10}°`);
     act(() => workspaceModeStore.setMode('parametric'));
   });
 });

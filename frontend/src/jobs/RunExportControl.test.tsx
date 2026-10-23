@@ -11,7 +11,7 @@ import { useRunExportStore } from '../stores/runExports';
 import { provideExportDestinationPrompt } from '../shell/exportDestinationPrompt';
 import { ExportCancelledError } from '../api/exportDestination';
 import { RunExportControl } from './RunExportControl';
-import { useImportedSolveOptionsStore } from '../stores/solveOptions';
+import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { JobsPanel } from '../shell/JobsPanel';
 
 const mocks = vi.hoisted(() => ({
@@ -106,6 +106,7 @@ describe('RunExportControl', () => {
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     preferencesStore.resetForTests();
+    resetSolveOptionsStore();
     compareSelection.clear();
     publishJobs([]);
     useRunExportStore.getState().resetForTests();
@@ -320,6 +321,15 @@ describe('RunExportControl', () => {
     openMenu();
     await act(async () => { menuItem('Frequency data').click(); await settle(); });
     expect(mocks.runWorkspaceExportBundle.mock.calls[0][0].normalizationAngle).toBe(0);
+  });
+
+  it.each(['parametric', 'imported'] as const)('exports legacy %s runs with their live kind reference', async (kind) => {
+    useSolveOptionsStore.getState().updatePolar({ normAngle: 10 });
+    useImportedSolveOptionsStore.getState().updatePolar({ normAngle: 30 });
+    render(kind === 'imported' ? cadJob() : completeJob());
+    openMenu();
+    await act(async () => { menuItem('Frequency data').click(); await settle(); });
+    expect(mocks.runWorkspaceExportBundle.mock.calls[0][0].normalizationAngle).toBe(kind === 'imported' ? 30 : 10);
   });
 
   it('puts Send to CAD first and hands off the selected run snapshot', async () => {

@@ -18,7 +18,7 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root.unmount()); host.remove(); workspaceModeStore.setMode('parametric'); });
 
-function Angle({ job }: { job?: { solve_options?: { polar_config?: unknown } } | null }) {
+function Angle({ job }: { job?: Parameters<typeof useRunNormAngle>[0] }) {
   return <span>{useRunNormAngle(job)}</span>;
 }
 
@@ -35,12 +35,25 @@ it('keeps a run reference when a different imported draft is shown or edited', (
   expect(host.textContent).toBe('17');
 });
 
-it('uses the portable reference for legacy runs and the scoped draft without a run', () => {
+it('follows the legacy run\'s geometry, and the workspace mode only without a run', () => {
+  act(() => workspaceModeStore.setMode('parametric'));
+  act(() => root.render(<Angle job={{ config_summary: { geometry_type: 'imported' } }}/>));
+  expect(host.textContent).toBe('30');
+  act(() => root.render(<Angle job={{ config_summary: { geometry_type: 'osse' } }}/>));
+  expect(host.textContent).toBe('10');
   act(() => root.render(<Angle job={{}}/>));
-  expect(host.textContent).toBe('5');
+  expect(host.textContent).toBe('10');
   act(() => root.render(<Angle/>));
   act(() => workspaceModeStore.setMode('parametric'));
   expect(host.textContent).toBe('10');
   act(() => workspaceModeStore.setMode('cad'));
   expect(host.textContent).toBe('30');
+  act(() => root.render(<Angle job={{ config_summary: { geometry_type: 'osse' } }}/>));
+  expect(host.textContent).toBe('10');
+  act(() => useSolveOptionsStore.getState().updatePolar({ normAngle: 12 }));
+  expect(host.textContent).toBe('12');
+  act(() => root.render(<Angle job={{ config_summary: { geometry_type: 'imported' } }}/>));
+  expect(host.textContent).toBe('30');
+  act(() => useImportedSolveOptionsStore.getState().updatePolar({ normAngle: 45 }));
+  expect(host.textContent).toBe('45');
 });

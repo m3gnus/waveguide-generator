@@ -3,6 +3,7 @@ import type { PolarSample } from '../api/results';
 import type { ResultPayload } from './types';
 import {
   levelAtAngle,
+  runNormalizationAngle,
   renormalizeRows,
   resolveNormalizationAngle,
   sampledAngleRange,
@@ -11,6 +12,18 @@ import {
 
 const row = (levels: Array<[number, number | null]>): PolarSample[] =>
   levels.map(([angle, level]) => [angle, level] as PolarSample);
+
+describe('runNormalizationAngle', () => {
+  it.each([0, 5, 17])('uses a recorded %s-degree reference instead of the live value', (angle) => {
+    expect(runNormalizationAngle({ solve_options: { polar_config: { norm_angle: angle } } }, 30)).toBe(angle);
+  });
+  it.each([undefined, null, {}, { norm_angle: null }, { norm_angle: '5' }, { norm_angle: NaN }, { norm_angle: Infinity }])(
+    'keeps the legacy live reference without a valid recorded angle (%j)', (polar_config) => {
+      expect(runNormalizationAngle({ solve_options: { polar_config } }, 10)).toBe(10);
+      expect(runNormalizationAngle({ solve_options: { polar_config } }, 30)).toBe(30);
+    },
+  );
+});
 
 function result(rows: PolarSample[][], metadata?: Record<string, unknown>): ResultPayload {
   return {
