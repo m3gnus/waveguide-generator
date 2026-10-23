@@ -10,7 +10,7 @@ import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore } from '../stores/document';
 import { SETTINGS_NAMESPACES } from '../stores/durableSettings';
 import { CadCrossover } from './CrossoverSection';
-import { jobsCoordinatorBridge } from '../shell/JobsCoordinator';
+import { solveControlStore } from '../shell/JobsCoordinator';
 import { useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 
 const recombineMocks = vi.hoisted(() => ({ recombine: vi.fn() }));
@@ -117,7 +117,7 @@ describe('live recombine from the rail', () => {
   it('recombines 900 and 300 Hz within a 200 Hz band, then offers a 100 Hz sweep', async () => {
     recombineMocks.recombine.mockResolvedValue({ channels: {} } as JobResults);
     const run = vi.fn().mockResolvedValue(undefined);
-    (jobsCoordinatorBridge.getSnapshot() as unknown as { run: typeof run }).run = run;
+    vi.spyOn(solveControlStore, 'getSnapshot').mockReturnValue({ solve: run, disabled: false } as unknown as NonNullable<ReturnType<typeof solveControlStore.getSnapshot>>);
     render();
     publishShown({ solvedBandHz: [200, 20_000] });
     for (const hz of [900, 300]) {
@@ -138,7 +138,7 @@ describe('live recombine from the rail', () => {
 
   it('switches the imported options, not the parametric ones, back to a generated grid for the re-solve', async () => {
     recombineMocks.recombine.mockResolvedValue({ channels: {} } as JobResults);
-    (jobsCoordinatorBridge.getSnapshot() as unknown as { run: unknown }).run = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(solveControlStore, 'getSnapshot').mockReturnValue({ solve: vi.fn(), disabled: false } as unknown as NonNullable<ReturnType<typeof solveControlStore.getSnapshot>>);
     useImportedSolveOptionsStore.getState().setFrequencyMode('list');
     useSolveOptionsStore.getState().setFrequencyMode('list');
     render();

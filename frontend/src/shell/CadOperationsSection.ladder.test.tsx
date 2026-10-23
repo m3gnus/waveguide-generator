@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { cadJobFixture, publishCadJobs } from '../jobs/cadSolve.fixtures';
+import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { jobsSocket } from '../api/jobsSocket';
 import { cadRecoveryNoticesStore } from '../stores/cadRecoveryNotices';
 
@@ -144,6 +145,8 @@ describe('the needs_user_input ladder', () => {
 
   it('at the findings gate, names the findings and offers Approve and solve', async () => {
     stubBackend();
+    const continueRun = vi.fn(async () => 'child');
+    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({ ...jobsCoordinatorBridge.getSnapshot(), continueRun });
     // The backend's own message names the findings by id (preparation.py).
     const ladder = await show(operation('findings_need_review', {
       attemptGeneration: 2, message: `Review the preparation's findings before solving: ${FINDING}`,
@@ -155,7 +158,7 @@ describe('the needs_user_input ladder', () => {
     expect(host.textContent).not.toContain(FINDING);
     await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Approve and solve: PartyMEH"]')!.click(); });
     // The approval continues the preparation it was given for, with its settings.
-    expect(vi.mocked(fetch).mock.calls).toContainEqual([expect.stringContaining('/approvals'), expect.objectContaining({ body: JSON.stringify({ preparation_id: 'wgi_prep1', finding_ids: [FINDING] }) })]);
+    expect(continueRun).toHaveBeenCalledExactlyOnceWith('job:manual-solve:op-1', { approvals: { preparation_id: 'wgi_prep1', finding_ids: [FINDING] } });
     expect(coordinator.solveOperationWithSettings).not.toHaveBeenCalled();
   });
 

@@ -137,10 +137,10 @@ describe('Enable & rerun wiring', () => {
     rerun.rerunWithPatch.mockReturnValueOnce(pending.promise);
     const arm = vi.spyOn(solveAttention, 'armSolve');
     const bind = vi.spyOn(solveAttention, 'bindRun');
-    const blocked = vi.fn(async () => 'wrong-job');
+    const blocked = vi.spyOn(jobsSocket, 'retryJob').mockResolvedValue('wrong-job');
     await act(async () => {
       button()!.click(); button()!.click();
-      expect(await jobsCoordinatorBridge.getSnapshot().acceptSubmission(blocked)).toBeNull();
+      expect(await jobsCoordinatorBridge.getSnapshot().continueRun('blocked')).toBeNull();
     });
     expect(arm).toHaveBeenCalledOnce();
     expect(arm.mock.invocationCallOrder[0]).toBeLessThan(rerun.rerunWithPatch.mock.invocationCallOrder[0]);
@@ -177,8 +177,9 @@ describe('Enable & rerun wiring', () => {
     compareSelection.setPrimary('parametric-run');
     await act(async () => root.render(<JobsCoordinator><ResultsPanel/></JobsCoordinator>));
     const pending = deferred<string>();
+    vi.spyOn(jobsSocket, 'retryJob').mockReturnValue(pending.promise);
     let other!: Promise<string | null>;
-    await act(async () => { other = jobsCoordinatorBridge.getSnapshot().acceptSubmission(() => pending.promise); });
+    await act(async () => { other = jobsCoordinatorBridge.getSnapshot().continueRun('other'); });
     const arm = vi.spyOn(solveAttention, 'armSolve');
     await act(async () => { button()!.click(); });
     expect(rerun.rerunWithPatch).not.toHaveBeenCalled();

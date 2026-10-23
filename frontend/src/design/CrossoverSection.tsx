@@ -6,9 +6,8 @@ import { NumberField } from './NumberField';
 import { ToggleRow } from './SolveOptionsSections';
 import { latestCombine } from '../results/latestCombine';
 import { recombineJobResults } from '../api/results';
-import { useDesignStore } from '../stores/design';
 import { useImportedSolveOptionsStore } from '../stores/solveOptions';
-import { jobsCoordinatorBridge } from '../shell/JobsCoordinator';
+import { useOptionalSolveControl } from '../shell/JobsCoordinator';
 import {
   driverXoMinNote,
   familyOrders,
@@ -270,6 +269,13 @@ function LiveNote({ shown, live, busy, error, members, outside }: {
   members: boolean;
   outside?: number | null;
 }) {
+  const solve = useOptionalSolveControl();
+  const [sweepSolve, setSweepSolve] = useState(false);
+  useEffect(() => {
+    if (!sweepSolve) return;
+    setSweepSolve(false);
+    void solve?.solve();
+  }, [sweepSolve, solve]);
   if (!live) {
     return <p className="section-note warning" role="status" aria-live="polite">
       {shown.blockedReason ?? 'Crossover changes cannot be applied to the shown run.'}
@@ -285,13 +291,12 @@ function LiveNote({ shown, live, busy, error, members, outside }: {
     const [start, end] = shown.solvedBandHz;
     return <p className="section-note warning" role="status" aria-live="polite">
       The {outside} Hz crossover is outside the solved band [{start}, {end}] Hz. The combined response cannot update until that frequency is solved.{' '}
-      <button type="button" className="crossover-recall" onClick={() => {
+      <button type="button" className="crossover-recall" disabled={!solve || solve.disabled} title={solve?.title ?? 'Solve is not available here.'} onClick={() => {
         const cad = useCadReturnStore.getState();
         cad.setSweep(outside < start ? { frequencyStartHz: outside } : { frequencyEndHz: outside });
         useImportedSolveOptionsStore.getState().setFrequencyMode('range');
-        const design = useDesignStore.getState();
-        // The coordinator reports a refused or failed submission itself.
-        void jobsCoordinatorBridge.getSnapshot().run(design.design, design.designRevision).catch(() => undefined);
+        // Render the changed sweep first; Solve retains the intent while its plan refreshes.
+        setSweepSolve(true);
       }}>Re-solve with sweep {outside < start ? 'from' : 'to'} {outside} Hz</button>
     </p>;
   }

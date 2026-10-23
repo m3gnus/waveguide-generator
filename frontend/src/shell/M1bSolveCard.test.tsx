@@ -33,7 +33,7 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import type { ImportedMeshScene } from '../viewport/importedMesh';
 import fixtureV2 from '../viewport/solverFrame.v2.fixture.json';
 import { SOLVER_FRAME_AXES, type SolverFrameAxis } from '../viewport/solverFrame';
-import { JobsCoordinator, jobsCoordinatorBridge } from './JobsCoordinator';
+import { JobsCoordinator, jobsCoordinatorBridge, solveControlStore } from './JobsCoordinator';
 import { ResultsPanel } from './ResultsPanel';
 import { SolveActions } from './TopBar';
 import { CadSolveCard } from './CadSolveCard';
@@ -415,7 +415,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     await jobs([cadJobFixture(operation('cmd-fusion', 'accepted', { jobId: 'job-child' }), { ...cadJob('job-child', 'error'), parent_job_id: 'cmd-fusion' })]);
     const bind = vi.spyOn(solveAttention, 'bindRun');
     const retry = vi.spyOn(jobsSocket, 'retryJob').mockResolvedValue('retry-child');
-    await act(async () => jobsCoordinatorBridge.getSnapshot().retry('job-child'));
+    await act(async () => jobsCoordinatorBridge.getSnapshot().continueRun('job-child'));
     expect(retry).toHaveBeenCalledWith('job-child');
     expect(compareSelection.getSnapshot().awaiting).toBe('retry-child');
     expect(bind).toHaveBeenCalledWith('retry-child');
@@ -439,19 +439,18 @@ describe('M1b: one Solve card, to the revealed result', () => {
     expect(pressOf(1).frame_axis).toBe('+x');
   });
 
-  it('captures the original snapshot and settings while the initial frame read waits', async () => {
+  it('leaves Solve disabled while the initial frame read waits', async () => {
     let release!: () => void;
     const read = new Promise<void>((resolve) => { release = resolve; });
     const api = vi.fn(async () => { await read; return json(frame); });
     const loading = useCadSolverFrameStore.getState().load('wgi_first', api);
-    let solve!: Promise<unknown>;
-    await act(async () => { root.render(<JobsCoordinator><span>ready</span></JobsCoordinator>); });
-    await act(async () => { solve = jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); await flush(); });
-    act(() => { readyCad(); useCadReturnStore.setState({ ingestRecord: { ...useCadReturnStore.getState().ingestRecord!, ingest_id: 'wgi_second', manifest_sha256: SECOND } }); useCadReturnStore.setState({ frequencyCount: 99 }); });
-    await act(async () => { release(); await loading; await solve; });
-    const press = pressOf();
-    expect(press.prepared_id).toBe('wgi_first');
-    expect(press.setup!.options.num_frequencies).toBe(36);
+    await act(async () => { root.render(<JobsCoordinator><CadSolveCard record={useCadReturnStore.getState().ingestRecord!} label="Speaker"/></JobsCoordinator>); });
+    expect(solveButton().disabled).toBe(true);
+    await expect(solveControlStore.getSnapshot()!.solve()).resolves.toBe('blocked');
+    await act(async () => { release(); await loading; });
+    expect(mocks.solveModel).not.toHaveBeenCalled();
+    await pressSolve();
+    expect(pressOf().prepared_id).toBe('wgi_first');
   });
 
   it('leaves the job already preparing the displayed snapshot to the server: Solve is one model call', async () => {
@@ -460,7 +459,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     // No frontend hold: Solve stays available.
     expect(solveButton().disabled).toBe(false);
     mocks.solveModel.mockResolvedValueOnce('job-fusion');
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     // The server answers the job in flight for the same settings; nothing else is made here.
     expect(mocks.solveModel).toHaveBeenCalledOnce();
   });

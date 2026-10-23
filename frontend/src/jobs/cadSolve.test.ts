@@ -52,21 +52,20 @@ describe('CAD job commands and window identities', () => {
     expect(fetcher.mock.calls[0]).toEqual(['/api/jobs/parent%2Fid/solve-again', expect.objectContaining({ body: JSON.stringify({ setup_revision_id: 'displayed', frame_axis: '-y', submit: true }) })]);
   });
 
-  it('approves the exact preparation then continues with those approvals, without operation calls', async () => {
+  it('records approval of the exact preparation without starting a solve', async () => {
     const fetcher = vi.fn(async (url: RequestInfo | URL) => json(String(url).endsWith('/solve-again') ? { job_id: 'child' } : {}));
     vi.stubGlobal('fetch', fetcher);
     vi.spyOn(jobsSocket, 'refresh').mockResolvedValue();
-    await approveCadJob(job(), 'prep', ['finding']);
-    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/api/jobs/refused/approvals', '/api/jobs/refused/solve-again']);
+    await approveCadJob(job().id, { preparation_id: 'prep', finding_ids: ['finding'] });
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/api/jobs/refused/approvals']);
     const approvals = { preparation_id: 'prep', finding_ids: ['finding'] };
     expect(JSON.parse(String((fetcher.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toEqual(approvals);
-    expect(JSON.parse(String((fetcher.mock.calls[1] as unknown as [string, RequestInit])[1].body))).toEqual({ approvals });
   });
 
   it('does not start a child when exact-preparation approval is refused', async () => {
     const fetcher = vi.fn(async () => json({ detail: 'wrong preparation' }, 422));
     vi.stubGlobal('fetch', fetcher);
-    await expect(approveCadJob(job(), 'other-prep', ['finding'])).rejects.toThrow('wrong preparation');
+    await expect(approveCadJob(job().id, { preparation_id: 'other-prep', finding_ids: ['finding'] })).rejects.toThrow('wrong preparation');
     expect(fetcher).toHaveBeenCalledOnce();
   });
 

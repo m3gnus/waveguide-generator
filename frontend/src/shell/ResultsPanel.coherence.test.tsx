@@ -9,7 +9,7 @@ import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { preferencesStore } from '../prefs/preferences';
-import { jobsCoordinatorBridge } from './JobsCoordinator';
+import { solveControlStore } from './JobsCoordinator';
 import { ResultsPanel } from './ResultsPanel';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 
@@ -237,7 +237,7 @@ describe('results run coherence', () => {
     publishJobs([older]);
     compareSelection.setPrimary(older.id);
     const run = vi.fn().mockResolvedValue(undefined);
-    (jobsCoordinatorBridge.getSnapshot() as unknown as { run: typeof run }).run = run;
+    vi.spyOn(solveControlStore, 'getSnapshot').mockReturnValue({ solve: run, disabled: false } as unknown as NonNullable<ReturnType<typeof solveControlStore.getSnapshot>>);
 
     await act(async () => { root.render(<ResultsPanel/>); });
     const chip = host.querySelector('.result-chip.stale')!;
@@ -258,8 +258,8 @@ describe('results run coherence', () => {
 
     await act(async () => { useDesignStore.getState().updateField('R', 181); });
     await act(async () => { host.querySelector<HTMLButtonElement>('button.result-context-marker.stale')!.click(); });
-    await act(async () => { toolbarButton(document.body, 'Solve current design')!.click(); });
-    expect(run).toHaveBeenCalledWith(useDesignStore.getState().design, useDesignStore.getState().designRevision);
+    await act(async () => { toolbarButton(document.body, 'Solve this version')!.click(); });
+    expect(run).toHaveBeenCalledWith();
   });
 
   it('marks an other-model run and wires model recall and newest-run recovery', async () => {

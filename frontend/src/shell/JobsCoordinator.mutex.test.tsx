@@ -34,12 +34,16 @@ import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import {
   JobsCoordinator,
   jobsCoordinatorBridge,
+  solveControlStore,
   refreshedArchiveJob,
-  SolveEngineUnavailableError,
   useSolveControl,
   useOptionalSolveControl,
 } from './JobsCoordinator';
-import { SolveActions } from './TopBar';
+import { SolveActions, TopBar } from './TopBar';
+import { CadSolveCard } from './CadSolveCard';
+import { CadCrossover } from '../design/CrossoverSection';
+import { latestCombine } from '../results/latestCombine';
+import { toWire } from '../results/crossoverSpec';
 import { CrossoverAdvanced } from '../design/CrossoverAdvanced';
 import { expandLegacy } from '../results/crossoverSpec';
 import { JobsPanel } from './JobsPanel';
@@ -221,6 +225,12 @@ function MainSolveButton() {
   return <button disabled={solve.disabled} title={solve.title} onClick={solve.solve}>{solve.label}</button>;
 }
 
+/** Exercise the public command after putting the test design on screen. */
+function runCurrentDesign(design: ReturnType<typeof designForFamily>, _revision?: number) {
+  act(() => { if (useDesignStore.getState().design !== design) useDesignStore.getState().replaceDocument(design); });
+  return solveControlStore.getSnapshot()!.solve();
+}
+
 /** The solve-options store of the workspace mode that is currently on screen. */
 const activeOptions = () => solveOptionsStoreForMode(workspaceModeStore.getSnapshot().mode).getState();
 
@@ -268,7 +278,8 @@ describe('solve invocation mutex', () => {
     mocks.solvePlanError = null;
     mocks.solvePlanPending = false;
     mocks.planSolveDesign.mockResolvedValue(mocks.solvePlan);
-    mocks.solveModel.mockResolvedValue('job-cad');
+    mocks.solveModel.mockReset().mockResolvedValue('job-cad');
+    mocks.submitDesign.mockReset();
 
     mocks.getCadOperation.mockRejectedValue(new CadLinkApiError('Unknown CAD operation', [], 404));
     compareSelection.clear();
@@ -298,6 +309,165 @@ describe('solve invocation mutex', () => {
     vi.useRealTimers();
   });
 
+  // CAD-only controls have no parametric/file counterpart. Every surface that
+  // exists in each mode is exercised through its real UI, down to HTTP paths.
+  const surfaceCases = [
+    ...['top bar', 'palette', 'Cmd+Enter', 'CAD card', 'Results empty', 'Results popover', 'crossover'].map((surface) => ({ mode: 'cad', surface })),
+    ...['top bar', 'palette', 'Cmd+Enter', 'Results empty', 'Results popover'].map((surface) => ({ mode: 'file', surface })),
+    ...['top bar', 'palette', 'Cmd+Enter', 'Results popover'].map((surface) => ({ mode: 'parametric', surface })),
+  ];
+  it.each(surfaceCases)('$mode: $surface submits only the on-screen model endpoint', async ({ mode, surface }) => {
+    if (surface === 'crossover') {
+      act(() => root.unmount());
+      root = createRoot(host);
+      vi.useFakeTimers();
+      mocks.useRealImportedPlan = true;
+      mocks.postImportedSolvePlan.mockReset().mockResolvedValue(mocks.importedPlan.plan);
+    }
+    const actions = await vi.importActual<typeof import('../jobs/actions')>('../jobs/actions');
+    mocks.submitDesign.mockImplementation(actions.submitDesign);
+    mocks.solveModel.mockImplementation(actions.solveModel);
+    const posts: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === 'POST' && (url === '/api/solve' || /\/api\/models\/.+\/solve$/.test(url))) {
+        posts.push({ url, body: JSON.parse(String(init.body)) });
+        return json({ job_id: 'table-run' });
+      }
+      if (url.includes('/results')) return json({ detail: 'No retained results in this test' }, 404);
+      return json({ checkout: { kind: 'source' } });
+    }));
+    const tableClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    act(() => {
+      if (mode === 'cad') {
+        readyCad('wgi_surface').model_id = 'wgl_test';
+        workspaceModeStore.setMode('cad');
+        useCadReturnStore.setState({ driveChannels: [
+          { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
+          { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
+        ], sourceSizesMm: { 'source-mf': 4, 'source-hf': 4 },
+          combineSpec: expandLegacy(['drive-mf', 'drive-hf'], [100]), combineEnabled: true });
+      } else if (mode === 'file') {
+        workspaceModeStore.setImportedInput('file');
+        workspaceModeStore.setMode('cad');
+        useMeshImportStore.setState({ busy: false, filename: 'surface.msh' });
+        void openImported({ kind: 'file', prepared: {
+          ingest_id: 'wgi_file', model_id: 'mesh-file:surface',
+          manifest_sha256: 'sha256:mesh', artifact_sha256: 'sha256:surface', source_tags: { group_2: 2 },
+        } as unknown as RegisteredMesh });
+        importedMeshStore.setFile({ name: 'surface.msh', source: 'file', ingestId: 'wgi_file' } as ImportedMeshScene);
+      }
+      if (surface === 'Results popover') {
+        publishJobs([{ ...failedJob(), id: 'older-run', status: 'complete', has_results: true }]);
+        compareSelection.setPrimary('older-run');
+      }
+    });
+    await act(async () => { root.render(<QueryClientProvider client={tableClient}><JobsCoordinator>
+      {surface === 'top bar' ? <SolveActions/> : surface === 'palette' ? <TopBar onResetLayout={() => undefined}/>
+        : surface === 'CAD card' ? <CadSolveCard record={useCadReturnStore.getState().ingestRecord!} label="Speaker"/>
+          : surface.startsWith('Results') ? <ResultsPanel/>
+            : surface === 'crossover' ? <CadCrossover/> : <span/>}
+    </JobsCoordinator></QueryClientProvider>); });
+    if (surface === 'crossover') await flushPlan();
+    const sweepPlan = deferred<typeof mocks.importedPlan.plan>();
+    if (surface === 'crossover') mocks.postImportedSolvePlan.mockReturnValueOnce(sweepPlan.promise);
+    if (surface === 'crossover') act(() => latestCombine.publish({
+      jobId: 'shown', channelId: 'combined', canApply: true, blockedReason: null, recall: null,
+      solvedBandHz: [200, 20000], onApplied: () => undefined,
+      combine: { ...toWire(expandLegacy(['drive-mf', 'drive-hf'], [100])), crossovers_hz: [100] } as never,
+    }));
+    if (surface === 'palette') {
+      act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true })));
+    }
+    if (surface === 'Results popover') {
+      const marker = host.querySelector<HTMLButtonElement>('button.result-context-marker')!;
+      expect(marker).not.toBeNull();
+      act(() => marker.click());
+    }
+    await act(async () => {
+      if (surface === 'Cmd+Enter') window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true }));
+      else {
+        const button = surface === 'top bar' ? host.querySelector<HTMLButtonElement>('.solve-button') : surface === 'palette' ? document.querySelector<HTMLButtonElement>('#palette-solve')
+          : surface === 'Results popover' ? [...document.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent === 'Solve this version')
+            : surface === 'crossover' ? [...host.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent?.startsWith('Re-solve with sweep'))
+              : [...host.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent === 'Solve');
+        expect(button).toBeTruthy();
+        expect(button!.disabled, button!.title).toBe(false);
+        button!.click();
+      }
+    });
+    if (surface === 'crossover') {
+      expect(posts).toHaveLength(0);
+      await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_DEBOUNCE_MS); });
+      expect(posts).toHaveLength(0);
+      await act(async () => { sweepPlan.resolve(mocks.importedPlan.plan); });
+      await flushPlan();
+    }
+    expect(posts).toHaveLength(1);
+    expect(posts[0].url).toBe(mode === 'parametric' ? '/api/solve' : mode === 'file' ? '/api/models/mesh-file%3Asurface/solve' : '/api/models/wgl_test/solve');
+    if (mode !== 'parametric') expect(posts[0].body.prepared_id).toBe(mode === 'file' ? 'wgi_file' : 'wgi_surface');
+    else expect(posts[0].body.design).toMatchObject({ formula: useDesignStore.getState().design.formula });
+    if (surface === 'crossover') expect((posts[0].body.setup as { options: { frequency_range: number[] } }).options.frequency_range[0]).toBe(100);
+    latestCombine.publish(null);
+    tableClient.clear();
+  });
+
+  it('regression: Results Solve continues the refused CAD model, never the open parametric design', async () => {
+    const actions = await vi.importActual<typeof import('../jobs/actions')>('../jobs/actions');
+    mocks.solveModel.mockImplementation(actions.solveModel);
+    const fetcher = vi.fn<typeof fetch>(async () => json({ job_id: 'continued-cad' }));
+    vi.stubGlobal('fetch', fetcher);
+    act(() => { readyCad('wgi_refused_results').model_id = 'wgl_test'; workspaceModeStore.setMode('cad'); });
+    const refused = cadJobFixture(operation('fusion-refused', 'needs_user_input', {
+      jobId: 'refused-cad', reason: 'engine_unavailable', message: 'BEAT Metal needs preparing.',
+    }));
+    act(() => publishJobs([refused]));
+    await act(async () => root.render(<JobsCoordinator><ResultsPanel/></JobsCoordinator>));
+    expect(host.textContent).toContain('Not solved yet');
+    const solve = host.querySelector<HTMLButtonElement>('.empty-state .solve-button')!;
+    expect(solve.disabled).toBe(false);
+    await act(async () => solve.click());
+    expect(mocks.solveModel).toHaveBeenCalledExactlyOnceWith('wgl_test', expect.objectContaining({ prepared_id: 'wgi_refused_results' }));
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST').map(([url]) => url)).toEqual(['/api/models/wgl_test/solve']);
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
+  });
+
+  it.each(['accepted', 'approval refused', 'continuation refused'])('CAD continuation holds the Solve lock through both requests: %s', async (outcome) => {
+    const approval = deferred<Response>();
+    const retry = vi.spyOn(jobsSocket, 'retryJob').mockResolvedValue('retry-child');
+    const release = vi.spyOn(solveAttention, 'releaseOperation');
+    const fetcher = vi.fn<typeof fetch>(async (input) => String(input).endsWith('/approvals') ? approval.promise
+      : outcome === 'continuation refused' ? json({ detail: 'continuation refused' }, 422) : json({ job_id: 'approved-child' }));
+    vi.stubGlobal('fetch', fetcher);
+    let continuation!: Promise<unknown>;
+    await act(async () => {
+      continuation = jobsCoordinatorBridge.getSnapshot().continueRun('refused-parent', {
+        approvals: { preparation_id: 'reviewed-preparation', finding_ids: ['finding'] },
+      }).catch((error: unknown) => error);
+      expect(await jobsCoordinatorBridge.getSnapshot().continueRun('another-run')).toBeNull();
+      expect(await solveControlStore.getSnapshot()!.solve()).toBe('busy');
+    });
+    expect(retry).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(solveAttention.operationArmed('refused-parent')).toBe(true);
+    await act(async () => {
+      approval.resolve(outcome === 'approval refused' ? json({ detail: 'wrong preparation' }, 422) : json({}));
+      await continuation;
+    });
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(outcome === 'approval refused'
+      ? ['/api/jobs/refused-parent/approvals'] : ['/api/jobs/refused-parent/approvals', '/api/jobs/refused-parent/solve-again']);
+    if (outcome === 'accepted') {
+      expect(compareSelection.getSnapshot().awaiting).toBe('approved-child');
+      expect(solveAttention.operationArmed('approved-child')).toBe(true);
+    } else {
+      expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe(outcome === 'approval refused' ? 'wrong preparation' : 'continuation refused');
+      expect(release).toHaveBeenCalledWith('refused-parent');
+      expect(solveAttention.operationArmed('refused-parent')).toBe(false);
+    }
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().continueRun('next-run'); });
+    expect(retry).toHaveBeenCalledExactlyOnceWith('next-run');
+  });
+
   it.each(['parametric', 'file', 'retry'] as const)('%s uses plain acceptance for refusal, child selection, attention, refresh and locking', async (path) => {
     const refused = deferred<string>();
     const accepted = deferred<string>();
@@ -318,19 +488,19 @@ describe('solve invocation mutex', () => {
       });
     }
     await act(async () => root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>));
-    const invoke = () => path === 'retry' ? jobsCoordinatorBridge.getSnapshot().retry('parent')
-      : path === 'parametric' ? jobsCoordinatorBridge.getSnapshot().run(designForFamily('OSSE'))
+    const invoke = () => path === 'retry' ? jobsCoordinatorBridge.getSnapshot().continueRun('parent')
+      : path === 'parametric' ? runCurrentDesign(designForFamily('OSSE'))
       : Promise.resolve(host.querySelector<HTMLButtonElement>('button')!.click());
     const arm = vi.spyOn(solveAttention, 'armSolve');
     const release = vi.spyOn(solveAttention, 'releaseSolve');
     const bind = vi.spyOn(solveAttention, 'bindRun');
-    const blocked = vi.fn(async () => 'must-not-submit');
+    const blocked = path === 'retry' ? null : vi.spyOn(jobsSocket, 'retryJob').mockResolvedValue('must-not-submit');
     const refresh = vi.mocked(jobsSocket.refresh);
     let refusal!: Promise<unknown>;
     await act(async () => {
       refusal = invoke().catch((error: unknown) => error);
       await Promise.resolve();
-      expect(await jobsCoordinatorBridge.getSnapshot().acceptSubmission(blocked)).toBeNull();
+      expect(await jobsCoordinatorBridge.getSnapshot().continueRun('blocked')).toBeNull();
     });
     expect(request).toHaveBeenCalledOnce();
     expect(arm).toHaveBeenCalledOnce();
@@ -356,10 +526,10 @@ describe('solve invocation mutex', () => {
     expect(refresh).toHaveBeenCalledOnce();
     expect(bind.mock.invocationCallOrder.at(-1)!).toBeLessThan(refresh.mock.invocationCallOrder[0]);
     await act(async () => {
-      expect(await jobsCoordinatorBridge.getSnapshot().acceptSubmission(blocked)).toBeNull();
+      expect(await jobsCoordinatorBridge.getSnapshot().continueRun('blocked')).toBeNull();
       refreshed.resolve(); await submitting;
     });
-    expect(blocked).not.toHaveBeenCalled();
+    if (blocked) expect(blocked).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledTimes(2);
     expect(host.querySelector<HTMLButtonElement>('button')!.disabled).toBe(false);
     expect(solveAttention.resultsReady('new-child')).toBe('revealed');
@@ -585,15 +755,15 @@ describe('solve invocation mutex', () => {
     client.clear();
   });
 
-  it('submits only once when run is invoked twice in the same tick', async () => {
+  it('submits only once when Solve is invoked twice in the same tick', async () => {
     const pending = deferred<string>();
     mocks.submitDesign.mockReturnValue(pending.promise);
     const design = designForFamily('OSSE');
-    let first!: Promise<void>;
-    let second!: Promise<void>;
+    let first!: Promise<unknown>;
+    let second!: Promise<unknown>;
 
     await act(async () => {
-      const run = jobsCoordinatorBridge.getSnapshot().run;
+      const run = runCurrentDesign;
       first = run(design);
       second = run(design);
       await second;
@@ -632,8 +802,8 @@ describe('solve invocation mutex', () => {
     );
 
     await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().run(designForFamily('FREEFORM')))
-        .rejects.toThrow("Solve engine 'beat' is unavailable. GPU backend is offline");
+      await expect(runCurrentDesign(designForFamily('FREEFORM')))
+        .resolves.toBe('blocked');
     });
 
     expect(mocks.planSolveDesign).toHaveBeenCalledOnce();
@@ -664,7 +834,7 @@ describe('solve invocation mutex', () => {
     mocks.submitDesign.mockResolvedValue('fresh-run');
     compareSelection.setPrimary('pinned-run');
 
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(designForFamily('OSSE')); });
+    await act(async () => { await runCurrentDesign(designForFamily('OSSE')); });
 
     expect(compareSelection.getSnapshot()).toMatchObject({
       primary: 'pinned-run', following: false, awaiting: 'fresh-run',
@@ -675,8 +845,8 @@ describe('solve invocation mutex', () => {
     mocks.submitDesign.mockResolvedValue('job');
     const design = designForFamily('OSSE');
 
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(design); });
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(design); });
+    await act(async () => { await runCurrentDesign(design); });
+    await act(async () => { await runCurrentDesign(design); });
 
     expect(mocks.submitDesign).toHaveBeenCalledTimes(2);
     expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn1', 'horn2']);
@@ -702,7 +872,7 @@ describe('solve invocation mutex', () => {
 
     await act(async () => {
       const state = useDesignStore.getState();
-      await jobsCoordinatorBridge.getSnapshot().run(state.design, state.designRevision);
+      await runCurrentDesign(state.design, state.designRevision);
     });
 
     expect(useDesignStore.getState().design.mesh.wall_thickness).toBe(0);
@@ -717,8 +887,9 @@ describe('solve invocation mutex', () => {
 
   it.each(['half_xz', 'half_yz', 'quarter'] as const)('blocks native submission with persisted %s symmetry', async (symmetry) => {
     act(() => useSolveOptionsStore.getState().setSymmetry(symmetry));
-    await expect(jobsCoordinatorBridge.getSnapshot().run(designForFamily('OSSE-ARC')))
-      .rejects.toThrow('Select Full in Solve domain.');
+    await expect(runCurrentDesign(designForFamily('OSSE-ARC')))
+      .resolves.toBe('blocked');
+    expect(solveControlStore.getSnapshot()!.disabled).toBe(true);
     expect(mocks.submitDesign).not.toHaveBeenCalled();
   });
 
@@ -726,11 +897,11 @@ describe('solve invocation mutex', () => {
     mocks.submitDesign.mockResolvedValue('job');
     const design = designForFamily('OSSE');
 
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(design); });
+    await act(async () => { await runCurrentDesign(design); });
     const changed = structuredClone(design);
     changed.simulation.f2 += 1_000;
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(changed); });
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(changed); });
+    await act(async () => { await runCurrentDesign(changed); });
+    await act(async () => { await runCurrentDesign(changed); });
 
     expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn1', 'horn2', 'horn3']);
     expect(useDocumentStore.getState().designName).toBe('horn');
@@ -739,9 +910,9 @@ describe('solve invocation mutex', () => {
   it('does not overwrite a rename made while a submission was in flight', async () => {
     const pending = deferred<string>();
     mocks.submitDesign.mockReturnValue(pending.promise);
-    let run!: Promise<void>;
+    let run!: Promise<unknown>;
     await act(async () => {
-      run = jobsCoordinatorBridge.getSnapshot().run(designForFamily('OSSE'));
+      run = runCurrentDesign(designForFamily('OSSE'));
       await Promise.resolve();
     });
     act(() => useDocumentStore.getState().setDesignName('user-choice'));
@@ -762,10 +933,10 @@ describe('solve invocation mutex', () => {
     preferencesStore.update({ runNameDatePosition: 'suffix' });
     const design = designForFamily('OSSE');
 
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(design); });
+    await act(async () => { await runCurrentDesign(design); });
     const changed = structuredClone(design);
     changed.simulation.f2 += 1_000;
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(changed); });
+    await act(async () => { await runCurrentDesign(changed); });
 
     expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn1_260812', 'horn2_260812']);
     expect(useDocumentStore.getState().designName).toBe('horn');
@@ -778,28 +949,28 @@ describe('solve invocation mutex', () => {
     const design = designForFamily('OSSE');
 
     await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().run(design)).rejects.toThrow('submit failed');
+      await expect(runCurrentDesign(design)).resolves.toBe('blocked');
     });
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(design); });
+    await act(async () => { await runCurrentDesign(design); });
 
     expect(mocks.submitDesign).toHaveBeenCalledTimes(2);
   });
 
   const solveCad = async (ingestId: string) => {
-    readyCad(ingestId);
-    act(() => workspaceModeStore.setMode('cad'));
-    return jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
+    await act(async () => { readyCad(ingestId); workspaceModeStore.setMode('cad'); });
+    return solveControlStore.getSnapshot()!.solve();
   };
   const press = (index = 0) => mocks.solveModel.mock.calls[index][1] as ModelSolvePress;
 
   it('routes imported submissions through the same invocation mutex', async () => {
     const pending = deferred<string>();
     mocks.solveModel.mockReturnValue(pending.promise);
-    let first!: Promise<'submitted' | 'busy'>;
+    let first!: ReturnType<NonNullable<ReturnType<typeof solveControlStore.getSnapshot>>['solve']>;
+    act(() => { readyCad('wgi_example'); workspaceModeStore.setMode('cad'); });
     await act(async () => {
-      first = solveCad('wgi_example');
-      expect(await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).toBe('busy');
-      await jobsCoordinatorBridge.getSnapshot().run(designForFamily('OSSE'));
+      first = solveControlStore.getSnapshot()!.solve();
+      expect(await solveControlStore.getSnapshot()!.solve()).toBe('busy');
+      await runCurrentDesign(designForFamily('OSSE'));
     });
     expect(mocks.solveModel).toHaveBeenCalledOnce();
     expect(mocks.submitDesign).not.toHaveBeenCalled();
@@ -813,8 +984,9 @@ describe('solve invocation mutex', () => {
     mocks.solveModel.mockRejectedValue(new Error(
       'passive_cardioid_topology: coupled passive cardioid requires all PORT_EXIT patches in one drive channel',
     ));
-    await act(async () => { await expect(solveCad('wgi_refused')).rejects.toThrow(/same drive channel/); });
-    await act(async () => { await expect(solveCad('wgi_refused')).rejects.not.toThrow(/passive_cardioid_topology/); });
+    await act(async () => { await expect(solveCad('wgi_refused')).resolves.toBe('blocked'); });
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toMatch(/same drive channel/);
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).not.toMatch(/passive_cardioid_topology/);
   });
 
   // Imported geometry takes the same engine choice as a parametric design: the
@@ -834,13 +1006,13 @@ describe('solve invocation mutex', () => {
   // "No engine here can take this geometry" is a capability this machine
   // lacks, which callers must handle differently from a refusal of the
   // request itself -- so it arrives as its own type.
-  it('turns an engine_unavailable refusal into a typed capability error', async () => {
+  it('reports an engine_unavailable refusal without its machine code', async () => {
     const message = 'No solve engine on this host that can solve imported geometry is available.';
     mocks.solveModel.mockRejectedValue(new SolveSubmissionRefused(message, 503, 'engine_unavailable'));
     let caught: unknown;
     await act(async () => { caught = await solveCad('wgi_capability').catch((error: unknown) => error); });
-    expect(caught).toBeInstanceOf(SolveEngineUnavailableError);
-    expect((caught as Error).message).toBe(message);
+    expect(caught).toBe('blocked');
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe(message);
   });
 
   // An unsupported engine answers a request that named one -- a verdict on
@@ -848,20 +1020,18 @@ describe('solve invocation mutex', () => {
   it.each([
     ['fem_required', 'fem_required: this return includes FEM air volumes'],
     ['imported_engine_unsupported', "imported_engine_unsupported: engine 'bempp' does not declare imported geometry; engines that do: metal"],
-  ])('keeps a %s refusal an ordinary error', async (code, message) => {
+  ])('reports a %s refusal without its machine code', async (code, message) => {
     mocks.solveModel.mockRejectedValue(new SolveSubmissionRefused(message, 422, code));
     let caught: unknown;
     await act(async () => { caught = await solveCad('wgi_refused').catch((error: unknown) => error); });
-    expect(caught).toBeInstanceOf(Error);
-    expect(caught).not.toBeInstanceOf(SolveEngineUnavailableError);
-    // The words without their code; the code stays on the error.
-    expect((caught as Error).message).toBe(message.slice(`${code}: `.length));
-    expect((caught as SolveSubmissionRefused).code).toBe(code);
+    expect(caught).toBe('blocked');
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe(message.slice(`${code}: `.length));
   });
 
   it('leaves no claim and no armed operation behind a refused press', async () => {
     mocks.solveModel.mockRejectedValueOnce(new SolveSubmissionRefused('setup_required: choose settings', 409, 'setup_required'));
-    await act(async () => { await expect(solveCad('wgi_refused_claim')).rejects.toThrow('choose settings'); });
+    await act(async () => { await expect(solveCad('wgi_refused_claim')).resolves.toBe('blocked'); });
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toMatch('choose settings');
     const key = `cad-solve:manual-solve:${press().client_request_id}`;
     expect(sessionStorage.getItem(`wg2.cad.solve.claim.v1:${key}`)).toBeNull();
     expect(Object.keys(sessionStorage).filter((item) => item.startsWith('wg2.cad.solve.claim.v1:'))).toEqual([]);
@@ -872,7 +1042,8 @@ describe('solve invocation mutex', () => {
 
   it('keeps the claim when the answer was lost, since the job may exist', async () => {
     mocks.solveModel.mockRejectedValueOnce(new TypeError('connection closed'));
-    await act(async () => { await expect(solveCad('wgi_lost_claim')).rejects.toThrow('connection closed'); });
+    await act(async () => { await expect(solveCad('wgi_lost_claim')).resolves.toBe('blocked'); });
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toMatch('connection closed');
     const key = `cad-solve:manual-solve:${press().client_request_id}`;
     expect(sessionStorage.getItem(`wg2.cad.solve.claim.v1:${key}`)).not.toBeNull();
   });
@@ -930,7 +1101,7 @@ describe('solve invocation mutex', () => {
     mocks.useRealImportedPlan = true;
     const plan = mocks.importedPlan.plan;
     mocks.postImportedSolvePlan.mockResolvedValue(plan);
-    readyCad('wgi_frequency');
+    act(() => { readyCad('wgi_frequency'); workspaceModeStore.setMode('cad'); });
     useCadReturnStore.setState({
       driveChannels: [
         { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
@@ -999,7 +1170,7 @@ describe('solve invocation mutex', () => {
     root = createRoot(host);
     mocks.useRealImportedPlan = true;
     mocks.postImportedSolvePlan.mockResolvedValue(mocks.importedPlan.plan);
-    readyCad('wgi_invalid_frequency');
+    act(() => { readyCad('wgi_invalid_frequency'); workspaceModeStore.setMode('cad'); });
     useCadReturnStore.setState({
       driveChannels: [
         { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
@@ -1048,7 +1219,7 @@ describe('solve invocation mutex', () => {
     root = createRoot(host);
     mocks.useRealImportedPlan = true;
     mocks.postImportedSolvePlan.mockResolvedValue(mocks.importedPlan.plan);
-    readyCad('wgi_plan_snapshot');
+    act(() => { readyCad('wgi_plan_snapshot'); workspaceModeStore.setMode('cad'); });
     useCadReturnStore.setState({
       driveChannels: [
         { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
@@ -1089,9 +1260,8 @@ describe('solve invocation mutex', () => {
   });
 
   it('labels the durable setup from the CAD document, not the open parametric design', async () => {
-    readyCad('wgi_label');
-    act(() => workspaceModeStore.setMode('cad'));
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    act(() => { readyCad('wgi_label'); workspaceModeStore.setMode('cad'); });
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     // The run's name is the press's; the setup itself carries none.
     expect(press().label).toBe('Speaker1');
     expect(press().setup!.label).toBeUndefined();
@@ -1099,8 +1269,8 @@ describe('solve invocation mutex', () => {
   });
 
   it('selects an accepted durable job and advances its CAD label once across duplicate events and reload', async () => {
-    readyCad('wgi_once');
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    act(() => { readyCad('wgi_once'); workspaceModeStore.setMode('cad'); });
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     const request = press();
     const accepted = cadJobFixture(operation(`manual-solve:${request.client_request_id}`, 'accepted', { jobId: 'job-cad' }));
     await act(async () => { publishJobs([accepted]); });
@@ -1117,10 +1287,9 @@ describe('solve invocation mutex', () => {
 
   it('binds the same request fields as the old imported submission builder', async () => {
     const ingestId = 'wgi_01J5A8QK3M9T2XVBH0RD7NWE6C';
-    readyCad(ingestId);
-    act(() => workspaceModeStore.setMode('cad'));
+    await act(async () => { readyCad(ingestId); workspaceModeStore.setMode('cad'); });
     const old = (await import('../jobs/importedSubmission')).buildImportedSubmission(useCadReturnStore.getState());
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     const setup = mocks.solveModel.mock.calls[0][1].setup as CadSolveSetup;
     const {
       type: _type, ingest_id: _ingest, manifest_sha256: _manifest,
@@ -1151,7 +1320,7 @@ describe('solve invocation mutex', () => {
       approvals: [{ preparation_id: 'wgi_prepared', finding_id: 'f1' }] } }]));
     mocks.solveModel.mockResolvedValueOnce('job-child');
     act(() => workspaceModeStore.setMode('cad'));
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     expect(mocks.solveModel).toHaveBeenCalledWith('wgl_test', expect.objectContaining({
       prepared_id: 'wgi_waiting', label: 'Speaker1',
       approvals: { preparation_id: 'wgi_prepared', finding_ids: ['f1'] },
@@ -1163,29 +1332,23 @@ describe('solve invocation mutex', () => {
     expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceNext: 2 });
   });
 
-  it('keeps the snapshot and settings captured at the press across the frame read', async () => {
-    readyCad('wgi_captured');
-    act(() => workspaceModeStore.setMode('cad'));
+  it('blocks Solve during the initial frame read without queuing a hidden solve', async () => {
+    act(() => { readyCad('wgi_captured'); workspaceModeStore.setMode('cad'); });
     const read = deferred<Response>();
     act(() => { void useCadSolverFrameStore.getState().load('wgi_captured', (() => read.promise) as typeof fetch); });
-    let solve!: Promise<'submitted' | 'busy'>;
-    await act(async () => { solve = jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    await expect(solveControlStore.getSnapshot()!.solve()).resolves.toBe('blocked');
+    expect(solveControlStore.getSnapshot()!.title).toContain('Reading which way');
+    await act(async () => { read.resolve(new Response(JSON.stringify({ linked: true }))); });
     expect(mocks.solveModel).not.toHaveBeenCalled();
-    // A later on-screen model or setting must not replace what the press captured.
-    act(() => {
-      useCadReturnStore.setState({ frequencyCount: 99 });
-      const other = readyCad('wgi_different_screen');
-      useCadReturnStore.setState({ ingestRecord: { ...other, manifest_sha256: `sha256:${'9'.repeat(64)}` } });
-    });
-    await act(async () => { read.resolve(new Response(JSON.stringify({ linked: true }))); expect(await solve).toBe('submitted'); });
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     expect(press().prepared_id).toBe('wgi_captured');
-    expect(press().setup!.options.num_frequencies).not.toBe(99);
   });
 
   it('caches no press: after a lost response the next press is a new id the server answers', async () => {
-    readyCad('wgi_lost');
+    act(() => { readyCad('wgi_lost'); workspaceModeStore.setMode('cad'); });
     mocks.solveModel.mockRejectedValueOnce(new Error('connection closed'));
-    await act(async () => { await expect(solveCad('wgi_lost')).rejects.toThrow('connection closed'); });
+    await act(async () => { await expect(solveCad('wgi_lost')).resolves.toBe('blocked'); });
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toMatch('connection closed');
     act(() => { root.unmount(); });
     root = createRoot(host);
     await act(async () => root.render(<JobsCoordinator><span>reloaded</span></JobsCoordinator>));
@@ -1204,7 +1367,7 @@ describe('solve invocation mutex', () => {
     // The server answers the job in flight for the same settings: no frontend hold.
     expect(host.querySelector<HTMLButtonElement>('button')!.disabled).toBe(false);
     mocks.solveModel.mockResolvedValueOnce('job-fusion');
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     expect(mocks.solveModel).toHaveBeenCalledOnce();
     // The press claims the job it was answered with: its completion is shown.
     await act(async () => publishJobs([cadJobFixture(operation('op-fusion', 'accepted', { jobId: 'job-fusion' }))]));
@@ -1213,47 +1376,47 @@ describe('solve invocation mutex', () => {
 
   it('a refused press leaves nothing behind, so corrected settings make a new one', async () => {
     mocks.solveModel.mockRejectedValueOnce(new SolveSubmissionRefused('request refused', 409, 'setup_required'));
-    await act(async () => { await expect(solveCad('wgi_known_refusal')).rejects.toThrow('request refused'); });
+    await act(async () => { await expect(solveCad('wgi_known_refusal')).resolves.toBe('blocked'); });
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toMatch('request refused');
     act(() => useCadReturnStore.setState({ frequencyCount: 42 }));
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     expect(press(1).client_request_id).not.toBe(press(0).client_request_id);
     expect(press(1).setup!.options.num_frequencies).toBe(42);
   });
 
   it('holds rapid double presses and claims the job the server returned', async () => {
-    readyCad('wgi_double');
-    act(() => workspaceModeStore.setMode('cad'));
+    act(() => { readyCad('wgi_double'); workspaceModeStore.setMode('cad'); });
     const pending = deferred<string>();
     mocks.solveModel.mockReturnValueOnce(pending.promise);
-    let first!: Promise<'submitted' | 'busy'>;
+    let first!: ReturnType<NonNullable<ReturnType<typeof solveControlStore.getSnapshot>>['solve']>;
     await act(async () => {
-      first = jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
-      expect(await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).toBe('busy');
+      first = solveControlStore.getSnapshot()!.solve();
+      expect(await solveControlStore.getSnapshot()!.solve()).toBe('busy');
     });
     expect(mocks.solveModel).toHaveBeenCalledOnce();
     await act(async () => { pending.resolve('job-child'); await first; });
     await act(async () => publishJobs([cadJobFixture(operation('op-parent', 'accepted', { jobId: 'job-child' }))]));
     expect(compareSelection.getSnapshot().awaiting).toBe('job-child');
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     expect(press(1).client_request_id).not.toBe(press(0).client_request_id);
   });
 
   it('advances a lost-response label once when the jobs channel finds the accepted job', async () => {
     mocks.solveModel.mockRejectedValueOnce(new Error('connection closed'));
-    await act(async () => { await expect(solveCad('wgi_terminal')).rejects.toThrow(); });
+    await act(async () => { await expect(solveCad('wgi_terminal')).resolves.toBe('blocked'); });
     const request = press();
     const accepted = cadJobFixture(operation(`manual-solve:${request.client_request_id}`, 'accepted', { jobId: 'job-cad' }));
     await act(async () => publishJobs([accepted]));
     expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceNext: 2 });
     // Pressed again, the server answers that same job: it is not counted twice.
     mocks.solveModel.mockResolvedValueOnce('job-cad');
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceNext: 2 });
   });
 
   it('reports a refused job once after reload and never reads its operation', async () => {
-    readyCad('wgi_refused');
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    act(() => { readyCad('wgi_refused'); workspaceModeStore.setMode('cad'); });
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     act(() => root.unmount());
     root = createRoot(host);
     await act(async () => root.render(<JobsCoordinator><span>reloaded</span></JobsCoordinator>));
@@ -1264,7 +1427,7 @@ describe('solve invocation mutex', () => {
   });
 
   it('shows a refusal of the Solve', async () => {
-    readyCad('wgi_refusal');
+    act(() => { readyCad('wgi_refusal'); workspaceModeStore.setMode('cad'); });
     mocks.solveModel.mockRejectedValueOnce(new Error('refused with 409'));
     await act(async () => root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>));
     act(() => workspaceModeStore.setMode('cad'));
@@ -1309,21 +1472,21 @@ describe('solve invocation mutex', () => {
         ? new Response(archivedMesh) : json(archivedRecord)) as typeof fetch); });
     mocks.solveModel.mockRejectedValueOnce(new SolveSubmissionRefused(`${code}: refused`, 409, code));
     let caught: unknown;
-    await act(async () => { caught = await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport().catch((error: unknown) => error); });
-    expect((caught as Error).message).toBe(hint);
-    expect((caught as SolveSubmissionRefused).code).toBe(code);
+    await act(async () => { caught = await solveControlStore.getSnapshot()!.solve().catch((error: unknown) => error); });
+    expect(caught).toBe('blocked');
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe(hint);
   });
 
   it('solves a restored CAD run from before setup revisions with the revision the server derived, and an edited one with its setup', async () => {
     await act(async () => { await restoreCadJobModel(archivedJob(), {}, (async input => String(input).endsWith('/workspace')
       ? json(workspaceFor(archivedRecord.ingest_id, archivedRequest(), { revision: 'wgs_derived' })) : String(input).endsWith('/viewport-mesh')
         ? new Response(archivedMesh) : json(archivedRecord)) as typeof fetch); });
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     expect(press()).toMatchObject({ prepared_id: archivedRecord.ingest_id, setup_revision_id: 'wgs_derived' });
     expect(press().setup).toBeUndefined();
     // One edit: the press sends the setup on screen, a new revision.
     act(() => useImportedSolveOptionsStore.getState().setFrequencySpacing('linear'));
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     const edited = mocks.solveModel.mock.calls.at(-1)![1] as ModelSolvePress;
     expect(edited.setup_revision_id).toBeUndefined();
     expect(edited.setup!.options).toMatchObject({ frequency_spacing: 'linear', frequencies_hz: [100, 500, 1000] });
@@ -1341,7 +1504,7 @@ describe('solve invocation mutex', () => {
   });
 
   it('solves the prepared file from the main command, with one model Solve and no CAD job', async () => {
-    readyCad('wgi_retained_cad');
+    act(() => { readyCad('wgi_retained_cad'); workspaceModeStore.setMode('cad'); });
     workspaceModeStore.setImportedInput('file'); workspaceModeStore.setMode('cad');
     const accepted = deferred<string>();
     mocks.solveModel.mockReturnValueOnce(accepted.promise);
@@ -1427,8 +1590,7 @@ describe('solve invocation mutex', () => {
         observationFreshness: 'current', documentChangeDetectable: true,
       } as never,
     });
-    readyCad('wgi_displayed');
-    act(() => workspaceModeStore.setMode('cad'));
+    act(() => { readyCad('wgi_displayed'); workspaceModeStore.setMode('cad'); });
     await act(async () => { root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>); });
 
     const buttons = [...host.querySelectorAll<HTMLButtonElement>('.solve-button')];
@@ -1451,8 +1613,7 @@ describe('solve invocation mutex', () => {
       pullAndSolve,
       fusionStatus: { running: true, state: 'stale', fusionChangesAvailable: true, observationFreshness: 'current', documentChangeDetectable: true } as never,
     });
-    readyCad('wgi_displayed');
-    act(() => workspaceModeStore.setMode('cad'));
+    act(() => { readyCad('wgi_displayed'); workspaceModeStore.setMode('cad'); });
     await act(async () => { root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>); });
 
     await act(async () => {
@@ -1471,8 +1632,7 @@ describe('solve invocation mutex', () => {
       pullFromFusion,
       fusionStatus: { running: true, state: 'stale', fusionChangesAvailable: true, observationFreshness: 'current', documentChangeDetectable: true } as never,
     });
-    readyCad('wgi_displayed');
-    act(() => workspaceModeStore.setMode('cad'));
+    act(() => { readyCad('wgi_displayed'); workspaceModeStore.setMode('cad'); });
     await act(async () => { root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>); });
 
     const line = host.querySelector('.cad-source-line')!;
@@ -1525,7 +1685,7 @@ describe('solve invocation mutex', () => {
     compareSelection.setPrimary(pinned.id);
     await act(async () => { root.render(<JobsCoordinator><ResultsPanel/></JobsCoordinator>); });
 
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().retry(parent.id); });
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().continueRun(parent.id); });
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: pinned.id, awaiting: child.id });
     expect(bindRun).toHaveBeenCalledWith(child.id);
 
@@ -1545,21 +1705,21 @@ describe('solve invocation mutex', () => {
     publishJobs([parent]);
     compareSelection.setPrimary('pinned');
     await act(async () => root.render(<JobsCoordinator><ResultsPanel/></JobsCoordinator>));
-    await act(async () => jobsCoordinatorBridge.getSnapshot().retry(parent.id));
+    await act(async () => jobsCoordinatorBridge.getSnapshot().continueRun(parent.id));
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: child.id, awaiting: null });
   });
 
   it('reports a refresh error without losing the accepted child and unlocks the next press', async () => {
-    vi.spyOn(jobsSocket, 'retryJob').mockResolvedValue('accepted-child');
+    vi.spyOn(jobsSocket, 'retryJob').mockResolvedValueOnce('accepted-child').mockResolvedValue('next-child');
     vi.mocked(jobsSocket.refresh).mockRejectedValueOnce(new Error('refresh failed'));
     await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().retry('parent')).rejects.toThrow('refresh failed');
+      await expect(jobsCoordinatorBridge.getSnapshot().continueRun('parent')).rejects.toThrow('refresh failed');
     });
     expect(compareSelection.getSnapshot().awaiting).toBe('accepted-child');
     expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe('refresh failed');
     expect(solveAttention.resultsReady('accepted-child')).toBe('revealed');
     await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().acceptSubmission(async () => 'next-child')).resolves.toBe('next-child');
+      await expect(jobsCoordinatorBridge.getSnapshot().continueRun('next-parent')).resolves.toBe('next-child');
     });
   });
 
@@ -1571,7 +1731,7 @@ describe('solve invocation mutex', () => {
     await act(async () => { root.render(<JobsCoordinator><ResultsPanel/></JobsCoordinator>); });
 
     await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().retry(parent.id)).rejects.toThrow('retry refused');
+      await expect(jobsCoordinatorBridge.getSnapshot().continueRun(parent.id)).rejects.toThrow('retry refused');
     });
     solveAttention.bindRun('unrelated-run');
     expect(bindRun).toHaveBeenCalledWith('unrelated-run');

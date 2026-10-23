@@ -29,7 +29,6 @@ import { FemPortsPanel } from '../results/FemPortsPanel';
 import { resolveResultView, resultViewStore, useResultView } from '../stores/resultView';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
-import { rerunWithPatch } from '../jobs/rerun';
 import { workspaceNavigation } from './workspaceNavigation';
 import { showJobModel } from '../jobs/showJobModel';
 import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
@@ -42,13 +41,12 @@ import { electricalDrive, excursionSeries, hasElectricalImpedance } from '../res
 import { deEmbeddedPhaseRadians, hasOnAxisPhase, phaseSpatialSign, phaseUnwrapIsResolved, propagationReference } from '../results/phaseAnalysis';
 import { Icon } from './icons';
 import { ResultsHeader } from './ResultsHeader';
-import { jobsCoordinatorBridge } from './JobsCoordinator';
+import { jobsCoordinatorBridge, useOptionalSolveControl } from './JobsCoordinator';
 import { useVisibleRedraw } from './panelVisibility';
 import { trapDialogFocus } from './dialogFocus';
 import { useRunNormAngle } from '../stores/solveOptionsContext';
 import { useObservationStore } from '../viewport/observationStore';
 import { MAX_MEASURED_OVERLAYS, useMeasuredOverlayStore, type MeasuredOverlay } from '../stores/measuredOverlays';
-import { useDesignStore } from '../stores/design';
 import { RUN_VERDICT_MARKER, RUN_VERDICT_SENTENCE, runContextMarker, runDisplayVerdict, runMatchesContext, useRunContext } from '../results/runCoherence';
 import { AnchoredPanel } from '../prefs/AnchoredPanel';
 import { radiationImpedanceTraces } from '../results/radiationImpedance';
@@ -2620,13 +2618,7 @@ export function ResultsPanel() {
     // the source result had been pinned for comparison.
     setBeamRerunSubmitting(true);
     const sourceId = selectedJob.id;
-    void coordinator.acceptSubmission(
-      () => rerunWithPatch(sourceId, { options: { polar_config: { spherical_sampling: true } } }),
-      {
-        onAccepted: () => compareSelection.followLatest(sourceId),
-        busyMessage: 'Another solve is being submitted. Try again in a moment.',
-      },
-    )
+    void coordinator.continueRun(sourceId, { options: { polar_config: { spherical_sampling: true } } })
       .catch(() => undefined) // The coordinator reports submission errors.
       .finally(() => setBeamRerunSubmitting(false));
   }, [coordinator, selectedJob]);
@@ -2671,11 +2663,7 @@ export function ResultsPanel() {
     if (!primaryJob || replaceWithJobDesign(primaryJob, { keepHistory: true })) return;
     coordinator.reportError('This result has no readable design snapshot, so its design cannot be restored.');
   }, [coordinator, primaryJob]);
-  const solveCurrentDesign = useCallback(() => {
-    const current = useDesignStore.getState();
-    void coordinator.run(current.design, current.designRevision)
-      .catch(() => undefined); // The coordinator reports submission errors.
-  }, [coordinator]);
+  const solve = useOptionalSolveControl();
   // Everything above keeps following the solve while this panel is covered --
   // results are still fetched, combined and labelled, so the panel is never
   // stale when it comes back. Only the drawing is held: a covered tab that is
@@ -2819,8 +2807,9 @@ export function ResultsPanel() {
     >
       <p>{RUN_VERDICT_SENTENCE[primaryVerdict]}</p>
       {primaryVerdict === 'older-revision'
-        ? <><button type="button" onClick={() => { setCoherenceOpen(false); restorePrimaryDesign(); }}>Restore this run&apos;s design</button><button type="button" onClick={() => { setCoherenceOpen(false); solveCurrentDesign(); }}>Solve current design</button></>
+        ? <button type="button" onClick={() => { setCoherenceOpen(false); restorePrimaryDesign(); }}>Restore this run&apos;s design</button>
         : <><button type="button" onClick={() => { setCoherenceOpen(false); showPrimaryModel(); }} disabled={modelLoad === 'loading'}>{modelLoad === 'loading' ? 'Loading…' : 'Show this model'}</button><button type="button" onClick={() => { setCoherenceOpen(false); compareSelection.followLatest(latest?.id ?? null); }}>Show newest run</button></>}
+      <button type="button" disabled={!solve || solve.disabled} title={solve?.title ?? 'Solve is not available here.'} onClick={() => { setCoherenceOpen(false); void solve?.solve(); }}>Solve this version</button>
     </AnchoredPanel>}
     {(measuredOverlays.length > 0 || measuredError) && <div className="results-toolbar result-measured">
       <span className="result-measured-caption">Measured</span>
@@ -2834,7 +2823,7 @@ export function ResultsPanel() {
         in flight, and nothing selected at all. The last used to claim it was
         loading, which is how a dock with no selection looked like a hang. */}
     {coherenceContext.mode === 'cad' && !cadResultMatchesViewport && !cleanedUpRun
-      ? <div className="empty-state" role="status"><b>Not solved yet</b><span>The model in the viewport has no selected solved result.</span><button type="button" className="solve-button" onClick={solveCurrentDesign}>Solve</button></div>
+      ? <div className="empty-state" role="status"><b>Not solved yet</b><span>The model in the viewport has no selected solved result.</span><button type="button" className="solve-button" disabled={!solve || solve.disabled} title={solve?.title ?? 'Solve is not available here.'} onClick={() => void solve?.solve()}>Solve</button></div>
       : charts ?? (cleanedUpRun ? <div className="empty-state" role="status">
         <b>Results cleaned up</b>
         <span>{cleanedUpMessage(cleanedUpRun)}</span>

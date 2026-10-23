@@ -10,6 +10,7 @@ import { clearJobLink, jobIdFromLink, openLinkedJob } from '../jobs/jobDeepLink'
 import { compareSelection } from '../api/results';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { importedSolvePlanRequestBody, planSolveDesign, postImportedSolvePlan, solveModel, SolveSubmissionRefused, submitDesign, type EngineSubstitution, type ImportedSolveSubmission, type ModelSolvePress, type SolvePlan } from '../jobs/actions';
+import { rerunWithPatch, type RerunPatch } from '../jobs/rerun';
 import { setupOfSubmission } from '../jobs/importedSetup';
 import {
   useCapabilities,
@@ -20,7 +21,7 @@ import { useSolvePlan } from '../jobs/useSolvePlan';
 import { JobAutomation } from '../jobs/automation';
 import { explainImportedRefusal } from '../jobs/importedRefusals';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
-import { acknowledgeCadSolve, cadSolveClaim, forgetCadSolve, latestCadJobs, rememberCadSolve } from '../jobs/cadSolve';
+import { acknowledgeCadSolve, approveCadJob, solveCadAgain, type CadSolvePress, cadSolveClaim, forgetCadSolve, latestCadJobs, rememberCadSolve } from '../jobs/cadSolve';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
 import { currentRunNameSource } from '../jobs/runNameSource';
@@ -57,7 +58,7 @@ interface SolveControl {
   /** The coordinator's current parametric plan, also shared with dock panels. */
   plan: SolvePlan | null;
   planPending: boolean;
-  solve(): void;
+  solve(): Promise<'submitted' | 'busy' | 'blocked' | 'pending'>;
   /** CAD Link mode: Solve solves the CAD model on screen. */
   cadMode: boolean;
   disabled: boolean;
@@ -84,29 +85,18 @@ interface SubmissionAcceptanceOptions {
   busyMessage?: string;
 }
 
+export type ContinueRunPatch = RerunPatch & Pick<CadSolvePress, 'approvals'>;
+
 interface CoordinatorBridgeSnapshot {
-  run(design: DesignDocument, designRevision?: number): Promise<void>;
-  /** The single CAD solve entry point: the displayed axis and reviewed findings,
-   * readiness, one `POST /api/models/{id}/solve`, the submission mutex, naming
-   * and list refresh. Throws the blocking reason; returns 'busy' when a solve
-   * is already in flight so an automatic caller can say so instead of
-   * silently doing nothing. */
-  solveCurrentCadImport(): Promise<'submitted' | 'busy'>;
-  retry(jobId: string): Promise<void>;
-  /** Accept a plain job under Solve's mutex; null means busy. Reports errors
-   * and rethrows them for callers that need to handle a refusal. CAD uses its
-   * own acceptance observer and must not enter this lifecycle. */
-  acceptSubmission(submit: () => Promise<string>, opts?: SubmissionAcceptanceOptions): Promise<string | null>;
+  /** Continue a specific run, under the same lock and attention as Solve. */
+  continueRun(jobId: string, patch?: ContinueRunPatch): Promise<string | null>;
   reportError(message: string): void;
   actionError: string | null;
 }
 
 const unavailableRun = async () => { throw new Error('Solve coordinator is unavailable'); };
 let bridgeSnapshot: CoordinatorBridgeSnapshot = {
-  run: unavailableRun,
-  solveCurrentCadImport: unavailableRun,
-  retry: unavailableRun,
-  acceptSubmission: unavailableRun,
+  continueRun: unavailableRun,
   reportError: () => undefined,
   actionError: null,
 };
@@ -137,7 +127,7 @@ export function useSolveControl(): SolveControl {
  * React roots (`Workspace.tsx`), where the coordinator's context does not reach. */
 let publishedSolveControl: SolveControl | null = null;
 const solveControlListeners = new Set<() => void>();
-const publishedSolveControlStore = {
+export const solveControlStore = {
   getSnapshot: () => publishedSolveControl,
   subscribe(listener: () => void) {
     solveControlListeners.add(listener);
@@ -157,9 +147,9 @@ function publishSolveControl(control: SolveControl | null): void {
 export function useOptionalSolveControl(): SolveControl | null {
   const context = useContext(SolveContext);
   const published = useSyncExternalStore(
-    publishedSolveControlStore.subscribe,
-    publishedSolveControlStore.getSnapshot,
-    publishedSolveControlStore.getSnapshot,
+    solveControlStore.subscribe,
+    solveControlStore.getSnapshot,
+    solveControlStore.getSnapshot,
   );
   return context ?? published;
 }
@@ -543,9 +533,38 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     }
   }, [completeCadSolve, now]);
 
-  const retry = useCallback(async (jobId: string) => {
-    await acceptSubmission(() => jobsSocket.retryJob(jobId));
-  }, [acceptSubmission]);
+  const continueRun = useCallback(async (jobId: string, patch: ContinueRunPatch = {}) => {
+    const cad = patch.approvals !== undefined;
+    return acceptSubmission(async () => {
+      if (cad) {
+        const approvals = patch.approvals!;
+        solveAttention.bindOperation(jobId);
+        let child;
+        try {
+          await approveCadJob(jobId, approvals);
+          child = await solveCadAgain(jobId, { approvals });
+        } catch (error) {
+          solveAttention.releaseOperation(jobId);
+          throw error;
+        }
+        const parent = jobsSocket.getSnapshot().jobs.find((job) => job.id === jobId);
+        const claim = parent ? cadSolveClaim(parent) : null;
+        rememberCadSolve(child.job_id, claim?.designName ?? '', claim?.sourceIngestId ?? null);
+        return child.job_id;
+      }
+      return patch.options ? rerunWithPatch(jobId, patch) : jobsSocket.retryJob(jobId);
+    }, {
+      busyMessage: 'Another solve is being submitted. Try again in a moment.',
+      onAccepted: (id) => {
+        if (patch.options) compareSelection.followLatest(jobId);
+        if (cad) {
+          solveAttention.followJob(jobId, id);
+          const job = jobsSocket.getSnapshot().jobs.find((candidate) => candidate.id === id);
+          if (job) completeCadSolve(job);
+        }
+      },
+    });
+  }, [acceptSubmission, completeCadSolve]);
 
   const reportError = useCallback((message: string) => setActionError(message), []);
   // An empty `?job=` names no run; drop it at once.
@@ -560,16 +579,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     clearJobLink();
   }, [jobs, jobsLoaded, reportError]);
   useEffect(() => {
-    publishBridge({ run, solveCurrentCadImport, retry, acceptSubmission, reportError, actionError });
+    publishBridge({ continueRun, reportError, actionError });
     return () => publishBridge({
-      run: unavailableRun,
-      solveCurrentCadImport: unavailableRun,
-      retry: unavailableRun,
-      acceptSubmission: unavailableRun,
+      continueRun: unavailableRun,
       reportError: () => undefined,
       actionError: null,
     });
-  }, [actionError, reportError, retry, run, acceptSubmission, solveCurrentCadImport]);
+  }, [actionError, reportError, continueRun]);
 
   useEffect(() => {
     const retryExport = (event: Event) => automation.retryExport((event as CustomEvent<string>).detail);
@@ -614,13 +630,14 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const [pendingSolve, setPendingSolve] = useState<'cad' | 'parametric' | 'file' | null>(null);
   const solveEnabled = (solveAvailable || planPending) && (fileGeometryActive || !solveOptionsError)
     && !planError && !submitting && !solveBlocker;
-  const solve = useCallback(() => {
+  const solve = useCallback(async () => {
     // The button, the shortcut and the palette all arrive here: one command.
-    if (submissionInFlight.current || !solveEnabled) return;
+    if (submissionInFlight.current) return 'busy' as const;
+    if (!solveEnabled) return 'blocked' as const;
     if (planPending) {
       solveAttention.armSolve();
       setPendingSolve(fileGeometryActive ? 'file' : cadGeometryActive ? 'cad' : 'parametric');
-      return;
+      return 'pending' as const;
     }
     setPendingSolve(null);
     const action = async () => {
@@ -651,10 +668,14 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       const current = useDesignStore.getState();
       await run(current.design, current.designRevision);
     };
-    void action().catch((error) => {
+    try {
+      await action();
+      return 'submitted' as const;
+    } catch (error) {
       // Plain jobs report through acceptSubmission; CAD retains its observer.
       if (cadGeometryActive) reportError(error instanceof Error ? error.message : String(error));
-    });
+      return 'blocked' as const;
+    }
   }, [cadGeometryActive, fileGeometryActive, planPending, reportError, run, solveCurrentCadImport, solveEnabled, solveFileModel]);
   useEffect(() => {
     if (pendingSolve === null) return;

@@ -6,6 +6,7 @@ import { compareSelection } from '../api/results';
 import { cadReceiptsStore, type CadReceipt } from '../stores/cadReceipts';
 import { useCadConnectionStore } from '../stores/cadConnection';
 import { cadRecoveryNoticesStore } from '../stores/cadRecoveryNotices';
+import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { readLastModel, rememberLastModel } from '../stores/lastModel';
 import { resetImportedModelStore } from '../stores/importedModel';
@@ -19,7 +20,7 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { preferencesStore } from '../prefs/preferences';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { mountCadWorkspaceOwners } from './CadWorkspaceOwners';
-import { jobsCoordinatorBridge } from './JobsCoordinator';
+import { solveControlStore } from './JobsCoordinator';
 import { identity, status, exported } from './cadlink/outbound.fixtures';
 import { bundle, deferred, json, mesh, record, job, workspaceFor } from './cadlink/selection.fixtures';
 
@@ -117,7 +118,7 @@ it('gives a correlated pull one selection and ingest owner despite simultaneous 
 
 it('Bring in and solve joins the arrival preparation and submits once through the job owner (rows 18, 25)', async () => {
   const solve = vi.fn(async () => 'submitted' as const);
-  vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({ ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport: solve });
+  vi.spyOn(solveControlStore, 'getSnapshot').mockReturnValue({ solve } as unknown as NonNullable<ReturnType<typeof solveControlStore.getSnapshot>>);
   stop = mountCadWorkspaceOwners(); await flush();
   const action = cadWorkspace.getSnapshot().pullAndSolve(); await flush();
   returns = [{ ...bundle, requestId: 'pull-1' }];
@@ -125,6 +126,23 @@ it('Bring in and solve joins the arrival preparation and submits once through th
   expect(await action).toBe('solving');
   expect(calls('/api/cadlink/ingest')).toHaveLength(1);
   expect(solve).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])('Bring in and solve waits for the arrival frame and rechecks supersession (%s)', async (superseded) => {
+  const frame = deferred<Response>();
+  const reading = useCadSolverFrameStore.getState().load(record.ingest_id, (() => frame.promise) as typeof fetch);
+  const solve = vi.fn(async () => 'submitted' as const);
+  vi.spyOn(solveControlStore, 'getSnapshot').mockReturnValue({ solve } as unknown as NonNullable<ReturnType<typeof solveControlStore.getSnapshot>>);
+  stop = mountCadWorkspaceOwners(); await flush();
+  const action = cadWorkspace.getSnapshot().pullAndSolve(); await flush();
+  returns = [{ ...bundle, requestId: 'pull-1' }];
+  await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true }); await flush();
+  expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
+  expect(solve).not.toHaveBeenCalled();
+  if (superseded) useCadReturnStore.setState({ ingestRecord: { ...record, ingest_id: 'newer-model' } });
+  frame.resolve(json({ linked: true })); await reading; await flush();
+  expect(await action).toBe(superseded ? 'blocked' : 'solving');
+  expect(solve).toHaveBeenCalledTimes(superseded ? 0 : 1);
 });
 
 it('mounts the receipt feed and display without a solve or operations-list reader (rows 1, 7, 14)', async () => {
@@ -477,7 +495,7 @@ it('pull-and-solve reports preparation and submission phases and clears stale st
   const ingest = deferred<Response>(); const submit = deferred<'submitted'>();
   const base = fetcher.getMockImplementation()!;
   fetcher.mockImplementation((input, init) => String(input) === '/api/cadlink/ingest' ? ingest.promise : base(input, init));
-  vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({ ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport: () => submit.promise });
+  vi.spyOn(solveControlStore, 'getSnapshot').mockReturnValue({ solve: () => submit.promise } as unknown as NonNullable<ReturnType<typeof solveControlStore.getSnapshot>>);
   stop = mountCadWorkspaceOwners(); await flush();
   const solve = cadWorkspace.getSnapshot().pullAndSolve(); await flush();
   returns = [{ ...bundle, requestId: 'pull-1' }];

@@ -115,7 +115,7 @@ export interface JobCardProps {
   job: JobItem;
   now: number;
   selected: boolean;
-  retryJob: (jobId: string) => Promise<void>;
+  retryJob: (jobId: string) => Promise<unknown>;
   onError: (message: string) => void;
   onRemove: (job: JobItem) => void;
   onOpenExportSettings: () => void;
@@ -417,7 +417,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
       : 'Solve the model on screen to start one. Every run is kept here with its results, so you can compare and re-run it later.'}</span></div>}
     {snapshot.jobs.length > 0 && visibleJobs.length === 0 && <div className="empty-state"><b>No runs match the filter</b><span>{source !== 'all' || project || model ? 'Clear filters to show runs from other sources, projects or models.' : query.trim() && preferences.minRating > 0 ? 'Clear the search or turn off the kept-only filter.' : query.trim() ? 'Clear the search to show runs.' : 'Turn off the kept-only filter to show more.'}</span></div>}
     {visibleJobs.length > 0 && <div className="job-list" role="list" aria-label="Run history">
-      {visibleJobs.map(job => <JobCard key={job.id} job={job} now={now} selected={job.id === selection.primary} retryJob={coordinator.retry} onError={coordinator.reportError} onRemove={remove} onOpenExportSettings={openExportSettings}/>)}
+      {visibleJobs.map(job => <JobCard key={job.id} job={job} now={now} selected={job.id === selection.primary} retryJob={coordinator.continueRun} onError={coordinator.reportError} onRemove={remove} onOpenExportSettings={openExportSettings}/>)}
     </div>}
   </div>;
 }

@@ -7,9 +7,8 @@ import { isPendingCadOperation, reconcileCadOperation } from '../api/cadOperatio
 import { createCadRequestActions, selectCadRequests, useCadRecoveryNotices, type CadRequest } from '../stores/cadRecoveryNotices';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { openCadProject } from './CadProjectPanel';
-import { approveCadJob, cadJobSummaries, dismissCadJob, useCadJobs } from '../jobs/cadSolve';
+import { cadJobSummaries, dismissCadJob, useCadJobs } from '../jobs/cadSolve';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
-import { solveAttention } from './solveAttention';
 import { inFlightWords } from './cadOnScreenSettings';
 import { fullTime, relativeTime } from './cadTime';
 import { usePanelVisible } from './panelVisibility';
@@ -362,10 +361,11 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
         className="primary"
         disabled={heldAction === 'approve'}
         aria-label={`Approve and solve: ${label}`}
-        onClick={() => ask('approve', () => (async () => {
-          solveAttention.armOperation(job.id);
-          await approveCadJob(job, reviewedPreparation, review.findingIds);
-        })())}
+        onClick={() => ask('approve', async () => {
+          await jobsCoordinatorBridge.getSnapshot().continueRun(job.id, {
+            approvals: { preparation_id: reviewedPreparation, finding_ids: review.findingIds },
+          });
+        })}
       >Approve and solve</button>}
     </div>
   </div>;

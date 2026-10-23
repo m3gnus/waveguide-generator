@@ -27,7 +27,7 @@ import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import type { ImportedMeshScene } from '../viewport/importedMesh';
-import { JobsCoordinator, jobsCoordinatorBridge } from './JobsCoordinator';
+import { JobsCoordinator, solveControlStore } from './JobsCoordinator';
 import { activateWorkspaceMode } from './TopBar';
 import { takeDesignOpenTicket } from '../design/openCadProject';
 import { showJobModel } from '../jobs/showJobModel';
@@ -488,7 +488,8 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
       await flush();
     });
     // Every caller, at call time.
-    await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow('does not match the selected ingestion');
+    await expect(solveControlStore.getSnapshot()!.solve()).resolves.toBe('blocked');
+    expect(solveControlStore.getSnapshot()!.title).toContain('does not match the selected ingestion');
     expect(mocks.solveModel).not.toHaveBeenCalled();
   });
 

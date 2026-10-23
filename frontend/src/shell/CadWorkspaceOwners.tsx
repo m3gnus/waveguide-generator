@@ -8,6 +8,7 @@ import { useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
 import { useCadConnectionStore } from '../stores/cadConnection';
 import { cadReceiptsStore, connectCadReceipts, connectCadReceiptDisplay } from '../stores/cadReceipts';
 import { cadRecoveryNoticesStore, connectCadRecoveryNotices } from '../stores/cadRecoveryNotices';
+import { frameReadInFlight } from '../stores/cadSolverFrame';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { cadWorkspace, emptyCadWorkspace } from '../stores/cadWorkspace';
 import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
@@ -25,7 +26,7 @@ import { createReceiptDisplay } from './cadlink/receiptDisplay';
 import { createFusionSolveDisplay } from './cadlink/fusionSolveDisplay';
 import { observeCadProjectLoads, observeLastModel, refreshChannelDriverBases } from './cadlink/restores';
 import { solvedCadModels } from './cadlink/solvedModel';
-import { jobsCoordinatorBridge } from './JobsCoordinator';
+import { solveControlStore } from './JobsCoordinator';
 import { solveAttention } from './solveAttention';
 import { jobIdFromLink } from '../jobs/jobDeepLink';
 import { useModalDialogFocus } from './dialogFocus';
@@ -178,17 +179,23 @@ export function mountCadWorkspaceOwners(): () => void {
       reportStatus('Received the current Fusion geometry. Preparing the simulation…');
       const choice = useCadReturnStore.getState().captureModelChoice();
       const prepared = await preparation;
+      // This composed command already holds a solve intention. Let the card's
+      // initial frame read answer before invoking the same public Solve.
+      if (prepared) await frameReadInFlight(prepared.ingest_id);
       const selected = useCadReturnStore.getState();
       if (!prepared || selected.ingestRecord !== prepared || selected.needsIngest
         || !selected.isCurrentModelChoice(choice) || selected.selectedBundle?.bundlePath !== returned.bundlePath) {
         throw new SupersededError('A newer model selection superseded this geometry request.');
       }
       reportStatus('Prepared. Submitting the solve…');
-      const outcome = await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
+      const control = solveControlStore.getSnapshot();
+      if (!control) throw new Error('Solve coordinator is unavailable');
+      const outcome = await control.solve();
       if (outcome === 'busy') {
         reportStatus('Prepared the Fusion geometry. A solve is already running — press Solve when it finishes.');
         return 'blocked';
       }
+      if (outcome === 'blocked') { reportStatus(control.title); return 'blocked'; }
       reportStatus('Solving the current Fusion geometry.');
       return 'solving';
     } catch (error) {

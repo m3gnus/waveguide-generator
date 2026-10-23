@@ -107,12 +107,9 @@ export function solveCadAgain(jobId: string, press: CadSolvePress): Promise<{ jo
   const { setup_revision_id, frame_axis, approvals, submit } = press;
   return post(`/api/jobs/${encodeURIComponent(jobId)}/solve-again`, { setup_revision_id, frame_axis, approvals, submit });
 }
-export async function approveCadJob(job: JobItem, preparationId: string, findingIds: string[]): Promise<void> {
-  const approvals = { preparation_id: preparationId, finding_ids: findingIds };
-  await post(`/api/jobs/${encodeURIComponent(job.id)}/approvals`, approvals);
-  const child = await solveCadAgain(job.id, { approvals });
-  rememberCadSolve(child.job_id, '');
-  await jobsSocket.refresh();
+/** Record approval only; JobsCoordinator owns continuing the solve. */
+export async function approveCadJob(jobId: string, approvals: NonNullable<CadSolvePress['approvals']>): Promise<void> {
+  await post(`/api/jobs/${encodeURIComponent(jobId)}/approvals`, approvals);
 }
 export async function dismissCadJob(job: JobItem): Promise<void> {
   const current = jobsSocket.getSnapshot().jobs.find((item) => item.id === job.id) ?? job;
