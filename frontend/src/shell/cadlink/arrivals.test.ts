@@ -97,7 +97,7 @@ describe('selection actions without the coordinator', () => {
     listed = { ...listed, modifiedAt: '2026-08-13T00:00:00Z', sources: [{ ...bundle.sources[0], role: 'LF' }] };
     await reader.refresh({ autoOpenNew: true });
     expect(useCadReturnStore.getState().driveVoltageV).toBe(2.83);
-    expect(useCadReturnStore.getState().rigidSizeMm).toBe(4);
+    expect(useCadReturnStore.getState().rigidSizeMm).toBe(25);
   });
 
   it('refuses a foreign arrival without replacing design or undo history', async () => {

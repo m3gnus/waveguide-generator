@@ -426,9 +426,9 @@ def test_request_versions_and_exact_refusals(tmp_path: Path):
             row = store.get_operation(f"case-{schema}")
             assert row["state"] == "rejected"
             assert json.loads(row["outcome_json"])["message"] == (
-                "This solve request came from a WGLink add-in older than this Waveguide "
-                "Generator, which it no longer accepts. Restart Fusion so it loads the WGLink "
-                "that WG installed, then use Solve in WG again."
+                "This solve request came from an older Waveguide Generator add-in in Fusion that this WG "
+                "no longer accepts. Restart Fusion so it loads the add-in that WG installed, "
+                "then use Solve in WG again."
             )
         sent = {
             **base,

@@ -140,7 +140,10 @@ def test_a_handoff_to_an_outdated_addin_says_why_nothing_happens_yet(tmp_path: P
         "document": None,
     }
     (folder / ".fusion-status.json").write_text(json.dumps(heartbeat))
-    assert "older than this Waveguide Generator" in (_handoff_waiting_notice(tmp_path) or "")
+    assert _handoff_waiting_notice(tmp_path) == (
+        "The Waveguide Generator add-in in Fusion is older than this WG installation. Restart "
+        "Fusion so it loads the add-in that WG installed, then try again."
+    )
 
     (folder / ".fusion-status.json").write_text(json.dumps({**heartbeat, "deliveryVersion": 3}))
     assert _handoff_waiting_notice(tmp_path) is None

@@ -142,7 +142,7 @@ function outdatedAddinDetail(status: FusionCadStatus): string {
     return 'WG is still checking the Waveguide Generator add-in in Fusion. Until Fusion runs the add-in that matches this Waveguide Generator, they exchange nothing.';
   }
   if (verdict === 'pending') {
-    return `Activation of the Waveguide Generator add-in in Fusion is pending until Fusion closes. Close Fusion to finish updating the Waveguide Generator add-in in Fusion: WG installs the add-in that matches it once Fusion is closed, and says here when Fusion can be reopened. ${EXCHANGE_NOTHING}${notes}`;
+    return `Activation of the Waveguide Generator add-in in Fusion is pending until Fusion closes. Close Fusion to finish updating the add-in: WG installs the add-in that matches it once Fusion is closed, and says here when Fusion can be reopened. ${EXCHANGE_NOTHING}${notes}`;
   }
   if (ACTIVATED_VERDICTS.has(verdict)) {
     return `WG has installed the Waveguide Generator add-in in Fusion that matches it, and Fusion loads it the next time it starts. ${EXCHANGE_NOTHING}${notes}`;
@@ -160,13 +160,13 @@ function outdatedAddinDetail(status: FusionCadStatus): string {
     return `The Waveguide Generator add-in in Fusion belongs to another Waveguide Generator installation, which is older than this one. Update or remove that installation, then restart Fusion 360. (${refresh?.detail ?? ''})${notes}`;
   }
   if (verdict === 'developer') {
-    return `The developer copy of the Waveguide Generator add-in in Fusion is older than this WG installation. Sync it again, then restart the Waveguide Generator add-in in Fusion.${notes}`;
+    return `The developer copy of the Waveguide Generator add-in in Fusion is older than this WG installation. Sync it again, then restart the add-in.${notes}`;
   }
   if (verdict === 'failed' || verdict === 'unavailable' || verdict === 'not-detected') {
     return `WG could not install the Waveguide Generator add-in in Fusion that matches it: ${refresh?.detail ?? 'no detail'}. Reinstall Waveguide Generator, then restart Fusion 360.${notes}`;
   }
   if (verdict === 'disabled') {
-    return `WG does not update the Waveguide Generator add-in in Fusion here (${refresh?.detail ?? ''}). Install the Waveguide Generator add-in in Fusion that matches this Waveguide Generator, then restart Fusion 360.${notes}`;
+    return `WG does not update the Waveguide Generator add-in in Fusion here (${refresh?.detail ?? ''}). Install the add-in that matches this Waveguide Generator, then restart Fusion 360.${notes}`;
   }
   return `The Waveguide Generator add-in in Fusion is older than this WG installation, and WG did not replace it (${refresh?.detail ?? verdict}). ${EXCHANGE_NOTHING}${notes}`;
 }
@@ -178,7 +178,7 @@ function activationNote(state: CadWorkflowView['state'], refresh: WgLinkRefreshR
   const troubled = state === 'addin-offline' || state === 'closed';
   const notes = activationFootnotes(refresh, troubled);
   if (verdict === 'pending') {
-    return `Activation of the Waveguide Generator add-in in Fusion is pending until Fusion closes: close Fusion to finish updating the Waveguide Generator add-in in Fusion.${notes}`;
+    return `Activation of the Waveguide Generator add-in in Fusion is pending until Fusion closes: close Fusion to finish updating the add-in.${notes}`;
   }
   if (verdict === 'failed') {
     return `WG could not update the Waveguide Generator add-in in Fusion (${refresh?.detail ?? 'no detail'}).${notes}`;

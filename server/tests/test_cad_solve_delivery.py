@@ -38,7 +38,7 @@ from server.cadlink.store import CadLinkStore
 
 LEGACY = ".wg-solve-request.json"
 V2_DIR = ".wg-solve-requests"
-OLDER_ADDIN = "older than this WG installation accepts"
+OLDER_ADDIN = "an older Waveguide Generator add-in in Fusion that this WG no longer accepts"
 
 
 @pytest.fixture

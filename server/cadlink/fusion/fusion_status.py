@@ -38,7 +38,7 @@ _LEGACY_SIGNATURE_EXPLANATION = (
 )
 ADDIN_OUTDATED_MESSAGE = (
     "The Waveguide Generator add-in in Fusion is older than this WG installation. Restart "
-    "Fusion so it loads the Waveguide Generator add-in in Fusion that WG installed, then try again."
+    "Fusion so it loads the add-in that WG installed, then try again."
 )
 _SCOPED_SELECTION_EXPLANATION = (
     "stale detection unavailable: this return covers a selected assembly "

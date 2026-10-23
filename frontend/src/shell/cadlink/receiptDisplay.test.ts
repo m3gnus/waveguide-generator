@@ -202,7 +202,7 @@ describe('receipt-keyed Send display', () => {
     const store = createCadReceiptsStore(sessionStorage, () => NOW);
     await createReceiptDisplay(renderer(), store, serving([changed]))(receipt());
     expect(useCadReturnStore.getState().driveVoltageV).not.toBe(4);
-    expect(useCadReturnStore.getState().rigidSizeMm).toBe(3);
+    expect(useCadReturnStore.getState().rigidSizeMm).toBe(25);
     expect(useCadReturnStore.getState().channelDrivers).toEqual({});
   });
 

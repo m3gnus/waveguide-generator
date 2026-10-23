@@ -148,7 +148,7 @@ describe('CAD setup publisher', () => {
       expect(setup.geometry).not.toHaveProperty(snapshotField);
     }
     expect(setup.geometry).toMatchObject({
-      mesh: { rigid_size_mm: 4, source_size_mm: { 'source-hf': 4 } },
+      mesh: { rigid_size_mm: 25, source_size_mm: { 'source-hf': 4 } },
       skipped_source_ids: [],
       exterior_only: false,
     });

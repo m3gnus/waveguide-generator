@@ -1393,7 +1393,7 @@ describe('CadLinkPanel', () => {
     // Pending: WG never replaces the add-in while Fusion is open.
     const pending = detail({ verdict: 'pending', detail: 'Activation of the Waveguide Generator add-in in Fusion is pending until Fusion closes' });
     expect(pending).toContain('Activation of the Waveguide Generator add-in in Fusion is pending until Fusion closes');
-    expect(pending).toContain('Close Fusion to finish updating the Waveguide Generator add-in in Fusion');
+    expect(pending).toContain('Close Fusion to finish updating the add-in');
     expect(pending).not.toMatch(/Restart Fusion/);
 
     // Activated: installed on disk for Fusion's next start, never "running".
@@ -1448,7 +1448,7 @@ describe('CadLinkPanel', () => {
     const unconfigured = { ...closedFusion, cadFolderConfigured: false };
     const view = fusionWorkflowView({ ...unconfigured, addinRefresh: { verdict: 'pending', detail: '' } });
     expect(view).toMatchObject({ state: 'not-configured', action: null });
-    expect(view.detail).toContain('close Fusion to finish updating the Waveguide Generator add-in in Fusion');
+    expect(view.detail).toContain('close Fusion to finish updating the add-in');
     expect(fusionWorkflowView(unconfigured).detail).not.toContain('Activation of the Waveguide Generator add-in in Fusion');
   });
 
