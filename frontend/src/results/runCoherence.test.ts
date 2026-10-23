@@ -7,7 +7,7 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { hydrateDesignDocument } from '../api/designIo';
 import { designFingerprint, jobDesignFingerprint } from './runCoherence';
-import { currentModelScene, currentModel, runContextMarker, runVerdict, runProvenanceMarker, type CurrentModel } from '../model/currentModel';
+import { currentModelScene, currentModel, runContextMarker, runVerdict, runProvenanceMarker, shownResult, spatialResult, type CurrentModel } from '../model/currentModel';
 
 let nextJob = 0;
 
@@ -66,10 +66,9 @@ describe('run coherence', () => {
     expect(runVerdict(run, contextFor(useDesignStore.getState().design))).toBe('current');
   });
 
-  it('ignores expression spelling and the machine-local solver path', () => {
+  it('ignores the machine-local solver path', () => {
     const design = designForFamily('OSSE');
     const respelled = structuredClone(design);
-    respelled._expressions = { R: { value: respelled.R ?? 0, text: '2*R0' } as never };
     respelled.simulation.solver_mode = 'bempp';
     expect(designFingerprint(respelled)).toBe(designFingerprint(design));
   });
@@ -172,6 +171,71 @@ describe('run coherence', () => {
     });;
   });
 });
+
+it.each(['wire', 'sidecar', 'both'] as const)('preserves executable expression identity in legacy %s snapshots', shape => {
+  useDesignStore.getState().updateExpression('R', { value: null, raw: '70*(1+cos(p))' });
+  const design = useDesignStore.getState().design;
+  const submitted = JSON.parse(JSON.stringify(serializeSolveDesign(design)));
+  expect(submitted.R).toEqual({ value: null, raw: '70*(1+cos(p))' });
+  const wire = shape === 'sidecar' ? structuredClone(design)
+    : shape === 'both' ? { ...submitted, _expressions: structuredClone(design._expressions) } : submitted;
+  for (const snapshot of [wire, { version: 1, design: wire }]) {
+    const run = { ...parametric(null), status: 'complete' as const, has_results: true, script_snapshot: snapshot };
+    const model = contextFor(design);
+    expect(jobDesignFingerprint(run)).toBe(model.key);
+    expect(runVerdict(run, model)).toBe('current');
+    expect(shownResult(model, { primary: run.id }, [run]).canRender).toBe(true);
+
+    useDesignStore.getState().updateExpression('R', { value: null, raw: '90*(1+cos(p))' });
+    const edited = useDesignStore.getState().design;
+    expect(edited.R).toBe(design.R); // Same editor scalar, different executable geometry.
+    expect(serializeSolveDesign(edited).R).not.toEqual(submitted.R);
+    expect(runVerdict(run, contextFor(edited))).toBe('earlier-version');
+    expect(shownResult(contextFor(edited), { primary: run.id }, [run]).canRender).toBe(false);
+    expect(spatialResult(contextFor(edited), { primary: run.id }, [run])).toBeNull();
+    const plain = structuredClone(design);
+    delete plain._expressions;
+    expect(designFingerprint(plain)).not.toBe(model.key);
+    expect(runVerdict(parametric(plain), model)).toBe('earlier-version');
+  }
+});
+
+it.each(['140', '1.4e2', ' +140.0 ', null] as const)('matches equivalent scalar and expression snapshots with raw %s', raw => {
+  const plain = designForFamily('OSSE');
+  plain.R = 140;
+  const expression = structuredClone(plain);
+  expression._expressions = { R: { value: 140, raw } };
+  expect(designFingerprint(expression)).toBe(designFingerprint(plain));
+  for (const design of [plain, expression]) {
+    for (const wire of [serializeSolveDesign(design), { ...structuredClone(design) }]) {
+      for (const snapshot of [wire, { version: 1, design: wire }]) {
+        const run = { ...parametric(null), script_snapshot: snapshot };
+        expect(runVerdict(run, contextFor(plain))).toBe('current');
+        expect(runVerdict(run, contextFor(expression))).toBe('current');
+      }
+    }
+  }
+});
+
+it.each(['ath', 'wg-v1'] as const)('round trips the submitted %s dialect without conflating executable dialects', dialect => {
+  const design = designForFamily('OSSE');
+  design._expressions = { R: { value: null, raw: '70*(1+log(p))', dialect } };
+  const run = { ...parametric(null), script_snapshot: { version: 1, design: serializeSolveDesign(design) } };
+  expect(runVerdict(run, contextFor(design))).toBe('current');
+  const other = structuredClone(design);
+  other._expressions!.R.dialect = dialect === 'ath' ? 'wg-v1' : 'ath';
+  expect(designFingerprint(other)).not.toBe(designFingerprint(design));
+});
+
+it.each(['70*(1+cos(p))', '2*70', '140.0000000001', '140,0'])(
+  'does not collapse nonliteral or unequal raw %s to its numeric sample', raw => {
+    const plain = designForFamily('OSSE');
+    plain.R = 140;
+    const expression = structuredClone(plain);
+    expression._expressions = { R: { value: 140, raw } };
+    expect(designFingerprint(expression)).not.toBe(designFingerprint(plain));
+    expect(runVerdict(parametric(expression), contextFor(expression))).toBe('current');
+  });
 
 it('matches file runs in Imported mesh even when an unrelated CAD return is retained', () => {
   const context = { ...contextFor(designForFamily('OSSE')), kind: 'file' as const, key: 'wgi_file', ingestId: 'wgi_file' };

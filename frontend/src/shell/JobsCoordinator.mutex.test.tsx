@@ -312,7 +312,8 @@ describe('solve invocation mutex', () => {
     vi.useRealTimers();
   });
 
-  it.each(['parametric', 'file', 'cad'] as const)('%s: shows a completed solve with the exact submitted snapshot', async kind => {
+  it.each(['parametric', 'expression', 'file', 'cad'] as const)('%s: shows a completed solve with the exact submitted snapshot', async kind => {
+    const parametric = kind === 'parametric' || kind === 'expression';
     const actions = await vi.importActual<typeof import('../jobs/actions')>('../jobs/actions');
     mocks.submitDesign.mockImplementation(actions.submitDesign);
     mocks.solveModel.mockImplementation(actions.solveModel);
@@ -327,13 +328,14 @@ describe('solve invocation mutex', () => {
         // Mock only the server's persistence projection: identity comes from
         // the real HTTP submission, never from modelForRun/currentModel.
         completed = { ...anchor, id: 'round-trip', status: 'complete', has_results: true,
-          script_snapshot: kind === 'parametric' ? body.design_snapshot : anchor.script_snapshot,
-          config_summary: kind === 'parametric' ? {} : { geometry_type: 'imported', import_origin: kind === 'file' ? 'mesh-file' : 'fusion' },
-          ...(kind === 'parametric' ? {} : { cad_source: { archive_stem: null, design_id: null, document_name: null, lineage_id: null, manifest_sha256: null, return_state_hash: null, ingest_id: body.prepared_id,
+          script_snapshot: parametric ? body.design_snapshot : anchor.script_snapshot,
+          config_summary: parametric ? {} : { geometry_type: 'imported', import_origin: kind === 'file' ? 'mesh-file' : 'fusion' },
+          ...(parametric ? {} : { cad_source: { archive_stem: null, design_id: null, document_name: null, lineage_id: null, manifest_sha256: null, return_state_hash: null, ingest_id: body.prepared_id,
             model_id: decodeURIComponent(url.split('/')[3]), solve_model_sha256: 'round-trip-sha' },
             solve_options: body.setup.options, cad_setup: body.setup.geometry }),
         };
-        if (kind === 'parametric') {
+        if (parametric) {
+          if (kind === 'expression') expect(body.design.R).toEqual({ value: null, raw: '70*(1+cos(p))' });
           expect(body.design).toEqual(body.design_snapshot.design);
           expect(body.design.simulation.f1).toBe(useDesignStore.getState().design.simulation.f1);
           expect(body.design.simulation.num_frequencies).toBe(useDesignStore.getState().design.simulation.num_frequencies);
@@ -344,10 +346,11 @@ describe('solve invocation mutex', () => {
       return json({ checkout: { kind: 'source' } });
     }));
     act(() => {
-      if (kind === 'parametric') {
+      if (parametric) {
         const design = structuredClone(useDesignStore.getState().design);
         design._absent = ['simulation.f1', 'simulation.f2', 'simulation.num_frequencies'];
         useDesignStore.getState().replaceDocument(design);
+        if (kind === 'expression') useDesignStore.getState().updateExpression('R', { value: null, raw: '70*(1+cos(p))' });
         expect(serializeDesign(design).simulation).toMatchObject({ f1: null, f2: null, num_frequencies: null });
       } else if (kind === 'cad') {
         Object.assign(readyCad('round-trip-cad'), { model_id: 'round-trip-model', solve_model_sha256: 'round-trip-sha' });
@@ -368,7 +371,7 @@ describe('solve invocation mutex', () => {
     const before = currentModel();
     expect(before.viewportShowing).toBe(true);
     await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
-    expect(posts).toEqual([kind === 'parametric' ? '/api/solve' : kind === 'file'
+    expect(posts).toEqual([parametric ? '/api/solve' : kind === 'file'
       ? '/api/models/mesh-file%3Around-trip/solve' : '/api/models/round-trip-model/solve']);
     expect(completed).toBeDefined();
     act(() => { publishJobs([completed!]); compareSelection.setPrimary(completed!.id); });
@@ -383,6 +386,14 @@ describe('solve invocation mutex', () => {
     });
     expect(host.querySelector('[data-result-primary]')?.getAttribute('data-result-primary')).toBe(completed!.id);
     expect(host.querySelector('.result-grid')).not.toBeNull();
+    if (kind === 'expression') {
+      const scalar = useDesignStore.getState().design.R;
+      act(() => useDesignStore.getState().updateExpression('R', { value: null, raw: '90*(1+cos(p))' }));
+      expect(useDesignStore.getState().design.R).toBe(scalar);
+      expect(runVerdict(completed!, currentModel())).toBe('earlier-version');
+      expect(spatialResult(currentModel(), compareSelection.getSnapshot(), [completed!])).toBeNull();
+      expect(host.querySelector('.result-grid')).toBeNull();
+    }
   });
 
   // CAD-only controls have no parametric/file counterpart. Every surface that

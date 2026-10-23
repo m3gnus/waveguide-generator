@@ -719,6 +719,30 @@ describe('Viewport preview errors', () => {
     expect(host.querySelector('.field-plane-probe')).toBeNull();
   });
 
+  it.each(['unreadable', 'different-run'])('hides a cached probe for %s before field cleanup', selection => {
+    const available = completeJob('available', true);
+    // Leave cached state intact to exercise the synchronous render gate.
+    const { reportUnavailable, selectJob: selectFieldJob } = useFieldPlaneStore.getState();
+    try {
+      useFieldPlaneStore.setState({ reportUnavailable: vi.fn(), selectJob: vi.fn() });
+      act(() => {
+        const historical = { ...unreadable, field_plane_available: true } as unknown as JobItem;
+        publishJobs(selection === 'unreadable' ? [historical] : [available]);
+        if (selection === 'unreadable') selectJob(historical);
+        else compareSelection.setPrimary(available.id);
+        useFieldPlaneStore.setState({ enabled: true, source: 'exterior', jobId: 'cached-run',
+          plane: fieldPlane, status: 'ready' });
+        useFieldPlaneProbeStore.getState().show({ localX: 120, localY: 90, hostWidth: 900, hostHeight: 700,
+          offsetU_m: 0.05, offsetV_m: -0.02, point_m: [0.05, 0, -0.02], real: 2, imag: 0, masked: false });
+      });
+      expect(useFieldPlaneStore.getState()).toMatchObject({ enabled: true, jobId: 'cached-run' });
+      expect(useFieldPlaneProbeStore.getState().reading).not.toBeNull();
+      expect(host.querySelector('.field-plane-probe')).toBeNull();
+    } finally {
+      useFieldPlaneStore.setState({ reportUnavailable, selectJob: selectFieldJob });
+    }
+  });
+
   it('retries a blocked field plane once per solve-busy transition', () => {
     const retryIfBlocked = vi.spyOn(useFieldPlaneStore.getState(), 'retryIfBlocked')
       .mockImplementation(() => undefined);

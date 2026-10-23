@@ -10,6 +10,9 @@ import { useImportedModelStore } from '../stores/importedModel';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
 import { importedMeshStore, type ImportedMeshState } from '../viewport/importedMeshStore';
 
+/** D4 MODEL identity: parametric design content or imported solve geometry SHA
+ * (legacy ingestion fallback). It does not identify the complete solve request;
+ * separate solver options, polar sampling and imported setup are outside it. */
 export interface CurrentModel {
   kind: 'parametric' | 'file' | 'cad';
   key: string | null;

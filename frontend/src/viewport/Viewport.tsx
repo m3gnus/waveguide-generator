@@ -1324,7 +1324,8 @@ export function Viewport() {
       </div>}
     </div>}
 
-    {fieldEnabled && fieldSource === 'exterior' && <FieldPlaneProbeTooltip fieldMaxSplDb={fieldMaxSplDb}/>}
+    {fieldEnabled && fieldSource === 'exterior' && fieldJobId === availableFieldJob?.id
+      && <FieldPlaneProbeTooltip fieldMaxSplDb={fieldMaxSplDb}/>}
 
     {observationVisible && observationBasis && <div className="observation-readout" role="status" aria-live="polite">
       <b>{observationHovered

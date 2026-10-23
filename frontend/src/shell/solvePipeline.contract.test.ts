@@ -164,6 +164,9 @@ function spatialSelectorViolations(raw: string): string[] {
       problems.push(`${name}: spatial selection bypass`);
     }
   }
+  if (!/fieldEnabled && fieldSource === 'exterior' && fieldJobId === availableFieldJob\?\.id\s*&& <FieldPlaneProbeTooltip/.test(raw)) {
+    problems.push('FieldPlaneProbeTooltip: spatial selection bypass');
+  }
   // Viewport has no use for the standalone-chart exception.
   if (/\bshownResult\b/.test(raw.replace(literalsAndComments, token => token.startsWith('//') || token.startsWith('/*') ? ' ' : token))) problems.push('chart selector in viewport');
   return problems;
@@ -196,17 +199,19 @@ describe('one current model and shown result owner', () => {
     expect(canvas).toContain("if (clipMode === 'field-plane' && fieldCurrent && fieldPlane)");
   });
 
-  it.each(['fieldPlaneJob', 'femFieldJob'])('rejects a chart-selector bypass in %s even if the other path is guarded', name => {
+  it.each(['fieldPlaneJob', 'femFieldJob', 'FieldPlaneProbeTooltip'])('rejects a spatial-selector bypass in %s even if the other paths are guarded', name => {
     const source = sources['../viewport/Viewport.tsx'];
     const start = source.indexOf(`export function ${name}(`);
-    const changed = source.slice(0, start) + source.slice(start).replace('spatialResult(context, { primary: selectedJobId }, jobs, provisional)',
+    const changed = name === 'FieldPlaneProbeTooltip'
+      ? source.replace(' && fieldJobId === availableFieldJob?.id', '')
+      : source.slice(0, start) + source.slice(start).replace('spatialResult(context, { primary: selectedJobId }, jobs, provisional)',
       'shownResult(context, { primary: selectedJobId }, jobs, provisional).job');
     expect(spatialSelectorViolations(changed)).toContain(`${name}: spatial selection bypass`);
   });
 
   it('uses the effective solve representation for live and saved parametric identity', () => {
     const source = sources['../results/runCoherence.ts'];
-    expect(source).toContain('canonicalJson(serializeSolveDesign(rest as DesignDocument))');
+    expect(source).toContain('canonicalJson(serializeSolveDesign(design))');
     expect(source).toContain('design ? designFingerprint(design) : null');
     expect(source).not.toMatch(/\bserializeDesign\(/);
   });

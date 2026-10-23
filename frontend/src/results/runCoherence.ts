@@ -1,13 +1,16 @@
 import type { JobItem } from '../api/jobsSocket';
+import { parseDecimalInput } from '../design/decimalInput';
 import { hydrateJobDesign } from '../jobs/jobDesign';
 import { serializeSolveDesign, type DesignDocument } from '../stores/design';
 
 /**
- * Effective solver identity, shared by the live document and hydrated run snapshots.
+ * D4 model identity, shared by the live document and hydrated run snapshots.
  * Use the submission serializer so omitted sweep values and their displayed defaults
- * describe the same solve, including snapshots written by older serializers.
- * Expression spelling and the machine-local solver path do not affect identity;
- * geometry, effective sweep and portable simulation settings still do.
+ * describe the same model, including snapshots written by older serializers.
+ * Executable expressions are geometry. Only equivalent numeric literals and the
+ * default ATH dialect normalize; raw executable source is otherwise retained.
+ * This is not complete solve-request identity: separate solve-options/polar stores
+ * and machine-local execution preferences are outside this key.
  */
 const designFingerprints = new WeakMap<DesignDocument, string>();
 
@@ -16,8 +19,7 @@ export function designFingerprint(design: DesignDocument): string {
   // this is one hash per edit however many surfaces ask for it per render.
   const cached = designFingerprints.get(design);
   if (cached !== undefined) return cached;
-  const { _expressions, ...rest } = design;
-  const fingerprint = fnv1a(canonicalJson(serializeSolveDesign(rest as DesignDocument)));
+  const fingerprint = fnv1a(canonicalJson(serializeSolveDesign(design)));
   designFingerprints.set(design, fingerprint);
   return fingerprint;
 }
@@ -27,6 +29,22 @@ function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   if (value !== null && typeof value === 'object') {
     const record = value as Record<string, unknown>;
+    // Older snapshots may wrap a scalar in an Expr. Never evaluate formulas or
+    // discard their raw source merely because they carry a numeric sample.
+    if ('value' in record && Object.keys(record).every(key => ['value', 'raw', 'dialect'].includes(key))) {
+      if (typeof record.value === 'number' && Number.isFinite(record.value)) {
+        const literal = typeof record.raw === 'string'
+          ? parseDecimalInput(record.raw, { allowCommaDecimal: false }) : null;
+        if (record.raw == null || (literal?.kind === 'number' && literal.value === record.value)) {
+          return canonicalJson(record.value);
+        }
+      }
+      // The schema/hydrator omit ATH, the default; wg-v1 remains significant.
+      if (record.dialect === 'ath') {
+        const { dialect, ...expression } = record;
+        return canonicalJson(expression);
+      }
+    }
     return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`;
   }
   return JSON.stringify(value) ?? 'null';

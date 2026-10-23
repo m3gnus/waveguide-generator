@@ -72,6 +72,20 @@ describe('design hydration', () => {
     expect(design._expressions).toMatchObject({ R: { value: 280, raw: '140 * 2' }, a: { value: null, raw: 'coverage(p)' } });
     expect(serializeDesign(design)).toMatchObject({ R: { value: 280, raw: '140 * 2' }, a: { value: null, raw: 'coverage(p)' } });
   });
+
+  it('hydrates legacy expression sidecar paths and lets wire expressions take precedence', () => {
+    const legacy = { R: { value: null, raw: '70*(1+cos(p))' },
+      'mesh.throat_resolution': { value: 6, raw: '3*2' } };
+    const wireR = { value: null, raw: '90*(1+cos(p))' };
+    for (const R of [140, wireR]) {
+      const design = hydrateDesignDocument({ formula: 'OSSE', R, _expressions: legacy });
+      const expected = { ...legacy, R: R === 140 ? legacy.R : wireR };
+      expect(design._expressions).toEqual(expected);
+      expect(serializeDesign(design)).toMatchObject({ R: expected.R,
+        mesh: { throat_resolution: legacy['mesh.throat_resolution'] } });
+      expect(serializeDesign(design)).not.toHaveProperty('_expressions');
+    }
+  });
 });
 
 describe('FREEFORM conversion of a rolled-back profile', () => {
