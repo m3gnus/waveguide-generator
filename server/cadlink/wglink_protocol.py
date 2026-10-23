@@ -92,8 +92,46 @@ def canonical_json(value: Any, profile: str) -> str:
     raise ValueError(f"unknown canonical JSON profile: {profile!r}")
 
 
+# Complete CAD mesh snapshot. WG vendors this module byte-for-byte.
+MESH_SIZING_FEATURE = 'mesh-sizing-v1'
+MESH_SIZING_CAPABILITY = 'meshSizing'
+MESH_DEFAULTS = {
+    'wall_size_mm': 25.0,
+    'grading_distance_mm': 100.0,
+    'symmetry': 'auto',
+    'source_size_mm': {'HF': 6.0, 'MF': 15.0, 'LF': 25.0, 'PASSIVE_CARDIOID': 25.0},
+}
+MESH_PRESETS = {'Fine': 15.0, 'Coarse': 40.0}
+MESH_SIZING_UNAVAILABLE_MESSAGE = (
+    'This Waveguide Generator is too old for Fusion-side mesh settings. '
+    'Update and restart Waveguide Generator, then Send again.'
+)
+
+
+def default_source_size_mm(role: str) -> float:
+    """Resolve legacy role spellings against the one source defaults table."""
+    return MESH_DEFAULTS['source_size_mm'][LEGACY_SOURCE_ROLE_ALIASES.get(role, role)]
+
+
+def default_mesh(sources: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """A detached complete snapshot; keep any existing source suggestion."""
+    return {
+        'wall_size_mm': MESH_DEFAULTS['wall_size_mm'],
+        'grading_distance_mm': MESH_DEFAULTS['grading_distance_mm'],
+        'symmetry': MESH_DEFAULTS['symmetry'],
+        'source_size_mm': {
+            source['id']: source.get('suggested_resolution_mm')
+            if source.get('suggested_resolution_mm') is not None
+            else default_source_size_mm(source['role'])
+            for source in sources
+        },
+        'surface_groups': [],
+        'settings_origin': 'defaults',
+    }
+
+
 # Add-in writer structural profile.
-_addin_SUPPORTED_RETURN_FEATURES = frozenset({'checksummed-files-v1', 'assembly-frame-v1', 'instance-records-v1', 'fem-air-volume-v1', 'reduced-domain-v1', 'source-identity-v1', 'document-up-v1', 'domain-automatic-v1', 'fem-regions-v1'})
+_addin_SUPPORTED_RETURN_FEATURES = frozenset({'checksummed-files-v1', 'assembly-frame-v1', 'instance-records-v1', 'fem-air-volume-v1', 'reduced-domain-v1', 'source-identity-v1', 'document-up-v1', 'domain-automatic-v1', 'fem-regions-v1', MESH_SIZING_FEATURE})
 _addin_SOURCE_IDENTITY_FEATURE = 'source-identity-v1'
 _addin_DOCUMENT_UP_FEATURE = 'document-up-v1'
 _addin_DOCUMENT_UP_AXES = ('+y', '+z')
@@ -212,7 +250,9 @@ def _addin__check_forbidden_fields(value: object, *, path: str='wgreturn') -> No
         for key, child in value.items():
             if key == 'config' and path.startswith('wgreturn.instances['):
                 continue
-            if isinstance(key, str) and key.lower() in _addin__FORBIDDEN_EVIDENCE_KEYS:
+            if (isinstance(key, str) and key.lower() in _addin__FORBIDDEN_EVIDENCE_KEYS
+                    and path != 'wgreturn.mesh.source_size_mm'
+                    and not (path == 'wgreturn.mesh' and key == 'symmetry')):
                 raise ProtocolValidationError(f'{path}.{key} is WG-authored verdict data and must not appear in CAD evidence')
             _addin__check_forbidden_fields(child, path=f'{path}.{key}')
     elif isinstance(value, list):
@@ -610,13 +650,14 @@ def _addin_validate_return_manifest(manifest: Mapping[str, Any]) -> None:
         raise ProtocolValidationError('sources must have unique id values')
     if len(channel_ids) != len(set(channel_ids)):
         raise ProtocolValidationError('sources must have unique default_drive_channel_id values')
+    validate_mesh(root, features)
     if root.get('acoustics') is not None:
         raise ProtocolValidationError('acoustics must be null in wgreturn_version 1.0')
 
 # WG ingress structural profile.
 _wg_SUPPORTED_MAJOR = 1
 _wg_SUPPORTED_VERSION = '1.1'
-_wg_SUPPORTED_FEATURES = frozenset({'checksummed-files-v1', 'assembly-frame-v1', 'instance-records-v1', 'fem-air-volume-v1', 'reduced-domain-v1', 'source-identity-v1', 'document-up-v1', 'domain-automatic-v1', 'fem-regions-v1'})
+_wg_SUPPORTED_FEATURES = frozenset({'checksummed-files-v1', 'assembly-frame-v1', 'instance-records-v1', 'fem-air-volume-v1', 'reduced-domain-v1', 'source-identity-v1', 'document-up-v1', 'domain-automatic-v1', 'fem-regions-v1', MESH_SIZING_FEATURE})
 _wg_EXPORT_FRAMES = ('root-component', 'selected-occurrence-component')
 _wg_DOCUMENT_UP_FEATURE = 'document-up-v1'
 _wg_DOCUMENT_UP_AXES = ('+y', '+z')
@@ -651,7 +692,8 @@ def _wg__walk(value: Any, path: str='$') -> Iterable[tuple[str, Any]]:
             if key == 'config' and re.fullmatch('\\$\\.instances\\[\\d+\\]', path):
                 yield (child_path, child)
                 continue
-            if key in _wg_FORBIDDEN_VERDICT_KEYS:
+            if (key in _wg_FORBIDDEN_VERDICT_KEYS and path != '$.mesh.source_size_mm'
+                    and not (path == '$.mesh' and key == 'symmetry')):
                 _wg__fail(child_path, 'CAD-authored verdict keys are forbidden')
             yield from _wg__walk(child, child_path)
     elif isinstance(value, list):
@@ -688,7 +730,10 @@ def _wg__integer(value: Any, path: str, *, minimum: int=0) -> int:
 def _wg__number(value: Any, path: str, *, positive: bool=False) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         _wg__fail(path, 'must be a finite number')
-    number = float(value)
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        _wg__fail(path, 'must be finite')
     if not math.isfinite(number):
         _wg__fail(path, 'must be finite')
     if positive and number <= 0.0:
@@ -929,33 +974,10 @@ def _wg__validate_instance(value: Any, path: str) -> str:
             _wg__fail(f'{path}.source_contract.expected_disc_area_mm2', 'differs from pi*throat_diameter_mm^2/4 by more than 1%')
     return instance_id
 
-def _wg__validate_source(value: Any, path: str, instance_ids: set[str], *, source_identity: bool=False) -> str:
-    obj = _wg__mapping(value, path)
-    source_id = _wg__string(_wg__required(obj, 'id', path), f'{path}.id')
-    assert source_id is not None
-    if source_identity:
-        if source_id != source_id.strip():
-            _wg__fail(f'{path}.id', f'{_wg_SOURCE_IDENTITY_FEATURE} source identity must be trimmed')
-        if len(source_id.encode('utf-8')) > _wg_SOURCE_IDENTITY_MAX_BYTES:
-            _wg__fail(f'{path}.id', f'{_wg_SOURCE_IDENTITY_FEATURE} source identity must be at most {_wg_SOURCE_IDENTITY_MAX_BYTES} UTF-8 bytes')
-    role = _wg__string(_wg__required(obj, 'role', path), f'{path}.role')
-    assert role is not None
-    instance_id = _wg__string(obj.get('instance_id'), f'{path}.instance_id', nullable=True)
-    if instance_id is not None and instance_id not in instance_ids:
-        _wg__fail(f'{path}.instance_id', f'does not name an instances[] record: {instance_id!r}')
-    if source_identity:
-        name_bytes = len(source_physical_name(_wg_WORST_CASE_SOURCE_TAG, source_id, instance_id, role).encode('utf-8'))
-        if name_bytes > _wg_GMSH_PHYSICAL_NAME_MAX_BYTES:
-            _wg__fail(path, f'{_wg_SOURCE_IDENTITY_FEATURE} source {source_id!r} would need a {name_bytes}-byte mesh physical name (its id, instance_id and role together); the mesh keeps at most {_wg_GMSH_PHYSICAL_NAME_MAX_BYTES} UTF-8 bytes, so shorten the role or instance_id')
-    if not isinstance(_wg__required(obj, 'required', path), bool):
-        _wg__fail(f'{path}.required', 'must be boolean')
-    _wg__string(_wg__required(obj, 'default_drive_channel_id', path), f'{path}.default_drive_channel_id')
-    policy = _wg__string(_wg__required(obj, 'patch_policy', path), f'{path}.patch_policy')
-    if policy not in {'single-connected', 'explicit-disconnected'}:
-        _wg__fail(f'{path}.patch_policy', "must be 'single-connected' or 'explicit-disconnected'")
-    components = _wg__integer(_wg__required(obj, 'expected_connected_components', path), f'{path}.expected_connected_components', minimum=1)
-    if policy == 'single-connected' and components != 1:
-        _wg__fail(f'{path}.expected_connected_components', 'must be 1 for single-connected')
+def _wg__validate_patch_evidence(obj: Mapping[str, Any], path: str,
+                                 instance_ids: set[str], *, instance_id: str | None = None,
+                                 require_bodies: bool = True) -> None:
+    """STEP selector and measured-face evidence shared by sources and mesh groups."""
     selectors = _wg__mapping(_wg__required(obj, 'selectors', path), f'{path}.selectors')
     mechanisms = 0
     linked = selectors.get('linked_throat')
@@ -990,9 +1012,40 @@ def _wg__validate_source(value: Any, path: str, instance_ids: set[str], *, sourc
         _wg__fail(f'{path}.observed.per_face_area_mm2', 'length must equal observed.face_count')
     for index, item in enumerate(per_face):
         _wg__number(item, f'{path}.observed.per_face_area_mm2[{index}]', positive=True)
+    if not require_bodies and 'bodies' not in observed:
+        return
     bodies = _wg__list(_wg__required(observed, 'bodies', f'{path}.observed'), f'{path}.observed.bodies')
     for index, item in enumerate(bodies):
         _wg__string(item, f'{path}.observed.bodies[{index}]')
+
+def _wg__validate_source(value: Any, path: str, instance_ids: set[str], *, source_identity: bool=False) -> str:
+    obj = _wg__mapping(value, path)
+    source_id = _wg__string(_wg__required(obj, 'id', path), f'{path}.id')
+    assert source_id is not None
+    if source_identity:
+        if source_id != source_id.strip():
+            _wg__fail(f'{path}.id', f'{_wg_SOURCE_IDENTITY_FEATURE} source identity must be trimmed')
+        if len(source_id.encode('utf-8')) > _wg_SOURCE_IDENTITY_MAX_BYTES:
+            _wg__fail(f'{path}.id', f'{_wg_SOURCE_IDENTITY_FEATURE} source identity must be at most {_wg_SOURCE_IDENTITY_MAX_BYTES} UTF-8 bytes')
+    role = _wg__string(_wg__required(obj, 'role', path), f'{path}.role')
+    assert role is not None
+    instance_id = _wg__string(obj.get('instance_id'), f'{path}.instance_id', nullable=True)
+    if instance_id is not None and instance_id not in instance_ids:
+        _wg__fail(f'{path}.instance_id', f'does not name an instances[] record: {instance_id!r}')
+    if source_identity:
+        name_bytes = len(source_physical_name(_wg_WORST_CASE_SOURCE_TAG, source_id, instance_id, role).encode('utf-8'))
+        if name_bytes > _wg_GMSH_PHYSICAL_NAME_MAX_BYTES:
+            _wg__fail(path, f'{_wg_SOURCE_IDENTITY_FEATURE} source {source_id!r} would need a {name_bytes}-byte mesh physical name (its id, instance_id and role together); the mesh keeps at most {_wg_GMSH_PHYSICAL_NAME_MAX_BYTES} UTF-8 bytes, so shorten the role or instance_id')
+    if not isinstance(_wg__required(obj, 'required', path), bool):
+        _wg__fail(f'{path}.required', 'must be boolean')
+    _wg__string(_wg__required(obj, 'default_drive_channel_id', path), f'{path}.default_drive_channel_id')
+    policy = _wg__string(_wg__required(obj, 'patch_policy', path), f'{path}.patch_policy')
+    if policy not in {'single-connected', 'explicit-disconnected'}:
+        _wg__fail(f'{path}.patch_policy', "must be 'single-connected' or 'explicit-disconnected'")
+    components = _wg__integer(_wg__required(obj, 'expected_connected_components', path), f'{path}.expected_connected_components', minimum=1)
+    if policy == 'single-connected' and components != 1:
+        _wg__fail(f'{path}.expected_connected_components', 'must be 1 for single-connected')
+    _wg__validate_patch_evidence(obj, path, instance_ids, instance_id=instance_id)
     if obj.get('suggested_resolution_mm') is not None:
         _wg__number(obj['suggested_resolution_mm'], f'{path}.suggested_resolution_mm', positive=True)
     return source_id
@@ -1143,9 +1196,61 @@ def _wg_validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     reused_channels = sorted((channel for channel, owners in channel_owners.items() if len(owners) > 1))
     if reused_channels:
         _wg__fail('$.sources', 'default_drive_channel_id values must not span linked instances: ' + ', '.join(reused_channels))
+    validate_mesh(manifest, feature_names)
     if _wg__required(manifest, 'acoustics', '$') is not None:
         _wg__fail('$.acoustics', 'must be null in Phase 2')
     return manifest
+
+def validate_mesh(manifest: Mapping[str, Any], features: Sequence[str]) -> None:
+    """One mesh-sizing-v1 contract for both structural profiles; no legacy defaults."""
+    enabled = MESH_SIZING_FEATURE in features
+    if ('mesh' in manifest) != enabled:
+        _wg__fail('$.mesh', f'{MESH_SIZING_FEATURE} is required exactly when mesh is present')
+    if not enabled:
+        return
+    mesh = _wg__mapping(manifest['mesh'], '$.mesh')
+    for key in ('wall_size_mm', 'grading_distance_mm'):
+        _wg__number(_wg__required(mesh, key, '$.mesh'), f'$.mesh.{key}', positive=True)
+    if _wg__required(mesh, 'symmetry', '$.mesh') not in ('auto', 'off'):
+        _wg__fail('$.mesh.symmetry', "must be 'auto' or 'off'")
+    if _wg__required(mesh, 'settings_origin', '$.mesh') not in ('defaults', 'user'):
+        _wg__fail('$.mesh.settings_origin', "must be 'defaults' or 'user'")
+    sizes = _wg__mapping(_wg__required(mesh, 'source_size_mm', '$.mesh'), '$.mesh.source_size_mm')
+    sources = manifest['sources']
+    if set(sizes) != {source['id'] for source in sources}:
+        _wg__fail('$.mesh.source_size_mm', 'must name every source exactly once')
+    for source in sources:
+        source_id = source['id']
+        size = _wg__number(sizes[source_id], f'$.mesh.source_size_mm.{source_id}', positive=True)
+        suggestion = _wg__number(source.get('suggested_resolution_mm'),
+                                 f'$.sources[{source_id}].suggested_resolution_mm', positive=True)
+        if suggestion != size:
+            _wg__fail(f'$.sources[{source_id}].suggested_resolution_mm', 'must equal mesh.source_size_mm')
+    groups = _wg__list(_wg__required(mesh, 'surface_groups', '$.mesh'), '$.mesh.surface_groups')
+    ids: set[str] = set()
+    labels: set[str] = set()
+    source_labels = {label for source in sources for key in ('appearance_labels', 'shell_names')
+                     for label in source['selectors'].get(key, [])}
+    for index, value in enumerate(groups):
+        path = f'$.mesh.surface_groups[{index}]'
+        group = _wg__mapping(value, path)
+        group_id = _wg__string(_wg__required(group, 'group_id', path), f'{path}.group_id')
+        if group_id != group_id.strip():
+            _wg__fail(f'{path}.group_id', 'must be trimmed')
+        if group_id in ids:
+            _wg__fail(f'{path}.group_id', 'must be unique')
+        ids.add(group_id)
+        _wg__string(_wg__required(group, 'name', path), f'{path}.name')
+        _wg__number(_wg__required(group, 'size_mm', path), f'{path}.size_mm', positive=True)
+        _wg__validate_patch_evidence(group, path, set(), require_bodies=False)
+        selectors = group['selectors']
+        expected_label = f'WGMESH_{group_id}'
+        if selectors != {'appearance_labels': [expected_label]}:
+            _wg__fail(f'{path}.selectors', 'must contain only appearance_labels: [WGMESH_<group_id>]')
+        if expected_label in labels or expected_label in source_labels:
+            _wg__fail(f'{path}.selectors', 'mesh selectors must be unique and must not collide with source labels')
+        labels.add(expected_label)
+
 
 # FEM regions (fem-regions-v1): CAD declares bounded air volumes and named
 # surface groups on them; WG meshes, tags and solves. Faces are described by

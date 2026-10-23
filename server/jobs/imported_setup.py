@@ -17,11 +17,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import hashlib
+import json
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from server.jobs.models import SolveRequest
+from server.cadlink.snapshot_mesh import snapshot_mesh
 
 from server.contracts.canonical import canonical_utf8_strict_json as canonical_json
 
@@ -164,6 +166,21 @@ def _fem_region_ids(record: Mapping[str, Any]) -> list[str]:
     )
 
 
+def snapshot_setup(setup: CadSolveSetup, manifest: Mapping[str, Any]) -> CadSolveSetup:
+    """The effective setup for a new solve; legacy setups keep their identity."""
+
+    mesh = snapshot_mesh(manifest, skipped_source_ids=setup.geometry.get("skipped_source_ids") or ())
+    if mesh is None:
+        return setup
+    return validate_setup({
+        **json.loads(setup_content(setup)),
+        "geometry": {**setup.geometry, "mesh": mesh.sizes},
+        "preparation": {
+            **setup.preparation.model_dump(mode="json"), "symmetry_mode": mesh.symmetry_mode,
+        },
+    })
+
+
 def setup_of_request(
     request: Mapping[str, Any], record: Mapping[str, Any] | None,
 ) -> tuple[dict[str, Any], bool]:
@@ -197,6 +214,9 @@ def setup_content(setup: CadSolveSetup) -> str:
     content = setup.model_dump(mode="json")
     if content.get("origin") is None:
         content.pop("origin", None)
+    mesh = content["geometry"].get("mesh")
+    if isinstance(mesh, dict) and mesh.get("surface_groups") is None:
+        mesh.pop("surface_groups", None)
     return canonical_json(content)
 
 
@@ -213,6 +233,7 @@ __all__ = [
     "setup_content",
     "setup_digest",
     "setup_of_request",
+    "snapshot_setup",
     "solve_request_for",
     "validate_setup",
 ]

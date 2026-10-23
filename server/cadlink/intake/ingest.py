@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 import contextlib
 import hashlib
 from importlib.metadata import PackageNotFoundError, version
@@ -28,6 +29,7 @@ from server.cadlink.intake.isolation import ChildRefusal, MESH_BUDGET
 from server.cadlink.build_flags import fem_regions_enabled
 from server.cadlink.limits import MAX_WGRETURN_JSON_BYTES
 from server.cadlink.store import CadLinkStore
+from server.cadlink.snapshot_mesh import snapshot_mesh
 from server.design.textcfg import parse
 from server.exports.geometry_identity import geometry_hash_for_design
 from server.mesh.imported import (
@@ -1319,6 +1321,12 @@ def _ingest_bundle(
     except Exception as exc:
         raise IngestRefusal("stage 1 bundle validation", str(exc)) from exc
     manifest = bundle.manifest
+    authored_mesh = snapshot_mesh(manifest, skipped_source_ids=skipped_source_ids)
+    if authored_mesh is not None:
+        mesh = authored_mesh.sizes
+        prep_options = {
+            **dict(prep_options or {}), "symmetry_mode": authored_mesh.symmetry_mode,
+        }
     # The solver frame of a return with no WG instance (server/cadlink/
     # solver_frame.py). Checked before any gate: it is a statement about which
     # frame this preparation meshes in, and a linked return is always meshed in
@@ -1415,6 +1423,8 @@ def _ingest_bundle(
     normalized_mesh = validate_imported_sizes(
         manifest["sources"], mesh, skipped_source_ids=skipped_source_ids
     )
+    if mesh.get("surface_groups") is not None:
+        normalized_mesh["surface_groups"] = deepcopy(mesh["surface_groups"])
     scope_findings = _scope_findings(manifest)
     validate_scope_inventory(manifest)
     try:
@@ -1422,6 +1432,9 @@ def _ingest_bundle(
     except IngestRefusal:
         raise
     options = dict(prep_options or {})
+    options.pop("surface_groups", None)
+    if normalized_mesh.get("surface_groups") is not None:
+        options["surface_groups"] = normalized_mesh["surface_groups"]
     options.pop("solver_frame", None)
     # A caller never states the domain interpretation: it is resolved here,
     # from the return and the store, like the declaration below.
@@ -2087,6 +2100,7 @@ def _ingest_bundle(
             "project": project,
             "sources": manifest["sources"],
             "mesh_sizes": effective_mesh,
+            **({"mesh_snapshot": deepcopy(manifest["mesh"])} if authored_mesh is not None else {}),
             "skipped_source_ids": effective_skipped_source_ids,
             "role_resolution": built["role_resolution"],
             "role_findings": built.get("role_findings", []),

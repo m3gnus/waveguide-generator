@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "version": "0.3.6-old",
+  "fusionRequestDelivery": 3,
+  "solveCommandDelivery": 4,
+  "automaticDomain": 1,
+  "documentUp": 1,
+  "sourceIdentity": 1,
+  "femRegions": 1
+}

@@ -843,6 +843,14 @@ class ImportedMeshSizes(JobModel):
     rigid_size_mm: float = Field(gt=0, allow_inf_nan=False)
     transition_mm: float = Field(gt=0, allow_inf_nan=False)
     source_size_mm: dict[str, float]
+    surface_groups: list[dict[str, Any]] | None = None
+
+    @model_serializer(mode="wrap")
+    def omit_legacy_surface_groups(self, handler: SerializerFunctionWrapHandler):  # type: ignore[no-untyped-def]
+        wire = handler(self)
+        if self.surface_groups is None:
+            wire.pop("surface_groups", None)
+        return wire
 
     @field_validator("rigid_size_mm", "transition_mm", mode="before")
     @classmethod

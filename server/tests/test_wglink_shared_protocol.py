@@ -6,6 +6,7 @@ import ast
 from copy import deepcopy
 import dataclasses
 import enum
+import gzip
 import hashlib
 import json
 import os
@@ -67,10 +68,11 @@ def test_vendor_bytes_and_shared_fixtures(addin: Path):
     for row in (SHARED / "MANIFEST.sha256").read_text().splitlines():
         digest, name = row.split("  ", 1)
         manifest[name] = digest
-    assert set(manifest) == {p.name for p in SHARED.iterdir() if p.name != "MANIFEST.sha256"}
+    assert set(manifest) == {p.relative_to(SHARED).as_posix() for p in SHARED.rglob("*") if p.is_file() and p.name != "MANIFEST.sha256"}
     for name, digest in manifest.items():
         assert hashlib.sha256((SHARED / name).read_bytes()).hexdigest() == digest
-        assert (SHARED / name).read_bytes() == (addin.parents[1] / "tests/fixtures/wgreturn-endpoint-oracle" / name).read_bytes()
+        fixture = name if name.startswith("mesh-sizing-v1/") else "wgreturn-endpoint-oracle/" + name
+        assert (SHARED / name).read_bytes() == (addin.parents[1] / "tests/fixtures" / fixture).read_bytes()
 
 
 def test_shared_ingress_oracle():
@@ -292,8 +294,23 @@ def test_wg_ingress_literals_match_the_pre_consolidation_reader():
     """
 
     expected = json.loads((ROOT / "server/tests/fixtures/wg-ingress-literals.json").read_text())
+    frozen = gzip.decompress((SHARED / "mesh-sizing-v1/pre-w1-protocol.py.gz").read_bytes()).decode()
+    namespace = {}
+    exec(compile(frozen, "pre-w1-protocol.py", "exec"), namespace)
+    assert _profile_literals(frozen, "_wg_", namespace) == expected
     actual = _profile_literals(VENDORED.read_text(), "_wg_", vars(wglink_protocol))
-    assert actual == expected
+    expected["functions"]["_number"].insert(2, "must be finite")
+    # W1 factors source evidence into a shared helper and permits the two mesh
+    # paths. Every unaffected historical message and constant stays pinned.
+    for name, literals in expected["functions"].items():
+        if name not in {"_walk", "_validate_source"}:
+            assert actual["functions"][name] == literals, name
+    from collections import Counter
+    assert Counter(actual["functions"]["_walk"]) == Counter(expected["functions"]["_walk"] + ["$.mesh.source_size_mm", "$.mesh", "symmetry"])
+    assert Counter(actual["functions"]["_validate_source"] + actual["functions"]["_validate_patch_evidence"]) == Counter(expected["functions"]["_validate_source"] + ["bodies"])
+    expected["constants"]["SUPPORTED_FEATURES"].append("mesh-sizing-v1")
+    expected["constants"]["SUPPORTED_FEATURES"].sort()
+    assert actual["constants"] == expected["constants"]
 
 
 # -- Hash sites: byte goldens through the real call sites -------------------

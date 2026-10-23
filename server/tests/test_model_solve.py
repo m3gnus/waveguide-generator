@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -46,11 +47,22 @@ def _models_app(harness: JobsHarness) -> FastAPI:
     return app
 
 
-def _cad_model(harness: JobsHarness, *, name: str = "speaker") -> dict[str, Any]:
+def _cad_model(harness: JobsHarness, *, name: str = "speaker", mesh_snapshot: bool = False) -> dict[str, Any]:
     """A CAD model as WG has it on screen: a project's return, retained and ingested."""
 
     design_id, lineage = _project(harness, 90.0)
     bundle_path, manifest = _project_return(harness, name, design_id, lineage)
+    if mesh_snapshot:
+        from server.cadlink.wglink_protocol import default_mesh
+        path = harness.workspace / bundle_path / 'wgreturn.json'
+        value = json.loads(path.read_text())
+        value['wgreturn_version'] = '1.1'
+        value['assembly']['signature_hash'] = 'sha256:' + '5' * 64
+        value['required_features'].append('mesh-sizing-v1')
+        value['mesh'] = default_mesh(value['sources'])
+        value['mesh'].update(wall_size_mm=31, grading_distance_mm=75, symmetry='off')
+        path.write_text(json.dumps(value))
+        manifest = 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()
     retained = retain_snapshot(harness.workspace / bundle_path, harness.data_dir)
     sources = json.loads((harness.workspace / bundle_path / "wgreturn.json").read_text())["sources"]
 
@@ -136,10 +148,11 @@ def _revision_of(harness: JobsHarness, setup: dict[str, Any]) -> str:
     return str(harness.store.create_setup_revision(setup_content(parsed), setup_digest(parsed))["revision_id"])
 
 
+@pytest.mark.parametrize("mesh_snapshot", [False, True])
 @pytest.mark.parametrize("fusion_state", ["preparing", "bound"])
-def test_a_wg_press_and_a_fusion_solve_in_wg_for_the_same_setup_are_one_job(harness, fusion_state) -> None:
+def test_a_wg_press_and_a_fusion_solve_in_wg_for_the_same_setup_are_one_job(harness, fusion_state, mesh_snapshot) -> None:
     app = _models_app(harness)
-    model = _cad_model(harness)
+    model = _cad_model(harness, mesh_snapshot=mesh_snapshot)
     setup = _setup(engine="metal")
     revision = _revision_of(harness, setup)
     harness.store.record_model_setup(model["model_id"], inventory_sha256(model["sources"]), revision)
@@ -158,7 +171,7 @@ def test_a_wg_press_and_a_fusion_solve_in_wg_for_the_same_setup_are_one_job(harn
     assert _job_count(harness) == 1
     if fusion_state == "bound":
         # The Fusion lane prepared with the model's own setup, which the WG press named.
-        assert harness.bound_setup_revision("cmd-1") == revision
+        assert (harness.bound_setup_revision("cmd-1") == revision) is (not mesh_snapshot)
 
 
 def test_frame_refusals_and_confirmation(harness) -> None:
@@ -196,9 +209,10 @@ def test_frame_refusals_and_confirmation(harness) -> None:
     assert frame_preview(harness.store, record)["confirmed"]["axis"] == "-y"
 
 
-def test_findings_refuse_and_an_approved_press_resumes_the_same_preparation(harness) -> None:
+@pytest.mark.parametrize("mesh_snapshot", [False, True])
+def test_findings_refuse_and_an_approved_press_resumes_the_same_preparation(harness, mesh_snapshot) -> None:
     app = _models_app(harness)
-    model = _cad_model(harness)
+    model = _cad_model(harness, mesh_snapshot=mesh_snapshot)
     harness.ingest.findings = [{"id": "review-1", "blocking": True}]
 
     status, first = _solve(harness, app, model, client_request_id="press-1", setup=_setup(engine="metal"))
@@ -748,3 +762,44 @@ def test_refused_imported_request_does_not_record_setup(tmp_path, monkeypatch):
         assert error.value.reason_code == "imported_diagonal_inclination_unsupported"
         assert runtime.store.list_jobs()[1] == 0
     _file_scenario(tmp_path, scenario)
+
+
+
+def test_wg_solve_uses_snapshot_mesh_over_saved_project_sizes(harness):
+    from server.cadlink.snapshot_mesh import snapshot_mesh
+    app = _models_app(harness)
+    model = _cad_model(harness, mesh_snapshot=True)
+    stored = _setup(rigid=4, engine='metal')
+    revision = _revision_of(harness, stored)
+    harness.store.record_model_setup(model['model_id'], inventory_sha256(model['sources']), revision)
+    original = harness.store.get_setup_revision(revision)['setup_json']
+    status, result = _solve(harness, app, model, client_request_id='snapshot-wg', setup_revision_id=revision)
+    assert status == 200, result
+    _settle(harness)
+    job = harness.jobs_store.get_job_row(result['job_id'])
+    assert job['status'] == 'queued', job
+    manifest = json.loads((harness.workspace / model['bundle_path'] / 'wgreturn.json').read_text())
+    expected = snapshot_mesh(manifest)
+    assert job['config_json']['geometry']['mesh'] == expected.sizes
+    effective_id = job['task_metadata']['cad']['setup']['revision_id']
+    effective = json.loads(harness.store.get_setup_revision(effective_id)['setup_json'])
+    assert effective['preparation']['symmetry_mode'] == 'full'
+    assert harness.store.get_setup_revision(revision)['setup_json'] == original
+    # A second press with the saved project sizes still means the same solve.
+    status, again = _solve(harness, app, model, client_request_id='snapshot-wg-again', setup_revision_id=revision)
+    assert status == 200, again
+    assert again['job_id'] == result['job_id']
+
+
+def test_snapshot_with_different_saved_drive_sources_records_a_refusal(harness):
+    app = _models_app(harness)
+    model = _cad_model(harness, mesh_snapshot=True)
+    stale = _setup(engine='metal')
+    stale['geometry']['drive_channels'][0]['source_ids'] = ['old-source']
+    stale['geometry']['mesh']['source_size_mm'] = {'old-source': 8}
+    status, result = _solve(harness, app, model, client_request_id='stale-sources', setup=stale)
+    assert status == 200, result
+    _settle(harness)
+    job = harness.jobs_store.get_job_row(result['job_id'])
+    assert job['status'] == 'error'
+    assert job['task_metadata']['cad']['refusal']['code'] == 'setup_required'

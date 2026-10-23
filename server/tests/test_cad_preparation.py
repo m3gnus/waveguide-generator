@@ -1919,3 +1919,47 @@ def _coded(code: str) -> BaseException:
 def test_a_submission_refusal_is_named_by_type_and_exact_code(error: BaseException, expected: str) -> None:
     code = str(getattr(error, "reason_code", "") or "")
     assert preparation_inputs._submission_refusal_reason(error, code) == expected
+
+
+@pytest.mark.parametrize('symmetry', ['auto', 'off'])
+def test_snapshot_mesh_overrides_a_saved_setup_and_is_frozen_in_the_job(harness: Harness, symmetry):
+    from server.cadlink.snapshot_mesh import snapshot_mesh
+    from server.cadlink.wglink_protocol import default_mesh
+
+    bundle_path, _ = _write_return(harness.workspace)
+    path = harness.workspace / bundle_path / 'wgreturn.json'
+    manifest = json.loads(path.read_text())
+    manifest['wgreturn_version'] = '1.1'
+    manifest['assembly']['signature_hash'] = 'sha256:' + '5' * 64
+    manifest['required_features'].append('mesh-sizing-v1')
+    manifest['mesh'] = default_mesh(manifest['sources'])
+    manifest['mesh'].update(wall_size_mm=31, grading_distance_mm=75, symmetry=symmetry)
+    manifest['mesh']['surface_groups'] = [{
+        'group_id': 'back', 'name': 'Back', 'size_mm': 40,
+        'selectors': {'appearance_labels': ['WGMESH_back']},
+        'observed': {'face_count': 1, 'total_area_mm2': 100, 'per_face_area_mm2': [100]},
+    }]
+    raw = json.dumps(manifest).encode()
+    path.write_bytes(raw)
+    _accept(harness.store, 'cmd-1', bundle_path, 'sha256:' + hashlib.sha256(raw).hexdigest())
+    saved = _setup(rigid=4)
+    saved['preparation'] = {'symmetry_mode': 'full' if symmetry == 'auto' else 'auto'}
+    revision = _revision(harness.store, saved)
+    original = harness.store.get_setup_revision(revision)['setup_json']
+    seen = []
+
+    def ingest(*args, **kwargs):
+        seen.append(kwargs['prep_options'])
+        return harness.ingest(*args, **kwargs)
+
+    summary = harness.prepare(setup_revision_id=revision, ingest=ingest)
+    assert summary['state'] == 'accepted', summary
+    expected = snapshot_mesh(manifest)
+    assert harness.ingest.calls[0]['mesh'] == expected.sizes
+    assert seen[0]['symmetry_mode'] == expected.symmetry_mode
+    assert harness.bound_request()['geometry']['mesh'] == expected.sizes
+    assert harness.bound_setup_revision() != revision
+    effective = json.loads(harness.store.get_setup_revision(harness.bound_setup_revision())['setup_json'])
+    assert effective['preparation']['symmetry_mode'] == expected.symmetry_mode
+    assert effective['geometry']['mesh'] == expected.sizes
+    assert harness.store.get_setup_revision(revision)['setup_json'] == original

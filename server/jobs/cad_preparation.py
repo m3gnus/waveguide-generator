@@ -82,6 +82,7 @@ from server.cadlink.joblane.preparation_inputs import (
 )
 from server.cadlink.joblane.project_setup import compose_solve_request
 from server.jobs.imported_setup import DEFAULTS_ORIGIN
+from server.jobs.imported_setup import setup_content, setup_digest, snapshot_setup
 from server.cadlink.interpretation.solver_frame import (
     AS_MODELLED,
     REASON as FRAME_CONFIRMATION_REQUIRED,
@@ -493,9 +494,7 @@ def prepare_job_sync(
             else "Choose the solve settings for this model in WG, then solve it.",
         )
     setup, revision_id = loaded
-    # Recorded before anything can fail: a preparation that fails before it is
-    # recorded still leaves the job holding the settings it was asked with, for
-    # a Solve again that names none.
+    # Keep the requested settings even if reading the retained copy fails.
     run.advance(cad={"setup": _setup_record(store, revision_id)})
     manifest_sha256 = str(retained["manifest_sha256"])
     semantics = meshing_semantics_fingerprint()
@@ -509,6 +508,20 @@ def prepare_job_sync(
             "WG takes a fresh copy from the WGLink folder. If the return has left that "
             "folder, send the model again from Fusion.",
         )
+    try:
+        effective_setup = snapshot_setup(setup, retained_manifest)
+    except ValueError:
+        return run.refuse(
+            "setup_required",
+            "The saved drive channels do not match this snapshot. "
+            "Choose them again in WG, then solve.",
+        )
+    if effective_setup is not setup:
+        setup = effective_setup
+        revision = store.create_setup_revision(setup_content(setup), setup_digest(setup))
+        revision_id = str(revision["revision_id"])
+        # Freeze the effective snapshot-owned inputs before meshing or resuming.
+        run.advance(cad={"setup": _setup_record(store, revision_id)})
     solver_frame = resolve_solver_frame(
         store, retained_manifest, manifest_sha256, automatic=True
     )

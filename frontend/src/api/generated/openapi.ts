@@ -4449,6 +4449,10 @@ export interface components {
             source_size_mm: {
                 [key: string]: number;
             };
+            /** Surface Groups */
+            surface_groups?: {
+                [key: string]: unknown;
+            }[] | null;
             /** Transition Mm */
             transition_mm: number;
         };

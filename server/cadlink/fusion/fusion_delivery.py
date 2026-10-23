@@ -130,6 +130,7 @@ def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:
         "sourceIdentity": SOURCE_IDENTITY,
         "documentUp": DOCUMENT_UP,
         "automaticDomain": AUTOMATIC_DOMAIN,
+        "meshSizing": 1,
     }
     # Protocol support is static and independent of Onshape/capture settings.
     # Job admission separately requires an available official BEAT engine.

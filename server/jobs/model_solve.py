@@ -68,6 +68,7 @@ from server.jobs.imported_setup import (
     setup_content,
     setup_digest,
     setup_of_request,
+    snapshot_setup,
     validate_setup,
 )
 from server.jobs.models import CadApprovalsRequest, ImportedGeometrySource, SolveRequest
@@ -174,14 +175,17 @@ def inputs_digest(setup: CadSolveSetup) -> str:
     return setup_digest(setup.model_copy(update={"label": None}))
 
 
-def _revision_inputs(store: Any, revision_id: str | None, cache: dict[str, str | None]) -> str | None:
+def _revision_inputs(
+    store: Any, revision_id: str | None, cache: dict[str, str | None],
+    manifest: Mapping[str, Any] | None = None,
+) -> str | None:
     if not revision_id:
         return None
     if revision_id not in cache:
         row = store.get_setup_revision(revision_id)
         try:
             cache[revision_id] = (
-                inputs_digest(CadSolveSetup.model_validate(json.loads(row["setup_json"])))
+                inputs_digest(snapshot_setup(CadSolveSetup.model_validate(json.loads(row["setup_json"])), manifest or {}))
                 if row is not None else None
             )
         except (TypeError, ValueError):
@@ -259,6 +263,9 @@ class SolveTarget:
     domain: Any = None
     compare_domain: bool = False
     adopts: bool = False
+    # Validated retained snapshot, only for comparing new CAD solves. Exact
+    # stored-request replays leave this absent and keep their recorded inputs.
+    manifest: Mapping[str, Any] | None = None
 
 
 def _is_defaults(store: Any, revision_id: str | None) -> bool:
@@ -296,7 +303,7 @@ def _matches(
                 saved = store.get_model_setup(model_id, inventory_sha256(record.get("sources") or []))
                 standing.append(str(saved["revision_id"]) if saved else None)
             revision = standing[0]
-        if _revision_inputs(store, revision, cache) != target.inputs:
+        if _revision_inputs(store, revision, cache, target.manifest) != target.inputs:
             return None
     if prepared_row is not None:
         frame, domain = record_identity(json.loads(prepared_row["record_json"]))
@@ -486,7 +493,7 @@ def _bind_press(store: Any, model_id: str, body: ModelSolveRequest, job_id: str)
 
 
 def _lane_target(
-    store: Any, data_dir: Path, record: Mapping[str, Any], inputs: str, *, adopts: bool
+    store: Any, data_dir: Path, record: Mapping[str, Any], setup: CadSolveSetup, *, adopts: bool
 ) -> SolveTarget | None:
     """The frame and domain plan the preparation lane would prepare this snapshot under now.
 
@@ -498,15 +505,18 @@ def _lane_target(
     manifest_sha256 = str(record.get("manifest_sha256") or "")
     try:
         manifest = read_snapshot(retained_snapshot_path(data_dir, manifest_sha256), retained=True).manifest
+        effective_setup = snapshot_setup(setup, manifest)
     except (OSError, ValueError):
+        # Preparation owns the refusal if this setup cannot drive the snapshot.
         return None
     solver_frame = resolve_for_manifest(store, manifest, manifest_sha256, automatic=True)
     return SolveTarget(
-        inputs=inputs,
+        inputs=inputs_digest(effective_setup),
         frame=resolution_identity(solver_frame) if solver_frame is not None else None,
         domain=resolve_domain_plan(store, manifest, manifest_sha256).identity(),
         compare_domain=True,
         adopts=adopts,
+        manifest=manifest,
     )
 
 
@@ -696,7 +706,6 @@ async def _solve_cad(
     else:
         _refuse_restart(runtime)
     setup, revision_id = await asyncio.to_thread(_resolve_setup, store, body)
-    inputs = inputs_digest(setup)
     adopts = model_id != UNFILED_MODEL_ID
     async with _model_lock(model_id):
         # The axis the press showed is confirmed first: the frame it is
@@ -704,7 +713,7 @@ async def _solve_cad(
         frame_axis = await asyncio.to_thread(_press_frame, store, record, body.frame_axis)
         press = _press(body, revision_id, frame_axis)
         target = await asyncio.to_thread(
-            _lane_target, store, Path(state.data_dir), record, inputs, adopts=adopts
+            _lane_target, store, Path(state.data_dir), record, setup, adopts=adopts
         )
         if started is None and target is not None:
             match = await asyncio.to_thread(active_model_match, runtime, store, model_id, record, target)
@@ -721,7 +730,7 @@ async def _solve_cad(
         )
         if refused is not None:
             held = _job_target(refused)[2]
-            if held and held != revision_id and _revision_inputs(store, held, {}) == inputs:
+            if held and held != revision_id and _revision_inputs(store, held, {}, target.manifest) == target.inputs:
                 # The same settings under another name: keep the revision the
                 # refused solve holds, so its preparation (and the approvals on
                 # it) is resumed rather than made again.

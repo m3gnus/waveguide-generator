@@ -53,6 +53,7 @@ def test_capabilities_advertise_source_identity_without_changing_delivery(
         "sourceIdentity": 1,
         "documentUp": 1,
         "automaticDomain": 1,
+        "meshSizing": 1,
         "femRegions": 1,
     }
     monkeypatch.setenv("WG2_FEM_REGIONS", "0")

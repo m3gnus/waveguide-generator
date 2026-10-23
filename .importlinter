@@ -117,6 +117,7 @@ layers =
     identity
     interpretation
     wgreturn : operations : roles : usage : ipc : build_flags
+    snapshot_mesh
     wglink_protocol : limits
 exhaustive = true
 unmatched_ignore_imports_alerting = error

@@ -71,10 +71,16 @@ def packaged(tmp_path_factory: pytest.TempPathFactory):
     checkout = _run("git", "checkout", "--quiet", "--detach", "FETCH_HEAD", cwd=source)
     assert checkout.returncode == 0, checkout.stderr
     assert _run("git", "rev-parse", "HEAD", cwd=source).stdout.strip() == PIN["commit"]
-    archive = build_wglink_package.build_package(source, root / "wglink.zip")
+    return _package_source(source, root, PIN)
+
+
+def _package_source(source: Path, root: Path, spec: dict) -> Path:
+    """Exercise the shipping package builder against an explicit pair fixture."""
+
+    archive = build_wglink_package.build_package(source, root / "wglink.zip", spec=spec)
     with zipfile.ZipFile(archive) as bundle:
         provenance = json.loads(bundle.read("wglink/provenance.json"))
-        assert provenance["sourceCommit"] == PIN["commit"]
+        assert provenance["sourceCommit"] == spec["commit"]
         assert set(bundle.namelist()) == set(provenance["files"]) | {"wglink/provenance.json"}
         for name, digest in provenance["files"].items():
             assert _sha(bundle.read(name)) == digest, name

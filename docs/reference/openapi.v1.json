@@ -6180,6 +6180,21 @@
             "title": "Source Size Mm",
             "type": "object"
           },
+          "surface_groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Surface Groups"
+          },
           "transition_mm": {
             "exclusiveMinimum": 0.0,
             "title": "Transition Mm",
