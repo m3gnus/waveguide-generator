@@ -33,6 +33,7 @@ class Reservation:
     deadline: float
     active: int = 0
     released: bool = False
+    archive_guard: Any = None
 
 
 class AutoExportOwner:
@@ -45,6 +46,8 @@ class AutoExportOwner:
     def _expire(self) -> None:
         owner = self.owner
         if owner and (owner.released or owner.deadline <= self.clock()) and not owner.active:
+            if owner.archive_guard is not None:
+                owner.archive_guard.__exit__(None, None, None)
             self.owner = None
 
     def _require(self, token: str) -> Reservation:
@@ -83,20 +86,40 @@ class AutoExportOwner:
                 return {"claimed": False, "busy": False}
             token = secrets.token_urlsafe(32)
             timestamp = datetime.now(timezone.utc).isoformat()
-            await self.runtime.patch_metadata(
-                job_id,
-                {
-                    "auto_export_formats": {
-                        f: {
-                            "status": "blocked",
-                            "attempted_at": timestamp,
-                            "reason": "Automatic export was interrupted or is still running. Retry after resolving any destination conflicts.",
+            from server.workspace.archive_identity import archive_root, job_archive_location
+            from server.workspace.run_moves import archive_write, MoveRefused
+            from pathlib import Path
+
+            guard = None
+            root = archive_root(getattr(self.runtime, "cadlink_store", None))
+            if root is not None:
+                row = self.runtime.store.get_job_row(job_id)
+                location = job_archive_location(row)
+                path = (row.get("task_metadata") or {}).get("archived_path")
+                guard = archive_write(Path(path) if path else root / location.folder)
+                try:
+                    guard.__enter__()
+                except MoveRefused as exc:
+                    raise HTTPException(409, str(exc)) from exc
+            try:
+                await self.runtime.patch_metadata(
+                    job_id,
+                    {
+                        "auto_export_formats": {
+                            f: {
+                                "status": "blocked",
+                                "attempted_at": timestamp,
+                                "reason": "Automatic export was interrupted or is still running. Retry after resolving any destination conflicts.",
+                            }
+                            for f in pending
                         }
-                        for f in pending
-                    }
-                },
-            )
-            self.owner = Reservation(token, job_id, pending, formats, self.clock() + LEASE_SECONDS)
+                    },
+                )
+                self.owner = Reservation(token, job_id, pending, formats, self.clock() + LEASE_SECONDS, archive_guard=guard)
+            except BaseException:
+                if guard is not None:
+                    guard.__exit__(None, None, None)
+                raise
             return {"claimed": True, "token": token, "formats": pending, "job": job}
 
     async def heartbeat(self, token: str) -> None:
@@ -138,6 +161,8 @@ class AutoExportOwner:
                 )
                 changes.update(exported_files=files, auto_export_completed_at=completed)
             await self.runtime.patch_metadata(owner.job_id, changes)
+            if owner.archive_guard is not None:
+                owner.archive_guard.__exit__(None, None, None)
             self.owner = None
 
     async def release(self, token: str) -> None:

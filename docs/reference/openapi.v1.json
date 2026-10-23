@@ -2226,6 +2226,20 @@
         "title": "ConfigBlock",
         "type": "object"
       },
+      "ConfirmRunMove": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmed": {
+            "title": "Confirmed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "confirmed"
+        ],
+        "title": "ConfirmRunMove",
+        "type": "object"
+      },
       "Contour": {
         "additionalProperties": false,
         "properties": {
@@ -10195,6 +10209,53 @@
           "document"
         ],
         "title": "PresetWrite",
+        "type": "object"
+      },
+      "PreviewRunMove": {
+        "additionalProperties": false,
+        "properties": {
+          "gather": {
+            "default": true,
+            "title": "Gather",
+            "type": "boolean"
+          },
+          "key": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Key",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "rename": {
+            "default": false,
+            "title": "Rename",
+            "type": "boolean"
+          },
+          "selected": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected"
+          }
+        },
+        "required": [
+          "key",
+          "name"
+        ],
+        "title": "PreviewRunMove",
         "type": "object"
       },
       "ROSSEConfig": {
@@ -19100,6 +19161,196 @@
           }
         },
         "summary": "Workspace Path",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/workspace/run-moves/preview": {
+      "post": {
+        "description": "Read-only scan and immutable preview; never moves folders.",
+        "operationId": "preview_api_workspace_run_moves_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewRunMove"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Preview Api Workspace Run Moves Preview Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/workspace/run-moves/recover": {
+      "post": {
+        "description": "Retry journal recovery after reconnecting a drive or closing an open file.",
+        "operationId": "recover_api_workspace_run_moves_recover_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Recover Api Workspace Run Moves Recover Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Recover",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/workspace/run-moves/status": {
+      "get": {
+        "operationId": "status_api_workspace_run_moves_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Status Api Workspace Run Moves Status Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Status",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/workspace/run-moves/{move_id}/execute": {
+      "post": {
+        "description": "Execute only the saved preview explicitly confirmed by the user.",
+        "operationId": "execute_api_workspace_run_moves__move_id__execute_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "move_id",
+            "required": true,
+            "schema": {
+              "title": "Move Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmRunMove"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Execute Api Workspace Run Moves  Move Id  Execute Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/workspace/run-moves/{move_id}/undo": {
+      "post": {
+        "operationId": "undo_api_workspace_run_moves__move_id__undo_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "move_id",
+            "required": true,
+            "schema": {
+              "title": "Move Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Undo Api Workspace Run Moves  Move Id  Undo Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Undo",
         "tags": [
           "workspace"
         ]

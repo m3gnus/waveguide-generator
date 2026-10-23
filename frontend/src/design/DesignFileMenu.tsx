@@ -1,3 +1,4 @@
+import { MoveRunsButton } from '../shell/MoveRunsDialog';
 import { mintDesignUid } from '../stores/designUid';
 import { inspectDesignFile, rememberDesignFile, designFileSource } from './designFiles';
 import { SharedDesignIdDialog, type SharedDesignQuestion } from './SharedDesignIdDialog';
@@ -144,6 +145,7 @@ export function DesignFileMenu() {
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
   const designName = useDocumentStore((state) => state.designName);
+  const moveIdentity = useDocumentStore((state) => state.identity);
   const designUid = useDocumentStore((state) => state.designUid);
   const classification = useDocumentStore((state) => state.classification);
   const setCadLink = useDocumentStore((state) => state.setCadLink);
@@ -540,6 +542,7 @@ export function DesignFileMenu() {
             <span>{project.filename}</span><span>v{project.editVersion} · {project.exportCount} export{project.exportCount === 1 ? '' : 's'} · {cadProjectReference(project)}</span>
           </button>)}
       </div>}
+      {!copyReason && <MoveRunsButton role="menuitem" target={{ key: moveIdentity?.lineageId ? `lineage:${moveIdentity.lineageId}` : `design:${designUid}`, name: designName }}>Earlier runs of this design…</MoveRunsButton>}
       {copyReason && <div className="design-menu-item" role="note">{copyReason}</div>}
       <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(copyReason)} title={copyReason} onClick={duplicateDesign}><span>Duplicate as new design</span></button>
       <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(copyReason)} title={copyReason} onClick={() => void exportCopy()}><span>Export a copy</span><kbd>{design.formula === 'LOOKUP' ? 'mwg' : 'cfg'}</kbd></button>

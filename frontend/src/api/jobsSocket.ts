@@ -555,6 +555,16 @@ function parseSnapshot(message: JsonRecord): SnapshotMessage | null {
 function sanitizeMetadataChanges(value: unknown): Partial<JobItem> & JsonRecord | null {
   if (!isRecord(value)) return null;
   const patch: Partial<JobItem> & JsonRecord = {};
+  for (const key of ['archive_folder', 'archive_run'] as const) {
+    if (!hasOwn(value, key)) continue;
+    if (typeof value[key] !== 'string') return null;
+    patch[key] = value[key];
+  }
+  for (const key of ['archive_key', 'archived_path'] as const) {
+    if (!hasOwn(value, key)) continue;
+    if (!isNullableString(value[key])) return null;
+    patch[key] = value[key];
+  }
   if (hasOwn(value, 'label')) {
     if (!isNullableString(value.label)) return null;
     patch.label = value.label;

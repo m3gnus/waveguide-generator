@@ -993,7 +993,15 @@ def create_cad_workspace_router(state: CadWorkspaceState) -> APIRouter:
     return router
 
 
-def _write_export_sync(
+def _write_export_sync(workspace_path: Path, subdirectory: str, existing: str,
+                       members: list[tuple[str, bytes]]) -> dict[str, Any]:
+    from server.workspace.run_moves import archive_write
+
+    with archive_write(workspace_path / subdirectory):
+        return _write_export_unlocked(workspace_path, subdirectory, existing, members)
+
+
+def _write_export_unlocked(
     workspace_path: Path,
     subdirectory: str,
     existing: str,
@@ -1368,6 +1376,25 @@ def create_workspace_router(
         },
     )
     async def workspace_write_export(request: Request) -> Any:
+        from server.workspace.run_moves import archive_write, MoveRefused
+
+        try:
+            # Root-wide guard also covers unowned old-client exports. Recorded
+            # roots are additionally guarded in claim_run_write_path/the writer.
+            # Guard the configured root even if offline. A one-off destination
+            # can still work while the current Runs drive is disconnected.
+            try:
+                guarded_root = state.path()
+            except WorkspaceUnavailableError as exc:
+                guarded_root = exc.path
+            with archive_write(guarded_root):
+                return await workspace_write_export_guarded(request)
+        except MoveRefused as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except WorkspaceUnavailableError as exc:
+            return _workspace_unavailable_response(exc)
+
+    async def workspace_write_export_guarded(request: Request) -> Any:
         try:
             if isinstance(request, WriteExportRequest):
                 # Direct endpoint calls in unit tests retain the legacy model

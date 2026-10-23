@@ -129,36 +129,73 @@ def _sidecar_matches_digest(sidecar: Path, digest: str) -> bool:
     return str(payload.get("returnStateHash") or "") == digest
 
 
-def cad_document_sidecar(document: Path, digest: str) -> Path | None:
-    """The identifying capture record, for both current and legacy files."""
+def _sidecar_document(sidecar: Path) -> Path | None:
+    """Resolve a WG capture record; checksum aliases stay inside this cad/ folder."""
+    if sidecar.is_symlink():
+        return None
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        alias = data.get("modelFile")
+        if alias is not None:
+            if not isinstance(alias, str) or Path(alias).name != alias or alias in {".", ".."}:
+                return None
+            document = sidecar.parent / alias
+        else:
+            stem = sidecar.name[:-len(".cad.json")] if sidecar.name.endswith(".cad.json") else sidecar.stem
+            document = sidecar.parent / (stem + ".f3d")
+            if not document.is_file():
+                # Keep the legacy discovery contract: the opener reports a
+                # verified non-Fusion attachment as an unsupported type (422).
+                document = next((path for path in sorted(sidecar.parent.iterdir())
+                                 if path.name.startswith(stem + ".") and path.suffix != ".json" and path.is_file()), document)
+        if not document.is_file() or not _unlinked_archive_path(document, sidecar.parent):
+            return None
+        return document
+    except (FileNotFoundError, ValueError, AttributeError):
+        return None
 
-    for sidecar in (document.with_suffix(".cad.json"), document.with_suffix(".json")):
-        if sidecar.is_file() and _sidecar_matches_digest(sidecar, digest):
+
+def cad_document_sidecar(document: Path, digest: str) -> Path | None:
+    """One capture record per state; byte-identical states may share a document."""
+    preferred = [document.with_suffix(".cad.json"), document.with_suffix(".json")]
+    for sidecar in preferred:
+        if (sidecar.is_file() and _sidecar_matches_digest(sidecar, digest)
+                and _sidecar_document(sidecar) == document):
+            return sidecar
+    # Gathered checksum aliases need not carry the document's stem. Do not use
+    # glob: it suppresses directory-read errors required by strict protection.
+    for sidecar in _capture_sidecars(document.parent):
+        if sidecar not in preferred and _sidecar_matches_digest(sidecar, digest) and _sidecar_document(sidecar) == document:
             return sidecar
     return None
+
+
+def _capture_sidecars(directory: Path) -> list[Path]:
+    """Strict enumeration shared by lookup and gather; an absent folder is empty."""
+    if directory.is_symlink() or not directory.is_dir():
+        return []
+    return sorted((path for path in directory.iterdir() if path.suffix == ".json"),
+                  key=lambda path: (not path.name.endswith(".pinned.cad.json"), path.name))
 
 
 def _find_captured_document(
     directory: Path, digest: str,
     verify_document: Callable[[Path], bool] | None = None,
 ) -> Path | None:
-    """Find the full return hash behind a friendly or legacy capture name."""
+    """Find full-state evidence, preferring protected current/legacy/alias pairs.
 
-    if directory.is_symlink() or not directory.is_dir():
-        return None
-    fragment = _digest_fragment(digest)
-    legacy_name = archive_folder_slug(digest, "return")
-    # Path.glob suppresses directory-read errors. Pinning must distinguish an
-    # unreadable directory from an absent model before releasing a job reference.
-    candidates = [path for path in directory.iterdir()
-                  if f"_{fragment}." in path.name or path.name.startswith(legacy_name + ".")]
-    for candidate in sorted(candidates, key=lambda path: (not path.stem.endswith(".pinned"), path.name)):
-        if candidate.suffix == ".json" or candidate.is_symlink() or not candidate.is_file():
-            continue
-        if cad_document_sidecar(candidate, digest) is None:
-            continue
-        if verify_document is None or verify_document(candidate):
-            return candidate
+    Names are only a preference: gathered aliases identify by sidecar digest.
+    Read errors propagate so protection never releases a job as if files were absent.
+    """
+    candidates = []
+    for sidecar in _capture_sidecars(directory):
+        if _sidecar_matches_digest(sidecar, digest):
+            document = _sidecar_document(sidecar)
+            if document is not None:
+                candidates.append(document)
+    for document in sorted(set(candidates), key=lambda path: (not path.stem.endswith(".pinned"), path.name)):
+        if verify_document is None or verify_document(document):
+            return document
     return None
 
 
@@ -238,7 +275,9 @@ def reclaim_captured_documents(
 ) -> None:
     """Drop released unpinned captures, preserving the newest and all pins."""
 
-    with _CAD_DOCUMENT_LOCK:
+    from server.workspace.run_moves import archive_write
+
+    with archive_write(design_archive_folder(runs_root, stem)), _CAD_DOCUMENT_LOCK:
         directory = design_archive_folder(runs_root, stem) / CAD_SUBDIRECTORY
         entries = _captured_documents(directory)
         if len(entries) < 2 or any(not entry.captured_at for entry in entries):
@@ -272,7 +311,9 @@ def archive_cad_document(
     version (including a pinned version) changes neither bytes nor sidecar.
     """
 
-    with _CAD_DOCUMENT_LOCK:
+    from server.workspace.run_moves import archive_write
+
+    with archive_write(design_archive_folder(runs_root, stem)), _CAD_DOCUMENT_LOCK:
         document = record.get("document")
         document = document if isinstance(document, Mapping) else {}
         member = str(document.get("file") or "")
@@ -338,11 +379,19 @@ def cad_document_sidecars(folder: Path) -> list[Path]:
 
     if not _unlinked_archive_path(folder, folder.parent) or not folder.is_dir():
         return []
-    candidates = [*(folder / CAD_SUBDIRECTORY).glob("*.json"), *folder.rglob("*.cad.json")]
-    return sorted({
-        sidecar for sidecar in candidates
-        if _unlinked_archive_path(sidecar, folder.parent) and sidecar.is_file()
-    })
+    candidates = []
+    pending = [folder]
+    while pending:
+        directory = pending.pop()
+        for path in directory.iterdir():
+            if not _unlinked_archive_path(path, folder.parent):
+                continue
+            if path.is_dir():
+                pending.append(path)
+            elif path.is_file() and (path.name.endswith(".cad.json") or
+                                     (path.parent == folder / CAD_SUBDIRECTORY and path.suffix == ".json")):
+                candidates.append(path)
+    return sorted(candidates)
 
 
 def captured_cad_document(
@@ -406,7 +455,7 @@ def _placed_run_document(
     if not digest or not destination_directory.is_dir():
         return None
     slug = archive_folder_slug(run_stem, "run")
-    for candidate in sorted(destination_directory.glob(f"{slug}.*")):
+    for candidate in sorted(path for path in destination_directory.iterdir() if path.name.startswith(slug + ".")):
         if candidate.suffix.lower() != ".f3d" or candidate.is_symlink() or not candidate.is_file():
             continue
         sidecar = candidate.with_suffix(".cad.json")
@@ -426,7 +475,9 @@ def pin_cad_document(
     pair from older prune enumerators, even after an old capture of this state.
     """
 
-    with _CAD_DOCUMENT_LOCK:
+    from server.workspace.run_moves import archive_write
+
+    with archive_write(design_archive_folder(runs_root, stem)), _CAD_DOCUMENT_LOCK:
         folder = design_archive_folder(runs_root, stem)
         source = captured_cad_document(
             runs_root, stem, return_state_hash, verify_run_document=verify_document,
@@ -434,6 +485,11 @@ def pin_cad_document(
         if source is None:
             return None
         if source.parent == folder / CAD_SUBDIRECTORY:
+            identifying = cad_document_sidecar(source, return_state_hash)
+            if (source.stem.endswith(".pinned") and identifying is not None
+                    and identifying.name.endswith(".cad.json")
+                    and identifying != source.with_suffix(".cad.json")):
+                return source.relative_to(folder).as_posix()
             ordinary = source.with_suffix(".json")
             old_pin = source.with_suffix(".cad.json")
             if old_pin.exists() and (

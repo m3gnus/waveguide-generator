@@ -1,4 +1,5 @@
 import { CurrentModelStatus } from './CurrentModelStatus';
+import { RunMoveRecoveryNotice } from './MoveRunsDialog';
 import { selectJob } from '../jobs/selectJob';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
@@ -504,5 +505,6 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
     {/* Mounted once, for every export surface in the window: the File menu, the
       * Results panel and each run's export menu all ask this one dialog. */}
     <ExportDestinationDialog/>
+    <RunMoveRecoveryNotice/>
   </header>;
 }

@@ -103,7 +103,8 @@ it('does not claim capture was off when the attachment is missing', async () => 
   expect(missing.textContent).toBe('no Fusion file');
   expect(missing.getAttribute('title')).not.toContain('Capture was off');
   expect(missing.getAttribute('title')).toContain('may have been removed');
-  expect(host.querySelector('button')).toBeNull();
+  expect([...host.querySelectorAll('button')].some(button => button.textContent === 'Open in Fusion')).toBe(false);
+  expect(host.textContent).toContain('Move into');
 });
 
 

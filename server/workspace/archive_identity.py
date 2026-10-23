@@ -447,7 +447,10 @@ def claim_run_write_path(jobs: Any, row: Mapping[str, Any], current_root: Any,
     Selection changes affect only runs without a recorded write location.
     Never recreate an unavailable recorded Runs root (for example a missing drive).
     """
-    with jobs._lock:
+    from server.workspace.run_moves import archive_write
+
+    recorded = (row.get("task_metadata") or {}).get("archived_path")
+    with archive_write(Path(recorded).parent if recorded else Path(current_root())), jobs._lock:
         fresh = jobs.get_job_row(row["id"]) or row
         previous = (fresh.get("task_metadata") or {}).get("archived_path")
         location = job_archive_location(fresh, cad_source)
@@ -486,10 +489,13 @@ def write_project_record(
     cad_source: Mapping[str, Any] | None = None,
 ) -> Path:
     """Serialize pointer checks and publication with other registry users."""
-    if store is not None:
-        with store._lock:
-            return _write_project_record(root, row, store, cad_source)
-    return _write_project_record(root, row, store, cad_source)
+    from server.workspace.run_moves import archive_write
+
+    with archive_write(root / job_archive_location(row, cad_source).folder):
+        if store is not None:
+            with store._lock:
+                return _write_project_record(root, row, store, cad_source)
+        return _write_project_record(root, row, store, cad_source)
 
 
 def _write_project_record(
@@ -538,8 +544,8 @@ def _write_project_record(
         "name": _design_name(config, row.get("label")),
         "lineageId": identity if kind == "lineage" else imported.get("anchor_lineage_id"),
         "designId": config.get("design_id") or imported.get("anchor_design_id"),
-        "designUid": config.get("design_uid"),
-        "modelId": imported.get("model_id"),
+        "designUid": identity if kind == "design" else config.get("design_uid"),
+        "modelId": identity if kind == "model" else imported.get("model_id"),
     }
     # Reuse the workspace's atomic JSON writer, without its client boundary.
     from server.platform.json_file import write_json_atomic

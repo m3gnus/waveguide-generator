@@ -62,7 +62,7 @@ The browser never supplies an absolute archive destination.
 Fusion versions live once per return state in `<model>/cad/`. Capture writes a
 `.json` sidecar; `/api/cadlink/runs/archive-document` accepts only `jobId`, verifies
 the captured bytes against the retained manifest, and pins the original by
-renaming its sidecar to `.cad.json`. Pinned versions are never pruned, including
+renaming the model to `.pinned.f3d` and its sidecar to `.pinned.cad.json`. Pinned versions are never pruned, including
 after their jobs leave history. The rename also excludes pins from older WG's
 ordinary-sidecar prune enumerator. Keep mirrors `captureMode: "run"`; the legacy
 `project` setting migrates to Keep, and Don't keep mirrors `"off"`.
@@ -541,3 +541,60 @@ The fine producer metadata and a coarse pending example are captured in
 `shared/preview-fixtures/c2-dimensions-metadata.json` and
 `shared/preview-fixtures/c2-dimensions-pending-metadata.json`.
 The real-mesher server regression skips until the dependency pin supplies C2.
+
+### Moving earlier run archives
+
+Use **Move earlier runs…** from a CAD project’s folder menu, **Earlier runs of
+this design…** from Design, or **From an earlier version · Move into …** in Run
+details. Opening the tool only saves a preview. Identity matches are checked;
+name-only matches and every Untitled match require selection. Changing selection,
+**Gather Fusion files into cad/** (initially checked), or **Rename folder to
+match …** (initially unchecked) creates another preview. **Move N runs** confirms
+that saved preview; paths, counts, byte sizes, methods and old-folder cleanup are
+shown before execution.
+
+`workspace/run_moves.py` owns planning, exclusion, execution, journal recovery and
+undo. Journals live in application data `moves/<id>.json`, never in Runs. Atomic,
+fsynced intent records precede mutations. Exclusive same-volume renames cannot
+replace a concurrent destination. Cross-volume moves stage copies, fsync and
+SHA-256-verify every file across the whole move before removing any original.
+Deletion touches only verified manifest members, rechecks each source and
+retained destination before unlink, and can resume a partially removed tree.
+Unexpected new files remain in place and are reported. Every recovery rechecks
+destination bytes; a past verified marker never licenses later deletion.
+
+Recovery runs before the jobs runtime starts. A pending journal keeps affected
+projects locked after an error; writes answer 409 **Runs are being moved**.
+Capture, pin, pruning, workspace writes and automatic-export reservations share
+the exclusion. Solves can be submitted; existing queued/running/not-yet-archived
+runs in affected folders refuse a new move. Reconnect the drive or close the
+file, then use **Retry recovery**. Startup displays a recovery notice. Ordinary
+previews are never executed at startup.
+
+The journal coordinates separate jobs/CAD database transactions. It updates
+`task_metadata.archive.{key,folder,run,moved}`, `archived_path`, an existing
+`imported_geometry.archive_stem`, and recorded `exported_files` under the moved
+run. One-off export paths elsewhere remain valid. Registry aliases and the
+`lineage_cad_names` / `imported_models` compatibility mirrors follow an explicit
+project rename. Server `design.json` pointers follow the location and current
+name; the durable jobs metadata stream updates other windows. This version has
+no separate export-index file or live `project.json` writer; an opaque
+`project.json` inside a run moves unchanged, and unknown project-level contents
+prevent a whole-folder rename.
+
+**Moved run.json files are byte-for-byte unchanged: no fields, including
+cad.modelFile, are rewritten.** Legacy CAD locations in those immutable records
+remain historical references. Fusion download/open/listing resolve through the
+full return-state hash and retained-manifest verifier. Gather keeps one `.f3d`
+per checksum, named `.pinned.f3d`, and one protected `.cad.json` evidence record per return state. When
+states share identical document bytes, the sidecar’s `modelFile` basename points
+to the shared file inside the same `cad/`; it cannot escape that folder. These
+pinned records stay outside the older-WG ordinary-sidecar prune enumerator.
+
+**Undo this move** is available for completed same-drive moves only. It refuses
+changed files, occupied/linked originals and subsequent archives, restores exact
+original sidecar bytes through fsynced temporary files, and rechecks restored
+originals before removing gathered copies. Undo itself is journaled and
+recoverable. Cross-drive originals have been removed after verification, so that
+move has no undo in this tool. No source outside a known Runs root, unknown job,
+symlink/junction, or not-downloaded File Provider placeholder is accepted.

@@ -971,6 +971,32 @@ def create_app(
         restart_approval=restart_approval,
         settings=settings_store,
     )
+    from server.workspace.run_moves import RunMoves
+    from server.workspace.run_moves_api import create_run_moves_router
+    from server.cadlink.api import _verified_run_document
+    from starlette.requests import Request
+
+    move_request = Request({"type": "http", "app": application})
+    moves = RunMoves(
+        resolved_data_dir, application.state.jobs_runtime.store, application.state.cadlink_store,
+        workspace_state.path,
+        cad_source=lambda row: application.state.jobs_runtime._serialize_job(
+            row, cadlink_store=application.state.cadlink_store).get("cad_source") or {},
+        verify_document=lambda lineage, digest, document: _verified_run_document(
+            move_request, lineage, digest, document, strict_io=True),
+        known_roots=lambda: [resolved_workspace_dir, workspace_state.default_path, *workspace_state.legacy_defaults],
+    )
+    application.state.run_moves = moves
+    application.include_router(create_run_moves_router(moves, application.state.jobs_runtime.events.publish))
+
+    async def recover_run_moves() -> None:
+        application.state.recovered_run_moves = await asyncio.to_thread(moves.recover)
+        for event in moves.take_events():
+            application.state.jobs_runtime.events.publish(event)
+
+    # Recover before runtime.start, which can resume queued jobs and archive work.
+    application.router.on_startup.insert(0, recover_run_moves)
+
     from server.jobs.models_api import mount_models_api
 
     mount_models_api(application)

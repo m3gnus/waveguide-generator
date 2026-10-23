@@ -1,3 +1,4 @@
+import { MoveRunsButton } from './MoveRunsDialog';
 import { useEffect, useState } from 'react';
 import { runDocumentName, runSourceLabel } from '../jobs/runIdentity';
 import { runSourceForJob } from '../jobs/exportNaming';
@@ -9,6 +10,8 @@ import { listProjectDocuments, openProjectDocument, projectDocumentUrl, type Cad
 /** Optional CAD attachments decorate the shared run; their failure cannot hide it. */
 export function RunModelDetails({ job }: { job: JobItem }) {
   const runModel = modelForRun(job);
+  const currentUid = useDocumentStore(state => state.designUid);
+  const openName = useDocumentStore(state => state.designName);
   const currentName = useDocumentStore(state => job.design_uid && state.designUid === job.design_uid ? state.designName : null);
   const lineage = job.cad_source?.lineage_id ?? job.cad_state?.snapshot?.project_lineage_id;
   const hash = job.cad_source?.return_state_hash;
@@ -74,6 +77,9 @@ export function RunModelDetails({ job }: { job: JobItem }) {
       <dt>Model hash</dt><dd>{modelHash || 'Not recorded'}</dd>
     </dl>
     {runSourceForJob(job) !== 'mesh-file' && attachment}
+    <MoveRunsButton target={{ key: lineage ? `lineage:${lineage}` : `design:${job.design_uid || currentUid}`, name: currentName || (!job.design_uid && !lineage ? openName : job.design_name) || document }}>
+      {!job.archive_key ? `From an earlier version · Move into ${currentName || (!job.design_uid && !lineage ? openName : job.design_name) || document}…` : 'Move earlier runs…'}
+    </MoveRunsButton>
   </section>;
 
 }

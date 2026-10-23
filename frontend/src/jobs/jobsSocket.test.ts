@@ -440,6 +440,11 @@ describe('jobs websocket state machine', () => {
     const changed = JSON.parse(`{
       "label":"kept",
       "rating":5,
+      "archive_key":"design:wgu_moved",
+      "archive_folder":"Moved",
+      "archive_run":"1_run",
+      "archived_path":"/WG/runs/Moved/1_run",
+      "exported_files":["/WG/runs/Moved/1_run/exports/one.csv"],
       "id":"attacker",
       "run_number":999,
       "status":"complete",
@@ -458,6 +463,8 @@ describe('jobs websocket state machine', () => {
     expect(manager.getSnapshot().jobs[0]).toMatchObject({
       id: 'job-1', run_number: 1, status: 'queued', progress: 0,
       created_at: '2026-08-03T10:00:00Z', log_tail: [], label: 'kept', rating: 5,
+      archive_key: 'design:wgu_moved', archive_folder: 'Moved', archive_run: '1_run',
+      archived_path: '/WG/runs/Moved/1_run', exported_files: ['/WG/runs/Moved/1_run/exports/one.csv'],
     });
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
 

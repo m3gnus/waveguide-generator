@@ -1,3 +1,4 @@
+import { MoveRunsButton } from './MoveRunsDialog';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   cadProjectName,
@@ -206,7 +207,7 @@ function ProjectSwitcher({ current, label, onOpened, onError }: {
  * change made in either place names the same folder everywhere.
  */
 function ProjectOverflowMenu({ project, onNotice, onError }: {
-  project: { lineageId: string; archiveFolder: string | null } | null;
+  project: { lineageId: string; name: string; archiveFolder: string | null } | null;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
 }) {
@@ -234,6 +235,7 @@ function ProjectOverflowMenu({ project, onNotice, onError }: {
     >⋯</button>
     {open && <div role="menu" aria-label="Project folders" className="cad-project-menu cad-overflow-menu">
       {project && <button role="menuitem" title={`Open project folder: ${project.archiveFolder ?? 'not yet claimed'}/`} onClick={() => void reveal()}><Icon name="folder"/>Open project folder</button>}
+      {project && <MoveRunsButton role="menuitem" target={{ key: `lineage:${project.lineageId}`, name: project.name }}/>}
       <button role="menuitem" disabled={!folder.path || folder.busy !== null} title="Open the Runs folder every CAD project is archived under. Its effective path is shown in Settings → WG folder." onClick={() => { setOpen(false); void folder.open(); }}><Icon name="folder"/>Open Runs folder</button>
       <button role="menuitem" disabled={folder.busy !== null} title="Choose the WG folder. Existing overrides and files are kept." onClick={() => { setOpen(false); void folder.select(); }}>Change WG folder…</button>
       <div className="cad-overflow-path" title={folder.path ?? undefined}>{folder.path ?? (folder.loaded ? 'Runs folder unavailable' : 'Loading…')}</div>
