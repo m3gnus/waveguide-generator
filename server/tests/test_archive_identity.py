@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
+import random
 import sqlite3
 
 import pytest
@@ -464,6 +465,105 @@ def test_downgrade_mirror_collision_backfill_does_not_share_owner(tmp_path, capl
     assert "mirror ownership conflict" in caplog.text
     # The design must also avoid the old lineage's on-disk runs on next claim.
     assert identity.claim_project_folder(store, f"design:{UID}", "Horn") == "Horn-3"
+
+
+def test_downgrade_backfill_reserves_pending_lineage_mirror(tmp_path, caplog):
+    store, _ = registry(tmp_path)
+    assert identity.claim_project_folder(store, f"design:{UID}", "Horn") == "Horn"
+    with store._transaction() as conn:
+        conn.executemany(
+            "INSERT INTO lineage_cad_names (lineage_id, archive_stem, created_at, updated_at) "
+            "VALUES (?, ?, 'then', 'then')",
+            [("wgl_first", "Horn"), ("wgl_pending", "Horn-2")],
+        )
+    store.close()
+    store.initialize()
+    assert identity.registered_folder(store, f"design:{UID}") == "Horn"
+    for lineage, expected in [("wgl_first", "Horn-3"), ("wgl_pending", "Horn-2")]:
+        assert identity.registered_folder(store, f"lineage:{lineage}") == expected
+        assert store.get_lineage_cad_names(lineage)["archive_stem"] == expected
+    assert "mirror ownership conflict" in caplog.text
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_downgrade_backfill_reserves_all_mirrors_in_random_order(tmp_path, seed):
+    store, _ = registry(tmp_path)
+    occupied = {"Horn", "Horn-2", "Horn-3"}
+    for folder in sorted(occupied):
+        assert identity.claim_project_folder(store, f"design:{folder}", folder) == folder
+    mirrors = [
+        (table, column, prefix, f"{prefix}{n}", folder)
+        for table, column, prefix in [
+            ("lineage_cad_names", "lineage_id", "lineage:"),
+            ("imported_models", "model_id", "model:mesh-file:"),
+        ]
+        for n, folder in enumerate(["horn", "Horn-2", "HORN-3", "Horn-2-2", "Horn-4"])
+    ]
+    random.Random(seed).shuffle(mirrors)
+    with store._transaction() as conn:
+        for table, column, prefix, mirror_id, folder in mirrors:
+            if table == "lineage_cad_names":
+                conn.execute(
+                    "INSERT INTO lineage_cad_names (lineage_id, archive_stem, created_at, updated_at) "
+                    "VALUES (?, ?, 'then', 'then')",
+                    (mirror_id, folder),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO imported_models (model_id, producer, display_name, archive_stem, created_at, updated_at) "
+                    "VALUES (?, 'mesh-file', 'mesh', ?, 'then', 'then')",
+                    (mirror_id.removeprefix("model:"), folder),
+                )
+    store.close()
+    store.initialize()
+    reserved = {folder.casefold() for folder in occupied}
+    reserved.update(folder.casefold() for *_, folder in mirrors)
+    allocated = {}
+    for table, column, prefix, mirror_id, old_folder in mirrors:
+        key = f"lineage:{mirror_id}" if table == "lineage_cad_names" else mirror_id
+        folder = identity.registered_folder(store, key)
+        assert folder is not None
+        if folder != old_folder:
+            assert folder.casefold() not in reserved
+        assert folder.casefold() not in allocated.values()
+        allocated[key] = folder.casefold()
+        actual_id = mirror_id.removeprefix("model:") if table == "imported_models" else mirror_id
+        assert store._read_one(
+            f"SELECT archive_stem FROM {table} WHERE {column}=?", (actual_id,)
+        )["archive_stem"] == folder
+    for folder in occupied:
+        assert identity.registered_folder(store, f"design:{folder}") == folder
+    store.close()
+    store.initialize()
+    assert {key: identity.registered_folder(store, key).casefold() for key in allocated} == allocated
+
+
+def test_backfill_folder_conflict_logs_and_continues_initialization(tmp_path, caplog):
+    store, _ = registry(tmp_path)
+    identity.claim_project_folder(store, f"design:{UID}", "Horn")
+    with store._transaction() as conn:
+        conn.executemany(
+            "INSERT INTO lineage_cad_names (lineage_id, archive_stem, created_at, updated_at) "
+            "VALUES (?, ?, 'then', 'then')",
+            [("wgl_conflict", "Horn"), ("wgl_next", "Other")],
+        )
+        conn.execute("""CREATE TRIGGER reject_mirror_update BEFORE UPDATE OF archive_stem
+            ON lineage_cad_names WHEN OLD.lineage_id = 'wgl_conflict'
+            BEGIN SELECT RAISE(ABORT, 'folder conflict'); END""")
+    store.close()
+    store.initialize()
+    assert store.get_lineage_cad_names("wgl_conflict")["archive_stem"] == "Horn"
+    assert identity.registered_folder(store, "lineage:wgl_conflict") is None
+    assert identity.registered_folder(store, "lineage:wgl_next") == "Other"
+    assert identity.registered_folder(store, f"design:{UID}") == "Horn"
+    assert "folder conflict" in caplog.text
+    # A failed row leaves no partial claim and is retried on the next open.
+    with store._transaction() as conn:
+        conn.execute("DROP TRIGGER reject_mirror_update")
+    store.close()
+    store.initialize()
+    assert identity.registered_folder(store, "lineage:wgl_conflict") == "Horn-2"
+    assert store.get_lineage_cad_names("wgl_conflict")["archive_stem"] == "Horn-2"
 
 
 @pytest.mark.parametrize("name", ["CON", "CON.txt", "PRN", "AUX", "NUL", "COM1", "COM9.log", "LPT1", "LPT9.txt", "name.", "name ", 'bad:name?', "x" * 300])

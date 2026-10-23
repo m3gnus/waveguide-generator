@@ -54,6 +54,7 @@ def initialize_registry(conn: sqlite3.Connection) -> None:
         owner_key TEXT PRIMARY KEY, folder TEXT NOT NULL COLLATE NOCASE,
         created_at TEXT NOT NULL)""")
     conn.execute("CREATE INDEX IF NOT EXISTS archive_folders_by_folder ON archive_folders(folder)")
+    mirrors = []
     for table, column, prefix in (
         ("lineage_cad_names", "lineage_id", "lineage:"),
         ("imported_models", "model_id", "model:"),
@@ -69,12 +70,32 @@ def initialize_registry(conn: sqlite3.Connection) -> None:
                 if table == "imported_models" and not identity.startswith("mesh-file:")
                 else prefix + identity
             )
-            if conn.execute("SELECT 1 FROM archive_folders WHERE owner_key=?", (key,)).fetchone():
-                continue
-            folder = claim_in_transaction(conn, key, row[1])
-            if folder != row[1]:
-                logger.warning("Archive mirror ownership conflict for %s; new runs use %s instead of %s", key, folder, row[1])
+            mirrors.append((table, column, identity, key, str(row[1])))
+
+    # Keep every original location reserved, including rows not yet registered
+    # and locations whose mirror moves below. Older releases can add mirrors
+    # without consulting the registry, and lineage stems have a unique index.
+    reserved = {folder.casefold() for *_, folder in mirrors}
+    reserved.update(str(row[0]).casefold() for row in conn.execute("SELECT folder FROM archive_folders"))
+    for table, column, identity, key, old_folder in mirrors:
+        if conn.execute("SELECT 1 FROM archive_folders WHERE owner_key=?", (key,)).fetchone():
+            continue
+        conn.execute("SAVEPOINT archive_mirror_backfill")
+        try:
+            folder = claim_in_transaction(
+                conn, key, old_folder,
+                reserved_folders=reserved - {old_folder.casefold()},
+            )
+            if folder != old_folder:
                 conn.execute(f"UPDATE {table} SET archive_stem=? WHERE {column}=?", (folder, identity))
+                logger.warning("Archive mirror ownership conflict for %s; new runs use %s instead of %s", key, folder, old_folder)
+        except (sqlite3.IntegrityError, ValueError) as exc:
+            # A conflicting mirror must not prevent the rest of the database
+            # from opening. Roll back its claim too, then retry on next open.
+            conn.execute("ROLLBACK TO archive_mirror_backfill")
+            logger.warning("Archive mirror backfill conflict for %s; leaving %s unchanged: %s", key, old_folder, exc)
+        finally:
+            conn.execute("RELEASE archive_mirror_backfill")
 
 
 def _now() -> str:
@@ -192,7 +213,9 @@ def claim_in_transaction(
     root: Path | None = None,
     aliases: tuple[str, ...] = (),
     adopt_aliases: tuple[str, ...] = (),
+    reserved_folders: set[str] | frozenset[str] = frozenset(),
 ) -> str:
+    # Backfill supplies case-folded locations held by other legacy mirrors.
     rows = {str(r[0]): str(r[1]) for r in conn.execute("SELECT owner_key, folder FROM archive_folders")}
     disk: dict[str, Path] = {}
     if root is not None:
@@ -207,6 +230,8 @@ def claim_in_transaction(
     allowed = {key, *adopt_aliases, *shared, *adopted_owners}
 
     def taken(candidate: str) -> bool:
+        if candidate.casefold() in reserved_folders:
+            return True
         if key.startswith("lineage:") and any(
             owner.startswith("lineage:") and owner != key and folder.casefold() == candidate.casefold()
             for owner, folder in rows.items()
