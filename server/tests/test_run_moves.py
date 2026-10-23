@@ -627,8 +627,10 @@ def test_route_confirmation_write_lock_events_and_startup_order(tmp_path):
     write = next(route.endpoint for route in create_workspace_router(state).routes if route.path.endswith('/write-export'))
     manager._block(plan)
     with pytest.raises(HTTPException) as locked:
-        asyncio.run(write(WriteExportRequest(subdirectory="any/run", members=[{"relative_path":"one.csv", "text":"x"}])))
+        asyncio.run(write(WriteExportRequest(subdirectory=f"{source.parent.name}/{source.name}", members=[{"relative_path":"one.csv", "text":"x"}])))
     assert locked.value.status_code == 409 and locked.value.detail == "Runs are being moved"
+    asyncio.run(write(WriteExportRequest(subdirectory="any/run", members=[{"relative_path":"one.csv", "text":"x"}])))
+    assert (root / "any/run/one.csv").read_text() == "x"
     result = asyncio.run(endpoint('/{move_id}/execute')(plan["id"], ConfirmRunMove(confirmed=True)))
     assert result["phase"] == "done"
     assert published[-1]["payload"]["changed"]["archive_folder"] == "250728solana"
@@ -1086,8 +1088,10 @@ def test_recovered_undo_revalidates_before_reversing_project_rename(tmp_path, ch
     assert jobs.get_job_row("job1")["task_metadata"]["archive"]["folder"] == "Renamed"
 
 
-def test_submission_waits_for_stuck_rename_and_persists_final_location(tmp_path, monkeypatch):
+@pytest.mark.parametrize("recover", [False, True])
+def test_submissions_return_during_rename_and_reconcile_at_publication(tmp_path, monkeypatch, recover):
     import asyncio
+    from concurrent.futures import ThreadPoolExecutor
     import threading
     from server.engines.registry import EngineInfo, EngineRegistry
     from server.jobs.runtime import JobRuntime
@@ -1101,44 +1105,61 @@ def test_submission_waits_for_stuck_rename_and_persists_final_location(tmp_path,
     identity.write_project_record(root, jobs.get_job_row("job1"), cad)
     plan = manager.preview(key, "Renamed", rename=True)
     rename = moves_module.rename_absent
+    reached, release = threading.Event(), threading.Event()
     def locked(src, dst):
         if Path(src) == source.parent:
-            raise PermissionError(32, "File is open")
+            if recover:
+                raise PermissionError(32, "File is open")
+            reached.set()
+            assert release.wait(10), "test did not release rename"
         return rename(src, dst)
     monkeypatch.setattr(moves_module, "rename_absent", locked)
-    assert "File is open" in manager.execute(plan["id"], confirmed=True)["error"]
+    if recover:
+        assert "File is open" in manager.execute(plan["id"], confirmed=True)["error"]
     runtime = JobRuntime(jobs, cadlink_store=cad)
     runtime.engine_registry = EngineRegistry(detector=lambda: [EngineInfo("dryrun", True, "test", "test")])
     monkeypatch.setattr(runtime, "_ensure_scheduler", lambda: None)
-    waiting = threading.Event()
-    wait = moves_module._MOVE_CHANGED.wait
-    def observe_wait(*args, **kwargs):
-        waiting.set()
-        return wait(*args, **kwargs)
-    monkeypatch.setattr(moves_module._MOVE_CHANGED, "wait", observe_wait)
     request = _request().model_copy(update={"design_uid": UID, "design_name": "Original", "label": "New solve"})
+    other = request.model_copy(update={"design_uid": "wgu_other", "design_name": "Other", "label": "Other solve"})
     async def exercise():
-        submission = asyncio.create_task(runtime.submit(request))
+        # More submissions than shared executor workers catches parked-wait starvation.
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=4))
+        moving = None
         try:
-            assert await asyncio.to_thread(waiting.wait, 5)
-            assert not submission.done()
-            assert len(manager._rows()) == 1
+            if not recover:
+                moving = asyncio.create_task(asyncio.to_thread(manager.execute, plan["id"], confirmed=True))
+                assert await asyncio.to_thread(reached.wait, 5)
+            other_id = await asyncio.wait_for(runtime.submit(other), 5)
+            job_ids = await asyncio.wait_for(asyncio.gather(*(runtime.submit(request) for _ in range(48))), 10)
+            assert all(jobs.get_job_row(job)["task_metadata"]["archive"]["folder"] == "Original" for job in job_ids)
+            other_row = jobs.get_job_row(other_id)
+            assert other_row["task_metadata"]["archive"]["folder"] == "Other"
+            # Project-level exclusion also applies to a run's first write.
+            with pytest.raises(MoveRefused, match="Runs are being moved"):
+                identity.claim_run_write_path(jobs, jobs.get_job_row(job_ids[0]), lambda: root)
+            assert identity.claim_run_write_path(jobs, other_row, lambda: root).parent == root / "Other"
+            with archive_write(root / "Other"):
+                pass
             monkeypatch.setattr(moves_module, "rename_absent", rename)
-            assert manager.recover()[0]["phase"] == "done"
-            job_id = await asyncio.wait_for(submission, 5)
-            metadata = jobs.get_job_row(job_id)["task_metadata"]
-            assert metadata["archive"]["folder"] == "Renamed"
+            release.set()
+            result = (await asyncio.wait_for(asyncio.to_thread(manager.recover), 10))[0] if recover else await asyncio.wait_for(moving, 10)
+            assert result["phase"] == "done", result["error"]
+            for job in job_ids:
+                metadata = jobs.get_job_row(job)["task_metadata"]
+                assert metadata["archive"]["folder"] == "Renamed"
+                assert Path(metadata["archived_path"]).parent == root / "Renamed"
+            assert jobs.get_job_row(other_id)["task_metadata"]["archive"]["folder"] == "Other"
             assert identity.registered_folder(cad, key) == "Renamed"
             assert not source.parent.exists()
         finally:
-            moves_module._BLOCKED.clear()
-            with moves_module._MOVE_CHANGED:
-                moves_module._MOVE_CHANGED.notify_all()
+            release.set()
+            if moving is not None:
+                await moving
             await runtime.shutdown()
     asyncio.run(exercise())
 
 
-def test_recovery_rechecks_busy_and_reconciles_post_journal_jobs(tmp_path):
+def test_recovery_reconciles_queued_post_journal_jobs(tmp_path):
     manager, root, jobs, cad = setup(tmp_path, name="Original")
     _, source = run(manager, root, key=KEY, name="Original", folder="Original")
     identity.write_project_record(root, jobs.get_job_row("job1"), cad)
@@ -1152,11 +1173,162 @@ def test_recovery_rechecks_busy_and_reconciles_post_journal_jobs(tmp_path):
                "imported_geometry": {"archive_stem": "Original"}}}
     jobs.create_job(row)
     manager.after_step = lambda _: None
-    assert "Wait for it to finish" in manager.recover()[0]["error"]
-    assert source.exists()
-    with jobs._transaction() as conn:
-        conn.execute("UPDATE simulation_jobs SET status='cancelled' WHERE id='late'")
     assert manager.recover()[0]["phase"] == "done"
     metadata = jobs.get_job_row("late")["task_metadata"]
     assert metadata["archive"]["folder"] == "Renamed"
     assert metadata["imported_geometry"]["archive_stem"] == "Renamed"
+
+
+@pytest.mark.parametrize("change", ["changed", "unexpected", "finder"])
+def test_cleanup_preserves_and_reports_leftovers_after_journal_write(tmp_path, change):
+    manager, root, jobs, cad = setup(tmp_path)
+    _, source = run(manager, root, key=KEY)
+    identity.write_project_record(root, jobs.get_job_row("job1"), cad)
+    pointer = source.parent / "design.json"
+    if change == "finder":
+        leftover = source.parent / ".DS_Store"
+        leftover.write_bytes(b"Finder data, not WG data")
+    else:
+        leftover = pointer if change == "changed" else source.parent / "foreign.txt"
+    plan = move_plan(manager)
+    def edit(phase):
+        if phase == "cleanup" and change != "finder":
+            leftover.write_bytes(b"edited after journal fsync")
+    manager.after_step = edit
+    report = manager.execute(plan["id"], confirmed=True)
+    assert leftover.read_bytes() == (b"Finder data, not WG data" if change == "finder" else b"edited after journal fsync")
+    assert any(item["path"] == str(leftover) for item in report["leftovers"])
+    if change == "finder":
+        assert report["phase"] == "done", report["error"]
+        assert report["error"] is None
+        assert not pointer.exists()
+        assert all(Path(item["path"]).name != ".DS_Store" for item in report["cleanup"])
+    else:
+        assert report["phase"] != "done"
+        assert "Move needs attention" in report["error"]
+        assert str(leftover) in report["error"]
+    assert (root / "250728solana" / source.name / "result.bin").exists()
+
+
+@pytest.mark.parametrize("phase", ["verified", "jobs_committed", "registry_committed", "pointers_committed"])
+def test_recovery_preserves_edited_design_pointer(tmp_path, phase):
+    manager, root, jobs, cad = setup(tmp_path, name="Original")
+    run(manager, root, key=KEY, name="Original", folder="Original")
+    identity.write_project_record(root, jobs.get_job_row("job1"), cad)
+    plan = manager.preview(KEY, "Renamed", rename=True)
+    crash_at(manager, phase)
+    with pytest.raises(Crash):
+        manager.execute(plan["id"], confirmed=True)
+    pointer = root / "Renamed" / "design.json"
+    edited = json.loads(pointer.read_text())
+    edited["name"] = "User edit while stopped"
+    content = json.dumps(edited).encode()
+    pointer.write_bytes(content)
+    manager.after_step = lambda _: None
+    report = manager.recover()[0]
+    assert report["phase"] != "done"
+    assert str(pointer) in report["error"]
+    assert "kept" in report["error"]
+    assert pointer.read_bytes() == content
+
+
+def test_pointer_rechecked_after_replacement_intent_is_journaled(tmp_path):
+    manager, root, jobs, cad = setup(tmp_path, name="Original")
+    run(manager, root, key=KEY, name="Original", folder="Original")
+    identity.write_project_record(root, jobs.get_job_row("job1"), cad)
+    plan = manager.preview(KEY, "Renamed", rename=True)
+    pointer = root / "Renamed" / "design.json"
+    def edit(phase):
+        record = manager.read(plan["id"])
+        if record.get("pointer_writes"):
+            pointer.write_bytes(b"Changed after pointer intent fsync")
+    manager.after_step = edit
+    report = manager.execute(plan["id"], confirmed=True)
+    assert report["phase"] != "done"
+    assert "Changed design.json was kept" in report["error"]
+    assert pointer.read_bytes() == b"Changed after pointer intent fsync"
+
+
+def test_recovery_replays_reconciled_queued_jobs_after_reference_intent_crash(tmp_path):
+    manager, root, jobs, cad = setup(tmp_path, name="Original")
+    run(manager, root, key=KEY, name="Original", folder="Original")
+    identity.write_project_record(root, jobs.get_job_row("job1"), cad)
+    plan = manager.preview(KEY, "Renamed", rename=True)
+    crash_at(manager, "prepared")
+    with pytest.raises(Crash):
+        manager.execute(plan["id"], confirmed=True)
+    row = {"id": "late", "label": "late", "status": "queued", "created_at": "then", "updated_at": "then", "queued_at": "then",
+           "config_json": {}, "config_summary_json": {}, "task_metadata": {
+               "archive": {"key": KEY, "folder": "Original", "run": "2_late"},
+               "imported_geometry": {"archive_stem": "Original"}}}
+    jobs.create_job(row)
+    crash_at(manager, "reference_intent")
+    with pytest.raises(Crash):
+        manager.recover()
+    manager.after_step = lambda _: None
+    report = manager.recover()[0]
+    assert report["phase"] == "done", report["error"]
+    metadata = jobs.get_job_row("late")["task_metadata"]
+    assert metadata["archive"]["folder"] == "Renamed"
+    assert metadata["imported_geometry"]["archive_stem"] == "Renamed"
+
+
+def test_rename_ignores_other_projects_busy_jobs_and_writers(tmp_path):
+    manager, root, jobs, cad = setup(tmp_path, name="Original")
+    run(manager, root, key=KEY, name="Original", folder="Original")
+    identity.write_project_record(root, jobs.get_job_row("job1"), cad)
+    run(manager, root, 2, key="design:other", name="Other", folder="Other", status="queued", archived=False)
+    with archive_write(root / "Other"):
+        plan = manager.preview(KEY, "Renamed", rename=True)
+        result = manager.execute(plan["id"], confirmed=True)
+    assert result["phase"] == "done", result["error"]
+
+
+def test_first_write_checks_fresh_project_after_reference_reconciliation(tmp_path):
+    manager, root, jobs, cad = setup(tmp_path, name="Original")
+    run(manager, root, key=KEY, name="Original", folder="Original")
+    stale_row = jobs.get_job_row("job1")
+    identity.write_project_record(root, stale_row, cad)
+    plan = manager.preview(KEY, "Renamed", rename=True)
+    assert manager.execute(plan["id"], confirmed=True)["phase"] == "done"
+    moves_module._BLOCKED["another-move"] = [root / "Renamed"]
+    with pytest.raises(MoveRefused, match="Runs are being moved"):
+        identity.claim_run_write_path(jobs, stale_row, lambda: root)
+
+
+def test_undo_reconciles_submission_at_last_reverse_rename_boundary(tmp_path):
+    manager, root, jobs, cad = setup(tmp_path, name="Original")
+    run(manager, root, key=KEY, name="Original", folder="Original")
+    identity.write_project_record(root, jobs.get_job_row("job1"), cad)
+    plan = manager.preview(KEY, "Renamed", rename=True)
+    assert manager.execute(plan["id"], confirmed=True)["phase"] == "done"
+    def submit(phase):
+        if phase == "undone:0":
+            with moves_module.submission_location(cad, {"design_uid": "wgu_test", "design_name": "Original"}, metadata := {}):
+                jobs.create_job({"id": "late", "label": "late", "status": "queued", "created_at": "then", "updated_at": "then", "queued_at": "then",
+                                 "config_json": {}, "config_summary_json": {}, "task_metadata": metadata})
+    manager.after_step = submit
+    result = manager.undo(plan["id"])
+    assert result["phase"] == "undone", result["error"]
+    assert jobs.get_job_row("late")["task_metadata"]["archive"]["folder"] == "Original"
+
+
+def test_cleanup_reports_unknown_file_added_while_unlinking_owned_pointer(tmp_path, monkeypatch):
+    manager, root, jobs, cad = setup(tmp_path)
+    _, source = run(manager, root, key=KEY)
+    identity.write_project_record(root, jobs.get_job_row("job1"), cad)
+    pointer = source.parent / "design.json"
+    foreign = source.parent / "new.txt"
+    plan = move_plan(manager)
+    unlink = Path.unlink
+    def add_file(path, *args, **kwargs):
+        result = unlink(path, *args, **kwargs)
+        if path == pointer:
+            foreign.write_bytes(b"new unowned contents")
+        return result
+    monkeypatch.setattr(Path, "unlink", add_file)
+    report = manager.execute(plan["id"], confirmed=True)
+    assert report["phase"] != "done"
+    assert str(foreign) in report["error"]
+    assert any(item["path"] == str(foreign) for item in report["leftovers"])
+    assert foreign.read_bytes() == b"new unowned contents"

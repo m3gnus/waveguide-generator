@@ -91,3 +91,18 @@ it('announces startup recovery before opening the tool', async () => {
   expect(document.body.textContent).toContain('Recovered 1 earlier-runs move');
   expect(document.body.textContent).toContain('Review move into /WG/runs/250728solana');
 });
+
+it('reports a completed move with preserved Finder leftovers', async () => {
+  fetcher.mockImplementation(async (path: string) => {
+    if (path.endsWith('/status')) return json({ reports: [] });
+    if (path.endsWith('/execute')) return json({ ...preview(), phase: 'done', leftovers: [
+      { path: '/older/Runs/model/.DS_Store', reason: 'No WG-creation evidence; kept', attention: false },
+    ] });
+    return json(preview());
+  });
+  await mount();
+  await act(async () => button('Move 1 run').click());
+  expect(document.body.textContent).toContain('Move complete with leftovers');
+  expect(document.querySelector('[aria-label="Preserved leftovers"]')?.textContent).toContain('/older/Runs/model/.DS_Store');
+  expect(document.body.textContent).toContain('No WG-creation evidence; kept');
+});

@@ -13,7 +13,7 @@ import json
 import logging
 from pathlib import Path
 import sqlite3
-from typing import Any, Mapping, NamedTuple
+from typing import Any, Callable, Mapping, NamedTuple
 import unicodedata
 
 from server.platform.acl_repair import path_has_reparse_point
@@ -449,23 +449,24 @@ def claim_run_write_path(jobs: Any, row: Mapping[str, Any], current_root: Any,
     """
     from server.workspace.run_moves import archive_write
 
-    recorded = (row.get("task_metadata") or {}).get("archived_path")
-    with archive_write(Path(recorded).parent if recorded else Path(current_root())), jobs._lock:
+    with jobs._lock:
         fresh = jobs.get_job_row(row["id"]) or row
         previous = (fresh.get("task_metadata") or {}).get("archived_path")
         location = job_archive_location(fresh, cad_source)
-        if previous:
-            path = Path(previous)
-            root = path.parent.parent
-            if not path.is_absolute() or not root.is_dir():
-                raise RunFolderUnavailableError(root)
-        else:
-            root = Path(current_root())
-            if not root.is_dir():
-                raise RunFolderUnavailableError(root)
-            path = root / location.folder / location.run
-            jobs.mutate_job_metadata(row["id"], {"archived_path": str(path.absolute())})
-        return path
+        project = Path(previous).parent if previous else Path(current_root()) / location.folder
+        with archive_write(project):
+            if previous:
+                path = Path(previous)
+                root = path.parent.parent
+                if not path.is_absolute() or not root.is_dir():
+                    raise RunFolderUnavailableError(root)
+            else:
+                root = Path(current_root())
+                if not root.is_dir():
+                    raise RunFolderUnavailableError(root)
+                path = root / location.folder / location.run
+                jobs.mutate_job_metadata(row["id"], {"archived_path": str(path.absolute())})
+            return path
 
 
 def complete_archive(
@@ -503,6 +504,7 @@ def _write_project_record(
     row: Mapping[str, Any],
     store: Any = None,
     cad_source: Mapping[str, Any] | None = None,
+    *, publish: Callable[[Path, dict], None] | None = None,
 ) -> Path:
     """Create/update our pointer; a foreign pointer never prevents archiving."""
     location = job_archive_location(row, cad_source)
@@ -550,5 +552,5 @@ def _write_project_record(
     # Reuse the workspace's atomic JSON writer, without its client boundary.
     from server.platform.json_file import write_json_atomic
 
-    write_json_atomic(pointer, record)
+    (publish or write_json_atomic)(pointer, record)
     return folder / location.run

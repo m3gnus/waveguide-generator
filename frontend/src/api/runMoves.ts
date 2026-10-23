@@ -12,6 +12,7 @@ export interface RunMove {
   summary: { runs: number; files: number; bytes: number; fusion_files: number; duplicates: number; saved_bytes: number; rename_runs: number; rename_files: number; rename_bytes: number };
   operations: { src: string; dst: string; kind: string; state: string; method: string }[];
   old_folders: string[];
+  leftovers?: { path: string; reason: string; attention: boolean }[];
 }
 async function request<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(`/api/workspace/run-moves${path}`, body === undefined ? undefined : {

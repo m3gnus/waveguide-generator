@@ -94,8 +94,9 @@ export function MoveRunsDialog({ target, onClose }: { target: MoveTarget; onClos
           </>}
         </>}
         {latest && <section aria-label="Move report">
-          <h3>{latest.phase === 'done' ? 'Move complete' : latest.phase === 'undone' ? 'Move undone' : 'Move needs attention'}</h3>
+          <h3>{latest.phase === 'done' ? (latest.leftovers?.length ? 'Move complete with leftovers' : 'Move complete') : latest.phase === 'undone' ? 'Move undone' : 'Move needs attention'}</h3>
           {latest.error && <p role="alert">{latest.error}</p>}
+          {!!latest.leftovers?.length && <ul aria-label="Preserved leftovers">{latest.leftovers.map(item => <li key={item.path}>{item.path} · {item.reason}</li>)}</ul>}
           <ul>{latest.operations.map((op, index) => <li key={index}>{op.src} → {op.dst} · {latest.phase === 'undone' ? 'Restored' : op.state === 'removed' ? (op.kind === 'run' || op.kind === 'rename' ? 'Moved' : 'Gathered') : op.state === 'published' ? 'At destination; finishing move' : 'Not moved'}</li>)}</ul>
           {latest.phase !== 'done' && latest.phase !== 'undone' && <button disabled={busy} onClick={() => void act(async () => {
             const recovered = await recoverRunMoves();

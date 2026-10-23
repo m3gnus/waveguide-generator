@@ -569,20 +569,27 @@ destination bytes; a past verified marker never licenses later deletion.
 Recovered undo uses the same final-tree, subsequent-run and link checks as
 interactive undo before reverse renames, accounting only for journaled restores
 and renames already landed. Folder identity also detects replaced rename roots.
-Gathered deletion targets are verified again immediately before unlink.
+Gathered deletion targets and old-folder cleanup files are verified again
+immediately before unlink, after the deletion intent is journaled. Changed or
+unexpected leftovers are preserved and listed in an attention report. Finder
+`.DS_Store` files lack WG-creation evidence and are always preserved and listed;
+they allow the move to complete with leftovers. Recovery matches `design.json`
+against the preview or an exact journaled pointer replacement before overwriting
+it; an edited pointer is preserved and reported.
 
 Recovery runs before the jobs runtime starts. A pending journal keeps affected
 projects locked after an error; writes answer 409 **Runs are being moved**.
 Capture, pin, pruning, workspace writes and automatic-export reservations share
-the exclusion. A submission for an affected project waits outside the CAD lock
-until its pending move or undo finishes. At job creation (and CAD preparation
-binding), location assignment is repeated under the same CAD lock that moves
-hold from busy-check through reference commit. This closes the gap between
-request composition and durable job creation; the queued job uses the final
-registered folder. Unrelated submissions continue normally. Recovery rechecks
-busy jobs and journals references for jobs added since the move journal (for
-example by an earlier server version). A busy older job refuses recovery until
-it is stopped; an unarchived location is never moved underneath a writer.
+the exclusion, scoped to the affected project folders rather than their Runs
+root. Submissions never wait for moves or recovery. Job creation and CAD
+preparation binding assign and persist locations under the CAD lock. Moves hold
+that lock only for the busy check and reference publication, releasing it during
+filesystem work. At publication, jobs added since the journal whose assignments
+point into a moved project are included in the same reference transaction; the
+registry changes before another submission can assign a location. Recovery uses
+the same reconciliation, including queued later submissions. Their writes to an
+affected folder receive the retryable 409 while the journal is pending. No move
+polling loops or parked submission executor workers are used.
 Existing queued/running/not-yet-archived runs in affected folders refuse a new
 move. Reconnect the drive or close the file, then use **Retry recovery**. Startup displays a recovery notice. Ordinary
 previews are never executed at startup.

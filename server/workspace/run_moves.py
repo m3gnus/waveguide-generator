@@ -32,7 +32,6 @@ class MoveRefused(OSError):
 
 
 _GATE = threading.RLock()
-_MOVE_CHANGED = threading.Condition(_GATE)
 _WRITERS: dict[str, Path] = {}
 _BLOCKED: dict[str, list[Path]] = {}
 
@@ -168,32 +167,21 @@ def _remove_members(path: Path, manifest: dict) -> None:
 
 @contextmanager
 def submission_location(store: Any, config: dict, metadata: dict) -> Iterator[None]:
-    """Wait outside the CAD lock; resolve and persist a job under that lock.
+    """Assign and persist under the short reference-publication CAD lock.
 
-    Move execution/recovery holds the same lock from busy-check through commit.
-    The final assignment therefore cannot race a move's journal or registry update.
+    Pending moves never delay submissions. Publication reconciles assignments
+    made before the registry update; archive writes independently refuse with 409.
     """
     if store is None:
         metadata["archive"] = identity.submission_archive(store, config, metadata)
         yield
         return
-    while True:
-        with store._lock:
-            archive = identity.submission_archive(store, config, metadata)
-            root = identity.archive_root(store)
-            with _MOVE_CHANGED:
-                blocked = any(_overlap(root / archive["folder"], other) if root is not None
-                              else other.name.casefold() == archive["folder"].casefold()
-                              for paths in _BLOCKED.values() for other in paths)
-            if not blocked:
-                metadata["archive"] = archive
-                if metadata.get("imported_geometry") is not None:
-                    metadata["imported_geometry"]["archive_stem"] = archive["folder"]
-                yield
-                return
-        # Timed wait also handles process-local lock reset during shutdown/tests.
-        with _MOVE_CHANGED:
-            _MOVE_CHANGED.wait(timeout=0.1)
+    with store._lock:
+        archive = identity.submission_archive(store, config, metadata)
+        metadata["archive"] = archive
+        if metadata.get("imported_geometry") is not None:
+            metadata["imported_geometry"]["archive_stem"] = archive["folder"]
+        yield
 
 
 class RunMoves:
@@ -345,7 +333,7 @@ class RunMoves:
 
     def preview(self, key: str, name: str, *, selected: list[str] | None = None,
                 gather: bool = True, rename: bool = False) -> dict:
-        with self._mutex, self.cad._lock:
+        with self._mutex:
             root = Path(self.runs_root()).absolute()
             _safe(root)
             if not root.is_dir():
@@ -420,8 +408,9 @@ class RunMoves:
                 candidate["destination"] = candidate["destination"] or str(target / Path(candidate["source"]).name)
                 ancestor = Path(candidate["source"])
                 candidate["method"] = "rename" if ancestor.stat().st_dev == root.stat().st_dev else "copy_verify_remove"
-            affected = [folder, target, *[Path(op["src"]).parent for op in operations]]
-            self._busy(rows, affected, root)
+            affected = [folder, target, *[Path(op["src"]).parent for op in operations if op["kind"] != "rename"]]
+            with self.cad._lock:
+                self._busy(self._rows(), affected, root)
             # Gather existing destination runs as well, even if no earlier runs were selected.
             gather_ops = self._gather(operations, rows, root, folder, target, key) if gather else []
             operations += gather_ops
@@ -430,6 +419,7 @@ class RunMoves:
                     raise MoveRefused("The destination path is too long. Choose a shorter WG folder or design name.")
             record = {"schemaVersion": 1, "id": uuid.uuid4().hex, "created_at": _now(), "phase": "planned",
                       "key": key, "name": name, "root": str(root), "folder": str(folder), "target": str(target),
+                      "pointer_before_bytes": base64.b64encode((folder / "design.json").read_bytes()).decode() if (folder / "design.json").is_file() else None,
                       "pointer_before": (folder / "design.json").read_text(encoding="utf-8") if (folder / "design.json").is_file() else None,
                       "destination_jobs": [row["id"] for row in rows if self._location(row, root).parent in {folder, target}],
                       "operations": operations, "candidates": candidates, "selected": [row["id"] for row, _, _ in chosen],
@@ -450,7 +440,7 @@ class RunMoves:
                 record["old_folders"].append(str(parent))
                 for child in leftovers:
                     _safe(child)
-                    if child.is_file():
+                    if child.name == "design.json" and child.is_file():
                         record["cleanup"].append({"path": str(child), "source_bytes": base64.b64encode(child.read_bytes()).decode()})
             record["summary"] = {"runs": len(chosen), "files": sum(c["files"] for c in candidates if c["job_id"] in record["selected"]),
                                  "bytes": sum(c["bytes"] for c in candidates if c["job_id"] in record["selected"]),
@@ -573,25 +563,33 @@ class RunMoves:
                   content=base64.b64encode(content).decode(), destination_manifest=self._content_manifest(content))
         return op
 
-    def _references(self, record: dict, rows: list[dict]) -> None:
+    def _references(self, record: dict, rows: list[dict], *, undo: bool = False) -> None:
         for row in rows:
             before = self._location(row, Path(record["root"]))
             after = before
             for op in record["operations"]:
                 if op["kind"] in {"rename", "run"}:
-                    src = Path(op["src"])
-                    if _overlap(before, src) and (before == src or src in before.parents):
-                        after = Path(op["dst"]) / before.relative_to(src)
+                    src = Path(op["dst"] if undo else op["src"])
+                    if before == src or src in before.parents:
+                        after = Path(op["src"] if undo else op["dst"]) / before.relative_to(src)
             if before != after:
+                if undo:
+                    before, after = after, before
+                archive = dict((row.get("task_metadata") or {}).get("archive", {}))
+                imported = {key: value for key, value in ((row.get("task_metadata") or {}).get("imported_geometry") or {}).items() if key == "archive_stem"}
+                if undo:
+                    archive.update(folder=before.parent.name, run=before.name)
+                    if imported:
+                        imported["archive_stem"] = before.parent.name
                 record["references"].append({"job_id": row["id"], "before": str(before), "after": str(after),
-                                             "archive": (row.get("task_metadata") or {}).get("archive", {}),
+                                             "archive": archive,
                                              "exported_files": (row.get("task_metadata") or {}).get("exported_files", []),
                                              "source_key": identity.job_archive_location(row, self.cad_source(row)).key,
-                                             "imported_location": {key: value for key, value in ((row.get("task_metadata") or {}).get("imported_geometry") or {}).items() if key == "archive_stem"}})
+                                             "imported_location": imported})
 
     def _block(self, record: dict) -> None:
         paths = [Path(record["folder"]), Path(record["target"])]
-        paths += [Path(op["src"]).parent for op in record["operations"]]
+        paths += [Path(op["src"]).parent for op in record["operations"] if op["kind"] != "rename"]
         with _GATE:
             if any(_overlap(path, writer) for path in paths for writer in _WRITERS.values()):
                 raise MoveRefused("A run in these folders is exporting. Wait for it to finish.")
@@ -602,14 +600,15 @@ class RunMoves:
     def execute(self, move_id: str, *, confirmed: bool = False) -> dict:
         if not confirmed:
             raise MoveRefused("Confirm the preview before moving any files.")
-        with self._mutex, self.cad._lock:
+        with self._mutex:
             record = self.read(move_id)
             if record["phase"] != "planned":
                 return record
             self._block(record)
             try:
-                rows = self._rows()
-                self._busy(rows, _BLOCKED[record["id"]], Path(record["root"]))
+                with self.cad._lock:
+                    rows = self._rows()
+                    self._busy(rows, _BLOCKED[record["id"]], Path(record["root"]))
                 if Path(self.runs_root()).absolute() != Path(record["root"]):
                     raise MoveRefused("The Runs folder changed. Preview the move again.")
                 current_folder = Path(record["folder"])
@@ -638,7 +637,6 @@ class RunMoves:
                     record["phase"] = "refused"
                     with _GATE:
                         _BLOCKED.pop(record["id"], None)
-                        _MOVE_CHANGED.notify_all()
                 self._step(record, record["phase"])
             return record
 
@@ -702,7 +700,6 @@ class RunMoves:
         self._step(record, "done")
         with _GATE:
             _BLOCKED.pop(record["id"], None)
-            _MOVE_CHANGED.notify_all()
 
     def _publish_copy(self, record: dict, op: dict, src: Path, dst: Path) -> None:
         partial = dst.with_name(dst.name + ".partial-" + record["id"])
@@ -768,10 +765,6 @@ class RunMoves:
         for op in record["operations"]:
             for name, evidence in op.get("destination_manifest", op["manifest"])["files"].items():
                 path = Path(op["dst"]) if name == "." else Path(op["dst"]) / name
-                # A server-owned pointer is reconstructed from the journal/rows
-                # after verification. Run records and results always retain hashes.
-                if record.get("all_verified") and path.name == "design.json" and op["kind"] == "rename":
-                    continue
                 for transform in transforms:
                     if path == Path(transform.get("live_src", transform["src"])):
                         path = Path(transform["dst"])
@@ -785,8 +778,44 @@ class RunMoves:
         # Never trust a past verification after a restart. This is repeated
         # before resuming deletion, even if reference commits already landed.
         for member, expected in self._expected_destinations(record).items():
+            if member == Path(record["target"]) / "design.json":
+                self._verify_pointer(record, member)
+                continue
             if not member.is_file() or member.stat().st_size != expected["size"] or _hash(member) != expected["sha256"]:
                 raise MoveRefused(f"Verification failed; remaining originals were kept: {member}")
+
+    def _verify_pointer(self, record: dict, path: Path, *, undo: bool = False) -> None:
+        """Accept only previewed bytes or an exact journaled replacement."""
+        _safe(path)
+        original = record.get("pointer_before")
+        content = base64.b64decode(record["pointer_before_bytes"]) if record.get("pointer_before_bytes") is not None else original.encode() if original is not None else None
+        allowed = [self._content_manifest(content)["files"]["."] if content is not None else None]
+        for op in record["operations"]:
+            if op["kind"] == "rename":
+                allowed = [op["manifest"]["files"].get("design.json")]
+        if undo:
+            final = record["final"].get(str(Path(record["target"])), {})
+            allowed = [final.get("files", {}).get("design.json")]
+        allowed.extend(item["after"] for item in record.get("pointer_writes", []))
+        current = None
+        if path.exists():
+            if not path.is_file():
+                raise MoveRefused(f"Changed design.json was kept: {path}")
+            current = {"size": path.stat().st_size, "sha256": _hash(path)}
+        if current not in allowed:
+            raise MoveRefused(f"Changed design.json was kept: {path}")
+
+    def _replace_pointer(self, record: dict, path: Path, data: dict, *, undo: bool = False) -> None:
+        self._verify_pointer(record, path, undo=undo)
+        evidence = self._content_manifest((json.dumps(data, indent=2) + "\n").encode())["files"]["."]
+        writes = record.setdefault("pointer_writes", [])
+        if not any(item["after"] == evidence for item in writes):
+            writes.append({"path": str(path), "after": evidence})
+            self._step(record, "pointer_intent")
+        # The journal fsync (and any crash hook) precedes this last byte check.
+        self._verify_pointer(record, path, undo=undo)
+        _save(path, data)
+        self.after_step("pointer_replaced:" + str(path))
 
     def _remove_original(self, record: dict, op: dict, src: Path) -> None:
         actual = inventory(src)
@@ -818,7 +847,19 @@ class RunMoves:
             _sync_dir(src.parent)
 
     def _commit_references(self, record: dict, *, undo: bool = False) -> None:
+        with self.cad._lock:
+            known = {ref["job_id"] for ref in record["references"]}
+            self._references(record, [row for row in self._rows() if row["id"] not in known], undo=undo)
+            for ref in record["references"]:
+                if ref["job_id"] not in known:
+                    ref["reconciled"] = True
+            self._step(record, "reference_intent")
+            self._publish_references(record, undo=undo)
+        self._publish_pointers(record, undo=undo)
+
+    def _publish_references(self, record: dict, *, undo: bool = False) -> None:
         # Separate SQLite owners: journal replays both transactions idempotently.
+        self._verify_pointer(record, Path(record["folder"] if undo else record["target"]) / "design.json", undo=undo)
         events = []
         with self.jobs._lock, self.jobs._transaction() as conn:
             for ref in record["references"]:
@@ -869,51 +910,74 @@ class RunMoves:
             conn.execute("UPDATE lineage_cad_names SET archive_stem=? WHERE archive_stem=? COLLATE NOCASE", (new, old))
             conn.execute("UPDATE imported_models SET archive_stem=? WHERE archive_stem=? COLLATE NOCASE", (new, old))
         self.after_step("registry_committed")
+
+    def _publish_pointers(self, record: dict, *, undo: bool = False) -> None:
         if not undo:
             for ref in record["references"]:
                 row = self.jobs.get_job_row(ref["job_id"])
-                identity._write_project_record(Path(ref["after"]).parent.parent, row, self.cad, self.cad_source(row))
+                identity._write_project_record(Path(ref["after"]).parent.parent, row, self.cad, self.cad_source(row),
+                                               publish=lambda path, data: self._replace_pointer(record, path, data))
         # A CAD-only rename has no job from which to reconstruct a pointer.
         folder = Path(record["folder"] if undo else record["target"])
         pointer = folder / "design.json"
         if undo and record.get("pointer_before") is not None:
-            _save(pointer, json.loads(record["pointer_before"]))
+            self._replace_pointer(record, pointer, json.loads(record["pointer_before"]), undo=True)
         elif pointer.is_file():
             data = json.loads(pointer.read_text(encoding="utf-8"))
             data["folder"] = folder.name
             data["name"] = record["name"]
-            _save(pointer, data)
+            self._replace_pointer(record, pointer, data, undo=undo)
         self.after_step("pointers_committed")
 
     def _cleanup(self, record: dict) -> None:
-        # Remove only previewed WG remnants, with their exact bytes retained for undo.
+        # A manifest proves bytes, not WG creation. Only owned design pointers
+        # are removable remnants; Finder metadata and unknown files stay visible.
+        leftovers = record["leftovers"] = []
         for value in record["old_folders"]:
             folder = Path(value)
             _safe(folder)
             if not folder.exists():
                 continue
             expected = {Path(item["path"]): base64.b64decode(item["source_bytes"])
-                        for item in record["cleanup"] if Path(item["path"]).parent == folder}
-            children = list(folder.iterdir())
-            if any(child not in expected and not (child.name == "cad" and child.is_dir() and not any(child.iterdir())) for child in children):
-                continue
-            if any(path.exists() and path.read_bytes() != content for path, content in expected.items()):
-                continue
+                        for item in record["cleanup"] if Path(item["path"]).parent == folder
+                        and Path(item["path"]).name == "design.json"}
             self._step(record, "cleanup")
-            for child in children:
-                _safe(child)
-                if child.is_dir():
-                    child.rmdir()
-                else:
-                    child.unlink()
-            folder.rmdir()
-            _sync_dir(folder.parent)
+            for child in list(folder.iterdir()):
+                try:
+                    _safe(child)
+                    if child in expected:
+                        # Re-read after journal publication, immediately before unlink.
+                        if not child.is_file() or child.read_bytes() != expected[child]:
+                            raise MoveRefused("Changed cleanup file was kept")
+                        child.unlink()
+                        _sync_dir(child.parent)
+                    elif child.name == "cad" and child.is_dir() and not any(child.iterdir()):
+                        child.rmdir()
+                        _sync_dir(child.parent)
+                    else:
+                        leftovers.append({"path": str(child), "reason": "No WG-creation evidence; kept",
+                                          "attention": child.name != ".DS_Store"})
+                except OSError as exc:
+                    leftovers.append({"path": str(child), "reason": str(exc), "attention": True})
+            # Also report entries that appeared while journaled members were
+            # removed; an unexpected leftover must never be silently skipped.
+            reported = {item["path"] for item in leftovers}
+            for child in folder.iterdir():
+                if str(child) not in reported:
+                    leftovers.append({"path": str(child), "reason": "Unexpected cleanup contents; kept",
+                                      "attention": child.name != ".DS_Store"})
+            if not any(folder.iterdir()):
+                folder.rmdir()
+                _sync_dir(folder.parent)
+        if any(item["attention"] for item in leftovers):
+            raise MoveRefused("Move needs attention. Preserved leftovers: " + "; ".join(
+                item["path"] + " (" + item["reason"] + ")" for item in leftovers))
 
     def recover(self) -> list[dict]:
         reports = []
         if not self.directory.exists():
             return reports
-        with self._mutex, self.cad._lock:
+        with self._mutex:
             for path in sorted(path for path in self.directory.iterdir() if path.suffix == ".json"):
                 record = json.loads(path.read_text(encoding="utf-8"))
                 if record["phase"] in {"planned", "done", "undone", "refused"}:
@@ -923,11 +987,12 @@ class RunMoves:
                     if record.get("undoing"):
                         self._undo(record)
                     else:
-                        rows = self._rows()
-                        self._busy(rows, _BLOCKED[record["id"]], Path(record["root"]))
-                        known = {ref["job_id"] for ref in record["references"]}
-                        self._references(record, [row for row in rows if row["id"] not in known])
-                        self._step(record, record["phase"])
+                        with self.cad._lock:
+                            # Later submissions are reconciled at publication. Their
+                            # writes are excluded, so queued jobs cannot stall recovery.
+                            known = {ref["job_id"] for ref in record["references"] if not ref.get("reconciled")} | set(record.get("destination_jobs", []))
+                            rows = [row for row in self._rows() if row["id"] in known]
+                            self._busy(rows, _BLOCKED[record["id"]], Path(record["root"]))
                         self._resume(record)
                 except Exception as exc:
                     record["error"] = str(exc)
@@ -938,7 +1003,7 @@ class RunMoves:
         return reports
 
     def undo(self, move_id: str) -> dict:
-        with self._mutex, self.cad._lock:
+        with self._mutex:
             record = self.read(move_id)
             if record["phase"] != "done" or any(op["method"] == "copy_verify_remove" for op in record["operations"]):
                 raise MoveRefused("Only a completed move on this drive can be undone.")
@@ -955,7 +1020,6 @@ class RunMoves:
                 if not record.get("undoing"):
                     with _GATE:
                         _BLOCKED.pop(record["id"], None)
-                        _MOVE_CHANGED.notify_all()
                 raise
             return record
 
@@ -965,8 +1029,9 @@ class RunMoves:
         Build one current manifest so startup and interactive undo use the same
         checks, including a rename that landed before its completion was saved.
         """
-        rows = self._rows()
-        self._busy(rows, _BLOCKED[record["id"]], Path(record["root"]))
+        with self.cad._lock:
+            rows = self._rows()
+            self._busy(rows, _BLOCKED[record["id"]], Path(record["root"]))
         expected_jobs = {ref["job_id"] for ref in record["references"]} | set(record.get("destination_jobs", []))
         for row in rows:
             if row["id"] not in expected_jobs and self._location(row, Path(record["root"])).parent in {Path(record["target"]), Path(record["folder"])}:
@@ -1142,4 +1207,3 @@ class RunMoves:
         self._step(record, "undone")
         with _GATE:
             _BLOCKED.pop(record["id"], None)
-            _MOVE_CHANGED.notify_all()
