@@ -41,6 +41,7 @@ from server.workspace.api import (
     _strictly_inside,
     open_folder_command,
 )
+from server.workspace.archive_identity import project_folder, job_archive_location
 from server.workspace.archive import (
     archive_cad_document,
     archive_folder_slug,
@@ -1272,13 +1273,7 @@ def _project_archive_stem(store: CadLinkStore, lineage_id: str, filename: str) -
     at the one moment a document actually has to be filed.
     """
 
-    names = store.get_lineage_cad_names(lineage_id) or {}
-    return (
-        str(names.get("archive_stem") or "").strip()
-        or str(names.get("bundle_stem") or "").strip()
-        or Path(str(filename or "")).stem
-        or str(names.get("document_name") or "").strip()
-    )
+    return project_folder(store, lineage_id, filename)
 
 
 def _runs_root(request: Request) -> Path:
@@ -1356,13 +1351,31 @@ def _verified_run_document(
         return False
 
 
+def _archived_project_runs(request: Request, lineage_id: str) -> list[Path]:
+    jobs = getattr(request.app.state, "jobs_runtime", None)
+    if jobs is None:
+        return []
+    paths = []
+    for row in jobs.store.archived_job_rows():
+        metadata = row.get('task_metadata') or {}
+        recorded_lineage = (metadata.get('imported_geometry') or {}).get('anchor_lineage_id')
+        if recorded_lineage is None:
+            source = jobs._serialize_job(row, cadlink_store=request.app.state.cadlink_store).get('cad_source') or {}
+            recorded_lineage = source.get('lineage_id')
+        if recorded_lineage == lineage_id:
+            paths.append(Path(metadata['archived_path']))
+    return paths
+
+
 async def _project_documents(folder: Path, request: Request, lineage_id: str) -> list[dict[str, Any]]:
     """Every captured CAD document in one project, newest capture first."""
 
     def read() -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         records: dict[str, tuple[Mapping[str, Any], list[Path]]] = {}
-        for sidecar in cad_document_sidecars(folder):
+        archived = _archived_project_runs(request, lineage_id)
+        all_sidecars = [*cad_document_sidecars(folder), *(s for run in archived for s in cad_document_sidecars(run))]
+        for sidecar in all_sidecars:
             try:
                 payload = json.loads(sidecar.read_text(encoding="utf-8"))
             except (OSError, ValueError):
@@ -1377,7 +1390,7 @@ async def _project_documents(folder: Path, request: Request, lineage_id: str) ->
             records[digest][1].append(sidecar)
         for digest, (payload, sidecars) in records.items():
             document = captured_cad_document(
-                folder.parent, folder.name, digest, sidecars=sidecars,
+                folder.parent, folder.name, digest, sidecars=sidecars, archived_paths=archived,
                 verify_run_document=lambda path: _verified_run_document(request, lineage_id, digest, path),
             )
             items.append(
@@ -1421,8 +1434,10 @@ async def _resolve_project_document(
     if _RETURN_STATE_HASH.fullmatch(return_state_hash) is None:
         raise HTTPException(status_code=422, detail="Malformed return state hash")
     folder, stem = await _project_folder(request, lineage_id)
+    archived = await asyncio.to_thread(_archived_project_runs, request, lineage_id)
     document = await asyncio.to_thread(
         captured_cad_document, folder.parent, stem, return_state_hash,
+        archived_paths=archived,
         verify_run_document=lambda path: _verified_run_document(request, lineage_id, return_state_hash, path),
     )
     if document is None:
@@ -1434,7 +1449,9 @@ async def _resolve_project_document(
             ),
         )
     try:
-        _strictly_inside(document.resolve(), folder, "CAD document")
+        roots = [folder, *archived]
+        if not any(document.resolve().is_relative_to(root.resolve()) for root in roots):
+            raise ValueError("CAD document is outside its recorded archive")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return document
@@ -1491,21 +1508,9 @@ async def reveal_project_folder(lineage_id: str, request: Request) -> dict[str, 
 
 
 class ArchiveRunDocumentRequest(BaseModel):
-    """Where the caller wrote the run folder this document belongs beside.
-
-    The run-folder naming rule lives in the frontend, which has just used it to
-    write the folder; asking the server to re-derive it would be a third
-    implementation of one name rule and a third chance for them to disagree.
-    """
-
+    """The run already owns its archive location; the caller supplies only its id."""
     model_config = ConfigDict(extra="forbid")
-
-    #: Relative to the run archive root, as passed to ``write-export``.
-    subdirectory: str = Field(min_length=1, max_length=512)
-    #: The run's file stem, shared by every export it produced.
-    runStem: str = Field(min_length=1, max_length=200)
-    archiveStem: str = Field(min_length=1, max_length=200)
-    returnStateHash: str = Field(min_length=1, max_length=128)
+    jobId: str = Field(min_length=1, max_length=200)
 
 
 @router.post("/runs/archive-document")
@@ -1531,38 +1536,40 @@ async def archive_run_document(
             "retryable": False,
             "reason": f"Capture mode is {mode}.",
         }
-    if _RETURN_STATE_HASH.fullmatch(payload.returnStateHash) is None:
-        raise HTTPException(status_code=422, detail="Malformed return state hash")
+    jobs = request.app.state.jobs_runtime
+    row = await asyncio.to_thread(jobs.store.get_job_row, payload.jobId)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    source = jobs._serialize_job(row, cadlink_store=request.app.state.cadlink_store).get('cad_source') or {}
+    location = job_archive_location(row, source)
+    digest = str(source.get('return_state_hash') or '')
+    if _RETURN_STATE_HASH.fullmatch(digest) is None:
+        return {"placed": False, "retryable": False, "reason": "Model state not recorded."}
     root = _runs_root(request)
-    # A run can outrun the background capture of the model it was solved from,
-    # so join that capture before deciding the document is not there.
-    await _await_cad_document_capture(payload.returnStateHash)
-    # The subdirectory is `<project>/<run>`; the placement helper takes the
-    # project from the stem, so only the run segment travels on from here.
-    segments = _path_segments(payload.subdirectory, "subdirectory")
+    await _await_cad_document_capture(digest)
     try:
         relative = await asyncio.to_thread(
             place_run_cad_document,
             root,
-            payload.archiveStem,
-            segments[-1],
-            payload.runStem,
-            payload.returnStateHash,
+            location.folder,
+            location.run,
+            location.run,
+            digest,
         )
     except OSError as exc:
         logger.warning(
-            "Could not place the CAD document for %s: %s", payload.runStem, exc
+            "Could not place the CAD document for %s: %s", location.run, exc
         )
         return {"placed": False, "retryable": True, "reason": str(exc)}
     if relative is None:
         source = await asyncio.to_thread(
-            captured_cad_document, root, payload.archiveStem, payload.returnStateHash
+            captured_cad_document, root, location.folder, digest
         )
         missing = source is None
         logger.warning(
             "No CAD document was filed for run %s from model state %s",
-            payload.runStem,
-            payload.returnStateHash,
+            location.run,
+            digest,
         )
         return {
             "placed": False,
@@ -1577,7 +1584,7 @@ async def archive_run_document(
                 else "A different file already occupies the run's CAD document name."
             ),
         }
-    await _reclaim_captured_documents(request, root, payload.archiveStem)
+    await _reclaim_captured_documents(request, root, location.folder)
     return {"placed": True, "relativePath": relative}
 
 

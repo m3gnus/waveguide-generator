@@ -200,12 +200,14 @@ def test_the_run_copy_is_filed_only_in_run_mode(tmp_path: Path) -> None:
     app, runs = app_with_runs(tmp_path)
     project(app)
     capture(runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
-    request = ArchiveRunDocumentRequest(
-        subdirectory="Tritonia/14_Tritonia",
-        runStem="14_Tritonia",
-        archiveStem="Tritonia",
-        returnStateHash="sha256:aaa",
-    )
+    app.state.jobs_runtime.store.initialize()
+    app.state.jobs_runtime.store.create_job({
+        "id": "run-14", "status": "complete", "created_at": "now", "updated_at": "now",
+        "queued_at": "now", "config_json": {"geometry": {"type": "imported"}}, "config_summary_json": {},
+        "task_metadata": {"archive": {"key": "lineage:test", "folder": "Tritonia", "run": "14_Tritonia"},
+                          "imported_geometry": {"document": {"return_state_hash": "sha256:aaa"}}},
+    })
+    request = ArchiveRunDocumentRequest(jobId="run-14")
 
     app.state.cad_workspace.set_capture_mode("project")
     declined = asyncio.run(archive_run_document(request, SimpleNamespace(app=app)))
@@ -233,6 +235,7 @@ def test_a_run_subdirectory_that_escapes_the_archive_is_refused(tmp_path: Path) 
         asyncio.run(
             archive_run_document(
                 ArchiveRunDocumentRequest(
+                    jobId="run-14",
                     subdirectory="Tritonia/../../escape",
                     runStem="14_Tritonia",
                     archiveStem="Tritonia",
@@ -771,3 +774,47 @@ def test_reparse_directories_cannot_alias_another_archive(tmp_path: Path, monkey
             handler = api.download_project_document if operation == "download" else api.open_project_document
             asyncio.run(handler(lineage, digest, request))
     assert refused.value.status_code == (422 if component == "project" else 404)
+
+
+@pytest.mark.parametrize("legacy_folder", ["cad-import", "Older_v10"])
+@pytest.mark.parametrize("stored_provenance", [True, False])
+def test_recorded_run_path_finds_verified_model_after_root_override(tmp_path: Path, legacy_folder: str, stored_provenance: bool) -> None:
+    """The current model name/root cannot strand an existing per-run .f3d."""
+    app, lineage, document = older_run_document(tmp_path)
+    import shutil
+    old_run = tmp_path / 'previous-runs' / legacy_folder / '68_cad-import'
+    old_run.parent.mkdir(parents=True)
+    shutil.move(str(document.parent), old_run)
+    original = old_run / document.name
+    jobs = app.state.jobs_runtime.store
+    jobs.initialize()
+    owner = app.state.cadlink_store.find_latest_design_for_lineage(lineage)
+    legacy_ingest = app.state.cadlink_store.allocate_ingest(
+        manifest_sha256='sha256:ownership', artifact_sha256='sha256:ownership',
+        record_builder=lambda ingest_id, created_at: json.dumps({
+            'ingest_id': ingest_id, 'anchor': {'design_id': owner['design_id']},
+            'document': {'return_state_hash': 'sha256:aaa'},
+        }))
+    imported_metadata = {'anchor_lineage_id': lineage,
+                         'document': {'return_state_hash': 'sha256:aaa'}} if stored_provenance else {}
+    jobs.create_job({
+        'id': 'old-run', 'status': 'complete', 'created_at': 'then', 'updated_at': 'then',
+        'queued_at': 'then', 'config_json': {'geometry': {'type': 'imported', 'ingest_id': legacy_ingest['ingest_id']}}, 'config_summary_json': {},
+        'task_metadata': {'archived_path': str(old_run), 'archived_at': 'then',
+                          'imported_geometry': imported_metadata},
+    })
+    override = tmp_path / 'override' / 'runs'
+    override.mkdir(parents=True)
+    app.state.workspace.select(override)
+    request = SimpleNamespace(app=app)
+    listing = asyncio.run(list_project_documents(lineage, request))
+    assert [item['returnStateHash'] for item in listing['items']] == ['sha256:aaa']
+    response = asyncio.run(download_project_document(lineage, 'sha256:aaa', request))
+    assert Path(response.path) == original
+    assert original.read_bytes() == b'model-aaa'
+    assert jobs.get_job_row('old-run')['task_metadata']['archived_path'] == str(old_run)
+    # Every fallback still goes through the retained manifest verification.
+    original.write_bytes(b'tampered')
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(download_project_document(lineage, 'sha256:aaa', request))
+    assert caught.value.status_code == 404

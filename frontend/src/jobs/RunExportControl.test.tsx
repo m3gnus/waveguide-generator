@@ -43,6 +43,7 @@ function deferred<T>() {
 function completeJob(overrides: Partial<JobItem> = {}): JobItem {
   const design = designForFamily('OSSE');
   return {
+    archive_folder: 'stored_horn_v07', archive_run: '1_stored_horn_v07',
     id: 'job-export-1', run_number: 1, parent_job_id: null,
     status: 'complete', progress: 1, stage: 'complete', stage_message: null,
     created_at: '2026-08-10T10:00:00Z', queued_at: '2026-08-10T10:00:00Z',

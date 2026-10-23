@@ -50,6 +50,10 @@ type JobNullableFields = Pick<components['schemas']['JobItem'],
 >;
 
 export interface JobItem extends JobNullableFields {
+  archive_key?: string | null;
+  archive_folder?: string;
+  archive_run?: string;
+  archived_path?: string | null;
   design_uid?: string | null;
   design_name?: string | null;
   id: string;

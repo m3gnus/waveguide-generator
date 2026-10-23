@@ -20,6 +20,7 @@ import tempfile
 import time
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
+from server.workspace.archive_identity import record_run_segment
 from server.cadlink.operations import REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED
 from server.jobs.result_contracts import RESULT_ENVELOPE_ADAPTER
 from server.platform.paths import DATA_DIR_ENV, app_root, data_paths
@@ -1143,6 +1144,7 @@ class JobStore:
                 "INSERT INTO job_identity (job_id, parent_job_id) VALUES (?, ?)",
                 (job["id"], job.get("parent_job_id")),
             )
+            record_run_segment(conn, str(job["id"]))
         if mesh_artifact is not None:
             conn.execute(
                 "INSERT INTO simulation_artifacts (job_id, msh_text) VALUES (?, ?)",
@@ -1497,6 +1499,7 @@ class JobStore:
                 "INSERT INTO job_identity (job_id, parent_job_id) VALUES (?, ?)",
                 (job_id, parent_job_id),
             )
+            record_run_segment(conn, job_id)
             conn.execute(
                 "INSERT INTO simulation_artifacts (job_id, msh_text) VALUES (?, ?)",
                 (job_id, mesh_artifact),
@@ -1955,6 +1958,20 @@ class JobStore:
             ).fetchone()
             return self._row_to_job(row) if row else None
 
+    def archived_job_rows(self) -> list[dict[str, Any]]:
+        """Rows with a recorded path; legacy CAD identity is resolved by the runtime."""
+        if not self.db_path.is_file():
+            return []
+        with self._lock, self._connection() as conn:
+            if conn.execute("SELECT name FROM sqlite_master WHERE name='simulation_jobs'").fetchone() is None:
+                return []
+            rows = conn.execute(
+                """SELECT simulation_jobs.*, job_identity.run_number, job_identity.parent_job_id
+                   FROM simulation_jobs LEFT JOIN job_identity ON job_identity.job_id=simulation_jobs.id
+                   WHERE json_extract(task_metadata_json, '$.archived_path') IS NOT NULL"""
+            ).fetchall()
+        return [self._row_to_job(row) for row in rows]
+
     def unreleased_cad_return_states(self) -> list[dict[str, str]]:
         """Which captured CAD model states runs still have to be archived from.
 
@@ -1993,9 +2010,9 @@ class JobStore:
                 return []
             rows = conn.execute(
                 f"""
-                SELECT json_extract(
+                SELECT COALESCE(json_extract(task_metadata_json, '$.archive.folder'), json_extract(
                            task_metadata_json, '$.imported_geometry.archive_stem'
-                       ) AS archive_stem,
+                       )) AS archive_stem,
                        json_extract(
                            task_metadata_json,
                            '$.imported_geometry.document.return_state_hash'

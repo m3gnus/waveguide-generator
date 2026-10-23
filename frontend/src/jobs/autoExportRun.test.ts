@@ -35,6 +35,7 @@ const result = {
 
 function completedJob(id: string): JobItem {
   return {
+    archive_folder: 'OSSE', archive_run: '9_OSSE',
     id, run_number: 9, parent_job_id: null, status: 'complete', progress: 1,
     stage: null, stage_message: null, created_at: '2026-10-10T22:00:00Z', queued_at: '2026-10-10T22:00:00Z',
     started_at: '2026-10-10T22:00:01Z', completed_at: '2026-10-10T22:02:00Z',

@@ -114,7 +114,7 @@ describe('filing a run’s CAD document', () => {
     }), { status: 200 }));
 
     const outcome = await placeRunCadDocument(
-      cadRun('Tritonia', 'sha256:aaa'), 'Tritonia/14_Tritonia', '14_Tritonia', fetcher, async () => {},
+      cadRun('Tritonia', 'sha256:aaa'), fetcher, async () => {},
     );
 
     expect(outcome.requested).toBe(true);
@@ -134,7 +134,7 @@ describe('filing a run’s CAD document', () => {
     );
 
     const outcome = await placeRunCadDocument(
-      cadRun('Tritonia', 'sha256:aaa'), 'Tritonia/14_Tritonia', '14_Tritonia', fetcher, async () => {},
+      cadRun('Tritonia', 'sha256:aaa'), fetcher, async () => {},
     );
 
     expect(fetcher).toHaveBeenCalledTimes(2);
@@ -149,7 +149,7 @@ describe('filing a run’s CAD document', () => {
     }), { status: 200 }));
 
     const outcome = await placeRunCadDocument(
-      cadRun('Tritonia', 'sha256:aaa'), 'Tritonia/14_Tritonia', '14_Tritonia', fetcher, async () => {},
+      cadRun('Tritonia', 'sha256:aaa'), fetcher, async () => {},
     );
 
     expect(fetcher).toHaveBeenCalledTimes(3);
@@ -161,7 +161,7 @@ describe('filing a run’s CAD document', () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response('{}', { status: 200 }));
 
     const outcome = await placeRunCadDocument(
-      cadRun('Tritonia', null), 'Tritonia/14_Tritonia', '14_Tritonia', fetcher, async () => {},
+      cadRun('Tritonia', null), fetcher, async () => {},
     );
 
     expect(fetcher).not.toHaveBeenCalled();

@@ -1036,7 +1036,7 @@ describe('result exporters', () => {
     });
 
     const saved = await saveMeshArtifactToWorkspace({
-      id: 'artifact-uuid', run_number: 123, label: 'asro68', config_summary: {},
+      id: 'artifact-uuid', archive_folder: 'asro68', archive_run: '123_asro68', run_number: 123, label: 'asro68', config_summary: {},
     }, reportNotice, fetcher);
 
     expect(saved).toBe(`C:/output/123_asro68/${expectedName}`);
@@ -1053,7 +1053,7 @@ describe('result exporters', () => {
 
   it('adds both radiation artifacts to the permanent run archive only when retained', async () => {
     const job: JobItem = {
-      id: 'archive-cardioid', run_number: 8, parent_job_id: null, status: 'complete', progress: 1,
+      id: 'archive-cardioid', archive_folder: 'Cardioid', archive_run: '8_Cardioid', run_number: 8, parent_job_id: null, status: 'complete', progress: 1,
       stage: null, stage_message: null, created_at: '2026-08-20T10:00:00Z', queued_at: '2026-08-20T10:00:00Z',
       started_at: '2026-08-20T10:00:01Z', completed_at: '2026-08-20T10:02:00Z', config_summary: {},
       solve_options: {} as JobItem['solve_options'], has_results: true, has_mesh_artifact: false,
@@ -1085,6 +1085,7 @@ describe('result exporters', () => {
     });
 
     await archiveRunToWorkspace(job, preferencesStore.getSnapshot(), fetcher);
+    expect(writes.flatMap(({ members }) => members.map(({ relative_path }) => relative_path))).not.toContain('design.json');
     expect(writes[0].members.map(({ relative_path }) => relative_path)).toEqual([
       '8_Cardioid.json',
       '8_Cardioid.csv',
@@ -1104,7 +1105,7 @@ describe('result exporters', () => {
     // The placement answer used to be discarded, so a run could be marked
     // archived without the model it was solved from and nothing said so.
     const job = {
-      id: 'archive-cad', run_number: 21, parent_job_id: null, status: 'complete', progress: 1,
+      id: 'archive-cad', archive_folder: 'Tritonia', archive_run: '21_Tritonia', run_number: 21, parent_job_id: null, status: 'complete', progress: 1,
       stage: null, stage_message: null, created_at: '2026-08-20T10:00:00Z', queued_at: '2026-08-20T10:00:00Z',
       started_at: '2026-08-20T10:00:01Z', completed_at: '2026-08-20T10:02:00Z',
       config_summary: { geometry_type: 'imported' },
@@ -1147,7 +1148,7 @@ describe('result exporters', () => {
 
   it('writes the exact retained mesh copied into the archive snapshot', async () => {
     const job = {
-      id: 'archive-mesh', run_number: 9, parent_job_id: null, status: 'complete', progress: 1,
+      id: 'archive-mesh', archive_folder: 'OSSE', archive_run: '9_OSSE', run_number: 9, parent_job_id: null, status: 'complete', progress: 1,
       stage: null, stage_message: null, created_at: '2026-08-20T10:00:00Z', queued_at: '2026-08-20T10:00:00Z',
       started_at: '2026-08-20T10:00:01Z', completed_at: '2026-08-20T10:02:00Z', config_summary: {},
       solve_options: {} as JobItem['solve_options'], has_results: true, has_mesh_artifact: false,
@@ -1181,7 +1182,7 @@ describe('result exporters', () => {
 
   it.each([200, 409, 503])('archives replay bytes or an explicit refusal, retrying transient failures (%s)', async status => {
     const job = {
-      id: 'archive-replay', run_number: 9, parent_job_id: null, status: 'complete', progress: 1,
+      id: 'archive-replay', archive_folder: 'Driver', archive_run: '9_Driver', run_number: 9, parent_job_id: null, status: 'complete', progress: 1,
       stage: null, stage_message: null, created_at: '2026-08-20T10:00:00Z', queued_at: '2026-08-20T10:00:00Z',
       started_at: '2026-08-20T10:00:01Z', completed_at: '2026-08-20T10:02:00Z',
       config_summary: { geometry_type: 'imported', import_origin: 'mesh-file' },

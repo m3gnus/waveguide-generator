@@ -455,93 +455,17 @@ def test_repeat_manual_export_replaces_changed_files(tmp_path: Path) -> None:
     assert (workspace / "horn_1/horn_1_summary.txt").read_text() == "new file"
 
 
-def test_archive_pointer_refuses_to_overwrite_another_lineage(tmp_path: Path) -> None:
+@pytest.mark.parametrize("existing", ["reject", "merge_identical", "overwrite", "confirm"])
+@pytest.mark.parametrize("member", ["design.json", "Design.JSON", "nested/design.json"])
+def test_client_archive_pointers_are_reserved(tmp_path: Path, existing: str, member: str) -> None:
     state, workspace = selected_state(tmp_path)
-    original = json.dumps(
-        {"schemaVersion": 1, "folder": "Horn_A", "lineageId": "wgl_first"}
-    )
-    replacement = json.dumps(
-        {"schemaVersion": 1, "folder": "Horn_A", "lineageId": "wgl_second"}
-    )
-    call(
-        state,
-        workspace_api.WriteExportRequest(
-            subdirectory="Horn_A",
-            existing="merge_identical",
-            members=[{"relative_path": "design.json", "text": original}],
-        ),
-    )
-
-    with pytest.raises(HTTPException, match="another lineage") as caught:
-        call(
-            state,
-            workspace_api.WriteExportRequest(
-                subdirectory="Horn_A",
-                existing="overwrite",
-                members=[{"relative_path": "design.json", "text": replacement}],
-            ),
-        )
-
-    assert caught.value.status_code == 409
-    assert (workspace / "Horn_A/design.json").read_text() == original
-
-
-def test_an_unreadable_pointer_is_refused_as_unreadable_not_as_another_lineage(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The two refusals are different problems and must not share a message.
-
-    Reported as one, the message sent everyone looking for colliding lineage
-    identifiers when the file was simply unreadable -- and `lineageId: null`
-    for an Untitled design compares equal to `lineageId: null`, so a lineage
-    collision was never what was happening.
-    """
-
-    state, workspace = selected_state(tmp_path)
-    pointer = json.dumps({"schemaVersion": 1, "folder": "Horn_A", "lineageId": None})
-    call(
-        state,
-        workspace_api.WriteExportRequest(
-            subdirectory="Horn_A",
-            existing="merge_identical",
-            members=[{"relative_path": "design.json", "text": pointer}],
-        ),
-    )
-    published = workspace / "Horn_A/design.json"
-
-    # Standing in for a file this account cannot open: on Windows that came
-    # from an earlier run under another owner, and reproducing *that* needs a
-    # second account. The refusal under test is driven by the read failing, so
-    # the read is what the test controls.
-    real_read_bytes = Path.read_bytes
-
-    def refuse_the_pointer(self: Path, *args: object, **kwargs: object) -> bytes:
-        if self == published:
-            raise PermissionError(13, "Permission denied")
-        return real_read_bytes(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "read_bytes", refuse_the_pointer)
-
-    with pytest.raises(HTTPException) as caught:
-        call(
-            state,
-            workspace_api.WriteExportRequest(
-                subdirectory="Horn_A",
-                existing="overwrite",
-                members=[{"relative_path": "design.json", "text": pointer}],
-            ),
-        )
-
-    assert caught.value.status_code == 409
-    detail = str(caught.value.detail)
-    assert "Cannot read" in detail
-    assert "another lineage" not in detail
-    # Actionable: which file, why, and what to do about it.
-    assert str(published) in detail
-    assert "Permission denied" in detail
-    assert "Delete that file" in detail
-    # Still a refusal: the guard is right, only its explanation was wrong.
-    assert real_read_bytes(published).decode() == pointer
+    with pytest.raises(HTTPException, match="reserved") as caught:
+        call(state, workspace_api.WriteExportRequest(
+            subdirectory="Horn_A", existing=existing,
+            members=[{"relative_path": member, "text": "{}"}],
+        ))
+    assert caught.value.status_code == 422
+    assert not (workspace / "Horn_A").exists()
 
 
 def test_published_files_are_readable_by_more_than_their_writer() -> None:

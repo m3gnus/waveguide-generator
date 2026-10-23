@@ -20,31 +20,16 @@ export function exportStemForJob(
   return `${runNumber}_${exportTitleSlug(title)}`;
 }
 
-/**
- * The design folder a run is archived under.
- *
- * Runs group by design rather than by pipeline: one design is edited
- * parametrically, sent to CAD and solved from the return, and splitting that
- * history across a `parametric/` and a `cadlink/` tree scatters the very thing
- * a person opens the folder to read. A CAD run reuses the stem its `.wglink`
- * bundle already owns, so a rename keeps writing to one folder.
- */
-export function archiveFolderForJob(
-  job: Pick<JobItem, 'label' | 'config_summary' | 'cad_source'>,
-): string {
-  const stem = job.cad_source?.archive_stem?.trim();
-  // CAD archive stems are server-allocated ASCII folder keys whose uniqueness
-  // is enforced case-insensitively. Treat that contract as opaque: slugging it
-  // again here would give the browser a second, divergent filesystem rule.
-  if (stem) return stem;
-  return exportTitleSlug(job.label?.trim() || job.config_summary.formula_type || 'design');
+/** The opaque location assigned by the server, including legacy paths. */
+export function archiveFolderForJob(job: Pick<JobItem, 'archive_folder'>): string {
+  if (!job.archive_folder) throw new Error('The server has not supplied this run’s archive folder');
+  return job.archive_folder;
 }
 
 /** Where a run's files land inside the workspace: `<design>/<run>`. */
-export function exportSubdirectoryForJob(
-  job: Pick<JobItem, 'run_number' | 'label' | 'config_summary' | 'cad_source'>,
-): string {
-  return `${archiveFolderForJob(job)}/${exportStemForJob(job)}`;
+export function exportSubdirectoryForJob(job: Pick<JobItem, 'archive_folder' | 'archive_run'>): string {
+  if (!job.archive_run) throw new Error('The server has not supplied this run’s archive name');
+  return `${archiveFolderForJob(job)}/${job.archive_run}`;
 }
 
 /**
@@ -63,7 +48,7 @@ export const AUTO_EXPORT_FOLDER = 'exports';
 
 /** Where automatic export writes a run's files: `<design>/<run>/exports`. */
 export function autoExportSubdirectoryForJob(
-  job: Pick<JobItem, 'run_number' | 'label' | 'config_summary' | 'cad_source'>,
+  job: Pick<JobItem, 'archive_folder' | 'archive_run'>,
 ): string {
   return `${exportSubdirectoryForJob(job)}/${AUTO_EXPORT_FOLDER}`;
 }

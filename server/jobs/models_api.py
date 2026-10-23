@@ -46,7 +46,7 @@ from server.mesh.file_import import MAX_MESH_BYTES, mesh_text, parse_file_mesh, 
 from server.mesh.integrity import mesh_integrity_report
 from server.mesh.prepared_gc import prepared_mesh_use
 from server.platform.staging import publish_staging_directory
-from server.workspace.archive import archive_folder_slug
+from server.workspace.archive_identity import claim_project_folder
 
 MAX_ACCEPTED_SETUP_WRITES = 512
 
@@ -229,7 +229,7 @@ def _register_mesh(
         "source_file": {"filename": filename, **spec},
         # One folder for every run of this file, however it was prepared.
         "archive_stem": model.get("archive_stem")
-        or f"{archive_folder_slug(Path(filename).stem)}_{ingest_id[-10:]}",
+        or claim_project_folder(store, f"model:{model_id}", Path(filename).stem),
         "document": {"name": filename},
         "sources": sources,
         "source_tags": {source["id"]: tag for source, tag in zip(sources, sorted(body.source_tags))},

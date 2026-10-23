@@ -11,8 +11,8 @@ import {
 import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
 import { placeRunCadDocument } from '../api/cadProjects';
 import { fetchJobArchiveSnapshot, fetchRadiationImpedancePresentation, type RadiationImpedancePresentation } from '../api/results';
-import { archiveFolderForJob, exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
-import { buildDesignRecord, buildRunRecord } from '../jobs/runArchive';
+import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
+import { buildRunRecord } from '../jobs/runArchive';
 import { modelKindForRun } from '../model/currentModel';
 import { parameterExportReason, resultExportSelection, resultExportSnapshot } from './exportContext';
 import { serializeDesign, type DesignDocument } from '../stores/design';
@@ -1028,7 +1028,7 @@ export async function downloadMeshArtifact(
 }
 
 export async function saveMeshArtifactToWorkspace(
-  job: Pick<JobItem, 'id' | 'run_number' | 'label' | 'config_summary' | 'cad_source'>,
+  job: Pick<JobItem, 'id' | 'run_number' | 'label' | 'config_summary' | 'archive_folder' | 'archive_run'>,
   reportNotice: (message: string) => void,
   fetcher: typeof fetch = fetch,
 ): Promise<string> {
@@ -1127,8 +1127,8 @@ async function writeArchiveMembers(
  * evidence: they are derived only from the stored job and its snapshot, so
  * re-archiving the same run is a byte-identical no-op rather than a rewrite,
  * and a different file already holding one of their names keeps it
- * (`writeArchiveMembers`). The design pointer file is derived state and
- * follows a rename, so it is the one file allowed to replace itself.
+ * (`writeArchiveMembers`). The server writes the project pointer when the run
+ * is marked archived.
  */
 export async function archiveRunToWorkspace(
   job: JobItem,
@@ -1220,9 +1220,6 @@ export async function archiveRunToWorkspace(
     [textFile(buildRunRecord(archiveJob, (filename) => moved.get(filename) ?? filename, written, replay))],
     fetcher,
   );
-  const pointer = await writeWorkspaceFiles(
-    archiveFolderForJob(archiveJob), [textFile(buildDesignRecord(archiveJob))], fetcher, 'overwrite',
-  );
   // The captured Fusion model, when the capture setting files one per run. It
   // is a convenience copy of something already archived at project level, so a
   // failure here is reported and dropped rather than failing the archive. It is
@@ -1231,7 +1228,7 @@ export async function archiveRunToWorkspace(
   // archived without the model it was solved from.
   try {
     const placement = await placeRunCadDocument(
-      archiveJob, subdirectory, exportStemForJob(archiveJob), fetcher,
+      archiveJob, fetcher,
     );
     if (placement.requested && !placement.placed) {
       console.warn(
@@ -1242,5 +1239,5 @@ export async function archiveRunToWorkspace(
   } catch (error) {
     console.warn('Could not file the run\u2019s CAD document', error);
   }
-  return [...results.files, ...mesh.files, ...record.files, ...pointer.files];
+  return [...results.files, ...mesh.files, ...record.files];
 }

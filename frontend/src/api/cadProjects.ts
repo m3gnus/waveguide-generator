@@ -154,12 +154,10 @@ export interface RunCadDocumentPlacement {
 /**
  * Ask the server to file this run's CAD document beside the run.
  *
- * The run-folder name is passed rather than derived: the caller has just used
- * that name to write the folder, and a second implementation of the naming rule
- * on the server could only ever agree by coincidence.
+ * The server reads the immutable location and model state from the stored run.
  */
 export async function archiveRunCadDocument(
-  request: { subdirectory: string; runStem: string; archiveStem: string; returnStateHash: string },
+  request: { jobId: string },
   fetcher: typeof fetch = fetch,
 ): Promise<RunCadDocumentPlacement> {
   const response = await fetcher('/api/cadlink/runs/archive-document', {
@@ -223,15 +221,12 @@ const pause = (milliseconds: number) => new Promise<void>((resolve) => {
  */
 export async function placeRunCadDocument(
   job: JobItem,
-  subdirectory: string,
-  runStem: string,
   fetcher: typeof fetch = fetch,
   wait: (milliseconds: number) => Promise<void> = pause,
 ): Promise<RunCadDocumentOutcome> {
-  const archiveStem = job.cad_source?.archive_stem;
   const returnStateHash = runReturnStateHash(job);
-  if (!archiveStem || !returnStateHash) return { placed: false, requested: false };
-  const request = { subdirectory, runStem, archiveStem, returnStateHash };
+  if (!returnStateHash) return { placed: false, requested: false };
+  const request = { jobId: job.id };
   let result = await archiveRunCadDocument(request, fetcher);
   for (const delay of PLACEMENT_RETRY_DELAYS_MS) {
     if (result.placed || result.retryable !== true) break;

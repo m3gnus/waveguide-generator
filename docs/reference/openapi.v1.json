@@ -3,38 +3,17 @@
     "schemas": {
       "ArchiveRunDocumentRequest": {
         "additionalProperties": false,
-        "description": "Where the caller wrote the run folder this document belongs beside.\n\nThe run-folder naming rule lives in the frontend, which has just used it to\nwrite the folder; asking the server to re-derive it would be a third\nimplementation of one name rule and a third chance for them to disagree.",
+        "description": "The run already owns its archive location; the caller supplies only its id.",
         "properties": {
-          "archiveStem": {
+          "jobId": {
             "maxLength": 200,
             "minLength": 1,
-            "title": "Archivestem",
-            "type": "string"
-          },
-          "returnStateHash": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Returnstatehash",
-            "type": "string"
-          },
-          "runStem": {
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Runstem",
-            "type": "string"
-          },
-          "subdirectory": {
-            "maxLength": 512,
-            "minLength": 1,
-            "title": "Subdirectory",
+            "title": "Jobid",
             "type": "string"
           }
         },
         "required": [
-          "subdirectory",
-          "runStem",
-          "archiveStem",
-          "returnStateHash"
+          "jobId"
         ],
         "title": "ArchiveRunDocumentRequest",
         "type": "object"
@@ -6306,6 +6285,27 @@
       "JobItem": {
         "additionalProperties": false,
         "properties": {
+          "archive_folder": {
+            "default": "",
+            "title": "Archive Folder",
+            "type": "string"
+          },
+          "archive_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archive Key"
+          },
+          "archive_run": {
+            "default": "",
+            "title": "Archive Run",
+            "type": "string"
+          },
           "archived_at": {
             "anyOf": [
               {
@@ -6316,6 +6316,17 @@
               }
             ],
             "title": "Archived At"
+          },
+          "archived_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived Path"
           },
           "auto_export_completed_at": {
             "anyOf": [
@@ -7011,6 +7022,27 @@
       "JobStatusResponse": {
         "additionalProperties": false,
         "properties": {
+          "archive_folder": {
+            "default": "",
+            "title": "Archive Folder",
+            "type": "string"
+          },
+          "archive_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archive Key"
+          },
+          "archive_run": {
+            "default": "",
+            "title": "Archive Run",
+            "type": "string"
+          },
           "archived_at": {
             "anyOf": [
               {
@@ -7021,6 +7053,17 @@
               }
             ],
             "title": "Archived At"
+          },
+          "archived_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived Path"
           },
           "auto_export_completed_at": {
             "anyOf": [

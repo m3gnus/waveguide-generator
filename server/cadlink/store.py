@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
-import hashlib
 import json
 import logging
 import math
@@ -20,6 +19,7 @@ from server.platform.private_paths import ensure_private_directory
 from server.platform.sqlite import _BUSY_TIMEOUT_MS, JournalModeStatus, configure_connection
 
 from server.workspace.archive import archive_folder_slug
+from server.workspace import archive_identity
 
 from .identity import (
     CadLink,
@@ -389,17 +389,7 @@ def _archive_stem_candidate(value: object) -> str:
 def _suffixed_archive_stem(base: str, lineage_id: str, used: set[str]) -> str:
     """Disambiguate a portable/case-fold collision from durable identity."""
 
-    digest = hashlib.sha256(lineage_id.encode("utf-8")).hexdigest()
-    for length in range(12, len(digest) + 1, 4):
-        candidate = f"{base}-{digest[:length]}"
-        if candidate.casefold() not in used:
-            return candidate
-    # A natural filename could theoretically contain the entire digest. Keep
-    # the lineage-derived suffix and add a deterministic final discriminator.
-    discriminator = 2
-    while f"{base}-{digest}-{discriminator}".casefold() in used:
-        discriminator += 1
-    return f"{base}-{digest}-{discriminator}"
+    return archive_identity.suffixed_legacy_stem(base, lineage_id, used)
 
 
 def _migrate_archive_stems(conn: sqlite3.Connection) -> None:
@@ -446,18 +436,7 @@ def _migrate_archive_stems(conn: sqlite3.Connection) -> None:
 def _allocate_archive_stem(
     conn: sqlite3.Connection, lineage_id: str, preferred: object
 ) -> str:
-    base = _archive_stem_candidate(preferred)
-    used = {
-        str(row["archive_stem"]).casefold()
-        for row in conn.execute(
-            "SELECT archive_stem FROM lineage_cad_names "
-            "WHERE lineage_id != ? AND archive_stem IS NOT NULL AND archive_stem != ''",
-            (lineage_id,),
-        )
-    }
-    if base.casefold() not in used:
-        return base
-    return _suffixed_archive_stem(base, lineage_id, used)
+    return archive_identity.claim_in_transaction(conn, f"lineage:{lineage_id}", preferred)
 
 
 #: A file model's id: this prefix and the original file's ``sha256:`` digest.
@@ -811,6 +790,7 @@ class CadLinkStore:
     ) -> None:
         self.db_path = Path(db_path)
         self.data_root = Path(data_root) if data_root is not None else None
+        self.archive_root: Callable[[], Path] | None = None
         # An earlier version's JSON solve-command ledger, imported on open.
         # Only ``for_data_dir`` knows where one lives.
         self.legacy_solve_ledger = (
@@ -952,6 +932,7 @@ class CadLinkStore:
                 "CREATE INDEX IF NOT EXISTS ingests_by_model ON ingests(model_id, created_at)"
             )
             _file_unfiled_ingests(conn)
+            archive_identity.initialize_registry(conn)
             _migrate_legacy_file_setups(conn)
             imported_ledger = _import_legacy_solve_ledger(conn, self.legacy_solve_ledger)
             receipt_feed_created = receipts.initialize(conn)
@@ -2106,6 +2087,8 @@ class CadLinkStore:
         bundle_stem: str | None = None,
         archive_stem: str | None = None,
         recorded_at: str | None = None,
+        archive_aliases: tuple[str, ...] = (),
+        adopt_archive_aliases: tuple[str, ...] = (),
     ) -> dict[str, Any]:
         """Claim a lineage's CAD names, first writer per column winning.
 
@@ -2124,9 +2107,11 @@ class CadLinkStore:
             claimed_archive_stem = (
                 str(existing["archive_stem"] or "").strip() if existing else ""
             )
-            if not claimed_archive_stem and str(archive_stem or "").strip():
-                claimed_archive_stem = _allocate_archive_stem(
-                    conn, lineage_id, archive_stem
+            if str(archive_stem or "").strip():
+                claimed_archive_stem = archive_identity.claim_in_transaction(
+                    conn, f"lineage:{lineage_id}", claimed_archive_stem or archive_stem,
+                    root=archive_identity.archive_root(self),
+                    aliases=archive_aliases, adopt_aliases=adopt_archive_aliases,
                 )
             conn.execute(
                 """
@@ -2314,7 +2299,7 @@ class CadLinkStore:
         recorded = self.get_lineage_cad_names(lineage_id) or {}
         claimed = str(recorded.get("archive_stem") or "").strip()
         if claimed:
-            return claimed
+            return archive_identity.claim_project_folder(self, f"lineage:{lineage_id}", claimed)
         stem = (
             str(recorded.get("bundle_stem") or "").strip()
             or str(preferred or "").strip()

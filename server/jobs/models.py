@@ -1527,6 +1527,10 @@ class JobItem(JobDesignIdentity):
     auto_export_formats: dict[str, Any]
     #: When this run was written to the run archive. The job database can lose
     #: results (removal, or the optional 30-day cleanup); the archive survives.
+    archive_key: str | None = None
+    archive_folder: str = ""
+    archive_run: str = ""
+    archived_path: str | None = None
     archived_at: str | None = None
     raw_results_file: str | None
     mesh_artifact_file: str | None

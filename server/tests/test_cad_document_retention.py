@@ -100,7 +100,7 @@ def imported_run(
             "progress": 1.0 if status == "complete" else 0.0,
             "stage": status,
             "stage_message": status,
-            "config_json": {},
+            "config_json": {"geometry": {"type": "imported", "ingest_id": f"wgi_{digest}"}},
             "config_summary_json": {"geometry_type": "imported"},
             "has_results": has_results,
             "has_mesh_artifact": True,
@@ -124,13 +124,17 @@ def capture_through_the_app(app, tmp_path: Path, digest: str, *, at: str) -> Non
     )
 
 
-def archive_request(digest: str, run: str = "14_Tritonia") -> ArchiveRunDocumentRequest:
-    return ArchiveRunDocumentRequest(
-        subdirectory=f"{STEM}/{run}",
-        runStem=run,
-        archiveStem=STEM,
-        returnStateHash=f"sha256:{digest}",
-    )
+def archive_request(app, digest: str, run: str = "14_Tritonia") -> ArchiveRunDocumentRequest:
+    store = app.state.jobs_runtime.store
+    store.initialize()
+    rows, _ = store.list_jobs(limit=100)
+    matching = next((row for row in rows if
+        ((row.get('task_metadata') or {}).get('imported_geometry') or {}).get('document', {}).get('return_state_hash') == f'sha256:{digest}'), None)
+    job_id = matching['id'] if matching else f'placement-{digest}'
+    if matching is None:
+        imported_run(app, job_id, digest, status='complete', archived_at='already-archived')
+    store.mutate_job_metadata(job_id, {'archive': {'key': 'name:Tritonia', 'folder': STEM, 'run': run}})
+    return ArchiveRunDocumentRequest(jobId=job_id)
 
 
 def test_a_queued_run_keeps_its_model_when_a_changed_one_is_ingested(
@@ -158,7 +162,7 @@ def test_a_queued_run_keeps_its_model_when_a_changed_one_is_ingested(
     ]
 
     placed = asyncio.run(
-        archive_run_document(archive_request("aaa"), SimpleNamespace(app=app))
+        archive_run_document(archive_request(app, "aaa"), SimpleNamespace(app=app))
     )
 
     assert placed == {"placed": True, "relativePath": "14_Tritonia/14_Tritonia.f3d"}
@@ -205,7 +209,7 @@ def test_a_run_archived_before_its_capture_finishes_still_gets_the_copy(
 
             placing = asyncio.ensure_future(
                 archive_run_document(
-                    archive_request("ccc", "15_Tritonia"), SimpleNamespace(app=app)
+                    archive_request(app, "ccc", "15_Tritonia"), SimpleNamespace(app=app)
                 )
             )
             for _ in range(50):
@@ -242,10 +246,10 @@ def test_archiving_a_run_twice_never_substitutes_the_newer_model(
     capture_through_the_app(app, tmp_path, "bbb", at="2026-08-21T09:00:00Z")
 
     first = asyncio.run(
-        archive_run_document(archive_request("aaa"), SimpleNamespace(app=app))
+        archive_run_document(archive_request(app, "aaa"), SimpleNamespace(app=app))
     )
     again = asyncio.run(
-        archive_run_document(archive_request("aaa"), SimpleNamespace(app=app))
+        archive_run_document(archive_request(app, "aaa"), SimpleNamespace(app=app))
     )
 
     assert first == again == {
@@ -300,14 +304,14 @@ def test_placing_a_run_copy_reclaims_the_states_nothing_needs_any_more(
     capture_through_the_app(app, tmp_path, "bbb", at="2026-08-21T09:00:00Z")
 
     # The A run is archived and marked archived, so it has released A.
-    asyncio.run(archive_run_document(archive_request("aaa"), SimpleNamespace(app=app)))
+    asyncio.run(archive_run_document(archive_request(app, "aaa"), SimpleNamespace(app=app)))
     app.state.jobs_runtime.store.mutate_job_metadata(
         "job-a", {"archived_at": "2026-08-21T10:00:00Z"}
     )
     # A second run, of the current state, archives next.
     asyncio.run(
         archive_run_document(
-            archive_request("bbb", "15_Tritonia"), SimpleNamespace(app=app)
+            archive_request(app, "bbb", "15_Tritonia"), SimpleNamespace(app=app)
         )
     )
 
@@ -330,7 +334,7 @@ def test_a_missing_model_is_reported_rather_than_answered_as_a_success(
     app, _runs = app_with_runs(tmp_path)
 
     answer = asyncio.run(
-        archive_run_document(archive_request("zzz"), SimpleNamespace(app=app))
+        archive_run_document(archive_request(app, "zzz"), SimpleNamespace(app=app))
     )
 
     assert answer["placed"] is False

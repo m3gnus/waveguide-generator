@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
 import { archiveFolderForJob, exportSubdirectoryForJob, runSourceForJob } from './exportNaming';
-import { buildDesignRecord, buildRunRecord, needsArchiving } from './runArchive';
+import { buildRunRecord, needsArchiving } from './runArchive';
 
 function jobItem(overrides: Partial<JobItem> = {}): JobItem {
   return {
+    archive_folder: 'Big_Horn', archive_run: '3_Big_Horn',
     id: 'abcdef123456', run_number: 3, parent_job_id: null, status: 'complete', progress: 1,
     stage: null, stage_message: null, created_at: '2026-08-19T10:00:00Z',
     queued_at: '2026-08-19T10:00:00Z', started_at: '2026-08-19T10:00:01Z',
@@ -59,7 +60,6 @@ describe('run archive layout', () => {
   it('archives the same run to identical bytes so a repeat write is a no-op', () => {
     const job = jobItem();
     expect(buildRunRecord(job).text).toBe(buildRunRecord(job).text);
-    expect(buildDesignRecord(job).text).toBe(buildDesignRecord(job).text);
   });
 
   it('records the separately retained radiation artifacts and their convention', () => {
@@ -137,4 +137,13 @@ describe('run archive layout', () => {
     expect(needsArchiving(jobItem({ archived_at: '2026-08-19T10:03:00Z' }))).toBe(false);
     expect(needsArchiving(jobItem({ status: 'error', has_results: false }))).toBe(false);
   });
+});
+
+it('keeps pre-identity run record bytes and adds the uid only to new submissions', () => {
+  const legacy = jobItem({ design_name: 'Original', design_uid: 'wgu_example', label: 'Original7' });
+  const oldRecord = JSON.parse(buildRunRecord(legacy).text);
+  expect(oldRecord.design.name).toBe('Original7');
+  expect(oldRecord.design).not.toHaveProperty('uid');
+  const current = JSON.parse(buildRunRecord({ ...legacy, archive_key: 'design:wgu_example' }).text);
+  expect(current.design).toMatchObject({ name: 'Original', uid: 'wgu_example' });
 });

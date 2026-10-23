@@ -2507,21 +2507,11 @@ export interface components {
     schemas: {
         /**
          * ArchiveRunDocumentRequest
-         * @description Where the caller wrote the run folder this document belongs beside.
-         *
-         *     The run-folder naming rule lives in the frontend, which has just used it to
-         *     write the folder; asking the server to re-derive it would be a third
-         *     implementation of one name rule and a third chance for them to disagree.
+         * @description The run already owns its archive location; the caller supplies only its id.
          */
         ArchiveRunDocumentRequest: {
-            /** Archivestem */
-            archiveStem: string;
-            /** Returnstatehash */
-            returnStateHash: string;
-            /** Runstem */
-            runStem: string;
-            /** Subdirectory */
-            subdirectory: string;
+            /** Jobid */
+            jobId: string;
         };
         /** AssemblyDimensions */
         AssemblyDimensions: {
@@ -4493,8 +4483,22 @@ export interface components {
         };
         /** JobItem */
         JobItem: {
+            /**
+             * Archive Folder
+             * @default
+             */
+            archive_folder?: string;
+            /** Archive Key */
+            archive_key?: string | null;
+            /**
+             * Archive Run
+             * @default
+             */
+            archive_run?: string;
             /** Archived At */
             archived_at?: string | null;
+            /** Archived Path */
+            archived_path?: string | null;
             /** Auto Export Completed At */
             auto_export_completed_at: string | null;
             /** Auto Export Formats */
@@ -4695,8 +4699,22 @@ export interface components {
         };
         /** JobStatusResponse */
         JobStatusResponse: {
+            /**
+             * Archive Folder
+             * @default
+             */
+            archive_folder?: string;
+            /** Archive Key */
+            archive_key?: string | null;
+            /**
+             * Archive Run
+             * @default
+             */
+            archive_run?: string;
             /** Archived At */
             archived_at?: string | null;
+            /** Archived Path */
+            archived_path?: string | null;
             /** Auto Export Completed At */
             auto_export_completed_at: string | null;
             /** Auto Export Formats */

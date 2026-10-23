@@ -21,6 +21,7 @@ from server.cadlink.identity import CadLink, SaveIdentity, design_hash
 from server.cadlink.limits import MAX_STEP_INPUT_BYTES
 from server.cadlink.store import CadLinkStore
 from server.design.schema import DesignConfig
+from server.workspace.archive_identity import bind_design_lineage
 from server.design.textcfg import serialize
 from server.mesh.child import run_mesh_build
 from server.platform.paths import app_root
@@ -422,6 +423,7 @@ def _export_wglink_sync(
     identity = _commit_design_for_export(
         store, request.identity, request.design, current_design_hash, design_name, request.design_uid
     )
+    bind_design_lineage(store, identity.lineage_id, request.design_uid, design_name)
     instance_slug = _instance_slug(store, identity.lineage_id, design_name)
 
     try:

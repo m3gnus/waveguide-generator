@@ -36,6 +36,7 @@ vi.mock('../jobs/useSolvePlan', () => ({
 
 function job(id: string, label: string, runNumber: number): JobItem {
   return {
+    archive_folder: label, archive_run: `${runNumber}_${label}`,
     id, run_number: runNumber, parent_job_id: null,
     label, status: 'complete', progress: 1, stage: null,
     stage_message: null, created_at: '2026-08-08T00:00:00Z',

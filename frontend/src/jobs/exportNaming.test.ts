@@ -24,8 +24,13 @@ describe('job export naming', () => {
     expect(exportStemForJob({ run_number: 9, label: null, config_summary: { formula_type: 'OSSE' } })).toBe('9_OSSE');
   });
 
+  it('keeps the server location through a label change', () => {
+    const job = { archive_folder: 'Foo-2', archive_run: '9_original', label: 'renamed' };
+    expect(exportSubdirectoryForJob(job)).toBe('Foo-2/9_original');
+  });
+
   it('gives automatic export a folder of its own inside the run folder the archive owns', () => {
-    const job = { run_number: 9, label: null, config_summary: { formula_type: 'OSSE' } };
+    const job = { archive_folder: 'OSSE', archive_run: '9_OSSE' };
     expect(exportSubdirectoryForJob(job)).toBe('OSSE/9_OSSE');
     expect(autoExportSubdirectoryForJob(job)).toBe('OSSE/9_OSSE/exports');
   });

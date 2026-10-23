@@ -250,6 +250,9 @@ router = create_design_io_router(_DIRECT_STORE)
 def mount_design_io(application: FastAPI) -> CadLinkStore:
     registry = CadLinkStore.for_data_dir(Path(application.state.data_dir))
     application.state.cadlink_store = registry
+    workspace = getattr(application.state, "workspace", None)
+    if workspace is not None:
+        registry.archive_root = workspace.path
     application.include_router(create_design_io_router(registry))
     application.router.add_event_handler("shutdown", registry.close)
     return registry

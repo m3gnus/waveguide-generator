@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from server.platform.json_file import write_json_atomic as _write_json_atomic
+
 import asyncio
 from collections import OrderedDict
 from collections.abc import Sequence
@@ -18,7 +20,6 @@ import re
 import secrets
 import shutil
 import subprocess
-import tempfile
 import time
 from typing import Any, Callable, Literal, TypeVar
 import unicodedata
@@ -228,22 +229,6 @@ def _workspace_unavailable_response(exc: WorkspaceUnavailableError) -> JSONRespo
     )
 
 
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    """Publish a small cross-process setting without exposing a torn file."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(payload, stream, indent=2)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
 
 def _member_bytes(member: ExportMember, remaining: int = MAX_EXPORT_BYTES) -> bytes:
     if member.text is not None:
@@ -261,17 +246,6 @@ def _member_bytes(member: ExportMember, remaining: int = MAX_EXPORT_BYTES) -> by
     except (binascii.Error, ValueError) as exc:
         raise ValueError(f"{member.relative_path!r} contains invalid base64 data") from exc
 
-
-def _archive_design_lineage(content: bytes) -> tuple[bool, object]:
-    """Recognize the reserved run-archive pointer and return its lineage."""
-
-    try:
-        record = json.loads(content.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError, TypeError):
-        return False, None
-    if not isinstance(record, dict) or "schemaVersion" not in record or "lineageId" not in record:
-        return False, None
-    return True, record["lineageId"]
 
 
 def _decode_json_export_request(
@@ -1076,6 +1050,8 @@ def _write_export_sync(
         for index, (relative_path, content) in enumerate(members):
             label = f"members[{index}].relative_path"
             segments = _path_segments(relative_path, label)
+            if segments[-1].casefold() == "design.json":
+                raise ValueError("design.json is reserved for the server archive owner")
             destination = export_directory.joinpath(*segments).resolve()
             _strictly_inside(destination, workspace_root, label)
             if destination == export_directory or export_directory not in destination.parents:
@@ -1167,46 +1143,6 @@ def _write_export_sync(
                     status_code=409,
                     detail=f"Export path is a directory, not a file: {destination}",
                 )
-            if segments == ["design.json"] and destination.is_file():
-                incoming_record, incoming_lineage = _archive_design_lineage(content)
-                if incoming_record:
-                    try:
-                        existing = _retry_after_acl_repair(
-                            destination,
-                            destination.read_bytes,
-                            workspace_root=workspace_root,
-                        )
-                    except OSError as exc:
-                        # A pointer file that cannot be opened and one that
-                        # names another design both mean "do not overwrite",
-                        # and they mean nothing else alike. Reported as one,
-                        # this read the way it was meant to -- as two
-                        # Untitled designs colliding -- and sent everyone
-                        # looking at lineage identifiers, when the file was
-                        # simply unreadable: written by an earlier run under a
-                        # different owner, with an ACL that named nobody else.
-                        # `server/platform/staging.py` is why that could
-                        # happen; this is what it looked like when it did.
-                        raise HTTPException(
-                            status_code=409,
-                            detail=(
-                                "Cannot read the run archive's design.json at "
-                                f"{destination} ({exc.strerror or exc}); refusing to "
-                                "overwrite a pointer file whose lineage cannot be "
-                                "checked. Delete that file or restore read access to "
-                                "it, and the next run will write it again."
-                            ),
-                        ) from exc
-                    existing_record, existing_lineage = _archive_design_lineage(existing)
-                    if not existing_record or existing_lineage != incoming_lineage:
-                        raise HTTPException(
-                            status_code=409,
-                            detail=(
-                                "Archive design.json belongs to another lineage "
-                                "or is not a run-archive pointer file; refusing "
-                                "overwrite."
-                            ),
-                        )
 
     response = {
         "directory": str(export_directory),

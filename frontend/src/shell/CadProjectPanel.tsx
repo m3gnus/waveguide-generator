@@ -58,7 +58,7 @@ export function useCurrentCadProjectLineage(): string | null {
   return returned?.lineage_id ?? identity?.lineageId ?? null;
 }
 
-export function useCurrentCadProject(): { lineageId: string; name: string } | null {
+export function useCurrentCadProject(): { lineageId: string; name: string; archiveFolder: string | null } | null {
   const returned = useCadReturnStore((state) => state.ingestRecord?.project ?? null);
   const lineageId = useCurrentCadProjectLineage();
   const [projects, setProjects] = useState<CadProject[]>([]);
@@ -80,7 +80,7 @@ export function useCurrentCadProject(): { lineageId: string; name: string } | nu
   const name = known
     ? projectName(known)
     : returned?.document_name?.trim() || returned?.archive_stem?.trim() || 'Untitled project';
-  return { lineageId, name };
+  return { lineageId, name, archiveFolder: known?.archiveStem ?? returned?.archive_stem ?? null };
 }
 
 async function openCadOnlyProject(project: CadProject, ticket: DesignOpenTicket): Promise<string> {
@@ -206,7 +206,7 @@ function ProjectSwitcher({ current, label, onOpened, onError }: {
  * change made in either place names the same folder everywhere.
  */
 function ProjectOverflowMenu({ project, onNotice, onError }: {
-  project: { lineageId: string } | null;
+  project: { lineageId: string; archiveFolder: string | null } | null;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
 }) {
@@ -233,7 +233,7 @@ function ProjectOverflowMenu({ project, onNotice, onError }: {
       onClick={() => setOpen((value) => !value)}
     >⋯</button>
     {open && <div role="menu" aria-label="Project folders" className="cad-project-menu cad-overflow-menu">
-      {project && <button role="menuitem" title="Open this project's archive folder: every run's files, beside the captured Fusion documents." onClick={() => void reveal()}><Icon name="folder"/>Open project folder</button>}
+      {project && <button role="menuitem" title={`Open project folder: ${project.archiveFolder ?? 'not yet claimed'}/`} onClick={() => void reveal()}><Icon name="folder"/>Open project folder</button>}
       <button role="menuitem" disabled={!folder.path || folder.busy !== null} title="Open the Runs folder every CAD project is archived under. Its effective path is shown in Settings → WG folder." onClick={() => { setOpen(false); void folder.open(); }}><Icon name="folder"/>Open Runs folder</button>
       <button role="menuitem" disabled={folder.busy !== null} title="Choose the WG folder. Existing overrides and files are kept." onClick={() => { setOpen(false); void folder.select(); }}>Change WG folder…</button>
       <div className="cad-overflow-path" title={folder.path ?? undefined}>{folder.path ?? (folder.loaded ? 'Runs folder unavailable' : 'Loading…')}</div>

@@ -1,5 +1,5 @@
 import type { JobItem } from '../api/jobsSocket';
-import { archiveFolderForJob, exportStemForJob, runSourceForJob } from './exportNaming';
+import { exportStemForJob, runSourceForJob } from './exportNaming';
 
 /**
  * The permanent record of a solve.
@@ -9,17 +9,14 @@ import { archiveFolderForJob, exportStemForJob, runSourceForJob } from './export
  * terminal-run cap is passed, and only a rated run is exempt; and a user can
  * remove a run at any time. Nothing else on disk said a run had ever
  * happened, so a CAD solve that was not manually exported could simply
- * disappear. These two files are what survives that: a run
- * record beside the exported curves, and one pointer file naming the design
- * the folder belongs to.
+ * disappear. A run record beside the exported curves preserves that evidence. The server owns the project pointer.
  *
- * Both are derived entirely from the job item, with no clock reading, so
+ * It is derived entirely from the job item, with no clock reading, so
  * archiving the same run twice produces the same bytes and the backend's
  * `merge_identical` write stays a no-op rather than a 409.
  */
 
 export const RUN_RECORD_FILENAME = 'run.json';
-export const DESIGN_RECORD_FILENAME = 'design.json';
 export const RUN_RECORD_SCHEMA_VERSION = 1;
 
 export interface WorkspaceTextFile {
@@ -29,20 +26,6 @@ export interface WorkspaceTextFile {
 
 function stableJson(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
-}
-
-/** The design folder's pointer file: which design these runs belong to. */
-export function buildDesignRecord(job: JobItem): WorkspaceTextFile {
-  return {
-    filename: DESIGN_RECORD_FILENAME,
-    text: stableJson({
-      schemaVersion: RUN_RECORD_SCHEMA_VERSION,
-      folder: archiveFolderForJob(job),
-      name: job.label ?? null,
-      lineageId: job.cad_source?.lineage_id ?? null,
-      designId: job.cad_source?.design_id ?? null,
-    }),
-  };
 }
 
 /**
@@ -79,7 +62,8 @@ export function buildRunRecord(
         importedMesh: { ...(job.config_summary.mesh_import as Record<string, unknown> ?? {}), setup: job.cad_setup },
       } : {}),
       design: {
-        name: job.label ?? null,
+        name: (job.archive_key ? job.design_name : null) ?? job.label ?? null,
+        ...(job.archive_key && job.design_uid ? { uid: job.design_uid } : {}),
         lineageId: cad?.lineage_id ?? null,
         designId: cad?.design_id ?? null,
         revision: job.design_revision,

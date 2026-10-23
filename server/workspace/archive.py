@@ -373,6 +373,7 @@ def cad_document_sidecars(folder: Path) -> list[Path]:
 def captured_cad_document(
     runs_root: Path, stem: object, return_state_hash: str,
     *, sidecars: Collection[Path] | None = None,
+    archived_paths: Collection[Path] = (),
     verify_run_document: Callable[[Path], bool] | None = None,
 ) -> Path | None:
     """The exact archived model, preferring cad/ then an identified run copy.
@@ -384,7 +385,7 @@ def captured_cad_document(
     if not digest:
         return None
     folder = design_archive_folder(runs_root, stem)
-    if not _unlinked_archive_path(folder, runs_root):
+    if folder.exists() and not _unlinked_archive_path(folder, runs_root):
         return None
     directory = folder / CAD_SUBDIRECTORY
     document = _find_captured_document(directory, digest) if _unlinked_archive_path(directory, runs_root) else None
@@ -397,6 +398,18 @@ def captured_cad_document(
         if (document is not None and _unlinked_archive_path(document, runs_root)
                 and (verify_run_document is None or verify_run_document(document))):
             return document
+    # A previous Runs root or a legacy cad-import folder can hold the only
+    # remaining per-run copy. These paths come from the server's job database.
+    for run in archived_paths:
+        if not _unlinked_archive_path(run, Path(run.anchor)):
+            continue
+        for sidecar in cad_document_sidecars(run):
+            if not sidecar.name.endswith('.cad.json'):
+                continue
+            document = _placed_run_document(sidecar.parent, sidecar.name[:-len('.cad.json')], digest)
+            if (document is not None and _unlinked_archive_path(document, Path(run.anchor))
+                    and verify_run_document is not None and verify_run_document(document)):
+                return document
     return None
 
 

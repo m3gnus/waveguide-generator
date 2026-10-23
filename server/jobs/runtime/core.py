@@ -35,6 +35,7 @@ from server.cadlink.operations import REASON_CODES as CAD_REASON_STATES, REJECTE
 from server.cadlink.interpretation.solver_frame import REASON as FRAME_CONFIRMATION_REQUIRED
 from server.cadlink.intake.readings import record_frame_refusal
 from server.cadlink.store import CadLinkStore
+from server.workspace import archive_identity
 from server.design.defaults import default_sweep_start_hz
 from server.design.schema import DesignConfig, Expr
 from server.design.textcfg import parse
@@ -1810,6 +1811,10 @@ class JobRuntime:
             }
         if imported is not None and cad_provenance:
             task_metadata["cad"] = json.loads(json.dumps(cad_provenance, default=str))
+        task_metadata["archive"] = await asyncio.to_thread(
+            archive_identity.submission_archive, self.cadlink_store,
+            request.model_dump(mode="json"), task_metadata,
+        )
         return _ComposedJob(
             request=request,
             config_summary=summary,
@@ -3173,8 +3178,13 @@ class JobRuntime:
 
     async def patch_metadata(self, job_id: str, fields: Mapping[str, Any]) -> None:
         await self.start()
-        self._require_job(job_id)
+        row = self._require_job(job_id)
         changed = dict(fields)
+        if changed.get("archived_at"):
+            source = self._serialize_job(row, cadlink_store=self.cadlink_store).get('cad_source')
+            path = await asyncio.to_thread(archive_identity.complete_archive, self.cadlink_store, row, source)
+            if path is not None:
+                changed["archived_path"] = path
         column_fields: dict[str, Any] = {}
         if "label" in changed:
             column_fields["label"] = changed.pop("label")
@@ -4869,6 +4879,10 @@ class JobRuntime:
             "exported_files": metadata.get("exported_files") or [],
             "auto_export_completed_at": metadata.get("auto_export_completed_at"),
             "archived_at": metadata.get("archived_at"),
+            "archive_key": (metadata.get("archive") or {}).get("key"),
+            "archive_folder": archive_identity.job_archive_location(row, cad_source).folder,
+            "archive_run": archive_identity.job_archive_location(row, cad_source).run,
+            "archived_path": metadata.get("archived_path"),
             "auto_export_formats": metadata.get("auto_export_formats") or {},
             "raw_results_file": metadata.get("raw_results_file"),
             "mesh_artifact_file": metadata.get("mesh_artifact_file"),

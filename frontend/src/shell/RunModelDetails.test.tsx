@@ -4,10 +4,12 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
 import { migratedCadRequestFixture } from '../jobs/cadSolve.fixtures';
 import { useCadReturnStore } from '../stores/cadReturn';
+import { useDocumentStore, resetDocumentStore } from '../stores/document';
 import { RunModelDetails } from './RunModelDetails';
 
 let host: HTMLDivElement, root: Root;
 beforeEach(() => {
+  resetDocumentStore();
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ items: [{
@@ -102,4 +104,17 @@ it('does not claim capture was off when the attachment is missing', async () => 
   expect(missing.getAttribute('title')).not.toContain('Capture was off');
   expect(missing.getAttribute('title')).toContain('may have been removed');
   expect(host.querySelector('button')).toBeNull();
+});
+
+
+it('shows the immutable folder and a current rename only for the same document', async () => {
+  useDocumentStore.setState({ designUid: 'same-design', designName: 'Big Horn' });
+  const job = { ...run(), design_uid: 'same-design', design_name: 'Big Horn', archive_folder: 'Big_Horn', archive_run: '1_Big_Horn' };
+  await act(async () => root.render(<RunModelDetails job={job}/>));
+  expect(host.textContent).toContain('Folder:Big_Horn/');
+  expect(host.textContent).not.toContain('design now');
+  act(() => useDocumentStore.getState().setDesignName('Renamed'));
+  expect(host.textContent).toContain('design now Renamed');
+  act(() => useDocumentStore.setState({ designUid: 'unrelated', designName: 'Other' }));
+  expect(host.textContent).not.toContain('design now');
 });
