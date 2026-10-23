@@ -1454,7 +1454,7 @@ describe('permanent design id lifecycle in the File menu', () => {
     expect(useDocumentStore.getState().identity).toBeNull();
   });
 
-  it.each(['Keep with original', 'New design'])('asks again for a browser copy whose %s choice cannot be written', async (answer) => {
+  it.each(['Keep with original', 'New design'])('asks again for a browser copy after choosing %s', async (answer) => {
     const { durableSettings } = await import('../stores/durableSettings');
     durableSettings.set('designFiles', null);
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
@@ -1501,7 +1501,8 @@ it('uses the native picker path to distinguish same-name copies', async () => {
   expect(dialog.textContent).toContain('copy of same.');
   await act(async () => { [...dialog.querySelectorAll('button')].find((button) => button.textContent === 'Keep with original')!.click(); });
   await nativeOpen();
-  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  await answerSharedCopy('Cancel');
   expect(useDocumentStore.getState().designUid).toBe(uid);
 });
 
@@ -1519,73 +1520,75 @@ async function answerSharedCopy(answer: string) {
   });
 }
 
-it('writes New design to the copy, recognizes it after a move, and asks about another copy at the old path', async () => {
+it('keeps New design in memory until explicit export, asks on unsaved reopen, and reopens the saved id', async () => {
   const { durableSettings } = await import('../stores/durableSettings');
   durableSettings.set('designFiles', null);
   const uid = 'wgu_01K00000000000000000000000';
-  let diskUid = uid;
+  const stamp = (id: string) => `; Waveguide Generator design-id: ${id}\n`;
+  let diskText = stamp(uid) + 'cfg';
   let source = '/original/design.cfg';
   let fileKey = '1:1';
-  const saves: unknown[] = [];
+  const writes: string[] = [];
+  const identity = { designId: 'wgd_original', lineageId: 'wgl_original', baseEditVersion: 3 };
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
-    if (String(url) === '/api/design/choose') return Response.json({
-      selected: true, filename: source.split('/').pop(), source, fileKey, selectedFile: 'grant', text: 'cfg',
+    const path = String(url);
+    if (path === '/api/design/choose') return Response.json({
+      selected: true, filename: source.split('/').pop(), source, fileKey, text: diskText,
     });
-    if (String(url) === '/api/design/open') return Response.json({ ...openedResponse(150), designUid: diskUid });
-    if (String(url) === '/api/design/save') {
+    if (path === '/api/design/open') return Response.json({
+      ...openedResponse(150), designUid: /design-id: (\S+)/.exec(init!.body as string)![1],
+      cadlink: diskText.includes('CadLink')
+        ? { identity, classification: 'current', adoptionCandidate: null }
+        : { identity: null, classification: 'missing', adoptionCandidate: null },
+    });
+    if (path === '/api/design/serialize') {
       const payload = JSON.parse(init!.body as string);
-      saves.push(payload);
-      diskUid = payload.designUid;
-      fileKey = '1:3'; // the atomic writer publishes a new inode
-      return Response.json({ text: 'new stamp', fileKey });
+      expect(payload.designUid).toBe(useDocumentStore.getState().designUid);
+      expect(payload).not.toHaveProperty('identity');
+      return Response.json({ text: stamp(payload.designUid) + 'cfg', suggestedFilename: 'design.cfg' });
+    }
+    if (path === '/api/design/save') throw new Error('Opening a copy must never save it');
+    if (path === '/api/workspace/write-export') {
+      const files = (init!.body as FormData).getAll('file') as File[];
+      diskText = await files[0].text();
+      writes.push(diskText);
+      fileKey = '1:3';
+      return Response.json({ directory: '/copy', files: ['/copy/design.cfg'] });
     }
     return Response.json({ items: [] });
   }));
   vi.spyOn(window, 'confirm').mockReturnValue(true);
+  diskText += '\nCadLink { original identity }';
   await nativeOpen();
+  expect(useDocumentStore.getState().identity).toEqual(identity);
+  const geometry = structuredClone(useDesignStore.getState().design);
   source = '/copy/design.cfg'; fileKey = '1:2';
+  const originalText = diskText;
   await nativeOpen();
-  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
-  expect(saves).toHaveLength(0);
   await answerSharedCopy('New design');
   const newUid = useDocumentStore.getState().designUid;
+  expect(newUid).toMatch(/^wgu_/);
   expect(newUid).not.toBe(uid);
-  expect(saves).toEqual([{ selectedFile: 'grant', designUid: newUid }]);
-  source = '/moved/renamed.cfg';
+  expect(useDocumentStore.getState().identity).toBeNull();
+  expect(useDocumentStore.getState().classification).toBe('missing');
+  expect(useDesignStore.getState().design).toEqual(geometry);
+  expect(diskText).toBe(originalText);
+  expect(writes).toHaveLength(0);
+  expect(vi.mocked(fetch).mock.calls.some(([url]) => ['/api/design/save', '/api/workspace/write-export', '/api/design/serialize'].includes(String(url)))).toBe(false);
+  const observed = durableSettings.get('designFiles');
+  await nativeOpen();
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  await answerSharedCopy('Cancel');
+  expect(useDocumentStore.getState().designUid).toBe(newUid);
+  expect(durableSettings.get('designFiles')).toBe(observed);
+  const exportCopy = itemNamed('Export a copy');
+  await act(async () => { exportCopy.click(); });
+  expect(writes).toEqual([stamp(newUid) + 'cfg']);
+  expect(diskText.match(/Waveguide Generator design-id:/g)).toHaveLength(1);
   await nativeOpen();
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(useDocumentStore.getState().designUid).toBe(newUid);
-  source = '/copy/design.cfg'; diskUid = uid; fileKey = '1:4';
-  await nativeOpen();
-  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
-  expect(useDocumentStore.getState().designUid).toBe(newUid);
-  await answerSharedCopy('Cancel');
-  expect(saves).toHaveLength(1);
-});
-
-it.each(['read-only', 'disk full'])('asks again when the new-design copy cannot be written: %s', async (detail) => {
-  const { durableSettings } = await import('../stores/durableSettings');
-  durableSettings.set('designFiles', null);
-  const uid = 'wgu_01K00000000000000000000000';
-  let source = '/original/design.cfg';
-  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-    if (String(url) === '/api/design/choose') return Response.json({
-      selected: true, filename: 'design.cfg', source, fileKey: source, selectedFile: 'grant', text: 'cfg',
-    });
-    if (String(url) === '/api/design/open') return Response.json({ ...openedResponse(150), designUid: uid });
-    if (String(url) === '/api/design/save') return Response.json({ detail }, { status: 409 });
-    return Response.json({ items: [] });
-  }));
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
-  await nativeOpen();
-  source = '/copy/design.cfg';
-  await nativeOpen();
-  await answerSharedCopy('New design');
-  expect(useDocumentStore.getState().designUid).not.toBe(uid);
-  expect(container.querySelector('[role="status"]')?.textContent).toContain('You will be asked again next time');
-  await nativeOpen();
-  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
-  await answerSharedCopy('Cancel');
+  expect(useDocumentStore.getState().identity).toBeNull();
 });
 
 it.each([404, 405, 500, 'unavailable', 'cancelled'])('Open uses the browser input unless the native result is a real cancel: %s', async result => {

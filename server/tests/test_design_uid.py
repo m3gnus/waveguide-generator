@@ -151,10 +151,53 @@ def test_native_open_picker_returns_a_path_and_distinct_outcomes(picker_client, 
     assert chosen.items() >= {"selected": True, "outcome": "chosen", "source": str(source.resolve()),
                               "filename": source.name, "text": STAMP + SOURCE}.items()
     assert chosen["fileKey"]
-    assert chosen["selectedFile"]
+    assert "selectedFile" not in chosen
     for outcome in ("cancelled", "unavailable"):
         monkeypatch.setattr(api, "select_workspace_path", lambda *args, **kwargs: PathPickerResult(outcome))
         assert client.post("/api/design/choose").json() == {"selected": False, "outcome": outcome}
+
+
+def test_explicit_export_writes_the_new_uid_and_detached_cadlink(picker_client, tmp_path):
+    from server.cadlink.store import CadLinkStore
+    from server.design_io.api import save_design
+    from server.tests.test_workspace_write_export import destination_router, selected_state
+
+    client, copy = picker_client
+    store = CadLinkStore(":memory:")
+    try:
+        linked = asyncio.run(save_design({"design": parse(SOURCE).semantic_data(), "designUid": UID}, store=store))
+    finally:
+        store.close()
+    original = copy.with_name("original.cfg")
+    original.write_text(linked["text"])
+    copy.write_bytes(original.read_bytes())
+    before = copy.read_bytes()
+    chosen = client.post("/api/design/choose").json()
+    opened = client.post("/api/design/open", content=chosen["text"]).json()
+    assert opened["designUid"] == UID
+    assert opened["cadlink"]["identity"] is not None
+
+    # The UI's new uid and detached identity are sent through normal export.
+    serialized = client.post("/api/design/serialize", json={
+        "design": opened["design"], "designUid": OTHER, "filename": copy.name,
+    })
+    assert serialized.status_code == 200, serialized.text
+    assert copy.read_bytes() == original.read_bytes() == before
+    text = serialized.json()["text"]
+    state, _ = selected_state(tmp_path)
+    destinations, router = destination_router(state, tmp_path)
+    client.app.include_router(router)
+    written = client.post("/api/workspace/write-export", data={
+        "destination": destinations.issue(copy.parent), "existing": "overwrite",
+        "relative_path": copy.name,
+    }, files={"file": (copy.name, text, "text/plain")})
+    assert written.status_code == 200, written.text
+    assert original.read_bytes() == before
+    assert copy.read_text().count("Waveguide Generator design-id:") == 1
+    assert parse(copy.read_text()).semantic_data() == parse(before.decode()).semantic_data()
+    reopened = client.post("/api/design/open", content=copy.read_text()).json()
+    assert reopened["designUid"] == OTHER
+    assert reopened["cadlink"]["identity"] is None
 
 
 @pytest.mark.parametrize("system", ["Darwin", "Windows", "Linux"])
@@ -232,46 +275,6 @@ def test_tk_picker_distinguishes_selection_and_cancel(selected, monkeypatch):
     assert destroyed == [True]
 
 
-def test_copy_new_identity_is_written_and_survives_a_move(picker_client):
-    client, source = picker_client
-    before = parse(source.read_text())
-    chosen = client.post("/api/design/choose").json()
-    saved = client.post("/api/design/save", json={"selectedFile": chosen["selectedFile"], "designUid": OTHER})
-    assert saved.status_code == 200, saved.text
-    after = parse(source.read_text())
-    assert after.design_uid == OTHER
-    assert after.semantic_data() == before.semantic_data()
-    assert design_hash(after.design) == design_hash(before.design)
-    key = saved.json()["fileKey"]
-    moved = source.with_name("moved.cfg")
-    source.rename(moved)
-    source.write_text(STAMP + SOURCE)
-    assert parse(moved.read_text()).design_uid == OTHER
-    assert key == f"{moved.stat().st_dev}:{moved.stat().st_ino}"
-    assert client.post("/api/design/choose").json()["fileKey"] != key
-    assert parse(source.read_text()).design_uid == UID
-    assert client.post("/api/design/save", json={"selectedFile": chosen["selectedFile"], "designUid": OTHER}).status_code == 409
-
-
-@pytest.mark.parametrize("failure", ["read-only", "changed", "write-error"])
-def test_copy_identity_write_refuses_unwritable_or_changed_file(picker_client, monkeypatch, failure):
-    from server.design_io import api
-
-    client, source = picker_client
-    chosen = client.post("/api/design/choose").json()
-    if failure == "read-only":
-        source.chmod(0o444)
-    elif failure == "changed":
-        source.write_text(STAMP + SOURCE + "; changed\n")
-    else:
-        monkeypatch.setattr(api, "_write_export_sync", lambda *args: (_ for _ in ()).throw(OSError("disk full")))
-    before = source.read_bytes()
-    response = client.post("/api/design/save", json={"selectedFile": chosen["selectedFile"], "designUid": OTHER})
-    assert response.status_code == 409
-    assert source.read_bytes() == before
-    source.chmod(0o644)
-
-
 @pytest.mark.parametrize("inline", [False, True])
 @pytest.mark.parametrize("conflicting", [False, True])
 def test_duplicate_and_inline_stamps_normalize_without_geometry_or_hash_changes(inline, conflicting, caplog):
@@ -319,30 +322,6 @@ def test_solve_submission_persists_document_identity_outside_geometry(tmp_path, 
         await app.state.jobs_runtime.shutdown()
 
     asyncio.run(scenario())
-
-
-def test_new_design_copy_detaches_cadlink_without_changing_geometry(picker_client):
-    from server.cadlink.store import CadLinkStore
-    from server.design_io.api import save_design
-
-    client, source = picker_client
-    store = CadLinkStore(":memory:")
-    try:
-        linked = asyncio.run(save_design({"design": parse(SOURCE).semantic_data(), "designUid": UID}, store=store))
-        source.write_text(linked["text"])
-        before = parse(linked["text"])
-        chosen = client.post("/api/design/choose").json()
-        saved = client.post("/api/design/save", json={"selectedFile": chosen["selectedFile"], "designUid": OTHER})
-        assert saved.status_code == 200, saved.text
-        after = parse(source.read_text())
-        assert before.cadlink is not None
-        assert after.cadlink is None
-        assert after.design_uid == OTHER
-        assert after.semantic_data() == before.semantic_data()
-        assert design_hash(after.design) == design_hash(before.design)
-        assert design_hash(after.design).startswith(before.cadlink.saved_design_hash)
-    finally:
-        store.close()
 
 
 def test_headless_linux_never_misreads_a_silent_picker_failure_as_cancel(monkeypatch):

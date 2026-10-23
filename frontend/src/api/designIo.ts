@@ -113,7 +113,6 @@ async function postText<T>(path: string, text: string, fetcher: typeof fetch): P
 export interface ChosenDesignFile {
   selected: boolean;
   outcome?: 'chosen' | 'cancelled' | 'unavailable';
-  selectedFile?: string;
   fileKey?: string;
   filename?: string;
   source?: string;
@@ -130,18 +129,6 @@ export async function chooseDesignFile(fetcher: typeof fetch = fetch): Promise<C
     if (chosen.selected && chosen.filename && typeof chosen.text === 'string') return chosen;
   } catch { /* unavailable picker, network, or malformed reply: retain browser Open */ }
   return null;
-}
-
-/** Persist the explicit New design decision to the exact native-selected file. */
-export async function saveSelectedDesignIdentity(
-  selectedFile: string, designUid: string, fetcher: typeof fetch = fetch,
-): Promise<{ text: string; fileKey: string }> {
-  const response = await fetcher('/api/design/save', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ selectedFile, designUid }),
-  });
-  if (!response.ok) throw new Error(await errorMessage(response));
-  return response.json();
 }
 
 export function openDesignText(text: string, fetcher: typeof fetch = fetch): Promise<OpenDesignResponse> {

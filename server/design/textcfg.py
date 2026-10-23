@@ -2042,7 +2042,7 @@ def _with_design_uid_stamp(text: str, uid: str | None) -> str:
 
 def serialize(
     design: ParsedDesign | DesignConfig, *, cadlink: CadLink | None = None,
-    design_uid: str | None = None, detach_cadlink: bool = False,
+    design_uid: str | None = None,
 ) -> str:
     """Serialize in stable v1 order, preserving pristine source except id stamps."""
 
@@ -2059,30 +2059,15 @@ def serialize(
             and (cadlink is None or cadlink == design.cadlink)
             and _semantic_fingerprint(design.design) == design._initial_fingerprint
         ):
-            source = design.source_text
-            if detach_cadlink and design.cadlink is not None:
-                # Reuse the lexer's block grammar; only CadLink's strict block
-                # is removed. Geometry and every other source byte stay intact.
-                lines = []
-                skipping = False
-                for line in source.splitlines(keepends=True):
-                    match = _BLOCK_START.fullmatch(_without_comment(line))
-                    if match and match[1] == "CadLink":
-                        skipping = True
-                    elif skipping and _without_comment(line) == "}":
-                        skipping = False
-                    elif not skipping:
-                        lines.append(line)
-                source = "".join(lines)
-            return _with_design_uid_stamp(source, uid)
+            return _with_design_uid_stamp(design.source_text, uid)
         return _serialize_canonical(
             design.design,
             design.comments,
-            None if detach_cadlink else design.cadlink if cadlink is None else cadlink,
+            design.cadlink if cadlink is None else cadlink,
             uid,
         )
     if isinstance(design, DesignConfig):
-        return _serialize_canonical(design, cadlink=None if detach_cadlink else cadlink, design_uid=design_uid)
+        return _serialize_canonical(design, cadlink=cadlink, design_uid=design_uid)
     raise TypeError("serialize expects ParsedDesign or DesignConfig")
 
 

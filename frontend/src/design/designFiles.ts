@@ -7,7 +7,11 @@ interface FileMemory { originals: Record<string, KnownFile> }
 function memory(): FileMemory {
   try {
     const value = JSON.parse(storage.getItem('') ?? '{}') as Partial<FileMemory>;
-    return { originals: value.originals ?? {} };
+    // Discard legacy copy decisions and accepted-copy keys. Only the first
+    // observation identifies the original; choosing Keep/New never changes it.
+    return { originals: Object.fromEntries(Object.entries(value.originals ?? {}).map(([uid, file]) => [uid, {
+      uid, source: file.source, name: file.name, fileKeys: file.fileKeys?.slice(0, 1),
+    }])) };
   } catch { return { originals: {} }; }
 }
 
@@ -18,18 +22,14 @@ export function designFileSource(file: { name: string; path?: string; webkitRela
 
 export function inspectDesignFile(uid: string, source: string, fileKey?: string): { uid: string; originalName?: string } {
   const original = memory().originals[uid];
-  // Native file keys survive a move and distinguish replacement at an old path.
-  // Browser uploads expose only a name; they cannot persist a copy decision.
+  // The original native file key survives moves; browser uploads expose only a name.
   const sameFile = original?.source === source || (fileKey && original?.fileKeys?.includes(fileKey));
   return original && !sameFile ? { uid, originalName: original.name } : { uid };
 }
 
-/** Record an observed on-disk uid only, never an old-stamp/path -> chosen-uid mapping. */
+/** Keep the first observed file for each uid, solely to recognize shared stamps. */
 export function rememberDesignFile(uid: string, source: string, name: string, fileKey?: string): void {
   const known = memory();
-  const original = known.originals[uid] ??= { uid, source, name };
-  if (fileKey && !original.fileKeys?.includes(fileKey)) {
-    original.fileKeys = [...original.fileKeys ?? [], fileKey];
-  }
+  known.originals[uid] ??= { uid, source, name, fileKeys: fileKey ? [fileKey] : undefined };
   storage.setItem('', JSON.stringify(known));
 }

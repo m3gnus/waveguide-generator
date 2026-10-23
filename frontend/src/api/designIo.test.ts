@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { chooseDesignFile, saveSelectedDesignIdentity, convertDesignToFreeform, exportGeometryToOutputFolder, freeformFromProfileCsv, hydrateDesignDocument, sendDesignToCad, serializeDesignDocument } from './designIo';
+import { chooseDesignFile, convertDesignToFreeform, exportGeometryToOutputFolder, freeformFromProfileCsv, hydrateDesignDocument, sendDesignToCad, serializeDesignDocument } from './designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
 
 describe('design hydration', () => {
@@ -579,12 +579,5 @@ describe('native Open and browser fallback', () => {
   it('falls back on transport or reply decoding errors', async () => {
     expect(await chooseDesignFile(vi.fn().mockRejectedValue(new Error('offline')))).toBeNull();
     expect(await chooseDesignFile(vi.fn(async () => new Response('not json')))).toBeNull();
-  });
-
-  it('saves an explicit copy identity to the selected-file grant only', async () => {
-    const fetcher = vi.fn<typeof fetch>(async () => Response.json({ text: 'new stamp', fileKey: '1:2' }));
-    expect(await saveSelectedDesignIdentity('grant', 'wgu_new', fetcher)).toEqual({ text: 'new stamp', fileKey: '1:2' });
-    expect(JSON.parse(fetcher.mock.calls[0][1]!.body as string)).toEqual({ selectedFile: 'grant', designUid: 'wgu_new' });
-    await expect(saveSelectedDesignIdentity('grant', 'wgu_new', vi.fn(async () => Response.json({ detail: 'read-only' }, { status: 409 })))).rejects.toThrow('read-only');
   });
 });
