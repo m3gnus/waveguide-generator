@@ -231,7 +231,7 @@ def test_a_retained_model_state_survives_a_newer_capture(tmp_path: Path) -> None
     ]
     # The retained state is still the one its own runs will be given.
     placed = pin_cad_document(runs, "Big Horn", "sha256:aaa111", verify_document=lambda path: path.read_bytes() == b"first-bytes")
-    assert placed == "cad/Big_Horn_v7_260819-1000_aaa111.f3d"
+    assert placed == "cad/Big_Horn_v7_260819-1000_aaa111.pinned.f3d"
     assert (runs / "Big_Horn" / placed).read_bytes() == b"first-bytes"
 
 
@@ -448,31 +448,49 @@ def test_two_runs_share_one_pinned_file_and_reingestion_is_a_noop(tmp_path: Path
     relative = archive_cad_document(bundle, record_for(), runs, "Big Horn")
     original = runs / "Big_Horn" / relative
     before = original.stat().st_mtime_ns
+    pinned = pin_cad_document(runs, "Big Horn", "sha256:abc123", verify_document=lambda path: path.read_bytes() == b"f3d-bytes")
+    assert pinned != relative
+    assert not original.exists()
     for _run in (14, 15):
-        assert pin_cad_document(runs, "Big Horn", "sha256:abc123", verify_document=lambda path: path.read_bytes() == b"f3d-bytes") == relative
-    assert archive_cad_document(bundle, record_for(), runs, "Big Horn") == relative
+        assert pin_cad_document(runs, "Big Horn", "sha256:abc123", verify_document=lambda path: path.read_bytes() == b"f3d-bytes") == pinned
+    assert archive_cad_document(bundle, record_for(), runs, "Big Horn") == pinned
+    original = runs / "Big_Horn" / pinned
     assert original.stat().st_mtime_ns == before
     assert list((runs / "Big_Horn").rglob("*.f3d")) == [original]
     assert original.with_suffix(".cad.json").is_file()
     assert not original.with_suffix(".json").exists()
 
 
-def test_a_pinned_version_survives_capture_and_older_wg_prune(tmp_path: Path) -> None:
-    from server.workspace.archive import _captured_documents
+@pytest.mark.parametrize("legacy_pin", [False, True])
+def test_a_pinned_version_survives_actual_v035_recapture_and_prune(tmp_path: Path, legacy_pin) -> None:
+    from server.tests.fixtures import archive_v035 as older
 
     runs = tmp_path / "runs"
-    first = archive_cad_document(bundle_with_document(tmp_path), record_for(), runs, "Big Horn")
-    pin_cad_document(runs, "Big Horn", "sha256:abc123", verify_document=lambda _path: True)
+    bundle = bundle_with_document(tmp_path)
+    record = record_for()
+    first = archive_cad_document(bundle, record, runs, "Big Horn")
+    if legacy_pin:
+        # Upgrade a sidecar-only pin made by the initial implementation.
+        source = runs / "Big_Horn" / first
+        source.with_suffix(".json").rename(source.with_suffix(".cad.json"))
+    pinned = pin_cad_document(runs, "Big Horn", "sha256:abc123", verify_document=lambda _path: True)
+    document = runs / "Big_Horn" / pinned
+    sidecar = document.with_suffix(".cad.json")
+    before = (document.read_bytes(), sidecar.read_bytes(), document.stat().st_mtime_ns)
+    assert older._placed_run_document(document.parent, document.stem, "sha256:abc123") == document
+    # Same document/hash/minute: old WG recreates the exact ordinary filename.
+    assert older.archive_cad_document(bundle, record, runs, "Big Horn") == first
+    assert (runs / "Big_Horn" / first).exists()
+    assert captured_cad_document(runs, "Big Horn", "sha256:abc123") == document
+    assert pin_cad_document(runs, "Big Horn", "sha256:abc123", verify_document=lambda _path: True) == pinned
     later = record_for()
     later["document"]["return_state_hash"] = "sha256:later"
-    archive_cad_document(bundle_with_document(tmp_path / "later"), later, runs, "Big Horn")
-    # Older WG only enumerates ordinary .json sidecars; mimic deleting all it sees.
-    for entry in _captured_documents(runs / "Big_Horn" / "cad"):
-        entry.document.unlink()
-        entry.sidecar.unlink()
-    assert (runs / "Big_Horn" / first).read_bytes() == b"f3d-bytes"
+    older.archive_cad_document(bundle_with_document(tmp_path / "later"), later, runs, "Big Horn")
+    older._prune_captured_documents(document.parent, set(), [])
+    assert not (runs / "Big_Horn" / first).exists()
+    assert (document.read_bytes(), sidecar.read_bytes(), document.stat().st_mtime_ns) == before
     reclaim_captured_documents(runs, "Big Horn")
-    assert (runs / "Big_Horn" / first).is_file()
+    assert document.is_file()
 
 
 def test_pinning_requires_verified_bytes_and_never_overwrites_a_pin(tmp_path: Path) -> None:
@@ -589,3 +607,39 @@ def test_legacy_run_copy_remains_a_verified_source_without_creating_copies(tmp_p
     assert captured_cad_document(runs, "Big Horn", "sha256:abc123", verify_run_document=lambda path: path.read_bytes() == b"legacy") == old
     assert pin_cad_document(runs, "Big Horn", "sha256:abc123", verify_document=lambda path: path.read_bytes() == b"legacy") == "14_Big_Horn/14_Big_Horn.f3d"
     assert list((runs / "Big_Horn").rglob("*.f3d")) == [old]
+
+
+@pytest.mark.parametrize("after_model_rename", [False, True])
+def test_interrupted_pinning_can_be_retried_without_losing_the_model(tmp_path, monkeypatch, after_model_rename):
+    from server.workspace import archive
+
+    runs = tmp_path / "runs"
+    relative = archive_cad_document(bundle_with_document(tmp_path), record_for(), runs, "Big Horn")
+    original = runs / "Big_Horn" / relative
+    # Exercise byte-preserving retries with a legacy compact sidecar too.
+    sidecar = original.with_suffix(".json")
+    raw = json.dumps(json.loads(sidecar.read_bytes())).encode()
+    sidecar.write_bytes(raw)
+    if after_model_rename:
+        real_unlink = Path.unlink
+
+        def interrupted_unlink(path, *args, **kwargs):
+            if path == sidecar:
+                raise OSError("interrupted after model rename")
+            return real_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", interrupted_unlink)
+    else:
+        def interrupted_rename(_source, _destination):
+            raise OSError("interrupted before model rename")
+
+        monkeypatch.setattr(archive.os, "rename", interrupted_rename)
+    with pytest.raises(OSError):
+        pin_cad_document(runs, "Big Horn", "sha256:abc123", verify_document=lambda _path: True)
+    monkeypatch.undo()
+    pinned = pin_cad_document(runs, "Big Horn", "sha256:abc123", verify_document=lambda _path: True)
+    document = runs / "Big_Horn" / pinned
+    assert document.read_bytes() == b"f3d-bytes"
+    assert document.with_suffix(".cad.json").read_bytes() == raw
+    assert not document.with_suffix(".json").exists()
+    assert list(document.parent.glob("*.f3d")) == [document]

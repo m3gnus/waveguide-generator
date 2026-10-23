@@ -161,11 +161,11 @@ def test_a_queued_run_keeps_its_model_when_a_changed_one_is_ingested(
         archive_run_document(archive_request(app, "aaa"), SimpleNamespace(app=app))
     )
 
-    assert placed == {"placed": True, "relativePath": "cad/Tritonia_260820-0900_aaa.f3d", "modelFile": "cad/Tritonia_260820-0900_aaa.f3d"}
+    assert placed == {"placed": True, "relativePath": "cad/Tritonia_260820-0900_aaa.pinned.f3d", "modelFile": "cad/Tritonia_260820-0900_aaa.pinned.f3d"}
     run_folder = runs / STEM / "cad"
-    assert run_folder.joinpath("Tritonia_260820-0900_aaa.f3d").read_bytes() == b"model-aaa"
+    assert run_folder.joinpath("Tritonia_260820-0900_aaa.pinned.f3d").read_bytes() == b"model-aaa"
     sidecar = json.loads(
-        run_folder.joinpath("Tritonia_260820-0900_aaa.cad.json").read_text(encoding="utf-8")
+        run_folder.joinpath("Tritonia_260820-0900_aaa.pinned.cad.json").read_text(encoding="utf-8")
     )
     assert sidecar["returnStateHash"] == "sha256:aaa"
 
@@ -221,9 +221,9 @@ def test_a_run_archived_before_its_capture_finishes_still_gets_the_copy(
 
     placed = asyncio.run(scenario())
 
-    assert placed == {"placed": True, "relativePath": "cad/Tritonia_260822-0900_ccc.f3d", "modelFile": "cad/Tritonia_260822-0900_ccc.f3d"}
+    assert placed == {"placed": True, "relativePath": "cad/Tritonia_260822-0900_ccc.pinned.f3d", "modelFile": "cad/Tritonia_260822-0900_ccc.pinned.f3d"}
     assert (
-        runs / STEM / "cad" / "Tritonia_260822-0900_ccc.f3d"
+        runs / STEM / "cad" / "Tritonia_260822-0900_ccc.pinned.f3d"
     ).read_bytes() == b"model-ccc"
 
 
@@ -250,10 +250,10 @@ def test_archiving_a_run_twice_never_substitutes_the_newer_model(
 
     assert first == again == {
         "placed": True,
-        "relativePath": "cad/Tritonia_260820-0900_aaa.f3d",
-        "modelFile": "cad/Tritonia_260820-0900_aaa.f3d",
+        "relativePath": "cad/Tritonia_260820-0900_aaa.pinned.f3d",
+        "modelFile": "cad/Tritonia_260820-0900_aaa.pinned.f3d",
     }
-    document = runs / STEM / "cad" / "Tritonia_260820-0900_aaa.f3d"
+    document = runs / STEM / "cad" / "Tritonia_260820-0900_aaa.pinned.f3d"
     assert document.read_bytes() == b"model-aaa"
     assert document.read_bytes() != b"model-bbb"
     sidecar = json.loads(
@@ -315,8 +315,8 @@ def test_pinned_versions_remain_after_all_runs_release_them(
     app.state.jobs_runtime.store.delete_job_with_event("job-a")
     capture_through_the_app(app, tmp_path, "ccc", at="2026-08-22T09:00:00Z")
     assert sorted(path.name for path in (runs / STEM / "cad").iterdir()) == [
-        "Tritonia_260820-0900_aaa.cad.json", "Tritonia_260820-0900_aaa.f3d",
-        "Tritonia_260821-0900_bbb.cad.json", "Tritonia_260821-0900_bbb.f3d",
+        "Tritonia_260820-0900_aaa.pinned.cad.json", "Tritonia_260820-0900_aaa.pinned.f3d",
+        "Tritonia_260821-0900_bbb.pinned.cad.json", "Tritonia_260821-0900_bbb.pinned.f3d",
         "Tritonia_260822-0900_ccc.f3d", "Tritonia_260822-0900_ccc.json",
     ]
     assert len(list((runs / STEM).rglob("*.f3d"))) == 3
@@ -386,7 +386,7 @@ def test_two_different_runs_pin_one_file_even_after_dont_keep(tmp_path):
         imported_run(app, job_id, "aaa", status="complete")
         app.state.jobs_runtime.store.mutate_job_metadata(job_id, {"archive": {"key": "name:Tritonia", "folder": STEM, "run": f"{number}_Tritonia"}})
         answer = asyncio.run(archive_run_document(ArchiveRunDocumentRequest(jobId=job_id), SimpleNamespace(app=app)))
-        assert answer == {"placed": True, "relativePath": "cad/Tritonia_260820-0900_aaa.f3d", "modelFile": "cad/Tritonia_260820-0900_aaa.f3d"}
+        assert answer == {"placed": True, "relativePath": "cad/Tritonia_260820-0900_aaa.pinned.f3d", "modelFile": "cad/Tritonia_260820-0900_aaa.pinned.f3d"}
         app.state.cad_workspace.set_capture_mode("off")
     assert len(list((runs / STEM).rglob("*.f3d"))) == 1
 
@@ -440,5 +440,156 @@ def test_unrelated_run_record_is_left_to_the_existing_collision_writer(tmp_path,
     capture_directly(app, runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
     result = asyncio.run(archive_run_document(request, SimpleNamespace(app=app)))
     assert result["placed"] is True
-    assert result["modelFile"] == "cad/Tritonia_260820-0900_aaa.f3d"
+    assert result["modelFile"] == "cad/Tritonia_260820-0900_aaa.pinned.f3d"
     assert (run / "run.json").read_text() == content
+
+
+@pytest.mark.parametrize("read_target", ["model", "sidecar", "manifest"])
+def test_transient_verification_io_is_retryable_and_cannot_release_retention(tmp_path, monkeypatch, read_target):
+    from server.jobs.runtime import JobConflictError
+
+    app, runs = app_with_runs(tmp_path)
+    capture_directly(app, runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
+    imported_run(app, "job-a", "aaa", status="complete")
+    payload = ArchiveRunDocumentRequest(jobId="job-a")
+    original = runs / STEM / "cad" / "Tritonia_260820-0900_aaa.f3d"
+    real_open = Path.open
+    failing = True
+
+    def transient_open(path, *args, **kwargs):
+        target = {"model": path == original, "sidecar": path == original.with_suffix(".json"),
+                  "manifest": path.name == "wgreturn.json"}[read_target]
+        if failing and target:
+            raise OSError("transient cloud read failure")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", transient_open)
+    answer = asyncio.run(archive_run_document(payload, SimpleNamespace(app=app)))
+    assert answer["placed"] is False
+    assert answer["retryable"] is True
+
+    async def refuse_release():
+        nonlocal failing
+        runtime = app.state.jobs_runtime
+        try:
+            with pytest.raises(JobConflictError):
+                await runtime.patch_metadata("job-a", {"archived_at": "now"})
+            with pytest.raises(JobConflictError):
+                await runtime.delete("job-a")
+            row = runtime.store.get_job_row("job-a")
+            assert row is not None
+            assert not row["task_metadata"].get("archived_at")
+            failing = False
+            await cadlink_api._archive_cad_document(
+                app.state.workspace, app.state.cad_workspace, runtime, app.state.cadlink_store,
+                bundle_for(tmp_path, "bbb"), record_for(app, "bbb", at="2026-08-21T09:00:00Z"),
+            )
+            assert original.read_bytes() == b"model-aaa"
+            answer = await archive_run_document(payload, SimpleNamespace(app=app))
+            assert answer["placed"] is True
+            pinned = runs / STEM / answer["relativePath"]
+            await cadlink_api._archive_cad_document(
+                app.state.workspace, app.state.cad_workspace, runtime, app.state.cadlink_store,
+                bundle_for(tmp_path, "ccc"), record_for(app, "ccc", at="2026-08-22T09:00:00Z"),
+            )
+            assert pinned.read_bytes() == b"model-aaa"
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(refuse_release())
+
+
+def test_deleting_a_completed_job_before_archive_permanently_protects_its_version(tmp_path):
+    app, runs = app_with_runs(tmp_path)
+    capture_directly(app, runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
+    imported_run(app, "job-a", "aaa", status="complete")
+
+    async def delete():
+        try:
+            await app.state.jobs_runtime.delete("job-a")
+            assert app.state.jobs_runtime.store.get_job_row("job-a") is None
+            await cadlink_api._archive_cad_document(
+                app.state.workspace, app.state.cad_workspace, app.state.jobs_runtime, app.state.cadlink_store,
+                bundle_for(tmp_path, "bbb"), record_for(app, "bbb", at="2026-08-21T09:00:00Z"),
+            )
+        finally:
+            await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(delete())
+    document = runs / STEM / "cad" / "Tritonia_260820-0900_aaa.pinned.f3d"
+    assert document.read_bytes() == b"model-aaa"
+    assert document.with_suffix(".cad.json").is_file()
+    assert len(list((runs / STEM).rglob("*.f3d"))) == 2
+
+
+def test_marking_archive_complete_also_protects_the_used_version(tmp_path):
+    app, runs = app_with_runs(tmp_path)
+    capture_directly(app, runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
+    imported_run(app, "job-a", "aaa", status="complete")
+
+    async def complete_archive():
+        try:
+            await app.state.jobs_runtime.patch_metadata("job-a", {"archived_at": "now"})
+            await cadlink_api._archive_cad_document(
+                app.state.workspace, app.state.cad_workspace, app.state.jobs_runtime, app.state.cadlink_store,
+                bundle_for(tmp_path, "bbb"), record_for(app, "bbb", at="2026-08-21T09:00:00Z"),
+            )
+        finally:
+            await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(complete_archive())
+    assert (runs / STEM / "cad" / "Tritonia_260820-0900_aaa.pinned.f3d").read_bytes() == b"model-aaa"
+
+
+@pytest.mark.parametrize("check", ["directory", "links"])
+def test_transient_archive_lookup_io_is_retryable(tmp_path, monkeypatch, check):
+    from server.workspace import archive
+
+    app, runs = app_with_runs(tmp_path)
+    capture_directly(app, runs, tmp_path, "aaa", at="2026-08-20T09:00:00Z")
+    payload = archive_request(app, "aaa")
+    if check == "directory":
+        real_iterdir = Path.iterdir
+
+        def unreadable(path):
+            if path == runs / STEM / "cad":
+                raise OSError("transient directory read failure")
+            return real_iterdir(path)
+
+        monkeypatch.setattr(Path, "iterdir", unreadable)
+    else:
+        def unreadable(*_args, **_kwargs):
+            raise OSError("transient link check failure")
+
+        monkeypatch.setattr(archive, "path_has_reparse_point", unreadable)
+    result = asyncio.run(archive_run_document(payload, SimpleNamespace(app=app)))
+    assert result["placed"] is False
+    assert result["retryable"] is True
+
+
+def test_capture_still_in_progress_is_retryable_before_history_deletion(tmp_path, monkeypatch):
+    from server.jobs.runtime import JobConflictError
+
+    app, _runs = app_with_runs(tmp_path)
+    imported_run(app, "job-a", "aaa", status="complete")
+    monkeypatch.setattr(cadlink_api, "_CAPTURE_WAIT_SECONDS", 0.001)
+
+    async def scenario():
+        gate = asyncio.Event()
+        capture = asyncio.create_task(gate.wait())
+        key = cadlink_api._capture_key("sha256:aaa")
+        cadlink_api._CAD_DOCUMENT_CAPTURES[key] = capture
+        runtime = app.state.jobs_runtime
+        try:
+            answer = await archive_run_document(ArchiveRunDocumentRequest(jobId="job-a"), SimpleNamespace(app=app))
+            assert answer["retryable"] is True
+            with pytest.raises(JobConflictError):
+                await runtime.delete("job-a")
+            assert runtime.store.get_job_row("job-a") is not None
+        finally:
+            gate.set()
+            await capture
+            cadlink_api._CAD_DOCUMENT_CAPTURES.pop(key)
+            await runtime.shutdown()
+
+    asyncio.run(scenario())

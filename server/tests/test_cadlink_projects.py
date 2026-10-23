@@ -218,10 +218,10 @@ def test_run_and_project_modes_both_pin_the_shared_version(tmp_path: Path) -> No
     first = asyncio.run(archive_run_document(request, SimpleNamespace(app=app)))
     app.state.cad_workspace.set_capture_mode("run")
     again = asyncio.run(archive_run_document(request, SimpleNamespace(app=app)))
-    assert first == again == {"placed": True, "relativePath": "cad/Tritonia_260820-0900_aaa.f3d", "modelFile": "cad/Tritonia_260820-0900_aaa.f3d"}
+    assert first == again == {"placed": True, "relativePath": "cad/Tritonia_260820-0900_aaa.pinned.f3d", "modelFile": "cad/Tritonia_260820-0900_aaa.pinned.f3d"}
     assert not (runs / "Tritonia" / "14_Tritonia").exists()
     assert len(list((runs / "Tritonia").rglob("*.f3d"))) == 1
-    assert (runs / "Tritonia" / "cad" / "Tritonia_260820-0900_aaa.cad.json").is_file()
+    assert (runs / "Tritonia" / "cad" / "Tritonia_260820-0900_aaa.pinned.cad.json").is_file()
 
 
 def test_a_run_subdirectory_that_escapes_the_archive_is_refused(tmp_path: Path) -> None:
@@ -818,7 +818,7 @@ def test_run_document_placement_uses_recorded_root_and_refuses_offline(tmp_path)
     app.state.cad_workspace.set_capture_mode("run")
     request = ArchiveRunDocumentRequest(jobId="run-14")
     result = asyncio.run(archive_run_document(request, SimpleNamespace(app=app)))
-    assert result == {"placed": True, "relativePath": "cad/Tritonia_260820-0900_aaa.f3d", "modelFile": "cad/Tritonia_260820-0900_aaa.f3d"}
+    assert result == {"placed": True, "relativePath": "cad/Tritonia_260820-0900_aaa.pinned.f3d", "modelFile": "cad/Tritonia_260820-0900_aaa.pinned.f3d"}
     assert (old_run.parent / result["relativePath"]).read_bytes() == b"model-aaa"
     assert list(old_run.iterdir()) == []
     assert list(root_b.iterdir()) == []

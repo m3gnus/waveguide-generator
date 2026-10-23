@@ -1106,6 +1106,8 @@ def create_jobs_router(
                 name: getattr(body, name) for name in body.model_fields_set
             }
             await runtime.patch_metadata(job_id, fields)
+        except JobConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
         except ValueError as exc:

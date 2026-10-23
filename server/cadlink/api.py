@@ -249,7 +249,9 @@ async def _await_cad_document_capture(return_state_hash: str) -> None:
     # ``wait`` joins the task without cancelling it and without re-raising its
     # exception: capture is advisory on both sides of this, and the caller
     # reports a missing copy on its own terms.
-    await asyncio.wait({task}, timeout=_CAPTURE_WAIT_SECONDS)
+    _done, pending = await asyncio.wait({task}, timeout=_CAPTURE_WAIT_SECONDS)
+    if pending:
+        raise OSError("The Fusion model capture is still in progress. Retry shortly.")
 
 
 def _schedule_deferred_viewport(
@@ -1324,7 +1326,8 @@ async def _project_folder(request: Request, lineage_id: str) -> tuple[Path, str]
 
 
 def _verified_run_document(
-    request: Request, lineage_id: str, digest: str, document: Path
+    request: Request, lineage_id: str, digest: str, document: Path,
+    *, strict_io: bool = False,
 ) -> bool:
     """Verify every archive candidate against its retained manifest and lineage."""
 
@@ -1339,7 +1342,7 @@ def _verified_run_document(
         if (record.get("document") or {}).get("return_state_hash") != digest:
             return False
         retained = retained_snapshot_path(request.app.state.data_dir, record["manifest_sha256"])
-        manifest = _retained_manifest({"retained_path": retained})
+        manifest = _retained_manifest({"retained_path": retained}, strict_io=strict_io)
         if not manifest or (manifest.get("assembly") or {}).get("signature_hash") != digest:
             return False
         member = cad_document_member(manifest)
@@ -1351,7 +1354,13 @@ def _verified_run_document(
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 checksum.update(chunk)
         return "sha256:" + checksum.hexdigest() == evidence["sha256"]
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    except FileNotFoundError:
+        return False
+    except OSError:
+        if strict_io:
+            raise
+        return False
+    except (ValueError, KeyError, TypeError, AttributeError):
         return False
 
 
@@ -1559,14 +1568,8 @@ async def archive_run_document(
                 break
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             continue  # The existing writer owns collision handling.
-    await _await_cad_document_capture(digest)
     try:
-        relative = await asyncio.to_thread(
-            pin_cad_document, root, location.folder, digest,
-            verify_document=lambda document: _verified_run_document(
-                request, str(source.get("lineage_id") or ""), digest, document,
-            ),
-        )
+        relative = await _pin_job_document(request, row, source=source, path=path)
     except OSError as exc:
         logger.warning(
             "Could not pin the CAD document for %s: %s", location.run, exc
@@ -1585,6 +1588,29 @@ async def archive_run_document(
     await _reclaim_captured_documents(request, root, location.folder)
     return {"placed": True, "relativePath": relative,
             "modelFile": previous_model_file if has_record else relative}
+
+
+async def _pin_job_document(
+    request: Request, row: Mapping[str, Any],
+    *, source: Mapping[str, Any] | None = None, path: Path | None = None,
+) -> str | None:
+    """Protect a run's version before archiving or discarding its last job reference."""
+
+    jobs = request.app.state.jobs_runtime
+    if source is None:
+        source = jobs._serialize_job(row, cadlink_store=request.app.state.cadlink_store).get("cad_source") or {}
+    digest = str(source.get("return_state_hash") or "")
+    if _RETURN_STATE_HASH.fullmatch(digest) is None:
+        return None
+    await _await_cad_document_capture(digest)
+    if path is None:
+        path = await asyncio.to_thread(claim_run_write_path, jobs.store, row, lambda: _runs_root(request), source)
+    return await asyncio.to_thread(
+        pin_cad_document, path.parent.parent, path.parent.name, digest,
+        verify_document=lambda document: _verified_run_document(
+            request, str(source.get("lineage_id") or ""), digest, document, strict_io=True,
+        ),
+    )
 
 
 async def _reclaim_captured_documents(request: Request, root: Path, stem: str) -> None:
@@ -2176,6 +2202,16 @@ def mount_cadlink(application: FastAPI) -> None:
     application.include_router(router)
     # Ingestion's unawaited work holds headless retirement until it finishes.
     application.state.cad_background_in_flight = background_work_in_flight
+
+    async def protect_job_document(row: Mapping[str, Any]) -> None:
+        # A real Request keeps the verifier and Runs-root ownership identical
+        # for HTTP archives and runtime deletion/metadata changes.
+        request = Request({"type": "http", "app": application})
+        await _pin_job_document(request, row)
+
+    runtime = getattr(application.state, "jobs_runtime", None)
+    if runtime is not None:
+        runtime.protect_cad_document = protect_job_document
     application.include_router(receipts_api.router)
     application.include_router(recovery_api.router)
     from server.cadlink.fusion.fusion_return import router as return_requests_router

@@ -388,8 +388,8 @@ def test_recovered_legacy_stem_and_hash_keep_exact_existing_browser_location(tmp
     result = asyncio.run(
         archive_run_document(ArchiveRunDocumentRequest(jobId="old"), SimpleNamespace(app=app))
     )
-    assert result == {"placed": True, "relativePath": "cad/Tritonia_260820-0900_aaa.f3d",
-                      "modelFile": "cad/Tritonia_260820-0900_aaa.f3d"}
+    assert result == {"placed": True, "relativePath": "cad/Tritonia_260820-0900_aaa.pinned.f3d",
+                      "modelFile": "cad/Tritonia_260820-0900_aaa.pinned.f3d"}
     assert "archive" not in jobs.get_job_row("old")["task_metadata"]
 
 

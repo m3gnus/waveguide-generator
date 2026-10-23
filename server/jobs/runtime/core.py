@@ -23,7 +23,7 @@ import os
 from pathlib import Path
 import time
 import threading
-from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 import uuid
 
 from server.cadlink.intake.ingest import IngestRefusal, current_fem_evidence
@@ -1327,6 +1327,9 @@ class JobRuntime:
         if restart_approval is not None:
             restart_approval.add_release_listener(self._restart_called_off)
         self.cadlink_store = cadlink_store
+        # Installed by CAD Link assembly. Failure preserves the durable job
+        # reference so an unavailable model can be pinned on the next attempt.
+        self.protect_cad_document: Callable[[Mapping[str, Any]], Awaitable[None]] | None = None
         self.engine_registry = engine_registry or EngineRegistry(factory=get_engine)
         self.events = EventBroker()
         self._queue: deque[str] = deque()
@@ -3182,6 +3185,7 @@ class JobRuntime:
         row = self._require_job(job_id)
         changed = dict(fields)
         if changed.get("archived_at"):
+            await self._protect_cad_document(row)
             source = self._serialize_job(row, cadlink_store=self.cadlink_store).get('cad_source')
             path = await asyncio.to_thread(archive_identity.complete_archive, self.cadlink_store, row, source)
             if path is not None:
@@ -3207,11 +3211,20 @@ class JobRuntime:
             raise JobNotFoundError(job_id)
         self.events.publish(event)
 
+    async def _protect_cad_document(self, row: Mapping[str, Any]) -> None:
+        if self.protect_cad_document is not None:
+            try:
+                await self.protect_cad_document(row)
+            except OSError as exc:
+                raise JobConflictError("The Fusion model could not be protected. Retry when its folder is available.") from exc
+
     async def delete(self, job_id: str) -> None:
         await self.start()
         row = self._require_job(job_id)
         if row["status"] in ACTIVE_STATUSES:
             raise JobConflictError("Cannot delete active job")
+        if row["status"] == "complete" or row.get("has_results"):
+            await self._protect_cad_document(row)
         deleted, event = self.store.delete_job_with_event(job_id)
         if not deleted or event is None:
             raise JobNotFoundError(job_id)

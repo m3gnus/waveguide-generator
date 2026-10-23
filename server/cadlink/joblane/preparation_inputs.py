@@ -216,7 +216,7 @@ def _load_setup(
     return updated, new_revision_id
 
 
-def _retained_manifest(retained: Mapping[str, Any]) -> Mapping[str, Any] | None:
+def _retained_manifest(retained: Mapping[str, Any], *, strict_io: bool = False) -> Mapping[str, Any] | None:
     """A retained snapshot's manifest, when the copy still is the bundle it is named for.
 
     The directory's name *is* the manifest's sha256 (``retained_snapshot_path``),
@@ -232,7 +232,13 @@ def _retained_manifest(retained: Mapping[str, Any]) -> Mapping[str, Any] | None:
     try:
         path = Path(str(retained["retained_path"]))
         raw = (path / "wgreturn.json").read_bytes()
-    except (OSError, KeyError, TypeError):
+    except FileNotFoundError:
+        return None
+    except OSError:
+        if strict_io:
+            raise
+        return None
+    except (KeyError, TypeError):
         return None
     if hashlib.sha256(raw).hexdigest() != path.name.removesuffix(".wgreturn"):
         logger.warning("The retained copy %s does not hash to its own name.", path.name)
