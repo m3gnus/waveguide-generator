@@ -53,6 +53,7 @@ import { useFieldPlaneStore } from './fieldPlaneStore';
 import type { DemandRenderScheduler } from './demandRender';
 
 interface FieldPlaneProps {
+  active: boolean;
   unitsPerMetre: number;
   clipPlane: Plane | null;
   colormap: readonly string[];
@@ -253,8 +254,8 @@ function ReadyFieldPlane({ plane, field, unitsPerMetre, clipPlane, colormap, sch
   </mesh>;
 }
 
-function FieldPlaneMaskController({ scheduler }: Pick<FieldPlaneProps, 'scheduler'>) {
-  const enabled = useFieldPlaneStore((state) => state.enabled && state.source === 'exterior');
+function FieldPlaneMaskController({ scheduler, active }: Pick<FieldPlaneProps, 'scheduler' | 'active'>) {
+  const enabled = useFieldPlaneStore((state) => active && state.enabled && state.source === 'exterior');
   const dragging = useFieldPlaneStore((state) => state.dragging);
   const jobId = useFieldPlaneStore((state) => state.jobId);
   const geometrySha256 = useFieldPlaneStore((state) => state.geometrySha256);
@@ -598,16 +599,16 @@ function FieldPlaneProbe({ plane, field, unitsPerMetre }: Pick<ReadyFieldPlanePr
 }
 
 export function FieldPlane(props: FieldPlaneProps) {
-  const enabled = useFieldPlaneStore((state) => state.enabled);
+  const enabled = useFieldPlaneStore((state) => props.active && state.enabled);
   const plane = useFieldPlaneStore((state) => state.plane);
   const field = useFieldPlaneStore((state) => state.field);
   useEffect(() => {
     const state = useFieldPlaneStore.getState();
-    if (state.enabled) state.resume();
+    if (props.active && state.enabled) state.resume();
     return () => useFieldPlaneStore.getState().cancelPending();
   }, []);
   return <>
-    <FieldPlaneMaskController scheduler={props.scheduler}/>
+    <FieldPlaneMaskController scheduler={props.scheduler} active={props.active}/>
     {enabled && plane && <>
       {field && <ReadyFieldPlane {...props} plane={plane} field={field}/>}
       {field && <FieldPlaneProbe plane={plane} field={field} unitsPerMetre={props.unitsPerMetre}/>}

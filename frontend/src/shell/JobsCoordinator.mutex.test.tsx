@@ -5,6 +5,9 @@ import { openImported, resetImportedModelStore, useImportedModelStore } from '..
 /** Reopen a CAD run as history does: `openImported` of the run, shown by the CAD rail. */
 const restoreCadJobModel = (run: JobItem, display = {}, fetcher: typeof fetch = fetch) =>
   openImported({ kind: 'run', job: run, display }, fetcher).catch(() => false);
+import { currentModel, currentModelStatus, runVerdict, shownResult, spatialResult } from '../model/currentModel';
+import { previewSocket } from '../api/previewSocket';
+import { currentDocumentLoad, serializeDesign } from '../stores/design';
 import { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
@@ -307,6 +310,79 @@ describe('solve invocation mutex', () => {
     workspaceModeStore.setMode('parametric');
     vi.clearAllTimers();
     vi.useRealTimers();
+  });
+
+  it.each(['parametric', 'file', 'cad'] as const)('%s: shows a completed solve with the exact submitted snapshot', async kind => {
+    const actions = await vi.importActual<typeof import('../jobs/actions')>('../jobs/actions');
+    mocks.submitDesign.mockImplementation(actions.submitDesign);
+    mocks.solveModel.mockImplementation(actions.solveModel);
+    let completed: JobItem | undefined;
+    const posts: string[] = [];
+    const anchor = failedJob();
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === 'POST' && (url === '/api/solve' || /\/api\/models\/.+\/solve$/.test(url))) {
+        posts.push(url);
+        const body = JSON.parse(String(init.body));
+        // Mock only the server's persistence projection: identity comes from
+        // the real HTTP submission, never from modelForRun/currentModel.
+        completed = { ...anchor, id: 'round-trip', status: 'complete', has_results: true,
+          script_snapshot: kind === 'parametric' ? body.design_snapshot : anchor.script_snapshot,
+          config_summary: kind === 'parametric' ? {} : { geometry_type: 'imported', import_origin: kind === 'file' ? 'mesh-file' : 'fusion' },
+          ...(kind === 'parametric' ? {} : { cad_source: { archive_stem: null, design_id: null, document_name: null, lineage_id: null, manifest_sha256: null, return_state_hash: null, ingest_id: body.prepared_id,
+            model_id: decodeURIComponent(url.split('/')[3]), solve_model_sha256: 'round-trip-sha' },
+            solve_options: body.setup.options, cad_setup: body.setup.geometry }),
+        };
+        if (kind === 'parametric') {
+          expect(body.design).toEqual(body.design_snapshot.design);
+          expect(body.design.simulation.f1).toBe(useDesignStore.getState().design.simulation.f1);
+          expect(body.design.simulation.num_frequencies).toBe(useDesignStore.getState().design.simulation.num_frequencies);
+        }
+        return json({ job_id: completed!.id });
+      }
+      if (url === '/api/results/round-trip') return json({ result_kind: 'parametric', result_contract_version: 1, frequencies: [1000], metadata: {} });
+      return json({ checkout: { kind: 'source' } });
+    }));
+    act(() => {
+      if (kind === 'parametric') {
+        const design = structuredClone(useDesignStore.getState().design);
+        design._absent = ['simulation.f1', 'simulation.f2', 'simulation.num_frequencies'];
+        useDesignStore.getState().replaceDocument(design);
+        expect(serializeDesign(design).simulation).toMatchObject({ f1: null, f2: null, num_frequencies: null });
+      } else if (kind === 'cad') {
+        Object.assign(readyCad('round-trip-cad'), { model_id: 'round-trip-model', solve_model_sha256: 'round-trip-sha' });
+        workspaceModeStore.setMode('cad');
+      } else {
+        workspaceModeStore.setImportedInput('file'); workspaceModeStore.setMode('cad');
+        useMeshImportStore.setState({ busy: false, filename: 'round-trip.msh' });
+        void openImported({ kind: 'file', prepared: { ingest_id: 'round-trip-file', model_id: 'mesh-file:round-trip',
+          solve_model_sha256: 'round-trip-sha', manifest_sha256: 'sha256:mesh', artifact_sha256: 'sha256:file',
+          source_tags: { group_2: 2 } } as unknown as RegisteredMesh });
+        importedMeshStore.setFile({ name: 'round-trip.msh', source: 'file', ingestId: 'round-trip-file' } as ImportedMeshScene);
+      }
+    });
+    // A real accepted preview for the document on screen.
+    vi.spyOn(previewSocket, 'getSnapshot').mockReturnValue({ ...previewSocket.getSnapshot(),
+      awaitingDocumentFrame: false, connection: 'connected', displayedRevision: useDesignStore.getState().designRevision,
+      frame: { documentLoad: currentDocumentLoad() } as never });
+    const before = currentModel();
+    expect(before.viewportShowing).toBe(true);
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
+    expect(posts).toEqual([kind === 'parametric' ? '/api/solve' : kind === 'file'
+      ? '/api/models/mesh-file%3Around-trip/solve' : '/api/models/round-trip-model/solve']);
+    expect(completed).toBeDefined();
+    act(() => { publishJobs([completed!]); compareSelection.setPrimary(completed!.id); });
+    expect(currentModel().key).toBe(before.key);
+    expect(runVerdict(completed!, currentModel())).toBe('current');
+    expect(shownResult(currentModel(), compareSelection.getSnapshot(), [completed!])).toMatchObject({ job: completed, canRender: true, ids: [completed!.id] });
+    expect(spatialResult(currentModel(), compareSelection.getSnapshot(), [completed!])).toBe(completed);
+    expect(currentModelStatus(currentModel(), [completed!]).kind).toBe('solved');
+    await act(async () => {
+      preferencesStore.update({ chartTypes: ['summary'] });
+      root.render(<JobsCoordinator><ResultsPanel/></JobsCoordinator>);
+    });
+    expect(host.querySelector('[data-result-primary]')?.getAttribute('data-result-primary')).toBe(completed!.id);
+    expect(host.querySelector('.result-grid')).not.toBeNull();
   });
 
   // CAD-only controls have no parametric/file counterpart. Every surface that

@@ -1,21 +1,13 @@
 import type { JobItem } from '../api/jobsSocket';
 import { hydrateJobDesign } from '../jobs/jobDesign';
-import { serializeDesign, type DesignDocument } from '../stores/design';
+import { serializeSolveDesign, type DesignDocument } from '../stores/design';
 
 /**
- * A content identity for a design: equal fingerprints mean the same model.
- *
- * Taken from the serialized wire form rather than from the store document,
- * because that is the form a run was solved from and the form its snapshot is
- * read back as -- a fingerprint is only worth anything if a design reopened
- * from a file, undone back to what was solved, or browsed to in the run list
- * hashes equal to the run it came from. Everything `serializeDesign` drops is
- * therefore excluded by construction: `simulation.solver_mode` (a machine
- * preference that never leaves this computer), `enclosure.baffle_margin` and
- * the `quadrants` mirror, and `guiding_curve` off OSSE. `_expressions` is
- * stripped on top of that, being ATH spelling for a value already present as a
- * scalar; `_absent` is kept, because it decides whether the wire states a
- * value or leaves it to the server.
+ * Effective solver identity, shared by the live document and hydrated run snapshots.
+ * Use the submission serializer so omitted sweep values and their displayed defaults
+ * describe the same solve, including snapshots written by older serializers.
+ * Expression spelling and the machine-local solver path do not affect identity;
+ * geometry, effective sweep and portable simulation settings still do.
  */
 const designFingerprints = new WeakMap<DesignDocument, string>();
 
@@ -25,7 +17,7 @@ export function designFingerprint(design: DesignDocument): string {
   const cached = designFingerprints.get(design);
   if (cached !== undefined) return cached;
   const { _expressions, ...rest } = design;
-  const fingerprint = fnv1a(canonicalJson(serializeDesign(rest as DesignDocument)));
+  const fingerprint = fnv1a(canonicalJson(serializeSolveDesign(rest as DesignDocument)));
   designFingerprints.set(design, fingerprint);
   return fingerprint;
 }

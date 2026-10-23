@@ -152,6 +152,23 @@ function displayVerdictViolations(raw: string): string[] {
   return problems;
 }
 
+/** Inspect each spatial consumer, so a valid call elsewhere in the file cannot
+ * mask one field path falling back to the chart-only legacy exception. */
+function spatialSelectorViolations(raw: string): string[] {
+  const problems: string[] = [];
+  for (const name of ['fieldPlaneJob', 'femFieldJob']) {
+    const start = raw.indexOf(`export function ${name}(`);
+    const next = raw.indexOf('\nexport ', start + 1);
+    const body = start < 0 ? '' : raw.slice(start, next < 0 ? undefined : next);
+    if (!/const candidate = spatialResult\(context, \{ primary: selectedJobId \}, jobs, provisional\);/.test(body)) {
+      problems.push(`${name}: spatial selection bypass`);
+    }
+  }
+  // Viewport has no use for the standalone-chart exception.
+  if (/\bshownResult\b/.test(raw.replace(literalsAndComments, token => token.startsWith('//') || token.startsWith('/*') ? ' ' : token))) problems.push('chart selector in viewport');
+  return problems;
+}
+
 describe('one current model and shown result owner', () => {
   it('keeps run-versus-viewport verdicts in currentModel/runCoherence', () => {
     const owners = ['../model/currentModel.ts', '../results/runCoherence.ts'];
@@ -169,8 +186,33 @@ describe('one current model and shown result owner', () => {
     expect(displayVerdictViolations(source)).not.toEqual([]);
   });
 
+  it('routes both geometry field paths through the spatial selector', () => {
+    expect(spatialSelectorViolations(sources['../viewport/Viewport.tsx'])).toEqual([]);
+    expect(sources['../viewport/Viewport.tsx']).toContain('spatialResultId={availablePlaneJob?.id ?? null}');
+    const canvas = sources['../viewport/ViewportCanvas.tsx'];
+    expect(canvas).toContain('const fieldCurrent = spatialResultId !== null && spatialResultId === fieldJobId;');
+    expect(canvas).toContain('active={fieldCurrent}');
+    expect(sources['../viewport/FieldPlane.tsx']).toContain('props.active && state.enabled');
+    expect(canvas).toContain("if (clipMode === 'field-plane' && fieldCurrent && fieldPlane)");
+  });
+
+  it.each(['fieldPlaneJob', 'femFieldJob'])('rejects a chart-selector bypass in %s even if the other path is guarded', name => {
+    const source = sources['../viewport/Viewport.tsx'];
+    const start = source.indexOf(`export function ${name}(`);
+    const changed = source.slice(0, start) + source.slice(start).replace('spatialResult(context, { primary: selectedJobId }, jobs, provisional)',
+      'shownResult(context, { primary: selectedJobId }, jobs, provisional).job');
+    expect(spatialSelectorViolations(changed)).toContain(`${name}: spatial selection bypass`);
+  });
+
+  it('uses the effective solve representation for live and saved parametric identity', () => {
+    const source = sources['../results/runCoherence.ts'];
+    expect(source).toContain('canonicalJson(serializeSolveDesign(rest as DesignDocument))');
+    expect(source).toContain('design ? designFingerprint(design) : null');
+    expect(source).not.toMatch(/\bserializeDesign\(/);
+  });
+
   it('routes every result consumer to the shared selector', () => {
-    for (const path of ['./ResultsPanel.tsx', '../viewport/Viewport.tsx', '../results/exportContext.ts']) {
+    for (const path of ['./ResultsPanel.tsx', '../results/exportContext.ts']) {
       expect(sources[path]).toMatch(/\bshownResult\(/);
     }
     for (const path of ['../jobs/RunExportControl.tsx', '../jobs/autoExportRun.ts', '../results/exporters.ts']) {

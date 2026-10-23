@@ -7,7 +7,7 @@ import type { DecodedFrame } from '../api/frame';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
 import { compareSelection, provisionalResults } from '../api/results';
-import { currentModel, currentModelScene, currentCadScenes, shownResult, useCurrentModel, type CurrentModel } from '../model/currentModel';
+import { currentModel, currentModelScene, currentCadScenes, spatialResult, useCurrentModel, type CurrentModel } from '../model/currentModel';
 import { postSymmetry, toSolveDesign } from '../jobs/actions';
 import { planAdjustmentNotice } from '../jobs/planAdjustments';
 import { useOptionalSolveControl } from '../shell/JobsCoordinator';
@@ -292,7 +292,7 @@ export function fieldPlaneJob(
   context: CurrentModel = currentModel(),
   provisional = provisionalResults.getSnapshot().entries,
 ): JobItem | null {
-  const candidate = shownResult(context, { primary: selectedJobId }, jobs, provisional).job;
+  const candidate = spatialResult(context, { primary: selectedJobId }, jobs, provisional);
   return candidate?.field_plane_available === true && candidate.status === 'complete'
     ? candidate
     : null;
@@ -302,7 +302,7 @@ export function femFieldJob(
   jobs: readonly JobItem[], selectedJobId: string | null, context: CurrentModel = currentModel(),
   provisional = provisionalResults.getSnapshot().entries,
 ): JobItem | null {
-  const candidate = shownResult(context, { primary: selectedJobId }, jobs, provisional).job;
+  const candidate = spatialResult(context, { primary: selectedJobId }, jobs, provisional);
   // The server projects this marker from task metadata AND WG2_FEM_REGIONS.
   // Geometry with declared FEM regions alone does not advertise a field.
   return candidate?.has_fem_field_artifact === true && candidate.status === 'complete'
@@ -1020,6 +1020,7 @@ export function Viewport() {
     {activeScene && hasSurfaces && webgl && <ViewportCanvas
       scene={activeScene}
       sceneMarker={sceneMarker}
+      spatialResultId={availablePlaneJob?.id ?? null}
       mode={mode}
       showEnclosure={showEnclosure}
       clipMode={clipMode}

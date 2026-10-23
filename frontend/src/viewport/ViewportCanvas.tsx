@@ -30,6 +30,7 @@ interface ViewportCanvasProps {
   children?: ReactNode;
   scene: FrameScene;
   sceneMarker: string;
+  spatialResultId: string | null;
   mode: DisplayMode;
   showEnclosure: boolean;
   clipMode: ModelClipMode;
@@ -701,22 +702,23 @@ function useRepaintWhenShown(scheduler: DemandRenderScheduler): void {
   useEffect(() => observeCanvasVisibility(gl.domElement, () => scheduler.schedule()), [gl, scheduler]);
 }
 
-function Scene({ children, scene, sceneMarker, mode, showEnclosure, clipMode, sectionAxis, invertFieldClip, cameraRequest, zoomRequest, cameraProjection, preferences, frameStartedAt, onClientFrame, theme, onCameraDirection }: Omit<ViewportCanvasProps, 'onRenderFailure'>) {
+function Scene({ children, scene, sceneMarker, spatialResultId, mode, showEnclosure, clipMode, sectionAxis, invertFieldClip, cameraRequest, zoomRequest, cameraProjection, preferences, frameStartedAt, onClientFrame, theme, onCameraDirection }: Omit<ViewportCanvasProps, 'onRenderFailure'>) {
   const invalidate = useThree((state) => state.invalidate);
   const scheduler = useMemo(() => new DemandRenderScheduler(invalidate), [invalidate]);
   useFrame(() => scheduler.flush(), 0);
   const fieldPlane = useFieldPlaneStore((state) => state.plane);
   const fieldJobId = useFieldPlaneStore((state) => state.jobId);
+  const fieldCurrent = spatialResultId !== null && spatialResultId === fieldJobId;
   const fieldGeometrySha256 = useFieldPlaneStore((state) => state.geometrySha256);
   const maskState = useFieldPlaneMaskStore((state) => state);
   const stableClipPlane = useMemo(() => new Plane(new Vector3(1, 0, 0), 0), []);
   const clipDefinition = useMemo(() => {
     if (clipMode === 'section') return sectionClipPlane(sectionAxis, scene.bounds);
-    if (clipMode === 'field-plane' && fieldPlane) {
+    if (clipMode === 'field-plane' && fieldCurrent && fieldPlane) {
       return fieldPlaneToClipPlane(fieldPlane, scene.unitsPerMetre, invertFieldClip);
     }
     return null;
-  }, [clipMode, fieldPlane, invertFieldClip, scene.bounds, scene.unitsPerMetre, sectionAxis]);
+  }, [clipMode, fieldCurrent, fieldPlane, invertFieldClip, scene.bounds, scene.unitsPerMetre, sectionAxis]);
   const clipActive = clipDefinition !== null;
   const materials = useMemo(
     () => createMaterialLibrary(
@@ -773,6 +775,7 @@ function Scene({ children, scene, sceneMarker, mode, showEnclosure, clipMode, se
       position={[-(size.x || 100), (size.y || 100) * 0.2, size.z || 100]}
     />
     <FieldPlane
+      active={fieldCurrent}
       unitsPerMetre={scene.unitsPerMetre}
       clipPlane={clipMode === 'section' ? stableClipPlane : null}
       colormap={fieldColormap}

@@ -5,6 +5,9 @@ import { deferred, job as archivedJob, json, mesh as archivedMesh, record as arc
 const restoreCadJobModel = (run: JobItem, display: ImportedDisplay = {}, fetcher: typeof fetch = fetch) =>
   openImported({ kind: 'run', job: run, display }, fetcher).catch(() => false);
 
+import { currentModel, shownResult, spatialResult } from '../model/currentModel';
+import { selectJob } from '../jobs/selectJob';
+import unreadable from '../model/fixtures/unreadable.json';
 import { readFileSync } from 'node:fs';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -27,6 +30,8 @@ import { useFieldPlaneStore } from './fieldPlaneStore';
 import { useFieldPlaneProbeStore } from './fieldPlaneProbe';
 import meshFixture from './test-fixtures/tagged_sources-small.msh?raw';
 import { femFieldFixture } from './test-fixtures/femField';
+import { FieldPlane } from './FieldPlane';
+import { DemandRenderScheduler } from './demandRender';
 import * as canvasModule from './ViewportCanvas';
 import * as femSceneModule from './FemFieldScene';
 
@@ -455,6 +460,62 @@ describe('Viewport preview errors', () => {
     expect(fetchSpy.mock.calls.filter(([url]) => String(url).includes('/fem-field'))).toHaveLength(0);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(host.querySelector('[aria-label="FEM field controls"]')).toBeNull();
+  });
+
+  it.each(['exterior', 'fem'] as const)('keeps unreadable-run charts but draws no %s fields on another model', async source => {
+    const visible = completeJob('visible-model', false);
+    const visibleKey = currentModel().key;
+    const historical = { ...unreadable, field_plane_available: true, has_fem_field_artifact: true } as unknown as JobItem;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 404 }));
+    const femScene = vi.spyOn(femSceneModule, 'FemFieldScene');
+    vi.spyOn(canvasModule, 'canRenderWebGL').mockReturnValue(true);
+    const canvas = vi.spyOn(canvasModule.ViewportCanvas as unknown as { type: (props: { children: import('react').ReactNode; spatialResultId: string | null }) => import('react').ReactNode }, 'type')
+      .mockImplementation(({ children }) => <>{children}</>);
+    act(() => {
+      publishJobs([historical, visible]);
+      selectJob(historical);
+      // Fields can already be enabled when the history selection changes.
+      useFieldPlaneStore.setState({ enabled: true, source, jobId: historical.id, plane: fieldPlane, status: 'ready' });
+    });
+    await act(async () => { await Promise.resolve(); });
+    expect(currentModel().key).toBe(visibleKey);
+    expect(shownResult(currentModel(), compareSelection.getSnapshot(), [historical, visible])).toMatchObject({
+      job: historical, canRender: true, modelNotLoaded: true,
+    });
+    expect(host.querySelector('[aria-label="Acoustic field plane overlay"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Field plane controls"]')).toBeNull();
+    expect(host.querySelector('[aria-label="FEM field controls"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Clip model to field plane"]')).toBeNull();
+    expect(femScene).not.toHaveBeenCalled();
+    expect(canvas).toHaveBeenCalled();
+    expect(canvas.mock.calls.at(-1)![0].spatialResultId).toBeNull();
+    expect(useFieldPlaneStore.getState().enabled).toBe(false);
+    expect(fetchSpy.mock.calls.filter(([url]) => /field-plane|fem-field/.test(String(url)))).toHaveLength(0);
+  });
+
+  it('does not mount cached acoustic geometry before the unavailable-field cleanup effect', () => {
+    completeJob('visible-model', false);
+    const historical = { ...unreadable, field_plane_available: true } as unknown as JobItem;
+    // Exercise the renderer without Viewport's cleanup effect: correspondence
+    // must gate cached geometry synchronously, even while the store is enabled.
+    act(() => root.render(<span/>));
+    selectJob(historical);
+    const allowed = spatialResult(currentModel(), compareSelection.getSnapshot(), [historical]);
+    const resume = vi.spyOn(useFieldPlaneStore.getState(), 'resume');
+    act(() => {
+      useFieldPlaneStore.setState({ enabled: true, source: 'exterior', jobId: historical.id, plane: fieldPlane,
+        status: 'ready', geometrySha256: 'historical-geometry', field: {
+          header: { version: 2, request_id: 'cached-request', job_id: historical.id, frequency_index: 0, frequency_hz: 1000,
+            nx: 2, ny: 2, ordering: 'v-major-row-major', phase_convention: 'solver_exp_plus_ikr', pressure_unit: 'Pa',
+            response_id: 'system', symmetry_plane: null, geometry_sha256: 'historical-geometry', synthesis_revision: 'historical-synthesis' },
+          real: new Float32Array(4), imag: new Float32Array(4),
+        } });
+      root.render(<FieldPlane active={allowed !== null} unitsPerMetre={1000} clipPlane={null} colormap={[]}
+        scheduler={new DemandRenderScheduler(() => undefined)}/>);
+    });
+    expect(useFieldPlaneStore.getState().enabled).toBe(true);
+    expect(resume).not.toHaveBeenCalled();
+    expect(host.innerHTML).toBe('');
   });
 
   it('shows overlay alone until enabled, then shows clip and invert', () => {

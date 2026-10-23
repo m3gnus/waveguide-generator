@@ -59,11 +59,6 @@ export function modelForRun(job: JobItem): CurrentModel {
   };
 }
 
-export function displayedCadIngestId(selected: string | null): string | null {
-  return currentModelScene({ kind: 'cad', key: selected, lineage: selected, label: 'CAD model',
-    ingestId: selected, viewportShowing: false })?.ingestId ?? null;
-}
-
 /** Retained CAD artifacts are eligible only for the selected model. */
 export function currentCadScenes(model: CurrentModel, viewport: ImportedMeshState = importedMeshStore.getSnapshot()) {
   return {
@@ -160,7 +155,7 @@ export interface ShownResult {
   canRender: boolean;
 }
 
-/** One display/export/field selection. D1: earlier versions never supply charts. */
+/** One chart/export selection. D1: earlier versions never supply charts. */
 export function shownResult(model: CurrentModel, selection: ResultSelection, jobs: readonly JobItem[],
   provisional: Readonly<Record<string, unknown>> = {}): ShownResult {
   const drawable = (job: JobItem) => (job.status === 'complete' && job.has_results) || (isActiveJobStatus(job.status) && !!provisional[job.id]);
@@ -175,6 +170,14 @@ export function shownResult(model: CurrentModel, selection: ResultSelection, job
   const ids = job ? [job.id, ...(selection.overlays ?? []).filter(id => id !== job.id
     && jobs.some(candidate => candidate.id === id && current(candidate) && drawable(candidate)))] : [];
   return { job, latest, ids, verdict, modelNotLoaded: !!legacy, releaseSelection, canRender: !!job && drawable(job) };
+}
+
+/** Spatial artifacts require the shown run's model to actually be in the viewport.
+ * The unreadable-archive exception permits standalone charts only. */
+export function spatialResult(model: CurrentModel, selection: ResultSelection, jobs: readonly JobItem[],
+  provisional: Readonly<Record<string, unknown>> = {}): JobItem | null {
+  const { job } = shownResult(model, selection, jobs, provisional);
+  return job && runVerdict(job, model) === 'current' ? job : null;
 }
 
 /** Existing job data only; slice 4 can supply readiness at this single seam. */

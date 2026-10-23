@@ -1,19 +1,23 @@
 import { previewSocket } from '../api/previewSocket';
 import { currentDocumentLoad } from '../stores/design';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { JobItem } from '../api/jobsSocket';
+import { act, createElement } from 'react';
+import { createRoot } from 'react-dom/client';
+import { jobsSocket, type JobItem } from '../api/jobsSocket';
+import { ResultsPanel } from '../shell/ResultsPanel';
+import { preferencesStore } from '../prefs/preferences';
 import { designFingerprint } from '../results/runCoherence';
 import { resultExportSelection } from '../results/exportContext';
 import { hydrateJobDesign } from '../jobs/jobDesign';
 import { selectJob } from '../jobs/selectJob';
 import { showJobModel } from '../jobs/showJobModel';
-import { compareSelection } from '../api/results';
+import { compareSelection, resultsCache } from '../api/results';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore } from '../stores/document';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
-import { currentModel, currentModelStatus, modelForRun, runVerdict, shownResult } from './currentModel';
+import { currentModel, currentModelScene, currentModelStatus, modelForRun, runVerdict, shownResult, spatialResult } from './currentModel';
 import parametric from './fixtures/parametric.json';
 import fileSha from './fixtures/file-sha.json';
 import fileNoSha from './fixtures/file-no-sha.json';
@@ -21,25 +25,84 @@ import cad from './fixtures/cad.json';
 import cadNoSha from './fixtures/cad-no-sha.json';
 import unreadable from './fixtures/unreadable.json';
 import refused from '../jobs/cadRefusedJob.fixture.json';
+import { resetImportedModelStore, useImportedModelStore } from '../stores/importedModel';
+import { json, mesh, record, workspaceFor } from '../shell/cadlink/selection.fixtures';
+import { fieldPlaneJob, femFieldJob } from '../viewport/Viewport';
 
 export const oldRuns = [parametric, fileSha, fileNoSha, cad, cadNoSha, unreadable] as unknown as JobItem[];
 
-afterEach(() => { vi.restoreAllMocks(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 beforeEach(() => {
   resetDesignStore(); resetDocumentStore(); resetCadReturnStore();
-  workspaceModeStore.setImportedInput('cad'); workspaceModeStore.setMode('parametric');
+  resultsCache.clear(); preferencesStore.resetForTests(); preferencesStore.update({ chartTypes: ['summary'] });
+  workspaceModeStore.setImportedInput('cad'); resetImportedModelStore(); workspaceModeStore.setMode('parametric');
   importedMeshStore.clear(); compareSelection.clear();
 });
 
 describe('one model display table', () => {
-  it.each(oldRuns)('opens the saved identity and result together: $id', job => {
-    const model = modelForRun(job);
-    const selected = shownResult(model, { primary: job.id }, [job]);
-    expect(selected.job?.id).toBe(job.id);
-    expect(selected.ids).toEqual([job.id]);
+  it.each(oldRuns)('opens saved charts and the corresponding viewport through history: $id', async saved => {
+    const job = { ...saved, field_plane_available: true, has_fem_field_artifact: true };
+    const imported = job.config_summary.geometry_type === 'imported';
+    const file = job.config_summary.import_origin === 'mesh-file';
+    const ingestId = job.cad_source?.ingest_id!;
+    const retained = { ...record, ingest_id: ingestId, model_id: job.cad_source?.model_id,
+      ...(job.cad_source?.solve_model_sha256 ? { solve_model_sha256: job.cad_source.solve_model_sha256 } : {}) };
+    const workspace = workspaceFor(ingestId);
+    const response = { ...workspace, job_id: job.id,
+      model: { ...workspace.model, model_id: retained.model_id, producer: file ? 'mesh-file' : 'cad' },
+      prepared: { ...workspace.prepared, ingest_id: ingestId, model_id: retained.model_id,
+        producer: file ? 'mesh-file' : 'cad', ...(file ? {
+          msh_text: mesh, source_file: { filename: 'saved.msh', transform: { units: 'm', forward: '+z', up: '+y' }, source_tags: [1] },
+          source_tags: { 'source-hf': 1 }, summary: { node_count: 3, triangle_count: 1, dimensions: [1, 1, 0], groups: [] },
+        } : {}) } };
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === `/api/results/${job.id}`) return json({ result_kind: 'parametric', result_contract_version: 1, frequencies: [1000], metadata: {} });
+      if (path === `/api/runs/${job.id}/workspace`) return json(response);
+      if (path.endsWith('/viewport-mesh')) return new Response(mesh);
+      if (path === `/api/cadlink/ingest/${ingestId}`) return json(retained);
+      if (path.includes('/setup')) return json({ setup: null });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const before = currentModel();
+    const errors: string[] = [];
+    selectJob(job, message => errors.push(message));
+    if (imported) await vi.waitFor(() => expect(useImportedModelStore.getState().phase).toBe('ready'));
+    expect(errors).toEqual([]);
+    const model = currentModel();
+    const selected = shownResult(model, compareSelection.getSnapshot(), [job]);
+    expect(selected).toMatchObject({ job, ids: [job.id], canRender: true,
+      modelNotLoaded: job.id === 'legacy-unreadable' });
+    if (job.id === 'legacy-unreadable') {
+      expect(model.key).toBe(before.key);
+      expect(runVerdict(job, model)).toBe('model-not-shown');
+      expect(spatialResult(model, compareSelection.getSnapshot(), [job])).toBeNull();
+      expect(fieldPlaneJob([job], job.id)).toBeNull();
+      expect(femFieldJob([job], job.id)).toBeNull();
+    } else {
+      expect(runVerdict(job, model)).toBe('current');
+      expect(model.viewportShowing).toBe(true);
+      expect(fieldPlaneJob([job], job.id)).toBe(job);
+      expect(femFieldJob([job], job.id)).toBe(job);
+      if (imported) {
+        expect(fetcher).toHaveBeenCalledWith(`/api/runs/${job.id}/workspace`);
+        expect(currentModelScene(model)?.ingestId).toBe(ingestId);
+      } else expect(model.key).toBe(designFingerprint(hydrateJobDesign(job)!));
+    }
     expect(resultExportSelection(job)).toBe(job);
-    expect(selected.modelNotLoaded).toBe(job.id === 'legacy-unreadable');
+    // Assert the real chart consumer too, after the real history/model load.
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    vi.spyOn(jobsSocket, 'getSnapshot').mockReturnValue({ connection: 'connected', epoch: 1, cursor: 1, jobs: [job], error: null });
+    const host = document.createElement('div'); document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => { root.render(createElement(ResultsPanel)); });
+      expect(host.querySelector('[data-result-primary]')?.getAttribute('data-result-primary')).toBe(job.id);
+      expect(host.querySelector('.result-grid')).not.toBeNull();
+      if (job.id === 'legacy-unreadable') expect(host.textContent).toContain('Run model not loaded');
+    } finally { act(() => root.unmount()); host.remove(); resultsCache.clear(); }
   });
 
   it('selects a readable parametric run and its viewport in one call', () => {

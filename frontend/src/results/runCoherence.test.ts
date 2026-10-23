@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { designForFamily, resetDesignStore, serializeDesign, useDesignStore, type DesignDocument } from '../stores/design';
+import { designForFamily, resetDesignStore, serializeDesign, serializeSolveDesign, useDesignStore, type DesignDocument } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
-import { designFingerprint } from './runCoherence';
-import { displayedCadIngestId, currentModel, runContextMarker, runVerdict, runProvenanceMarker, type CurrentModel } from '../model/currentModel';
+import { hydrateDesignDocument } from '../api/designIo';
+import { designFingerprint, jobDesignFingerprint } from './runCoherence';
+import { currentModelScene, currentModel, runContextMarker, runVerdict, runProvenanceMarker, type CurrentModel } from '../model/currentModel';
 
 let nextJob = 0;
 
@@ -134,9 +135,10 @@ describe('run coherence', () => {
     importedMeshStore.setCadSolver({ source: 'cad', ingestId: 'old' } as never);
     importedMeshStore.setCad({ source: 'cad', ingestId: 'new' } as never);
     importedMeshStore.showCadSolver();
-    expect(displayedCadIngestId('new')).toBe('new');
-    expect(displayedCadIngestId('old')).toBe('old');
-    expect(displayedCadIngestId('missing')).toBeNull();
+    const model = (ingestId: string): CurrentModel => ({ kind: 'cad', key: ingestId, ingestId, lineage: null, label: 'CAD', viewportShowing: false });
+    expect(currentModelScene(model('new'))?.ingestId).toBe('new');
+    expect(currentModelScene(model('old'))?.ingestId).toBe('old');
+    expect(currentModelScene(model('missing'))).toBeNull();
   });
 
   it('marks only the provenance that differs from the workspace mode', () => {
@@ -178,4 +180,31 @@ it('matches file runs in Imported mesh even when an unrelated CAD return is reta
   expect(runVerdict(file, context)).toBe('current');
   expect(runVerdict(cad('wgi_cad'), context)).toBe('other-model');
   expect(runVerdict(file, { ...context, key: null, ingestId: null })).toBe('other-model');
+});
+
+// Historical snapshots exist as raw designs and versioned envelopes, with
+// omitted/null sweep fields or the defaults filled by the solve serializer.
+it.each(['omitted', 'null', 'filled'] as const)('normalizes legacy %s sweep snapshots to the effective solve', shape => {
+  const design = designForFamily('OSSE');
+  design._absent = ['simulation.f1', 'simulation.f2', 'simulation.num_frequencies'];
+  const wire = serializeDesign(design);
+  if (shape === 'omitted') {
+    for (const key of ['f1', 'f2', 'num_frequencies']) delete (wire.simulation as Record<string, unknown>)[key];
+  } else if (shape === 'filled') Object.assign(wire, serializeSolveDesign(design));
+  for (const snapshot of [wire, { version: 1, design: wire }]) {
+    const run = { ...parametric(null), script_snapshot: snapshot };
+    expect(jobDesignFingerprint(run)).toBe(designFingerprint(design));
+    expect(runVerdict(run, contextFor(design))).toBe('current');
+    expect(designFingerprint(hydrateDesignDocument(wire))).toBe(designFingerprint(design));
+  }
+});
+
+it.each(['f1', 'f2', 'num_frequencies', 'sim_type'] as const)('keeps an effective simulation change distinct: %s', key => {
+  const design = designForFamily('OSSE');
+  design._absent = ['simulation.f1', 'simulation.f2', 'simulation.num_frequencies'];
+  const edited = structuredClone(design);
+  const changes = { f1: 123, f2: 12345, num_frequencies: 17, sim_type: 'infinite-baffle' };
+  Object.assign(edited.simulation, { [key]: changes[key] });
+  expect(designFingerprint(edited)).not.toBe(designFingerprint(design));
+  expect(runVerdict(parametric(design), contextFor(edited))).toBe('earlier-version');
 });
