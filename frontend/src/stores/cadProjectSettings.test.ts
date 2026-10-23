@@ -55,6 +55,7 @@ it('restores identical model settings on reopen, selection and arrival, independ
   expect(await openImported({ kind: 'model', modelId: model }, fetcher)).toBe(true);
   const reopened = buildCadProjectSetup();
   expect(reopened?.setup.preparation).toEqual(saved.preparation);
+  expect(reopened?.setup.geometry.mesh).toEqual(saved.geometry.mesh);
   for (const arrive of [false, true]) {
     resetCadReturnStore(); resetSolveOptionsStore(); resetCadPreparationStore();
     useSolveOptionsStore.getState().updatePolar({ distance: 11 });

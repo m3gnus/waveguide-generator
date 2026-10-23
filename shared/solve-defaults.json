@@ -35,7 +35,17 @@
     "drive_voltage_v": 2.83,
     "preparation_symmetry_mode": "auto",
     "exterior_only": false,
-    "unsuggested_mesh_size_mm": 1,
+    "mesh": {
+      "rigid_size_mm": 25,
+      "transition_mm": 100,
+      "source_roles": {
+        "HF": { "size_mm": 6, "legacy_suggestion_mm": 4 },
+        "MF": { "size_mm": 15, "legacy_suggestion_mm": 15 },
+        "LF": { "size_mm": 25, "legacy_suggestion_mm": 30 },
+        "PASSIVE_CARDIOID": { "size_mm": 25, "legacy_suggestion_mm": 25 },
+        "PORT_EXIT": { "size_mm": 25, "legacy_suggestion_mm": 25 }
+      }
+    },
     "crossover": {
       "family": "lr",
       "order": 4,

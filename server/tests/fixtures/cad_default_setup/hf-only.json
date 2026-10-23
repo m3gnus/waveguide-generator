@@ -27,11 +27,11 @@
       ],
       "exterior_only": false,
       "mesh": {
-        "rigid_size_mm": 4,
+        "rigid_size_mm": 25,
         "source_size_mm": {
-          "source-hf": 4
+          "source-hf": 6
         },
-        "transition_mm": 4
+        "transition_mm": 100
       },
       "skipped_source_ids": []
     },

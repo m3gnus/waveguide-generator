@@ -51,6 +51,7 @@ from server.workspace.archive import (
 )
 
 from server.cadlink.fusion.addin_update import last_refresh, loaded_addin_identity, poll_activation
+from server.cadlink.joblane.default_setup import default_mesh
 from server.cadlink.joblane.delivery_status import delivery_status
 from server.cadlink.fusion.fusion_status import (
     ADDIN_OUTDATED_MESSAGE,
@@ -510,7 +511,11 @@ def _realized_dimensions_payload(
 
 def _return_listing(workspace_root: Path, store: CadLinkStore) -> list[dict[str, Any]]:
     return [
-        {**item, "projectLineageId": snapshot_project(store, manifest) if manifest else None}
+        {
+            **item,
+            "projectLineageId": snapshot_project(store, manifest) if manifest else None,
+            "defaultMesh": default_mesh(manifest) if item["readable"] and manifest else None,
+        }
         for item, manifest, _path in return_inventory(workspace_root)
     ]
 

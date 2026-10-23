@@ -252,12 +252,34 @@ def test_a_first_cad_authored_model_is_solved_with_wg_default_settings(harness: 
     assert options["frequency_spacing"] == "log"
     assert options["engine"] == "auto" and options["accuracy"] == "fast"
     assert options["polar_config"]["angle_range"] == [0.0, 180.0, 37]
-    assert request.geometry.mesh.source_size_mm == {"source-hf": 4.0}
+    assert request.geometry.mesh.source_size_mm == {"source-hf": 6.0}
+    assert request.geometry.mesh.rigid_size_mm == 25.0
+    assert request.geometry.mesh.transition_mm == 100.0
     assert [channel.id for channel in request.geometry.drive_channels] == ["drive-hf"]
     # The revision it solved with is bound to the operation and says it is WG's defaults.
     assert harness.bound_setup_revision() == summary["setupRevisionId"]
     revision = json.loads(harness.store.get_setup_revision(summary["setupRevisionId"])["setup_json"])
     assert revision["origin"] == "wg_defaults"
+
+
+@pytest.mark.parametrize("origin", [None, "wg_defaults"])
+def test_saved_mesh_sizes_are_never_replaced_by_new_defaults(harness: Harness, origin) -> None:
+    _received(harness)
+    saved = _setup(rigid=4)
+    saved["geometry"]["mesh"] = {
+        "rigid_size_mm": 4, "transition_mm": 4, "source_size_mm": {"source-hf": 4},
+    }
+    if origin:
+        saved["origin"] = origin
+    revision = _revision(harness.store, saved)
+    before = harness.store.get_setup_revision(revision)["setup_json"]
+
+    summary = harness.prepare(setup_revision_id=revision)
+
+    assert summary["state"] == "accepted"
+    assert harness.submitted[0].geometry.mesh.model_dump() == saved["geometry"]["mesh"]
+    assert harness.bound_setup_revision() == revision
+    assert harness.store.get_setup_revision(revision)["setup_json"] == before
 
 
 def test_a_first_time_model_the_defaults_cannot_mesh_waits_for_its_settings(

@@ -73,6 +73,9 @@ _SHAPE: dict[tuple[str, ...], type | tuple[type, ...]] = {
     ("ground_plane", "height_m"): _NUMBER,
     ("cad", "preparation_symmetry_mode"): str,
     ("cad", "exterior_only"): bool,
+    ("cad", "mesh", "rigid_size_mm"): _NUMBER,
+    ("cad", "mesh", "transition_mm"): _NUMBER,
+    ("cad", "mesh", "source_roles"): dict,
     ("cad", "crossover", "family"): str,
     ("cad", "crossover", "order"): int,
     ("cad", "crossover", "band_roles"): list,
@@ -89,6 +92,15 @@ def _check_shape(data: Any) -> None:
             value = value[key]
         if not isinstance(value, kind) or (kind is not bool and isinstance(value, bool)):
             raise SolveDefaultsDamaged(f"{'.'.join(path)} has the wrong type")
+    mesh = data["cad"]["mesh"]
+    values = {key: mesh[key] for key in ("rigid_size_mm", "transition_mm")}
+    for role, policy in mesh["source_roles"].items():
+        if not isinstance(policy, dict) or set(policy) != {"size_mm", "legacy_suggestion_mm"}:
+            raise SolveDefaultsDamaged(f"cad.mesh.source_roles.{role} is malformed")
+        values.update({f"source_roles.{role}.{key}": value for key, value in policy.items()})
+    for key, value in values.items():
+        if type(value) not in _NUMBER or not math.isfinite(value) or value <= 0:
+            raise SolveDefaultsDamaged(f"cad.mesh.{key} must be finite and positive")
     for item in data["cad"]["crossover"]["role_crossovers_hz"]:
         if not isinstance(item, dict) or not {"lower", "upper", "hz"} <= set(item):
             raise SolveDefaultsDamaged("cad.crossover.role_crossovers_hz has a malformed entry")
@@ -245,6 +257,35 @@ def unsized_sources(manifest: Mapping[str, Any]) -> list[str]:
     ]
 
 
+def default_mesh(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """First-use sizing only; saved setups and run snapshots never pass here.
+
+    Replace WGLink's fixed role suggestions with WG's defaults. A different
+    suggestion remains an intentional per-source size. Legacy returns carry
+    no edit provenance, so a value equal to the old fixed suggestion is treated
+    as the role default. Exposed verbatim by the returns API for the frontend.
+    """
+
+    mesh = solve_defaults()["cad"]["mesh"]
+    sizes = {}
+    for source in manifest.get("sources") or []:
+        if not isinstance(source, Mapping):
+            continue
+        suggested = source.get("suggested_resolution_mm")
+        role = canonical_source_role(str(source.get("role") or ""))
+        policy = mesh["source_roles"].get(role)
+        sizes[str(source["id"])] = (
+            policy["size_mm"]
+            if policy and suggested == policy["legacy_suggestion_mm"]
+            else suggested
+        )
+    return {
+        "rigid_size_mm": mesh["rigid_size_mm"],
+        "transition_mm": mesh["transition_mm"],
+        "source_size_mm": sizes,
+    }
+
+
 def default_setup(
     manifest: Mapping[str, Any], selection: Mapping[str, str] | None = None
 ) -> CadSolveSetup:
@@ -267,8 +308,6 @@ def default_setup(
             + ", ".join(missing)
             + ", and WG does not guess one"
         )
-    sizes = {str(source["id"]): source["suggested_resolution_mm"] for source in sources}
-    coarsest = max(sizes.values()) if sizes else max(r["mesh_size_mm"] for r in regions)
     channels = _drive_channels(sources)
     sweep = defaults["sweep"]
     cad = defaults["cad"]
@@ -297,11 +336,7 @@ def default_setup(
                 # No driver: every channel is solved at the model's own drive,
                 # as a first-time manual solve is, so no drive voltage either.
                 "drive_channels": channels,
-                "mesh": {
-                    "rigid_size_mm": coarsest,
-                    "transition_mm": coarsest,
-                    "source_size_mm": sizes,
-                },
+                "mesh": default_mesh(manifest),
                 "skipped_source_ids": [],
                 "exterior_only": cad["exterior_only"],
                 **({"combine": combine} if combine else {}),
@@ -323,6 +358,7 @@ __all__ = [
     "DEFAULT_SETTINGS_NOTE",
     "SolveDefaultsDamaged",
     "SOLVE_DEFAULTS_PATH",
+    "default_mesh",
     "default_setup",
     "solve_defaults",
     "unsized_sources",

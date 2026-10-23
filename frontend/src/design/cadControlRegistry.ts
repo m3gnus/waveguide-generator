@@ -190,7 +190,7 @@ export const CAD_CONTROLS = {
     ['rigid CAD surfaces', 'mesh size', 'rigidSizeMm'], 'ingested-return', 'cad.mesh-detail',
   ),
   transitionSize: control(
-    'cad.mesh.transition', 'Size transition', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
+    'cad.mesh.transition', 'Grading distance', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
     ['mesh regions', 'transitionMm'], 'ingested-return', 'cad.mesh-detail',
   ),
   exteriorOnly: control(

@@ -79,8 +79,11 @@ const cad = defaults.cad;
 export const DEFAULT_DRIVE_VOLTAGE_V: number = cad.drive_voltage_v;
 export const DEFAULT_CAD_PREPARATION_SYMMETRY = cad.preparation_symmetry_mode as 'auto' | 'full';
 export const DEFAULT_EXTERIOR_ONLY: boolean = cad.exterior_only;
-/** The mesh size the rail starts from when a return suggests none at all. */
-export const UNSUGGESTED_MESH_SIZE_MM: number = cad.unsuggested_mesh_size_mm;
+/** Empty/legacy bundle fallback; source role defaults arrive from the server. */
+export const DEFAULT_CAD_MESH = Object.freeze({
+  rigidSizeMm: cad.mesh.rigid_size_mm,
+  transitionMm: cad.mesh.transition_mm,
+});
 
 /** The combined output's default chain: its slope, the band roles lowest
  * first, and the crossover each pair of banded roles starts at. */

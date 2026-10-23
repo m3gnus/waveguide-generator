@@ -80,12 +80,12 @@
       ],
       "exterior_only": false,
       "mesh": {
-        "rigid_size_mm": 12,
+        "rigid_size_mm": 25,
         "source_size_mm": {
           "source-hf": 3,
           "source-lf": 12
         },
-        "transition_mm": 12
+        "transition_mm": 100
       },
       "skipped_source_ids": []
     },

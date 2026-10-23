@@ -96,20 +96,47 @@ describe('CAD return store', () => {
     useCadReturnStore.getState().selectBundle(bundle);
     const state = useCadReturnStore.getState();
     expect(state.sourceSizesMm).toEqual({ 'source-mf': 8, 'source-hf': 3 });
-    expect(state.rigidSizeMm).toBe(8);
+    expect(state.rigidSizeMm).toBe(25);
+    expect(state.transitionMm).toBe(100);
     expect(state.driveChannels.map(({ id, source_ids }) => ({ id, source_ids }))).toEqual([
       { id: 'drive-mf', source_ids: ['source-mf'] },
       { id: 'drive-hf', source_ids: ['source-hf'] },
     ]);
   });
 
-  it('uses a sub-millimetre coarsest source suggestion without a 1 mm floor', () => {
+  it('keeps custom sub-millimetre source suggestions independent of wall sizing', () => {
     useCadReturnStore.getState().selectBundle({
       ...bundle,
       sources: bundle.sources.map((source, index) => ({ ...source, suggestedResolutionMm: index ? 0.15 : 0.4 })),
     });
-    expect(useCadReturnStore.getState().rigidSizeMm).toBe(0.4);
-    expect(useCadReturnStore.getState().transitionMm).toBe(0.4);
+    expect(useCadReturnStore.getState().sourceSizesMm).toEqual({ 'source-mf': 0.4, 'source-hf': 0.15 });
+    expect(useCadReturnStore.getState().rigidSizeMm).toBe(25);
+    expect(useCadReturnStore.getState().transitionMm).toBe(100);
+  });
+
+  it('uses the server default mesh without recomputing source role defaults', () => {
+    useCadReturnStore.getState().selectBundle({
+      ...bundle,
+      defaultMesh: { rigid_size_mm: 25, transition_mm: 100, source_size_mm: { 'source-mf': 15, 'source-hf': 6 } },
+    });
+    expect(useCadReturnStore.getState()).toMatchObject({
+      rigidSizeMm: 25, transitionMm: 100, sourceSizesMm: { 'source-mf': 15, 'source-hf': 6 },
+    });
+  });
+
+  it('uses server defaults for newly listed sources while retaining existing choices', () => {
+    useCadReturnStore.getState().selectBundle({ ...bundle, sources: [bundle.sources[0]], sourceCount: 1 });
+    useCadReturnStore.getState().setSourceSize('source-mf', 9);
+    const refreshed = {
+      ...bundle,
+      defaultMesh: { rigid_size_mm: 25, transition_mm: 100, source_size_mm: { 'source-mf': 15, 'source-hf': 6 } },
+    };
+    useCadReturnStore.getState().refreshSelectedBundle(refreshed);
+    expect(useCadReturnStore.getState().sourceSizesMm).toEqual({ 'source-mf': 9, 'source-hf': 6 });
+    // Re-enabling an unsized optional source follows the same server policy.
+    useCadReturnStore.setState({ sourceSizesMm: { 'source-mf': 9 }, skippedSourceIds: ['source-hf'] });
+    useCadReturnStore.getState().setSkipped('source-hf', false);
+    expect(useCadReturnStore.getState().sourceSizesMm).toEqual({ 'source-mf': 9, 'source-hf': 6 });
   });
 
   it('distinguishes a first arrival from resetting an existing solve setup', () => {

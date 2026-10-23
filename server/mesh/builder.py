@@ -517,16 +517,22 @@ def _mesh_policy(
     return guarded, warning_limit, multiplier
 
 
-def _enforce_artifact_triangle_ceiling(triangle_count: int) -> None:
+def _enforce_artifact_triangle_ceiling(
+    triangle_count: int, *, rigid_size_mm: float | None = None
+) -> None:
     """Repeat the mesher artifact sanity check on the parsed output."""
 
     if triangle_count > MAX_SOLVER_MESH_ARTIFACT_TRIANGLES:
+        cause = (
+            f"the walls are meshed at {rigid_size_mm:g} mm. "
+            if rigid_size_mm is not None else ""
+        )
         raise RuntimeError(
-            "Solver mesh contains "
-            f"{triangle_count:,} actual-domain triangles, exceeding the "
-            "non-bypassable solver-artifact sanity ceiling of "
-            f"{MAX_SOLVER_MESH_ARTIFACT_TRIANGLES:,}. Coarsen the relevant "
-            "mm mesh resolution before solving."
+            f"The mesh has {triangle_count:,} triangles "
+            f"(limit {MAX_SOLVER_MESH_ARTIFACT_TRIANGLES:,})"
+            f"{': ' + cause if cause else '. '}"
+            "Larger mesh sizes produce fewer triangles. "
+            "Use coarser wall or source sizes before solving again."
         )
 
 

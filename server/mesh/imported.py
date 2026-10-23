@@ -3721,7 +3721,9 @@ def build_imported_mesh(
             )
         if len(triangles) == 0:
             raise ImportedMeshError("meshing: imported mesh contains no triangles")
-        _enforce_artifact_triangle_ceiling(int(len(triangles)))
+        _enforce_artifact_triangle_ceiling(
+            int(len(triangles)), rigid_size_mm=normalized_sizes["rigid_size_mm"]
+        )
         imported_symmetry = imported_symmetry_from_cut_planes(domain_planes)
         dense = _enforce_dense_solver_memory_ceiling(
             triangles,

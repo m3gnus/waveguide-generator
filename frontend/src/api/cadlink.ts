@@ -33,6 +33,12 @@ export interface CadReturnInstanceSummary {
 export type CadReturnBundleOrigin = 'wglink' | 'onshape' | 'native';
 
 export interface CadReturnBundle {
+  /** Server-owned first-use sizing; never replaces saved setup/run sizes. */
+  defaultMesh?: {
+    rigid_size_mm: number;
+    transition_mm: number;
+    source_size_mm: Record<string, number | null>;
+  } | null;
   /** Resolved by the server from the manifest, never the open editor. Null for a new document. */
   projectLineageId?: string | null;
   name: string;

@@ -114,13 +114,13 @@
       ],
       "exterior_only": false,
       "mesh": {
-        "rigid_size_mm": 14,
+        "rigid_size_mm": 25,
         "source_size_mm": {
           "source-hf": 2,
           "source-lf": 14,
           "source-mf": 6
         },
-        "transition_mm": 14
+        "transition_mm": 100
       },
       "skipped_source_ids": []
     },

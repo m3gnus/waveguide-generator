@@ -21,7 +21,7 @@ import {
   DEFAULT_DRIVE_VOLTAGE_V,
   DEFAULT_EXTERIOR_ONLY,
   DEFAULT_SWEEP,
-  UNSUGGESTED_MESH_SIZE_MM,
+  DEFAULT_CAD_MESH,
 } from './solveDefaults';
 
 export interface CadDriveChannel {
@@ -266,15 +266,21 @@ export interface CadReturnState {
   setSweep: (update: Partial<Pick<CadReturnState, 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>>) => void;
 }
 
+/** Read the server's first-use suggestion without reimplementing role policy. */
+function defaultSourceSize(bundle: CadReturnBundle | null, source: CadReturnBundle['sources'][number]): number {
+  return bundle?.defaultMesh?.source_size_mm[source.id] ?? source.suggestedResolutionMm;
+}
+
 function initialFromBundle(bundle: CadReturnBundle | null) {
   const sources = bundle?.readable ? bundle.sources : [];
-  const sourceSizesMm = Object.fromEntries(sources.map((source) => [source.id, source.suggestedResolutionMm]));
-  const suggestions = sources.map((source) => source.suggestedResolutionMm).filter((value) => value > 0);
-  const coarsest = suggestions.length ? Math.max(...suggestions) : UNSUGGESTED_MESH_SIZE_MM;
+  const mesh = bundle?.defaultMesh;
+  const sourceSizesMm = Object.fromEntries(sources.map((source) => [
+    source.id, defaultSourceSize(bundle, source),
+  ]));
   return {
     sourceSizesMm,
-    rigidSizeMm: coarsest,
-    transitionMm: coarsest,
+    rigidSizeMm: mesh?.rigid_size_mm ?? DEFAULT_CAD_MESH.rigidSizeMm,
+    transitionMm: mesh?.transition_mm ?? DEFAULT_CAD_MESH.transitionMm,
     skippedSourceIds: [] as string[],
     driveChannels: groupChannels(sources.map((source) => ({ sourceId: source.id, channelId: source.defaultDriveChannelId, motion: 'normal' as const }))),
     areaDriftOverrides: [] as string[],
@@ -406,7 +412,7 @@ function reconcileListing(state: CadReturnState, selectedBundle: CadReturnBundle
   const ids = new Set(selectedBundle.sources.map((source) => source.id));
   const sourceSizesMm = Object.fromEntries(selectedBundle.sources.map((source) => [
     source.id,
-    state.sourceSizesMm[source.id] ?? source.suggestedResolutionMm,
+    state.sourceSizesMm[source.id] ?? defaultSourceSize(selectedBundle, source),
   ]));
   const skippedSourceIds = state.skippedSourceIds.filter((id) => ids.has(id));
   const areaDriftOverrides = state.areaDriftOverrides.filter((id) => ids.has(id));
@@ -742,7 +748,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       }
       const source = state.selectedBundle?.sources.find((item) => item.id === sourceId);
       const sourceSizesMm = !skipped && source && state.sourceSizesMm[sourceId] === undefined
-        ? { ...state.sourceSizesMm, [sourceId]: source.suggestedResolutionMm }
+        ? { ...state.sourceSizesMm, [sourceId]: defaultSourceSize(state.selectedBundle, source) }
         : state.sourceSizesMm;
       return {
         skippedSourceIds,

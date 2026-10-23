@@ -700,7 +700,10 @@ def test_surface_deviation_is_bounded_to_the_band_where_the_dial_has_authority()
     assert CadReturnIngestRequest.model_validate(base).surface_deviation_mm is None
 
 
-def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("suggested", "effective"), [(3.5, 3.5), (4, 6)])
+def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(
+    tmp_path: Path, suggested: float, effective: float,
+) -> None:
     app = create_app(data_dir=tmp_path / "data")
     workspace = tmp_path / "workspace"
     good = workspace / "wgreturn" / "speaker.wgreturn"
@@ -721,7 +724,7 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
                         "id": "source-hf",
                         "role": " hf ",
                         "required": True,
-                        "suggested_resolution_mm": 3.5,
+                        "suggested_resolution_mm": suggested,
                         "default_drive_channel_id": "drive-hf",
                     }
                 ],
@@ -746,6 +749,10 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
     assert result["items"][0] == {
         "name": "speaker.wgreturn",
         "bundlePath": "wgreturn/speaker.wgreturn",
+        "defaultMesh": {
+            "rigid_size_mm": 25, "transition_mm": 100,
+            "source_size_mm": {"source-hf": effective},
+        },
         "modifiedAt": result["items"][0]["modifiedAt"],
         "readable": True,
         "documentName": "Speaker v4",
@@ -777,7 +784,7 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
                 "role": "HF",
                 "instanceId": None,
                 "required": True,
-                "suggestedResolutionMm": 3.5,
+                "suggestedResolutionMm": suggested,
                 "defaultDriveChannelId": "drive-hf",
             }
         ],

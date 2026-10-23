@@ -31,11 +31,12 @@ interface Fixture {
     default_drive_channel_id: string;
   }>;
   selection: { engine: string; accuracy: 'fast' | 'accurate' };
-  setup: unknown;
+  setup: { geometry: { mesh: NonNullable<CadReturnBundle['defaultMesh']> } };
 }
 
 function bundleOf(fixture: Fixture): CadReturnBundle {
   return {
+    defaultMesh: fixture.setup.geometry.mesh,
     name: 'model.wgreturn',
     bundlePath: 'wgreturn/model.wgreturn',
     modifiedAt: '2026-09-28T10:00:00Z',

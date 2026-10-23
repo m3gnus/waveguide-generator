@@ -362,8 +362,18 @@ def test_large_mesh_warning_quantifies_the_cubic_factorisation_cost() -> None:
 
 def test_actual_domain_artifact_ceiling_is_enforced_post_build() -> None:
     _enforce_artifact_triangle_ceiling(MAX_SOLVER_MESH_ARTIFACT_TRIANGLES)
-    with pytest.raises(RuntimeError, match="solver-artifact sanity ceiling"):
+    with pytest.raises(RuntimeError, match=r"22,001 triangles \(limit 22,000\)"):
         _enforce_artifact_triangle_ceiling(MAX_SOLVER_MESH_ARTIFACT_TRIANGLES + 1)
+
+
+def test_imported_mesh_refusal_names_count_limit_and_wall_size() -> None:
+    with pytest.raises(RuntimeError) as error:
+        _enforce_artifact_triangle_ceiling(28_944, rigid_size_mm=4)
+    assert str(error.value) == (
+        "The mesh has 28,944 triangles (limit 22,000): the walls are meshed at 4 mm. "
+        "Larger mesh sizes produce fewer triangles. "
+        "Use coarser wall or source sizes before solving again."
+    )
 
 
 def _triangles_using(vertex_count: int) -> np.ndarray:
