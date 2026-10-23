@@ -6,6 +6,7 @@ import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { hydrateDesignDocument } from '../api/designIo';
+import { replaceWithJobDesign } from '../jobs/jobDesign';
 import { designFingerprint, jobDesignFingerprint } from './runCoherence';
 import { currentModelScene, currentModel, runContextMarker, runVerdict, runProvenanceMarker, shownResult, spatialResult, type CurrentModel } from '../model/currentModel';
 
@@ -172,7 +173,9 @@ describe('run coherence', () => {
   });
 });
 
-it.each(['wire', 'sidecar', 'both'] as const)('preserves executable expression identity in legacy %s snapshots', shape => {
+it.each(['wire', 'sidecar', 'both'] as const)('matches the actual reopened submission for legacy %s snapshots', shape => {
+  resetDesignStore();
+  useDesignStore.getState().updateField('R', 140);
   useDesignStore.getState().updateExpression('R', { value: null, raw: '70*(1+cos(p))' });
   const design = useDesignStore.getState().design;
   const submitted = JSON.parse(JSON.stringify(serializeSolveDesign(design)));
@@ -181,22 +184,35 @@ it.each(['wire', 'sidecar', 'both'] as const)('preserves executable expression i
     : shape === 'both' ? { ...submitted, _expressions: structuredClone(design._expressions) } : submitted;
   for (const snapshot of [wire, { version: 1, design: wire }]) {
     const run = { ...parametric(null), status: 'complete' as const, has_results: true, script_snapshot: snapshot };
-    const model = contextFor(design);
+    const before = JSON.stringify(snapshot);
+    expect(replaceWithJobDesign(run)).toBe(true);
+    const reopened = useDesignStore.getState().design;
+    const model = contextFor(reopened);
+    expect(serializeSolveDesign(reopened).R).toEqual(shape === 'sidecar' ? 140 : submitted.R);
     expect(jobDesignFingerprint(run)).toBe(model.key);
+    expect(JSON.stringify(snapshot)).toBe(before); // Identity reconstruction is read-only.
     expect(runVerdict(run, model)).toBe('current');
     expect(shownResult(model, { primary: run.id }, [run]).canRender).toBe(true);
 
     useDesignStore.getState().updateExpression('R', { value: null, raw: '90*(1+cos(p))' });
     const edited = useDesignStore.getState().design;
-    expect(edited.R).toBe(design.R); // Same editor scalar, different executable geometry.
-    expect(serializeSolveDesign(edited).R).not.toEqual(submitted.R);
+    expect(edited.R).toBe(reopened.R); // Same editor scalar, different executable geometry.
+    expect(serializeSolveDesign(edited).R).not.toEqual(serializeSolveDesign(reopened).R);
     expect(runVerdict(run, contextFor(edited))).toBe('earlier-version');
     expect(shownResult(contextFor(edited), { primary: run.id }, [run]).canRender).toBe(false);
     expect(spatialResult(contextFor(edited), { primary: run.id }, [run])).toBeNull();
-    const plain = structuredClone(design);
+    const plain = structuredClone(reopened);
     delete plain._expressions;
-    expect(designFingerprint(plain)).not.toBe(model.key);
-    expect(runVerdict(parametric(plain), model)).toBe('earlier-version');
+    if (shape === 'sidecar') {
+      expect(designFingerprint(plain)).toBe(model.key);
+      expect(runVerdict(parametric(plain), model)).toBe('current');
+      const changedSidecar = structuredClone(wire);
+      changedSidecar._expressions!.R.raw = '100*(1+cos(p))';
+      expect(jobDesignFingerprint({ ...parametric(null), script_snapshot: changedSidecar })).toBe(model.key);
+    } else {
+      expect(designFingerprint(plain)).not.toBe(model.key);
+      expect(runVerdict(parametric(plain), model)).toBe('earlier-version');
+    }
   }
 });
 

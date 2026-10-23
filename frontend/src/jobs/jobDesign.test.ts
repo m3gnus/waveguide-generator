@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { resetDesignStore, useDesignStore } from '../stores/design';
+import { resetDesignStore, serializeSolveDesign, useDesignStore } from '../stores/design';
+import parentLegacySubmission from './fixtures/legacySidecar.parent.solve.json?raw';
 import {
   canLoadJobDesign,
   canOpenJobModel,
@@ -11,6 +12,17 @@ import {
 
 describe('versioned job design snapshots', () => {
   beforeEach(() => resetDesignStore());
+
+  it.each([false, true])('reopens legacy sidecars with the parent submission bytes (versioned: %s)', versioned => {
+    const wire = { formula: 'OSSE', R: 140, _expressions: { R: { value: null, raw: '70*(1+cos(p))' } } };
+    const job = { script_snapshot: versioned ? { version: 1, design: wire } : wire };
+    expect(replaceWithJobDesign(job)).toBe(true);
+    const submitted = serializeSolveDesign(useDesignStore.getState().design);
+    // Captured with the hydrator and submission serializer from 417641762.
+    expect(JSON.stringify(submitted)).toBe(parentLegacySubmission.trimEnd());
+    expect(submitted.R).toBe(140);
+    expect(submitted).not.toHaveProperty('_expressions');
+  });
 
   it('hydrates canonical schema wire and starts a new undo epoch on Load design', () => {
     useDesignStore.getState().updateField('a', 33);

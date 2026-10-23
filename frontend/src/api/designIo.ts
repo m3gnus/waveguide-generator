@@ -242,14 +242,7 @@ export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocu
   }
   const expressions: Record<string, ExprNumber> = {};
   const absent: string[] = [];
-  // Legacy snapshots can carry the editor sidecar as well as wire Expr values.
-  // Read its paths from the root, never as fictitious `_expressions.R` paths.
-  const { _expressions: legacyExpressions, ...portable } = wire;
-  if (legacyExpressions && typeof legacyExpressions === 'object' && !Array.isArray(legacyExpressions)) {
-    unwrapExpressions(legacyExpressions, '', expressions);
-  }
-  // Wire Expr values take precedence when both representations are present.
-  const unwrapped = unwrapExpressions(portable, '', expressions, absent) as Record<string, unknown>;
+  const unwrapped = unwrapExpressions(wire, '', expressions, absent) as Record<string, unknown>;
   const formula = unwrapped.formula as DesignFamily;
   if (!['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', 'LOOKUP', ...NATIVE_FAMILIES].includes(formula)) {
     throw new Error(`Unsupported design formula: ${String(unwrapped.formula)}`);

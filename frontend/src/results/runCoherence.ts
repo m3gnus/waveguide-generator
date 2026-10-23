@@ -72,6 +72,9 @@ const jobDesignFingerprints = new Map<string, { snapshot: JobItem['script_snapsh
 export function jobDesignFingerprint(job: Pick<JobItem, 'id' | 'script_snapshot'>): string | null {
   const cached = jobDesignFingerprints.get(job.id);
   if (cached && cached.snapshot === job.script_snapshot) return cached.fingerprint;
+  // Reconstruct only for this read-only comparison. Follow the reopen/submit
+  // path exactly: legacy sidecars do not override scalar wire parameters;
+  // expressions at actual wire paths do. Never promote sidecars into a document.
   const design = hydrateJobDesign(job);
   const fingerprint = design ? designFingerprint(design) : null;
   jobDesignFingerprints.set(job.id, { snapshot: job.script_snapshot, fingerprint });

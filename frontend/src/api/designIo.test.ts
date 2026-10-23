@@ -73,16 +73,19 @@ describe('design hydration', () => {
     expect(serializeDesign(design)).toMatchObject({ R: { value: 280, raw: '140 * 2' }, a: { value: null, raw: 'coverage(p)' } });
   });
 
-  it('hydrates legacy expression sidecar paths and lets wire expressions take precedence', () => {
+  it('keeps legacy sidecars inert while preserving executable wire expressions', () => {
     const legacy = { R: { value: null, raw: '70*(1+cos(p))' },
       'mesh.throat_resolution': { value: 6, raw: '3*2' } };
     const wireR = { value: null, raw: '90*(1+cos(p))' };
     for (const R of [140, wireR]) {
       const design = hydrateDesignDocument({ formula: 'OSSE', R, _expressions: legacy });
-      const expected = { ...legacy, R: R === 140 ? legacy.R : wireR };
-      expect(design._expressions).toEqual(expected);
-      expect(serializeDesign(design)).toMatchObject({ R: expected.R,
-        mesh: { throat_resolution: legacy['mesh.throat_resolution'] } });
+      expect(design._expressions).toEqual({
+        '_expressions.R': legacy.R,
+        '_expressions.mesh.throat_resolution': legacy['mesh.throat_resolution'],
+        ...(R === 140 ? {} : { R: wireR }),
+      });
+      expect(serializeDesign(design)).toMatchObject({ R,
+        mesh: { throat_resolution: 6 } });
       expect(serializeDesign(design)).not.toHaveProperty('_expressions');
     }
   });
