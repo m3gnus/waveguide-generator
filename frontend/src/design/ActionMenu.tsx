@@ -31,6 +31,7 @@ export interface ActionMenuProps {
   items: ActionMenuItem[];
   menuLabel: string;
   triggerLabel: string;
+  triggerTitle?: string;
   onPrimary?: () => void | Promise<void>;
   chevronLabel?: string;
   disabled?: boolean;
@@ -51,6 +52,7 @@ export function ActionMenu({
   items,
   menuLabel,
   triggerLabel,
+  triggerTitle,
   onPrimary,
   chevronLabel = 'More options',
   disabled = false,
@@ -348,6 +350,7 @@ export function ActionMenu({
       <button
         type="button"
         className="action-menu-primary"
+        title={triggerTitle}
         disabled={disabled}
         aria-haspopup={onPrimary ? undefined : 'menu'}
         aria-expanded={onPrimary ? undefined : open}

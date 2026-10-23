@@ -43,7 +43,7 @@ const CAD_IMPORT: JobDesignFields = {
     reopenable: false,
     source: 'cad-import',
     reason_code: 'imported_geometry',
-    reason: 'This immutable CAD return cannot be reopened. The ingestion anchor is registered design design-123.',
+    reason: 'Solved from a Fusion return; there are no WG parameters to edit.',
     note: null,
   },
 };
@@ -99,13 +99,26 @@ describe('the design verdict a job card shows', () => {
     expect(notice()).toBeNull();
   });
 
-  it('allows CAD replay while pointing at the linked design instead of reopening it', () => {
+  it('allows CAD replay without a design availability banner', () => {
     const onRerun = vi.fn();
     render(<><RerunButton job={CAD_IMPORT} onRerun={onRerun}/><DesignAvailabilityNotice job={CAD_IMPORT}/></>);
     expect(button().disabled).toBe(false);
-    expect(notice()?.textContent).toContain('design-123');
+    expect(notice()).toBeNull();
     act(() => button().click());
     expect(onRerun).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    'This solve is still being prepared from a CAD return, so it has no design to reopen yet.',
+    'This solve ended while it was being prepared from a CAD return.',
+  ])('keeps the no-stored-design notice, including CAD preparation: %s', (reason) => {
+    render(<DesignAvailabilityNotice job={NO_DESIGN}/>);
+    expect(notice()?.textContent).toContain('no design was stored');
+    render(<DesignAvailabilityNotice job={{ ...NO_DESIGN, design_availability: {
+      ...NO_DESIGN.design_availability!, source: 'cad-import',
+      reason,
+    } }}/>);
+    expect(notice()?.textContent).toBe(reason);
   });
 
   it('still refuses a job whose verdict the server did not send', () => {

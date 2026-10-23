@@ -9,15 +9,12 @@ import { axes, LABEL_FONT, type ChartDensity } from '../results/chartAxes';
 export type { ChartDensity } from '../results/chartAxes';
 import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, groupDelaySeries, hasZeroRadiationRear, impedanceComparable, impedanceSeries, impedanceSubtitle, isOutsideHalfSpace, nearestFrequencyIndex, OUTSIDE_HALF_SPACE_LABEL, phaseSeries, polarCut, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
-import { runWorkspaceExportBundle } from '../results/exporters';
+import { RunExportControl } from '../jobs/RunExportControl';
 import {
   askForExportDestination,
   askToReplaceExports,
-  replacedNotice,
-  EXPORT_CANCELLED_MESSAGE,
 } from './exportDestinationPrompt';
 import { ExportCancelledError } from '../api/exportDestination';
-import { resultExportSnapshot } from '../results/exportContext';
 export { resultExportSnapshot } from '../results/exportContext';
 import { copyChartPng, saveChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
@@ -48,7 +45,7 @@ import { ResultsHeader } from './ResultsHeader';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { useVisibleRedraw } from './panelVisibility';
 import { trapDialogFocus } from './dialogFocus';
-import { solveOptionsStoreForJob, useRunNormAngle } from '../stores/solveOptionsContext';
+import { useRunNormAngle } from '../stores/solveOptionsContext';
 import { useObservationStore } from '../viewport/observationStore';
 import { MAX_MEASURED_OVERLAYS, useMeasuredOverlayStore, type MeasuredOverlay } from '../stores/measuredOverlays';
 import { useDesignStore } from '../stores/design';
@@ -2259,8 +2256,6 @@ export function ResultsPanel() {
   const [fetchError, setFetchError] = useState<ResultFetchError | null>(null);
   const [fetchAttempt, setFetchAttempt] = useState(0);
   const [radiationArtifactLoads, setRadiationArtifactLoads] = useState<Record<string, RadiationArtifactView>>({});
-  const [exportStatus, setExportStatus] = useState<string | null>(null);
-  const [exporting, setExporting] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const preferencesAnchor = useRef<HTMLButtonElement | null>(null);
   const [beamRerunSubmitting, setBeamRerunSubmitting] = useState(false);
@@ -2709,52 +2704,6 @@ export function ResultsPanel() {
     setMeasuredError(problems.length ? problems.join(' ') : null);
   }, []);
 
-  const exportSelected = async () => {
-    if (!primary || primaryIsProvisional) return;
-    setExporting(true); setExportStatus(null);
-    try {
-      const job = jobs.find(({ id }) => id === selection.primary);
-      if (!job) throw new Error('The selected run is no longer available for export.');
-      const destination = await askForExportDestination({
-        title: 'Export these results',
-        detail: `${preferences.exportFormats.length} format${preferences.exportFormats.length === 1 ? '' : 's'} from the selected run.`,
-      });
-      if (!destination) { setExportStatus(EXPORT_CANCELLED_MESSAGE); return; }
-      // The envelope plus the active channel, not the channel alone: the file
-      // suffix is allocated from the channel id against its siblings, and the
-      // formats that fan out across members (VituixCAD) need the envelope to
-      // fan out from. Handing over the scoped payload left every CAD export
-      // named as if the run had one channel.
-      const result = await runWorkspaceExportBundle({
-        result: primaryRaw ?? primary,
-        ...(activeChannel ? { channelId: activeChannel } : {}),
-        ...resultExportSnapshot(job),
-        jobStem: exportStemForJob(job),
-        jobId: job.id,
-        hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
-        // Exports follow the maps: the normalization angle is a display
-        // reference now, and the angle the run was solved at is no longer shown
-        // anywhere, so it is not a candidate.
-        normalizationAngle: solveOptionsStoreForJob(job).getState().polar.normAngle,
-        preferences,
-        destinationToken: destination.token,
-        confirmReplacements: askToReplaceExports,
-        // The user asked for these files: asking again must produce them again,
-        // even though several builders stamp the time into their output. What
-        // it must not do is replace files WG never wrote without asking, which
-        // is what `confirm` adds over `overwrite`.
-      }, preferences.exportFormats, 'confirm');
-      if (selection.primary && result.files.length) {
-        await jobsSocket.patchMetadata(selection.primary, { exported_files: [...new Set([...(job?.exported_files ?? []), ...result.files])] });
-      }
-      const written = result.directory ? ` written to ${result.directory}` : ' written to Workspace';
-      setExportStatus(`${result.files.length} file${result.files.length === 1 ? '' : 's'}${written}${replacedNotice(result.replaced)}${result.failures.length ? ` · ${result.failures.length} failed: ${result.failures.map(({ format, reason }) => `${format} (${reason})`).join(', ')}` : ''}`);
-    } catch (reason) { setExportStatus(reason instanceof Error ? reason.message : String(reason)); }
-    // A declined replacement arrives as `ExportCancelledError`, whose message
-    // is the cancellation line, so it reads the same as a dismissed dialog.
-    finally { setExporting(false); }
-  };
-
   if (coherenceContext.mode !== 'cad' && !selection.primary && !jobs.some((job) => job.has_results)) return <div className="results-panel panel-scroll">
     <ResultsHeader identity={null} controls={<button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>}/>
     {preferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}<div className="empty-state" role="status"><b>No results yet</b><span>Solve the current design, or select a finished run in the Jobs rail, to fill these charts.</span></div>
@@ -2843,7 +2792,14 @@ export function ResultsPanel() {
           : 'Draw a measured response (FRD, or a REW text export) on the on-axis SPL chart'}
         onClick={() => measuredInput.current?.click()}
       >Overlay measured…</button>
-      <button disabled={exporting || !primary || !cadResultMatchesViewport || primaryIsProvisional || !preferences.exportFormats.length} title={primaryIsProvisional ? 'Export is available when the solve finishes' : 'Export the current result using the formats enabled in Results preferences'} onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export (${preferences.exportFormats.length})`}</button>
+      {primaryJob ? <RunExportControl
+        job={primaryJob}
+        result={primaryRaw ?? primary}
+        channelId={activeChannel ?? undefined}
+        disabledReason={primaryIsProvisional ? 'Export is available when the solve finishes'
+          : !primary || !cadResultMatchesViewport ? 'Select a run with results to export' : undefined}
+        onOpenExportSettings={() => setPreferencesOpen(true)}
+      /> : <button disabled title="Select a run to export">Export</button>}
       <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
     </>}/>
     {powerFlags && cadResultMatchesViewport && <div className="result-diagnostics">
@@ -2872,7 +2828,7 @@ export function ResultsPanel() {
       {measuredError && <span className="result-recombine-error" role="alert">{measuredError}</span>}
     </div>}
     {preferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}
-    {(error || exportStatus) && <div className={error ? 'job-error' : ''} role="status" style={{ margin: 7, color: error ? undefined : 'var(--fg2)', fontSize: 'var(--text-micro)' }}>{error ?? exportStatus}{error && <button type="button" onClick={() => { setFetchError(null); setFetchAttempt((value) => value + 1); }}>Retry</button>}</div>}
+    {error && <div className="job-error" role="status" style={{ margin: 7, fontSize: 'var(--text-micro)' }}>{error}<button type="button" onClick={() => { setFetchError(null); setFetchAttempt((value) => value + 1); }}>Retry</button></div>}
     {showingPrevious && <div className="job-warning" role="status" style={{ margin: 7 }}>Showing previous results while fetching the selected run…</div>}
     {/* Three different empty docks, said apart: a failed fetch, a fetch still
         in flight, and nothing selected at all. The last used to claim it was

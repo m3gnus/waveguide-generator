@@ -32,6 +32,9 @@ import './RunExportControl.css';
 export interface RunExportControlProps {
   job: JobItem;
   compact?: boolean;
+  disabledReason?: string;
+  result?: ResultPayload;
+  channelId?: string;
   onOpenExportSettings(): void;
 }
 
@@ -43,6 +46,7 @@ interface CatalogItem {
   group: string;
   needsResult: boolean;
   needsDesign: boolean;
+  cadRunReason?: string;
   needsPressureBasis?: boolean;
   needsRadiationArtifact?: boolean;
 }
@@ -58,15 +62,15 @@ const FORMAT_CATALOG: CatalogItem[] = [
   { id: 'pressure_basis', format: 'pressure_basis', label: 'Complex pressure basis', trailing: '.npz', group: 'Results', needsResult: true, needsDesign: false, needsPressureBasis: true },
   { id: 'derived_acoustics', format: 'derived_acoustics', label: 'Derived acoustics', trailing: '.csv + .json', group: 'Results', needsResult: true, needsDesign: false },
   { id: 'html_report', format: 'html_report', label: 'Static run report', trailing: '.html', group: 'Results', needsResult: true, needsDesign: false },
-  { id: 'step', format: 'step', label: 'STEP solid', trailing: '.step', group: 'Geometry & design', needsResult: false, needsDesign: true },
-  { id: 'mwg_config', format: 'mwg_config', label: 'Parameter config', trailing: '.cfg', group: 'Geometry & design', needsResult: false, needsDesign: true },
+  { id: 'step', format: 'step', label: 'STEP solid', trailing: '.step', group: 'Geometry & design', needsResult: false, needsDesign: true, cadRunReason: 'STEP export is not available for CAD runs yet.' },
+  { id: 'mwg_config', format: 'mwg_config', label: 'Parameter config', trailing: '.cfg', group: 'Geometry & design', needsResult: false, needsDesign: true, cadRunReason: 'CAD runs have no WG parameter config to export.' },
   { id: 'impedance_csv', format: 'impedance_csv', label: 'Impedance', trailing: '.csv', group: 'Advanced', needsResult: true, needsDesign: false },
   { id: 'radiation_impedance_csv', format: 'radiation_impedance_csv', label: 'Radiation matrix curves', trailing: '.csv', group: 'Advanced', needsResult: false, needsDesign: false, needsRadiationArtifact: true },
   { id: 'radiation_impedance_npz', format: 'radiation_impedance_npz', label: 'Lossless radiation matrix', trailing: '.npz', group: 'Advanced', needsResult: false, needsDesign: false, needsRadiationArtifact: true },
   { id: 'polar_csv', format: 'polar_csv', label: 'Polar directivity', trailing: '.csv', group: 'Advanced', needsResult: true, needsDesign: false },
   { id: 'txt', format: 'txt', label: 'Summary report', trailing: '.txt', group: 'Advanced', needsResult: true, needsDesign: false },
-  { id: 'stl', format: 'stl', label: 'STL mesh', trailing: '.stl', group: 'Advanced', needsResult: false, needsDesign: true },
-  { id: 'fusion_csv', format: 'fusion_csv', label: 'Fusion curves', trailing: '.csv', group: 'Advanced', needsResult: false, needsDesign: true },
+  { id: 'stl', format: 'stl', label: 'STL mesh', trailing: '.stl', group: 'Advanced', needsResult: false, needsDesign: true, cadRunReason: 'STL export is not available for CAD runs.' },
+  { id: 'fusion_csv', format: 'fusion_csv', label: 'Fusion curves', trailing: '.csv', group: 'Advanced', needsResult: false, needsDesign: true, cadRunReason: 'CAD runs have no WG curves to export.' },
 ];
 
 const CATALOG_BY_FORMAT = new Map(
@@ -96,7 +100,9 @@ function unavailableFormatReason(
   job: JobItem,
   designExportable: boolean,
   designUnavailableReason: string,
+  cadRun: boolean,
 ): string | undefined {
+  if (cadRun && item.cadRunReason) return item.cadRunReason;
   if (item.id === 'polar_frd' && Object.keys(job.polar_grid ?? {}).length === 0) {
     return 'This run has no directivity data for a polar FRD set.';
   }
@@ -143,7 +149,7 @@ function workspaceNotice(
   return `${written}${replacedNotice(result.replaced)}`;
 }
 
-export function RunExportControl({ job, compact = false, onOpenExportSettings }: RunExportControlProps) {
+export function RunExportControl({ job, compact = false, disabledReason, result, channelId, onOpenExportSettings }: RunExportControlProps) {
   const preferences = usePreferences();
   const operation = useRunExportStore((state) => state.jobs[job.id] ?? EMPTY_RUN_EXPORT_STATE);
   const execute = useRunExportStore((state) => state.execute);
@@ -152,11 +158,14 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   const family = hydrateJobDesign(job)?.formula ?? '';
   const cadLimitation = nativeCadLimitation(family);
   const designAvailability = jobDesignAvailability(job);
+  const cadRun = designAvailability.source === 'cad-import' || job.config_summary.formula_type === 'cad-import';
   const designUnavailableReason = designAvailability.reason ?? designState.reason ?? 'This run has no recoverable design.';
+  const formatReason = (item: CatalogItem) => unavailableFormatReason(item, job, designExportable, designUnavailableReason, cadRun);
 
   const buildContext = async (formats: readonly ExportFormat[]): Promise<ExportContext> => ({
-    ...(needsResults(formats) ? { result: await fetchJobResults(job.id) as ResultPayload } : {}),
+    ...(needsResults(formats) ? { result: result ?? await fetchJobResults(job.id) as ResultPayload } : {}),
     ...resultExportSnapshot(job),
+    ...(channelId ? { channelId } : {}),
     jobId: job.id,
     jobStem: exportStemForJob(job),
     hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
@@ -199,6 +208,16 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   const exportPreferred = () => {
     const formats = [...preferences.exportFormats];
     return execute(job.id, formats, async (): Promise<RunExportOutcome> => {
+      const unavailable = formats.flatMap((format) => {
+        const item = CATALOG_BY_FORMAT.get(format);
+        const reason = item ? formatReason(item) : 'This format is not available.';
+        return reason ? [{ format, reason: `${formatLabel(format, family)}: ${reason}` }] : [];
+      });
+      if (unavailable.length) return {
+        notice: '',
+        error: unavailable.map(({ reason }) => reason).join(' '),
+        errorFormats: unavailable.map(({ format }) => format),
+      };
       const destination = await askForExportDestination({
         title: 'Export this run',
         detail: `${formats.length} format${formats.length === 1 ? '' : 's'} from run ${jobName(job)}.`,
@@ -256,7 +275,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
       id: 'mesh-replay', label: 'Mesh replay', trailing: '.wgreplay', group: 'Geometry & design',
       disabled: operation.busy, onSelect: async () => { await exportReplay(); },
     }] : []),
-    {
+    ...(!cadRun ? [{
       id: 'send-to-cad',
       label: 'Send to CAD',
       trailing: '.wglink',
@@ -267,9 +286,9 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
       busyLabel: 'Sending to CAD…',
       error: operation.lastErrorFormats.length === 0 ? operation.lastError ?? undefined : undefined,
       onSelect: async () => { await sendRunToCad(); },
-    },
-    ...FORMAT_CATALOG.map((item): ActionMenuItem => {
-      const disabledReason = unavailableFormatReason(item, job, designExportable, designUnavailableReason);
+    }] : []),
+    ...FORMAT_CATALOG.filter((item) => !cadRun || !item.needsDesign || item.id === 'step').map((item): ActionMenuItem => {
+      const disabledReason = formatReason(item);
       return {
         id: item.id,
         label: item.label,
@@ -293,19 +312,28 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
     },
   ];
 
-  if (!canExportRun(job)) return null;
+  if (!canExportRun(job) && !disabledReason) return null;
+
+  const preferredNames = preferences.exportFormats.map((format) =>
+    ['csv', 'png', 'json', 'step', 'stl', 'txt', 'zma', 'vxp'].includes(format)
+      ? format.toUpperCase() : formatLabel(format, family));
+  const names = preferredNames.join(' + ');
+  const triggerLabel = !preferredNames.length ? 'Export'
+    : preferredNames.length <= 2 && names.length <= 20 ? `Export ${names}`
+      : `Export (${preferredNames.length})`;
+  const triggerTitle = disabledReason ?? (preferredNames.length
+    ? `Export ${preferences.exportFormats.map((format) => formatLabel(format, family)).join(' + ')}`
+    : 'Choose an export format');
 
   return <div className={`run-export-control${compact ? ' compact' : ''}`}>
     <ActionMenu
       items={items}
       menuLabel={`Export ${jobName(job)}`}
-      triggerLabel={compact ? 'Export' : `Export${preferences.exportFormats.length ? ` (${preferences.exportFormats.length})` : ''}`}
+      triggerLabel={triggerLabel}
+      triggerTitle={triggerTitle}
+      disabled={operation.busy || Boolean(disabledReason)}
       chevronLabel={`More export options for ${jobName(job)}`}
-      onPrimary={preferences.exportFormats.length && preferences.exportFormats.every((format) => {
-        const item = CATALOG_BY_FORMAT.get(format);
-        if (!item) return false;
-        return !unavailableFormatReason(item, job, designExportable, designUnavailableReason);
-      }) ? async () => { await exportPreferred(); } : undefined}
+      onPrimary={preferences.exportFormats.length ? async () => { await exportPreferred(); } : undefined}
     />
     {operation.lastError
       ? <div className="design-menu-status run-export-feedback error" role="alert">{operation.lastError}</div>

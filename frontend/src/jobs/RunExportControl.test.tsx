@@ -55,6 +55,17 @@ function completeJob(overrides: Partial<JobItem> = {}): JobItem {
   };
 }
 
+function cadJob(): JobItem {
+  return completeJob({
+    config_summary: { formula_type: 'cad-import', geometry_type: 'imported' },
+    script_snapshot: null,
+    design_availability: {
+      reopenable: false, source: 'cad-import', reason_code: 'imported_geometry',
+      reason: 'Solved from a Fusion return; there are no WG parameters to edit.', note: null,
+    },
+  });
+}
+
 function directivityResult() {
   return {
     frequencies: [1000],
@@ -156,6 +167,55 @@ describe('RunExportControl', () => {
     expect(item.getAttribute('aria-disabled')).toBe('true');
     expect(document.body.textContent).toContain('Export STEP or STL');
     expect(mocks.sendDesignToCad).not.toHaveBeenCalled();
+  });
+
+  it('hides CAD-inapplicable items and gives STEP its own reason', () => {
+    render(cadJob());
+    openMenu();
+    for (const label of ['Send to CAD', 'Parameter config', 'STL mesh', 'Fusion curves']) {
+      expect(document.querySelector('[role="menu"]')?.textContent).not.toContain(label);
+    }
+    expect(menuItem('STEP solid').getAttribute('aria-disabled')).toBe('true');
+    expect(menuItem('STEP solid').textContent).toContain('STEP export is not available for CAD runs yet.');
+    expect(menuItem('Frequency data').getAttribute('aria-disabled')).toBeNull();
+    expect(document.body.textContent).not.toContain('Solved from a Fusion return');
+  });
+
+  it.each([
+    ['step', 'STEP export is not available for CAD runs yet.'],
+    ['mwg_config', 'CAD runs have no WG parameter config to export.'],
+    ['stl', 'STL export is not available for CAD runs.'],
+    ['fusion_csv', 'CAD runs have no WG curves to export.'],
+  ] as const)('explains a preferred %s on CAD runs without exporting or changing preferences', async (format, reason) => {
+    preferencesStore.update({ exportFormats: ['csv', format] });
+    render(cadJob());
+    await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await settle(); });
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(reason);
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(mocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
+    expect(mocks.fetchJobResults).not.toHaveBeenCalled();
+    expect(preferencesStore.getSnapshot().exportFormats).toEqual(['csv', format]);
+    openMenu();
+    expect(menuItem('Frequency data').getAttribute('aria-disabled')).toBeNull();
+    expect(menuItem('Frequency data').textContent).not.toContain(reason);
+    await act(async () => { menuItem('Frequency data').click(); await settle(); });
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['csv'], 'confirm');
+  });
+
+  it.each([false, true])('names two preferred formats and titles the trigger (compact=%s)', (compact) => {
+    preferencesStore.update({ exportFormats: ['csv', 'png'] });
+    act(() => root.render(<RunExportControl job={completeJob()} compact={compact} onOpenExportSettings={vi.fn()}/>));
+    const trigger = host.querySelector<HTMLButtonElement>('.action-menu-primary')!;
+    expect(trigger.textContent).toBe('Export CSV + PNG');
+    expect(trigger.title).toBe('Export Frequency data (.csv) + Charts (.png)');
+  });
+
+  it('counts three formats and lists each in the title', () => {
+    preferencesStore.update({ exportFormats: ['csv', 'png', 'step'] });
+    render();
+    const trigger = host.querySelector<HTMLButtonElement>('.action-menu-primary')!;
+    expect(trigger.textContent).toBe('Export (3)');
+    expect(trigger.title).toBe('Export Frequency data (.csv) + Charts (.png) + STEP solid (.step)');
   });
 
   it('does no network work or result fetch on hover', () => {
@@ -449,13 +509,15 @@ describe('RunExportControl', () => {
     expect(item.textContent).toContain('no directivity data');
   });
 
-  it('opens the menu instead of bulk-exporting a preferred polar set when directivity is absent', () => {
+  it('explains a blocked preferred polar export without opening the menu', async () => {
     preferencesStore.update({ exportFormats: ['polar_frd'] });
     render(completeJob({ polar_grid: {} }));
 
-    act(() => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await settle(); });
 
-    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('no directivity data');
+    openMenu();
     expect(menuItem('Polar set (VituixCAD)').getAttribute('aria-disabled')).toBe('true');
     expect(mocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
     expect(mocks.fetchJobResults).not.toHaveBeenCalled();

@@ -5002,26 +5002,14 @@ class JobRuntime:
                 "note": None,
             }
         elif imported:
-            imported_metadata = metadata.get("imported_geometry")
-            imported_metadata = (
-                imported_metadata if isinstance(imported_metadata, Mapping) else {}
-            )
-            anchor_design_id = imported_metadata.get("anchor_design_id")
-            anchor_note = (
-                f" The ingestion anchor is registered design {anchor_design_id}."
-                if anchor_design_id
-                else ""
-            )
             design_availability = {
                 "reopenable": False,
                 "source": "cad-import",
                 "reason_code": "imported_geometry",
                 "reason": (
-                    ("This job was solved from an imported mesh and cannot "
-                     if row.get("config_summary_json", {}).get("import_origin") == "mesh-file"
-                     else "This job was solved from an immutable CAD-return ingestion and cannot ")
-                    + "be reopened as a parametric design."
-                    + anchor_note
+                    "Solved from an imported mesh; there are no WG parameters to edit."
+                    if row.get("config_summary_json", {}).get("import_origin") == "mesh-file"
+                    else "Solved from a Fusion return; there are no WG parameters to edit."
                 ),
                 "note": None,
             }

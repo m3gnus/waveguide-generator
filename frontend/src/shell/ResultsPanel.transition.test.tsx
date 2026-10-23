@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { compareSelection, provisionalResults, resultsCache } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
+import { resultViewStore } from '../stores/resultView';
+import { useRunExportStore } from '../stores/runExports';
 import { provideExportDestinationPrompt } from './exportDestinationPrompt';
 import { ResultsPanel } from './ResultsPanel';
 
@@ -79,6 +81,8 @@ describe('atomic results display transitions', () => {
 
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    useRunExportStore.getState().resetForTests();
+    resultViewStore.resetForTests();
     resultsCache.clear();
     provisionalResults.clear();
     compareSelection.clear();
@@ -112,6 +116,8 @@ describe('atomic results display transitions', () => {
     host.remove();
     publishJobs([]);
     compareSelection.clear();
+    useRunExportStore.getState().resetForTests();
+    resultViewStore.resetForTests();
     resultsCache.clear();
     provisionalResults.clear();
     vi.unstubAllGlobals();
@@ -356,6 +362,48 @@ describe('atomic results display transitions', () => {
     }
   });
 
+  it('uses the shared CAD menu and preferred-format refusal in the Results toolbar', async () => {
+    preferencesStore.update({ exportFormats: ['csv', 'step'] });
+    publishJobs([{ ...job('old'), script_snapshot: null,
+      config_summary: { formula_type: 'cad-import', geometry_type: 'imported' },
+      design_availability: { reopenable: false, source: 'cad-import', reason_code: 'imported_geometry',
+        reason: 'Solved from a Fusion return; there are no WG parameters to edit.', note: null },
+    }]);
+    await act(async () => { root.render(<ResultsPanel/>); });
+    await act(async () => { pending.get('old')!(response([100])); });
+    const trigger = host.querySelector<HTMLButtonElement>('.results-panel .action-menu-primary')!;
+    expect(trigger.textContent).toBe('Export CSV + STEP');
+    expect(trigger.title).toContain('STEP solid (.step)');
+    await act(async () => { trigger.click(); });
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('STEP export is not available for CAD runs yet.');
+    expect(exportMocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    act(() => host.querySelector<HTMLButtonElement>('.action-menu-chevron')!.click());
+    const menu = document.querySelector('[role="menu"]')!;
+    expect(menu.textContent).toContain('STEP export is not available for CAD runs yet.');
+    for (const label of ['Send to CAD', 'Parameter config', 'STL mesh', 'Fusion curves']) {
+      expect(menu.textContent).not.toContain(label);
+    }
+  });
+
+  it('forwards the full result envelope and active channel through the shared export control', async () => {
+    preferencesStore.update({ exportFormats: ['csv'] });
+    vi.spyOn(jobsSocket, 'patchMetadata').mockResolvedValue(undefined);
+    const channel = await response([100]).json();
+    const envelope = { ...channel, channel_order: ['drive-mf', 'drive-hf'],
+      channels: { 'drive-mf': channel, 'drive-hf': { ...channel, frequencies: [200] } },
+    };
+    resultViewStore.setView('drive-hf');
+    await act(async () => { root.render(<ResultsPanel/>); });
+    await act(async () => { pending.get('old')!(new Response(JSON.stringify(envelope), {
+      headers: { 'Content-Type': 'application/json' },
+    })); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); });
+    expect(exportMocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
+      expect.objectContaining({ result: envelope, channelId: 'drive-hf', jobId: 'old' }), ['csv'], 'confirm',
+    );
+  });
+
   it('writes the Results toolbar export through the selected Workspace', async () => {
     preferencesStore.update({ exportFormats: ['csv'] });
     const patchMetadata = vi.spyOn(jobsSocket, 'patchMetadata').mockResolvedValue(undefined);
@@ -363,7 +411,7 @@ describe('atomic results display transitions', () => {
     await act(async () => { pending.get('old')!(response([100])); });
 
     const exportButton = [...host.querySelectorAll('button')]
-      .find((button) => button.textContent === 'Export (1)');
+      .find((button) => button.textContent === 'Export CSV');
     expect(exportButton).toBeDefined();
     await act(async () => { exportButton!.click(); });
 

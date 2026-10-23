@@ -28,9 +28,10 @@ const NOTICE_STYLE = {
 
 /** Why this job cannot be reopened, or what its stored design is missing. */
 export function DesignAvailabilityNotice({ job }: { job: JobDesignFields }) {
+  const availability = jobDesignAvailability(job);
+  if (availability.reason_code === 'imported_geometry') return null;
   // A reason outranks a note: they never both apply, but if that ever changes
   // the blocking sentence is the one the user needs first.
-  const availability = jobDesignAvailability(job);
   const message = jobRerunState(job).reason
     ?? (availability.source === 'cad-import' ? availability.reason : availability.note);
   if (!message) return null;

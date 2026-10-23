@@ -1046,6 +1046,15 @@ def test_submit_persists_ingestion_mesh_summary_and_availability(tmp_path: Path)
             serialized = runtime._serialize_job(row)
             assert serialized["design_availability"]["source"] == "cad-import"
             assert serialized["design_availability"]["reopenable"] is False
+            assert serialized["design_availability"]["reason_code"] == "imported_geometry"
+            assert serialized["design_availability"]["reason"] == (
+                "Solved from a Fusion return; there are no WG parameters to edit."
+            )
+            runtime.store.mutate_job_metadata(job_id, {"imported_geometry": {
+                **row["task_metadata"]["imported_geometry"], "anchor_design_id": "design-anchor",
+            }})
+            anchored = runtime._serialize_job(runtime.store.get_job_row(job_id))
+            assert anchored["design_availability"] == serialized["design_availability"]
             assert serialized["cad_setup"] == row["config_json"]["geometry"]
             assert serialized["cad_provenance"] is None
             assert "cad" not in row["task_metadata"]

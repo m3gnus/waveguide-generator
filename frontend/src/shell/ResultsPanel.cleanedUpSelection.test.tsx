@@ -129,7 +129,7 @@ describe('selecting a run whose results were cleaned up', () => {
 
   const shownPrimary = () => host.querySelector('[data-result-primary]')?.getAttribute('data-result-primary') ?? null;
   const selectedCard = () => host.querySelector('.job-card.selected .job-title')?.textContent ?? null;
-  const dockExport = () => host.querySelector<HTMLButtonElement>('.results-panel button[title^="Export the current result"]');
+  const dockExport = () => host.querySelector<HTMLButtonElement>('.results-panel .action-menu-primary');
   function clickCard(label: string): void {
     const button = [...host.querySelectorAll<HTMLButtonElement>('button.job-select')]
       .find((b) => b.getAttribute('aria-label')?.endsWith(` · ${label}`));
