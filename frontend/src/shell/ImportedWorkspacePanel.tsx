@@ -1,17 +1,16 @@
 import { useSyncExternalStore } from 'react';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { useMeshImportStore } from '../stores/meshImport';
 import { importedMeshStore } from '../viewport/importedMeshStore';
-import { noteExplicitNavigation, workspaceNavigation } from './workspaceNavigation';
+import { noteExplicitNavigation } from './workspaceNavigation';
 import { CadOperationsSection } from './CadOperationsSection';
+import { ParamPanel } from '../design/ParamPanel';
 import { CadLinkPanel } from './CadLinkPanel';
 
 /** One selected input; CAD connection controls remain specific to CAD Link. */
 export function ImportedWorkspacePanel() {
   const { mode, importedInput } = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot);
-  const filename = useMeshImportStore(state => state.filename);
-  if (mode === 'parametric') return <div className="imported-workspace"><CadOperationsSection record={null}/></div>;
-  return <div className="imported-workspace">
+  return <div className="imported-workspace panel-scroll">
+    {mode === 'cad' && <>
     <div className="cad-section">
       <h3>Imported mesh</h3>
       <div role="group" aria-label="Imported mesh input" className="theme-toggle imported-input-toggle">
@@ -23,12 +22,9 @@ export function ImportedWorkspacePanel() {
           }}>{input === 'file' ? 'File mesh' : 'CAD Link'}</button>)}
       </div>
     </div>
-    {importedInput === 'file' ? <div className="cad-section">
-      <h4>{filename || 'Import a mesh file'}</h4>
-      <p>Use Import mesh above to open an ASCII Gmsh 2.2 surface mesh. CAD Link is optional.</p>
-      <p>In Geometry, choose units and Radiating surfaces, then prepare the mesh.</p>
-      <button onClick={() => workspaceNavigation.navigate('geometry')}>Open mesh setup</button>
-      <CadOperationsSection record={null}/>
-    </div> : <CadLinkPanel/>}
+    {importedInput === 'cad' && <CadLinkPanel/>}
+    </>}
+    <ParamPanel tab="geometry" embedded/>
+    {(mode === 'parametric' || importedInput === 'file') && <CadOperationsSection record={null}/>}
   </div>;
 }

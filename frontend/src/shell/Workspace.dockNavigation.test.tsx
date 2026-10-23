@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DockviewComponent } from 'dockview';
-import { bindDockNavigation, createDefaultLayout, syncCadLinkPanel } from './Workspace';
+import { bindDockNavigation, createDefaultLayout, syncGeometryTitle } from './Workspace';
 import { resetSolveAttentionForTests, solveAttention } from './solveAttention';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { navigationGeneration, resetWorkspaceNavigationForTests, workspaceNavigation } from './workspaceNavigation';
@@ -77,16 +77,24 @@ describe('the dock reports to the navigation seam', () => {
   });
   it('reveals requests from Parametric without changing mode or duplicating the panel', () => {
     workspaceModeStore.setMode('parametric');
-    syncCadLinkPanel(dock.api, 'parametric');
-    expect(dock.api.getPanel('cadlink')).toBeUndefined();
+    syncGeometryTitle(dock.api, 'parametric');
     workspaceNavigation.reveal('cad-requests');
     expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
-    expect(workspaceNavigation.isVisible('cadlink')).toBe(true);
-    expect(dock.api.getPanel('cadlink')?.api.title).toBe('CAD requests');
+    expect(workspaceNavigation.isVisible('geometry')).toBe(true);
+    expect(dock.api.getPanel('geometry')?.api.title).toBe('Geometry');
     workspaceNavigation.reveal('cad-requests');
-    expect(dock.api.panels.filter(panel => panel.id === 'cadlink')).toHaveLength(1);
-    syncCadLinkPanel(dock.api, 'cad');
-    expect(dock.api.getPanel('cadlink')?.api.title).toBe('Imported mesh');
+    expect(dock.api.panels.filter(panel => panel.id === 'geometry')).toHaveLength(1);
+    syncGeometryTitle(dock.api, 'cad');
+    expect(dock.api.getPanel('geometry')?.api.title).toBe('Imported mesh');
+  });
+
+  it('reopens a closed left workspace for request review without rebuilding the dock', () => {
+    const originalJobs = dock.api.getPanel('jobs');
+    dock.api.removePanel(dock.api.getPanel('geometry')!);
+    workspaceNavigation.reveal('cad-requests');
+    expect(workspaceNavigation.isVisible('geometry')).toBe(true);
+    expect(dock.api.getPanel('jobs')).toBe(originalJobs);
+    expect(dock.api.totalPanels).toBe(5);
   });
 
 });

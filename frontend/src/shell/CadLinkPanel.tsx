@@ -734,7 +734,7 @@ export function CadLinkPanel() {
       <button className="link-button" disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} title="Ask Fusion for the active document's current geometry and source tags." onClick={() => void bringFromFusion()}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring geometry into WG'}</button>
     </>;
 
-  return <div className="cadlink-panel panel-scroll">
+  return <div className="cadlink-panel">
     <h2 className="sr-only">CAD Link</h2>
     {/* One notice channel. Transient events land here, at the top of the rail;
         persistent conditions render inside the card they belong to. */}

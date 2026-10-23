@@ -85,6 +85,7 @@ import {
   parametricControlIsAvailable,
 } from './parametricControlRegistry';
 import './paramPanel.css';
+import { RunNameField } from '../shell/RunNameField';
 import { MeshImportPanel } from './MeshImportPanel';
 
 interface SectionProps {
@@ -785,7 +786,7 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
     // Onshape's public-document consent stays in CAD Link. Fusion sends use
     // the coordinator's unified path; its dialog holds the two-way conflict.
     if (onshape) {
-      workspaceNavigation.navigate('cadlink');
+      workspaceNavigation.navigate('geometry');
       return;
     }
     void cadWorkspaceView.sendWgToFusion().catch(() => undefined);
@@ -1215,7 +1216,7 @@ function CadMeshDetail() {
 
 function CadSimulationEmpty() {
   const cadApplication = cadApplicationName(usePreferences().cadApplication);
-  return <div className="cad-mode-empty" role="status"><b>Prepare CAD geometry to unlock these inputs</b><span>Drivers, crossover, sweep, directivity, solve options, and mesh detail appear here after CAD Link brings the finished geometry back from {cadApplication}.</span><button className="primary" onClick={() => workspaceNavigation.navigate('cadlink')}>Open CAD Link setup</button></div>;
+  return <div className="cad-mode-empty" role="status"><b>Prepare CAD geometry to unlock these inputs</b><span>Drivers, crossover, sweep, directivity, solve options, and mesh detail appear here after CAD Link brings the finished geometry back from {cadApplication}.</span><button className="primary" onClick={() => workspaceNavigation.navigate('geometry')}>Open CAD Link setup</button></div>;
 }
 
 const osseChoices = [
@@ -1247,7 +1248,7 @@ function OsseFeatureChoices({ design, onChange }: { design: DesignDocument; onCh
   </fieldset>;
 }
 
-export function ParamPanel({ tab }: { tab: ParameterTab }) {
+export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embedded?: boolean }) {
   const design = useDesignStore((state) => state.design);
   const designRevision = useDesignStore((state) => state.designRevision);
   const updateValues = useDesignStore((state) => state.updateValues);
@@ -1483,11 +1484,12 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
     </div>}
   </Section>;
 
-  if (workspaceMode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file') return <SolveOptionsStoreProvider mode={workspaceMode}><MeshImportPanel/></SolveOptionsStoreProvider>;
+  if (workspaceMode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file') return <MeshImportPanel tab={tab} embedded={embedded}/>;
 
   return (
     <SolveOptionsStoreProvider mode={workspaceMode}>
-    <div ref={registerParameterPanel} className="param-panel panel-scroll" data-param-tab={tab}>
+    <div ref={registerParameterPanel} className={`param-panel${embedded ? '' : ' panel-scroll'}`} data-param-tab={tab}>
+      {workspaceMode === 'parametric' && tab === 'geometry' && <RunNameField/>}
       <div className="parameter-search">
         <label className="sr-only" htmlFor={`parameter-filter-${tab}`}>Filter {tab} parameters</label>
         <input id={`parameter-filter-${tab}`} type="search" value={query} placeholder="Filter labels or keys…" onChange={(event) => setQuery(event.target.value)} />

@@ -304,7 +304,7 @@ describe('a refused request reaches the user in either mode', () => {
     expect(notice.textContent).toContain('A CAD request was refused');
     act(() => notice.click());
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
-    expect(activations.at(-1)).toBe('cadlink');
+    expect(activations.at(-1)).toBe('geometry');
   });
 });
 

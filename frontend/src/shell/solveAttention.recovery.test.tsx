@@ -15,7 +15,7 @@ const notice = (overrides: Partial<CadRecoveryNotice> = {}): CadRecoveryNotice =
 function Attention({ store }: { store: CadRecoveryNoticesStore }) {
   const notices = useStore(store, (state) => state.notices);
   const count = useRecoveryNoticeAttention(notices);
-  return count ? <button onClick={() => { workspaceModeStore.setMode('cad'); workspaceNavigation.navigate('cadlink'); }}>Recovery notices ({count})</button> : null;
+  return count ? <button onClick={() => { workspaceModeStore.setMode('cad'); workspaceNavigation.navigate('geometry'); }}>Recovery notices ({count})</button> : null;
 }
 describe('recovery attention without the coordinator', () => {
   let host: HTMLDivElement;
@@ -38,7 +38,7 @@ describe('recovery attention without the coordinator', () => {
   it('fronts a newly actionable active-document recovery only once', () => {
     solveAttention.armOperation('mutation');
     arrive(notice()); arrive(notice());
-    expect(activations).toEqual(['cadlink']);
+    expect(activations).toEqual(['geometry']);
   });
   it('keeps an unarmed recovery discoverable after navigation without arming at discovery', () => {
     act(() => workspaceNavigation.navigate('geometry')); activations.length = 0;
@@ -59,7 +59,7 @@ describe('recovery attention without the coordinator', () => {
     complete(new Response(JSON.stringify({ cadHandoffRequestId: 'mutation', cadHandoff: 'published' })));
     await sending;
     arrive(notice());
-    expect(activations).toEqual(navigate ? [] : ['cadlink']);
+    expect(activations).toEqual(navigate ? [] : ['geometry']);
     expect(host.textContent).toContain('Recovery notices (1)');
   });
   it('keeps recovery changes discoverable after navigation without yanking the user', () => {
@@ -71,7 +71,7 @@ describe('recovery attention without the coordinator', () => {
     arrive(notice({ active_document: false })); arrive(notice());
     expect(activations).toEqual([]);
     act(() => host.querySelector('button')!.click());
-    expect(activations).toEqual(['cadlink']);
+    expect(activations).toEqual(['geometry']);
     act(() => store.setState({ notices: {} }));
     expect(host.querySelector('button')).toBeNull();
   });
@@ -81,7 +81,7 @@ describe('recovery attention without the coordinator', () => {
     expect(activations).toEqual([]);
     expect(host.textContent).toContain('Recovery notices (1)');
     arrive(notice());
-    expect(activations).toEqual(['cadlink']);
+    expect(activations).toEqual(['geometry']);
   });
   it('never changes Parametric mode automatically and leaves a route to the notice', () => {
     act(() => workspaceModeStore.setMode('parametric'));

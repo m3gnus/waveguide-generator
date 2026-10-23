@@ -249,7 +249,7 @@ export async function refreshCadReturnArrivals(
 
 export function enterCadWorkspace(): void {
   workspaceModeStore.setMode('cad');
-  workspaceNavigation.activate('cadlink');
+  workspaceNavigation.activate('geometry');
 }
 
 export interface CadArrivalActionsIntegration {

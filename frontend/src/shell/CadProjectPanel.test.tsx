@@ -140,7 +140,7 @@ describe('CAD project history', () => {
     expect(names).toEqual(['#1 \u00b7 run mine-new', '#1 \u00b7 run mine-old']);
   });
 
-  it('breaks the list where the CAD model changed and offers that model', async () => {
+  it('keeps alternating models in plain history and offers the selected attachment', async () => {
     setJobs([
       run({ id: 'b1', returnStateHash: 'sha256:bbb' }),
       run({ id: 'a1', returnStateHash: 'sha256:aaa' }),
@@ -150,7 +150,7 @@ describe('CAD project history', () => {
     await render(<CadProjectHistory/>);
 
     const downloads = [...host.querySelectorAll<HTMLAnchorElement>('.cad-model-download')];
-    expect(host.querySelectorAll('.cad-model-divider')).toHaveLength(3);
+    expect(host.querySelectorAll('.cad-model-divider')).toHaveLength(0);
     expect(downloads).toHaveLength(1);
     expect(host.textContent).toContain('Model captured 2026-08-21');
     expect(downloads[0].getAttribute('href')).toBe(`/api/cadlink/projects/${LINEAGE}/documents/sha256%3Abbb`);

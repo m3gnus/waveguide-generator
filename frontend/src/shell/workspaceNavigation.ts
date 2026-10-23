@@ -2,10 +2,10 @@ export type WorkspaceRevealTarget = 'cad-requests';
 let revealTarget: WorkspaceRevealTarget | null = null;
 let reveals = 0;
 
-export type WorkspacePanel = 'geometry' | 'simulation' | 'viewport' | 'results' | 'jobs' | 'cadlink';
+export type WorkspacePanel = 'geometry' | 'simulation' | 'viewport' | 'results' | 'jobs';
 
 let activateWorkspacePanel = (_panel: WorkspacePanel): boolean => false;
-let revealWorkspaceTarget = (_target: WorkspaceRevealTarget): boolean => activateWorkspacePanel('cadlink');
+let revealWorkspaceTarget = (_target: WorkspaceRevealTarget): boolean => activateWorkspacePanel('geometry');
 
 /**
  * How many times the user has deliberately moved somewhere in the workspace.
@@ -90,7 +90,7 @@ export const workspaceNavigation = {
 
 export function bindWorkspaceNavigation(
   activate: (panel: WorkspacePanel) => boolean,
-  reveal: (target: WorkspaceRevealTarget) => boolean = () => activate('cadlink'),
+  reveal: (target: WorkspaceRevealTarget) => boolean = () => activate('geometry'),
 ): () => void {
   activateWorkspacePanel = activate;
   revealWorkspaceTarget = reveal;

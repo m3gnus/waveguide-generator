@@ -1,3 +1,4 @@
+import { workspaceNavigation } from './workspaceNavigation';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -262,6 +263,7 @@ describe('results run coherence', () => {
   });
 
   it('marks an other-model run and wires model recall and newest-run recovery', async () => {
+    const navigate = vi.spyOn(workspaceNavigation, 'navigate').mockReturnValue(true);
     const latest = job('live', 5, liveDesign());
     const imported = job('archive-cad', 6, null, true);
     publishJobs([imported, latest]);
@@ -275,6 +277,7 @@ describe('results run coherence', () => {
     await act(async () => { marker.click(); });
     await act(async () => { toolbarButton(document.body, 'Show this model')!.click(); });
     expect(modelMocks.showJobModel).toHaveBeenCalledWith(imported, expect.any(Function));
+    expect(navigate).toHaveBeenCalledWith('geometry');
 
     await act(async () => { host.querySelector<HTMLButtonElement>('button.result-context-marker.stale')!.click(); });
     await act(async () => { toolbarButton(document.body, 'Show newest run')!.click(); });

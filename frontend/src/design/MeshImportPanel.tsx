@@ -13,7 +13,7 @@ import { DirectivityMapControls, SolveOptionsControls } from './SolveOptionsSect
 const AXES = ['+x', '-x', '+y', '-y', '+z', '-z'];
 
 /** The ready-mesh workflow does not expose CAD generation or connection controls. */
-export function MeshImportPanel() {
+export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | 'simulation'; embedded?: boolean }) {
   const state = useMeshImportStore();
   const model = useImportedModelStore();
   const draft = model.fileDraft;
@@ -37,8 +37,9 @@ export function MeshImportPanel() {
   const frequencySummary = frequencies?.length
     ? `${frequencies.length} explicit frequencies: ${frequencies.slice(0, 8).join(', ')}${frequencies.length > 8 ? ', …' : ''} Hz`
     : `${replayOptions?.frequency_spacing} sweep: ${replayOptions?.frequency_range?.join('–')} Hz, ${replayOptions?.num_frequencies} frequencies`;
-  return <SolveOptionsStoreProvider mode="cad"><div className="param-panel mesh-import-panel panel-scroll" aria-label="Imported mesh setup">
-    <h3>Imported mesh</h3>
+  return <SolveOptionsStoreProvider mode="cad"><div className={`param-panel mesh-import-panel${embedded ? '' : ' panel-scroll'}`} aria-label={`Imported mesh ${tab}`}>
+    {tab === 'geometry' && <>
+    <h3>Mesh file</h3>
     <p>{state.filename}</p>
     <p className="section-note">Full closed surface · free space. Choose radiating surfaces below; all other labels are rigid.</p>
     {state.summary?.groups.some(group => group.tag === 0) && <p className="section-note">Unassigned triangles are available for inspection only. Assign physical surface groups in the authoring tool and import again to solve.</p>}
@@ -73,6 +74,8 @@ export function MeshImportPanel() {
         }}>{state.busy ? 'Preparing…' : registered ? 'Prepare again' : 'Prepare mesh'}</button>
       </fieldset>}
     {dimensions && <p role="status">Ready · {registered?.summary.triangle_count.toLocaleString()} triangles · {dimensions.map(value => value.toPrecision(4)).join(' × ')} mm</p>}
+    </>}
+    {tab === 'simulation' && <>
     {replay && replayOptions && <section aria-label="Exact mesh replay">
       <h4>Exact replay settings</h4>
       <p>{frequencySummary}</p>
@@ -106,10 +109,11 @@ export function MeshImportPanel() {
       void saveMeshSetup().catch(error => useMeshImportStore.setState({ error: String(error) }))
         .finally(() => setSaving(false));
     }}>{saving ? 'Saving…' : 'Save setup'}</button>
+    </>}
     {state.error && <p className="field-error" role="alert">{state.error}</p>}
     {state.notice && <p role="status">{state.notice}</p>}
-    <button onClick={() => {
+    {tab === 'geometry' && <button onClick={() => {
       noteExplicitNavigation(); restoreParametricWorkingDesign(); workspaceModeStore.setMode('parametric');
-    }}>Return to parametric design</button>
+    }}>Return to parametric design</button>}
   </div></SolveOptionsStoreProvider>;
 }

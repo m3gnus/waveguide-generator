@@ -13,7 +13,7 @@ import {
   ReactPanelRenderer,
   LEGACY_LAYOUT_KEY,
   seedSize,
-  syncCadLinkPanel,
+  syncGeometryTitle,
   Workspace,
 } from './Workspace';
 import { jobsSocket } from '../api/jobsSocket';
@@ -68,35 +68,14 @@ describe('Workspace', () => {
     error.mockRestore();
   });
 
-  it('adds CAD Link beside Jobs only while CAD mode owns it', () => {
-    const jobs = { id: 'jobs' };
-    const cadlink = { id: 'cadlink' };
-    let currentCadLink: typeof cadlink | undefined;
-    const api = {
-      activePanel: undefined,
-      getPanel: vi.fn((id: string) => id === 'jobs' ? jobs : id === 'cadlink' ? currentCadLink : undefined),
-      addPanel: vi.fn(() => { currentCadLink = cadlink; return cadlink; }),
-      removePanel: vi.fn(() => { currentCadLink = undefined; }),
-    };
-
-    syncCadLinkPanel(api as never, 'cad');
-    expect(api.addPanel).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'cadlink',
-      component: 'cadlink',
-      inactive: true,
-      position: { referencePanel: jobs, direction: 'within' },
-    }));
-
-    syncCadLinkPanel(api as never, 'parametric');
-    expect(api.removePanel).toHaveBeenCalledWith(cadlink);
-  });
-
-  it('renames a retained CAD dock without changing its saved identity', () => {
-    const panel = { id: 'cadlink', api: { setTitle: vi.fn() } };
-    const api = { getPanel: vi.fn(() => panel), addPanel: vi.fn() };
-    syncCadLinkPanel(api as never, 'cad');
-    expect(panel.api.setTitle).toHaveBeenCalledWith('Imported mesh');
+  it('updates the stable left tab title without adding or removing panels', () => {
+    const panel = { id: 'geometry', api: { setTitle: vi.fn() } };
+    const api = { getPanel: vi.fn(() => panel), addPanel: vi.fn(), removePanel: vi.fn() };
+    for (const mode of ['cad', 'parametric', 'cad'] as const) syncGeometryTitle(api as never, mode);
+    expect(api.getPanel).toHaveBeenCalledWith('geometry');
+    expect(panel.api.setTitle.mock.calls).toEqual([['Imported mesh'], ['Geometry'], ['Imported mesh']]);
     expect(api.addPanel).not.toHaveBeenCalled();
+    expect(api.removePanel).not.toHaveBeenCalled();
   });
 
   it('ignores a stored old-key parameter layout and falls back to the new default', async () => {
@@ -359,11 +338,10 @@ describe('Workspace', () => {
     expect(analysis.data.views).toEqual(['results', 'jobs']);
   });
 
-  it('includes CAD Link in default layouts created for CAD mode', () => {
-    const wide = createDefaultLayout(1440, 900, 'cad');
-    expect(wide.panels).toHaveProperty('cadlink');
-    const columns = wide.grid.root.data as Array<{ data: unknown }>;
-    expect((columns[2].data as { views: string[] }).views).toEqual(['jobs', 'cadlink']);
+  it.each([720, 960, 1440])('uses the same five panel identities in CAD mode at %d px', width => {
+    const layout = createDefaultLayout(width, 900, 'cad');
+    expect(Object.keys(layout.panels)).toEqual(['geometry', 'simulation', 'viewport', 'results', 'jobs']);
+    expect(layout.panels.geometry.title).toBe('Imported mesh');
   });
 
   it.each([[1440, 900], [1280, 720]])('preserves rail sizes at %d×%d', (width, height) => {

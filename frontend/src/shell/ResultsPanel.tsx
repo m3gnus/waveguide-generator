@@ -33,6 +33,7 @@ import { resolveResultView, resultViewStore, useResultView } from '../stores/res
 import { useCadReturnStore } from '../stores/cadReturn';
 import { hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { rerunWithPatch } from '../jobs/rerun';
+import { workspaceNavigation } from './workspaceNavigation';
 import { showJobModel } from '../jobs/showJobModel';
 import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
 import { CHART_TYPES, GROUP_DELAY_UNITS, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType, type GroupDelayUnit, type PolarPlane } from '../prefs/preferences';
@@ -2564,6 +2565,7 @@ export function ResultsPanel() {
   const showPrimaryModel = useCallback(() => {
     if (!primaryJob) return;
     setModelLoad('loading');
+    workspaceNavigation.navigate('geometry');
     void showJobModel(primaryJob, coordinator.reportError)
       .then((ok) => setModelLoad(ok ? 'idle' : 'failed'))
       .catch((reason) => { coordinator.reportError(String(reason)); setModelLoad('failed'); });

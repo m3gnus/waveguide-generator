@@ -169,7 +169,7 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
             else {
               const continuity = useCadReturnStore.getState().selectArrivedBundle(returned);
               importedMeshStore.beginIntent();
-              workspaceModeStore.setMode('cad'); workspaceNavigation.activate('cadlink');
+              workspaceModeStore.setMode('cad'); workspaceNavigation.activate('geometry');
               store.setState({ status: `Received ${returned.documentName ?? returned.name} from Fusion 360.${
                 continuity === 'carried' ? ' Kept your mesh, channel, and solve settings.' : ''}` });
             }

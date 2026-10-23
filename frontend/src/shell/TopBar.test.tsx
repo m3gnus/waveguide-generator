@@ -58,7 +58,7 @@ describe('workspace mode switch', () => {
     act(() => radios[1].click());
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
     expect(radios[1].getAttribute('aria-checked')).toBe('true');
-    expect(activate).toHaveBeenCalledWith('cadlink');
+    expect(activate).toHaveBeenCalledWith('geometry');
   });
 
   it('stays in place when prepared CAD geometry is already available', () => {
@@ -132,6 +132,6 @@ describe('workspace mode switch', () => {
     expect(entries.map((entry) => entry.label)).toEqual(['Mode: Parametric', 'Mode: Imported mesh']);
     act(() => entries[1].run());
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
-    expect(activate).toHaveBeenCalledWith('cadlink');
+    expect(activate).toHaveBeenCalledWith('geometry');
   });
 });

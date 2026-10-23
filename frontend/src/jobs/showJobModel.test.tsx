@@ -151,7 +151,7 @@ describe('history selection keeps the current panel visible', () => {
 
   it('keeps the default explicit CAD workspace navigation for other callers', async () => {
     expect(await openImported({ kind: 'run', job: cadRun() })).toBe(true);
-    expect(activations).toEqual(['cadlink']);
-    expect(workspaceNavigation.isVisible('cadlink')).toBe(true);
+    expect(activations).toEqual(['geometry']);
+    expect(workspaceNavigation.isVisible('geometry')).toBe(true);
   });
 });

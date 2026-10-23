@@ -18,12 +18,13 @@ const coordinator = vi.hoisted(() => ({ reportError: vi.fn(), reportStatus: vi.f
 vi.mock('../stores/cadWorkspace', () => ({ cadWorkspace: { subscribe: () => () => undefined, getSnapshot: () => coordinator } }));
 vi.mock('./CadProjectPanel', () => ({ openCadProject: vi.fn() }));
 // Keep CAD connection controls out of this routing test; use the real request owners.
+vi.mock('../design/ParamPanel', () => ({ ParamPanel: () => null }));
 vi.mock('./CadLinkPanel', () => ({ CadLinkPanel: () => <div className="cadlink-panel"><CadOperationsSection record={null}/></div> }));
 
 function Surface() {
   const { mode } = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot);
   useSyncExternalStore(workspaceNavigation.subscribe, workspaceNavigation.getSnapshot);
-  return <><AttentionNotices/>{(mode === 'cad' || workspaceNavigation.isVisible('cadlink')) && <ImportedWorkspacePanel/>}</>;
+  return <><AttentionNotices/>{(mode === 'cad' || workspaceNavigation.isVisible('geometry')) && <ImportedWorkspacePanel/>}</>;
 }
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });

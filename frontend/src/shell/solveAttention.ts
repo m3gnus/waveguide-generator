@@ -175,7 +175,7 @@ export function useOperationAttention(operations: Record<string, CadOperationSum
       if (key === null || key === previous) continue;
       if (solveAttention.operationArmed(operation.operationId)) front = true;
     }
-    if (front && workspaceModeStore.getSnapshot().mode === 'cad') workspaceNavigation.activate('cadlink');
+    if (front && workspaceModeStore.getSnapshot().mode === 'cad') workspaceNavigation.activate('geometry');
   }, [operations]);
 }
 
@@ -195,7 +195,7 @@ export function useJobAttention(jobs: JobItem[]): void {
       if (key === null || key === previous) continue;
       if (solveAttention.operationArmed(job.id)) front = true;
     }
-    if (front && workspaceModeStore.getSnapshot().mode === 'cad') workspaceNavigation.activate('cadlink');
+    if (front && workspaceModeStore.getSnapshot().mode === 'cad') workspaceNavigation.activate('geometry');
   }, [jobs]);
 }
 
@@ -214,7 +214,7 @@ export function useRecoveryNoticeAttention(notices: Record<string, import('../st
       seen.current.set(notice.id, key);
       if (key !== previous && notice.active_document && solveAttention.operationArmed(notice.id)) front = true;
     }
-    if (front && workspaceModeStore.getSnapshot().mode === 'cad') workspaceNavigation.activate('cadlink');
+    if (front && workspaceModeStore.getSnapshot().mode === 'cad') workspaceNavigation.activate('geometry');
   }, [notices]);
   return Object.keys(notices).length;
 }

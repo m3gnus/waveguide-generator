@@ -1,3 +1,4 @@
+import { runDocumentName } from '../jobs/runIdentity';
 import { useSyncExternalStore } from 'react';
 import { isActiveJobStatus, type JobItem } from '../api/jobsSocket';
 import type { RunNameDateFormat, RunNameDatePosition, RunNameNumberFormat, RunNameNumberPosition } from '../jobs/runNaming';
@@ -663,8 +664,9 @@ export function usePreferences(): Preferences {
 export type RunDisplayVariant = 'full' | 'short';
 
 /** The one user-facing identity for a run, shared by lists, charts, and search. */
-export function runDisplayName(job: Pick<JobItem, 'id' | 'run_number' | 'label'>, variant: RunDisplayVariant = 'full'): string {
-  const title = job.label || `osse-${job.id.slice(0, 6)}`;
+export function runDisplayName(job: Pick<JobItem, 'id' | 'run_number' | 'label'> & Partial<Pick<JobItem, 'cad_source' | 'cad_state'>>, variant: RunDisplayVariant = 'full'): string {
+  const title = job.label?.trim() ? job.label : runDocumentName(job);
+  if (!title) return job.run_number === null ? 'Run' : `Run #${job.run_number}`;
   // A solve that is still being prepared, or ended refused, has no run number yet.
   return variant === 'short' || job.run_number === null ? title : `#${job.run_number} · ${title}`;
 }

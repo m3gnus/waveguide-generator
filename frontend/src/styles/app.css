@@ -623,13 +623,8 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
    tinted ground already says "warning", and the 2px side rule is the same
    device the run cards use for run state, where it actually carries meaning. */
 .job-warning { margin: 2px 0; padding: 4px 6px; border: 1px solid rgba(var(--amber-rgb), .38); border-radius: var(--r3); background: rgba(var(--amber-rgb), .09); color: var(--fg2); font-size: var(--text-micro); line-height: 1.4; }
-/* The rail's toolbar, now that the counts strip above it is conditional: it
-   holds the run name and the gear, so it is what has to stay put while the
-   list scrolls — the gear is the anchor its preferences panel is positioned
-   against, and an anchor that scrolls away takes the panel with it. */
-.run-name-field { position: sticky; top: 0; z-index: 6; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 2px 6px; padding: 4px 6px 6px; border-bottom: 1px solid var(--hair); background: var(--surface-panel); }
-.run-name-field > .run-name-preview { grid-column: 1 / -1; }
-.run-name-actions { display: flex; align-items: center; gap: 2px; margin-bottom: 2px; }
+.run-name-field { display: grid; gap: 3px; padding: 6px; border-bottom: 1px solid var(--hair); }
+.jobs-history-actions { position: sticky; top: 0; z-index: 6; display: flex; justify-content: flex-end; align-items: center; gap: 4px; padding: 4px 6px; background: var(--surface-panel); }
 .run-name-field .ui-field { margin: 0; }
 .run-name-preview { overflow: hidden; color: var(--fg4); font: var(--text-micro) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .run-name-preview b { color: var(--acc); font-weight: 500; }
@@ -658,12 +653,23 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .job-select.editing { width: 14px; flex: none; }
 .job-card header > .job-select > i { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--fg3); }
 .job-card.running header > .job-select > i { background: var(--acc); box-shadow: 0 0 7px rgba(var(--acc-rgb), .7); }.job-card.complete header > .job-select > i { background: var(--green); }.job-card.failed header > .job-select > i { background: var(--red); }.job-card.cancelled header > .job-select > i { background: var(--fg4); }
-.job-card header b { flex: 1; overflow: hidden; color: var(--fg); font-size: var(--text-base); font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
+.job-card header b { display: flex; flex: 1; min-width: 0; color: var(--fg); font-size: var(--text-base); font-weight: 560; }
 .job-title-input { min-width: 0; height: 24px; flex: 1; padding: 2px 5px; border: 1px solid rgba(var(--acc-rgb), .5); border-radius: var(--r3); background: var(--input-bg); color: var(--fg); font-size: var(--text-base); }
 .job-rename { width: 20px; height: 20px; flex: none; border-radius: var(--r3); background: transparent; color: var(--fg4); font-size: var(--text-base); }
 .job-rename:hover, .job-rename:focus-visible { background: var(--ov3); color: var(--acc); }
 .job-stars { flex: none; color: var(--amber); font-size: var(--text-micro); letter-spacing: .5px; }
-.job-card header em { color: var(--fg3); font-style: normal; font-weight: 400; }
+.job-number { flex: none; white-space: pre; }
+.job-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-secondary { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 3px; }
+.job-secondary > time, .job-secondary > button { flex: none; }
+.job-source { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 1; overflow: hidden; color: var(--fg3); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }
+.job-source > :first-child { flex: none; }
+.job-source-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-model-details { margin-top: 6px; color: var(--fg3); font-size: var(--text-micro); }
+.run-model-details dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 8px; }
+.run-model-details dt { color: var(--fg2); }
+.run-model-details dd { margin: 0; overflow-wrap: anywhere; }
+
 .job-card time { color: var(--fg3); font: var(--text-micro) var(--mono); }
 .job-card p { margin: 4px 0 0; overflow: hidden; color: var(--fg3); font: var(--text-micro) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .job-stage { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin-top: 7px; color: var(--fg1); font-size: var(--text-micro); }.job-stage b { margin-left: auto; color: var(--acc); font: 500 var(--text-micro) var(--mono); }
@@ -1103,7 +1109,7 @@ textarea:disabled { opacity: .48; }
 
 .job-card { margin: 8px 8px 0; padding: 8px 12px 8px 12px; border-radius: var(--r2); background: var(--surface-raised); }
 .job-card header b { font-size: var(--text-base); }
-.job-card header time,
+.job-secondary time,
 .job-card > p { font-size: var(--text-micro); }
 .job-actions button { min-height: 27px; padding: 4px 8px; border-radius: var(--r3); font-size: var(--text-micro); }
 .job-error {

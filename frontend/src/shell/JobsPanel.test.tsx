@@ -1,3 +1,4 @@
+import type { CadReturnIngestRecord } from '../api/cadlink';
 import { archivedRequest, workspaceFor } from './cadlink/selection.fixtures';
 import { useRunFilters } from '../jobs/runFilters';
 import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
@@ -6,17 +7,15 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
-import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { preferencesStore } from '../prefs/preferences';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { resetDesignStore, useDesignStore } from '../stores/design';
+import { resetDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { jobCardPropsEqual, JobsPanel, selectJob, type JobCardProps } from './JobsPanel';
 import { cadWorkspace } from '../stores/cadWorkspace';
-import { currentJobLabel } from './JobsCoordinator';
 import { resetSolveStageClocksForTests } from './solveProgress';
 
 const designMocks = vi.hoisted(() => ({ replaceWithJobDesign: vi.fn() }));
@@ -51,21 +50,6 @@ function enter(input: HTMLInputElement, value: string): void {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
   setter?.call(input, value);
   input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
-}
-
-function cadBundle(documentName: string): CadReturnBundle {
-  return {
-    name: `${documentName}.wgreturn`, bundlePath: `/cad/${documentName}.wgreturn`,
-    modifiedAt: '2026-08-19T12:00:00Z', readable: true, documentName,
-    requestId: null, sourceCount: 1, instanceCount: 1, sources: [],
-  };
-}
-
-function readyCadRecord(ingestId: string): CadReturnIngestRecord {
-  return {
-    ingest_id: ingestId, manifest_sha256: `manifest:${ingestId}`, artifact_sha256: `artifact:${ingestId}`, report_sha256: `report:${ingestId}`,
-    findings: [], evidence: { fem_air_volumes: [] }, polar_grid_derivation: {},
-  } as unknown as CadReturnIngestRecord;
 }
 
 describe('jobs panel run list', () => {
@@ -108,7 +92,7 @@ describe('jobs panel run list', () => {
     expect(host.querySelectorAll('.job-card')).toHaveLength(3);
     choose('Run project', 'project-a');
     expect(host.querySelectorAll('.job-card')).toHaveLength(2);
-    expect(host.querySelectorAll('.cad-model-divider')).toHaveLength(2);
+    expect(host.querySelectorAll('.cad-model-divider')).toHaveLength(0);
     const model = host.querySelector<HTMLSelectElement>('[aria-label="Run model"]')!.options[1].value;
     choose('Run model', model);
     expect(host.querySelectorAll('.job-card')).toHaveLength(1);
@@ -121,6 +105,22 @@ describe('jobs panel run list', () => {
     act(() => useRunFilters.setState({ project: 'empty-project', model: '' }));
     expect(host.querySelector('.empty-state')?.textContent).toContain('Clear filters');
     expect(host.querySelector('.empty-state')?.textContent).not.toContain('kept-only');
+  });
+
+  it('keeps long Unicode titles intact and searches the source document', async () => {
+    const title = '測定 🔊 ' + '長い波導管の名前'.repeat(8);
+    const imported = { ...job(123456, title), config_summary: { geometry_type: 'imported' },
+      cad_source: { document_name: 'Old Fusion document', ingest_id: 'retained', return_state_hash: 'old-hash', archive_stem: null, design_id: null, lineage_id: null, manifest_sha256: null } } as JobItem;
+    publishJobs([imported, job(2, null)]);
+    await act(async () => root.render(<JobsPanel/>));
+    expect(host.querySelector('.job-number')?.textContent).toBe('#123456 · ');
+    expect(host.querySelector('.job-label')?.textContent).toBe(title);
+    expect(host.querySelector('.job-title')?.getAttribute('title')).toBe(`#123456 · ${title}`);
+    expect(host.querySelector('.job-source')?.textContent).toContain('Old Fusion document');
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Filter runs"]')!;
+    act(() => enter(input, 'old fusion'));
+    expect(host.querySelectorAll('.job-card')).toHaveLength(1);
+    expect(imported.label).toBe(title);
   });
 
   afterEach(() => {
@@ -844,7 +844,7 @@ describe('jobs panel run list', () => {
     act(() => enter(filter, 'Visible'));
 
     const clearFailed = host.querySelector<HTMLButtonElement>('.panel-text-action--danger')!;
-    expect(clearFailed.closest('.run-name-field')).not.toBeNull();
+    expect(clearFailed.closest('.jobs-history-actions')).not.toBeNull();
     expect(host.querySelector('.panel-meta .panel-text-action--danger')).toBeNull();
     await act(async () => clearFailed.click());
 
@@ -875,76 +875,14 @@ describe('jobs panel run list', () => {
     expect(designMocks.replaceWithJobDesign).toHaveBeenCalledOnce();
   });
 
-  it('renames the whole document from the one name field', async () => {
+  it.each(['parametric', 'cad'] as const)('keeps current-model naming out of %s history', async mode => {
+    workspaceModeStore.setMode(mode);
     publishJobs([]);
     await act(async () => root.render(<JobsPanel/>));
-    const input = host.querySelector<HTMLInputElement>('[aria-label="Design name"]')!;
-    act(() => input.focus());
-    act(() => enter(input, 'winner'));
-    act(() => input.blur());
-
-    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · winner1');
-    expect(input.title).toContain('Export a copy');
-    expect(input.title).not.toContain('saves as');
-    // The Export a copy filename follows the same edit -- this is the whole
-    // point of the field.
-    expect(useDocumentStore.getState()).toMatchObject({ designName: 'winner', filename: 'winner.cfg' });
-
-    // Editing the geometry does not rename anything any more.
-    act(() => useDesignStore.getState().updateField('R', 141));
-    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · winner1');
+    expect(host.querySelector('.run-name-field')).toBeNull();
+    expect(host.querySelector('[aria-label="CAD document name"]')).toBeNull();
   });
 
-  it('reports the CAD document name in CAD mode instead of offering an edit', async () => {
-    // The name of a CAD Link run belongs to the Fusion document, and WG cannot
-    // write a name back into Fusion -- so the field states it rather than
-    // pretending to own it.
-    useCadReturnStore.setState({ selectedBundle: cadBundle('Tritonia V') });
-    workspaceModeStore.setMode('cad');
-    act(() => useDocumentStore.getState().setDesignName('a leftover design'));
-    publishJobs([]);
-    await act(async () => root.render(<JobsPanel/>));
-
-    expect(host.querySelector<HTMLInputElement>('[aria-label="Design name"]')).toBeNull();
-    const input = host.querySelector<HTMLInputElement>('[aria-label="CAD document name"]')!;
-    expect(input.value).toBe('Tritonia V');
-    expect(input.readOnly).toBe(true);
-    expect(input.title).toContain('Rename the document in Fusion 360');
-    // Renaming in Fusion and sending again is what changes it.
-    act(() => useCadReturnStore.setState({ selectedBundle: cadBundle('Tritonia V2') }));
-    expect(host.querySelector<HTMLInputElement>('[aria-label="CAD document name"]')!.value).toBe('Tritonia V2');
-  });
-
-  it('previews the Fusion document name in CAD mode, advancing only with the counter', async () => {
-    useCadReturnStore.setState({
-      selectedBundle: cadBundle('cad-run'),
-      ingestRecord: readyCadRecord('wgi_first'), needsIngest: false,
-      driveChannels: [{ id: 'drive', source_ids: ['source'], motion: 'normal' }],
-      sourceSizesMm: { source: 2 }, rigidSizeMm: 5, transitionMm: 5,
-    });
-    workspaceModeStore.setMode('cad');
-    act(() => useDocumentStore.getState().setDesignName('a leftover design'));
-    publishJobs([]);
-    await act(async () => root.render(<JobsPanel/>));
-
-    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · cad-run1');
-    act(() => useDesignStore.getState().updateField('R', 141));
-    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · cad-run1');
-    act(() => useCadReturnStore.setState({ ingestRecord: readyCadRecord('wgi_second') }));
-    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · cad-run1');
-  });
-
-  it('shows the exact dated label that submission will use while editing only the name', async () => {
-    const now = new Date(2026, 7, 12, 12);
-    preferencesStore.update({ runNameDatePosition: 'prefix' });
-    act(() => useDocumentStore.getState().setDesignName('horn'));
-    publishJobs([]);
-    await act(async () => root.render(<JobsPanel namingNow={now}/>));
-
-    expect(host.querySelector<HTMLInputElement>('[aria-label="Design name"]')?.value).toBe('horn');
-    expect(host.querySelector('.run-name-preview')?.textContent)
-      .toBe(`next · ${currentJobLabel(undefined, now)}`);
-  });
 });
 
 describe('jobs panel Runs folder', () => {

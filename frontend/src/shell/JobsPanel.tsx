@@ -1,8 +1,9 @@
 import { useRunFilters, runModelKey } from '../jobs/runFilters';
 import { runSourceForJob } from '../jobs/exportNaming';
+import { runDocumentName, runSourceLabel, runSourceText } from '../jobs/runIdentity';
 import { RunModelDetails } from './RunModelDetails';
 import { retryBlockedExport } from '../jobs/autoExportOwner';
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { useWorkspaceFolder } from './WorkspaceFolderControls';
 import { compareSelection } from '../api/results';
@@ -10,12 +11,9 @@ import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailabilit
 import { canOpenJobModel, canLoadJobDesign } from '../jobs/jobDesign';
 import { selectJob } from '../jobs/selectJob';
 import { canExportRun, RunExportControl } from '../jobs/RunExportControl';
-import { nextRunLabel } from '../jobs/runNaming';
-import { useRunNameSource } from '../jobs/runNameSource';
 import { applyJobPreferences, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { runProvenanceMarker } from '../results/runCoherence';
-import { useDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { Icon } from './icons';
@@ -208,13 +206,14 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
   const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const provenance = runProvenanceMarker(job, mode);
   const displayName = runDisplayName({ ...job, label: displayLabel });
+  const shortName = runDisplayName({ ...job, label: displayLabel }, 'short');
+  const neutralName = !displayLabel?.trim() && !runDocumentName(job);
   const heading = <>
     {/* The dot is hue-only, and DESIGN.md's Signal Rule requires every state to
         carry a word or a glyph as well. The word is the alternative; it costs
         no width because it is only ever read aloud. */}
     <i/><span className="sr-only">{statusWord}. </span>
-    {!editing && <b className="job-title" title={displayName}>{middleEllipsis(displayName, 22)}</b>}
-    {provenance && <span className="pill accent" title={provenance === 'CAD' ? 'Solved from a CAD-return ingestion' : provenance === 'Mesh' ? 'Solved from a retained mesh file' : 'Solved from the parametric design'}>{provenance}</span>}
+    {!editing && <b className="job-title" title={displayName}>{job.run_number !== null && <span className="job-number">{neutralName ? `Run #${job.run_number}` : `#${job.run_number} · `}</span>}<span className="job-label">{neutralName && job.run_number !== null ? '' : shortName}</span></b>}
     {/* Stars are a label here, shown only once a run has actually been rated. */}
     {!expanded && rating > 0 && <span className="job-stars" aria-label={`Kept, rated ${rating} of 5`} title="Kept: rated runs are never cleaned up">{'★'.repeat(rating)}</span>}
   </>;
@@ -242,18 +241,20 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
       /> : null}
       {/* A run title is an annotation on history -- "the one with the deeper
           throat" -- and deliberately does not rename the design. The Design
-          name field above does that. */}
+          name field in Geometry does that. */}
       {selected && !running && !editing && <button className="job-rename" aria-label={`Rename ${displayName}`} title="Rename this run (does not rename the design)" onClick={() => { setRenameError(null); setEditing(true); }}>✎</button>}
+    </header>
+    <div className="job-secondary">
+      <span className="job-source" title={runSourceText(job)}><span className={provenance ? 'pill accent' : undefined}>{provenance || runSourceLabel(job)}</span>{runDocumentName(job) && <span className="job-source-label">· {runDocumentName(job)}</span>}</span>
       <time>{running ? duration(secondsBetween(job.started_at ?? job.queued_at, null, now)) : clock(job.completed_at ?? job.created_at)}</time>
       <button className={`job-compare${overlaid ? ' on' : ''}`} aria-label={`Compare ${displayName}`} aria-pressed={overlaid}
         disabled={!job.has_results || selected} title={selected ? 'This run is the one being shown' : overlaid ? 'Stop comparing this run' : 'Compare this run against the one on screen'}
         onClick={() => compareSelection.toggleOverlay(job.id)}>{overlaid ? 'Comparing' : 'Compare'}</button>
       {!running && <button className="job-remove" aria-label={`Remove ${displayName}`} title="Remove this job" onClick={() => onRemove(job)}><Icon name="close"/></button>}
-    </header>
+    </div>
     {renameError && <div className="job-error job-rename-error" role="alert">{renameError}</div>}
     {job.results_discarded_at && <div className="job-retention-note">Results were cleaned up to save space.</div>}
-    {expanded && fileImport && <p>Imported mesh · {job.cad_source?.document_name} · full domain · unit acceleration</p>}
-    {expanded && cadInputs && <RunModelDetails job={job}/>}
+    {expanded && (fileImport || cadInputs) && <RunModelDetails job={job}/>}
     {expanded && cadInputs && <CadSolveInputs
       className="job-cad-operation"
       operationId={cadOperationId ?? 'not recorded'}
@@ -309,50 +310,6 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
   </article>;
 }, jobCardPropsEqual);
 
-/**
- * The design's name, and the label the next solve will be stored under.
- *
- * This is the one editable name in WG. It renames the document, the file it
- * saves as, the `Report.Title` inside that file, and every run and export made
- * from it -- which is what stopped the run list, the file chip, and the `.cfg`
- * from each answering to a different name.
- */
-function RunNameField({ actions, now = new Date() }: { actions?: ReactNode; now?: Date }) {
-  const preferences = usePreferences();
-  const setDesignName = useDocumentStore((state) => state.setDesignName);
-  // In CAD mode the name belongs to the Fusion document, so the field reports
-  // it instead of offering an edit WG could not write back to CAD.
-  const { name, origin } = useRunNameSource();
-  const displayedLabel = nextRunLabel(name, preferences, now);
-  const [draft, setDraft] = useState(name);
-  const [editing, setEditing] = useState(false);
-  useEffect(() => { if (!editing) setDraft(name); }, [name, editing]);
-  const commit = (value: string) => {
-    setDesignName(value);
-    setEditing(false);
-  };
-  const fromCad = origin === 'cad';
-  const fromMesh = origin === 'mesh';
-  const readOnlyName = fromCad || fromMesh;
-  return <div className="run-name-field">
-    <label className="ui-field">{fromMesh ? 'Mesh file' : fromCad ? 'CAD document' : 'Design name'}<input
-      aria-label={fromMesh ? 'Mesh file name' : fromCad ? 'CAD document name' : 'Design name'}
-      value={readOnlyName ? name : draft}
-      readOnly={readOnlyName}
-      placeholder={fromCad ? 'No CAD return selected' : 'Untitled'}
-      title={fromMesh ? 'Runs are named from the imported mesh file.' : fromCad
-        ? 'CAD Link runs are named by the Fusion document. Rename the document in Fusion 360 and send it again to change it.'
-        : 'Names the design, its Export a copy file, and every run and export made from it'}
-      onChange={(event) => setDraft(event.target.value)}
-      onFocus={() => { if (!readOnlyName) setEditing(true); }}
-      onBlur={(event) => { if (!readOnlyName) commit(event.target.value); }}
-      onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
-    /></label>
-    <div className="run-name-actions">{actions}</div>
-    <span className="run-name-preview" title="The name the next solve is stored under">next · <b>{displayedLabel}</b></span>
-  </div>;
-}
-
 export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {}) {
   const snapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
   const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
@@ -379,7 +336,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
       const formula = String(job.config_summary.formula_type ?? '').toLocaleLowerCase();
       const title = runDisplayName(job).toLocaleLowerCase();
       const runNumberMatches = /^#?\d+$/.test(wanted) && job.run_number !== null && String(job.run_number).includes(numberQuery);
-      return title.includes(wanted) || runNumberMatches || formula.includes(wanted);
+      return title.includes(wanted) || runNumberMatches || formula.includes(wanted) || runSourceText(job).toLocaleLowerCase().includes(wanted);
     });
   }, [preferenceJobs, query, source, project, model]);
   const projects = new Map<string, string>();
@@ -424,7 +381,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
         the application. What is left is conditional and every part of it is
         news: runs in flight, the jobs socket when it is NOT connected, the
         count only while the rating filter is actually hiding runs. Clear
-        failed lives beside the run name below, where history actions are. */}
+        failed stays with the history actions below. */}
     {(notConnected || hiddenByFilter > 0 || activeCount > 0) && <div className="panel-meta">
       {activeCount > 0 && <span className="pill accent">{activeCount} running</span>}
       {notConnected && <span className="panel-meta-warn">jobs {snapshot.connection}</span>}
@@ -437,10 +394,10 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
       now={namingNow}
     />}
     {exportPreferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setExportPreferencesOpen(false)}/>}
-    <RunNameField now={namingNow} actions={<>
+    <div className="jobs-history-actions">
       {failedCount > 0 && <button className="panel-text-action panel-text-action--danger" title={`Remove ${failedCount} failed run${failedCount === 1 ? '' : 's'}`} onClick={clearFailed}>Clear failed</button>}
       <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => { setExportPreferencesOpen(false); setPreferencesOpen((value) => !value); }}><Icon name="settings"/></button>
-    </>}/>
+    </div>
     <div className="jobs-filter"><Icon name="search"/><input aria-label="Filter runs" placeholder="Filter runs" value={query} onChange={(event) => setQuery(event.target.value)}/><button className={`jobs-kept-toggle${preferences.minRating > 0 ? ' on' : ''}`} aria-label="Show kept runs only" aria-pressed={preferences.minRating > 0} title="Show kept runs only" onClick={() => preferencesStore.update({ minRating: preferences.minRating > 0 ? 0 : lastMinimumRating.current })}>★</button></div>
     <div className="jobs-scope-filter">
       <select aria-label="Run source" value={source} onChange={e => useRunFilters.setState({ source: e.target.value as typeof source, model: '' })}>
@@ -460,12 +417,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
       : 'Solve the model on screen to start one. Every run is kept here with its results, so you can compare and re-run it later.'}</span></div>}
     {snapshot.jobs.length > 0 && visibleJobs.length === 0 && <div className="empty-state"><b>No runs match the filter</b><span>{source !== 'all' || project || model ? 'Clear filters to show runs from other sources, projects or models.' : query.trim() && preferences.minRating > 0 ? 'Clear the search or turn off the kept-only filter.' : query.trim() ? 'Clear the search to show runs.' : 'Turn off the kept-only filter to show more.'}</span></div>}
     {visibleJobs.length > 0 && <div className="job-list" role="list" aria-label="Run history">
-      {visibleJobs.map((job, index) => <Fragment key={job.id}>
-        {runSourceForJob(job) !== 'parametric' && (index === 0 || runModelKey(job) !== runModelKey(visibleJobs[index - 1])) && <div className="cad-model-divider">
-          <span className="cad-model-label" title={runModelKey(job)}>Model · {job.cad_source?.document_name ?? 'Imported mesh'} · …{runModelKey(job).slice(-10)}</span>
-        </div>}
-        <JobCard job={job} now={now} selected={job.id === selection.primary} retryJob={coordinator.retry} onError={coordinator.reportError} onRemove={remove} onOpenExportSettings={openExportSettings}/>
-      </Fragment>)}
+      {visibleJobs.map(job => <JobCard key={job.id} job={job} now={now} selected={job.id === selection.primary} retryJob={coordinator.retry} onError={coordinator.reportError} onRemove={remove} onOpenExportSettings={openExportSettings}/>)}
     </div>}
   </div>;
 }

@@ -11,7 +11,7 @@ import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsSt
 import { MeshImportPanel } from './MeshImportPanel';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-const panel = () => <QueryClientProvider client={queryClient}><MeshImportPanel/></QueryClientProvider>;
+const panel = () => <QueryClientProvider client={queryClient}><MeshImportPanel tab="geometry"/><MeshImportPanel tab="simulation"/></QueryClientProvider>;
 
 const initial = useMeshImportStore.getState();
 let root: Root;

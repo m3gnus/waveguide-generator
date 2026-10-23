@@ -171,9 +171,7 @@ details.cad-check[open] > summary .cad-check-chevron { transform: rotate(90deg);
 .linked-instance-selection { display: grid; gap: 3px; margin: 7px 0; }
 .linked-instance-selection small { color: var(--fg3); font-size: var(--text-micro); }
 
-/* Model boundaries and optional attachments in the shared Runs view. */
-.cad-model-divider { display: flex; align-items: center; gap: 7px; margin: 5px 0 7px; padding-top: 5px; border-top: 1px dashed color-mix(in srgb, var(--fg3) 45%, transparent); }
-.cad-model-label { min-width: 0; overflow: hidden; color: var(--fg3); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }
+/* Optional model attachments in the shared Runs view. */
 .cad-model-download, .cad-model-missing { margin-left: auto; font-size: var(--text-micro); white-space: nowrap; }
 .cad-model-download { color: var(--acc); }
 .cad-model-missing { color: var(--fg4); }

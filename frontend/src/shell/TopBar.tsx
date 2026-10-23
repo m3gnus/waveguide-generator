@@ -88,7 +88,7 @@ export function activateWorkspaceMode(mode: WorkspaceMode): void {
   if (mode === 'parametric') restoreParametricWorkingDesign();
   workspaceModeStore.setMode(mode);
   if (mode === 'cad' && !useCadReturnStore.getState().ingestRecord) {
-    workspaceNavigation.activate('cadlink');
+    workspaceNavigation.activate('geometry');
   }
 }
 
@@ -279,10 +279,10 @@ export function AttentionNotices() {
   const requests = selectCadRequests({ jobs, notices, record: null });
   const waiting = [...requests.earlier, ...requests.current];
   const waitingCount = waiting.length;
-  const showWaiting = waitingCount > 0 && !workspaceNavigation.isVisible('cadlink');
+  const showWaiting = waitingCount > 0 && !workspaceNavigation.isVisible('geometry');
   const showReady = readyRun !== null && !workspaceNavigation.isVisible('results');
   // A request WG took and refused has no row to wait in; this is its route.
-  const showRefused = unseenRefusals > 0 && !(mode === 'cad' && workspaceNavigation.isVisible('cadlink'));
+  const showRefused = unseenRefusals > 0 && !(mode === 'cad' && workspaceNavigation.isVisible('geometry'));
   const readyJob = readyRun ? jobs.find((job) => job.id === readyRun) ?? null : null;
   const first = waiting[0]?.operation;
   const waitingLabel = !first && !Object.keys(notices).length
@@ -305,7 +305,7 @@ export function AttentionNotices() {
       title="WG took a request from Fusion and could not accept it. The CAD Link panel says why."
       onClick={() => {
         if (mode !== 'cad') activateWorkspaceMode('cad');
-        workspaceNavigation.navigate('cadlink');
+        workspaceNavigation.navigate('geometry');
       }}
     ><i/>{unseenRefusals === 1 ? 'A CAD request was refused' : `${unseenRefusals} CAD requests were refused`} · Show</button>}
     {showReady && <button

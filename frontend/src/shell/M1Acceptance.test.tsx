@@ -168,8 +168,8 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
   const dockActivate = (panel: WorkspacePanel) => {
     activations.push(panel);
     // A tab fronted in the shared group hides the one it covered.
-    if (panel === 'results') visible.delete('cadlink');
-    if (panel === 'cadlink') visible.delete('results');
+    if (panel === 'results') visible.delete('geometry');
+    if (panel === 'geometry') visible.delete('results');
     visible.add(panel);
     publishVisiblePanels(visible);
     return true;
@@ -230,7 +230,7 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     compareSelection.clear();
     publishJobs([]);
     activations = [];
-    visible = new Set(['viewport', 'cadlink', 'geometry']);
+    visible = new Set(['viewport', 'geometry']);
     publishVisiblePanels(visible);
     bindWorkspaceNavigation(dockActivate);
     vi.stubGlobal('fetch', vi.fn(async () => resultResponse()));
@@ -298,7 +298,7 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     await deliver(operation(operationId, 'accepted', { jobId: 'job-1', updatedAt: '2026-09-21T10:00:05Z' }));
     await jobs([cadJob('job-1', 'wgi_first')]);
     expect(workspaceNavigation.isVisible('results')).toBe(true);
-    expect(workspaceNavigation.isVisible('cadlink')).toBe(false);
+    expect(workspaceNavigation.isVisible('geometry')).toBe(false);
   });
 
   it('makes no second job and no second result when the completion is delivered twice', async () => {
@@ -326,7 +326,7 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     act(() => root.unmount());
     resetSolveAttentionForTests();
     root = createRoot(host);
-    act(() => workspaceNavigation.navigate('cadlink'));
+    act(() => workspaceNavigation.navigate('geometry'));
     activations = [];
     const claimed = vi.spyOn(compareSelection, 'awaitRun');
     await mount();
@@ -575,18 +575,18 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
       reason: 'frame_confirmation_required', stage: 'ready', preparationId: 'wgp_1',
       attemptGeneration: 1, updatedAt: '2026-09-21T10:00:02Z',
     }));
-    expect(activations).toEqual(['cadlink']);
+    expect(activations).toEqual(['geometry']);
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
     // The same gate reported again is not a new event.
     await deliver(operation(operationId, 'needs_user_input', {
       reason: 'frame_confirmation_required', stage: 'ready', preparationId: 'wgp_1',
       attemptGeneration: 1, updatedAt: '2026-09-21T10:00:03Z',
     }));
-    expect(activations).toEqual(['cadlink']);
+    expect(activations).toEqual(['geometry']);
 
     await deliver(operation(operationId, 'accepted', { jobId: 'job-1', attemptGeneration: 2, updatedAt: '2026-09-21T10:00:09Z' }));
     await jobs([cadJob('job-1', 'wgi_first')]);
-    expect(activations).toEqual(['cadlink', 'results']);
+    expect(activations).toEqual(['geometry', 'results']);
     expect(navigationGeneration()).toBe(0);
   });
 });

@@ -8,6 +8,7 @@ import {
   type IContentRenderer,
   type SerializedDockview,
 } from 'dockview';
+import { migrateWorkspaceLayout } from './layoutMigration';
 import { ParamPanel } from '../design/ParamPanel';
 import { AppQueryProvider } from '../queryClient';
 import { ImportedWorkspacePanel } from './ImportedWorkspacePanel';
@@ -28,12 +29,11 @@ const layoutStorage = namespaceStorage('dockviewLayout');
 const layoutModeStorage = namespaceStorage('dockviewMode');
 
 const components = {
-  geometry: () => <ParamPanel tab="geometry" />,
+  geometry: ImportedWorkspacePanel,
   simulation: () => <ParamPanel tab="simulation" />,
   viewport: ViewportPanel,
   results: ResultsPanel,
   jobs: JobsPanel,
-  cadlink: ImportedWorkspacePanel,
 };
 
 type ComponentName = keyof typeof components;
@@ -124,14 +124,12 @@ export function createDefaultLayout(width: number, height: number, mode: Workspa
   const layoutWidth = Math.max(1, Math.round(width) || FALLBACK_WIDTH);
   const layoutHeight = Math.max(1, Math.round(height) || FALLBACK_HEIGHT);
   const group = (id: string, views: ComponentName[], activeView: ComponentName = views[0]) => ({ id: `${id}-group`, views, activeView });
-  const cadLinkViews: ComponentName[] = mode === 'cad' ? ['cadlink'] : [];
   const panels = {
-    geometry: { id: 'geometry', contentComponent: 'geometry', title: 'Geometry' },
+    geometry: { id: 'geometry', contentComponent: 'geometry', title: mode === 'cad' ? 'Imported mesh' : 'Geometry' },
     simulation: { id: 'simulation', contentComponent: 'simulation', title: 'Simulation' },
     viewport: { id: 'viewport', contentComponent: 'viewport', title: 'Viewport' },
     results: { id: 'results', contentComponent: 'results', title: 'Results' },
     jobs: { id: 'jobs', contentComponent: 'jobs', title: 'Jobs' },
-    ...(mode === 'cad' ? { cadlink: { id: 'cadlink', contentComponent: 'cadlink', title: 'Imported mesh' } } : {}),
   };
 
   if (layoutWidth < COMPACT_BREAKPOINT) {
@@ -143,7 +141,7 @@ export function createDefaultLayout(width: number, height: number, mode: Workspa
         root: {
           type: 'branch',
           size: layoutHeight,
-          data: [{ type: 'leaf', size: layoutWidth, data: group('workspace', ['geometry', 'simulation', 'viewport', 'results', 'jobs', ...cadLinkViews], 'viewport') }],
+          data: [{ type: 'leaf', size: layoutWidth, data: group('workspace', ['geometry', 'simulation', 'viewport', 'results', 'jobs'], 'viewport') }],
         },
       },
       panels,
@@ -170,7 +168,7 @@ export function createDefaultLayout(width: number, height: number, mode: Workspa
               size: contentWidth,
               data: [
                 { type: 'leaf', size: layoutHeight - resultsHeight, data: group('viewport', ['viewport']) },
-                { type: 'leaf', size: resultsHeight, data: group('analysis', ['results', 'jobs', ...cadLinkViews], 'results') },
+                { type: 'leaf', size: resultsHeight, data: group('analysis', ['results', 'jobs'], 'results') },
               ],
             },
           ],
@@ -202,7 +200,7 @@ export function createDefaultLayout(width: number, height: number, mode: Workspa
               { type: 'leaf', size: resultsHeight, data: group('results', ['results']) },
             ],
           },
-          { type: 'leaf', size: JOBS_WIDTH, data: group('jobs', ['jobs', ...cadLinkViews], 'jobs') },
+          { type: 'leaf', size: JOBS_WIDTH, data: group('jobs', ['jobs'], 'jobs') },
         ],
       },
     },
@@ -260,31 +258,9 @@ export function addDefaultLayout(api: DockviewApi, host: HTMLElement | null): vo
   applyDefaultLayout(api, width, height);
 }
 
-/** Keep the bidirectional Fusion workflow out of the parametric workspace.
- *
- * A one-way parametric handoff lives in the design and run export menus. CAD
- * Link is mounted only while CAD mode can actually use its return controls.
- * Existing saved layouts may still contain the old always-present tab, so mode
- * changes reconcile the live dock instead of relying only on new defaults.
- */
-export function syncCadLinkPanel(api: DockviewApi, mode: WorkspaceMode): void {
-  const existing = api.getPanel('cadlink');
-  if (mode === 'parametric') {
-    if (existing) api.removePanel(existing);
-    return;
-  }
-  if (existing) {
-    existing.api.setTitle('Imported mesh');
-    return;
-  }
-  const reference = api.getPanel('jobs') ?? api.getPanel('results') ?? api.activePanel;
-  api.addPanel({
-    id: 'cadlink',
-    component: 'cadlink',
-    title: 'Imported mesh',
-    inactive: true,
-    ...(reference ? { position: { referencePanel: reference, direction: 'within' as const } } : {}),
-  });
+/** Mode changes keep the stable left tab and every saved group in place. */
+export function syncGeometryTitle(api: DockviewApi, mode: WorkspaceMode): void {
+  api.getPanel('geometry')?.api.setTitle(mode === 'cad' ? 'Imported mesh' : 'Geometry');
 }
 
 /** Keys that choose a dock tab from the keyboard. */
@@ -300,18 +276,24 @@ const TAB_NAVIGATION_KEYS: ReadonlySet<string> = new Set(['Enter', ' ', 'ArrowLe
  */
 export function bindDockNavigation(api: DockviewApi, host: HTMLElement): () => void {
   const activate = (panel: WorkspacePanel): boolean => {
-    const target = api.getPanel(panel);
+    let target = api.getPanel(panel);
+    // A saved custom layout may have closed the left workspace. Request review
+    // still needs a destination, without rebuilding the user's other groups.
+    if (!target && panel === 'geometry') {
+      const simulation = api.getPanel('simulation');
+      const reference = simulation ?? api.getPanel('viewport') ?? api.activePanel;
+      target = api.addPanel({
+        id: 'geometry', component: 'geometry',
+        title: workspaceModeStore.getSnapshot().mode === 'cad' ? 'Imported mesh' : 'Geometry',
+        ...(reference ? { position: { referencePanel: reference, direction: simulation ? 'within' as const : 'left' as const } } : {}),
+      });
+    }
     if (!target) return false;
     target.api.setActive();
     publish();
     return true;
   };
-  const unbind = bindWorkspaceNavigation(activate, () => {
-    // Reviewing a request must not change the viewport's mode or input.
-    syncCadLinkPanel(api, 'cad');
-    if (workspaceModeStore.getSnapshot().mode === 'parametric') api.getPanel('cadlink')?.api.setTitle('CAD requests');
-    return activate('cadlink');
-  });
+  const unbind = bindWorkspaceNavigation(activate);
   const publish = () => publishVisiblePanels(api.panels.filter((panel) => panel.api.isVisible).map((panel) => panel.id));
   const onTabInput = (event: Event) => {
     const target = event.target as Element | null;
@@ -402,7 +384,7 @@ export function Workspace({ resetKey }: { resetKey: number }) {
     let restored = false;
     if (stored && restoreDisposition(storedMode, initialLayoutSize[0]) === 'restore') {
       try {
-        dockview.api.fromJSON(JSON.parse(stored) as ReturnType<DockviewApi['toJSON']>);
+        dockview.api.fromJSON(migrateWorkspaceLayout(JSON.parse(stored) as SerializedDockview));
         // Restored layouts see the same transient 10x100 mount measurement as
         // new layouts. Applying it can permanently collapse the Results rows.
         dockview.api.layout(initialLayoutSize[0], initialLayoutSize[1]);
@@ -416,7 +398,7 @@ export function Workspace({ resetKey }: { resetKey: number }) {
       coldStartSeeded.current = true;
       addDefaultLayout(dockview.api, host.current);
     }
-    const syncModePanels = () => syncCadLinkPanel(dockview.api, workspaceModeStore.getSnapshot().mode);
+    const syncModePanels = () => syncGeometryTitle(dockview.api, workspaceModeStore.getSnapshot().mode);
     syncModePanels();
     const unbindModePanels = workspaceModeStore.subscribe(syncModePanels);
     const resizeLayout = createResizeLayoutHandler(dockview.api, initialLayoutSize);

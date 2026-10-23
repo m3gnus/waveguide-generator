@@ -87,7 +87,7 @@ describe('solve attention: reveal only while the user is still waiting', () => {
 
   it('does not count the application fronting a panel as the user navigating', () => {
     solveAttention.armSolve();
-    workspaceNavigation.activate('cadlink');
+    workspaceNavigation.activate('geometry');
     expect(navigationGeneration()).toBe(0);
     workspaceNavigation.navigate('jobs');
     expect(navigationGeneration()).toBe(1);
@@ -147,7 +147,7 @@ describe('F8: a blocked operation reaches the user in either mode', () => {
   it('fronts the CAD Link panel in CAD mode when a request arrives needing the user', () => {
     act(() => workspaceModeStore.setMode('cad'));
     arrive(waiting('op-fusion'));
-    expect(activations).toEqual(['cadlink']);
+    expect(activations).toEqual(['geometry']);
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
   });
 
@@ -155,7 +155,7 @@ describe('F8: a blocked operation reaches the user in either mode', () => {
     act(() => workspaceModeStore.setMode('cad'));
     arrive(waiting('op-fusion'));
     arrive(waiting('op-fusion', { reason: 'findings_need_review', attemptGeneration: 2, updatedAt: '2026-09-21T10:00:05Z' }));
-    expect(activations).toEqual(['cadlink', 'cadlink']);
+    expect(activations).toEqual(['geometry', 'geometry']);
   });
 
   it('never changes the mode or fronts anything in Parametric mode, and shows a notice that opens the request', () => {
@@ -169,7 +169,7 @@ describe('F8: a blocked operation reaches the user in either mode', () => {
     // Reviewing the request preserves the user's working mode.
     act(() => notice!.click());
     expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
-    expect(activations.at(-1)).toBe('cadlink');
+    expect(activations.at(-1)).toBe('geometry');
     expect(navigationGeneration()).toBeGreaterThan(0);
     expect(host.querySelector('.attention-waiting')).toBeNull();
   });
@@ -177,7 +177,7 @@ describe('F8: a blocked operation reaches the user in either mode', () => {
   it('does not yank a user who navigated after the request arrived; the notice is their route', () => {
     act(() => workspaceModeStore.setMode('cad'));
     arrive(operation('op-fusion', 'processing'));
-    act(() => { workspaceNavigation.navigate('geometry'); });
+    act(() => { workspaceNavigation.navigate('jobs'); });
     activations.length = 0;
     arrive(waiting('op-fusion', { updatedAt: '2026-09-21T10:00:05Z' }));
     expect(activations).toEqual([]);
@@ -188,8 +188,8 @@ describe('F8: a blocked operation reaches the user in either mode', () => {
     act(() => workspaceModeStore.setMode('cad'));
     arrive(waiting('parent'));
     arrive(waiting('parent'));
-    expect(activations).toEqual(['cadlink']);
-    act(() => workspaceNavigation.navigate('geometry'));
+    expect(activations).toEqual(['geometry']);
+    act(() => workspaceNavigation.navigate('jobs'));
     activations.length = 0;
     act(() => publishCadJobs([
       cadJobFixture(waiting('parent')),

@@ -234,8 +234,8 @@ describe('M1b: one Solve card, to the revealed result', () => {
 
   const dockActivate = (panel: WorkspacePanel) => {
     activations.push(panel);
-    if (panel === 'results') visible.delete('cadlink');
-    if (panel === 'cadlink') visible.delete('results');
+    if (panel === 'results') visible.delete('geometry');
+    if (panel === 'geometry') visible.delete('results');
     visible.add(panel);
     publishVisiblePanels(visible);
     return true;
@@ -296,7 +296,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     compareSelection.clear();
     publishJobs([]);
     activations = [];
-    visible = new Set(['viewport', 'cadlink', 'geometry']);
+    visible = new Set(['viewport', 'geometry']);
     publishVisiblePanels(visible);
     bindWorkspaceNavigation(dockActivate);
     frame = frameAnswer({ suggestion: automatic('+x'), preselected: { axis: '+x', source: 'suggested' } });
