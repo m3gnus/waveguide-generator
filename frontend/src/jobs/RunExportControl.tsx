@@ -206,16 +206,18 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
   });
 
   const exportPreferred = () => {
-    const formats = [...preferences.exportFormats];
-    return execute(job.id, formats, async (): Promise<RunExportOutcome> => {
-      const unavailable = formats.flatMap((format) => {
+    const preferred = [...preferences.exportFormats];
+    return execute(job.id, preferred, async (): Promise<RunExportOutcome> => {
+      const unavailable = preferred.flatMap((format) => {
         const item = CATALOG_BY_FORMAT.get(format);
         const reason = item ? formatReason(item) : 'This format is not available.';
-        return reason ? [{ format, reason: `${formatLabel(format, family)}: ${reason}` }] : [];
+        return reason ? [{ format, reason: `Skipped ${formatLabel(format, family)}: ${reason}` }] : [];
       });
-      if (unavailable.length) return {
+      const skipped = unavailable.map(({ reason }) => reason).join(' ');
+      const formats = preferred.filter((format) => !unavailable.some((item) => item.format === format));
+      if (!formats.length) return {
         notice: '',
-        error: unavailable.map(({ reason }) => reason).join(' '),
+        error: skipped,
         errorFormats: unavailable.map(({ format }) => format),
       };
       const destination = await askForExportDestination({
@@ -231,12 +233,14 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
       if (!result) return { notice: EXPORT_CANCELLED_MESSAGE };
       await recordFiles(result.files);
       const fileText = workspaceNotice('Export', result);
-      if (!result.failures.length) return { notice: fileText };
+      if (!result.failures.length && !unavailable.length) return { notice: fileText };
       const failed = result.failures.map(({ format, reason }) => `${formatLabel(format, family)}: ${reason}`).join('; ');
+      const failureText = result.failures.length
+        ? `Failed ${result.failures.length} format${result.failures.length === 1 ? '' : 's'}: ${failed}` : '';
       return {
         notice: fileText,
-        error: `${fileText} · Failed ${result.failures.length} format${result.failures.length === 1 ? '' : 's'}: ${failed}`,
-        errorFormats: result.failures.map(({ format }) => format),
+        error: [fileText, skipped, failureText].filter(Boolean).join(' · '),
+        errorFormats: [...unavailable, ...result.failures].map(({ format }) => format),
       };
     });
   };

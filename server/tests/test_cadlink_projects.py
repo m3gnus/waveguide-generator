@@ -529,6 +529,37 @@ def older_run_document(tmp_path: Path):
     capture(runs, tmp_path, "Tritonia", "bbb", at="2026-08-21T09:00:00Z")
     document = runs / "Tritonia" / relative
     document.with_suffix(".csv").write_text("frequency,spl\n100,90\n")
+    # Retention omits the document bytes but preserves their checksum and size.
+    manifest = {
+        "assembly": {"signature_hash": "sha256:aaa"},
+        "files": {"document.f3d": {
+            "purpose": "cad-document",
+            "sha256": "sha256:" + hashlib.sha256(document.read_bytes()).hexdigest(),
+            "size_bytes": document.stat().st_size,
+        }},
+    }
+    raw = json.dumps(manifest).encode()
+    manifest_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+    from server.cadlink.intake.ingest import retained_snapshot_path
+
+    retained = retained_snapshot_path(app.state.data_dir, manifest_hash)
+    retained.mkdir(parents=True)
+    (retained / "wgreturn.json").write_bytes(raw)
+    row = app.state.cadlink_store.allocate_ingest(
+        manifest_sha256=manifest_hash,
+        artifact_sha256="sha256:unused",
+        record_builder=lambda ingest_id, created_at: json.dumps({
+            "ingest_id": ingest_id,
+            "created_at": created_at,
+            "manifest_sha256": manifest_hash,
+            "project": {"lineage_id": lineage},
+            "document": {"return_state_hash": "sha256:aaa"},
+        }),
+    )
+    sidecar = document.with_suffix(".cad.json")
+    payload = json.loads(sidecar.read_text())
+    payload["ingestId"] = row["ingest_id"]
+    sidecar.write_text(json.dumps(payload))
     return app, lineage, document
 
 
@@ -651,3 +682,92 @@ def test_project_root_cannot_link_to_another_project(tmp_path: Path, operation: 
         else:
             asyncio.run(api.open_project_document(lineage, "sha256:aaa", request))
     assert refused.value.status_code == 422
+
+
+@pytest.mark.parametrize("damage", ["replacement", "other-lineage", "missing-ingest", "manifest-changed", "no-checksum"])
+@pytest.mark.parametrize("operation", ["download", "open"])
+def test_run_fallback_requires_trusted_document_evidence(tmp_path: Path, monkeypatch, damage: str, operation: str) -> None:
+    from server.cadlink import api
+    from server.cadlink.intake.ingest import retained_snapshot_path
+
+    app, lineage, document = older_run_document(tmp_path)
+    sidecar = document.with_suffix(".cad.json")
+    payload = json.loads(sidecar.read_text())
+    row = app.state.cadlink_store.get_ingest(payload["ingestId"])
+    retained = retained_snapshot_path(app.state.data_dir, row["manifest_sha256"])
+    if damage == "replacement":
+        # A planted pair claims the genuine old hash and ingestion id. Even
+        # equal-size replacement bytes must fail the actual checksum check.
+        document.unlink()
+        document = document.with_name("replacement.f3d")
+        document.write_bytes(b"forged-aa")
+        sidecar.rename(document.with_suffix(".cad.json"))
+    elif damage == "other-lineage":
+        _design, lineage = project(app, filename="Other.cfg")
+        monkeypatch.setattr(api, "_project_archive_stem", lambda *_args: "Tritonia")
+    elif damage == "missing-ingest":
+        payload["ingestId"] = "wgi_missing"
+        sidecar.write_text(json.dumps(payload))
+    elif damage == "manifest-changed":
+        (retained / "wgreturn.json").write_text("{}")
+    else:
+        manifest = json.loads((retained / "wgreturn.json").read_text())
+        del manifest["files"]["document.f3d"]["sha256"]
+        raw = json.dumps(manifest).encode()
+        new_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+        new_retained = retained_snapshot_path(app.state.data_dir, new_hash)
+        new_retained.mkdir()
+        (new_retained / "wgreturn.json").write_bytes(raw)
+        record = json.loads(row["record_json"])
+        record["manifest_sha256"] = new_hash
+        new_row = app.state.cadlink_store.allocate_ingest(
+            manifest_sha256=new_hash, artifact_sha256="sha256:unused",
+            record_builder=lambda _id, _at: json.dumps(record),
+        )
+        payload["ingestId"] = new_row["ingest_id"]
+        sidecar.write_text(json.dumps(payload))
+    monkeypatch.setattr(api, "open_cad_document", lambda _path: pytest.fail("Unverified document opened"))
+    with pytest.raises(HTTPException) as refused:
+        handler = api.download_project_document if operation == "download" else api.open_project_document
+        asyncio.run(handler(lineage, "sha256:aaa", SimpleNamespace(app=app)))
+    assert refused.value.status_code == 404
+
+
+@pytest.mark.parametrize("operation", ["list", "download", "open"])
+@pytest.mark.parametrize("component", ["project", "intermediate", "run", "cad"])
+def test_reparse_directories_cannot_alias_another_archive(tmp_path: Path, monkeypatch, operation: str, component: str) -> None:
+    from server.cadlink import api
+    from server.platform import acl_repair
+
+    app, lineage, document = older_run_document(tmp_path)
+    project_folder = document.parent.parent
+    # Two levels ensure every intermediate component is inspected, rather than
+    # just the project and the file's immediate parent.
+    nested = project_folder / "nested"
+    nested.mkdir()
+    destination = nested / document.parent.name
+    document.parent.rename(destination)
+    document = destination / document.name
+    target = {
+        "project": project_folder,
+        "intermediate": nested,
+        "run": destination,
+        "cad": project_folder / "cad",
+    }[component]
+    original = acl_repair._is_reparse_point
+    monkeypatch.setattr(acl_repair, "_is_reparse_point", lambda path: Path(path) == target or original(path))
+    monkeypatch.setattr(api, "open_cad_document", lambda _path: pytest.fail("Linked archive opened"))
+    request = SimpleNamespace(app=app)
+    if component != "project" and operation == "list":
+        listing = asyncio.run(api.list_project_documents(lineage, request))
+        blocked = "sha256:bbb" if component == "cad" else "sha256:aaa"
+        assert not any(item["returnStateHash"] == blocked and item["filename"] for item in listing["items"])
+        return
+    digest = "sha256:bbb" if component == "cad" else "sha256:aaa"
+    with pytest.raises(HTTPException) as refused:
+        if operation == "list":
+            asyncio.run(api.list_project_documents(lineage, request))
+        else:
+            handler = api.download_project_document if operation == "download" else api.open_project_document
+            asyncio.run(handler(lineage, digest, request))
+    assert refused.value.status_code == (422 if component == "project" else 404)

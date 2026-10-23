@@ -362,7 +362,8 @@ describe('atomic results display transitions', () => {
     }
   });
 
-  it('uses the shared CAD menu and preferred-format refusal in the Results toolbar', async () => {
+  it('exports available preferences with skipped reasons and the shared CAD menu in the Results toolbar', async () => {
+    vi.spyOn(jobsSocket, 'patchMetadata').mockResolvedValue(undefined);
     preferencesStore.update({ exportFormats: ['csv', 'step'] });
     publishJobs([{ ...job('old'), script_snapshot: null,
       config_summary: { formula_type: 'cad-import', geometry_type: 'imported' },
@@ -376,7 +377,9 @@ describe('atomic results display transitions', () => {
     expect(trigger.title).toContain('STEP solid (.step)');
     await act(async () => { trigger.click(); });
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('STEP export is not available for CAD runs yet.');
-    expect(exportMocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
+    expect(exportMocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['csv'], 'confirm');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Skipped STEP');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('1 file written');
     expect(document.querySelector('[role="menu"]')).toBeNull();
     act(() => host.querySelector<HTMLButtonElement>('.action-menu-chevron')!.click());
     const menu = document.querySelector('[role="menu"]')!;

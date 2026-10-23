@@ -23,9 +23,10 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
-from typing import Any, Collection, Mapping, NamedTuple
+from typing import Any, Callable, Collection, Mapping, NamedTuple
 import unicodedata
 
+from server.platform.acl_repair import path_has_reparse_point
 from server.platform.staging import publish_staging_directory
 
 
@@ -344,6 +345,15 @@ def archive_cad_document(
     return relative
 
 
+def _unlinked_archive_path(path: Path, root: Path) -> bool:
+    """Check lexical components before resolution can erase junctions or links."""
+
+    try:
+        return not path_has_reparse_point(path, root=root)
+    except OSError:
+        return False
+
+
 def cad_document_sidecars(folder: Path) -> list[Path]:
     """WG's project and run capture records, confined to this project.
 
@@ -351,37 +361,41 @@ def cad_document_sidecars(folder: Path) -> list[Path]:
     Do not follow linked folders or sidecars, even within the archive.
     """
 
-    if folder.is_symlink() or not folder.is_dir():
+    if not _unlinked_archive_path(folder, folder.parent) or not folder.is_dir():
         return []
     candidates = [*(folder / CAD_SUBDIRECTORY).glob("*.json"), *folder.rglob("*.cad.json")]
     return sorted({
         sidecar for sidecar in candidates
-        if sidecar.is_file() and not sidecar.is_symlink()
-        and not any((folder / parent).is_symlink()
-                    for parent in sidecar.relative_to(folder).parents)
+        if _unlinked_archive_path(sidecar, folder.parent) and sidecar.is_file()
     })
 
 
 def captured_cad_document(
     runs_root: Path, stem: object, return_state_hash: str,
     *, sidecars: Collection[Path] | None = None,
+    verify_run_document: Callable[[Path], bool] | None = None,
 ) -> Path | None:
-    """The exact archived model, preferring cad/ then a sidecar-verified run copy."""
+    """The exact archived model, preferring cad/ then an identified run copy.
+
+    HTTP callers supply trusted ingestion verification for run-folder candidates.
+    Internal archive placement keeps its existing sidecar-based retry behaviour."""
 
     digest = str(return_state_hash or "").strip()
     if not digest:
         return None
     folder = design_archive_folder(runs_root, stem)
-    if folder.is_symlink():
+    if not _unlinked_archive_path(folder, runs_root):
         return None
-    document = _find_captured_document(folder / CAD_SUBDIRECTORY, digest)
-    if document is not None:
+    directory = folder / CAD_SUBDIRECTORY
+    document = _find_captured_document(directory, digest) if _unlinked_archive_path(directory, runs_root) else None
+    if document is not None and _unlinked_archive_path(document, runs_root):
         return document
     for sidecar in cad_document_sidecars(folder) if sidecars is None else sidecars:
-        if not sidecar.name.endswith(".cad.json"):
+        if not sidecar.name.endswith(".cad.json") or not _unlinked_archive_path(sidecar, runs_root):
             continue
         document = _placed_run_document(sidecar.parent, sidecar.name[:-len(".cad.json")], digest)
-        if document is not None:
+        if (document is not None and _unlinked_archive_path(document, runs_root)
+                and (verify_run_document is None or verify_run_document(document))):
             return document
     return None
 

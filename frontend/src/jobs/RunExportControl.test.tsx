@@ -186,20 +186,50 @@ describe('RunExportControl', () => {
     ['mwg_config', 'CAD runs have no WG parameter config to export.'],
     ['stl', 'STL export is not available for CAD runs.'],
     ['fusion_csv', 'CAD runs have no WG curves to export.'],
-  ] as const)('explains a preferred %s on CAD runs without exporting or changing preferences', async (format, reason) => {
+  ] as const)('exports available preferences and explains skipped %s on CAD runs', async (format, reason) => {
     preferencesStore.update({ exportFormats: ['csv', format] });
     render(cadJob());
     await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await settle(); });
     expect(host.querySelector('[role="alert"]')?.textContent).toContain(reason);
     expect(document.querySelector('[role="menu"]')).toBeNull();
-    expect(mocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
-    expect(mocks.fetchJobResults).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Skipped ');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('1 file written');
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['csv'], 'confirm');
+    expect(mocks.fetchJobResults).toHaveBeenCalledOnce();
     expect(preferencesStore.getSnapshot().exportFormats).toEqual(['csv', format]);
     openMenu();
     expect(menuItem('Frequency data').getAttribute('aria-disabled')).toBeNull();
     expect(menuItem('Frequency data').textContent).not.toContain(reason);
     await act(async () => { menuItem('Frequency data').click(); await settle(); });
     expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['csv'], 'confirm');
+  });
+
+  it('writes nothing and reports every reason when all preferences are unavailable', async () => {
+    preferencesStore.update({ exportFormats: ['step', 'stl'] });
+    render(cadJob());
+    await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await settle(); });
+    const alert = host.querySelector('[role="alert"]')?.textContent;
+    expect(alert).toContain('STEP export is not available for CAD runs yet.');
+    expect(alert).toContain('STL export is not available for CAD runs.');
+    expect(mocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
+    expect(mocks.fetchJobResults).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it('exports every available preference and reports skips alongside bundle failures', async () => {
+    preferencesStore.update({ exportFormats: ['csv', 'png', 'step', 'stl'] });
+    mocks.runWorkspaceExportBundle.mockResolvedValueOnce({
+      directory: '/exports', files: ['/exports/run.csv'],
+      failures: [{ format: 'png', reason: 'Chart rendering failed.' }],
+    });
+    render(cadJob());
+    await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await settle(); });
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['csv', 'png'], 'confirm');
+    const alert = host.querySelector('[role="alert"]')?.textContent;
+    expect(alert).toContain('1 file written');
+    expect(alert).toContain('STEP export is not available for CAD runs yet.');
+    expect(alert).toContain('STL export is not available for CAD runs.');
+    expect(alert).toContain('Chart rendering failed.');
   });
 
   it.each([false, true])('names two preferred formats and titles the trigger (compact=%s)', (compact) => {

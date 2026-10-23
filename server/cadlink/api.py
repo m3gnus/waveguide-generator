@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -28,6 +29,7 @@ from server.mesh.artifact import (
     read_verified_import_mesh,
     read_verified_import_viewport_mesh,
 )
+from server.platform.acl_repair import path_has_reparse_point
 from server.platform.cad_launch import launch_disabled, open_cad_document
 from server.platform.process import background_process_kwargs
 from server.workspace.api import (
@@ -76,7 +78,10 @@ from server.cadlink.intake.ingest import (
     get_ingestion_record,
     ingest_bundle,
     resolve_deferred_viewport,
+    retained_snapshot_path,
+    cad_document_member,
 )
+from server.cadlink.joblane.preparation_inputs import _retained_manifest
 from server.cadlink.joblane.manual_solve import create_manual_solve, recover_manual_solve
 # The Onshape leg publishes its bundles under WG's own data directory rather
 # than a user-chosen WGLink folder, so re-ingesting one has to be anchored to
@@ -1297,10 +1302,16 @@ async def _project_folder(request: Request, lineage_id: str) -> tuple[Path, str]
         return stem
 
     stem = await asyncio.to_thread(resolve)
-    root = _runs_root(request).resolve()
+    root = _runs_root(request)
     folder = design_archive_folder(root, stem)
-    if folder.is_symlink():
-        raise HTTPException(status_code=422, detail="Project archive folder must not be a symbolic link.")
+    try:
+        if path_has_reparse_point(folder, root=root):
+            raise HTTPException(status_code=422, detail="Project archive folder must not be a symbolic link or junction.")
+    except FileNotFoundError:
+        pass  # A project without an archive still has an empty document listing.
+    except OSError as exc:
+        raise HTTPException(status_code=422, detail="Project archive folder could not be checked for links.") from exc
+    root = root.resolve()
     folder = folder.resolve()
     try:
         _strictly_inside(folder, root, "project folder")
@@ -1309,7 +1320,36 @@ async def _project_folder(request: Request, lineage_id: str) -> tuple[Path, str]
     return folder, stem
 
 
-async def _project_documents(folder: Path) -> list[dict[str, Any]]:
+def _verified_run_document(
+    request: Request, lineage_id: str, digest: str, document: Path
+) -> bool:
+    """Match run bytes to the retained ingestion manifest and owning lineage."""
+
+    try:
+        sidecar = json.loads(document.with_suffix(".cad.json").read_text(encoding="utf-8"))
+        record = get_ingestion_record(request.app.state.cadlink_store, str(sidecar["ingestId"]))
+        if not record or (record.get("project") or {}).get("lineage_id") != lineage_id:
+            return False
+        if (record.get("document") or {}).get("return_state_hash") != digest:
+            return False
+        retained = retained_snapshot_path(request.app.state.data_dir, record["manifest_sha256"])
+        manifest = _retained_manifest({"retained_path": retained})
+        if not manifest or (manifest.get("assembly") or {}).get("signature_hash") != digest:
+            return False
+        member = cad_document_member(manifest)
+        evidence = (manifest.get("files") or {}).get(member) or {}
+        if not evidence.get("sha256") or document.stat().st_size != evidence.get("size_bytes"):
+            return False
+        checksum = hashlib.sha256()
+        with document.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                checksum.update(chunk)
+        return "sha256:" + checksum.hexdigest() == evidence["sha256"]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
+async def _project_documents(folder: Path, request: Request, lineage_id: str) -> list[dict[str, Any]]:
     """Every captured CAD document in one project, newest capture first."""
 
     def read() -> list[dict[str, Any]]:
@@ -1329,7 +1369,10 @@ async def _project_documents(folder: Path) -> list[dict[str, Any]]:
                 records[digest] = (payload, [])
             records[digest][1].append(sidecar)
         for digest, (payload, sidecars) in records.items():
-            document = captured_cad_document(folder.parent, folder.name, digest, sidecars=sidecars)
+            document = captured_cad_document(
+                folder.parent, folder.name, digest, sidecars=sidecars,
+                verify_run_document=lambda path: _verified_run_document(request, lineage_id, digest, path),
+            )
             items.append(
                 {
                     "returnStateHash": str(payload.get("returnStateHash") or ""),
@@ -1355,7 +1398,7 @@ async def list_project_documents(lineage_id: str, request: Request) -> dict[str,
     return {
         "archiveStem": stem,
         "folder": str(folder),
-        "items": await _project_documents(folder),
+        "items": await _project_documents(folder, request, lineage_id),
         "launchDisabled": launch_disabled(),
         "fileManager": "Finder" if platform.system() == "Darwin" else (
             "Explorer" if platform.system() == "Windows" else "file manager"
@@ -1372,7 +1415,8 @@ async def _resolve_project_document(
         raise HTTPException(status_code=422, detail="Malformed return state hash")
     folder, stem = await _project_folder(request, lineage_id)
     document = await asyncio.to_thread(
-        captured_cad_document, folder.parent, stem, return_state_hash
+        captured_cad_document, folder.parent, stem, return_state_hash,
+        verify_run_document=lambda path: _verified_run_document(request, lineage_id, return_state_hash, path),
     )
     if document is None:
         raise HTTPException(
