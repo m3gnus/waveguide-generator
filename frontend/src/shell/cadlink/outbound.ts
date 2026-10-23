@@ -69,8 +69,7 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
     if (folderPick) return folderPick;
     const picking = (async () => {
       if (!(await selectCadWorkspace(undefined, fetcher)).selected) {
-        throw new Error('WG and Fusion share a folder, and none is chosen yet, so there is nowhere to send '
-          + 'this design. Choose the folder when WG asks, or set it in Settings → CAD Link, and send again.');
+        throw new Error('Check the WGLink folder in Settings → CAD Link, then send again.');
       }
       return readStatus();
     })();

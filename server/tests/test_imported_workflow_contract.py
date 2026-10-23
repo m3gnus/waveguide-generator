@@ -97,7 +97,7 @@ def test_equivalent_cad_and_file_meshes_use_same_engine_and_agree(tmp_path: Path
     source = manifest["sources"][0]
     source_id = source["id"]
     workspace = tmp_path / "workspace"
-    shutil.copytree(ROUND_RETURN, workspace / "wgreturn" / "round.wgreturn")
+    shutil.copytree(ROUND_RETURN, workspace / "cadlink" / "wgreturn" / "round.wgreturn")
     sizes = {"rigid_size_mm": 20.0, "transition_mm": 30.0,
              "source_size_mm": {source_id: float(source["suggested_resolution_mm"])}}
 

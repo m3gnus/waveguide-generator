@@ -688,15 +688,13 @@ async def fusion_status(
 ) -> dict[str, Any]:
     """Report whether the design on screen is open and current in Fusion."""
 
-    workspace: WorkspaceState = request.app.state.cad_workspace
+    workspace: CadWorkspaceState = request.app.state.cad_workspace
     selected = workspace.selected_path()
     workspace_root = selected.resolve() if selected is not None else None
     returned_bundle: Path | None = None
     returned_manifest: Mapping[str, Any] | None = None
-    if payload.return_bundle_path and workspace_root is None:
-        raise HTTPException(
-            status_code=422, detail="No WGLink folder has been selected."
-        )
+    # A missing exchange must still yield status and its repair actions when
+    # a CAD return is on screen. There is no bundle to resolve until repaired.
     if workspace_root is not None and (
         payload.return_bundle_path or payload.identity is not None
     ):
@@ -769,6 +767,8 @@ async def fusion_status(
             report["loadedIdentity"] = loaded_addin_identity(Path(request.app.state.data_dir))
     status["cadFolderConfigured"] = selected is not None
     status["cadFolderPath"] = str(selected) if selected is not None else None
+    missing = workspace.missing_path()
+    status["cadFolderMissingPath"] = str(missing) if missing is not None else None
     status["cadConnectionIssue"] = None
     if selected is not None and status.get("running"):
         reported_root = status.get("workspaceRoot")

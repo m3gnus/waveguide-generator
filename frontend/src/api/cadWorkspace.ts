@@ -1,6 +1,6 @@
 import { httpErrorMessage } from './httpError';
 import { deadlineFetch } from './deadlineFetch';
-import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
+import { selectFolderRoot } from './folders';
 
 /**
  * Where a captured CAD document is filed in the run archive.
@@ -16,6 +16,7 @@ export type CadCaptureMode = 'off' | 'project' | 'run';
 export interface CadWorkspacePath {
   selected: boolean;
   path: string | null;
+  missingPath?: string | null;
   /** Whether returns carry a copy of the CAD document they were taken from. */
   captureDocument?: boolean;
   captureMode?: CadCaptureMode;
@@ -33,21 +34,13 @@ export async function selectCadWorkspace(
   path?: string,
   fetcher: typeof fetch = fetch,
 ): Promise<CadWorkspacePath> {
-  const response = await fetcher('/api/cad-workspace/select', {
-    method: 'POST',
-    ...(path ? {
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path }),
-    } : {}),
-  });
-  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WGLink folder request failed'));
-  const selection = await response.json() as CadWorkspacePath;
-  // Both routes to a folder land here -- the native picker when `path` is
-  // absent, the manual field when it is not -- so this is the only place that
-  // sees every one of them. The CAD Link coordinator is asleep until it hears
-  // this; see `stores/cadWorkspaceSelection`.
-  cadWorkspaceSelection.noteSelection(selection.selected);
-  return selection;
+  const selection = await selectFolderRoot(path, fetcher);
+  const available = selection.cadlinkExists !== false;
+  return {
+    selected: selection.selected && available,
+    path: available ? selection.cadlink ?? null : null,
+    missingPath: available ? null : selection.cadlink,
+  };
 }
 
 export async function openCadWorkspace(

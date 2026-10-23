@@ -454,6 +454,7 @@ def test_status_endpoint_hashes_the_design_and_reports_wglink_folder_setup(
     missing = asyncio.run(fusion_status(payload, SimpleNamespace(app=app)))
     assert missing["cadFolderConfigured"] is False
     assert missing["cadFolderPath"] is None
+    assert missing["cadFolderMissingPath"] == str(app.state.folders.effective("cadlink"))
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -463,6 +464,7 @@ def test_status_endpoint_hashes_the_design_and_reports_wglink_folder_setup(
         "cadApplication": "fusion360",
         "cadFolderConfigured": True,
         "cadFolderPath": str(workspace.resolve()),
+        "cadFolderMissingPath": None,
         "cadConnectionIssue": None,
         "state": "closed",
         "running": False,
@@ -1347,3 +1349,20 @@ def test_immutable_bundle_capability_does_not_gate_automatic_delivery(tmp_path, 
     assert status["immutableBundles"] is expected
     assert status["running"] is True
     assert status["state"] != "addin_outdated"
+
+
+def test_missing_cad_folder_still_reports_repair_path_with_a_return_on_screen(tmp_path, monkeypatch):
+    monkeypatch.setattr("server.cadlink.api.fusion_process_running", lambda: False)
+    app = create_app(data_dir=tmp_path / "data")
+    chosen = tmp_path / "chosen"
+    chosen.mkdir()
+    app.state.folders.select(chosen)
+    (chosen / "cadlink").rmdir()
+    payload = FusionStatusRequest.model_validate({
+        "design": {"formula": "OSSE", "L": 120, "a": 45},
+        "returnBundlePath": "wgreturn/earlier.wgreturn",
+    })
+    status = asyncio.run(fusion_status(payload, SimpleNamespace(app=app)))
+    assert status["cadFolderConfigured"] is False
+    assert status["cadFolderMissingPath"] == str(chosen / "cadlink")
+    assert not (chosen / "cadlink").exists()

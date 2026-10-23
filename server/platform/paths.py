@@ -298,6 +298,6 @@ def validate_folder_root(path: str | os.PathLike[str], *, system: str | None = N
     if (system or platform.system()) == "Windows":
         units = len(ntpath.join(str(path), "runs").encode("utf-16-le")) // 2
         if units + 180 >= 260:
-            raise ValueError("The WG root folder path is too long for Windows run files. "
+            raise ValueError("The WG folder path is too long for Windows run files. "
                              "Choose a shorter path (at most 74 characters) to leave room "
                              "for project names, run names and exports.")

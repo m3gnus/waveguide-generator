@@ -187,6 +187,7 @@ export interface FusionCadStatus {
   cadApplication: 'fusion360';
   cadFolderConfigured: boolean;
   cadFolderPath: string | null;
+  cadFolderMissingPath?: string | null;
   cadConnectionIssue?: 'addin_upgrade_required' | 'folder_unreadable' | 'folder_mismatch' | null;
   adapterVersion?: string | null;
   workspaceRoot?: string | null;

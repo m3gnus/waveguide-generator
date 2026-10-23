@@ -231,7 +231,8 @@ function fusionConnectionView(status: FusionCadStatus | null): CadWorkflowView {
   if (status.cadFolderConfigured === false) return {
     state: 'not-configured',
     headline: 'Fusion connection needs a WGLink folder',
-    detail: 'Choose the shared exchange folder in Settings → CAD Link. WG and the WGLink add-in will then use it automatically.',
+    detail: status.cadFolderMissingPath ? `WGLink folder not found: ${status.cadFolderMissingPath}`
+      : 'Choose the WG folder in Settings → CAD Link. WG and Fusion use its WGLink folder.',
     action: null,
   };
   // Before every other reading of the heartbeat: an older add-in is refused

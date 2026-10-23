@@ -51,8 +51,10 @@ def test_fresh_install(tmp_path, isolated):
     app, root = setup(tmp_path, isolated=isolated)
     f = app.state.folders
     assert f.root == root
-    assert f.overrides == ({'runs': f.data_dir / 'workspace'} if isolated else {})
-    assert app.state.workspace.path() == (f.data_dir / 'workspace' if isolated else root / 'runs')
+    assert f.overrides == {}
+    assert app.state.workspace.path() == root / 'runs'
+    if isolated:
+        assert not (f.data_dir / 'workspace').exists()
     if isolated:
         assert app.state.cad_workspace.selected_path() is None
         assert not (root / 'cadlink').exists()
@@ -333,7 +335,7 @@ def test_root_and_cad_pickers_open_at_current_choice(tmp_path, monkeypatch):
     monkeypatch.setattr(api, '_select_workspace_folder', lambda prompt, start: seen.append((prompt, start)))
     asyncio.run(endpoint(app, '/api/folders/select')())
     asyncio.run(endpoint(app, '/api/cad-workspace/select')())
-    assert seen == [('Select WG root folder', root), ('Select WGLink folder', root / 'cadlink')]
+    assert seen == [('Select WG folder', root), ('Select WG folder', root)]
 
 
 def test_windows_documents_ctypes_and_fallback(tmp_path, monkeypatch, real_windows_documents):
@@ -679,17 +681,16 @@ def test_spelling_only_rollback_drift_is_adopted_once(tmp_path):
     assert read_settings(data / 'cadlink_settings.json')['cadLinkPath'] == str(alias / 'cadlink')
 
 
-def test_override_cleanup_on_selection_and_persistence(tmp_path):
+def test_only_explicit_use_root_clears_an_override(tmp_path):
     app, root = setup(tmp_path)
     f = app.state.folders
     new = tmp_path / 'new'
     (new / 'runs').mkdir(parents=True)
     f.set_override('runs', new / 'runs')
     f.select(new)
-    assert f.overrides == {}
-    assert restart(f.data_dir, root).overrides == {}
-    f.overrides['cadlink'] = new / 'cadlink'
-    f.persist()
+    assert f.overrides == {'runs': new / 'runs'}
+    assert restart(f.data_dir, root).overrides == f.overrides
+    f.use_root('runs')
     assert f.overrides == {}
     assert 'overrides' not in read_settings(f.settings_path)
 
@@ -767,7 +768,7 @@ def test_recorded_root_does_not_readopt_legacy_output_when_mirrors_are_absent(tm
     assert not root.exists()
 
 
-def test_explicit_root_choice_clears_overrides_with_the_same_filesystem_identity(tmp_path):
+def test_root_choice_preserves_alias_override_until_explicitly_cleared(tmp_path):
     app, root = setup(tmp_path)
     f = app.state.folders
     alias = tmp_path / 'alias'
@@ -775,6 +776,8 @@ def test_explicit_root_choice_clears_overrides_with_the_same_filesystem_identity
     f.set_override('runs', alias / 'runs')
     assert f.overrides == {'runs': alias / 'runs'}  # recorded spelling retained
     f.select(root)
+    assert f.overrides == {'runs': alias / 'runs'}
+    f.use_root('runs')
     assert f.overrides == {}
     assert read_settings(f.settings_path).get('overrides', {}) == {}
     assert f.effective('runs') == root / 'runs'
@@ -827,3 +830,242 @@ def test_both_spelling_only_mirror_changes_keep_their_recorded_windows_case(tmp_
         assert f.effective(name) == choices[name]
         assert read_settings(data / file)[key] == str(choices[name])
     assert restart(data, root, system='Windows').notice is None
+
+
+@pytest.mark.parametrize('child', ['wglink', 'wgreturn', 'runs'])
+def test_new_root_refuses_child_folders_without_changing_settings(tmp_path, child):
+    app, root = setup(tmp_path)
+    chosen = tmp_path / 'exchange'
+    if child == 'runs':
+        chosen = root / 'runs'
+    else:
+        (chosen / child).mkdir(parents=True)
+    before = {p.name: p.read_bytes() for p in app.state.folders.data_dir.glob('*.json')}
+    with pytest.raises(ValueError, match='Choose the folder that should contain'):
+        app.state.folders.select(chosen)
+    assert before == {p.name: p.read_bytes() for p in app.state.folders.data_dir.glob('*.json')}
+
+
+def test_existing_child_like_root_is_only_noted_on_restart(tmp_path):
+    app, root = setup(tmp_path)
+    (root / 'wglink').mkdir()
+    before = {p.name: p.read_bytes() for p in app.state.folders.data_dir.glob('*.json')}
+    f = restart(app.state.folders.data_dir, root)
+    assert f.root == root
+    assert f.info()['rootNote'].startswith('This folder is a WGLink folder.')
+    assert before == {p.name: p.read_bytes() for p in f.data_dir.glob('*.json')}
+
+
+def test_legacy_cad_select_chooses_root_and_preserves_overrides(tmp_path):
+    app, root = setup(tmp_path)
+    old = root / 'cadlink'
+    app.state.folders.set_override('cadlink', old)
+    new = tmp_path / 'new'
+    new.mkdir()
+    result = asyncio.run(endpoint(app, '/api/cad-workspace/select')(api.SelectCadWorkspaceRequest(path=str(new))))
+    assert result == {'selected': True, 'path': str(old)}
+    assert app.state.folders.root == new
+    assert app.state.folders.overrides == {'cadlink': old}
+    assert not (new / 'cadlink').exists()
+
+
+@pytest.mark.parametrize('override', [False, True])
+def test_missing_cad_folder_is_reported_and_created_only_on_explicit_action(tmp_path, override):
+    app, root = setup(tmp_path)
+    f = app.state.folders
+    old = tmp_path / 'old-exchange'
+    (root / 'cadlink').rmdir()
+    if override:
+        old.mkdir()
+        f.set_override('cadlink', old)
+        old.rmdir()
+    app, _ = setup(tmp_path)
+    f = app.state.folders
+    result = asyncio.run(endpoint(app, '/api/cad-workspace/path')())
+    assert result['path'] is None
+    assert result['missingPath'] == str(old if override else root / 'cadlink')
+    assert not (root / 'cadlink').exists()
+    asyncio.run(endpoint(app, '/api/folders/select')(api.UseRootFolderRequest(useRoot='cadlink')))
+    assert app.state.cad_workspace.path() == root / 'cadlink'
+    assert f.overrides == {}
+    assert not old.exists()
+    assert read_settings(f.data_dir / 'cadlink_settings.json')['cadLinkPath'] == str(root / 'cadlink')
+
+
+def test_proposed_creation_uses_chosen_root_not_platform_default_or_override(tmp_path):
+    app, root = setup(tmp_path)
+    new = tmp_path / 'new'
+    new.mkdir()
+    app.state.folders.select(new)
+    (new / 'cadlink').rmdir()
+    old = tmp_path / 'old'
+    old.mkdir()
+    app.state.folders.set_override('cadlink', old)
+    old.rmdir()
+    cad = app.state.cad_workspace
+    cad.create_proposed_if_requested(old)
+    assert not old.exists()
+    cad.create_proposed_if_requested(new / 'cadlink')
+    assert (new / 'cadlink').is_dir()
+    assert cad.selected_path() is None  # Creation alone never clears the override.
+
+
+@pytest.mark.parametrize('fail_at', ['workspace_settings.json', 'cadlink_settings.json', 'folders.json'])
+def test_interrupted_override_clear_recovers_durable_mirrors(tmp_path, fail_at):
+    app, root = setup(tmp_path)
+    f = app.state.folders
+    old = tmp_path / 'old'
+    old.mkdir()
+    f.set_override('cadlink', old)
+    f.set_override('runs', old)
+    previous = {name: f.effective(name) for name in NAMES}
+    def writer(path, payload):
+        if path.name == fail_at:
+            raise OSError('interrupted')
+        api._write_json_atomic(path, payload)
+    f.writer = writer
+    with pytest.raises(OSError, match='interrupted'):
+        f.use_root('runs' if fail_at == 'workspace_settings.json' else 'cadlink')
+    durable = {name: Path(read_settings(f.data_dir / file)[key]) for name, (file, key) in NAMES.items()}
+    assert {name: f.effective(name) for name in NAMES} == durable
+    again = restart(f.data_dir, root)
+    assert {name: again.effective(name) for name in NAMES} == durable
+    assert old.is_dir()
+    assert all(value == previous[name] or value == root / name for name, value in durable.items())
+
+
+@pytest.mark.parametrize('name', ['cadlink', 'runs'])
+def test_empty_child_folder_and_its_alias_are_refused_as_roots(tmp_path, name):
+    app, root = setup(tmp_path)
+    alias = tmp_path / 'alias'
+    alias.symlink_to(root / name, target_is_directory=True)
+    for chosen in (root / name, alias):
+        with pytest.raises(ValueError, match='Choose the folder that should contain'):
+            app.state.folders.select(chosen)
+    assert not (root / name / 'cadlink').exists()
+
+
+@pytest.mark.parametrize('name', ['cadlink', 'runs'])
+def test_failed_root_choice_retains_equal_child_override_before_retry(tmp_path, name):
+    app, root = setup(tmp_path)
+    f = app.state.folders
+    child = root / name
+    f.set_override(name, child)
+    new = tmp_path / 'new'
+    new.mkdir()
+    def refuse(path, payload):
+        raise OSError('before publication')
+    f.writer = refuse
+    with pytest.raises(OSError, match='before publication'):
+        f.select(new)
+    assert f.overrides == {name: child}
+    assert restart(f.data_dir, root).overrides == {name: child}
+    f.writer = api._write_json_atomic
+    f.select(new)
+    assert f.effective(name) == child
+    assert f.overrides == {name: child}
+
+
+def test_failed_override_clear_does_not_replace_chosen_root_with_mirror_parent(tmp_path):
+    app, root = setup(tmp_path)
+    f = app.state.folders
+    for name in NAMES:
+        f.set_override(name, root / name)
+    new = tmp_path / 'new'
+    new.mkdir()
+    f.select(new)
+    def refuse(path, payload):
+        raise OSError('before publication')
+    f.writer = refuse
+    with pytest.raises(OSError, match='before publication'):
+        f.use_root('cadlink')
+    assert f.root == new
+    assert f.overrides == {name: root / name for name in NAMES}
+    f.writer = api._write_json_atomic
+    f.use_root('cadlink')
+    assert f.root == new
+    assert f.effective('cadlink') == new / 'cadlink'
+    assert f.effective('runs') == root / 'runs'
+
+
+@pytest.mark.parametrize('missing', [False, True])
+def test_compatibility_cad_select_reports_effective_availability_on_cancel(tmp_path, monkeypatch, missing):
+    app, root = setup(tmp_path)
+    if missing:
+        (root / 'cadlink').rmdir()
+    monkeypatch.setattr(api, '_select_workspace_folder', lambda *args: None)
+    assert asyncio.run(endpoint(app, '/api/cad-workspace/select')()) == {
+        'selected': not missing, 'path': None if missing else str(root / 'cadlink')}
+
+
+def test_compatibility_cad_select_does_not_claim_success_for_missing_override(tmp_path):
+    app, root = setup(tmp_path)
+    old = root / 'cadlink'
+    app.state.folders.set_override('cadlink', old)
+    old.rmdir()
+    new = tmp_path / 'new'
+    new.mkdir()
+    result = asyncio.run(endpoint(app, '/api/cad-workspace/select')(api.SelectCadWorkspaceRequest(path=str(new))))
+    assert result == {'selected': False, 'path': None}
+    assert app.state.folders.root == new
+    assert app.state.folders.overrides == {'cadlink': old}
+
+
+def test_stale_override_confirmation_refuses_without_publication(tmp_path):
+    app, root = setup(tmp_path)
+    f = app.state.folders
+    old = tmp_path / 'old'
+    old.mkdir()
+    f.set_override('cadlink', old)
+    new = tmp_path / 'new'
+    new.mkdir()
+    f.select(new)
+    before = {p.name: p.read_bytes() for p in f.data_dir.glob('*.json')}
+    with pytest.raises(api.HTTPException, match='WG folder changed'):
+        asyncio.run(endpoint(app, '/api/folders/select')(
+            api.UseRootFolderRequest(useRoot='cadlink', expectedPath=str(root / 'cadlink'))))
+    assert f.overrides == {'cadlink': old}
+    assert before == {p.name: p.read_bytes() for p in f.data_dir.glob('*.json')}
+    assert not (new / 'cadlink').exists()
+
+
+def test_stale_override_path_confirmation_is_refused(tmp_path):
+    app, root = setup(tmp_path)
+    f = app.state.folders
+    old, newer = tmp_path / 'old', tmp_path / 'newer'
+    old.mkdir()
+    newer.mkdir()
+    f.set_override('runs', old)
+    f.set_override('runs', newer)
+    with pytest.raises(ValueError, match='WG folder changed'):
+        f.use_root('runs', root / 'runs', old)
+    assert f.overrides == {'runs': newer}
+
+
+
+def test_read_failure_does_not_count_as_a_fresh_isolated_setup(tmp_path):
+    data, root = tmp_path / 'data', tmp_path / 'data' / 'workspace-root'
+    (root / 'runs').mkdir(parents=True)
+    legacy = data / 'workspace'
+    f = FolderRoot(data, default_root=root, legacy_runs=legacy,
+                   writer=api._write_json_atomic, settings_read_failed=True)
+    assert f.read_only
+    assert f.effective('runs') == legacy
+    assert f.implicit_runs_path is None
+    assert not (data / 'folders.json').exists()
+
+
+def test_fresh_isolated_runs_is_not_recreated_after_restart(tmp_path):
+    app, root = setup(tmp_path, isolated=True)
+    assert app.state.folders.overrides == {}
+    (root / 'runs').rmdir()
+    app = FastAPI()
+    app.state.data_dir = tmp_path / 'data'
+    api.mount_workspace(app, default_root=root, default_path=tmp_path / 'data' / 'workspace')
+    assert not (root / 'runs').exists()
+    assert app.state.folders.implicit_runs_path is None
+    with pytest.raises(api.WorkspaceUnavailableError):
+        app.state.workspace.path()
+    assert app.state.folders.runs_selected is False
+    app.state.folders.select(root)
+    assert app.state.workspace.path() == root / 'runs'

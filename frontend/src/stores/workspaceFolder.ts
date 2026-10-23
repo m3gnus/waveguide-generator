@@ -87,3 +87,11 @@ export const useWorkspaceFolderStore = create<WorkspaceFolderStore>((set) => ({
 export function resetWorkspaceFolderStore(): void {
   useWorkspaceFolderStore.getState().resetForTests();
 }
+
+
+/** Publish a WG folder choice before any older Runs-folder read can return. */
+export function applyWorkspaceFolderChoice(folder: WorkspaceFolder): void {
+  generation += 1;
+  loading = null;
+  useWorkspaceFolderStore.setState({ ...folder, loaded: true, busy: null, error: null });
+}

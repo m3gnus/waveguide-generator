@@ -1857,10 +1857,9 @@ def qualify_imported_return(
 
     **Where.** The data directory and the workspace are created here, under
     names with spaces and non-ASCII characters. The workspace is selected
-    through the application's own API twice: as the run workspace, which on
-    Windows otherwise defaults to the user's Documents, and as the CAD Link
-    folder, which is the root ``bundlePath`` resolves against. A fresh install
-    has no CAD Link folder, and ingest refuses without one.
+    through the application's WG folder API. Its Runs and WGLink children
+    are checked before solving; ``bundlePath`` resolves against the WGLink
+    folder. The isolated legacy Runs override is explicitly cleared.
 
     **Import and prepare.** Ingest is synchronous: it meshes the return and
     answers with the record, whose blocking findings the solve acknowledges.
@@ -1878,7 +1877,7 @@ def qualify_imported_return(
     fixture = fixture.expanduser().resolve()
     data_dir = work / IMPORTED_DATA_DIR_NAME
     workspace = work / IMPORTED_WORKSPACE_NAME
-    bundle = workspace / "wgreturn" / IMPORTED_BUNDLE_NAME
+    bundle = workspace / "cadlink" / "wgreturn" / IMPORTED_BUNDLE_NAME
     bundle_path = f"wgreturn/{IMPORTED_BUNDLE_NAME}"
     section.update(
         {
@@ -1966,21 +1965,21 @@ def qualify_imported_return(
             else:
                 entry["decision"] = "not offered"
 
-        # Both selections before anything is imported or solved, and both read
-        # back: a run that wrote into somebody's Documents and only then
-        # checked would already have done what the check exists to prevent.
-        api(base, "/api/workspace/select", {"path": str(workspace)},
-            what="selecting the run workspace")
-        runs = api(base, "/api/workspace/path", what="reading the run workspace")
-        api(base, "/api/cad-workspace/select", {"path": str(workspace)},
-            what="selecting the CAD Link folder")
-        cad = api(base, "/api/cad-workspace/path", what="reading the CAD Link folder")
+        # Choose the WG folder, then explicitly retire the isolated legacy
+        # Runs override so both destinations are inside this qualification.
+        api(base, "/api/folders/select", {"path": str(workspace)},
+            what="selecting the WG folder")
+        api(base, "/api/folders/select", {"useRoot": "runs"},
+            what="using the WG folder for runs")
+        runs = api(base, "/api/workspace/path", what="reading the Runs folder")
+        cad = api(base, "/api/cad-workspace/path", what="reading the WGLink folder")
         section["workspace"] = {"runs": runs.get("path"), "cad": cad.get("path")}
-        for label, answer in (("run workspace", runs), ("CAD Link folder", cad)):
-            if not _same_path(answer.get("path"), workspace):
+        for label, answer, expected in (("run workspace", runs, workspace / "runs"),
+                                        ("CAD Link folder", cad, workspace / "cadlink")):
+            if not _same_path(answer.get("path"), expected):
                 raise QualificationError(
                     f"the application reports its {label} as {answer.get('path')!r}, "
-                    f"not {str(workspace)!r}"
+                    f"not {str(expected)!r}"
                 )
 
         bundle.parent.mkdir(parents=True, exist_ok=True)
@@ -2137,7 +2136,7 @@ def qualify_imported_return(
         )
         cad = api(server.base, "/api/cad-workspace/path",
                   what="reading the CAD Link folder after the restart")
-        reopen["cad_workspace_persisted"] = _same_path(cad.get("path"), workspace)
+        reopen["cad_workspace_persisted"] = _same_path(cad.get("path"), workspace / "cadlink")
 
     missing = [job for job, row in reopen["jobs"].items() if not row["listed"]]
     if missing:

@@ -234,8 +234,8 @@ function ProjectOverflowMenu({ project, onNotice, onError }: {
     >⋯</button>
     {open && <div role="menu" aria-label="Project folders" className="cad-project-menu cad-overflow-menu">
       {project && <button role="menuitem" title="Open this project's archive folder: every run's files, beside the captured Fusion documents." onClick={() => void reveal()}><Icon name="folder"/>Open project folder</button>}
-      <button role="menuitem" disabled={!folder.path || folder.busy !== null} title="Open the Runs folder every CAD project is archived under. Its effective path is shown in Settings → WG root folder." onClick={() => { setOpen(false); void folder.open(); }}><Icon name="folder"/>Open Runs folder</button>
-      <button role="menuitem" disabled={folder.busy !== null} title="Choose the WG root folder. Existing overrides and files are kept." onClick={() => { setOpen(false); void folder.select(); }}>Change WG root folder…</button>
+      <button role="menuitem" disabled={!folder.path || folder.busy !== null} title="Open the Runs folder every CAD project is archived under. Its effective path is shown in Settings → WG folder." onClick={() => { setOpen(false); void folder.open(); }}><Icon name="folder"/>Open Runs folder</button>
+      <button role="menuitem" disabled={folder.busy !== null} title="Choose the WG folder. Existing overrides and files are kept." onClick={() => { setOpen(false); void folder.select(); }}>Change WG folder…</button>
       <div className="cad-overflow-path" title={folder.path ?? undefined}>{folder.path ?? (folder.loaded ? 'Runs folder unavailable' : 'Loading…')}</div>
       {folder.error && <div className="cad-projects-folder-error" role="status">{folder.error}</div>}
     </div>}

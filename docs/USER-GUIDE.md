@@ -560,7 +560,7 @@ until you answer, and cancelling leaves the folder exactly as it was. Files that
 are not there yet, and files that are already byte-identical, are not part of
 that question.
 
-This is separate from the WG root folder: choosing a destination for one export
+This is separate from the WG folder: choosing a destination for one export
 never moves the **Runs folder** that runs, archives and CAD projects live
 in. Automatic post-run export and the run archive are unaffected and never
 interrupt a solve with a dialog -- they keep writing into the Runs folder.
@@ -608,17 +608,23 @@ To save the retained solve mesh as a Gmsh `.msh` file, enable **Settings → Job
 Auto-save solve mesh to Workspace**. It saves available job meshes in the Runs
 folder automatically. The run archive also includes the exact retained solve mesh.
 
-### WG root folder
+### WG folder
 
-Choose **Settings → WG root folder**, or use the same chooser in Results & export
+Choose **Settings → WG folder**, or use the same chooser in Results & export
 preferences. The default is `Documents/Waveguide Generator`, with the **WGLink
 folder** in `cadlink/` and the **Runs folder** in `runs/`. With an explicit data
-folder override, the root is `<data>/workspace-root` and the Runs folder
-stays at `<data>/workspace` as a preserved override.
+folder override, the WG folder is `<data>/workspace-root`. Fresh setups use
+its `runs/` child; an existing Runs folder at `<data>/workspace` stays effective
+as a separate folder.
 
-Changing the root moves no files. Earlier choices that differ from its children
-are kept as read-only overrides, marked “kept from an earlier setup”. These
-folders are never consolidated or deleted. One-off export destinations remain
+Changing the WG folder moves no files. Earlier choices appear as
+“Separate folder from an earlier setup: <path>”. Choose “Use the WG folder
+instead” to use its `cadlink/` or `runs/` child. The confirmation names where new
+files will go; no files move. Choosing another WG folder keeps earlier choices.
+In **Settings → CAD Link**, “WGLink folder not found: <path>” offers “Create it”
+or, for a separate folder, “Use the WG folder instead”. “Choose WG folder…” is
+available there too. Choose the folder that should contain WG's folders, rather
+than a WGLink folder or Runs folder. One-off export destinations remain
 independent. [Folder migration and rollback](architecture/FOLDERS.md) describes
 the compatibility mirrors that preserve choices when running an older version.
 
@@ -645,15 +651,12 @@ already hold that version's automatic export under the archive's names; the arch
 then leaves those files as they are and writes its own copies of them in an
 `archive` folder beside them.
 
-A CAD-linked project's folder is one of these design folders, so the Workspace
-folder is also the folder every CAD project is kept in. It can be opened or moved
-from three places, all the same setting: **Settings → Workspace**, **Settings →
-CAD Link → Project folder**, and the **Projects folder** line under the project in
-the CAD Link panel. The folder is chosen by the server's native picker, as v1 did,
-so it works in every browser; a path can also be typed in Settings when WG is
-reached from another machine. Changing it does not move projects that already
-exist — new runs and captures go to the new folder, and the old folder keeps what
-it has.
+A CAD-linked project's folder is one of these design folders inside the Runs
+folder. Open it from the CAD Link project menu. Use **Change WG folder…** there,
+or choose **Settings → WG folder**, to change where new work goes. Earlier
+separate folders stay effective until “Use the WG folder instead” is confirmed.
+The chooser runs on the server; a path can also be typed in Settings when WG is
+reached from another machine. No files move.
 
 A design keeps one folder across a rename, and its parametric and CAD-link runs sit
 side by side, because they are the same design's history. `run.json` records what was

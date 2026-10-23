@@ -561,7 +561,7 @@ def test_a_cad_return_ingests_prepares_and_solves_through_its_model(tmp_path: Pa
     source_id, channel_id = str(source["id"]), str(source["default_drive_channel_id"])
     source_size = float(source["suggested_resolution_mm"])
     workspace = tmp_path / "workspace"
-    shutil.copytree(ROUND_RETURN, workspace / "wgreturn" / "round.wgreturn")
+    shutil.copytree(ROUND_RETURN, workspace / "cadlink" / "wgreturn" / "round.wgreturn")
     mesh_request = {"rigid_size_mm": 20.0, "transition_mm": 30.0, "source_size_mm": {source_id: source_size}}
 
     async def scenario() -> tuple[str, str, dict[str, Any], str]:

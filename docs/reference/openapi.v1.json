@@ -12185,6 +12185,50 @@
         "title": "TerminatingArc",
         "type": "object"
       },
+      "UseRootFolderRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedCurrentPath": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedcurrentpath"
+          },
+          "expectedPath": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedpath"
+          },
+          "useRoot": {
+            "enum": [
+              "cadlink",
+              "runs"
+            ],
+            "title": "Useroot",
+            "type": "string"
+          }
+        },
+        "required": [
+          "useRoot"
+        ],
+        "title": "UseRootFolderRequest",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -15088,6 +15132,9 @@
                 "anyOf": [
                   {
                     "$ref": "#/components/schemas/SelectWorkspaceRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/UseRootFolderRequest"
                   },
                   {
                     "type": "null"

@@ -23,7 +23,7 @@ import { cadJobOperationId } from '../jobs/cadSolve';
 import { CadSolveInputs } from './CadSolveInputs';
 import { SolveProgressView, useSolveClock } from './solveProgress';
 
-/** Show the effective Runs folder and choose the shared WG root folder. */
+/** Show the effective Runs folder and choose the shared WG folder. */
 function OutputFolderBar() {
   const { path, busy, error, select, open } = useWorkspaceFolder();
   return <div className="jobs-output-folder">
@@ -31,9 +31,9 @@ function OutputFolderBar() {
     <button
       className="jobs-output-folder-path"
       disabled={busy !== null}
-      title={path ? `Runs folder: ${path}. Click to choose the WG root folder; earlier choices stay as overrides.` : 'Choose the WG root folder'}
+      title={path ? `Runs folder: ${path}. Click to choose the WG folder; earlier choices stay as overrides.` : 'Choose the WG folder'}
       onClick={() => void select()}
-    >{path ? middleEllipsis(path, 30) : 'Choose WG root folder…'}</button>
+    >{path ? middleEllipsis(path, 30) : 'Choose WG folder…'}</button>
     <button
       className="jobs-output-folder-open"
       aria-label="Open Runs folder"
@@ -296,7 +296,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
       {meshWarnings(job).map((warning) => <div key={warning} className="job-warning" title={warning}>{warning}</div>)}
       {Object.values(job.auto_export_formats).some((format) => format.status === 'blocked') && <div className="job-warning" role="status">
         Automatic export blocked: {[...new Set(Object.values(job.auto_export_formats).filter((format) => format.status === 'blocked').map((format) => format.reason))].join(' ')}
-        <p>Choose another WG root folder or resolve the existing files, then retry. Retry preserves existing files and does not overwrite them.</p>
+        <p>Choose another WG folder or resolve the existing files, then retry. Retry preserves existing files and does not overwrite them.</p>
         <button type="button" onClick={() => { void retryBlockedExport(job.id).catch((error) => onError(error instanceof Error ? error.message : String(error))); }}>Retry automatic export</button>
       </div>}
       <Rating job={job} onError={onError}/>

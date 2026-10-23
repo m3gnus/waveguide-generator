@@ -49,7 +49,7 @@ describe('SettingsDialog', () => {
     expect(document.activeElement).toBe(opener);
   });
 
-  it('shows the WG root folder and exposes open and select actions', async () => {
+  it('shows the WG folder and exposes open and select actions', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path === '/api/folders/path') {
@@ -72,11 +72,11 @@ describe('SettingsDialog', () => {
     const section = host.querySelector<HTMLElement>('[aria-labelledby="settings-workspace-title"]')!;
     expect(section).not.toBeNull();
     expect(section.textContent).toContain('/data/workspace');
-    expect(section.textContent).toContain('Changing the WG root folder moves no files');
+    expect(section.textContent).toContain('Changing the WG folder moves no files');
 
     const buttons = [...section.querySelectorAll<HTMLButtonElement>('button')];
-    await act(async () => buttons.find((button) => button.textContent === 'Open WG root folder')!.click());
-    await act(async () => buttons.find((button) => button.textContent === 'Choose WG root folder…')!.click());
+    await act(async () => buttons.find((button) => button.textContent === 'Open WG folder')!.click());
+    await act(async () => buttons.find((button) => button.textContent === 'Choose WG folder…')!.click());
 
     expect(fetchMock).toHaveBeenCalledWith('/api/folders/open', { method: 'POST' });
     expect(fetchMock).toHaveBeenCalledWith('/api/folders/select', { method: 'POST' });
@@ -144,7 +144,7 @@ describe('SettingsDialog', () => {
     await act(async () => { host.querySelector<HTMLButtonElement>('#open-settings')!.click(); });
     const section = host.querySelector<HTMLElement>('[aria-labelledby="settings-workspace-title"]')!;
     const select = [...section.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent === 'Choose WG root folder…')!;
+      .find((button) => button.textContent === 'Choose WG folder…')!;
     await act(async () => {
       select.click();
       await Promise.resolve();
@@ -183,7 +183,7 @@ describe('SettingsDialog', () => {
     expect(section.textContent).toContain('WGLink folder');
   });
 
-  it('shows earlier folder choices read-only with one root chooser', async () => {
+  it('shows earlier folder choices with explicit removal and the shared chooser in CAD setup', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input) === '/api/folders/path') return new Response(JSON.stringify({
         path: '/root', selected: true, runs: '/old/runs', cadlink: '/old/exchange',
@@ -197,14 +197,14 @@ describe('SettingsDialog', () => {
     expect(section.textContent).toContain('/old/runs');
     expect(section.textContent).toContain('/old/exchange');
     expect(section.querySelectorAll('dd small')).toHaveLength(2);
-    expect(section.querySelector('dd')?.textContent).toContain('kept from an earlier setup');
-    expect(section.querySelectorAll('dd input, dd button')).toHaveLength(0);
-    expect([...host.querySelectorAll('button')].filter(button => button.textContent === 'Choose WG root folder…')).toHaveLength(1);
+    expect(section.querySelector('dd')?.textContent).toContain('Separate folder from an earlier setup: /old/exchange');
+    expect(section.querySelectorAll('dd button')).toHaveLength(2);
+    expect([...host.querySelectorAll('button')].filter(button => button.textContent === 'Choose WG folder…')).toHaveLength(2);
     expect(host.querySelector('.cad-project-folder')).toBeNull();
     expect(host.querySelector('#settings-cad')?.textContent).not.toContain('Choose a new folder');
   });
 
-  it('accepts a typed WG root folder for a browser that is not on the server', async () => {
+  it('accepts a typed WG folder for a browser that is not on the server', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path === '/api/folders/path') return new Response(JSON.stringify({ selected: false, path: '/exports' }));

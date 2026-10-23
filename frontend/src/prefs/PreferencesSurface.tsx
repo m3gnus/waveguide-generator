@@ -47,7 +47,7 @@ function ResultsPreferencesContent({ showFolders = true }: { showFolders?: boole
     ? themes : [{ id: preferences.chartTheme, label: preferences.chartTheme }, ...themes];
   return <section className="preferences-section">
     <h3 className="preferences-section-title">Results & export</h3>
-    {showFolders && <div><h4>WG root folder</h4><RootFolderControls/></div>}
+    {showFolders && <div><h4>WG folder</h4><RootFolderControls/></div>}
     <p className="preferences-section-copy">Chart layout, processing, and automatic export defaults. Files are saved under the Runs folder, grouped as <code>&lt;design&gt;/&lt;run&gt;</code>, without browser download prompts. Automatic exports go in that run’s <code>exports</code> folder, beside the run archive.</p>
     <div className="preferences-grid">
       <ResultPanelCountControl/>

@@ -6281,6 +6281,18 @@ export interface components {
              */
             join_t?: number;
         };
+        /** UseRootFolderRequest */
+        UseRootFolderRequest: {
+            /** Expectedcurrentpath */
+            expectedCurrentPath?: string | null;
+            /** Expectedpath */
+            expectedPath?: string | null;
+            /**
+             * Useroot
+             * @enum {string}
+             */
+            useRoot: "cadlink" | "runs";
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -8348,7 +8360,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": components["schemas"]["SelectWorkspaceRequest"] | null;
+                "application/json": components["schemas"]["SelectWorkspaceRequest"] | components["schemas"]["UseRootFolderRequest"] | null;
             };
         };
         responses: {

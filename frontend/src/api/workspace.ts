@@ -1,6 +1,6 @@
 import { httpErrorMessage } from './httpError';
 import { deadlineFetch } from './deadlineFetch';
-import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
+import { selectFolderRoot } from './folders';
 import {
   collisionFrom,
   writeConfirmingReplacements,
@@ -31,7 +31,7 @@ export async function openWorkspaceFolder(fetcher: typeof fetch = fetch): Promis
 }
 
 /**
- * Choose the WG root folder, returning the effective Runs folder.
+ * Choose the WG folder, returning the effective Runs folder.
  *
  * With no path the server opens its native picker; with one it takes the path
  * as given. With no body the server starts the picker at the current root.
@@ -40,16 +40,9 @@ export async function selectWorkspaceFolder(
   path?: string,
   fetcher: typeof fetch = fetch,
 ): Promise<WorkspaceFolder> {
-  const response = await fetcher('/api/folders/select', path ? {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path }),
-  } : { method: 'POST' });
-  if (!response.ok) throw new Error(await httpErrorMessage(response, 'Runs folder request failed'));
-  const payload = await response.json() as { selected?: boolean };
+  const selection = await selectFolderRoot(path, fetcher);
   const folder = await getWorkspaceFolder(fetcher);
-  if (payload.selected) cadWorkspaceSelection.noteSelection(true);
-  return { ...folder, selected: payload.selected === true };
+  return { ...folder, selected: selection.selected };
 }
 
 export interface OutputFolderWrite {

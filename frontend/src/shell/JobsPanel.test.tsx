@@ -938,7 +938,7 @@ describe('jobs panel Runs folder', () => {
 
     await act(async () => root.render(<JobsPanel/>));
 
-    expect(host.querySelector('.jobs-output-folder-path')?.textContent).toBe('Choose WG root folder…');
+    expect(host.querySelector('.jobs-output-folder-path')?.textContent).toBe('Choose WG folder…');
     // A folder that could not be read is not an alert: it must not crowd out
     // the run errors that share this column.
     expect(host.querySelector('.jobs-output-folder [role="alert"]')).toBeNull();

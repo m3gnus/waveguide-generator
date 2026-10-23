@@ -28,6 +28,7 @@ import { CadOperationsSection, onScreenSolves, shortSha256 } from './CadOperatio
 import { CadSolveInputs } from './CadSolveInputs';
 import { CadDeliveryHealth } from './CadDeliveryHealth';
 import { CadSolveCard } from './CadSolveCard';
+import { RootFolderControls } from './RootFolderControls';
 import { requestSettings } from './settingsNavigation';
 import { workspaceNavigation } from './workspaceNavigation';
 import { usePanelVisible } from './panelVisibility';
@@ -850,7 +851,8 @@ export function CadLinkPanel() {
             <small>Updates and returns use this exact managed Part Studio link. WG does not guess from the newest document.</small>
           </label>}
           {/* Fusion: the actions that resolve the out-of-sync state, and only those. */}
-          {!onshape && workflow.state === 'not-configured' && <button className="primary cad-primary-action" onClick={() => requestSettings('cad')}>Set up Fusion connection</button>}
+          {!onshape && workflow.state === 'not-configured' && fusionStatus?.cadFolderMissingPath && <RootFolderControls cadlinkOnly showPath={false}/>}
+          {!onshape && workflow.state === 'not-configured' && !fusionStatus?.cadFolderMissingPath && <button className="primary cad-primary-action" onClick={() => requestSettings('cad')}>Set up Fusion connection</button>}
           {!onshape && !unlinkedOnScreen && workflow.action === 'open' && <button className="primary cad-primary-action" disabled={sendingToFusion || Boolean(cadLimitation)} title={cadLimitation} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Open in Fusion 360'}</button>}
           {!onshape && fusionStatus?.fusionChangesAvailable && !fusionStatus.wgChangesAvailable && <div className="cad-confirm-actions">
             <button disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} onClick={() => void bringFromFusion()}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring in'}</button>

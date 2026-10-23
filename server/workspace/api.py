@@ -179,6 +179,14 @@ class SelectWorkspaceRequest(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
 
 
+class UseRootFolderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    useRoot: Literal["cadlink", "runs"]
+    expectedPath: str | None = Field(default=None, min_length=1, max_length=4096)
+    expectedCurrentPath: str | None = Field(default=None, min_length=1, max_length=4096)
+
+
 #: Where a captured CAD document is filed in the run archive.
 #:
 #: ``project`` keeps only the newest model state under
@@ -782,6 +790,11 @@ class CadWorkspaceState(WorkspaceState):
             {"schemaVersion": 1, self.SETTINGS_KEY: str(candidate)},
         )
 
+    def missing_path(self) -> Path | None:
+        if self.selected_path() is not None:
+            return None
+        return self.folders.effective("cadlink") if self.folders is not None else self._selected
+
     def create_proposed_if_requested(self, path: Path) -> None:
         """Create the folder this class proposed, and only that one.
 
@@ -791,7 +804,8 @@ class CadWorkspaceState(WorkspaceState):
         """
 
         resolved = path.expanduser()
-        if resolved.is_dir() or resolved != self.proposed_path:
+        proposed = self.folders.root / "cadlink" if self.folders is not None else self.proposed_path
+        if resolved.is_dir() or resolved != proposed:
             return
         resolved.mkdir(parents=True, exist_ok=True)
 
@@ -901,9 +915,11 @@ def create_cad_workspace_router(state: CadWorkspaceState) -> APIRouter:
     @router.get("/path")
     async def cad_workspace_path() -> dict[str, Any]:
         selected = state.selected_path()
+        missing = state.missing_path()
         return {
             "path": str(selected) if selected is not None else None,
             "selected": selected is not None,
+            "missingPath": str(missing) if missing is not None else None,
             # The proposal is not a fallback: nothing reads it until the user
             # accepts it, so an unselected CAD folder stays unselected.
             "proposed": str(state.proposed_path),
@@ -940,6 +956,11 @@ def create_cad_workspace_router(state: CadWorkspaceState) -> APIRouter:
     async def cad_workspace_select(
         payload: SelectCadWorkspaceRequest | None = None,
     ) -> dict[str, Any]:
+        # Compatibility entry point: new choices are WG roots, never overrides.
+        if state.folders is not None:
+            await _choose_folder_root(state.folders, payload.path if payload is not None else None)
+            current = state.selected_path()
+            return {"selected": current is not None, "path": str(current) if current is not None else None}
         selected = (
             payload.path
             if payload is not None
@@ -1456,6 +1477,18 @@ def create_workspace_router(
     return router
 
 
+async def _choose_folder_root(folders: FolderRoot, path: str | None) -> dict[str, Any]:
+    selected = path if path is not None else await asyncio.to_thread(
+        _select_workspace_folder, "Select WG folder", folders.root
+    )
+    if selected:
+        try:
+            folders.select(Path(selected))
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {**folders.info(), "selected": bool(selected)}
+
+
 def create_folder_root_router(folders: FolderRoot) -> APIRouter:
     router = APIRouter(prefix="/api/folders", tags=["workspace"])
 
@@ -1464,16 +1497,16 @@ def create_folder_root_router(folders: FolderRoot) -> APIRouter:
         return folders.info()
 
     @router.post("/select")
-    async def root_select(payload: SelectWorkspaceRequest | None = None) -> dict[str, Any]:
-        selected = payload.path if payload is not None else await asyncio.to_thread(
-            _select_workspace_folder, "Select WG root folder", folders.root
-        )
-        if selected:
+    async def root_select(payload: SelectWorkspaceRequest | UseRootFolderRequest | None = None) -> dict[str, Any]:
+        if isinstance(payload, UseRootFolderRequest):
             try:
-                folders.select(Path(selected))
+                folders.use_root(payload.useRoot,
+                                 Path(payload.expectedPath) if payload.expectedPath is not None else None,
+                                 Path(payload.expectedCurrentPath) if payload.expectedCurrentPath is not None else None)
             except (OSError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {**folders.info(), "selected": bool(selected)}
+            return folders.info()
+        return await _choose_folder_root(folders, payload.path if payload is not None else None)
 
     @router.post("/open")
     async def root_open() -> dict[str, Any]:

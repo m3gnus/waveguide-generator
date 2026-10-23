@@ -1154,10 +1154,12 @@ class StubApplication:
         if path == "/api/workspace/select":
             self.workspace["path"] = body["path"]
             return 200, self.workspace, {}
-        if path == "/api/cad-workspace/select":
-            state["cad_workspace"] = body["path"]
-            self.save()
-            return 200, {"selected": True, "path": body["path"]}, {}
+        if path == "/api/folders/select":
+            if "path" in body:
+                self.workspace["path"] = str(Path(body["path"]) / "runs")
+                state["cad_workspace"] = str(Path(body["path"]) / "cadlink")
+                self.save()
+            return 200, {"selected": True}, {}
         if path == "/api/cadlink/ingest":
             (self.data / "ingest-request.json").write_text(json.dumps(body), encoding="utf-8")
             if state["cad_workspace"] is None:
@@ -2248,7 +2250,7 @@ def test_a_fresh_install_ingests_solves_and_reopens_an_imported_return(
     assert section["paths"]["data_dir"] == str(data_dir)
     assert section["paths"]["workspace"] == str(workspace)
     # The committed return, copied into the selected workspace's wgreturn/.
-    copied = workspace / "wgreturn" / gate.IMPORTED_BUNDLE_NAME
+    copied = workspace / "cadlink" / "wgreturn" / gate.IMPORTED_BUNDLE_NAME
     assert (copied / "wgreturn.json").read_bytes() == (FIXTURE / "wgreturn.json").read_bytes()
     # Ingested through the application's own API, relative to that workspace.
     ingest = json.loads((data_dir / "ingest-request.json").read_text(encoding="utf-8"))

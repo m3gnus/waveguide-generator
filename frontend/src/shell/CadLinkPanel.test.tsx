@@ -148,6 +148,20 @@ describe('CadLinkPanel', () => {
     }
   });
 
+  it('shows the missing WGLink path with direct repair and the shared chooser', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/fusion-status')) return json({ ...closedFusion, cadFolderConfigured: false, cadFolderMissingPath: '/chosen/cadlink' });
+      if (path === '/api/folders/path') return json({ path: '/chosen', runs: '/chosen/runs', cadlink: '/chosen/cadlink', cadlinkExists: false, overrides: {} });
+      if (path.endsWith('/returns')) return json({ items: [], cadFolderConfigured: false });
+      return json(record);
+    }));
+    await act(async () => root.render(<CadLinkTestSurface/>));
+    await vi.waitFor(() => expect(host.textContent).toContain('WGLink folder not found: /chosen/cadlink'));
+    expect([...host.querySelectorAll('button')].some(button => button.textContent === 'Create it')).toBe(true);
+    expect([...host.querySelectorAll('button')].some(button => button.textContent === 'Choose WG folder…')).toBe(true);
+  });
+
   it('offers install and repair before any signal or selected folder', async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);

@@ -71,7 +71,7 @@ class FolderRoot:
                  and root is not None and root.is_absolute() and isinstance(overrides, dict)
                  and all(stored_path(value) is not None and stored_path(value).is_absolute()
                          for name, value in overrides.items() if name in NAMES))
-        fresh = not payload and not any(settings[file] for file, _ in NAMES.values()) and not legacy_runs.exists()
+        fresh = not failed and not payload and not any(settings[file] for file, _ in NAMES.values()) and not legacy_runs.exists()
         if valid:
             self.root = root
             self._extra = {key: value for key, value in payload.items() if key not in {"schemaVersion", "rootPath", "overrides"}}
@@ -95,22 +95,21 @@ class FolderRoot:
         else:
             # The caller supplies the exact 0.3.5 implicit runs path, including
             # USERPROFILE Documents and <data>/workspace for data overrides.
-            runs = mirrors["runs"] or legacy_runs
+            runs = mirrors["runs"] or (default_root / "runs" if fresh and not explicit_runs else legacy_runs)
             cad = mirrors["cadlink"]
             self.root = self._paired_root(runs, cad) or default_root
             self.overrides: dict[str, Path] = {}
             for name, selected in (("runs", runs), ("cadlink", cad)):
                 if selected is not None and str(selected) != str(self.root / name):
                     self.overrides[name] = selected
-        self._cleanup_overrides()
         # Legacy mirrors have no marker: their path was a choice or adoption.
         # New implicit mirrors retain the distinction across backend restarts.
         recorded_runs = ((mirrors["runs"] is not None or valid)
                          and settings["workspace_settings.json"].get(RUNS_SELECTED_KEY) is not False)
         self.runs_selected = explicit_runs or recorded_runs
-        self.implicit_runs_path = (legacy_runs if not self.read_only
+        self.implicit_runs_path = (self.effective("runs") if not self.read_only
                                    and not recorded_runs
-                                   and self.effective("runs") == legacy_runs else None)
+                                   and (self.effective("runs") == legacy_runs or (fresh and not explicit_runs)) else None)
         if self.read_only:
             self.notice = ("Folder settings could not be read; folder changes are disabled for this start." if failed else
                            "This WG version uses the existing folder settings; folders.json has an unsupported schema.")
@@ -157,7 +156,6 @@ class FolderRoot:
         if failed:
             self.read_only = True
             raise OSError("Folder settings could not be read; no settings were published.")
-        self._cleanup_overrides()
         for name, (file, key) in NAMES.items():
             payload = dict(settings[file])
             payload.setdefault("schemaVersion", 1)
@@ -192,12 +190,14 @@ class FolderRoot:
         validate_folder_root(chosen, system=self.system)
         if not chosen.is_dir():
             raise ValueError(f"Selected path is not a directory: {chosen}")
+        note = self.root_note(chosen)
+        if note:
+            raise ValueError(note)
         previous, previous_overrides = self.root, dict(self.overrides)
         previous_selected, previous_implicit = self.runs_selected, self.implicit_runs_path
         self.runs_selected = True
         self.implicit_runs_path = None
         self.root = chosen
-        self._cleanup_overrides(selected=True)
         try:
             self._create_children()
             self.persist()
@@ -208,19 +208,36 @@ class FolderRoot:
             raise
         self.on_change()
 
+    def use_root(self, name: str, expected_path: Path | None = None, expected_current_path: Path | None = None) -> None:
+        """Explicitly retire one earlier choice and create its root child."""
+        if ((expected_path is not None and str(expected_path) != str(self.root / name))
+                or (expected_current_path is not None and str(expected_current_path) != str(self.effective(name)))):
+            raise ValueError("The WG folder changed. Check the new location and try again.")
+        self._update_override(name, None)
+
     def set_override(self, name: str, path: Path) -> None:
+        self._update_override(name, path)
+
+    def _update_override(self, name: str, path: Path | None) -> None:
         if self.read_only:
             raise ValueError("Folder settings are read-only; restore access before changing folders.")
-        chosen = path.expanduser().absolute()
-        if not chosen.is_dir():
+        if name not in NAMES:
+            raise ValueError("Unknown WG folder.")
+        chosen = path.expanduser().absolute() if path is not None else self.root / name
+        if path is not None and not chosen.is_dir():
             raise ValueError(f"Selected path is not a directory: {chosen}")
         previous_overrides = dict(self.overrides)
         previous_selected, previous_implicit = self.runs_selected, self.implicit_runs_path
         if name == "runs":
             self.runs_selected = True
             self.implicit_runs_path = None
-        self.overrides[name] = chosen
+        if path is None:
+            self.overrides.pop(name, None)
+        else:
+            self.overrides[name] = chosen
         try:
+            if path is None:
+                chosen.mkdir(parents=True, exist_ok=True)
             self.persist()
         except OSError:
             self.overrides = previous_overrides
@@ -237,6 +254,15 @@ class FolderRoot:
             self.runs_selected = settings["workspace_settings.json"].get(RUNS_SELECTED_KEY) is not False
             if self.runs_selected:
                 self.implicit_runs_path = None
+        changed = any(selected is not None and str(selected) != str(self.effective(name))
+                      for name, selected in mirrors.items())
+        if not changed:
+            self.on_change()
+            return
+        # An unchanged durable mirror cannot retire an explicit override,
+        # even one equal to the root child. folders.json may not have landed.
+        preserved = {name: path for name, path in self.overrides.items()
+                     if mirrors.get(name) is not None and str(mirrors[name]) == str(path)}
         paired = self._paired_root(mirrors["runs"], mirrors["cadlink"])
         if paired is not None and all(mirrors.values()):
             self.root = paired
@@ -247,10 +273,26 @@ class FolderRoot:
                 if selected is not None:
                     self.overrides[name] = selected
             self._cleanup_overrides()
+        self.overrides.update(preserved)
         self.on_change()
+
+    def root_note(self, path: Path | None = None) -> str | None:
+        chosen = path if path is not None else self.root
+        if (chosen.name.casefold() == "cadlink" or self.same(chosen, self.effective("cadlink"))
+                or any((chosen / child).is_dir() for child in ("wglink", "wgreturn"))):
+            kind = "WGLink"
+        elif (chosen.name.casefold() == "runs" or self.same(chosen, self.effective("runs"))
+              or any((chosen / child).is_file() for child in ("run.json", "project.json"))):
+            kind = "Runs"
+        else:
+            return None
+        return (f"This folder is a {kind} folder. Choose the folder that should contain "
+                "WG's folders, for example its parent.")
 
     def info(self) -> dict[str, Any]:
         return {"path": str(self.root), "selected": True,
                 "runs": str(self.effective("runs")), "cadlink": str(self.effective("cadlink")),
+                "cadlinkExists": self.effective("cadlink").is_dir(), "runsSelected": self.runs_selected,
+                "rootChildren": {name: str(self.root / name) for name in NAMES},
                 "overrides": {name: str(path) for name, path in self.overrides.items()},
-                "notice": self.notice, "readOnly": self.read_only}
+                "notice": self.notice, "readOnly": self.read_only, "rootNote": self.root_note()}

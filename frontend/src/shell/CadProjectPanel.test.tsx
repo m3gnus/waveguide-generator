@@ -338,7 +338,7 @@ describe('CAD project history', () => {
     // output and WGLink folders use, so it works away from Chromium.
     act(() => host.querySelector<HTMLButtonElement>('.cad-overflow-trigger')!.click());
     const change = [...host.querySelectorAll<HTMLButtonElement>('.cad-overflow-menu button')]
-      .find((button) => button.textContent?.includes('Change WG root folder'))!;
+      .find((button) => button.textContent?.includes('Change WG folder'))!;
     await act(async () => { change.click(); await Promise.resolve(); });
     expect(globalThis.fetch).toHaveBeenCalledWith('/api/folders/select', { method: 'POST' });
     act(() => host.querySelector<HTMLButtonElement>('.cad-overflow-trigger')!.click());

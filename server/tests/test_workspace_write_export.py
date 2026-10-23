@@ -106,6 +106,7 @@ def test_cad_workspace_is_separate_and_requires_a_selection(tmp_path: Path) -> N
     assert asyncio.run(cad_path_endpoint(cad)()) == {
         "selected": False,
         "path": None,
+        "missingPath": None,
         "proposed": str(proposed),
         "proposedExists": False,
         "captureDocument": True,

@@ -19,9 +19,8 @@ export interface CadWorkspaceSelectionState {
  * field beside it, which never leaves the window at all. A user who types a
  * path would have waited out the idle interval before WG looked again.
  *
- * So the one place that can know says so. Every route to a new folder goes
- * through `selectCadWorkspace`, picker and typed path alike, which is why the
- * announcement belongs there rather than in either caller.
+ * The shared WG folder API announces successful choices and explicit
+ * override removal, so Settings and Send wake the coordinator alike.
  */
 class CadWorkspaceSelectionStore {
   private value: CadWorkspaceSelectionState = { revision: 0, selected: false };

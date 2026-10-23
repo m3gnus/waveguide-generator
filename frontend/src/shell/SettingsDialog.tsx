@@ -3,7 +3,6 @@ import { getOnshapeConnection, type OnshapeConnection } from '../api/onshape';
 import { getAclRepairStatus, type AclRepairRootStatus } from '../api/aclRepair';
 import {
   getCadWorkspace,
-  openCadWorkspace,
   setCaptureMode,
   type CadCaptureMode,
 } from '../api/cadWorkspace';
@@ -13,7 +12,6 @@ import { preferencesStore, usePreferences, useOnshapeAvailable, type CadApplicat
 import { useDriverLibraryStore } from '../stores/driverLibrary';
 import { Icon } from './icons';
 import { RootFolderControls } from './RootFolderControls';
-import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
 import type { SettingsSection } from './settingsNavigation';
 import { focusableSelector, useModalDialogFocus } from './dialogFocus';
 
@@ -128,7 +126,7 @@ export function WindowsFileAccessStatus() {
 
 function WorkspaceSettings() {
   return <section className="settings-theme workspace-settings" aria-labelledby="settings-workspace-title">
-    <h3 id="settings-workspace-title">WG root folder</h3>
+    <h3 id="settings-workspace-title">WG folder</h3>
     <RootFolderControls/>
     <WindowsFileAccessStatus/>
   </section>;
@@ -154,9 +152,7 @@ const CAPTURE_CHOICES: Array<{ mode: CadCaptureMode; label: string; detail: stri
 ];
 
 function CadFolderSettings() {
-  const [path, setPath] = useState<string | null>();
   const [capture, setCapture] = useState<CadCaptureMode>('run');
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const requestGeneration = useRef(0);
   const captureGeneration = useRef(0);
@@ -169,7 +165,6 @@ function CadFolderSettings() {
     void getCadWorkspace().then(
       (value) => {
         if (request !== requestGeneration.current) return;
-        setPath(value.path);
         if (captureRequest === captureGeneration.current) {
           const mode = value.captureMode ?? (value.captureDocument === false ? 'off' : 'run');
           confirmedCapture.current = mode;
@@ -178,23 +173,11 @@ function CadFolderSettings() {
       },
       (reason: unknown) => { if (request === requestGeneration.current) setError(String(reason)); },
     );
-    const unsubscribe = cadWorkspaceSelection.subscribe(() => {
-      const next = ++requestGeneration.current;
-      void getCadWorkspace().then(value => { if (next === requestGeneration.current) setPath(value.path); }, () => undefined);
-    });
     return () => {
-      unsubscribe();
       requestGeneration.current += 1;
       captureGeneration.current += 1;
     };
   }, []);
-
-  const open = async () => {
-    setBusy(true); setError(undefined);
-    try { await openCadWorkspace(); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
-    finally { setBusy(false); }
-  };
 
   const chooseCapture = async (mode: CadCaptureMode) => {
     // Optimistic: the chosen option is the state, and a refused write puts the
@@ -221,12 +204,9 @@ function CadFolderSettings() {
     }
   };
 
-  return <div className="cad-setup-folder" aria-busy={busy}>
-    <p className={`workspace-settings-path ${path ? '' : 'not-selected'}`} title={path ?? undefined}>{path ?? 'WGLink folder unavailable'}</p>
-    <p className="cad-settings-note">WG creates <code>wglink</code> and <code>wgreturn</code> inside the WGLink folder. Choose the WG root folder below to change the default location.</p>
-    <div className="settings-theme-options">
-      <button disabled={!path || busy} onClick={() => void open()}>Open WGLink folder</button>
-    </div>
+  return <div className="cad-setup-folder">
+    <RootFolderControls cadlinkOnly/>
+    <p className="cad-settings-note">WG creates <code>wglink</code> and <code>wgreturn</code> inside the WGLink folder.</p>
     <fieldset className="cad-settings-capture">
       <legend>Keep a copy of the Fusion model</legend>
       {CAPTURE_CHOICES.map(({ mode, label, detail }) => <label key={mode} className="ui-check">
@@ -324,7 +304,7 @@ function CadSettings() {
       <li><b>Verify the account</b><span>The check reports the account and plan that will own new CAD documents.</span><OnshapeConnectionStatus onConnection={rememberOnshapeConnection}/></li>
     </ol> : <ol className="cad-setup-steps" aria-label="Set up Autodesk Fusion 360">
       <li><b>Install and start WGLink</b><span>Install the WGLink add-in once, restart Fusion, then confirm <b>Utilities → Scripts and Add-Ins → WGLink</b> is set to run on startup. <a href="https://github.com/m3gnus/wglink/tree/main/fusion-addins/WGLink#install" target="_blank" rel="noreferrer noopener">WGLink install guide</a></span></li>
-      <li><b>WGLink folder</b><span>WG and Fusion read the same folder setting. Its location is shown under WG root folder below.</span><CadFolderSettings/></li>
+      <li><b>WGLink folder</b><span>WG and Fusion use this WGLink folder.</span><CadFolderSettings/></li>
       <li><b>Open a design in Fusion</b><span>Close Settings, open <b>CAD Link</b>, and choose <b>Open in Fusion 360</b>. WG writes the bundle, starts Fusion, and the connection card confirms when WGLink is online.</span></li>
     </ol>}
   </section>;
