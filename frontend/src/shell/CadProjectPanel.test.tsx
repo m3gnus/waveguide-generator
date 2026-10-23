@@ -166,7 +166,7 @@ describe('CAD project history', () => {
     expect(host.querySelector('.cad-model-download')).toBeNull();
     const missing = host.querySelector('.cad-model-missing');
     expect(missing?.textContent).toBe('no Fusion file');
-    expect(missing?.getAttribute('title')).toContain('Capture was off');
+    expect(missing?.getAttribute('title')).toContain('may have been removed');
   });
   it('keeps runs usable when the attachment listing has an invalid items shape', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ items: 'invalid' })));

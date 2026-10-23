@@ -8,6 +8,7 @@ import logging
 import math
 import os
 from pathlib import Path
+import platform
 import re
 import sqlite3
 import subprocess
@@ -27,6 +28,7 @@ from server.mesh.artifact import (
     read_verified_import_mesh,
     read_verified_import_viewport_mesh,
 )
+from server.platform.cad_launch import launch_disabled, open_cad_document
 from server.platform.process import background_process_kwargs
 from server.workspace.api import (
     CadWorkspaceState,
@@ -36,10 +38,10 @@ from server.workspace.api import (
     open_folder_command,
 )
 from server.workspace.archive import (
-    CAD_SUBDIRECTORY,
     archive_cad_document,
     archive_folder_slug,
     captured_cad_document,
+    cad_document_sidecars,
     design_archive_folder,
     place_run_cad_document,
     reclaim_captured_documents,
@@ -1296,7 +1298,10 @@ async def _project_folder(request: Request, lineage_id: str) -> tuple[Path, str]
 
     stem = await asyncio.to_thread(resolve)
     root = _runs_root(request).resolve()
-    folder = design_archive_folder(root, stem).resolve()
+    folder = design_archive_folder(root, stem)
+    if folder.is_symlink():
+        raise HTTPException(status_code=422, detail="Project archive folder must not be a symbolic link.")
+    folder = folder.resolve()
     try:
         _strictly_inside(folder, root, "project folder")
     except ValueError as exc:
@@ -1307,31 +1312,24 @@ async def _project_folder(request: Request, lineage_id: str) -> tuple[Path, str]
 async def _project_documents(folder: Path) -> list[dict[str, Any]]:
     """Every captured CAD document in one project, newest capture first."""
 
-    directory = folder / CAD_SUBDIRECTORY
-
     def read() -> list[dict[str, Any]]:
-        if not directory.is_dir():
-            return []
         items: list[dict[str, Any]] = []
-        for sidecar in directory.glob("*.json"):
-            if sidecar.is_symlink() or not sidecar.is_file():
-                continue
+        records: dict[str, tuple[Mapping[str, Any], list[Path]]] = {}
+        for sidecar in cad_document_sidecars(folder):
             try:
                 payload = json.loads(sidecar.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
             if not isinstance(payload, Mapping):
                 continue
-            document = next(
-                (
-                    candidate
-                    for candidate in sorted(directory.glob(f"{sidecar.stem}.*"))
-                    if candidate.suffix != ".json"
-                    and candidate.is_file()
-                    and not candidate.is_symlink()
-                ),
-                None,
-            )
+            digest = str(payload.get("returnStateHash") or "")
+            if not digest:
+                continue
+            if digest not in records:
+                records[digest] = (payload, [])
+            records[digest][1].append(sidecar)
+        for digest, (payload, sidecars) in records.items():
+            document = captured_cad_document(folder.parent, folder.name, digest, sidecars=sidecars)
             items.append(
                 {
                     "returnStateHash": str(payload.get("returnStateHash") or ""),
@@ -1358,14 +1356,17 @@ async def list_project_documents(lineage_id: str, request: Request) -> dict[str,
         "archiveStem": stem,
         "folder": str(folder),
         "items": await _project_documents(folder),
+        "launchDisabled": launch_disabled(),
+        "fileManager": "Finder" if platform.system() == "Darwin" else (
+            "Explorer" if platform.system() == "Windows" else "file manager"
+        ),
     }
 
 
-@router.get("/projects/{lineage_id}/documents/{return_state_hash}", response_model=None)
-async def download_project_document(
+async def _resolve_project_document(
     lineage_id: str, return_state_hash: str, request: Request
-) -> Response:
-    """Hand back the Fusion document one geometry version was captured from."""
+) -> Path:
+    """One validated, archive-only lookup for download and desktop opening."""
 
     if _RETURN_STATE_HASH.fullmatch(return_state_hash) is None:
         raise HTTPException(status_code=422, detail="Malformed return state hash")
@@ -1377,15 +1378,48 @@ async def download_project_document(
         raise HTTPException(
             status_code=404,
             detail=(
-                "No CAD document was archived for this version. It was captured "
-                "before the setting was turned on, or the file has been removed."
+                "No archived Fusion file is available for this model. "
+                "It may not have been captured, or may have been removed."
             ),
         )
+    try:
+        _strictly_inside(document.resolve(), folder, "CAD document")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return document
+
+
+@router.get("/projects/{lineage_id}/documents/{return_state_hash}", response_model=None)
+async def download_project_document(
+    lineage_id: str, return_state_hash: str, request: Request
+) -> Response:
+    """Hand back the Fusion document one geometry version was captured from."""
+
+    document = await _resolve_project_document(lineage_id, return_state_hash, request)
     return FileResponse(
         document,
         media_type="application/octet-stream",
         filename=document.name,
     )
+
+
+@router.post("/projects/{lineage_id}/documents/{return_state_hash}/open")
+async def open_project_document(
+    lineage_id: str, return_state_hash: str, request: Request
+) -> dict[str, str]:
+    """Import this archived .f3d, or show its folder when CAD launching is off."""
+
+    document = await _resolve_project_document(lineage_id, return_state_hash, request)
+    if document.suffix.lower() != ".f3d":
+        raise HTTPException(status_code=422, detail="Only archived Fusion .f3d files can be opened.")
+    try:
+        if launch_disabled():
+            subprocess.Popen(open_folder_command(document.parent), **background_process_kwargs())
+            return {"status": "revealed", "message": "Opened the archive folder. Opening Fusion is disabled on this computer."}
+        await asyncio.to_thread(open_cad_document, document)
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "opened", "message": "Sent to Fusion. The file imports as a new document."}
 
 
 @router.post("/projects/{lineage_id}/reveal")

@@ -25,7 +25,7 @@ from server.mesh.child import run_mesh_build
 from server.platform.paths import app_root
 from server.workspace.api import WorkspaceState
 
-from .cad_launch import focus_cad
+from server.platform.cad_launch import focus_cad
 from server.cadlink.fusion.fusion_status import ADDIN_OUTDATED_MESSAGE, read_fusion_status
 
 from .cad_handoff import UPDATE_TARGET_REQUIRED

@@ -114,6 +114,8 @@ def _captured_document_stem(document_name: object, captured_at: object, digest: 
 
 
 def _sidecar_matches_digest(sidecar: Path, digest: str) -> bool:
+    if sidecar.is_symlink():
+        return False
     try:
         payload = json.loads(sidecar.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -133,7 +135,7 @@ def _find_captured_document(directory: Path, digest: str) -> Path | None:
     digest is already in the name, so no sidecar check is needed to trust it.
     """
 
-    if not directory.is_dir():
+    if directory.is_symlink() or not directory.is_dir():
         return None
     fragment = _digest_fragment(digest)
     if fragment:
@@ -342,14 +344,46 @@ def archive_cad_document(
     return relative
 
 
-def captured_cad_document(runs_root: Path, stem: object, return_state_hash: str) -> Path | None:
-    """The archived CAD document for one return state, if it was captured."""
+def cad_document_sidecars(folder: Path) -> list[Path]:
+    """WG's project and run capture records, confined to this project.
+
+    Run records use ``.cad.json``; ordinary result JSON is never a capture.
+    Do not follow linked folders or sidecars, even within the archive.
+    """
+
+    if folder.is_symlink() or not folder.is_dir():
+        return []
+    candidates = [*(folder / CAD_SUBDIRECTORY).glob("*.json"), *folder.rglob("*.cad.json")]
+    return sorted({
+        sidecar for sidecar in candidates
+        if sidecar.is_file() and not sidecar.is_symlink()
+        and not any((folder / parent).is_symlink()
+                    for parent in sidecar.relative_to(folder).parents)
+    })
+
+
+def captured_cad_document(
+    runs_root: Path, stem: object, return_state_hash: str,
+    *, sidecars: Collection[Path] | None = None,
+) -> Path | None:
+    """The exact archived model, preferring cad/ then a sidecar-verified run copy."""
 
     digest = str(return_state_hash or "").strip()
     if not digest:
         return None
-    directory = design_archive_folder(runs_root, stem) / CAD_SUBDIRECTORY
-    return _find_captured_document(directory, digest)
+    folder = design_archive_folder(runs_root, stem)
+    if folder.is_symlink():
+        return None
+    document = _find_captured_document(folder / CAD_SUBDIRECTORY, digest)
+    if document is not None:
+        return document
+    for sidecar in cad_document_sidecars(folder) if sidecars is None else sidecars:
+        if not sidecar.name.endswith(".cad.json"):
+            continue
+        document = _placed_run_document(sidecar.parent, sidecar.name[:-len(".cad.json")], digest)
+        if document is not None:
+            return document
+    return None
 
 
 def _placed_run_document(
@@ -367,7 +401,7 @@ def _placed_run_document(
         return None
     slug = archive_folder_slug(run_stem, "run")
     for candidate in sorted(destination_directory.glob(f"{slug}.*")):
-        if candidate.suffix == ".json" or candidate.is_symlink() or not candidate.is_file():
+        if candidate.suffix.lower() != ".f3d" or candidate.is_symlink() or not candidate.is_file():
             continue
         sidecar = candidate.with_suffix(".cad.json")
         if sidecar.is_file() and _sidecar_matches_digest(sidecar, digest):
@@ -417,7 +451,7 @@ def place_run_cad_document(
         )
         return f"{'/'.join(segments)}/{already.name}" if already is not None else None
     destination = destination_directory / f"{archive_folder_slug(run_stem, 'run')}{source.suffix}"
-    source_sidecar = source.with_suffix(".json")
+    source_sidecar = source.with_suffix(".json" if source.parent == design_folder / CAD_SUBDIRECTORY else ".cad.json")
     destination_sidecar = destination.with_suffix(".cad.json")
     relative = f"{'/'.join(segments)}/{destination.name}"
     resolved_root = design_folder.resolve()
@@ -462,6 +496,7 @@ __all__ = [
     "archive_cad_document",
     "archive_folder_slug",
     "captured_cad_document",
+    "cad_document_sidecars",
     "design_archive_folder",
     "place_run_cad_document",
     "reclaim_captured_documents",

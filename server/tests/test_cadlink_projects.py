@@ -144,7 +144,7 @@ def test_downloading_a_model_that_was_never_captured_says_why(tmp_path: Path) ->
         )
 
     assert refused.value.status_code == 404
-    assert "captured before the setting" in str(refused.value.detail)
+    assert "may not have been captured" in str(refused.value.detail)
 
 
 def test_a_malformed_return_state_hash_is_refused_before_touching_disk(
@@ -517,3 +517,137 @@ def test_a_second_capture_of_a_legacy_document_is_a_no_op(tmp_path: Path) -> Non
         "sha256_aaa.f3d",
         "sha256_aaa.json",
     ]
+
+
+def older_run_document(tmp_path: Path):
+    from server.workspace.archive import place_run_cad_document
+
+    app, runs = app_with_runs(tmp_path)
+    _design, lineage = project(app)
+    capture(runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
+    relative = place_run_cad_document(runs, "Tritonia", "68_cad-import", "68_cad-import", "sha256:aaa")
+    capture(runs, tmp_path, "Tritonia", "bbb", at="2026-08-21T09:00:00Z")
+    document = runs / "Tritonia" / relative
+    document.with_suffix(".csv").write_text("frequency,spl\n100,90\n")
+    return app, lineage, document
+
+
+def test_pruned_model_is_listed_and_downloaded_from_its_run_copy(tmp_path: Path) -> None:
+    app, lineage, document = older_run_document(tmp_path)
+    request = SimpleNamespace(app=app)
+    listing = asyncio.run(list_project_documents(lineage, request))
+    assert [item["returnStateHash"] for item in listing["items"]] == ["sha256:bbb", "sha256:aaa"]
+    assert listing["items"][1]["filename"] == document.name
+    response = asyncio.run(download_project_document(lineage, "sha256:aaa", request))
+    assert Path(response.path) == document
+    assert document.read_bytes() == b"model-aaa"
+
+
+@pytest.mark.parametrize("damage", ["wrong-hash", "no-sidecar", "bad-sidecar", "linked-file", "linked-sidecar", "linked-folder"])
+def test_run_lookup_refuses_unverified_or_linked_files(tmp_path: Path, damage: str) -> None:
+    app, lineage, document = older_run_document(tmp_path)
+    sidecar = document.with_suffix(".cad.json")
+    if damage == "wrong-hash":
+        payload = json.loads(sidecar.read_text())
+        payload["returnStateHash"] = "sha256:aaab"
+        sidecar.write_text(json.dumps(payload))
+    elif damage == "no-sidecar":
+        sidecar.unlink()
+    elif damage == "bad-sidecar":
+        sidecar.write_text("{broken")
+    elif damage in {"linked-file", "linked-sidecar"}:
+        target = document if damage == "linked-file" else sidecar
+        outside = tmp_path / target.name
+        target.rename(outside)
+        target.symlink_to(outside)
+    else:
+        outside = tmp_path / "outside"
+        document.parent.rename(outside)
+        document.parent.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(download_project_document(lineage, "sha256:aaa", SimpleNamespace(app=app)))
+    assert refused.value.status_code == 404
+
+
+def test_open_uses_the_same_pruned_run_copy(tmp_path: Path, monkeypatch) -> None:
+    from fastapi.testclient import TestClient
+    from server.cadlink import api
+
+    app, lineage, document = older_run_document(tmp_path)
+    monkeypatch.delenv("WG2_CAD_LAUNCH", raising=False)
+    opened = []
+    monkeypatch.setattr(api, "open_cad_document", opened.append)
+    client = TestClient(app, base_url="http://127.0.0.1")
+    response = client.post(f"/api/cadlink/projects/{lineage}/documents/sha256:aaa/open")
+    assert response.status_code == 200
+    assert response.json()["status"] == "opened"
+    assert opened == [document]
+    assert "new document" in response.json()["message"]
+    assert client.post(f"/api/cadlink/projects/{lineage}/documents/sha256:missing/open").status_code == 404
+    assert client.post(f"/api/cadlink/projects/{lineage}/documents/bad*hash/open").status_code == 422
+    assert opened == [document]
+
+
+def test_disabled_launch_shows_the_run_folder_without_starting_fusion(tmp_path: Path, monkeypatch) -> None:
+    from server.cadlink import api
+
+    app, lineage, document = older_run_document(tmp_path)
+    monkeypatch.setenv("WG2_CAD_LAUNCH", "0")
+    monkeypatch.setattr(api.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(api, "open_cad_document", lambda _path: pytest.fail("CAD launch is disabled"))
+    commands = []
+    monkeypatch.setattr(api.subprocess, "Popen", lambda command, **_kwargs: commands.append(command))
+    listing = asyncio.run(list_project_documents(lineage, SimpleNamespace(app=app)))
+    assert listing["launchDisabled"] is True
+    assert listing["fileManager"] == "Finder"
+    response = asyncio.run(api.open_project_document(lineage, "sha256:aaa", SimpleNamespace(app=app)))
+    assert response["status"] == "revealed"
+    assert commands == [["open", str(document.parent)]]
+
+
+def test_open_reports_installation_errors(tmp_path: Path, monkeypatch) -> None:
+    from server.cadlink import api
+
+    app, lineage, _document = older_run_document(tmp_path)
+    monkeypatch.delenv("WG2_CAD_LAUNCH", raising=False)
+
+    def fail(_path):
+        raise RuntimeError("Install Fusion 360 to open this file.")
+
+    monkeypatch.setattr(api, "open_cad_document", fail)
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(api.open_project_document(lineage, "sha256:aaa", SimpleNamespace(app=app)))
+    assert refused.value.status_code == 409
+    assert "Install Fusion 360" in refused.value.detail
+
+
+def test_open_refuses_other_archived_file_types(tmp_path: Path, monkeypatch) -> None:
+    from server.cadlink import api
+
+    app, lineage, document = older_run_document(tmp_path)
+    document = document.parent.parent / "cad" / "Tritonia_260821-0900_bbb.f3d"
+    document.rename(document.with_suffix(".step"))
+    monkeypatch.setattr(api, "open_cad_document", lambda _path: pytest.fail("Not a Fusion file"))
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(api.open_project_document(lineage, "sha256:bbb", SimpleNamespace(app=app)))
+    assert refused.value.status_code == 422
+
+
+@pytest.mark.parametrize("operation", ["list", "download", "open"])
+def test_project_root_cannot_link_to_another_project(tmp_path: Path, operation: str) -> None:
+    from server.cadlink import api
+
+    app, lineage, document = older_run_document(tmp_path)
+    folder = document.parent.parent
+    other = folder.with_name("OtherProject")
+    folder.rename(other)
+    folder.symlink_to(other, target_is_directory=True)
+    request = SimpleNamespace(app=app)
+    with pytest.raises(HTTPException) as refused:
+        if operation == "list":
+            asyncio.run(api.list_project_documents(lineage, request))
+        elif operation == "download":
+            asyncio.run(api.download_project_document(lineage, "sha256:aaa", request))
+        else:
+            asyncio.run(api.open_project_document(lineage, "sha256:aaa", request))
+    assert refused.value.status_code == 422

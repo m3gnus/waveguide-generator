@@ -673,3 +673,19 @@ def test_capture_refuses_members_outside_bundle(tmp_path, member):
     runs = tmp_path / "runs"
     assert archive_cad_document(bundle, record, runs, "Horn") is None
     assert not runs.exists()
+
+
+def test_run_copy_remains_a_source_with_its_original_sidecar_after_pruning(tmp_path: Path) -> None:
+    bundle = bundle_with_document(tmp_path)
+    runs = tmp_path / "runs"
+    archive_cad_document(bundle, record_for(), runs, "Big Horn")
+    relative = place_run_cad_document(runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:abc123")
+    original = runs / "Big_Horn" / relative
+    original_sidecar = original.with_suffix(".cad.json").read_bytes()
+    for path in (runs / "Big_Horn" / "cad").iterdir():
+        path.unlink()
+    assert captured_cad_document(runs, "Big Horn", "sha256:abc123") == original
+    # A later run and a retried archive still work after project retention.
+    assert place_run_cad_document(runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:abc123") == relative
+    copied = place_run_cad_document(runs, "Big Horn", "15_Big_Horn", "15_Big_Horn", "sha256:abc123")
+    assert (runs / "Big_Horn" / copied).with_suffix(".cad.json").read_bytes() == original_sidecar

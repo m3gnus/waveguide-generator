@@ -13531,6 +13531,62 @@
         ]
       }
     },
+    "/api/cadlink/projects/{lineage_id}/documents/{return_state_hash}/open": {
+      "post": {
+        "description": "Import this archived .f3d, or show its folder when CAD launching is off.",
+        "operationId": "open_project_document_api_cadlink_projects__lineage_id__documents__return_state_hash__open_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "lineage_id",
+            "required": true,
+            "schema": {
+              "title": "Lineage Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "return_state_hash",
+            "required": true,
+            "schema": {
+              "title": "Return State Hash",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Open Project Document Api Cadlink Projects  Lineage Id  Documents  Return State Hash  Open Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Open Project Document",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
     "/api/cadlink/projects/{lineage_id}/reveal": {
       "post": {
         "description": "Open this project's archive folder in the desktop file manager.",

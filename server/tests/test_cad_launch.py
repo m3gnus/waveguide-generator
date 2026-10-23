@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from server.exports import cad_launch
+from server.platform import cad_launch
 
 
 def _capture(monkeypatch, *, returncode: int = 0) -> list[list[str]]:
@@ -89,4 +89,72 @@ def test_windows_without_an_install_is_unsupported_not_a_crash(monkeypatch, tmp_
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     calls = _capture(monkeypatch)
     assert cad_launch.focus_cad(system="Windows", environ={}) == "unsupported:windows"
+    assert calls == []
+
+
+def test_macos_opens_the_archived_file_with_fusion(monkeypatch, tmp_path) -> None:
+    calls = _capture(monkeypatch)
+    monkeypatch.delenv("WG2_CAD_LAUNCH", raising=False)
+    document = tmp_path / "68_cad-import.f3d"
+    cad_launch.open_cad_document(document, system="Darwin")
+    assert calls == [["open", "-a", "Autodesk Fusion", str(document)]]
+
+
+def test_macos_uses_the_file_handler_if_the_app_name_is_not_registered(monkeypatch, tmp_path) -> None:
+    calls = []
+    monkeypatch.delenv("WG2_CAD_LAUNCH", raising=False)
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, int("-a" in command))
+
+    monkeypatch.setattr(cad_launch.subprocess, "run", run)
+    document = tmp_path / "model.f3d"
+    cad_launch.open_cad_document(document, system="Darwin")
+    assert calls == [["open", "-a", "Autodesk Fusion", str(document)], ["open", str(document)]]
+
+
+def test_macos_missing_fusion_and_handler_is_a_clear_error(monkeypatch, tmp_path) -> None:
+    _capture(monkeypatch, returncode=1)
+    monkeypatch.delenv("WG2_CAD_LAUNCH", raising=False)
+    with pytest.raises(RuntimeError, match="Install Fusion 360"):
+        cad_launch.open_cad_document(tmp_path / "model.f3d", system="Darwin")
+
+
+def test_open_timeout_is_a_clear_error(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("WG2_CAD_LAUNCH", raising=False)
+
+    def timeout(command, **_kwargs):
+        raise subprocess.TimeoutExpired(command, 15)
+
+    monkeypatch.setattr(cad_launch.subprocess, "run", timeout)
+    with pytest.raises(RuntimeError, match="Check that Fusion 360 is installed"):
+        cad_launch.open_cad_document(tmp_path / "model.f3d", system="Darwin")
+
+
+def test_windows_opens_the_exact_file_with_startfile(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("WG2_CAD_LAUNCH", raising=False)
+    calls = []
+    monkeypatch.setattr(cad_launch.os, "startfile", calls.append, raising=False)
+    document = tmp_path / "model.f3d"
+    cad_launch.open_cad_document(document, system="Windows")
+    assert calls == [str(document)]
+
+
+def test_windows_missing_handler_is_a_clear_error(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("WG2_CAD_LAUNCH", raising=False)
+
+    def fail(_path):
+        raise OSError("No association")
+
+    monkeypatch.setattr(cad_launch.os, "startfile", fail, raising=False)
+    with pytest.raises(RuntimeError, match="Check that Fusion 360 is installed"):
+        cad_launch.open_cad_document(tmp_path / "model.f3d", system="Windows")
+
+
+def test_disabled_launch_never_opens_a_document(monkeypatch, tmp_path) -> None:
+    calls = _capture(monkeypatch)
+    monkeypatch.setenv("WG2_CAD_LAUNCH", "0")
+    with pytest.raises(RuntimeError, match="disabled"):
+        cad_launch.open_cad_document(tmp_path / "model.f3d", system="Darwin")
     assert calls == []

@@ -478,6 +478,11 @@ distinguish changed snapshots. Select a run to find its captured **Fusion file**
 in the details, when document capture was enabled. Compare, rerun, remove and
 export use the same controls as parametric and standalone mesh runs.
 
+**Open in Fusion** beside **Fusion file** opens that run's saved `.f3d` on this
+computer. Fusion imports it as a new document; it does not reopen the cloud
+document. If CAD launching is disabled, **Show in Finder** or **Show in Explorer**
+opens the folder holding the saved file instead.
+
 On WG startup, an existing return is selected
 without preparation; choose **Prepare simulation**. Newly arriving returns and
 ones you select from **Model versions** are prepared automatically. If a

@@ -54,3 +54,52 @@ it('shows retained file provenance without claiming a Fusion attachment', async 
   expect(host.textContent).toContain('Mesh file');
   expect(host.textContent).not.toContain('Fusion file');
 });
+
+it('opens the archived model by lineage and hash and explains the new document import', async () => {
+  const listing = await fetch('/unused').then(response => response.json());
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, options?: RequestInit) => new Response(JSON.stringify(
+    options?.method === 'POST' ? { status: 'opened', message: 'Sent to Fusion.' } : listing,
+  )));
+  vi.stubGlobal('fetch', fetcher);
+  await act(async () => root.render(<RunModelDetails job={run()}/>));
+  expect(host.textContent).toContain('imports this file as a new document');
+  expect(host.textContent).toContain('does not reopen the cloud document');
+  const button = host.querySelector('button')!;
+  expect(button.textContent).toBe('Open in Fusion');
+  await act(async () => button.click());
+  const [url, options] = fetcher.mock.calls[1];
+  expect(url).toBe('/api/cadlink/projects/lineage/documents/old-state/open');
+  expect(options?.method).toBe('POST');
+  expect(options?.body).toBeUndefined();
+  expect(host.querySelector('[role="status"]')?.textContent).toBe('Sent to Fusion.');
+});
+
+it.each(['Finder', 'Explorer'])('offers Show in %s when CAD launching is disabled', async (fileManager) => {
+  const listing = await fetch('/unused').then(response => response.json());
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ...listing, launchDisabled: true, fileManager }))));
+  await act(async () => root.render(<RunModelDetails job={run()}/>));
+  expect(host.querySelector('button')?.textContent).toBe(`Show in ${fileManager}`);
+  expect(host.textContent).toContain('Opening Fusion is disabled on this computer.');
+});
+
+it('shows a missing Fusion error and keeps the download available', async () => {
+  const listing = await fetch('/unused').then(response => response.json());
+  vi.stubGlobal('fetch', vi.fn(async (_url, options) => options?.method === 'POST'
+    ? new Response(JSON.stringify({ detail: 'Install Fusion 360 to open this file.' }), { status: 409 })
+    : new Response(JSON.stringify(listing))));
+  await act(async () => root.render(<RunModelDetails job={run()}/>));
+  await act(async () => host.querySelector('button')!.click());
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('Install Fusion 360');
+  expect(host.querySelector('a')?.textContent).toBe('Fusion file');
+  expect(host.querySelector('button')?.disabled).toBe(false);
+});
+
+it('does not claim capture was off when the attachment is missing', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ items: [] }))));
+  await act(async () => root.render(<RunModelDetails job={run()}/>));
+  const missing = host.querySelector('.cad-model-missing')!;
+  expect(missing.textContent).toBe('no Fusion file');
+  expect(missing.getAttribute('title')).not.toContain('Capture was off');
+  expect(missing.getAttribute('title')).toContain('may have been removed');
+  expect(host.querySelector('button')).toBeNull();
+});

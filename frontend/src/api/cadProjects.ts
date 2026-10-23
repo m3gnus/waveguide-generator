@@ -25,6 +25,8 @@ export interface CadProjectDocumentListing {
   archiveStem: string;
   folder: string;
   items: CadProjectDocument[];
+  launchDisabled: boolean;
+  fileManager: string;
 }
 
 /**
@@ -118,6 +120,17 @@ export async function listProjectDocuments(
 /** Where the browser should send someone to download one version's model. */
 export function projectDocumentUrl(lineageId: string, returnStateHash: string): string {
   return `/api/cadlink/projects/${encodeURIComponent(lineageId)}/documents/${encodeURIComponent(returnStateHash)}`;
+}
+
+/** Open only the server-resolved archived model; no local path crosses this API. */
+export async function openProjectDocument(
+  lineageId: string,
+  returnStateHash: string,
+  fetcher: typeof fetch = fetch,
+): Promise<{ status: string; message: string }> {
+  const response = await deadlineFetch(fetcher, `${projectDocumentUrl(lineageId, returnStateHash)}/open`, { method: 'POST' });
+  if (!response.ok) throw await failure(response);
+  return response.json() as Promise<{ status: string; message: string }>;
 }
 
 export async function revealProjectFolder(

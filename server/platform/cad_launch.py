@@ -1,4 +1,4 @@
-"""Bring Fusion forward once a CAD-link bundle has been written.
+"""Open archived Fusion files or bring Fusion forward after a CAD-link export.
 
 Send to CAD writes a file; nothing about that reaches a running Fusion. Raising
 its window is the small half of closing that gap -- the add-in's watcher is the
@@ -61,6 +61,44 @@ def _command(system: str) -> list[str] | None:
     return None
 
 
+def _run_command(command: list[str], system: str) -> subprocess.CompletedProcess:
+    return subprocess.run(  # noqa: S603 - fixed argv, no shell
+        command, check=False, capture_output=True, timeout=15,
+        **background_process_kwargs(system=system),
+    )
+
+
+def open_cad_document(document: Path, *, system: str | None = None) -> None:
+    """Import an archived .f3d through Fusion or the OS file association.
+
+    The caller resolves and confines the archived file. Launch policy is also
+    enforced here so a changed setting cannot be bypassed by a stale UI.
+    """
+
+    if launch_disabled():
+        raise RuntimeError("Opening Fusion is disabled on this computer.")
+    if document.suffix.lower() != ".f3d":
+        raise RuntimeError("Only archived Fusion .f3d files can be opened.")
+    resolved = platform.system() if system is None else system
+    try:
+        if resolved == "Darwin":
+            completed = _run_command(["open", "-a", _MACOS_APP_NAME, str(document)], resolved)
+            if completed.returncode == 0:
+                return
+            # Older Fusion installations can register the file type under a
+            # different application name. Let Launch Services find that handler.
+            if _run_command(["open", str(document)], resolved).returncode == 0:
+                return
+        elif resolved == "Windows":
+            os.startfile(str(document))
+            return
+        else:
+            raise RuntimeError("Opening Fusion files is supported on macOS and Windows.")
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError("Could not open the Fusion file. Check that Fusion 360 is installed.") from exc
+    raise RuntimeError("Could not open the Fusion file. Install Fusion 360 or set it as the .f3d handler.")
+
+
 def focus_cad(*, system: str | None = None, environ: dict[str, str] | None = None) -> str:
     """Raise or start Fusion. Returns a short reason code for the caller's log."""
 
@@ -71,25 +109,14 @@ def focus_cad(*, system: str | None = None, environ: dict[str, str] | None = Non
     if command is None:
         return f"unsupported:{resolved.lower() or 'unknown'}"
     try:
-        completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            command,
-            check=False,
-            capture_output=True,
-            timeout=15,
-            **background_process_kwargs(system=resolved),
-        )
+        completed = _run_command(command, resolved)
     except (OSError, subprocess.SubprocessError) as exc:
         logger.info("Could not bring Fusion forward: %s", exc)
         return "failed"
     if completed.returncode != 0:
         if resolved == "Darwin" and shutil.which("open"):
             # A machine whose Fusion predates the rename registers no bundle id.
-            fallback = subprocess.run(  # noqa: S603 - fixed argv, no shell
-                ["open", "-a", _MACOS_APP_NAME],
-                check=False,
-                capture_output=True,
-                timeout=15,
-            )
+            fallback = _run_command(["open", "-a", _MACOS_APP_NAME], resolved)
             if fallback.returncode == 0:
                 return "launched"
         logger.info(
