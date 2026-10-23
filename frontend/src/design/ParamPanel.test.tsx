@@ -21,7 +21,7 @@ import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, type OsseFeatures } f
 import { NATIVE_FAMILIES, designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { FusionParameterDrift, ParamPanel, RealizedDimensionsSection, channelHeadingText, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
+import { ParamPanel, RealizedDimensionsSection, channelHeadingText, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
 
 /**
  * The panel reads capabilities and symmetry through React Query, exactly as
@@ -1190,7 +1190,7 @@ describe('ParamPanel inventory UX', () => {
       workspaceModeStore.setMode('cad');
     });
     const titles = () => [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
-    expect(titles()).toEqual(['Linked design', 'Profile Dimensions', 'Throat Extension', 'Morph Target', 'Wall & Enclosure', 'Guiding Curve', 'Realized dimensions']);
+    expect(titles()).toEqual(['Profile Dimensions', 'Throat Extension', 'Morph Target', 'Wall & Enclosure', 'Guiding Curve', 'Realized dimensions']);
     expect(host.querySelector('[data-section="Model Type"]')).toBeNull();
     expect(host.textContent).not.toContain('Mesh');
 
@@ -1240,7 +1240,7 @@ describe('ParamPanel inventory UX', () => {
       workspaceModeStore.setMode('cad');
     });
     const titles = () => [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
-    expect(titles()).toEqual(['Linked design', 'Realized dimensions']);
+    expect(titles()).toEqual(['Realized dimensions']);
     for (const gone of ['Profile', 'Throat', 'Mouth', 'Mounting', 'Cross-section']) {
       expect(host.querySelector(`[data-section="${gone}"]`)).toBeNull();
     }
@@ -1305,23 +1305,6 @@ describe('ParamPanel inventory UX', () => {
     expect(edited[0].textContent).not.toContain('Enclosure depth');
   });
 
-  it('names every edited Fusion parameter even when no realized row can match it', () => {
-    act(() => root.render(<FusionParameterDrift
-      parameterDriftCount={2}
-      driftedParameters={['wg_tritonia_v_depth', 'wg_tritonia_v_mouth_overshoot']}
-    />));
-
-    expect(host.textContent).toContain('2 managed parameters have local edits');
-    expect([...host.querySelectorAll('li')].map((item) => item.textContent)).toEqual([
-      'wg_tritonia_v_depth',
-      'wg_tritonia_v_mouth_overshoot',
-    ]);
-
-    act(() => root.render(<FusionParameterDrift parameterDriftCount={1}/>));
-    expect(host.textContent).toContain('1 managed parameter has local edits');
-    expect(host.querySelector('ul')).toBeNull();
-  });
-
   it('tells the truth for no link, pre-capture, missing-registry, and stale-export states', () => {
     const empty = (state: CadRealizedDimensions['state']): CadRealizedDimensions => ({
       state, instanceId: state === 'no_link' ? null : 'instance-a', exportId: state === 'no_link' ? null : 'wge_4', parameters: [],
@@ -1376,19 +1359,11 @@ describe('ParamPanel inventory UX', () => {
       expect(save).toHaveBeenCalledTimes(3);
       expect(alert()?.textContent).toBe('Settings not saved. Edit a setting to retry.');
       expect(cadWorkspace.getSnapshot().error).toBeNull();
-      // The shared selector preserves action-error precedence at both settings sites.
+      // Action errors take precedence over settings-publisher feedback.
       const snapshot = { ...cadWorkspace.getSnapshot(), error: 'CAD action failed.' };
       vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue(snapshot);
       act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
       expect(alert()?.textContent).toBe('CAD action failed.');
-      act(() => {
-        root.render(withQueryClient(<ParamPanel tab="geometry" />));
-      });
-      const linkedAlert = () => host.querySelector('[data-section="Linked design"] [role="alert"]');
-      expect(linkedAlert()?.textContent).toBe('CAD action failed.');
-      vi.mocked(cadWorkspace.getSnapshot).mockReturnValue({ ...snapshot, error: null });
-      act(() => root.render(withQueryClient(<ParamPanel tab="geometry" />)));
-      expect(linkedAlert()?.textContent).toBe('Settings not saved. Edit a setting to retry.');
     } finally {
       vi.useRealTimers();
     }
@@ -1833,7 +1808,6 @@ describe('ParamPanel inventory UX', () => {
 
   it('shows the CAD simulation empty state without hiding formula editing on Geometry', () => {
     act(() => workspaceModeStore.setMode('cad'));
-    expect(host.querySelector('[data-section="Linked design"]')).not.toBeNull();
     expect(host.querySelector('[data-section="Profile Dimensions"]')).not.toBeNull();
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     expect(host.textContent).toContain('Prepare CAD geometry to unlock these inputs');

@@ -64,7 +64,7 @@ copy and tick the checkbox in Fusion.
 
 1. Finish the basic waveguide in WG. From the design menu, choose
    **Export → Send to CAD** with Fusion selected as the CAD application.
-   **Open in Fusion 360** on the linked-design card is another entry point.
+   **Open in Fusion 360** in Imported mesh → CAD Link is another entry point.
    You can also use **Send to CAD** in a completed parametric run's export menu
    to send that run's saved design. WG writes the bundle and starts or raises
    Fusion. The CAD Link connection indicator shows when the add-in's heartbeat

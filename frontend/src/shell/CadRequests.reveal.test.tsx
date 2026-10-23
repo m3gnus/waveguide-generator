@@ -53,9 +53,12 @@ describe('Show reveals the requests it counts', () => {
     resetWorkspaceNavigationForTests(); vi.restoreAllMocks(); vi.unstubAllGlobals();
   });
 
-  it.each(['parametric', 'cad', 'file'] as const)('opens and focuses the first earlier request from %s without replacing its mesh', async (input) => {
+  it.each((['parametric', 'cad', 'file'] as const).flatMap(input =>
+    [false, true].map(geometryVisible => ({ input, geometryVisible })),
+  ))('opens and focuses the first earlier request from $input with Geometry visible=$geometryVisible without replacing its mesh', async ({ input, geometryVisible }) => {
     workspaceModeStore.setMode(input === 'parametric' ? 'parametric' : 'cad');
     workspaceModeStore.setImportedInput(input === 'file' ? 'file' : 'cad');
+    publishVisiblePanels(geometryVisible ? ['geometry'] : ['jobs']);
     importedMeshStore.showParametric();
     const mesh = importedMeshStore.getSnapshot();
     const workingMode = workspaceModeStore.getSnapshot().mode;

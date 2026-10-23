@@ -1,7 +1,7 @@
 import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, OSSE_SWITCH_NOTICE, type OsseFeatures } from './osseFeatures';
 import { FreeformProfileInspection } from './ProfileInspection';
 import { registerParameterPanel } from './parameterPanelValidity';
-import { nativeCadLimitation, nativeSymmetryLimitation } from './nativeFamilies';
+import { nativeSymmetryLimitation } from './nativeFamilies';
 import { EnclosureResolutionField } from './EnclosureResolutionField';
 import { ExteriorDriverFields, ExteriorDriverOptions } from './ExteriorDriverOptions';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
@@ -17,7 +17,6 @@ import { backendLimitation, symmetryDomainLimitation } from './backendSupport';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { CadCrossover } from './CrossoverSection';
 import { useCadPreparationStore } from '../stores/cadPreparation';
-import { useCadConnectionStore } from '../stores/cadConnection';
 import {
   assignableChannelIds,
   channelAcceptsDriver,
@@ -66,8 +65,6 @@ import {
 } from './parameterRegistry';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { useCadFeedbackError } from '../shell/cadSetupPublisher';
-import { fusionWorkflowView, onshapeWorkflowView } from '../shell/CadLinkPanel';
-import { fusionLinkDisplayName } from '../shell/cadWorkflowView';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
 import {
   CAD_CARDIOID_FIELD_CONTROLS,
@@ -766,105 +763,6 @@ export function requestParameterReveal(detail: RevealRequest): void {
   window.dispatchEvent(new CustomEvent(REVEAL_PARAMETER_EVENT, { detail }));
 }
 
-function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
-  const preferences = usePreferences();
-  const observedFusionStatus = useCadConnectionStore((state) => state.fusionStatus);
-  const cadWorkspaceView = useSyncExternalStore(
-    cadWorkspace.subscribe,
-    cadWorkspace.getSnapshot,
-    cadWorkspace.getSnapshot,
-  );
-  const error = useCadFeedbackError(cadWorkspaceView.error);
-  const formula = useDesignStore((state) => state.design.formula);
-  const cadLimitation = nativeCadLimitation(formula);
-  const onshape = preferences.cadApplication === 'onshape';
-  const workflow = onshape
-    ? onshapeWorkflowView(cadWorkspaceView.onshapeStatus)
-    : fusionWorkflowView(cadWorkspaceView.fusionStatus);
-  const driftCount = cadWorkspaceView.fusionStatus?.link?.parameterDriftCount ?? 0;
-  const send = () => {
-    // Onshape's public-document consent stays in CAD Link. Fusion sends use
-    // the coordinator's unified path; its dialog holds the two-way conflict.
-    if (onshape) {
-      workspaceNavigation.navigate('geometry');
-      return;
-    }
-    void cadWorkspaceView.sendWgToFusion().catch(() => undefined);
-  };
-  const actionLabel = onshape
-    ? workflow.action === 'update' ? 'Send WG changes to Onshape' : 'Create in Onshape'
-    : workflow.action === 'update' ? 'Send WG changes to Fusion' : 'Open in Fusion 360';
-  const matchingFusionLinks = cadWorkspaceView.fusionStatus?.matchingLinks ?? [];
-  const matchingOnshapeLinks = cadWorkspaceView.onshapeStatus?.matchingLinks ?? [];
-  return <Section
-    title={CAD_CONTROLS.linkedDesign.section}
-    description="The CAD document linked to this design, its aggregate freshness, and the outbound rebuild action."
-    forceOpen={forceOpen}
-    revealId={CAD_CONTROLS.linkedDesign.reveal.id}
-  >
-    <div className={`linked-design-card cad-connection-${workflow.state}`}>
-      <span className="cad-connection-dot" aria-hidden="true"/>
-      <div><b>{workflow.headline}</b><span>{workflow.detail}</span></div>
-    </div>
-    {!onshape && matchingFusionLinks.length > 1 && <label className="field-row linked-instance-selection">
-      <span>Managed Fusion instance</span>
-      <select
-        aria-label="Linked Fusion instance"
-        value={cadWorkspaceView.fusionStatus?.selectedInstanceId ?? ''}
-        onChange={(event) => cadWorkspaceView.selectFusionInstance(event.target.value)}
-      >
-        <option value="" disabled>Choose an instance</option>
-        {matchingFusionLinks.map((link) => {
-          const name = fusionLinkDisplayName(observedFusionStatus?.matchingLinks?.find((item) => item.instanceId === link.instanceId) ?? link);
-          return <option value={link.instanceId} key={link.instanceId}>
-            {name ? `${name} · ` : ''}{link.instanceId}
-          </option>;
-        })}
-      </select>
-      <small>Body freshness and update/return actions are scoped to this instance ID. Placements of the same design are never merged.</small>
-    </label>}
-    {onshape && matchingOnshapeLinks.length > 1 && <label className="field-row linked-instance-selection">
-      <span>Managed Onshape link</span>
-      <select
-        aria-label="Linked Onshape instance"
-        value={cadWorkspaceView.onshapeStatus?.selectedInstanceId ?? ''}
-        onChange={(event) => cadWorkspaceView.selectOnshapeInstance(event.target.value)}
-      >
-        <option value="" disabled>Choose a link</option>
-        {matchingOnshapeLinks.map((link) => <option value={link.instanceId} key={link.instanceId}>
-          {link.documentName} · {link.instanceId}
-        </option>)}
-      </select>
-      <small>WG scopes status, updates, and returns to this exact managed Part Studio link.</small>
-    </label>}
-    <FusionParameterDrift
-      parameterDriftCount={driftCount}
-      driftedParameters={cadWorkspaceView.fusionStatus?.link?.driftedParameters}
-    />
-    {workflow.action && <button className="primary linked-design-action" disabled={cadWorkspaceView.sendingToFusion || Boolean(cadLimitation)} title={cadLimitation} onClick={send}>{cadWorkspaceView.sendingToFusion ? 'Sending…' : actionLabel}</button>}
-    {cadLimitation && <p className="section-note">{cadLimitation}</p>}
-    {error && <div className="field-error" role="alert">{error}</div>}
-    {cadWorkspaceView.status && <p className="section-note" role="status">{cadWorkspaceView.status}</p>}
-  </Section>;
-}
-
-/** New WGLink builds name every edited managed parameter. Keep the aggregate
- * fallback for older add-ins, but enumerate exact Fusion names when available:
- * enclosure builds also manage a synthetic `mouth_overshoot` parameter which
- * has no corresponding row in the exported realized-dimensions table. */
-export function FusionParameterDrift({ parameterDriftCount, driftedParameters }: {
-  parameterDriftCount: number;
-  driftedParameters?: readonly string[];
-}) {
-  if (parameterDriftCount <= 0) return null;
-  return <div className="linked-design-drift">
-    <p>{parameterDriftCount} managed parameter{parameterDriftCount === 1 ? ' has' : 's have'} local edits</p>
-    {driftedParameters && driftedParameters.length > 0 && <ul aria-label="Locally edited Fusion parameters">
-      {driftedParameters.map((name) => <li key={name}><code>{name}</code></li>)}
-    </ul>}
-  </div>;
-}
-
 const REALIZED_DIMENSION_LABELS: ReadonlyArray<{ suffix: string; label: string }> = [
   { suffix: '_throat_dia', label: 'Realized throat diameter' },
   { suffix: '_mouth_w', label: 'Mouth width' },
@@ -1502,7 +1400,6 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
           onClick={() => parameterHelpStore.toggle()}
         ><Icon name="info" /></button>
       </div>
-      {workspaceMode === 'cad' && tab === 'geometry' && cadSectionMatches(CAD_CONTROLS.linkedDesign.section) && <LinkedDesignCard forceOpen={searching}/>}
       {workspaceMode === 'parametric' && tab === 'geometry' && (!searching || (osseFeatures(design.formula) && matchingParametricSections.has('Model Type'))) && modelTypeSection}
       {workspaceMode === 'parametric' ? definitions.map(renderRegistrySection)
         : <>

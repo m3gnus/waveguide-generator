@@ -7,7 +7,6 @@ import {
 import type { ParameterTab } from './parameterRegistry';
 
 export const CAD_CONTROL_SECTIONS = {
-  linkedDesign: 'Linked design',
   realizedDimensions: 'Realized dimensions',
   frequencySweep: 'Frequency Sweep',
   directivityMap: 'Directivity Map',
@@ -51,10 +50,6 @@ function control(
  * important distinction: none of these ids claims to be a serializable path.
  */
 export const CAD_CONTROLS = {
-  linkedDesign: control(
-    'cad.linked-design', 'Linked design', CAD_CONTROL_SECTIONS.linkedDesign, 'geometry',
-    ['Fusion', 'CAD Link', 'connection', 'sync', 'send', 'rebuild'], 'cad-mode',
-  ),
   realizedDimensions: control(
     'cad.realized-dimensions', 'Realized dimensions', CAD_CONTROL_SECTIONS.realizedDimensions, 'geometry',
     ['published', 'interface', 'throat diameter', 'mouth width', 'mouth height', 'depth', 'wall thickness', 'enclosure', 'vertical offset'], 'cad-mode',

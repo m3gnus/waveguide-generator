@@ -1,4 +1,4 @@
-export type WorkspaceRevealTarget = 'cad-requests';
+export type WorkspaceRevealTarget = 'cad-requests' | 'cad-link';
 let revealTarget: WorkspaceRevealTarget | null = null;
 let reveals = 0;
 

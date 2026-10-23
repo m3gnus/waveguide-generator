@@ -27,6 +27,8 @@ import { CadSolveInputs } from './CadSolveInputs';
 import { CadDeliveryHealth } from './CadDeliveryHealth';
 import { CadSolveCard } from './CadSolveCard';
 import { requestSettings } from './settingsNavigation';
+import { workspaceNavigation } from './workspaceNavigation';
+import { usePanelVisible } from './panelVisibility';
 import { cadCoordinationStore } from '../api/cadCoordination';
 import './cadLinkPanel.css';
 
@@ -517,6 +519,17 @@ function ModelVersions({ projectBundles, unlinkedReturns, otherProjectReturns, s
 }
 
 export function CadLinkPanel() {
+  const connection = useRef<HTMLElement>(null);
+  const visible = usePanelVisible();
+  const navigation = useSyncExternalStore(workspaceNavigation.subscribe, workspaceNavigation.getSnapshot, workspaceNavigation.getSnapshot);
+  useEffect(() => {
+    if (!visible || workspaceNavigation.getRevealTarget() !== 'cad-link' || !connection.current) return;
+    const disclosure = connection.current.querySelector('details');
+    if (disclosure) disclosure.open = true;
+    connection.current.scrollIntoView?.({ block: 'nearest' });
+    connection.current.focus();
+    workspaceNavigation.claimReveal('cad-link');
+  }, [navigation, visible]);
   const state = useCadReturnStore();
   const preferences = usePreferences();
   const design = useDesignStore((current) => current.design);
@@ -765,7 +778,7 @@ export function CadLinkPanel() {
     </div>}
 
     {/* 2 · CAD Link: is CAD in sync with WG? One card, both directions. */}
-    <section className={`cad-workflow cad-link-card${quietLink ? '' : ' attention'}`}>
+    <section ref={connection} tabIndex={-1} aria-label="CAD Link connection" className={`cad-workflow cad-link-card${quietLink ? '' : ' attention'}`}>
       {quietLink
         ? <details className="cad-link-quiet">
           <summary title={fusionConnected ? addinVersion : [workflow.detail, addinVersion].filter(Boolean).join(' · ')}>

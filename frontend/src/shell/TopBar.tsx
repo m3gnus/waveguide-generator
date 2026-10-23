@@ -151,7 +151,18 @@ export function buildParameterPaletteEntries(family?: DesignFamily, context: Par
       matches: (query) => cadControlMatchesQuery(descriptor, query),
       run: () => revealCadControlFromPalette(descriptor.reveal.id, descriptor.tab, descriptor.label, descriptor.reveal.fallbackId),
     }));
-  return [...parameterEntries, ...cadEntries];
+  return [...parameterEntries, ...cadEntries, {
+    id: 'cad-link-connection',
+    kind: 'Commands',
+    label: 'CAD Link',
+    detail: 'Connection',
+    keywords: 'Linked design Fusion Onshape connection sync send rebuild',
+    run: () => {
+      workspaceModeStore.setImportedInput('cad');
+      activateWorkspaceMode('cad');
+      workspaceNavigation.reveal('cad-link');
+    },
+  }];
 }
 
 /**
@@ -279,7 +290,8 @@ export function AttentionNotices() {
   const requests = selectCadRequests({ jobs, notices, record: null });
   const waiting = [...requests.earlier, ...requests.current];
   const waitingCount = waiting.length;
-  const showWaiting = waitingCount > 0 && !workspaceNavigation.isVisible('geometry');
+  // A visible Geometry tab can still have its requests below the scroll fold.
+  const showWaiting = waitingCount > 0;
   const showReady = readyRun !== null && !workspaceNavigation.isVisible('results');
   // A request WG took and refused has no row to wait in; this is its route.
   const showRefused = unseenRefusals > 0 && !(mode === 'cad' && workspaceNavigation.isVisible('geometry'));
