@@ -1,7 +1,7 @@
 import { currentModel, useCurrentModel } from '../model/currentModel';
-import { importedModelBlocker, unchangedSetup, useImportedModelStore } from '../stores/importedModel';
+import { importedModelBlocker, importedModelId, unchangedSetup, useImportedModelStore } from '../stores/importedModel';
 import { nativeSymmetryLimitation } from '../design/nativeFamilies';
-import { fileMeshSubmission, registeredMesh, useMeshImportStore } from '../stores/meshImport';
+import { fileMeshSetup, fileMeshSubmission, registeredMesh, useMeshImportStore } from '../stores/meshImport';
 import type { ExportFormat } from '../prefs/preferences';
 import { ownedAutoExport } from '../jobs/autoExportOwner';
 import { exportRunAutomatically } from '../jobs/autoExportRun';
@@ -12,7 +12,6 @@ import { compareSelection } from '../api/results';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { importedSolvePlanRequestBody, planSolveDesign, postImportedSolvePlan, solveModel, SolveSubmissionRefused, submitDesign, type EngineSubstitution, type ImportedSolveSubmission, type ModelSolvePress, type SolvePlan } from '../jobs/actions';
 import { rerunWithPatch, type RerunPatch } from '../jobs/rerun';
-import { setupOfSubmission } from '../jobs/importedSetup';
 import {
   useCapabilities,
   useCapabilityRefreshOnReconnect,
@@ -197,13 +196,6 @@ function cadInputBlockerNow(): string | null {
     return CAD_VIEWPORT_MISMATCH;
   }
   return importedSubmissionBlocker(cadReturn);
-}
-
-/** The model a CAD preparation is filed under, as a Solve names it: the reserved
- * `unfiled` for one the server files under none (server/jobs/model_solve.py). */
-function cadModelId(record: CadReturnIngestRecord): string {
-  if (record.model_id !== undefined) return record.model_id || 'unfiled';
-  return record.project?.lineage_id || 'unfiled';
 }
 
 /** The blocking findings already reviewed on the refused solve of this
@@ -447,7 +439,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const solveFileModel = useCallback(async () => {
     let designName = '';
     const jobId = await acceptSubmission(async () => {
-      const submission = fileMeshSubmission();
+      const setup = fileMeshSetup();
       const record = registeredMesh()!;
       designName = useMeshImportStore.getState().filename;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
@@ -455,7 +447,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       const unchanged = unchangedSetup('file', record.ingest_id);
       const press: ModelSolvePress = {
         prepared_id: record.ingest_id, client_request_id: `mesh-${crypto.randomUUID()}`, label,
-        ...(unchanged ?? { setup: setupOfSubmission(submission) }),
+        ...(unchanged ?? { setup: { schema_version: 1, ...setup } as unknown as ModelSolvePress['setup'] }),
       };
       return solveModel(record.model_id, press)
         .catch((error) => { throw importedSolveError(error, unchanged !== null); });
@@ -478,7 +470,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     if (blocker) throw new Error(blocker);
     // The settings on screen, or the setup an unedited reopened run was opened with.
     const unchanged = unchangedSetup('cad', ingestId);
-    const built = unchanged ? null : buildCadProjectSetup(cad, undefined, undefined, cadModelId(record));
+    const built = unchanged ? null : buildCadProjectSetup(cad, undefined, undefined, importedModelId(record));
     if (!unchanged && !built) throw new Error('The CAD solve settings are incomplete. Review the Simulation settings and try again.');
     const designName = currentRunNameSource().name;
     const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
@@ -505,7 +497,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       // The completion claim exists before HTTP: an event may beat the response.
       rememberCadSolve(key, designName, ingestId);
       solveAttention.bindOperation(key);
-      const jobId = await solveModel(cadModelId(record), press).catch((error) => {
+      const jobId = await solveModel(importedModelId(record), press).catch((error) => {
         if (error instanceof SolveSubmissionRefused) {
           // Refused: no job exists for this press, so nothing may claim it.
           forgetCadSolve(key);

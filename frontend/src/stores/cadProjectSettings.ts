@@ -8,7 +8,7 @@ import { useCadReturnStore, sourceInventorySignature } from './cadReturn';
 import { useCadPreparationStore } from './cadPreparation';
 import { durableSettings, type SettingsNamespace } from './durableSettings';
 import { CAD_DRAFTS_NAMESPACE, cadDraftHash, journalKey, mergeCadDrafts, type CadDraftJournal } from './cadDraftJournal';
-import { applyCadOptions, cadOptionsSnapshot, endOpenedSetup } from './importedModel';
+import { applyCadOptions, cadOptionsSnapshot, endOpenedSetup, restoreCadImportedSetup } from './importedModel';
 import { readLegacySolveProfiles, parseSolveSettings, type PersistedSolveSettings } from './legacyCadProfiles';
 import { defaultSolveOptions, importedOptionsFromWire, normalizePersistedSolveOptions, type ImportedOptionsSnapshot } from './solveOptions';
 import { gateSolveSettingsEdits, subscribeSolveSettingsEdits } from './solveSettingsEdits';
@@ -272,8 +272,9 @@ export function loadCadProjectSettings(fetcher: typeof fetch = fetch): Promise<b
         default_drive_channel_id: source.defaultDriveChannelId })), skipped_source_ids: held.skippedSourceIds,
         mesh_sizes: { source_size_mm: held.sourceSizesMm, rigid_size_mm: held.rigidSizeMm, transition_mm: held.transitionMm },
       } as unknown as CadReturnIngestRecord;
-      restoreCadProjectSettings(saved.setup, record, true, saved.revision_id ?? null);
+      const draft = restoreCadProjectSettings(saved.setup, record, true, saved.revision_id ?? null);
       useCadReturnStore.setState({ setupLoading: false });
+      restoreCadImportedSetup(model, held.ingestRecord, draft ? null : saved.setup, saved.revision_id ?? null);
       releaseEdits(selection, true);
       return true;
     } catch (error) {

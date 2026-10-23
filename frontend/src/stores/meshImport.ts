@@ -11,12 +11,13 @@ import {
   useImportedSolveOptionsStore, type SolveOptions,
 } from './solveOptions';
 import type { ImportedSolveSubmission } from '../jobs/actions';
-import { noteSolveSettingsEdit, subscribeSolveSettingsEdits } from './solveSettingsEdits';
+import { beforeSolveSettingsEdit, noteSolveSettingsEdit, subscribeSolveSettingsEdits } from './solveSettingsEdits';
 import { openMeshReplay } from '../api/meshReplay';
 import { bindImportedSetup, importedSetupOf, type ImportedSetup } from '../jobs/importedSetup';
 import { saveImportedSetup } from '../api/importedModels';
 import {
-  editFileDraft, importedModelBlocker, isCurrentOpen, openImported, registerImportedView, useImportedModelStore,
+  editFileDraft, effectiveImportedSetup, importedModelBlocker, isCurrentOpen, openImported,
+  registerImportedSetupControls, registerImportedView, useImportedModelStore,
   type ImportedView,
 } from './importedModel';
 
@@ -77,9 +78,14 @@ export function editMeshImport(patch: Partial<{ units: string; forward: string; 
   useMeshImportStore.setState({ error: null, notice: null });
 }
 
-/** A source's motion is part of the setup: changing it ends the setup the file was opened with. */
+/** A source's motion edits its retained channel without replacing the other physics. */
 export function setMeshMotion(sourceId: string, motion: 'normal' | 'axial'): void {
-  useMeshImportStore.setState((state) => ({ motions: { ...state.motions, [sourceId]: motion } }));
+  beforeSolveSettingsEdit({ source: 'meshImport', control: 'motion' });
+  const model = useImportedModelStore.getState();
+  const setup = model.setup ?? model.setupEditBase?.retained;
+  const sources = setup?.geometry.drive_channels.find(channel => channel.source_ids.includes(sourceId))?.source_ids ?? [sourceId];
+  useMeshImportStore.setState((state) => ({ motions: { ...state.motions,
+    ...Object.fromEntries(sources.map(id => [id, motion])) } }));
   noteSolveSettingsEdit({ source: 'meshImport', control: 'motion' });
 }
 
@@ -129,7 +135,9 @@ export async function prepareMeshFile(fetcher: typeof fetch = fetch): Promise<vo
     if (useMeshImportStore.getState().original !== state.original || JSON.stringify(current) !== JSON.stringify(draft)) return;
     if (importedMeshStore.setFile(preparedFileScene(record), generation)) {
       useMeshImportStore.setState({ summary: state.summary ?? record.summary });
-      await openImported({ kind: 'file', prepared: record });
+      const latest = useImportedModelStore.getState();
+      const retained = latest.setup ?? latest.setupEditBase?.retained;
+      await openImported({ kind: 'file', prepared: record, setup: retained ? setupForPreparedFile(retained, record) : null });
     }
   } catch (error) {
     if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ error: error instanceof Error ? error.message : String(error) });
@@ -138,7 +146,32 @@ export async function prepareMeshFile(fetcher: typeof fetch = fetch): Promise<vo
   }
 }
 
+/** Preparation edits only the source assignments that no longer exist. */
+function setupForPreparedFile(retained: ImportedSetup, record: RegisteredMesh): ImportedSetup {
+  const setup = structuredClone(retained);
+  const available = new Set(Object.keys(record.source_tags));
+  setup.geometry.drive_channels = setup.geometry.drive_channels.flatMap(channel => {
+    const source_ids = channel.source_ids.filter(id => available.has(id));
+    return source_ids.length ? [{ ...channel, source_ids }] : [];
+  });
+  const assigned = new Set(setup.geometry.drive_channels.flatMap(channel => channel.source_ids));
+  setup.geometry.skipped_source_ids = setup.geometry.skipped_source_ids.filter(id => available.has(id));
+  for (const id of available) if (!assigned.has(id) && !setup.geometry.skipped_source_ids.includes(id)) {
+    setup.geometry.drive_channels.push({ id, source_ids: [id], motion: 'normal' });
+  }
+  if (setup.geometry.combine?.members.some(id => !setup.geometry.drive_channels.some(channel => channel.id === id))) {
+    delete setup.geometry.combine;
+  }
+  return setup;
+}
+
 export function fileMeshSubmission(): ImportedSolveSubmission {
+  const setup = fileMeshSetup();
+  return bindImportedSetup(registeredMesh()!, setup);
+}
+
+/** The same effective setup Save records and Solve submits. */
+export function fileMeshSetup(): ImportedSetup {
   const state = useMeshImportStore.getState();
   const record = registeredMesh();
   const viewport = importedMeshStore.getSnapshot();
@@ -148,6 +181,13 @@ export function fileMeshSubmission(): ImportedSolveSubmission {
   if (!record || viewport.showing !== 'file' || viewport.file?.ingestId !== record.ingest_id) {
     throw new Error('Choose units and driven groups, then prepare this mesh before solving.');
   }
+  return effectiveImportedSetup('file', record.ingest_id, fileSetupControls);
+}
+
+function fileSetupControls(): ImportedSetup {
+  const state = useMeshImportStore.getState();
+  const model = useImportedModelStore.getState();
+  const record = model.prepared as RegisteredMesh;
   // Every option, the sweep range and count included, is the imported
   // instance's; this view only adds the mesh's geometry and source motions.
   const selected = useImportedSolveOptionsStore.getState();
@@ -164,12 +204,17 @@ export function fileMeshSubmission(): ImportedSolveSubmission {
   delete options.ground_plane;
   options.symmetry = 'full';
   options.solver_mode = 'full_3d';
-  return bindImportedSetup(record, {
+  const retained = model.setup ?? model.setupEditBase?.retained;
+  const channels = retained?.geometry.drive_channels
+    ?? Object.keys(record.source_tags).map(id => ({ id, source_ids: [id], motion: 'normal' as const }));
+  return {
     geometry: { skipped_source_ids: [],
-      drive_channels: Object.keys(record.source_tags).map(id => ({ id, source_ids: [id], motion: state.motions[id] ?? 'normal' })) },
+      drive_channels: channels.map(channel => ({ ...channel,
+        motion: channel.source_ids.map(id => state.motions[id]).find(motion => motion !== undefined) ?? channel.motion ?? 'normal' })) },
     options,
-  });
+  };
 }
+registerImportedSetupControls('file', fileSetupControls);
 
 function preparedFileScene(record: RegisteredMesh) {
   return createImportedMeshScene(record.source_file.filename, parseMSH(record.msh_text), 'file', record.ingest_id,
@@ -194,7 +239,8 @@ function fillFileRail(record: RegisteredMesh, setup: ImportedSetup | null, gener
   if (setup) applyWireOptionsToImportedSolveOptions(setup.options as Partial<SolveOptions>);
   useImportedSolveOptionsStore.setState({ groundPlane: { enabled: false, axis: 'y', height_m: 0 } });
   useMeshImportStore.setState({ ...initial, filename: record.source_file.filename, summary: record.summary,
-    motions: Object.fromEntries((setup?.geometry.drive_channels ?? []).map(channel => [channel.id, channel.motion ?? 'normal'])),
+    motions: Object.fromEntries((setup?.geometry.drive_channels ?? []).flatMap(channel =>
+      channel.source_ids.map(id => [id, channel.motion ?? 'normal']))),
     request: useMeshImportStore.getState().request,
   });
   return true;
@@ -244,7 +290,7 @@ export async function loadMeshReplay(text: string, fetcher: typeof fetch = fetch
     }
     if (!fillFileRail(opened.record, setup, generation)) return false;
     await openImported({ kind: 'file', prepared: opened.record, setup });
-    useMeshImportStore.setState({ notice: 'Mesh replay opened. Solve preserves its exact settings. Editing a setup or solve control starts a new setup.' });
+    useMeshImportStore.setState({ notice: 'Mesh replay opened. Save and Solve keep its settings. Edits keep the other settings.' });
     return true;
   } catch (error) {
     if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ error: error instanceof Error ? error.message : String(error) });
@@ -256,13 +302,13 @@ export async function loadMeshReplay(text: string, fetcher: typeof fetch = fetch
 
 /** Explicitly save before Solve. CAD project edits use this same setup schema. */
 export async function saveMeshSetup(fetcher: typeof fetch = fetch): Promise<void> {
-  const submission = fileMeshSubmission();
-  const ingest_id = submission.geometry.ingest_id;
+  const setup = fileMeshSetup();
+  const ingest_id = registeredMesh()!.ingest_id;
   const modelId = registeredMesh()!.model_id;
-  await saveImportedSetup(modelId, ingest_id, importedSetupOf(submission), fetcher);
+  await saveImportedSetup(modelId, ingest_id, setup, fetcher);
   if (registeredMesh()?.ingest_id !== ingest_id) return;
   let unchanged = false;
-  try { unchanged = JSON.stringify(fileMeshSubmission()) === JSON.stringify(submission); } catch { unchanged = false; }
+  try { unchanged = JSON.stringify(fileMeshSetup()) === JSON.stringify(setup); } catch { unchanged = false; }
   useMeshImportStore.setState({ notice: unchanged
     ? 'Mesh setup saved with this model. Reopening the model, or importing the same file again, restores it.'
     : 'Earlier mesh settings were saved. Your current edits are not saved.' });

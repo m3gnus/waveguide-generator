@@ -374,12 +374,18 @@ describe('a reopened file run', () => {
 });
 
 describe('portable mesh replay', () => {
+  const replayRecord: RegisteredMesh = { ...record, source_tags: { group_1: 1, group_2: 2 },
+    source_file: { ...record.source_file, source_tags: [1, 2] } };
   function exactRequest() {
-    showPrepared();
+    showPrepared(replayRecord);
     const request = fileMeshSubmission();
     request.options.frequencies_hz = [137, 211, 3987];
     request.options.polar_config = { ...request.options.polar_config, distance: 3.7, norm_angle: 17, enabled_axes: ['vertical'] };
     request.geometry.drive_voltage_v = 4.2;
+    request.geometry.drive_channels = [{ id: 'retained-channel', source_ids: ['group_2'], motion: 'axial',
+      driver: { re_ohm: 6.2, le_mh: 0.1, bl_t_m: 12.4, sd_cm2: 26, mms_g: 2.4, fs_hz: 620 } },
+    { id: 'second-channel', source_ids: ['group_1'], motion: 'normal' }];
+    request.geometry.combine = { members: ['second-channel', 'retained-channel'], crossovers_hz: [620], level_match: false, align: false };
     return request;
   }
   const setupOfRequest = (request: ReturnType<typeof fileMeshSubmission>) => {
@@ -389,7 +395,7 @@ describe('portable mesh replay', () => {
 
   it('solves the complete request until a setting is edited', async () => {
     const request = exactRequest();
-    const opening = vi.fn(async () => response({ record, request }));
+    const opening = vi.fn(async () => response({ record: replayRecord, request }));
     expect(await loadMeshReplay('{"version":1}', opening)).toBe(true);
     expect(opening.mock.calls[0]).toEqual(['/api/mesh-replay', expect.objectContaining({ body: '{"version":1}' })]);
     // No revision is known for a replay: an unedited Solve sends its exact setup.
@@ -403,10 +409,58 @@ describe('portable mesh replay', () => {
 
   it('keeps exact replay through an edit to the parametric options', async () => {
     const request = exactRequest();
-    await loadMeshReplay('{}', vi.fn(async () => response({ record, request })));
+    await loadMeshReplay('{}', vi.fn(async () => response({ record: replayRecord, request })));
     useSolveOptionsStore.getState().updatePolar({ distance: 9 });
     useSolveOptionsStore.getState().setEngine('bempp');
     expect(unchangedSetup('file', record.ingest_id)).toEqual({ setup: setupOfRequest(request) });
+  });
+
+  it('saves and reopens the complete replay without changing its physics', async () => {
+    const request = exactRequest();
+    await loadMeshReplay('{}', vi.fn(async () => response({ record: replayRecord, request })));
+    const before = fileMeshSubmission();
+    const save = vi.fn<typeof fetch>(async () => response({ revision_id: 'wgs_saved' }));
+    await saveMeshSetup(save);
+    const { setup } = JSON.parse(save.mock.calls[0][1]?.body as string);
+    expect(setup).toEqual(setupOfRequest(request));
+    expect(fileMeshSubmission()).toEqual(before);
+    expect(await openImported({ kind: 'model', modelId: record.model_id }, vi.fn(async url =>
+      String(url).includes('/setup?') ? response({ setup, revision_id: 'wgs_saved' }) : prepared(replayRecord)))).toBe(true);
+    expect(useImportedModelStore.getState().setup).toEqual(setup);
+    expect(fileMeshSubmission()).toEqual(before);
+  });
+
+  it('edits only the chosen controls, keeping retained drivers, combination, voltage and other options', async () => {
+    const request = exactRequest();
+    await loadMeshReplay('{}', vi.fn(async () => response({ record: replayRecord, request })));
+    // Hydration is not a person's engine choice and must not ride along with a later edit.
+    useImportedSolveOptionsStore.setState({ engine: 'bempp' });
+    useImportedSolveOptionsStore.getState().updatePolar({ distance: 9 });
+    const expected = structuredClone(request);
+    expected.options.polar_config.distance = 9;
+    expect(fileMeshSubmission()).toEqual(expected);
+    setMeshMotion('group_2', 'normal');
+    expected.geometry.drive_channels[0].motion = 'normal';
+    expect(fileMeshSubmission()).toEqual(expected);
+    const save = vi.fn<typeof fetch>(async () => response({ revision_id: 'wgs_edited' }));
+    await saveMeshSetup(save);
+    expect(JSON.parse(save.mock.calls[0][1]?.body as string).setup).toEqual(setupOfRequest(expected));
+  });
+
+  it('keeps retained physics when only file preparation axes change', async () => {
+    const request = exactRequest();
+    await loadMeshReplay('{}', vi.fn(async () => response({ record: replayRecord, request })));
+    editMeshImport({ forward: '+x', up: '+z' });
+    expect(() => fileMeshSubmission()).toThrow('Choose units');
+    const next = { ...replayRecord, ingest_id: 'wgi_rotated',
+      source_file: { ...replayRecord.source_file, transform: { units: 'mm', forward: '+x', up: '+z' } } };
+    const wait = deferred<Response>();
+    const preparing = prepareMeshFile(vi.fn(() => wait.promise));
+    useImportedSolveOptionsStore.getState().updatePolar({ distance: 8 });
+    wait.resolve(prepared(next));
+    await preparing;
+    request.options.polar_config.distance = 8;
+    expect(fileMeshSubmission()).toEqual({ ...request, geometry: { ...request.geometry, ingest_id: next.ingest_id } });
   });
 
   it('does not let a delayed replay replace a newer viewport choice', async () => {

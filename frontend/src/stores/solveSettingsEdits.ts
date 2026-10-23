@@ -18,6 +18,17 @@ export function gateSolveSettingsEdits(gate: EditGate): () => void {
   return () => { gates.delete(gate); };
 }
 const listeners = new Set<Listener>();
+const beforeListeners = new Set<Listener>();
+
+/** Capture the controls immediately before a person's edit, after any edit gate. */
+export function beforeSolveSettingsEdit(edit: SolveSettingsEdit): void {
+  beforeListeners.forEach(listener => listener(edit));
+}
+
+export function subscribeBeforeSolveSettingsEdits(listener: Listener): () => void {
+  beforeListeners.add(listener);
+  return () => { beforeListeners.delete(listener); };
+}
 
 export function noteSolveSettingsEdit(edit?: SolveSettingsEdit): void {
   listeners.forEach((listener) => listener(edit));
@@ -45,6 +56,7 @@ export function withEditSignals<S extends object>(
     announced[name] = ((...args: unknown[]) => {
       const apply = () => {
         const before = get();
+        beforeSolveSettingsEdit({ source, control: String(name) });
         const result = setter(...args);
         if (get() !== before) noteSolveSettingsEdit({ source, control: String(name) });
         return result;

@@ -1,4 +1,4 @@
-import { importedModelBlocker } from '../stores/importedModel';
+import { effectiveImportedSetup, importedModelBlocker } from '../stores/importedModel';
 import { exteriorTransducerError } from '../stores/exteriorTransducer';
 import type { ImportedSolveSubmission } from './actions';
 import { bindImportedSetup, type ImportedSetup } from './importedSetup';
@@ -360,7 +360,7 @@ export function buildImportedSubmission(
   if (opening) throw new Error(opening);
   if (!record) throw new Error('Ingest a CAD return before solving.');
   if (record.evidence_unverified) throw new Error('The retained return manifest cannot be verified; re-ingest this return before solving.');
-  const setup = resolveCadImportedSetup(state);
+  const setup = effectiveImportedSetup('cad', record.ingest_id, () => resolveCadImportedSetup(state));
   if (record.native_source) setup.geometry.required_features = [...record.native_source.required_features];
   widenPolarToDerivation(setup.options, record.polar_grid_derivation);
   return bindImportedSetup(record, setup, blockingFindingWire(record));

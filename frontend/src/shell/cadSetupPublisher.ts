@@ -21,6 +21,8 @@ import { useCadReceiptsStore } from '../stores/cadReceipts';
 import { polarValidationError, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { subscribeSolveSettingsEdits } from '../stores/solveSettingsEdits';
 import { workspaceModeStore } from '../stores/workspaceMode';
+import { effectiveImportedSetup, registerImportedSetupControls, useImportedModelStore } from '../stores/importedModel';
+import type { ImportedSetup } from '../jobs/importedSetup';
 
 /**
  * What the backend prepares a Fusion solve of this project from
@@ -71,6 +73,19 @@ export function buildCadProjectSetup(
   preparation: CadPreparationSnapshot = useCadPreparationStore.getState(),
   lineageId: string | null = projectLineage(state),
 ): CadProjectSetup | null {
+  const draft = cadProjectSetupControls(state, solveStore, preparation, lineageId);
+  if (!draft) return null;
+  return { ...draft, setup: { schema_version: 1,
+    ...effectiveImportedSetup('cad', state.ingestRecord?.ingest_id, () => draft.setup as unknown as ImportedSetup),
+  } as unknown as CadSolveSetup };
+}
+
+function cadProjectSetupControls(
+  state: CadReturnSnapshot = useCadReturnStore.getState(),
+  solveStore: SolveOptionsSnapshot = useImportedSolveOptionsStore.getState(),
+  preparation: CadPreparationSnapshot = useCadPreparationStore.getState(),
+  lineageId: string | null = projectLineage(state),
+): CadProjectSetup | null {
   const bundle = state.selectedBundle;
   if (state.setupLoading) return null;
   if (bundle?.bundleOrigin === 'native') return null;
@@ -108,6 +123,8 @@ export function buildCadProjectSetup(
     },
   };
 }
+registerImportedSetupControls('cad', () => cadProjectSetupControls(undefined, undefined, undefined,
+  useImportedModelStore.getState().modelId)?.setup as unknown as ImportedSetup | null);
 
 /** Which project, inventory and return the settings on screen belong to. */
 function selectionKey(state: CadReturnSnapshot): string | null {

@@ -3,6 +3,7 @@ import { bundle, record, json, deferred, mesh, workspaceFor } from '../shell/cad
 import '../shell/cadlink/restores';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { buildCadProjectSetup, startCadSetupPublisher } from '../shell/cadSetupPublisher';
+import { buildImportedSubmission } from '../jobs/importedSubmission';
 import { resetCadReturnStore, sourceInventorySignature, useCadReturnStore } from './cadReturn';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
 import { resetCadPreparationStore } from './cadPreparation';
@@ -67,6 +68,25 @@ it('restores identical model settings on reopen, selection and arrival, independ
   const read = fetcher.mock.calls.find(([input]) => String(input).includes('?inventory='))!;
   expect(JSON.parse(decodeURIComponent(String(read[0]).split('inventory=')[1]))).toEqual(inventory);
   expect(useImportedSolveOptionsStore.getState()).toMatchObject({ frequencySpacing: 'linear', adaptiveFrequencySampling: true });
+});
+
+it('publishes and solves only the edited CAD option while retaining the rest of the archived setup', async () => {
+  const fetcher = server();
+  expect(await openImported({ kind: 'model', modelId: model }, fetcher)).toBe(true);
+  expect(buildCadProjectSetup()?.setup).toEqual(saved);
+  useImportedSolveOptionsStore.getState().updatePolar({ distance: 7 });
+  const expected = structuredClone(saved);
+  expected.options.polar_config.distance = 7;
+  expect(buildCadProjectSetup()?.setup).toEqual(expected);
+  const submitted = buildImportedSubmission();
+  expect(submitted.geometry.drive_voltage_v).toBe(saved.geometry.drive_voltage_v);
+  expect(submitted.geometry.max_drive_voltage_v).toBe(saved.geometry.max_drive_voltage_v);
+  expect(submitted.options).toEqual(expected.options);
+  // Preparing another mesh of this model keeps the effective edited setup.
+  const next = { ...record, model_id: model, ingest_id: 'wgi_prepared_again' };
+  await openImported({ kind: 'cad', record: next });
+  useCadReturnStore.setState({ ingestRecord: next });
+  expect(buildCadProjectSetup()?.setup).toEqual(expected);
 });
 
 it('persists an incomplete driver immediately, restores it over the last valid setup, and clears only on successful publish', async () => {

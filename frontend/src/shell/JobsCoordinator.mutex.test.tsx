@@ -28,7 +28,7 @@ import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsSt
 import { solveOptionsStoreForMode, useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
-import { useMeshImportStore } from '../stores/meshImport';
+import { saveMeshSetup, useMeshImportStore } from '../stores/meshImport';
 import { readLastModel, rememberLastModel } from '../stores/lastModel';
 import type { RegisteredMesh } from '../api/meshImport';
 import type { ImportedMeshScene } from '../viewport/importedMesh';
@@ -1658,6 +1658,36 @@ describe('solve invocation mutex', () => {
     expect(press().client_request_id).toMatch(/^mesh-/);
     await act(async () => { accepted.resolve('replayed-run'); await accepted.promise; });
     act(() => resetImportedModelStore());
+  });
+
+  it('submits the same complete file setup before and after Save setup', async () => {
+    const replay = importedSubmission('wgi_saved_replay');
+    replay.geometry.drive_voltage_v = 4.2;
+    replay.geometry.drive_channels[0].driver = { re_ohm: 6.2, sd_cm2: 26, bl_t_m: 12.4, mms_g: 2.4, fs_hz: 620 };
+    replay.geometry.drive_channels.push({ id: 'second', source_ids: ['source-2'], motion: 'normal' });
+    replay.geometry.combine = { members: replay.geometry.drive_channels.map(channel => channel.id), crossovers_hz: [500] };
+    const { type: _t, ingest_id: _i, manifest_sha256: _m, artifact_sha256: _a, acknowledged_findings: _f, ...geometry } = replay.geometry;
+    const setup = { geometry, options: replay.options };
+    act(() => {
+      workspaceModeStore.setImportedInput('file'); workspaceModeStore.setMode('cad');
+      useMeshImportStore.setState({ busy: false, filename: 'replay.msh' });
+      void openImported({ kind: 'file', setup, prepared: { ingest_id: 'wgi_saved_replay', model_id: 'mesh-file:saved-replay',
+        manifest_sha256: replay.geometry.manifest_sha256, artifact_sha256: replay.geometry.artifact_sha256,
+        source_tags: Object.fromEntries(geometry.drive_channels.flatMap(channel => channel.source_ids).map((id, i) => [id, i + 1])),
+      } as unknown as RegisteredMesh });
+      importedMeshStore.setFile({ name: 'replay.msh', source: 'file', ingestId: 'wgi_saved_replay' } as ImportedMeshScene);
+    });
+    mocks.solveModel.mockResolvedValue('replayed-run');
+    await act(async () => root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>));
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
+    const before = structuredClone(press().setup);
+    const save = vi.fn<typeof fetch>(async () => json({ revision_id: 'wgs_saved' }));
+    await act(async () => { await saveMeshSetup(save); });
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
+    expect(before).toEqual({ schema_version: 1, ...setup });
+    expect(press(1).setup).toEqual(before);
+    expect(JSON.parse(save.mock.calls[0][1]?.body as string).setup).toEqual(before);
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
   });
 
   // V2: Solve has one meaning. It solves the model and settings on screen;

@@ -6,9 +6,9 @@ import {
   ImportedModelApiError, isModelGone, readImportedModel, readImportedSetup, readRunWorkspace,
   type ImportedModelSummary, type PreparedSummary,
 } from '../api/importedModels';
-import type { ImportedSetup } from '../jobs/importedSetup';
+import { applySetupEdits, type ImportedSetup } from '../jobs/importedSetup';
 import { importedMeshStore } from '../viewport/importedMeshStore';
-import { subscribeSolveSettingsEdits } from './solveSettingsEdits';
+import { subscribeBeforeSolveSettingsEdits, subscribeSolveSettingsEdits } from './solveSettingsEdits';
 import {
   importedOptionsSnapshot, seedImportedSolveOptions, seedImportedSolveOptionsForFile,
   seedImportedSolveOptionsFromParametric,
@@ -35,6 +35,12 @@ export interface FileDraft { units: string; forward: string; up: string; selecte
 /** The prepared mesh on screen: a file's registered mesh, or a CAD ingestion record. */
 export type ImportedPrepared = { ingest_id: string; manifest_sha256: string; artifact_sha256: string; model_id?: string | null };
 
+/** The registered model, including older CAD records that only carry a project lineage. */
+export function importedModelId(record: ImportedPrepared & { project?: { lineage_id?: string | null } | null }): string {
+  if (record.model_id !== undefined) return record.model_id || 'unfiled';
+  return record.project?.lineage_id || 'unfiled';
+}
+
 export interface ImportedModelState {
   input: ImportedInput | null;
   model: ImportedModelSummary | null;
@@ -45,6 +51,8 @@ export interface ImportedModelState {
   originalAvailable: boolean;
   /** The setup the model was opened with, until a person edits it. */
   setup: ImportedSetup | null;
+  /** Retained physics and its control projection, kept through explicit edits. */
+  setupEditBase: { retained: ImportedSetup; controls: ImportedSetup } | null;
   /** The saved revision `setup` is; an unedited Solve sends it. */
   restoredRevisionId: string | null;
   fileDraft: FileDraft;
@@ -58,7 +66,7 @@ export const EMPTY_FILE_DRAFT: Readonly<FileDraft> = Object.freeze({ units: '', 
 function emptyState(input: ImportedInput | null): Omit<ImportedModelState, 'generation'> {
   return {
     input, model: null, modelId: null, prepared: null, originalAvailable: false, setup: null,
-    restoredRevisionId: null, fileDraft: { ...EMPTY_FILE_DRAFT, selected: [] }, phase: 'empty', error: null,
+    restoredRevisionId: null, setupEditBase: null, fileDraft: { ...EMPTY_FILE_DRAFT, selected: [] }, phase: 'empty', error: null,
   };
 }
 
@@ -139,13 +147,13 @@ function inputOf(producer: string | null | undefined): ImportedInput {
 function openKnown(source: Extract<ImportedSource, { kind: 'file' | 'cad' }>): void {
   const input: ImportedInput = source.kind === 'file' ? 'file' : 'cad';
   const prepared = source.kind === 'file' ? source.prepared : source.record;
-  const modelId = prepared ? (prepared.model_id || 'unfiled') : null;
+  const modelId = prepared ? importedModelId(prepared) : null;
   const filename = source.kind === 'file' ? source.prepared?.source_file?.filename : source.record.project?.document_name ?? undefined;
   const held = workspaceModeStore.getSnapshot().importedInput === input ? useImportedModelStore.getState() : parked[input]?.state;
-  // The same CAD snapshot arriving again (a refresh of the record on screen)
-  // is the model already open: an unedited opened setup stays.
-  const same = source.kind === 'cad' && held?.input === 'cad' && held.phase === 'ready'
-    && held.prepared?.ingest_id === source.record.ingest_id;
+  // Refreshing or preparing the same CAD model keeps its effective setup.
+  const same = source.kind === 'cad' && held?.input === 'cad'
+    && (held.prepared?.ingest_id === source.record.ingest_id
+      || (modelId !== 'unfiled' && held.modelId === modelId && held.setupEditBase !== null));
   const next: Omit<ImportedModelState, 'generation'> = {
     ...emptyState(input),
     model: modelId && modelId !== 'unfiled'
@@ -154,6 +162,7 @@ function openKnown(source: Extract<ImportedSource, { kind: 'file' | 'cad' }>): v
     prepared,
     originalAvailable: source.kind === 'file' && prepared !== null,
     setup: source.kind === 'file' ? source.setup ?? null : same ? held!.setup : null,
+    setupEditBase: same ? held!.setupEditBase : null,
     restoredRevisionId: same ? held!.restoredRevisionId : null,
     ...(same ? { model: held!.model, modelId: held!.modelId, originalAvailable: held!.originalAvailable } : {}),
     fileDraft: source.kind === 'file' && source.prepared ? fileDraftOf(source.prepared)
@@ -167,6 +176,7 @@ function openKnown(source: Extract<ImportedSource, { kind: 'file' | 'cad' }>): v
     return;
   }
   useImportedModelStore.setState(next);
+  if (!same) captureSetupControls();
 }
 
 async function readOpened(source: Extract<ImportedSource, { kind: 'run' | 'model' }>, input: ImportedInput,
@@ -247,6 +257,7 @@ export async function openImported(source: ImportedSource, fetcher: typeof fetch
       fileDraft: input === 'file' ? fileDraftOf(opened.prepared) : useImportedModelStore.getState().fileDraft,
       phase: 'ready', error: null,
     });
+    captureSetupControls();
     return true;
   } catch (error) {
     if (!current()) return stopped();
@@ -360,7 +371,49 @@ export function unchangedSetup(input: ImportedInput, preparedId: string | undefi
     || !state.setup) return null;
   return state.restoredRevisionId
     ? { setup_revision_id: state.restoredRevisionId }
-    : { setup: { schema_version: 1, ...structuredClone(state.setup) } as unknown as CadSolveSetup };
+    : { setup: { schema_version: 1, ...effectiveImportedSetup(input, preparedId, () => state.setup!) } as unknown as CadSolveSetup };
+}
+
+const setupControls: Partial<Record<ImportedInput, () => ImportedSetup | null>> = {};
+
+/** Each rail supplies its existing builder; the imported model owns replay versus edits. */
+export function registerImportedSetupControls(input: ImportedInput, controls: () => ImportedSetup | null): void {
+  setupControls[input] = controls;
+}
+
+function captureSetupControls(): void {
+  const state = useImportedModelStore.getState();
+  if (!state.input || !state.setup) return;
+  const controls = readSetupControls(state.input);
+  if (controls) useImportedModelStore.setState({ setupEditBase: {
+    retained: structuredClone(state.setup), controls: structuredClone(controls),
+  } });
+}
+
+function readSetupControls(input: ImportedInput): ImportedSetup | null {
+  try { return setupControls[input]?.() ?? null; } catch { return null; }
+}
+
+/** A CAD inventory read restores settings before its mesh is prepared. */
+export function restoreCadImportedSetup(modelId: string, prepared: ImportedPrepared | null,
+  setup: ImportedSetup | null, revisionId: string | null): void {
+  if (workspaceModeStore.getSnapshot().importedInput !== 'cad') return;
+  useImportedModelStore.setState({ input: 'cad', modelId, prepared,
+    setup: setup ? structuredClone(setup) : null, restoredRevisionId: setup ? revisionId : null,
+    setupEditBase: null, phase: prepared ? 'ready' : 'empty', error: null });
+  captureSetupControls();
+}
+
+/** One physics selection for Save, Solve, and the request archived for replay export. */
+export function effectiveImportedSetup(input: ImportedInput, preparedId: string | undefined,
+  draft: () => ImportedSetup): ImportedSetup {
+  const state = useImportedModelStore.getState();
+  if (state.input !== input || !['ready', 'empty'].includes(state.phase)
+    || state.prepared?.ingest_id !== preparedId) return draft();
+  if (state.setup) return structuredClone(state.setup);
+  const base = state.setupEditBase;
+  const controls = draft(); // Incomplete edits still refuse; they never fall back to the last valid setup.
+  return base ? structuredClone(base.retained) : controls;
 }
 
 // A person's edit of an imported setting ends the opened setup. Parametric
@@ -373,6 +426,15 @@ function editedInput(source: string | undefined): ImportedInput {
   // cadReturn and cadPreparation announce their setters without a source.
   return 'cad';
 }
+
+subscribeBeforeSolveSettingsEdits(edit => {
+  if (edit?.source === 'solveOptions') return;
+  const input = editedInput(edit?.source);
+  const state = useImportedModelStore.getState();
+  if (state.input !== input || !state.setupEditBase) return;
+  const controls = readSetupControls(input);
+  if (controls) useImportedModelStore.setState({ setupEditBase: { ...state.setupEditBase, controls } });
+});
 
 subscribeSolveSettingsEdits((edit) => {
   if (edit?.source === 'solveOptions') return;
@@ -389,6 +451,11 @@ subscribeSolveSettingsEdits((edit) => {
       error: 'Settings changed while this run was loading. Select the run again before solving.' });
     return;
   }
+  const base = state.setupEditBase;
+  const controls = base ? readSetupControls(input) : null;
+  if (base && controls) useImportedModelStore.setState({ setupEditBase: {
+    retained: applySetupEdits(base.retained, base.controls, controls) as ImportedSetup, controls,
+  } });
   if (state.setup || state.restoredRevisionId) useImportedModelStore.setState({ setup: null, restoredRevisionId: null });
 });
 
@@ -453,11 +520,11 @@ export function resetParkedImportedOptions(): void {
 export function endOpenedSetup(input: ImportedInput): void {
   if (workspaceModeStore.getSnapshot().importedInput === input) {
     const state = useImportedModelStore.getState();
-    if (state.setup || state.restoredRevisionId) useImportedModelStore.setState({ setup: null, restoredRevisionId: null });
+    if (state.setup || state.restoredRevisionId || state.setupEditBase) useImportedModelStore.setState({ setup: null, setupEditBase: null, restoredRevisionId: null });
     return;
   }
   const held = parked[input]?.state;
-  if (held) parked[input] = { ...parked[input]!, state: { ...held, setup: null, restoredRevisionId: null } };
+  if (held) parked[input] = { ...parked[input]!, state: { ...held, setup: null, setupEditBase: null, restoredRevisionId: null } };
 }
 
 /** Tests and a full reset: nothing open, nothing parked. */
