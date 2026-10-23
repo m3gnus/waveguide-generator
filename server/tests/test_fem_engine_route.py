@@ -301,7 +301,8 @@ def test_job_refusals(monkeypatch, change, code):
 
 
 @pytest.mark.parametrize("accuracy", ["fast", "accurate"])
-def test_auto_dispatch_skips_gpu_for_fem(monkeypatch, tmp_path, accuracy):
+@pytest.mark.parametrize("cpu_ready", [True, False])
+def test_auto_fem_prefers_ready_cpu_and_uses_ready_gpu_when_needed(monkeypatch, tmp_path, accuracy, cpu_ready):
     import asyncio
     from server.jobs.runtime.core import resolve_imported_submission
     from server.engines.registry import EngineInfo
@@ -314,7 +315,7 @@ def test_auto_dispatch_skips_gpu_for_fem(monkeypatch, tmp_path, accuracy):
     record = _record(path)
     record["fem_regions"] = [region_input(channel="left").record]
     record["symmetry"] = {"applied": {"cut_planes": [], "quadrants": 1234}}
-    infos = [EngineInfo(name=name, version=None, available=True, reason="fixture", geometry_sources=("imported",),
+    infos = [EngineInfo(name=name, version=None, available=name != "beat-cpu" or cpu_ready, reason="fixture", geometry_sources=("imported",),
                        imported_features=features, symmetry_domains=("full",))
              for name, features in (("beat-metal", ("fem-regions",)), ("beat-cpu", ("fem-regions",)))]
     class Registry:
@@ -327,7 +328,7 @@ def test_auto_dispatch_skips_gpu_for_fem(monkeypatch, tmp_path, accuracy):
     request.options.accuracy = accuracy
     resolution = asyncio.run(resolve_imported_submission(request, Registry(),
         imported_record=record, imported_msh_text=MESH, symmetry_metadata={"resolved_quadrants": 1234}))
-    assert resolution.request.options.engine == "beat-cpu"
+    assert resolution.request.options.engine == ("beat-cpu" if cpu_ready else "beat-metal")
 
 
 @pytest.mark.parametrize("engine", ["bempp"])
@@ -372,11 +373,11 @@ def test_fem_plan_offers_cpu_despite_incompatible_selected_backend(monkeypatch, 
         assert verdicts[name]["code"] == "imported_feature_unsupported_by_engine"
         assert "coupled FEM regions (official BEAT)" in verdicts[name]["reason"]
     assert plan["engine"] is None
-    assert plan["code"] == "fem_backend_unsupported"
-    assert "choose BEAT CPU, Metal, CUDA or ROCm, or choose exterior-only" in plan["reason"]
-    with pytest.raises(ImportedSolveRefusal, match="choose BEAT CPU, Metal, CUDA or ROCm, or choose exterior-only") as caught:
+    assert plan["code"] == "imported_engine_unsupported"
+    assert [r["engine"] for r in plan["readiness"]["remedies"] if r["kind"] == "use_engine"] == ["beat-cpu"]
+    with pytest.raises(ImportedSolveRefusal, match="coupled FEM regions") as caught:
         asyncio.run(resolve_imported_submission(request, Registry(), **kwargs))
-    assert caught.value.reason_code == "fem_backend_unsupported"
+    assert caught.value.reason_code == "imported_engine_unsupported"
     assert request.options.engine == engine
 
 
@@ -500,7 +501,7 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
     class Registry:
         async def capabilities(self):
             return tuple(EngineInfo(name, True, "fixture", "test", geometry_sources=("imported",),
-                                   imported_features=("fem-regions", "exterior-transducers"), symmetry_domains=("full",))
+                                   imported_features=("fem-regions",) + (("exterior-transducers",) if name in {"beat-cpu", "beat-metal"} else ()), symmetry_domains=("full",))
                          for name in {"beat-cpu", f"beat-{backend}"})
         async def get_engine(self, name):
             return Engine(backend)
@@ -593,10 +594,11 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
             assert port_runs == [False]
             override = request.model_copy(deep=True)
             override.geometry.exterior_only = True
-            if voltage and engine_choice in {"auto", "beat-cuda", "beat-rocm"}:
-                from server.jobs.models import SolveRequest
-                with pytest.raises(ValueError, match="exterior transducer jobs require an explicit"):
-                    SolveRequest.model_validate(override.model_dump())
+            if voltage and engine_choice in {"beat-cuda", "beat-rocm"}:
+                from server.jobs.runtime import ImportedSolveRefusal
+                with pytest.raises(ImportedSolveRefusal) as refused:
+                    await job_runtime.submit(override)
+                assert refused.value.details["blocker"]["engine"] == engine_choice
                 assert len(runtime.requests) == 1
                 assert worker_operations == ["field-npz", "field-npz"]
                 return
@@ -991,13 +993,15 @@ def test_default_fem_admission_refuses_without_a_capable_engine(
     record = _record(path)
     record["fem_regions"] = [region_input(channel="left").record]
     record["symmetry"] = {"applied": {"cut_planes": [], "quadrants": 1234}}
-    with pytest.raises(EngineUnavailableError, match="available official BEAT engine"):
+    from server.jobs.runtime import ImportedSolveRefusal
+    error = ImportedSolveRefusal if available else EngineUnavailableError
+    with pytest.raises(error):
         asyncio.run(resolve_imported_submission(request, Registry(), imported_record=record,
                                                 imported_msh_text=MESH))
 
 
 @pytest.mark.parametrize("state,remedy", [
-    ("preparing", "wait for BEAT CPU preparation to finish"),
+    ("preparing", "BEAT CPU is still preparing"),
     ("unprepared", "Prepare BEAT CPU"),
 ])
 def test_fem_unavailable_remedy_tracks_cpu_preparation(monkeypatch, state, remedy):
@@ -1011,7 +1015,9 @@ def test_fem_unavailable_remedy_tracks_cpu_preparation(monkeypatch, state, remed
     monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
     class Registry:
         async def capabilities(self):
-            return (EngineInfo("beat-cpu", False, "fixture", None, runtime_state=state),)
+            return (EngineInfo("beat-cpu", False, "fixture", None, label="BEAT CPU", runtime_state=state,
+                               runtime_preparable=state == "unprepared", geometry_sources=("imported",),
+                               imported_features=("fem-regions",)),)
     request = _request("wgi_" + "0" * 26)
     request.options.engine = "beat-cpu"
     request.geometry.drive_channels = []
@@ -1101,17 +1107,26 @@ def test_fem_explicit_gpu_submission_and_planner(monkeypatch, tmp_path, backend,
             return SimpleNamespace(name=name)
     kwargs = dict(imported_record=record, imported_msh_text=MESH,
                   symmetry_metadata={"resolved_quadrants": 1234})
-    resolution = asyncio.run(resolve_imported_submission(job, Registry(), **kwargs))
-    expected_engine = "beat-cpu" if interior else f"beat-{backend}"
-    assert resolution.engine_name == expected_engine
-    plan = resolution.symmetry_metadata["solver_plan"]
-    assert plan["requested"] == f"beat-{backend}"
     if interior:
-        assert plan["fallback_reason"] == "Interior-only FEM uses CPU float64"
+        from server.jobs.runtime import ImportedSolveRefusal
+        with pytest.raises(ImportedSolveRefusal) as caught:
+            asyncio.run(resolve_imported_submission(job, Registry(), **kwargs))
+        blocker = caught.value.details["blocker"]
+        assert blocker["engine"] == f"beat-{backend}"
+        assert blocker["code"] == "fem_interior_cpu_required"
+        assert [r["engine"] for r in blocker["remedies"] if r["kind"] == "use_engine"] == ["beat-cpu"]
+        planned = asyncio.run(plan_imported_submission(job, Registry(), **kwargs))
+        assert planned["engine"] is None
+        assert planned["readiness"] == blocker
+        assert not next(v for v in planned["engines"] if v["name"] == f"beat-{backend}")["solves"]
+    else:
+        resolution = asyncio.run(resolve_imported_submission(job, Registry(), **kwargs))
+        assert resolution.engine_name == f"beat-{backend}"
+        assert resolution.symmetry_metadata["solver_plan"]["requested"] == f"beat-{backend}"
+        planned = asyncio.run(plan_imported_submission(job, Registry(), **kwargs))
+        assert planned["engine"] == f"beat-{backend}"
+        assert next(v for v in planned["engines"] if v["name"] == f"beat-{backend}")["solves"]
     assert job.options.engine == f"beat-{backend}"
-    planned = asyncio.run(plan_imported_submission(job, Registry(), **kwargs))
-    assert planned["engine"] == expected_engine
-    assert next(v for v in planned["engines"] if v["name"] == f"beat-{backend}")["solves"]
 
 
 @pytest.mark.parametrize("backend", ["metal", "cuda", "rocm"])
@@ -1270,14 +1285,26 @@ def test_fem_fast_unavailable_gpu_names_availability_reason(monkeypatch, tmp_pat
     infos = [_beat_engine_info("cpu", {"available": True, "state": "ready"})]
     reason = "this host does not detect it" if state == "missing" else f"fixture GPU {state}"
     if state != "missing":
-        infos.append(EngineInfo(f"beat-{backend}", False, reason, None, runtime_state=state))
+        infos.append(EngineInfo(f"beat-{backend}", False, reason, None, runtime_state=state,
+                                runtime_preparable=state == "unprepared", geometry_sources=("imported",),
+                                imported_features=("fem-regions",)))
     class Registry:
         async def capabilities(self):
             return infos
         async def get_engine(self, name):
-            pytest.fail("an unavailable engine must not be acquired")
-    with pytest.raises(EngineUnavailableError, match=reason):
+            assert name == "beat-cpu"
+            return SimpleNamespace(name=name)
+    with pytest.raises(EngineUnavailableError) as caught:
         asyncio.run(resolve_imported_submission(job, Registry(), imported_record=record, imported_msh_text=MESH))
+    blocker = caught.value.blocker
+    assert blocker.engine == f"beat-{backend}"
+    if state == "preparing":
+        assert any(r.kind == "wait" for r in blocker.remedies)
+    elif state == "unprepared":
+        assert any(r.kind == "prepare" and r.disabled_reason is None for r in blocker.remedies)
+    else:
+        assert reason in blocker.message
+    assert [r.engine for r in blocker.remedies if r.kind == "use_engine"] == ["beat-cpu"]
 
 
 @pytest.mark.parametrize("ready_gpu", [False, True])
@@ -1296,18 +1323,22 @@ def test_fem_auto_preparing_cpu_explains_reference_policy(monkeypatch, ready_gpu
     record = {"fem_regions": [region_input().record], "domain_interpretation": _closed_domain()}
     class Registry:
         async def capabilities(self):
-            return [EngineInfo("beat-cpu", False, "fixture", None, runtime_state="preparing"), *(
+            return [EngineInfo("beat-cpu", False, "fixture", None, label="BEAT CPU", runtime_state="preparing",
+                               geometry_sources=("imported",), imported_features=("fem-regions",)), *(
                 [_beat_engine_info("cuda", {"available": True, "state": "ready"})] if ready_gpu else [])]
-    with pytest.raises(EngineUnavailableError, match="BEAT CPU is still preparing.*Auto run on BEAT CPU float64.*choose a ready GPU backend"):
+    with pytest.raises(EngineUnavailableError, match="BEAT CPU is still preparing"):
         asyncio.run(resolve_imported_submission(job, Registry(), imported_record=record))
 
 
 @pytest.mark.parametrize("engine", ["auto", "beat-cuda", "beat-rocm"])
 @pytest.mark.parametrize("exterior_only", [False, True])
 @pytest.mark.parametrize("accuracy", ["fast", "accurate"])
-def test_non_fem_driver_engine_refusal_is_preserved(engine, exterior_only, accuracy):
+def test_non_fem_driver_choice_uses_shared_policy(engine, exterior_only, accuracy):
+    import asyncio
+    from server.engines.registry import EngineInfo
     from server.jobs.models import DriveChannel, SolveRequest
-    from server.jobs.runtime.imported_refusals import _imported_request_refusal
+    from server.jobs.runtime import ImportedSolveRefusal
+    from server.jobs.runtime.core import resolve_imported_submission
     from server.tests.test_fem_electrodynamic import driver
     from server.tests.test_imported_jobs import _request
 
@@ -1316,29 +1347,28 @@ def test_non_fem_driver_engine_refusal_is_preserved(engine, exterior_only, accur
     job.geometry.exterior_only = exterior_only
     job.geometry.drive_channels = [DriveChannel(id="left", source_ids=["source-a", "source-b", "source-c"],
                                                exterior_transducer=driver(), motion="axial")]
-    message = "exterior transducer jobs require an explicit beat-cpu or beat-metal engine"
-    if exterior_only:
-        with pytest.raises(ValueError, match=message):
-            SolveRequest.model_validate(job.model_dump(mode="json"))
+    validated = SolveRequest.model_validate(job.model_dump(mode="json"))
+    class Registry:
+        async def capabilities(self):
+            return [EngineInfo(name, True, "ready", "1", geometry_sources=("imported",),
+                               imported_features=features) for name, features in (
+                ("beat-metal", ("exterior-transducers",)), ("beat-cpu", ("exterior-transducers",)),
+                ("beat-cuda", ()), ("beat-rocm", ()), ("metal", ("passive-cardioid",)))]
+        async def get_engine(self, name):
+            return SimpleNamespace(name=name)
+    if engine == "auto":
+        resolved = asyncio.run(resolve_imported_submission(validated, Registry(), request_refusal=None))
+        assert resolved.engine_name == "beat-metal"
     else:
-        validated = SolveRequest.model_validate(job.model_dump(mode="json"))
-        # Not a refusal every engine shares: the planner must keep BEAT CPU and
-        # Metal selectable, and the engine choice is refused at submit instead.
-        refusal = _imported_request_refusal(validated, {})
-        assert refusal is None or refusal[0] != "exterior_transducer_engine_unsupported"
-        import asyncio
-        from server.jobs.runtime import ImportedSolveRefusal
-        from server.jobs.runtime.core import resolve_imported_submission
-        class Registry:
-            async def capabilities(self):
-                pytest.fail("non-FEM Auto drivers must refuse before accuracy resolves the engine")
-        with pytest.raises(ImportedSolveRefusal, match=message):
-            asyncio.run(resolve_imported_submission(validated, Registry(), imported_record={}))
+        with pytest.raises(ImportedSolveRefusal) as caught:
+            asyncio.run(resolve_imported_submission(validated, Registry(), request_refusal=None))
+        remedies = caught.value.details["blocker"]["remedies"]
+        assert [r["engine"] for r in remedies if r["kind"] == "use_engine"] == ["beat-metal", "beat-cpu"]
+        assert all(r["same_solver"] for r in remedies if r["kind"] == "use_engine")
 
 
 def test_planner_keeps_beat_cpu_and_metal_selectable_for_auto_exterior_drivers(monkeypatch, tmp_path):
-    """A non-FEM driver job on Auto is refused at submit, but the selector must
-    still offer the engines the refusal names (review: selector lock)."""
+    """The planner offers and selects only transducer-capable engines for Auto."""
     import asyncio
     from server.engines.registry import EngineInfo
     from server.jobs.models import DriveChannel

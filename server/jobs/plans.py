@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from server.jobs.runtime.core import SubmissionResolution
+from server.jobs.runtime.engine_policy import SolveBlocker
 
 
 class EngineSubstitution(BaseModel):
@@ -42,6 +43,7 @@ class PlanAdjustment(BaseModel):
 class SolvePlanResponse(BaseModel):
     """The request-specific engine/formulation selected by the runtime."""
 
+    readiness: SolveBlocker | None = None
     engine: str
     formulation: Literal["full-3d"]
     reason: str
@@ -58,6 +60,7 @@ def solve_plan_response(resolved: SubmissionResolution) -> SolvePlanResponse:
     substitution = plan.get("engine_substitution")
     return SolvePlanResponse(
         engine=resolved.engine_name,
+        readiness=plan.get("readiness"),
         refusal=plan.get("refusal"),
         formulation=plan["formulation"],
         reason=plan["reason"],

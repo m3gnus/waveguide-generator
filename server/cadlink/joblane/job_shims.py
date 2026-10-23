@@ -204,7 +204,8 @@ async def _admit_operation_solve(ctx, operation_id, press, *, manual, schedule, 
                 reason = _submission_refusal_reason(exc, code)
                 job_id = await runtime.accept_cad_solve(
                     intent, key, prepare=False, cad_record=record,
-                    refusal={"code": reason, "message": str(exc)},
+                    refusal={"code": reason, "message": str(exc),
+                             **({"blocker": exc.details["blocker"]} if getattr(exc, "details", {}).get("blocker") else {})},
                 )
         else:
             # Let preparation validate the return and keep its exact stage and remedy.

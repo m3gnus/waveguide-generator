@@ -1393,6 +1393,7 @@ class JobStore:
         code: str,
         message: str,
         cad: Mapping[str, Any] | None = None,
+        blocker: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """End a preparing job as refused: an ``error`` carrying its reason and message.
 
@@ -1415,7 +1416,7 @@ class JobStore:
             metadata["cad"] = {
                 **(metadata.get("cad") or {}),
                 **dict(cad or {}),
-                "refusal": {"code": code, "message": message},
+                "refusal": {"code": code, "message": message, **({"blocker": dict(blocker)} if blocker else {})},
             }
             conn.execute(
                 """UPDATE simulation_jobs

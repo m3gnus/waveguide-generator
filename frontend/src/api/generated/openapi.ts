@@ -2717,6 +2717,7 @@ export interface components {
             acceptedSeq: number | null;
             /** Attemptgeneration */
             attemptGeneration: number;
+            blocker?: components["schemas"]["SolveBlocker"] | null;
             /** Createdat */
             createdAt: string | null;
             /** Frameaxisautomatic */
@@ -2735,6 +2736,8 @@ export interface components {
             preparationId: string | null;
             /** Reason */
             reason: string | null;
+            /** Remedies */
+            remedies?: (components["schemas"]["PrepareRemedy"] | components["schemas"]["UseEngineRemedy"] | components["schemas"]["WaitRemedy"] | components["schemas"]["SettingsRemedy"])[];
             /**
              * Setupdefaults
              * @default false
@@ -4459,6 +4462,7 @@ export interface components {
             engines: components["schemas"]["ImportedEngineVerdictResponse"][];
             /** Ingest Id */
             ingest_id: string;
+            readiness?: components["schemas"]["SolveBlocker"] | null;
             /** Reason */
             reason: string;
             /** Requested */
@@ -5551,6 +5555,18 @@ export interface components {
              */
             symmetry_mode?: "auto" | "full";
         };
+        /** PrepareRemedy */
+        PrepareRemedy: {
+            /** Disabled Reason */
+            disabled_reason?: string | null;
+            /** Engine */
+            engine: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "prepare";
+        };
         /** PresetWrite */
         PresetWrite: {
             /** Authoring */
@@ -5889,6 +5905,19 @@ export interface components {
             /** Rss Ohm */
             rss_ohm?: number | null;
         };
+        /** SettingsRemedy */
+        SettingsRemedy: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "settings";
+            /**
+             * Section
+             * @default simulation
+             */
+            section?: string;
+        };
         /** SetupRevisionRequest */
         SetupRevisionRequest: {
             /** Setup */
@@ -5912,6 +5941,17 @@ export interface components {
             client_request_id?: string | null;
             /** Job Id */
             job_id: string;
+        };
+        /** SolveBlocker */
+        SolveBlocker: {
+            /** Code */
+            code: string;
+            /** Engine */
+            engine: string;
+            /** Message */
+            message: string;
+            /** Remedies */
+            remedies?: (components["schemas"]["PrepareRemedy"] | components["schemas"]["UseEngineRemedy"] | components["schemas"]["WaitRemedy"] | components["schemas"]["SettingsRemedy"])[];
         };
         /** SolveCommandOutcome */
         SolveCommandOutcome: {
@@ -6079,6 +6119,7 @@ export interface components {
              * @constant
              */
             formulation: "full-3d";
+            readiness?: components["schemas"]["SolveBlocker"] | null;
             /** Reason */
             reason: string;
             /** Refusal */
@@ -6281,6 +6322,20 @@ export interface components {
              */
             join_t?: number;
         };
+        /** UseEngineRemedy */
+        UseEngineRemedy: {
+            /** Engine */
+            engine: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "use_engine";
+            /** Label */
+            label: string;
+            /** Same Solver */
+            same_solver: boolean;
+        };
         /** UseRootFolderRequest */
         UseRootFolderRequest: {
             /** Expectedcurrentpath */
@@ -6305,6 +6360,14 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** WaitRemedy */
+        WaitRemedy: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "wait";
         };
         /** WgLinkExportRequest */
         WgLinkExportRequest: {

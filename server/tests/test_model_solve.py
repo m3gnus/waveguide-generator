@@ -667,3 +667,45 @@ def test_a_file_solve_is_refused_while_an_update_restart_is_pending(tmp_path) ->
         assert runtime.store.list_jobs()[1] == 1
 
     _file_scenario(tmp_path, scenario)
+
+
+def test_held_fusion_engine_blocker_is_continued_only_by_model_solve(harness) -> None:
+    from server.jobs.cad_preparation import job_operation_view
+    from server.jobs.runtime import EngineUnavailableError
+    from server.jobs.runtime.engine_policy import PrepareRemedy, SolveBlocker
+
+    app = _models_app(harness)
+    model = _cad_model(harness)
+    setup = _setup(engine="beat-metal")
+    revision = _revision_of(harness, setup)
+    harness.store.record_model_setup(model["model_id"], inventory_sha256(model["sources"]), revision)
+    blocker = SolveBlocker(code="engine_unavailable", engine="beat-metal",
+                           message="BEAT Metal needs preparing. Prepare BEAT Metal to solve.",
+                           remedies=[PrepareRemedy(engine="beat-metal")])
+    harness.submit_error = EngineUnavailableError(blocker.message, blocker=blocker)
+    _accept(harness.store, "cmd-engine", model["bundle_path"], model["manifest"])
+    harness.runtime._ensure_prep_lane = lambda: None
+    held_id = harness._loop.run(harness.runtime.accept_cad_solve(
+        harness._intent("cmd-engine"), "cad-solve:cmd-engine"))
+    harness.runtime._ensure_prep_lane = type(harness.runtime)._ensure_prep_lane.__get__(harness.runtime)
+
+    async def settle():
+        harness.runtime._ensure_prep_lane()
+        await harness.runtime.wait_cad_preparations()
+    harness._loop.run(settle())
+    held = harness.jobs_store.get_job_row(held_id)
+    view = job_operation_view(held)
+    assert (view["state"], view["reason"]) == ("needs_user_input", "engine_unavailable")
+    assert view["blocker"] == blocker.model_dump(mode="json")
+    assert view["message"] == blocker.message
+    assert view["remedies"] == view["blocker"]["remedies"]
+    # Preparation becoming ready creates no new solve on the server.
+    _settle(harness)
+    assert _job_count(harness) == 1
+    status, continued = _solve(harness, app, model, client_request_id="prepare-and-solve", setup=setup)
+    assert status == 200
+    _settle(harness)
+    child = harness.jobs_store.get_job_row(continued["job_id"])
+    assert child["parent_job_id"] == held_id
+    assert child["status"] == "queued"
+    assert _job_count(harness) == 2

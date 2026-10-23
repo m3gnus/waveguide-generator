@@ -109,8 +109,6 @@ def test_refuse_invalid_si_model(field, value):
 @pytest.mark.parametrize(
     "option,value",
     [
-        ("engine", "auto"),
-        ("engine", "metal"),
         ("adaptive_frequency_sampling", True),
         ("mesh_ladder", "auto"),
         ("ground_plane", {"enabled": True}),
@@ -122,6 +120,33 @@ def test_refuse_unsupported_job_options(option, value):
     payload["options"][option] = value
     with pytest.raises(ValidationError, match="exterior transducer"):
         SolveRequest.model_validate(payload)
+
+
+@pytest.mark.parametrize("engine", ["auto", "metal"])
+def test_engine_choice_uses_shared_policy_instead_of_wire_refusal(engine):
+    import asyncio
+    from server.engines.registry import EngineInfo, EngineRegistry
+    from server.jobs.runtime import ImportedSolveRefusal
+    from server.jobs.runtime.core import resolve_imported_submission
+
+    payload = request().model_dump(mode="json")
+    payload["geometry"]["exterior_only"] = True
+    payload["options"]["engine"] = engine
+    validated = SolveRequest.model_validate(payload)
+    registry = EngineRegistry(
+        detector=lambda: [EngineInfo(name, True, "ready", "1", geometry_sources=("imported",),
+                                    imported_features=features) for name, features in (
+            ("metal", ("passive-cardioid",)), ("beat-cpu", ("exterior-transducers",)))],
+        factory=lambda _: object(),
+    )
+    if engine == "auto":
+        resolved = asyncio.run(resolve_imported_submission(validated, registry, request_refusal=None))
+        assert resolved.engine_name == "beat-cpu"
+    else:
+        with pytest.raises(ImportedSolveRefusal) as caught:
+            asyncio.run(resolve_imported_submission(validated, registry, request_refusal=None))
+        assert caught.value.details["blocker"]["engine"] == "metal"
+        assert caught.value.details["capable_engines"] == ["beat-cpu"]
 
 
 def test_hybrid_and_ceiling_refused():

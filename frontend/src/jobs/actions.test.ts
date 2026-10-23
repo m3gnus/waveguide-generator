@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { hydrateDesignDocument } from '../api/designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
 import type { SolveOptions } from '../stores/solveOptions';
-import { fetchSymmetry, formatApiDetail, getCapabilities, planSolveDesign, postSymmetry, resolveEngine, solveModel, SolveSubmissionRefused, submitDesign, toSolveDesign } from './actions';
+import { fetchSymmetry, formatApiDetail, getCapabilities, planSolveDesign, postSolvePlan, postImportedSolvePlan, postSymmetry, resolveEngine, solveModel, SolveSubmissionRefused, submitDesign, toSolveDesign } from './actions';
 
 describe('API validation errors', () => {
   it('surfaces nested solve request validation instead of the generic envelope', async () => {
@@ -212,5 +212,37 @@ describe('symmetry resolution', () => {
     const design = designForFamily('R-OSSE');
     await fetchSymmetry(design, fetcher as typeof fetch);
     expect(body).toEqual(toSolveDesign(design));
+  });
+});
+
+
+describe('server solve blocker messages', () => {
+  const blocker = {
+    code: 'engine_unavailable', engine: 'beat-metal',
+    message: 'BEAT Metal needs preparing. Prepare BEAT Metal to solve. Use BEAT CPU.',
+    remedies: [{ kind: 'prepare', engine: 'beat-metal' }],
+  };
+
+  it('reports parametric plan readiness through the existing plan error', async () => {
+    const fetcher = async () => new Response(JSON.stringify({
+      engine: 'beat-metal', formulation: 'full-3d', reason: 'explicit',
+      eligibility_reasons: [], readiness: blocker,
+    }));
+    await expect(postSolvePlan('{}', fetcher)).rejects.toThrow(blocker.message);
+  });
+
+  it('uses imported readiness as the existing visible plan reason', async () => {
+    const fetcher = async () => new Response(JSON.stringify({
+      ingest_id: 'ingest', requested: 'beat-metal', engine: null,
+      reason: 'legacy generic reason', engines: [], readiness: blocker,
+    }));
+    expect((await postImportedSolvePlan('{}', fetcher)).reason).toBe(blocker.message);
+  });
+
+  it('shows the blocker message from submission details', async () => {
+    const fetcher = async () => new Response(JSON.stringify({
+      detail: 'Generic refusal', error: { code: blocker.code, details: { blocker } },
+    }), { status: 503 });
+    await expect(submitDesign(designForFamily('OSSE'), undefined, fetcher)).rejects.toThrow(blocker.message);
   });
 });

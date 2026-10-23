@@ -79,7 +79,7 @@ def test_accurate_refuses_missing_beat_instead_of_switching_to_metal() -> None:
     )
     request = _planner_request()
     request.options.accuracy = "accurate"
-    with pytest.raises(EngineUnavailableError, match="Accurate requires a ready BEAT"):
+    with pytest.raises(EngineUnavailableError, match="beat-cpu.*unavailable"):
         asyncio.run(resolve_submission(request, engine_registry))
 
 
@@ -104,12 +104,13 @@ def test_accurate_refusal_explains_only_active_beat_preparation(
     request.options.accuracy = "accurate"
     with pytest.raises(EngineUnavailableError) as refused:
         asyncio.run(resolve_submission(request, engine_registry))
-    assert str(refused.value) == (
-        "BEAT is still being prepared (this happens once after installing or updating "
-        "and can take several minutes). Wait for it to finish, or choose Fast."
-        if preparing else
-        "Accurate requires a ready BEAT GPU or BEAT CPU backend. Enable BEAT, or choose Fast."
-    )
+    blocker = refused.value.blocker
+    assert blocker.engine == name
+    assert any(r.kind == "wait" for r in blocker.remedies) == (runtime_state == "preparing")
+    prepare = next((r for r in blocker.remedies if r.kind == "prepare"), None)
+    assert bool(prepare) == (runtime_state in {"unprepared", "failed"})
+    if prepare:
+        assert prepare.disabled_reason == "not ready"
     assert request.options.engine == "auto"
     assert request.options.accuracy == "accurate"
 
@@ -131,7 +132,7 @@ def test_explicit_engine_overrides_accuracy_and_accurate_refuses_coupled_baffle(
 
     baffle = _planner_request(sim_type="infinite-baffle")
     baffle.options.accuracy = "accurate"
-    with pytest.raises(SymmetryValidationError, match="Accurate via BEAT cannot solve a coupled infinite baffle"):
+    with pytest.raises(SymmetryValidationError, match="cannot solve a coupled infinite baffle"):
         asyncio.run(resolve_submission(baffle, engine_registry))
 
 
@@ -774,16 +775,10 @@ def test_a_stored_legacy_beat_request_still_submits(monkeypatch) -> None:
     assert resolution.symmetry_metadata["solver_plan"]["engine"] == "beat-cpu"
 
 
-def test_a_legacy_beat_request_with_no_beat_backend_substitutes_and_says_why(
+def test_a_legacy_beat_request_with_no_backend_refuses_with_remedies(
     monkeypatch,
 ) -> None:
-    """The two mechanisms compose: resolve the name first, substitute second.
-
-    With no BEAT backend on the host there is nothing to resolve ``beat`` to,
-    so it falls through to the ordinary unavailable-engine substitution and the
-    user is told which engine ran instead and why -- rather than being refused,
-    which is what this did before the substitution fallback existed.
-    """
+    """Explicit choices refuse; remedies must preserve model capabilities."""
 
     engine_registry = registry.EngineRegistry(
         detector=lambda: [
@@ -793,28 +788,19 @@ def test_a_legacy_beat_request_with_no_beat_backend_substitutes_and_says_why(
         factory=lambda name: object() if name == "bempp" else None,
     )
 
-    resolution = asyncio.run(
-        resolve_submission(_planner_request(engine="beat"), engine_registry)
-    )
+    with pytest.raises((EngineUnavailableError, SymmetryValidationError)) as caught:
+        asyncio.run(
+            resolve_submission(_planner_request(engine="beat"), engine_registry)
+        )
 
-    assert resolution.engine_name == "bempp"
-    substitution = resolution.symmetry_metadata["solver_plan"]["engine_substitution"]
-    assert substitution["requested"] == "beat"
-    assert substitution["resolved"] == "bempp"
-    # The CPU variant carries the reason worth reporting: it is the one backend
-    # every host could run, so whatever stops it is why none of the four works.
-    assert "No Julia executable was found." in substitution["reason"]
+    blocker = caught.value.details["blocker"]
+    assert [r["engine"] for r in blocker["remedies"] if r["kind"] == "use_engine"] == ['bempp']
 
 
-def test_a_beat_variant_this_host_lacks_substitutes_like_any_other_engine(
+def test_a_beat_variant_this_host_lacks_refuses_with_same_solver_first(
     monkeypatch,
 ) -> None:
-    """A preference made on a CUDA box, opened on a Mac.
-
-    Backend-level selection has to compose with the substitution fallback, or
-    the new engine names would be the one class of stored selection that
-    refuses instead of falling back.
-    """
+    """Explicit choices refuse; remedies must preserve model capabilities."""
 
     engine_registry = registry.EngineRegistry(
         detector=lambda: [
@@ -825,17 +811,13 @@ def test_a_beat_variant_this_host_lacks_substitutes_like_any_other_engine(
         factory=lambda name: object() if name in {"metal", "beat-cpu"} else None,
     )
 
-    resolution = asyncio.run(
-        resolve_submission(_planner_request(engine="beat-cuda"), engine_registry)
-    )
+    with pytest.raises((EngineUnavailableError, SymmetryValidationError)) as caught:
+        asyncio.run(
+            resolve_submission(_planner_request(engine="beat-cuda"), engine_registry)
+        )
 
-    assert resolution.engine_name == "metal"
-    substitution = resolution.symmetry_metadata["solver_plan"]["engine_substitution"]
-    assert substitution == {
-        "requested": "beat-cuda",
-        "resolved": "metal",
-        "reason": "Needs an NVIDIA GPU.",
-    }
+    blocker = caught.value.details["blocker"]
+    assert [r["engine"] for r in blocker["remedies"] if r["kind"] == "use_engine"] == ['beat-cpu', 'metal']
 
 
 @pytest.mark.parametrize("symmetry", ["half_xz", "auto"])
@@ -901,8 +883,8 @@ def test_forced_backend_refuses_unsupported_symmetry_during_planning() -> None:
         )
 
 
-def test_unavailable_engine_substitution_skips_incompatible_beat_backend() -> None:
-    """The original regression: a missing Metal choice, BEAT-CUDA, and xz half."""
+def test_unavailable_engine_remedies_skip_incompatible_beat_backend() -> None:
+    """Explicit choices refuse; remedies must preserve model capabilities."""
 
     engine_registry = registry.EngineRegistry(
         detector=lambda: [
@@ -919,21 +901,18 @@ def test_unavailable_engine_substitution_skips_incompatible_beat_backend() -> No
         factory=lambda name: object() if name in {"beat-cuda", "bempp"} else None,
     )
 
-    resolution = asyncio.run(
-        resolve_submission(
-            _planner_request(
-                engine="metal", solver_mode="full_3d", symmetry="half_xz"
-            ),
-            engine_registry,
+    with pytest.raises((EngineUnavailableError, SymmetryValidationError)) as caught:
+        asyncio.run(
+            resolve_submission(
+                _planner_request(
+                    engine="metal", solver_mode="full_3d", symmetry="half_xz"
+                ),
+                engine_registry,
+            )
         )
-    )
 
-    assert resolution.engine_name == "bempp"
-    assert resolution.symmetry_metadata["solver_plan"]["engine_substitution"] == {
-        "requested": "metal",
-        "resolved": "bempp",
-        "reason": "Metal is unavailable",
-    }
+    blocker = caught.value.details["blocker"]
+    assert [r["engine"] for r in blocker["remedies"] if r["kind"] == "use_engine"] == ['bempp']
 
 
 def test_bempp_coupled_infinite_baffle_planner_requires_full_domain() -> None:
@@ -1400,7 +1379,7 @@ def test_auto_skips_beat_for_a_coupled_infinite_baffle_solve() -> None:
         detector=lambda: gpu_host(coupled_bempp=False),
         factory=lambda _name: object(),
     )
-    with pytest.raises(EngineUnavailableError, match="infinite-baffle"):
+    with pytest.raises(SymmetryValidationError, match="infinite baffle"):
         asyncio.run(
             resolve_submission(
                 _planner_request(solver_mode="full_3d", sim_type="infinite-baffle"),
@@ -1409,18 +1388,8 @@ def test_auto_skips_beat_for_a_coupled_infinite_baffle_solve() -> None:
         )
 
 
-def test_an_unavailable_stored_engine_falls_back_instead_of_refusing() -> None:
-    """A stored selection must not be able to disable Solve on its own.
-
-    The reported symptom was a permanently grey Solve button: an engine chosen
-    on one machine, remembered, and then unavailable on the next one made
-    ``/api/solve/plan`` answer 503 for the whole session. The frontend treats a
-    503 as a refusal and deliberately never retries it, so nothing healed, and
-    the only text explaining any of it lived in a ``title`` tooltip on a
-    disabled button.
-
-    The engine now falls back to what AUTO would have chosen, and says so.
-    """
+def test_an_unavailable_stored_engine_refuses_with_an_explicit_fix() -> None:
+    """Explicit choices refuse; remedies must preserve model capabilities."""
 
     engine_registry = registry.EngineRegistry(
         detector=lambda: [
@@ -1430,23 +1399,19 @@ def test_an_unavailable_stored_engine_falls_back_instead_of_refusing() -> None:
         factory=lambda name: object() if name == "bempp" else None,
     )
 
-    resolution = asyncio.run(
-        resolve_submission(
-            _planner_request(engine="beat", solver_mode="full_3d"), engine_registry
+    with pytest.raises((EngineUnavailableError, SymmetryValidationError)) as caught:
+        asyncio.run(
+            resolve_submission(
+                _planner_request(engine="beat", solver_mode="full_3d"), engine_registry
+            )
         )
-    )
 
-    assert resolution.engine_name == "bempp"
-    assert resolution.symmetry_metadata["solver_plan"]["engine"] == "bempp"
-    assert resolution.symmetry_metadata["solver_plan"]["engine_substitution"] == {
-        "requested": "beat",
-        "resolved": "bempp",
-        "reason": "No Julia executable was found.",
-    }
+    blocker = caught.value.details["blocker"]
+    assert [r["engine"] for r in blocker["remedies"] if r["kind"] == "use_engine"] == ['bempp']
 
 
-def test_the_fallback_follows_auto_order_rather_than_any_available_engine() -> None:
-    """The AUTO ordering is the contract, not whichever engine happens to be left."""
+def test_different_solver_remedies_follow_auto_order() -> None:
+    """Explicit choices refuse; remedies must preserve model capabilities."""
 
     engine_registry = registry.EngineRegistry(
         detector=lambda: [
@@ -1457,23 +1422,19 @@ def test_the_fallback_follows_auto_order_rather_than_any_available_engine() -> N
         factory=lambda name: object() if name in {"metal", "bempp"} else None,
     )
 
-    resolution = asyncio.run(
-        resolve_submission(
-            _planner_request(engine="beat", solver_mode="full_3d"), engine_registry
+    with pytest.raises((EngineUnavailableError, SymmetryValidationError)) as caught:
+        asyncio.run(
+            resolve_submission(
+                _planner_request(engine="beat", solver_mode="full_3d"), engine_registry
+            )
         )
-    )
 
-    # metal outranks bempp in ("metal", "beat", "bempp", "dryrun").
-    assert resolution.engine_name == "metal"
+    blocker = caught.value.details["blocker"]
+    assert [r["engine"] for r in blocker["remedies"] if r["kind"] == "use_engine"] == ['metal', 'bempp']
 
 
-def test_the_fallback_respects_the_infinite_baffle_mounting_filter() -> None:
-    """The substitute has to be able to run the request, not merely exist.
-
-    BEAT advertises no coupled infinite-baffle mounting, so it must not be
-    picked as a stand-in for an unavailable Metal on such a solve even though
-    it ranks above BEMPP in the AUTO order.
-    """
+def test_remedies_respect_the_infinite_baffle_mounting_filter() -> None:
+    """Explicit choices refuse; remedies must preserve model capabilities."""
 
     engine_registry = registry.EngineRegistry(
         detector=lambda: [
@@ -1492,27 +1453,22 @@ def test_the_fallback_respects_the_infinite_baffle_mounting_filter() -> None:
         factory=lambda name: object() if name in {"beat", "bempp"} else None,
     )
 
-    resolution = asyncio.run(
-        resolve_submission(
-            _planner_request(
-                engine="metal", solver_mode="full_3d", sim_type="infinite-baffle"
-            ),
-            engine_registry,
+    with pytest.raises((EngineUnavailableError, SymmetryValidationError)) as caught:
+        asyncio.run(
+            resolve_submission(
+                _planner_request(
+                    engine="metal", solver_mode="full_3d", sim_type="infinite-baffle"
+                ),
+                engine_registry,
+            )
         )
-    )
 
-    assert resolution.engine_name == "bempp"
-    substitution = resolution.symmetry_metadata["solver_plan"]["engine_substitution"]
-    assert substitution["requested"] == "metal"
+    blocker = caught.value.details["blocker"]
+    assert [r["engine"] for r in blocker["remedies"] if r["kind"] == "use_engine"] == ['bempp']
 
 
-def test_a_substituted_engine_still_gets_its_own_mounting_treatment() -> None:
-    """Falling back onto BEMPP must not skip BEMPP infinite-baffle handling.
-
-    The substitution happens before the mounting rules rather than after, so a
-    solve that lands on BEMPP by fallback is configured exactly like one that
-    asked for it. Ordering is the whole content of this test.
-    """
+def test_an_explicit_remedy_gets_its_own_mounting_treatment() -> None:
+    """Explicit choices refuse; remedies must preserve model capabilities."""
 
     engine_registry = registry.EngineRegistry(
         detector=lambda: [
@@ -1528,20 +1484,21 @@ def test_a_substituted_engine_still_gets_its_own_mounting_treatment() -> None:
         factory=lambda name: object() if name == "bempp" else None,
     )
 
-    resolution = asyncio.run(
-        resolve_submission(
-            _planner_request(
-                engine="metal", solver_mode="full_3d", sim_type="infinite-baffle"
-            ),
-            engine_registry,
+    with pytest.raises((EngineUnavailableError, SymmetryValidationError)) as caught:
+        asyncio.run(
+            resolve_submission(
+                _planner_request(
+                    engine="metal", solver_mode="full_3d", sim_type="infinite-baffle"
+                ),
+                engine_registry,
+            )
         )
-    )
 
-    assert resolution.engine_name == "bempp"
-    assert resolution.symmetry_metadata["resolved_quadrants"] == 1234
-    assert resolution.symmetry_metadata["solver_plan"]["symmetry_reason"] == (
-        "BEMPP coupled infinite-baffle uses the validated full-domain formulation"
-    )
+    blocker = caught.value.details["blocker"]
+    assert [r["engine"] for r in blocker["remedies"] if r["kind"] == "use_engine"] == ['bempp']
+    resolved = asyncio.run(resolve_submission(_planner_request(engine="bempp", sim_type="infinite-baffle"), engine_registry))
+    assert resolved.engine_name == "bempp"
+    assert resolved.symmetry_metadata["resolved_quadrants"] == 1234
 
 
 def test_dryrun_never_gets_a_real_engine_substituted_for_it() -> None:
@@ -1561,16 +1518,11 @@ def test_dryrun_never_gets_a_real_engine_substituted_for_it() -> None:
         )
 
     assert "WG2_ENABLE_DRYRUN=1" in str(caught.value)
-    assert "bempp" not in str(caught.value)
+    assert caught.value.blocker.engine == "dryrun"
 
 
-def test_the_callers_request_engine_is_left_untouched() -> None:
-    """The caller's own request object must survive the substitution.
-
-    ``resolve_submission`` deep-copies before substituting. That is what lets
-    the UI keep showing -- and keep persisting -- the engine the user actually
-    chose, so it re-engages by itself once that engine can run here.
-    """
+def test_a_refused_request_engine_is_left_untouched() -> None:
+    """Explicit choices refuse; remedies must preserve model capabilities."""
 
     engine_registry = registry.EngineRegistry(
         detector=lambda: [
@@ -1581,16 +1533,18 @@ def test_the_callers_request_engine_is_left_untouched() -> None:
     )
     request = _planner_request(engine="beat", solver_mode="full_3d")
 
-    resolution = asyncio.run(resolve_submission(request, engine_registry))
+    with pytest.raises((EngineUnavailableError, SymmetryValidationError)) as caught:
+        asyncio.run(resolve_submission(request, engine_registry))
 
+    blocker = caught.value.details["blocker"]
+    assert [r["engine"] for r in blocker["remedies"] if r["kind"] == "use_engine"] == ['bempp']
     assert request.options.engine == "beat"
-    assert resolution.request.options.engine == "bempp"
 
 
-def test_the_plan_endpoint_reports_the_substitution_to_the_client(
+def test_the_plan_endpoint_reports_the_blocker_to_the_client(
     tmp_path: Path,
 ) -> None:
-    """The swap has to reach the UI, or it is just a quieter silent failure."""
+    """The engine refusal and its fixes reach the existing plan consumer."""
 
     engine_registry = registry.EngineRegistry(
         detector=lambda: [
@@ -1611,11 +1565,10 @@ def test_the_plan_endpoint_reports_the_substitution_to_the_client(
 
     plan = asyncio.run(endpoint(_planner_request(engine="beat", solver_mode="full_3d")))
 
-    assert plan.engine == "bempp"
-    assert plan.engine_substitution is not None
-    assert plan.engine_substitution.requested == "beat"
-    assert plan.engine_substitution.resolved == "bempp"
-    assert plan.engine_substitution.reason == "No Julia executable was found."
+    assert plan.engine == "beat"
+    assert plan.engine_substitution is None
+    assert plan.readiness.engine == "beat"
+    assert [r.engine for r in plan.readiness.remedies if r.kind == "use_engine"] == ["bempp"]
 
 
 def test_an_available_engine_reports_no_substitution() -> None:

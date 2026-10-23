@@ -1400,6 +1400,9 @@ def test_queued_stop_wins_while_scheduler_resolves_engine(
             self.release = asyncio.Event()
             self.calls = 0
 
+        async def capabilities(self):
+            return (EngineInfo("dryrun", True, "enabled for test", "1"),)
+
         async def get_engine(self, _name: str) -> DryRunEngine | None:
             self.calls += 1
             if self.calls == 1:

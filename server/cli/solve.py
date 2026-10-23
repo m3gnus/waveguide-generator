@@ -629,6 +629,7 @@ async def solve_path(
                         error_code="engine_unavailable",
                         error_stage="submission",
                         error_message=str(exc),
+                        error_details=exc.details,
                     )
                 return 1
             except ImportedSolveRefusal as exc:
@@ -673,6 +674,7 @@ async def solve_path(
                         error_code=code,
                         error_stage="submission",
                         error_message=str(exc),
+                        error_details=getattr(exc, "details", None),
                     )
                 return 1
 

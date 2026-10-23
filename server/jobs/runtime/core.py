@@ -43,7 +43,6 @@ from server.engines.registry import (
     EngineRegistry,
     create_engine as get_engine,
     full3d_engine_order,
-    resolve_legacy_beat_engine,
 )
 from server.jobs.cad_intent import (
     BIND_BLOCKED,
@@ -95,6 +94,12 @@ from server.solver.base import EngineRunResult
 from server.solver.watchdog import watch_native_operation, stall_timeout_seconds
 
 from . import logger
+from .engine_policy import (
+    EngineUnavailableError,
+    EngineVerdict,
+    SolveBlocker,
+    select_engine,
+)
 from .provisional import (
     _extend_provisional_results,
     _copy_provisional_result,
@@ -106,17 +111,11 @@ from .imported_refusals import (
     _imported_job_decision_refusal,
     _imported_side_identity_refusal,
     _imported_open_half_refusal,
-    _IMPORTED_GEOMETRY,
     _imported_features_needed,
-    _engines_able_to_take,
     _imported_request_refusal,
-    _imported_backend_refusal,
     ImportedEngineVerdict,
     imported_engine_verdict,
-    _BEAT_ACCELERATORS,
-    _BEAT_FAST_IMPORTED_EXPLICIT,
     _imported_capabilities,
-    _imported_capable_if_picked,
     _imported_accuracy,
     _fem_interior_only,
 )
@@ -505,10 +504,6 @@ class MeshArtifactDownload:
     mesher_version: str | None = None
 
 
-class EngineUnavailableError(RuntimeError):
-    """The requested solve engine is known but unavailable."""
-
-
 class UnknownEngineError(ValueError):
     """The request named an engine outside the registry."""
 
@@ -569,21 +564,6 @@ def _requested_mounting(request: SolveRequest) -> str | None:
     if _ground_plane_axis(request) is not None:
         return "ground-plane"
     return request.design.root.simulation.sim_type
-
-
-_INFINITE_BAFFLE_ENGINES = "Metal, or BEMPP with coupled infinite-baffle support"
-
-
-def _engine_remedy(mounting: str | None) -> str:
-    """The install/enable advice for a request with no engine to run it.
-
-    A coupled infinite baffle is solved only by Metal and by a BEMPP whose
-    probe reports coupled support; BEAT cannot, so it is not offered as a remedy.
-    """
-
-    if mounting == "infinite-baffle":
-        return f"Install/enable {_INFINITE_BAFFLE_ENGINES}."
-    return "Install/enable Metal, BEAT, or BEMPP."
 
 
 class SymmetryValidationError(ValueError):
@@ -648,8 +628,6 @@ def _design_quadrants_text(request: SolveRequest) -> str | None:
     return quadrants.text() if quadrants is not None else None
 
 
-_ACCURATE_CPU_FALLBACK = "Accurate ran on BEAT CPU because no GPU backend was ready"
-
 
 class RemovedSolverError(ValueError):
     """A request names the removed Axisymmetric solver mode or engine."""
@@ -711,155 +689,69 @@ def _refuse_imported_fem(
     return evidence
 
 
-async def _accuracy_engine(request: SolveRequest, registry: EngineRegistry) -> tuple[SolveRequest, str | None]:
-    """Resolve the shared accuracy choice without changing an explicit engine.
+def _explicit_accuracy(request: SolveRequest) -> SolveRequest:
+    """An explicit non-BEAT engine takes precedence over the accuracy preset."""
+    if (request.options.engine not in {"auto", "beat"}
+            and not request.options.engine.startswith("beat-")
+            and request.options.accuracy == "accurate"):
+        request = request.model_copy(deep=True)
+        request.options.accuracy = "fast"
+    return request
 
-    BEAT GPU readiness is the existing capability probe's verdict. CPU is used
-    only when none of those backends is ready; a geometry refusal never triggers
-    a switch to a different formulation or engine.
-    """
-    engine = request.options.engine
-    if engine != "auto":
-        # Old clients explicitly naming BEAT sent no accuracy field. Keep
-        # their unavailable-engine behavior; the new
-        # UI sends Accurate when its BEAT override is selected.
-        if request.options.accuracy == "accurate" and not (
-            engine == "beat" or engine.startswith("beat-")
-        ):
-            request = request.model_copy(deep=True)
-            request.options.accuracy = "fast"
-        return request, None
-    if request.options.accuracy != "accurate":
-        return request, None
-    capabilities = {info.name: info for info in await registry.capabilities()}
-    for name in ("beat-metal", "beat-cuda", "beat-rocm", "beat-cpu"):
-        info = capabilities.get(name)
-        if info is not None and info.available:
-            request = request.model_copy(deep=True)
-            request.options.engine = name
-            return request, _ACCURATE_CPU_FALLBACK if name == "beat-cpu" else None
-    beat_runtimes = [info for name, info in capabilities.items() if name.startswith("beat-")]
-    if any(info.runtime_state == "preparing" for info in beat_runtimes) or (
-        any(info.runtime_state == "unprepared" for info in beat_runtimes)
-        and registry.cpu_preparation_in_flight()
-    ):
-        raise EngineUnavailableError(
-            "BEAT is still being prepared (this happens once after installing or updating "
-            "and can take several minutes). Wait for it to finish, or choose Fast."
+
+def _raise_engine_blocker(blocker: SolveBlocker, *, imported: bool = False) -> None:
+    if blocker.code == "engine_unavailable":
+        raise EngineUnavailableError(blocker.message, blocker=blocker)
+    if imported:
+        raise ImportedSolveRefusal(
+            "imported_engine_unsupported", blocker.message,
+            details={"engine": blocker.engine, "reason_code": blocker.code,
+                     "capable_engines": [r.engine for r in blocker.remedies if r.kind == "use_engine"],
+                     "blocker": blocker.model_dump(mode="json")},
         )
-    raise EngineUnavailableError(
-        "Accurate requires a ready BEAT GPU or BEAT CPU backend. "
-        "Enable BEAT, or choose Fast."
-    )
+    error = SymmetryValidationError(blocker.message)
+    error.blocker = blocker
+    error.details = {"blocker": blocker.model_dump(mode="json")}
+    raise error
 
 
-async def _resolve_parametric_engine(
-    request: SolveRequest,
-    engine_registry: EngineRegistry,
-    resolved_quadrants: int,
-    plan: dict[str, Any],
-) -> tuple[SolveRequest, str, EngineUnavailableError | None]:
-    """Select or substitute an engine, retaining selection failures for preview."""
+async def _settled_candidate(info, registry):
+    """Wait for BEMPP qualification only when selection reaches that candidate."""
+    if info.qualification == "pending":
+        detected = await registry.wait_for_bempp()
+        return next((candidate for candidate in detected if candidate.name == info.name), info)
+    return info
 
+
+async def _parametric_engine_verdict(info, request, registry, quadrants):
+    """Geometry-specific admission, shared by selection and offered remedies."""
+    from server.engines.registry import engine_supports_symmetry
+
+    mounting = _requested_mounting(request)
+    if mounting == "ground-plane" and "ground-plane" not in info.mountings:
+        return EngineVerdict(False, "capability", "engine_mounting_unsupported",
+                             "it cannot solve above a rigid ground plane; choose a compatible engine or turn the ground plane off")
+    if mounting == "infinite-baffle" and "infinite-baffle" not in info.mountings:
+        return EngineVerdict(False, "capability", "engine_mounting_unsupported",
+                             "it cannot solve a coupled infinite baffle; choose a compatible engine or set the simulation type to free-standing")
+    if (info.name == "bempp" and mounting == "infinite-baffle"
+            and request.options.symmetry != "auto" and quadrants != 1234):
+        return EngineVerdict(False, "capability", "engine_symmetry_unsupported",
+                             "BEMPP coupled infinite-baffle currently requires Full symmetry; use Auto/Full or choose Metal for half/quarter domains")
+    if (not (info.name == "bempp" and mounting == "infinite-baffle" and request.options.symmetry == "auto")
+            and not engine_supports_symmetry(info, quadrants)):
+        return EngineVerdict(False, "capability", "engine_symmetry_unsupported",
+                             f"it does not support { {1234: 'full', 12: 'the xz half', 14: 'the yz half', 1: 'quarter'}.get(quadrants, quadrants)} symmetry; choose a compatible engine or change the requested symmetry")
     try:
-        engine_name = request.options.engine
-        if engine_name == "auto":
-            # Resolve against the requested mounting, not just the host's engine
-            # list: BEAT advertises no coupled infinite-baffle support and rejects
-            # such a request outright, so picking it here would persist a job that
-            # a coupling-capable BEMPP on the same host could have solved.
-            mounting = _requested_mounting(request)
-            engine_name = await engine_registry.resolve(
-                "auto",
-                solver_mode=request.options.solver_mode,
-                mounting=mounting,
-                resolved_quadrants=resolved_quadrants,
-            )
-            if engine_name is None:
-                unsupported = {
-                    "infinite-baffle": " that supports a coupled infinite-baffle mounting",
-                    "ground-plane": " that supports a rigid ground-plane mounting",
-                }.get(mounting or "", "")
-                raise EngineUnavailableError(
-                    f"AUTO could not resolve a compatible solve engine{unsupported} from "
-                    "this host's capabilities. "
-                    + _engine_remedy(mounting)
-                    + " Explicitly enable dry-run with WG2_ENABLE_DRYRUN=1 for "
-                    "synthetic development solves."
-                )
-            request = request.model_copy(deep=True)
-            request.options.engine = engine_name
-            plan["engine"] = engine_name
-        else:
-            if engine_name == "beat":
-                # Legacy BEAT names the family; prefer its best ready backend
-                # before considering substitution by another engine.
-                resolved_beat = resolve_legacy_beat_engine(
-                    await engine_registry.capabilities()
-                )
-                if resolved_beat is not None:
-                    engine_name = resolved_beat
-                    request = request.model_copy(deep=True)
-                    request.options.engine = engine_name
-                    plan["engine"] = engine_name
-            if engine_name != "dryrun" and (
-                await engine_registry.get_engine(engine_name) is None
-            ):
-                if request.options.accuracy == "accurate":
-                    reason = await engine_registry.unavailable_reason(engine_name)
-                    raise EngineUnavailableError(
-                        f"Accurate requires BEAT engine '{engine_name}', which is unavailable. "
-                        f"{reason or 'No capability reason was reported.'} Choose Fast or enable BEAT."
-                    )
-                # Preserve the stored preference but substitute what AUTO would
-                # run on this host, reporting both the selection and its reason.
-                # Dry-run is excluded: real engines must never stand in for it.
-                unavailable_reason = await engine_registry.unavailable_reason(engine_name)
-                # Ground-plane mounting lives in options, not sim_type.
-                mounting = _requested_mounting(request)
-                substitute = await engine_registry.resolve(
-                    "auto",
-                    solver_mode=request.options.solver_mode,
-                    mounting=mounting,
-                    resolved_quadrants=resolved_quadrants,
-                )
-                if substitute is None:
-                    unsupported = {
-                        "infinite-baffle": " that supports a coupled infinite-baffle mounting",
-                        "ground-plane": " that supports a rigid ground-plane mounting",
-                    }.get(mounting or "", "")
-                    raise EngineUnavailableError(
-                        f"Solve engine '{engine_name}' is unavailable, and no other "
-                        f"engine on this host{unsupported} can take its place. "
-                        + (unavailable_reason or "No capability reason was reported.")
-                        + " "
-                        + _engine_remedy(mounting)
-                        + " Explicitly enable dry-run with WG2_ENABLE_DRYRUN=1 for "
-                        "synthetic development solves."
-                    )
-                request = request.model_copy(deep=True)
-                request.options.engine = substitute
-                plan["engine"] = substitute
-                plan["engine_substitution"] = {
-                    "requested": engine_name,
-                    "resolved": substitute,
-                    "reason": unavailable_reason
-                    or "No capability reason was reported.",
-                }
-                logger.info(
-                    "Solve engine %r is unavailable on this host; falling back to %r, "
-                    "which is what AUTO would have selected. %s The stored engine "
-                    "preference is unchanged.",
-                    engine_name,
-                    substitute,
-                    unavailable_reason or "No capability reason was reported.",
-                )
-                engine_name = substitute
-    except EngineUnavailableError as exc:
-        engine_name = request.options.engine
-        plan["engine"] = engine_name
-        return request, engine_name, exc
-    return request, engine_name, None
+        _apply_bempp_wall_default(request, info.name)
+    except SymmetryValidationError as exc:
+        return EngineVerdict(False, "capability", "engine_geometry_unsupported", str(exc))
+    if not info.available:
+        return EngineVerdict(False, "availability", "engine_unavailable", info.reason)
+    if await registry.get_engine(info.name) is None:
+        return EngineVerdict(False, "adapter", "engine_unavailable",
+                             await registry.unavailable_reason(info.name))
+    return EngineVerdict(True)
 
 
 async def resolve_submission(
@@ -898,11 +790,7 @@ async def resolve_submission(
 
     _refuse_removed_solver(request)
     original_requested = request.options.engine
-    cpu_fallback = None
-    try:
-        request, cpu_fallback = await _accuracy_engine(request, engine_registry)
-    except EngineUnavailableError as exc:
-        refuse(exc)
+    request = _explicit_accuracy(request)
     engine_name = request.options.engine
     if engine_name not in SELECTABLE_ENGINE_NAMES:
         raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
@@ -942,31 +830,26 @@ async def resolve_submission(
         ),
         "eligibility_reasons": [],
     }
-    if cpu_fallback is not None:
-        symmetry_metadata["solver_plan"]["fallback_reason"] = cpu_fallback
-    if request.options.accuracy == "accurate":
-        if resolved_quadrants == 12:
-            refuse(SymmetryValidationError(
-                "Accurate via BEAT cannot solve an xz-only half domain. "
-                "Use a full or yz-half/quarter domain, or choose Fast."
-            ))
-        if _requested_mounting(request) == "infinite-baffle":
-            refuse(SymmetryValidationError(
-                "Accurate via BEAT cannot solve a coupled infinite baffle. "
-                "Use a free-standing mounting, or choose Fast and a compatible engine."
-            ))
-        if _ground_plane_axis(request) is not None:
-            refuse(SymmetryValidationError(
-                "Accurate via BEAT cannot solve a rigid ground plane in this adapter. "
-                "Turn off the ground plane, or choose Fast and a compatible engine."
-            ))
-
-    request, engine_name, unavailable = await _resolve_parametric_engine(
-        request, engine_registry, resolved_quadrants,
-        symmetry_metadata["solver_plan"],
-    )
-    if unavailable is not None:
-        refuse(unavailable)
+    detected = await engine_registry.capabilities()
+    async def verdict(info):
+        info = await _settled_candidate(info, engine_registry)
+        return await _parametric_engine_verdict(info, request, engine_registry, resolved_quadrants)
+    selection = await select_engine(engine_name, request.options.accuracy, detected, verdict)
+    if isinstance(selection, SolveBlocker):
+        if refusal is None:
+            symmetry_metadata["solver_plan"]["readiness"] = selection.model_dump(mode="json")
+        try:
+            _raise_engine_blocker(selection)
+        except (EngineUnavailableError, SymmetryValidationError) as exc:
+            refuse(exc)
+    else:
+        engine_name = selection.engine
+        request = request.model_copy(deep=True)
+        request.options.engine = engine_name
+        symmetry_metadata["solver_plan"]["engine"] = engine_name
+        symmetry_metadata["solver_plan"]["eligibility_reasons"] = selection.passed_over
+        if selection.fallback_reason:
+            symmetry_metadata["solver_plan"]["fallback_reason"] = selection.fallback_reason
 
     if (
         _ground_plane_axis(request) is not None
@@ -984,91 +867,15 @@ async def resolve_submission(
             "baffle already mounts the mouth in an unbounded wall; turn the "
             "ground plane off, or set the simulation type to free-standing."
         ))
-    if _ground_plane_axis(request) is not None:
-        # Every path that picks an engine converges here, which is the point.
-        # The AUTO gate above filters candidates by mounting, but it is only
-        # reached when the engine is literally "auto": an explicitly selected engine skips it, and a
-        # substitution for an unavailable engine resolves separately. All three
-        # would otherwise accept a ground plane and hand it to an adapter that
-        # never reads it, returning a free-standing answer to a question about
-        # a floor -- no error, a wrong number, which is the failure mode this
-        # mounting was split out of "infinite baffle" to avoid.
-        #
-        # Advertising is the contract: an engine offers "ground-plane" only
-        # once its adapter consumes SolverContext.ground_plane.
-        capable = {
-            info.name
-            for info in await engine_registry.capabilities()
-            if "ground-plane" in info.mountings
-        }
-        if engine_name not in capable:
-            offer = ", ".join(sorted(capable)) if capable else "none on this host"
-            refuse(SymmetryValidationError(
-                f"Solve engine '{engine_name}' cannot solve above a rigid ground "
-                f"plane; it would silently return a free-standing result. "
-                f"Engines that can: {offer}. Choose one, or turn the ground "
-                "plane off."
-            ))
-    if request.design.root.simulation.sim_type == "infinite-baffle":
-        # Every path that picks an engine converges here, exactly as for the
-        # ground plane above: an explicit engine skips the AUTO gate, and so do
-        # a stored preference, an imported ATH SimType=1 and a retry. Refused
-        # before the job exists rather than after the adapter rejects it, and
-        # the engine and mounting are never changed silently.
-        #
-        # Advertising is the contract, and it is the same one AUTO filters on:
-        # Metal by name, BEMPP only when its probe reports coupled support.
-        #
-        # An engine the host does not list at all (a disabled dry run) is left
-        # to the unavailable-engine refusal below, which says why.
-        listed = {info.name: info for info in await engine_registry.capabilities()}
-        info = listed.get(engine_name)
-        if info is not None and "infinite-baffle" not in info.mountings:
-            refuse(SymmetryValidationError(
-                f"Solve engine '{engine_name}' cannot solve a coupled infinite "
-                f"baffle. Choose {_INFINITE_BAFFLE_ENGINES}, or set the "
-                "simulation type to free-standing."
-            ))
-    if (
-        engine_name != "dryrun"
-        and await engine_registry.get_engine(engine_name) is not None
-        and not await engine_registry.supports_symmetry(engine_name, resolved_quadrants)
-    ):
-        domain = {
-            1234: "full",
-            12: "the xz half",
-            14: "the yz half",
-            1: "quarter",
-        }.get(resolved_quadrants, f"quadrants {resolved_quadrants}")
-        refuse(SymmetryValidationError(
-            f"Solve engine '{engine_name}' does not support {domain} symmetry; "
-            "choose a compatible engine or change the requested symmetry"
-        ))
     if (
         engine_name == "bempp"
         and request.design.root.simulation.sim_type == "infinite-baffle"
     ):
-        if request.options.symmetry != "auto" and resolved_quadrants != 1234:
-            refuse(SymmetryValidationError(
-                "BEMPP coupled infinite-baffle currently requires Full symmetry; "
-                "use Auto/Full or choose Metal for half/quarter domains"
-            ))
         resolved_quadrants = 1234
         symmetry_metadata["resolved_quadrants"] = resolved_quadrants
         symmetry_metadata["solver_plan"]["symmetry_reason"] = (
             "BEMPP coupled infinite-baffle uses the validated full-domain formulation"
         )
-    if await engine_registry.get_engine(engine_name) is None:
-        reason = await engine_registry.unavailable_reason(engine_name)
-        fallback_reason = (
-            "Dry-run solves require WG2_ENABLE_DRYRUN=1."
-            if engine_name == "dryrun"
-            else "No capability reason was reported."
-        )
-        refuse(EngineUnavailableError(
-            f"Solve engine '{engine_name}' is unavailable. "
-            f"{reason or fallback_reason}"
-        ))
     wall_adjustment = None
     try:
         request, wall_adjustment = _apply_bempp_wall_default(request, engine_name)
@@ -1189,28 +996,10 @@ async def resolve_imported_submission(
         )
     _refuse_removed_solver(request)
     original_requested = request.options.engine
-    backend_refusal = _imported_backend_refusal(request, imported_record)
-    if backend_refusal is not None:
-        raise ImportedSolveRefusal(*backend_refusal)
-    if imported_record and imported_record.get("fem_regions") and not request.geometry.exterior_only:
-        cpu_fallback = None
-        # AUTO keeps the CPU f64 FEM reference policy. Explicit coupled GPU
-        # choices keep their backend; interior sparse solves always use CPU f64.
-        if request.options.engine in {"auto", "beat"} or (
-                request.options.engine in {"beat-cpu", "beat-metal", "beat-cuda", "beat-rocm"}
-                and _fem_interior_only(request, imported_record)):
-            request = request.model_copy(deep=True)
-            request.options.engine = "beat-cpu"
-            if original_requested != "beat-cpu":
-                cpu_fallback = ("Interior-only FEM uses CPU float64" if _fem_interior_only(request, imported_record)
-                                else "AUTO FEM uses the CPU float64 reference")
-    else:
-        request, cpu_fallback = await _accuracy_engine(request, engine_registry)
+    fem = bool(imported_record and imported_record.get("fem_regions") and not request.geometry.exterior_only)
+    request = request if fem else _explicit_accuracy(request)
     requested = request.options.engine
-    backend_refusal = _imported_backend_refusal(request, imported_record)
-    if backend_refusal is not None:
-        request_refusal = backend_refusal
-    elif request_refusal is _REQUEST_UNCHECKED:
+    if request_refusal is _REQUEST_UNCHECKED:
         request_refusal = await _imported_request_refusal_async(request, imported_record, imported_msh_text)
     if request_refusal is not None:
         raise ImportedSolveRefusal(*request_refusal)
@@ -1218,201 +1007,38 @@ async def resolve_imported_submission(
         raise UnknownEngineError(f"Unknown solve engine: {requested}")
 
     detected = await engine_registry.capabilities()
-    if imported_record and imported_record.get("fem_regions") and not request.geometry.exterior_only:
-        selected_info = next((info for info in detected if info.name == requested), None)
-        if (original_requested in {"auto", "beat"} and selected_info is not None
-                and not selected_info.available and selected_info.runtime_state == "preparing"):
-            raise EngineUnavailableError(
-                "BEAT CPU is still preparing. FEM regions on Auto run on BEAT CPU float64; "
-                "wait for BEAT CPU preparation to finish, or choose a ready GPU backend."
-            )
-        if requested in _BEAT_ACCELERATORS and (selected_info is None or not selected_info.available):
-            reason = selected_info.reason if selected_info is not None else "this host does not detect it"
-            raise EngineUnavailableError(f"Solve engine '{requested}' is unavailable. {reason}")
-    if (imported_record and imported_record.get("fem_regions")
-            and not request.geometry.exterior_only
-            and not any(info.available and "fem-regions" in info.imported_features
-                        for info in detected)):
-        remedy = ("wait for BEAT CPU preparation to finish" if any(
-            info.name == "beat-cpu" and info.runtime_state == "preparing" for info in detected
-        ) else "Prepare BEAT CPU")
-        raise EngineUnavailableError(
-            "FEM regions require an available official BEAT engine. "
-            f"{remedy}, or choose exterior-only (leave FEM regions out)."
-        )
-    if requested == "bempp" and any(info.name == "bempp" and info.qualification == "pending"
-                                    for info in detected):
-        detected = await engine_registry.wait_for_bempp()
     needed_features = _imported_features_needed(request.geometry, imported_record)
-    declared = _imported_capabilities(detected, _imported_accuracy(request), request.options.engine,
-                                      fem_regions="fem-regions" in needed_features)
-    order = full3d_engine_order()
-    capable = [
-        name
-        for name in order
-        if name in declared and _IMPORTED_GEOMETRY in declared[name].geometry_sources
-    ]
-    if requested == "auto":
-        candidates = order
-        reason = (
-            "AUTO selected the first available engine, in AUTO order, that "
-            "declares imported geometry"
+    resolved_quadrants = (symmetry_metadata or {}).get("resolved_quadrants")
+
+    async def verdict(info, *, explicit=False):
+        info = await _settled_candidate(info, engine_registry)
+        declared = _imported_capabilities(
+            [info], _imported_accuracy(request), info.name if explicit else requested,
+            fem_regions="fem-regions" in needed_features,
         )
-    elif requested == "beat":
-        candidates = tuple(name for name in order if name.startswith("beat-"))
-        reason = (
-            "legacy engine='beat' selected the best available BEAT backend "
-            "that declares imported geometry"
-        )
-    else:
-        candidates = (requested,)
-        reason = cpu_fallback or f"explicit engine={requested!r} declares imported geometry"
-    if requested != "auto" and not any(name in capable for name in candidates):
-        if requested not in declared and requested in _BEAT_ACCELERATORS:
-            # Not detected on this host at all: say so, not that the engine
-            # cannot take CAD returns.
-            raise EngineUnavailableError(
-                f"Solve engine '{requested}' is unavailable: this host does not "
-                "detect it."
-            )
-        # Name only engines this host can actually run, each judged as if it
-        # were the one picked (an explicit BEAT Metal takes a return in Fast).
-        usable = [
-            name
-            for name in order
-            if name != requested
-            and _imported_capable_if_picked(detected, request.options.accuracy, name,
-                                           fem_regions="fem-regions" in needed_features)
-            and next(item for item in detected if item.name == name).available
-        ]
-        if (
-            requested in _BEAT_ACCELERATORS
-            and requested not in _BEAT_FAST_IMPORTED_EXPLICIT
-            and request.options.accuracy != "accurate"
-            and "fem-regions" not in needed_features
-        ):
-            label = declared[requested].display_label()
-            others = [
-                next(item for item in detected if item.name == name).display_label()
-                for name in usable
-            ]
-            # AUTO is a way forward only where it can resolve in Fast.
-            if any(name in capable and declared[name].available for name in order):
-                others.append("AUTO")
-            message = f"{label} solves CAD returns only in Accurate. Choose Accurate"
-            message += f", or {' / '.join(others)}." if others else "."
-        else:
-            offer = ", ".join(usable) if usable else "none on this host"
-            message = (
-                f"engine {requested!r} does not declare imported geometry; "
-                f"engines that do and are available here: {offer}"
-            )
-        raise ImportedSolveRefusal(
-            "imported_engine_unsupported",
-            message,
-            details={"engine": requested, "capable_engines": usable},
+        return await imported_engine_verdict(
+            declared[info.name], resolved_quadrants=resolved_quadrants,
+            needed_features=needed_features, engine_registry=engine_registry,
+            imported_record=imported_record, imported_msh_text=imported_msh_text,
+            drive_channels=request.geometry.drive_channels, request=request,
         )
 
-    explicit = requested not in {"auto", "beat"}
-    resolved_quadrants = (symmetry_metadata or {}).get("resolved_quadrants")
-    selected: str | None = None
-    passed_over: list[str] = []
-    refused: list[str] = []
-    for name in candidates:
-        info = declared.get(name)
-        if info is not None and info.qualification == "pending":
-            # Walk the imported request's normal order too: a higher engine's
-            # preflight can choose it immediately, but pending BEMPP cannot be
-            # passed over just because OpenCL has not returned yet.
-            detected = await engine_registry.wait_for_bempp()
-            declared = _imported_capabilities(detected, _imported_accuracy(request), request.options.engine,
-                                              fem_regions="fem-regions" in needed_features)
-            capable = [candidate for candidate in order if candidate in declared
-                       and _IMPORTED_GEOMETRY in declared[candidate].geometry_sources]
-            info = declared.get(name)
-        if info is None:
-            # Not detected on this host at all, so not a candidate here.
-            continue
-        verdict = await imported_engine_verdict(
-            info,
-            resolved_quadrants=resolved_quadrants,
-            needed_features=needed_features,
-            engine_registry=engine_registry,
-            imported_record=imported_record,
-            imported_msh_text=imported_msh_text,
-            drive_channels=request.geometry.drive_channels,
-            request=request,
-        )
-        if verdict.solves:
-            selected = name
-            break
-        reason = str(verdict.reason)
-        if verdict.stage == "declaration":
-            passed_over.append(f"{name}: does not declare imported geometry")
-            continue
-        if verdict.stage == "availability":
-            passed_over.append(f"{name}: {reason}")
-            continue
-        if verdict.stage == "adapter":
-            # The snapshot said available; the adapter is the final word,
-            # exactly as on the parametric path.
-            raise EngineUnavailableError(f"Solve engine '{name}' is unavailable. {reason}")
-        # Capability or preflight: this engine cannot take this return. The
-        # user's pick is refused, never swapped, and the refusal names the
-        # engines that can take this record here.
-        if explicit:
-            able = await _engines_able_to_take(
-                declared,
-                order,
-                exclude=name,
-                resolved_quadrants=resolved_quadrants,
-                needed_features=needed_features,
-                engine_registry=engine_registry,
-                imported_record=imported_record,
-                imported_msh_text=imported_msh_text,
-                drive_channels=request.geometry.drive_channels,
-                request=request,
-            )
-            raise ImportedSolveRefusal(
-                "imported_engine_unsupported",
-                f"{'Accurate via BEAT' if request.options.accuracy == 'accurate' else f'engine {name!r}'} cannot solve this CAD return: {reason}"
-                + ("" if reason.endswith(".") else ".")
-                + f" Engines that can: {', '.join(able) if able else 'none on this host'}. "
-                + ("Choose Fast and a compatible engine, or change the CAD domain/features." if request.options.accuracy == 'accurate' else ""),
-                details={
-                    "engine": name,
-                    "reason_code": verdict.code,
-                    "capable_engines": able,
-                },
-            )
-        passed_over.append(f"{name}: {reason}")
-        refused.append(f"{verdict.label}: {reason}" + ("" if reason.endswith(".") else "."))
-    if selected is None:
-        if explicit:
-            unavailable_reason = await engine_registry.unavailable_reason(requested)
-            raise EngineUnavailableError(
-                f"Solve engine '{requested}' is unavailable. "
-                f"{unavailable_reason or 'No capability reason was reported.'}"
-            )
-        unavailable = [
-            f"Solve engine '{name}' is unavailable. {declared[name].reason}"
-            for name in candidates
-            if name in capable and not declared[name].available
-        ]
-        if refused:
-            # A return no present engine could take is not a missing
-            # capability that may yet arrive: it is refused, with every reason.
-            raise ImportedSolveRefusal(
-                "imported_no_engine_solves_return",
-                "No solve engine on this host can solve this CAD return. "
-                + " ".join(refused + unavailable),
-                details={"passed_over": passed_over, "capable_engines": capable},
-            )
-        raise EngineUnavailableError(
-            "No solve engine on this host that can solve imported geometry is "
-            "available. "
-            + (" ".join(unavailable) or "No engine here declares imported geometry.")
-        )
+    async def alternative(info):
+        return await verdict(info, explicit=True)
+
+    selection = await select_engine(requested, request.options.accuracy, detected, verdict,
+                                    alternative_verdict=alternative, preferred=("beat-cpu",) if fem else ())
+    if isinstance(selection, SolveBlocker):
+        _raise_engine_blocker(selection, imported=True)
+    selected = selection.engine
+    passed_over = selection.passed_over
+    cpu_fallback = selection.fallback_reason
+    if fem and requested in {"auto", "beat"} and selected == "beat-cpu":
+        cpu_fallback = ("Interior-only FEM uses CPU float64" if _fem_interior_only(request, imported_record)
+                        else "AUTO FEM uses the CPU float64 reference")
+    reason = ("AUTO selected the first available engine, in AUTO order, that declares imported geometry"
+              if requested == "auto" else "legacy engine='beat' selected the best available BEAT backend that declares imported geometry"
+              if requested == "beat" else cpu_fallback or f"explicit engine={requested!r} declares imported geometry")
     if selected != requested:
         request = request.model_copy(deep=True)
         request.options.engine = selected
@@ -1491,6 +1117,7 @@ async def plan_imported_submission(
         )
     engine: str | None = None
     code: str | None = None
+    readiness = None
     try:
         resolution = await resolve_imported_submission(
             request,
@@ -1502,8 +1129,10 @@ async def plan_imported_submission(
         )
     except ImportedSolveRefusal as exc:
         code, reason = exc.reason_code, str(exc)
+        readiness = exc.details.get("blocker")
     except EngineUnavailableError as exc:
         code, reason = "engine_unavailable", str(exc)
+        readiness = exc.details.get("blocker")
     except UnknownEngineError as exc:
         code, reason = "unknown_engine", str(exc)
     else:
@@ -1511,6 +1140,7 @@ async def plan_imported_submission(
         reason = str(resolution.symmetry_metadata["solver_plan"]["reason"])
     return {
         "ingest_id": request.geometry.ingest_id,
+        "readiness": readiness,
         "requested": request.options.engine,
         "engine": engine,
         "code": code,
@@ -3745,22 +3375,18 @@ class JobRuntime:
                     ),
                 }
             if imported_record and imported_record.get("fem_regions") and not request.geometry.exterior_only:
-                refusal = (
-                    _imported_backend_refusal(request, imported_record)
-                    or await _imported_request_refusal_async(
-                        request, imported_record, job_msh_text,
-                        cancel_check=lambda: self._check_cancelled(job_id))
-                )
+                refusal = await _imported_request_refusal_async(
+                    request, imported_record, job_msh_text,
+                    cancel_check=lambda: self._check_cancelled(job_id))
                 if refusal:
                     raise ImportedSolveRefusal(*refusal)
-            if _fem_interior_only(request, imported_record) and request.options.engine != "beat-cpu":
-                requested_engine = request.options.engine
-                request = request.model_copy(deep=True)
-                request.options.engine = "beat-cpu"
-                self.store.mutate_job_metadata(job_id, {"fem_execution_reroute": {
-                    "requested_engine": requested_engine, "engine": "beat-cpu",
-                    "backend": "cpu", "precision": "float64",
-                    "reason": "Interior-only FEM uses CPU float64"}})
+                # Queued requests from older builds obey the same policy at
+                # execution; an explicit backend is never silently replaced.
+                await resolve_imported_submission(
+                    request, self.engine_registry, symmetry_metadata=symmetry_metadata,
+                    imported_record=imported_record, imported_msh_text=job_msh_text,
+                    request_refusal=None,
+                )
             try:
                 engine = await self.engine_registry.get_engine(request.options.engine)
             except Exception:

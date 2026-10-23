@@ -87,7 +87,10 @@ export interface PlanAdjustment {
   reason_code: string;
   policy_version: number;
 }
+export type SolveBlocker = components['schemas']['SolveBlocker'];
+
 export interface SolvePlan {
+  readiness?: SolveBlocker | null;
   engine: string;
   formulation: 'full-3d';
   reason: string;
@@ -186,8 +189,10 @@ async function detail(response: Response): Promise<string> {
   try {
     const body = await response.json() as {
       detail?: unknown;
-      error?: { details?: { validation_errors?: unknown } };
+      error?: { details?: { validation_errors?: unknown; blocker?: { message?: string } } };
     };
+    const blocker = body.error?.details?.blocker?.message;
+    if (blocker) return blocker;
     const validation = formatApiDetail(body.error?.details?.validation_errors);
     if (validation) return validation;
     const formatted = formatApiDetail(body.detail);
@@ -403,6 +408,7 @@ export async function postSolvePlan(
   ) {
     throw new Error('Solve plan response is invalid');
   }
+  if (plan.readiness) throw new SolvePlanRefused(plan.readiness.message, 422);
   return plan as SolvePlan;
 }
 
@@ -425,6 +431,7 @@ export interface ImportedEngineVerdict {
  * the request as set up would be refused.
  */
 export interface ImportedSolvePlan {
+  readiness?: SolveBlocker | null;
   ingest_id: string;
   requested: string;
   engine: string | null;
@@ -467,6 +474,7 @@ export async function postImportedSolvePlan(
   ) {
     throw new Error('Imported solve plan response is invalid');
   }
+  if (plan.readiness) plan.reason = plan.readiness.message;
   return plan as ImportedSolvePlan;
 }
 
@@ -531,8 +539,8 @@ async function submissionRefusal(response: Response): Promise<SolveSubmissionRef
   let message: string | null = null;
   let code: string | null = null;
   try {
-    const body = await response.json() as { detail?: unknown; error?: { code?: unknown } | null };
-    message = formatApiDetail(body.detail);
+    const body = await response.json() as { detail?: unknown; error?: { code?: unknown; details?: { blocker?: { message?: string } } } | null };
+    message = body.error?.details?.blocker?.message || formatApiDetail(body.detail);
     code = typeof body.error?.code === 'string' ? body.error.code : null;
   } catch { /* fall through */ }
   return new SolveSubmissionRefused(

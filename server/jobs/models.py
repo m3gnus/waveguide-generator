@@ -1158,13 +1158,6 @@ class SolveRequest(JobModel):
         # restrictions unless retained FEM regions establish a coupled job.
         if geometry.exterior_only and not all(c.exterior_transducer for c in geometry.drive_channels):
             raise ValueError("exterior transducer jobs currently require a model on every drive channel")
-        if geometry.exterior_only:
-            if self.options.engine not in {"beat-cpu", "beat-metal"}:
-                raise ValueError("exterior transducer jobs require an explicit beat-cpu or beat-metal engine")
-        elif self.options.engine not in {"auto", "beat", "beat-cpu", "beat-metal", "beat-cuda", "beat-rocm"}:
-            # The ingestion record admits coupled GPU voltage drives; an
-            # exterior-only system still needs its declared transducer capability.
-            raise ValueError("transducer jobs require an official BEAT engine")
         if (geometry.combine is not None or geometry.passive_cardioid_enabled or geometry.rg_ohm != 0
                 or geometry.max_drive_voltage_v is not None or self.options.adaptive_frequency_sampling
                 or self.options.mesh_ladder != "off" or self.options.ground_plane.enabled):

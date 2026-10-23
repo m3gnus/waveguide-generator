@@ -179,6 +179,8 @@ def job_operation_view(row: Mapping[str, Any]) -> dict[str, Any]:
         "stage": stage,
         "reason": reason,
         "message": message,
+        "blocker": refusal.get("blocker") if refusal else None,
+        "remedies": (refusal.get("blocker") or {}).get("remedies", []) if refusal else [],
         "setupDefaults": accepted["setup_defaults"] and state == "accepted",
         "frameAxisAutomatic": accepted["frame_axis_automatic"],
         "jobId": job_id,
@@ -321,11 +323,11 @@ class _Run:
         if stage:
             logger.info("CAD job %s (operation %s): stage %s.", self.job_id, self.intent.operation_id, stage)
 
-    def refuse(self, code: str, message: str) -> tuple[str, None]:
+    def refuse(self, code: str, message: str, *, blocker: Mapping[str, Any] | None = None) -> tuple[str, None]:
         """End the job as refused. ``("done", None)``: the preparation is over."""
 
         event = self.port.job_store.refuse_preparing_job(
-            self.job_id, code=code, message=message, cad=self.cad or None
+            self.job_id, code=code, message=message, cad=self.cad or None, blocker=blocker
         )
         if event is None:
             raise _Fenced()
@@ -855,7 +857,8 @@ async def _bind(
         # The jobs system refused this exact request; nothing was created.
         code = str(getattr(exc, "reason_code", "") or getattr(exc, "code", "") or "")
         await asyncio.to_thread(
-            run.refuse, _submission_refusal_reason(exc, code), str(exc)
+            run.refuse, _submission_refusal_reason(exc, code), str(exc),
+            blocker=getattr(exc, "details", {}).get("blocker")
         )
         return "refused"
     except _Fenced:

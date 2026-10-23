@@ -40,7 +40,7 @@ class ImportedSolveRefusal(ValueError):
     ) -> None:
         self.reason_code = reason_code
         self.details = dict(details or {})
-        super().__init__(f"{reason_code}: {message}")
+        super().__init__(message if self.details.get("blocker") else f"{reason_code}: {message}")
 
 
 def _imported_decision_refusal(record: Mapping[str, Any] | None) -> tuple[str, str] | None:
@@ -249,47 +249,6 @@ async def _imported_preflight_refusal(
     return refusal if isinstance(refusal, str) and refusal else None
 
 
-async def _engines_able_to_take(
-    declared: Mapping[str, EngineInfo],
-    order: tuple[str, ...],
-    *,
-    exclude: str,
-    resolved_quadrants: Any,
-    needed_features: set[str],
-    engine_registry: EngineRegistry,
-    imported_record: Mapping[str, Any] | None,
-    imported_msh_text: str | None,
-    drive_channels: Sequence[Any] | None = None,
-    request: SolveRequest | None = None,
-) -> list[str]:
-    """The engines, other than ``exclude``, that would take this return here.
-
-    Each engine's own ``imported_engine_verdict`` -- the one the selector
-    shows, its adapter's preflight included -- so a refusal never names an
-    engine that would refuse the record in turn. It runs only on the refusal
-    path, and solves nothing.
-    """
-
-    able: list[str] = []
-    for name in order:
-        info = declared.get(name)
-        if name == exclude or info is None:
-            continue
-        verdict = await imported_engine_verdict(
-            info,
-            resolved_quadrants=resolved_quadrants,
-            needed_features=needed_features,
-            engine_registry=engine_registry,
-            imported_record=imported_record,
-            imported_msh_text=imported_msh_text,
-            drive_channels=drive_channels,
-            request=request,
-        )
-        if verdict.solves:
-            able.append(name)
-    return able
-
-
 def _imported_axial_refusal(
     request: SolveRequest, record: Mapping[str, Any] | None, msh_text: str | None
 ) -> tuple[str, str] | None:
@@ -321,26 +280,6 @@ def _fem_interior_only(request: SolveRequest, record: Mapping[str, Any] | None) 
                             for g in r.get("surface_groups", ())))
 
 
-def _imported_backend_refusal(
-    request: SolveRequest, record: Mapping[str, Any] | None = None,
-) -> tuple[str, str] | None:
-    """Refuse the selected backend at submit/run, without restricting other picks."""
-    coupled_regions = bool(record and record.get("fem_regions") and not request.geometry.exterior_only)
-    if (not coupled_regions and any(c.exterior_transducer is not None for c in request.geometry.drive_channels)
-            and request.options.engine not in {"beat-cpu", "beat-metal"}):
-        return "exterior_transducer_engine_unsupported", "exterior transducer jobs require an explicit beat-cpu or beat-metal engine"
-    from server.cadlink.build_flags import fem_regions_enabled
-
-    # With FEM regions switched off the FEM engine rule does not apply; the
-    # kill-switch refusal names the real reason.
-    if (record and record.get("fem_regions") and not request.geometry.exterior_only
-            and fem_regions_enabled()
-            and request.options.engine not in {"auto", "beat", "beat-cpu", "beat-metal", "beat-cuda", "beat-rocm"}):
-        return "fem_backend_unsupported", (
-            "FEM regions require official BEAT; choose BEAT CPU, Metal, CUDA or ROCm, or choose exterior-only")
-    return None
-
-
 def _imported_request_refusal(
     request: SolveRequest, record: Mapping[str, Any] | None = None,
     msh_text: str | None = None,
@@ -351,7 +290,7 @@ def _imported_request_refusal(
     if not request.geometry.drive_channels and not coupled_regions:
         return "drive_source_coverage", "The return has no driven exterior source or FEM diaphragm"
     if not coupled_regions and any(c.exterior_transducer is not None for c in request.geometry.drive_channels):
-        # The engine choice is refused at submit and run (_imported_backend_refusal),
+        # The engine choice is refused by the shared selection policy,
         # never here: the planner applies this refusal to every engine's verdict.
         if not all(c.exterior_transducer is not None for c in request.geometry.drive_channels):
             return "exterior_transducer_mixed_channels", "Exterior-only transducer jobs require a model on every drive channel; mixed drives require FEM regions"
@@ -456,6 +395,12 @@ async def imported_engine_verdict(
     """
 
     label = info.display_label()
+    if (request is not None and "fem-regions" in needed_features
+            and _fem_interior_only(request, imported_record) and info.name != "beat-cpu"):
+        return ImportedEngineVerdict(
+            info.name, label, False, "capability", "fem_interior_cpu_required",
+            "Interior-only FEM uses CPU float64; choose BEAT CPU",
+        )
     if _IMPORTED_GEOMETRY not in info.geometry_sources:
         return ImportedEngineVerdict(
             info.name,
@@ -463,7 +408,9 @@ async def imported_engine_verdict(
             False,
             "declaration",
             "imported_engine_unsupported",
-            "does not solve imported CAD geometry",
+            ("solves CAD returns only in Accurate; choose Accurate in Simulation"
+             if info.name in _BEAT_ACCELERATORS and request is not None and _imported_accuracy(request) != "accurate"
+             else "does not solve imported CAD geometry"),
         )
     blocker = _imported_capability_blocker(info, resolved_quadrants, needed_features)
     if blocker is not None:
@@ -521,17 +468,17 @@ def _imported_capabilities(
 ) -> dict[str, EngineInfo]:
     """Expose imported BEAT accelerators for the request that may use them.
 
-    FEM exposes every explicitly selected BEAT backend in either accuracy.
+    FEM exposes every BEAT backend in either accuracy; Auto prefers the CPU reference.
     Accurate exposes every accelerator. An explicitly named ``beat-metal`` is
     exposed in Fast too: Fast and Accurate run the identical BEAT computation.
-    AUTO and the legacy ``beat`` family never gain a Fast accelerator, so their
-    resolution is unchanged.
+    Outside FEM, AUTO and the legacy ``beat`` family keep their Fast declarations.
     """
 
     def exposed(info: EngineInfo) -> bool:
         if info.name not in _BEAT_ACCELERATORS or "imported" in info.geometry_sources:
             return False
-        return (fem_regions and "fem-regions" in info.imported_features and info.name == engine) or accuracy == "accurate" or (
+        return (fem_regions and "fem-regions" in info.imported_features
+                and engine in {"auto", "beat", info.name}) or accuracy == "accurate" or (
             info.name == engine and engine in _BEAT_FAST_IMPORTED_EXPLICIT
         )
 
@@ -540,16 +487,6 @@ def _imported_capabilities(
         if exposed(info) else info
         for info in capabilities
     }
-
-
-def _imported_capable_if_picked(
-    capabilities: tuple[EngineInfo, ...] | list[EngineInfo], accuracy: str, name: str,
-    *, fem_regions: bool = False,
-) -> bool:
-    """Whether ``name`` would declare imported geometry if it were the pick."""
-
-    info = _imported_capabilities(capabilities, accuracy, name, fem_regions=fem_regions).get(name)
-    return info is not None and _IMPORTED_GEOMETRY in info.geometry_sources
 
 
 def _imported_accuracy(request: SolveRequest) -> str:

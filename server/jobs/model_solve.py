@@ -528,7 +528,7 @@ def refusal_from(exc: BaseException) -> ModelSolveRefusal:
     if isinstance(exc, SubmissionConflictError):
         return ModelSolveRefusal(409, "submission_key_conflict", str(exc))
     if isinstance(exc, EngineUnavailableError):
-        return ModelSolveRefusal(503, "engine_unavailable", str(exc))
+        return ModelSolveRefusal(503, "engine_unavailable", str(exc), details=exc.details)
     if isinstance(exc, ImportedSolveRefusal):
         code = exc.reason_code
         if code == FRAME_CONFIRMATION_REQUIRED:
@@ -543,7 +543,7 @@ def refusal_from(exc: BaseException) -> ModelSolveRefusal:
     if isinstance(exc, RemovedSolverError):
         return ModelSolveRefusal(422, exc.code, str(exc))
     if isinstance(exc, SymmetryValidationError):
-        return ModelSolveRefusal(422, "invalid_symmetry", str(exc))
+        return ModelSolveRefusal(422, "invalid_symmetry", str(exc), details=getattr(exc, "details", None))
     return ModelSolveRefusal(422, "submission_refused", str(exc))
 
 

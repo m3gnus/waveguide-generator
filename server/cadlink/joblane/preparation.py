@@ -149,6 +149,8 @@ def operation_summary(row: Mapping[str, Any], job_store: Any = None) -> dict[str
         "stage": stage,
         "reason": row.get("reason"),
         "message": outcome.get("message") if isinstance(outcome, Mapping) else None,
+        "blocker": outcome.get("blocker"),
+        "remedies": (outcome.get("blocker") or {}).get("remedies", []),
         # Solved with WG's default settings: ``message`` says so in words.
         "setupDefaults": bool(isinstance(outcome, Mapping) and outcome.get("setup_defaults")),
         # The solver axis WG chose itself, confident and unconfirmed (the

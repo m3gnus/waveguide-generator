@@ -39,6 +39,7 @@ from server.jobs.models import (
     SolveRequest,
     StopResponse,
 )
+from server.jobs.runtime.engine_policy import SolveBlocker
 from server.jobs.plans import SolvePlanResponse, solve_plan_response
 from server.jobs.result_contracts import ResultEnvelope
 from server.jobs.retention import settings_auto_cleanup_policy
@@ -231,6 +232,7 @@ class ImportedSolvePlanResponse(BaseModel):
     engine is available.
     """
 
+    readiness: SolveBlocker | None = None
     ingest_id: str
     requested: str
     engine: str | None
@@ -434,6 +436,7 @@ def create_jobs_router(
                 code="invalid_solve_plan",
                 stage="planning",
                 message=str(exc),
+                details=getattr(exc, "details", None),
                 client_request_id=body.client_request_id,
             )
         return ImportedSolvePlanResponse.model_validate(plan)
@@ -450,7 +453,10 @@ def create_jobs_router(
         """Resolve the submitted design without allocating or persisting a job."""
 
         try:
-            resolved = await resolve_submission(body, runtime.engine_registry)
+            resolved = await resolve_submission(body, runtime.engine_registry, preview=True)
+            plan = resolved.symmetry_metadata["solver_plan"]
+            if plan.get("refusal") and not plan.get("readiness"):
+                raise SymmetryValidationError(plan["refusal"])
         except UnknownEngineError as exc:
             return _error_response(
                 422,
@@ -482,6 +488,7 @@ def create_jobs_router(
                 code="invalid_solve_plan",
                 stage="planning",
                 message=str(exc),
+                details=getattr(exc, "details", None),
                 client_request_id=body.client_request_id,
             )
         except EngineUnavailableError as exc:
@@ -490,6 +497,7 @@ def create_jobs_router(
                 code="engine_unavailable",
                 stage="planning",
                 message=str(exc),
+                details=exc.details,
                 client_request_id=body.client_request_id,
             )
         return solve_plan_response(resolved)
@@ -543,6 +551,7 @@ def create_jobs_router(
                 code="invalid_symmetry",
                 stage="submission",
                 message=str(exc),
+                details=getattr(exc, "details", None),
                 client_request_id=body.client_request_id,
             )
         except ImportedSolveRefusal as exc:
@@ -560,6 +569,7 @@ def create_jobs_router(
                 code="engine_unavailable",
                 stage="submission",
                 message=str(exc),
+                details=exc.details,
                 client_request_id=body.client_request_id,
             )
         except SubmissionConflictError as exc:

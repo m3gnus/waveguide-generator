@@ -662,3 +662,22 @@ def test_in_process_sigint_cancels_and_exits_130(tmp_path: Path, capsys) -> None
     assert exit_code == 130
     assert messages[-1]["kind"] == "outcome"
     assert messages[-1]["status"] == "interrupted"
+
+
+def test_cli_explicit_unprepared_engine_reports_shared_blocker(tmp_path: Path, capsys) -> None:
+    engine_registry = EngineRegistry(
+        detector=lambda: [EngineInfo(
+            "beat-metal", False, "not prepared", None, label="BEAT Metal",
+            runtime_state="unprepared", runtime_preparable=True,
+        )], factory=lambda _: None,
+    )
+    source = VALID_MWG + "WG.Solve = {\nEngine = beat-metal\n}\n"
+    code = main(["solve", str(_design(tmp_path, source)), "--data-dir", str(tmp_path / "data"),
+                 "--json-events"], engine_registry=engine_registry)
+    captured = capsys.readouterr()
+    outcome = json.loads(captured.out.splitlines()[-1])
+    assert code == 1 and outcome["status"] == "refused"
+    blocker = outcome["error"]["details"]["blocker"]
+    assert blocker["engine"] == "beat-metal"
+    assert blocker["message"] in captured.err
+    assert blocker["remedies"][0] == {"kind": "prepare", "engine": "beat-metal", "disabled_reason": None}

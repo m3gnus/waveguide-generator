@@ -205,7 +205,7 @@ def test_real_build_returns_a_parseable_reduced_artifact() -> None:
         ({"simulation": {"sim_type": "infinite-baffle"}}, {"engine": "bempp"}, 1234, None),
         ({"mesh": {"wall_thickness": 0}}, {"engine": "bempp"}, 1, 5),
         ({}, {"engine": "bempp", "mesh_validation_mode": "off"}, 1, 5),
-        ({}, {"engine": "beat-cpu"}, 1, 5),
+        ({}, {"engine": "bempp", "accuracy": "accurate"}, 1, 5),
     ],
 )
 def test_preview_builds_the_solve_execution_geometry_and_reuses_its_cache(
@@ -375,9 +375,9 @@ def test_unavailable_auto_engine_still_resolves_floor_domain(monkeypatch):
 @pytest.mark.parametrize(
     ("design_extra", "options", "reason", "quadrants"),
     [
-        ({}, {"accuracy": "accurate", "ground_plane": {"enabled": True}}, "Accurate via BEAT cannot solve a rigid ground plane", 14),
-        ({}, {"accuracy": "accurate", "symmetry": "half_xz"}, "xz-only half domain", 12),
-        ({"simulation": {"sim_type": "infinite-baffle"}}, {"accuracy": "accurate"}, "Accurate via BEAT cannot solve a coupled infinite baffle", 1),
+        ({}, {"accuracy": "accurate", "ground_plane": {"enabled": True}}, "cannot solve above a rigid ground plane", 14),
+        ({}, {"accuracy": "accurate", "symmetry": "half_xz"}, "does not support the xz half symmetry", 12),
+        ({"simulation": {"sim_type": "infinite-baffle"}}, {"accuracy": "accurate"}, "cannot solve a coupled infinite baffle", 1),
         ({}, {"symmetry": "quarter", "ground_plane": {"enabled": True}}, "ground plane", 14),
         ({"simulation": {"sim_type": "infinite-baffle"}}, {"ground_plane": {"enabled": True}}, "two different half-space boundaries", 1234),
         ({}, {"engine": "beat-metal", "ground_plane": {"enabled": True}}, "cannot solve above a rigid ground plane", 14),
@@ -419,64 +419,16 @@ def test_geometry_refusals_still_preview_mesh_and_reason(monkeypatch, design_ext
 
 
 @pytest.mark.parametrize("path", ["/api/solve", "/api/solve/plan"])
-@pytest.mark.parametrize(
-    ("options", "status", "message"),
-    [
-        (
-            {"engine": "auto", "ground_plane": {"enabled": True}},
-            503,
-            "AUTO could not resolve a compatible solve engine that supports a rigid "
-            "ground-plane mounting from this host's capabilities. Install/enable Metal, "
-            "BEAT, or BEMPP. Explicitly enable dry-run with WG2_ENABLE_DRYRUN=1 for "
-            "synthetic development solves.",
-        ),
-        (
-            {"engine": "bempp", "ground_plane": {"enabled": True}},
-            503,
-            "Solve engine 'bempp' is unavailable, and no other engine on this host that "
-            "supports a rigid ground-plane mounting can take its place. No capability "
-            "reason was reported. Install/enable Metal, BEAT, or BEMPP. Explicitly enable "
-            "dry-run with WG2_ENABLE_DRYRUN=1 for synthetic development solves.",
-        ),
-        (
-            {"engine": "auto", "accuracy": "accurate", "ground_plane": {"enabled": True}},
-            503,
-            "Accurate requires a ready BEAT GPU or BEAT CPU backend. "
-            "Enable BEAT, or choose Fast.",
-        ),
-        (
-            {"engine": "auto", "accuracy": "accurate", "symmetry": "half_xz"},
-            503,
-            "Accurate requires a ready BEAT GPU or BEAT CPU backend. "
-            "Enable BEAT, or choose Fast.",
-        ),
-        (
-            {"engine": "auto", "accuracy": "accurate", "symmetry": "quarter",
-             "ground_plane": {"enabled": True}},
-            503,
-            "Accurate requires a ready BEAT GPU or BEAT CPU backend. "
-            "Enable BEAT, or choose Fast.",
-        ),
-        (
-            {"engine": "beat-metal", "accuracy": "accurate", "ground_plane": {"enabled": True}},
-            422,
-            "Accurate via BEAT cannot solve a rigid ground plane in this adapter. "
-            "Turn off the ground plane, or choose Fast and a compatible engine.",
-        ),
-        (
-            {"engine": "beat-metal", "accuracy": "accurate", "symmetry": "half_xz"},
-            422,
-            "Accurate via BEAT cannot solve an xz-only half domain. "
-            "Use a full or yz-half/quarter domain, or choose Fast.",
-        ),
-        (
-            {"engine": "dryrun"},
-            503,
-            "Solve engine 'dryrun' is unavailable. Dry-run solves require WG2_ENABLE_DRYRUN=1.",
-        ),
-    ],
-)
-def test_refusal_order_matches_dev(tmp_path, path, options, status, message):
+@pytest.mark.parametrize("options", [
+    {"engine": "auto", "ground_plane": {"enabled": True}},
+    {"engine": "bempp", "ground_plane": {"enabled": True}},
+    {"engine": "auto", "accuracy": "accurate", "ground_plane": {"enabled": True}},
+    {"engine": "auto", "accuracy": "accurate", "symmetry": "half_xz"},
+    {"engine": "beat-metal", "accuracy": "accurate", "ground_plane": {"enabled": True}},
+    {"engine": "beat-metal", "accuracy": "accurate", "symmetry": "half_xz"},
+    {"engine": "dryrun"},
+])
+def test_unavailable_engine_plan_solve_and_mesh_preview_share_the_blocker(tmp_path, path, options):
     from server.jobs.api import create_jobs_router
     from server.jobs.runtime.core import JobRuntime
     from server.jobs.store import JobStore
@@ -486,12 +438,20 @@ def test_refusal_order_matches_dev(tmp_path, path, options, status, message):
     app = FastAPI()
     app.include_router(create_jobs_router(runtime))
     request = SolveRequest.model_validate({"design": _rosse(), "options": options})
+    preview = asyncio.run(resolve_submission(request, registry, preview=True))
+    blocker = preview.symmetry_metadata["solver_plan"]["readiness"]
     with TestClient(app) as client:
         response = client.post(path, json=request.model_dump(mode="json"))
-    assert response.status_code == status
-    assert response.json()["detail"] == message
-    preview = asyncio.run(resolve_submission(request, registry, preview=True))
-    assert preview.symmetry_metadata["solver_plan"]["refusal"] == message
+    if path.endswith("/plan"):
+        assert response.status_code == 200
+        assert response.json()["readiness"] == blocker
+        assert response.json()["engine_substitution"] is None
+    else:
+        assert response.status_code == 503
+        assert response.json()["error"]["details"]["blocker"] == blocker
+        assert response.json()["detail"] == blocker["message"]
+    assert blocker["code"] == "engine_unavailable"
+    assert preview.symmetry_metadata["solver_plan"]["refusal"] == blocker["message"]
 
 
 def test_validation_mode_rechecks_cached_mesh_without_rebuilding(monkeypatch):
@@ -539,7 +499,7 @@ def test_bare_native_bempp_refusal_still_previews_geometry(monkeypatch, availabl
             ),
         ))
         assert preview["msh_text"] == STUB_MSH
-        reason = "BEMPP requires a closed body" if available else "Solve engine 'bempp' is unavailable"
+        reason = "BEMPP requires a closed body"
         assert reason in preview["plan"]["refusal"]
     finally:
         clear_solver_mesh_cache()

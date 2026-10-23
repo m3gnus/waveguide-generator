@@ -1848,9 +1848,12 @@ def test_imported_submit_refusals(
         try:
             request = _request(ingest_id)
             mutate_request(request, record)
-            with pytest.raises(ImportedSolveRefusal) as caught:
+            with pytest.raises((ImportedSolveRefusal, EngineUnavailableError)) as caught:
                 await runtime.submit(request)
-            assert caught.value.reason_code == reason
+            if reason == "imported_engine_unsupported":
+                assert caught.value.blocker.engine == request.options.engine
+            else:
+                assert caught.value.reason_code == reason
         finally:
             await runtime.shutdown()
 
@@ -3359,7 +3362,7 @@ def test_imported_auto_walks_the_capability_order_past_an_unavailable_engine(
     assert plan["eligibility_reasons"] == ["metal: unavailable (no Apple GPU)"]
 
 
-@pytest.mark.parametrize("engine", ["bempp", "beat-cpu", "beat", "dryrun"])
+@pytest.mark.parametrize("engine", ["bempp", "beat-cpu", "beat"])
 def test_imported_explicit_engine_without_the_capability_is_refused_naming_capable_engines(
     tmp_path: Path, engine: str
 ) -> None:
@@ -3371,7 +3374,9 @@ def test_imported_explicit_engine_without_the_capability_is_refused_naming_capab
         asyncio.run(_submit_with(tmp_path, registry, engine))
 
     assert caught.value.reason_code == "imported_engine_unsupported"
-    assert caught.value.details == {"engine": engine, "capable_engines": ["metal"]}
+    assert caught.value.details["engine"] == ("beat-cpu" if engine == "beat" else engine)
+    assert caught.value.details["capable_engines"] == ["metal"]
+    assert caught.value.details["blocker"]["code"] == "imported_engine_unsupported"
 
 
 def test_imported_auto_without_an_available_capable_engine_is_unavailable(
@@ -3382,7 +3387,7 @@ def test_imported_auto_without_an_available_capable_engine_is_unavailable(
     with pytest.raises(EngineUnavailableError) as caught:
         asyncio.run(_submit_with(tmp_path, registry, "auto"))
 
-    assert "imported geometry" in str(caught.value)
+    assert caught.value.blocker.engine == "metal"
     assert "Metal needs an Apple GPU" in str(caught.value)
 
 
@@ -3394,7 +3399,8 @@ def test_imported_explicit_capable_engine_that_is_unavailable_stays_unavailable(
     with pytest.raises(EngineUnavailableError) as caught:
         asyncio.run(_submit_with(tmp_path, registry, "metal"))
 
-    assert str(caught.value) == "Solve engine 'metal' is unavailable. Metal needs an Apple GPU"
+    assert caught.value.blocker.engine == "metal"
+    assert "Metal needs an Apple GPU" in caught.value.blocker.message
 
 
 def test_resolve_imported_submission_is_one_named_function_beside_resolve_submission() -> None:
@@ -3406,7 +3412,7 @@ def test_resolve_imported_submission_is_one_named_function_beside_resolve_submis
 
     resolution = asyncio.run(
         resolve_imported_submission(
-            request, _DeclaredRegistry(_metal(), _bempp()), symmetry_metadata=prepared
+            request, _AlwaysDeclaredRegistry(_metal(), _bempp()), symmetry_metadata=prepared
         )
     )
 
@@ -3424,7 +3430,7 @@ def test_resolve_imported_submission_is_one_named_function_beside_resolve_submis
     )
     with pytest.raises(ValueError, match="imported geometry"):
         asyncio.run(
-            resolve_imported_submission(parametric, _DeclaredRegistry(_metal()))
+            resolve_imported_submission(parametric, _AlwaysDeclaredRegistry(_metal()))
         )
 
 
@@ -3537,7 +3543,7 @@ def test_imported_explicit_beat_cpu_refuses_a_y_only_half_by_name(tmp_path: Path
     assert caught.value.details["engine"] == "beat-cpu"
     assert caught.value.details["reason_code"] == "imported_symmetry_unsupported_by_engine"
     assert caught.value.details["capable_engines"] == ["metal"]
-    assert "Engines that can: metal." in str(caught.value)
+    assert "Use metal (different solver — results will differ)" in str(caught.value)
 
 
 def test_imported_accurate_refuses_xz_half_without_switching_to_metal(tmp_path: Path) -> None:
@@ -3546,15 +3552,15 @@ def test_imported_accurate_refuses_xz_half_without_switching_to_metal(tmp_path: 
     request = _request("wgi_" + "0" * 26)
     request.options.engine = "auto"
     request.options.accuracy = "accurate"
-    registry = _DeclaredRegistry(_metal(), _beat_cpu())
+    registry = _AlwaysDeclaredRegistry(_metal(), _beat_cpu())
     with pytest.raises(ImportedSolveRefusal) as caught:
         asyncio.run(resolve_imported_submission(
             request,
             registry,
             symmetry_metadata={"resolved_quadrants": 12},
         ))
-    assert "Accurate via BEAT cannot solve" in str(caught.value)
-    assert "Choose Fast" in str(caught.value)
+    assert "beat-cpu cannot solve" in str(caught.value)
+    assert "Use metal (different solver — results will differ)" in str(caught.value)
     assert caught.value.details["engine"] == "beat-cpu"
 
 
@@ -3570,7 +3576,7 @@ def test_imported_accurate_selects_ready_beat_gpu() -> None:
         symmetry_domains=("full", "half-yz", "quarter"),
     )
     resolution = asyncio.run(
-        resolve_imported_submission(request, _DeclaredRegistry(_metal(), beat_metal, _beat_cpu()))
+        resolve_imported_submission(request, _AlwaysDeclaredRegistry(_metal(), beat_metal, _beat_cpu()))
     )
 
     assert resolution.engine_name == "beat-metal"
@@ -3598,7 +3604,7 @@ def test_fast_auto_imported_resolution_keeps_legacy_platform_table(
         gpu, True, platform, "1", geometry_sources=("parametric",),
         symmetry_domains=("full", "half-yz", "quarter"),
     )]
-    engines = _DeclaredRegistry(_metal(available=metal_ready), *gpu_info, _beat_cpu())
+    engines = _AlwaysDeclaredRegistry(_metal(available=metal_ready), *gpu_info, _beat_cpu())
     resolved = asyncio.run(resolve_imported_submission(request, engines))
     assert resolved.engine_name == expected
     assert resolved.request.options.accuracy == "fast"
@@ -3627,7 +3633,7 @@ def test_explicit_beat_metal_takes_imported_geometry_in_fast() -> None:
     request = _request("wgi_" + "0" * 26)
     request.options.engine = "beat-metal"
     assert request.options.accuracy == "fast"
-    engines = _DeclaredRegistry(_metal(), _fast_gpu("beat-metal"), _beat_cpu())
+    engines = _AlwaysDeclaredRegistry(_metal(), _fast_gpu("beat-metal"), _beat_cpu())
     resolved = asyncio.run(resolve_imported_submission(request, engines))
     # The user's pick is kept: never swapped for Metal or BEAT CPU.
     assert resolved.engine_name == "beat-metal"
@@ -3656,7 +3662,7 @@ def test_beat_cuda_fast_refusal_offers_beat_metal_and_never_an_empty_auto() -> N
 
     request = _request("wgi_" + "0" * 26)
     request.options.engine = "beat-cuda"
-    with_metal = _DeclaredRegistry(
+    with_metal = _AlwaysDeclaredRegistry(
         _metal(available=False), _fast_gpu("beat-cuda"), _fast_gpu("beat-metal"),
         _beat_cpu(available=False),
     )
@@ -3665,13 +3671,13 @@ def test_beat_cuda_fast_refusal_offers_beat_metal_and_never_an_empty_auto() -> N
     assert "BEAT \u00b7 Metal" in str(caught.value) or "beat-metal" in str(caught.value)
     assert caught.value.details["capable_engines"] == ["beat-metal"]
 
-    nothing = _DeclaredRegistry(
+    nothing = _AlwaysDeclaredRegistry(
         _metal(available=False), _fast_gpu("beat-cuda"), _beat_cpu(available=False)
     )
     with pytest.raises(ImportedSolveRefusal) as caught:
         asyncio.run(resolve_imported_submission(request, nothing))
     message = str(caught.value)
-    assert message.endswith("Choose Accurate.")
+    assert "choose Accurate" in message
     assert "AUTO" not in message
 
 
@@ -3686,7 +3692,7 @@ def test_explicit_beat_gpu_not_detected_says_it_is_unavailable(
     request.options.engine = engine
     request.options.accuracy = accuracy
     with pytest.raises(EngineUnavailableError, match=f"'{engine}' is unavailable"):
-        asyncio.run(resolve_imported_submission(request, _DeclaredRegistry(_metal(), _beat_cpu())))
+        asyncio.run(resolve_imported_submission(request, _AlwaysDeclaredRegistry(_metal(), _beat_cpu())))
 
 
 @pytest.mark.parametrize("engine", ["beat-cuda", "beat-rocm"])
@@ -3726,20 +3732,20 @@ def test_explicit_beat_cuda_or_rocm_fast_is_refused_with_the_real_way_forward(gp
     request = _request("wgi_" + "0" * 26)
     request.options.engine = gpu
     unprovisioned_cpu = _beat_cpu(available=False, reason="not provisioned")
-    engines = _DeclaredRegistry(
+    engines = _AlwaysDeclaredRegistry(
         _metal(), _fast_gpu(gpu), _fast_gpu("beat-metal"), unprovisioned_cpu
     )
     with pytest.raises(ImportedSolveRefusal) as caught:
         asyncio.run(resolve_imported_submission(request, engines))
     message = str(caught.value)
     assert "solves CAD returns only in Accurate" in message
-    assert "Choose Accurate" in message
-    assert "AUTO" in message
+    assert "choose Accurate" in message
+    assert "Use metal" in message
     # A machine without a provisioned BEAT CPU is never sent to it.
     assert "CPU" not in message
     assert caught.value.reason_code == "imported_engine_unsupported"
     assert "beat-cpu" not in caught.value.details["capable_engines"]
-    assert caught.value.details["capable_engines"] == ["metal", "beat-metal"]
+    assert caught.value.details["capable_engines"] == ["beat-metal", "metal"]
 
 
 def test_explicit_beat_cuda_accurate_is_still_accepted() -> None:
@@ -3749,7 +3755,7 @@ def test_explicit_beat_cuda_accurate_is_still_accepted() -> None:
     request.options.engine = "beat-cuda"
     request.options.accuracy = "accurate"
     resolved = asyncio.run(
-        resolve_imported_submission(request, _DeclaredRegistry(_metal(), _fast_gpu("beat-cuda")))
+        resolve_imported_submission(request, _AlwaysDeclaredRegistry(_metal(), _fast_gpu("beat-cuda")))
     )
     assert resolved.engine_name == "beat-cuda"
 
@@ -3759,7 +3765,7 @@ def test_fast_auto_never_resolves_to_beat_metal_when_metal_is_absent() -> None:
 
     request = _request("wgi_" + "0" * 26)
     request.options.engine = "auto"
-    engines = _DeclaredRegistry(_metal(available=False), _fast_gpu("beat-metal"), _beat_cpu())
+    engines = _AlwaysDeclaredRegistry(_metal(available=False), _fast_gpu("beat-metal"), _beat_cpu())
     assert asyncio.run(resolve_imported_submission(request, engines)).engine_name == "beat-cpu"
 
 
@@ -3782,8 +3788,8 @@ def test_imported_accurate_refuses_passive_cardioid_without_switching_to_metal()
         geometry_sources=("parametric", "imported"),
         imported_features=("passive-cardioid",),
     )
-    with pytest.raises(ImportedSolveRefusal, match="Choose Fast"):
-        asyncio.run(resolve_imported_submission(request, _DeclaredRegistry(metal, _beat_cpu())))
+    with pytest.raises(ImportedSolveRefusal, match="different solver — results will differ"):
+        asyncio.run(resolve_imported_submission(request, _AlwaysDeclaredRegistry(metal, _beat_cpu())))
 
 
 def test_imported_auto_passes_beat_cpu_over_for_a_y_only_half(tmp_path: Path) -> None:
@@ -3792,14 +3798,14 @@ def test_imported_auto_passes_beat_cpu_over_for_a_y_only_half(tmp_path: Path) ->
     row = asyncio.run(_submit_record(tmp_path / "metal", with_metal, "auto", _y_only_half()))
     assert row["config_json"]["options"]["engine"] == "metal"
 
-    # Where it does not, no present engine can mirror the return. That is a
-    # refusal naming both reasons, not a capability that may yet arrive.
+    # The compatible Metal backend is absent; preparation/installation can lift
+    # that blocker. The present BEAT CPU cannot mirror this domain.
     without_metal = _DeclaredRegistry(_metal(available=False, reason="no Apple GPU"), _beat_cpu())
-    with pytest.raises(ImportedSolveRefusal) as caught:
+    with pytest.raises(EngineUnavailableError) as caught:
         asyncio.run(_submit_record(tmp_path / "cpu", without_metal, "auto", _y_only_half()))
-    assert caught.value.reason_code == "imported_no_engine_solves_return"
-    assert "y-only half" in str(caught.value)
+    assert caught.value.blocker.engine == "metal"
     assert "no Apple GPU" in str(caught.value)
+    assert not any(r.kind == "use_engine" for r in caught.value.blocker.remedies)
 
 
 @pytest.mark.parametrize("engine", ["auto", "metal", "beat-cpu"])
@@ -3848,7 +3854,7 @@ def test_a_passive_cardioid_return_goes_only_to_an_engine_that_declares_it() -> 
     with pytest.raises(ImportedSolveRefusal) as caught:
         asyncio.run(
             resolve_imported_submission(
-                request, _DeclaredRegistry(metal_with_campaign, _beat_cpu())
+                request, _AlwaysDeclaredRegistry(metal_with_campaign, _beat_cpu())
             )
         )
     assert caught.value.reason_code == "imported_engine_unsupported"
@@ -3859,7 +3865,7 @@ def test_a_passive_cardioid_return_goes_only_to_an_engine_that_declares_it() -> 
     request.options.engine = "auto"
     resolution = asyncio.run(
         resolve_imported_submission(
-            request, _DeclaredRegistry(metal_with_campaign, _beat_cpu())
+            request, _AlwaysDeclaredRegistry(metal_with_campaign, _beat_cpu())
         )
     )
     assert resolution.engine_name == "metal"
@@ -3927,7 +3933,7 @@ def test_the_beat_adapter_preflight_refuses_a_return_at_submission(tmp_path: Pat
     # Metal is unavailable in this fixture, so nothing here can take it.
     assert caught.value.details["capable_engines"] == []
     assert "would move that plane" in str(caught.value)
-    assert "Engines that can: none on this host." in str(caught.value)
+    assert not any(r["kind"] == "use_engine" for r in caught.value.details["blocker"]["remedies"])
 
 
 def _record_mesh_with_open_edges(tmp_path: Path, count: int | None) -> dict[str, Any]:
@@ -3968,14 +3974,13 @@ def test_an_explicit_refusal_names_only_engines_whose_own_verdict_takes_the_reco
     assert caught.value.details["engine"] == "beat-cpu"
     assert caught.value.details["reason_code"] == "imported_symmetry_unsupported_by_engine"
     assert caught.value.details["capable_engines"] == named
-    offer = ", ".join(named) if named else "none on this host"
-    assert f"Engines that can: {offer}." in str(caught.value)
+    assert [r["engine"] for r in caught.value.details["blocker"]["remedies"] if r["kind"] == "use_engine"] == named
 
     # The selector shows the same engines as able to take it, and the plan's
     # refusal names the same list.
     plan = asyncio.run(_plan(tmp_path / "plan", registry, "beat-cpu", changes))
     assert [name for name, entry in _verdicts(plan).items() if entry["solves"]] == named
-    assert f"Engines that can: {offer}." in plan["reason"]
+    assert plan["readiness"] == caught.value.details["blocker"]
 
 
 # The imported plan: every engine's verdict on one ingested return, read by the
@@ -4746,7 +4751,7 @@ def test_auto_takes_beat_for_an_axis_along_z_and_passes_it_over_for_a_tilted_one
     # 10 degrees off z: BEAT cannot drive it, so with nothing else the refusal
     # names BEAT's reason; with BEMPP present AUTO takes BEMPP instead.
     tilted = _flat_axial_msh(10.0)
-    with pytest.raises(ImportedSolveRefusal, match="z axis only"):
+    with pytest.raises(EngineUnavailableError, match="z axis only"):
         asyncio.run(
             _resolve_axial(tmp_path / "tilted", _AdapterRegistry(metal_off, _beat_cpu()), "auto", tilted)
         )

@@ -676,13 +676,16 @@ def test_dryrun_submit_is_rejected_when_guard_is_off(tmp_path: Path, monkeypatch
         assert status == 503
         failure = json.loads(raw)
         assert "WG2_ENABLE_DRYRUN=1" in failure["detail"]
+        blocker = failure["error"]["details"]["blocker"]
+        assert blocker["engine"] == "dryrun"
+        assert blocker["message"] == failure["detail"]
         assert failure["error"] == {
             "schema_version": 1,
             "code": "engine_unavailable",
             "stage": "submission",
             "message": failure["detail"],
             "retryable": False,
-            "details": {},
+            "details": {"blocker": blocker},
             "client_request_id": None,
         }
         await app.state.jobs_runtime.shutdown()

@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 from server.cadlink.identity import SaveIdentity, design_hash
+from server.jobs.runtime.engine_policy import SolveBlocker, SolveRemedy
 from server.design.schema import DesignConfig
 from server.integration.contracts import ErrorEnvelope, error_envelope
 from server.mesh.artifact import (
@@ -1628,6 +1629,8 @@ class CadOperationSummary(BaseModel):
     stage: str | None
     reason: str | None
     message: str | None
+    blocker: SolveBlocker | None = None
+    remedies: list[SolveRemedy] = Field(default_factory=list)
     #: Solved with WG's default settings, none being recorded for the model
     #: (``default_setup.py``); ``message`` then says so in words.
     setup_defaults: bool = Field(default=False, alias="setupDefaults")

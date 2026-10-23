@@ -674,6 +674,16 @@
             "title": "Attemptgeneration",
             "type": "integer"
           },
+          "blocker": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SolveBlocker"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "createdAt": {
             "anyOf": [
               {
@@ -751,6 +761,35 @@
               }
             ],
             "title": "Reason"
+          },
+          "remedies": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "prepare": "#/components/schemas/PrepareRemedy",
+                  "settings": "#/components/schemas/SettingsRemedy",
+                  "use_engine": "#/components/schemas/UseEngineRemedy",
+                  "wait": "#/components/schemas/WaitRemedy"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/PrepareRemedy"
+                },
+                {
+                  "$ref": "#/components/schemas/UseEngineRemedy"
+                },
+                {
+                  "$ref": "#/components/schemas/WaitRemedy"
+                },
+                {
+                  "$ref": "#/components/schemas/SettingsRemedy"
+                }
+              ]
+            },
+            "title": "Remedies",
+            "type": "array"
           },
           "setupDefaults": {
             "default": false,
@@ -6234,6 +6273,16 @@
             "title": "Ingest Id",
             "type": "string"
           },
+          "readiness": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SolveBlocker"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "reason": {
             "title": "Reason",
             "type": "string"
@@ -9979,6 +10028,36 @@
         "title": "PreparationOptions",
         "type": "object"
       },
+      "PrepareRemedy": {
+        "properties": {
+          "disabled_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disabled Reason"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "kind": {
+            "const": "prepare",
+            "default": "prepare",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "engine"
+        ],
+        "title": "PrepareRemedy",
+        "type": "object"
+      },
       "PresetWrite": {
         "additionalProperties": false,
         "properties": {
@@ -11035,6 +11114,23 @@
         "title": "SemiInductanceSpec",
         "type": "object"
       },
+      "SettingsRemedy": {
+        "properties": {
+          "kind": {
+            "const": "settings",
+            "default": "settings",
+            "title": "Kind",
+            "type": "string"
+          },
+          "section": {
+            "default": "simulation",
+            "title": "Section",
+            "type": "string"
+          }
+        },
+        "title": "SettingsRemedy",
+        "type": "object"
+      },
       "SetupRevisionRequest": {
         "additionalProperties": false,
         "properties": {
@@ -11141,6 +11237,58 @@
           "job_id"
         ],
         "title": "SolveAccepted",
+        "type": "object"
+      },
+      "SolveBlocker": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "remedies": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "prepare": "#/components/schemas/PrepareRemedy",
+                  "settings": "#/components/schemas/SettingsRemedy",
+                  "use_engine": "#/components/schemas/UseEngineRemedy",
+                  "wait": "#/components/schemas/WaitRemedy"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/PrepareRemedy"
+                },
+                {
+                  "$ref": "#/components/schemas/UseEngineRemedy"
+                },
+                {
+                  "$ref": "#/components/schemas/WaitRemedy"
+                },
+                {
+                  "$ref": "#/components/schemas/SettingsRemedy"
+                }
+              ]
+            },
+            "title": "Remedies",
+            "type": "array"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "engine"
+        ],
+        "title": "SolveBlocker",
         "type": "object"
       },
       "SolveCommandOutcome": {
@@ -11533,6 +11681,16 @@
             "const": "full-3d",
             "title": "Formulation",
             "type": "string"
+          },
+          "readiness": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SolveBlocker"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "reason": {
             "title": "Reason",
@@ -12185,6 +12343,35 @@
         "title": "TerminatingArc",
         "type": "object"
       },
+      "UseEngineRemedy": {
+        "properties": {
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "kind": {
+            "const": "use_engine",
+            "default": "use_engine",
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "same_solver": {
+            "title": "Same Solver",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "engine",
+          "label",
+          "same_solver"
+        ],
+        "title": "UseEngineRemedy",
+        "type": "object"
+      },
       "UseRootFolderRequest": {
         "additionalProperties": false,
         "properties": {
@@ -12267,6 +12454,18 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "WaitRemedy": {
+        "properties": {
+          "kind": {
+            "const": "wait",
+            "default": "wait",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "title": "WaitRemedy",
         "type": "object"
       },
       "WgLinkExportRequest": {
