@@ -34,7 +34,7 @@ import { readLastModel, rememberLastModel } from '../stores/lastModel';
 import type { RegisteredMesh } from '../api/meshImport';
 import type { ImportedMeshScene } from '../viewport/importedMesh';
 import { cadWorkspace } from '../stores/cadWorkspace';
-import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
+import { resetCadSolverFrameStore, useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import {
   JobsCoordinator,
   jobsCoordinatorBridge,
@@ -267,6 +267,7 @@ describe('solve invocation mutex', () => {
     useDocumentStore.getState().setDesignName('horn');
     resetDesignStore();
     resetCadReturnStore();
+    resetCadSolverFrameStore();
 
     resetSolveOptionsStore();
     sessionStorage.clear();
@@ -523,7 +524,7 @@ describe('solve invocation mutex', () => {
     workspaceModeStore.setMode('cad');
     mocks.importedPlan.plan = { ...mocks.importedPlan.plan, engine: null, reason: blocker.message, readiness: blocker };
     if (held) publishJobs([cadJobFixture(operation('held-fusion', 'needs_user_input', {
-      reason: 'engine_unavailable', message: blocker.message,
+      reason: 'engine_unavailable', message: blocker.message, setupRevisionId: 'held-setup',
     }))]);
     return record;
   }
@@ -584,7 +585,7 @@ describe('solve invocation mutex', () => {
     expect(mocks.refreshCapabilities).toHaveBeenCalledOnce();
     expect(mocks.solveModel).not.toHaveBeenCalled();
   });
-  it.each([false, true])('held Fusion: explicit prepare and solve continues once; changed model=%s', async changed => {
+  it.each(['unchanged', 'model changed', 'settings changed'])('held Fusion continues its saved request once: %s', async changed => {
     const actions = await vi.importActual<typeof import('../jobs/actions')>('../jobs/actions');
     mocks.solveModel.mockImplementation(actions.solveModel);
     const posts: string[] = [];
@@ -603,17 +604,117 @@ describe('solve invocation mutex', () => {
     const readiness = host.querySelector('.solve-readiness')!;
     expect([...readiness.querySelectorAll('button')].map(button => button.textContent)).toEqual(['Prepare BEAT Metal and solve']);
     await act(async () => readiness.querySelector<HTMLButtonElement>('button')!.click());
-    if (changed) act(() => readyCad('wgi_different'));
+    if (changed === 'model changed') act(() => readyCad('wgi_different'));
+    if (changed === 'settings changed') act(() => {
+      useImportedSolveOptionsStore.getState().setSweep({ startHz: 123, endHz: 456, count: 5 });
+      useImportedSolveOptionsStore.getState().setEngine('bempp');
+      useCadReturnStore.setState({ rigidSizeMm: 17 });
+    });
     act(() => { mocks.capabilities.engines = [{ ...mocks.capabilities.engines[0], runtime_state: 'preparing' } as EngineCapability]; });
     await act(async () => preparation.resolve(json({}, 202)));
     expect(posts).toEqual([]);
     act(() => { mocks.capabilities.engines = [{ ...mocks.capabilities.engines[0], available: true, runtime_state: 'ready' } as EngineCapability]; });
     await act(async () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>));
-    expect(posts).toEqual(changed ? [] : ['/api/models/wgl_readiness/solve']);
+    expect(posts).toEqual(changed === 'model changed' ? [] : ['/api/jobs/job%3Aheld-fusion/solve-again']);
+    if (changed !== 'model changed') {
+      const continuation = vi.mocked(fetch).mock.calls.find(([url]) => String(url).endsWith('/solve-again'))!;
+      expect(JSON.parse(String(continuation[1]?.body))).toEqual({}); // inherit the held job’s setup, frame and identity
+    }
+    expect(mocks.solveModel).not.toHaveBeenCalled();
     expect(mocks.submitDesign).not.toHaveBeenCalled();
     await act(async () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>));
-    expect(posts).toHaveLength(changed ? 0 : 1);
+    expect(posts).toHaveLength(changed === 'model changed' ? 0 : 1);
   });
+  it.each(['unmount', 'leave and return', 'model change and return', 'held job moves on', 'held job cancelled', 'preparation fails', 'unchanged'])(
+    'held continuation checks its lifetime after the frame read: %s', async change => {
+      const preparation = deferred<Response>();
+      const frame = deferred<Response>();
+      const posts: string[] = [];
+      vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        if (String(url).endsWith('/prepare')) return preparation.promise;
+        if (init?.method === 'POST') posts.push(String(url));
+        return json({ job_id: 'continued-held' });
+      }));
+      act(() => {
+        blockedCad(true);
+        mocks.capabilities.engines = [{ name: 'beat-metal', label: 'BEAT Metal', available: false,
+          runtime_state: 'unprepared', runtime_preparable: true, reason: null, version: null, fast_paths: [] } as EngineCapability];
+      });
+      await act(async () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>));
+      await act(async () => host.querySelector<HTMLButtonElement>('.solve-readiness button')!.click());
+      let frameRead!: Promise<void>;
+      act(() => { frameRead = useCadSolverFrameStore.getState().load('wgi_readiness', () => frame.promise); });
+      act(() => { mocks.capabilities.engines = [{ ...mocks.capabilities.engines[0], available: true, runtime_state: 'ready' } as EngineCapability]; });
+      await act(async () => preparation.resolve(json({}, 202)));
+      await act(async () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>));
+      expect(solveControlStore.getSnapshot()!.submitting).toBe(true); // continuation is waiting inside the mutex
+      expect(posts).toEqual([]);
+      await act(async () => {
+        if (change === 'unmount') root.render(<span>gone</span>);
+        if (change === 'leave and return') {
+          const scene = importedMeshStore.getSnapshot().cad!;
+          importedMeshStore.clear();
+          importedMeshStore.setCad(scene); // same batch: cancellation must remain latched
+        }
+        if (change === 'model change and return') {
+          const record = useCadReturnStore.getState().ingestRecord;
+          useCadReturnStore.setState({ ingestRecord: { ...record!, ingest_id: 'different' } });
+          useCadReturnStore.setState({ ingestRecord: record });
+        }
+        if (change === 'held job moves on') {
+          const held = jobsSocket.getSnapshot().jobs[0];
+          publishJobs([{ ...held, status: 'preparing', cad_state: { ...held.cad_state!, state: 'processing' } }]);
+          publishJobs([held]); // restoring the read model cannot revive a cancelled token
+        }
+        if (change === 'held job cancelled') {
+          const held = jobsSocket.getSnapshot().jobs[0];
+          publishJobs([{ ...held, status: 'cancelled' }]); // cad_state may lag behind a status delta
+        }
+        if (change === 'preparation fails') {
+          mocks.capabilities.engines = [{ ...mocks.capabilities.engines[0], available: false, runtime_state: 'failed' } as EngineCapability];
+          root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+        }
+      });
+      await act(async () => { frame.resolve(json({ linked: true })); await frameRead; });
+      expect(posts).toEqual(change === 'unchanged' ? ['/api/jobs/job%3Aheld-fusion/solve-again'] : []);
+      expect(mocks.solveModel).not.toHaveBeenCalled();
+      expect(mocks.submitDesign).not.toHaveBeenCalled();
+    });
+
+  it('preparation POST failure cancels the held intention even if the engine later becomes ready', async () => {
+    const preparation = deferred<Response>();
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => String(url).endsWith('/prepare') ? preparation.promise : json({}));
+    vi.stubGlobal('fetch', fetcher);
+    act(() => blockedCad(true));
+    await act(async () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>));
+    await act(async () => host.querySelector<HTMLButtonElement>('.solve-readiness button')!.click());
+    await act(async () => preparation.resolve(json({ detail: 'Preparation failed' }, 500)));
+    act(() => { mocks.capabilities.engines = [{ name: 'beat-metal', available: true, runtime_state: 'ready' } as EngineCapability]; });
+    await act(async () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>));
+    expect(fetcher.mock.calls.map(([url]) => String(url)).filter(url => url.endsWith('/solve-again'))).toEqual([]);
+    expect(mocks.solveModel).not.toHaveBeenCalled();
+  });
+
+  it.each(['running', 'error', 'complete'] as const)('keeps the CAD run’s %s status beside blocked readiness for the next solve', async status => {
+    const run = cadJobFixture(operation('run-status', 'accepted'), {
+      cad_source: { ingest_id: 'wgi_readiness', model_id: 'wgl_readiness' } as JobItem['cad_source'],
+      status, progress: 0.4, stage: 'solve', stage_message: 'Solving frequency 2/10 with Metal BEM',
+      error_message: status === 'error' ? 'The solver failed on this run.' : null,
+      has_results: status === 'complete',
+    });
+    act(() => {
+      blockedCad();
+      publishJobs([run]);
+      if (status === 'error') useImportedSolveOptionsStore.getState().updatePolar({ angleStep: 0 });
+    });
+    await act(async () => root.render(<JobsCoordinator><CurrentReadiness/></JobsCoordinator>));
+    const progress = host.querySelector('.cad-solve-run')!;
+    expect(progress).not.toBeNull();
+    expect(progress.textContent).toContain(status === 'running' ? 'frequency 2 of 10' : status === 'error' ? 'The solver failed on this run.' : 'Done');
+    expect(host.querySelector('.solve-readiness')).not.toBeNull();
+    expect(host.querySelector('.current-model-status')?.getAttribute('data-model-status')).toBe(status === 'running' ? 'running' : status === 'error' ? 'failed' : 'solved');
+  });
+
   it('Use engine changes the visible option and re-plans the imported request', async () => {
     act(() => blockedCad());
     mocks.useRealImportedPlan = true;

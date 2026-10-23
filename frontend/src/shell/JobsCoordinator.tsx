@@ -1,7 +1,7 @@
 import { usePrepareEngine } from '../jobs/usePrepareEngine';
-import { useHeldSolvePreparation } from '../jobs/useHeldSolvePreparation';
+import { heldSolveStillCurrent, useHeldSolvePreparation, type HeldSolveContinuation } from '../jobs/useHeldSolvePreparation';
 import { messageBlocker, type SolveReadinessState } from '../jobs/solveReadiness';
-import { currentModel, currentModelStatus, useCurrentModel } from '../model/currentModel';
+import { currentModel, useCurrentModel } from '../model/currentModel';
 import { importedModelBlocker, importedModelId, unchangedSetup, useImportedModelStore } from '../stores/importedModel';
 import { nativeSymmetryLimitation } from '../design/nativeFamilies';
 import { fileMeshSetup, fileMeshSubmission, registeredMesh, useMeshImportStore } from '../stores/meshImport';
@@ -43,19 +43,6 @@ import { getCrossoverDraftError, useCrossoverDraftError } from '../design/crosso
 import { solveAttention, useJobAttention, useRecoveryNoticeAttention } from './solveAttention';
 import { solvedCadModels } from './cadlink/solvedModel';
 
-/**
- * A line of text rendered beside the Solve button, not inside its `title`.
- *
- * A disabled control cannot be hovered usefully, so a tooltip was the one place
- * this could not go -- and until now it was the only place it went. `blocked`
- * says why Solve cannot run; `substituted` says the solve will run, just not on
- * the engine that was asked for. Neither interrupts anything.
- */
-export interface SolveNotice {
-  tone: 'blocked' | 'substituted';
-  text: string;
-}
-
 interface SolveControl {
   /** The coordinator's current parametric plan, also shared with dock panels. */
   plan: SolvePlan | null;
@@ -67,7 +54,6 @@ interface SolveControl {
   submitting: boolean;
   label: string;
   title: string;
-  notice: SolveNotice | null;
   readiness: SolveReadinessState | null;
   prepareEngine(engine: string): Promise<boolean>;
   prepareAndSolve(engine: string): Promise<void>;
@@ -93,7 +79,7 @@ interface SubmissionAcceptanceOptions {
   busyMessage?: string;
 }
 
-export type ContinueRunPatch = RerunPatch & Pick<CadSolvePress, 'approvals'> & { resumeModel?: boolean };
+export type ContinueRunPatch = RerunPatch & Pick<CadSolvePress, 'approvals'> & { held?: HeldSolveContinuation };
 
 interface CoordinatorBridgeSnapshot {
   available: boolean;
@@ -402,7 +388,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     : importedPlan.plan?.reason ?? importedPlan.error;
 
   const acceptSubmission = useCallback(async (
-    submit: () => Promise<string>, opts: SubmissionAcceptanceOptions = {},
+    submit: () => Promise<string | null>, opts: SubmissionAcceptanceOptions = {},
   ): Promise<string | null> => {
     if (submissionInFlight.current) {
       if (opts.busyMessage) setActionError(opts.busyMessage);
@@ -414,6 +400,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     solveAttention.armSolve();
     try {
       const jobId = await submit();
+      if (jobId === null) { solveAttention.releaseSolve(); return null; }
       opts.onAccepted?.(jobId);
       compareSelection.awaitRun(jobId);
       solveAttention.bindRun(jobId);
@@ -469,7 +456,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   // makes one call; the server prepares, continues or answers the job in flight.
   const solveCurrentCadImport = useCallback(async (
     clicked?: { cad: ReturnType<typeof useCadReturnStore.getState>; checkPlan: () => Promise<void> },
-    expectedModelKey?: string | null,
   ) => {
     if (submissionInFlight.current) return 'busy' as const;
     const cad = clicked?.cad ?? useCadReturnStore.getState();
@@ -505,7 +491,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         ...(frameAxis ? { frame_axis: frameAxis } : {}),
         ...(approvals ? { approvals } : {}),
       };
-      if (expectedModelKey && (currentModel().key !== expectedModelKey || !currentModel().viewportShowing)) return 'blocked' as const;
       // The completion claim exists before HTTP: an event may beat the response.
       rememberCadSolve(key, designName, ingestId);
       solveAttention.bindOperation(key);
@@ -532,25 +517,24 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [completeCadSolve, now]);
 
   const continueRun = useCallback(async (jobId: string, patch: ContinueRunPatch = {}) => {
-    if (patch.resumeModel) {
-      const status = currentModelStatus(currentModel(), jobsSocket.getSnapshot().jobs);
-      if (status.job?.id !== jobId || status.job.cad_state?.state !== 'needs_user_input' || !currentModel().viewportShowing) return null;
-      try {
-        await solveCurrentCadImport(undefined, currentModel().key);
-        return jobId;
-      } catch (error) {
-        setActionError(error instanceof Error ? error.message : String(error));
-        throw error;
-      }
-    }
-    const cad = patch.approvals !== undefined;
+    const cad = patch.approvals !== undefined || patch.held !== undefined;
     return acceptSubmission(async () => {
       if (cad) {
-        const approvals = patch.approvals!;
+        const approvals = patch.approvals;
+        if (patch.held) {
+          const reading = frameReadInFlight(patch.held.model.ingestId);
+          if (reading) await reading;
+        }
         solveAttention.bindOperation(jobId);
         let child;
         try {
-          await approveCadJob(jobId, approvals);
+          if (approvals) await approveCadJob(jobId, approvals);
+          // The token and held-job guard survive every await through the POST.
+          // No overrides: the server continues this job’s saved request.
+          if (patch.held && (patch.held.jobId !== jobId || !heldSolveStillCurrent(patch.held))) {
+            solveAttention.releaseOperation(jobId);
+            return null;
+          }
           child = await solveCadAgain(jobId, { approvals });
         } catch (error) {
           solveAttention.releaseOperation(jobId);
@@ -573,7 +557,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         }
       },
     });
-  }, [acceptSubmission, completeCadSolve, solveCurrentCadImport]);
+  }, [acceptSubmission, completeCadSolve]);
 
   const reportError = useCallback((message: string) => setActionError(message), []);
   // An empty `?job=` names no run; drop it at once.
@@ -709,20 +693,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     return () => window.removeEventListener('keydown', shortcut);
   }, [solve, solveEnabled]);
 
-  const notice = useMemo<SolveNotice | null>(
-    () => fileGeometryActive ? null : cadGeometryActive && crossoverDraftError
-      ? { tone: 'blocked', text: crossoverDraftError }
-      : solveNotice({
-      cadGeometryActive,
-      plan: solvePlan,
-      pending: solvePlanPending,
-      optionsError: solveOptionsError,
-      planError: solvePlanError,
-    }),
-    [cadGeometryActive, fileGeometryActive, crossoverDraftError, solveOptionsError, solvePlan, solvePlanError, solvePlanPending],
-  );
   const prepareAndSolve = useHeldSolvePreparation(model, engines, preparation.prepare,
-    useCallback((id: string) => continueRun(id, { resumeModel: true }), [continueRun]));
+    useCallback((held: HeldSolveContinuation) => continueRun(held.jobId, { held }), [continueRun]));
   const serverReadiness = cadGeometryActive || fileGeometryActive ? importedPlan.plan?.readiness : parametricReadiness;
   const readiness = solveBlocker || solveOptionsError
     ? messageBlocker(solveBlocker || solveOptionsError!)
@@ -739,7 +711,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     solve,
     cadMode: cadGeometryActive,
     disabled: !solveEnabled,
-    notice,
     submitting,
     label: 'Solve',
     title: readiness?.message ?? (submitting
@@ -755,7 +726,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
               : cadGeometryActive
                 ? capabilityError ?? importedUnavailable ?? 'No engine can solve imported CAD geometry here'
                 : parametricUnavailable),
-  }), [engines, readiness, preparation.prepare, preparation.error, preparation.starting, prepareAndSolve, solveOptions, cadGeometryActive, capabilityError, fileBlocker, fileGeometryActive, importedUnavailable, importedEngineLabel, notice, parametricUnavailable, planError, planPending, selectedEngine, solve, solveEnabled, solveBlocker, solvePlan, solvePlanPending, submitting]);
+  }), [engines, readiness, preparation.prepare, preparation.error, preparation.starting, prepareAndSolve, solveOptions, cadGeometryActive, capabilityError, fileBlocker, fileGeometryActive, importedUnavailable, importedEngineLabel, parametricUnavailable, planError, planPending, selectedEngine, solve, solveEnabled, solveBlocker, solvePlan, solvePlanPending, submitting]);
 
   useEffect(() => {
     publishSolveControl(control);
@@ -763,35 +734,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [control]);
 
   return <SolveContext.Provider value={control}>{children}<JobAnnouncer jobs={jobs}/></SolveContext.Provider>;
-}
-
-/**
- * The notice shown beside Solve: why it cannot run, or what it swapped.
- *
- * Only the parametric path produces one. The CAD path already renders the
- * chosen engine's availability text in its rail, and duplicating it here
- * would put the same sentence on screen twice.
- *
- * A pending plan is deliberately silent. Planning is debounced and re-runs on
- * every parameter keystroke, so reporting "no plan yet" would flash a warning
- * during ordinary editing.
- */
-export function solveNotice(input: {
-  cadGeometryActive: boolean;
-  plan: SolvePlan | null;
-  pending: boolean;
-  optionsError: string | null;
-  planError: string | null;
-}): SolveNotice | null {
-  if (input.cadGeometryActive) return null;
-  const blocked = input.optionsError ?? input.planError;
-  if (blocked) return { tone: 'blocked', text: blocked };
-  if (input.pending) return null;
-  const substitution = input.plan?.engine_substitution;
-  if (substitution) {
-    return { tone: 'substituted', text: engineSubstitutionNotice(substitution) };
-  }
-  return null;
 }
 
 /**

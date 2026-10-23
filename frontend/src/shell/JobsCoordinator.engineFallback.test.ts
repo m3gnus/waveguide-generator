@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { engineSubstitutionNotice, solveNotice, solvePlanTitle } from './JobsCoordinator';
+import { engineSubstitutionNotice, solvePlanTitle } from './JobsCoordinator';
 import { postSolvePlan, type SolvePlan } from '../jobs/actions';
 
 /**
@@ -33,65 +33,6 @@ describe('engineSubstitutionNotice', () => {
     // Without this clause the honest reading is that the app has overwritten a
     // setting, and the user's next move is to go and set it back.
     expect(text).toContain('Your BEAT preference is kept');
-  });
-});
-
-describe('solveNotice', () => {
-  const base = {
-    cadGeometryActive: false,
-    plan: null as SolvePlan | null,
-    pending: false,
-    optionsError: null as string | null,
-    planError: null as string | null,
-  };
-
-  it('reports a substitution as a non-blocking notice', () => {
-    const notice = solveNotice({ ...base, plan: plan({ engine_substitution: substitution }) });
-
-    expect(notice?.tone).toBe('substituted');
-    expect(notice?.text).toContain('BEMPP instead');
-  });
-
-  it('says nothing on an ordinary plan', () => {
-    expect(solveNotice({ ...base, plan: plan() })).toBeNull();
-  });
-
-  it('treats an explicit null substitution as no substitution', () => {
-    expect(solveNotice({ ...base, plan: plan({ engine_substitution: null }) })).toBeNull();
-  });
-
-  it('surfaces a refusal that no fallback could rescue', () => {
-    const notice = solveNotice({
-      ...base,
-      planError: "Solve engine 'beat' is unavailable, and no other engine on this host can take its place.",
-    });
-
-    expect(notice?.tone).toBe('blocked');
-    // This is the case the button title used to hold alone. A disabled control
-    // cannot be hovered usefully, so it has to be rendered as text.
-    expect(notice?.text).toContain('no other engine on this host');
-  });
-
-  it('prefers a solve-options error over a plan error', () => {
-    const notice = solveNotice({ ...base, optionsError: 'Polar angles are invalid', planError: 'stale' });
-
-    expect(notice?.text).toBe('Polar angles are invalid');
-  });
-
-  it('stays quiet while a plan is in flight', () => {
-    // Planning is debounced and re-runs on every parameter keystroke, so a
-    // "no plan yet" warning would flash throughout ordinary editing.
-    expect(solveNotice({ ...base, pending: true })).toBeNull();
-  });
-
-  it('leaves the CAD path to its own Metal availability text', () => {
-    const notice = solveNotice({
-      ...base,
-      cadGeometryActive: true,
-      planError: 'Metal is unavailable',
-    });
-
-    expect(notice).toBeNull();
   });
 });
 

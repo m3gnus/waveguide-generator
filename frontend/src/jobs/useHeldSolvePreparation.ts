@@ -1,42 +1,94 @@
 import { useEffect, useRef, useState } from 'react';
 import { currentModel, type CurrentModel, currentModelStatus } from '../model/currentModel';
-import { jobsSocket, type JobItem } from '../api/jobsSocket';
+import { jobsSocket } from '../api/jobsSocket';
+import { useCadReturnStore } from '../stores/cadReturn';
+import { workspaceModeStore } from '../stores/workspaceMode';
+import { importedMeshStore } from '../viewport/importedMeshStore';
 import type { EngineCapability } from './actions';
+
+export interface HeldSolveContinuation {
+  jobId: string;
+  model: CurrentModel;
+  signal: AbortSignal;
+}
+
+/** Checked again synchronously at the POST, after all asynchronous reads. */
+export function heldSolveStillCurrent(request: HeldSolveContinuation): boolean {
+  const model = currentModel();
+  const job = currentModelStatus(model, jobsSocket.getSnapshot().jobs).job;
+  return !request.signal.aborted && model.key === request.model.key && model.kind === request.model.kind
+    && model.ingestId === request.model.ingestId && model.viewportShowing
+    && job?.id === request.jobId && job.status === 'error' && !job.cancellation_requested
+    && job.cad_state?.state === 'needs_user_input'
+    && job.cad_state.reason === 'engine_unavailable';
+}
+
+type Intention = HeldSolveContinuation & {
+  controller: AbortController;
+  engine: string;
+  prepared: boolean;
+  continuing: boolean;
+};
 
 /** Only this explicit intention may continue after runtime preparation. */
 export function useHeldSolvePreparation(model: CurrentModel, engines: readonly EngineCapability[],
-  prepare: (engine: string) => Promise<boolean>, continueRun: (id: string) => Promise<unknown>) {
-  const [held, setHeld] = useState<{ key: string; kind: string; jobId: string; engine: string; prepared: boolean } | null>(null);
-  const intention = useRef(held);
-  const cancel = () => { intention.current = null; setHeld(null); };
+  prepare: (engine: string) => Promise<boolean>, continueRun: (request: HeldSolveContinuation) => Promise<unknown>) {
+  const [held, setHeld] = useState<Intention | null>(null);
+  const intention = useRef<Intention | null>(null);
+  const cancel = () => {
+    intention.current?.controller.abort();
+    intention.current = null;
+    setHeld(null);
+  };
   useEffect(() => {
-    if (!held) return;
-    if (model.key !== held.key || model.kind !== held.kind || !model.viewportShowing) { cancel(); return; }
-    const job = jobsSocket.getSnapshot().jobs.find(job => job.id === held.jobId);
-    if (job?.cad_state?.state !== 'needs_user_input') { cancel(); return; }
+    // Observe every transition, including leave/return within one React batch.
+    const validate = () => {
+      if (intention.current && !heldSolveStillCurrent(intention.current)) cancel();
+    };
+    const unsubscribe = [jobsSocket.subscribe(validate), useCadReturnStore.subscribe(validate),
+      workspaceModeStore.subscribe(validate), importedMeshStore.subscribe(validate)];
+    return () => {
+      unsubscribe.forEach(stop => stop());
+      intention.current?.controller.abort();
+      intention.current = null;
+    };
+  }, []);
+  useEffect(() => {
+    if (!held || intention.current !== held) return;
+    if (!heldSolveStillCurrent(held)) { cancel(); return; }
     const engine = engines.find(engine => engine.name === held.engine);
     if (!held.prepared) return;
     if (engine?.available && engine.runtime_state === 'ready') {
-      cancel(); // consume before continuation; rerenders cannot replay it
-      void continueRun(held.jobId).catch(() => undefined);
+      if (held.continuing) return;
+      held.continuing = true; // consume once, retain the token until POST finishes
+      void continueRun(held).catch(() => undefined).finally(() => {
+        if (intention.current === held) cancel();
+      });
     } else if (engine?.runtime_state !== 'preparing') cancel();
   }, [held, model.key, model.kind, model.viewportShowing, engines, continueRun]);
-  useEffect(() => () => { intention.current = null; }, []);
   return async (engine: string) => {
     if (intention.current) return;
     const model = currentModel();
     const status = currentModelStatus(model, jobsSocket.getSnapshot().jobs);
-    const job: JobItem | undefined = status.job;
+    const job = status.job;
     if (!model.key || !model.viewportShowing || status.kind !== 'refused' || job?.cad_state?.state !== 'needs_user_input'
       || job.cad_state.reason !== 'engine_unavailable') return;
-    const request = { key: model.key, kind: model.kind, jobId: job.id, engine, prepared: false };
+    const controller = new AbortController();
+    const request: Intention = { model, jobId: job.id, engine, controller, signal: controller.signal,
+      prepared: false, continuing: false };
     intention.current = request;
     setHeld(request);
-    const success = await prepare(engine);
-    if (intention.current !== request) return;
-    if (!success || currentModel().key !== request.key || !currentModel().viewportShowing) { cancel(); return; }
-    const ready = { ...request, prepared: true };
-    intention.current = ready;
-    setHeld(ready);
+    let success = false;
+    try { success = await prepare(engine); }
+    finally {
+      if (intention.current === request) {
+        if (!success || !heldSolveStillCurrent(request)) cancel();
+        else {
+          const ready = { ...request, prepared: true };
+          intention.current = ready;
+          setHeld(ready);
+        }
+      }
+    }
   };
 }
