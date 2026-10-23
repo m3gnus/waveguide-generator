@@ -1701,8 +1701,9 @@ class JobRuntime:
         initial_event = ("queued", {"status": "queued", "progress": 0.0})
         if submission_key is not None:
             claimed_job_id, created, event = await asyncio.to_thread(
-                self.store.create_job_idempotent,
+                self._create_submission,
                 job_record,
+                idempotent=True,
                 submission_key=submission_key,
                 request_sha256=submission_request_sha256,
                 initial_event=initial_event,
@@ -1711,10 +1712,10 @@ class JobRuntime:
             if not created:
                 return claimed_job_id
         elif imported is None:
-            event = self.store.create_job(job_record, initial_event=initial_event)
+            event = await asyncio.to_thread(self._create_submission, job_record, initial_event=initial_event)
         else:
             event = await asyncio.to_thread(
-                self.store.create_job,
+                self._create_submission,
                 job_record,
                 initial_event=initial_event,
                 mesh_artifact=composed.mesh_artifact,
@@ -1724,6 +1725,13 @@ class JobRuntime:
             self.events.publish(event)
         self._ensure_scheduler()
         return job_id
+
+    def _create_submission(self, record: dict, *, idempotent: bool = False, **kwargs: Any) -> Any:
+        from server.workspace.run_moves import submission_location
+
+        with submission_location(self.cadlink_store, record["config_json"], record["task_metadata"]):
+            create = self.store.create_job_idempotent if idempotent else self.store.create_job
+            return create(record, **kwargs)
 
     async def _compose_job(
         self,
@@ -2594,18 +2602,21 @@ class JobRuntime:
         assert composed.imported is not None and composed.mesh_artifact is not None
 
         def bind() -> dict[str, Any] | None:
-            return self.store.bind_preparing_job(
-                job_id,
-                config=composed.request.model_dump(mode="json"),
-                config_summary=composed.config_summary,
-                task_metadata=composed.task_metadata,
-                mesh_artifact=composed.mesh_artifact,
-                mesh_stats=composed.mesh_stats,
-                script_snapshot=composed.script_snapshot,
-                label=composed.request.label,
-                parent_job_id=composed.request.parent_job_id,
-                initial_event=("queued", {"status": "queued", "progress": 0.0}),
-            )
+            from server.workspace.run_moves import submission_location
+
+            with submission_location(self.cadlink_store, composed.request.model_dump(mode="json"), composed.task_metadata):
+                return self.store.bind_preparing_job(
+                    job_id,
+                    config=composed.request.model_dump(mode="json"),
+                    config_summary=composed.config_summary,
+                    task_metadata=composed.task_metadata,
+                    mesh_artifact=composed.mesh_artifact,
+                    mesh_stats=composed.mesh_stats,
+                    script_snapshot=composed.script_snapshot,
+                    label=composed.request.label,
+                    parent_job_id=composed.request.parent_job_id,
+                    initial_event=("queued", {"status": "queued", "progress": 0.0}),
+                )
 
         approval = self.restart_approval
         if approval is None:

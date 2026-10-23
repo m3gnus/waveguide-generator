@@ -10,8 +10,6 @@ import { listProjectDocuments, openProjectDocument, projectDocumentUrl, type Cad
 /** Optional CAD attachments decorate the shared run; their failure cannot hide it. */
 export function RunModelDetails({ job }: { job: JobItem }) {
   const runModel = modelForRun(job);
-  const currentUid = useDocumentStore(state => state.designUid);
-  const openName = useDocumentStore(state => state.designName);
   const currentName = useDocumentStore(state => job.design_uid && state.designUid === job.design_uid ? state.designName : null);
   const lineage = job.cad_source?.lineage_id ?? job.cad_state?.snapshot?.project_lineage_id;
   const hash = job.cad_source?.return_state_hash;
@@ -66,6 +64,9 @@ export function RunModelDetails({ job }: { job: JobItem }) {
   const document = runDocumentName(job) || current?.document?.documentName || 'Not recorded';
   const modelHash = job.cad_source?.solve_model_sha256 || job.cad_source?.transformed_geometry_hash
     || hash || job.cad_source?.manifest_sha256 || job.cad_state?.snapshot?.manifest_sha256;
+  const moveKey = job.archive_key || (lineage ? `lineage:${lineage}` : runModel.modelId?.startsWith('mesh-file:') ? `model:${runModel.modelId}`
+    : job.design_uid ? `design:${job.design_uid}` : `name:${(job.design_name || job.label || document).normalize('NFKC').trim()}`);
+  const moveName = currentName || job.design_name || runDocumentName(job) || job.label || document;
   return <section className="run-model-details" aria-label="Run model details">
     <dl>
       {job.archive_folder && <><dt>Folder:</dt><dd>{job.archive_folder}/
@@ -77,8 +78,8 @@ export function RunModelDetails({ job }: { job: JobItem }) {
       <dt>Model hash</dt><dd>{modelHash || 'Not recorded'}</dd>
     </dl>
     {runSourceForJob(job) !== 'mesh-file' && attachment}
-    <MoveRunsButton target={{ key: lineage ? `lineage:${lineage}` : `design:${job.design_uid || currentUid}`, name: currentName || (!job.design_uid && !lineage ? openName : job.design_name) || document }}>
-      {!job.archive_key ? `From an earlier version · Move into ${currentName || (!job.design_uid && !lineage ? openName : job.design_name) || document}…` : 'Move earlier runs…'}
+    <MoveRunsButton target={{ key: moveKey, name: moveName }}>
+      {!job.archive_key ? `From an earlier version · Move into ${moveName}…` : 'Move earlier runs…'}
     </MoveRunsButton>
   </section>;
 

@@ -119,3 +119,46 @@ it('shows the immutable folder and a current rename only for the same document',
   act(() => useDocumentStore.setState({ designUid: 'unrelated', designName: 'Other' }));
   expect(host.textContent).not.toContain('design now');
 });
+
+it.each([
+  ['model:mesh-file:horn', undefined, undefined],
+  ['lineage:run-lineage', 'unrelated-lineage', 'run-design'],
+  ['design:run-design', undefined, 'run-design'],
+  ['name:Mesh horn', undefined, undefined],
+])('uses the recorded %s archive owner while another design is open', async (archiveKey, lineage, designUid) => {
+  useDocumentStore.setState({ designUid: 'open-other', designName: 'Unrelated design' });
+  const job: JobItem = { ...run(), label: 'Mesh horn', design_name: 'Mesh horn', design_uid: designUid,
+    archive_key: archiveKey, cad_state: null, cad_source: { ...run().cad_source!, model_id: 'mesh-file:horn', lineage_id: lineage ?? null },
+    config_summary: { geometry_type: 'imported', import_origin: 'mesh-file' } };
+  const fetcher = vi.fn(async (url: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify(
+    String(url).endsWith('/preview') ? { selected: [], candidates: [], operations: [], old_folders: [],
+      summary: { runs: 0, files: 0, bytes: 0, fusion_files: 0, duplicates: 0, saved_bytes: 0 } } : { reports: [] },
+  )));
+  vi.stubGlobal('fetch', fetcher);
+  await act(async () => root.render(<RunModelDetails job={job}/>));
+  await act(async () => [...host.querySelectorAll('button')].find(button => button.textContent === 'Move earlier runs…')!.click());
+  const preview = fetcher.mock.calls.find(([url]) => String(url).endsWith('/preview'));
+  expect(preview).toBeDefined();
+  const body = JSON.parse((preview as unknown as [string, RequestInit])[1].body as string);
+  expect(body.key).toBe(archiveKey);
+  expect(body.name).toBe('Mesh horn');
+  expect(document.body.textContent).not.toContain('Bring earlier runs into Unrelated design');
+});
+
+it('uses a legacy mesh run’s own model when no archive key was recorded', async () => {
+  useDocumentStore.setState({ designUid: 'open-other', designName: 'Unrelated design' });
+  const job: JobItem = { ...run(), archive_key: undefined, design_uid: undefined, design_name: 'Mesh horn',
+    cad_state: null, cad_source: { ...run().cad_source!, model_id: 'mesh-file:horn', lineage_id: null },
+    config_summary: { geometry_type: 'imported', import_origin: 'mesh-file' } };
+  const fetcher = vi.fn(async (url: RequestInfo | URL, _options?: RequestInit) => new Response(JSON.stringify(
+    String(url).endsWith('/preview') ? { selected: [], candidates: [], operations: [], old_folders: [],
+      summary: { runs: 0, files: 0, bytes: 0, fusion_files: 0, duplicates: 0, saved_bytes: 0 } } : { reports: [] },
+  )));
+  vi.stubGlobal('fetch', fetcher);
+  await act(async () => root.render(<RunModelDetails job={job}/>));
+  await act(async () => [...host.querySelectorAll('button')].find(button => button.textContent?.startsWith('From an earlier version'))!.click());
+  const preview = fetcher.mock.calls.find(([url]) => String(url).endsWith('/preview'));
+  const body = JSON.parse((preview as unknown as [string, RequestInit])[1].body as string);
+  expect(body.key).toBe('model:mesh-file:horn');
+  expect(body.name).toBe('Mesh horn');
+});

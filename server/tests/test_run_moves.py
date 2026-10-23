@@ -128,6 +128,10 @@ def test_cross_drive_verifies_whole_move_before_any_original_removal(tmp_path, m
     old = tmp_path / "older-Runs"
     old.mkdir()
     originals = [run(manager, old, n, key=KEY)[1] for n in (1, 2)]
+    result_file = originals[0] / "result.bin"
+    result_file.chmod(0o640)
+    os.utime(result_file, (946684800, 946684800))
+    original_stat = result_file.stat()
     cross_device(monkeypatch, originals)
     plan = move_plan(manager)
     assert all(op["method"] == "copy_verify_remove" for op in plan["operations"])
@@ -142,6 +146,9 @@ def test_cross_drive_verifies_whole_move_before_any_original_removal(tmp_path, m
     assert observed == [True]
     assert all(not p.exists() for p in originals)
     assert len(list(root.rglob("result.bin"))) == 2
+    copied_stat = (root / "250728solana" / originals[0].name / "result.bin").stat()
+    assert copied_stat.st_mode == original_stat.st_mode
+    assert copied_stat.st_mtime_ns == original_stat.st_mtime_ns
     with pytest.raises(MoveRefused, match="this drive"):
         manager.undo(result["id"])
     assert Path(jobs.get_job_row("job1")["task_metadata"]["archived_path"]).is_dir()
@@ -939,3 +946,217 @@ def test_undo_never_overwrites_cleanup_file_created_during_publication(tmp_path,
         manager.undo(plan["id"])
     assert pointer.read_bytes() == b"new foreign pointer"
     assert manager.read(plan["id"])["phase"] != "undone"
+
+
+def gathered_fixture(tmp_path):
+    key = "lineage:wgl_test"
+    manager, root, jobs, cad = setup(tmp_path, key=key, name="Model")
+    _, source = run(manager, root, key=key)
+    (source / "old.f3d").write_bytes(b"fusion")
+    (source / "old.cad.json").write_bytes(b'{"returnStateHash":"sha256:state"}\r\n')
+    manager.verify_document = lambda lineage, digest, doc: doc.read_bytes() == b"fusion"
+    plan = move_plan(manager, name="Model", key=key)
+    assert manager.execute(plan["id"], confirmed=True)["phase"] == "done"
+    return manager, root, source, plan
+
+
+def crash_at(manager, phase):
+    def crash(current):
+        if current == phase:
+            raise Crash(current)
+    manager.after_step = crash
+
+
+@pytest.mark.parametrize("replacement", ["bytes", "directory"])
+def test_recovered_undo_keeps_changed_gathered_deletion_target(tmp_path, replacement):
+    manager, root, source, plan = gathered_fixture(tmp_path)
+    shared = Path(next(op["dst"] for op in plan["operations"] if op["kind"] == "cad"))
+    crash_at(manager, "undone:0")
+    with pytest.raises(Crash):
+        manager.undo(plan["id"])
+    assert (source / "old.f3d").read_bytes() == b"fusion"
+    if replacement == "bytes":
+        shared.write_bytes(b"edited")  # Same size; hash must be checked.
+    else:
+        shared.unlink()
+        shared.mkdir()
+        (shared / "recovery.f3d").write_bytes(b"only copy")
+    manager.after_step = lambda _: None
+    report = manager.recover()[0]
+    assert report["error"] and report["phase"] != "undone"
+    assert (shared.read_bytes() if replacement == "bytes" else (shared / "recovery.f3d").read_bytes()) == (b"edited" if replacement == "bytes" else b"only copy")
+
+
+def test_gathered_target_is_rechecked_at_unlink_after_undo_verification(tmp_path, monkeypatch):
+    manager, _, _, plan = gathered_fixture(tmp_path)
+    remove = moves_module._remove_members
+    edited = []
+    def race(path, manifest):
+        if path.suffix == ".f3d":
+            path.write_bytes(b"edited")
+            edited.append(path)
+        return remove(path, manifest)
+    monkeypatch.setattr(moves_module, "_remove_members", race)
+    with pytest.raises(MoveRefused, match="Verification"):
+        manager.undo(plan["id"])
+    assert edited and edited[0].read_bytes() == b"edited"
+
+
+@pytest.mark.parametrize("change", ["extra", "changed", "source_missing", "unowned"])
+def test_recovery_preserves_unexpected_partial_contents_and_requires_safe_source(tmp_path, monkeypatch, change):
+    manager, root, _, _ = setup(tmp_path)
+    _, source = run(manager, root, key=KEY)
+    cross_device(monkeypatch, [source])
+    plan = move_plan(manager)
+    destination = Path(plan["operations"][0]["dst"])
+    partial = destination.with_name(destination.name + ".partial-" + plan["id"])
+    crash_at(manager, "copied:" + str(destination))
+    with pytest.raises(Crash):
+        manager.execute(plan["id"], confirmed=True)
+    if change == "extra":
+        protected = partial / "recovery-notes.txt"
+        protected.write_bytes(b"user data")
+    elif change == "changed":
+        protected = partial / "result.bin"
+        protected.write_bytes(b"user data")
+    elif change == "source_missing":
+        source.rename(partial / "last-original")
+        protected = partial / "last-original" / "result.bin"
+    else:
+        record = manager.read(plan["id"])
+        record["operations"][0]["created"] = False
+        moves_module._save(manager._journal_path(plan["id"]), record)
+        protected = partial / "result.bin"
+    before = protected.read_bytes()
+    manager.after_step = lambda _: None
+    report = manager.recover()[0]
+    assert report["error"] and report["phase"] != "done"
+    assert protected.read_bytes() == before
+    assert not destination.exists()
+    if change == "source_missing":
+        assert (partial / "result.bin").read_bytes() == b"results\x00unchanged"
+
+
+def test_undo_partial_with_unexpected_contents_is_preserved(tmp_path):
+    manager, _, _, plan = gathered_fixture(tmp_path)
+    op = next(op for op in plan["operations"] if op["kind"] == "cad")
+    source = Path(op["live_src"])
+    partial = source.with_name(source.name + ".undo-partial-" + plan["id"])
+    crash_at(manager, "undo_copied:" + str(source))
+    with pytest.raises(Crash):
+        manager.undo(plan["id"])
+    partial.unlink()
+    partial.mkdir()
+    protected = partial / "last-copy.f3d"
+    protected.write_bytes(b"only copy")
+    manager.after_step = lambda _: None
+    report = manager.recover()[0]
+    assert report["error"] and protected.read_bytes() == b"only copy"
+
+
+@pytest.mark.parametrize("change", ["run", "metadata_only", "replacement", "link"])
+def test_recovered_undo_revalidates_before_reversing_project_rename(tmp_path, change):
+    manager, root, jobs, cad = setup(tmp_path, name="Original")
+    _, source = run(manager, root, key=KEY, name="Original", folder="Original")
+    identity.write_project_record(root, jobs.get_job_row("job1"), cad)
+    plan = manager.preview(KEY, "Renamed", rename=True)
+    assert manager.execute(plan["id"], confirmed=True)["phase"] == "done"
+    crash_at(manager, "undo_prepared")
+    with pytest.raises(Crash):
+        manager.undo(plan["id"])
+    target = Path(plan["target"])
+    if change in {"run", "metadata_only"}:
+        _, added = run(manager, root, 2, key=KEY, name="Original", folder="Renamed")
+        if change == "metadata_only":
+            # A new history row counts even when no files have been written yet.
+            import shutil
+            shutil.rmtree(added)
+    else:
+        original = root / "retained-original"
+        target.rename(original)
+        if change == "replacement":
+            import shutil
+            shutil.copytree(original, target)  # Identical bytes, different folder.
+        else:
+            target.symlink_to(original, target_is_directory=True)
+    manager.after_step = lambda _: None
+    report = manager.recover()[0]
+    assert report["error"] and report["phase"] != "undone"
+    assert target.exists() and not source.exists()
+    assert jobs.get_job_row("job1")["task_metadata"]["archive"]["folder"] == "Renamed"
+
+
+def test_submission_waits_for_stuck_rename_and_persists_final_location(tmp_path, monkeypatch):
+    import asyncio
+    import threading
+    from server.engines.registry import EngineInfo, EngineRegistry
+    from server.jobs.runtime import JobRuntime
+    from server.tests.test_archive_identity import UID
+    from server.tests.test_jobs_runtime import _request
+
+    monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")
+    key = f"design:{UID}"
+    manager, root, jobs, cad = setup(tmp_path, key=key, name="Original")
+    _, source = run(manager, root, key=key, name="Original", folder="Original")
+    identity.write_project_record(root, jobs.get_job_row("job1"), cad)
+    plan = manager.preview(key, "Renamed", rename=True)
+    rename = moves_module.rename_absent
+    def locked(src, dst):
+        if Path(src) == source.parent:
+            raise PermissionError(32, "File is open")
+        return rename(src, dst)
+    monkeypatch.setattr(moves_module, "rename_absent", locked)
+    assert "File is open" in manager.execute(plan["id"], confirmed=True)["error"]
+    runtime = JobRuntime(jobs, cadlink_store=cad)
+    runtime.engine_registry = EngineRegistry(detector=lambda: [EngineInfo("dryrun", True, "test", "test")])
+    monkeypatch.setattr(runtime, "_ensure_scheduler", lambda: None)
+    waiting = threading.Event()
+    wait = moves_module._MOVE_CHANGED.wait
+    def observe_wait(*args, **kwargs):
+        waiting.set()
+        return wait(*args, **kwargs)
+    monkeypatch.setattr(moves_module._MOVE_CHANGED, "wait", observe_wait)
+    request = _request().model_copy(update={"design_uid": UID, "design_name": "Original", "label": "New solve"})
+    async def exercise():
+        submission = asyncio.create_task(runtime.submit(request))
+        try:
+            assert await asyncio.to_thread(waiting.wait, 5)
+            assert not submission.done()
+            assert len(manager._rows()) == 1
+            monkeypatch.setattr(moves_module, "rename_absent", rename)
+            assert manager.recover()[0]["phase"] == "done"
+            job_id = await asyncio.wait_for(submission, 5)
+            metadata = jobs.get_job_row(job_id)["task_metadata"]
+            assert metadata["archive"]["folder"] == "Renamed"
+            assert identity.registered_folder(cad, key) == "Renamed"
+            assert not source.parent.exists()
+        finally:
+            moves_module._BLOCKED.clear()
+            with moves_module._MOVE_CHANGED:
+                moves_module._MOVE_CHANGED.notify_all()
+            await runtime.shutdown()
+    asyncio.run(exercise())
+
+
+def test_recovery_rechecks_busy_and_reconciles_post_journal_jobs(tmp_path):
+    manager, root, jobs, cad = setup(tmp_path, name="Original")
+    _, source = run(manager, root, key=KEY, name="Original", folder="Original")
+    identity.write_project_record(root, jobs.get_job_row("job1"), cad)
+    plan = manager.preview(KEY, "Renamed", rename=True)
+    crash_at(manager, "prepared")
+    with pytest.raises(Crash):
+        manager.execute(plan["id"], confirmed=True)
+    row = {"id": "late", "label": "late", "status": "queued", "created_at": "then", "updated_at": "then", "queued_at": "then",
+           "config_json": {}, "config_summary_json": {}, "task_metadata": {
+               "archive": {"key": KEY, "folder": "Original", "run": "2_late"},
+               "imported_geometry": {"archive_stem": "Original"}}}
+    jobs.create_job(row)
+    manager.after_step = lambda _: None
+    assert "Wait for it to finish" in manager.recover()[0]["error"]
+    assert source.exists()
+    with jobs._transaction() as conn:
+        conn.execute("UPDATE simulation_jobs SET status='cancelled' WHERE id='late'")
+    assert manager.recover()[0]["phase"] == "done"
+    metadata = jobs.get_job_row("late")["task_metadata"]
+    assert metadata["archive"]["folder"] == "Renamed"
+    assert metadata["imported_geometry"]["archive_stem"] == "Renamed"

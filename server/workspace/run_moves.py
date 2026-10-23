@@ -32,6 +32,7 @@ class MoveRefused(OSError):
 
 
 _GATE = threading.RLock()
+_MOVE_CHANGED = threading.Condition(_GATE)
 _WRITERS: dict[str, Path] = {}
 _BLOCKED: dict[str, list[Path]] = {}
 
@@ -145,26 +146,54 @@ def _mkdir(path: Path) -> None:
         _sync_dir(directory.parent)
 
 
-def _copy(src: Path, dst: Path) -> None:
-    if src.is_dir():
-        shutil.copytree(src, dst, copy_function=shutil.copy2)
-        files = [p for p in _tree(dst) if p.is_file()]
-    else:
-        shutil.copy2(src, dst)
-        files = [dst]
-    for file in files:
-        with file.open("rb") as stream:
-            os.fsync(stream.fileno())
-    for directory in reversed([dst, *[p for p in _tree(dst) if p != dst and p.is_dir()]] if dst.is_dir() else [dst.parent]):
-        _sync_dir(directory)
+def _remove_members(path: Path, manifest: dict) -> None:
+    """Unlink only journaled, currently matching files; never recursively remove."""
+    _safe(path)
+    for name, evidence in manifest["files"].items():
+        member = path if name == "." else path / name
+        _safe(member)
+        if member.exists():
+            _verify(member, {"files": {".": evidence}, "directories": []})
+            member.unlink()
+            _sync_dir(member.parent)
+    for name in sorted(manifest["directories"], key=lambda value: len(Path(value).parts), reverse=True):
+        directory = path if name == "." else path / name
+        _safe(directory)
+        if directory.exists():
+            directory.rmdir()  # Unexpected contents are preserved and reported.
+            _sync_dir(directory.parent)
+    if path.exists():
+        raise MoveRefused(f"Unjournaled partial contents were kept: {path}")
 
 
-def _remove(path: Path) -> None:
-    if path.is_dir():
-        shutil.rmtree(path)
-    else:
-        path.unlink()
-    _sync_dir(path.parent)
+@contextmanager
+def submission_location(store: Any, config: dict, metadata: dict) -> Iterator[None]:
+    """Wait outside the CAD lock; resolve and persist a job under that lock.
+
+    Move execution/recovery holds the same lock from busy-check through commit.
+    The final assignment therefore cannot race a move's journal or registry update.
+    """
+    if store is None:
+        metadata["archive"] = identity.submission_archive(store, config, metadata)
+        yield
+        return
+    while True:
+        with store._lock:
+            archive = identity.submission_archive(store, config, metadata)
+            root = identity.archive_root(store)
+            with _MOVE_CHANGED:
+                blocked = any(_overlap(root / archive["folder"], other) if root is not None
+                              else other.name.casefold() == archive["folder"].casefold()
+                              for paths in _BLOCKED.values() for other in paths)
+            if not blocked:
+                metadata["archive"] = archive
+                if metadata.get("imported_geometry") is not None:
+                    metadata["imported_geometry"]["archive_stem"] = archive["folder"]
+                yield
+                return
+        # Timed wait also handles process-local lock reset during shutdown/tests.
+        with _MOVE_CHANGED:
+            _MOVE_CHANGED.wait(timeout=0.1)
 
 
 class RunMoves:
@@ -441,7 +470,8 @@ class RunMoves:
             ancestor = ancestor.parent
         _safe(ancestor)
         return {"src": str(src), "dst": str(dst), "kind": kind, "manifest": manifest or inventory(src),
-                "method": "rename" if src.stat().st_dev == ancestor.stat().st_dev else "copy_verify_remove", "state": "pending"}
+                "method": "rename" if src.stat().st_dev == ancestor.stat().st_dev else "copy_verify_remove", "state": "pending",
+                "source_identity": [src.stat().st_dev, src.stat().st_ino]}
 
     def _gather(self, operations: list[dict], rows: list[dict], root: Path, folder: Path, target: Path, key: str) -> list[dict]:
         if not key.startswith("lineage:"):
@@ -608,6 +638,7 @@ class RunMoves:
                     record["phase"] = "refused"
                     with _GATE:
                         _BLOCKED.pop(record["id"], None)
+                        _MOVE_CHANGED.notify_all()
                 self._step(record, record["phase"])
             return record
 
@@ -671,30 +702,65 @@ class RunMoves:
         self._step(record, "done")
         with _GATE:
             _BLOCKED.pop(record["id"], None)
+            _MOVE_CHANGED.notify_all()
 
     def _publish_copy(self, record: dict, op: dict, src: Path, dst: Path) -> None:
         partial = dst.with_name(dst.name + ".partial-" + record["id"])
         if dst.exists():
             _verify(dst, op.get("destination_manifest", op["manifest"]))
             return
+        # A safe source must exist before discarding even our own partial bytes.
+        manifest = op.get("destination_manifest", op["manifest"])
+        content = base64.b64decode(op["content"]) if op.get("content") else None
+        _verify(src, op["manifest"])
         if partial.exists():
-            _safe(partial)
-            _remove(partial)
-        # Record ownership before creation so recovery can safely remove only ours.
+            if not op.get("created") or "partial_manifest" not in op:
+                raise MoveRefused(f"Unjournaled partial contents were kept: {partial}")
+            _remove_members(partial, op["partial_manifest"])
         op["created"] = True
-        self._step(record, record["phase"])
-        if op.get("content"):
-            with partial.open("xb") as stream:
-                stream.write(base64.b64decode(op["content"]))
-                stream.flush()
-                os.fsync(stream.fileno())
-        else:
-            _copy(src, partial)
+        self._write_partial(record, op, partial, src, manifest, content=content)
         self.after_step("copied:" + op["dst"])
         _verify(partial, op.get("destination_manifest", op["manifest"]))
         rename_absent(partial, dst)
         _sync_dir(dst.parent)
         self.after_step("copy_published:" + op["dst"])
+
+    def _write_partial(self, record: dict, owner: dict, partial: Path, src: Path,
+                       manifest: dict, *, content: bytes | None = None) -> None:
+        # Only completed, fsynced members are deletion evidence. A process dying
+        # during a write leaves unverified bytes for manual attention.
+        evidence: dict = {"files": {}, "directories": []}
+        owner["partial_manifest"] = evidence
+        self._step(record, record["phase"])
+        for name in manifest["directories"]:
+            directory = partial if name == "." else partial / name
+            directory.mkdir()
+            _sync_dir(directory.parent)
+            evidence["directories"].append(name)
+            self._step(record, record["phase"])
+        for name, expected in manifest["files"].items():
+            target = partial if name == "." else partial / name
+            source = src if name == "." else src / name
+            with target.open("xb") as output:
+                if content is not None:
+                    output.write(content)
+                else:
+                    with source.open("rb") as incoming:
+                        shutil.copyfileobj(incoming, output)
+                output.flush()
+                if content is None:
+                    shutil.copystat(source, target)
+                os.fsync(output.fileno())
+            _verify(target, {"files": {".": expected}, "directories": []})
+            _sync_dir(target.parent)
+            evidence["files"][name] = expected
+            self._step(record, record["phase"])
+
+        for name in reversed(manifest["directories"]):
+            source = src if name == "." else src / name
+            target = partial if name == "." else partial / name
+            shutil.copystat(source, target)
+            _sync_dir(target)
 
     def _expected_destinations(self, record: dict) -> dict[Path, dict]:
         expected = {}
@@ -857,6 +923,11 @@ class RunMoves:
                     if record.get("undoing"):
                         self._undo(record)
                     else:
+                        rows = self._rows()
+                        self._busy(rows, _BLOCKED[record["id"]], Path(record["root"]))
+                        known = {ref["job_id"] for ref in record["references"]}
+                        self._references(record, [row for row in rows if row["id"] not in known])
+                        self._step(record, record["phase"])
                         self._resume(record)
                 except Exception as exc:
                     record["error"] = str(exc)
@@ -873,18 +944,10 @@ class RunMoves:
                 raise MoveRefused("Only a completed move on this drive can be undone.")
             self._block(record)
             try:
-                self._busy(self._rows(), _BLOCKED[record["id"]], Path(record["root"]))
-                for path, manifest in record["final"].items():
-                    _verify(Path(path), manifest)
-                self._verify_cleanup_paths(record)
+                self._verify_undo(record)
                 for op in record["operations"]:
                     if op["kind"] in {"run", "rename"} and Path(op["src"]).exists():
                         raise MoveRefused("An original location is occupied. Undo would replace it.")
-                # Check no new run has archived into the project since the move.
-                expected = {ref["job_id"] for ref in record["references"]} | set(record.get("destination_jobs", []))
-                for row in self._rows():
-                    if row["id"] not in expected and self._location(row, Path(record["root"])).parent == Path(record["target"]):
-                        raise MoveRefused("Another run has used this folder since the move.")
                 record["undoing"] = True
                 self._step(record, "undo_prepared")
                 self._undo(record)
@@ -892,8 +955,89 @@ class RunMoves:
                 if not record.get("undoing"):
                     with _GATE:
                         _BLOCKED.pop(record["id"], None)
+                        _MOVE_CHANGED.notify_all()
                 raise
             return record
+
+    def _verify_undo(self, record: dict) -> None:
+        """Validate the final tree plus only the journal's landed undo mutations.
+
+        Build one current manifest so startup and interactive undo use the same
+        checks, including a rename that landed before its completion was saved.
+        """
+        rows = self._rows()
+        self._busy(rows, _BLOCKED[record["id"]], Path(record["root"]))
+        expected_jobs = {ref["job_id"] for ref in record["references"]} | set(record.get("destination_jobs", []))
+        for row in rows:
+            if row["id"] not in expected_jobs and self._location(row, Path(record["root"])).parent in {Path(record["target"]), Path(record["folder"])}:
+                raise MoveRefused("Another run has used this folder since the move.")
+        self._verify_cleanup_paths(record)
+        files, directories, roots = {}, set(), set()
+        for value, manifest in record["final"].items():
+            root = Path(value)
+            roots.add(root)
+            files.update({root if name == "." else root / name: evidence for name, evidence in manifest["files"].items()})
+            directories.update(root if name == "." else root / name for name in manifest["directories"])
+        # Gather restores may land just before their completion marker.
+        for op in record["operations"]:
+            if op["method"] == "gather":
+                source = Path(op.get("live_src", op["src"]))
+                # A reverse parent rename can already have carried this restore.
+                original = Path(op["src"])
+                if op.get("undone") or source.exists() or original.exists():
+                    evidence = op["manifest"]["files"]["."]
+                    files[source] = evidence
+                    roots.add(source)
+                    parent = source.parent
+                    while any(root == parent or root in parent.parents for root in roots if root != source):
+                        directories.add(parent)
+                        parent = parent.parent
+        for op in record["operations"]:
+            partial = Path(op.get("live_src", op["src"]))
+            partial = partial.with_name(partial.name + ".undo-partial-" + record["id"])
+            if op.get("undo_created") and partial.exists():
+                manifest = op["undo_partial"]["partial_manifest"]
+                roots.add(partial)
+                files.update({partial if name == "." else partial / name: value for name, value in manifest["files"].items()})
+                directories.update(partial if name == "." else partial / name for name in manifest["directories"])
+        for op in reversed(record["operations"]):
+            if op["method"] == "gather":
+                continue
+            source, destination = Path(op.get("live_src", op["src"])), Path(op["dst"])
+            reversed_on_disk = source.exists() and not destination.exists()
+            if op.get("undone") or reversed_on_disk:
+                def remap(path: Path) -> Path:
+                    return source / path.relative_to(destination) if path == destination or destination in path.parents else path
+                files = {remap(path): value for path, value in files.items()}
+                directories = {remap(path) for path in directories}
+                roots = {remap(path) for path in roots}
+            current = source if reversed_on_disk or op.get("undone") else destination
+            _safe(current)
+            if op.get("source_identity") and op["kind"] in {"run", "rename"}:
+                stat = current.stat()
+                if [stat.st_dev, stat.st_ino] != op["source_identity"]:
+                    raise MoveRefused("A moved folder was replaced. Undo needs attention.")
+        for value in record.get("undo_removed", []):
+            if not Path(value).exists():
+                files.pop(Path(value), None)
+                roots.discard(Path(value))
+        if all(op.get("undone") for op in record["operations"]):
+            # Reference replay may already have restored the journaled pointer.
+            pointer = Path(record["folder"]) / "design.json"
+            if record.get("pointer_before") is not None and pointer.is_file():
+                content = (json.dumps(json.loads(record["pointer_before"]), indent=2) + "\n").encode()
+                if pointer.read_bytes() == content:
+                    files[pointer] = self._content_manifest(content)["files"]["."]
+        # Verify maximal roots; nested snapshots have been merged above.
+        for root in sorted(path for path in roots if not any(parent in roots for parent in path.parents)):
+            manifest = {
+                "files": {str(path.relative_to(root)): evidence for path, evidence in files.items() if path == root or root in path.parents},
+                "directories": sorted(str(path.relative_to(root)) for path in directories if path == root or root in path.parents),
+            }
+            actual = inventory(root)
+            actual["directories"].sort()
+            if actual != manifest:
+                raise MoveRefused(f"Verification failed. Undo needs attention: {root}")
 
     def _verify_cleanup_paths(self, record: dict) -> None:
         for removed in record["cleanup"]:
@@ -904,7 +1048,7 @@ class RunMoves:
 
     def _undo(self, record: dict) -> None:
         # Recovery also refuses a recreated/changed pointer before moving files.
-        self._verify_cleanup_paths(record)
+        self._verify_undo(record)
         # Restore gathered originals before reversing directory renames.
         for index in reversed(range(len(record["operations"]))):
             op = record["operations"][index]
@@ -919,15 +1063,15 @@ class RunMoves:
                 if not src.exists():
                     partial = src.with_name(src.name + ".undo-partial-" + record["id"])
                     _safe(partial)
+                    content = base64.b64decode(op["source_bytes"]) if op["kind"] == "sidecar" else None
+                    _verify(dst, op.get("destination_manifest", op["manifest"]))
                     if partial.exists():
-                        _remove(partial)
-                    if op["kind"] == "sidecar":
-                        with partial.open("xb") as stream:
-                            stream.write(base64.b64decode(op["source_bytes"]))
-                            stream.flush()
-                            os.fsync(stream.fileno())
-                    else:
-                        _copy(dst, partial)
+                        if not op.get("undo_created") or "undo_partial" not in op:
+                            raise MoveRefused(f"Unjournaled partial contents were kept: {partial}")
+                        _remove_members(partial, op["undo_partial"]["partial_manifest"])
+                    op["undo_created"] = True
+                    owner = op["undo_partial"] = {}
+                    self._write_partial(record, owner, partial, dst, op["manifest"], content=content)
                     self.after_step("undo_copied:" + str(src))
                     _verify(partial, op["manifest"])
                     rename_absent(partial, src)
@@ -938,6 +1082,7 @@ class RunMoves:
                 if src.exists() and dst.exists():
                     raise MoveRefused("An original location is occupied. Undo would replace it.")
                 if not src.exists():
+                    self._verify_undo(record)
                     _mkdir(src.parent)
                     rename_absent(dst, src)
                     _sync_dir(src.parent)
@@ -970,7 +1115,14 @@ class RunMoves:
                 _safe(dst)
                 if dst.exists():
                     verify_restored()
-                    _remove(dst)
+                    _verify(dst, op.get("destination_manifest", op["manifest"]))
+                    removed = record.setdefault("undo_removed", [])
+                    if str(dst) not in removed:
+                        removed.append(str(dst))
+                    # Persist intent: on replay an absent file is accounted for;
+                    # a still-present file must still match and be removed below.
+                    self._step(record, record["phase"])
+                    _remove_members(dst, op.get("destination_manifest", op["manifest"]))
         for removed in record["cleanup"]:
             path = Path(removed["path"])
             _safe(path)
@@ -978,7 +1130,7 @@ class RunMoves:
             if not path.exists():
                 partial = path.with_name(path.name + ".undo-partial-" + record["id"])
                 _safe(partial)
-                with partial.open("wb") as stream:
+                with partial.open("xb") as stream:
                     stream.write(base64.b64decode(removed["source_bytes"]))
                     stream.flush()
                     os.fsync(stream.fileno())
@@ -990,3 +1142,4 @@ class RunMoves:
         self._step(record, "undone")
         with _GATE:
             _BLOCKED.pop(record["id"], None)
+            _MOVE_CHANGED.notify_all()

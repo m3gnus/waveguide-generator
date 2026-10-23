@@ -560,15 +560,31 @@ replace a concurrent destination. Cross-volume moves stage copies, fsync and
 SHA-256-verify every file across the whole move before removing any original.
 Deletion touches only verified manifest members, rechecks each source and
 retained destination before unlink, and can resume a partially removed tree.
-Unexpected new files remain in place and are reported. Every recovery rechecks
+Unexpected new files remain in place and are reported. Temporary copies journal
+each completed, fsynced member. Cleanup verifies a safe retained source first,
+then unlinks only journaled members whose current type, size and SHA-256 match;
+directories are removed only when empty. Interrupted unjournaled writes and
+unexpected partial contents require attention. Every recovery rechecks
 destination bytes; a past verified marker never licenses later deletion.
+Recovered undo uses the same final-tree, subsequent-run and link checks as
+interactive undo before reverse renames, accounting only for journaled restores
+and renames already landed. Folder identity also detects replaced rename roots.
+Gathered deletion targets are verified again immediately before unlink.
 
 Recovery runs before the jobs runtime starts. A pending journal keeps affected
 projects locked after an error; writes answer 409 **Runs are being moved**.
 Capture, pin, pruning, workspace writes and automatic-export reservations share
-the exclusion. Solves can be submitted; existing queued/running/not-yet-archived
-runs in affected folders refuse a new move. Reconnect the drive or close the
-file, then use **Retry recovery**. Startup displays a recovery notice. Ordinary
+the exclusion. A submission for an affected project waits outside the CAD lock
+until its pending move or undo finishes. At job creation (and CAD preparation
+binding), location assignment is repeated under the same CAD lock that moves
+hold from busy-check through reference commit. This closes the gap between
+request composition and durable job creation; the queued job uses the final
+registered folder. Unrelated submissions continue normally. Recovery rechecks
+busy jobs and journals references for jobs added since the move journal (for
+example by an earlier server version). A busy older job refuses recovery until
+it is stopped; an unarchived location is never moved underneath a writer.
+Existing queued/running/not-yet-archived runs in affected folders refuse a new
+move. Reconnect the drive or close the file, then use **Retry recovery**. Startup displays a recovery notice. Ordinary
 previews are never executed at startup.
 
 The journal coordinates separate jobs/CAD database transactions. It updates
