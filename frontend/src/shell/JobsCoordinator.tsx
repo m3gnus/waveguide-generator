@@ -1,5 +1,5 @@
 import { usePrepareEngine } from '../jobs/usePrepareEngine';
-import { heldSolveStillCurrent, useHeldSolvePreparation, type HeldSolveContinuation } from '../jobs/useHeldSolvePreparation';
+import { heldSolveCancellationReason, heldSolveStillCurrent, useHeldSolvePreparation, type HeldSolveContinuation } from '../jobs/useHeldSolvePreparation';
 import { messageBlocker, type SolveReadinessState } from '../jobs/solveReadiness';
 import { currentModel, useCurrentModel } from '../model/currentModel';
 import { importedModelBlocker, importedModelId, unchangedSetup, useImportedModelStore } from '../stores/importedModel';
@@ -59,6 +59,7 @@ interface SolveControl {
   prepareAndSolve(engine: string): Promise<void>;
   useEngine(engine: string): void;
   preparationError: string | null;
+  actionError: string | null;
   preparingEngine: string | null;
 }
 
@@ -533,8 +534,15 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
           // No overrides: the server continues this job’s saved request.
           if (patch.held && (patch.held.jobId !== jobId || !heldSolveStillCurrent(patch.held))) {
             solveAttention.releaseOperation(jobId);
+            // An observer may already have reported and latched the cancellation.
+            // Unmount also aborts the token, and must stay silent.
+            if (!patch.held.signal.aborted) setActionError(heldSolveCancellationReason(patch.held)
+              ?? 'Prepare and solve was cancelled because the waiting job changed.');
             return null;
           }
+          // A child may arrive over the socket or refresh before this promise
+          // settles. Once dispatched, this press is no longer a held intention.
+          if (patch.held) patch.held.submitted = true;
           child = await solveCadAgain(jobId, { approvals });
         } catch (error) {
           solveAttention.releaseOperation(jobId);
@@ -694,7 +702,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [solve, solveEnabled]);
 
   const prepareAndSolve = useHeldSolvePreparation(model, engines, preparation.prepare,
-    useCallback((held: HeldSolveContinuation) => continueRun(held.jobId, { held }), [continueRun]));
+    useCallback((held: HeldSolveContinuation) => continueRun(held.jobId, { held }), [continueRun]), setActionError);
   const serverReadiness = cadGeometryActive || fileGeometryActive ? importedPlan.plan?.readiness : parametricReadiness;
   const readiness = solveBlocker || solveOptionsError
     ? messageBlocker(solveBlocker || solveOptionsError!)
@@ -704,6 +712,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     prepareEngine: preparation.prepare,
     prepareAndSolve,
     preparationError: preparation.error,
+    actionError,
     preparingEngine: preparation.starting ?? engines.find(engine => engine.runtime_state === 'preparing')?.name ?? null,
     useEngine: (engine: string) => solveOptions.setEngine(engine),
     plan: solvePlan,
@@ -726,7 +735,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
               : cadGeometryActive
                 ? capabilityError ?? importedUnavailable ?? 'No engine can solve imported CAD geometry here'
                 : parametricUnavailable),
-  }), [engines, readiness, preparation.prepare, preparation.error, preparation.starting, prepareAndSolve, solveOptions, cadGeometryActive, capabilityError, fileBlocker, fileGeometryActive, importedUnavailable, importedEngineLabel, parametricUnavailable, planError, planPending, selectedEngine, solve, solveEnabled, solveBlocker, solvePlan, solvePlanPending, submitting]);
+  }), [actionError, engines, readiness, preparation.prepare, preparation.error, preparation.starting, prepareAndSolve, solveOptions, cadGeometryActive, capabilityError, fileBlocker, fileGeometryActive, importedUnavailable, importedEngineLabel, parametricUnavailable, planError, planPending, selectedEngine, solve, solveEnabled, solveBlocker, solvePlan, solvePlanPending, submitting]);
 
   useEffect(() => {
     publishSolveControl(control);

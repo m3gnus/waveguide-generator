@@ -10,17 +10,30 @@ export interface HeldSolveContinuation {
   jobId: string;
   model: CurrentModel;
   signal: AbortSignal;
+  /** Set at the POST boundary: later job/model changes cannot cancel this press. */
+  submitted?: boolean;
+}
+
+const PREPARATION_FAILED = 'Prepare and solve was cancelled because engine preparation failed.';
+
+/** The same reason is used by store observers and the final guard at the POST. */
+export function heldSolveCancellationReason(request: HeldSolveContinuation): string | null {
+  const model = currentModel();
+  if (model.key !== request.model.key || model.kind !== request.model.kind || model.ingestId !== request.model.ingestId) {
+    return 'Prepare and solve was cancelled because the model on screen changed.';
+  }
+  if (!model.viewportShowing) return 'Prepare and solve was cancelled because the model left the viewport.';
+  const job = currentModelStatus(model, jobsSocket.getSnapshot().jobs).job;
+  if (job?.id !== request.jobId || job.status !== 'error' || job.cancellation_requested
+    || job.cad_state?.state !== 'needs_user_input' || job.cad_state.reason !== 'engine_unavailable') {
+    return 'Prepare and solve was cancelled because the waiting job changed.';
+  }
+  return null;
 }
 
 /** Checked again synchronously at the POST, after all asynchronous reads. */
 export function heldSolveStillCurrent(request: HeldSolveContinuation): boolean {
-  const model = currentModel();
-  const job = currentModelStatus(model, jobsSocket.getSnapshot().jobs).job;
-  return !request.signal.aborted && model.key === request.model.key && model.kind === request.model.kind
-    && model.ingestId === request.model.ingestId && model.viewportShowing
-    && job?.id === request.jobId && job.status === 'error' && !job.cancellation_requested
-    && job.cad_state?.state === 'needs_user_input'
-    && job.cad_state.reason === 'engine_unavailable';
+  return !request.signal.aborted && heldSolveCancellationReason(request) === null;
 }
 
 type Intention = HeldSolveContinuation & {
@@ -32,18 +45,26 @@ type Intention = HeldSolveContinuation & {
 
 /** Only this explicit intention may continue after runtime preparation. */
 export function useHeldSolvePreparation(model: CurrentModel, engines: readonly EngineCapability[],
-  prepare: (engine: string) => Promise<boolean>, continueRun: (request: HeldSolveContinuation) => Promise<unknown>) {
+  prepare: (engine: string) => Promise<boolean>, continueRun: (request: HeldSolveContinuation) => Promise<unknown>,
+  reportNotice: (message: string | null) => void) {
   const [held, setHeld] = useState<Intention | null>(null);
   const intention = useRef<Intention | null>(null);
-  const cancel = () => {
-    intention.current?.controller.abort();
+  const report = useRef(reportNotice);
+  report.current = reportNotice;
+  const cancel = (reason?: string) => {
+    if (!intention.current) return;
+    const request = intention.current;
+    request.controller.abort();
     intention.current = null;
     setHeld(null);
+    if (reason && !request.submitted) report.current(reason);
   };
   useEffect(() => {
     // Observe every transition, including leave/return within one React batch.
     const validate = () => {
-      if (intention.current && !heldSolveStillCurrent(intention.current)) cancel();
+      if (!intention.current) return;
+      const reason = heldSolveCancellationReason(intention.current);
+      if (reason) cancel(reason);
     };
     const unsubscribe = [jobsSocket.subscribe(validate), useCadReturnStore.subscribe(validate),
       workspaceModeStore.subscribe(validate), importedMeshStore.subscribe(validate)];
@@ -55,7 +76,8 @@ export function useHeldSolvePreparation(model: CurrentModel, engines: readonly E
   }, []);
   useEffect(() => {
     if (!held || intention.current !== held) return;
-    if (!heldSolveStillCurrent(held)) { cancel(); return; }
+    const reason = heldSolveCancellationReason(held);
+    if (reason) { cancel(reason); return; }
     const engine = engines.find(engine => engine.name === held.engine);
     if (!held.prepared) return;
     if (engine?.available && engine.runtime_state === 'ready') {
@@ -64,7 +86,7 @@ export function useHeldSolvePreparation(model: CurrentModel, engines: readonly E
       void continueRun(held).catch(() => undefined).finally(() => {
         if (intention.current === held) cancel();
       });
-    } else if (engine?.runtime_state !== 'preparing') cancel();
+    } else if (engine?.runtime_state !== 'preparing') cancel(PREPARATION_FAILED);
   }, [held, model.key, model.kind, model.viewportShowing, engines, continueRun]);
   return async (engine: string) => {
     if (intention.current) return;
@@ -77,12 +99,14 @@ export function useHeldSolvePreparation(model: CurrentModel, engines: readonly E
     const request: Intention = { model, jobId: job.id, engine, controller, signal: controller.signal,
       prepared: false, continuing: false };
     intention.current = request;
+    report.current(null);
     setHeld(request);
     let success = false;
     try { success = await prepare(engine); }
     finally {
       if (intention.current === request) {
-        if (!success || !heldSolveStillCurrent(request)) cancel();
+        const reason = heldSolveCancellationReason(request);
+        if (reason || !success) cancel(reason ?? PREPARATION_FAILED);
         else {
           const ready = { ...request, prepared: true };
           intention.current = ready;
