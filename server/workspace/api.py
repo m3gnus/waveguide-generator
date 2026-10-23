@@ -1531,7 +1531,8 @@ def mount_workspace(
     explicit_runs: bool = False,
 ) -> WorkspaceState:
     data_dir = Path(application.state.data_dir)
-    settings, failed = read_folder_settings(data_dir)
+    known_settings: set[Path] = set()
+    settings, failed = read_folder_settings(data_dir, known_files=known_settings)
     version = settings["folders.json"].get("schemaVersion")
     unsupported = "schemaVersion" in settings["folders.json"] and (type(version) is not int or version != 1)
     root = settings["folders.json"].get("rootPath")
@@ -1541,9 +1542,10 @@ def mount_workspace(
         data_dir,
         default_path=default_path,
         legacy_defaults=legacy_defaults,
-        allow_adoption=allow_adoption,
+        allow_adoption=allow_adoption and data_dir / "workspace_settings.json" not in known_settings,
     )
-    cad_state = CadWorkspaceState(data_dir, allow_adoption=allow_adoption)
+    cad_state = CadWorkspaceState(
+        data_dir, allow_adoption=allow_adoption and data_dir / "cadlink_settings.json" not in known_settings)
     folders = FolderRoot(
         Path(application.state.data_dir),
         default_root=default_root or default_folder_root(Path(application.state.data_dir)),
@@ -1552,6 +1554,7 @@ def mount_workspace(
         create_implicit_runs=create_implicit_runs,
         explicit_runs=explicit_runs,
         settings_read_failed=failed,
+        known_settings=known_settings,
     )
 
     def refresh() -> None:

@@ -50,11 +50,10 @@ def endpoint(app, route):
 def test_fresh_install(tmp_path, isolated):
     app, root = setup(tmp_path, isolated=isolated)
     f = app.state.folders
+    runs = f.data_dir / 'workspace' if isolated else root / 'runs'
     assert f.root == root
-    assert f.overrides == {}
-    assert app.state.workspace.path() == root / 'runs'
-    if isolated:
-        assert not (f.data_dir / 'workspace').exists()
+    assert f.overrides == ({'runs': runs} if isolated else {})
+    assert app.state.workspace.path() == runs
     if isolated:
         assert app.state.cad_workspace.selected_path() is None
         assert not (root / 'cadlink').exists()
@@ -192,7 +191,11 @@ def test_broken_json_uses_mirrors(tmp_path, content):
     write(data, 'workspace_settings.json', {'workspacePath': str(chosen)})
     f = restart(data, tmp_path / 'default')
     assert f.effective('runs') == chosen
-    assert read_settings(f.settings_path)['schemaVersion'] == 1
+    if content in ('{', '[]'):
+        assert f.read_only
+        assert f.settings_path.read_text() == content
+    else:
+        assert read_settings(f.settings_path)['schemaVersion'] == 1
 
 
 def test_unknown_schema_never_overwritten(tmp_path):
@@ -585,7 +588,7 @@ def test_windows_redirected_documents_retains_035_userprofile_runs(tmp_path, mon
 
 
 @pytest.mark.parametrize('file', ['folders.json', 'workspace_settings.json', 'cadlink_settings.json'])
-@pytest.mark.parametrize('error', [PermissionError, OSError])
+@pytest.mark.parametrize('error', [PermissionError, OSError, FileNotFoundError, ValueError])
 def test_unreadable_settings_publish_nothing_and_use_readable_choices(tmp_path, monkeypatch, caplog, file, error):
     data, root, cad = tmp_path / 'data', tmp_path / 'saved-root', tmp_path / 'saved-cad'
     (root / 'runs').mkdir(parents=True)
@@ -637,14 +640,15 @@ def test_unreadable_newer_schema_is_never_replaced_or_legacy_adopted(tmp_path, m
     assert not (tmp_path / 'default').exists()
 
 
-def test_read_failure_at_persist_preflights_all_files_before_any_publication(tmp_path, monkeypatch):
+@pytest.mark.parametrize('error', [OSError, FileNotFoundError, ValueError])
+def test_read_failure_at_persist_preflights_all_files_before_any_publication(tmp_path, monkeypatch, error):
     app, root = setup(tmp_path)
     f = app.state.folders
     before = {p.name: p.read_bytes() for p in f.data_dir.iterdir()}
     original = Path.read_text
     def refuse(path, *args, **kwargs):
         if path == f.data_dir / 'cadlink_settings.json':
-            raise OSError('IO failure')
+            raise error('read failure')
         return original(path, *args, **kwargs)
     monkeypatch.setattr(Path, 'read_text', refuse)
     f.writer = lambda *_: pytest.fail('Read failure must prevent every publication')
@@ -1043,7 +1047,7 @@ def test_stale_override_path_confirmation_is_refused(tmp_path):
 
 
 
-def test_read_failure_does_not_count_as_a_fresh_isolated_setup(tmp_path):
+def test_read_failure_preserves_missing_legacy_runs_without_publication(tmp_path):
     data, root = tmp_path / 'data', tmp_path / 'data' / 'workspace-root'
     (root / 'runs').mkdir(parents=True)
     legacy = data / 'workspace'
@@ -1055,17 +1059,90 @@ def test_read_failure_does_not_count_as_a_fresh_isolated_setup(tmp_path):
     assert not (data / 'folders.json').exists()
 
 
-def test_fresh_isolated_runs_is_not_recreated_after_restart(tmp_path):
-    app, root = setup(tmp_path, isolated=True)
-    assert app.state.folders.overrides == {}
-    (root / 'runs').rmdir()
-    app = FastAPI()
-    app.state.data_dir = tmp_path / 'data'
-    api.mount_workspace(app, default_root=root, default_path=tmp_path / 'data' / 'workspace')
-    assert not (root / 'runs').exists()
+def test_missing_legacy_default_is_not_replaced_on_startup_or_restore(tmp_path):
+    data, root = tmp_path / 'data', tmp_path / 'data' / 'workspace-root'
+    legacy = data / 'workspace'
+    for restored in (False, True):
+        if restored:
+            (legacy / 'previous-run').mkdir(parents=True)
+            (legacy / 'previous-run' / 'keep').write_text('history')
+        app = FastAPIWithData(data)
+        api.mount_workspace(app, default_root=root, default_path=legacy)
+        f = app.state.folders
+        assert f.effective('runs') == legacy
+        assert f.overrides == {'runs': legacy}
+        assert f.implicit_runs_path == legacy
+        assert not f.runs_selected
+        assert legacy.exists() == restored
+        assert not root.exists()
+        assert read_settings(data / 'workspace_settings.json')['workspacePath'] == str(legacy)
+        assert read_settings(data / 'folders.json')['overrides'] == {'runs': str(legacy)}
+    assert app.state.workspace.path() == legacy
+    assert (legacy / 'previous-run' / 'keep').read_text() == 'history'
+
+
+@pytest.mark.parametrize('file', ['folders.json', 'workspace_settings.json', 'cadlink_settings.json'])
+@pytest.mark.parametrize('content', [b'{', b'[]', b'\xff'])
+def test_malformed_settings_disable_startup_publication_and_adoption(tmp_path, file, content):
+    data, root, legacy = tmp_path / 'data', tmp_path / 'default', tmp_path / 'old-output'
+    (legacy / 'wglink').mkdir(parents=True)
+    data.mkdir()
+    (data / file).write_bytes(content)
+    before = {p.name: p.read_bytes() for p in data.iterdir()}
+    app = FastAPIWithData(data)
+    api.mount_workspace(app, default_root=root, default_path=data / 'workspace', legacy_defaults=(legacy,))
+    assert app.state.folders.read_only
+    assert app.state.folders.effective('runs') == data / 'workspace'
     assert app.state.folders.implicit_runs_path is None
-    with pytest.raises(api.WorkspaceUnavailableError):
-        app.state.workspace.path()
-    assert app.state.folders.runs_selected is False
-    app.state.folders.select(root)
-    assert app.state.workspace.path() == root / 'runs'
+    assert {p.name: p.read_bytes() for p in data.iterdir()} == before
+    assert not root.exists()
+    assert not (data / 'workspace').exists()
+
+
+@pytest.mark.parametrize('file', ['folders.json', 'workspace_settings.json', 'cadlink_settings.json'])
+def test_settings_disappearing_between_startup_reads_publish_nothing(tmp_path, monkeypatch, file):
+    app, root = setup(tmp_path)
+    data = app.state.folders.data_dir
+    real_read = api.read_folder_settings
+    def disappear(*args, **kwargs):
+        result = real_read(*args, **kwargs)
+        (data / file).unlink()
+        return result
+    monkeypatch.setattr(api, 'read_folder_settings', disappear)
+    monkeypatch.setattr(api, '_write_json_atomic', lambda *_: pytest.fail('Disappeared settings must prevent publication'))
+    app = FastAPIWithData(data)
+    api.mount_workspace(app, default_root=tmp_path / 'default', default_path=data / 'workspace')
+    assert app.state.folders.read_only
+    assert not (data / file).exists()
+    assert not (tmp_path / 'default').exists()
+
+
+@pytest.mark.parametrize('file', ['folders.json', 'workspace_settings.json', 'cadlink_settings.json'])
+def test_previously_published_settings_disappearing_prevent_republication(tmp_path, file):
+    app, root = setup(tmp_path)
+    f = app.state.folders
+    (f.data_dir / file).unlink()
+    before = {p.name: p.read_bytes() for p in f.data_dir.iterdir()}
+    f.writer = lambda *_: pytest.fail('Disappeared settings must prevent every publication')
+    with pytest.raises(OSError, match='no settings were published'):
+        f.persist()
+    assert f.read_only
+    assert {p.name: p.read_bytes() for p in f.data_dir.iterdir()} == before
+
+
+def test_disappearing_runs_mirror_does_not_enable_legacy_adoption(tmp_path, monkeypatch):
+    data, chosen, legacy = tmp_path / 'data', tmp_path / 'chosen', tmp_path / 'old-output'
+    chosen.mkdir()
+    (legacy / 'previous-run').mkdir(parents=True)
+    write(data, 'workspace_settings.json', {'workspacePath': str(chosen)})
+    real_read = api.read_folder_settings
+    def disappear(*args, **kwargs):
+        result = real_read(*args, **kwargs)
+        (data / 'workspace_settings.json').unlink()
+        return result
+    monkeypatch.setattr(api, 'read_folder_settings', disappear)
+    monkeypatch.setattr(api, '_write_json_atomic', lambda *_: pytest.fail('Disappeared settings must prevent adoption'))
+    app = FastAPIWithData(data)
+    api.mount_workspace(app, default_root=tmp_path / 'default', default_path=data / 'workspace', legacy_defaults=(legacy,))
+    assert app.state.folders.read_only
+    assert list(data.iterdir()) == []

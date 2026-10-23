@@ -18,26 +18,35 @@ NAMES = {"runs": ("workspace_settings.json", "workspacePath"),
 RUNS_SELECTED_KEY = "workspacePathSelected"
 
 
-def read_settings(path: Path) -> dict[str, Any]:
+def read_settings(path: Path, *, known_files: set[Path] | None = None) -> dict[str, Any]:
+    # These files are optional on first use. Once discovered, a failed read
+    # (including disappearance during sync) must disable publication.
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
-    except (FileNotFoundError, ValueError):
+        path.lstat()
+    except FileNotFoundError:
+        if known_files is not None and path in known_files:
+            raise
         return {}
+    if known_files is not None:
+        known_files.add(path)
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("Folder settings must be a JSON object")
+    return value
 
 
 def stored_path(value: Any) -> Path | None:
     return Path(value.strip()).expanduser() if isinstance(value, str) and value.strip() and "\x00" not in value else None
 
 
-def read_folder_settings(data_dir: Path) -> tuple[dict[str, dict[str, Any]], bool]:
+def read_folder_settings(data_dir: Path, *, known_files: set[Path] | None = None) -> tuple[dict[str, dict[str, Any]], bool]:
     """Read everything before any writer (including legacy adoption) runs."""
     settings = {}
     failed = False
     for file in ("folders.json", *(file for file, _ in NAMES.values())):
         try:
-            settings[file] = read_settings(data_dir / file)
-        except OSError as exc:
+            settings[file] = read_settings(data_dir / file, known_files=known_files)
+        except (OSError, ValueError) as exc:
             settings[file] = {}
             failed = True
             log.warning("Folder settings are read-only: cannot read %s: %s", data_dir / file, exc)
@@ -48,7 +57,7 @@ class FolderRoot:
     def __init__(self, data_dir: Path, *, default_root: Path, legacy_runs: Path,
                  writer: Callable[[Path, dict[str, Any]], None], system: str | None = None,
                  create_implicit_runs: bool = False, settings_read_failed: bool = False,
-                 explicit_runs: bool = False) -> None:
+                 explicit_runs: bool = False, known_settings: set[Path] | None = None) -> None:
         self.data_dir = data_dir
         self.settings_path = data_dir / "folders.json"
         self.default_root = default_root
@@ -56,7 +65,8 @@ class FolderRoot:
         self.writer = writer
         self.on_change: Callable[[], None] = lambda: None
         self.notice: str | None = None
-        settings, failed = read_folder_settings(data_dir)
+        self._known_settings = set(known_settings or ())
+        settings, failed = read_folder_settings(data_dir, known_files=self._known_settings)
         failed |= settings_read_failed
         payload = settings["folders.json"]
         unsupported = "schemaVersion" in payload and (type(payload["schemaVersion"]) is not int or payload["schemaVersion"] != 1)
@@ -95,7 +105,7 @@ class FolderRoot:
         else:
             # The caller supplies the exact 0.3.5 implicit runs path, including
             # USERPROFILE Documents and <data>/workspace for data overrides.
-            runs = mirrors["runs"] or (default_root / "runs" if fresh and not explicit_runs else legacy_runs)
+            runs = mirrors["runs"] or legacy_runs
             cad = mirrors["cadlink"]
             self.root = self._paired_root(runs, cad) or default_root
             self.overrides: dict[str, Path] = {}
@@ -107,9 +117,9 @@ class FolderRoot:
         recorded_runs = ((mirrors["runs"] is not None or valid)
                          and settings["workspace_settings.json"].get(RUNS_SELECTED_KEY) is not False)
         self.runs_selected = explicit_runs or recorded_runs
-        self.implicit_runs_path = (self.effective("runs") if not self.read_only
+        self.implicit_runs_path = (legacy_runs if not self.read_only
                                    and not recorded_runs
-                                   and (self.effective("runs") == legacy_runs or (fresh and not explicit_runs)) else None)
+                                   and self.effective("runs") == legacy_runs else None)
         if self.read_only:
             self.notice = ("Folder settings could not be read; folder changes are disabled for this start." if failed else
                            "This WG version uses the existing folder settings; folders.json has an unsupported schema.")
@@ -152,7 +162,7 @@ class FolderRoot:
     def persist(self) -> None:
         if self.read_only:
             return
-        settings, failed = read_folder_settings(self.data_dir)
+        settings, failed = read_folder_settings(self.data_dir, known_files=self._known_settings)
         if failed:
             self.read_only = True
             raise OSError("Folder settings could not be read; no settings were published.")
@@ -174,12 +184,14 @@ class FolderRoot:
                     payload[RUNS_SELECTED_KEY] = False
             if payload != settings[file]:
                 self.writer(self.data_dir / file, payload)
+                self._known_settings.add(self.data_dir / file)
         payload = {**self._extra, "schemaVersion": 1, "rootPath": str(self.root)}
         overrides = {**self._unknown_overrides, **{name: str(path) for name, path in self.overrides.items()}}
         if overrides:
             payload["overrides"] = overrides
         if payload != settings["folders.json"]:
             self.writer(self.settings_path, payload)
+            self._known_settings.add(self.settings_path)
         if not self.overrides:
             self.notice = None
 
@@ -247,7 +259,7 @@ class FolderRoot:
         self.on_change()
 
     def _recover_mirror_choices(self) -> None:
-        settings, failed = read_folder_settings(self.data_dir)
+        settings, failed = read_folder_settings(self.data_dir, known_files=self._known_settings)
         self.read_only |= failed
         mirrors = {name: stored_path(settings[file].get(key)) for name, (file, key) in NAMES.items()}
         if mirrors["runs"] is not None:
