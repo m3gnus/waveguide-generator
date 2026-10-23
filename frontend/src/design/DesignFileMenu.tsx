@@ -1,6 +1,9 @@
 import { mintDesignUid } from '../stores/designUid';
 import { inspectDesignFile, rememberDesignFile, designFileSource } from './designFiles';
 import { SharedDesignIdDialog, type SharedDesignQuestion } from './SharedDesignIdDialog';
+import { useCurrentModel } from '../model/currentModel';
+import { assertCurrentModelExport, parameterExportReason } from '../results/exportContext';
+import { noteExplicitNavigation } from '../shell/workspaceNavigation';
 import { nativeCadLimitation } from './nativeFamilies';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
@@ -135,6 +138,9 @@ export async function exportProfileArtifacts(
 }
 
 export function DesignFileMenu() {
+  const model = useCurrentModel();
+  const copyReason = parameterExportReason(model, 'mwg_config');
+  const geometryReason = parameterExportReason(model, 'step');
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
   const designName = useDocumentStore((state) => state.designName);
@@ -332,7 +338,7 @@ export function DesignFileMenu() {
     // says what did if something had.
     const ticket = takeDesignOpenTicket();
     await act(async () => {
-      const opened = await openCadLinkedProject(designId, ticket, { loadSource: 'cad-project-switch' });
+      const opened = await openCadLinkedProject(designId, ticket);
       if (opened.adoptionCandidate) setAdoptionCandidate(opened.adoptionCandidate);
       setMessage(`Opened CAD-linked design ${opened.filename}`);
     });
@@ -380,6 +386,7 @@ export function DesignFileMenu() {
 
   async function exportCopy() {
     await act(async () => {
+      assertCurrentModelExport(model, 'mwg_config');
       // Asked before the file is built: cancelling must cost nothing, and the
       // question is where this export goes, not whether it can be serialized.
       const destination = await askForExportDestination({
@@ -387,6 +394,7 @@ export function DesignFileMenu() {
         detail: 'A text copy of this design.',
       });
       if (!destination) { setMessage(EXPORT_CANCELLED_MESSAGE); return; }
+      assertCurrentModelExport(model, 'mwg_config');
       const solveState = useSolveOptionsStore.getState();
       const polarConfig = polarConfigFromUi(solveState.polar);
       // Taken before the awaits, so it describes exactly what is written.
@@ -414,11 +422,13 @@ export function DesignFileMenu() {
 
   async function newDesign() {
     if (!await mayReplace('start a new design')) return;
+    noteExplicitNavigation();
     resetDesignStore();
     // Directivity and solver settings deliberately survive New: they describe
     // how this user measures, not which horn is on screen, and resetting them
     // meant retyping the same measurement rig for every new design.
     resetDocumentStore();
+    workspaceModeStore.setMode('parametric');
     setMessage('New design');
     setAdoptionCandidate(null);
     setOpen(false);
@@ -441,11 +451,13 @@ export function DesignFileMenu() {
 
   async function exportOne(kind: 'step' | 'stl', stepBody: StepBody = 'solid') {
     await act(async () => {
+      assertCurrentModelExport(model, kind);
       const destination = await askForExportDestination({
         title: `Export ${kind.toUpperCase()}`,
         detail: `${designNameSlug(designName)}.${kind} from revision ${revision}.`,
       });
       if (!destination) { setMessage(EXPORT_CANCELLED_MESSAGE); return; }
+      assertCurrentModelExport(model, kind);
       const written = await exportGeometryToOutputFolder(
         kind, design, revision, designNameSlug(designName), undefined, stepBody, fetch,
         destination.token, askToReplaceExports,
@@ -463,6 +475,7 @@ export function DesignFileMenu() {
 
   async function exportProfiles() {
     await act(async () => {
+      assertCurrentModelExport(model, 'fusion_csv');
       // One question, then one more only if the folder already holds them:
       // profiles and slices are halves of one export, and both are written by
       // a single request so neither can be answered without the other.
@@ -471,6 +484,7 @@ export function DesignFileMenu() {
         detail: 'Profile and slice CSV files.',
       });
       if (!destination) { setMessage(EXPORT_CANCELLED_MESSAGE); return; }
+      assertCurrentModelExport(model, 'fusion_csv');
       const result = await exportProfileArtifacts(
         (kind) => buildGeometryExport(
           'profiles', design, revision, designNameSlug(designName), kind, 'solid', fetch,
@@ -487,6 +501,7 @@ export function DesignFileMenu() {
 
   async function sendToCad() {
     await act(async () => {
+      assertCurrentModelExport(model, 'step');
       // The coordinator owns the send: it derives open-vs-update, attaches the
       // expected-document guard, and parks on the two-way conflict dialog.
       const result = await cadWorkspace.getSnapshot().sendWgToFusion();
@@ -496,7 +511,7 @@ export function DesignFileMenu() {
 
   return <div ref={root} className="design-file-menu">
     <button className="file-chip" title={classification ? CLASSIFICATION_DISPLAY[classification].detail : 'Design file menu'} onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-      <Icon name="folder"/><span>{designName ? <>{designName}<em>{design.formula === 'LOOKUP' ? '.mwg' : '.cfg'}</em></> : <em>Untitled</em>}</span>
+      <Icon name="folder"/><span>{model.kind !== 'parametric' ? model.label : designName ? <>{designName}<em>{design.formula === 'LOOKUP' ? '.mwg' : '.cfg'}</em></> : <em>Untitled</em>}</span>
       {classification && <small
         className="cadlink-badge"
         aria-label={`CAD link: ${CLASSIFICATION_DISPLAY[classification].label}`}
@@ -525,8 +540,9 @@ export function DesignFileMenu() {
             <span>{project.filename}</span><span>v{project.editVersion} · {project.exportCount} export{project.exportCount === 1 ? '' : 's'} · {cadProjectReference(project)}</span>
           </button>)}
       </div>}
-      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={duplicateDesign}><span>Duplicate as new design</span></button>
-      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportCopy()}><span>Export a copy</span><kbd>{design.formula === 'LOOKUP' ? 'mwg' : 'cfg'}</kbd></button>
+      {copyReason && <div className="design-menu-item" role="note">{copyReason}</div>}
+      <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(copyReason)} title={copyReason} onClick={duplicateDesign}><span>Duplicate as new design</span></button>
+      <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(copyReason)} title={copyReason} onClick={() => void exportCopy()}><span>Export a copy</span><kbd>{design.formula === 'LOOKUP' ? 'mwg' : 'cfg'}</kbd></button>
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => reportInput.current?.click()}><span>Import report…</span><span>›</span></button>
       <div className="design-menu-divider"/>
       <button
@@ -541,13 +557,14 @@ export function DesignFileMenu() {
         onClick={() => replayInput.current?.click()}><span>Open mesh replay…</span><kbd>wgreplay</kbd></button>
       <button role="menuitem" aria-expanded={exportsOpen} className="design-menu-item" disabled={busy} onClick={() => setExportsOpen((value) => !value)}><span>Export</span><span>{exportsOpen ? '⌄' : '›'}</span></button>
       {exportsOpen && <div role="menu" aria-label="Export design" className="design-menu-nested">
+        {geometryReason && <div className="design-menu-item" role="note">Geometry and profile exports are unavailable for imported models.</div>}
         {/* The .wglink bundle and its handoff are Fusion's transport; Onshape
             sends live in the CAD Link panel and go through its own adapter. */}
-        {cadApplication === 'fusion360' && <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(nativeCadLimitation(design.formula))} onClick={() => void sendToCad()} title={nativeCadLimitation(design.formula) ?? 'Write an identity-bearing .wglink bundle to the selected workspace'}><span>Send to CAD</span><span>.wglink</span></button>}
-        <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('step')} title="Closed solid with walls and enclosure — imports straight into Fusion 360 or Onshape"><span>STEP solid</span><span>.step</span></button>
-        <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('step', 'surface')} title="Inner acoustic surface only, for thickening or lofting yourself"><span>STEP inner surface</span><span>.step</span></button>
-        <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('stl')}><span>STL</span><span>.stl</span></button>
-        <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportProfiles()}><span>Profiles CSV</span><span>2 files</span></button>
+        {cadApplication === 'fusion360' && <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason) || Boolean(nativeCadLimitation(design.formula))} onClick={() => void sendToCad()} title={geometryReason ?? nativeCadLimitation(design.formula) ?? 'Write an identity-bearing .wglink bundle to the selected workspace'}><span>Send to CAD</span><span>.wglink</span></button>}
+        <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason)} onClick={() => void exportOne('step')} title={geometryReason ?? 'Closed solid with walls and enclosure — imports straight into Fusion 360 or Onshape'}><span>STEP solid</span><span>.step</span></button>
+        <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason)} onClick={() => void exportOne('step', 'surface')} title={geometryReason ?? 'Inner acoustic surface only, for thickening or lofting yourself'}><span>STEP inner surface</span><span>.step</span></button>
+        <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason)} title={parameterExportReason(model, 'stl')} onClick={() => void exportOne('stl')}><span>STL</span><span>.stl</span></button>
+        <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason)} title={parameterExportReason(model, 'fusion_csv')} onClick={() => void exportProfiles()}><span>Profiles CSV</span><span>2 files</span></button>
       </div>}
     </div>}
     {(message || adoptionCandidate) && <div role="status" className="design-menu-status" onClick={() => { setMessage(null); setAdoptionCandidate(null); }}>

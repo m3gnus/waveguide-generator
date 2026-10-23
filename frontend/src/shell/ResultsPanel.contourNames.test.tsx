@@ -97,21 +97,21 @@ describe('rendered directivity comparison maps', () => {
     });
   });
 
-  it('references a shown run\'s map to its own geometry\'s normalization angle, whatever the workspace mode', () => {
+  it('references a shown run\'s map to its recorded angle, whatever draft is shown', () => {
     resetSolveOptionsStore();
     useSolveOptionsStore.getState().updatePolar({ normAngle: 10 });
     useImportedSolveOptionsStore.getState().updatePolar({ normAngle: 30 });
     const subtitle = () => host.querySelector('.result-subtitle')?.textContent ?? '';
-    const importedRun = { id: 'cad-run', config_summary: { geometry_type: 'imported' } } as unknown as JobItem;
-    const parametricRun = { id: 'design-run', config_summary: { geometry_type: 'osse' } } as unknown as JobItem;
+    const importedRun = { id: 'cad-run', config_summary: { geometry_type: 'imported' }, solve_options: { polar_config: { norm_angle: 0 } } } as unknown as JobItem;
+    const parametricRun = { id: 'design-run', config_summary: { geometry_type: 'osse' }, solve_options: { polar_config: { norm_angle: 17 } } } as unknown as JobItem;
     act(() => workspaceModeStore.setMode('parametric'));
     act(() => root.render(<ResultsChartGrid chartTypes={['directivity_map_h']} result={named[0].result} named={[]} tokens={tokens} job={importedRun}/>));
-    // Parametric on screen, an imported run shown: the imported options' angle.
-    expect(subtitle()).toContain('0 dB at 30°');
+    // Imported draft says 30 degrees; the run says 0.
+    expect(subtitle()).toContain('0 dB at 0°');
     act(() => workspaceModeStore.setMode('cad'));
     act(() => root.render(<ResultsChartGrid chartTypes={['directivity_map_h']} result={named[0].result} named={[]} tokens={tokens} job={parametricRun}/>));
-    // Imported on screen, a parametric run shown: the design's angle.
-    expect(subtitle()).toContain('0 dB at 10°');
+    // Parametric draft says 10 degrees; the run says 17.
+    expect(subtitle()).toContain('0 dB at 17°');
     act(() => workspaceModeStore.setMode('parametric'));
   });
 });

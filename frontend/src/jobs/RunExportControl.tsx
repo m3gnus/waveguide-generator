@@ -1,3 +1,5 @@
+import { modelKindForRun } from '../model/currentModel';
+import { runNormalizationAngle } from '../results/normalization';
 import { nativeCadLimitation } from '../design/nativeFamilies';
 import type { JobItem } from '../api/jobsSocket';
 import { jobsSocket } from '../api/jobsSocket';
@@ -8,7 +10,7 @@ import { sendDesignToCad } from '../api/designIo';
 import { ActionMenu, type ActionMenuItem } from '../design/ActionMenu';
 import { sentToCadMessage } from '../design/useSendToCad';
 import { usePreferences, type ExportFormat } from '../prefs/preferences';
-import { resultExportSelection, resultExportSnapshot } from '../results/exportContext';
+import { parameterExportReason, resultExportSelection, resultExportSnapshot } from '../results/exportContext';
 import {
   runWorkspaceExportBundle,
   type ExportBundleResult,
@@ -23,7 +25,6 @@ import {
   EXPORT_CANCELLED_MESSAGE,
 } from '../shell/exportDestinationPrompt';
 import { EMPTY_RUN_EXPORT_STATE, useRunExportStore, type RunExportOutcome } from '../stores/runExports';
-import { solveOptionsStoreForJob } from '../stores/solveOptionsContext';
 import { canLoadJobDesign, hydrateJobDesign, jobDesignAvailability, jobRerunState } from './jobDesign';
 import { exportStemForJob, exportSubdirectoryForJob } from './exportNaming';
 import { designFileExtension } from '../stores/designName';
@@ -46,7 +47,6 @@ interface CatalogItem {
   group: string;
   needsResult: boolean;
   needsDesign: boolean;
-  cadRunReason?: string;
   needsPressureBasis?: boolean;
   needsRadiationArtifact?: boolean;
 }
@@ -62,15 +62,15 @@ const FORMAT_CATALOG: CatalogItem[] = [
   { id: 'pressure_basis', format: 'pressure_basis', label: 'Complex pressure basis', trailing: '.npz', group: 'Results', needsResult: true, needsDesign: false, needsPressureBasis: true },
   { id: 'derived_acoustics', format: 'derived_acoustics', label: 'Derived acoustics', trailing: '.csv + .json', group: 'Results', needsResult: true, needsDesign: false },
   { id: 'html_report', format: 'html_report', label: 'Static run report', trailing: '.html', group: 'Results', needsResult: true, needsDesign: false },
-  { id: 'step', format: 'step', label: 'STEP solid', trailing: '.step', group: 'Geometry & design', needsResult: false, needsDesign: true, cadRunReason: 'STEP export is not available for CAD runs yet.' },
-  { id: 'mwg_config', format: 'mwg_config', label: 'Parameter config', trailing: '.cfg', group: 'Geometry & design', needsResult: false, needsDesign: true, cadRunReason: 'CAD runs have no WG parameter config to export.' },
+  { id: 'step', format: 'step', label: 'STEP solid', trailing: '.step', group: 'Geometry & design', needsResult: false, needsDesign: true },
+  { id: 'mwg_config', format: 'mwg_config', label: 'Parameter config', trailing: '.cfg', group: 'Geometry & design', needsResult: false, needsDesign: true },
   { id: 'impedance_csv', format: 'impedance_csv', label: 'Impedance', trailing: '.csv', group: 'Advanced', needsResult: true, needsDesign: false },
   { id: 'radiation_impedance_csv', format: 'radiation_impedance_csv', label: 'Radiation matrix curves', trailing: '.csv', group: 'Advanced', needsResult: false, needsDesign: false, needsRadiationArtifact: true },
   { id: 'radiation_impedance_npz', format: 'radiation_impedance_npz', label: 'Lossless radiation matrix', trailing: '.npz', group: 'Advanced', needsResult: false, needsDesign: false, needsRadiationArtifact: true },
   { id: 'polar_csv', format: 'polar_csv', label: 'Polar directivity', trailing: '.csv', group: 'Advanced', needsResult: true, needsDesign: false },
   { id: 'txt', format: 'txt', label: 'Summary report', trailing: '.txt', group: 'Advanced', needsResult: true, needsDesign: false },
-  { id: 'stl', format: 'stl', label: 'STL mesh', trailing: '.stl', group: 'Advanced', needsResult: false, needsDesign: true, cadRunReason: 'STL export is not available for CAD runs.' },
-  { id: 'fusion_csv', format: 'fusion_csv', label: 'Fusion curves', trailing: '.csv', group: 'Advanced', needsResult: false, needsDesign: true, cadRunReason: 'CAD runs have no WG curves to export.' },
+  { id: 'stl', format: 'stl', label: 'STL mesh', trailing: '.stl', group: 'Advanced', needsResult: false, needsDesign: true },
+  { id: 'fusion_csv', format: 'fusion_csv', label: 'Fusion curves', trailing: '.csv', group: 'Advanced', needsResult: false, needsDesign: true },
 ];
 
 const CATALOG_BY_FORMAT = new Map(
@@ -100,9 +100,9 @@ function unavailableFormatReason(
   job: JobItem,
   designExportable: boolean,
   designUnavailableReason: string,
-  cadRun: boolean,
 ): string | undefined {
-  if (cadRun && item.cadRunReason) return item.cadRunReason;
+  const provenanceReason = parameterExportReason({ kind: modelKindForRun(job) }, item.format);
+  if (provenanceReason) return provenanceReason;
   if (item.id === 'polar_frd' && Object.keys(job.polar_grid ?? {}).length === 0) {
     return 'This run has no directivity data for a polar FRD set.';
   }
@@ -158,9 +158,9 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
   const family = hydrateJobDesign(job)?.formula ?? '';
   const cadLimitation = nativeCadLimitation(family);
   const designAvailability = jobDesignAvailability(job);
-  const cadRun = designAvailability.source === 'cad-import' || job.config_summary.formula_type === 'cad-import';
+  const cadRun = modelKindForRun(job) !== 'parametric';
   const designUnavailableReason = designAvailability.reason ?? designState.reason ?? 'This run has no recoverable design.';
-  const formatReason = (item: CatalogItem) => unavailableFormatReason(item, job, designExportable, designUnavailableReason, cadRun);
+  const formatReason = (item: CatalogItem) => unavailableFormatReason(item, job, designExportable, designUnavailableReason);
 
   const buildContext = async (formats: readonly ExportFormat[]): Promise<ExportContext> => {
     const selected = resultExportSelection(job);
@@ -174,7 +174,7 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
       hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
       workspaceSubdirectory: exportSubdirectoryForJob(job),
       designName: job.label ?? undefined,
-      normalizationAngle: solveOptionsStoreForJob(job).getState().polar.normAngle,
+      normalizationAngle: runNormalizationAngle(job),
       preferences,
     };
   };

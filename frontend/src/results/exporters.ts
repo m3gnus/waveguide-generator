@@ -13,7 +13,8 @@ import { placeRunCadDocument } from '../api/cadProjects';
 import { fetchJobArchiveSnapshot, fetchRadiationImpedancePresentation, type RadiationImpedancePresentation } from '../api/results';
 import { archiveFolderForJob, exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { buildDesignRecord, buildRunRecord } from '../jobs/runArchive';
-import { resultExportSelection, resultExportSnapshot } from './exportContext';
+import { modelKindForRun } from '../model/currentModel';
+import { parameterExportReason, resultExportSelection, resultExportSnapshot } from './exportContext';
 import { serializeDesign, type DesignDocument } from '../stores/design';
 import { designFileExtension } from '../stores/designName';
 import { designWireWithSolveSettings } from '../stores/designWire';
@@ -668,6 +669,10 @@ async function writeManualPolarFrd(
 }
 
 export async function runExportFormat(format: ExportFormat, context: ExportContext): Promise<string[]> {
+  if (context.selectedRun) {
+    const reason = parameterExportReason({ kind: modelKindForRun(context.selectedRun) }, format);
+    if (reason) throw new Error(reason);
+  }
   const baseName = exportContextBaseName(context);
   const saveText = context.saveText ?? downloadText;
   const now = context.now ?? new Date();

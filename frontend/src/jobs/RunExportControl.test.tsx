@@ -11,6 +11,7 @@ import { useRunExportStore } from '../stores/runExports';
 import { provideExportDestinationPrompt } from '../shell/exportDestinationPrompt';
 import { ExportCancelledError } from '../api/exportDestination';
 import { RunExportControl } from './RunExportControl';
+import { useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { JobsPanel } from '../shell/JobsPanel';
 
 const mocks = vi.hoisted(() => ({
@@ -176,16 +177,16 @@ describe('RunExportControl', () => {
       expect(document.querySelector('[role="menu"]')?.textContent).not.toContain(label);
     }
     expect(menuItem('STEP solid').getAttribute('aria-disabled')).toBe('true');
-    expect(menuItem('STEP solid').textContent).toContain('STEP export is not available for CAD runs yet.');
+    expect(menuItem('STEP solid').textContent).toContain('STEP export is not available for imported models.');
     expect(menuItem('Frequency data').getAttribute('aria-disabled')).toBeNull();
     expect(document.body.textContent).not.toContain('Solved from a Fusion return');
   });
 
   it.each([
-    ['step', 'STEP export is not available for CAD runs yet.'],
-    ['mwg_config', 'CAD runs have no WG parameter config to export.'],
-    ['stl', 'STL export is not available for CAD runs.'],
-    ['fusion_csv', 'CAD runs have no WG curves to export.'],
+    ['step', 'STEP export is not available for imported models.'],
+    ['mwg_config', 'Imported models have no WG parameter config to export.'],
+    ['stl', 'STL export is not available for imported models.'],
+    ['fusion_csv', 'Imported models have no WG profiles to export.'],
   ] as const)('exports available preferences and explains skipped %s on CAD runs', async (format, reason) => {
     preferencesStore.update({ exportFormats: ['csv', format] });
     render(cadJob());
@@ -209,8 +210,8 @@ describe('RunExportControl', () => {
     render(cadJob());
     await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await settle(); });
     const alert = host.querySelector('[role="alert"]')?.textContent;
-    expect(alert).toContain('STEP export is not available for CAD runs yet.');
-    expect(alert).toContain('STL export is not available for CAD runs.');
+    expect(alert).toContain('STEP export is not available for imported models.');
+    expect(alert).toContain('STL export is not available for imported models.');
     expect(mocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
     expect(mocks.fetchJobResults).not.toHaveBeenCalled();
     expect(document.querySelector('[role="menu"]')).toBeNull();
@@ -227,8 +228,8 @@ describe('RunExportControl', () => {
     expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['csv', 'png'], 'confirm');
     const alert = host.querySelector('[role="alert"]')?.textContent;
     expect(alert).toContain('1 file written');
-    expect(alert).toContain('STEP export is not available for CAD runs yet.');
-    expect(alert).toContain('STL export is not available for CAD runs.');
+    expect(alert).toContain('STEP export is not available for imported models.');
+    expect(alert).toContain('STL export is not available for imported models.');
     expect(alert).toContain('Chart rendering failed.');
   });
 
@@ -309,6 +310,16 @@ describe('RunExportControl', () => {
     expect(patchMetadata).toHaveBeenCalledWith(job.id, {
       exported_files: ['earlier.csv', 'C:/chosen/1_stored_horn_v07/1_stored_horn_v07.csv'],
     });
+  });
+
+  it('exports a CAD run using its own normalization while a file draft uses another angle', async () => {
+    const job = cadJob();
+    job.solve_options = { ...job.solve_options, polar_config: { norm_angle: 0 } } as JobItem['solve_options'];
+    useImportedSolveOptionsStore.getState().updatePolar({ normAngle: 30 });
+    render(job);
+    openMenu();
+    await act(async () => { menuItem('Frequency data').click(); await settle(); });
+    expect(mocks.runWorkspaceExportBundle.mock.calls[0][0].normalizationAngle).toBe(0);
   });
 
   it('puts Send to CAD first and hands off the selected run snapshot', async () => {

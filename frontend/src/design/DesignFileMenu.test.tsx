@@ -10,6 +10,7 @@ import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOpt
 import { wgSolveSettingsFromStore } from '../stores/designWire';
 import { withWgSolveBlock } from '../stores/wgSolveBlock';
 import { workspaceModeStore } from '../stores/workspaceMode';
+import { resetImportedModelStore, useImportedModelStore } from '../stores/importedModel';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
 import { cadWorkspace } from '../stores/cadWorkspace';
@@ -35,6 +36,7 @@ const requested: string[] = [];
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   resetDesignStore();
+  resetImportedModelStore();
   resetDocumentStore();
   resetSolveOptionsStore();
   preferencesStore.resetForTests();
@@ -134,6 +136,60 @@ async function chooseLocalDesign(file: { name: string; text: () => Promise<strin
 }
 
 describe('design file export menu', () => {
+  it.each(['file', 'cad'] as const)('refuses parked parametric exports while %s B is shown', input => {
+    useDocumentStore.getState().setDesignName('Parked A');
+    workspaceModeStore.setImportedInput(input);
+    workspaceModeStore.setMode('cad');
+    useImportedModelStore.setState({ input, prepared: { ingest_id: 'B' } as never });
+    if (input === 'file') importedMeshStore.setFile({ ingestId: 'B' } as never);
+    else importedMeshStore.setCad({ ingestId: 'B' } as never);
+    const items = open();
+    const fetcher = vi.mocked(fetch);
+    fetcher.mockClear();
+    for (const label of ['Export a copy', 'STEP solid', 'STEP inner surface', 'STL', 'Profiles CSV', 'Send to CAD']) {
+      const item = items.find(button => button.querySelector('span')?.textContent === label)!;
+      expect(item.disabled, label).toBe(true);
+      act(() => item.click());
+    }
+    expect(container.textContent).toContain('imported models');
+    expect(container.querySelector('.file-chip')?.textContent).not.toContain('Parked A');
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(useDocumentStore.getState().designName).toBe('Parked A');
+  });
+
+  it.each(['STEP solid', 'STL', 'Profiles CSV', 'Export a copy'])('refuses %s if an imported arrival changes the model during the destination dialog', async label => {
+    const items = open();
+    provideExportDestinationPrompt(async () => {
+      workspaceModeStore.setMode('cad');
+      return { token: 'destination-handle', directory: '/chosen' };
+    });
+    requested.length = 0;
+    await act(async () => { items.find(button => button.querySelector('span')?.textContent === label)!.click(); });
+    expect(requested.some(path => path.startsWith('/api/export/') || path === '/api/design/serialize')).toBe(false);
+    expect(container.querySelector('[role="status"]')?.textContent).toMatch(/imported models/i);
+  });
+
+  it('opens a cfg from Imported mode into the visible parametric document', async () => {
+    workspaceModeStore.setMode('cad');
+    const response = openedResponse(234);
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => String(url) === '/api/design/open'
+      ? new Response(JSON.stringify(response), { headers: { 'Content-Type': 'application/json' } })
+      : new Response(JSON.stringify({ jobs: [] }), { headers: { 'Content-Type': 'application/json' } })));
+    open();
+    await chooseLocalDesign({ name: 'opened.cfg', text: async () => 'cfg' });
+    expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
+    expect(useDesignStore.getState().design.R).toBe(234);
+    expect(useDocumentStore.getState().designName).toBe('opened');
+  });
+
+  it('New from Imported mode shows the new parametric design', async () => {
+    workspaceModeStore.setMode('cad');
+    const items = open();
+    await act(async () => { items.find(button => button.textContent?.startsWith('New'))!.click(); });
+    expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
+    expect(useDocumentStore.getState().designName).toBe('');
+  });
+
   it.each([
     ['freestanding', 'throat'],
     ['infinite-baffle', 'mouth'],

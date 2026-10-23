@@ -46,14 +46,22 @@ export function showUnreadableRun(job: JobItem): void {
     workspace: workspaceModeStore.getSnapshot(), imported: useImportedModelStore.getState() };
 }
 
+/** Stored provenance wins over the anchor design retained by imported runs. */
+export function modelKindForRun(job: Partial<Pick<JobItem, 'config_summary' | 'cad_state' | 'cad_intent' | 'design_availability'>>): CurrentModel['kind'] {
+  const imported = job.config_summary?.geometry_type === 'imported' || job.config_summary?.formula_type === 'cad-import' || job.config_summary?.import_origin === 'mesh-file'
+    || job.design_availability?.source === 'cad-import' || !!job.cad_state || !!job.cad_intent;
+  return imported ? job.config_summary?.import_origin === 'mesh-file' ? 'file' : 'cad' : 'parametric';
+}
+
 /** The identity of the saved model, also used for exports explicitly scoped to a run. */
 export function modelForRun(job: JobItem): CurrentModel {
-  const imported = job.config_summary.geometry_type === 'imported' || !!job.cad_state || !!job.cad_intent;
+  const kind = modelKindForRun(job);
+  const imported = kind !== 'parametric';
   const ingestId = job.cad_source?.ingest_id ?? (typeof job.cad_intent?.bundle_path === 'string' && job.cad_intent.bundle_path.startsWith('ingest/') ? job.cad_intent.bundle_path.slice('ingest/'.length) : null) ?? job.cad_state?.preparation?.ingest_id ?? null;
   const modelId = job.cad_source?.model_id && job.cad_source.model_id !== 'unfiled' ? job.cad_source.model_id : null;
   const key = imported ? job.cad_source?.solve_model_sha256 || ingestId : jobDesignFingerprint(job);
   return {
-    kind: imported ? job.config_summary.import_origin === 'mesh-file' ? 'file' : 'cad' : 'parametric',
+    kind,
     key, lineage: imported ? modelId || ingestId : job.cad_source?.design_id ?? null,
     label: job.label || 'Run model', viewportShowing: true, ingestId,
     manifestSha256: job.cad_state?.snapshot?.manifest_sha256 ?? job.cad_source?.manifest_sha256,

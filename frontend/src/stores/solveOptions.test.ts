@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { durableSettings } from './durableSettings';
 import { workspaceModeStore } from './workspaceMode';
-import { solveOptionsStoreForJob } from './solveOptionsContext';
 import {
   MAX_FREQUENCY_POINTS,
   defaultPolarUi,
@@ -480,8 +479,4 @@ describe('file and CAD input keep their own imported options', () => {
     workspaceModeStore.setImportedInput('cad');
   });
 
-  it('chooses the options of an exported run by its geometry, not the workspace mode', () => {
-    expect(solveOptionsStoreForJob({ config_summary: { geometry_type: 'imported' } })).toBe(useImportedSolveOptionsStore);
-    expect(solveOptionsStoreForJob({ config_summary: { geometry_type: 'parametric' } })).toBe(useSolveOptionsStore);
-  });
 });

@@ -7,6 +7,7 @@ import { useDocumentStore, type DesignIdentity } from '../stores/document';
 import { currentEditorMutation } from '../stores/editorMutation';
 import { restoreSolveSettingsFromBlocks } from '../stores/solveOptions';
 import { keptContentKeyNow } from './replacementCheck';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import { noteExplicitNavigation } from '../shell/workspaceNavigation';
 
 /** Only the fields a later save may advance; the rest is derived state. */
@@ -51,6 +52,7 @@ export function applyOpenedDesign(
   // Last, once the design, its settings and its name have all applied: the
   // design as opened is one a later replacement can count as kept.
   document.setOpenedContentKey(keptContentKeyNow());
+  if (loadSource === 'ordinary') workspaceModeStore.setMode('parametric');
   return {
     filename,
     report: opened,

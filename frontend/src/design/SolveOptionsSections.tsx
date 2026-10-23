@@ -513,10 +513,8 @@ const POLAR_FIELD_LABELS: Array<[keyof PolarUiState, string]> = [
 /**
  * Which directivity settings the selected run differs from on screen.
  *
- * `normAngle` is deliberately absent from `POLAR_FIELD_LABELS`: the charts
- * re-reference whatever run is drawn to the angle in the field, so a run solved
- * at a different one is not showing anything stale and saying so would send the
- * user to re-solve for nothing.
+ * `normAngle` changes presentation only. Each run keeps its recorded reference,
+ * so a different draft reference does not make that run's physics stale.
  */
 export function polarDifferences(run: PolarUiState, current: PolarUiState): string[] {
   const differences = POLAR_FIELD_LABELS.flatMap(([key, label]) => {
@@ -616,7 +614,7 @@ export function DirectivityMapControls({ effectiveDerivation }: { effectiveDeriv
     <PolarNumber id="polar-angle-end" label={mode === 'cad' ? 'Sweep end' : 'End angle'} help="Last off-axis angle measured in each directivity plane. 90° reaches the baffle plane." value={polar.angleEnd} unit="°" step={1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('angleEnd')} />
     <PolarNumber id="polar-angle-step" label="Angular step" help="Spacing between measured angles. Finer steps give smoother directivity maps and cost almost nothing, because the field is evaluated after the solve rather than solved again." value={polar.angleStep} unit="°" min={1} step={1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('angleStep')} />
     <PolarNumber id="polar-distance" label="Measurement distance" help="How far from the horn the virtual microphone sits. Keep it well beyond the mouth so the result is a far-field pattern." value={polar.distance} unit="m" min={.1} step={.1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('distance')} />
-    <PolarNumber id="polar-norm-angle" label="Normalization angle" help="The angle held at 0 dB in the directivity maps. Every polar curve is shifted so this angle reads flat. It is applied when the map is drawn, so it takes effect immediately and re-references runs already solved -- no re-solve, and the frequency response, phase and DI never move with it." value={polar.normAngle} unit="°" step={1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('normAngle')} />
+    <PolarNumber id="polar-norm-angle" label="Normalization angle" help="The angle held at 0 dB in directivity maps. New runs keep this reference; existing runs keep their own. Frequency response, phase and DI are unchanged." value={polar.normAngle} unit="°" step={1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('normAngle')} />
     {infiniteBaffle && <p className="section-note" role="note">Infinite baffle observes the front half-space, 0–90°. A default 0–180° sweep is narrowed to that; set another end angle to keep it.</p>}
     <div data-control-reveal-id="polar-planes" className="axis-toggles" role="group" aria-label="Directivity planes" {...axisHelp.triggerProps} aria-invalid={validationError ? true : undefined} aria-describedby={axisDescribedBy}>{(['horizontal', 'vertical', 'diagonal'] as PolarAxis[]).map((axis) => <label key={axis}><input type="checkbox" checked={polar.enabledAxes.includes(axis)} onChange={() => toggleAxis(axis)} /> {axis}</label>)}{axisHelp.tip}</div>
     <PolarNumber id="polar-diagonal-angle" label="Diagonal plane angle" help="Where the diagonal plane sits, measured from the horizontal. 45° is the corner of a square mouth. Only used when the diagonal plane is enabled." value={polar.diagonalAngle} unit="°" step={1} disabled={!polar.enabledAxes.includes('diagonal')} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('diagonalAngle')} />

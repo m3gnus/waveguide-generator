@@ -1,3 +1,4 @@
+import { runNormalizationAngle } from '../results/normalization';
 import type { JobItem } from '../api/jobsSocket';
 import { fetchJobResults } from '../api/results';
 import type { ExportFormat, Preferences } from '../prefs/preferences';
@@ -10,8 +11,6 @@ export interface AutomaticRunExportOptions {
   preferences: Preferences;
   /** The fenced fetch of the automatic-export lane that owns this job. */
   fetcher: typeof fetch;
-  /** The angle the polar outputs are referenced to, as on screen. */
-  normalizationAngle?: number;
 }
 
 /**
@@ -24,7 +23,7 @@ export interface AutomaticRunExportOptions {
 export async function exportRunAutomatically(
   job: JobItem,
   formats: readonly ExportFormat[],
-  { preferences, fetcher, normalizationAngle }: AutomaticRunExportOptions,
+  { preferences, fetcher }: AutomaticRunExportOptions,
 ): Promise<ExportBundleResult> {
   job = resultExportSelection(job);
   return runAutomaticWorkspaceExport({
@@ -37,7 +36,7 @@ export async function exportRunAutomatically(
     hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
     workspaceSubdirectory: autoExportSubdirectoryForJob(job),
     designName: job.label ?? undefined,
-    normalizationAngle,
+    normalizationAngle: runNormalizationAngle(job),
     preferences,
   }, formats);
 }

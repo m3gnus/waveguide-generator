@@ -384,14 +384,14 @@ describe('atomic results display transitions', () => {
     expect(trigger.textContent).toBe('Export CSV + STEP');
     expect(trigger.title).toContain('STEP solid (.step)');
     await act(async () => { trigger.click(); });
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('STEP export is not available for CAD runs yet.');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('STEP export is not available for imported models.');
     expect(exportMocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['csv'], 'confirm');
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('Skipped STEP');
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('1 file written');
     expect(document.querySelector('[role="menu"]')).toBeNull();
     act(() => host.querySelector<HTMLButtonElement>('.action-menu-chevron')!.click());
     const menu = document.querySelector('[role="menu"]')!;
-    expect(menu.textContent).toContain('STEP export is not available for CAD runs yet.');
+    expect(menu.textContent).toContain('STEP export is not available for imported models.');
     for (const label of ['Send to CAD', 'Parameter config', 'STL mesh', 'Fusion curves']) {
       expect(menu.textContent).not.toContain(label);
     }

@@ -31,6 +31,14 @@ import type { ResultPayload } from './types';
 /** The portable default, matching `_portable_defaults` on the server. */
 export const DEFAULT_NORMALIZATION_ANGLE = 5;
 
+/** A run's presentation uses its recorded reference, never another model's draft. */
+export function runNormalizationAngle(job: { solve_options?: { polar_config?: unknown } | null }): number {
+  const polar = job.solve_options?.polar_config;
+  const angle = polar && typeof polar === 'object' && 'norm_angle' in polar ? polar.norm_angle : undefined;
+  return typeof angle === 'number' && Number.isFinite(angle) ? angle : DEFAULT_NORMALIZATION_ANGLE;
+}
+
+
 type PatternRows = PolarSample[][];
 type DirectivityBlock = NonNullable<ResultData['directivity']>;
 

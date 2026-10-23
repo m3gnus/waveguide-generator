@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
 import { preferencesStore } from '../prefs/preferences';
+import { useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { archiveRunToWorkspace } from '../results/exporters';
 import type { ResultPayload } from '../results/types';
 import { exportRunAutomatically } from './autoExportRun';
@@ -22,12 +23,12 @@ const result = {
   spl_on_axis: { frequencies: [100, 200], spl: [90, 91], phase_degrees: [0, 10] },
   di: { frequencies: [100, 200], di: [3, 4] },
   impedance: { frequencies: [100, 200], real: [1, 1.1], imaginary: [0, -0.5] },
-  directivity: { horizontal: [[[-90, -12], [0, 0]], [[-90, -10], [0, 0]]] },
+  directivity: { horizontal: [[[-90, -12], [0, 0], [30, -6]], [[-90, -10], [0, 0], [30, -6]]] },
   result_kind: 'parametric',
   result_contract_version: 1,
   client_request_id: null,
   client_metadata: {},
-  metadata: {},
+  metadata: { directivity: { normalization_angle_degrees: 5 } },
 } as unknown as ResultPayload;
 
 function completedJob(id: string): JobItem {
@@ -101,6 +102,32 @@ function workspace(jobId: string) {
 const AUTO_FORMATS = ['step', 'mwg_config', 'csv', 'json', 'html_report', 'txt'] as const;
 
 describe('run archive and automatic export in one Workspace', () => {
+  it.each(['cad', 'file'] as const)('never regenerates the anchor of a %s run during automatic export', async kind => {
+    const job = completedJob(`imported-${kind}`);
+    job.config_summary = { geometry_type: 'imported', ...(kind === 'file' ? { import_origin: 'mesh-file' } : {}) };
+    job.cad_source = { ingest_id: 'B', model_id: 'model-B' } as JobItem['cad_source'];
+    const { files, fetcher } = workspace(job.id);
+    const exported = await exportRunAutomatically(job, ['step', 'stl', 'mwg_config', 'fusion_csv', 'csv'], {
+      preferences: preferencesStore.getSnapshot(), fetcher,
+    });
+    expect(exported.failures.map(failure => failure.format)).toEqual(['step', 'stl', 'mwg_config', 'fusion_csv']);
+    expect(exported.failures.every(failure => failure.reason.includes('imported models') || failure.reason.includes('Imported models'))).toBe(true);
+    expect(exported.files).toHaveLength(1);
+    expect([...files.keys()].every(path => path.endsWith('.csv'))).toBe(true);
+    expect(fetcher.mock.calls.some(([path]) => String(path).startsWith('/api/export/') || path === '/api/design/serialize')).toBe(false);
+  });
+
+  it('automatically exports the recorded run normalization despite another imported draft', async () => {
+    const job = completedJob('recorded-angle');
+    job.solve_options = { ...job.solve_options, polar_config: { norm_angle: 0 } } as JobItem['solve_options'];
+    useImportedSolveOptionsStore.getState().updatePolar({ normAngle: 30 });
+    const { files, fetcher } = workspace(job.id);
+    const exported = await exportRunAutomatically(job, ['json'], { preferences: preferencesStore.getSnapshot(), fetcher });
+    expect(exported.failures).toEqual([]);
+    const written = JSON.parse([...files.values()][0]);
+    expect(written.results.metadata.directivity.normalization_angle_degrees).toBe(0);
+  });
+
   it('archive first: every automatic format is still written, and the archive is untouched', async () => {
     const job = completedJob('archive-first');
     const { files, writes, fetcher } = workspace(job.id);

@@ -7,7 +7,9 @@ import { CAD_CONTROL_DESCRIPTORS, cadControlIsAvailable, cadControlMatchesQuery 
 import { DesignFileMenu } from '../design/DesignFileMenu';
 import { CAD_PARAMETER_SECTION_DEFINITIONS, LEGACY_PARAMETER_REGISTRY, PARAMETER_REGISTRY, fieldIsVisible, PARAMETER_SECTION_DEFINITIONS, fieldAppliesToFamily, fieldMatchesQuery, parameterSectionIsVisible, type ParameterTab } from '../design/parameterRegistry';
 import { PARAMETRIC_CONTROL_DESCRIPTORS, parametricControlIsAvailable, parametricControlMatchesQuery } from '../design/parametricControlRegistry';
-import { restoreParametricWorkingDesign } from '../model/currentModel';
+import { parameterExportReason } from '../results/exportContext';
+import { documentHistory } from '../model/documentCommands';
+import { currentModel, useCurrentModel, restoreParametricWorkingDesign } from '../model/currentModel';
 import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { waveguideDefinitionAppliesNow } from '../stores/waveguideLink';
@@ -359,8 +361,10 @@ export function workspaceModePaletteEntries(): PaletteEntry[] {
 
 export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   const solve = useSolveControl();
-  const undo = useDesignStore((state) => state.undo);
-  const redo = useDesignStore((state) => state.redo);
+  const model = useCurrentModel();
+  useSyncExternalStore(useDesignStore.temporal.subscribe, useDesignStore.temporal.getState, useDesignStore.temporal.getState);
+  const { undo, redo, undoReason, redoReason } = documentHistory(model);
+  const copyReason = parameterExportReason(model, 'mwg_config');
   const revision = useDesignStore((state) => state.designRevision);
   const design = useDesignStore((state) => state.design);
   const family = design.formula;
@@ -378,9 +382,8 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   const [reportOpen, setReportOpen] = useState(false);
   const update = useUpdateStatus();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
-  const temporal = useDesignStore.temporal.getState();
-  const canUndo = temporal.pastStates.length > 0 || Boolean(useDesignStore.getState().dragSnapshot);
-  const canRedo = temporal.futureStates.length > 0;
+  const canUndo = !undoReason;
+  const canRedo = !redoReason;
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -404,6 +407,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   // thing WG keeps, and the `.cfg` is derived from it. Typing an extension is
   // therefore not part of the name -- it is stripped rather than stored.
   const exportCopyAs = () => {
+    if (parameterExportReason(currentModel(), 'mwg_config')) return;
     const requested = window.prompt('Export a copy as', useDocumentStore.getState().designName);
     if (!requested?.trim()) return;
     useDocumentStore.getState().setDesignName(requested.trim().replace(/\.(cfg|txt|mwg)$/i, ''));
@@ -439,11 +443,11 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
         disabled: workspaceMode !== 'cad' || !cadWorkspaceView.fusionStatus?.running,
         run: () => { void cadWorkspace.getSnapshot().pullFromFusion().catch(() => undefined); },
       },
-      { id: 'undo', kind: 'Commands', label: 'Undo', disabled: !canUndo, run: undo },
-      { id: 'redo', kind: 'Commands', label: 'Redo', disabled: !canRedo, run: redo },
+      { id: 'undo', kind: 'Commands', label: 'Undo', detail: undoReason, disabled: !canUndo, run: undo },
+      { id: 'redo', kind: 'Commands', label: 'Redo', detail: redoReason, disabled: !canRedo, run: redo },
       { id: 'open', kind: 'Commands', label: 'Open', detail: 'Open a design file', run: () => fileAction('Open…') },
-      { id: 'save', kind: 'Commands', label: 'Export a copy', detail: 'Write a .cfg copy to the output folder without changing the editor’s saved state', run: () => fileAction('Export a copy') },
-      { id: 'save-as', kind: 'Commands', label: 'Export a copy as…', detail: 'Rename the current design and export a copy', run: exportCopyAs },
+      { id: 'save', kind: 'Commands', label: 'Export a copy', detail: copyReason ?? 'Write a .cfg copy to the output folder', disabled: Boolean(copyReason), run: () => fileAction('Export a copy') },
+      { id: 'save-as', kind: 'Commands', label: 'Export a copy as…', detail: copyReason ?? 'Rename the current design and export a copy', disabled: Boolean(copyReason), run: exportCopyAs },
       { id: 'reset-layout', kind: 'Commands', label: 'Reset layout', run: onResetLayout },
       { id: 'dark-theme', kind: 'Commands', label: 'Dark theme', run: () => setTheme('dark') },
       { id: 'light-theme', kind: 'Commands', label: 'Light theme', run: () => setTheme('light') },
@@ -454,7 +458,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       ...RESULT_PANEL_COUNTS.map((count) => ({ id: `results-${count}`, kind: 'Commands' as const, label: `Results: ${count} chart${count === 1 ? '' : 's'}`, keywords: `panel count layout`, run: () => preferencesStore.setChartCount(count) })),
     ];
     return [...parameters, ...jobEntries, ...commands];
-  }, [cadWorkspaceView.fusionStatus?.running, cadReturnReady, canRedo, canUndo, design, family, jobs, onResetLayout, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version, workspaceMode]);
+  }, [cadWorkspaceView.fusionStatus?.running, cadReturnReady, canRedo, canUndo, copyReason, undoReason, redoReason, design, family, jobs, onResetLayout, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version, workspaceMode]);
 
   return <header className="topbar">
     <WindowControls side="leading"/>
@@ -474,8 +478,8 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
         * the only remaining controls that have both a keyboard shortcut and a
         * palette entry, which is what makes them the ones to go. */}
       <div className="button-group topbar-history">
-        <button className="icon-button" disabled={!canUndo} onClick={undo} title="Undo"><Icon name="undo"/></button>
-        <button className="icon-button" disabled={!canRedo} onClick={redo} title="Redo"><Icon name="redo"/></button>
+        <button className="icon-button" disabled={!canUndo} onClick={undo} title={undoReason ?? 'Undo'} aria-label="Undo"><Icon name="undo"/></button>
+        <button className="icon-button" disabled={!canRedo} onClick={redo} title={redoReason ?? 'Redo'} aria-label="Redo"><Icon name="redo"/></button>
       </div>
       <CommandPalette entries={paletteEntries}/>
       <WorkspaceModeSwitch/>

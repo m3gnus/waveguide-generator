@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { designForFamily } from '../stores/design';
+import { resultExportSnapshot } from './exportContext';
 import { preferencesStore } from '../prefs/preferences';
 import type { ResultPayload } from './types';
 import type { RadiationImpedancePresentation } from '../api/results';
@@ -96,6 +97,33 @@ function workspacePayload(init?: RequestInit) {
 
 describe('result exporters', () => {
   beforeEach(() => { preferencesStore.resetForTests(); });
+  it.each(['step', 'stl', 'fusion_csv', 'mwg_config'] as const)('refuses %s generation even if an imported run carries a parametric anchor', async format => {
+    const selectedRun = {
+      id: 'cad-anchor', config_summary: { geometry_type: 'imported' },
+      script_snapshot: { version: 1, design: { formula: 'OSSE', L: 120 } },
+      design_revision: 3, solve_options: {},
+    } as unknown as JobItem;
+    expect(resultExportSnapshot(selectedRun).design).toBeUndefined();
+    const fetcher = vi.fn<typeof fetch>();
+    await expect(runExportFormat(format, {
+      selectedRun, design: designForFamily('OSSE'), designRevision: 3,
+      jobStem: 'cad-run', preferences: preferencesStore.getSnapshot(), fetcher,
+    })).rejects.toThrow(/imported models/i);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { config_summary: { formula_type: 'cad-import' } },
+    { config_summary: { import_origin: 'mesh-file' } },
+    { design_availability: { source: 'cad-import' } },
+    { cad_intent: { bundle_path: 'ingest/legacy' } },
+  ])('does not expose a legacy imported anchor as an exportable design: %j', provenance => {
+    expect(resultExportSnapshot({
+      ...provenance,
+      script_snapshot: { version: 1, design: { formula: 'OSSE', L: 120 } }, design_revision: 1,
+    } as Parameters<typeof resultExportSnapshot>[0]).design).toBeUndefined();
+  });
+
   it('builds the five client-side audit formats with stable missing-value behavior', () => {
     const preferences = preferencesStore.getSnapshot();
     expect(buildFrequencyCsv(result, preferences)).toContain('200,,4,,-0.5');

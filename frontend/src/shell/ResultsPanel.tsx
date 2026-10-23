@@ -1800,11 +1800,7 @@ interface RadiationArtifactView {
 
 function ResultChart({ chartType, result, named, tokens, density, live, beamShapeAction, radiationArtifact, wrapper, job, channelId }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity; live: boolean; beamShapeAction?: ChartStubAction; radiationArtifact?: RadiationArtifactView } & SummarySourceProps) {
   const preferences = usePreferences();
-  // The normalization angle is a display reference, not a solve setting: the
-  // stored patterns are re-referenced to whatever is in the field right now,
-  // so an archived run answers a change to it without being solved again.
-  // It is the shown run's: an imported run's angle is the imported options',
-  // a parametric run's the design's, whichever workspace is on screen.
+  // The shown run owns its display reference, independently of live drafts.
   const normAngle = useRunNormAngle(job);
   // Only comparable and driver charts read the cross-job list. Keeping it in the
   // dependency array for every chart would rebuild expensive single-run
@@ -2013,8 +2009,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     .flatMap(({ label, result: entry }) => samplingNotes(entry).length
       ? [`${label}: ${samplingNotes(entry)[1]}. ${samplingNotes(entry)[0]}`] : [])
     .join('\n');
-  // Subscribed rather than read from the snapshot: the subtitle names the angle
-  // the map is referenced to, and that has to follow the field as it is typed.
+  // The subtitle and map share the shown run's recorded reference.
   const cardNormAngle = useRunNormAngle(job);
   const cardPreferences = usePreferences();
   const [expanded, setExpanded] = useState(false);
