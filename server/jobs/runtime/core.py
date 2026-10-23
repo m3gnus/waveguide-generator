@@ -62,6 +62,7 @@ from server.platform.feature_flags import fem_regions_enabled
 from server.jobs.design_availability import resolve_job_design
 from server.jobs.retention import MAX_RETAINED_RESULTS, RESULT_RETENTION_DAYS
 from server.jobs.models import (
+    JobArchiveIdentity,
     JobDesignIdentity,
     ChannelCombineSpec,
     FieldPlaneRequest,
@@ -4814,6 +4815,14 @@ class JobRuntime:
                     else None
                 ),
             }
+        # Without a registry or recorded archive provenance there is no archive
+        # identity to advertise. API reads have the registry, which resolves old
+        # rows through the same legacy-location owner as every archive writer.
+        archive_location = (
+            archive_identity.job_archive_location(row, cad_source)
+            if cadlink_store is not None or metadata.get("archive") or metadata.get("archived_path") or cad_source
+            else None
+        )
         item = {
             **JobDesignIdentity(
                 design_uid=stored_config.get("design_uid"),
@@ -4879,10 +4888,12 @@ class JobRuntime:
             "exported_files": metadata.get("exported_files") or [],
             "auto_export_completed_at": metadata.get("auto_export_completed_at"),
             "archived_at": metadata.get("archived_at"),
-            "archive_key": (metadata.get("archive") or {}).get("key"),
-            "archive_folder": archive_identity.job_archive_location(row, cad_source).folder,
-            "archive_run": archive_identity.job_archive_location(row, cad_source).run,
-            "archived_path": metadata.get("archived_path"),
+            **JobArchiveIdentity(
+                archive_key=(metadata.get("archive") or {}).get("key"),
+                archive_folder=archive_location.folder if archive_location else "",
+                archive_run=archive_location.run if archive_location else "",
+                archived_path=metadata.get("archived_path"),
+            ).model_dump(mode="json"),
             "auto_export_formats": metadata.get("auto_export_formats") or {},
             "raw_results_file": metadata.get("raw_results_file"),
             "mesh_artifact_file": metadata.get("mesh_artifact_file"),

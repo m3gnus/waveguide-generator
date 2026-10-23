@@ -502,12 +502,12 @@ describe('M1b: one Solve card, to the revealed result', () => {
     for (const hz of [8, 80, 199]) {
       await act(async () => useCadReturnStore.getState().setCombineSpec(withPair(combineSpecEffective(useCadReturnStore.getState())!, 'drive-mf→drive-hf', { hz })));
       expect(solveButton().disabled).toBe(true);
-      expect(host.querySelector('.cad-solve-blocker')?.textContent).toContain(`The ${hz} Hz crossover is below the 200 Hz sweep start`);
+      expect(host.querySelector('.cad-solve-card .solve-readiness')?.textContent).toContain(`The ${hz} Hz crossover is below the 200 Hz sweep start`);
     }
     for (const hz of [200, 800]) {
       await act(async () => useCadReturnStore.getState().setCombineSpec(withPair(combineSpecEffective(useCadReturnStore.getState())!, 'drive-mf→drive-hf', { hz })));
       expect(solveButton().disabled).toBe(false);
-      expect(host.querySelector('.cad-solve-blocker')).toBeNull();
+      expect(host.querySelector('.cad-solve-card .solve-readiness')).toBeNull();
     }
   });
 

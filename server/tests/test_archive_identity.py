@@ -367,7 +367,7 @@ def test_recovered_legacy_stem_and_hash_keep_exact_existing_browser_location(tmp
     item = JobRuntime._serialize_job(old, cadlink_store=store)
     assert item["archive_folder"] == source["archive_stem"] == "Older_v10"
     assert item["archive_run"] == "40_cad-import"
-    assert item["archive_key"] is None
+    assert "archive_key" not in item
     assert json.dumps(old, sort_keys=True) == before
     from server.tests.test_cadlink_projects import capture
     from server.cadlink.api import ArchiveRunDocumentRequest, archive_run_document
@@ -607,3 +607,22 @@ def test_recorded_absolute_path_wins_over_repaired_mirror_at_completion(tmp_path
     with pytest.raises(OSError, match="recorded archive location is unavailable"):
         identity.complete_archive(store, old)
     assert not root.exists()
+
+
+@pytest.mark.parametrize("values", [{}, {
+    "archive_key": "name:Stable", "archive_folder": "Stable",
+    "archive_run": "1_Stable", "archived_path": "/runs/Stable/1_Stable",
+}])
+def test_archive_identity_encodings_omit_absent_and_retain_present(values):
+    from pydantic import BaseModel
+    from server.jobs.models import JobArchiveIdentity
+
+    class Envelope(BaseModel):
+        job: JobArchiveIdentity
+
+    identity = JobArchiveIdentity.model_validate(values)
+    for mode in ("python", "json"):
+        assert identity.model_dump(mode=mode) == values
+        assert Envelope(job=identity).model_dump(mode=mode) == {"job": values}
+    assert json.loads(identity.model_dump_json()) == values
+    assert json.loads(Envelope(job=identity).model_dump_json()) == {"job": values}

@@ -584,10 +584,13 @@ describe('CadLinkPanel', () => {
     expect(buttonTexts(ready)).toEqual(['Dismiss']);
     expect(buttonLabels(ready)).toEqual(['Dismiss: Speaker']);
     expect(ready.closest('.cad-solve-card')).not.toBeNull();
-    // The refusal names the engines that can; WG points at the selector and picks none.
-    expect(engine.textContent).toContain('Engines that can: bempp, beat-cpu.');
-    expect(engine.textContent).toContain('solver selector');
-    expect(buttonTexts(engine)).toEqual(['Dismiss', 'Open Simulation']);
+    // Older requests retain their reported refusal in Details. Only current
+    // model status owns readiness and remedies, with no copy on each request.
+    const engineInputs = [...details.querySelectorAll('.cad-solve-inputs')]
+      .find((item) => item.textContent?.includes('op-engine'))!;
+    expect(engineInputs.textContent).toContain('Engines that can: bempp, beat-cpu.');
+    expect(engine.querySelector('.solve-readiness')).toBeNull();
+    expect(buttonTexts(engine)).toEqual(['Dismiss']);
     expect(buttonLabels(engine)[0]).toBe('Dismiss: operation op-engine');
     // The model is on screen, so the card's own guidance replaces the backend's
     // message; only the collapsed Solve inputs record keeps it, as reported.
@@ -726,6 +729,7 @@ describe('CadLinkPanel', () => {
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
       if (path.endsWith('/recovery-notices')) return json({ notices: [] });
+      if (path.endsWith('/viewport-mesh')) return new Response(meshFixture, { status: 200 });
       return json({ ...record, project: { lineage_id: 'wgl_speaker' } });
     }));
     await renderAndSelect(true);
@@ -764,9 +768,11 @@ describe('CadLinkPanel', () => {
     act(() => {
       applyCadRequest(cadOperation({
         operationId: 'op-fusion', reason: 'engine_unavailable', createdAt: '2026-09-14T10:00:03Z',
+        message: 'Choose an available engine, then press Solve.',
       }));
     });
-    expect(operationCard('op-fusion').textContent).toContain('then press Solve');
+    expect(host.querySelector('.cad-solve-card .solve-readiness')?.textContent).toContain('Choose an available engine, then press Solve.');
+    expect(operationCard('op-fusion').querySelector('.solve-readiness')).toBeNull();
     expect(buttonIn(operationCard('op-fusion'), 'Solve now')).toBeUndefined();
     expect(posted).toHaveLength(2);
   });

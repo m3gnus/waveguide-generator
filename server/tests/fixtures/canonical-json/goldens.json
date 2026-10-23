@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline_commit": "1ad76dd2d4a25e9231b97fbda139d7b7c8b38d96",
-  "pinned_protocol_sha256": "a71af9289b5c85c7e69b9174e515ca02b7efec8ecb18cdb901ff944371ee18e7",
+  "pinned_protocol_sha256": "84adc3a89a451712ec66b7a78c338663eac7293fb229bbaa337f8cb898a50d5a",
   "sites": [
     {
       "kind": "inline",

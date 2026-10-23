@@ -1482,7 +1482,15 @@ class SolveExecution(ChannelSolveExecution):
     fallback_reason: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
-class JobItem(JobDesignIdentity):
+class JobArchiveIdentity(JobModel):
+    # Absent archive identity must not change legacy persisted/echoed bytes.
+    archive_key: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    archive_folder: str = Field(default="", exclude_if=lambda value: not value)
+    archive_run: str = Field(default="", exclude_if=lambda value: not value)
+    archived_path: str | None = Field(default=None, exclude_if=lambda value: value is None)
+
+
+class JobItem(JobArchiveIdentity, JobDesignIdentity):
     id: str
     client_request_id: str | None = None
     client_metadata: dict[str, Any]
@@ -1535,10 +1543,6 @@ class JobItem(JobDesignIdentity):
     auto_export_formats: dict[str, Any]
     #: When this run was written to the run archive. The job database can lose
     #: results (removal, or the optional 30-day cleanup); the archive survives.
-    archive_key: str | None = None
-    archive_folder: str = ""
-    archive_run: str = ""
-    archived_path: str | None = None
     archived_at: str | None = None
     raw_results_file: str | None
     mesh_artifact_file: str | None

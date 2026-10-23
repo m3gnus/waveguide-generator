@@ -23,6 +23,7 @@ vi.mock('../results/exporters', () => ({
 function job(id: string): JobItem {
   return {
     id, run_number: 1, parent_job_id: null,
+    archive_folder: 'server-folder', archive_run: `7_recorded-${id}`,
     label: id, status: 'complete', progress: 1, stage: null,
     stage_message: null, created_at: '2026-08-08T00:00:00Z',
     queued_at: '2026-08-08T00:00:00Z', started_at: null,
@@ -427,7 +428,7 @@ describe('atomic results display transitions', () => {
     await act(async () => { exportButton!.click(); });
 
     expect(exportMocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
-      expect.objectContaining({ jobStem: '1_old', destinationToken: 'destination-handle' }),
+      expect.objectContaining({ jobId: 'old', jobStem: '1_old', workspaceSubdirectory: 'server-folder/7_recorded-old', destinationToken: 'destination-handle' }),
       ['csv'],
       'confirm',
     );

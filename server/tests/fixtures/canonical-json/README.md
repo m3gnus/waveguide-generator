@@ -9,7 +9,15 @@ from the shared owner. Input recipes are in `test_canonical_json.py`.
 The inventory was checked with `git grep` and an AST scan, including multiline
 calls: seven former helpers, 18 server inline sites, and three script inline
 sites. Unsorted wire serializers and indented human-readable JSON are outside
-this identity dedupe. The pinned WGLink protocol remains byte-for-byte unchanged.
+this identity dedupe. The protocol hash was updated for WG 0.3.6 G1's intentional mesh-sizing-v1
+vendor update from `m3gnus/wglink` commit
+`5d4fbaa89909642cc2f973592a6365b5b3e6c07d`, path
+`fusion-addins/WGLink/wglink_protocol.py`, SHA-256
+`84adc3a89a451712ec66b7a78c338663eac7293fb229bbaa337f8cb898a50d5a`.
+`server/cadlink/wglink_protocol.source.json` records the same source. The former
+protocol hash was `a71af9289b5c85c7e69b9174e515ca02b7efec8ecb18cdb901ff944371ee18e7`;
+the frozen pre-update protocol remains in the mesh-sizing-v1 protocol fixtures.
+Canonical serializer byte cases and their original baseline are unchanged.
 
 All profiles use sorted keys, compact comma/colon separators, standard-library
 float formatting, UTF-8 byte encoding, and no trailing newline. `ascii_json`
