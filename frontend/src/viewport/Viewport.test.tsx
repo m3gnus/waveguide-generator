@@ -950,9 +950,11 @@ describe('Viewport preview errors', () => {
   it('shows the ingested solve mesh in CAD Link when a display artifact exists', async () => {
     const ingestId = 'wgi_viewport_cadmesh';
     const meshUrl = `/api/cadlink/ingest/${ingestId}/mesh`;
-    // Other requests (status polls) may run meanwhile: only the mesh is counted.
+    // Other requests (status polls, and the settings this file's stores persist,
+    // such as the last model and the imported input) may run meanwhile on a busy
+    // machine: they are answered, and only the mesh reads are counted.
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => (
-      String(input) === meshUrl ? new Response(meshFixture, { status: 200 }) : new Response('{}', { status: 404 })));
+      String(input) === meshUrl ? new Response(meshFixture, { status: 200 }) : new Response('{}', { status: 200 })));
     const meshFetches = () => fetchSpy.mock.calls.filter(([input]) => String(input) === meshUrl).length;
     act(() => {
       useCadReturnStore.setState({
