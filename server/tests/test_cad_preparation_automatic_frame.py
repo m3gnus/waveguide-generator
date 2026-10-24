@@ -432,3 +432,65 @@ def test_a_cut_refused_only_by_the_provisional_axis_is_prepared_again_along_one_
         key="snapshot:a", requirement={}, allowed_axes=AXES, confirmed_axis="+x",
     )
     assert job_preparation._domain_frame_retry(store, record("+x"), chosen, provisional=True) is None
+
+
+def test_a_cut_the_provisional_axis_cannot_mirror_is_prepared_again_through_prepare_job_sync(
+    real, monkeypatch
+) -> None:
+    """The domain retry, end to end through ``prepare_job_sync``.
+
+    The snapshot's cached confident verdict (+x) makes +x the provisional axis
+    of the next press, which meshes along it directly. That record shows a CAD
+    cut on x = 0, which +x is square to, so the domain refuses it. The press
+    is prepared again, once, along the first ranked axis the cut contains, and
+    that decision is sealed as a fallback; it is never a frame question.
+    """
+
+    from server.cadlink.interpretation.frame_infer import DECISION_FALLBACK
+
+    harness, mesher = real
+    _verdict(monkeypatch, status="automatic", axis="+x")
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    first = _prepare(harness)
+    assert first["state"] == "accepted" and first["frameAxisAutomatic"] == "+x"
+
+    real_refusal = job_preparation.decision_refusal
+    refused_axes: list[str] = []
+
+    def cut_on_x0(record):
+        axis = record["normalisation"]["solver_frame"]["axis"]
+        if axis == "+x":
+            refused_axes.append(axis)
+            record["domain_decision"] = {
+                **(record.get("domain_decision") or {}),
+                "cad_cuts": [{"plane": "x0", "status": "unmirrored"}],
+            }
+            return ("imported_open_half_shell", "This cut cannot be mirrored along +x.")
+        return real_refusal(record)
+
+    monkeypatch.setattr(job_preparation, "decision_refusal", cut_on_x0)
+    passes: list[bool] = []
+    real_prepare = job_preparation.prepare_job_sync
+
+    def counted(*args, **kwargs):
+        passes.append(bool(kwargs.get("automatic_retry")))
+        assert len(passes) <= 2, "the domain retry recursed beyond one second pass"
+        return real_prepare(*args, **kwargs)
+
+    monkeypatch.setattr(job_preparation, "prepare_job_sync", counted)
+    meshed = len(mesher.calls)
+    _accept(harness.store, "cmd-2", *_bundle_of(harness, "authored"))
+    second = _prepare(harness, "cmd-2")
+
+    assert passes == [False, True]
+    assert refused_axes == ["+x"]
+    # Both meshes were prepared for the first press (+z to survey, then +x): reused.
+    assert len(mesher.calls) == meshed
+    assert second["state"] == "accepted", second
+    assert not _waiting_for_frame(second)
+    record = _record(harness, second)
+    assert record["normalisation"]["solver_frame"]["axis"] == "+z"
+    decision = harness.store.get_frame_decision(record["ingest_id"])
+    assert (decision["axis"], decision["provenance"]) == ("+z", DECISION_FALLBACK)
+    assert second["frameAxisAutomatic"] == "+z"
