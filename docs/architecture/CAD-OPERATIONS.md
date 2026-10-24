@@ -545,14 +545,19 @@ axis" below).
 - **Automatic axis (Solve without a shown axis).** A matching manual confirmation wins,
   followed by a carried v1 choice. Otherwise `frame_infer.choose_axis` decides, never
   asks:
-  - **Inference (`frame-infer-v4`).** The mouth -- where the sources' sound leaves the
-    model, found by flooding the free air from in front of each source through a voxel
-    grid until it leaves the model's bounding box -- is the primary evidence; a folded
-    horn faces its mouth, not its hidden driver's normal. The line-of-sight verdict
-    (normals, visibility, aperture) is v2's, unchanged. A clear mouth of an HF/MF source
-    agreeing with a confident line-of-sight verdict confirms it; disagreeing, it is a
-    conflict; where the line of sight cannot decide (hidden sources, weak or cancelling
-    normals) and visibility does not contradict it, the mouth decides with confidence.
+  - **Inference (`frame-infer-v5`).** The mouth -- where the sources' sound leaves the
+    model -- floods the air each source sounds into through a voxel grid to saturation and
+    measures its openings out of the model's bounding box by area, so a horn's mouth
+    outweighs a vent, port or leak however near the source; each source's openings count
+    by its share of its role's area, so one small source's own opening does not decide
+    for the role. A folded horn faces its mouth, not its hidden driver's normal. The
+    line-of-sight verdict (normals, visibility, aperture) is v2's, unchanged, and a
+    confident one always stands: a clear mouth that agrees joins its support, one that
+    disagrees is recorded (`mouthConflict`) and never heads the ranking. Where the line
+    of sight cannot decide (hidden sources, weak or cancelling normals) and visibility
+    does not contradict it, a clear HF/MF mouth decides with confidence only when another
+    kind of evidence agrees; alone it is the first axis of the ranking, recorded as a
+    fallback (`mouth-only`).
   - **Fallback.** When the survey abstains (weak, conflicting, no HF/MF source,
     unvalidated sources, inverted surfaces, unavailable) or names an axis the domain
     cannot use, WG takes the first allowed axis of the survey's documented

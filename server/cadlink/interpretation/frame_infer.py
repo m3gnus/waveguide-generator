@@ -12,11 +12,13 @@ axis afterwards.
 One pure function, :func:`infer_frame`, over the full model in CAD
 coordinates. Four kinds of evidence each score the six assembly axes:
 
-- **mouth** (primary, geometric, frame-infer-v4): where each source role's
-  sound leaves the model. The free air is flooded through a voxel grid from in
-  front of the sources until it leaves the model's bounding box; the face it
-  leaves across is the mouth -- a horn's, a folded path's, a port's -- found
-  without any line of sight from the source. A sealed source says nothing.
+- **mouth** (geometric, frame-infer-v5): where each source role's sound
+  leaves the model. The air each source sounds into is flooded through a
+  voxel grid to saturation, and its openings out of the model's bounding box
+  are measured by area -- a horn's mouth, a folded path's exit, a port, a
+  vent -- found without any line of sight from the source. The largest
+  opening leads, not the nearest, and each source's openings count by the
+  source's share of its role's area. A sealed source says nothing.
 - **normals** (the prior): the mean oriented normal of each source role, then
   the roles weighted HF 9 : MF 3 : LF 1, passive cardioid 0. Averaging within a
   role first keeps a large LF area from outvoting the HF throat. Opposing
@@ -32,15 +34,18 @@ The line-of-sight verdict (normals, visibility, aperture) is frame-infer-v2's,
 unchanged: each evidence type that decides casts a confidence-scaled vote, and
 the result is confident only when the vote share, the normalised lead and the
 number of distinct evidence types supporting the winner (at least one
-geometric) all pass. The mouth then decides first: a clear mouth of a
-directional (HF/MF) source that disagrees with a confident line-of-sight
-verdict is a conflict; one that agrees, or that stands where the line of sight
+geometric) all pass. A confident line-of-sight verdict stands: a clear mouth
+that agrees joins its support, and one that disagrees is recorded
+(``mouthConflict``) and never heads the ranking. Where the line of sight
 could not decide (hidden sources in a folded path, weak or conflicting
-normals) and that visibility does not contradict, is confident. WG abstains
--- and the fallback ranking chooses -- when there is no HF or MF source, when
-source identity is not validated, when the surface orientation is unreliable,
-when the evidence conflicts or is weak, and when the winner is not a supported
-axis. Abstaining never names a weaker axis as confident.
+normals), a clear mouth of a directional (HF/MF) source that visibility does
+not contradict decides with confidence when another kind of evidence agrees,
+and is the ranking's first axis (``mouth-only``, a recorded fallback) when
+none does. WG abstains -- and the fallback ranking chooses -- when there is
+no HF or MF source, when source identity is not validated, when the surface
+orientation is unreliable, when the evidence conflicts or is weak, and when
+the winner is not a supported axis. Abstaining never names a weaker axis as
+confident.
 
 Everything here -- weights, thresholds, sampling -- is frozen under
 :data:`ALGORITHM_VERSION`; a change is a new version, and the suggestion cache
@@ -65,13 +70,17 @@ import numpy as np
 
 from server.contracts.geometry import SYMMETRY_PLANE_AXIS as _PLANE_AXIS
 
-# v4 adds the air-path mouth (the primary direction evidence) and a recorded,
-# deterministic fallback ranking for every abstention; v2's weights,
-# thresholds and confident verdicts are unchanged where the mouth agrees.
-ALGORITHM_VERSION = "frame-infer-v4"
+# v4 added the air-path mouth and a recorded, deterministic fallback ranking
+# for every abstention. v5 measures the mouth by opening area per source
+# instead of by the nearest exit, lets a confident v2 verdict stand against
+# it, and records a mouth with no agreeing evidence as a fallback. v2's
+# weights, thresholds and confident verdicts are unchanged.
+ALGORITHM_VERSION = "frame-infer-v5"
 #: The versions earlier builds cached. Their confident verdicts still stand
 #: for the records prepared under them (``readings.legacy_automatic_axis``);
-#: v3 was an unreleased build whose confident verdicts were v2's.
+#: v3 was an unreleased build whose confident verdicts were v2's. v4
+#: (unreleased) stored a decision for every record it prepared, so its cache
+#: is never read.
 LEGACY_ALGORITHM_VERSIONS: tuple[str, ...] = ("frame-infer-v2", "frame-infer-v3")
 
 AXES: tuple[str, ...] = ("+z", "-z", "+x", "-x", "+y", "-y")
@@ -89,7 +98,7 @@ VISIBILITY = "visibility"
 APERTURE = "aperture"
 EVIDENCE_WEIGHTS: dict[str, float] = {NORMALS: 0.40, VISIBILITY: 0.35, APERTURE: 0.25}
 GEOMETRIC_EVIDENCE = frozenset({VISIBILITY, APERTURE})
-#: Where the sources' sound leaves the model (:func:`_mouth_exits`). Not one of
+#: Where the sources' sound leaves the model (:func:`_mouth_openings`). Not one of
 #: the weighted votes: it decides first, and the votes confirm it.
 MOUTH = "mouth"
 #: The mouth decides only at or above this relative margin over the next axis.
@@ -215,8 +224,8 @@ def evidence_votes(evidence: Mapping[str, Any]) -> dict[str, float]:
 def fallback_ranking(evidence: Mapping[str, Any]) -> tuple[str, ...]:
     """Every axis, most likely first: the documented rule for a weak survey.
 
-    1. The mouth: the role-weighted share of the sources' air path that leaves
-       the model across each face (:func:`_mouth_exits`).
+    1. The mouth: the role-weighted share of the sources' opening area toward
+       each axis (:func:`_mouth_openings`).
     2. The v2 votes (:func:`evidence_votes`), counting the evidence gathered
        before any abstention.
     3. The stable axis order, as modelled (+z) first.
@@ -478,31 +487,37 @@ def _aperture(render: _Render, source_visible: np.ndarray, depth: float, pixel: 
 MOUTH_RESOLUTION = 200
 #: Empty voxels kept around the model's bounding box: the free air.
 MOUTH_PAD_VOXELS = 6
-#: How far, in voxels, the air path spreads after it first leaves the model.
-MOUTH_SPREAD_VOXELS = 3
 #: The voxel budget of the air-path survey; a larger model uses coarser voxels.
 MOUTH_MAX_VOXELS = 12_000_000
 
 
-def _mouth_exits(
+def _mouth_openings(
     samples: _Samples,
-    sample_role: Mapping[str, np.ndarray],
-    roles: Iterable[str],
+    sample_tag: np.ndarray,
+    role_sources: Mapping[str, Iterable[int]],
     low: np.ndarray,
     high: np.ndarray,
     pixel: float,
 ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
-    """Which way each role's sound leaves the model: the mouth of its air path.
+    """Which way each role's sound leaves the model: the openings of its air path.
 
-    The surface is rasterised into wall voxels and the free air through the
-    model is flooded from just in front of each role's faces (their oriented
-    normals point into the air), until the flood first leaves the model's
-    bounding box and spreads :data:`MOUTH_SPREAD_VOXELS` further. The voxels
-    reached beyond each face of the box are counted per axis: a horn mouth,
-    a folded path's exit, a port. A source in a sealed cavity never leaves and
-    so says nothing. Unlike visibility, this does not need a line of sight
-    from the source: a folded horn's mouth is found through its fold.
+    The surface is rasterised into wall voxels. For each source, the air it
+    sounds into -- every air voxel inside the model's bounding box connected
+    to just in front of its faces (their oriented normals point into the
+    air) -- is flooded to saturation. An opening toward an axis is where that
+    air sees out of the box along the axis with no wall in the way; its area
+    is the air's footprint seen along the axis (a horn's mouth, a folded
+    path's exit, a port, a vent), plus the faces that sit flush on that side
+    of the box. So a large mouth outweighs a small vent or leak however near
+    the source the vent is, and a source in a sealed cavity says nothing.
+
+    Each source's openings are shared out to one, and a role's share is its
+    sources' shares weighted by their area: one small source with its own
+    opening does not decide for its role. Returns per role the opening share
+    per axis (zero for a sealed role) and survey diagnostics.
     """
+
+    from scipy import ndimage
 
     diagonal = float(np.linalg.norm(high - low))
     voxel = max(pixel, diagonal / MOUTH_RESOLUTION)
@@ -513,66 +528,81 @@ def _mouth_exits(
             break
         voxel *= 1.25
     origin = low - MOUTH_PAD_VOXELS * voxel
+    shape = tuple(int(value) for value in dims)
 
     def cells(points: np.ndarray) -> np.ndarray:
         index = np.floor((points - origin) / voxel).astype(np.int64)
         return np.clip(index, 0, dims - 1)
 
-    strides = np.array((dims[1] * dims[2], dims[2], 1), dtype=np.int64)
-    wall = np.zeros(int(np.prod(dims)), dtype=bool)
-    wall[cells(samples.points) @ strides] = True
-    # The face of the box each voxel lies beyond, per axis (+z, -z, +x, ...).
     first = MOUTH_PAD_VOXELS
     last = MOUTH_PAD_VOXELS + inner - 1
-    neighbours = np.concatenate([strides, -strides])
-    exits: dict[str, np.ndarray] = {}
-    reached: dict[str, int] = {}
-    for role in roles:
-        mask = sample_role[role]
-        starts = []
-        for offset in (1.0, 1.75):
-            starts.append(cells(samples.points[mask] + offset * voxel * samples.normals[mask]))
-        start = np.unique(np.concatenate(starts) @ strides)
-        start = start[~wall[start]]
-        visited = wall.copy()
-        visited[start] = True
-        frontier = start
-        steps = 0
-        left_at: int | None = None
-        outside: list[np.ndarray] = []
-        limit = int(dims.sum()) * 4
-        while len(frontier) and steps <= limit:
-            coordinates = np.stack(
-                [frontier // strides[0], (frontier // strides[1]) % dims[1], frontier % dims[2]], axis=1
+    wall = np.zeros(shape, dtype=bool)
+    index = cells(samples.points)
+    wall[index[:, 0], index[:, 1], index[:, 2]] = True
+    inside_box = np.zeros(shape, dtype=bool)
+    inside_box[first : last[0] + 1, first : last[1] + 1, first : last[2] + 1] = True
+    # The air inside the box, split into what is connected (6-neighbours).
+    labels, count = ndimage.label(~wall & inside_box)
+    # Per axis: the air voxels with no wall between them and the box's face.
+    clear: list[np.ndarray] = []
+    for axis in AXES:
+        component = "xyz".index(axis[1])
+        if axis[0] == "+":
+            blocked = np.flip(np.logical_or.accumulate(np.flip(wall, component), axis=component), component)
+        else:
+            blocked = np.logical_or.accumulate(wall, axis=component)
+        clear.append(~blocked)
+    del wall
+
+    face_area = voxel * voxel
+    cache: dict[tuple, np.ndarray] = {}
+    role_openings: dict[str, np.ndarray] = {}
+    source_openings: dict[str, dict[str, float]] = {}
+    for role, tags in role_sources.items():
+        total = np.zeros(len(AXES))
+        held_weight = 0.0
+        for tag in sorted({int(tag) for tag in tags}):
+            mask = sample_tag == tag
+            if not np.any(mask):
+                continue
+            starts = np.unique(
+                np.concatenate([
+                    cells(samples.points[mask] + offset * voxel * samples.normals[mask])
+                    for offset in (1.0, 1.75)
+                ]),
+                axis=0,
             )
-            beyond = (coordinates < first) | (coordinates > last)
-            if left_at is None and beyond.any():
-                left_at = steps
-            if left_at is not None:
-                outside.append(coordinates[beyond.any(axis=1)])
-                if steps >= left_at + MOUTH_SPREAD_VOXELS:
-                    break
-            candidates = (frontier[:, None] + neighbours[None, :]).reshape(-1)
-            # Neighbours across the grid's own edge wrap around; the padding
-            # is free air on every side, so a wrapped step stays in free air.
-            candidates = candidates[(candidates >= 0) & (candidates < len(wall))]
-            candidates = np.unique(candidates)
-            candidates = candidates[~visited[candidates]]
-            visited[candidates] = True
-            frontier = candidates
-            steps += 1
-        counts = np.zeros(len(AXES))
-        if outside:
-            beyond_cells = np.concatenate(outside)
-            for axis_index, axis in enumerate(AXES):
-                component = "xyz".index(axis[1])
-                if axis[0] == "+":
-                    counts[axis_index] = np.count_nonzero(beyond_cells[:, component] > last[component])
-                else:
-                    counts[axis_index] = np.count_nonzero(beyond_cells[:, component] < first)
-        exits[role] = counts
-        reached[role] = -1 if left_at is None else int(left_at)
-    return exits, {"voxelMm": round(voxel, 6), "stepsToLeave": reached}
+            within = np.all((starts >= first) & (starts <= last), axis=1)
+            components = np.unique(labels[tuple(starts[within].T)])
+            components = components[components > 0]
+            beyond = starts[~within]
+            key = (tuple(components.tolist()), beyond.tobytes())
+            if key not in cache:
+                selected = np.zeros(int(count) + 1, dtype=bool)
+                selected[components] = True
+                reached = selected[labels]
+                areas = np.zeros(len(AXES))
+                for axis_index, axis in enumerate(AXES):
+                    component = "xyz".index(axis[1])
+                    footprint = np.any(reached & clear[axis_index], axis=component)
+                    # Faces flush on this side of the box sound straight out of it.
+                    outward = (beyond[:, component] > last[component]) if axis[0] == "+" else (
+                        beyond[:, component] < first
+                    )
+                    flush = np.delete(beyond[outward], component, axis=1)
+                    if len(flush):
+                        footprint[flush[:, 0], flush[:, 1]] = True
+                    areas[axis_index] = float(np.count_nonzero(footprint)) * face_area
+                cache[key] = areas
+            areas = cache[key]
+            source_openings[str(tag)] = _round_scores(areas)
+            if areas.sum() <= 0.0:
+                continue
+            weight = float(samples.weights[mask].sum())
+            total += weight * areas / areas.sum()
+            held_weight += weight
+        role_openings[role] = total / held_weight if held_weight > 0.0 else total
+    return role_openings, {"voxelMm": round(voxel, 6), "sourceOpeningsMm2": source_openings}
 
 
 # -- the decision ----------------------------------------------------------------
@@ -724,12 +754,15 @@ def infer_frame(mesh: SurveyMesh, *, supported_axes: Iterable[str] = AXES) -> Fr
     }
 
     # Evidence 4, the primary one: where the sources' sound leaves the model.
-    exits, mouth_survey = _mouth_exits(samples, sample_role, roles_present, low, high, pixel)
+    role_sources = {
+        role: [tag for tag, name in role_by_tag.items() if name == role] for role in roles_present
+    }
+    exits, mouth_survey = _mouth_openings(samples, tags[samples.triangle], role_sources, low, high, pixel)
     exiting = [role for role in roles_present if exits[role].sum() > 0]
     mouth_scores = np.zeros(len(AXES))
     exiting_weight = sum(ROLE_WEIGHTS[role] for role in exiting)
     for role in exiting:
-        mouth_scores += ROLE_WEIGHTS[role] * exits[role] / exits[role].sum()
+        mouth_scores += ROLE_WEIGHTS[role] * exits[role]
     if exiting_weight > 0.0:
         mouth_scores /= exiting_weight
     mouth_axis, mouth_confidence = _decide(mouth_scores, relative=True)
@@ -769,8 +802,13 @@ def infer_frame(mesh: SurveyMesh, *, supported_axes: Iterable[str] = AXES) -> Fr
             evidence=evidence,
         )
 
-    def mouth_inference(code: str, reason: str) -> FrameInference:
-        """The mouth decides when the line-of-sight evidence could not."""
+    def mouth_inference() -> FrameInference:
+        """The mouth decides when the line-of-sight evidence could not.
+
+        Confident only with another kind of evidence agreeing: an opening on
+        its own is a recorded fallback (``mouth-only``), never presented as
+        confident inference.
+        """
 
         assert mouth_axis is not None
         total = float(mouth_scores.sum())
@@ -791,6 +829,13 @@ def infer_frame(mesh: SurveyMesh, *, supported_axes: Iterable[str] = AXES) -> Fr
                 f"{', '.join(supported) or 'no axis'}. Check the model, or send the whole model.",
                 unrestricted_axis=mouth_axis, supporting=backing, evidence=evidence,
             )
+        if not agreeing:
+            return ask(
+                "mouth-only",
+                f"Only {_evidence_words((MOUTH,))} points along {mouth_axis}; nothing else "
+                "in the geometry confirms it. Pick the front.",
+                unrestricted_axis=mouth_axis, supporting=backing, evidence=evidence,
+            )
         return FrameInference(
             algorithm=ALGORITHM_VERSION,
             status=STATUS_AUTOMATIC,
@@ -800,8 +845,8 @@ def infer_frame(mesh: SurveyMesh, *, supported_axes: Iterable[str] = AXES) -> Fr
             vote_share=float(ordered[0]) / total,
             vote_lead=float(ordered[0] - ordered[1]) / total,
             supporting_evidence=backing,
-            reason_code=code,
-            reason=reason,
+            reason_code="mouth",
+            reason=f"Radiates along {mouth_axis}: {_evidence_words(backing)} agree.",
             supported_axes=supported,
             evidence=evidence,
             fallback_ranking=fallback_ranking(evidence),
@@ -913,13 +958,11 @@ def infer_frame(mesh: SurveyMesh, *, supported_axes: Iterable[str] = AXES) -> Fr
     v2 = _line_of_sight_verdict()
     if v2.status == STATUS_AUTOMATIC:
         if mouth_decisive and mouth_axis != v2.axis:
-            return ask(
-                "evidence-conflicts",
-                f"The model's opening faces {mouth_axis}, but its sources face {v2.axis}. "
-                "Pick the front.",
-                unrestricted_axis=v2.axis, vote_share=v2.vote_share, vote_lead=v2.vote_lead,
-                supporting=v2.supporting_evidence, evidence=evidence,
-            )
+            # The confident line of sight wins, and heads the ranking; the
+            # opening that disagreed (a vent, a port, a leak) is recorded.
+            evidence["mouthConflict"] = {"mouthAxis": mouth_axis, "verdictAxis": v2.axis}
+            assert v2.axis is not None
+            return replace(v2, fallback_ranking=_ranking_led_by(v2.axis, evidence))
         if mouth_decisive:
             return replace(
                 v2,
@@ -932,11 +975,14 @@ def infer_frame(mesh: SurveyMesh, *, supported_axes: Iterable[str] = AXES) -> Fr
     if v2.reason_code != "unsupported-axis" and mouth_decisive and not visibility_contradicts:
         # Hidden or weak line-of-sight evidence, but one clear opening: a folded
         # horn's mouth, not its driver's normal, is its front.
-        return mouth_inference(
-            "mouth",
-            f"Radiates along {mouth_axis}: {_evidence_words((MOUTH,))} faces that way.",
-        )
+        return mouth_inference()
     return v2
+
+
+def _ranking_led_by(axis: str, evidence: Mapping[str, Any]) -> tuple[str, ...]:
+    """The fallback ranking with a confident verdict's axis first."""
+
+    return (axis, *(item for item in fallback_ranking(evidence) if item != axis))
 
 
 _ROLE_WORDS = {"HF": "high-frequency source", "MF": "midrange sources", "LF": "low-frequency sources"}

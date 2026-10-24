@@ -69,7 +69,9 @@ def _builder(function, **kwargs):
 # -- the fixture table: expectations fixed before tuning ------------------------
 
 FIXTURES = {
-    # name: (builder, mesh size mm, expected axis or ASK, expected reason code when asking)
+    # name: (builder, mesh size mm, expected axis or ASK, expected reason code when asking).
+    # An axis with a reason code: WG abstains, and the recorded fallback
+    # (``choose_axis``) still names that axis.
     "rear-facing source": (_builder(fx.horn_box, rear_lf=True), 5.0, "+z", None),
     "opposed MEH midrange": (_builder(fx.horn_box, mf_taps=True), 5.0, "+z", None),
     "side-firing taps": (fx.side_firing_taps, 10.0, "+z", None),
@@ -77,7 +79,8 @@ FIXTURES = {
     "conventional ported box": (fx.ported_box, 12.0, "+z", None),
     "coaxial": (fx.coaxial, 10.0, "+z", None),
     # Its source is hidden behind the fold; the mouth it leaves through faces +z.
-    "folded horn": (fx.folded_horn, 10.0, "+z", None),
+    # Nothing else confirms it, so +z is a recorded fallback, not a confident one.
+    "folded horn": (fx.folded_horn, 10.0, "+z", "mouth-only"),
     "dipole baffle": (fx.dipole_baffle, 12.0, ASK, None),
     "cardioid": (fx.cardioid, 10.0, "+z", None),
     "equal-area sources": (fx.equal_area_front_back, 8.0, "+z", None),
@@ -90,10 +93,17 @@ FIXTURES = {
 
 @pytest.mark.parametrize("name", sorted(FIXTURES))
 def test_fixture_expectation(name: str) -> None:
+    from server.cadlink.interpretation.frame_infer import DECISION_FALLBACK, choose_axis
+
     builder, size, expected, code = FIXTURES[name]
     result = infer_frame(_mesh(builder, size).survey())
     assert result.algorithm == ALGORITHM_VERSION
-    if expected is ASK:
+    if expected is not ASK and code is not None:
+        assert result.status == STATUS_ASK and result.reason_code == code, (name, result.reason)
+        assert result.axis is None and result.confidence == 0.0
+        choice = choose_axis(result.to_json(), frame_infer.AXES)
+        assert (choice.axis, choice.provenance, choice.reason_code) == (expected, DECISION_FALLBACK, code)
+    elif expected is ASK:
         assert result.status == STATUS_ASK, (name, result.axis, result.reason)
         assert result.axis is None
         assert result.confidence == 0.0
@@ -128,13 +138,19 @@ def test_party_meh_like_is_found_in_every_orientation(axis: str) -> None:
 def test_every_fixture_turns_with_its_model(axis: str) -> None:
     """The answer follows a rotated model, and an abstention stays one."""
 
-    for name, (builder, size, expected, _) in sorted(FIXTURES.items()):
+    from server.cadlink.interpretation.frame_infer import choose_axis
+
+    for name, (builder, size, expected, code) in sorted(FIXTURES.items()):
         rotated = infer_frame(_mesh(builder, size).survey(fx.POSES[axis]))
         if expected is ASK:
             assert rotated.status == STATUS_ASK, name
+            continue
+        turned = _axis_name(fx.POSES[axis] @ {"+z": np.array((0.0, 0.0, 1.0))}[expected])
+        if code is not None:
+            assert rotated.status == STATUS_ASK and rotated.reason_code == code, name
+            assert choose_axis(rotated.to_json(), frame_infer.AXES).axis == turned, name
         else:
-            turned = fx.POSES[axis] @ {"+z": np.array((0.0, 0.0, 1.0))}[expected]
-            assert rotated.axis == _axis_name(turned), name
+            assert rotated.axis == turned, name
 
 
 def _axis_name(vector: np.ndarray) -> str:
@@ -356,14 +372,22 @@ def test_a_reduced_record_is_not_judged_without_its_mirror_image() -> None:
 
 @pytest.mark.parametrize("pose", ["+z", "-x", "+y"])
 def test_a_folded_horn_faces_its_mouth_not_its_driver(pose: str) -> None:
-    """The driver at the closed end of the fold faces -z; the mouth faces +z."""
+    """The driver at the closed end of the fold faces -z; the mouth faces +z.
+
+    The mouth is the only evidence that sees through the fold, so the axis is
+    the fallback ranking's first, recorded as ``mouth-only``.
+    """
+
+    from server.cadlink.interpretation.frame_infer import DECISION_FALLBACK, choose_axis
 
     result = infer_frame(_mesh(fx.folded_horn, 10.0).survey(fx.POSES[pose]))
     driver = fx.POSES[pose] @ np.array((0.0, 0.0, -1.0))
     assert result.evidence["normals"]["axis"] == _axis_name(driver)
-    assert result.status == STATUS_AUTOMATIC and result.reason_code == "mouth"
-    assert result.axis == pose
-    assert result.evidence["mouth"]["stepsToLeave"]["HF"] > 100  # through the fold
+    assert result.status == STATUS_ASK and result.reason_code == "mouth-only"
+    assert result.evidence["mouth"]["axis"] == pose
+    assert result.evidence["mouth"]["strength"] > 0.9  # one opening
+    choice = choose_axis(result.to_json(), frame_infer.AXES)
+    assert (choice.axis, choice.provenance) == (pose, DECISION_FALLBACK)
 
 
 @pytest.mark.parametrize(("name", "code"), [("dipole baffle", None), ("occluded HF", "sources-not-visible")])
@@ -440,3 +464,69 @@ def test_lf_only_abstention_retains_evidence_for_fusions_axis(pose: str) -> None
     assert {*frame_infer.EVIDENCE_WEIGHTS, frame_infer.MOUTH} <= result.evidence.keys()
     choice = choose_axis(result.to_json(), frame_infer.AXES)
     assert (choice.axis, choice.provenance) == (pose, DECISION_FALLBACK)
+
+
+# -- the mouth: largest opening, per source, never over a confident verdict ------
+
+
+@pytest.mark.parametrize("opening", ["side-vent", "rear-vent", "port"])
+def test_a_folded_horn_with_a_second_small_opening_still_faces_its_mouth(opening: str) -> None:
+    """A vent or port nearer the source than the mouth does not decide.
+
+    The opening area the HF's air reaches is measured to saturation: the
+    60 x 80 mm mouth outweighs a 10 mm vent or a 30 mm port, however near the
+    source they are. The mouth is still the only evidence through the fold,
+    so +z is a recorded fallback, never confident.
+    """
+
+    from server.cadlink.interpretation.frame_infer import DECISION_FALLBACK, choose_axis
+
+    result = infer_frame(_mesh(_builder(fx.folded_horn_vented, opening=opening), 8.0).survey())
+    mouth = result.evidence["mouth"]
+    assert mouth["axis"] == "+z" and mouth["strength"] >= frame_infer.MOUTH_MIN_STRENGTH, mouth
+    second = {"side-vent": "-x", "rear-vent": "-z", "port": "-y"}[opening]
+    assert 0.0 < mouth["scores"][second] < 0.2, mouth["scores"]
+    assert result.status == STATUS_ASK and result.reason_code == "mouth-only"
+    assert result.fallback_ranking[:2] == ("+z", second)
+    choice = choose_axis(result.to_json(), frame_infer.AXES)
+    assert (choice.axis, choice.provenance, choice.reason_code) == ("+z", DECISION_FALLBACK, "mouth-only")
+
+
+@pytest.mark.parametrize("opening", [None, "rear-vent", "port"])
+def test_a_horn_in_a_box_with_a_vent_or_port_stays_confidently_forward(opening) -> None:
+    result = infer_frame(_mesh(_builder(fx.deep_horn_in_box, opening=opening), 8.0).survey())
+    assert result.status == STATUS_AUTOMATIC and result.axis == "+z", (result.reason_code, result.evidence)
+    assert frame_infer.MOUTH in result.supporting_evidence
+    assert result.fallback_ranking[0] == "+z"
+    assert "mouthConflict" not in result.evidence
+
+
+def test_a_small_same_role_source_on_a_side_wall_does_not_decide_for_its_role() -> None:
+    """Each source's openings count by its share of the role's area."""
+
+    result = infer_frame(_mesh(fx.deep_horn_with_side_hf, 6.0).survey())
+    scores = result.evidence["mouth"]["scores"]
+    assert scores["+x"] <= scores["+z"]
+    assert result.status == STATUS_AUTOMATIC and result.axis == "+z", (result.reason_code, result.evidence)
+    assert result.fallback_ranking[0] == "+z"
+
+
+@pytest.mark.parametrize("pose", ["+z", "-y"])
+def test_an_opening_that_contradicts_a_confident_line_of_sight_never_heads_the_ranking(pose: str) -> None:
+    """The HF's largest opening faces sideways; every line of sight says front.
+
+    The confident verdict stands and leads the ranking; the conflicting
+    opening is recorded as a diagnostic.
+    """
+
+    from server.cadlink.interpretation.frame_infer import DECISION_AUTOMATIC, choose_axis
+
+    result = infer_frame(_mesh(fx.horn_with_large_side_port, 8.0).survey(fx.POSES[pose]))
+    side = _axis_name(fx.POSES[pose] @ np.array((-1.0, 0.0, 0.0)))
+    assert result.evidence["mouth"]["axis"] == side
+    assert result.evidence["mouth"]["strength"] >= frame_infer.MOUTH_MIN_STRENGTH
+    assert result.status == STATUS_AUTOMATIC and result.axis == pose and result.reason_code == "inferred"
+    assert frame_infer.MOUTH not in result.supporting_evidence
+    assert result.evidence["mouthConflict"] == {"mouthAxis": side, "verdictAxis": pose}
+    assert result.fallback_ranking[0] == pose
+    assert choose_axis(result.to_json(), frame_infer.AXES).provenance == DECISION_AUTOMATIC

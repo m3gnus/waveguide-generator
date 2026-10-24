@@ -286,6 +286,70 @@ def folded_horn() -> list[SourceRule]:
     return [("HF", "hf", face((-50, 0, -40), (0, 0, -1), within=3))]
 
 
+def folded_horn_vented(opening: str) -> list[SourceRule]:
+    """The folded horn with a second, small opening from its closed leg.
+
+    ``opening``: ``side-vent`` (10 mm, out of the -x wall), ``rear-vent``
+    (10 mm, out of the back) or ``port`` (30 mm, out of the -y wall). The
+    sound still leaves through the 60 x 80 mm mouth facing +z.
+    """
+
+    tool = {
+        "side-vent": lambda: _cylinder((-75, 0, -100), (-30, 0, 0), 5),
+        "rear-vent": lambda: _cylinder((-50, 0, -205), (0, 0, 40), 5),
+        "port": lambda: _cylinder((-50, -35, -100), (0, -70, 0), 15),
+    }[opening]
+    body = [_box(-100, -100, -200, 100, 100, 0)]
+    body = _cut(body, [
+        _box(20, -40, -170, 80, 40, 5),
+        _box(-80, -40, -170, 80, 40, -150),
+        _box(-80, -40, -170, -20, 40, -40),
+        tool(),
+    ])
+    return [("HF", "hf", face((-50, 0, -40), (0, 0, -1), within=3))]
+
+
+def deep_horn_in_box(opening: str | None = None) -> list[SourceRule]:
+    """A 300 mm deep box with a 250 mm horn (160 mm mouth) on the front.
+
+    ``opening``: ``rear-vent`` (a 12 mm tube from the throat out of the back)
+    or ``port`` (a 40 mm tube from the horn out of the -y wall), or None.
+    """
+
+    body = [_box(-100, -100, -300, 100, 100, 0)]
+    body = _cut(body, [_cone((0, 0, -250), (0, 0, 255), 10, 80)])
+    if opening == "rear-vent":
+        body = _cut(body, [_cylinder((0, 0, -305), (0, 0, 60), 6)])
+    elif opening == "port":
+        body = _cut(body, [_cylinder((0, 0, -180), (0, -105, 0), 20)])
+    return [("HF", "hf", face((0, 0, -250), (0, 0, 1), within=3, degrees=3))]
+
+
+def deep_horn_with_side_hf() -> list[SourceRule]:
+    """The main HF deep in a front horn; a second, small HF flush in a side wall."""
+
+    body = [_box(-100, -75, -150, 100, 75, 0)]
+    body = _cut(body, [_cone((0, 0, -120), (0, 0, 125), 8, 60)])
+    body = _cut(body, [_recess((100, 0, -75), (-1, 0, 0), 8, 2)])
+    return [
+        ("HF", "hf", face((0, 0, -120), (0, 0, 1), within=2)),
+        ("HF", "hf-side", face((98, 0, -75), (1, 0, 0), within=2)),
+    ]
+
+
+def horn_with_large_side_port() -> list[SourceRule]:
+    """A small front horn whose throat also opens through a larger side port.
+
+    Every line of sight says +z; the largest opening the HF sounds into faces
+    -x. The confident line of sight must win.
+    """
+
+    body = [_box(-100, -100, -300, 100, 100, 0)]
+    body = _cut(body, [_cone((0, 0, -150), (0, 0, 155), 8, 20)])
+    body = _cut(body, [_cylinder((0, 0, -100), (-105, 0, 0), 35)])
+    return [("HF", "hf", face((0, 0, -150), (0, 0, 1), within=2))]
+
+
 def dipole_baffle() -> list[SourceRule]:
     """An open baffle radiating equally from both faces."""
 
