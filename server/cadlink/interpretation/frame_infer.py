@@ -77,11 +77,11 @@ from server.contracts.geometry import SYMMETRY_PLANE_AXIS as _PLANE_AXIS
 # weights, thresholds and confident verdicts are unchanged.
 ALGORITHM_VERSION = "frame-infer-v5"
 #: The versions earlier builds cached. Their confident verdicts still stand
-#: for the records prepared under them (``readings.legacy_automatic_axis``);
-#: v3 was an unreleased build whose confident verdicts were v2's. v4
-#: (unreleased) stored a decision for every record it prepared, so its cache
-#: is never read.
-LEGACY_ALGORITHM_VERSIONS: tuple[str, ...] = ("frame-infer-v2", "frame-infer-v3")
+#: for the records prepared under them (``readings.legacy_automatic_axis``):
+#: v1 (released 0.3.5) and v2 are the released ones, v3 was an unreleased build
+#: whose confident verdicts were v2's. v4 (unreleased) stored a decision for
+#: every record it prepared, so its cache is never read.
+LEGACY_ALGORITHM_VERSIONS: tuple[str, ...] = ("frame-infer-v1", "frame-infer-v2", "frame-infer-v3")
 
 AXES: tuple[str, ...] = ("+z", "-z", "+x", "-x", "+y", "-y")
 _AXIS_VECTORS = np.asarray(

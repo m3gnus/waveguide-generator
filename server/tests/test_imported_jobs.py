@@ -1342,6 +1342,39 @@ def test_an_unlinked_record_with_no_confirmed_frame_is_refused_at_submission(
             with pytest.raises(ImportedSolveRefusal) as caught:
                 await runtime.submit(_request(ingest_id))
             assert caught.value.reason_code == "frame_confirmation_required"
+            _assert_prepare_again(str(caught.value))
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def _assert_prepare_again(message: str) -> None:
+    """A submission that shows no axis is never asked to choose one."""
+
+    words = message.split("frame_confirmation_required: ", 1)[-1]
+    assert "Prepare it again" in words
+    assert "choose" not in words.lower() and "confirm" not in words.lower()
+
+
+def test_a_record_an_earlier_build_prepared_on_a_fallback_is_prepared_again_calmly(tmp_path: Path) -> None:
+    """Unreleased frame-infer-v3 builds meshed along a weak fallback without storing it.
+
+    A retry or restart of such a run has no recorded decision: it is refused
+    with "prepare it again", never with a frame question.
+    """
+
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path, _unlinked_changes("-z"))
+        runtime.cadlink_store.record_frame_suggestion(
+            MANIFEST_SHA, "frame-infer-v3",
+            {"status": "ask", "axis": None, "reasonCode": "sources-not-visible"}, ingest_id,
+        )
+        try:
+            with pytest.raises(ImportedSolveRefusal) as caught:
+                await runtime.submit(_request(ingest_id))
+            assert caught.value.reason_code == "frame_confirmation_required"
+            _assert_prepare_again(str(caught.value))
         finally:
             await runtime.shutdown()
 
@@ -1394,31 +1427,70 @@ def test_a_decision_for_another_axis_than_the_record_was_meshed_in_is_refused(tm
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize(("status", "admitted"), [("automatic", True), ("ask", False)])
-def test_a_run_prepared_under_frame_infer_v2_keeps_its_confident_axis(
-    tmp_path: Path, status: str, admitted: bool
-) -> None:
-    """Prepared before decisions were stored, along v2's confident automatic -x.
+def _released_035_changes(axis: str) -> dict[str, Any]:
+    """A record as released 0.3.5 prepared it: its own solver frame and matrix.
 
-    Retry and restart read v2's own cached verdict for its snapshot, never the
-    current algorithm's (which has no entry), so no frame question appears. A
-    weak v2 verdict was never solved automatically and still is not.
+    0.3.5's ``record_solver_frame`` (contract v2, the resolved up and the
+    ``spec_matrix`` of that frame), the matrix it meshed in, and the
+    ``frame-infer-v1`` survey it cached.
     """
 
+    from server.cadlink.interpretation.solver_frame import CONTRACT_V2, frame_spec, spec_matrix
+
+    spec = frame_spec(axis, {})
+    matrix = spec_matrix(spec).tolist()
+    changes = _unlinked_changes(axis)
+    changes["normalisation"] = {
+        **changes["normalisation"],
+        "assembly_frame_is_solver_frame": False,
+        "matrix": matrix,
+        "solver_frame": {
+            "contract": CONTRACT_V2,
+            "axis": axis,
+            "up": spec["up"],
+            "up_source": spec["up_source"],
+            "document_up": spec.get("document_up"),
+            "requirement": {"contract": CONTRACT_V2, "export_frame": "root-component", "document_up": None},
+            "allowed_axes": ["+z", "-z", "+x", "-x", "+y", "-y"],
+            "matrix": matrix,
+        },
+    }
+    return changes
+
+
+@pytest.mark.parametrize("algorithm", ["frame-infer-v1", "frame-infer-v2"])
+@pytest.mark.parametrize(("status", "admitted"), [("automatic", True), ("ask", False)])
+def test_a_run_prepared_under_frame_infer_v2_keeps_its_confident_axis(
+    tmp_path: Path, status: str, admitted: bool, algorithm: str
+) -> None:
+    """Prepared before decisions were stored, along a confident automatic -x.
+
+    ``frame-infer-v1`` is released 0.3.5's survey, with the record 0.3.5
+    wrote; ``frame-infer-v2`` an earlier dev build's. Retry and restart read
+    that survey's own cached verdict for its snapshot, never the current
+    algorithm's (which has no entry), so no frame question appears. A weak
+    verdict was never solved automatically and still is not.
+    """
+
+    changes = _released_035_changes("-x") if algorithm == "frame-infer-v1" else _unlinked_changes("-x")
+
     async def scenario() -> None:
-        runtime, ingest_id, _ = await _runtime_fixture(tmp_path, _unlinked_changes("-x"))
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path, changes)
         runtime.cadlink_store.record_frame_suggestion(
-            MANIFEST_SHA, "frame-infer-v2",
+            MANIFEST_SHA, algorithm,
             {"status": status, "axis": "-x" if status == "automatic" else None}, ingest_id,
         )
         try:
             if admitted:
                 job_id = await runtime.submit(_request(ingest_id))
                 assert runtime.store.get_job_row(job_id) is not None
+                again = await runtime._validate_imported_submission(_request(ingest_id))
+                assert again.record["ingest_id"] == ingest_id
             else:
                 with pytest.raises(ImportedSolveRefusal) as caught:
                     await runtime.submit(_request(ingest_id))
                 assert caught.value.reason_code == "frame_confirmation_required"
+                _assert_prepare_again(str(caught.value))
         finally:
             await runtime.shutdown()
 

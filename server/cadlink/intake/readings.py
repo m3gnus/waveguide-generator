@@ -184,9 +184,10 @@ def legacy_automatic_axis(store: CadLinkStore, record: Mapping[str, Any]) -> str
 
     Records prepared before :func:`store_frame_decision` existed carry no
     decision. Each was solved along the confident verdict of the survey of
-    its time, which its snapshot's cache still holds (``frame-infer-v2``), or
-    of the current one; only a confident verdict naming the axis the record
-    was meshed in counts, never a weak one. The record's own frame (its v1 or
+    its time, which its snapshot's cache still holds (``frame-infer-v1`` for
+    released 0.3.5, ``-v2``, the unreleased ``-v3``), or of the current one;
+    only a confident verdict naming the axis the record was meshed in counts,
+    never a weak one. The record's own frame (its v1 or
     v2 matrix) is what it solves in; nothing is re-meshed.
     """
 
@@ -408,6 +409,14 @@ def record_frame_refusal(
             return (
                 f"This model was prepared along {frame['axis']}, but WG decided to solve "
                 f"it along {decision.get('axis')}. Prepare it again in WG."
+            )
+        if carried_ok:
+            # A request that shows no axis (a Fusion press, a retry or a
+            # restart) never asks for one. A record an earlier build prepared
+            # without recording how it chose its axis is prepared again.
+            return (
+                "WG has no record of how it chose this model's solver frame when it "
+                "was prepared. Prepare it again."
             )
         return (
             "Confirm this model's solver frame in WG first: choose the axis it "

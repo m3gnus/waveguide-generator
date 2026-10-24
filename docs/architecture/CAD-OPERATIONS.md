@@ -572,8 +572,11 @@ axis" below).
     allowed axes). Admission, execution, retry and restart read it through
     `record_frame_refusal`; nothing re-derives an axis from the version-keyed suggestion
     cache. A record prepared before decisions were stored keeps the confident verdict of
-    its own time (`frame-infer-v2`'s cached `automatic` axis equal to the axis it was meshed
-    in, under its own v1 or v2 matrix). A second-pass disagreement is an internal
+    its own time: the cached `automatic` axis of `frame-infer-v1` (released 0.3.5),
+    `frame-infer-v2` or the unreleased `-v3`, equal to the axis it was meshed in, under
+    the frame and matrix its record states (contract v1 or v2). Such a record with no
+    confident verdict of its time, solved by a request that shows no axis, is refused
+    with a calm "prepare it again", never a request to choose an axis. A second-pass disagreement is an internal
     preparation failure, never a frame question. No confirmation row is written. The
     accepted job records `frameAxisAutomatic` and, in its frame provenance, the
     decision's own provenance; Change still opens the existing chooser and saves a manual
