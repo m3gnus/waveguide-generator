@@ -1006,7 +1006,9 @@ export async function runAutomaticWorkspaceExport(
       written.files.forEach((file) => { if (!files.includes(file)) files.push(file); });
     } catch (error) {
       const flags = error as { destinationConflict?: boolean; publicationUncertain?: boolean };
-      reportCaughtError('export-write', error, { job_id: context.jobId ?? null, format });
+      // A file of the user's already in the way is their folder, not WG's
+      // failure: it is shown, never reported to the developers.
+      if (flags.destinationConflict !== true) reportCaughtError('export-write', error, { job_id: context.jobId ?? null, format });
       failures.push({
         format,
         reason: error instanceof Error ? error.message : String(error),

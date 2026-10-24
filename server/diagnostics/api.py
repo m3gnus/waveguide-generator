@@ -14,7 +14,13 @@ from typing import Any
 from fastapi import APIRouter, Body, FastAPI, HTTPException, Query
 from fastapi.responses import Response
 
-from server.platform.incidents import bounded, configure_incidents, record_incident, summary as incident_summary
+from server.platform.incidents import (
+    INTERFACE_ERROR_KIND,
+    bounded,
+    configure_incidents,
+    record_incident,
+    summary as incident_summary,
+)
 from server.platform.paths import app_root, data_paths
 from server.platform.process import background_process_kwargs
 from server.workspace.api import open_folder_command
@@ -167,7 +173,7 @@ def create_diagnostics_router(
         rules = scrub_rules()
         system = collect_system()
         jobs_rows = await asyncio.to_thread(_recent_jobs)
-        incidents = await asyncio.to_thread(bundle_incidents, paths.root)
+        incidents = await asyncio.to_thread(bundle_incidents, paths.root, job_id=job)
         summary = build_summary(
             build=build,
             version=version,
@@ -270,8 +276,8 @@ def create_diagnostics_router(
         )
         if operation:
             # Kept beyond this session, like the server's own incidents.
-            record_incident(
-                "interface-error", operation,
+            await asyncio.to_thread(
+                record_incident, INTERFACE_ERROR_KIND, operation,
                 ids={key: (context or {}).get(key) for key in ("job_id", "operation_id", "ingest_id")},
                 evidence=record, signature={"operation": operation, "message": record["message"]},
             )

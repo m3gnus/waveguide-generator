@@ -24,6 +24,7 @@ import sys
 from typing import Any
 import zipfile
 
+from server.cadlink.operations import user_hold
 from server.jobs.models import JobStatusName
 from server.platform.incidents import summary as incident_summary
 from server.platform.paths import DataPaths
@@ -322,10 +323,15 @@ def _job_digest(job: Mapping[str, Any], rules: ScrubRules) -> dict[str, Any]:
     engine = None
     if isinstance(summary, Mapping):
         engine = summary.get("engine") or summary.get("solver")
+    metadata = job.get("task_metadata")
+    cad = metadata.get("cad") if isinstance(metadata, Mapping) else None
     return {
         "id": job.get("id"),
         "run": job.get("run_number"),
         "status": job.get("status"),
+        # A request kept for the user, even one saved as an error before holds
+        # had their own status (``operations.user_hold``), is not a failure.
+        "held": user_hold(str(job.get("status") or ""), cad) if isinstance(cad, Mapping) else False,
         "engine": engine,
         "stage": job.get("stage"),
         "createdAt": job.get("created_at"),
@@ -369,7 +375,7 @@ def summary_text(summary: Mapping[str, Any]) -> str:
         lines.append(f"Module drift: {', '.join(str(item) for item in drift)}")
 
     jobs = summary.get("recentJobs") or []
-    failed = [job for job in jobs if job.get("status") == FAILED_JOB_STATUS]
+    failed = [job for job in jobs if job.get("status") == FAILED_JOB_STATUS and not job.get("held")]
     if failed:
         lines.append("")
         lines.append("Recent failures:")
@@ -501,7 +507,8 @@ def _member_note(name: str) -> str:
     if name in _MEMBER_NOTES:
         return _MEMBER_NOTES[name]
     if name.startswith("incidents/"):
-        return "One incident record: versions, ids, evidence, stack and the tails of the logs it names."
+        return ("One incident record: versions, ids, evidence and stack; the newest ten and any naming "
+                "the selected run also keep the tails of the run logs they name.")
     if name.startswith("logs/job-"):
         return "The log of the run selected in the report dialog."
     if name.startswith("design/"):

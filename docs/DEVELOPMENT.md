@@ -249,12 +249,17 @@ Records live in `<data>/diagnostics/incidents/<kind>-<fingerprint>.json`. A repe
 of the same failure (kind plus a fingerprint of its evidence and stack, with ids
 and numbers ignored) updates the one record: first and last occurrence, count,
 the latest evidence and exception, and the ids of the last 20 occurrences. They
-are bounded (at most 200 records, 30 days since last seen, every field cut to a
-fixed size, geometry keys withheld), and paths are rewritten to `<wg>`, `<data>`,
-`<home>` and `<tmp>` and the account name to `<user>` before writing. Clear failed
+are bounded (at most 200 records, plus 50 caught interface errors in a pool of
+their own, 30 days since last seen, every field cut to a fixed size, geometry
+keys withheld; pruning reads file times, which are each record's last
+occurrence), and paths are rewritten to `<wg>`, `<data>` and `<tmp>`, the home
+folder and location variables as a problem report writes them (`~`,
+`%APPDATA%`, ...), and the account name to `<user>` before anything is
+fingerprinted, cut or written. Clear failed
 and other run deletions never remove a record; the tails of the job logs they
 delete are copied into the records that name those jobs first. Problem reports
-carry the 50 newest records (`incidents/` in the zip) and the summary lists the
+carry the 50 newest records (`incidents/` in the zip), with job-log tails only in
+the ten newest and in those naming the selected run, and the summary lists the
 newest ten. Only the running app configures the store, so tests, `cad_replay`
 and child processes never write records.
 
@@ -271,9 +276,13 @@ runs `server.tools.cad_replay` in its own process on the recorded inbox request
 `fixed` (exit 0), `still fails` (the recorded diagnostic recurs, exit 1),
 `fails differently` (exit 3) or `could not replay` (its request or retained bundle
 is gone, exit 2). `export` writes the record and WG's retained copy of
-the bundle, which never holds the CAD document; `--redact` also replaces the
-document name, blanks the STEP header's author fields (updating the manifest's
-file hashes) and drops the ids. A typical loop: `list --since 2h`, `replay`, fix,
+the bundle, which never holds the CAD document; `--redact` also replaces every
+name the record and the bundle hold (document, components, bodies, occurrence
+paths, STEP products: `redacted-model`, `name-<n>`, the same stand-in everywhere)
+and every id (`<redacted>`; the manifest's design, export and return ids by
+stand-ins, its document and origin-bundle ids dropped), keys the job logs
+`job-<n>`, blanks the STEP header's author fields and updates the manifest's
+file hashes, so the fixture still replays. A typical loop: `list --since 2h`, `replay`, fix,
 `replay` again.
 
 ### Running targeted tests

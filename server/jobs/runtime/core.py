@@ -2351,7 +2351,8 @@ class JobRuntime:
             if refusal and is_calm_failure(refusal["code"], refusal["message"]):
                 from server.jobs.cad_preparation import record_refusal_diagnostic
 
-                record_refusal_diagnostic(
+                await asyncio.to_thread(
+                    record_refusal_diagnostic,
                     str(refusal["code"]), str(refusal["message"] or ""),
                     job_id=job_id, operation_id=intent.operation_id,
                 )

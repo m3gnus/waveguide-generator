@@ -122,6 +122,36 @@ def usable_root(value: str) -> str:
     return candidate.rstrip("\\/") if named >= 1 else ""
 
 
+def location_roots(
+    *,
+    home: str | os.PathLike[str] | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> list[tuple[str, str]]:
+    """The home directory and the location variables, each with its placeholder.
+
+    The one set of identity roots: problem reports (:func:`scrub_rules`) and
+    incident records (``server.platform.incidents.redaction_rules``) both build
+    on it, so a folder reads the same in both.
+    """
+
+    env = os.environ if environ is None else environ
+    roots: list[tuple[str, str]] = []
+    home_dir = usable_root(str(Path(home) if home is not None else Path.home()))
+    if home_dir:
+        roots.append((home_dir, HOME_PLACEHOLDER))
+    for name in LOCATION_VARIABLES:
+        value = usable_root(env.get(name) or "")
+        if not value:
+            continue
+        # Anything under the home directory is already covered by the rule
+        # above, and adding it again would only produce ``%APPDATA%`` where
+        # ``~/AppData/Roaming`` is more useful to read.
+        if home_dir and value.lower().startswith(home_dir.lower()):
+            continue
+        roots.append((value, f"%{name}%"))
+    return roots
+
+
 def scrub_rules(
     *,
     home: str | os.PathLike[str] | None = None,
@@ -136,28 +166,11 @@ def scrub_rules(
     whose Windows behaviour is untested everywhere the CI matrix is green.
     """
 
-    env = os.environ if environ is None else environ
     os_name = platform.system() if system is None else system
-    roots: list[tuple[str, str]] = []
-
-    home_dir = usable_root(str(Path(home) if home is not None else Path.home()))
-    if home_dir:
-        roots.append((home_dir, HOME_PLACEHOLDER))
-    for name in LOCATION_VARIABLES:
-        value = usable_root(env.get(name) or "")
-        if not value:
-            continue
-        # Anything under the home directory is already covered by the rule
-        # above, and adding it again would only produce ``%APPDATA%`` where
-        # ``~/AppData/Roaming`` is more useful to read.
-        if home_dir and value.lower().startswith(home_dir.lower()):
-            continue
-        roots.append((value, f"%{name}%"))
-
     # Windows path comparison is case-insensitive, and the same directory shows
     # up as ``C:\\Users\\Ada`` and ``c:\\users\\ada`` in one log: the shell, the
     # registry and Python all normalise differently.
-    return ScrubRules(roots, ignore_case=os_name == "Windows")
+    return ScrubRules(location_roots(home=home, environ=environ), ignore_case=os_name == "Windows")
 
 
 def scrub_text(text: str, rules: ScrubRules) -> str:
@@ -190,6 +203,7 @@ __all__ = [
     "usable_root",
     "LOCATION_VARIABLES",
     "ScrubRules",
+    "location_roots",
     "scrub_rules",
     "scrub_text",
     "scrub_value",

@@ -25,6 +25,9 @@ VERSIONED_DISTRIBUTIONS = ("gmsh", "numpy", "scipy", "bempp-cl", "cadquery-ocp",
 #: Incidents a summary lists, and a report carries in full.
 SUMMARY_INCIDENTS = 10
 BUNDLE_INCIDENTS = 50
+#: Records whose job-log tails a report keeps: the newest, and any naming the
+#: run selected in the dialog. The rest say how many tails they left out.
+TAILED_INCIDENTS = 10
 
 
 def _distribution_versions() -> dict[str, str | None]:
@@ -74,21 +77,49 @@ def recent_incidents(data_dir: Path | str, *, limit: int = SUMMARY_INCIDENTS) ->
         return []
 
 
-def bundle_incidents(data_dir: Path | str, *, limit: int = BUNDLE_INCIDENTS) -> list[dict[str, Any]]:
-    """The newest incident records in full, for the report zip."""
+def names_job(record: Mapping[str, Any], job_id: str | None) -> bool:
+    """Whether a record is about this run: its latest occurrence, an earlier one, or a kept log."""
+
+    if not job_id:
+        return False
+    occurrences = [record.get("latest") or {}, *(record.get("occurrences") or ())]
+    return job_id in (record.get("jobLogs") or {}) or any(
+        isinstance(item, Mapping) and str((item.get("ids") or {}).get("job_id")) == job_id
+        for item in occurrences
+    )
+
+
+def bundle_incidents(
+    data_dir: Path | str, *, limit: int = BUNDLE_INCIDENTS, job_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """The newest incident records, for the report zip.
+
+    Job-log tails stay in the :data:`TAILED_INCIDENTS` newest records and in
+    those naming ``job_id`` (the run selected in the dialog); the others keep
+    the count of the tails they left out.
+    """
 
     try:
-        return incident_store(data_dir).list()[:limit]
+        records = incident_store(data_dir).list()[:limit]
     except Exception:  # noqa: BLE001 - a report never fails over its evidence
         return []
+    kept = []
+    for index, record in enumerate(records):
+        logs = record.get("jobLogs") or {}
+        if logs and index >= TAILED_INCIDENTS and not names_job(record, job_id):
+            record = {**record, "jobLogs": {}, "jobLogsLeftOut": len(logs)}
+        kept.append(record)
+    return kept
 
 
 __all__ = [
     "BUNDLE_INCIDENTS",
     "SUMMARY_INCIDENTS",
+    "TAILED_INCIDENTS",
     "VERSIONED_DISTRIBUTIONS",
     "bundle_incidents",
     "incident_store",
     "incident_versions",
+    "names_job",
     "recent_incidents",
 ]

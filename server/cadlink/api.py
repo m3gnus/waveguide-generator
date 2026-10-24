@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import json
 import logging
@@ -1074,7 +1075,8 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
     except HTTPException:
         raise
     except Exception as exc:
-        raise _ingest_error(exc) from exc
+        # Off the event loop: classifying may record an incident.
+        raise await asyncio.to_thread(_ingest_error, exc) from exc
     runtime = getattr(request.app.state, "jobs_runtime", None)
     _schedule_deferred_viewport(record, data_dir, getattr(runtime, "events", None))
     _schedule_frame_suggestion(store, record)
@@ -2034,7 +2036,10 @@ def _track(state: Any, task: asyncio.Task[Any]) -> None:
             logger.error(
                 "A CAD preparation failed unexpectedly.", exc_info=finished.exception()
             )
-            record_incident("preparation-crash", "cad-preparation", exception=finished.exception())
+            # Written off the event loop; recording never raises.
+            asyncio.get_running_loop().run_in_executor(None, functools.partial(
+                record_incident, "preparation-crash", "cad-preparation", exception=finished.exception(),
+            ))
 
     task.add_done_callback(done)
 

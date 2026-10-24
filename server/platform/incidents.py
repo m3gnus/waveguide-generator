@@ -9,13 +9,17 @@ The records are
 * **deduplicated** by kind and fingerprint: a repeat of the same failure
   updates the one record (first and last occurrence, count, the latest
   evidence and the ids of the last few occurrences) instead of adding a file;
-* **bounded**: at most :data:`MAX_RECORDS` records, none older than
+* **bounded**: at most :data:`MAX_RECORDS` records (and, in a pool of their
+  own, :data:`MAX_INTERFACE_RECORDS` interface errors), none older than
   :data:`MAX_AGE_DAYS` days since it last happened, and every string, list and
   nested mapping in a record is cut to a fixed size, so no record can carry a
-  mesh or a model;
-* **privacy-safe**: the application folder, the data folder and the home folder
-  are rewritten to ``<wg>``, ``<data>`` and ``<home>``, and the account name to
-  ``<user>``, before anything is written;
+  mesh or a model. A record file's modification time is its last occurrence,
+  so pruning reads no record;
+* **privacy-safe**: the application, data and temporary folders are rewritten
+  to ``<wg>``, ``<data>`` and ``<tmp>``, the home folder and the location
+  variables as a problem report's scrubber writes them (``~``, ``%APPDATA%``,
+  ...), and the account name to ``<user>``, before anything is fingerprinted,
+  cut or written;
 * **independent of the run list**: deleting runs (Clear failed) never deletes a
   record, and the job logs it removes are copied, as bounded tails, into the
   records that name those jobs first (:func:`retain_job_logs`).
@@ -44,7 +48,7 @@ import traceback
 from typing import Any
 
 from .json_file import write_json_atomic
-from .scrub import ScrubRules, usable_root
+from .scrub import HOME_PLACEHOLDER, ScrubRules, location_roots, usable_root
 
 
 log = logging.getLogger("wg.incidents")
@@ -53,6 +57,10 @@ SCHEMA_VERSION = 1
 INCIDENTS_DIRECTORY = ("diagnostics", "incidents")
 
 MAX_RECORDS = 200
+#: Caught interface errors keep a pool of their own, so a noisy interface can
+#: never push the pipeline's incidents out.
+INTERFACE_ERROR_KIND = "interface-error"
+MAX_INTERFACE_RECORDS = 50
 MAX_AGE_DAYS = 30
 #: The ids and times of the most recent occurrences of one incident.
 MAX_OCCURRENCES = 20
@@ -81,7 +89,8 @@ _SAFE_ID = re.compile(r"[^a-z0-9-]+")
 #: What changes between occurrences of one failure: ids, digests, counts and
 #: measurements. Replaced before fingerprinting so a repeat is recognised.
 _VOLATILE = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"(?<![A-Za-z0-9])tmp[A-Za-z0-9_]{3,}"  # tempfile's random directory names
+    r"|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
     r"|\b0x[0-9a-f]+\b"
     r"|\b[0-9a-f]{8,}\b"
     r"|\d+(?:\.\d+)?(?:e[+-]?\d+)?",
@@ -107,15 +116,20 @@ def _parse(value: Any) -> datetime | None:
 
 def redaction_rules(
     *, data_dir: Path | str | None, app_root: Path | str | None, home: Path | str | None = None,
-    temp_dir: Path | str | None = None,
+    temp_dir: Path | str | None = None, environ: Mapping[str, str] | None = None,
 ) -> ScrubRules:
-    """``<wg>``, ``<data>``, ``<home>`` and ``<tmp>``; the longest root wins."""
+    """The report scrubber's roots (home, location variables), plus ``<wg>``, ``<data>``, ``<tmp>``.
 
-    roots = []
+    One set of roots with the problem report's :func:`~server.platform.scrub.scrub_rules`,
+    so a folder reads the same in a record and in the report around it. The
+    longest root wins.
+    """
+
+    roots = list(location_roots(home=home, environ=environ))
     for value, placeholder in (
+        (Path.home() if home is None else home, HOME_PLACEHOLDER),  # its resolved spelling too
         (app_root, "<wg>"),
         (data_dir, "<data>"),
-        (Path.home() if home is None else home, "<home>"),
         (tempfile.gettempdir() if temp_dir is None else temp_dir, "<tmp>"),
     ):
         if value is None:
@@ -141,7 +155,8 @@ class Redactor:
     def __init__(self, rules: ScrubRules, *, user: str | None) -> None:
         self._rules = rules
         self._user = (
-            re.compile(rf"(?<![A-Za-z0-9]){re.escape(user)}(?![A-Za-z0-9])", re.IGNORECASE)
+            # Not inside ``<user>`` itself: redacting twice changes nothing.
+            re.compile(rf"(?<![A-Za-z0-9<]){re.escape(user)}(?![A-Za-z0-9>])", re.IGNORECASE)
             if user else None
         )
 
@@ -215,9 +230,14 @@ def _stack_signature(exc: BaseException) -> list[str]:
 
 def fingerprint(
     kind: str, phase: str, *, exception: BaseException | None, evidence: Mapping[str, Any],
-    signature: Any = None,
+    signature: Any = None, redact: Callable[[str], str] | None = None,
 ) -> str:
-    """The identity of one failure: what failed, where, and how, but not which run."""
+    """The identity of one failure: what failed, where, and how, but not which run.
+
+    ``evidence`` and ``signature`` are already redacted; ``redact`` does the
+    same for the exception's message, so a path is a placeholder before it is
+    normalised and a repeat in another folder is the same failure.
+    """
 
     basis = {
         "kind": kind,
@@ -225,20 +245,22 @@ def fingerprint(
         "signature": _normalized(signature) if signature is not None else _normalized(evidence),
         "exception": None if exception is None else {
             "type": type(exception).__name__,
-            "message": _normalized(str(exception))[:512],
+            "message": _normalized((redact or str)(str(exception)))[:512],
             "stack": _stack_signature(exception),
         },
     }
     return hashlib.sha256(json.dumps(basis, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
-def _exception_record(exc: BaseException) -> dict[str, Any]:
-    stack = "".join(traceback.format_exception(exc))
+def _exception_record(exc: BaseException, redact: Callable[[str], str] = str) -> dict[str, Any]:
+    """Redacted, then cut: a path is never split by the cut and left half named."""
+
+    stack = redact("".join(traceback.format_exception(exc)))
     if len(stack) > MAX_STACK_CHARS:
         stack = "... [earlier frames cut]\n" + stack[-MAX_STACK_CHARS:]
     return {
         "type": f"{type(exc).__module__}.{type(exc).__qualname__}",
-        "message": str(exc)[:MAX_STRING_CHARS],
+        "message": redact(str(exc))[:MAX_STRING_CHARS],
         "stack": stack,
         "reasonCode": getattr(exc, "reason_code", None) or getattr(exc, "code", None),
     }
@@ -263,6 +285,19 @@ def read_log_tail(path: Path, *, limit: int = MAX_JOB_LOG_TAIL_BYTES) -> tuple[s
 
 def incidents_dir(data_dir: Path | str) -> Path:
     return Path(data_dir).joinpath(*INCIDENTS_DIRECTORY)
+
+
+def incident_id(kind: str, digest: str) -> str:
+    """``<kind>-<12 hex>``: the file name says which pool a record is in."""
+
+    return f"{_SAFE_ID.sub('-', kind.lower()).strip('-')[:40] or 'incident'}-{digest[:12]}"
+
+
+_INTERFACE_PREFIX = incident_id(INTERFACE_ERROR_KIND, "").rstrip("-") + "-"
+
+
+def _pool(name: str) -> str:
+    return INTERFACE_ERROR_KIND if name.startswith(_INTERFACE_PREFIX) else "pipeline"
 
 
 class IncidentStore:
@@ -311,24 +346,30 @@ class IncidentStore:
     ) -> str:
         """Record one occurrence and return its incident id."""
 
-        evidence = dict(evidence or {})
-        ids = {key: value for key, value in dict(ids or {}).items() if value not in (None, "")}
-        digest = fingerprint(kind, phase, exception=exception, evidence=evidence, signature=signature)
-        incident_id = f"{_SAFE_ID.sub('-', kind.lower()).strip('-')[:40] or 'incident'}-{digest[:12]}"
+        redactor = self._redactor
+        # Redacted first: the fingerprint and the cuts see placeholders, never
+        # a temporary folder or a home directory.
+        evidence = redactor.value(dict(evidence or {}))
+        ids = redactor.value({key: value for key, value in dict(ids or {}).items() if value not in (None, "")})
+        signature = redactor.value(signature) if signature is not None else None
+        digest = fingerprint(
+            kind, phase, exception=exception, evidence=evidence, signature=signature, redact=redactor.text,
+        )
+        identity = incident_id(kind, digest)
         moment = _iso(self._now())
         occurrence = {
             "at": moment,
             "ids": bounded(ids, limit=256),
             "evidence": bounded(evidence),
-            "exception": _exception_record(exception) if exception is not None else None,
+            "exception": _exception_record(exception, redactor.text) if exception is not None else None,
         }
         with self._lock:
-            path = self.root / f"{incident_id}.json"
+            path = self.root / f"{identity}.json"
             current = self._read(path)
             if current is None or current.get("fingerprint") != digest:
                 current = {
                     "schema": SCHEMA_VERSION,
-                    "id": incident_id,
+                    "id": identity,
                     "kind": kind,
                     "phase": phase,
                     "fingerprint": digest,
@@ -344,9 +385,9 @@ class IncidentStore:
             current["occurrences"] = (
                 list(current.get("occurrences") or []) + [{"at": moment, "ids": occurrence["ids"]}]
             )[-MAX_OCCURRENCES:]
-            write_json_atomic(path, self._redactor.value(current))
+            self._write(path, current)
             self._prune_locked()
-        return incident_id
+        return identity
 
     def retain_job_logs(self, job_ids: Iterable[str], log_path: Callable[[str], Path]) -> int:
         """Copy the tails of these jobs' logs into the records naming them.
@@ -380,9 +421,20 @@ class IncidentStore:
                     logs.pop(job_id, None)
                     logs[job_id] = {"capturedAt": _iso(self._now()), "truncated": truncated, "tail": text}
                 record["jobLogs"] = dict(list(logs.items())[-MAX_JOB_LOGS:])
-                write_json_atomic(path, self._redactor.value(record))
+                self._write(path, record)
                 updated += 1
         return updated
+
+    def _write(self, path: Path, record: Mapping[str, Any]) -> None:
+        """Write a record; its modification time becomes its last occurrence."""
+
+        write_json_atomic(path, self._redactor.value(record))
+        last = _parse(record.get("lastSeen"))
+        if last is not None:
+            try:
+                os.utime(path, (last.timestamp(), last.timestamp()))
+            except OSError:
+                pass  # pruning then counts it from now, which only keeps it longer
 
     # -- reading ---------------------------------------------------------------
 
@@ -432,21 +484,31 @@ class IncidentStore:
             return self._prune_locked()
 
     def _prune_locked(self) -> int:
-        cutoff = self._now() - timedelta(days=MAX_AGE_DAYS)
-        dated: list[tuple[str, Path]] = []
+        """Drop records past their age, then the oldest beyond each pool's size.
+
+        Reads modification times and names only (``_write`` sets the time to
+        the last occurrence): recording one failure never parses every record.
+        """
+
+        cutoff = (self._now() - timedelta(days=MAX_AGE_DAYS)).timestamp()
+        limits = {INTERFACE_ERROR_KIND: MAX_INTERFACE_RECORDS, "pipeline": MAX_RECORDS}
+        pools: dict[str, list[tuple[float, str, Path]]] = {}
         removed = 0
         for path in self._paths():
-            record = self._read(path)
-            last = _parse((record or {}).get("lastSeen"))
-            if last is None or last < cutoff:
+            try:
+                modified = path.stat().st_mtime
+            except OSError:
+                continue
+            if modified < cutoff:
                 path.unlink(missing_ok=True)
                 removed += 1
                 continue
-            dated.append((str((record or {}).get("lastSeen")), path))
-        dated.sort(reverse=True)
-        for _stamp, path in dated[MAX_RECORDS:]:
-            path.unlink(missing_ok=True)
-            removed += 1
+            pools.setdefault(_pool(path.name), []).append((modified, path.name, path))
+        for pool, entries in pools.items():
+            entries.sort(reverse=True)
+            for _modified, _name, path in entries[limits[pool]:]:
+                path.unlink(missing_ok=True)
+                removed += 1
         return removed
 
 
@@ -547,11 +609,13 @@ def retain_job_logs(job_ids: Iterable[str], log_path: Callable[[str], Path]) -> 
 __all__ = [
     "GEOMETRY_KEYS",
     "INCIDENTS_DIRECTORY",
+    "INTERFACE_ERROR_KIND",
     "IncidentStore",
     "MAX_AGE_DAYS",
     "MAX_JOB_LOGS",
     "MAX_JOB_LOG_TAIL_BYTES",
     "MAX_OCCURRENCES",
+    "MAX_INTERFACE_RECORDS",
     "MAX_RECORDS",
     "Redactor",
     "account_name",
@@ -559,6 +623,7 @@ __all__ = [
     "configure_incidents",
     "configured_store",
     "fingerprint",
+    "incident_id",
     "incidents_dir",
     "read_log_tail",
     "record_incident",

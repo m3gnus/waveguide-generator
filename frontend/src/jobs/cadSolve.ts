@@ -59,7 +59,7 @@ export function cadJobOperationId(job: JobItem): string | null {
 }
 
 /** Historical refusals remain waiting requests after upgrading. */
-export function isHeldCadJob(job: JobItem): boolean {
+export function isHeldCadJob(job: Pick<JobItem, 'status' | 'cad_state'>): boolean {
   if (isFailedCadPreparation(job)) return false;
   return job.cad_state?.held ?? (job.status === 'held' || (job.status === 'error'
     && job.cad_state?.state === 'needs_user_input' && !!job.cad_state.reason));
@@ -68,7 +68,7 @@ export function isHeldCadJob(job: JobItem): boolean {
 /** A preparation that ended without a result and without needing a choice
  * (the server's `prepare_failed`): its message is WG's calm sentence and its
  * options are what can still work (Try again, Dismiss). Never a hold. */
-export function isFailedCadPreparation(job: JobItem): boolean {
+export function isFailedCadPreparation(job: Pick<JobItem, 'cad_state'>): boolean {
   return job.cad_state?.prepare_failed === true;
 }
 

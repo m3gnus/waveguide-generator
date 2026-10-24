@@ -134,10 +134,10 @@ def test_paths_and_the_account_name_are_rewritten(tmp_path: Path) -> None:
     assert "ada-lovelace" not in text.lower()
     record = json.loads(text)
     assert record["latest"]["evidence"]["detail"] == (
-        "<wg>/server/mesh.py failed for <home>/Documents/<user>/horn.step"
+        "<wg>/server/mesh.py failed for ~/Documents/<user>/horn.step"
     )
     assert record["latest"]["evidence"]["owner"] == "<user>"
-    assert "<home>/key" in record["latest"]["evidence"]
+    assert "~/key" in record["latest"]["evidence"]
     assert "<data>/imports/bundles/x.wgreturn" in record["latest"]["exception"]["message"]
 
 
@@ -168,11 +168,12 @@ def test_preparation_diagnostic_records_an_incident_with_the_handled_stack(tmp_p
     with caplog.at_level("WARNING"):
         try:
             raise ValueError("synthetic preparation failure")
-        except ValueError:
+        except ValueError as exc:
             incident = record_preparation_diagnostic(
                 "internal-failure",
                 {"code": "preparation_failed", "job_id": "job-7", "operation_id": "op-7",
                  "detail": "synthetic preparation failure"},
+                exception=exc,
             )
     record = store.get(incident)
     assert record["kind"] == "internal-failure" and record["phase"] == "cad-preparation"
@@ -310,3 +311,136 @@ def test_caught_interface_errors_with_an_operation_become_incidents(tmp_path: Pa
     # An uncaught error without an operation stays in the session buffer only.
     client.post("/api/diagnostics/client-log", json={"message": "render loop", "source": "render"})
     assert len(store.list()) == 1
+
+
+def test_a_diagnostic_never_takes_an_unrelated_outer_exception(tmp_path: Path) -> None:
+    from server.cadlink.intake.readings import record_preparation_diagnostic
+
+    store = configure_incidents(tmp_path / "data", app_root=tmp_path / "app")
+    try:
+        raise KeyError("an unrelated lookup further out")
+    except KeyError:
+        incident = record_preparation_diagnostic("frame-fallback", {"reason_code": "survey"})
+    assert store.get(incident)["latest"]["exception"] is None
+
+
+def test_repeats_in_different_temporary_folders_are_one_incident(tmp_path: Path) -> None:
+    import tempfile
+
+    store = _store(tmp_path)
+    incidents_seen = set()
+    for _ in range(2):
+        scratch = Path(tempfile.mkdtemp(prefix="tmp"))
+        try:
+            incidents_seen.add(store.record(
+                "internal-failure", "cad-preparation",
+                exception=_failure(f"could not open {scratch}/mesh/part.msh"),
+                evidence={"code": "preparation_failed", "detail": f"gmsh wrote nothing in {scratch}/mesh"},
+            ))
+        finally:
+            scratch.rmdir()
+    [incident] = incidents_seen
+    assert store.get(incident)["count"] == 2
+    assert "<tmp>/" in store.get(incident)["latest"]["evidence"]["detail"]
+
+
+def test_paths_are_redacted_before_a_field_is_cut(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    home = tmp_path / "home"
+    detail = "x" * (MAX_STRING_CHARS - 20) + f" {home}/file"
+    assert len(detail) > MAX_STRING_CHARS
+    incident = store.record("domain", "cad-preparation", evidence={"detail": detail},
+                            exception=_failure("y" * (MAX_STRING_CHARS - 20) + f" {home}/stack"))
+    record = store.get(incident)
+    assert record["latest"]["evidence"]["detail"].endswith(" ~/file")
+    assert record["latest"]["exception"]["message"].endswith(" ~/stack")
+    assert str(tmp_path)[:16] not in json.dumps(record)
+
+
+def test_interface_errors_have_their_own_pool(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(incidents, "MAX_RECORDS", 5)
+    monkeypatch.setattr(incidents, "MAX_INTERFACE_RECORDS", 3)
+    clock = Clock(datetime(2026, 10, 24, 12, tzinfo=timezone.utc))
+    store = _store(tmp_path, now=clock)
+    pipeline = store.record("internal-failure", "cad-preparation", evidence={"code": "preparation_failed"})
+    for index in range(10):
+        clock.advance(seconds=1)
+        store.record("interface-error", "run-archive", evidence={"message": chr(97 + index)})
+    assert store.get(pipeline) is not None  # a noisy interface never pushes it out
+    assert len(store.list(kind="interface-error")) == 3
+    for index in range(10):
+        clock.advance(seconds=1)
+        store.record("domain", "cad-preparation", evidence={"code": chr(97 + index)})
+    assert len([item for item in store.list() if item["kind"] != "interface-error"]) == 5
+    assert len(store.list(kind="interface-error")) == 3
+
+
+def test_recording_reads_only_its_own_record(tmp_path: Path, monkeypatch) -> None:
+    store = _store(tmp_path)
+    for index in range(20):
+        store.record("domain", "cad-preparation", evidence={"code": chr(97 + index)})
+    reads = []
+    original = IncidentStore._read
+
+    def counting(path):
+        reads.append(path)
+        return original(path)
+
+    monkeypatch.setattr(IncidentStore, "_read", staticmethod(counting))
+    store.record("frame-gate", "cad-preparation", evidence={"reason": "mismatch"})
+    assert len(reads) == 1  # pruning reads file times, never the other records
+
+
+def test_file_time_is_the_last_occurrence(tmp_path: Path) -> None:
+    clock = Clock(datetime(2026, 10, 1, 8, tzinfo=timezone.utc))
+    store = _store(tmp_path, now=clock)
+    incident = store.record("domain", "cad-preparation", evidence={"code": "open"})
+    assert (store.root / f"{incident}.json").stat().st_mtime == clock.moment.timestamp()
+
+
+def test_discarded_result_logs_are_kept_with_their_incidents(tmp_path: Path) -> None:
+    from server.jobs.store import JobStore
+
+    store = configure_incidents(tmp_path / "data", app_root=tmp_path / "app")
+    jobs = JobStore.for_data_dir(tmp_path / "data")
+    jobs.initialize()
+    try:
+        now = "2026-10-24T12:00:00Z"
+        jobs.create_job({
+            "id": "job-discarded", "status": "complete", "created_at": now, "updated_at": now,
+            "queued_at": now, "completed_at": now, "config_json": {}, "config_summary_json": {},
+            "task_metadata": {"results_discarded_at": now},
+        })
+        log_path = jobs._job_log_path("job-discarded")
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("meshing\nthe solve diverged\n", encoding="utf-8")
+        incident = record_incident("internal-failure", "solve", ids={"job_id": "job-discarded"},
+                                   evidence={"code": "x"})
+        jobs._delete_discarded_result_logs()
+        assert not log_path.exists()
+        assert store.get(incident)["jobLogs"]["job-discarded"]["tail"].endswith("the solve diverged\n")
+    finally:
+        jobs.close()
+
+
+def test_report_keeps_log_tails_for_the_newest_and_the_selected_run(tmp_path: Path) -> None:
+    from server.diagnostics.incidents import TAILED_INCIDENTS, bundle_incidents
+
+    clock = Clock(datetime(2026, 10, 24, 12, tzinfo=timezone.utc))
+    store = _store(tmp_path, now=clock)
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    created = []
+    for index in range(TAILED_INCIDENTS + 3):
+        clock.advance(seconds=1)
+        job_id = f"job-{chr(97 + index)}"
+        (logs / f"{job_id}.log").write_text(f"log of {job_id}\n", encoding="utf-8")
+        created.append((job_id, store.record("domain", "cad-preparation", ids={"job_id": job_id},
+                                             evidence={"code": chr(97 + index)})))
+    store.retain_job_logs([job_id for job_id, _ in created], lambda job_id: logs / f"{job_id}.log")
+    oldest_job, oldest = created[0]
+    records = {record["id"]: record for record in bundle_incidents(tmp_path / "data", job_id=oldest_job)}
+    assert records[oldest]["jobLogs"][oldest_job]["tail"] == f"log of {oldest_job}\n"
+    assert records[created[1][1]]["jobLogs"] == {} and records[created[1][1]]["jobLogsLeftOut"] == 1
+    for job_id, incident in created[-TAILED_INCIDENTS:]:
+        assert job_id in records[incident]["jobLogs"]

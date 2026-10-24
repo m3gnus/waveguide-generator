@@ -39,6 +39,11 @@ describe('defaultJob', () => {
     expect(defaultJob([{ id: 'held', status: 'held' }, { id: 'failed', status: 'error' }])).toBe('failed');
   });
 
+  it('never takes a request saved as an error before holds had a status for a failure', () => {
+    const legacy: ReportJob = { id: 'legacy-hold', status: 'error', cad_state: { held: true } as ReportJob['cad_state'] };
+    expect(defaultJob([legacy, { id: 'failed', status: 'error' }])).toBe('failed');
+  });
+
   it('reads only statuses the jobs API sends', () => {
     expect(JOBS.every((job) => JOB_STATUSES.includes(job.status))).toBe(true);
   });

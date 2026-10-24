@@ -6,7 +6,8 @@ import {
   openLogsFolder,
   type DiagnosticsReport,
 } from '../api/diagnostics';
-import type { JobStatus } from '../api/jobsSocket';
+import type { JobItem, JobStatus } from '../api/jobsSocket';
+import { isHeldCadJob } from '../jobs/cadSolve';
 import { Icon } from './icons';
 import { useModalDialogFocus } from './dialogFocus';
 
@@ -15,6 +16,7 @@ export interface ReportJob {
   status: JobStatus;
   run_number?: number | null;
   label?: string | null;
+  cad_state?: JobItem['cad_state'];
 }
 
 /**
@@ -26,7 +28,9 @@ export interface ReportJob {
  * result is wrong", which is the other half of the reports that arrive.
  */
 export function defaultJob(jobs: readonly ReportJob[]): string | undefined {
-  return (jobs.find((job) => job.status === FAILED_JOB_STATUS) ?? jobs[0])?.id;
+  // A request kept for the user is not a failure, also one an older version
+  // saved as an error before holds had their own status.
+  return (jobs.find((job) => job.status === FAILED_JOB_STATUS && !isHeldCadJob(job)) ?? jobs[0])?.id;
 }
 
 /** A failed run's status (the server's `JobStatusName`); a held request waits for the user. */
@@ -152,7 +156,7 @@ export function ReportDialog({ open, jobs, onClose }: {
           <h3 id="report-summary-title">What this report says about your machine</h3>
           {error && <p className="workspace-settings-error" role="status">{error}</p>}
           <pre tabIndex={0}>{report?.text ?? (error ? 'Unavailable.' : 'Collecting…')}</pre>
-          <p className="cad-settings-note">The saved file adds the application log, the selected run&rsquo;s log, and a <code>manifest.json</code> listing everything in it. Your user name is rewritten out of every path.</p>
+          <p className="cad-settings-note">The saved file adds the application log, the selected run&rsquo;s log, WG&rsquo;s records of its own recent internal problems (what failed, the versions, run and request ids, error stacks, and the last lines of the logs of the runs they name), and a <code>manifest.json</code> listing everything in it. Your user name is rewritten out of every path.</p>
         </section>
 
         <div className="report-dialog-actions">

@@ -3869,9 +3869,15 @@ class JobStore:
                 self._job_log_path(str(row["id"])).name for row in kept_rows
             }
 
-            for path in entries:
-                if path.name in kept_names or self._job_log_path(path.stem).name != path.name:
-                    continue
+            doomed = [
+                path for path in entries
+                if path.name not in kept_names and self._job_log_path(path.stem).name == path.name
+                and path.is_file()
+            ]
+            # Like every other log deletion: the incidents naming these jobs
+            # keep their tails first.
+            retain_job_logs([path.stem for path in doomed], self._job_log_path)
+            for path in doomed:
                 try:
                     path.unlink(missing_ok=True)
                 except IsADirectoryError:

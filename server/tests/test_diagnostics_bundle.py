@@ -294,6 +294,23 @@ def test_recent_failures_are_the_runs_whose_status_is_error() -> None:
     assert "Recent failures:" not in summary_text(summary_for(jobs=jobs[:2]))
 
 
+def test_a_request_saved_as_an_error_before_holds_is_not_a_failure() -> None:
+    """The classifier (``operations.user_hold``) decides, not the stored status."""
+
+    from server.cadlink.operations import REASON_CODES, user_hold
+
+    code = next(code for code in REASON_CODES if user_hold("error", {"refusal": {"code": code, "message": ""}}))
+    legacy = {"id": "run-1", "run_number": 1, "status": "error", "error_message": "legacy hold message",
+              "config_summary_json": {}, "task_metadata": {"cad": {"refusal": {"code": code, "message": ""}}}}
+    failed = {"id": "run-2", "run_number": 2, "status": "error", "error_message": "real failure",
+              "config_summary_json": {}, "task_metadata": {"cad": {"refusal": {"code": "preparation_failed",
+                                                                                "message": "x"}}}}
+    summary = summary_for(jobs=[legacy, failed])
+    assert [job["held"] for job in summary["recentJobs"]] == [True, False]
+    text = summary_text(summary)
+    assert "real failure" in text and "legacy hold message" not in text
+
+
 def test_the_filename_names_the_build() -> None:
     assert bundle_filename(summary_for()).startswith("wg-report-abcd1234-")
     assert bundle_filename(summary_for()).endswith(".zip")

@@ -36,7 +36,8 @@ export interface DiagnosticsSummary {
   engines: DiagnosticsEngine[] | { status: string; reason: string };
   dependencies: { drift: string[]; pinned: Record<string, string>; installed: Record<string, string | null> } | null;
   storage: unknown;
-  recentJobs: { id: string; run: number | null; status: JobStatus; engine: string | null; error: string | null }[];
+  /** `held`: a request kept for the user (also one saved as an error before holds had a status). */
+  recentJobs: { id: string; run: number | null; status: JobStatus; held?: boolean; engine: string | null; error: string | null }[];
   frontendErrors: number;
   /** WG's own recent unexpected failures (developer records), newest first. */
   recentIncidents?: DiagnosticsIncident[];

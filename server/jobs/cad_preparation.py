@@ -229,6 +229,7 @@ def job_operation_view(row: Mapping[str, Any]) -> dict[str, Any]:
 def calm_refusal_message(
     code: str, message: str, cad: Mapping[str, Any], *,
     job_id: str | None, operation_id: str | None, record: bool = True,
+    exception: BaseException | None = None,
 ) -> str:
     """The message a refusal is stored with: WG's calm words for a failed preparation.
 
@@ -244,7 +245,7 @@ def calm_refusal_message(
     if record:
         record_refusal_diagnostic(
             code, message, job_id=job_id, operation_id=operation_id,
-            manifest_sha256=snapshot.get("manifest_sha256"),
+            manifest_sha256=snapshot.get("manifest_sha256"), exception=exception,
         )
     return str(preparation_failure(
         code, snapshot.get("document_name"), detail=message, manual=_is_manual(operation_id),
@@ -258,15 +259,19 @@ _DIAGNOSED_CODES = INTERNAL_FAILURE_CODES | {"solver_memory_exceeded"}
 
 def record_refusal_diagnostic(
     code: str, message: str, *, job_id: str | None, operation_id: str | None,
-    manifest_sha256: str | None = None,
+    manifest_sha256: str | None = None, exception: BaseException | None = None,
 ) -> None:
-    """Record a calm failure's raw detail for the developers, once, where it is diagnosed."""
+    """Record a calm failure's raw detail for the developers, once, where it is diagnosed.
+
+    ``exception`` is the failure's own, when it was one; its stack is kept.
+    """
 
     if code in _DIAGNOSED_CODES:
         record_preparation_diagnostic(
             "memory-guard" if code == "solver_memory_exceeded" else "internal-failure",
             {"code": code, "job_id": job_id, "operation_id": operation_id,
              "manifest_sha256": manifest_sha256, "detail": message},
+            exception=exception if isinstance(exception, Exception) else None,
         )
 
 
@@ -415,15 +420,20 @@ class _Run:
         if stage:
             logger.info("CAD job %s (operation %s): stage %s.", self.job_id, self.intent.operation_id, stage)
 
-    def refuse(self, code: str, message: str, *, blocker: Mapping[str, Any] | None = None) -> tuple[str, None]:
+    def refuse(
+        self, code: str, message: str, *, blocker: Mapping[str, Any] | None = None,
+        exception: BaseException | None = None,
+    ) -> tuple[str, None]:
         """End the job as refused. ``("done", None)``: the preparation is over.
 
         The one write of a refusal. An internal failure is recorded for the
-        developers with its raw detail, and the job keeps only WG's calm words.
+        developers with its raw detail (and ``exception``'s stack, when the
+        failure was one), and the job keeps only WG's calm words.
         """
 
         message = calm_refusal_message(
             code, message, self.cad, job_id=self.job_id, operation_id=self.intent.operation_id,
+            exception=exception,
         )
         event = self.port.job_store.refuse_preparing_job(
             self.job_id, code=code, message=message, cad=self.cad or None, blocker=blocker
@@ -712,17 +722,17 @@ def prepare_job_sync(
         except SolverMemoryTooLarge as exc:
             # Also after Solve anyway: only a coarser mesh helps, so this ends
             # the request calmly instead of holding it for another choice.
-            return run.refuse("solver_memory_exceeded", str(exc))
+            return run.refuse("solver_memory_exceeded", str(exc), exception=exc)
         except WgReturnError as exc:
             return run.refuse("snapshot_invalid", str(exc))
         except IngestRefusal as exc:
             if getattr(exc, "corruption", False):
                 return run.refuse("snapshot_invalid", str(exc))
-            return run.refuse("preparation_failed", str(exc))
+            return run.refuse("preparation_failed", str(exc), exception=exc)
         except (ChildRefusal, RuntimeError, ValueError, OSError) as exc:
             # A worker that crashed, ran out of time or memory: the app survives
             # and the user may solve again.
-            return run.refuse("preparation_failed", f"Preparing the mesh failed: {exc}")
+            return run.refuse("preparation_failed", f"Preparing the mesh failed: {exc}", exception=exc)
 
     if setup.origin == DEFAULTS_ORIGIN:
         standing = _remember_default_setup(store, retained_manifest, record, revision_id)
@@ -1128,6 +1138,7 @@ async def run_cad_preparation(port: CadJobPort, host: CadPreparationHost, job_id
                 "preparation_failed",
                 f"Preparing this request failed unexpectedly: {exc}. "
                 "Press Solve now to try again.",
+                exception=exc,
             )
         except _Fenced:
             pass
@@ -1170,9 +1181,10 @@ async def _bind(
         if code == FRAME_CONFIRMATION_REQUIRED:
             # A concurrent change between preparation and binding is internal
             # recovery work, never a request to choose its axis.
-            record_preparation_diagnostic(
+            await asyncio.to_thread(
+                record_preparation_diagnostic,
                 "frame-submission", {**_run_ids(run, None), "reason": str(exc)},
-                chosen_axis=(provenance.get("frame") or {}).get("axis"),
+                chosen_axis=(provenance.get("frame") or {}).get("axis"), exception=exc,
             )
             await asyncio.to_thread(
                 run.refuse, "preparation_failed",

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import logging
-import sys
 from typing import Any, TYPE_CHECKING
 
 import numpy as np
@@ -72,18 +71,18 @@ def record_preparation_diagnostic(
 ) -> str | None:
     """Record a developer diagnostic: one incident record, and the log line.
 
-    ``stage`` is the incident's kind. The exception is the one being handled
-    when none is named, so a catch-all's stack is kept without passing it. The
-    log line (``extra["cad_diagnostic"]``) stays: the replay tool reads it.
-    Returns the incident id, or ``None`` when no store is configured.
+    ``stage`` is the incident's kind. Its stack is ``exception``'s, named by
+    the caller that handled it: an exception merely being handled further out
+    is another failure's. The log line (``extra["cad_diagnostic"]``) stays: the
+    replay tool reads it. Returns the incident id, or ``None`` when no store is
+    configured.
     """
 
-    failure = exception if exception is not None else sys.exc_info()[1]
     diagnostic = {"stage": stage, "evidence": dict(evidence), "chosen_axis": chosen_axis}
     incident = record_incident(
         stage, phase,
         ids={key: evidence.get(key) for key in _DIAGNOSTIC_IDS},
-        exception=failure if isinstance(failure, Exception) else None,
+        exception=exception,
         evidence={**dict(evidence), "chosen_axis": chosen_axis},
     )
     if incident is not None:

@@ -57,6 +57,10 @@ def parse_since(value: str, *, now: datetime | None = None) -> datetime:
     return (now or datetime.now(timezone.utc)) - timedelta(**{_UNITS[unit]: amount})
 
 
+class NotReplayable(Exception):
+    """The replay cannot start: no record, no request, no bundle, or no report."""
+
+
 def _store(data_dir: Path) -> IncidentStore:
     return IncidentStore(data_dir)
 
@@ -64,7 +68,7 @@ def _store(data_dir: Path) -> IncidentStore:
 def _require(store: IncidentStore, incident_id: str) -> dict[str, Any]:
     record = store.get(incident_id)
     if record is None:
-        raise SystemExit(f"No incident {incident_id!r} (or the prefix is ambiguous) in {store.root}")
+        raise NotReplayable(f"No incident {incident_id!r} (or the prefix is ambiguous) in {store.root}")
     return record
 
 
@@ -97,7 +101,7 @@ def replay_arguments(record: Mapping[str, Any], data_dir: Path) -> list[str]:
         bundle = retained_bundle(data_dir, digest)
         if bundle.is_dir():
             return [str(bundle), "--retained"]
-    raise SystemExit(
+    raise NotReplayable(
         "This incident names no replayable request: it has no inbox request id and no "
         "retained bundle digest whose copy still exists."
     )
@@ -120,7 +124,7 @@ def run_cad_replay(arguments: Sequence[str]) -> dict[str, Any]:
     try:
         return json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        raise SystemExit(
+        raise NotReplayable(
             f"cad_replay did not produce a report (exit {completed.returncode}):\n{completed.stderr[-4000:]}"
         ) from exc
 
@@ -170,6 +174,250 @@ def describe_replay(payload: Mapping[str, Any]) -> str:
 
 # -- export -----------------------------------------------------------------------
 
+#: What an identifying value becomes in a redacted export.
+REDACTED = "<redacted>"
+#: Keys whose values name a run, a request, a design, a document or a return.
+IDENTIFYING_KEYS = frozenset({
+    "job_id", "jobId", "operation_id", "operationId", "ingest_id", "ingestId",
+    "preparation_id", "request_id", "run_number", "manifest_sha256", "manifestSha256",
+    "snapshot", "snapshotSha256", "design_id", "designId", "design_ids", "designIds",
+    "export_id", "lineage_id", "bundle_id", "origin_bundle_id", "native_id",
+    "document_native_id", "return_id", "project_id",
+})
+#: Keys whose values are a model's or a body's name.
+NAME_KEYS = frozenset({"document_name", "documentName", "model_name", "modelName"})
+#: Manifest values that are protocol vocabulary, never a user's words: a body
+#: named like one must not turn the manifest invalid.
+_MANIFEST_VOCABULARY = frozenset({
+    "adapter", "adapter_version", "body_kind", "build_mode", "cad_app", "cad_version",
+    "chirality", "external_reference", "formula", "handedness", "kind", "length_unit",
+    "local_body_state", "matrix_convention", "media_type", "patch_policy", "purpose",
+    "reason", "required_features", "role", "selection", "severity", "status",
+    "wgreturn_version", "appearance_labels", "sha256", "signature_hash", "design_hash",
+    "geometry_hash", "instance_id", "wglink_instance_id", "solver_anchor_instance_id",
+    "default_drive_channel_id", "id", "created_at", "observed_at",
+})
+#: Manifest identifiers: replaced by stable stand-ins (one per original value).
+_MANIFEST_IDS = ("design_id", "export_id", "lineage_id")
+_MIN_NAME = 3
+_STEP_STRING = re.compile(r"'((?:[^']|'')*)'")
+_STEP_PRODUCT = re.compile(r"\bPRODUCT\s*\(\s*'((?:[^']|'')*)'\s*,\s*'((?:[^']|'')*)'", re.IGNORECASE)
+_STEP_ESCAPE = re.compile(
+    r"\\X2\\((?:[0-9A-F]{4})+)\\X0\\|\\X4\\((?:[0-9A-F]{8})+)\\X0\\|\\X\\([0-9A-F]{2})|\\\\|''",
+    re.IGNORECASE,
+)
+
+
+def _step_decode(raw: str) -> str:
+    """A STEP string literal's contents as text (ISO 10303-21 escapes)."""
+
+    def one(match: re.Match[str]) -> str:
+        if match.group(1):
+            hexed = match.group(1)
+            return "".join(chr(int(hexed[index:index + 4], 16)) for index in range(0, len(hexed), 4))
+        if match.group(2):
+            hexed = match.group(2)
+            return "".join(chr(int(hexed[index:index + 8], 16)) for index in range(0, len(hexed), 8))
+        if match.group(3):
+            return bytes([int(match.group(3), 16)]).decode("latin-1")
+        return match.group(0)[0]
+
+    return _STEP_ESCAPE.sub(one, raw)
+
+
+def _step_encode(text: str) -> str:
+    """Text as a STEP string literal's contents: ASCII, quotes doubled, the rest escaped."""
+
+    parts = []
+    for character in text:
+        code = ord(character)
+        if character == "'":
+            parts.append("''")
+        elif character == "\\":
+            parts.append("\\\\")
+        elif 32 <= code < 127:
+            parts.append(character)
+        elif code <= 0xFFFF:
+            parts.append(f"\\X2\\{code:04X}\\X0\\")
+        else:
+            parts.append(f"\\X4\\{code:08X}\\X0\\")
+    return "".join(parts)
+
+
+class ExportRedactor:
+    """Every name and id an exported incident carries, replaced consistently.
+
+    Names (the document's, the components', bodies' and occurrences') become
+    ``redacted-model`` and ``name-<n>``; ids become ``<redacted>``. The same
+    original always becomes the same stand-in, in the record, the logs, the
+    manifest and the STEP file alike, so the fixture still replays.
+    """
+
+    def __init__(self, base: Redactor) -> None:
+        self._base = base
+        self._names: dict[str, str] = {}
+        self._ids: set[str] = set()
+        self._pattern: re.Pattern[str] | None = None
+
+    def add_name(self, value: Any, placeholder: str | None = None) -> None:
+        name = str(value or "").strip()
+        if len(name) < _MIN_NAME or name.lower() in self._names or name == REDACTED_NAME:
+            return
+        self._names[name.lower()] = placeholder or f"name-{len(self._names) + 1}"
+        self._pattern = None
+
+    def add_id(self, value: Any) -> None:
+        text = str(value or "").strip()
+        for spelling in {text, text.removeprefix("sha256:")}:
+            if len(spelling) >= 4 and spelling != REDACTED:
+                self._ids.add(spelling)
+                self._pattern = None
+
+    def names(self) -> list[str]:
+        return list(self._names)
+
+    def _compiled(self) -> re.Pattern[str] | None:
+        if self._pattern is None:
+            terms = sorted({*self._names, *(item.lower() for item in self._ids)}, key=len, reverse=True)
+            if not terms:
+                return None
+            self._pattern = re.compile("|".join(re.escape(term) for term in terms), re.IGNORECASE)
+        return self._pattern
+
+    def text(self, value: str, *, names: bool = True) -> str:
+        """Paths, the account name and ids replaced; and the names, unless ``names`` is false."""
+
+        value = self._base.text(value)
+        pattern = self._compiled()
+        if pattern is None:
+            return value
+        lowered_ids = {item.lower() for item in self._ids}
+
+        def replace(match: re.Match[str]) -> str:
+            found = match.group(0).lower()
+            if found in lowered_ids:
+                return REDACTED
+            return self._names[found] if names else match.group(0)
+
+        return pattern.sub(replace, value)
+
+    def value(self, value: Any) -> Any:
+        if isinstance(value, str):
+            return self.text(value)
+        if isinstance(value, Mapping):
+            # A key is vocabulary ("code", "detail"), never a name: a body
+            # called like one must not rename the record's fields.
+            return {
+                self.text(str(key), names=False): (
+                    REDACTED if str(key) in IDENTIFYING_KEYS and item not in (None, "", [], {})
+                    else self.value(item)
+                )
+                for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return [self.value(item) for item in value]
+        return value
+
+    # -- what to look for ------------------------------------------------------
+
+    def collect_record(self, value: Any) -> None:
+        """The ids and names a record holds, wherever they are."""
+
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                if str(key) in IDENTIFYING_KEYS:
+                    for each in item if isinstance(item, (list, tuple)) else (item,):
+                        if isinstance(each, (str, int)) and not isinstance(each, bool):
+                            self.add_id(each)
+                elif str(key) in NAME_KEYS:
+                    self.add_name(item, None if self._names else REDACTED_NAME)
+                self.collect_record(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                self.collect_record(item)
+
+    def collect_manifest(self, manifest: Mapping[str, Any]) -> None:
+        document = manifest.get("document") if isinstance(manifest.get("document"), Mapping) else {}
+        self.add_name(document.get("name"), REDACTED_NAME)
+        self.add_id(document.get("native_id"))
+        self.add_id((manifest.get("return") or {}).get("id") if isinstance(manifest.get("return"), Mapping) else None)
+        for instance in _mappings(manifest.get("instances")):
+            for key in (*_MANIFEST_IDS, "origin_bundle_id"):
+                self.add_id(instance.get(key))
+            for part in re.split(r"[/\\|]+", str(instance.get("occurrence_path") or "")):
+                # ``Name:1`` is occurrence 1 of ``Name``: the name is what is replaced.
+                self.add_name(re.sub(r":\d+$", "", part))
+            prefix = str(instance.get("parameter_prefix") or "")
+            self.add_name(re.sub(r"^wg_|_$", "", prefix))
+        scope = manifest.get("scope") if isinstance(manifest.get("scope"), Mapping) else {}
+        for group in ("included", "skipped", "fem_air_volumes"):
+            for entry in _mappings(scope.get(group)):
+                for key in ("name", "component", "object_id"):
+                    self.add_name(entry.get(key))
+        for source in _mappings(manifest.get("sources")):
+            for body in (source.get("observed") or {}).get("bodies") or ():
+                self.add_name(body)
+
+    def collect_step(self, text: str) -> None:
+        for match in _STEP_PRODUCT.finditer(text):
+            for raw in match.groups():
+                self.add_name(_step_decode(raw))
+
+    # -- rewriting -------------------------------------------------------------
+
+    def step(self, text: str) -> str:
+        """Every string literal with its names and ids replaced; the file stays valid STEP."""
+
+        text = _STEP_FILE_NAME.sub(f"FILE_NAME('{REDACTED_NAME}','',(''),(''),'','','');", text, count=1)
+
+        def literal(match: re.Match[str]) -> str:
+            decoded = _step_decode(match.group(1))
+            redacted = self.text(decoded)
+            return match.group(0) if redacted == decoded else f"'{_step_encode(redacted)}'"
+
+        return _STEP_STRING.sub(literal, text)
+
+    def manifest(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        """The manifest with no document or origin-bundle id, stand-in names and ids (valid ULIDs)."""
+
+        stand_ins: dict[str, str] = {}
+
+        def stand_in(value: Any) -> Any:
+            if not isinstance(value, str) or not value:
+                return value
+            # ``wgr_`` plus 26 ULID characters, as the protocol requires: an
+            # all-digit ULID that names nothing.
+            prefix = value.split("_", 1)[0] if "_" in value else "id"
+            return stand_ins.setdefault(value, f"{prefix}_{len(stand_ins) + 1:026d}")
+
+        if isinstance(manifest.get("document"), dict):
+            manifest["document"]["name"] = REDACTED_NAME
+            if "native_id" in manifest["document"]:
+                manifest["document"]["native_id"] = None
+        if isinstance(manifest.get("return"), dict) and "id" in manifest["return"]:
+            manifest["return"]["id"] = stand_in(manifest["return"]["id"])
+        for instance in _mappings(manifest.get("instances")):
+            instance.pop("origin_bundle_id", None)
+            for key in _MANIFEST_IDS:
+                if key in instance:
+                    instance[key] = stand_in(instance[key])
+        return self._manifest_names(manifest)
+
+    def _manifest_names(self, value: Any, key: str | None = None) -> Any:
+        if key in _MANIFEST_VOCABULARY:
+            return value
+        if isinstance(value, str):
+            return self.text(value)
+        if isinstance(value, dict):
+            return {name: self._manifest_names(item, name) for name, item in value.items()}
+        if isinstance(value, list):
+            return [self._manifest_names(item, key) for item in value]
+        return value
+
+
+def _mappings(value: Any) -> list[dict[str, Any]]:
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
 
 def export_incident(
     record: Mapping[str, Any], data_dir: Path, destination: Path, *, redact: bool,
@@ -177,60 +425,93 @@ def export_incident(
     """Write the record, and its retained bundle when there is one, as a fixture.
 
     The bundle is WG's retained copy, which never holds the CAD document. With
-    ``redact`` the document name becomes ``redacted-model``, the STEP header's
-    author fields are blanked (and the manifest's file hashes follow), the ids
-    are dropped, and paths and the account name are rewritten.
+    ``redact`` every name the record and the bundle hold (the document's, the
+    components', bodies' and occurrences', the STEP products') becomes
+    ``redacted-model`` or ``name-<n>``, every id ``<redacted>`` (the manifest's
+    by stand-ins), the STEP header's author fields are blanked (the manifest's
+    file hashes follow), the job logs are keyed ``job-<n>``, and paths and the
+    account name are rewritten.
     """
 
     if destination.exists() and any(destination.iterdir()):
         raise SystemExit(f"{destination} must be new or empty")
-    destination.mkdir(parents=True, exist_ok=True)
-    redactor = Redactor(redaction_rules(data_dir=data_dir, app_root=app_root()), user=account_name())
-    exported = dict(record)
-    if redact:
-        exported["occurrences"] = [{"at": item.get("at")} for item in record.get("occurrences") or ()]
-        latest = dict(record.get("latest") or {})
-        latest["ids"] = {key: "<redacted>" for key in (latest.get("ids") or {})}
-        exported["latest"] = latest
-        exported["redacted"] = True
-    written = [destination / "incident.json"]
-    written[0].write_text(
-        json.dumps(redactor.value(exported) if redact else exported, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
     ids = (record.get("latest") or {}).get("ids") or {}
     digest = str(ids.get("manifest_sha256") or "")
-    if _DIGEST.fullmatch(digest) and (bundle := retained_bundle(data_dir, digest)).is_dir():
-        target = destination / ("model.wgreturn" if redact else bundle.name)
-        shutil.copytree(bundle, target, ignore=shutil.ignore_patterns("*.f3d"))
-        if redact:
-            _redact_bundle(target)
+    bundle = retained_bundle(data_dir, digest) if _DIGEST.fullmatch(digest) else None
+    if bundle is not None and not bundle.is_dir():
+        bundle = None
+    destination.mkdir(parents=True, exist_ok=True)
+    written = [destination / "incident.json"]
+    if not redact:
+        written[0].write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        if bundle is not None:
+            target = destination / bundle.name
+            shutil.copytree(bundle, target, ignore=shutil.ignore_patterns("*.f3d"))
+            written.append(target)
+        return written
+
+    redactor = ExportRedactor(Redactor(redaction_rules(data_dir=data_dir, app_root=app_root()), user=account_name()))
+    manifest: dict[str, Any] | None = None
+    if bundle is not None:
+        # The manifest first: its document name is the one ``redacted-model`` stands for.
+        manifest = json.loads((bundle / "wgreturn.json").read_text(encoding="utf-8"))
+        redactor.collect_manifest(manifest)
+        for name in manifest.get("files") or {}:
+            path = bundle / name
+            if name.lower().endswith((".step", ".stp")) and path.is_file():
+                redactor.collect_step(path.read_text(encoding="utf-8", errors="surrogateescape"))
+    redactor.collect_record(record)
+    for job_id in (record.get("jobLogs") or {}):
+        redactor.add_id(job_id)
+    exported = dict(record)
+    exported["occurrences"] = [{"at": item.get("at")} for item in record.get("occurrences") or ()]
+    exported["jobLogs"] = {
+        f"job-{index}": log for index, log in enumerate((record.get("jobLogs") or {}).values(), start=1)
+    }
+    exported["redacted"] = True
+    written[0].write_text(json.dumps(redactor.value(exported), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if bundle is not None and manifest is not None:
+        target = destination / "model.wgreturn"
+        _write_redacted_bundle(bundle, manifest, target, redactor)
         written.append(target)
     return written
 
 
-def _redact_bundle(bundle: Path) -> None:
+def _write_redacted_bundle(bundle: Path, manifest: dict[str, Any], target: Path, redactor: ExportRedactor) -> None:
+    """Only the manifest and the members it lists; names and ids replaced, hashes updated."""
+
     import hashlib
 
-    manifest_path = bundle / "wgreturn.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if isinstance(manifest.get("document"), dict):
-        manifest["document"]["name"] = REDACTED_NAME
+    target.mkdir()
+    members: dict[str, Any] = {}
+    renamed: dict[str, str] = {}
     for name, entry in (manifest.get("files") or {}).items():
-        path = bundle / name
-        if not path.is_file() or not name.lower().endswith((".step", ".stp")):
+        source = bundle / name
+        if not source.is_file() or source.suffix.lower() == ".f3d":
             continue
-        text = path.read_text(encoding="utf-8", errors="surrogateescape")
-        redacted = _STEP_FILE_NAME.sub(
-            f"FILE_NAME('{REDACTED_NAME}','',(''),(''),'','','');", text, count=1,
-        )
-        if redacted != text:
-            payload = redacted.encode("utf-8", errors="surrogateescape")
-            path.write_bytes(payload)
-            if isinstance(entry, dict):
-                entry["sha256"] = "sha256:" + hashlib.sha256(payload).hexdigest()
-                entry["size_bytes"] = len(payload)
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        new_name = redactor.text(name)
+        renamed[name] = new_name
+        destination = target / new_name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if name.lower().endswith((".step", ".stp")):
+            payload = redactor.step(source.read_text(encoding="utf-8", errors="surrogateescape")).encode(
+                "utf-8", errors="surrogateescape",
+            )
+        else:
+            payload = source.read_bytes()
+        destination.write_bytes(payload)
+        entry = dict(entry) if isinstance(entry, Mapping) else entry
+        if isinstance(entry, dict):
+            entry["sha256"] = "sha256:" + hashlib.sha256(payload).hexdigest()
+            entry["size_bytes"] = len(payload)
+        members[new_name] = entry
+    manifest["files"] = members
+    manifest = redactor.manifest(manifest)
+    manifest["files"] = members  # member names are already rewritten, and hashed
+    for section in ("assembly",):
+        if isinstance(manifest.get(section), dict) and manifest[section].get("file") in renamed:
+            manifest[section]["file"] = renamed[manifest[section]["file"]]
+    (target / "wgreturn.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 # -- entry point --------------------------------------------------------------------
@@ -258,7 +539,7 @@ def main(
     export.add_argument("id")
     export.add_argument("--out", type=Path, required=True, help="New or empty folder")
     export.add_argument("--redact", action="store_true",
-                        help="Replace the model's name, blank STEP author fields, drop ids")
+                        help="Replace every name and id (record, logs, manifest, STEP); blank STEP author fields")
     args = parser.parse_args(argv)
 
     data_dir = (args.data_dir or resolve_data_dir()).expanduser().resolve()
@@ -270,12 +551,17 @@ def main(
         else:
             print("\n".join(list_lines(records)) if records else f"No incidents in {store.root}")
         return 0
-    record = _require(store, args.id)
-    if args.command == "show":
-        print(json.dumps(record, indent=2, sort_keys=True))
-        return 0
     if args.command == "replay":
-        payload = replay_runner(replay_arguments(record, data_dir))
+        # "Could not replay" is its own outcome with its own exit code, never
+        # the "still fails" a bare SystemExit(message) would read as.
+        try:
+            record = _require(store, args.id)
+            payload = replay_runner(replay_arguments(record, data_dir))
+        except NotReplayable as exc:
+            print(f"{args.id}: {NOT_REPLAYED}\n  {exc}", file=sys.stderr)
+            if args.json:
+                print(json.dumps({"incident": args.id, "verdict": NOT_REPLAYED, "reason": str(exc)}, indent=2))
+            return EXIT_CODES[NOT_REPLAYED]
         outcome = verdict(record, payload)
         if args.json:
             print(json.dumps({"incident": record.get("id"), "verdict": outcome, "replay": payload},
@@ -284,6 +570,13 @@ def main(
             print(f"{record.get('id')}: {outcome}")
             print(f"  replay: {describe_replay(payload)}")
         return EXIT_CODES[outcome]
+    try:
+        record = _require(store, args.id)
+    except NotReplayable as exc:
+        raise SystemExit(str(exc)) from exc
+    if args.command == "show":
+        print(json.dumps(record, indent=2, sort_keys=True))
+        return 0
     written = export_incident(record, data_dir, args.out.expanduser().resolve(), redact=args.redact)
     for path in written:
         print(path)
