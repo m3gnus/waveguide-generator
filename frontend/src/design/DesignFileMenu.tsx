@@ -512,9 +512,9 @@ export function DesignFileMenu() {
   }
 
   return <div ref={root} className="design-file-menu">
-    <button className="file-chip" title={classification ? CLASSIFICATION_DISPLAY[classification].detail : 'Design file menu'} onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+    <button className="file-chip" title={model.kind === 'parametric' && classification ? CLASSIFICATION_DISPLAY[classification].detail : 'Design file menu'} onClick={() => setOpen((value) => !value)} aria-expanded={open}>
       <Icon name="folder"/><span>{model.kind !== 'parametric' ? model.label : designName ? <>{designName}<em>{design.formula === 'LOOKUP' ? '.mwg' : '.cfg'}</em></> : <em>Untitled</em>}</span>
-      {classification && <small
+      {model.kind === 'parametric' && classification && <small
         className="cadlink-badge"
         aria-label={`CAD link: ${CLASSIFICATION_DISPLAY[classification].label}`}
         title={CLASSIFICATION_DISPLAY[classification].detail}

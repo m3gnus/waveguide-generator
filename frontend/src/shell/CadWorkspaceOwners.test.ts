@@ -672,7 +672,7 @@ it.each(['project open', 'application switch'])('R3X defers initial selection th
   expect(cadReceiptsStore.getState().feedback['receipt-1'].outcome).toBe('missing_source');
   expect(Object.keys(cadReceiptsStore.getState().receipts)).toHaveLength(0);
   expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
-  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(entry === 'application switch' ? 1 : 0);
   if (entry === 'project open') expect(cadWorkspace.getSnapshot().status).toContain('Selected the latest matching return');
 });
 
@@ -723,7 +723,7 @@ it.each(['missing_source', 'unreadable', 'refused', 'superseded'] as const)(
     expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(older.bundlePath);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(older.bundlePath);
-    expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+    expect(calls('/api/cadlink/ingest')).toHaveLength(outcome === 'superseded' ? 0 : 1);
   },
 );
 

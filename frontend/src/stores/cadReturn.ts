@@ -313,7 +313,7 @@ export function bundleIdentity(bundle: CadReturnBundle): string {
  * reason it can be wrong transiently -- a listing read during a server
  * restart is empty -- so it is the one reason that clears itself when the
  * identical bundle reappears. */
-export const LISTING_GONE_REASON = 'The ingested return no longer appears in the workspace listing.';
+export const LISTING_GONE_REASON = 'The prepared return no longer appears in the workspace listing.';
 
 /** Whether this bundle is one the workspace listing can speak about.
  *
@@ -338,16 +338,16 @@ function bundleChangeReason(previous: CadReturnBundle, current: CadReturnBundle 
   if (!current) return LISTING_GONE_REASON;
   if (bundleIdentity(previous) === bundleIdentity(current)) return null;
   if (previous.readable !== current.readable) return current.readable
-    ? 'The return became readable after it was ingested.'
+    ? 'The return became readable after it was prepared.'
     : `The return is no longer readable${current.reason ? `: ${current.reason}` : '.'}`;
   if (JSON.stringify(previous.sources) !== JSON.stringify(current.sources)
     || previous.sourceCount !== current.sourceCount) {
-    return 'The return source inventory or source sizing suggestions changed after ingestion.';
+    return 'The return source inventory or source sizing suggestions changed after preparation.';
   }
   if (previous.documentName !== current.documentName || previous.instanceCount !== current.instanceCount) {
-    return 'The return document or linked-instance inventory changed after ingestion.';
+    return 'The return document or linked-instance inventory changed after preparation.';
   }
-  return 'The return bundle was modified after this ingestion.';
+  return 'The return bundle was modified after this preparation.';
 }
 
 export interface SourceInventoryCarrier {
@@ -672,7 +672,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
         !selectedBundle || state.ingestedBundleIdentity !== bundleIdentity(selectedBundle)
       );
       const reason = differsFromIngest
-        ? bundleChangeReason(previous, selectedBundle) ?? state.ingestStaleReason ?? 'The return listing differs from the bundle used for this ingestion.'
+        ? bundleChangeReason(previous, selectedBundle) ?? state.ingestStaleReason ?? 'The return listing differs from the bundle used for this preparation.'
         : null;
       if (!selectedBundle) return reason ? { needsIngest: true, ingestStaleReason: reason } : {};
       // The one self-healing staleness: the bundle "vanished" only because a

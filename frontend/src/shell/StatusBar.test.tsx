@@ -76,6 +76,7 @@ describe('StatusBar workspace modes', () => {
     act(() => {
       useCadReturnStore.setState({
         selectedBundle: { documentName: 'Speaker Assembly', name: 'speaker.wgreturn' } as never,
+        needsIngest: false,
         ingestRecord: { mesh: { stats: { triangle_count: 12_345 } } } as CadReturnIngestRecord,
         frequencyStartHz: 250,
         frequencyEndHz: 18_000,
@@ -90,24 +91,29 @@ describe('StatusBar workspace modes', () => {
     act(() => { useImportedSolveOptionsStore.getState().setEngine('auto'); });
     expect(host.textContent).toContain('BEMPP · 2.0');
     // Grouped in the runner's locale, not en-US — see summary.test.ts.
-    expect(host.textContent).toContain(`CAD mesh ${(12_345).toLocaleString()} solved tri`);
+    expect(host.textContent).toContain(`CAD model · ${(12_345).toLocaleString()} triangles`);
     expect(host.textContent).toContain('next CAD solve 250 Hz – 18 kHz · 31 f');
     expect(host.textContent).toContain('Speaker Assembly');
-    expect(host.textContent).toContain('CAD return · ingested');
+    expect(host.textContent).not.toContain('CAD return');
     expect(host.textContent).not.toContain('parametric-design.cfg');
     expect(host.textContent).not.toContain('preview no frame');
   });
-  it('shows pending and refused plans without guessing from ready capabilities', () => {
+  it('keeps the engine cell about the engine when readiness is blocked', () => {
     act(() => { backend.plan = null; backend.isPending = true; root.render(<StatusBar/>); });
-    expect(host.textContent).toContain('Checking solve engine…');
-    expect(host.textContent).not.toContain('METAL · 1.0');
-    act(() => { backend.isPending = false; backend.error = 'BEAT Metal needs preparing'; root.render(<StatusBar/>); });
-    expect(host.textContent).toContain('SOLVE BLOCKED · BEAT Metal needs preparing');
+    expect(host.textContent).toContain('BEMPP');
+    act(() => { backend.isPending = false; backend.error = 'Engine needs preparing'; root.render(<StatusBar/>); });
+    expect(host.textContent).not.toContain('SOLVE BLOCKED');
+    expect(host.textContent).not.toContain('No solve plan');
+    expect(host.textContent).not.toContain('Engine needs preparing');
   });
 
-  it('shows the refusal reason returned by an imported plan', () => {
-    act(() => { backend.plan = { engine: null, reason: 'Prepare BEAT Metal' }; root.render(<StatusBar/>); });
-    expect(host.textContent).toContain('SOLVE BLOCKED · Prepare BEAT Metal');
+  it('uses one model cell for a selected unprepared return', () => {
+    act(() => {
+      workspaceModeStore.setMode('cad');
+      useCadReturnStore.setState({ selectedBundle: { name: 'speaker.wgreturn', documentName: 'Speaker' } as never });
+    });
+    expect(host.textContent).toContain('CAD model · not prepared');
+    expect(host.textContent?.match(/CAD model ·/g)).toHaveLength(1);
+    expect(host.textContent).not.toMatch(/ingest|CAD return|No solve plan|SOLVE BLOCKED/i);
   });
-
 });

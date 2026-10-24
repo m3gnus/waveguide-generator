@@ -431,8 +431,7 @@ function useReadinessProgress(enabled: boolean, readiness?: SolveReadinessState 
   const control = useOptionalSolveControl();
   if (!enabled) return null;
   const blocker = readiness === undefined ? control?.readiness : readiness;
-  const engineBlocked = !!blocker?.engine;
-  const visible = !engineBlocked || held || control?.readinessRequested;
+  const visible = held || control?.readinessRequested;
   const waiting = control?.waitingForEngine === true;
   const warmingEngine = control?.waitingEngine && control.waitingEngine !== 'auto' ? control.waitingEngine : blocker?.engine ?? control?.waitingEngine;
   const message = waiting ? `${resolveEngineLabel(warmingEngine) || warmingEngine} is warming up. The solve starts when it is ready.` : visible ? blocker?.message ?? (control?.disabled ? control.title : null) : null;

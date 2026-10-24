@@ -25,18 +25,18 @@ interface RefusalExplanation {
 const CARDIOID_EXPLANATIONS: readonly RefusalExplanation[] = [
   {
     match: 'ingestion source tag map',
-    advice: 'This ingestion carries no source tag map, so WG cannot tell which mesh faces are the port. '
+    advice: 'This prepared model carries no source tag map, so WG cannot tell which mesh faces are the port. '
       + 'Rebuild the mesh from the CAD return before enabling the passive-cardioid campaign.',
   },
   {
     match: 'PORT_EXIT aperture sources',
     advice: 'The return has no port-exit aperture. Mark the face the port vents through as a PORT_EXIT source '
-      + '(or PORT_EXIT_L and PORT_EXIT_R for a split port) in CAD, then bring the geometry back and re-ingest.',
+      + '(or PORT_EXIT_L and PORT_EXIT_R for a split port) in CAD, then bring the geometry back and prepare it again.',
   },
   {
     match: 'exactly one MF diaphragm source',
     advice: 'The passive cardioid needs exactly one MF diaphragm to load the rear chamber. '
-      + 'Give the return a single source with the MF role — remove, re-role, or merge the others — and re-ingest.',
+      + 'Give the return a single source with the MF role — remove, re-role, or merge the others — and prepare it again.',
   },
   {
     match: "MF diaphragm's drive channel",

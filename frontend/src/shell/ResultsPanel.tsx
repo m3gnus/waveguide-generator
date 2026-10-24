@@ -2481,7 +2481,7 @@ export function ResultsPanel() {
       return { reason: 'The shown run is a live preview of a solve in progress; crossover changes apply to it once that solve finishes.', recall: null };
     }
     return {
-      reason: 'The shown run was solved from an ingestion this session has not loaded, so the rail is not its crossover yet. Load its model and the changes apply without re-solving.',
+      reason: 'The shown run was solved from a prepared model this session has not loaded, so the rail is not its crossover yet. Load its model and the changes apply without re-solving.',
       recall: primaryJob ? showPrimaryModel : null,
     };
   }, [primaryIsProvisional, primaryJob, selectedJob, showPrimaryModel, shownCanApply]);

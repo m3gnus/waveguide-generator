@@ -245,7 +245,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
         })}
       </select></HelpTipRow>
       <p className="cad-solve-fact"><b>Runs on</b><span>{importedEngine ? `${importedEngine} · full 3-D · free space` : 'See solve readiness in Results.'}</span></p>
-      <p className="cad-solve-fact"><b>Ingested cut planes</b><span>{ingestRecord?.symmetry.cut_planes?.length ? ingestRecord.symmetry.cut_planes.join(', ') : 'none · full domain'}</span></p>
+      <p className="cad-solve-fact"><b>Prepared cut planes</b><span>{ingestRecord?.symmetry.cut_planes?.length ? ingestRecord.symmetry.cut_planes.join(', ') : 'none · full domain'}</span></p>
     </>}
     {error ? <span className="section-note" role="status">Capability refresh failed. Check the backend connection. <button type="button" onClick={refreshCapabilities}>Refresh</button></span> : qualificationRefreshNeeded
       ? <span className="section-note" role="status">BEMPP · <button type="button" onClick={refreshCapabilities}>Refresh</button></span>

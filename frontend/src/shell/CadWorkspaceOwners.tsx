@@ -118,7 +118,9 @@ export function mountCadWorkspaceOwners(): () => void {
     mounted, ingestRequest, ingestAbortController, manualSelectionAt, refusedForeignReturn,
     autoIngestSelected, enterCadWorkspace, rereadDrivers,
     onshapeInstanceId: () => onshapeInstance,
-    setIngesting: (ingesting) => publish({ ingesting }), setIngestError: (ingestError) => publish({ ingestError }),
+    setIngesting: (ingesting) => publish({ ingesting,
+      ...(ingesting ? { preparationIntent: useCadReturnStore.getState().captureIngestIntent() } : {}),
+    }), setIngestError: (ingestError) => publish({ ingestError }),
     setError: reportError, setStatus: reportStatus, setViewportNotice: reportViewportNotice,
     setBundles: (bundles) => publish({ bundles }), reportViewportNotice,
   });

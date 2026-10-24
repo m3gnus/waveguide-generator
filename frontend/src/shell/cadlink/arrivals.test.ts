@@ -18,6 +18,26 @@ beforeEach(() => {
 afterEach(() => { importedMeshStore.clear(); vi.restoreAllMocks(); });
 
 describe('selection actions without the coordinator', () => {
+  it('auto-prepares a restored CAD selection through the arrival preparation action', async () => {
+    workspaceModeStore.setMode('cad');
+    const prepare = vi.fn();
+    const reader = createCadReturnArrivalReader({ autoIngestSelected: prepare },
+      (async () => json({ cadFolderConfigured: true, items: [bundle] })) as typeof fetch);
+    await reader.refresh();
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
+    expect(prepare).toHaveBeenCalledOnce();
+    await reader.refresh();
+    expect(prepare).toHaveBeenCalledOnce();
+  });
+
+  it('does not let initial background discovery replace a parametric viewport', async () => {
+    const prepare = vi.fn();
+    const reader = createCadReturnArrivalReader({ autoIngestSelected: prepare },
+      (async () => json({ cadFolderConfigured: true, items: [bundle] })) as typeof fetch);
+    await reader.refresh();
+    expect(prepare).not.toHaveBeenCalled();
+    expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
+  });
   it.each(['success', 'error'] as const)('fences an older ingest %s even when fetch ignores abort', async (outcome) => {
     const old = deferred<Response>();
     const signals: AbortSignal[] = [];
@@ -273,5 +293,5 @@ it.each(['matching', 'no match'])('holds project-open feedback until the deferre
     expect(useCadReturnStore.getState().selectedBundle).toBeNull();
     expect(status).toHaveBeenCalledWith(expect.stringContaining('No matching CAD return'));
   }
-  expect(ingest).not.toHaveBeenCalled();
+  expect(ingest).toHaveBeenCalledTimes(result === 'matching' ? 1 : 0);
 });

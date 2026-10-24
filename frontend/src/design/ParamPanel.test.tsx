@@ -1203,7 +1203,7 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('#solve-symmetry')).toBeNull();
     expect(host.querySelector('#cad-solve-engine')).not.toBeNull();
     expect(host.textContent).toContain('Runs on');
-    expect(host.textContent).toContain('Ingested cut planesx0');
+    expect(host.textContent).toContain('Prepared cut planesx0');
     expect(host.textContent).toContain('Effective grid −180° … 180°');
   });
 

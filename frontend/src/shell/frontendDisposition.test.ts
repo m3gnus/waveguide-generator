@@ -54,9 +54,8 @@ describe('frontend result and status labels', () => {
       { name: 'metal', available: true, reason: null, version: '1.0', fast_paths: [] },
       { name: 'bempp', available: true, reason: null, version: '2.0', fast_paths: [] },
     ];
-    expect(engineStatusLabel(engines, 'bempp', null, false)).toBe('BEMPP · 2.0');
-    expect(engineStatusLabel(engines, null, null, true)).toBe('Checking solve engine…');
-    expect(engineStatusLabel(engines, null, 'Prepare BEAT Metal', false)).toBe('SOLVE BLOCKED · Prepare BEAT Metal');
+    expect(engineStatusLabel(engines, 'bempp')).toBe('BEMPP · 2.0');
+    expect(engineStatusLabel(engines, null)).toBe('Engine · —');
   });
 
   it('shows the tracked design filename instead of a path placeholder', () => {

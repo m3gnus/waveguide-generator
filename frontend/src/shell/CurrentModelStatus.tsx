@@ -1,9 +1,11 @@
-import { useSyncExternalStore, type ReactNode } from 'react';
+import { useCadModelState } from '../stores/cadModelState';
+import { cadWorkspace } from '../stores/cadWorkspace';
+import type { ReactNode } from 'react';
 import type { CadReturnIngestRecord } from '../api/cadlink';
-import { jobsSocket, type JobItem } from '../api/jobsSocket';
+import type { JobItem } from '../api/jobsSocket';
 import { cadJobSummary } from '../jobs/cadSolve';
 import { messageBlocker } from '../jobs/solveReadiness';
-import { currentModelStatus, useCurrentModel } from '../model/currentModel';
+import { useCurrentModelStatus } from '../model/currentModel';
 import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { openHeldRequest } from './HeldCadRequestDialog';
 import { CurrentModelRequests } from './CadOperationsSection';
@@ -13,12 +15,9 @@ import { Notice } from './Notice';
 import { clearSolveStageClock, MODEL_STATUS_TITLE, runStatusWord, SolveProgressView } from './solveProgress';
 
 export function CurrentModelStatus({ record, actions = false, solveStatus = false, activeOnly = false }: { record?: CadReturnIngestRecord; actions?: boolean; solveStatus?: boolean; activeOnly?: boolean }) {
-  const current = useCurrentModel();
-  const model = record ? { ...current, kind: 'cad' as const, key: record.solve_model_sha256 || record.ingest_id,
-    ingestId: record.ingest_id, manifestSha256: record.manifest_sha256 } : current;
+  const { model, status } = useCurrentModelStatus(record);
+  const cad = useCadModelState();
   const control = useOptionalSolveControl();
-  const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
-  const status = currentModelStatus(model, jobs);
   const latestJob = status.job;
   const latest = latestJob?.cad_state ? cadJobSummary(latestJob) : null;
   if (status.kind === 'waiting' && latestJob && latestJob.cad_state?.reason !== 'engine_unavailable') return <div className="current-model-status" data-model-status="waiting">
@@ -34,12 +33,20 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
   const request: ReactNode = record ? <CurrentModelRequests record={record}/> : null;
   const engineGate = held || !!readiness?.engine || control?.waitingForEngine;
   const pending = solveStatus && (control?.waitingForEngine || control?.actionError || control?.preparationError
-    || (readiness && (!readiness.engine || held || control?.readinessRequested)));
+    || (readiness && (held || control?.readinessRequested)));
   const terminalFailure = status.kind === 'failed' || (status.kind === 'refused' && !held);
   const latestAttempt = activeOnly && terminalFailure;
-  const readinessVisible = !readiness?.engine || held || control?.readinessRequested;
+  const readinessVisible = held || control?.readinessRequested;
   const diagnosticCovered = pending && ((!control?.waitingForEngine && readinessVisible && readiness?.message === status.message)
     || control?.actionError?.endsWith(status.message) || control?.preparationError?.endsWith(status.message));
+  if (actions && status.kind === 'never-solved' && model.kind === 'cad' && cad.selected
+    && (cad.needsPreparation || cad.phase === 'preparing')) return <div className="current-model-status" data-model-status="not-prepared">
+    <Notice title={cad.phase === 'preparing' ? `Preparing ${cad.label}…` : 'Not prepared yet'}
+      actions={<button type="button" className="btn-primary" disabled={!cad.canPrepare}
+        onClick={() => { void cadWorkspace.getSnapshot().ingest().catch(() => undefined); }}>Prepare simulation</button>}>
+      {cad.phase === 'preparing' ? 'CAD Link is preparing this model.' : 'Prepare this model in CAD Link before solving.'}
+    </Notice>
+  </div>;
   if (activeOnly && (!pending || !control) && !terminalFailure && status.kind !== 'running' && status.kind !== 'preparing') return null;
   const controls = actions || pending ? <>
     {pending && (!engineGate || terminalFailure) && <SolveProgressView showReadiness readiness={readiness}/>}

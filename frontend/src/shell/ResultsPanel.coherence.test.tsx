@@ -153,7 +153,7 @@ describe('results run coherence', () => {
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'parametric', following: true });
 
     await act(async () => {
-      useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_cad' } as never });
+      useCadReturnStore.setState({ needsIngest: false, ingestRecord: { ingest_id: 'wgi_cad' } as never });
       importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_cad' } as never);
       workspaceModeStore.setMode('cad');
       await Promise.resolve();
@@ -167,7 +167,7 @@ describe('results run coherence', () => {
     publishJobs([first]);
     workspaceModeStore.setMode('cad');
     act(() => {
-      useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_first', solve_model_sha256: 'shape-a' } as never });
+      useCadReturnStore.setState({ needsIngest: false, ingestRecord: { ingest_id: 'wgi_first', solve_model_sha256: 'shape-a' } as never });
       importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_first' } as never);
     });
     await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
@@ -175,7 +175,7 @@ describe('results run coherence', () => {
     expect(host.querySelector('[data-result-primary]')?.getAttribute('data-result-primary')).toBe('first');
 
     await act(async () => {
-      useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_second', solve_model_sha256: 'shape-b' } as never });
+      useCadReturnStore.setState({ needsIngest: false, ingestRecord: { ingest_id: 'wgi_second', solve_model_sha256: 'shape-b' } as never });
       importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_second' } as never);
       await Promise.resolve();
     });
@@ -184,7 +184,7 @@ describe('results run coherence', () => {
     expect(toolbarButton(host, 'Solve')).toBeDefined();
 
     await act(async () => {
-      useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_resent', solve_model_sha256: 'shape-a' } as never });
+      useCadReturnStore.setState({ needsIngest: false, ingestRecord: { ingest_id: 'wgi_resent', solve_model_sha256: 'shape-a' } as never });
       importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_resent' } as never);
       await Promise.resolve();
     });
@@ -307,7 +307,7 @@ describe('results run coherence', () => {
 
     // In CAD mode the pill would be on every run, so it moves to the exception.
     await act(async () => {
-      useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_imported' } as never });
+      useCadReturnStore.setState({ needsIngest: false, ingestRecord: { ingest_id: 'wgi_imported' } as never });
       workspaceModeStore.setMode('cad');
       await Promise.resolve();
     });
@@ -350,12 +350,12 @@ describe('results run coherence', () => {
     solved.cad_source = { ...solved.cad_source!, model_id: 'speaker', solve_model_sha256: 'version-a' };
     publishJobs([solved]); compareSelection.setPrimary(solved.id);
     workspaceModeStore.setMode('cad');
-    useCadReturnStore.setState({ ingestRecord: { ingest_id: solved.cad_source.ingest_id, model_id: 'speaker', solve_model_sha256: 'version-a' } as never });
+    useCadReturnStore.setState({ needsIngest: false, ingestRecord: { ingest_id: solved.cad_source.ingest_id, model_id: 'speaker', solve_model_sha256: 'version-a' } as never });
     importedMeshStore.setCad({ source: 'cad', ingestId: solved.cad_source.ingest_id } as never);
     await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
     expect(host.querySelector('[data-result-primary]')).not.toBeNull();
     await act(async () => {
-      useCadReturnStore.setState({ ingestRecord: { ingest_id: 'version-b-ingest', model_id: 'speaker', solve_model_sha256: 'version-b' } as never });
+      useCadReturnStore.setState({ needsIngest: false, ingestRecord: { ingest_id: 'version-b-ingest', model_id: 'speaker', solve_model_sha256: 'version-b' } as never });
       importedMeshStore.setCad({ source: 'cad', ingestId: 'version-b-ingest' } as never);
     });
     expect(host.querySelector('[data-result-primary]')).toBeNull();
@@ -376,7 +376,7 @@ describe('results run coherence', () => {
     if (imported) {
       failed.cad_state = { ...refusedCad.cad_state, state: 'accepted' };
       workspaceModeStore.setMode('cad');
-      useCadReturnStore.setState({ ingestRecord: { ingest_id: solved.cad_source!.ingest_id } as never });
+      useCadReturnStore.setState({ needsIngest: false, ingestRecord: { ingest_id: solved.cad_source!.ingest_id } as never });
       importedMeshStore.setCad({ source: 'cad', ingestId: solved.cad_source!.ingest_id } as never);
     }
     const continueRun = vi.fn().mockResolvedValue('retry-child');
@@ -402,7 +402,7 @@ describe('results run coherence', () => {
     const ingestId = refusedCad.cad_intent.bundle_path.split('/').at(-1)!;
     const refused = { ...job('refused', 22, null, true), ...refusedCad, cad_source: null, status: 'preparing', has_results: false } as JobItem;
     workspaceModeStore.setMode('cad');
-    useCadReturnStore.setState({ ingestRecord: { ingest_id: ingestId } as never });
+    useCadReturnStore.setState({ needsIngest: false, ingestRecord: { ingest_id: ingestId } as never });
     importedMeshStore.setCad({ source: 'cad', ingestId } as never);
     publishJobs([refused]);
     await act(async () => { root.render(<ResultsPanel/>); });

@@ -21,7 +21,7 @@ import {
 } from '../design/openCadProject';
 import { showProjectRuns } from '../jobs/runFilters';
 import { workspaceNavigation } from './workspaceNavigation';
-import { useCadReturnStore } from '../stores/cadReturn';
+import { useCadModelState } from '../stores/cadModelState';
 import { useDocumentStore } from '../stores/document';
 import { discardConfirmation, replacingWouldLose } from '../design/replacementCheck';
 import { fullTime, pluralized, relativeTime } from './cadTime';
@@ -56,12 +56,13 @@ export function projectName(
  */
 export function useCurrentCadProjectLineage(): string | null {
   const identity = useDocumentStore((state) => state.identity);
-  const returned = useCadReturnStore((state) => state.ingestRecord?.project ?? null);
-  return returned?.lineage_id ?? identity?.lineageId ?? null;
+  const model = useCadModelState();
+  return model.authoredInCad ? model.lineageId : model.lineageId ?? identity?.lineageId ?? null;
 }
 
 export function useCurrentCadProject(): { lineageId: string; name: string; archiveFolder: string | null } | null {
-  const returned = useCadReturnStore((state) => state.ingestRecord?.project ?? null);
+  const model = useCadModelState();
+  const returned = model.record?.project;
   const lineageId = useCurrentCadProjectLineage();
   const [projects, setProjects] = useState<CadProject[]>([]);
   const generation = useRef(0);
@@ -81,7 +82,7 @@ export function useCurrentCadProject(): { lineageId: string; name: string; archi
   const known = projects.find((project) => project.lineageId === lineageId);
   const name = known
     ? projectName(known)
-    : returned?.document_name?.trim() || returned?.archive_stem?.trim() || 'Untitled project';
+    : model.selected ? model.label : returned?.document_name?.trim() || returned?.archive_stem?.trim() || 'Untitled project';
   return { lineageId, name, archiveFolder: known?.archiveStem ?? returned?.archive_stem ?? null };
 }
 
@@ -256,6 +257,7 @@ function ProjectOverflowMenu({ project, onNotice, onError }: {
  */
 export function CadProjectHeader() {
   const project = useCurrentCadProject();
+  const model = useCadModelState();
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const snapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
@@ -266,13 +268,13 @@ export function CadProjectHeader() {
       <div className="cad-project-title">
         <h3 className="cad-project-heading"><ProjectSwitcher
           current={project?.lineageId ?? null}
-          label={project?.name ?? 'No CAD project open'}
+          label={project?.name ?? (model.selected ? `${model.label} · from ${model.application}` : 'No CAD project open')}
           onOpened={(name) => setNotice(`Opened ${name}`)}
           onError={setError}
         /></h3>
         <p className="cad-project-meta">{project
           ? (runs.length ? `${pluralized(runs.length, 'run')} in this project` : 'No runs in this project yet')
-          : 'Send a design to CAD, or switch to one you already have.'}</p>
+          : model.selected ? 'Prepare simulation to use this model in WG.' : 'Send a design to CAD, or switch to one you already have.'}</p>
       </div>
       <ProjectOverflowMenu project={project} onNotice={setNotice} onError={setError}/>
     </header>

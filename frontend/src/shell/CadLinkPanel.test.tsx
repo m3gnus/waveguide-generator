@@ -129,6 +129,28 @@ describe('CadLinkPanel', () => {
   });
   afterEach(() => { act(() => root.unmount()); importedMeshStore.clear();  workspaceModeStore.setMode('parametric'); vi.restoreAllMocks(); vi.clearAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); host.remove(); });
 
+  it('never offers the parametric Fusion actions for a selected unprepared CAD-authored return', async () => {
+    const { emptyCadWorkspace } = await import('../stores/cadWorkspace');
+    const ingest = vi.fn().mockResolvedValue(undefined);
+    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false, fusionStatus: currentFusion, ingest }, true);
+    workspaceModeStore.setMode('cad');
+    useDocumentStore.setState({ identity: { designId: 'parked-design', lineageId: 'parked-project' } as never });
+    useCadReturnStore.getState().selectBundle({ ...listing.items[0], designIds: [] });
+    await act(async () => root.render(<QueryClientProvider client={capabilityClient}><CadLinkPanel/>
+      <section aria-label="Results"><CurrentModelStatus actions solveStatus/></section>
+    </QueryClientProvider>));
+    const connection = host.querySelector('[aria-label="CAD Link connection"]')!;
+    expect(connection.textContent).not.toMatch(/Open in Fusion 360|Send to Fusion|Send WG changes|This WG design/);
+    expect(host.textContent).toContain('Speaker · from Fusion');
+    const results = host.querySelector('[aria-label="Results"]')!;
+    expect(results.textContent).toContain('Not prepared yet');
+    expect(results.textContent).not.toMatch(/Not solved yet|Ingest|Solve is not available/);
+    const prepare = Array.from(results.querySelectorAll('button')).find(button => button.textContent === 'Prepare simulation')!;
+    await act(async () => prepare.click());
+    expect(ingest).toHaveBeenCalledOnce();
+    cadWorkspace.setState(emptyCadWorkspace, true);
+  });
+
   it.each([true, false, undefined])('shows the manual Update upgrade notice for capability %s', async (immutableBundles) => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -1664,7 +1686,7 @@ describe('CadLinkPanel', () => {
 
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);
     expect(useCadReturnStore.getState().selectedBundle?.documentName).toBe('Tritonia');
-    expect(host.querySelector('.cad-status-strip')?.textContent).toContain('Returned and ingested Tritonia');
+    expect(host.querySelector('.cad-status-strip')?.textContent).toContain('Returned and prepared Tritonia');
     expect(host.querySelector('.cad-check-findings')?.textContent).toContain('freshness');
   });
 
@@ -1962,7 +1984,8 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
 
-    // The settings line on the Solve card opens them where they live.
+    act(() => publishCadJobs([cadJobFixture({ operationId: 'op-settings', kind: 'prepare_and_solve', state: 'processing', stage: 'preparing-mesh', snapshot: { manifestSha256: record.manifest_sha256 }, jobId: 'job-settings' } as CadOperationSummary)]));
+    // The settings line on a requested Solve card opens them where they live.
     const open = host.querySelector<HTMLButtonElement>('.cad-solve-card button[data-action="open-settings"]')!;
     expect(open.textContent).toBe('Settings…');
     // The hover tooltip names the inputs that moved to the Simulation tab.
@@ -1971,12 +1994,10 @@ describe('CadLinkPanel', () => {
     expect(activate).toHaveBeenCalledWith('simulation');
   });
 
-  it('shows the Solve card, never a "prepared" claim, while a finding still stands before the solve', async () => {
+  it('hides the Solve card before a request even while a finding still stands', async () => {
     await renderAndSelect();
     await clickIngest();
-    // The record's blocking finding still needs approving: the Solve card is
-    // what is there, and it claims nothing about readiness.
-    expect(host.querySelector('.cad-model-card .cad-solve-card')).not.toBeNull();
+    expect(host.querySelector('.cad-model-card .cad-solve-card')).toBeNull();
     expect(host.textContent).not.toContain('Prepared for simulation');
   });
 
@@ -2242,6 +2263,7 @@ describe('CadLinkPanel', () => {
   });
 
   it('shows the connection state with its settings link and the symmetric outbound action', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/fusion-status') ? json(closedFusion) : json({ ...listing, items: [] })));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     const card = host.querySelector('.cad-link-card')!;
     expect(card.textContent).toContain('Fusion 360 is closed');
@@ -2255,7 +2277,7 @@ describe('CadLinkPanel', () => {
   it('shows an up-to-date active Fusion document and the communicated parameter count', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/fusion-status')
       ? json(currentFusion)
-      : json(listing)));
+      : json({ ...listing, items: [] })));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     const quiet = host.querySelector<HTMLDetailsElement>('.cad-link-quiet')!;
     expect(quiet.open).toBe(false);
@@ -2271,7 +2293,7 @@ describe('CadLinkPanel', () => {
     const stale = { ...currentFusion, state: 'stale' as const, currentFormula: 'R-OSSE', fusionFormula: 'osse', wgChangesAvailable: true };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/fusion-status')
       ? json(stale)
-      : json(listing)));
+      : json({ ...listing, items: [] })));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     expect(host.querySelector('.cad-connection')?.textContent).toContain('Fusion has OSSE; WG is now R-OSSE');
     expect(host.querySelector('.cad-primary-action')?.textContent).toBe('Send WG changes to Fusion');
@@ -2470,7 +2492,7 @@ describe('CadLinkPanel', () => {
   });
 
   it('refuses to build an imported submission without an ingestion record', () => {
-    expect(() => buildImportedSubmission(useCadReturnStore.getState())).toThrow('Ingest a CAD return');
+    expect(() => buildImportedSubmission(useCadReturnStore.getState())).toThrow('Prepare this model before solving.');
   });
 
   it('emits the combine wire unless switched off, chained by role band order', () => {
@@ -2666,10 +2688,10 @@ describe('CadLinkPanel', () => {
       findings: [],
     };
     const notLinked: FusionCadStatus = { ...currentFusion, state: 'not_linked', link: null, documentName: 'PartyMEH v10', adapterVersion: '0.1.1' };
-    const surface = async (ingested: CadReturnIngestRecord) => {
+    const surface = async (ingested: CadReturnIngestRecord, designIds: string[] = []) => {
       vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
         const path = String(input);
-        if (path.endsWith('/returns')) return json(listing);
+        if (path.endsWith('/returns')) return json({ ...listing, items: [{ ...listing.items[0], designIds }] });
         if (path.endsWith('/fusion-status')) return json(notLinked);
         return json(ingested);
       }));
@@ -2694,7 +2716,7 @@ describe('CadLinkPanel', () => {
     act(() => root.unmount());
     root = createRoot(host);
     resetCadReturnStore();
-    const linkedCard = await surface(record);
+    const linkedCard = await surface(record, ['design-linked']);
     expect(linkedCard.querySelector('.cad-primary-action')?.textContent).toBe('Open in Fusion 360');
   });
 

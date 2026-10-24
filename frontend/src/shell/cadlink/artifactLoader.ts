@@ -285,8 +285,8 @@ export async function showIngestedSolverMeshInViewport(
   if (!current()) return null;
   if (!response.ok) {
     return response.status === 409
-      ? 'The ingested solve mesh failed verification and cannot be displayed.'
-      : `Could not read the ingested solve mesh (${response.status}).`;
+      ? 'The prepared solve mesh failed verification and cannot be displayed.'
+      : `Could not read the prepared solve mesh (${response.status}).`;
   }
   try {
     const meshText = await response.text();

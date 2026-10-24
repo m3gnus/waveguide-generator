@@ -1,3 +1,4 @@
+import { useCadModelState, type CadModelPhase } from '../stores/cadModelState';
 import { designFingerprint } from '../results/runCoherence';
 import { importedModelBlocker, useImportedModelStore } from '../stores/importedModel';
 import { useShallow } from 'zustand/react/shallow';
@@ -332,32 +333,31 @@ export function fieldPlaneUnavailableTooltip(jobs: readonly JobItem[]): string {
 export function cadViewportEmptyCopy(options: {
   bundleName: string;
   bundleReadable: boolean;
-  ingesting: boolean;
-  ingestError: string | null;
+  phase: CadModelPhase;
   cadApplication: string;
 }): { title: string; detail: string } {
-  const { bundleName, bundleReadable, ingesting, ingestError, cadApplication } = options;
+  const { bundleName, bundleReadable, phase, cadApplication } = options;
   if (!bundleReadable) {
     return {
       title: 'No CAD geometry yet',
       detail: `Bring a model back from ${cadApplication}; CAD Link will prepare it automatically.`,
     };
   }
-  if (ingesting) {
+  if (phase === 'preparing') {
     return {
       title: `Preparing ${bundleName}…`,
       detail: 'CAD Link is building the viewport and solver mesh.',
     };
   }
-  if (ingestError) {
+  if (phase === 'prepare-failed') {
     return {
       title: 'CAD preparation failed',
       detail: 'Preparation failed. Open CAD Link and use “Prepare simulation” to retry.',
     };
   }
   return {
-    title: 'CAD return selected',
-    detail: 'Select a return in CAD Link to prepare it automatically.',
+    title: `${bundleName} is not prepared yet`,
+    detail: 'Prepare simulation in CAD Link',
   };
 }
 
@@ -407,10 +407,10 @@ export function Viewport() {
   const solveSymmetry = useSolveOptionsStore((state) => state.symmetry);
   const designName = useDocumentStore((state) => state.designName);
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
-  const cadRecord = useCadReturnStore((state) => state.ingestRecord);
-  const cadBundleReadable = useCadReturnStore((state) => state.selectedBundle?.readable === true);
-  const cadName = useCadReturnStore((state) => state.selectedBundle?.documentName ?? state.selectedBundle?.name ?? 'CAD Link');
-  const cadWorkspaceView = useSyncExternalStore(cadWorkspace.subscribe, cadWorkspace.getSnapshot, cadWorkspace.getSnapshot);
+  const cad = useCadModelState();
+  const cadRecord = cad.record;
+  const cadBundleReadable = cad.bundle?.readable === true;
+  const cadName = cad.label;
   const theme = useViewportTheme();
   const preferences = useViewerPreferences();
   const cadApplication = cadApplicationName(usePreferences().cadApplication);
@@ -419,8 +419,7 @@ export function Viewport() {
   const cadEmpty = cadViewportEmptyCopy({
     bundleName: cadName,
     bundleReadable: cadBundleReadable,
-    ingesting: cadWorkspaceView.ingesting,
-    ingestError: cadWorkspaceView.ingestError,
+    phase: cad.phase,
     cadApplication,
   });
   const resultSelection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
@@ -1058,7 +1057,7 @@ export function Viewport() {
           : importedMesh?.name ?? (fileInputActive ? 'Imported mesh' : workspaceMode === 'cad' ? cadName : designName || 'Untitled design')}</b>
         <span>{importedMesh
           ? `${importedMesh.triangleCount.toLocaleString()} display triangles${importedMesh.triangleCount !== importedMesh.solvedTriangleCount ? ` · ${importedMesh.solvedTriangleCount.toLocaleString()} solved` : ''} · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
-          : fileInputActive ? 'Mesh file · configure in Geometry' : workspaceMode === 'cad' ? (cadWorkspaceView.ingesting && cadBundleReadable ? `Preparing ${cadName}…` : cadWorkspaceView.ingestError && cadBundleReadable ? 'CAD preparation failed' : 'No ingested CAD viewport mesh') : viewportSubtitle(design, nativeOpening)}</span>
+          : fileInputActive ? 'Mesh file · configure in Geometry' : workspaceMode === 'cad' ? (cad.phase === 'preparing' && cadBundleReadable ? `Preparing ${cadName}…` : cad.phase === 'prepare-failed' && cadBundleReadable ? 'CAD preparation failed' : cadEmpty.title) : viewportSubtitle(design, nativeOpening)}</span>
       </div>
       <div className="viewport-live">
         {workspaceMode === 'parametric' && <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>}
@@ -1081,7 +1080,7 @@ export function Viewport() {
           : cadSolverViewSelected
             ? <span>{cadSolverLoading
               ? 'loading solve mesh…'
-              : cadSolverMesh ? 'ingested solve mesh' : 'solve mesh unavailable'}</span>
+              : cadSolverMesh ? 'prepared solve mesh' : 'solve mesh unavailable'}</span>
             : <span>{fileInputActive ? 'Mesh file' : 'CAD Link'} workspace</span>}
         {workspaceMode === 'parametric' && <LiveDimensions />}
       </div>

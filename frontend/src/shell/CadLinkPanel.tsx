@@ -1,4 +1,5 @@
 import { isMeshRecoveryFinding } from '../model/cadMeshRecovery';
+import { useCadModelState } from '../stores/cadModelState';
 import { EmptyState } from './EmptyState';
 import { Notice } from './Notice';
 import { cadMeshSizing } from '../api/cadMesh';
@@ -92,7 +93,7 @@ function findingDetail(finding: CadReturnFinding): string {
   const details = Object.entries(finding)
     .filter(([key]) => !['id', 'kind', 'blocking', 'evidence_path'].includes(key))
     .map(([key, value]) => `${key.replaceAll('_', ' ')}: ${compactValue(value)}`);
-  return details.join(' · ') || 'Recorded by CAD-return ingestion.';
+  return details.join(' · ') || 'Recorded during CAD model preparation.';
 }
 
 function returnDisplayName(bundle: CadReturnBundle): string {
@@ -584,7 +585,6 @@ export function CadLinkPanel() {
     bundles,
     loading,
     ingesting,
-    ingestError,
     sendingToFusion,
     error: actionError,
     errorDiagnostics,
@@ -713,23 +713,23 @@ export function CadLinkPanel() {
   const linkedDocument = onshapeStatus?.link ?? null;
   const matchingOnshapeLinks = onshapeStatus?.matchingLinks ?? [];
   const matchingFusionLinks = fusionStatus?.matchingLinks ?? [];
-  const record = state.ingestRecord;
-  const bundle = state.selectedBundle;
+  const model = useCadModelState();
+  const { record, bundle } = model;
   // A model authored in Fusion is on screen. The link states compare the
   // Fusion document with the parametric WG design, which is not this model,
   // and their Open and Send actions would insert that design into the user's
   // document: while Fusion is simply connected, it is one quiet line.
-  const unlinkedOnScreen = !onshape && record?.freshness?.verdict === 'unlinked';
+  const unlinkedOnScreen = !onshape && model.authoredInCad;
   const fusionConnected = unlinkedOnScreen && Boolean(fusionStatus?.running)
     && DOCUMENT_LINK_STATES.has(workflow.state);
-  const quietLink = fusionConnected || workflow.state === 'current' || workflow.state === 'checking';
+  const quietLink = unlinkedOnScreen || workflow.state === 'current' || workflow.state === 'checking';
   const addinVersion = !onshape && fusionStatus?.running && fusionStatus.adapterVersion
     ? `The Waveguide Generator add-in in Fusion ${fusionStatus.adapterVersion}`
     : undefined;
   const solvesOnScreen = onScreenSolves(cadJobSummaries(jobs), record);
   const fusionBothChanged = Boolean(fusionStatus?.wgChangesAvailable && fusionStatus.fusionChangesAvailable);
-  const staleModel = Boolean(record && state.needsIngest);
-  const solveCard = Boolean(record) && !staleModel && !ingesting;
+  const staleModel = model.phase === 'stale';
+  const solveCard = model.phase === 'prepared';
   const onshapeActionLabel = workflow.action === 'update' ? 'Send WG changes to Onshape' : `Create ${shownName} in Onshape`;
   const unlinkButton = <button
     className="link-button cad-onshape-unlink"
@@ -793,17 +793,18 @@ export function CadLinkPanel() {
     <section ref={connection} tabIndex={-1} aria-label="CAD Link connection" className={`cad-workflow cad-link-card${quietLink ? '' : ' attention'}`}>
       {quietLink
         ? <details className="cad-link-quiet">
-          <summary title={fusionConnected ? addinVersion : [workflow.detail, addinVersion].filter(Boolean).join(' · ')}>
+          <summary title={unlinkedOnScreen ? addinVersion ?? '' : [workflow.detail, addinVersion].filter(Boolean).join(' · ')}>
             <span className="cad-link-chevron" aria-hidden="true">›</span>
             <span className={`cad-connection-dot cad-connection-dot-${fusionConnected ? 'current' : workflow.state}`} aria-hidden="true"/>
-            <b>{onshape ? 'Onshape' : 'Fusion 360'}{fusionConnected ? ' · connected' : workflow.state === 'current' ? ' · in sync' : ' · checking…'}</b>
+            <b>{onshape ? 'Onshape' : 'Fusion 360'}{unlinkedOnScreen ? fusionStatus?.statusObserved === false ? ' · last reported' : fusionConnected ? ' · connected' : fusionStatus === null ? ' · checking…' : fusionStatus.running ? ' · connection needs attention' : ' · not connected' : workflow.state === 'current' ? ' · in sync' : ' · checking…'}</b>
             <span className="cad-link-meta">{onshape ? linkedDocument?.documentName ?? '' : fusionStatus?.documentName ?? ''}</span>
           </summary>
           <div className="cad-link-quiet-body">
-            {!fusionConnected && workflowDetail}
+            {!unlinkedOnScreen && workflowDetail}
+            {unlinkedOnScreen && !fusionConnected && workflow.action === null && workflowDetail}
             <CadCoordinationNote/>
             <div className="cad-link-actions">
-              {!fusionConnected && linkActions}
+              {!unlinkedOnScreen && linkActions}
               <button className="link-button cad-link-settings" onClick={() => requestSettings('cad')}>Settings</button>
             </div>
           </div>
@@ -905,13 +906,13 @@ export function CadLinkPanel() {
       {record && !staleModel && importedSubmissionNotices(state).map((notice) => (
         <Notice key={notice}>{notice}</Notice>
       ))}
-      {ingestError && <Notice tone="error">Preparation failed — {ingestError}</Notice>}
-      {bundle?.readable && (ingesting || !record || staleModel || ingestError) && <button
+      {model.phase === 'prepare-failed' && <Notice>Preparation failed. Use Prepare simulation to try again.</Notice>}
+      {(model.canPrepare && model.needsPreparation || model.phase === 'preparing') && <button
         className="primary cad-primary-action"
-        disabled={ingesting}
+        disabled={!model.canPrepare}
         title="Mesh the returned geometry, verify its evidence, and make it the solve truth."
-        onClick={() => { void cadWorkspaceView.ingest(); }}
-      >{ingesting ? 'Preparing…' : record ? 'Prepare again' : 'Prepare simulation'}</button>}
+        onClick={() => { void cadWorkspaceView.ingest().catch(() => undefined); }}
+      >{model.phase === 'preparing' ? 'Preparing…' : 'Prepare simulation'}</button>}
       {record && <ChecksSection record={record}/>}
       {femRegionsOffered && !!record?.fem_regions?.length && <section className="cad-fem-regions" aria-label="FEM regions">
         <h4>FEM regions</h4>
@@ -943,7 +944,7 @@ export function CadLinkPanel() {
         <summary>Details</summary>
         <p
           className="cad-detail cad-model-provenance"
-          title="The snapshot is the returned model, named by its manifest hash. The preparation is the ingestion whose mesh is on screen and would be solved."
+          title="The snapshot is the returned model, named by its manifest hash. The preparation holds the mesh on screen that would be solved."
         >Snapshot <code>{shortSha256(record.manifest_sha256)}</code> · Preparation <code>{record.ingest_id}</code></p>
         {solvesOnScreen.map((operation) => <CadSolveInputs
           key={operation.jobId ?? operation.operationId}

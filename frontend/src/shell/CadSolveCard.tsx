@@ -1,3 +1,4 @@
+import { useCurrentModelStatus } from '../model/currentModel';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { useCadReturnStore } from '../stores/cadReturn';
@@ -130,6 +131,8 @@ export function CadSolveCard({ record, label, fetcher }: {
   fetcher?: typeof fetch;
 }) {
   const solve = useOptionalSolveControl();
+  const { status } = useCurrentModelStatus(record);
+  if (status.kind === 'never-solved' && !status.job) return null;
   const unlinked = record.freshness?.verdict === 'unlinked';
   // Only the CAD command: this card exists only in CAD Link mode.
   const available = Boolean(solve?.cadMode);

@@ -212,7 +212,7 @@ function acceptSubmittedLabel(designName: string): void {
 }
 
 const CAD_VIEWPORT_MISMATCH =
-  'The displayed CAD Link mesh does not match the selected ingestion. Prepare or reselect it before solving.';
+  'The displayed CAD Link mesh does not match the selected model. Prepare or reselect it before solving.';
 
 /** The complete CAD-mode readiness rule, read from live store state so the
  * Solve button, the keyboard shortcut, and every automatic caller apply one
@@ -541,7 +541,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     if (submissionInFlight.current) return 'busy' as const;
     const cad = clicked?.cad ?? useCadReturnStore.getState();
     const record = cad.ingestRecord;
-    if (!record) throw new Error('Ingest a CAD return before solving.');
+    if (!record) throw new Error('Prepare this model before solving.');
     const ingestId = record.ingest_id;
     const frameAtPress = useCadSolverFrameStore.getState().frames[ingestId];
     const blocker = cadInputBlockerNow();

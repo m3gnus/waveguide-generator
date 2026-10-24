@@ -104,9 +104,9 @@ export function importedSubmissionBlocker(
   const directivityError = polarValidationError(solveStore.polar);
   if (directivityError) return directivityError;
   if (state.setupLoading) return 'Wait for the model settings to finish loading.';
-  if (!state.ingestRecord) return 'Ingest a CAD return before solving.';
-  if (state.ingestRecord.evidence_unverified) return 'The retained return manifest cannot be verified; re-ingest this return before solving.';
-  if (state.needsIngest) return state.ingestStaleReason ?? 'Sizing or source selection changed. Re-ingest before solving.';
+  if (!state.ingestRecord) return 'Prepare this model before solving.';
+  if (state.ingestRecord.evidence_unverified) return 'The retained return manifest cannot be verified; prepare this model again before solving.';
+  if (state.needsIngest) return state.ingestStaleReason ?? 'Sizing or source selection changed. Prepare the model again before solving.';
   if (requiredFem && femRegions.length === 0 && !state.exteriorOnly) {
     const declared = 'required FEM air volumes';
     return `This return includes ${declared}. Declare these volumes as FEM regions with the Waveguide Generator add-in in Fusion and send again, or choose exterior-only to solve without the FEM air.`;
@@ -359,8 +359,8 @@ export function buildImportedSubmission(
   const record = state.ingestRecord;
   const opening = importedModelBlocker('cad');
   if (opening) throw new Error(opening);
-  if (!record) throw new Error('Ingest a CAD return before solving.');
-  if (record.evidence_unverified) throw new Error('The retained return manifest cannot be verified; re-ingest this return before solving.');
+  if (!record) throw new Error('Prepare this model before solving.');
+  if (record.evidence_unverified) throw new Error('The retained return manifest cannot be verified; prepare this model again before solving.');
   const setup = effectiveImportedSetup('cad', record.ingest_id, () => resolveCadImportedSetup(state));
   if (record.native_source) setup.geometry.required_features = [...record.native_source.required_features];
   widenPolarToDerivation(setup.options, record.polar_grid_derivation);

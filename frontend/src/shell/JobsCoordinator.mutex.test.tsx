@@ -487,6 +487,7 @@ describe('solve invocation mutex', () => {
         } as unknown as RegisteredMesh });
         importedMeshStore.setFile({ name: 'surface.msh', source: 'file', ingestId: 'wgi_file' } as ImportedMeshScene);
       }
+      if (surface === 'CAD card') publishJobs([cadJobFixture(operation('previous-card-request', 'cancelled'), { status: 'cancelled' })]);
       if (surface === 'Results popover') {
         publishJobs([{ ...failedJob(), id: 'older-run', status: 'complete', has_results: true }]);
         compareSelection.setPrimary('older-run');
@@ -1028,7 +1029,7 @@ describe('solve invocation mutex', () => {
     expect(results.textContent?.match(/Could not build the surface mesh\./g)).toHaveLength(1);
     expect(results.textContent?.match(/Solve refused/g)).toHaveLength(1);
     expect(host.querySelector('.topbar')?.textContent).not.toMatch(/refused|mesh|failed/i);
-    expect(host.querySelectorAll('.solve-readiness')).toHaveLength(1);
+    expect(host.querySelectorAll('.solve-readiness')).toHaveLength(0);
   });
 
   it.each(['top bar', 'Results empty', 'CAD card', 'crossover', 'Simulation'])('readiness parity: %s stays quiet until Solve is requested', async surface => {
@@ -1115,7 +1116,7 @@ describe('solve invocation mutex', () => {
     { name: 'waiting', readiness: { ...blocker, message: 'BEAT Metal is still preparing.', remedies: [{ kind: 'wait' as const }, { kind: 'settings' as const, section: 'simulation' }] }, expected: 'BEAT Metal is warming up. The solve starts when it is ready.', buttons: ['Stop'] },
     { name: 'mesh too large', readiness: { code: 'mesh_too_large', message: 'This mesh is too large to solve.' }, expected: 'This mesh is too large to solve.', buttons: [] },
   ])('$name renders its message and only the declared remedies', async ({ readiness, expected, buttons }) => {
-    act(() => { blockedCad(); mocks.importedPlan.plan.readiness = readiness as SolveBlocker; });
+    act(() => { blockedCad(); mocks.importedPlan.plan.readiness = readiness as SolveBlocker; mocks.importedPlan.plan.reason = readiness.message; });
     await act(async () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>));
     await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     const view = host.querySelector('.solve-readiness')!;
@@ -3022,7 +3023,7 @@ describe('solve invocation mutex', () => {
     const solve = host.querySelector<HTMLButtonElement>('button')!;
     expect(solve.textContent).toBe('Solve');
     expect(solve.disabled).toBe(true);
-    expect(solve.title).toBe('Ingest a CAD return before solving.');
+    expect(solve.title).toBe('Prepare this model before solving.');
   });
 
   it.each([

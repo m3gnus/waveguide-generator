@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import * as coordinator from './JobsCoordinator';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { JobItem } from '../api/jobsSocket';
 import {
@@ -252,6 +253,19 @@ describe('solveDetailLine', () => {
 });
 
 describe('SolveProgressView (component)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(['engine_unavailable', 'setup_required', 'invalid_sweep', 'findings_need_review'])
+    ('shows %s readiness only after a solve request', code => {
+      const readiness = { code, message: 'Choose the next step.', remedies: [] };
+      const control = { readiness, readinessRequested: false, disabled: true, title: readiness.message };
+      const spy = vi.spyOn(coordinator, 'useOptionalSolveControl').mockReturnValue(control as never);
+      expect(renderToStaticMarkup(<SolveProgressView showReadiness/>)).toBe('');
+      spy.mockReturnValue({ ...control, readinessRequested: true } as never);
+      expect(renderToStaticMarkup(<SolveProgressView showReadiness/>)).toContain(readiness.message);
+      spy.mockReturnValue(control as never);
+      expect(renderToStaticMarkup(<SolveProgressView showReadiness held/>)).toContain(readiness.message);
+    });
   beforeEach(() => { resetSolveStageClocksForTests(); });
 
   it('renders nothing for neither a job nor an operation', () => {

@@ -177,6 +177,7 @@ export async function refreshCadReturnArrivals(
     const projectMismatch = Boolean(
       opened && returnBelongsToAnotherProject(opened, currentDesignId),
     );
+    const prepareInitial = projectOpenPending.current || workspaceModeStore.getSnapshot().mode === 'cad';
     const destination = projectOpenPending.current
       ? useDocumentStore.getState().identity?.lineageId ?? null
       : undefined;
@@ -200,7 +201,7 @@ export async function refreshCadReturnArrivals(
     if (projectOpenPending.current && canChooseInitial) {
       projectOpenPending.current = false;
       setStatus(initial
-        ? `Project design loaded. Selected the latest matching return from ${initial.documentName ?? initial.name}; prepare it to restore Simulation geometry.`
+        ? `Project design loaded. Selected the latest matching return from ${initial.documentName ?? initial.name}; preparing Simulation geometry.`
         : 'Project design loaded. No matching CAD return is available yet; return the project from Fusion or Onshape to prepare Simulation geometry.');
     } else if (projectOpenPending.current && useCadReturnStore.getState().selectedBundle) {
       // A receipt or another selection owner resolved the project choice.
@@ -223,7 +224,11 @@ export async function refreshCadReturnArrivals(
         }`);
       enterCadWorkspace();
       if (!heldForManualPick) autoIngestSelected();
-    } else if (!initial) {
+    } else if (initial) {
+      // A restored choice is prepared just like a newly arrived or manually
+      // selected return, through the same settings and intent fences.
+      if (prepareInitial) autoIngestSelected();
+    } else {
       const currentSelected = useCadReturnStore.getState().selectedBundle;
       if (!currentSelected) return;
       if (currentSelected.bundleOrigin === 'native') return;
@@ -332,7 +337,7 @@ export function createCadArrivalActions(
       }, fetcher, abortController.signal);
       if (!isCurrentDocumentLoad(documentLoad)
         || !useCadReturnStore.getState().applyIngest(record, ingestGeneration)) {
-        const superseded = 'Discarded a completed ingest because its selected return or design was superseded. Rebuild the mesh for the current state.';
+        const superseded = 'Discarded a completed preparation because its selected return or design was superseded. Rebuild the mesh for the current state.';
         if (request === ingestRequest.current && mounted.current) setStatus(superseded);
         throw new SupersededError(superseded);
       }
@@ -359,7 +364,7 @@ export function createCadArrivalActions(
       if (reason instanceof SupersededError) throw reason;
       if (!isCurrentDocumentLoad(documentLoad)
         || !useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) {
-        const superseded = 'Discarded an ingest response because its selected return or design was superseded. Rebuild the mesh for the current state.';
+        const superseded = 'Discarded a preparation response because its selected return or design was superseded. Rebuild the mesh for the current state.';
         if (request === ingestRequest.current && mounted.current) setStatus(superseded);
         throw new SupersededError(superseded);
       }
@@ -471,7 +476,7 @@ export function createCadArrivalActions(
         return;
       }
       setBundles([bundle]);
-      setStatus(`Returned and ingested ${result.bundle.documentName ?? result.bundle.name} from Onshape.`);
+      setStatus(`Returned and prepared ${result.bundle.documentName ?? result.bundle.name} from Onshape.`);
       // The CAD Link panel only exists inside the CAD workspace, and the
       // ingested return is now the solve truth — enter the mode that owns it.
       activateWorkspace();

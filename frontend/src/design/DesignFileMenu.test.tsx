@@ -153,6 +153,7 @@ describe('design file export menu', () => {
     }
     expect(container.textContent).toContain('imported models');
     expect(container.querySelector('.file-chip')?.textContent).not.toContain('Parked A');
+    expect(container.querySelector('.file-chip .cadlink-badge')).toBeNull();
     expect(fetcher).not.toHaveBeenCalled();
     expect(useDocumentStore.getState().designName).toBe('Parked A');
   });

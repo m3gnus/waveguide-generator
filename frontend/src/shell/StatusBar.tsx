@@ -1,3 +1,5 @@
+import { cadModelStatusLabel, useCadModelState } from '../stores/cadModelState';
+import { resolveEngineLabel } from './solveProgress';
 import { useSyncExternalStore } from 'react';
 import { previewSocket } from '../api/previewSocket';
 import { compactFrequency } from '../design/lambdaLimit';
@@ -67,11 +69,8 @@ export function cadSolveSummary(
 export function engineStatusLabel(
   engines: readonly EngineCapability[],
   resolvedEngine: string | null | undefined,
-  error: string | null,
-  isPending: boolean,
 ): string {
-  if (error) return `SOLVE BLOCKED · ${error}`;
-  if (!resolvedEngine) return isPending ? 'Checking solve engine…' : 'No solve plan';
+  if (!resolvedEngine) return 'Engine · —';
   const engine = engines.find((item) => item.name === resolvedEngine);
   return `${resolvedEngine.toUpperCase()} · ${engine?.version ?? 'READY'}`;
 }
@@ -93,17 +92,17 @@ export function StatusBar() {
   const fileRegistered = useImportedModelStore((state) => state.input === 'file' && state.prepared !== null);
   const fileActive = mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file';
   const cadReturn = useCadReturnStore();
+  const cad = useCadModelState();
+  const requestedEngine = useScopedSolveOptions(state => state.engine);
   const filename = useDocumentStore((state) => state.filename);
   const frequencyMode = useScopedSolveOptions((state) => state.frequencyMode);
   const frequencyListText = useScopedSolveOptions((state) => state.frequencyListText);
   const fileSweep = useScopedSolveOptions((state) => `${state.sweepStartHz}/${state.sweepEndHz}/${state.sweepCount}`);
   const preferences = usePreferences();
   const backend = useSolveControlBackend();
-  const refusal = backend.error ?? (backend.plan?.engine === null ? backend.plan.reason : null);
-  const engineLabel = engineStatusLabel(engines, backend.plan?.engine, refusal, backend.isPending);
+  const engineLabel = backend.plan?.engine ? engineStatusLabel(engines, backend.plan.engine) : resolveEngineLabel(requestedEngine);
   const previewError = preview.error ? previewErrorMessage(preview.error) : null;
   const meshMetrics = previewMeshMetrics(preview.frame);
-  const cadTriangles = cadReturn.ingestRecord?.mesh?.stats.triangle_count;
   const [fileStart, fileEnd, fileCount] = fileSweep.split('/').map(Number);
   const listedFrequencies = frequencyMode === 'list' ? parseFrequencyList(frequencyListText).frequencies ?? undefined : undefined;
   const replayFrequencies = openedSetup?.options.frequencies_hz ?? listedFrequencies;
@@ -113,7 +112,7 @@ export function StatusBar() {
     ? cadSolveSummary({ start: cadReturn.frequencyStartHz, end: cadReturn.frequencyEndHz, count: cadReturn.frequencyCount }, { frequencyMode, frequencyListText, smoothing: preferences.smoothing })
     : solveSummary(design, { frequencyMode, frequencyListText, smoothing: preferences.smoothing });
   const document = fileActive ? file.filename || 'no mesh file' : mode === 'cad'
-    ? cadReturn.selectedBundle?.documentName ?? cadReturn.selectedBundle?.name ?? 'no CAD return'
+    ? cad.selected ? cad.label : 'no CAD model'
     : documentLabel(filename, design.formula);
   return <footer className="statusbar">
     <div className="status-item"><span className="engine-badge"><Icon name="chip"/>{engineLabel}</span></div>
@@ -126,12 +125,12 @@ export function StatusBar() {
         limit slot is gone until something computes it, because a readout that
         can only ever say "not calculated" is worse than no readout. */}
     <div className="status-item status-drop-2">{fileActive ? <>Mesh <b>{file.summary?.triangle_count.toLocaleString() ?? 'not imported'}</b> tri</> : mode === 'cad'
-      ? <>CAD mesh {cadTriangles === undefined ? <b>not ingested</b> : <><b>{cadTriangles.toLocaleString()}</b> solved tri</>}</>
+      ? cadModelStatusLabel(cad)
       : <>preview {meshMetrics ? <><b>{meshMetrics.triangles.toLocaleString()}</b> tri · <b>{meshMetrics.vertices.toLocaleString()}</b> vert</> : <b>no frame</b>}</>}</div>
     {mode === 'parametric' && previewError && <div className="status-item preview-error-status" title={previewError}>{previewError}</div>}
     <span className="spacer"/>
     <div className="status-item right">{summary}</div>
     <div className="status-item right status-drop-1"><Icon name="folder"/>{document}</div>
-    <div className="status-item right">{fileActive ? (fileRegistered ? 'Mesh · ready' : 'Mesh · not prepared') : <><i className={`connection-dot ${mode === 'cad' ? cadReturn.ingestRecord ? 'connected' : 'disconnected' : preview.connection}`}/>{mode === 'cad' ? cadReturn.ingestRecord ? 'CAD return · ingested' : 'CAD return · empty' : preview.connection === 'connected' ? 'local · connected' : `local · ${preview.connection}`}</>}</div>
+    {(fileActive || mode === 'parametric') && <div className="status-item right">{fileActive ? (fileRegistered ? 'Mesh · ready' : 'Mesh · not prepared') : <><i className={`connection-dot ${preview.connection}`}/>{preview.connection === 'connected' ? 'local · connected' : `local · ${preview.connection}`}</>}</div>}
   </footer>;
 }

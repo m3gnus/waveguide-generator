@@ -20,6 +20,8 @@ export interface CadWorkspaceSnapshot {
   loading: boolean;
   ingesting: boolean;
   ingestError: string | null;
+  /** Preparation feedback belongs to this CAD intent, including after failure. */
+  preparationIntent?: number;
   sendingToFusion: boolean;
   pullingFromFusion: boolean;
   error: string | null;
@@ -58,6 +60,7 @@ export const emptyCadWorkspace: CadWorkspaceSnapshot = {
   loading: true,
   ingesting: false,
   ingestError: null,
+  preparationIntent: undefined,
   sendingToFusion: false,
   pullingFromFusion: false,
   error: null,

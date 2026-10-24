@@ -92,7 +92,7 @@ export const cadImportedView: ImportedView = {
         if (!opened.setup && source.kind !== 'model') throw new Error('This run’s settings are no longer retained. Select the run again.');
         const record = await getIngest(opened.prepared.ingest_id, fetcher).catch((reason: unknown) => {
           throw reason instanceof CadLinkApiError && reason.status === 404
-            ? new Error('The archived CAD ingestion and mesh artifacts are no longer available.') : reason;
+            ? new Error('The archived CAD model and mesh are no longer available.') : reason;
         });
         if (!current()) return null;
         if (record.ingest_id !== opened.prepared.ingest_id || record.manifest_sha256 !== opened.prepared.manifest_sha256
@@ -187,7 +187,7 @@ export function observeCadProjectLoads(integration: UseCadRestoresOptions): () =
     projectOpenPending.current = false;
     workspaceModeStore.setMode('parametric');
     useCadReturnStore.getState().markIngestStale(
-      'The design was replaced after this CAD return was ingested. Re-ingest before solving.',
+      'The design was replaced after this CAD return was prepared. Prepare it again before solving.',
     );
   });
 }

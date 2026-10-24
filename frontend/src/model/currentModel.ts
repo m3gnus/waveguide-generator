@@ -1,10 +1,11 @@
+import type { CadReturnIngestRecord } from '../api/cadlink';
 import { latestCadJobs, isHeldCadJob } from '../jobs/cadSolve';
 import { previewSocket } from '../api/previewSocket';
 import { useSyncExternalStore } from 'react';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { canLoadJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { designFingerprint, jobDesignFingerprint } from '../results/runCoherence';
-import { useCadReturnStore } from '../stores/cadReturn';
+import { cadModelState, useCadModelState } from '../stores/cadModelState';
 import { currentDesignLoadSource, currentDocumentLoad, useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useImportedModelStore } from '../stores/importedModel';
@@ -111,13 +112,14 @@ export function currentModel(): CurrentModel {
       ? viewport.solver.modelKey === parametricKey : previewShowing, unloadedRunId,
   };
   const file = workspace.importedInput === 'file';
-  const record = file ? imported.input === 'file' ? imported.prepared : null : useCadReturnStore.getState().ingestRecord;
+  const cad = cadModelState();
+  const record = file ? imported.input === 'file' ? imported.prepared : null : cad.record;
   const ingestId = record?.ingest_id ?? null;
   const sha = (record as { solve_model_sha256?: string } | null)?.solve_model_sha256;
   const registered = record?.model_id || (imported.input === workspace.importedInput && imported.prepared?.ingest_id === ingestId ? imported.modelId : null);
   const modelId = registered === 'unfiled' ? null : registered;
   const model: CurrentModel = { kind: file ? 'file' : 'cad', key: sha || ingestId, lineage: modelId || ingestId,
-    label: file ? 'Mesh file' : 'CAD model', modelId, ingestId, unloadedRunId,
+    label: file ? 'Mesh file' : cad.label, modelId, ingestId, unloadedRunId,
     manifestSha256: record?.manifest_sha256,
     viewportShowing: false };
   return { ...model, viewportShowing: !!ingestId && currentModelScene(model, viewport) !== null };
@@ -127,7 +129,7 @@ export function useCurrentModel(): CurrentModel {
   useDesignStore(s => s.design);
   useDocumentStore(s => s.identity);
   useDocumentStore(s => s.designName);
-  useCadReturnStore(s => s.ingestRecord);
+  useCadModelState();
   useImportedModelStore();
   useSyncExternalStore(previewSocket.subscribe, previewSocket.getSnapshot, previewSocket.getSnapshot);
   useDesignStore(s => s.designRevision);
@@ -213,6 +215,15 @@ export function currentModelStatus(model: CurrentModel, jobs: readonly JobItem[]
   if (job?.status === 'error') return { kind: 'failed' as const, job, message: job.error_message || 'The solve failed.' };
   if (job?.status === 'complete' && job.has_results) return { kind: 'solved' as const, job, message: 'Loading results…' };
   return { kind: 'never-solved' as const, job, message: readiness || 'This version of the model has not been solved.' };
+}
+
+/** The same request/run status for Results and the CAD Solve card. */
+export function useCurrentModelStatus(record?: CadReturnIngestRecord) {
+  const current = useCurrentModel();
+  const model = record ? { ...current, kind: 'cad' as const, key: record.solve_model_sha256 || record.ingest_id,
+    ingestId: record.ingest_id, manifestSha256: record.manifest_sha256 } : current;
+  const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
+  return { model, status: currentModelStatus(model, jobs) };
 }
 
 export function runProvenanceMarker(job: Pick<JobItem, 'config_summary'>, mode: WorkspaceMode): string | null {

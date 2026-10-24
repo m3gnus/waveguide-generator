@@ -137,10 +137,15 @@ vi.mock('../api/previewSocket', () => ({
 import { femFieldJob, fieldPlaneUnavailableTooltip, cadViewportEmptyCopy, refitsCamera, Viewport } from './Viewport';
 
 describe('CAD viewport empty-state copy', () => {
+  it('names a selected return that has not been prepared', () => {
+    expect(cadViewportEmptyCopy({ bundleName: 'Speaker CAD', bundleReadable: true,
+      phase: 'selected-unprepared', cadApplication: 'Fusion 360' })).toEqual({
+      title: 'Speaker CAD is not prepared yet', detail: 'Prepare simulation in CAD Link',
+    });
+  });
   it('reports automatic preparation progress with the selected bundle name', () => {
     expect(cadViewportEmptyCopy({
-      bundleName: 'Speaker CAD', bundleReadable: true, ingesting: true,
-      ingestError: null, cadApplication: 'Fusion 360',
+      bundleName: 'Speaker CAD', bundleReadable: true, phase: 'preparing', cadApplication: 'Fusion 360',
     })).toEqual({
       title: 'Preparing Speaker CAD…',
       detail: 'CAD Link is building the viewport and solver mesh.',
@@ -149,8 +154,7 @@ describe('CAD viewport empty-state copy', () => {
 
   it('points a failed preparation to the CAD Link retry', () => {
     const copy = cadViewportEmptyCopy({
-      bundleName: 'Speaker CAD', bundleReadable: true, ingesting: false,
-      ingestError: 'meshing failed', cadApplication: 'Fusion 360',
+      bundleName: 'Speaker CAD', bundleReadable: true, phase: 'prepare-failed', cadApplication: 'Fusion 360',
     });
     expect(copy.title).toBe('CAD preparation failed');
     expect(copy.detail).toContain('“Prepare simulation” to retry');
@@ -1013,7 +1017,7 @@ describe('Viewport preview errors', () => {
       await Promise.resolve();
     });
     expect(importedMeshStore.getSnapshot().cadSolver?.ingestId).toBe(ingestId);
-    expect(host.querySelector('.viewport-live')?.textContent).toContain('ingested solve mesh');
+    expect(host.querySelector('.viewport-live')?.textContent).toContain('prepared solve mesh');
 
     fetchSpy.mockRestore();
     act(() => {
