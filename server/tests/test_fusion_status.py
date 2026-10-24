@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import re
+import shutil
+import tempfile
 from types import SimpleNamespace
 import hashlib
 import threading
@@ -1351,10 +1353,21 @@ def test_immutable_bundle_capability_does_not_gate_automatic_delivery(tmp_path, 
     assert status["state"] != "addin_outdated"
 
 
-def test_missing_cad_folder_still_reports_repair_path_with_a_return_on_screen(tmp_path, monkeypatch):
+@pytest.fixture
+def short_tmp_path():
+    """A chosen WG folder must leave Windows MAX_PATH room (at most 74
+    characters); pytest's tmp_path on a Windows runner is already longer."""
+    root = Path(tempfile.mkdtemp(prefix="wg-"))
+    try:
+        yield root
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_missing_cad_folder_still_reports_repair_path_with_a_return_on_screen(tmp_path, short_tmp_path, monkeypatch):
     monkeypatch.setattr("server.cadlink.api.fusion_process_running", lambda: False)
     app = create_app(data_dir=tmp_path / "data")
-    chosen = tmp_path / "chosen"
+    chosen = short_tmp_path / "chosen"
     chosen.mkdir()
     app.state.folders.select(chosen)
     (chosen / "cadlink").rmdir()

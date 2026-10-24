@@ -586,14 +586,17 @@ def test_delete_conflict_reports_file_and_bypass_does_not_touch_it(tmp_path):
     assert {p: p.read_bytes() for p in runs.rglob("*") if p.is_file()} == before
 
 
-def test_root_io_failure_exposes_the_cause_and_allows_confirmed_bypass(tmp_path, monkeypatch):
+@pytest.mark.parametrize("windows_shape", [False, True])
+def test_root_io_failure_exposes_the_cause_and_allows_confirmed_bypass(tmp_path, monkeypatch, windows_shape):
     from server.jobs.runtime import JobProtectionError
 
     app, runs = app_with_runs(tmp_path)
     imported_run(app, "job-a", "aaa", status="complete")
+    # str(OSError) would show this path through repr(), with doubled backslashes.
+    shown = r"C:\Users\example\Documents\WG\runs" if windows_shape else str(runs)
 
     def unreadable():
-        raise PermissionError(13, "Permission denied", str(runs))
+        raise PermissionError(13, "Permission denied", shown)
 
     monkeypatch.setattr(app.state.workspace, "path", unreadable)
 
@@ -602,7 +605,7 @@ def test_root_io_failure_exposes_the_cause_and_allows_confirmed_bypass(tmp_path,
         try:
             with pytest.raises(JobProtectionError) as error:
                 await runtime.delete("job-a")
-            assert str(runs) in str(error.value)
+            assert shown in str(error.value)
             assert "Permission denied" in str(error.value)
             await runtime.delete("job-a", skip_model_protection=True)
             assert runtime.store.get_job_row("job-a") is None

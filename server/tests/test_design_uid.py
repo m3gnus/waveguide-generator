@@ -132,7 +132,9 @@ def picker_client(tmp_path, monkeypatch):
     from server.workspace.api import PathPickerResult
 
     source = tmp_path / "same-name.cfg"
-    source.write_text(STAMP + SOURCE)
+    # Bytes, not write_text: Windows text mode would write CRLF, and the picker
+    # returns the file's text exactly as stored.
+    source.write_bytes((STAMP + SOURCE).encode("utf-8"))
     store = CadLinkStore(":memory:")
     application = FastAPI()
     application.include_router(api.create_design_io_router(store))
