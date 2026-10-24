@@ -344,7 +344,7 @@ describe('CAD Solve card run status', () => {
     await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
     const line = host.querySelector('.cad-solve-settings')?.textContent ?? '';
     expect(line).toContain('3 listed frequencies');
-    expect(line).toContain('AUTO');
+    expect(line).toContain('Auto');
     expect(line).not.toContain('BEMPP');
   });
 
@@ -403,9 +403,9 @@ describe('CAD Solve card run status', () => {
     publishOperation(operation());
     publishJobs([job({ status: 'cancelled', stage: 'cancelled', error_message: null })]);
     await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
-    expect(host.querySelector('.cad-solve-run')?.textContent).toBe('Cancelled');
+    expect(host.querySelector('.cad-solve-run')?.textContent).toBe('Cancelled\n');
     act(() => publishJobs([job({ status: 'cancelled', stage: 'cancelled', error_message: 'Simulation cancelled by user' })]));
-    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('Cancelled · Simulation cancelled by user');
+    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('Cancelled\nSimulation cancelled by user');
   });
 
   it('shows a refused continuation child from the job even when the operation row is gone', async () => {

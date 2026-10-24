@@ -1,5 +1,4 @@
 import type { EngineCapability } from '../jobs/actions';
-import { CurrentModelStatus } from '../shell/CurrentModelStatus';
 import { SelectRow } from './SelectRow';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
 import { useEffect, useState, useSyncExternalStore } from 'react';
@@ -254,7 +253,6 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
       && <span className="section-note" role="status">BEMPP · checking OpenCL…</span>}
     {showOpenclGuidance && <OpenclUnavailableHook platform={hostPlatform}
       engine={engines.find((engine) => engine.name === 'bempp')} />}
-    <CurrentModelStatus/>
     {includeSampling && <MeshValidationControl />}
     {mode === 'parametric' && <GroundPlaneControls />}
     {includeSampling && <FrequencySweepControls idPrefix={mode === 'cad' ? 'cad-solve' : 'design-solve'} context={mode === 'cad' ? 'imported' : 'design'} />}

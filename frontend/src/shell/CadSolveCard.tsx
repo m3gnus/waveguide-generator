@@ -85,7 +85,7 @@ function SettingsLine({ record }: { record: CadReturnIngestRecord }) {
   const sweep = mode === 'list'
     ? listed ? `${pluralized(listed.length, 'listed frequency', 'listed frequencies')}` : 'frequency list to fix'
     : `${hertz(start)}–${hertz(end)} · ${count} freq`;
-  // The engine chosen in the solver selector; AUTO names what it resolves to.
+  // The engine chosen in the solver selector; Auto names what it resolves to.
   // A capability verdict's own `label` is preferred when a solve plan is on
   // hand; `resolveEngineLabel` (./solveProgress, shared with the run
   // progress line) is the same fallback either way -- never a bare
@@ -93,7 +93,7 @@ function SettingsLine({ record }: { record: CadReturnIngestRecord }) {
   const labelOf = (name: string) => plan?.engines.find((verdict) => verdict.name === name)?.label || resolveEngineLabel(name) || name;
   const requested = engine.trim().toLowerCase();
   const engineWords = requested === 'auto'
-    ? `AUTO${plan?.engine ? ` (${labelOf(plan.engine)})` : ''}`
+    ? `${resolveEngineLabel(requested)}${plan?.engine ? ` (${labelOf(plan.engine)})` : ''}`
     : labelOf(requested);
   const measured = record.sizing_estimate?.measured;
   const perFrequency = measured && typeof measured === 'object'
@@ -148,7 +148,7 @@ export function CadSolveCard({ record, label, fetcher }: {
     <CurrentModelStatus record={record}/>
     <div className="cad-solve-actions">
       <button
-        className="primary cad-primary-action"
+        className="btn-primary cad-primary-action"
         data-action="solve"
         disabled={disabled}
         aria-busy={solve?.submitting ?? false}

@@ -1,4 +1,3 @@
-import { CurrentModelStatus } from './CurrentModelStatus';
 import { RunMoveRecoveryNotice } from './MoveRunsDialog';
 import { cadMeshIsEditable } from '../api/cadMesh';
 import { selectJob } from '../jobs/selectJob';
@@ -258,7 +257,6 @@ export function SolveActions() {
       }}
       onClick={solve.solve}
     ><Icon name="play"/>{solve.label}<kbd>{commandShortcutLabel('↵')}</kbd></button>
-    <CurrentModelStatus validation={false}/>
     {source && <span className={`cad-source-line cad-source-${source.tone}`} role="status" title={source.text}>
       <span>{source.text}</span>
       {source.refresh && <button

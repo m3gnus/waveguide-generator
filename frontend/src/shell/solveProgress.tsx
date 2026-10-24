@@ -78,6 +78,15 @@ export function solveStageWord(job: Pick<JobItem, 'status' | 'stage'>): SolveSta
   }
 }
 
+export const MODEL_STATUS_TITLE = {
+  solved: 'Solved', running: 'Solving', preparing: 'Preparing', refused: 'Solve refused',
+  failed: 'Solve failed', 'never-solved': 'Not solved yet',
+};
+
+export function runStatusWord(job: Pick<JobItem, 'status' | 'stage'>): SolveStageWord {
+  return solveStageWord(job);
+}
+
 /** The fields `RunLine` (CadSolveCard.tsx) needs from a `CadOperationSummary`
  * before its job exists -- deliberately narrow, so this module never has to
  * import the CAD operations API just to read three strings off it. */
@@ -100,10 +109,10 @@ const OPERATION_STAGE_WORDS: Record<string, SolveStageWord> = {
   submitted: 'Preparing mesh',
 };
 
-/** Reasons `needs_user_input` names, in the same short phrases
- * `CadOperationsSection.tsx`'s `REASON_COPY` uses -- only the ones that can
- * actually reach this pre-job status line. */
-const OPERATION_REASON_WORDS: Record<string, string> = {
+/** Short reasons shared by CAD request guidance and solve progress. */
+export const OPERATION_REASON_WORDS: Record<string, string> = {
+  preparation_failed: 'preparation failed',
+  interrupted: 'interrupted',
   setup_required: 'needs its solve settings',
   findings_need_review: 'blocking findings to review',
   frame_confirmation_required: 'needs its solver frame confirmed',
@@ -334,7 +343,7 @@ export function formatClock(seconds: number): string {
  * this is what both that line and this module fall back to otherwise --
  * one name per engine, never a bare `.toUpperCase()` of the slug. */
 const ENGINE_LABELS: Record<string, string> = {
-  auto: 'AUTO',
+  auto: 'Auto',
   metal: 'Metal-BEM',
   beat: 'BEAT Engine',
   'beat-cpu': 'BEAT CPU',
@@ -426,37 +435,40 @@ function useReadinessProgress(enabled: boolean, readiness?: SolveReadinessState 
   const waiting = control?.waitingForEngine === true;
   const warmingEngine = control?.waitingEngine && control.waitingEngine !== 'auto' ? control.waitingEngine : blocker?.engine ?? control?.waitingEngine;
   const message = waiting ? `${resolveEngineLabel(warmingEngine) || warmingEngine} is warming up. The solve starts when it is ready.` : visible ? blocker?.message ?? (control?.disabled ? control.title : null) : null;
-  if (!message && !control?.actionError) return null;
+  if (!message && !control?.actionError && !control?.preparationError) return null;
+  const errors = [...new Set([control?.actionError, control?.preparationError])]
+    .filter((error): error is string => !!error);
+  // A contextual action error may already contain the blocker's diagnostic.
+  const messageInError = !!message && errors.some(error => error.endsWith(message));
   const order = (remedy: NonNullable<SolveReadinessState['remedies']>[number]) =>
     remedy.kind === 'use_engine' ? remedy.same_solver ? 1 : 2 : remedy.kind === 'settings' ? 3 : 0;
   const remedies = [...(visible && !waiting ? blocker?.remedies ?? [] : [])].sort((a, b) => order(a) - order(b));
   return <div className="solve-progress solve-readiness" role="status" aria-live="polite">
-    {message && <span>{message}</span>}
-    {waiting && <button type="button" onClick={() => control?.stopWaiting()}>Stop</button>}
+    {message && !messageInError && <span>{message}</span>}
+    {waiting && <button type="button" className="btn" onClick={() => control?.stopWaiting()}>Stop</button>}
     {remedies.map((remedy, index) => {
       switch (remedy.kind) {
         case 'prepare': {
           const label = resolveEngineLabel(remedy.engine) || remedy.engine;
           if (remedy.disabled_reason) return message?.includes(remedy.disabled_reason) ? null : <span key={index}>{remedy.disabled_reason}</span>;
-          return <button type="button" key={index} disabled={!control || !!control.preparingEngine}
+          return <button type="button" className="btn" key={index} disabled={!control || !!control.preparingEngine}
             onClick={() => { void control?.prepareAndSolve(remedy.engine); }}>
             {control?.preparingEngine === remedy.engine ? `Preparing ${label}…` : `Prepare ${label} and solve`}
           </button>;
         }
         case 'use_engine': {
           const label = resolveEngineLabel(remedy.engine) || remedy.engine;
-          return <button type="button" key={index} disabled={!control} onClick={() => control?.useEngine(remedy.engine)}>
+          return <button type="button" className="btn" key={index} disabled={!control} onClick={() => control?.useEngine(remedy.engine)}>
             Use {label}
           </button>;
         }
         case 'wait': return null;
-        case 'settings': return <button type="button" key={index} onClick={() => workspaceNavigation.navigate('simulation')}>Open settings</button>;
+        case 'settings': return <button type="button" className="btn" key={index} onClick={() => workspaceNavigation.navigate('simulation')}>Open settings</button>;
       }
     })}
     {remedies.some(remedy => remedy.kind === 'use_engine' && !remedy.same_solver)
       && <span className="solve-readiness-note">Another solver’s results will differ.</span>}
-    {!waiting && control?.actionError && <span>{control.actionError}</span>}
-    {!waiting && control?.preparationError && <span role="alert">{control.preparationError}</span>}
+    {errors.map(error => <span key={error} role="alert">{error}</span>)}
   </div>;
 }
 
@@ -519,14 +531,7 @@ export function SolveProgressView({
   const percent = Math.round((job.progress ?? 0) * 100);
 
   if (variant === 'compact') {
-    if (job.status === 'complete' || job.status === 'error' || job.status === 'cancelled') {
-      const outcome = job.status === 'complete' ? 'results are in Results'
-        : job.error_message ?? (job.status === 'error' ? 'no reason given' : null);
-      return <span className="solve-progress solve-progress-compact">
-        <span className="job-stage-word">{stageWord}</span>
-        {outcome && <span className="solve-progress-meta"> · {outcome}</span>}
-      </span>;
-    }
+    if (!isActiveJobStatus(job.status)) return null;
     const meta = [
       frequency ? frequencyLine(frequency, eta, normalized) : indeterminate ? null : `${percent}%`,
       elapsedSeconds !== null ? formatClock(elapsedSeconds) : null,

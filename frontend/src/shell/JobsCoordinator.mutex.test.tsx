@@ -846,6 +846,68 @@ describe('solve invocation mutex', () => {
       expect(mocks.submitDesign).not.toHaveBeenCalled();
     });
 
+  it('keeps readiness and action errors in Results when the other solve surfaces are mounted', async () => {
+    const record = blockedCad();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => root.render(<QueryClientProvider client={client}><JobsCoordinator>
+      <div className="topbar"><ToolbarSolveActions/></div>
+      <ResultsPanel/><CadSolveCard record={record} label="Speaker"/>
+      <div data-settings><SolveOptionsControls mode="cad" ingestRecord={record}/></div>
+      <CadCrossover/><JobsPanel/>
+    </JobsCoordinator></QueryClientProvider>));
+    expect(host.querySelectorAll('.solve-readiness')).toHaveLength(0);
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
+    act(() => jobsCoordinatorBridge.getSnapshot().reportError('The requested solve could not be submitted.'));
+    expect(host.querySelectorAll('.solve-readiness')).toHaveLength(1);
+    const progress = host.querySelector('.results-panel .solve-readiness')!;
+    expect(progress.textContent).toContain(blocker.message);
+    expect([...progress.querySelectorAll('button')].every(button => button.classList.contains('btn'))).toBe(true);
+    expect([...host.querySelectorAll('[role="alert"]')].filter(node => node.textContent === 'The requested solve could not be submitted.')).toHaveLength(1);
+    expect(host.querySelector('.topbar .current-model-status')).toBeNull();
+    expect(host.querySelector('[data-settings] .current-model-status')).toBeNull();
+    expect(host.querySelector('.section-note .current-model-status')).toBeNull();
+    expect(host.querySelector('.cad-solve-card .solve-readiness')).toBeNull();
+    client.clear();
+  });
+
+  it.each(['never-solved', 'failed'] as const)('lays out the %s Results title, detail and action separately without toolbar status', async kind => {
+    if (kind === 'failed') {
+      const run = failedJob();
+      run.script_snapshot = { version: 1, design: serializeDesign(useDesignStore.getState().design) };
+      run.error_message = 'Mesh build could not finish.';
+      act(() => publishJobs([run]));
+    }
+    await act(async () => root.render(<JobsCoordinator>
+      <div className="topbar"><ToolbarSolveActions/></div><ResultsPanel/>
+    </JobsCoordinator>));
+    const status = host.querySelector('.results-panel .current-model-status')!;
+    const title = kind === 'failed' ? 'Solve failed' : 'Not solved yet';
+    const detail = kind === 'failed' ? 'Mesh build could not finish.' : 'This version of the model has not been solved.';
+    expect(status.querySelector('.notice-title')?.textContent).toBe(title);
+    expect(status.querySelector('.notice-detail')?.textContent).toBe(detail);
+    expect(status.textContent).toBe(`${title}\n${detail}\n${kind === 'failed' ? 'Retry' : 'Solve'}`);
+    expect(status.querySelector('.notice-actions button')?.className).toBe(kind === 'failed' ? 'btn' : 'btn-primary');
+    expect(host.querySelector('.topbar')?.textContent).not.toMatch(/failed|Not solved/i);
+  });
+
+  it('shows a rejected CAD diagnostic once in Results, including its contextual action error', async () => {
+    act(() => {
+      readyCad('wgi_rejected');
+      workspaceModeStore.setMode('cad');
+      publishJobs([cadJobFixture(operation('fusion-rejected', 'rejected', {
+        reason: 'preparation_failed', message: 'Could not build the surface mesh.',
+      }))]);
+    });
+    await act(async () => root.render(<JobsCoordinator>
+      <div className="topbar"><ToolbarSolveActions/></div><ResultsPanel/><JobsPanel/>
+    </JobsCoordinator>));
+    const results = host.querySelector('.results-panel')!;
+    expect(results.textContent?.match(/Could not build the surface mesh\./g)).toHaveLength(1);
+    expect(results.textContent?.match(/Solve refused/g)).toHaveLength(1);
+    expect(host.querySelector('.topbar')?.textContent).not.toMatch(/refused|mesh|failed/i);
+    expect(host.querySelectorAll('.solve-readiness')).toHaveLength(1);
+  });
+
   it.each(['top bar', 'Results empty', 'CAD card', 'crossover', 'Simulation'])('readiness parity: %s stays quiet until Solve is requested', async surface => {
     let record!: CadReturnIngestRecord;
     act(() => {
@@ -877,7 +939,7 @@ describe('solve invocation mutex', () => {
     expect([...readiness.querySelectorAll('button')].map(button => button.textContent)).toEqual([
       'Prepare BEAT Metal and solve', 'Use BEAT CPU', 'Use Metal-BEM', 'Open settings',
     ]);
-    const solve = host.querySelector<HTMLButtonElement>('.solve-button, [data-action="solve"], .crossover-recall');
+    const solve = host.querySelector<HTMLButtonElement>('.solve-button, [data-action="solve"], .results-panel .btn-primary');
     if (solve) expect(solve.disabled).toBe(false);
     expect(readiness.textContent).toContain(blocker.message); // visible text, outside the disabled button
     latestCombine.publish(null);
@@ -1523,7 +1585,7 @@ describe('solve invocation mutex', () => {
     act(() => publishJobs([refused]));
     await act(async () => root.render(<JobsCoordinator><ResultsPanel/></JobsCoordinator>));
     expect(host.querySelector('.solve-progress')?.textContent).toContain('BEAT Metal needs preparing.');
-    const solve = host.querySelector<HTMLButtonElement>('.results-panel .solve-button')!;
+    const solve = host.querySelector<HTMLButtonElement>('.results-panel .btn-primary')!;
     expect(solve.disabled).toBe(false);
     await act(async () => solve.click());
     expect(mocks.solveModel).toHaveBeenCalledExactlyOnceWith('wgl_test', expect.objectContaining({ prepared_id: 'wgi_refused_results' }));

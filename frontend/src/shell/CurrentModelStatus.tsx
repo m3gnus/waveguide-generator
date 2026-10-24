@@ -8,17 +8,16 @@ import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { CurrentModelRequests } from './CadOperationsSection';
 import { automaticAxisNote, defaultSettingsNote } from './CadSolveInputs';
 import { jobsCoordinatorBridge, useOptionalSolveControl } from './JobsCoordinator';
-import { clearSolveStageClock, SolveProgressView } from './solveProgress';
+import { Notice } from './Notice';
+import { clearSolveStageClock, MODEL_STATUS_TITLE, runStatusWord, SolveProgressView } from './solveProgress';
 
-const STATUS_COPY = { solved: 'Solved', running: 'Solving', preparing: 'Preparing', refused: 'Solve refused', failed: 'Solve failed', 'never-solved': 'Not solved yet' };
-
-export function CurrentModelStatus({ record, actions = false, solveStatus = false, validation = true, activeOnly = false }: { record?: CadReturnIngestRecord; actions?: boolean; solveStatus?: boolean; validation?: boolean; activeOnly?: boolean }) {
+export function CurrentModelStatus({ record, actions = false, solveStatus = false, activeOnly = false }: { record?: CadReturnIngestRecord; actions?: boolean; solveStatus?: boolean; activeOnly?: boolean }) {
   const current = useCurrentModel();
   const model = record ? { ...current, kind: 'cad' as const, key: record.solve_model_sha256 || record.ingest_id,
     ingestId: record.ingest_id, manifestSha256: record.manifest_sha256 } : current;
   const control = useOptionalSolveControl();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
-  const status = currentModelStatus(model, jobs, control?.disabled ? control.title : null);
+  const status = currentModelStatus(model, jobs);
   const latestJob = status.job;
   const latest = latestJob?.cad_state ? cadJobSummary(latestJob) : null;
   const unavailable = !control || (!!record && !control.cadMode);
@@ -28,30 +27,35 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
     && latestJob.cad_state.reason === 'engine_unavailable';
   const request: ReactNode = record ? <CurrentModelRequests record={record}/> : null;
   const engineGate = held || !!readiness?.engine || control?.waitingForEngine;
-  const pending = (solveStatus || (validation && !engineGate)) && (control?.waitingForEngine || control?.actionError
+  const pending = solveStatus && (control?.waitingForEngine || control?.actionError || control?.preparationError
     || (readiness && (!readiness.engine || held || control?.readinessRequested)));
   if (activeOnly && (!pending || !control) && status.kind !== 'running' && status.kind !== 'preparing') return null;
-  const controls = <>
+  const controls = actions || pending ? <>
     {pending && !engineGate && <SolveProgressView showReadiness readiness={readiness}/>}
     {actions && (status.kind === 'failed' && latestJob
-      ? <button type="button" onClick={() => void jobsCoordinatorBridge.getSnapshot().continueRun(latestJob.id).catch(() => undefined)}>Retry</button>
-      : <button type="button" className="solve-button" disabled={!control || control.disabled} title={control?.title ?? 'Solve is not available here.'} onClick={() => void control?.solve()}>Solve</button>)}
-  </>;
+      ? <button type="button" className="btn" onClick={() => void jobsCoordinatorBridge.getSnapshot().continueRun(latestJob.id).catch(() => undefined)}>Retry</button>
+      : <button type="button" className="btn-primary" disabled={!control || control.disabled} title={control?.title ?? 'Solve is not available here.'} onClick={() => void control?.solve()}>Solve</button>)}
+  </> : undefined;
   if (pending && engineGate) return <div className="current-model-status" data-model-status={status.kind}>
     <SolveProgressView showReadiness readiness={readiness} held={held}/>
     {!control?.waitingForEngine && controls}
   </div>;
   // Engine gates are described only in Results, including held Fusion requests.
-  if (held) return <div className="current-model-status">{controls}</div>;
+  if (held && !solveStatus) return <div className="current-model-status" data-model-status={status.kind}>{controls}</div>;
   if (!latest) return <div className="current-model-status" data-model-status={status.kind}>
-    <b>{actions && status.kind === 'solved' ? 'Loading results' : STATUS_COPY[status.kind]}</b>
-    {latestJob ? <SolveProgressView job={latestJob} variant="compact"/> : !readiness && !control?.disabled && <span>{status.message}</span>}
-    {controls}{request}
+    <Notice tone={status.kind === 'failed' || status.kind === 'refused' ? 'error' : 'info'}
+      title={actions && status.kind === 'solved' ? 'Loading results' : MODEL_STATUS_TITLE[status.kind]}
+      actions={controls}>
+      {latestJob && (status.kind === 'preparing' || status.kind === 'running')
+        ? <SolveProgressView job={latestJob} variant="compact"/>
+        : pending && (status.kind !== 'failed' || control?.actionError?.endsWith(status.message) || control?.preparationError?.endsWith(status.message)) ? null : status.message}
+    </Notice>
+    {request}
   </div>;
   let tone: 'ok' | 'info' | 'warn' = 'info';
   let body: ReactNode;
   if (latest.state === 'rejected') {
-    body = `Refused: ${latest.message ?? latest.reason ?? 'no reason given'}`;
+    body = <Notice tone="error" title={MODEL_STATUS_TITLE.refused}>{pending ? null : latest.message ?? latest.reason ?? 'No reason given.'}</Notice>;
     tone = 'warn';
   } else if (latest.state === 'cancelled') {
     body = 'Dismissed before it was solved.';
@@ -74,15 +78,21 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
         // this browser pressed Solve or a waiting Fusion request advanced).
         body = <SolveProgressView job={job} variant="compact"/>;
         break;
-      case 'complete': clearSolveStageClock(job.id); body = <SolveProgressView job={job} variant="compact"/>; tone = 'ok'; break;
-      case 'error': clearSolveStageClock(job.id); body = <SolveProgressView job={job} variant="compact"/>; tone = 'warn'; break;
-      case 'cancelled': clearSolveStageClock(job.id); body = <SolveProgressView job={job} variant="compact"/>; tone = 'warn'; break;
+      case 'complete':
+      case 'error':
+      case 'cancelled':
+        clearSolveStageClock(job.id);
+        body = <Notice tone={job.status === 'error' ? 'error' : 'info'}
+          title={<span className="job-stage-word">{runStatusWord(job)}</span>}>
+          {job.status === 'complete' ? 'Results are in Results' : job.error_message}
+        </Notice>;
+        tone = job.status === 'complete' ? 'ok' : job.status === 'error' ? 'warn' : 'info';
+        break;
     }
   }
   return <div className="current-model-status" data-model-status={status.kind}>
-    {status.kind === 'refused' && !control?.waitingForEngine && <b>{STATUS_COPY[status.kind]}</b>}
     {!(held && readiness?.code === 'engine_unavailable' && readiness.remedies?.length)
-      && <p className={`cad-solve-run cad-solve-run-${tone}`} role="status" data-run-operation-id={latest.operationId}>{body}</p>}
+      && <div className={`cad-solve-run cad-solve-run-${tone}`} role="status" data-run-operation-id={latest.operationId}>{body}</div>}
     {controls}{request}
     {/* No settings were recorded for this model, so WG solved it with its
         defaults; the backend's own words say so and where to change them. */}
@@ -96,7 +106,7 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
       && <p className="cad-detail cad-solve-frame-automatic" data-frame-axis-automatic={latest.frameAxisAutomatic}>
         {automaticAxisNote(latest.frameAxisAutomatic, latestJob?.status)}
         {' \u00b7 '}<button
-          className="link-button"
+          className="btn-link"
           data-action="change-automatic-frame"
           onClick={() => { if (model.ingestId) useCadSolverFrameStore.getState().requestChange(model.ingestId); }}
         >Change</button>

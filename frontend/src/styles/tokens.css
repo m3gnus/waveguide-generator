@@ -26,6 +26,7 @@
      because an .on control tints its background with the same hue and eats the
      difference -- the 3/4 view toggle measured 4.45:1 that way. */
   --acc-text: var(--acc);
+  --btn-primary-fg: #f1b296;
   --acc-deep: rgba(224,103,63,.12);
   --bg: var(--surface-canvas);
   --bg-grad: var(--bg);
@@ -228,6 +229,7 @@
   --red: rgb(var(--red-rgb));
   --acc-2: #8a3218;
   --acc-text: var(--acc);
+  --btn-primary-fg: #802b16;
   --acc-deep: rgba(165,57,27,.10);
   --bg: oklch(97% 0.012 78);
   --bg-grad: var(--bg);

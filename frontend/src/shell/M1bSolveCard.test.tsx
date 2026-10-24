@@ -342,7 +342,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
 
   it('captures the displayed setup and axis, remembers them for the project, and follows the run', async () => {
     await mount();
-    expect(host.querySelector('.cad-solve-settings > span')!.textContent).toContain('AUTO (Metal)');
+    expect(host.querySelector('.cad-solve-settings > span')!.textContent).toContain('Auto (Metal)');
     await pressSolve();
     // One call: the server confirms the axis shown and records the setup for the model.
     expect(puts).toEqual([]);
@@ -507,7 +507,8 @@ describe('M1b: one Solve card, to the revealed result', () => {
     for (const hz of [8, 80, 199]) {
       await act(async () => useCadReturnStore.getState().setCombineSpec(withPair(combineSpecEffective(useCadReturnStore.getState())!, 'drive-mf→drive-hf', { hz })));
       expect(solveButton().disabled).toBe(true);
-      expect(host.querySelector('.cad-solve-card .solve-readiness')?.textContent).toContain(`The ${hz} Hz crossover is below the 200 Hz sweep start`);
+      expect(host.querySelector('.cad-solve-card .solve-readiness')).toBeNull();
+      expect(solveButton().title).toContain(`The ${hz} Hz crossover is below the 200 Hz sweep start`);
     }
     for (const hz of [200, 800]) {
       await act(async () => useCadReturnStore.getState().setCombineSpec(withPair(combineSpecEffective(useCadReturnStore.getState())!, 'drive-mf→drive-hf', { hz })));

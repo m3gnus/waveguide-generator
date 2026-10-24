@@ -1,4 +1,3 @@
-import { CurrentModelStatus } from '../shell/CurrentModelStatus';
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { namespaceStorage } from '../stores/durableSettings';
 import { CAD_CONTROLS } from './cadControlRegistry';
@@ -280,7 +279,7 @@ function LiveNote({ shown, live, busy, error, members, outside }: {
   if (!live) {
     return <p className="section-note warning" role="status" aria-live="polite">
       {shown.blockedReason ?? 'Crossover changes cannot be applied to the shown run.'}
-      {shown.recall && <> <button type="button" className="crossover-recall" onClick={shown.recall}>Load this run's model</button></>}
+      {shown.recall && <> <button type="button" className="btn" onClick={shown.recall}>Load this run's model</button></>}
     </p>;
   }
   if (!members) {
@@ -291,7 +290,6 @@ function LiveNote({ shown, live, busy, error, members, outside }: {
   if (outside !== null && outside !== undefined && shown.solvedBandHz) {
     const [start, end] = shown.solvedBandHz;
     return <div className="section-note warning" role="status" aria-live="polite">
-      <CurrentModelStatus/>
       The {outside} Hz crossover is outside the solved band [{start}, {end}] Hz. The combined response cannot update until that frequency is solved.{' '}
       <button type="button" className="btn" disabled={!solve || solve.disabled} title={solve?.title ?? 'Solve is not available here.'} onClick={() => {
         const cad = useCadReturnStore.getState();

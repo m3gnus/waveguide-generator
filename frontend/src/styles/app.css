@@ -1104,7 +1104,7 @@ textarea:disabled { opacity: .48; }
 .job-card > p { font-size: var(--text-micro); }
 .job-actions button { min-height: 27px; padding: 4px 8px; border-radius: var(--r3); font-size: var(--text-micro); }
 .job-error {
-  margin-top: 7px; border: 1px solid rgba(var(--red-rgb), .2); border-radius: var(--r3); background: rgba(var(--red-rgb), .07); color: var(--red);
+  margin-top: var(--space-6); border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1);
   display: -webkit-box;
   overflow: hidden;
   padding: 6px 8px;
@@ -1387,11 +1387,6 @@ textarea:disabled { opacity: .48; }
 .crossover-unit-select { flex: none; height: 19px; min-width: 0; padding: 0 2px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg2); font-size: var(--text-micro); }
 .crossover-reset { height: 19px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: transparent; color: var(--fg3); font-size: var(--text-micro); }
 .crossover-reset:hover { border-color: var(--hair-hi); color: var(--fg1); }
-/* Sits inside the section note, so it rides the note's own line rather than
-   opening a control row for one occasional action. */
-.crossover-recall { height: 17px; padding: 0 5px; border: 1px solid rgba(var(--amber-rgb), .38); border-radius: var(--r3); background: rgba(var(--amber-rgb), .1); color: var(--amber); font-size: var(--text-micro); }
-.crossover-recall:hover { border-color: var(--amber); }
-
 /* Problem report ---------------------------------------------------------- */
 .report-dialog { width: min(640px, 92vw); }
 .report-dialog-body { display: grid; gap: 14px; padding: 16px; color: var(--fg2); font-size: var(--text-base); }
@@ -1452,8 +1447,9 @@ textarea:disabled { opacity: .48; }
 .imported-input-toggle button { width: auto; padding-inline: 10px; white-space: nowrap; }
 
 /* Pre-job stages use the solve progress area, with no banner treatment. */
-.current-model-status { min-width: 0; font-size: var(--text-base); }
-.solve-readiness { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.current-model-status { display: grid; gap: var(--space-8); min-width: 0; font-size: var(--text-base); }
+.current-model-status .notice { margin-bottom: 0; }
+.solve-readiness { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-6); }
 .solve-readiness-note { flex-basis: 100%; }
 .solve-readiness button { white-space: normal; text-align: left; }
 
@@ -1482,7 +1478,7 @@ textarea:disabled { opacity: .48; }
 .report-dialog-actions a.primary {
   border-color: rgba(var(--acc-rgb), .45);
   background: rgba(var(--acc-rgb), .12);
-  color: var(--acc-text);
+  color: var(--btn-primary-fg);
   font-weight: 550;
 }
 .btn-primary:hover:not(:disabled),
@@ -1492,7 +1488,7 @@ textarea:disabled { opacity: .48; }
 .report-dialog-actions a.primary:hover {
   border-color: var(--acc);
   background: rgba(var(--acc-rgb), .2);
-  color: var(--acc-text);
+  color: var(--btn-primary-fg);
 }
 .btn-link { padding: 0; border: 0; background: transparent; color: var(--acc-text); text-transform: none; }
 .btn-link:hover:not(:disabled) { text-decoration: underline; }

@@ -259,9 +259,9 @@ describe('live recombine from the rail', () => {
     });
     expect(host.textContent).toContain('this session has not loaded');
 
-    const button = [...host.querySelectorAll<HTMLButtonElement>('button.crossover-recall')][0];
+    const button = [...host.querySelectorAll<HTMLButtonElement>('button.btn')].find(button => button.textContent === "Load this run's model");
     expect(button).not.toBeUndefined();
-    act(() => button.click());
+    act(() => button!.click());
     expect(recall).toHaveBeenCalledTimes(1);
   });
 

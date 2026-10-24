@@ -24,7 +24,7 @@ import { LogDialog } from './LogDialog';
 import { middleEllipsis } from './ResultsPanel';
 import { cadJobOperationId } from '../jobs/cadSolve';
 import { CadSolveInputs } from './CadSolveInputs';
-import { SolveProgressView, useSolveClock } from './solveProgress';
+import { runStatusWord, SolveProgressView, useSolveClock } from './solveProgress';
 import { useModalDialogFocus } from './dialogFocus';
 
 /** Show the effective Runs folder and choose the shared WG folder. */
@@ -204,7 +204,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
   const expanded = selected || running || failed || cancelled || editing;
   const cleanedUp = job.status === 'complete' && !job.has_results;
   const selectable = !running && (job.has_results || cleanedUp || canOpenJobModel(job));
-  const statusWord = running ? 'Running' : failed ? 'Failed' : cancelled ? 'Cancelled' : 'Completed';
+  const statusWord = runStatusWord(job);
   // Only the mode, never the design revision: this card is one of a rail full
   // of them, and a marker that moved with every keystroke would repaint the
   // whole list mid-drag to say something none of these runs changed.
@@ -284,14 +284,14 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
           20-second stall in the middle of an otherwise familiar progress bar. */}
       {job.stage === RADIATION_IMPEDANCE_STAGE && <p className="job-stage-note">Extra pass before the main solve: the passive-cardioid port needs its own radiation-impedance matrix over the port aperture.</p>}
       {job.log_tail.length > 0 && <p title={job.log_tail.at(-1)}>{job.log_tail.at(-1)}</p>}
-      <footer><button className="btn" disabled={job.cancellation_requested} onClick={() => void jobsSocket.stopJob(job.id).catch((error) => onError(String(error)))}>{job.cancellation_requested ? 'Stopping…' : 'Stop'}</button><button className="btn" onClick={() => setLogOpen(true)}>Log</button></footer>
+      <footer><button className="btn" disabled={job.cancellation_requested} onClick={() => void jobsSocket.stopJob(job.id).catch((error) => onError(String(error)))}>{job.cancellation_requested ? runStatusWord({ status: 'running', stage: 'cancelling' }) : 'Stop'}</button><button className="btn" onClick={() => setLogOpen(true)}>Log</button></footer>
     </> : failed ? <>
-      <p>failed after {duration(secondsBetween(job.started_at ?? job.queued_at, job.completed_at, now))} · {job.stage ?? 'solve'} stage</p>
+      <p>{statusWord} after {duration(secondsBetween(job.started_at ?? job.queued_at, job.completed_at, now))}{job.stage && job.stage !== 'error' ? ` · ${job.stage} stage` : ''}</p>
       <div className="job-error" title={job.error_message ?? undefined}>{job.error_message ?? 'Simulation failed without a diagnostic.'}</div>
       <DesignAvailabilityNotice job={job}/>
       <footer><RerunButton job={job} onRerun={retry} label="Retry" className="btn"/><button className="btn" onClick={() => setLogOpen(true)}>Open log</button></footer>
     </> : cancelled ? <>
-      <p>cancelled after {duration(secondsBetween(job.started_at ?? job.queued_at, job.completed_at, now))}</p>
+      <p>{statusWord} after {duration(secondsBetween(job.started_at ?? job.queued_at, job.completed_at, now))}</p>
       <footer><RerunButton job={job} onRerun={retry} className="btn"/><button className="btn" onClick={() => setLogOpen(true)}>Log</button></footer>
     </> : expanded && <>
       <p>{metrics(job, now)}</p>
@@ -446,7 +446,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
       </select>
       {(source !== 'all' || project || model || query) && <button className="btn" onClick={() => useRunFilters.setState({ source: 'all', project: '', model: '', query: '' })}>Clear filters</button>}
     </div>
-    {(coordinator.actionError || snapshot.error) && <Notice tone="error">{coordinator.actionError ?? snapshot.error}</Notice>}
+    {snapshot.error && <Notice tone="error">{snapshot.error}</Notice>}
     {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <EmptyState title="No runs yet" detail={project
       ? 'Prepare the CAD model and press Solve to start this project’s first run.'
       : 'Solve the model on screen to start one. Every run is kept here with its results, so you can compare and re-run it later.'}/>}

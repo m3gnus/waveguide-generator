@@ -48,7 +48,7 @@ const mocks = vi.hoisted(() => ({
   solveModel: vi.fn(),
   submitDesign: vi.fn(),
   planSolveDesign: vi.fn(),
-  refreshCapabilities: vi.fn(),
+  refreshCapabilities: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock('../jobs/actions', async (importOriginal) => {

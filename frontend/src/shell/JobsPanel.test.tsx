@@ -861,6 +861,26 @@ describe('jobs panel run list', () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
+  it('uses the shared cancelling word while a Stop request is pending', async () => {
+    publishJobs([{ ...job(1, 'Pending stop'), status: 'running', cancellation_requested: true }]);
+    await act(async () => root.render(<JobsPanel/>));
+    const stop = host.querySelector<HTMLButtonElement>('.job-card footer button')!;
+    expect(stop.textContent).toBe('Cancelling…');
+    expect(stop.disabled).toBe(true);
+  });
+
+  it.each(['mesh', 'error', null])('labels failed runs calmly with their actual stage: %s', async stage => {
+    publishJobs([{ ...job(1, 'Failed run'), status: 'error', stage, error_message: 'Could not build the surface mesh.' }]);
+    await act(async () => root.render(<JobsPanel/>));
+    const card = host.querySelector('.job-card.failed')!;
+    expect(card.querySelector(':scope > p')?.textContent).toBe(`Failed after 1.0 s${stage === 'mesh' ? ' · mesh stage' : ''}`);
+    const diagnostic = card.querySelector('.job-error')!;
+    expect(diagnostic.textContent).toBe('Could not build the surface mesh.');
+    expect(diagnostic.getAttribute('title')).toBe(diagnostic.textContent);
+    expect([...card.querySelectorAll('footer button')].every(button => button.classList.contains('btn'))).toBe(true);
+    expect(host.querySelector('.panel-text-action')?.className).toBe('panel-text-action');
+  });
+
   it('confirms the global failed count including failures hidden by search', async () => {
     const visible = { ...job(1, 'Visible'), status: 'error' as const };
     const hidden = { ...job(2, 'Hidden'), status: 'error' as const };
@@ -889,7 +909,7 @@ describe('jobs panel run list', () => {
     const card = host.querySelector('.job-card')!;
     expect(card.classList.contains('cancelled')).toBe(true);
     expect(card.textContent).toContain('Cancelled.');
-    expect(card.textContent).toContain('cancelled after');
+    expect(card.textContent).toContain('Cancelled after');
     expect(card.textContent).not.toContain('cleaned up');
 
     act(() => publishJobs([{ ...job(4, 'Pruned'), has_results: false, results_discarded_at: '2026-08-11T00:00:00Z' }]));

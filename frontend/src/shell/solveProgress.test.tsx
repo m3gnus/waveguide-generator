@@ -75,6 +75,8 @@ describe('operationStageWord', () => {
     expect(operationWaitingReason(op({ state: 'needs_user_input', reason: 'setup_required' })))
       .toBe('needs its solve settings');
     expect(operationWaitingReason(op({ state: 'received' }))).toBeNull();
+    expect(operationWaitingReason(op({ state: 'needs_user_input', reason: 'preparation_failed' }))).toBe('preparation failed');
+    expect(operationWaitingReason(op({ state: 'needs_user_input', reason: 'interrupted' }))).toBe('interrupted');
     expect(operationWaitingReason(op({ state: 'needs_user_input', reason: 'engine_cannot_solve_return' })))
       .toBe('the selected engine cannot solve this return');
   });
@@ -182,7 +184,7 @@ describe('resolveEngineLabel', () => {
     expect(resolveEngineLabel('beat')).toBe('BEAT Engine');
     expect(resolveEngineLabel('official_beat')).toBe('Official BEAT');
     expect(resolveEngineLabel('bempp')).toBe('BEMPP');
-    expect(resolveEngineLabel('auto')).toBe('AUTO');
+    expect(resolveEngineLabel('auto')).toBe('Auto');
     expect(resolveEngineLabel('beat-metal')).toBe('BEAT Metal');
     for (const engine of ['beat-cpu', 'beat-metal', 'beat-cuda', 'beat-rocm']) {
       expect(resolveEngineLabel(engine)).not.toMatch(/[·—]/);

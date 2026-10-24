@@ -25,7 +25,7 @@ import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw'
 import { buildImportedSubmission, CadLinkPanel, declaredDomainPhrase, fusionWorkflowView, newestReturnArrival, onshapeWorkflowView, showIngestedMeshInViewport } from './CadLinkPanel';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { CadWorkspaceOwners } from './CadWorkspaceOwners';
-import { JobsCoordinator } from './JobsCoordinator';
+import { JobsCoordinator, jobsCoordinatorBridge } from './JobsCoordinator';
 import { CurrentModelStatus } from './CurrentModelStatus';
 import { workspaceNavigation } from './workspaceNavigation';
 
@@ -708,7 +708,8 @@ describe('CadLinkPanel', () => {
     await act(async () => solve().click());
     await vi.waitFor(() => expect(submitting.mock.calls.some(([path]) => String(path).endsWith('/solve'))).toBe(true));
     await act(async () => approve().click());
-    await vi.waitFor(() => expect(host.textContent).toContain('Another solve is being submitted. Try again in a moment.'));
+    await vi.waitFor(() => expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe('Another solve is being submitted. Try again in a moment.'));
+    expect(host.textContent).not.toContain('Another solve is being submitted. Try again in a moment.');
     expect(approve().disabled).toBe(false);
     expect(posted).toEqual([]);
     await act(async () => { finish(); });

@@ -13,6 +13,7 @@ import { inFlightWords } from './cadOnScreenSettings';
 import { fullTime, relativeTime } from './cadTime';
 import { usePanelVisible } from './panelVisibility';
 import { workspaceNavigation } from './workspaceNavigation';
+import { operationStageWord, OPERATION_REASON_WORDS } from './solveProgress';
 
 const RECOVERY_DISMISSED = 'Dismissed this recovery notice. Fusion still needs Undo or repair before you continue modelling.';
 
@@ -28,25 +29,6 @@ const makeRequestActions = () => createCadRequestActions({
 export function shortSha256(digest: string | null | undefined): string {
   return (digest ?? '').replace(/^sha256:/, '').slice(0, 12);
 }
-
-const STATE_COPY: Record<string, string> = {
-  received: 'Received',
-  processing: 'Preparing',
-  needs_user_input: 'Waiting for you',
-  recovery_required: 'Needs recovery',
-  cancel_requested: 'Stopping',
-};
-
-const REASON_COPY: Record<string, string> = {
-  setup_required: 'needs its solve settings',
-  findings_need_review: 'blocking findings to review',
-  preparation_failed: 'preparation failed',
-  submission_refused: 'the jobs system refused it',
-  interrupted: 'interrupted',
-  ready_to_solve: 'ready to solve',
-  update_restart_pending: 'held for the update restart',
-  frame_confirmation_required: 'needs its solver frame confirmed',
-};
 
 interface FindingReview {
   preparationId: string | null;
@@ -175,7 +157,7 @@ export function solveGateLadder(
       return [{ gate: 'solve', current: true, text: 'Now: press Solve to start it.' }];
     default:
       return [
-        { gate: 'other', current: true, text: `Now: ${REASON_COPY[operation.reason ?? ''] ?? 'it needs your attention'} — see below.` },
+        { gate: 'other', current: true, text: `Now: ${OPERATION_REASON_WORDS[operation.reason ?? ''] ?? 'it needs your attention'} — see below.` },
       ];
   }
 }
@@ -296,8 +278,8 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
   // reason are what the user acts on.
   const engineReason = operation.reason?.startsWith('engine_') || operation.reason === 'submission_refused';
   const status = [
-    STATE_COPY[operation.state] ?? operation.state,
-    operation.reason && !engineReason ? REASON_COPY[operation.reason] ?? operation.reason : null,
+    operationStageWord(operation),
+    operation.reason && !engineReason ? OPERATION_REASON_WORDS[operation.reason] ?? operation.reason : null,
   ].filter(Boolean).join(' · ');
   // For the model on screen the card's own guidance and controls say what the
   // backend's message says, which named menus for a model not on screen.
@@ -443,7 +425,7 @@ function EarlierRequests({ requests, requestActions }: { requests: CadRequest[];
         return <li key={`${request.source}:${request.id}`} data-operation-id={operation.operationId} data-request-id={request.id} tabIndex={-1}>
           <span>{label}</span>
           {operation.createdAt && <time dateTime={operation.createdAt} title={fullTime(operation.createdAt)}>{relativeTime(operation.createdAt)}</time>}
-          {operation.reason && <span>{REASON_COPY[operation.reason] ?? operation.reason}</span>}
+          {operation.reason && <span>{OPERATION_REASON_WORDS[operation.reason] ?? operation.reason}</span>}
           {operation.message && <span>{operation.message}</span>}
           {request.openable && <button
             className="link-button"
