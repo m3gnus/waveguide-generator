@@ -52,6 +52,7 @@ from server.cadlink.interpretation.cut_recovery import (
     CutRecovery,
     Failure,
     assess_cut_recovery,
+    cut_plane_options,
     frame_flip_problem,
     recovery_options,
     side_of_source,
@@ -80,7 +81,6 @@ from server.cadlink.interpretation.solver_frame import (
 )
 from server.cadlink.intake.readings import resolve_for_manifest
 from server.cadlink.wgreturn import (
-    DOMAIN_PLANES,
     WgReturnBundle,
     WgReturnError,
     WgReturnIntegrityError,
@@ -1196,11 +1196,12 @@ def _requested_solver_frame(
             "solver frame: this return is linked to a WG design and is solved in its "
             "design's frame; a solver frame applies only to a model authored in CAD",
         )
-    if requested not in allowed_axes(manifest):
+    allowed = allowed_axes(manifest)
+    if requested not in allowed:
         raise IngestRefusal(
             "stage 4 STEP import + normalisation",
-            "solver frame: this return is declared as a half or quarter model and is "
-            f"solved only in the frame it was modelled in ({AS_MODELLED})",
+            "solver frame: this return is declared as a half or quarter model, whose "
+            f"mirror planes contain only {', '.join(allowed)}",
         )
     return str(requested)
 
@@ -1458,6 +1459,12 @@ def _ingest_bundle(
     # is part of the mesh cache key -- the same STEP declared differently is a
     # different solve.
     options["declared_cut_planes"] = list(declared_domain_planes(manifest))
+    if solver_frame_axis != AS_MODELLED and options["declared_cut_planes"]:
+        # The declared CAD planes turn with the frame into the solver's mirror
+        # planes. A side the rotation puts negative is normalised by the mesher
+        # as for any hand-declared negative-side cut, so nothing is reflected.
+        options = cut_plane_options(options, options["declared_cut_planes"])
+        options.pop("reflect_planes", None)
     _refuse_fem_domain(manifest, options, options["declared_cut_planes"], final_domain=False)
     # M1c-auto: the evidence for this snapshot's domain (domain_interpretation).
     # A reading that changes what is solved enters the cache key; with no
@@ -1597,21 +1604,16 @@ def _ingest_bundle(
             raise IngestRefusal("stage 6 symmetry", evidence_refusal_message(plan, evidence_outcome.refusal))
         chosen = shown
         if evidence_outcome.applied:
-            # The same preparation as a hand declaration of these planes, in the
-            # frame they were modelled in: a reduced domain is +z until M1d.
+            # The same preparation as a hand declaration of these planes, in
+            # the frame the model is solved in: the CAD planes and their kept
+            # sides turn with it into the solver's mirror planes. A cut whose
+            # mesh lies on the negative side is reflected onto the positive
+            # side the solver mirrors (stage 3).
             mirrored_options = {
-                **{key: value for key, value in options.items() if key != "solver_frame"},
-                "declared_cut_planes": [
-                    plane
-                    for plane in DOMAIN_PLANES
-                    if plane in set(options["declared_cut_planes"]) | set(evidence_outcome.applied)
-                ],
-                # A cut that kept the negative side is reflected onto the
-                # positive side the solver mirrors (stage 3).
-                "reflect_planes": list(evidence_outcome.reflect),
+                **cut_plane_options(options, evidence_outcome.applied, negative=evidence_outcome.reflect),
                 "domain_interpretation": {**(plan.identity() or {}), "applied": list(evidence_outcome.applied)},
             }
-            if not evidence_outcome.reflect:
+            if not mirrored_options["reflect_planes"]:
                 # Exactly the options (and so the mesh key) a positive-side
                 # cut was prepared under before reflection existed.
                 mirrored_options.pop("reflect_planes")

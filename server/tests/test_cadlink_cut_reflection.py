@@ -280,7 +280,7 @@ def test_a_negative_half_is_reflected_onto_the_positive_side_with_its_normals(tm
     assert decision["reflected_axes"] == ["x"]
     assert decision["frame"]["determinant"] == pytest.approx(1.0)
     assert decision["frame"]["solver_from_cad"] == np.eye(4).tolist()
-    assert (decision["frame"]["axis"], decision["frame"]["allowed_axes"]) == ("+z", ["+z"])
+    assert (decision["frame"]["axis"], decision["frame"]["allowed_axes"]) == ("+z", ["+z", "-z", "+y", "-y"])
     assert record["normalisation"]["matrix"] == np.eye(4).tolist()
     plan, outcomes = _solve_verdicts(record)
     assert plan["code"] is None and plan["engine"] == "metal"
@@ -675,26 +675,80 @@ def test_provenance_never_overrides_a_front_back_cut_or_resets_the_confirmed_fra
         _ingest(bundle, tmp_path / "data-provenance", solver_frame="-y")
 
 
-def test_a_cut_model_confirmed_to_face_another_way_is_never_mirrored_by_resetting_its_frame(
-    tmp_path: Path,
+@pytest.mark.parametrize(("axis", "reflected"), [("-y", True), ("+y", False)])
+def test_a_cut_model_facing_another_way_is_mirrored_in_its_turned_frame(
+    tmp_path: Path, axis: str, reflected: bool
 ) -> None:
-    """The plane contains the confirmed axis, but a mirror would need +z: refused, frame kept."""
+    """The cut on CAD x = 0 contains +-y: the frame turns it into the solver's x = 0.
 
-    from server.cadlink.intake.ingest import IngestRefusal
+    The negative CAD half lies on the solver's negative side along -y (reflected
+    onto the positive side, apart from the proper rotation) and on its positive
+    side along +y (nothing to reflect). Either way the frame is the one asked
+    for, never reset to +z, and the mirrored mesh is the closed box.
+    """
+
     from test_cadlink_domain_automatic import provenance
 
-    record = _ingest(_box_bundle(tmp_path, "facing-x"), tmp_path / "data", solver_frame="-y")
+    record = _ingest(_box_bundle(tmp_path, "facing-x"), tmp_path / "data", solver_frame=axis)
     decision = _decision(record)
-    assert decision["frame"]["axis"] == "-y" and decision["solver_domain"]["planes"] == []
+    assert decision["refusal"] is None
+    assert decision["frame"]["axis"] == axis and decision["frame"]["determinant"] == pytest.approx(1.0)
+    assert decision["solver_domain"]["planes"] == ["x0"]
     [cut] = decision["cad_cuts"]
-    assert [item["code"] for item in cut["recovery"]["failed"]] == [cr.FRAME_NOT_MODELLED]
-    assert "change the frame you confirmed" in decision["refusal"]["message"]
+    assert (cut["plane"], cut["solver_plane"], cut["status"]) == ("x0", "x0", "recovered")
+    assert record["symmetry"]["domain_planes"] == ["x0"]
+    assert record["symmetry_verification"]["verified"] is True
+    assert decision["reflected_axes"] == (["x"] if reflected else [])
+    assert record["normalisation"]["solver_frame"]["allowed_axes"] == ["+z", "-z", "+y", "-y"]
+    points, triangles, tags = _mesh(record)
+    assert points[:, 0].min() == pytest.approx(0.0, abs=1e-9)
+    _assert_closed_and_outward(*_mirror_expanded(points, triangles, ["x0"]))
+    # The driver faces CAD +z, which is the solver's +y (the model's up) here.
+    normals = _normals(points, triangles)
+    assert np.allclose(normals[tags == record["source_tags"]["throat"]], [0.0, 1.0, 0.0], atol=1e-9)
+    plan, outcomes = _solve_verdicts(record)
+    assert plan["code"] is None
+    assert "imported_open_half_shell" not in outcomes.values()
+
+    # Recorded provenance mirrors the same cut in the same turned frame.
     bundle = _bundle(
-        tmp_path, "facing-x-provenance", lambda path: _cut_box(path), _faces_near(_half_disc_centre(0.0, 15.0, 10.0, -1, 0)),
+        tmp_path, "facing-x-provenance", lambda path: _cut_box(path),
+        _faces_near(_half_disc_centre(0.0, 15.0, 10.0, -1, 0)),
         cut=[provenance("body-0", "x0", kept_side="negative")],
     )
-    with pytest.raises(IngestRefusal, match="change the frame you confirmed"):
-        _ingest(bundle, tmp_path / "data-provenance", solver_frame="-y")
+    evidenced = _ingest(bundle, tmp_path / "data-provenance", solver_frame=axis)
+    assert _decision(evidenced)["refusal"] is None
+    assert evidenced["symmetry"]["domain_planes"] == ["x0"]
+    assert evidenced["normalisation"]["solver_frame"]["axis"] == axis
+
+
+def test_a_cut_on_cad_y0_is_solved_on_the_solver_x0_when_facing_x(tmp_path: Path) -> None:
+    box = dict(x_side=0, y_side=-1, discs=((15.0, 0.0, 10.0),))
+    record = _ingest(_box_bundle(tmp_path, "facing-plus-x", **box), tmp_path / "data", solver_frame="+x")
+    decision = _decision(record)
+    assert decision["refusal"] is None
+    [cut] = decision["cad_cuts"]
+    assert (cut["plane"], cut["solver_plane"], cut["status"]) == ("y0", "x0", "recovered")
+    assert record["symmetry"]["domain_planes"] == ["x0"]
+    assert decision["reflected_axes"] == ["x"]
+    points, triangles, _tags = _mesh(record)
+    _assert_closed_and_outward(*_mirror_expanded(points, triangles, ["x0"]))
+
+
+def test_cad_planes_turn_into_solver_mirror_planes_with_their_kept_sides() -> None:
+    from server.cadlink.interpretation.solver_frame import frame_spec, solver_cut_planes
+
+    def turned(axis: str, planes, negative=()):
+        return solver_cut_planes(frame_spec(axis, {}), planes, negative=negative)
+
+    assert turned("+z", ["x0", "y0"], negative=["y0"]) == (["x0", "y0"], ["y0"])
+    # Facing +x (up +z): solver x = CAD y, solver y = CAD z.
+    assert turned("+x", ["y0", "z0"]) == (["x0", "y0"], [])
+    assert turned("-x", ["y0"]) == (["x0"], ["x0"])
+    assert turned("-y", ["x0"], negative=["x0"]) == (["x0"], ["x0"])
+    assert turned("+y", ["x0"], negative=["x0"]) == (["x0"], [])
+    with pytest.raises(ValueError, match="square to the radiation axis"):
+        turned("+x", ["x0"])
 
 
 def test_a_cut_through_an_off_centre_driver_is_refused(tmp_path: Path) -> None:

@@ -807,7 +807,7 @@ def test_open_half_with_provenance_is_mirrored_and_its_second_plane_cut(tmp_path
     assert record["symmetry"]["cut_planes"] == ["y0"]
     assert record["symmetry_verification"]["verified"] is True
     assert _multiplier(record) == 4.0
-    assert record["normalisation"]["solver_frame"]["allowed_axes"] == ["+z"]
+    assert record["normalisation"]["solver_frame"]["allowed_axes"] == ["+z", "-z", "+y", "-y"]
     _no_blocking_domain_finding(record)
 
 
@@ -833,8 +833,8 @@ def test_the_same_open_half_without_provenance_is_recovered_from_its_geometry(tm
     assert _multiplier(record) == 4.0
     # Solved as shown it would be half a speaker in free space: no Change.
     assert interpretation["choices"] == []
-    # A reduced domain is solved as it was modelled (+z) until M1d.
-    assert record["normalisation"]["solver_frame"]["allowed_axes"] == ["+z"]
+    # A cut on x = 0 can be solved along any axis it contains.
+    assert record["normalisation"]["solver_frame"]["allowed_axes"] == ["+z", "-z", "+y", "-y"]
     _no_blocking_domain_finding(record)
     assert _imported_open_half_refusal(record) is None
     _assert_solves_on_metal_and_beat(record)
@@ -1032,8 +1032,9 @@ def test_a_cut_on_the_solver_y0_plane_is_refused_whatever_its_cad_name(tmp_path:
     assert observed["rigid_cut_rim_edges"] >= 3 and observed["sources_bisected"] == []
     refusal = _imported_open_half_refusal(record)
     assert refusal is not None and "along z = 0" in refusal[1]
-    # The failed flip condition, named: WG mirrors a cut only as modelled.
-    assert "only in the frame it was modelled in" in refusal[1]
+    # The failed flip condition, named: the plane turns into the solver's y = 0,
+    # but nothing shows it is the speaker's symmetry plane.
+    assert "no source meets" in refusal[1]
     _assert_refused_everywhere(record, refusal[1])
     _same_open_cut_refusal(refusal, _imported_open_half_refusal(_legacy(record)))
 

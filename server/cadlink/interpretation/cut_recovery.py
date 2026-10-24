@@ -13,8 +13,10 @@ conditions, adopted 2026-09-23), judged on the mesh observations of the model
 as it arrived (``domain_interpretation.observe``):
 
 1. **The plane contains the radiation axis.** A cut square to it (front/back)
-   is never a symmetry plane. A reduced model is solved in the frame it was
-   modelled in, where WG mirrors only x = 0 and y = 0.
+   is never a symmetry plane. The solver frame turns every other origin plane
+   into one of the solver's mirror planes (x = 0 or y = 0;
+   ``solver_frame.solver_cut_planes``), with its kept side, so a model cut in
+   CAD is solved along whichever axis it radiates along that its cuts contain.
 2. **The cut is clean.** A rigid-shell rim spanning the shell lies on the
    plane; nothing crosses the plane, no face lies in it (a cap closes it), no
    other edge of the model is open -- a rim on another coordinate plane
@@ -55,9 +57,8 @@ CONTRACT = "cad-cut-recovery-v1"
 #: The failed conditions, by code. Every refusal names one or more of them.
 FRONT_BACK = "front-back-cut"
 UNSUPPORTED_PLANE = "unsupported-plane"
-#: The model is confirmed to face another way than it was modelled (+z): a
-#: reduced domain is solved only as modelled, and a mirror never resets the
-#: confirmed frame.
+#: Retired: a reduced domain was once solved only as modelled (+z). A cut now
+#: turns with the frame; kept for records an earlier build wrote.
 FRAME_NOT_MODELLED = "frame-not-as-modelled"
 #: A curve of the model meets the cut plane at an angle: its mirror image
 #: would kink there, so the halves are not each other's mirror images (an
@@ -346,14 +347,11 @@ def assess_cut_recovery(
                     "so it is not a symmetry plane of the speaker",
                 )
             )
-        elif str(radiation_axis or "+z") != "+z":
-            own.append(Failure(FRAME_NOT_MODELLED, frame_not_modelled_message(str(radiation_axis))))
-        elif plane not in SUPPORTED_PLANES:
+        elif plane not in PLANES:
             own.append(
                 Failure(
                     UNSUPPORTED_PLANE,
-                    f"WG mirrors a cut model only in the frame it was modelled in, where it "
-                    f"cannot mirror {words}; cut it on the YZ or XZ origin plane",
+                    f"WG cannot mirror {words}; cut it on an origin plane",
                 )
             )
         side = _kept_side(observation.negative, observation.positive)
@@ -381,19 +379,12 @@ def assess_cut_recovery(
     return CutRecovery(planes=tuple(planes), kept_sides=kept, failures=failures)
 
 
-def frame_not_modelled_message(axis: str) -> str:
-    return (
-        "WG mirrors a cut model only in the frame it was modelled in (+z), and this "
-        f"model is confirmed to face {axis}; mirroring it would change the frame you confirmed"
-    )
-
-
 def frame_flip_problem(planes: Iterable[str], radiation_axis: str) -> str | None:
-    """Why the confirmed frame forbids mirroring these CAD planes, or None.
+    """Why the frame forbids mirroring these CAD planes, or None.
 
-    The same conditions :func:`assess_cut_recovery` judges, for recorded
-    evidence: a plane square to the radiation axis is never a symmetry plane,
-    and a mirror is solved only as modelled, never by resetting the frame.
+    The same condition :func:`assess_cut_recovery` judges, for recorded
+    evidence: a plane square to the radiation axis is never a symmetry plane.
+    Any other origin plane turns with the frame into a solver mirror plane.
     """
 
     axis = str(radiation_axis or "+z")
@@ -404,8 +395,6 @@ def frame_flip_problem(planes: Iterable[str], radiation_axis: str) -> str | None
                 f"the cut on {plane_words(plane)} is square to the radiation axis ({axis}), "
                 "so it is not a symmetry plane of the speaker"
             )
-    if axis != "+z":
-        return frame_not_modelled_message(axis)
     return None
 
 
@@ -419,20 +408,15 @@ def recovery_options(
 
     Prepared as a declaration of the recovered planes (the mesher then checks
     the open section, leaks and winding on the final mesh), with the planes
-    that kept the negative side reflected, in the frame the model was modelled
-    in. The options enter the mesh cache key, so the reading is part of what
-    was prepared.
+    whose mesh lies on their negative side reflected. In the frame the model
+    is solved in: the CAD planes and kept sides turn with it into the solver's
+    mirror planes (:func:`cut_plane_options`). The options enter the mesh cache
+    key, so the reading is part of what was prepared.
     """
 
-    planes = [plane for plane in SUPPORTED_PLANES if plane in recovery.planes]
+    planes = [plane for plane in PLANES if plane in recovery.planes]
     return {
-        **{key: value for key, value in options.items() if key != "solver_frame"},
-        "declared_cut_planes": [
-            plane
-            for plane in SUPPORTED_PLANES
-            if plane in set(options.get("declared_cut_planes") or ()) | set(planes)
-        ],
-        "reflect_planes": list(recovery.reflect),
+        **cut_plane_options(options, planes, negative=recovery.reflect),
         "domain_interpretation": {
             **dict(plan_identity or {}),
             "applied": planes,
@@ -445,6 +429,42 @@ def recovery_options(
     }
 
 
+def cut_plane_options(
+    options: Mapping[str, Any], cad_planes: Iterable[str], *, negative: Iterable[str] = ()
+) -> dict[str, Any]:
+    """``options`` that mesh these CAD cut planes as the solver's mirror planes.
+
+    As modelled (no ``solver_frame``) the CAD planes are the solver's, exactly
+    the options -- and so the mesh cache keys -- of earlier builds. In a
+    rotated frame they turn into solver planes with their kept sides
+    (``solver_frame.solver_cut_planes``), and ``cut_planes_frame: "solver"``
+    tells the mesher the planes are already the solver's. ``negative``: the
+    CAD planes whose cut kept the negative side. Raises ValueError for a plane
+    square to the radiation axis.
+    """
+
+    from server.cadlink.interpretation.solver_frame import solver_cut_planes
+
+    frame = options.get("solver_frame")
+    held = [str(plane) for plane in options.get("cad_cut_planes") or options.get("declared_cut_planes") or ()]
+    wanted = [plane for plane in PLANES if plane in set(held) | {str(p) for p in cad_planes}]
+    if frame is None:
+        out = {
+            **dict(options),
+            "declared_cut_planes": [plane for plane in SUPPORTED_PLANES if plane in wanted],
+            "reflect_planes": [plane for plane in SUPPORTED_PLANES if plane in set(negative)],
+        }
+        return out
+    solver_planes, reflect = solver_cut_planes(frame, wanted, negative=negative)
+    return {
+        **dict(options),
+        "declared_cut_planes": solver_planes,
+        "reflect_planes": reflect,
+        "cad_cut_planes": wanted,
+        "cut_planes_frame": "solver",
+    }
+
+
 __all__ = [
     "CONDITIONS",
     "CONTRACT",
@@ -453,6 +473,7 @@ __all__ = [
     "CutRecovery",
     "Failure",
     "assess_cut_recovery",
+    "cut_plane_options",
     "geometry_cut_planes",
     "recovery_options",
     "side_of_name",

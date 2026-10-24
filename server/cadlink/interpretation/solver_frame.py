@@ -245,8 +245,9 @@ def frame_requirement(manifest: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-#: The axes a reduced (mirrored) domain may be solved along until M1d permits
-#: more: the frame it was modelled in, where its planes keep their meaning.
+#: Kept for readers of the earlier contract, where a reduced domain was solved
+#: only as modelled. A CAD cut now turns with the frame (:func:`solver_cut_planes`):
+#: a reduced domain is solved along any axis lying in all of its planes.
 REDUCED_DOMAIN_AXES: tuple[str, ...] = (AS_MODELLED,)
 
 
@@ -267,24 +268,70 @@ def allowed_axes(
 ) -> tuple[str, ...]:
     """The axes this snapshot can be solved along.
 
-    - A declared domain (half, quarter, or an explicit full) keeps the frame
-      it was modelled in, as before M1c-auto.
+    A mirror plane must contain the radiation axis, so a CAD cut allows the
+    axes lying in all of its planes, and the cut turns with the frame into the
+    solver's mirror planes (:func:`solver_cut_planes`):
+
+    - A declared domain: the axes in its declared planes (an explicit full
+      declaration has none, so every axis).
     - ``"kind": "automatic"`` declares nothing, so it is treated as no domain
-      at all -- never as a truthy declaration that forces +Z.
+      at all -- never as a truthy declaration that restricts the axis.
     - ``domain_planes`` are validated pre-cut planes WG mirrors on recorded
-      evidence (``domain_interpretation``). They restrict the axes to those
-      lying in every plane, and a reduced domain is then +Z only until M1d.
+      evidence or recovered from the geometry (``domain_interpretation``,
+      ``cut_recovery``), in CAD terms.
+    - A return with FEM regions keeps a reduced domain as modelled (+z): its
+      regions are meshed against the CAD planes.
     """
 
-    from server.cadlink.wgreturn import domain_kind
+    from server.cadlink.wgreturn import declared_domain_planes, domain_kind
 
-    if domain_kind(manifest) == "declared":
-        return (AS_MODELLED,)
     planes = tuple(domain_planes)
-    if planes:
-        inside = axes_in_planes(planes)
+    if domain_kind(manifest) == "declared":
+        planes = tuple(declared_domain_planes(manifest)) or planes
+    if not planes:
+        return AXES
+    inside = axes_in_planes(planes)
+    scope = manifest.get("scope")
+    if isinstance(scope, Mapping) and scope.get("fem_regions"):
         return tuple(axis for axis in inside if axis in REDUCED_DOMAIN_AXES)
-    return AXES
+    return inside
+
+
+def solver_cut_planes(
+    frame: str | Mapping[str, Any],
+    cad_planes: Iterable[str],
+    *,
+    negative: Iterable[str] = (),
+) -> tuple[list[str], list[str]]:
+    """CAD cut planes turned into the solver's mirror planes by a frame.
+
+    The frame is a proper rotation taking the radiation axis to solver +Z, so
+    a CAD plane that contains that axis (x = 0 or y = 0 in CAD, or z = 0 for a
+    model radiating along x or y) becomes the solver's x = 0 or y = 0. Its kept
+    side turns with it: a positive CAD side can become the solver's negative
+    one and the reverse. Returns the solver planes and those of them on whose
+    negative side the solver mesh lies (``negative`` names the CAD planes that
+    kept their negative side), in canonical order. Reflection is recorded
+    apart from the rotation, which stays proper. Raises ValueError for a
+    plane square to the radiation axis: it is never a symmetry plane.
+    """
+
+    matrix = spec_matrix(frame)[:3, :3]
+    held_negative = {str(plane) for plane in negative}
+    solver: dict[str, bool] = {}
+    for plane in cad_planes:
+        name = str(plane)
+        if len(name) != 2 or name[0] not in "xyz" or name[1] != "0":
+            raise ValueError(f"unknown cut plane {plane!r}")
+        column = "xyz".index(name[0])
+        row = int(np.argmax(np.abs(matrix[:, column])))
+        if row == 2:
+            raise ValueError(
+                f"the cut on {name} is square to the radiation axis, so it is not a symmetry plane"
+            )
+        solver["xy"[row] + "0"] = (name in held_negative) != (matrix[row, column] < 0)
+    planes = [plane for plane in ("x0", "y0") if plane in solver]
+    return planes, [plane for plane in planes if solver[plane]]
 
 
 def confirmation_key(lineage_id: str | None, manifest_sha256: str) -> str:
@@ -415,9 +462,12 @@ def record_solver_frame(
         raise ValueError("a new preparation is made under the current solver frame contract")
     matrix = spec_matrix(spec)
     allowed = allowed_axes(manifest, domain_planes)
-    if allowed == (AS_MODELLED,) and not np.array_equal(matrix, np.eye(4)):
-        # A declared domain keeps its modelled transform until M1d permits more.
-        raise ValueError("a declared half or quarter is solved only in the frame it was modelled in")
+    if spec["axis"] not in allowed:
+        # A mirror plane must contain the radiation axis.
+        raise ValueError(
+            f"a model cut on {', '.join(domain_planes) or 'its declared planes'} is solved "
+            f"only along {', '.join(allowed)}"
+        )
     return {
         "contract": CONTRACT_V2,
         "axis": spec["axis"],
@@ -551,6 +601,7 @@ __all__ = [
     "record_solver_frame",
     "require_axis",
     "resolution_identity",
+    "solver_cut_planes",
     "resolve_up",
     "spec_axis",
     "spec_matrix",

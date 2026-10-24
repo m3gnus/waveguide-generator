@@ -36,8 +36,9 @@ The result states, in the CAD (exported) frame unless named otherwise:
     The planes WG cut, and the planes the solver mirrors with the fraction
     (full, half, quarter) of the model the mesh is.
 ``reflected_axes`` / ``reflection``
-    The CAD axes the solve mesh was reflected across (a cut that kept the
-    negative side), and how: the planes, the parity of the reflections (the
+    The solver axes the solve mesh was reflected across (a cut whose mesh lay
+    on the negative side of its solver plane; the same as the CAD axes as
+    modelled), and how: the planes, the parity of the reflections (the
     triangle winding is reversed once per reflection) and what did it. The
     reflection is recorded apart from the frame, which stays a proper
     rotation.
@@ -316,8 +317,8 @@ def _decide(
         cad_cuts.append(
             {
                 "plane": plane,
-                # A recovered cut is solved in the frame it was modelled in.
-                "solver_plane": plane if recovered else (observation or {}).get("solver_plane") or plane,
+                # The solver plane the frame turned this CAD cut into.
+                "solver_plane": (observation or {}).get("solver_plane") or plane,
                 "kept_side": _kept_side(observation) or "positive",
                 "found_by": "geometry" if recovered else evidence_source,
                 "features": features_by_plane.get(plane, []),

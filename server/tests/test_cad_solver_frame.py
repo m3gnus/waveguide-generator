@@ -191,11 +191,14 @@ def test_the_requirement_is_the_contract_the_export_frame_and_the_document_up() 
     assert frame_requirement(stated)["document_up"] == "+y"
 
 
-def test_a_declared_reduced_domain_allows_only_the_modelled_frame() -> None:
+def test_a_declared_reduced_domain_allows_the_axes_in_its_planes() -> None:
     assert allowed_axes(_manifest()) == AXES
     half = _manifest()
     half["assembly"]["domain"] = {"cut_planes": ["x0"]}
-    assert allowed_axes(half) == (AS_MODELLED,)
+    assert allowed_axes(half) == ("+z", "-z", "+y", "-y")
+    quarter = _manifest()
+    quarter["assembly"]["domain"] = {"cut_planes": ["x0", "y0"]}
+    assert allowed_axes(quarter) == (AS_MODELLED, "-z")
 
 
 def test_the_key_is_the_project_or_else_the_exact_snapshot() -> None:

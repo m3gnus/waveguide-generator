@@ -3036,10 +3036,17 @@ def build_imported_mesh(
         raise ImportedMeshError(
             "normalisation: a solver frame applies only to a return with no WG instance"
         )
-    if solver_frame is not None and declared_cut_planes:
+    if (
+        solver_frame is not None
+        and declared_cut_planes
+        and options.get("cut_planes_frame") != "solver"
+    ):
+        # Cut planes are stated in the assembly frame unless the caller turned
+        # them into the solver's (``cut_recovery.cut_plane_options``); planes
+        # left in CAD terms would mirror the wrong side of a rotated model.
         raise ImportedMeshError(
-            "symmetry: a return declared as a half or quarter model is solved only in "
-            "the frame it was modelled in"
+            "symmetry: the cut planes of a model meshed in a rotated solver frame "
+            "must be stated as the solver's mirror planes"
         )
     if reflect_planes and anchor_id is not None:
         # A linked throat is matched against its design's contract in the

@@ -130,11 +130,14 @@ def test_a_v1_axis_or_v1_frame_still_means_the_v1_matrix() -> None:
         assert np.array_equal(spec_matrix({"contract": CONTRACT_V1, "axis": axis}), frame_matrix(axis))
 
 
-def test_a_declared_domain_keeps_the_modelled_transform() -> None:
+def test_a_declared_domain_turns_with_the_frame_along_its_planes() -> None:
     half = _manifest("+z", domain={"kind": "half", "cut_planes": ["x0"]})
     frame = record_solver_frame(half, AS_MODELLED)
-    assert frame["allowed_axes"] == [AS_MODELLED]
+    assert frame["allowed_axes"] == [AS_MODELLED, "-z", "+y", "-y"]
     assert np.array_equal(np.asarray(frame["matrix"]), np.eye(4))
+    turned = record_solver_frame(half, frame_spec("-y", half))
+    assert turned["axis"] == "-y" and not np.array_equal(np.asarray(turned["matrix"]), np.eye(4))
+    # x = 0 does not contain +x: a mirror there is never a symmetry plane.
     with pytest.raises(ValueError):
         record_solver_frame(half, frame_spec("+x", half))
 
@@ -255,9 +258,13 @@ def test_a_v2_preparation_meshes_in_the_carried_axis(tmp_path: Path, monkeypatch
     assert resolved.spec["contract"] == CONTRACT_V2 and resolved.spec["axis"] == "-y"
     # ...never taken as confirmed.
     assert resolved.confirmed is False and resolved.confirmed_axis is None
-    # A declared half allows only +z: nothing carried forward is meshed in.
+    # A declared half on x = 0 contains -y: the carried axis is meshed in.
     half = _manifest(domain={"kind": "half", "cut_planes": ["x0"]})
     held = resolve_for_manifest(store, half, "sha256:" + "e" * 64)
+    assert held is not None and held.axis == "-y"
+    # One on y = 0 does not: nothing carried forward is meshed in.
+    across = _manifest(domain={"kind": "half", "cut_planes": ["y0"]})
+    held = resolve_for_manifest(store, across, "sha256:" + "f" * 64)
     assert held is not None and held.axis == AS_MODELLED
 
 

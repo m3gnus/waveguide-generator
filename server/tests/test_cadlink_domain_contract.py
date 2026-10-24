@@ -162,16 +162,17 @@ def test_automatic_is_not_a_declared_domain_for_the_frame() -> None:
 
     assert allowed_axes(automatic) == AXES
     assert allowed_axes(validate_manifest(_unlinked())) == AXES
-    assert allowed_axes(declared) == ("+z",)
+    assert allowed_axes(declared) == ("+z", "-z", "+y", "-y")
 
 
-def test_validated_precut_planes_restrict_the_axes_and_reduced_stays_plus_z() -> None:
+def test_validated_precut_planes_restrict_the_axes_to_those_in_every_plane() -> None:
     assert axes_in_planes(["x0"]) == ("+z", "-z", "+y", "-y")
     assert axes_in_planes(["y0"]) == ("+z", "-z", "+x", "-x")
     assert axes_in_planes(["x0", "y0"]) == ("+z", "-z")
     automatic = validate_manifest(_new_add_in())
-    assert allowed_axes(automatic, ["x0"]) == ("+z",)
-    assert allowed_axes(automatic, ["x0", "y0"]) == ("+z",)
+    assert allowed_axes(automatic, ["x0"]) == ("+z", "-z", "+y", "-y")
+    assert allowed_axes(automatic, ["x0", "y0"]) == ("+z", "-z")
+    assert allowed_axes(automatic, ["z0", "y0"]) == ("+x", "-x")
 
 
 # -- the plan --------------------------------------------------------------------------------

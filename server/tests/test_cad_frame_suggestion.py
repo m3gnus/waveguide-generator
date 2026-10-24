@@ -158,14 +158,28 @@ def test_a_choice_against_the_suggestion_is_recorded_as_chosen(tmp_path: Path) -
     assert row["frame"]["suggestion"]["algorithm"] == suggestion["algorithm"]
 
 
-def test_a_declared_half_facing_elsewhere_is_asked_about(tmp_path: Path) -> None:
+def test_a_declared_half_facing_along_its_plane_is_suggested(tmp_path: Path) -> None:
+    """A half cut on x = 0 contains -y: its cut turns with the frame, so -y is used."""
+
     store = CadLinkStore(tmp_path / "cadlink.db")
     record = _record(tmp_path, "-y", domain=True)
     preview = frame_preview(store, record)
     suggestion = preview["suggestion"]
+    assert suggestion["status"] == "automatic"
+    assert suggestion["axis"] == "-y"
+    assert suggestion["supportedAxes"] == ["+z", "-z", "+y", "-y"]
+
+
+def test_a_declared_half_facing_across_its_plane_is_asked_about(tmp_path: Path) -> None:
+    """A model facing +x cannot be mirrored on x = 0: never promoted to another axis."""
+
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    record = _record(tmp_path, "+x", domain=True)
+    preview = frame_preview(store, record)
+    suggestion = preview["suggestion"]
     assert suggestion["status"] == "ask"
     assert suggestion["reasonCode"] == "unsupported-axis"
-    assert suggestion["unrestrictedAxis"] == "-y"
+    assert suggestion["unrestrictedAxis"] == "+x"
     assert suggestion["axis"] is None
     assert preview["preselected"] is None
 

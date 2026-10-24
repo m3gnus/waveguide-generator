@@ -450,8 +450,8 @@ def confirm_frame(
         raise FrameConfirmationError(str(exc)) from exc
     if chosen not in _record_allowed(frame):
         raise FrameConfirmationError(
-            "this model is solved as a half or quarter model, and so only "
-            "in the frame it was modelled in (+z)"
+            "this model is solved as a half or quarter model, whose mirror planes "
+            f"contain only {', '.join(_record_allowed(frame))}"
         )
     spec = _frame_for_axis(frame, chosen)
     suggestion = _cached_suggestion(store, record)
