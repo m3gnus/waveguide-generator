@@ -23,7 +23,7 @@ from typing import Any, Callable, Iterator, Mapping, Sequence
 from server.workspace.archive_identity import record_run_segment
 from server.cadlink.operations import (
     REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED,
-    NEEDS_USER_INPUT, hold_details, is_calm_failure, user_hold,
+    ATTENTION_QUESTION, NEEDS_USER_INPUT, hold_details, reason_attention, user_hold,
 )
 from server.jobs.result_contracts import RESULT_ENVELOPE_ADAPTER
 from server.platform.paths import DATA_DIR_ENV, app_root, data_paths
@@ -1423,8 +1423,10 @@ class JobStore:
                 **dict(cad or {}),
                 "refusal": {"code": code, "message": message, **({"blocker": dict(blocker)} if blocker else {})},
             }
-            # A failed preparation is never a hold: it ends as an error.
-            held = CAD_REASON_STATES.get(code) == NEEDS_USER_INPUT and not is_calm_failure(code, message)
+            # A failed preparation is never a hold: it ends as an error. One
+            # owner says what is kept and what is a question (operations).
+            held = user_hold("error", metadata["cad"])
+            question = held and reason_attention(NEEDS_USER_INPUT, code, message) == ATTENTION_QUESTION
             if held:
                 metadata["cad"]["hold"] = hold_details(code, message)
             conn.execute(
@@ -1434,7 +1436,7 @@ class JobStore:
                        task_metadata_json = ?
                    WHERE id = ?""",
                 ("held" if held else "error", "held" if held else "error",
-                 "Waiting for you" if held else "Not solved",
+                 "Waiting for you" if question else "Not solved",
                  None if held else message, now, now, json.dumps(metadata), job_id),
             )
             return self._append_event(

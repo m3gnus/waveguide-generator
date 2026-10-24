@@ -54,7 +54,7 @@ describe('selected CAD model state', () => {
     expect(cadModelHeaderLine(preparing)).toBe('Preparing Speaker…');
     expect(cadModelStatusLabel(failed)).toBe('CAD model · preparation failed');
     expect(cadModelHeaderLine(failed)).toBe('WG could not prepare Speaker. This has been recorded for the developers.');
-    const heldJob = { ...job, status: 'held', cad_state: { state: 'needs_user_input', reason: 'mesh_too_large', held: true } } as unknown as JobItem;
+    const heldJob = { ...job, status: 'held', cad_state: { state: 'needs_user_input', reason: 'mesh_too_large', held: true, attention: 'question' } } as unknown as JobItem;
     const waiting = selectCadModelState(pointer, idle, { kind: 'waiting', job: heldJob });
     expect(cadModelStatusLabel(waiting)).toBe('CAD model · waiting for you');
     expect(cadModelHeaderLine(waiting)).toContain('Waiting for you');
@@ -114,7 +114,7 @@ describe('selected CAD model state', () => {
   });
 
   it('owns a request held for the user as the waiting state', () => {
-    const job = { id: 'held-1', status: 'held', cad_state: { state: 'needs_user_input', reason: 'mesh_too_large', held: true } } as unknown as JobItem;
+    const job = { id: 'held-1', status: 'held', cad_state: { state: 'needs_user_input', reason: 'mesh_too_large', held: true, attention: 'question' } } as unknown as JobItem;
     const waiting = { kind: 'waiting' as const, job };
     const model = selectCadModelState(selected, idle, waiting);
     expect(model).toMatchObject({ phase: 'waiting', preparation: 'selected-unprepared', heldRequest: job, needsPreparation: false });
@@ -122,7 +122,7 @@ describe('selected CAD model state', () => {
     const prepared = selectCadModelState({ ...selected, ingestRecord: record, needsIngest: false }, idle, waiting);
     expect(prepared).toMatchObject({ phase: 'waiting', preparation: 'prepared' });
     // The engine gate stays with solve readiness; an active preparation outranks the hold.
-    const engine = { ...job, cad_state: { ...job.cad_state, reason: 'engine_unavailable' } } as JobItem;
+    const engine = { ...job, cad_state: { ...job.cad_state, reason: 'engine_unavailable', attention: 'action' } } as JobItem;
     expect(selectCadModelState(selected, idle, { kind: 'waiting', job: engine }).phase).toBe('selected-unprepared');
     expect(selectCadModelState(selected, { ...idle, ingesting: true }, waiting).phase).toBe('preparing');
     expect(selectCadModelState({ ...selected, selectedBundle: null }, idle, waiting).phase).toBe('none');

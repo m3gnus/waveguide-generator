@@ -72,7 +72,10 @@ describe('operationStageWord', () => {
   });
 
   it('shows a clear waiting-for-you state, distinct from the pipeline stages', () => {
-    expect(operationStageWord(op({ state: 'needs_user_input', reason: 'setup_required' }))).toBe('Waiting for you');
+    expect(operationStageWord(op({ state: 'needs_user_input', reason: 'setup_required', attention: 'question' }))).toBe('Waiting for you');
+    // Only a question waits for the user: an engine gate or a frame changed elsewhere asks nothing.
+    expect(operationStageWord(op({ state: 'needs_user_input', reason: 'engine_unavailable', attention: 'action' }))).toBe('Not prepared');
+    expect(operationStageWord(op({ state: 'needs_user_input', reason: 'update_restart_pending', attention: null }))).toBe('Received');
     expect(operationWaitingReason(op({ state: 'needs_user_input', reason: 'setup_required' })))
       .toBe('needs its solve settings');
     expect(operationWaitingReason(op({ state: 'received' }))).toBeNull();

@@ -72,10 +72,12 @@ export function isFailedCadPreparation(job: JobItem): boolean {
   return job.cad_state?.prepare_failed === true;
 }
 
-/** A held request that asks the user to choose. An engine gate is held too,
- * but its home is the Results solve progress, never the pop-up or the chip. */
+/** A held request that asks the user to choose: the server's one
+ * classification (`operations.reason_attention`) says it is a question. An
+ * engine gate or a frame changed elsewhere is held too, but asks nothing
+ * (`action`): its home is the Results solve progress, never the pop-up or the chip. */
 export function isCadChoiceJob(job: JobItem): boolean {
-  return isHeldCadJob(job) && job.cad_state?.reason !== 'engine_unavailable';
+  return isHeldCadJob(job) && job.cad_state?.attention === 'question';
 }
 
 /** Retain only the current child of a chain; timestamps order separate presses. */

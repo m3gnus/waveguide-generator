@@ -4,6 +4,17 @@ import refusedJob from './cadRefusedJob.fixture.json';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 
+/** `operations.reason_attention` for the reasons fixtures use, as the server
+ * writes it on every `cad_state` (pinned server-side by
+ * `test_cad_held.py :: EXPECTED_ATTENTION`): only a user's choice is a question. */
+const FIXTURE_QUESTIONS: ReadonlySet<string> = new Set(['mesh_too_large', 'setup_required', 'findings_need_review', 'ready_to_solve']);
+const FIXTURE_FAILURES: ReadonlySet<string> = new Set(['preparation_failed', 'submission_refused', 'interrupted', 'snapshot_invalid']);
+function fixtureAttention(state: string, reason: string | null | undefined): CadOperationSummary['attention'] {
+  if ((state !== 'needs_user_input' && state !== 'rejected') || !reason || reason === 'update_restart_pending') return null;
+  if (FIXTURE_FAILURES.has(reason)) return 'failed';
+  return state === 'needs_user_input' && FIXTURE_QUESTIONS.has(reason) ? 'question' : 'action';
+}
+
 /** CAD job shapes as the backend serializer writes them; `cadRefusedJob.fixture.json`
  * is a refused intent serialized by `JobRuntime._serialize_job`. */
 export function cadJobFixture(operation: CadOperationSummary, overrides: Partial<JobItem> = {}): JobItem {
@@ -29,6 +40,7 @@ export function cadJobFixture(operation: CadOperationSummary, overrides: Partial
     cad_state: {
       operation_id: operation.operationId, job_id: operation.jobId,
       state: operation.state, stage: operation.stage, reason: operation.reason, message: operation.message, blocker: operation.blocker ?? null,
+      attention: operation.attention !== undefined ? operation.attention : fixtureAttention(operation.state, operation.reason),
       snapshot: operation.snapshot ? {
         manifest_sha256: operation.snapshot.manifestSha256, artifact_sha256: null,
         document_name: operation.snapshot.documentName ?? null, project_lineage_id: operation.snapshot.projectLineageId ?? null,

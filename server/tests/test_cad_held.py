@@ -335,20 +335,66 @@ def test_a_manual_solve_whose_copy_is_gone_is_prepared_again_in_wg() -> None:
     )
 
 
-def test_attention_tells_questions_from_failures_for_every_reason() -> None:
+#: The class of every reason an operation can carry, in the state it may
+#: accompany (``operations.REASON_CODES``). A new code fails here until it is
+#: classified on purpose: only a choice the user makes is a question.
+EXPECTED_ATTENTION = {
+    # Questions: WG asks them in its pop-up.
+    "mesh_too_large": "question",
+    "setup_required": "question",
+    "findings_need_review": "question",
+    "ready_to_solve": "question",
+    # Something to do; nothing is asked.
+    "frame_confirmation_required": "action",
+    "reduced_axis_not_allowed": "action",
+    "engine_unavailable": "action",
+    "engine_cannot_solve_return": "action",
+    "excitation_refused": "action",
+    "return_unavailable": "action",
+    "wglink_folder_unset": "action",
+    "solver_memory_exceeded": "action",
+    "snapshot_changed": "action",
+    "baseline_conflict": "action",
+    "target_not_exact": "action",
+    "request_payload_invalid": "action",
+    "snapshot_unavailable": "action",
+    "model_cut_unsolvable": "action",
+    "adapter_refused": "action",
+    "adapter_failed": "action",
+    # WG's own failures.
+    "preparation_failed": "failed",
+    "submission_refused": "failed",
+    "interrupted": "failed",
+    "snapshot_invalid": "failed",
+    # Nothing asked: queued again by itself, or cancelled.
+    "update_restart_pending": None,
+    "superseded": None,
+    "expired": None,
+    "session_changed": None,
+    "publication_failed": None,
+    "adapter_not_started": None,
+}
+
+
+def test_attention_classifies_every_reason_and_asks_only_real_questions() -> None:
     from server.cadlink.operations import REASON_CODES, reason_attention
 
-    assert reason_attention("needs_user_input", "mesh_too_large") == "question"
-    assert reason_attention("needs_user_input", "setup_required") == "question"
+    assert set(EXPECTED_ATTENTION) == set(REASON_CODES)
+    for code, state in REASON_CODES.items():
+        assert reason_attention(state, code) == EXPECTED_ATTENTION[code], code
+    # A legacy row storing the mesh ceiling as a failure is still its question.
     assert reason_attention("needs_user_input", "preparation_failed", "This model meshes to 1 triangles") == "question"
-    for code in ("preparation_failed", "submission_refused", "interrupted"):
-        assert reason_attention("needs_user_input", code) == "failed", code
-    assert reason_attention("rejected", "snapshot_invalid") == "failed"
-    for code in ("snapshot_changed", "model_cut_unsolvable", "baseline_conflict"):
-        assert reason_attention("rejected", code) == "action", code
-    assert reason_attention("needs_user_input", "update_restart_pending") is None
+    # An unknown reason is never a question.
+    assert reason_attention("needs_user_input", "some_future_code") == "action"
     assert reason_attention("accepted", None) is None
-    assert reason_attention("cancelled", "superseded") is None
-    # Every reason a kept operation can carry is classified.
-    assert all(reason_attention(state, code) in {"question", "action", "failed", None}
-               for code, state in REASON_CODES.items())
+
+
+def test_a_hold_is_a_question_or_an_action_never_a_failure() -> None:
+    from server.cadlink.operations import REASON_CODES, NEEDS_USER_INPUT, USER_ACTION_CODES, user_hold
+
+    for code, state in REASON_CODES.items():
+        if state != NEEDS_USER_INPUT:
+            continue
+        held = user_hold("held", {"refusal": {"code": code, "message": ""}})
+        # A user-action failure ends as a failed preparation, never a hold.
+        assert held is (EXPECTED_ATTENTION[code] in {"question", "action"} and code not in USER_ACTION_CODES), code

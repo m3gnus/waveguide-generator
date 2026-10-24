@@ -6,6 +6,7 @@ import { useCadReturnStore, type CadReturnState } from './cadReturn';
 import { useDocumentStore } from './document';
 import { cadWorkspace, type CadWorkspaceSnapshot } from './cadWorkspace';
 import { meshCeilingChoice, type MeshCeilingChoice } from './meshCeilingChoice';
+import { isCadChoiceJob } from '../jobs/cadSolve';
 
 /** `stopped`: the model has no prepared mesh, and the server's request for
  * it was refused or its solve failed; `failureMessage` says why. */
@@ -58,10 +59,11 @@ export function selectCadModelState(
   // A ceiling question for this model: asked, or put off with Later.
   const meshChoice = selected && !!bundle && ceiling?.bundlePath === bundle.bundlePath
     && preparationPhase !== 'preparing' && preparationPhase !== 'prepared' ? ceiling : null;
-  // A held request is the model's state until the user answers its pop-up.
-  // An engine hold is the solve readiness gate, which Results describes.
+  // A held request is the model's state until the user answers its pop-up:
+  // only a real question (`isCadChoiceJob`). An engine hold is the solve
+  // readiness gate, which Results describes.
   const heldRequest = selected && preparationPhase !== 'preparing' && request?.kind === 'waiting' && request.job
-    && request.job.cad_state?.reason !== 'engine_unavailable' ? request.job : null;
+    && isCadChoiceJob(request.job) ? request.job : null;
   const phase: CadModelPhase = heldRequest || meshChoice ? 'waiting' : preparationPhase;
   // A record without a bundle (a restored run) names no application; it is
   // never assumed to be Fusion.

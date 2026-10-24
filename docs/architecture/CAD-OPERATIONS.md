@@ -241,13 +241,19 @@ preparation can proceed.
 alone cannot: it covers real questions and failures alike. The summary (and a job's
 `cad_state`) carries it, from `operations.reason_attention`, the one classification:
 
-- `question`: a choice only the user can make (`mesh_too_large`, `setup_required`,
-  `findings_need_review`, `engine_unavailable`, `ready_to_solve`, ...); WG asks it in a
-  pop-up, and Fusion's progress panel says so with "Open Waveguide Generator".
-- `action`: the user must change something and nothing is asked
+- `question`: a choice only the user can make, and only these
+  (`operations.QUESTION_CODES`: `mesh_too_large`, `setup_required`,
+  `findings_need_review`, `ready_to_solve`); WG asks it in a pop-up, and Fusion's
+  progress panel says so with "Open Waveguide Generator". Only a question reads
+  "Waiting for you" or takes the pop-up (`isCadChoiceJob`).
+- `action`: the user must change or do something and nothing is asked
   (`operations.USER_ACTION_CODES`: `snapshot_changed`, `return_unavailable`,
-  `wglink_folder_unset`, `excitation_refused`, `solver_memory_exceeded`; and every other
-  rejection, such as `model_cut_unsolvable`).
+  `wglink_folder_unset`, `excitation_refused`, `solver_memory_exceeded`,
+  `reduced_axis_not_allowed`; the engine gates `engine_unavailable` and
+  `engine_cannot_solve_return`, whose home is the Results solve progress; a manual
+  axis changed elsewhere, `frame_confirmation_required`; every rejection, such as
+  `model_cut_unsolvable`; and any reason not listed). A kept hold (`user_hold`) is a
+  question or such an action that is not a failed preparation.
 - `failed`: WG's own failure (`operations.INTERNAL_FAILURE_CODES`), recorded for the
   developers; Try again.
 - null: nothing is asked (in progress, solved, cancelled, or `update_restart_pending`).

@@ -102,8 +102,9 @@ REASON_CODES: Mapping[str, str] = {
     # Cannot proceed now: each waits for the user, and the operation is kept.
     "setup_required": NEEDS_USER_INPUT,
     "findings_need_review": NEEDS_USER_INPUT,
-    # An unlinked (CAD-authored) model whose solver frame its project has not
-    # confirmed for this frame requirement (server/cadlink/interpretation/solver_frame.py).
+    # A Solve named a person's axis, and another person's choice replaced it
+    # before the solve was prepared: press Solve again (never a question about
+    # which way a model radiates; server/cadlink/interpretation/solver_frame.py).
     "frame_confirmation_required": NEEDS_USER_INPUT,
     # The model's radiation axis -- a person's choice, or one the survey is
     # confident about -- is one its reduced domain cannot be solved along.
@@ -158,6 +159,11 @@ USER_ACTION_CODES = frozenset(
     {"snapshot_changed", "return_unavailable", "wglink_folder_unset",
      "excitation_refused", "solver_memory_exceeded", "reduced_axis_not_allowed"}
 )
+#: The only real questions: choices only the user can make, asked in WG's
+#: pop-up. Every other kept reason asks nothing (``reason_attention``).
+QUESTION_CODES = frozenset(
+    {"mesh_too_large", "setup_required", "findings_need_review", "ready_to_solve"}
+)
 #: Failed preparations the read model words itself, whatever text is stored.
 CALM_FAILURE_CODES = INTERNAL_FAILURE_CODES | USER_ACTION_CODES
 _MESH_CEILING_PREFIX = "This model meshes to "
@@ -167,9 +173,11 @@ _MESH_CEILING_PREFIX = "This model meshes to "
 #: continue, so readers -- Fusion's progress panel among them -- tell from this
 #: which of those is a real question.
 #:
-#: - ``question``: a choice only the user can make; WG asks it in a pop-up.
-#: - ``action``: the user must change something (the design, the settings, the
-#:   mesh, or send the model again); nothing is asked.
+#: - ``question``: a choice only the user can make (:data:`QUESTION_CODES`);
+#:   WG asks it in a pop-up.
+#: - ``action``: the user must change or do something (the design, the
+#:   settings, the mesh, an engine, send the model again, press Solve again);
+#:   nothing is asked. The default for any other reason.
 #: - ``failed``: WG's own failure, recorded for the developers; Try again.
 #: - None: nothing is asked (in progress, solved, cancelled, or waiting for an
 #:   update restart).
@@ -199,13 +207,16 @@ def reason_attention(state: Any, code: Any, message: Any = "") -> str | None:
     if state not in {NEEDS_USER_INPUT, REJECTED} or not code:
         return None
     effective = _effective_code(code, message)
+    if effective == REASON_UPDATE_RESTART_PENDING:
+        return None  # Queued again by itself once no restart is pending.
     if effective in INTERNAL_FAILURE_CODES:
         return ATTENTION_FAILED
-    if effective in USER_ACTION_CODES or state == REJECTED:
-        return ATTENTION_ACTION
-    if effective == REASON_UPDATE_RESTART_PENDING:
-        return None
-    return ATTENTION_QUESTION
+    if state == NEEDS_USER_INPUT and effective in QUESTION_CODES:
+        return ATTENTION_QUESTION
+    # Engine gates (their home is the Results solve progress), a manual axis
+    # changed elsewhere, user-action failures, rejections and any reason not
+    # listed: something to do, never a question.
+    return ATTENTION_ACTION
 
 
 #: What a model whose radiation axis its reduced domain cannot use is told to do.
@@ -275,18 +286,25 @@ def preparation_failure(
 
 
 def user_hold(status: str, cad: Mapping[str, Any]) -> bool:
-    """Include refusals saved before holds had their own job status.
+    """A kept request: a question, or something to do, that is not a failed preparation.
 
-    A failed preparation is never a hold, however an older version stored it.
+    Read from :func:`reason_attention`, the one classification: a hold asks
+    a question or names an action (an engine gate, a frame changed
+    elsewhere); a failed preparation is never a hold, however an older
+    version stored it. Includes refusals saved before holds had their own job
+    status.
     """
 
     refusal = cad.get("refusal") or {}
     code, message = refusal.get("code"), refusal.get("message")
     if is_calm_failure(code, message):
         return False
-    return status == "held" or (
-        status == "error" and REASON_CODES.get(code) == NEEDS_USER_INPUT
-    )
+    if not (status == "held" or (status == "error" and REASON_CODES.get(code) == NEEDS_USER_INPUT)):
+        return False
+    # A held row with no stored reason predates reasons on holds; it stays one.
+    return not code or reason_attention(NEEDS_USER_INPUT, code, message) in {
+        ATTENTION_QUESTION, ATTENTION_ACTION,
+    }
 
 
 #: The triangle ceiling's next step; each surface adds the choice it offers.
@@ -620,6 +638,7 @@ __all__ = [
     "normalize_request",
     "prepare_and_solve_request",
     "preparation_failure",
+    "QUESTION_CODES",
     "axis_not_allowed_message",
     "reason_attention",
     "request_digest",

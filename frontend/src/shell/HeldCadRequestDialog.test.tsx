@@ -24,7 +24,7 @@ vi.mock('../jobs/cadSolve', async (load) => ({
 function held(id = 'held-request', heldAt = new Date().toISOString()): JobItem {
   return { ...cadJobFixture(cadJobSummary(legacy as unknown as JobItem)), ...legacy, id, status: 'held', stage: 'held', stage_message: 'Waiting for you', error_message: null,
     completed_at: heldAt,
-    cad_state: { ...legacy.cad_state, held: true, reason: 'mesh_too_large',
+    cad_state: { ...legacy.cad_state, held: true, reason: 'mesh_too_large', attention: 'question',
       message: 'This mesh is above the recommended size.',
       next_step: 'Change resolution in Sources & Mesh… or check the model size.',
       options: [{ id: 'solve_anyway', label: 'Solve anyway' }, { id: 'dismiss', label: 'Dismiss request' }] },
@@ -175,12 +175,15 @@ describe('held CAD request dialog owner', () => {
     expect(actions.continueRun).toHaveBeenCalledWith('failed');
   });
 
-  it('never pops up for an engine gate or a failed preparation', async () => {
+  it('never pops up for an engine gate, a frame changed elsewhere or a failed preparation', async () => {
     const engine = held('engine');
-    engine.cad_state = { ...engine.cad_state!, reason: 'engine_unavailable', options: [{ id: 'review', label: 'Review solve' }] };
+    engine.cad_state = { ...engine.cad_state!, reason: 'engine_unavailable', attention: 'action', options: [{ id: 'review', label: 'Review solve' }] };
+    // A manual axis changed elsewhere is held too, but asks nothing.
+    const frame = held('frame');
+    frame.cad_state = { ...frame.cad_state!, reason: 'frame_confirmation_required', attention: 'action' };
     const failed = { ...held('failed'), status: 'error', cad_state: { ...held().cad_state!, held: false, prepare_failed: true,
       reason: 'preparation_failed', message: 'WG could not prepare Speaker. This has been recorded for the developers.' } } as JobItem;
-    publishCadJobs([engine, failed]);
+    publishCadJobs([engine, frame, failed]);
     await act(async () => root.render(<HeldCadRequestDialog/>));
     expect(host.querySelector('[role="dialog"]')).toBeNull();
   });

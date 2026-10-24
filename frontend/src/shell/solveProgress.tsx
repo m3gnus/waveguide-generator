@@ -146,7 +146,9 @@ export function operationStageWord(operation: OperationProgressLike): SolveStage
     case 'cancelled': return 'Cancelled';
     case 'cancel_requested': return 'Cancelling…';
     case 'needs_user_input':
-      return operation.attention === 'failed' || operation.attention === 'action' ? 'Not prepared' : 'Waiting for you';
+      // Only a real question waits for the user; a restart hold is queued again by itself.
+      if (operation.attention === 'question') return 'Waiting for you';
+      return operation.reason === 'update_restart_pending' ? 'Received' : 'Not prepared';
     case 'recovery_required': return 'Needs recovery';
     default: return (operation.stage && OPERATION_STAGE_WORDS[operation.stage]) || 'Received';
   }
