@@ -1913,6 +1913,11 @@ def _ingest_bundle(
     if isinstance(fallback, Mapping):
         # The full mesh has passed the same validity gates as any other solve.
         # Losing an optimisation is a developer matter, never an approval gate.
+        # Worded from the planes actually solved: a declared or recovered CAD
+        # half keeps its plane when only WG's own cut was dropped.
+        solved_domain = SOLVED_DOMAIN_BY_PLANES.get(
+            len(imported_domain_planes({"symmetry": built.get("symmetry")})), "quarter"
+        )
         findings.append(
             {
                 "id": _finding_id(
@@ -1925,7 +1930,8 @@ def _ingest_bundle(
                 "detected_planes": list(fallback.get("detected_planes") or []),
                 "capped_planes": list(fallback.get("capped_planes") or []),
                 "off_plane_free_edge_count": fallback.get("off_plane_free_edge_count"),
-                "detail": "WG will solve the whole model; symmetry could not be used for this one.",
+                "solved_domain": solved_domain,
+                "detail": symmetry_fallback_detail(solved_domain),
             }
         )
     if built["healing"]["performed"]:
@@ -2160,6 +2166,21 @@ def _ingest_bundle(
     except Exception:  # noqa: BLE001 - memory for the next version, never this one's outcome
         logger.warning("Could not remember the domain reading of %s", published.get("ingest_id"), exc_info=True)
     return published
+
+
+#: What a solve mesh is of the model, by the number of planes it is mirrored on.
+SOLVED_DOMAIN_BY_PLANES = {0: "full", 1: "half", 2: "quarter"}
+
+
+def symmetry_fallback_detail(solved_domain: str) -> str:
+    """The one calm line for a symmetry fallback, worded from what is solved."""
+
+    if solved_domain == "full":
+        return "WG will solve the whole model; symmetry could not be used for this one."
+    return (
+        f"WG will solve the {solved_domain} model as cut in CAD; it could not use any "
+        "further symmetry for this one."
+    )
 
 
 def _record_mesh_recovery_diagnostic(record: Mapping[str, Any]) -> None:

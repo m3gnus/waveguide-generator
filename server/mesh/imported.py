@@ -288,6 +288,19 @@ class ImportedMeshError(ValueError):
     """A typed imported-geometry refusal."""
 
 
+class SymmetryCutRefused(Exception):
+    """The mesher's cutter refused to cut the model to its symmetry domain.
+
+    Raised inside one build attempt and always caught by
+    :func:`build_imported_mesh`, which meshes the whole model instead: the
+    cut, not the model, failed, so the full domain is still solvable.
+    """
+
+    def __init__(self, message: str, *, planes: Iterable[str] = ()) -> None:
+        self.planes = tuple(str(plane) for plane in planes)
+        super().__init__(message)
+
+
 class RoleResolutionError(ImportedMeshError):
     """Source roles could not be resolved without guessing."""
 
@@ -3587,12 +3600,21 @@ def build_imported_mesh(
                 },
             )
         else:
-            cut = auto_cut_occ_geometry(
-                groups,
-                planes=tuple(p for p in SUPPORTED_CUT_PLANES
-                             if p not in options.get("fem_rejected_symmetry_planes", ()))
-                if allow_symmetry_reduction else (),
-            )
+            candidate_planes = tuple(
+                p for p in SUPPORTED_CUT_PLANES
+                if p not in options.get("fem_rejected_symmetry_planes", ())
+            ) if allow_symmetry_reduction else ()
+            try:
+                cut = auto_cut_occ_geometry(groups, planes=candidate_planes)
+            except RuntimeError as exc:
+                # The cutter proves the retained portions survive its cut and
+                # refuses otherwise ("OCC cut lost retained portions ..."). That
+                # is a failed optimisation, not a bad model: the caller meshes
+                # the whole model through the same path as a cut that does not
+                # verify. Input errors (ValueError) still propagate.
+                if not candidate_planes:
+                    raise
+                raise SymmetryCutRefused(str(exc), planes=candidate_planes) from exc
             if not allow_symmetry_reduction:
                 cut.report["note"] = (
                     "symmetry reduction disabled after the reduced domain "
@@ -4208,7 +4230,25 @@ def build_imported_mesh(
             "roles_became_ambiguous": [],
         }
 
-    result, healing = build(allow_symmetry_reduction=symmetry_mode == "auto")
+    try:
+        result, healing = build(allow_symmetry_reduction=symmetry_mode == "auto")
+    except SymmetryCutRefused as refused:
+        # The cutter could not keep every retained portion of the model: mesh
+        # the whole model and record why, exactly like an unverified cut below.
+        result, healing = build(allow_symmetry_reduction=False)
+        result["symmetry_verification"] = {
+            **result.get("symmetry_verification", {}),
+            "fallback": {
+                "reason": f"cut-refused: {refused}",
+                "rejected_cut_planes": [],
+                "detected_planes": list(refused.planes),
+                "capped_planes": [],
+                "off_plane_free_edge_count": None,
+                "off_plane_free_edge_samples": [],
+                "remedy": None,
+                "reduced_orientation": None,
+            },
+        }
     # A reduced domain the mesh does not confirm is re-meshed whole rather than
     # refused: the full domain is always solvable and always right, it just
     # costs the 2-4x the reduction was worth. Refusing instead would strand the

@@ -52,7 +52,7 @@ _MESH_CHILD_FAULT_FIXTURE: ContextVar[str | None] = ContextVar(
     "mesh_child_fault_fixture", default=None
 )
 _KNOWN_MESH_CHILD_FAULT_FIXTURES = frozenset(
-    {"leaking-reduced-domain", "inverted-reduced-domain"}
+    {"leaking-reduced-domain", "inverted-reduced-domain", "cut-refused"}
 )
 
 

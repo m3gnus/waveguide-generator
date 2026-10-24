@@ -750,6 +750,56 @@ def test_a_leaking_reduced_domain_falls_back_to_the_full_domain(tmp_path: Path, 
     )
 
 
+
+def test_a_refused_symmetry_cut_falls_back_to_the_full_domain(tmp_path: Path, caplog) -> None:
+    """The mesher's cutter refuses a cut that loses a retained portion of a face.
+
+    That refusal ("OCC cut lost retained portions ...") is a failed
+    optimisation, not a bad model: WG meshes the whole model through the same
+    calm path as a cut that does not verify, and records why for developers.
+    """
+
+    pytest.importorskip("gmsh")
+    bundle = _horn_bundle(tmp_path, "capped")
+    with _inject_mesh_child_fault("cut-refused"):
+        record = _ingest(tmp_path, bundle)
+
+    assert record["symmetry"]["cut_planes"] == []
+    assert record["symmetry"]["domain_planes"] == []
+    verification = record["symmetry_verification"]
+    assert verification["verified"] is True
+    assert verification["fallback"]["reason"].startswith("cut-refused: ")
+    assert "lost retained portions" in verification["fallback"]["reason"]
+    assert verification["fallback"]["detected_planes"] == ["x0", "y0"]
+    finding = next(
+        item for item in record["findings"] if item["kind"] == "symmetry-cut-unverified"
+    )
+    assert finding["blocking"] is False
+    assert finding["solved_domain"] == "full"
+    assert finding["detail"] == "WG will solve the whole model; symmetry could not be used for this one."
+    diagnostics = [entry.cad_mesh_recovery for entry in caplog.records if hasattr(entry, "cad_mesh_recovery")]
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["symmetry_fallback"] == verification["fallback"]
+    assert diagnostics[0]["solved_planes"] == []
+    assert record["mesh"]["stats"]["domain_multiplier"] == 1.0
+
+
+@pytest.mark.parametrize(
+    ("planes", "domain", "words"),
+    [((), "full", "the whole model"), (("x0",), "half", "the half model as cut in CAD"),
+     (("x0", "y0"), "quarter", "the quarter model as cut in CAD")],
+)
+def test_the_fallback_line_names_the_domain_actually_solved(planes, domain, words) -> None:
+    from server.cadlink.intake.ingest import SOLVED_DOMAIN_BY_PLANES, symmetry_fallback_detail
+    from server.solver.imported import imported_domain_planes
+
+    solved = SOLVED_DOMAIN_BY_PLANES[len(imported_domain_planes({"symmetry": {"domain_planes": list(planes)}}))]
+    assert solved == domain
+    assert words in symmetry_fallback_detail(solved)
+    if planes:
+        assert "whole" not in symmetry_fallback_detail(solved)
+
+
 # ------------------------------------------------- returns already cut in CAD
 
 _RETURN_IDS.update(

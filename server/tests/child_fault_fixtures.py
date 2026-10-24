@@ -52,6 +52,25 @@ def _rewrite_reduced_meshes(
     step_import.postprocess_mesh = rewritten
 
 
+def install_cut_refusal() -> None:
+    """Make the mesher's cutter refuse every cut, as its retained-area proof does.
+
+    The real cutter raises this when even its retry loses a retained portion of
+    a face (a periodic throat cylinder, say). An uncut build is untouched.
+    """
+
+    import hornlab_mesher
+
+    real_cut = hornlab_mesher.auto_cut_occ_geometry
+
+    def refusing(groups: Any, *, planes: Any = None, **kwargs: Any) -> Any:
+        if planes is None or tuple(planes):
+            raise RuntimeError("OCC cut lost retained portions of surfaces [3]")
+        return real_cut(groups, planes=planes, **kwargs)
+
+    hornlab_mesher.auto_cut_occ_geometry = refusing
+
+
 def install_reduced_domain_leak() -> None:
     """Remove one off-plane rigid triangle from reduced meshes only."""
 

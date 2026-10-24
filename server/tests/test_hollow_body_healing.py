@@ -388,3 +388,39 @@ def test_an_unknown_healing_option_is_refused_rather_than_dropped(tmp_path: Path
 
     with pytest.raises(ImportedMeshError, match="Geometry.OCCFixSmallHoles"):
         _run_in_gmsh_session(probe)
+
+
+def test_a_healing_rung_that_fails_the_anchor_gates_still_refuses() -> None:
+    """Healing is non-blocking only because its rungs must re-anchor every face.
+
+    The healing-performed finding no longer asks for approval, which is safe
+    only while the mesher's anchor gates hold: a rung whose healed faces moved
+    or changed area (a filled hole, a dropped face) is rejected, and when every
+    rung is, the original unhealed mesh failure is raised and nothing is
+    prepared. Each rung here re-anchors through the production
+    ``anchor_surface_order`` against faces displaced past its centroid gate.
+    """
+
+    from hornlab_mesher.step_mapping import anchor_surface_order, run_occ_healing_fallbacks
+
+    reference = [((0.0, 0.0, 0.0), 100.0), ((50.0, 0.0, 0.0), 40.0)]
+    displaced = [((0.0, 0.0, 9.0), 100.0), ((50.0, 0.0, 9.0), 40.0)]
+    attempts: list[tuple[str, ...]] = []
+
+    def run_attempt(*, occ_healing_options, surface_order_reference, **_kwargs):
+        attempts.append(tuple(occ_healing_options))
+        anchor_surface_order([11, 12], displaced, surface_order_reference)
+        raise AssertionError("an implausible re-anchoring must not be accepted")
+
+    original = RuntimeError("unhealed mesh generation failed")
+    with pytest.raises(RuntimeError, match="unhealed mesh generation failed"):
+        run_occ_healing_fallbacks(
+            run_attempt,
+            original_mesh_error=original,
+            original_traceback=None,
+            surface_order_reference=reference,
+        )
+    assert attempts == [options for _name, options in _healing_rungs()]
+
+    # The same gate accepts a faithful re-anchoring, so the refusal is the gate's.
+    assert anchor_surface_order([12, 11], list(reversed(reference)), reference) == [11, 12]
