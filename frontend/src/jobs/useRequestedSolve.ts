@@ -82,6 +82,7 @@ export function solveCancellationReason(request: SolveInputs & { jobId?: string 
 
 interface SolveReadiness {
   capabilityGeneration: number;
+  capabilityIssueSequence?: () => number;
   enabled: boolean;
   busy: boolean;
   pending: boolean;
@@ -127,7 +128,9 @@ export function useRequestedSolve(refresh: () => void | Promise<void>, reportNot
     return token;
   }, []);
   const dispatch = useCallback(function dispatch(event: RequestedSolveEvent<SolveInputs>) {
-    const result = reduceRequestedSolve(machine.current, event);
+    const result = reduceRequestedSolve(machine.current, {
+      ...event, capabilityIssueSequence: services.current.readiness.capabilityIssueSequence?.(),
+    });
     machine.current = result.state; // Claim ownership before any effect or synchronous store event.
     if (result.state.mounted) setState(result.state);
     // Allocate cancellation resources before effects can synchronously notify stores.

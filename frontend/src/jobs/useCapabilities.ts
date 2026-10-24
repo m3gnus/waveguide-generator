@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { replaceEqualDeep, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { jobsSocket } from '../api/jobsSocket';
 import {
   getCapabilities,
@@ -7,6 +7,7 @@ import {
   type EngineSelection,
 } from './actions';
 import { capabilityFingerprint } from './capabilityFingerprint';
+import { issueCapabilityRequest, latestCapabilityRequest } from './capabilityRequestSequence';
 import { preferencesStore } from '../prefs/preferences';
 import { useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { useSolveControlBackend } from './useSolveControlBackend';
@@ -60,8 +61,9 @@ const qualificationClocks = new WeakMap<QueryClient, {
 }>();
 
 export interface CapabilitiesSnapshot {
-  /** Successful query observation count; cached renders retain this identity. */
+  /** Issue sequence captured before this snapshot's HTTP request starts. */
   capabilityGeneration: number;
+  capabilityIssueSequence: () => number;
   femRegionsOffered: boolean;
   hostPlatform: string | null;
   engines: readonly EngineCapability[];
@@ -80,9 +82,7 @@ export function useCapabilities(): CapabilitiesSnapshot {
   const connection = useSyncExternalStore(subscribeConnection, connectionSnapshot);
   const backendLost = connection === 'reconnecting' || connection === 'disconnected';
   const client = useQueryClient();
-  const subscribeCapabilities = useCallback((listener: () => void) => client.getQueryCache().subscribe(listener), [client]);
-  const capabilitySnapshot = useCallback(() => client.getQueryState(CAPABILITIES_QUERY_KEY)?.dataUpdateCount ?? 0, [client]);
-  const capabilityGeneration = useSyncExternalStore(subscribeCapabilities, capabilitySnapshot);
+  const capabilityIssueSequence = useCallback(() => latestCapabilityRequest(client), [client]);
   let clock = qualificationClocks.get(client);
   if (!clock) {
     clock = { started: null, generation: 0, listeners: new Set() };
@@ -102,7 +102,17 @@ export function useCapabilities(): CapabilitiesSnapshot {
   );
   const { data, error, isError, isPending } = useQuery({
     queryKey: CAPABILITIES_QUERY_KEY,
-    queryFn: ({ signal }) => getCapabilities(fetch, signal),
+    queryFn: async ({ signal }) => {
+      const capabilityGeneration = issueCapabilityRequest(client);
+      return { ...await getCapabilities(fetch, signal), capabilityGeneration };
+    },
+    // A cancelled/overlapping older fetch must never overwrite newer evidence.
+    structuralSharing: (previous, next) => {
+      const older = previous as { capabilityGeneration?: number } | undefined;
+      const newer = next as { capabilityGeneration?: number };
+      return (older?.capabilityGeneration ?? 0) > (newer.capabilityGeneration ?? 0)
+        ? previous : replaceEqualDeep(previous, next);
+    },
     retry: 1,
     staleTime: CAPABILITIES_STALE_MS,
     // This explicit server lifecycle covers delayed hardware inventory too.
@@ -160,7 +170,8 @@ export function useCapabilities(): CapabilitiesSnapshot {
     plannerSupportByClient.set(client, plannerSupport);
   }, [client, plannerSupport]);
   return {
-    capabilityGeneration,
+    capabilityGeneration: data?.capabilityGeneration ?? 0,
+    capabilityIssueSequence,
     hostPlatform: data?.hostPlatform ?? null,
     femRegionsOffered: data?.femRegions === true,
     engines: data?.engines ?? NO_ENGINES,

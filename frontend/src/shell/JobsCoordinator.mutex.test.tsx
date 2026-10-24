@@ -73,6 +73,7 @@ const mocks = vi.hoisted(() => ({
   postImportedSolvePlan: vi.fn(),
   useRealImportedPlan: false,
   useRealSolvePlan: false,
+  useRealCapabilities: false,
   getCadOperation: vi.fn(),
   solvePlan: {
     engine: 'metal', formulation: 'full-3d' as const,
@@ -117,26 +118,30 @@ vi.mock('../jobs/actions', async (importOriginal) => {
     postImportedSolvePlan: mocks.postImportedSolvePlan,
   };
 });
-vi.mock('../jobs/useCapabilities', () => ({
-  useCapabilities: () => {
-    if (mocks.lastCapabilityEngines !== mocks.capabilities.engines) {
-      mocks.lastCapabilityEngines = mocks.capabilities.engines;
-      mocks.capabilityGeneration++;
-    }
-    return {
-      capabilityGeneration: mocks.capabilityGeneration,
-      engines: mocks.capabilities.engines,
-      engineSelection: mocks.capabilities.engineSelection,
-      error: null,
-      refreshCapabilities: mocks.refreshCapabilities,
-      isLoading: false,
-    };
-  },
-  useActiveBackendCapability: () => null,
-  usePlannedBackendCapabilities: () => [],
-  useCapabilityRefreshOnReconnect: () => undefined,
-  useLegacyBeatEngineMigration: () => undefined,
-}));
+vi.mock('../jobs/useCapabilities', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../jobs/useCapabilities')>();
+  return {
+    useCapabilities: () => {
+      if (mocks.useRealCapabilities) return actual.useCapabilities();
+      if (mocks.lastCapabilityEngines !== mocks.capabilities.engines) {
+        mocks.lastCapabilityEngines = mocks.capabilities.engines;
+        mocks.capabilityGeneration++;
+      }
+      return {
+        capabilityGeneration: mocks.capabilityGeneration,
+        engines: mocks.capabilities.engines,
+        engineSelection: mocks.capabilities.engineSelection,
+        error: null,
+        refreshCapabilities: mocks.refreshCapabilities,
+        isLoading: false,
+      };
+    },
+    useActiveBackendCapability: () => null,
+    usePlannedBackendCapabilities: () => [],
+    useCapabilityRefreshOnReconnect: () => undefined,
+    useLegacyBeatEngineMigration: () => undefined,
+  };
+});
 vi.mock('../jobs/useSolvePlan', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../jobs/useSolvePlan')>();
   return {
@@ -286,6 +291,7 @@ describe('solve invocation mutex', () => {
     mocks.importedPlan.plan.reason = 'AUTO selected the first available engine';
     mocks.useRealImportedPlan = false;
     mocks.useRealSolvePlan = false;
+    mocks.useRealCapabilities = false;
     preferencesStore.resetForTests();
     resetDocumentStore();
     useDocumentStore.getState().setDesignName('horn');
@@ -1080,6 +1086,55 @@ describe('solve invocation mutex', () => {
     for (let poll = 0; poll < 3; poll++) await act(async () => { await vi.advanceTimersByTimeAsync(1000); render(); });
     expect(posts).toEqual(['/api/jobs/job%3Aheld-fusion/solve-again']);
     expect(mocks.solveModel).not.toHaveBeenCalled();
+  });
+
+  it.each(['failed', 'unprepared'] as const)('regression: an initial %s response requested before Fusion acceptance cannot cancel it', async runtimeState => {
+    vi.useFakeTimers();
+    const initial = deferred<Response>();
+    let capabilityFetches = 0;
+    const posts: string[] = [];
+    const snapshot = (state: string) => json({
+      engines: [{ name: 'beat-metal', available: state === 'ready', runtime_state: state }],
+      engineSelection: { default: 'auto', resolvedDefault: 'beat-metal', full3dOrder: ['beat-metal'] },
+    });
+    vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url) === '/api/capabilities') {
+        capabilityFetches++;
+        return capabilityFetches === 1 ? initial.promise : snapshot('ready');
+      }
+      if (init?.method === 'POST') posts.push(String(url));
+      return json({ job_id: 'continued-fusion' });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => root.render(null)); // Choose the real hook before mounting its owner.
+    mocks.useRealCapabilities = true;
+    act(() => {
+      blockedCad();
+      mocks.importedPlan.plan.readiness = { ...blocker, remedies: [{ kind: 'wait' }] };
+    });
+    const render = () => root.render(<QueryClientProvider client={client}><JobsCoordinator><SolveActions/></JobsCoordinator></QueryClientProvider>);
+    try {
+      await act(async () => render());
+      expect(capabilityFetches).toBe(1); // Fetch started before the Fusion request exists.
+      act(() => {
+        blockedCad(true);
+        mocks.importedPlan.plan.readiness = { ...blocker, remedies: [{ kind: 'wait' }] };
+      });
+      await act(async () => render());
+      expect(solveControlStore.getSnapshot()?.waitingForEngine).toBe(true);
+      await act(async () => { initial.resolve(snapshot(runtimeState)); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(solveControlStore.getSnapshot()?.waitingForEngine).toBe(true);
+      expect(posts).toEqual([]);
+      mocks.importedPlan.plan = { ...mocks.importedPlan.plan, engine: 'beat-metal', readiness: null };
+      for (let poll = 0; poll < 3; poll++) await act(async () => { await vi.advanceTimersByTimeAsync(1000); render(); });
+      expect(capabilityFetches).toBeGreaterThan(1);
+      expect(posts).toEqual(['/api/jobs/job%3Aheld-fusion/solve-again']);
+      expect(mocks.solveModel).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.render(null));
+      client.clear();
+    }
   });
 
   it('allows a new Fusion Solve for the same job after a fresh preparation failure', async () => {

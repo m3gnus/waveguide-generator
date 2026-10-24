@@ -6,7 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { preferencesStore } from '../prefs/preferences';
 import { AppQueryProvider, appQueryClient } from '../queryClient';
-import { CAPABILITIES_STALE_MS, OPENCL_POLL_FALLBACK_MS, OPENCL_POLL_SAFETY_FACTOR, useCapabilities, useCapabilityRefreshOnReconnect } from './useCapabilities';
+import { CAPABILITIES_QUERY_KEY, CAPABILITIES_STALE_MS, OPENCL_POLL_FALLBACK_MS, OPENCL_POLL_SAFETY_FACTOR, useCapabilities, useCapabilityRefreshOnReconnect } from './useCapabilities';
 
 const CAPABILITIES = {
   engines: [
@@ -69,7 +69,7 @@ describe('useCapabilities', () => {
 
   const textOf = (tag: string) => host.querySelector(`[data-tag="${tag}"]`)?.textContent ?? '';
 
-  it('versions successful observations even when an unchanged result shares its cached data', async () => {
+  it('versions requests even when an unchanged result shares its cached data', async () => {
     let snapshot!: ReturnType<typeof useCapabilities>;
     function Observer() { snapshot = useCapabilities(); return null; }
     await render(<Observer/>);
@@ -81,6 +81,54 @@ describe('useCapabilities', () => {
     await act(async () => snapshot.refreshCapabilities());
     expect(snapshot.engines).toBe(engines); // Query structural sharing keeps the same array.
     expect(snapshot.capabilityGeneration).toBe(generation + 1);
+  });
+
+  it('captures freshness before HTTP completion and shares the issue clock across consumers', async () => {
+    let resolve!: (response: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(done => { resolve = done; }));
+    let first!: ReturnType<typeof useCapabilities>;
+    let second!: ReturnType<typeof useCapabilities>;
+    function Observer() { first = useCapabilities(); second = useCapabilities(); return null; }
+    await render(<Observer/>);
+    const acceptedAt = first.capabilityIssueSequence;
+    expect(first.capabilityGeneration).toBe(0);
+    expect(acceptedAt()).toBe(1);
+    expect(second.capabilityIssueSequence()).toBe(1);
+    await act(async () => { resolve(new Response(JSON.stringify(CAPABILITIES))); });
+    await flushReact();
+    expect(first.capabilityGeneration).toBe(1);
+    expect(acceptedAt()).toBe(1); // Arrival never advances freshness.
+    await act(async () => first.refreshCapabilities());
+    expect(first.capabilityGeneration).toBe(2);
+    expect(acceptedAt()).toBe(2); // Stable callback reads the live clock.
+  });
+
+  it.each(['failed', 'ready'])('ignores an older %s response after a newer snapshot', async olderState => {
+    let snapshot!: ReturnType<typeof useCapabilities>;
+    function Observer() { snapshot = useCapabilities(); return null; }
+    await render(<Observer/>);
+    const resolvers: ((response: Response) => void)[] = [];
+    fetchMock.mockImplementation(() => new Promise<Response>(resolve => resolvers.push(resolve)));
+    const query = client.getQueryCache().find({ queryKey: CAPABILITIES_QUERY_KEY })!;
+    const fetchSnapshot = query.options.queryFn;
+    if (typeof fetchSnapshot !== 'function') throw new Error('Missing capability transport');
+    // Start two real transports independently, then deliver them in reverse
+    // order through the same cache merge used by the query observer.
+    const context = { client, queryKey: CAPABILITIES_QUERY_KEY, signal: new AbortController().signal, meta: undefined };
+    const older = fetchSnapshot(context);
+    const newer = fetchSnapshot(context);
+    const response = (state: string) => new Response(JSON.stringify({ ...CAPABILITIES,
+      engines: [{ name: 'beat-metal', available: state === 'ready', runtime_state: state }] }));
+    resolvers[1](response(olderState === 'ready' ? 'failed' : 'ready'));
+    await act(async () => { client.setQueryData(CAPABILITIES_QUERY_KEY, await newer); });
+    await flushReact();
+    const latest = snapshot;
+    resolvers[0](response(olderState));
+    await act(async () => { client.setQueryData(CAPABILITIES_QUERY_KEY, await older); });
+    await flushReact();
+    expect(snapshot.capabilityGeneration).toBe(latest.capabilityGeneration);
+    expect(snapshot.engines).toBe(latest.engines);
+    expect(snapshot.engines[0].runtime_state).toBe(olderState === 'ready' ? 'failed' : 'ready');
   });
 
   it('refreshes cached warming plans even when the capability fingerprint is unchanged', async () => {

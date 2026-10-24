@@ -1,7 +1,7 @@
 /** Pure request ownership. Async work may only advance the matching request ID. */
 export type SolvePhase = 'idle' | 'waiting-readiness' | 'continuing' | 'cancelling' | 'submitting' | 'done' | 'cancelled';
 export interface RequestPlan {
-  /** Monotonic identity of the capability snapshot, independent of plan renders. */
+  /** Issue sequence of the capability fetch, independent of response arrival. */
   capabilityGeneration: number;
   ordinary: 'ready' | 'pending' | 'blocked' | 'disabled';
   warmingEngine: string | null;
@@ -25,13 +25,17 @@ export interface RequestedSolveState<T> {
   mounted: boolean;
   plan: RequestPlan;
 }
-export type RequestedSolveEvent<T> =
+export type RequestedSolveEvent<T> = (
   | { type: 'press'; inputs: T; prepareEngine?: string }
   | { type: 'fusion-request'; inputs: T; jobId: string; engine: string; prepare?: boolean; plan?: RequestPlan }
   | { type: 'plan-ready'; plan: RequestPlan }
   | { type: 'preparation-done' | 'preparation-failed' | 'frame-resolved' | 'post-succeeded' | 'post-failed' | 'continuation-settled'; id: number; message?: string }
   | { type: 'inputs-changed'; ids: readonly number[]; reason?: string }
-  | { type: 'stop' | 'unmount' | 'mount' };
+  | { type: 'stop' | 'unmount' | 'mount' }
+) & {
+  /** Latest issued fetch at acceptance/preparation completion, including in-flight work. */
+  capabilityIssueSequence?: number;
+};
 export type RequestedSolveEffect<T> =
   | { type: 'continue' | 'prepare'; request: SolveRequest<T> }
   | { type: 'abort' | 'post'; id: number }
@@ -117,7 +121,7 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
         }
         break;
       }
-      const request: SolveRequest<T> = { id: state.nextId, acceptedCapabilityGeneration: state.plan.capabilityGeneration, inputs: event.inputs,
+      const request: SolveRequest<T> = { id: state.nextId, acceptedCapabilityGeneration: Math.max(event.capabilityIssueSequence ?? 0, state.plan.capabilityGeneration), inputs: event.inputs,
         ...(fusion ? { jobId: event.jobId, preparationEngine: event.engine }
           : { preparationEngine: event.prepareEngine ?? state.plan.warmingEngine ?? undefined }),
         preparation: (fusion ? event.prepare : event.prepareEngine) ? 'pending' : 'none' };
@@ -134,7 +138,7 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
     case 'preparation-done':
       if (state.active?.id === event.id && state.phase === 'waiting-readiness' && state.active.preparation === 'pending') {
         // A successful explicit preparation supersedes any failure cached during it.
-        set({ active: { ...state.active, preparation: 'done', acceptedCapabilityGeneration: state.plan.capabilityGeneration } });
+        set({ active: { ...state.active, preparation: 'done', acceptedCapabilityGeneration: Math.max(event.capabilityIssueSequence ?? 0, state.plan.capabilityGeneration) } });
       }
       break;
     case 'preparation-failed':

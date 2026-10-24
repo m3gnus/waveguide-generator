@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { issueCapabilityRequest, latestCapabilityRequest } from './capabilityRequestSequence';
 import { initialRequestedSolve, reduceRequestedSolve, type RequestPlan, type RequestedSolveEvent, type RequestedSolveState } from './requestedSolveMachine';
 
 const cold: RequestPlan = { capabilityGeneration: 1, ordinary: 'blocked', warmingEngine: 'engine', error: null, busy: false,
@@ -9,7 +10,8 @@ type Input = { model: string; engine: string; setup: string };
 const inputs: Input = { model: 'model', engine: 'engine', setup: 'setup' };
 type Event = RequestedSolveEvent<Input>;
 type State = RequestedSolveState<Input>;
-type Step = 'cold' | 'cached' | 'stale failed' | 'fresh failed' | 'stale ready' | 'settled' | 'stale settled' | 'mount' | 'press' | 'prepare' | 'Fusion A' | 'Fusion B' | 'ready' | 'prepared' | 'failed' | 'frame' | 'success' | 'post failure' | 'change' | 'stop' | 'unmount';
+type TransportStep = `fetch-start ${'A' | 'B'}` | `fetch-response ${'A' | 'B'}`;
+type Step = TransportStep | 'cold' | 'cached' | 'stale failed' | 'fresh failed' | 'stale ready' | 'settled' | 'stale settled' | 'mount' | 'press' | 'prepare' | 'Fusion A' | 'Fusion B' | 'ready' | 'prepared' | 'failed' | 'frame' | 'success' | 'post failure' | 'change' | 'stop' | 'unmount';
 const alphabet: Step[] = ['press', 'prepare', 'Fusion A', 'Fusion B', 'ready', 'prepared', 'failed', 'frame', 'success', 'post failure', 'change', 'stop', 'cold', 'cached', 'stale failed', 'fresh failed', 'stale ready', 'settled', 'stale settled', 'mount', 'unmount'];
 function eventFor(step: Step, state: State): Event {
   const id = state.active?.id ?? 0;
@@ -32,14 +34,29 @@ function eventFor(step: Step, state: State): Event {
     case 'post failure': return { type: 'post-failed', id };
     case 'change': return { type: 'inputs-changed', ids: [...state.queue.map(request => request.id), id], reason: 'inputs changed' };
     case 'stop': case 'unmount': case 'mount': return { type: step };
+    default: throw new Error('Transport events require a fetch-start record');
   }
 }
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
+function freeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) freeze(child);
+  }
+  return value;
+}
+
 /** Independent obligation ledger: every accepted request must post or have an explicit cancellation. */
-function verify(sequence: readonly Step[]) {
+function verify(sequence: readonly Step[], responses?: Record<'A' | 'B', string>) {
+  const scope = {};
+  issueCapabilityRequest(scope); // Initial cached snapshot.
+  let time = 0;
+  const issuedAt = new Map([[1, 0]]);
+  const inFlight = new Map<string, number>();
+  const acceptedAt = new Map<number, number>();
   let state = { ...initialRequestedSolve<Input>(), plan: cold };
   const accepted = new Map<number, string>();
   const acceptedGeneration = new Map<number, number>();
@@ -47,6 +64,8 @@ function verify(sequence: readonly Step[]) {
   const posted = new Set<number>();
   const started = new Set<number>();
   function send(event: Event) {
+    time++;
+    if (responses) event = { ...event, capabilityIssueSequence: latestCapabilityRequest(scope) };
     const before = state;
     const active = before.active;
     const live = [...before.queue, ...(active && before.phase !== 'submitting' ? [active] : [])];
@@ -55,19 +74,25 @@ function verify(sequence: readonly Step[]) {
     }
     if (event.type === 'preparation-failed' && active?.id === event.id && active.preparation === 'pending') cancelled.add(active.id);
     if (event.type === 'continuation-settled' && active?.id === event.id && ['continuing', 'cancelling'].includes(before.phase)) cancelled.add(active.id);
-    if (event.type === 'preparation-done' && active?.id === event.id && active.preparation === 'pending' && before.phase === 'waiting-readiness') acceptedGeneration.set(active.id, before.plan.capabilityGeneration);
+    if (event.type === 'preparation-done' && active?.id === event.id && active.preparation === 'pending' && before.phase === 'waiting-readiness') {
+      acceptedGeneration.set(active.id, before.plan.capabilityGeneration);
+      acceptedAt.set(active.id, time);
+    }
     const newFusion = event.type === 'fusion-request' && before.mounted
       && ![...before.queue, ...(active ? [active] : [])].some(request => request.jobId === event.jobId);
     const newPress = event.type === 'press' && before.mounted && !active;
     if (newFusion || newPress) {
       acceptedGeneration.set(before.nextId, before.plan.capabilityGeneration);
+      acceptedAt.set(before.nextId, time);
       accepted.set(before.nextId, newFusion && event.type === 'fusion-request' ? event.jobId : 'ordinary');
       if (newFusion && active && !active.jobId && before.phase !== 'submitting') cancelled.add(active.id);
     }
-    const frozen = JSON.stringify(before);
+    freeze(before); // Mutation throws, including nested inputs and capability arrays.
     const result = reduceRequestedSolve(before, event);
     state = result.state;
-    assert(JSON.stringify(before) === frozen, 'reducer mutated its input');
+    if (event.type === 'plan-ready' && event.plan.capabilityGeneration < before.plan.capabilityGeneration) {
+      assert(state.plan === before.plan, 'out-of-order response replaced newer evidence');
+    }
     assert(state.nextId === before.nextId + (newFusion || newPress ? 1 : 0), 'request acceptance/deduplication diverged');
     for (const effect of result.effects) {
       if (effect.type === 'continue') {
@@ -85,7 +110,8 @@ function verify(sequence: readonly Step[]) {
         const request = live.find(request => request.id === effect.id);
         const plan = event.type === 'plan-ready' && event.plan.capabilityGeneration > before.plan.capabilityGeneration ? event.plan : before.plan;
         const failure = request && request.preparation !== 'pending'
-          && plan.capabilityGeneration > acceptedGeneration.get(effect.id)!
+          && (responses ? issuedAt.get(plan.capabilityGeneration)! > acceptedAt.get(effect.id)!
+            : plan.capabilityGeneration > acceptedGeneration.get(effect.id)!)
           && plan.engines.some(engine => engine.runtime_state === 'failed' || engine.runtime_state === 'unavailable');
         assert(cancelled.has(effect.id) || failure, 'request aborted without a cancellation, supersession or fresh failure');
         cancelled.add(effect.id);
@@ -95,11 +121,27 @@ function verify(sequence: readonly Step[]) {
     const ids = [...state.queue.map(request => request.id), ...(state.active ? [state.active.id] : [])];
     assert(new Set(ids).size === ids.length, 'duplicate owner');
   }
-  for (const step of sequence) send(eventFor(step, state));
+  for (const step of sequence) {
+    if (step.startsWith('fetch-start')) {
+      const generation = issueCapabilityRequest(scope);
+      issuedAt.set(generation, ++time);
+      inFlight.set(step.slice(-1), generation);
+    } else if (step.startsWith('fetch-response')) {
+      const name = step.slice(-1) as 'A' | 'B';
+      const generation = inFlight.get(name);
+      assert(generation !== undefined, 'response before fetch-start');
+      const runtime_state = responses![name];
+      send({ type: 'plan-ready', plan: { ...(runtime_state === 'ready' ? ready : cold), capabilityGeneration: generation,
+        engines: [{ name: 'engine', available: runtime_state === 'ready', runtime_state }] } });
+      inFlight.delete(name);
+    } else send(eventFor(step, state));
+  }
   // Fair completion: readiness and async effects eventually answer. This detects
   // stranded waits without adding timer/poll events to rescue the machine.
   send({ type: 'mount' });
-  send({ type: 'plan-ready', plan: { ...ready, capabilityGeneration: state.plan.capabilityGeneration + 1 } });
+  const finalGeneration = responses ? issueCapabilityRequest(scope) : state.plan.capabilityGeneration + 1;
+  issuedAt.set(finalGeneration, ++time);
+  send({ type: 'plan-ready', plan: { ...ready, capabilityGeneration: finalGeneration } });
   for (let remaining = accepted.size + 2; state.active && remaining > 0; remaining--) {
     const id = state.active.id;
     switch (state.phase) {
@@ -154,6 +196,30 @@ describe('requested-solve pure reducer', () => {
     for (const sequence of permutations<Step>(['Fusion A', 'fresh failed', 'ready', 'settled', 'unmount', 'mount', 'frame', 'success'])) {
       try { verify(sequence); } catch (error) { throw new Error(`${sequence.join(' → ')}: ${String(error)}`); }
       count++;
+    }
+    expect(count).toBe(40_320);
+  }, 20_000);
+
+  it.each([
+    { A: 'failed', B: 'ready' }, { A: 'ready', B: 'failed' },
+    { A: 'unavailable', B: 'ready' }, { A: 'ready', B: 'preparing' },
+  ])('exhausts independent fetch starts/responses with %j', responses => {
+    let count = 0;
+    // Responses may arrive in either order and on either side of acceptance,
+    // preparation completion, queuing, cancellation and the POST boundary.
+    const scenarios: Step[][] = [
+      ['Fusion A', 'Fusion B', 'frame', 'stop'],
+      ['prepare', 'prepared', 'Fusion A', 'frame'],
+      ['Fusion A', 'frame', 'unmount', 'mount'],
+      ['Fusion A', 'frame', 'settled', 'stop'],
+    ];
+    for (const scenario of scenarios) {
+      for (const sequence of permutations<Step>(['fetch-start A', 'fetch-response A', 'fetch-start B', 'fetch-response B', ...scenario])) {
+        if (sequence.indexOf('fetch-start A') > sequence.indexOf('fetch-response A')
+          || sequence.indexOf('fetch-start B') > sequence.indexOf('fetch-response B')) continue;
+        try { verify(sequence, responses); } catch (error) { throw new Error(`${sequence.join(' → ')}: ${String(error)}`); }
+        count++;
+      }
     }
     expect(count).toBe(40_320);
   }, 20_000);
