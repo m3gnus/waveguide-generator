@@ -202,7 +202,7 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
       acknowledgeCadSolve(job, 'display');
       compareSelection.awaitRun(job.id);
       if (job.client_request_id) solveAttention.followJob(job.client_request_id, job.id);
-      solveAttention.bindRun(job.id, job.id);
+      solveAttention.bindRun(job.id, job.id, null);
     })();
     inFlight.set(job.id, action);
     try { await action; } finally { inFlight.delete(job.id); }

@@ -354,7 +354,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     if (claim.designName) acceptSubmittedLabel(claim.designName);
     compareSelection.awaitRun(job.id);
     if (job.client_request_id) solveAttention.followJob(job.client_request_id, job.id);
-    solveAttention.bindRun(job.id, job.id);
+    solveAttention.bindRun(job.id, job.id, null);
     // The run names the model its preparation made; show that model once the
     // solve claims its run, while the same return is still on screen.
     // Fusion's display owner follows its preparation before acceptance. Only

@@ -88,7 +88,7 @@ from server.cadlink.joblane.preparation_inputs import (
     resumable_record,
 )
 from server.cadlink.joblane.project_setup import ExcitationRefused, compose_solve_request
-from server.jobs.imported_setup import DEFAULTS_ORIGIN
+from server.jobs.imported_setup import DEFAULTS_ORIGIN, CadSolveSetup
 from server.jobs.imported_setup import is_default_setup, setup_content, setup_digest, snapshot_setup
 from server.cadlink.interpretation.solver_frame import (
     AS_MODELLED,
@@ -478,6 +478,33 @@ def _carried_approvals(cad: Mapping[str, Any]) -> dict[tuple[str, str], Mapping[
 # -- the preparation --------------------------------------------------------------
 
 
+def preparation_options(
+    setup: CadSolveSetup, frame_axis: str | None, *, mesh_limit_override: bool,
+) -> dict[str, Any]:
+    """The ``prep_options`` a preparation of ``setup`` meshes under, along ``frame_axis``.
+
+    ``setup`` is the snapshot's effective setup (``snapshot_setup``). The one
+    owner, so a Solve anyway press can ask whether it names this preparation
+    (``model_solve._solve_anyway_carries``).
+    """
+
+    return {
+        "area_drift_overrides": list(setup.preparation.area_drift_overrides),
+        "symmetry_mode": setup.preparation.symmetry_mode,
+        **({"mesh_limit_override": True} if mesh_limit_override else {}),
+        **(
+            {"surface_deviation_mm": setup.preparation.surface_deviation_mm}
+            if setup.preparation.surface_deviation_mm is not None
+            else {}
+        ),
+        **(
+            {"solver_frame": frame_axis}
+            if frame_axis is not None and frame_axis != AS_MODELLED
+            else {}
+        ),
+    }
+
+
 def prepare_job_sync(
     host: CadPreparationHost,
     run: _Run,
@@ -653,21 +680,9 @@ def prepare_job_sync(
                 list(geometry.get("skipped_source_ids") or []),
                 store,
                 host.data_dir,
-                prep_options={
-                    "area_drift_overrides": list(setup.preparation.area_drift_overrides),
-                    "symmetry_mode": setup.preparation.symmetry_mode,
-                    **({"mesh_limit_override": True} if run.intent.mesh_limit_override else {}),
-                    **(
-                        {"surface_deviation_mm": setup.preparation.surface_deviation_mm}
-                        if setup.preparation.surface_deviation_mm is not None
-                        else {}
-                    ),
-                    **(
-                        {"solver_frame": frame_axis}
-                        if frame_axis is not None and frame_axis != AS_MODELLED
-                        else {}
-                    ),
-                },
+                prep_options=preparation_options(
+                    setup, frame_axis, mesh_limit_override=run.intent.mesh_limit_override,
+                ),
                 commit_guard=lambda _conn: run.is_held(),
                 retained_copy=True,
                 defer_viewport=True,
@@ -1237,5 +1252,6 @@ __all__ = [
     "calm_refusal_message",
     "job_operation_view",
     "prepare_job_sync",
+    "preparation_options",
     "run_cad_preparation",
 ]

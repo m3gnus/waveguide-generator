@@ -79,10 +79,12 @@ def _cad_model(
             "project": {"lineage_id": lineage},
             "anchor": {"instance_id": "instance-1", "design_id": design_id, "throat_frame": None},
             "sources": sources,
-            # Prepared with Solve anyway over the triangle ceiling, with the
-            # mesh sizes of ``_setup()``.
+            # Prepared with Solve anyway over the triangle ceiling, as a press
+            # of ``_setup()`` prepares it.
             **({"mesh_limit_override": True, "mesh_sizes": _setup()["geometry"]["mesh"],
-                "skipped_source_ids": []} if mesh_limit_override else {}),
+                "skipped_source_ids": [],
+                "mesh_lookup_key": _anyway_key(harness, retained["manifest_sha256"], _setup())}
+               if mesh_limit_override else {}),
         })
 
     row = harness.store.allocate_ingest(
@@ -95,6 +97,24 @@ def _cad_model(
         "model_id": lineage, "prepared_id": str(row["ingest_id"]), "bundle_path": bundle_path,
         "manifest": manifest, "sources": sources,
     }
+
+
+def _anyway_key(
+    harness: Any, manifest_sha256: str, setup: dict[str, Any], frame_axis: str | None = None,
+) -> str:
+    """The mesh cache address a Solve anyway preparation of ``setup`` is made under."""
+
+    from server.cadlink.intake.ingest import mesh_preparation, read_snapshot, retained_snapshot_path
+    from server.jobs.cad_preparation import preparation_options
+    from server.jobs.imported_setup import snapshot_setup
+
+    bundle = read_snapshot(retained_snapshot_path(harness.data_dir, manifest_sha256), retained=True)
+    effective = snapshot_setup(validate_setup(setup), bundle.manifest)
+    return mesh_preparation(
+        harness.store, bundle, effective.geometry["mesh"],
+        list(effective.geometry.get("skipped_source_ids") or []),
+        preparation_options(effective, frame_axis, mesh_limit_override=True),
+    ).lookup_key
 
 
 def _solve(harness: JobsHarness, app: FastAPI, model: dict[str, Any], **body: Any) -> tuple[int, dict]:
@@ -897,3 +917,80 @@ def test_polar_projection_keeps_the_saved_user_setup_and_digest(harness) -> None
     saved = project_setup(harness.store, model["model_id"], model["sources"])
     assert saved is not None and saved[1] == revision_id
     assert saved[0].options["polar_config"]["angle_range"] == [0, 160, 11]
+
+
+# -- Solve anyway carries for exactly the preparation it was chosen for ----------------
+
+
+def _anyway_target(harness: JobsHarness, manifest_sha256: str, frame_axis: str | None = None) -> Any:
+    from server.cadlink.intake.ingest import read_snapshot, retained_snapshot_path
+    from server.jobs.model_solve import SolveTarget
+
+    manifest = read_snapshot(retained_snapshot_path(harness.data_dir, manifest_sha256), retained=True).manifest
+    return SolveTarget(inputs="", frame={"axis": frame_axis} if frame_axis else None, manifest=manifest)
+
+
+def _carries(harness: JobsHarness, record: dict[str, Any], setup: dict[str, Any], target: Any) -> bool:
+    from server.jobs.model_solve import _solve_anyway_carries
+
+    return _solve_anyway_carries(harness.store, harness.data_dir, record, validate_setup(setup), target)
+
+
+def _with_preparation(setup: dict[str, Any], **preparation: Any) -> dict[str, Any]:
+    return {**setup, "preparation": preparation}
+
+
+@pytest.mark.parametrize(("press", "carries"), [
+    (_setup(), True),
+    (_setup(engine="metal"), True),  # a solve option is not a preparation
+    (_with_preparation(_setup(), symmetry_mode="full"), False),
+    (_with_preparation(_setup(), surface_deviation_mm=0.25), False),
+    (_with_preparation(_setup(), area_drift_overrides=["source-hf"]), False),
+    (_setup(rigid=25.0), False),
+])
+def test_solve_anyway_carries_only_for_the_preparation_it_was_chosen_for(harness, press, carries) -> None:
+    """A symmetry 'auto' Solve anyway mesh is not a full-domain mesh 2-4x its size."""
+
+    model = _cad_model(harness, mesh_limit_override=True)
+    record = json.loads(harness.store.get_ingest(model["prepared_id"])["record_json"])
+    target = _anyway_target(harness, record["manifest_sha256"])
+    assert _carries(harness, record, press, target) is carries
+
+
+def test_solve_anyway_does_not_carry_without_the_records_key_or_its_override(harness) -> None:
+    model = _cad_model(harness, mesh_limit_override=True)
+    record = json.loads(harness.store.get_ingest(model["prepared_id"])["record_json"])
+    target = _anyway_target(harness, record["manifest_sha256"])
+    assert _carries(harness, record, _setup(), target) is True
+    # A record prepared before the key existed is not known to be the same mesh.
+    assert _carries(harness, {k: v for k, v in record.items() if k != "mesh_lookup_key"}, _setup(), target) is False
+    assert _carries(harness, {**record, "mesh_limit_override": False}, _setup(), target) is False
+    # No retained copy: nothing can be known to be the same.
+    assert _carries(harness, record, _setup(), None) is False
+
+
+def test_solve_anyway_does_not_carry_to_other_skipped_sources(harness) -> None:
+    design_id, lineage = _project(harness, 90.0)
+    bundle_path, _ = _project_return(harness, "two-sources", design_id, lineage)
+    path = harness.workspace / bundle_path / "wgreturn.json"
+    value = json.loads(path.read_text())
+    second = {**json.loads(json.dumps(value["sources"][0])), "id": "source-lf", "role": "LF",
+              "default_drive_channel_id": "drive-lf"}
+    second["selectors"]["appearance_labels"] = ["LF"]
+    value["sources"].append(second)
+    path.write_text(json.dumps(value))
+    retained = retain_snapshot(harness.workspace / bundle_path, harness.data_dir)
+    mesh = _setup()["geometry"]["mesh"]
+    both = {**_setup(), "geometry": {
+        "drive_channels": [{"id": "drive-hf", "source_ids": ["source-hf"]},
+                           {"id": "drive-lf", "source_ids": ["source-lf"]}],
+        "mesh": {**mesh, "source_size_mm": {"source-hf": 8.0, "source-lf": 8.0}},
+    }}
+    one = {**_setup(), "geometry": {**_setup()["geometry"], "skipped_source_ids": ["source-lf"]}}
+    record = {"mesh_limit_override": True, "manifest_sha256": retained["manifest_sha256"],
+              "mesh_lookup_key": _anyway_key(harness, retained["manifest_sha256"], both)}
+    target = _anyway_target(harness, retained["manifest_sha256"])
+    assert _carries(harness, record, both, target) is True
+    # Another mesh, not a press WG cannot prepare.
+    assert _anyway_key(harness, retained["manifest_sha256"], one) != record["mesh_lookup_key"]
+    assert _carries(harness, record, one, target) is False

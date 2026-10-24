@@ -423,6 +423,13 @@ export interface CadReturnIngestRecord {
   /** The user chose Solve anyway over the triangle ceiling for this mesh; a
    * Solve of it carries the choice (`mesh_limit_override`). */
   mesh_limit_override?: boolean;
+  /** The setup preparation options this mesh was asked for; absent on an
+   * earlier build's record. */
+  preparation_options?: {
+    symmetry_mode: 'auto' | 'full';
+    area_drift_overrides: string[];
+    surface_deviation_mm: number | null;
+  };
   /** The one domain decision ingest sealed (`api/domainDecision.ts`); absent
    * on an earlier build's record. */
   domain_decision?: unknown;

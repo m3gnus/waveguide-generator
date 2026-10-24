@@ -832,3 +832,53 @@ def test_a_browser_solve_of_a_weak_evidence_model_never_asks_and_a_change_is_kep
     assert mesher.calls[-1]["options"]["solver_frame"]["axis"] == "+y"
     assert harness.store.get_frame_confirmation(record_confirmation_key(changed))["axis"] == "+y"
     assert _decision(harness, {"preparationId": changed["ingest_id"]}) is None  # a person's choice
+
+
+def test_a_solve_anyway_record_names_the_mesh_of_its_press_and_frame(real) -> None:
+    """The record's mesh key is the press's: the same press carries Solve anyway,
+    another axis makes another mesh and asks about the ceiling again. The
+    mesher still receives exactly the options ingestion assembled."""
+
+    from server.cadlink.intake.ingest import read_snapshot, retain_snapshot
+    from server.cadlink.interpretation.solver_frame import frame_spec
+    from server.jobs.cad_preparation import preparation_options
+    from server.jobs.imported_setup import snapshot_setup, validate_setup
+    from server.jobs.model_solve import SolveTarget, _solve_anyway_carries
+
+    harness, mesher = real
+    step = b"STEP authored"
+    bundle_path, _ = _write(harness.workspace, "authored", _authored(step), step)
+    retained = retain_snapshot(harness.workspace / bundle_path, harness.data_dir)
+    bundle = read_snapshot(retained["retained_path"], retained=True)
+    setup = validate_setup(_setup())
+    effective = snapshot_setup(setup, bundle.manifest)
+    options = preparation_options(effective, "+x", mesh_limit_override=True)
+    record = ingest_module.ingest_bundle(
+        retained["retained_path"], dict(effective.geometry["mesh"]), [], harness.store, harness.data_dir,
+        prep_options=options, retained_copy=True, defer_viewport=True,
+    )
+    prepared = ingest_module.mesh_preparation(
+        harness.store, bundle, dict(effective.geometry["mesh"]), [], options,
+    )
+
+    assert record["mesh_limit_override"] is True
+    assert record["mesh_lookup_key"] == prepared.lookup_key
+    # What a screen restoring a setup compares with (cadProjectSettings.ts).
+    assert record["preparation_options"] == {
+        "symmetry_mode": "auto", "area_drift_overrides": [], "surface_deviation_mm": None,
+    }
+    assert mesher.calls[-1]["options"] == prepared.options == {
+        "area_drift_overrides": [],
+        "symmetry_mode": "auto",
+        "mesh_limit_override": True,
+        "solver_frame": frame_spec("+x", bundle.manifest),
+        "declared_cut_planes": [],
+    }
+
+    def target(axis: str) -> SolveTarget:
+        return SolveTarget(inputs="", frame={"axis": axis}, manifest=bundle.manifest)
+
+    assert _solve_anyway_carries(harness.store, harness.data_dir, record, setup, target("+x")) is True
+    assert _solve_anyway_carries(harness.store, harness.data_dir, record, setup, target("+y")) is False
+    # As modelled is another frame too.
+    assert _solve_anyway_carries(harness.store, harness.data_dir, record, setup, target("+z")) is False

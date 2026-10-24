@@ -143,6 +143,15 @@ export function subscribeCadDraftRestores(listener: () => void): () => void {
   return () => { restoredListeners.delete(listener); };
 }
 
+/** The preparation a record's mesh was made under; null where an earlier build's record does not say. */
+function preparedOptions(record: CadReturnIngestRecord): { symmetryMode: string | null; areaDriftOverrides: string[] | null } {
+  const stated = record.preparation_options as { symmetry_mode?: unknown; area_drift_overrides?: unknown } | undefined;
+  const symmetryMode = typeof stated?.symmetry_mode === 'string' ? stated.symmetry_mode : null;
+  const overrides = stated?.area_drift_overrides;
+  const areaDriftOverrides = Array.isArray(overrides) && overrides.every(id => typeof id === 'string')
+    ? [...new Set(overrides as string[])].sort() : null;
+  return { symmetryMode, areaDriftOverrides };
+}
 /** Shared by model reopen and return selection/arrival. Runs keep their immutable setup. */
 export function restoreCadProjectSettings(saved: ImportedSetup | null, record: CadReturnIngestRecord,
   includeDraft = true, revisionId: string | null = null): boolean {
@@ -199,11 +208,16 @@ export function restoreCadProjectSettings(saved: ImportedSetup | null, record: C
   if (state.selectedBundle?.meshSnapshot) {
     useCadReturnStore.setState(snapshotMeshSettings(state.selectedBundle.meshSnapshot));
   }
-  // A stored mesh choice different from the retained mesh requires preparation.
+  // A stored mesh choice or preparation different from the retained mesh's
+  // requires preparation: the viewport never shows a mesh the Solve would not use.
   const current = useCadReturnStore.getState();
+  const prepared = preparedOptions(record);
   if (state.ingestRecord && (JSON.stringify(current.meshSizes.source_size_mm) !== JSON.stringify(record.mesh_sizes.source_size_mm)
     || current.meshSizes.rigid_size_mm !== record.mesh_sizes.rigid_size_mm || current.meshSizes.transition_mm !== record.mesh_sizes.transition_mm
-    || JSON.stringify(current.skippedSourceIds) !== JSON.stringify(record.skipped_source_ids))) {
+    || JSON.stringify(current.skippedSourceIds) !== JSON.stringify(record.skipped_source_ids)
+    || (prepared.symmetryMode !== null && current.symmetryMode !== prepared.symmetryMode)
+    || (prepared.areaDriftOverrides !== null
+      && JSON.stringify([...new Set(current.areaDriftOverrides)].sort()) !== JSON.stringify(prepared.areaDriftOverrides)))) {
     useCadReturnStore.setState({ needsIngest: true, ingestStaleReason: 'Prepare the mesh for the restored model settings.' });
   }
   return !!draft;

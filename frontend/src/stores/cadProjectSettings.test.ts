@@ -467,3 +467,30 @@ it('keeps the last engine choice when startup reopens a model with an older save
   expect(await reopenLastModel(fetcher)).toBe(true);
   expect(useImportedSolveOptionsStore.getState().engine).toBe('beat-cpu');
 });
+
+it('marks the restored model stale when its setup prepares another mesh than the one on screen', async () => {
+  const cases: Array<[Record<string, unknown> | undefined, boolean]> = [
+    [{ symmetry_mode: 'full', area_drift_overrides: ['source-hf'], surface_deviation_mm: null }, false],
+    [{ symmetry_mode: 'auto', area_drift_overrides: ['source-hf'], surface_deviation_mm: null }, true],
+    [{ symmetry_mode: 'full', area_drift_overrides: [], surface_deviation_mm: null }, true],
+    // An earlier build's record does not say: nothing is invented.
+    [undefined, false],
+  ];
+  for (const [preparation, stale] of cases) {
+    localStorage.clear(); resetCadReturnStore(); resetSolveOptionsStore(); resetImportedModelStore();
+    const prepared = { ...record, ...(preparation ? { preparation_options: preparation } : {}) };
+    const fetcher = vi.fn<typeof fetch>(async input => {
+      const path = String(input);
+      if (path.includes('/setup')) return json({ setup: saved, revision_id: 'wgs_saved', cad_claimed: true });
+      if (path === `/api/models/${model}`) return json({ model: workspaceFor().model,
+        latest_prepared: workspaceFor().prepared, original_available: false });
+      if (path.endsWith('/viewport-mesh')) return new Response(mesh);
+      return json(prepared);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    expect(await openImported({ kind: 'model', modelId: model }, fetcher)).toBe(true);
+    await waitForCadProjectSettings();
+    expect(useCadReturnStore.getState().symmetryMode).toBe('full');
+    expect(useCadReturnStore.getState().needsIngest).toBe(stale);
+  }
+});

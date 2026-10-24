@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 import contextlib
+from dataclasses import dataclass
 import hashlib
 from importlib.metadata import PackageNotFoundError, version
 import json
@@ -29,7 +30,7 @@ from server.cadlink.intake.isolation import ChildRefusal, MESH_BUDGET
 from server.cadlink.build_flags import fem_regions_enabled
 from server.cadlink.limits import MAX_WGRETURN_JSON_BYTES
 from server.cadlink.store import CadLinkStore
-from server.cadlink.snapshot_mesh import snapshot_mesh
+from server.cadlink.snapshot_mesh import SnapshotMesh, snapshot_mesh
 from server.design.textcfg import parse
 from server.exports.geometry_identity import geometry_hash_for_design
 from server.mesh.imported import (
@@ -64,6 +65,7 @@ from server.cadlink.interpretation.domain_interpretation import (
     READING_AS_SHOWN,
     USER,
     USER_LINEAGE,
+    DomainPlan,
     EvidenceOutcome,
     apply_evidence,
     evidence_refusal_message,
@@ -1275,78 +1277,14 @@ def _mesher_denial(message: str) -> str:
     return text.rstrip(".") or "the meshed boundary denies the cut"
 
 
-def ingest_bundle(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    """:func:`_ingest_bundle`, with prepared-mesh collection held off meanwhile.
-
-    A cache hit adopts a mesh file another record already names; no
-    collection may decide that file is unused while this runs.
-    """
-
-    with prepared_mesh_use():
-        return _ingest_bundle(*args, **kwargs)
-
-
-def _ingest_bundle(
-    bundle_path: str | Path,
-    mesh: Mapping[str, Any],
-    skipped_source_ids: list[str],
+def _admit_return(
     store: CadLinkStore,
-    data_dir: str | Path,
-    *,
-    prep_options: Mapping[str, Any] | None = None,
-    expected_design_id: str | None = None,
-    expected_instance_id: str | None = None,
-    recompute_freshness: Callable[[Mapping[str, Any]], str] | None = None,
-    defer_viewport: bool = False,
-    commit_guard: Callable[[Any], bool] | None = None,
-    retained_copy: bool = False,
-    resolve_confirmed_frame: bool = False,
-) -> dict[str, Any]:
-    """Run the nine ingestion stages and persist the immutable WG verdict.
+    manifest: Mapping[str, Any],
+    expected_design_id: str | None,
+    expected_instance_id: str | None,
+) -> str | None:
+    """Stage 2: the project and instance gates; the instance this return is prepared as."""
 
-    ``resolve_confirmed_frame`` meshes a return with no WG instance in the
-    solver frame its project confirmed (``readings.resolve_for_manifest``),
-    as modelled until one is; it is how a UI's ingest shows what would be
-    solved without the request naming a frame. Backend preparation resolves the
-    frame itself and passes it in ``prep_options``.
-
-    ``commit_guard`` is a preparation attempt's fence
-    (``CadLinkStore.attempt_is_current``): it runs inside the transaction that
-    publishes the record, so an attempt that lost its operation commits nothing.
-    ``retained_copy`` says ``bundle_path`` is WG's retained copy of a return
-    (``retain_snapshot``), which carries no captured CAD document.
-
-    ``defer_viewport`` publishes the record as soon as the solver mesh exists,
-    leaving the display tessellation to :func:`build_deferred_viewport`. That
-    tessellation is two thirds of a cold ingestion's wall clock and nothing
-    downstream of the record needs it, so waiting for it only delays the moment
-    the user can see the geometry they asked WG to solve. A cached display
-    artifact is still adopted here: it costs a file read, not a mesh.
-    """
-
-    try:
-        bundle = read_snapshot(bundle_path, retained=retained_copy)
-    except Exception as exc:
-        raise IngestRefusal("stage 1 bundle validation", str(exc)) from exc
-    manifest = bundle.manifest
-    authored_mesh = snapshot_mesh(manifest, skipped_source_ids=skipped_source_ids)
-    if authored_mesh is not None:
-        mesh = authored_mesh.sizes
-        prep_options = {
-            **dict(prep_options or {}), "symmetry_mode": authored_mesh.symmetry_mode,
-        }
-    # The solver frame of a return with no WG instance (server/cadlink/
-    # solver_frame.py). Checked before any gate: it is a statement about which
-    # frame this preparation meshes in, and a linked return is always meshed in
-    # its anchor's frame. The modelled frame is today's and is never written
-    # into the options, so every mesh cached before the contract keeps its key.
-    if resolve_confirmed_frame and is_unlinked_manifest(manifest):
-        resolved = resolve_for_manifest(store, manifest, bundle.manifest_sha256)
-        prep_options = {
-            **dict(prep_options or {}),
-            "solver_frame": resolved.axis if resolved is not None else AS_MODELLED,
-        }
-    solver_frame_axis = _requested_solver_frame(manifest, prep_options)
     returned_design_ids = {
         str(instance["design_id"])
         for instance in manifest["instances"]
@@ -1428,17 +1366,78 @@ def _ingest_bundle(
                 f"selected instance {resolved_instance_id!r} is not the return's "
                 f"solver anchor {anchor_instance_id!r}",
             )
+    return resolved_instance_id
+
+
+@dataclass(frozen=True)
+class MeshPreparation:
+    """The normalised preparation a mesh of one snapshot is made under.
+
+    ``lookup_key`` addresses the mesh cache for exactly these inputs
+    (``_cache_lookup_key``): two presses whose keys agree ask for the same
+    mesh, and keys that differ ask for another one.
+    """
+
+    authored_mesh: SnapshotMesh | None
+    sizes: dict[str, Any]
+    options: dict[str, Any]
+    solver_frame_axis: str
+    solver_frame: dict[str, Any] | None
+    plan: DomainPlan
+    lookup_key: str
+
+
+def mesh_preparation(
+    store: CadLinkStore,
+    bundle: WgReturnBundle,
+    mesh: Mapping[str, Any],
+    skipped_source_ids: list[str],
+    prep_options: Mapping[str, Any] | None = None,
+    *,
+    resolve_confirmed_frame: bool = False,
+    admit: Callable[[], None] | None = None,
+) -> MeshPreparation:
+    """Normalise a preparation's sizes and options as ingestion meshes them.
+
+    The one owner of the options a prepared mesh is made under: the
+    snapshot's own mesh settings, the solver frame, the declared cut planes,
+    the domain interpretation and the surface groups. A caller's
+    ``solver_frame`` and ``domain_interpretation`` are never taken as stated.
+    Raises :class:`IngestRefusal` for a preparation that cannot be made.
+
+    The scope inventory and registry echoes are checked here too, so a
+    snapshot that contradicts them prepares nothing. ``admit`` is ingestion's
+    project and instance gates (``_admit_return``), run once the frame is
+    read and before the sizes are, so every refusal keeps its order.
+    """
+
+    manifest = bundle.manifest
+    authored_mesh = snapshot_mesh(manifest, skipped_source_ids=skipped_source_ids)
+    if authored_mesh is not None:
+        mesh = authored_mesh.sizes
+        prep_options = {
+            **dict(prep_options or {}), "symmetry_mode": authored_mesh.symmetry_mode,
+        }
+    # The solver frame of a return with no WG instance (server/cadlink/
+    # solver_frame.py): a statement about which frame this preparation meshes
+    # in, and a linked return is always meshed in its anchor's frame. The modelled frame is today's and is never written
+    # into the options, so every mesh cached before the contract keeps its key.
+    if resolve_confirmed_frame and is_unlinked_manifest(manifest):
+        resolved = resolve_for_manifest(store, manifest, bundle.manifest_sha256)
+        prep_options = {
+            **dict(prep_options or {}),
+            "solver_frame": resolved.axis if resolved is not None else AS_MODELLED,
+        }
+    solver_frame_axis = _requested_solver_frame(manifest, prep_options)
+    if admit is not None:
+        admit()
     normalized_mesh = validate_imported_sizes(
         manifest["sources"], mesh, skipped_source_ids=skipped_source_ids
     )
     if mesh.get("surface_groups") is not None:
         normalized_mesh["surface_groups"] = deepcopy(mesh["surface_groups"])
-    scope_findings = _scope_findings(manifest)
     validate_scope_inventory(manifest)
-    try:
-        validate_registry_echoes(manifest, store)
-    except IngestRefusal:
-        raise
+    validate_registry_echoes(manifest, store)
     options = dict(prep_options or {})
     options.pop("surface_groups", None)
     if normalized_mesh.get("surface_groups") is not None:
@@ -1474,6 +1473,93 @@ def _ingest_bundle(
     plan = resolve_domain_plan(store, manifest, bundle.manifest_sha256)
     if plan.identity() is not None and not plan.evidenced_planes:
         options["domain_interpretation"] = plan.identity()
+    lookup_key = _cache_lookup_key(bundle, manifest, normalized_mesh, skipped_source_ids, options)
+    return MeshPreparation(
+        authored_mesh=authored_mesh,
+        sizes=normalized_mesh,
+        options=options,
+        solver_frame_axis=solver_frame_axis,
+        solver_frame=solver_frame,
+        plan=plan,
+        lookup_key=lookup_key,
+    )
+
+
+def ingest_bundle(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """:func:`_ingest_bundle`, with prepared-mesh collection held off meanwhile.
+
+    A cache hit adopts a mesh file another record already names; no
+    collection may decide that file is unused while this runs.
+    """
+
+    with prepared_mesh_use():
+        return _ingest_bundle(*args, **kwargs)
+
+
+def _ingest_bundle(
+    bundle_path: str | Path,
+    mesh: Mapping[str, Any],
+    skipped_source_ids: list[str],
+    store: CadLinkStore,
+    data_dir: str | Path,
+    *,
+    prep_options: Mapping[str, Any] | None = None,
+    expected_design_id: str | None = None,
+    expected_instance_id: str | None = None,
+    recompute_freshness: Callable[[Mapping[str, Any]], str] | None = None,
+    defer_viewport: bool = False,
+    commit_guard: Callable[[Any], bool] | None = None,
+    retained_copy: bool = False,
+    resolve_confirmed_frame: bool = False,
+) -> dict[str, Any]:
+    """Run the nine ingestion stages and persist the immutable WG verdict.
+
+    ``resolve_confirmed_frame`` meshes a return with no WG instance in the
+    solver frame its project confirmed (``readings.resolve_for_manifest``),
+    as modelled until one is; it is how a UI's ingest shows what would be
+    solved without the request naming a frame. Backend preparation resolves the
+    frame itself and passes it in ``prep_options``.
+
+    ``commit_guard`` is a preparation attempt's fence
+    (``CadLinkStore.attempt_is_current``): it runs inside the transaction that
+    publishes the record, so an attempt that lost its operation commits nothing.
+    ``retained_copy`` says ``bundle_path`` is WG's retained copy of a return
+    (``retain_snapshot``), which carries no captured CAD document.
+
+    ``defer_viewport`` publishes the record as soon as the solver mesh exists,
+    leaving the display tessellation to :func:`build_deferred_viewport`. That
+    tessellation is two thirds of a cold ingestion's wall clock and nothing
+    downstream of the record needs it, so waiting for it only delays the moment
+    the user can see the geometry they asked WG to solve. A cached display
+    artifact is still adopted here: it costs a file read, not a mesh.
+    """
+
+    try:
+        bundle = read_snapshot(bundle_path, retained=retained_copy)
+    except Exception as exc:
+        raise IngestRefusal("stage 1 bundle validation", str(exc)) from exc
+    manifest = bundle.manifest
+    admitted: list[str | None] = []
+    prepared = mesh_preparation(
+        store, bundle, mesh, skipped_source_ids, prep_options,
+        resolve_confirmed_frame=resolve_confirmed_frame,
+        admit=lambda: admitted.append(
+            _admit_return(store, manifest, expected_design_id, expected_instance_id)
+        ),
+    )
+    resolved_instance_id = admitted[0]
+    scope_findings = _scope_findings(manifest)
+    authored_mesh = prepared.authored_mesh
+    normalized_mesh = prepared.sizes
+    options = prepared.options
+    requested_preparation = {
+        "symmetry_mode": str(options.get("symmetry_mode") or "auto"),
+        "area_drift_overrides": sorted({str(item) for item in options.get("area_drift_overrides") or ()}),
+        "surface_deviation_mm": options.get("surface_deviation_mm"),
+    }
+    solver_frame_axis = prepared.solver_frame_axis
+    solver_frame = prepared.solver_frame
+    plan = prepared.plan
     imports_root = data_paths(data_dir).root / "imports"
 
     def viewport_for(opts: Mapping[str, Any]) -> tuple[str, Path, str | None, Path, Path, dict[str, Any] | None]:
@@ -2115,6 +2201,13 @@ def _ingest_bundle(
             "project": project,
             "sources": manifest["sources"],
             "mesh_sizes": effective_mesh,
+            # The mesh cache address of the preparation this record was asked
+            # for (``mesh_preparation``), before WG's own domain decisions: a
+            # press asking for the same preparation computes the same key.
+            "mesh_lookup_key": prepared.lookup_key,
+            # The setup preparation options it was asked for, so a screen
+            # restoring another setup knows this mesh is not that one's.
+            "preparation_options": requested_preparation,
             **({"mesh_snapshot": deepcopy(manifest["mesh"])} if authored_mesh is not None else {}),
             "skipped_source_ids": effective_skipped_source_ids,
             "role_resolution": built["role_resolution"],

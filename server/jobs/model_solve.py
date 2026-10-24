@@ -38,7 +38,7 @@ import weakref
 
 from pydantic import Field, field_validator, model_validator
 
-from server.cadlink.intake.ingest import read_snapshot, retained_snapshot_path
+from server.cadlink.intake.ingest import mesh_preparation, read_snapshot, retained_snapshot_path
 from server.cadlink.intake.readings import (
     confirm_frame,
     frame_preview,
@@ -62,6 +62,7 @@ from server.cadlink.store import UNFILED_MODEL_ID
 from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json
 from server.jobs.cad_intent import CAD_INTENT, cad_of
+from server.jobs.cad_preparation import preparation_options
 from server.jobs.imported_setup import (
     CadSolveSetup,
     ImportedSolveSetup,
@@ -72,7 +73,7 @@ from server.jobs.imported_setup import (
     snapshot_setup,
     validate_setup,
 )
-from server.jobs.models import CadApprovalsRequest, ImportedGeometrySource, ImportedMeshSizes, SolveRequest
+from server.jobs.models import CadApprovalsRequest, ImportedGeometrySource, SolveRequest
 from server.jobs.runtime import (
     EngineUnavailableError,
     ImportedSolveRefusal,
@@ -666,36 +667,46 @@ def _press_frame(store: Any, record: Mapping[str, Any], frame_axis: str | None) 
 
 
 def _solve_anyway_carries(
-    record: Mapping[str, Any], setup: CadSolveSetup, target: SolveTarget | None,
+    store: Any, data_dir: Path, record: Mapping[str, Any], setup: CadSolveSetup,
+    target: SolveTarget | None,
 ) -> bool:
     """Whether the press's preparation remakes the mesh Solve anyway was chosen for.
 
     Solve anyway answers the triangle ceiling for the prepared mesh on screen
     (its record says ``mesh_limit_override``) and for nothing else, as
-    ``solve_again_intent`` keeps it to one preparation: the press must keep
-    that record's mesh sizes and skipped sources and the frame it was meshed
-    in. Other settings or another axis make another mesh, which the ceiling
-    asks about again. Unknown (no retained copy) is not the same.
+    ``solve_again_intent`` keeps it to one preparation. The press's
+    preparation -- the retained snapshot, the setup's mesh sizes, skipped
+    sources and preparation options, and the frame it would be meshed in --
+    is normalised as ingestion normalises it (``mesh_preparation``), and
+    carries only when its mesh cache address is the one the record was
+    prepared under. Anything else makes another mesh, which the ceiling asks
+    about again. Unknown (no retained copy, or a record from before the key)
+    is not the same.
     """
 
-    if record.get("mesh_limit_override") is not True or target is None:
+    if record.get("mesh_limit_override") is not True or target is None or target.manifest is None:
         return False
-    if target.frame != record_identity(record)[0]:
+    recorded = record.get("mesh_lookup_key")
+    if not isinstance(recorded, str) or not recorded:
         return False
-    recorded = record.get("mesh_sizes")
-    skipped = set(record.get("skipped_source_ids") or ())
-    effective = snapshot_setup(setup, target.manifest) if target.manifest is not None else setup
-    geometry = effective.geometry
-    if not isinstance(recorded, Mapping) or not set(geometry.get("skipped_source_ids") or ()) <= skipped:
-        return False
+    frame_axis = target.frame.get("axis") if isinstance(target.frame, Mapping) else None
     try:
-        sizes = ImportedMeshSizes.model_validate(geometry.get("mesh")).model_dump(mode="json")
-    except ValueError:
+        bundle = read_snapshot(
+            retained_snapshot_path(data_dir, str(record.get("manifest_sha256") or "")), retained=True
+        )
+        effective = snapshot_setup(setup, bundle.manifest)
+        geometry = effective.geometry
+        pressed = mesh_preparation(
+            store,
+            bundle,
+            dict(geometry.get("mesh") or {}),
+            list(geometry.get("skipped_source_ids") or []),
+            preparation_options(effective, frame_axis, mesh_limit_override=True),
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        # Preparation owns the refusal of a press it cannot make.
         return False
-    sizes["source_size_mm"] = {
-        source: size for source, size in sizes["source_size_mm"].items() if source not in skipped
-    }
-    return sizes == dict(recorded)
+    return pressed.lookup_key == recorded
 
 
 def _press(
@@ -754,10 +765,10 @@ async def _solve_cad(
         target = await asyncio.to_thread(
             _lane_target, store, Path(state.data_dir), record, setup, adopts=adopts
         )
-        press = _press(
-            body, revision_id, frame_axis,
-            body.mesh_limit_override and _solve_anyway_carries(record, setup, target),
+        carries = body.mesh_limit_override and await asyncio.to_thread(
+            _solve_anyway_carries, store, Path(state.data_dir), record, setup, target
         )
+        press = _press(body, revision_id, frame_axis, carries)
         if started is None and target is not None:
             match = await asyncio.to_thread(active_model_match, runtime, store, model_id, record, target)
             if match is not None:
