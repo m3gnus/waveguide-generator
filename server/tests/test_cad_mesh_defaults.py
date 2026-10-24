@@ -364,7 +364,46 @@ def test_mesh_too_large_is_an_actionable_refusal_on_both_ingest_routes() -> None
     error = MeshTooLarge(28_944, 22_000, mesh_sizes={
         "rigid_size_mm": 4, "transition_mm": 100, "source_size_mm": {"HF": 2},
     })
-    for formatter in (_ingest_error, _onshape_error):
-        response = formatter(error)
-        assert response.status_code == 422
-        assert response.detail == str(error)
+    response = _onshape_error(error)
+    assert response.status_code == 422 and response.detail == str(error)
+    # The browser Prepare path answers with the choice: Solve anyway or a coarser mesh.
+    response = _ingest_error(error)
+    assert response.status_code == 422
+    assert response.detail == {"code": "mesh_too_large", "message": error.message(),
+                               "next_step": "Change the mesh resolution in Sources & Mesh… in Fusion, "
+                               "or check the model size. You can also solve anyway.",
+                               "triangle_count": 28_944, "limit": 22_000}
+
+
+def test_browser_prepare_answers_the_ceiling_with_a_choice_and_carries_solve_anyway(monkeypatch, tmp_path) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from server.cadlink import api
+    from server.mesh.errors import MeshTooLarge, SolverMemoryTooLarge
+
+    seen: list[dict] = []
+
+    def ingest(*_args, prep_options, **_kwargs):
+        seen.append(dict(prep_options))
+        if prep_options.get("mesh_limit_override"):
+            raise SolverMemoryTooLarge("Solver mesh uses 1 P1 vertex/DOFs ... safety ceiling")
+        raise MeshTooLarge(28_944, 22_000)
+
+    monkeypatch.setattr(api, "ingest_bundle", ingest)
+    monkeypatch.setattr(api, "_resolve_ingest_bundle", lambda *_: tmp_path)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cadlink_store=None, data_dir=tmp_path)))
+    body = {"bundlePath": "wgreturn/x.wgreturn", "mesh": {"rigidSizeMm": 4, "transitionMm": 100, "sourceSizeMm": {}}}
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(api.post_ingest(api.CadReturnIngestRequest.model_validate(body), request))
+    assert refused.value.status_code == 422
+    assert refused.value.detail["code"] == "mesh_too_large"
+    assert refused.value.detail["triangle_count"] == 28_944 and refused.value.detail["limit"] == 22_000
+    assert "mesh_limit_override" not in seen[-1]  # the cache key of every older mesh is unchanged
+    with pytest.raises(HTTPException) as memory:
+        asyncio.run(api.post_ingest(api.CadReturnIngestRequest.model_validate({**body, "meshLimitOverride": True}), request))
+    assert seen[-1]["mesh_limit_override"] is True
+    assert memory.value.status_code == 422
+    assert memory.value.detail == {"code": "solver_memory_exceeded", "message": SolverMemoryTooLarge.USER_MESSAGE}

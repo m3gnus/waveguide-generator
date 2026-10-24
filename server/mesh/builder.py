@@ -47,7 +47,7 @@ from server.contracts.geometry import (
 )
 
 from .cache import SolverMeshArtifactCache, SolverMeshCacheInfo
-from .errors import MeshTooLarge
+from .errors import MeshTooLarge, SolverMemoryTooLarge
 from .child import (
     MesherChildError,
     MesherCrashError,
@@ -622,7 +622,7 @@ def _enforce_dense_solver_memory_ceiling(
             if requirements["aperture_triangle_count"]
             else ""
         )
-        raise RuntimeError(
+        raise SolverMemoryTooLarge(
             "Solver mesh uses "
             f"{used_vertex_count:,} P1 vertex/DOFs{coupled} in a "
             f"{multiplier}x symmetry domain, with a conservative dense-solver "

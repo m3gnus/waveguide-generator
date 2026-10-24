@@ -30,7 +30,7 @@ from server.mesh.artifact import (
     read_verified_import_mesh,
     read_verified_import_viewport_mesh,
 )
-from server.mesh.errors import MeshTooLarge
+from server.mesh.errors import MeshTooLarge, SolverMemoryTooLarge
 from server.platform.acl_repair import path_has_reparse_point
 from server.platform.cad_launch import launch_disabled, open_cad_document
 from server.platform.process import background_process_kwargs
@@ -95,7 +95,7 @@ from server.cadlink.joblane.manual_solve import create_manual_solve, recover_man
 # routes and their credentials stay in ``server/cadlink/onshape/``.
 from .build_flags import onshape_enabled
 from .onshape.return_leg import RETURN_SUBDIRECTORY as ONSHAPE_RETURN_SUBDIRECTORY
-from .operations import CANCELLED, KINDS, PREPARE_AND_SOLVE, STATES, TERMINAL_STATES
+from .operations import CANCELLED, KINDS, PREPARE_AND_SOLVE, STATES, TERMINAL_STATES, hold_details
 from server.cadlink.joblane.preparation import (
     PreparationContext,
     operation_summary,
@@ -380,6 +380,9 @@ class CadReturnIngestRequest(BaseModel):
     surface_deviation_mm: float | None = Field(
         default=None, alias="surfaceDeviationMm", ge=0.1, le=0.35
     )
+    # The user chose "Solve anyway" over the triangle ceiling (MeshTooLarge).
+    # Part of the mesh cache key, as on the job path; omitted when false.
+    mesh_limit_override: bool = Field(default=False, alias="meshLimitOverride")
 
 
 class FusionStatusRequest(BaseModel):
@@ -920,7 +923,18 @@ def _ingest_error(exc: Exception) -> HTTPException:
                 "area_drift_sources": list(exc.area_drift_sources),
             }
         return HTTPException(status_code=409 if exc.corruption else 422, detail=detail)
-    if isinstance(exc, (WgReturnError, ValueError, TypeError, MeshTooLarge)):
+    if isinstance(exc, MeshTooLarge):
+        # A choice for the user (Solve anyway, or a coarser mesh), not a failure.
+        return HTTPException(status_code=422, detail={
+            "code": "mesh_too_large", "message": exc.message(),
+            "next_step": hold_details("mesh_too_large", exc.message())["next_step"],
+            "triangle_count": exc.count, "limit": exc.limit,
+        })
+    if isinstance(exc, SolverMemoryTooLarge):
+        return HTTPException(status_code=422, detail={
+            "code": "solver_memory_exceeded", "message": SolverMemoryTooLarge.USER_MESSAGE,
+        })
+    if isinstance(exc, (WgReturnError, ValueError, TypeError)):
         return HTTPException(status_code=422, detail=str(exc))
     if isinstance(exc, (ImportError, RuntimeError)):
         return HTTPException(status_code=503, detail=str(exc))
@@ -1040,6 +1054,7 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
                     if payload.surface_deviation_mm is not None
                     else {}
                 ),
+                **({"mesh_limit_override": True} if payload.mesh_limit_override else {}),
             },
             expected_design_id=payload.expected_design_id,
             expected_instance_id=payload.expected_instance_id,

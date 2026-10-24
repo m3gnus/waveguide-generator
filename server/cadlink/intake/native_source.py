@@ -422,15 +422,18 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
     return json.loads(row["record_json"])
 
 
-_MEMORY_CEILING_PREFIX = "RuntimeError: Solver mesh uses "
+#: The traceback's last line names the guard's exception, plain or qualified.
+_MEMORY_CEILING_TYPES = ("RuntimeError: ", "SolverMemoryTooLarge: ", "server.mesh.errors.SolverMemoryTooLarge: ")
+_MEMORY_CEILING_TEXT = "Solver mesh uses "
 
 
 def _memory_ceiling_message(stderr):
     """The dense-solver memory ceiling's refusal text from a worker traceback, else None."""
 
     for line in reversed(stderr.splitlines()):
-        if line.startswith(_MEMORY_CEILING_PREFIX) and "safety ceiling" in line:
-            return line.removeprefix("RuntimeError: ").strip()
+        for prefix in _MEMORY_CEILING_TYPES:
+            if line.startswith(prefix + _MEMORY_CEILING_TEXT) and "safety ceiling" in line:
+                return line.removeprefix(prefix).strip()
     return None
 
 

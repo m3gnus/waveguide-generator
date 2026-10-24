@@ -39,7 +39,7 @@ from server.mesh.imported import (
     verify_artifact_reduced_orientation,
 )
 from server.mesh.artifact import mesh_text_sha256, read_verified_import_mesh
-from server.mesh.errors import MeshTooLarge
+from server.mesh.errors import MeshTooLarge, SolverMemoryTooLarge
 from server.mesh.prepared_gc import prepared_mesh_use
 from server.integration.mesher_identity import mesher_identity
 from server.platform.paths import data_paths
@@ -1531,7 +1531,7 @@ def _ingest_bundle(
                     expected_sha256=bundle.artifact_sha256,
                     expected_size_bytes=bundle.artifact_size_bytes,
                 )
-            except (ImportedMeshDependencyError, MeshTooLarge):
+            except (ImportedMeshDependencyError, MeshTooLarge, SolverMemoryTooLarge):
                 raise
             except ChildRefusal as exc:
                 # A refusal from a child that ran is already in the server log with

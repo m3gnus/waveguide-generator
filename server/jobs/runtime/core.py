@@ -33,6 +33,7 @@ from server.cadlink.interpretation.domain_decision import (
 )
 from server.cadlink.operations import (
     REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED, NEEDS_USER_INPUT, hold_details,
+    is_calm_failure,
 )
 from server.cadlink.interpretation.solver_frame import REASON as FRAME_CONFIRMATION_REQUIRED
 from server.cadlink.intake.readings import record_frame_refusal
@@ -2299,7 +2300,17 @@ class JobRuntime:
             record.update(status="error", stage="error", stage_message=refusal["message"] or "Preparation stopped",
                           error_message=refusal["message"], completed_at=_now_iso())
             record["task_metadata"]["cad"]["refusal"] = dict(refusal)
-            if CAD_REASON_STATES.get(refusal["code"]) == NEEDS_USER_INPUT:
+            if is_calm_failure(refusal["code"], refusal["message"]):
+                # Internal detail goes to the developers; the job keeps calm words.
+                from server.jobs.cad_preparation import calm_refusal_message
+
+                calm = calm_refusal_message(
+                    str(refusal["code"]), str(refusal["message"] or ""), record["task_metadata"]["cad"],
+                    job_id=None, operation_id=intent.operation_id,
+                )
+                record.update(stage_message=calm, error_message=calm)
+                record["task_metadata"]["cad"]["refusal"] = {**dict(refusal), "message": calm}
+            elif CAD_REASON_STATES.get(refusal["code"]) == NEEDS_USER_INPUT:
                 record.update(status="held", stage="held", stage_message="Waiting for you", error_message=None)
                 record["task_metadata"]["cad"]["hold"] = hold_details(str(refusal["code"]), str(refusal["message"] or ""))
         if cancelled:
@@ -4992,9 +5003,17 @@ class JobRuntime:
             "cad_setup": dict(geometry) if imported else None,
             "cad_intent": cad_intent,
         }
+        state = item["cad_state"]
+        if state and state.get("prepare_failed"):
+            # A failed preparation shows WG's calm words everywhere, including
+            # rows written before raw text stopped being stored.
+            item["error_message"] = state.get("message")
+            provenance = item["cad_provenance"]
+            if provenance and isinstance(provenance.get("refusal"), Mapping):
+                provenance["refusal"] = {**provenance["refusal"], "message": state.get("message")}
         if detailed:
             item["updated_at"] = row.get("updated_at")
-            item["message"] = row.get("error_message")
+            item["message"] = item["error_message"]
         return item
 
 

@@ -912,6 +912,11 @@
           "mesh": {
             "$ref": "#/components/schemas/ImportedMeshRequest"
           },
+          "meshLimitOverride": {
+            "default": false,
+            "title": "Meshlimitoverride",
+            "type": "boolean"
+          },
           "skippedSourceIds": {
             "items": {
               "type": "string"
@@ -1315,6 +1320,11 @@
                 "type": "null"
               }
             ]
+          },
+          "prepare_failed": {
+            "default": false,
+            "title": "Prepare Failed",
+            "type": "boolean"
           },
           "reason": {
             "anyOf": [

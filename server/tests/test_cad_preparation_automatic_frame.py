@@ -275,8 +275,8 @@ def test_the_jobs_second_mesh_is_bounded_when_the_two_sides_disagree(tmp_path, m
         assert not _waiting_for_frame(summary)
         assert harness.submitted == []
         row = harness.latest_job()
-        # A failed preparation is held for the user (Try again), not a failed run.
-        assert row["status"] == "held" and intent_of(row) is not None
+        # An internal failure: a calm failed preparation (Try again), never a hold.
+        assert row["status"] == "error" and intent_of(row) is not None
         events = harness.jobs_store.replay_events(0)
         assert events is not None
         assert sum(event["payload"].get("stage") == "validating" for event in events) == 1

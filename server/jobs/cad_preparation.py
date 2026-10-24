@@ -54,6 +54,9 @@ from server.cadlink.intake.isolation import ChildRefusal
 from server.cadlink.operations import (
     REASON_CODES,
     hold_details,
+    INTERNAL_FAILURE_CODES,
+    is_calm_failure,
+    preparation_failure,
     user_hold,
     REASON_UPDATE_RESTART_PENDING,
     REJECTED,
@@ -112,7 +115,7 @@ from server.jobs.cad_intent import (
     intent_of,
 )
 from server.jobs.models import SolveRequest
-from server.mesh.errors import MeshTooLarge
+from server.mesh.errors import MeshTooLarge, SolverMemoryTooLarge
 
 logger = logging.getLogger(__name__)
 
@@ -183,8 +186,15 @@ def job_operation_view(row: Mapping[str, Any]) -> dict[str, Any]:
     accepted = acceptance_details(row)
     held = user_hold(status, cad)
     hold = cad.get("hold") or (hold_details(str(reason), str(message or "")) if held else {})
+    # A failed preparation reads in WG's calm words, whatever text a row holds
+    # (rows written before this rule kept raw exception text).
+    prepare_failed = status == "error" and refusal is not None and is_calm_failure(reason, message)
+    if prepare_failed:
+        hold = preparation_failure(str(reason), (snapshot or {}).get("document_name"))
+        message = hold["message"]
     return {
-        "held": held, "next_step": hold.get("next_step"), "options": hold.get("options", []),
+        "held": held, "prepare_failed": prepare_failed,
+        "next_step": hold.get("next_step"), "options": hold.get("options", []),
         "operationId": cad.get("operation_id"),
         "state": state,
         "stage": stage,
@@ -209,6 +219,27 @@ def job_operation_view(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def calm_refusal_message(
+    code: str, message: str, cad: Mapping[str, Any], *,
+    job_id: str | None, operation_id: str | None,
+) -> str:
+    """The message a refusal is stored with: WG's calm words for a failed preparation.
+
+    An internal failure's raw detail is recorded once for the developers here
+    and never stored where a user can read it.
+    """
+
+    if not is_calm_failure(code, message):
+        return message
+    if code in INTERNAL_FAILURE_CODES:
+        record_preparation_diagnostic(
+            "internal-failure",
+            {"code": code, "job_id": job_id, "operation_id": operation_id, "detail": message},
+        )
+    snapshot = cad.get("snapshot") if isinstance(cad.get("snapshot"), Mapping) else {}
+    return str(preparation_failure(code, snapshot.get("document_name"))["message"])
+
+
 def _optional_operation_id(intent: Mapping[str, Any]) -> str | None:
     value = intent.get("operation_id")
     return value if isinstance(value, str) and value else None
@@ -230,7 +261,7 @@ def job_cad_state(row: Mapping[str, Any]) -> dict[str, Any] | None:
     preparation = cad.get("preparation")
     return {
         "operation_id": view["operationId"] or (_optional_operation_id(intent) if intent else None),
-        **{key: view[key] for key in ("state", "stage", "reason", "message", "blocker", "held", "next_step", "options")},
+        **{key: view[key] for key in ("state", "stage", "reason", "message", "blocker", "held", "prepare_failed", "next_step", "options")},
         "job_id": view["jobId"],
         "snapshot": (
             {key: snapshot.get(key) for key in ("document_name", "manifest_sha256", "artifact_sha256", "project_lineage_id")}
@@ -337,8 +368,15 @@ class _Run:
             logger.info("CAD job %s (operation %s): stage %s.", self.job_id, self.intent.operation_id, stage)
 
     def refuse(self, code: str, message: str, *, blocker: Mapping[str, Any] | None = None) -> tuple[str, None]:
-        """End the job as refused. ``("done", None)``: the preparation is over."""
+        """End the job as refused. ``("done", None)``: the preparation is over.
 
+        The one write of a refusal. An internal failure is recorded for the
+        developers with its raw detail, and the job keeps only WG's calm words.
+        """
+
+        message = calm_refusal_message(
+            code, message, self.cad, job_id=self.job_id, operation_id=self.intent.operation_id,
+        )
         event = self.port.job_store.refuse_preparing_job(
             self.job_id, code=code, message=message, cad=self.cad or None, blocker=blocker
         )
@@ -605,6 +643,10 @@ def prepare_job_sync(
             raise _Fenced() from exc
         except MeshTooLarge as exc:
             return run.refuse("mesh_too_large", exc.message())
+        except SolverMemoryTooLarge as exc:
+            # Also after Solve anyway: only a coarser mesh helps, so this ends
+            # the request calmly instead of holding it for another choice.
+            return run.refuse("solver_memory_exceeded", str(exc))
         except WgReturnError as exc:
             return run.refuse("snapshot_invalid", str(exc))
         except IngestRefusal as exc:
@@ -939,7 +981,11 @@ async def run_cad_preparation(port: CadJobPort, host: CadPreparationHost, job_id
             store.refuse_preparing_job,
             job_id,
             code="preparation_failed",
-            message=f"WG could not read this saved CAD request: {exc}. Send the CAD request again.",
+            message=calm_refusal_message(
+                "preparation_failed",
+                f"WG could not read this saved CAD request: {exc}. Send the CAD request again.",
+                cad_of(row), job_id=job_id, operation_id=None,
+            ),
         )
         if event is None:
             return "fenced"
@@ -1112,6 +1158,7 @@ __all__ = [
     "CadJobPort",
     "CadPreparationHost",
     "job_cad_state",
+    "calm_refusal_message",
     "job_operation_view",
     "prepare_job_sync",
     "run_cad_preparation",

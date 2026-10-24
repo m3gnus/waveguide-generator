@@ -1424,6 +1424,9 @@ class CadState(JobModel):
     message: str | None
     blocker: SolveBlocker | None = None
     held: bool = False
+    #: The preparation ended without a result and without needing a choice:
+    #: ``message`` is WG's calm sentence, ``options`` what can still work.
+    prepare_failed: bool = False
     next_step: str | None = None
     options: list[CadHoldOption] = Field(default_factory=list)
     job_id: str | None

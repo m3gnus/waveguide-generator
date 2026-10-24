@@ -443,7 +443,8 @@ def test_a_restart_mid_preparation_waits_visibly_and_solves_once_when_asked(tmp_
     _run_to_rest(second)
     view = second.harness.summary(request["operationId"])
     assert (view["state"], view["reason"]) == ("needs_user_input", "interrupted")
-    assert "Press Solve now" in view["message"]
+    # An internal failure: WG's calm words, and Try again in WG.
+    assert view["message"].startswith("WG could not prepare ")
     assert _inbox(second) == [] and second.submitted == []
 
     summary = second.harness.prepare(request["operationId"])

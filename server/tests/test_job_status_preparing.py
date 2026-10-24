@@ -287,8 +287,8 @@ def test_the_upgrade_raises_the_schema_version_with_a_snapshot(tmp_path: Path) -
     store.initialize()
     store.close()
     with closing(sqlite3.connect(db_path)) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
-    assert SUPPORTED_SCHEMA_VERSION == 6
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert SUPPORTED_SCHEMA_VERSION == 7  # 7 adds the held status
     assert store.rollback_snapshot_path.is_file()
 
 
@@ -354,7 +354,7 @@ def test_older_releases_refuse_intents_clearly_and_the_snapshot_restores(tmp_pat
     upgraded = _snapshot(db_path)
     result = _run_released(tree, refusal_driver, str(db_path))
     assert "created by a newer version" in result["refusal"]
-    assert "schema 6" in result["refusal"] and "supports schemas up to 5" in result["refusal"]
+    assert "schema 7" in result["refusal"] and "supports schemas up to 5" in result["refusal"]
     assert "last opened by" in result["refusal"]
     assert _snapshot(db_path) == upgraded
     # With every connection closed, replace the main file and discard the newer
@@ -457,8 +457,9 @@ def test_the_runtime_start_settles_a_preparing_row_a_lane_held(tmp_path: Path) -
 
     status, message = asyncio.run(scenario())
     assert status == "error"
-    # The words the operations' own start-up recovery uses for the same thing.
-    assert message == CAD_INTERRUPTED_MESSAGE
+    # An interrupted preparation reads in WG's calm words, never the stored text.
+    assert CAD_INTERRUPTED_MESSAGE
+    assert message == "WG could not prepare this model. This has been recorded for the developers."
 
 
 # --- runtime and HTTP consumers ---------------------------------------------------

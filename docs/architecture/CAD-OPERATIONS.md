@@ -1145,7 +1145,19 @@ solve scheduler, prepares it (`server/jobs/cad_preparation.py`):
   meshing_semantics, approvals}`, `return_state_hash`, `last_stage` and, on a refusal,
   `refusal {code, message}`. The `cad_operations` row is the acceptance ledger: the lane
   reads its retained snapshot and never writes it, and `cad_preparations` is not used.
-- **Held requests.** A `NEEDS_USER_INPUT` reason ends preparation with status and
+- **Failed preparations are not holds.** WG's own failures
+  (`operations.INTERNAL_FAILURE_CODES`: `preparation_failed`, `submission_refused`,
+  `interrupted`, `snapshot_invalid`) end as `error`. `_Run.refuse` records the raw detail
+  once as a developer diagnostic (`cad_preparation.calm_refusal_message`) and stores only
+  "WG could not prepare <name>. This has been recorded for the developers." The read
+  model shows that sentence for older rows too, with `prepare_failed: true` and the
+  options that can still work (Try again, except for a rejected snapshot; Dismiss).
+  `solver_memory_exceeded` (the dense memory guard, also after Solve anyway) ends the same
+  way: "<name> is too large for this machine's memory.", next step a coarser mesh, no Try
+  again. A legacy `preparation_failed` row whose message is the mesh ceiling's stays a
+  `mesh_too_large` hold. A root WG solve of a model (`manual-solve:`) also retires
+  Fusion's older holds of the same snapshot.
+- **Held requests.** A `NEEDS_USER_INPUT` reason that needs a real choice ends preparation with status and
   stage `held`, stage message `Waiting for you`, and `cad.hold {code, message,
   next_step, options}`. `cad.refusal {code, message}` remains for compatibility.
   The job read model exposes `held`, `next_step` and option buttons. Historical

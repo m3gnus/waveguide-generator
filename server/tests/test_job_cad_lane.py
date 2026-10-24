@@ -303,7 +303,7 @@ def test_solve_again_is_a_new_job_that_carries_what_the_first_recorded(h: JobsHa
     assert child["parent_job_id"] == parent["id"]
     assert _cad(child)["setup"]["revision_id"] == revision  # the recorded setup, named by no one
     assert len(h.ingest.calls) == 1  # its preparation was resumed, not made again
-    assert _row(h, parent["id"])["status"] == "held"  # the first stays as it ended
+    assert _row(h, parent["id"])["status"] == "error"  # the first stays as it ended
 
 
 def test_two_solve_again_presses_share_one_continuation(h: JobsHarness) -> None:
@@ -352,7 +352,7 @@ def test_each_continuation_has_its_own_client_request_id(h: JobsHarness) -> None
     h.submit_error = RuntimeError("second bind refused")
     child = h._loop.run(h.runtime.solve_cad_again(parent))
     _settle(h)
-    assert _row(h, child)["status"] == "held"
+    assert _row(h, child)["status"] == "error"  # an internal failure: Try again, not a hold
     grandchild = h._loop.run(h.runtime.solve_cad_again(child))
     _settle(h)
     assert _row(h, grandchild)["status"] == "queued"
@@ -374,7 +374,7 @@ def test_a_changed_parent_press_continues_the_newest_refused_child(h: JobsHarnes
     child = h._loop.run(h.runtime.solve_cad_again(parent))
     _settle(h)
     assert intent_of(_row(h, child)) is not None
-    assert _row(h, child)["status"] == "held"
+    assert _row(h, child)["status"] == "error"  # an internal failure: Try again, not a hold
 
     revision = _revision(h.store, _setup(rigid=12.0))
     h.blocked = "An update restart is pending."
@@ -425,7 +425,7 @@ def test_a_double_parent_press_after_the_new_child_is_refused_is_still_one_child
     grandchild, repeated = h._loop.run(double_press())
     assert grandchild == repeated
     _settle(h)
-    assert _row(h, grandchild)["status"] == "held"
+    assert _row(h, grandchild)["status"] == "error"
     assert _cad(_row(h, grandchild))["setup"]["revision_id"] == revision
     assert h._loop.run(h.runtime.solve_cad_again(parent, setup_revision_id=revision)) == grandchild
     assert h.jobs_store.list_jobs(limit=50)[1] == 3
@@ -885,9 +885,11 @@ def test_an_unexpected_failure_ends_the_job_refused_and_never_strands_it(h: Jobs
     summary = h.prepare(setup_revision_id=_revision(h.store, _setup()))
 
     job = h.latest_job()
-    assert (job["status"], summary["reason"]) == ("held", "preparation_failed")
-    assert "Preparing this request failed unexpectedly" in _cad(job)["refusal"]["message"]
-    assert "Press Solve now to try again." in summary["message"]
+    assert (job["status"], summary["reason"]) == ("error", "preparation_failed")
+    # WG's calm words; the unexpected failure itself is a developer diagnostic.
+    calm = "WG could not prepare Tritonia speaker. This has been recorded for the developers."
+    assert _cad(job)["refusal"]["message"] == calm and summary["message"].startswith("WG could not prepare ")
+    assert "unexpected failure" not in json.dumps(_cad(job)["refusal"])
     # The intent it ended with can be solved again, and the lane is free for it.
     h.ingest.error = None
     assert h.prepare(setup_revision_id=_revision(h.store, _setup()))["state"] == "accepted"

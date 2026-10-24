@@ -17,6 +17,8 @@ from server.cadlink.joblane.setup import solve_request_for, validate_setup
 from server.jobs.cad_intent import cad_of
 from test_cad_preparation import _received, _revision, _setup
 
+_CALM = "WG could not prepare this model. This has been recorded for the developers."
+
 
 @pytest.fixture
 def h(tmp_path):
@@ -70,7 +72,8 @@ def test_upgrade_migrates_every_pending_state_once_without_losing_preparation(h,
     assert h._loop.run(migrate()) == 0
     job = h.jobs_store.latest_cad_job("cmd-1")
     assert job is not None
-    expected = {"received": "preparing", "needs_user_input": "held", "processing": "held", "cancel_requested": "cancelled", "bound": "queued"}
+    # An interrupted attempt is a failed preparation (Try again), not a hold.
+    expected = {"received": "preparing", "needs_user_input": "held", "processing": "error", "cancel_requested": "cancelled", "bound": "queued"}
     assert job["status"] == expected[state]
     assert (job["run_number"] is not None) == (state == "bound")
     if state != "received":
@@ -298,8 +301,10 @@ def test_upgrade_refuses_a_processing_retry_even_when_it_carries_an_old_reason(h
     h.runtime._ensure_prep_lane = lambda: None
     assert h._loop.run(sweep_pending_solves(h.context())) == 1
     job = h.jobs_store.latest_cad_job("cmd-1")
-    assert job["status"] == "held" and job["run_number"] is None
-    assert cad_of(job)["refusal"] == {"code": "interrupted", "message": INTERRUPTED_MESSAGE}
+    assert job["status"] == "error" and job["run_number"] is None
+    # Stored in WG's calm words, never the old attempt's own text.
+    assert INTERRUPTED_MESSAGE
+    assert cad_of(job)["refusal"] == {"code": "interrupted", "message": _CALM.replace("this model", "Tritonia speaker")}
 
 
 def test_upgrade_keeps_an_unspecified_legacy_refusal_reason_and_message_unspecified(h):
@@ -436,7 +441,8 @@ def test_return_refusal_keeps_preparations_exact_stage_and_message(h, invalid):
             inputs = json.loads(h.row()["inputs_json"])
             inputs["manifest_sha256"] = "sha256:" + "0" * 64
             conn.execute("UPDATE cad_operations SET inputs_json = ? WHERE operation_id = 'cmd-1'", (json.dumps(inputs),))
-        expected = "The return bundle changed after Fusion asked WG to solve it. Send it again from Fusion."
+        # snapshot_invalid is internal: the read model shows WG's calm words.
+        expected = _CALM
     else:
         (h.workspace / bundle / "manifest.json").write_text("{not json")
         expected = None
@@ -531,7 +537,8 @@ def test_prepare_of_manual_solve_with_missing_copy_keeps_damaged_copy_remedy(h):
     shutil.rmtree(path)
     result = h._loop.run(compat_prepare(_request(h).app.state, "manual-1", wait=True))["operation"]
     assert result["state"] == "needs_user_input" and result["stage"] == "validating"
-    assert result["reason"] == "preparation_failed" and result["message"] == DAMAGED_COPY_MESSAGE
+    assert result["reason"] == "preparation_failed" and result["message"] == _CALM
+    assert DAMAGED_COPY_MESSAGE != _CALM
     assert len(h.ingest.calls) == 1 and h.submitted == []
 
 

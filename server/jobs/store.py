@@ -23,7 +23,7 @@ from typing import Any, Callable, Iterator, Mapping, Sequence
 from server.workspace.archive_identity import record_run_segment
 from server.cadlink.operations import (
     REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED,
-    NEEDS_USER_INPUT, hold_details, user_hold,
+    NEEDS_USER_INPUT, hold_details, is_calm_failure, user_hold,
 )
 from server.jobs.result_contracts import RESULT_ENVELOPE_ADAPTER
 from server.platform.paths import DATA_DIR_ENV, app_root, data_paths
@@ -1423,7 +1423,8 @@ class JobStore:
                 **dict(cad or {}),
                 "refusal": {"code": code, "message": message, **({"blocker": dict(blocker)} if blocker else {})},
             }
-            held = CAD_REASON_STATES.get(code) == NEEDS_USER_INPUT
+            # A failed preparation is never a hold: it ends as an error.
+            held = CAD_REASON_STATES.get(code) == NEEDS_USER_INPUT and not is_calm_failure(code, message)
             if held:
                 metadata["cad"]["hold"] = hold_details(code, message)
             conn.execute(
@@ -1443,47 +1444,74 @@ class JobStore:
             )
 
     def retire_held_cad_requests(self, job_id: str) -> list[dict[str, Any]]:
-        """The newest request for a lineage retires older holds, including old errors.
+        """The newest request for a model retires older holds, including old errors.
 
         Called when a snapshot arrives and when a preparation stops: an older
         lane finishing after a newer request cannot revive its waiting choice.
+        Two presses retire: a new Fusion press, for every older hold of its
+        project lineage, and a new WG solve of the model ("manual-solve:"), for
+        Fusion's older holds of that same snapshot -- solving the held
+        request's model from WG answers it.
         """
 
+        def cad_of_row(row: Mapping[str, Any]) -> dict[str, Any]:
+            return json.loads(row["task_metadata_json"] or "{}").get("cad") or {}
+
+        def is_root_press(row: Mapping[str, Any], manual: bool) -> bool:
+            operation_id = str(cad_of_row(row).get("operation_id") or "")
+            return (not row["parent_id"] and bool(operation_id)
+                    and operation_id.startswith("manual-solve:") == manual)
+
+        select = (
+            "SELECT simulation_jobs.id, status, task_metadata_json, created_at, "
+            "COALESCE(json_extract(config_json, '$.parent_job_id'), job_identity.parent_job_id) AS parent_id "
+            "FROM simulation_jobs LEFT JOIN job_identity ON job_identity.job_id = simulation_jobs.id "
+        )
         with self._lock, self._transaction() as conn:
-            lineage = conn.execute(
-                "SELECT json_extract(task_metadata_json, '$.cad.snapshot.project_lineage_id') "
-                "FROM simulation_jobs WHERE id = ?", (job_id,),
-            ).fetchone()
-            if lineage is None or not lineage[0]:
+            trigger = conn.execute(select + "WHERE simulation_jobs.id = ?", (job_id,)).fetchone()
+            if trigger is None:
                 return []
-            rows = conn.execute(
-                "SELECT simulation_jobs.id, status, task_metadata_json, "
-                "COALESCE(json_extract(config_json, '$.parent_job_id'), job_identity.parent_job_id) AS parent_id "
-                "FROM simulation_jobs LEFT JOIN job_identity ON job_identity.job_id = simulation_jobs.id "
-                "WHERE json_extract(task_metadata_json, '$.cad.snapshot.project_lineage_id') = ? "
-                "ORDER BY created_at DESC, simulation_jobs.id DESC", (lineage[0],),
-            ).fetchall()
-            # Only a new Fusion press replaces earlier choices. Separate WG
-            # model solves can deliberately keep different settings side by side;
-            # continuing a request also keeps its original delivery identity.
-            newest = None
-            for index, row in enumerate(rows):
-                cad = json.loads(row["task_metadata_json"] or "{}").get("cad") or {}
-                operation_id = str(cad.get("operation_id") or "")
-                if not row["parent_id"] and operation_id and not operation_id.startswith("manual-solve:"):
-                    newest = index
-                    break
-            if newest is None:
-                return []
+            snapshot = cad_of_row(trigger).get("snapshot") or {}
+            retire: list[tuple[Any, str]] = []
+            lineage = snapshot.get("project_lineage_id")
+            if lineage:
+                rows = conn.execute(
+                    select + "WHERE json_extract(task_metadata_json, '$.cad.snapshot.project_lineage_id') = ? "
+                    "ORDER BY created_at DESC, simulation_jobs.id DESC", (lineage,),
+                ).fetchall()
+                # Only a new Fusion press replaces earlier choices. Separate WG
+                # model solves can deliberately keep different settings side by side;
+                # continuing a request also keeps its original delivery identity.
+                newest = next((index for index, row in enumerate(rows) if is_root_press(row, manual=False)), None)
+                if newest is not None:
+                    retire += [(row, str(rows[newest]["id"])) for row in rows[newest + 1:]]
+            manifest = snapshot.get("manifest_sha256")
+            if manifest and is_root_press(trigger, manual=True):
+                rows = conn.execute(
+                    select + "WHERE json_extract(task_metadata_json, '$.cad.snapshot.manifest_sha256') = ? "
+                    "AND simulation_jobs.id != ? AND created_at <= ? "
+                    "ORDER BY created_at DESC, simulation_jobs.id DESC",
+                    (manifest, job_id, trigger["created_at"]),
+                ).fetchall()
+                # Only Fusion's requests: separate WG solves of one model may
+                # deliberately keep different settings side by side.
+                retire += [(row, job_id) for row in rows if not str(
+                    cad_of_row(row).get("operation_id") or "").startswith("manual-solve:")]
             events = []
-            for row in rows[newest + 1:]:
+            done: set[str] = set()
+            for row, newer in retire:
+                if str(row["id"]) in done:
+                    continue
+                done.add(str(row["id"]))
                 metadata = json.loads(row["task_metadata_json"] or "{}")
                 cad = metadata.get("cad") or {}
                 if not user_hold(row["status"], cad):
                     continue
-                cad["refusal"] = {"code": "superseded", "message": "Replaced by a newer request from Fusion."}
+                by_fusion = newer != job_id or not is_root_press(trigger, manual=True)
+                cad["refusal"] = {"code": "superseded", "message": "Replaced by a newer request from Fusion."
+                                  if by_fusion else "Replaced by a newer solve of this model in WG."}
                 cad.pop("hold", None)
-                cad["superseded_by"] = str(rows[newest]["id"])
+                cad["superseded_by"] = newer
                 metadata["cad"] = cad
                 now = _now_iso()
                 conn.execute(

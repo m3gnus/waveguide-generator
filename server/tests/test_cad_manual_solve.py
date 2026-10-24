@@ -15,7 +15,6 @@ import pytest
 
 from server.cadlink import api
 from server.cadlink.intake import ingest as ingest_module
-from server.cadlink.joblane import preparation_inputs
 from server.cadlink.intake.ingest import retain_snapshot
 from server.cadlink.joblane.manual_solve import OperationConflict, SnapshotNotRetained, UnknownIngest
 from server.cadlink.joblane.preparation import operation_summary
@@ -229,7 +228,8 @@ def test_a_manual_solve_whose_only_copy_is_damaged_waits_rather_than_rejects(
 
     assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed")
     assert "bundlePath" not in summary["message"]
-    assert summary["message"] == preparation_inputs.DAMAGED_COPY_MESSAGE
+    # An internal failure: WG's calm words; the detail is for the developers.
+    assert summary["message"].startswith("WG could not prepare ")
     assert harness.ingest.calls == [] and harness.submitted == []
 
 
@@ -304,7 +304,7 @@ def test_a_model_solve_replay_recovers_the_original_job(harness, after):
         assert harness.jobs_store.job_for_submission_key("cad-solve:manual-solve:press-1") == job_id
         await harness.runtime.wait_cad_preparations()
         row = harness.jobs_store.get_job_row(job_id)
-        assert row["status"] == ("queued" if after == "bound" else "error")
+        assert row["status"] == ("queued" if after == "bound" else "held")
         assert row["task_metadata"]["cad"]["setup"]["revision_id"] == revision
         assert row["label"] == body["label"]
         assert "manual_waiting" not in row["task_metadata"]["cad"]
@@ -437,11 +437,11 @@ def test_f2_job_dismiss_deletes_the_refused_chain_at_once(harness):
     async def flow():
         await _post_job(app, f"/api/jobs/{parent}/solve-again", {"setup_revision_id": revision, "frame_axis": "+z"})
         await harness.runtime.wait_cad_preparations()
-        assert harness.jobs_store.get_job_row(parent)["status"] == "error"
+        assert harness.jobs_store.get_job_row(parent)["status"] == "held"
         status, child = await _post_job(app, f"/api/jobs/{parent}/solve-again", {"setup_revision_id": revision, "frame_axis": "+z"})
         assert status == 200 and child["job_id"] != parent
         await harness.runtime.wait_cad_preparations()
-        assert harness.jobs_store.get_job_row(child["job_id"])["status"] == "error"
+        assert harness.jobs_store.get_job_row(child["job_id"])["status"] == "held"
         # Dismissing the child removes its refused parent in the same change.
         status, result = await _post_job(app, f"/api/jobs/{child['job_id']}/dismiss", {})
         assert status == 200 and result == {"deleted": True, "job_id": child["job_id"]}
@@ -461,7 +461,7 @@ def test_dismissed_refused_request_stays_gone_after_restart_and_redelivery(harne
     _create(harness, ingest_id)
     harness.prepare("manual-1", setup_revision_id=revision, expected_frame_axis="+z")
     refused = harness.jobs_store.latest_cad_job("manual-1")
-    assert refused["status"] == "error" and refused["id"] != "manual-1"
+    assert refused["status"] == "held" and refused["id"] != "manual-1"
     status, _ = harness._loop.run(
         _post_job(_jobs_app(harness), f"/api/jobs/{refused['id']}/dismiss", {})
     )
@@ -557,7 +557,7 @@ def test_r2_the_same_settings_after_a_refusal_are_a_new_solve_again(harness):
     async def flow():
         await _post_job(app, f"/api/jobs/{job_id}/solve-again", body)
         await harness.runtime.wait_cad_preparations()
-        assert harness.jobs_store.get_job_row(job_id)["status"] == "error"
+        assert harness.jobs_store.get_job_row(job_id)["status"] == "held"
         harness.runtime._ensure_prep_lane = lambda: None
         status, child = await _post_job(app, f"/api/jobs/{job_id}/solve-again", body)
         assert status == 200 and child["job_id"] != job_id

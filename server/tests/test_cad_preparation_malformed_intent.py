@@ -50,14 +50,15 @@ def test_startup_refuses_damaged_intent_once_and_prepares_valid_neighbor(h, valu
     assert cad_of(refused)["snapshot"] == {"diagnostic": "keep me"}
     refusal = cad_of(refused)["refusal"]
     assert refusal["code"] == "preparation_failed"
-    assert "a CAD intent names bundle_path" in refusal["message"]
+    # WG's calm words; the validation detail went to the developer diagnostic.
+    assert refusal["message"] == "WG could not prepare this model. This has been recorded for the developers."
     assert refused["error_message"] == refusal["message"]
     assert h.jobs_store.get_job_row(valid_id)["status"] == "queued"
     assert len(h.ingest.calls) == 1
     events = [event for event in h.jobs_store.replay_events(0) if event["jobId"] == damaged["id"]]
     assert len(events) == 1
     assert events[0]["type"] == "failed"
-    assert events[0]["payload"] == {"message": refusal["message"], "reason": "preparation_failed"}
+    assert events[0]["payload"] == {"stage": "error", "message": refusal["message"], "reason": "preparation_failed"}
     pushed = []
     while not h._queue.empty():
         pushed.append(h._queue.get_nowait())

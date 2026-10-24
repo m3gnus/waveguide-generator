@@ -2872,6 +2872,11 @@ export interface components {
             /** Expectedinstanceid */
             expectedInstanceId?: string | null;
             mesh: components["schemas"]["ImportedMeshRequest"];
+            /**
+             * Meshlimitoverride
+             * @default false
+             */
+            meshLimitOverride?: boolean;
             /** Skippedsourceids */
             skippedSourceIds?: string[];
             /** Surfacedeviationmm */
@@ -2992,6 +2997,11 @@ export interface components {
             /** Options */
             options?: components["schemas"]["CadHoldOption"][];
             preparation: components["schemas"]["CadStatePreparation"] | null;
+            /**
+             * Prepare Failed
+             * @default false
+             */
+            prepare_failed?: boolean;
             /** Reason */
             reason: string | null;
             /** Received At */

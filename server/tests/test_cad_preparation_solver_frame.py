@@ -678,7 +678,7 @@ def test_an_unreadable_retained_manifest_with_the_return_gone_waits(real) -> Non
     summary = _prepare(harness)
 
     assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed"), summary
-    assert "no copy it can use" in summary["message"]
+    assert summary["message"].startswith("WG could not prepare ")  # internal: calm words
     assert len(mesher.calls) == calls and harness.submitted == []
 
 

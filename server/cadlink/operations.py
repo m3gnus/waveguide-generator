@@ -104,6 +104,9 @@ REASON_CODES: Mapping[str, str] = {
     "frame_confirmation_required": NEEDS_USER_INPUT,
     "preparation_failed": NEEDS_USER_INPUT,
     "mesh_too_large": NEEDS_USER_INPUT,
+    # The solver's dense memory guard refused the mesh (after Solve anyway):
+    # the user can only send a coarser mesh. A calm failure, never a hold.
+    "solver_memory_exceeded": NEEDS_USER_INPUT,
     "engine_unavailable": NEEDS_USER_INPUT,
     # The engine the setup names is present but cannot solve this return.
     "engine_cannot_solve_return": NEEDS_USER_INPUT,
@@ -125,19 +128,75 @@ REASON_CODES: Mapping[str, str] = {
 }
 
 
+#: WG's own pipeline failures: developer matters, never a choice for the user.
+#: They end as a calm failed preparation ("WG could not prepare ..."), with the
+#: raw detail recorded for developers, never as a "Waiting for you" hold.
+INTERNAL_FAILURE_CODES = frozenset(
+    {"preparation_failed", "submission_refused", "interrupted", "snapshot_invalid"}
+)
+#: Failed preparations the read model words itself, whatever text is stored.
+CALM_FAILURE_CODES = INTERNAL_FAILURE_CODES | {"solver_memory_exceeded"}
+_MESH_CEILING_PREFIX = "This model meshes to "
+
+
+def _effective_code(code: Any, message: Any) -> str:
+    """Legacy rows stored the mesh ceiling as ``preparation_failed``."""
+
+    text = str(code or "")
+    if text == "preparation_failed" and str(message or "").startswith(_MESH_CEILING_PREFIX):
+        return "mesh_too_large"
+    return text
+
+
+def is_calm_failure(code: Any, message: Any = "") -> bool:
+    """Whether a refusal is a failed preparation rather than a user choice."""
+
+    return _effective_code(code, message) in CALM_FAILURE_CODES
+
+
+def internal_failure_message(document_name: Any) -> str:
+    """The one sentence a user sees for an internal preparation failure."""
+
+    name = str(document_name or "").strip() or "this model"
+    return f"WG could not prepare {name}. This has been recorded for the developers."
+
+
+def preparation_failure(code: str, document_name: Any) -> dict[str, Any]:
+    """The read model of a failed preparation: calm words, and what can still work."""
+
+    name = str(document_name or "").strip() or "this model"
+    dismiss = {"id": "dismiss", "label": "Dismiss request"}
+    if code == "solver_memory_exceeded":
+        return {
+            "code": code, "message": f"{name} is too large for this machine's memory.",
+            "next_step": "Use a coarser mesh resolution in Sources & Mesh… in Fusion, then send it again.",
+            "options": [dismiss],
+        }
+    # A rejected snapshot cannot be solved again; only dismissing it works.
+    retry = [] if REASON_CODES.get(code) == REJECTED else [{"id": "retry", "label": "Try again"}]
+    return {"code": code, "message": internal_failure_message(name), "next_step": None,
+            "options": [*retry, dismiss]}
+
+
 def user_hold(status: str, cad: Mapping[str, Any]) -> bool:
-    """Include refusals saved before holds had their own job status."""
+    """Include refusals saved before holds had their own job status.
+
+    A failed preparation is never a hold, however an older version stored it.
+    """
 
     refusal = cad.get("refusal") or {}
+    code, message = refusal.get("code"), refusal.get("message")
+    if is_calm_failure(code, message):
+        return False
     return status == "held" or (
-        status == "error" and REASON_CODES.get(refusal.get("code")) == NEEDS_USER_INPUT
+        status == "error" and REASON_CODES.get(code) == NEEDS_USER_INPUT
     )
 
 
 def hold_details(code: str, message: str) -> dict[str, Any]:
     """One vocabulary for persisted holds and historical request readers."""
 
-    choice_code = "mesh_too_large" if code == "preparation_failed" and message.startswith("This model meshes to ") else code
+    choice_code = _effective_code(code, message)
     action, label, next_step = {
         "mesh_too_large": (
             "solve_anyway", "Solve anyway",
@@ -148,11 +207,11 @@ def hold_details(code: str, message: str) -> dict[str, Any]:
         "engine_unavailable": ("review", "Review solve", "Open Results to prepare the solve engine."),
         "engine_cannot_solve_return": ("review", "Review settings", "Review this model's solve settings."),
         "ready_to_solve": ("retry", "Solve", "Start the prepared solve when you are ready."),
-        **{reason: ("retry", "Try again", "Try preparing this request again, or send an updated model from Fusion.")
-           for reason in ("preparation_failed", "submission_refused", "interrupted")},
     }.get(choice_code, ("review", "Review request", "Review this request in CAD Link before solving."))
     return {"code": code, "message": message, "next_step": next_step,
             "options": [{"id": action, "label": label}, {"id": "dismiss", "label": "Dismiss request"}]}
+
+
 BASELINE_KINDS = frozenset({"document_signature_hash"})
 OUTCOME_FIELDS = frozenset(
     {"message", "reconciled", "evidence", "setup_defaults", "frame_axis_automatic"}
@@ -418,11 +477,13 @@ __all__ = [
     "ACCEPTED",
     "BASELINE_KINDS",
     "CANCELLED",
+    "CALM_FAILURE_CODES",
     "CANCEL_REQUESTED",
     "CLAIMABLE_STATES",
     "FUSION_STAGES",
     "DIGEST_VERSION",
     "INSERT_LINK",
+    "INTERNAL_FAILURE_CODES",
     "KINDS",
     "MUTATING_KINDS",
     "NEEDS_USER_INPUT",
@@ -450,9 +511,14 @@ __all__ = [
     "canonical_json",
     "check_transition",
     "fusion_mutation_precheck",
+    "hold_details",
+    "internal_failure_message",
+    "is_calm_failure",
     "normalize_request",
     "prepare_and_solve_request",
+    "preparation_failure",
     "request_digest",
     "require_kind",
+    "user_hold",
     "validate_outcome",
 ]

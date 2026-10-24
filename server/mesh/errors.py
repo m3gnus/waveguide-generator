@@ -33,3 +33,17 @@ class MeshTooLarge(RuntimeError):
             f"raise Walls (now {wall:g} mm; default {default_wall:g} mm) "
             "or add a Coarse surface group. Check the model size, or choose Solve anyway."
         )
+
+
+class SolverMemoryTooLarge(RuntimeError):
+    """The solver mesh needs more dense-solver memory than this machine allows.
+
+    Raised by the dense memory guard even after the triangle ceiling was
+    overridden ("Solve anyway"): only a coarser mesh can help, so callers end
+    the request calmly with :data:`USER_MESSAGE` instead of asking again.
+    """
+
+    USER_MESSAGE = (
+        "This model is too large for this machine's memory. "
+        "Use a coarser mesh resolution, then prepare it again."
+    )
