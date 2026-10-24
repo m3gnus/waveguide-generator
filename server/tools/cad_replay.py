@@ -65,11 +65,12 @@ def request_bundle(request_id: str, live: Path) -> tuple[Path, str]:
     collectors, acknowledgements or schema migrations run against the source.
     """
     from server.cadlink.intake.ingest import retained_snapshot_path
+    from server.platform.temp_session import temporary_directory_root
 
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", request_id):
         raise ValueError("invalid request id")
     database = live / "db" / "cadlink.db"
-    with tempfile.TemporaryDirectory(prefix="wg-cad-request-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="wg-cad-request-", dir=temporary_directory_root()) as temporary:
         copied = Path(temporary) / database.name
         _copy_database(database, copied)
         with closing(sqlite3.connect(copied.as_uri() + "?mode=ro", uri=True)) as connection:

@@ -319,7 +319,9 @@ def test_wg_ingress_literals_match_the_pre_consolidation_reader():
 REQUEST_DIGEST_NON_ASCII = "sha256:ff2005fe471198911fc020ffd008d5fb521d494421ab1cfd04e4f6b8e0ff9638"
 DESIGN_HASH_NON_ASCII = "sha256:1e90c0011be979e9a43b113ea8e28037b070be6e9def0b1d762250aac1c2d1e3"
 DESIGN_HASH_NAN = "sha256:74485b0126616c29f67e48fb9033a771406b9f9f51ce8a0dcedc2e94551ac519"
-MESHING_SEMANTICS_FINGERPRINT = "sha256:874c19d1580db51227769b91cbc00c5d913ebea5223fe1a34ce92701eda9579b"
+# cut_recovery_fallback: full-domain-v1 (0.3.6) is a deliberate new identity
+# (docs/architecture/CAD-OPERATIONS.md, "the same fingerprint also names semantic contracts").
+MESHING_SEMANTICS_FINGERPRINT = "sha256:0fff255207703ad3826ece92de8c661edf9cb06da6032bfe74dd1ee21978eb7d"
 BASELINE_MESHING_SEMANTICS = "sha256:79aa14dff0812302be2bd64c494913fd39f370466ca80458ce285f6a63c173c8"
 INGEST_NORMALISED = (
     '{"array":[1.5,-0.0],"band":"HF","flt":0.25,'

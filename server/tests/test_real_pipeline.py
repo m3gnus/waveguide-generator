@@ -613,9 +613,10 @@ def test_a_cad_return_ingests_prepares_and_solves_through_its_model(tmp_path: Pa
             held = runtime.store.get_job_row(pressed["job_id"])
             cad = held["task_metadata"]["cad"]
             # Prepared through the production ingest, then held: this design is
-            # unknown to a fresh data directory, which the user has to review.
+            # unknown to a fresh data directory, which the user has to review --
+            # a real choice, so a "Waiting for you" hold, never a failed run.
             assert (held["status"], held["stage"], cad["refusal"]["code"]) == (
-                "error", "error", "findings_need_review",
+                "held", "held", "findings_need_review",
             ), held
             preparation_id = cad["preparation"]["preparation_id"]
             prepared = app.state.cadlink_store.get_ingest(preparation_id)

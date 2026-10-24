@@ -11,6 +11,8 @@ containers = server
 # jobs/cadlink coordinate each other, while registry selects solver adapters.
 # Pipes require independent siblings; colons permit sibling collaboration.
 layers =
+    # Developer tools run as their own process; nothing imports them.
+    tools
     __main__
     app : cli
     updates
