@@ -378,7 +378,7 @@ def test_cancel_preserves_only_confirmed_backend_inside_windows_stub_job(
     terminated, closed, reaped = [], [], []
     job = SimpleNamespace(
         contains=lambda pid: member,
-        terminate=lambda: terminated.append("job"),
+        stop=lambda timeout: terminated.append("job") or True,
         close=lambda: closed.append("job"),
     )
     child = SimpleNamespace(

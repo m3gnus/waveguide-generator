@@ -486,8 +486,10 @@ class BemppProcessHost:
         if process is None:
             _close_quietly(connection)
             if job is not None:
-                job.terminate()
+                stopped = child_process.stop_job(job)
                 job.close()
+                if not stopped:
+                    child_process.record_unconfirmed_stop("bempp-stop", "the BEMPP worker job")
             if stderr is not None:
                 stderr.discard()
             return
@@ -502,9 +504,12 @@ class BemppProcessHost:
         # The direct child is gone, but a parallel sweep's workers are not its
         # children by then -- they are siblings under the same job/group.
         # Reaching them is what keeps Stop honest once workers > 1.
-        child_process.finish_worker_tree(
+        if not child_process.finish_worker_tree(
             process, job, group, kill_group=kill_process_group
-        )
+        ):
+            child_process.record_unconfirmed_stop(
+                "bempp-stop", "the BEMPP worker", pid=process.pid, group=group
+            )
         if stderr is not None:
             stderr.discard()
 

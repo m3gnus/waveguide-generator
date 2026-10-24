@@ -956,8 +956,9 @@ def test_a_windows_job_is_used_and_the_pipe_is_not_read_for_a_group(
     terminated: list[str] = []
 
     class Job:
-        def terminate(self) -> None:
-            terminated.append("terminate")
+        def stop(self, timeout: float) -> bool:
+            terminated.append("stop")
+            return True
 
         def close(self) -> None:
             terminated.append("close")
@@ -990,7 +991,7 @@ def test_a_windows_job_is_used_and_the_pipe_is_not_read_for_a_group(
 
     asyncio.run(exercise())
 
-    assert terminated == ["terminate", "close"]
+    assert terminated == ["stop", "close"]
     assert killed == []
     assert parents[0].received == []
 
@@ -1104,3 +1105,24 @@ def test_field_timeout_rewarms_unless_shutdown_closed_host(monkeypatch, close_be
             await original_to_thread(host.close)
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("with_process", [True, False])
+def test_a_stop_that_cannot_confirm_the_tree_is_a_developer_incident(
+    monkeypatch, with_process
+) -> None:
+    recorded: list = []
+    monkeypatch.setattr(
+        child_process, "record_unconfirmed_stop",
+        lambda phase, subject, **evidence: recorded.append((phase, subject)),
+    )
+    monkeypatch.setattr(child_process, "terminate_worker", lambda *args, **kwargs: None)
+    monkeypatch.setattr(child_process, "finish_worker_tree", lambda *args, **kwargs: False)
+    job = type("Job", (), {"stop": lambda self, timeout: False, "close": lambda self: None})()
+    host = BemppProcessHost()
+    host._job = job
+    if with_process:
+        host._process = type("Process", (), {"pid": 9})()
+    host._terminate_sync()
+    subject = "the BEMPP worker" if with_process else "the BEMPP worker job"
+    assert recorded == [("bempp-stop", subject)]

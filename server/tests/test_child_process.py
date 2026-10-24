@@ -329,7 +329,7 @@ def test_tree_stop_never_signals_the_servers_group(monkeypatch):
     assert calls == ["terminate"]
 
 
-def test_worker_stop_keeps_root_protocol_tree_order_and_join_limits():
+def test_worker_stop_keeps_root_protocol_tree_order_and_join_limits(monkeypatch):
     calls = []
     alive = iter([True, True, False])
     process = SimpleNamespace(
@@ -340,6 +340,7 @@ def test_worker_stop_keeps_root_protocol_tree_order_and_join_limits():
     )
     child_process.terminate_worker(process, join_seconds=0.5)
     calls.append("protocol teardown")
+    monkeypatch.setattr(child_process, "_process_group_alive", lambda group: False)
     child_process.finish_worker_tree(
         process, None, 42, kill_group=lambda group: calls.append(("group", group))
     )
@@ -357,13 +358,49 @@ def test_worker_stop_keeps_root_protocol_tree_order_and_join_limits():
 def test_worker_job_owns_tree_instead_of_announced_group():
     calls = []
     job = SimpleNamespace(
-        terminate=lambda: calls.append("terminate job"), close=lambda: calls.append("close job")
+        stop=lambda timeout: calls.append(("stop job", timeout)) or True,
+        close=lambda: calls.append("close job"),
     )
     process = SimpleNamespace(is_alive=lambda: False, join=lambda: calls.append("join"))
-    child_process.finish_worker_tree(
+    assert child_process.finish_worker_tree(
         process, job, 42, kill_group=lambda group: pytest.fail("group used")
     )
-    assert calls == ["terminate job", "close job", "join"]
+    assert calls == [("stop job", child_process.TREE_STOP_GRACE_S), "close job", "join"]
+
+
+def test_worker_tree_reports_a_job_member_it_could_not_confirm_gone():
+    closed = []
+    job = SimpleNamespace(stop=lambda timeout: False, close=lambda: closed.append(True))
+    process = SimpleNamespace(is_alive=lambda: False, join=lambda: None)
+    assert not child_process.finish_worker_tree(process, job, None, kill_group=pytest.fail)
+    assert closed == [True], "an unconfirmed job is still closed"
+
+
+@pytest.mark.parametrize("survives", [False, True])
+def test_worker_tree_waits_for_the_killed_group_to_be_gone(monkeypatch, survives):
+    checks = []
+    monkeypatch.setattr(
+        child_process, "_process_group_alive", lambda group: checks.append(group) or survives
+    )
+    process = SimpleNamespace(is_alive=lambda: False, join=lambda: None)
+    stopped = child_process.finish_worker_tree(
+        process, None, 42, kill_group=lambda group: None, grace_seconds=0.05
+    )
+    assert stopped is not survives
+    assert checks and set(checks) == {42}
+
+
+def test_an_unconfirmed_stop_is_a_developer_incident_not_user_text(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(
+        child_process, "record_incident",
+        lambda kind, phase, **kwargs: recorded.append((kind, phase, kwargs)),
+    )
+    child_process.record_unconfirmed_stop("bempp-stop", "the BEMPP worker", pid=9)
+    assert recorded == [(
+        "process-tree-survived", "bempp-stop",
+        {"evidence": {"subject": "the BEMPP worker", "pid": 9}},
+    )]
 
 
 @pytest.mark.parametrize("error", [AssertionError, OSError, ValueError])

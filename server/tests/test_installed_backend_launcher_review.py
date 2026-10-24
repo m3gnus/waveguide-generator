@@ -265,7 +265,7 @@ def test_windows_spawn_requests_breakaway_and_checks_child_before_job(tmp_path, 
     monkeypatch.setattr(backend_owner.sys, "platform", "win32")
     monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", lambda: 0x01000000)
     monkeypatch.setattr(process_tree, "require_windows_job_detached", lambda h: calls.append(("detached", h)))
-    job = SimpleNamespace(terminate=lambda: None, close=lambda: None)
+    job = SimpleNamespace(stop=lambda timeout: True, close=lambda: None)
     def confine(pid, **kwargs):
         assert calls[-1] == ("detached", 42)
         return job

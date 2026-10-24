@@ -51,12 +51,13 @@ class FakeChild:
 
 
 class FakeJob:
-    def __init__(self):
+    def __init__(self, stopped=True):
         self.calls = []
+        self.stopped = stopped
 
     def stop(self, timeout):
         self.calls.append("stop")
-        return True
+        return self.stopped
 
     def close(self):
         self.calls.append("close")
@@ -427,3 +428,11 @@ def test_failed_job_assignment_refuses_and_leaves_no_worker(monkeypatch, tmp_pat
                 if stream is not None:
                     with contextlib.suppress(Exception):
                         stream.close()
+
+
+def test_a_worker_tree_not_confirmed_gone_is_refused(monkeypatch, fake_child_has_no_process_group):
+    child, job = FakeChild(), FakeJob(stopped=False)
+    monkeypatch.setattr(process_tree, "popen_in_windows_job", lambda command, **kwargs: (child, job))
+    with pytest.raises(ValueError, match="could not be confirmed stopped, so nothing it produced was trusted"):
+        native_source._run_worker(_STAGE)
+    assert job.calls == ["stop", "close"]

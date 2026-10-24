@@ -452,12 +452,14 @@ def _run_worker(stage):
     except ContainedStartError as exc:
         logger.warning("Native-source worker contained start refused: %s", exc)
         raise ValueError("native source ingestion failed: " + str(exc)) from exc
+    tree_stopped = False
     try:
         try:
             stdout, stderr = child.communicate(timeout=_WORKER_TIMEOUT_S)
         finally:
-            # Also stop any grandchild left behind after a normal worker exit.
-            isolation.terminate_process_tree(child, job)
+            # Also stop any grandchild left behind after a normal worker exit;
+            # nothing the worker wrote is read until its whole tree is gone.
+            tree_stopped = isolation.terminate_process_tree(child, job)
     except subprocess.TimeoutExpired as exc:
         logger.warning(
             "Native-source worker exceeded its %g second deadline (pid %s) and was stopped",
@@ -479,6 +481,15 @@ def _run_worker(stage):
                 if stream is not None:
                     with contextlib.suppress(Exception):
                         stream.close()
+    if not tree_stopped:
+        logger.warning(
+            "Native-source worker (pid %s) left helper processes that could not be "
+            "confirmed stopped", child.pid,
+        )
+        raise ValueError(
+            "native source ingestion failed: the native-source worker's helper processes "
+            "could not be confirmed stopped, so nothing it produced was trusted"
+        )
     if child.returncode:
         ceiling = _memory_ceiling_message(stderr)
         if ceiling:

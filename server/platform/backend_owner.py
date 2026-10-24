@@ -33,6 +33,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from .child_process import record_unconfirmed_stop, stop_job
 from .instance import (
     LOCK_FILENAME,
     LOCK_OPEN_FLAGS,
@@ -336,7 +337,8 @@ def _spawn_attempt(
         if process is not None:
             _terminate_child(process)
         if job is not None:
-            job.terminate()
+            if not stop_job(job):
+                record_unconfirmed_stop("backend-start", "the starting backend")
             job.close()
         from server.platform.job_start import ContainedStartError
         if not isinstance(exc, (OSError, ContainedStartError)):
@@ -375,8 +377,8 @@ def _log_tail(path: Path) -> str:
 
 def _terminate_child(process: subprocess.Popen[bytes]) -> str:
     job = getattr(process, "_wg_start_job", None)
-    if job is not None:
-        job.terminate()
+    if job is not None and not stop_job(job):
+        record_unconfirmed_stop("backend-start", "the starting backend", pid=process.pid)
     if process.poll() is not None:
         process.wait()
         return ""

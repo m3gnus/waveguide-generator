@@ -548,7 +548,7 @@ def test_windows_creation_flags(data_dir: Path, monkeypatch) -> None:
 
     captured = {}
     monkeypatch.setattr(process_tree, "confine_to_windows_job", lambda *args, **kwargs:
-                        SimpleNamespace(terminate=lambda: None, close=lambda: None))
+                        SimpleNamespace(stop=lambda timeout: True, close=lambda: None))
     monkeypatch.setattr(process_tree, "windows_backend_breakaway_flags", lambda: 0)
     monkeypatch.setattr(process_tree, "require_windows_job_detached", lambda handle: None)
 
@@ -575,7 +575,7 @@ def test_windows_contained_fallback_keeps_start_job(
     from server.platform import job_start, process_tree
 
     calls, spawns, stopped = [], [], []
-    job = SimpleNamespace(terminate=lambda: calls.append("terminate job"), close=lambda: None)
+    job = SimpleNamespace(stop=lambda timeout: calls.append("stop job") or True, close=lambda: None)
     active = {}
 
     def probe():
@@ -687,7 +687,7 @@ def test_forbidding_windows_job_requires_contained_permission(data_dir, monkeypa
     kernel = SimpleNamespace(GetCurrentProcess=lambda: 42, IsProcessInJob=member, QueryInformationJobObject=query)
     monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **kw: kernel, raising=False)
     monkeypatch.setattr(backend_owner, "sys", SimpleNamespace(platform="win32"))
-    job = SimpleNamespace(terminate=lambda: None, close=lambda: None)
+    job = SimpleNamespace(stop=lambda timeout: True, close=lambda: None)
     monkeypatch.setattr(process_tree, "confine_to_windows_job", lambda *a, **kw: job)
     captured = []
     def popen(argv, **kwargs):
@@ -1041,3 +1041,16 @@ def test_respawn_cleanup_targets_only_the_current_child(data_dir, monkeypatch, f
         backend_owner._start_and_wait(data_dir, ["backend"], 5.0)
     assert reaped == [100] and closed == [100, 200]
     assert terminated and set(terminated) == {200}
+
+
+@pytest.mark.parametrize("stopped", [True, False])
+def test_an_unconfirmed_start_job_stop_is_a_developer_incident(monkeypatch, stopped):
+    recorded = []
+    monkeypatch.setattr(
+        backend_owner, "record_unconfirmed_stop",
+        lambda phase, subject, **evidence: recorded.append((phase, subject, evidence)),
+    )
+    job = SimpleNamespace(stop=lambda timeout: stopped)
+    process = SimpleNamespace(pid=77, _wg_start_job=job, poll=lambda: 0, wait=lambda: 0)
+    assert backend_owner._terminate_child(process) == ""
+    assert recorded == ([] if stopped else [("backend-start", "the starting backend", {"pid": 77})])

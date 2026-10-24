@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
+import logging
 import multiprocessing
 import os
 import signal
@@ -20,6 +21,7 @@ import threading
 import time
 from typing import Any, Callable, Mapping
 
+from server.platform.incidents import record_incident
 from server.platform.process_tree import cancel_blocked_reads, kill_own_process_group
 
 
@@ -88,20 +90,60 @@ def _process_group_alive(group: int) -> bool:
     return True
 
 
-def _wait_for_tree_exit(
-    process: subprocess.Popen[bytes], group: int | None, timeout: float
-) -> bool:
+#: How long a tree stop waits for confirmed exit before reporting it unconfirmed.
+TREE_STOP_GRACE_S = 2.0
+
+
+def _wait_until(done: Callable[[], bool], timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while True:
-        # poll() also reaps the direct child. Without that, its zombie keeps
-        # the process group looking alive even after every process was stopped.
-        process.poll()
-        alive = _process_group_alive(group) if group is not None else process.poll() is None
-        if not alive:
+        if done():
             return True
         if time.monotonic() >= deadline:
             return False
         time.sleep(0.02)
+
+
+def _wait_for_tree_exit(
+    process: subprocess.Popen[bytes], group: int | None, timeout: float
+) -> bool:
+    def gone() -> bool:
+        # poll() also reaps the direct child. Without that, its zombie keeps
+        # the process group looking alive even after every process was stopped.
+        process.poll()
+        return not (_process_group_alive(group) if group is not None else process.poll() is None)
+
+    return _wait_until(gone, timeout)
+
+
+def stop_job(job: Any, timeout: float = TREE_STOP_GRACE_S) -> bool:
+    """Stop every member of a Windows job and report whether all were confirmed gone.
+
+    ``job.stop`` (``process_tree.WindowsJob.stop``) is the one implementation;
+    a job that cannot even be asked counts as unconfirmed.
+    """
+
+    try:
+        return bool(job.stop(timeout))
+    except Exception:
+        return False
+
+
+#: The incident kind for a process tree that a stop could not confirm gone.
+TREE_SURVIVED_KIND = "process-tree-survived"
+
+
+def record_unconfirmed_stop(phase: str, subject: str, **evidence: Any) -> None:
+    """Keep a developer incident for a stop whose tree was not confirmed gone.
+
+    For stops that have no answer to refuse (Stop, teardown, a start already
+    failing): the user's outcome is unchanged and gets no technical text.
+    """
+
+    logging.getLogger("wg.solve").warning(
+        "Could not confirm that %s and its helpers stopped: %s", subject, evidence
+    )
+    record_incident(TREE_SURVIVED_KIND, phase, evidence={"subject": subject, **evidence})
 
 
 def terminate_process_tree(
@@ -122,12 +164,7 @@ def terminate_process_tree(
     may still be running.
     """
 
-    job_stopped = True
-    if job is not None:
-        try:
-            job_stopped = bool(job.stop(grace_seconds))
-        except Exception:
-            job_stopped = False
+    job_stopped = True if job is None else stop_job(job, grace_seconds)
     resolved_group = (
         group
         if group is not None
@@ -473,16 +510,25 @@ def terminate_worker(process: Any, *, join_seconds: float) -> None:
 
 
 def finish_worker_tree(
-    process: Any, job: Any, group: int | None, *, kill_group: Callable[[int], Any]
-) -> None:
-    """After protocol teardown, stop descendants and reap the direct child."""
+    process: Any, job: Any, group: int | None, *, kill_group: Callable[[int], Any],
+    grace_seconds: float = TREE_STOP_GRACE_S,
+) -> bool:
+    """After protocol teardown, stop descendants and reap the direct child.
+
+    Returns whether the descendants were confirmed gone within ``grace_seconds``.
+    """
+    stopped = True
     if job is not None:
-        job.terminate()
+        stopped = stop_job(job, grace_seconds)
         job.close()
     elif group is not None:
         kill_group(group)
     if not process.is_alive():
         process.join()
+    if job is None and group is not None:
+        # Reaped first: the direct child's zombie would keep the group alive.
+        stopped = _wait_until(lambda: not _process_group_alive(group), grace_seconds)
+    return stopped
 
 
 def worker_exitcode(process: Any, *, join_seconds: float) -> int | None:
