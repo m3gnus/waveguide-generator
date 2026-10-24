@@ -427,7 +427,14 @@ jobs:
         # hundreds of files at ~1.6x Linux's per-test time, so no single file
         # wins it back. A crashed or hung worker is still named: faulthandler
         # exits that worker and xdist reports the test it was running.
-        run: python -m pytest ${{ matrix.paths }} -v --durations=25 ${{ matrix.os == 'windows-latest' && matrix.suite == 'server' && '-n 4 --dist=loadgroup' || '' }}
+        #
+        # Ubuntu and macOS server followed in run 40134196208: Ubuntu was
+        # cancelled at its 60m cap at 78% of pytest (no hang, no failure
+        # before it), and macOS finished in 52m of its 60m. Each server leg
+        # gets one worker per runner vCPU (four on Ubuntu and Windows, three
+        # on macOS), the count the local --full gate already uses; the job
+        # caps above stay as the backstop.
+        run: python -m pytest ${{ matrix.paths }} -v --durations=25 ${{ matrix.suite == 'server' && (matrix.os == 'macos-latest' && '-n 3 --dist=loadgroup' || '-n 4 --dist=loadgroup') || '' }}
 
   windows-installer-replay:
     name: Replay retained Windows installer gates
