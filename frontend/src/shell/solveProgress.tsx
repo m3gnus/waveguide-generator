@@ -332,7 +332,7 @@ export function formatClock(seconds: number): string {
  * one name per engine, never a bare `.toUpperCase()` of the slug. */
 const ENGINE_LABELS: Record<string, string> = {
   auto: 'AUTO',
-  metal: 'Metal',
+  metal: 'Metal-BEM',
   beat: 'BEAT Engine',
   'beat-cpu': 'BEAT CPU',
   'beat-metal': 'BEAT Metal',

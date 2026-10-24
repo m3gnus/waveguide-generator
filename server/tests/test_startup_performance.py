@@ -742,13 +742,13 @@ def test_jobs_answer_while_solver_prewarm_is_synchronously_blocked(
     from server.tests.test_app_batch_e import TestClient
 
     monkeypatch.setenv("WG2_SOLVER_WARMUP", "1")
-    saved = "beat-cpu" if blocked_work.startswith("beat") else "bempp"
+    saved = "beat-cpu" if blocked_work.startswith("beat") else "metal" if blocked_work == "solver-import" else "bempp"
     monkeypatch.setattr(app_module, "detect_engines", lambda: [
         EngineInfo(saved, True, "test", "0.1.0"),
     ])
     monkeypatch.setattr(solver_warmup, "persisted_engine_preference", lambda _settings: saved)
     monkeypatch.setattr(solver_warmup, "prewarm_beat_worker_for_engine", lambda _engine: True)
-    monkeypatch.setattr(solver_warmup, "start_solver_warmup", lambda: None)
+    monkeypatch.setattr(solver_warmup, "start_solver_warmup", lambda **kwargs: None)
     monkeypatch.setattr(bempp_process, "prewarm_bempp_process", lambda: None)
     monkeypatch.setattr(bempp_process, "shutdown_bempp_process", lambda: None)
     monkeypatch.setattr(beat_cpu_runtime, "cpu_preparation_in_flight", lambda: False)
@@ -886,7 +886,7 @@ def test_the_solver_warmup_is_opt_in(tmp_path: Path) -> None:
     assert "prewarm_solver" not in default_startup
 
     warmed = create_app(data_dir=tmp_path, solver_warmup=True)
-    assert "prewarm_solver" in {handler.__name__ for handler in warmed.router.on_startup}
+    assert "prewarm_selected_native" in {handler.__name__ for handler in warmed.router.on_startup}
 
 
 def test_the_solver_warmup_handler_never_blocks_startup(
@@ -1350,10 +1350,10 @@ def test_the_beat_prewarm_follows_the_users_choice_over_autos(
     assert warmed == ["beat"]
 
 
-def test_a_saved_engine_this_host_cannot_run_falls_back_to_auto(
+def test_a_saved_engine_this_host_cannot_run_does_not_warm_auto(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A GPU that has gone must cost the optimisation, not the whole warmup."""
+    """An unavailable explicit choice must never warm a different solver."""
 
     from server.app import bempp_worker_prewarm
     from server.engines.registry import EngineInfo, EngineRegistry
@@ -1371,14 +1371,14 @@ def test_a_saved_engine_this_host_cannot_run_falls_back_to_auto(
 
     asyncio.run(bempp_worker_prewarm(registry, _persisted("beat")))
 
-    assert warmed == ["bempp"]
+    assert warmed == []
 
 
 @pytest.mark.parametrize("replacement", ["beat-cpu", "beat-metal"])
-def test_failed_beat_head_start_warms_the_resolved_backend(
+def test_failed_beat_head_start_never_warms_a_replacement(
     monkeypatch: pytest.MonkeyPatch, replacement: str
 ) -> None:
-    """A failed CUDA guess does not count as warming another BEAT backend."""
+    """An unavailable explicit backend never warms a ready replacement."""
 
     from server.app import beat_worker_prewarm
     from server.engines.registry import EngineInfo, EngineRegistry
@@ -1400,13 +1400,13 @@ def test_failed_beat_head_start_warms_the_resolved_backend(
 
     asyncio.run(beat_worker_prewarm(registry, _persisted("beat-cuda")))
 
-    assert warmed == ["beat-cuda", replacement]
+    assert warmed == ["beat-cuda"]
 
 
-def test_successful_head_start_does_not_hide_a_different_resolved_backend(
+def test_explicit_backend_never_warms_a_ready_alternative(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Only the exact backend selected after probing can be considered warm."""
+    """An explicit backend remains the only candidate for warm-up."""
 
     from server.app import beat_worker_prewarm
     from server.engines.registry import EngineInfo, EngineRegistry
@@ -1427,7 +1427,7 @@ def test_successful_head_start_does_not_hide_a_different_resolved_backend(
 
     asyncio.run(beat_worker_prewarm(registry, _persisted("beat-cuda")))
 
-    assert warmed == ["beat-cuda", "beat-cpu"]
+    assert warmed == ["beat-cuda"]
 
 
 def test_leaving_the_picker_on_auto_still_warms_autos_answer(
@@ -1573,9 +1573,7 @@ def test_a_saved_metal_engine_does_not_take_beats_head_start(
         beat_worker_prewarm(EngineRegistry(detector=detector), _persisted("metal"))
     )
 
-    # Reached only through AUTO's resolved answer, after the probe, and
-    # refused there because it is not a BEAT engine.
-    assert warmed == ["metal"]
+    assert warmed == []
 
 
 def test_the_probe_still_gates_a_prewarm_with_no_saved_engine(
@@ -1605,16 +1603,10 @@ def test_the_probe_still_gates_a_prewarm_with_no_saved_engine(
     assert warmed == ["bempp"]
 
 
-def test_a_head_start_that_could_not_warm_still_falls_back_to_autos_choice(
+def test_a_failed_head_start_never_warms_a_different_solver(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Guessing early must cost a failed warmup, never a missing one.
-
-    ``prewarm_*_for_engine`` catches its own failures and returns False -- a
-    GPU that has gone, a package this machine never installed -- so the
-    reconciliation after the probe is what keeps the pre-existing behaviour:
-    whatever AUTO resolved to is warmed instead.
-    """
+    """A failed warm-up leaves the explicit selection untouched."""
 
     from server.app import beat_worker_prewarm
     from server.solver import warmup as solver_warmup
@@ -1633,7 +1625,7 @@ def test_a_head_start_that_could_not_warm_still_falls_back_to_autos_choice(
 
     asyncio.run(beat_worker_prewarm(registry, _persisted("beat")))
 
-    assert warmed == ["beat", "metal"]
+    assert warmed == ["beat"]
 
 
 def test_a_cancelled_prewarm_does_not_leave_its_head_start_running(

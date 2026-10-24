@@ -51,96 +51,55 @@ def test_official_presentation_does_not_load_hbb(official, monkeypatch):
     assert "server.solver.beat_runtime.cli" in facade.provision_command()
 
 
-@pytest.mark.parametrize("backend,system", [("metal", "Darwin"), ("cuda", "Windows"), ("rocm", "Linux")])
-def test_background_stages_publish_progress_and_preserve_cpu(official, monkeypatch, tmp_path, backend, system):
-    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs:
-                        {name: {"available": name == backend, "reason": "mock hardware"} for name in hardware.GPU_BACKENDS})
+@pytest.mark.parametrize("backend", ["cpu", "metal", "cuda", "rocm"])
+def test_selection_prepares_only_that_backend(official, monkeypatch, backend):
     begun, finish = threading.Event(), threading.Event()
-    ready = set()
-    observed = []
     calls = []
+    monkeypatch.delenv(facade.SKIP_PROVISION_ENV_VAR, raising=False)
+    monkeypatch.delenv(facade.SKIP_GPU_PROVISION_ENV_VAR, raising=False)
+    monkeypatch.setattr(readiness, "backend_readiness", lambda *a, **kw:
+                        readiness.BackendReadiness(False, "unprovisioned", "mock"))
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kw:
+                        {backend: {"available": True, "reason": "mock"}})
 
-    def verdict(backend, *args, **kwargs):
-        return readiness.BackendReadiness(backend in ready, "ready" if backend in ready else "unprovisioned", backend)
-
-    def cpu(**kwargs):
-        calls.append(("cpu", kwargs["environ"], threading.current_thread().name))
-        kwargs["step_cb"]("probe")
-        kwargs["status_cb"]("probe")
+    def provision(**kwargs):
+        calls.append(backend)
+        kwargs["step_cb"]("precompile")
         begun.set()
         assert finish.wait(2)
-        ready.add("cpu")
         return {"status": "ready"}
 
-    def gpu(**kwargs):
-        calls.append((backend, kwargs["environ"], threading.current_thread().name))
-        kwargs["step_cb"]("offline")
-        kwargs["status_cb"]("offline")
-        statuses = _official_runtime_statuses()
-        assert statuses["cpu"]["available"] and statuses["cpu"]["state"] == "ready"
-        assert facade.cpu_runtime_readiness(None).ready
-        assert all(statuses[name]["state"] != "provisioning" for name in hardware.GPU_BACKENDS if name != backend)
-        status = statuses[backend]
-        assert not status["available"] and status["state"] == "provisioning"
-        assert "offline" in status["reason"]
-        return {"status": "failed"}
-
-    monkeypatch.setattr(readiness, "backend_readiness", verdict)
-    monkeypatch.setattr(readiness, "provision_cpu", cpu)
-    monkeypatch.setattr(readiness, f"provision_{backend}", gpu)
-    listener = lambda: observed.append((facade.cpu_preparation_in_flight(), facade.cpu_provisioning_step(), facade.gpu_preparation_reason(backend)))
-    facade.add_readiness_listener(listener)
-    env = {provider.PROVIDER_ENV: "official", "WG2_BEAT_RUNTIME_DIR": str(tmp_path / "runtime")}
+    for name in ("cpu", *hardware.GPU_BACKENDS):
+        monkeypatch.setattr(readiness, f"provision_{name}", provision if name == backend
+                            else lambda **kw: pytest.fail("unselected backend prepared"))
     try:
-        thread = facade.start_cpu_provisioning(environ=env, system=system)
+        thread = facade.start_selected_provisioning(f"beat-{backend}")
         assert thread is not None and begun.wait(2)
-        assert facade.cpu_runtime_readiness(None).state == "provisioning"
-        assert _official_runtime_statuses()["cpu"]["state"] == "provisioning"
-        assert facade.start_cpu_provisioning(environ=env, system=system) is thread
-        finish.set()
-        thread.join(2)
-        assert not thread.is_alive() and not facade.cpu_preparation_in_flight()
-        assert [row[0] for row in calls] == ["cpu", backend]
-        assert all(row[1] == env and row[2] == facade.PROVISION_THREAD_NAME for row in calls)
-        assert facade.cpu_runtime_readiness(None).ready
-        assert any(row[1] == "probe" for row in observed)
-        assert any(row[2] and "offline" in row[2] for row in observed)
-        assert observed[-1] == (False, None, None)
+        assert facade.runtime_preparation_status(backend)[0] == "preparing"
+        assert all(facade.runtime_preparation_status(name)[0] is None
+                   for name in ("cpu", *hardware.GPU_BACKENDS) if name != backend)
+        assert facade.start_selected_provisioning(f"beat-{backend}") is thread
     finally:
         finish.set()
-        facade.remove_readiness_listener(listener)
-
-
-@pytest.mark.parametrize("failure", ["detection", "cpu"])
-def test_background_failure_does_not_hide_other_stage(official, monkeypatch, failure):
-    calls = []
-    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs:
-                        {name: {"available": name == "cuda", "reason": "mock hardware"} for name in hardware.GPU_BACKENDS})
-    monkeypatch.setattr(readiness, "backend_readiness", lambda *a, **k:
-                        readiness.BackendReadiness(False, "unprovisioned", "mock"))
-
-    def detect(**kwargs):
-        assert calls == ["cpu"]
-        assert threading.current_thread().name == facade.PROVISION_THREAD_NAME
-        if failure == "detection":
-            raise OSError("inventory failed")
-        return "cuda"
-
-    def cpu(**kwargs):
-        calls.append("cpu")
-        if failure == "cpu":
-            raise OSError("CPU offline")
-        return {"status": "ready"}
-
-    monkeypatch.setattr(hardware, "detect_gpu_backend", detect)
-    monkeypatch.setattr(readiness, "provision_cpu", cpu)
-    monkeypatch.setattr(readiness, "provision_cuda", lambda **kwargs:
-                        calls.append("cuda") or {"status": "ready"})
-    thread = facade.start_cpu_provisioning(environ={provider.PROVIDER_ENV: "official"}, system="Windows")
-    assert thread is not None
     thread.join(2)
-    assert not thread.is_alive() and not facade.cpu_preparation_in_flight()
-    assert calls == (["cpu"] if failure == "detection" else ["cpu", "cuda"])
+    assert calls == [backend]
+
+
+@pytest.mark.parametrize("engine", [None, "auto", "metal", "bempp"])
+def test_non_beat_selection_never_provisions(official, monkeypatch, engine):
+    monkeypatch.setattr(readiness, "backend_readiness", lambda *a, **k: pytest.fail("unselected runtime probed"))
+    assert facade.start_selected_provisioning(engine) is None
+
+
+def test_cpu_provisioning_does_not_inventory_or_prepare_gpu(official, monkeypatch):
+    calls = []
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kw: pytest.fail("unselected GPU inventoried"))
+    monkeypatch.setattr(readiness, "backend_readiness", lambda *a, **kw:
+                        readiness.BackendReadiness(False, "unprovisioned", "mock"))
+    monkeypatch.setattr(readiness, "provision_cpu", lambda **kw: calls.append("cpu") or {"status": "ready"})
+    thread = facade.start_cpu_provisioning(environ={})
+    thread.join(2)
+    assert calls == ["cpu"]
 
 
 @pytest.mark.parametrize("state", ["ready", "failed", "package-unusable"])
@@ -217,40 +176,99 @@ def test_macos_platform_reasons_survive_preparation(monkeypatch, tmp_path, cpu_p
         assert statuses[backend]["reason"] == f"{label} requires Linux or Windows"
 
 
-def test_launcher_reuses_verified_inventory_after_cpu_finishes(official, monkeypatch):
+def test_selected_gpu_receives_only_its_hardware_facts(official, monkeypatch):
+    facts = {"cuda": {"available": True, "reason": "mock hardware"}}
     calls = []
-    facts = {name: {"available": name == "cuda", "reason": "mock hardware"} for name in hardware.GPU_BACKENDS}
-    ready = set()
 
     def inventory(**kwargs):
-        if not kwargs.get("probe_nvidia", True):
-            return facts
-        assert "cpu" in ready
-        assert facade.cpu_runtime_readiness(None).ready
-        calls.append("detect")
+        assert kwargs["only"] == "cuda"
         return facts
 
     def verdict(backend, **kwargs):
-        if backend == "cuda":
-            assert kwargs["hardware_facts"] is facts[backend]
-        return readiness.BackendReadiness(backend in ready, "ready" if backend in ready else "unprovisioned", "mock")
-
-    def cpu(**kwargs):
-        ready.add("cpu")
-        calls.append("cpu")
-        return {"status": "ready"}
-
-    def cuda(**kwargs):
-        assert kwargs["hardware_facts"] is facts["cuda"]
-        calls.append("cuda")
-        return {"status": "ready"}
+        assert backend == "cuda" and kwargs["hardware_facts"] is facts[backend]
+        return readiness.BackendReadiness(False, "unprovisioned", "mock")
 
     monkeypatch.setattr(hardware, "gpu_hardware", inventory)
     monkeypatch.setattr(readiness, "backend_readiness", verdict)
-    monkeypatch.setattr(readiness, "provision_cpu", cpu)
-    monkeypatch.setattr(readiness, "provision_cuda", cuda)
-    thread = facade.start_cpu_provisioning(environ={provider.PROVIDER_ENV: "official"})
-    assert thread is not None
+    monkeypatch.setattr(readiness, "provision_cpu", lambda **kw: pytest.fail("CPU prepared"))
+    monkeypatch.setattr(readiness, "provision_cuda", lambda **kw: calls.append(kw["hardware_facts"]) or {"status": "ready"})
+    thread = facade._start_official_provisioning({}, backend="cuda")
+    thread.join(2)
+    assert calls == [facts["cuda"]]
+
+
+@pytest.mark.parametrize("backend", ["cpu", "metal"])
+def test_deselection_terminates_only_owned_preparation_children(official, monkeypatch, backend, tmp_path):
+    from types import SimpleNamespace
+
+    monkeypatch.delenv(facade.SKIP_PROVISION_ENV_VAR, raising=False)
+    monkeypatch.delenv(facade.SKIP_GPU_PROVISION_ENV_VAR, raising=False)
+    monkeypatch.setattr(readiness, "backend_readiness", lambda *a, **kw:
+                        readiness.BackendReadiness(False, "unprovisioned", "mock"))
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kw: {backend: {"available": True, "reason": "mock"}})
+    entered, stopped = threading.Event(), threading.Event()
+    calls = []
+
+    class Output:
+        def __iter__(self):
+            entered.set()
+            assert stopped.wait(2)
+            return iter(())
+        def close(self):
+            pass
+
+    child = SimpleNamespace(stdout=Output(), returncode=None)
+    def terminate():
+        calls.append("terminate")
+        child.returncode = -15
+        stopped.set()
+    child.terminate = terminate
+    child.wait = lambda **kw: child.returncode
+    child.poll = lambda: child.returncode
+    monkeypatch.setattr(facade.subprocess, "Popen", lambda *a, **kw: child)
+    def provision(**kw):
+        kw["run_step"]("julia", "nothing", project=tmp_path, environment={}, label="compile", status_cb=lambda _: None)
+        pytest.fail("deselected preparation continued")
+    monkeypatch.setattr(readiness, f"provision_{backend}", provision)
+    thread = facade.start_selected_provisioning(f"beat-{backend}")
+    try:
+        assert entered.wait(2)
+        facade.cancel_unselected_preparation("metal")
+    finally:
+        stopped.set()
     thread.join(2)
     assert not thread.is_alive()
-    assert calls == ["cpu", "detect", "cuda"]
+    assert calls == ["terminate"]
+    assert facade.runtime_preparation_status(backend) == (None, None)
+
+
+
+def test_deselected_probe_cannot_admit_preparation_after_selection_changes(official, monkeypatch):
+    monkeypatch.delenv(facade.SKIP_PROVISION_ENV_VAR, raising=False)
+    entered, release, cancelled = threading.Event(), threading.Event(), threading.Event()
+    def verdict(*args, **kwargs):
+        entered.set()
+        assert release.wait(2)
+        return readiness.BackendReadiness(False, "unprovisioned", "mock")
+    monkeypatch.setattr(readiness, "backend_readiness", verdict)
+    monkeypatch.setattr(readiness, "provision_cpu", lambda **kw: pytest.fail("deselected probe admitted"))
+    def check():
+        if cancelled.is_set():
+            raise ValueError("selection changed")
+    errors = []
+    def select():
+        try:
+            facade.start_selected_provisioning("beat-cpu", cancellation_callback=check)
+        except ValueError as exc:
+            errors.append(str(exc))
+    caller = threading.Thread(target=select)
+    caller.start()
+    try:
+        assert entered.wait(2)
+        cancelled.set()
+        facade.cancel_unselected_preparation("metal")
+    finally:
+        release.set()
+    caller.join(2)
+    assert not caller.is_alive() and errors == ["selection changed"]
+    assert facade._provision_thread is None

@@ -36,6 +36,7 @@ import { CAD_DRAFTS_NAMESPACE, mergeCadDrafts, migrateCadDrafts } from './cadDra
 export const SETTINGS_NAMESPACES = {
   preferences: 'waveguide-v2-g3-preferences',
   solveOptions: 'waveguide-v2-solve-options',
+  enginePreference: 'wg2.engine.preference.v1',
   viewer: 'wg2.preferences.v1',
   theme: 'wg2.theme',
   dockviewLayout: 'wg2.dockview.layout.v4',

@@ -58,6 +58,7 @@ import { resetSolveAttentionForTests, solveAttention } from './solveAttention';
 
 const mocks = vi.hoisted(() => ({
   refreshCapabilities: vi.fn(),
+  prewarmSelectedEngine: vi.fn(),
   planSolveDesign: vi.fn(),
   submitDesign: vi.fn(),
   solveModel: vi.fn(),
@@ -70,6 +71,7 @@ const mocks = vi.hoisted(() => ({
     reason: "explicit solver_mode='full_3d'", eligibility_reasons: [] as string[],
   } as { engine: string; formulation: 'axisymmetric' | 'full-3d'; reason: string; eligibility_reasons: string[] } | null,
   solvePlanError: null as string | null,
+  solveReadiness: null as SolveBlocker | null,
   solvePlanPending: false,
   // The server's verdict on the CAD return (POST /api/solve/imported-plan).
   importedPlan: {
@@ -100,6 +102,7 @@ vi.mock('../jobs/actions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../jobs/actions')>();
   return {
     ...actual,
+    prewarmSelectedEngine: mocks.prewarmSelectedEngine,
     planSolveDesign: mocks.planSolveDesign,
     submitDesign: mocks.submitDesign,
     solveModel: mocks.solveModel,
@@ -124,6 +127,7 @@ vi.mock('../jobs/useSolvePlan', async (importOriginal) => {
       ? actual.useSolvePlan(...args) : ({
         plan: mocks.solvePlan,
         error: mocks.solvePlanError,
+        readiness: mocks.solveReadiness,
         isPending: mocks.solvePlanPending,
       }),
   };
@@ -257,6 +261,7 @@ describe('solve invocation mutex', () => {
   beforeEach(async () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     mocks.refreshCapabilities.mockReset().mockResolvedValue(undefined);
+    mocks.prewarmSelectedEngine.mockReset().mockResolvedValue(undefined);
     mocks.importedPlan.plan.readiness = null;
     mocks.importedPlan.plan.engine = 'metal';
     mocks.importedPlan.plan.reason = 'AUTO selected the first available engine';
@@ -290,6 +295,7 @@ describe('solve invocation mutex', () => {
       reason: "explicit solver_mode='full_3d'", eligibility_reasons: [],
     };
     mocks.solvePlanError = null;
+    mocks.solveReadiness = null;
     mocks.solvePlanPending = false;
     mocks.planSolveDesign.mockResolvedValue(mocks.solvePlan);
     mocks.solveModel.mockReset().mockResolvedValue('job-cad');
@@ -510,6 +516,18 @@ describe('solve invocation mutex', () => {
     tableClient.clear();
   });
 
+  it('prepares only the active selection, including model and mode changes', async () => {
+    mocks.prewarmSelectedEngine.mockClear();
+    act(() => useImportedSolveOptionsStore.getState().setEngine('beat-metal'));
+    expect(mocks.prewarmSelectedEngine).not.toHaveBeenCalled();
+    act(() => useSolveOptionsStore.getState().setEngine('beat-cpu'));
+    expect(mocks.prewarmSelectedEngine).toHaveBeenCalledExactlyOnceWith('beat-cpu');
+    act(() => { readyCad('wgi_prewarm_selection'); workspaceModeStore.setMode('cad'); });
+    expect(mocks.prewarmSelectedEngine.mock.calls.at(-1)).toEqual(['beat-metal']);
+    act(() => useImportedSolveOptionsStore.setState({ engine: 'bempp' })); // restored setup
+    expect(mocks.prewarmSelectedEngine.mock.calls.at(-1)).toEqual(['bempp']);
+  });
+
   const blocker: SolveBlocker = { code: 'engine_unavailable', engine: 'beat-metal',
     message: 'BEAT Metal needs preparing.', remedies: [
       { kind: 'prepare', engine: 'beat-metal', disabled_reason: null },
@@ -528,7 +546,7 @@ describe('solve invocation mutex', () => {
     }))]);
     return record;
   }
-  it.each(['top bar', 'Results empty', 'CAD card', 'crossover', 'Simulation'])('readiness parity: %s shows the shared blocker and ordered remedies', async surface => {
+  it.each(['top bar', 'Results empty', 'CAD card', 'crossover', 'Simulation'])('readiness parity: %s stays quiet until Solve is requested', async surface => {
     let record!: CadReturnIngestRecord;
     act(() => {
       record = blockedCad();
@@ -547,37 +565,149 @@ describe('solve invocation mutex', () => {
         : surface === 'CAD card' ? <CadSolveCard record={record} label="Speaker"/>
           : surface === 'crossover' ? <CadCrossover/> : <SolveOptionsControls mode="cad" ingestRecord={record}/>}
     </JobsCoordinator></QueryClientProvider>));
+    expect(host.querySelector('.solve-readiness')).toBeNull();
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     const readiness = host.querySelector('.solve-readiness')!;
     expect(readiness).not.toBeNull();
     expect(readiness.querySelector('span')?.textContent).toBe(blocker.message);
     expect([...readiness.querySelectorAll('button')].map(button => button.textContent)).toEqual([
-      'Prepare BEAT Metal', 'Use BEAT CPU', 'Use Metal-BEM (different solver — results will differ)', 'Open settings',
+      'Prepare BEAT Metal and solve', 'Use BEAT CPU', 'Use Metal-BEM', 'Open settings',
     ]);
     const solve = host.querySelector<HTMLButtonElement>('.solve-button, [data-action="solve"], .crossover-recall');
-    if (solve) expect(solve.disabled).toBe(true);
+    if (solve) expect(solve.disabled).toBe(false);
     expect(readiness.textContent).toContain(blocker.message); // visible text, outside the disabled button
     latestCombine.publish(null);
     client.clear();
   });
   it.each([
     { name: 'disabled preparation', readiness: { ...blocker, remedies: [{ kind: 'prepare' as const, engine: 'beat-metal', disabled_reason: 'Preparation is disabled by this installation.' }] }, expected: 'Preparation is disabled by this installation.', buttons: [] },
-    { name: 'waiting', readiness: { ...blocker, message: 'BEAT Metal is still preparing.', remedies: [{ kind: 'wait' as const }, { kind: 'settings' as const, section: 'simulation' }] }, expected: 'BEAT Metal is still preparing.', buttons: ['Wait', 'Open settings'] },
+    { name: 'waiting', readiness: { ...blocker, message: 'BEAT Metal is still preparing.', remedies: [{ kind: 'wait' as const }, { kind: 'settings' as const, section: 'simulation' }] }, expected: 'BEAT Metal is getting ready. The solve starts when it is ready.', buttons: ['Stop'] },
     { name: 'mesh too large', readiness: { code: 'mesh_too_large', message: 'This mesh is too large to solve.' }, expected: 'This mesh is too large to solve.', buttons: [] },
   ])('$name renders its message and only the declared remedies', async ({ readiness, expected, buttons }) => {
     act(() => { blockedCad(); mocks.importedPlan.plan.readiness = readiness as SolveBlocker; });
     await act(async () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>));
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     const view = host.querySelector('.solve-readiness')!;
     expect(view.textContent).toContain(expected);
     expect([...view.querySelectorAll('button')].map(button => button.textContent)).toEqual(buttons);
-    expect(host.querySelector<HTMLButtonElement>('.solve-button')!.disabled).toBe(true);
+    expect(host.querySelector<HTMLButtonElement>('.solve-button')!.disabled).toBe(readiness.code !== 'engine_unavailable');
   });
+  it.each(['ready', 'stop', 'model change', 'engine change', 'failure', 'unmount'])('a requested warming solve continues exactly once, or cancels: %s', async outcome => {
+    act(() => {
+      blockedCad();
+      useImportedSolveOptionsStore.setState({ engine: 'beat-metal' });
+      mocks.importedPlan.plan.readiness = { ...blocker, message: 'BEAT Metal is getting ready.',
+        remedies: [{ kind: 'wait' }, ...(blocker.remedies ?? []).filter(remedy => remedy.kind === 'use_engine')] };
+    });
+    const render = () => root.render(<JobsCoordinator><SolveActions/><CurrentReadiness/></JobsCoordinator>);
+    await act(async () => render());
+    expect(host.textContent).toContain('Not solved yet');
+    expect(host.textContent).not.toContain('getting ready');
+    expect(host.querySelector('.solve-readiness')).toBeNull();
+    await act(async () => { host.querySelector<HTMLButtonElement>('.solve-button')!.click(); });
+    const notice = host.querySelector('.solve-readiness')!;
+    expect(notice.textContent).toContain('BEAT Metal is getting ready. The solve starts when it is ready.');
+    expect(notice.classList.contains('solve-notice-blocked')).toBe(false);
+    expect(notice.textContent).not.toContain('Wait');
+    expect(mocks.solveModel).not.toHaveBeenCalled();
+    if (outcome === 'stop') await act(async () => notice.querySelector<HTMLButtonElement>('button')!.click());
+    if (outcome === 'model change') act(() => readyCad('wgi_changed_while_waiting'));
+    if (outcome === 'engine change') act(() => useImportedSolveOptionsStore.getState().setEngine('beat-cpu'));
+    if (outcome === 'unmount') await act(async () => root.render(null));
+    if (outcome === 'failure') {
+      mocks.importedPlan.plan.readiness = blocker;
+      await act(async () => render());
+    }
+    mocks.importedPlan.plan = { ...mocks.importedPlan.plan, engine: 'beat-metal', readiness: null };
+    await act(async () => { if (outcome !== 'unmount') render(); });
+    expect(mocks.solveModel).toHaveBeenCalledTimes(outcome === 'ready' ? 1 : 0);
+    await act(async () => { if (outcome !== 'unmount') render(); });
+    expect(mocks.solveModel).toHaveBeenCalledTimes(outcome === 'ready' ? 1 : 0);
+  });
+
+  it.each(['model change', 'engine change', 'stop', 'unmount'])('keeps a warming intention guarded through asynchronous parametric preflight: %s', async outcome => {
+    const preflight = deferred<Awaited<ReturnType<typeof mocks.planSolveDesign>>>();
+    mocks.planSolveDesign.mockReturnValue(preflight.promise);
+    act(() => {
+      useSolveOptionsStore.setState({ engine: 'beat-metal' });
+      mocks.solvePlan = null;
+      mocks.solvePlanError = 'BEAT Metal is getting ready.';
+      mocks.solveReadiness = { ...blocker, remedies: [{ kind: 'wait' }] };
+    });
+    const render = () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    await act(async () => render());
+    await act(async () => { host.querySelector<HTMLButtonElement>('.solve-button')!.click(); });
+    mocks.solvePlan = { engine: 'beat-metal', formulation: 'full-3d', reason: 'ready', eligibility_reasons: [] };
+    mocks.solvePlanError = null; mocks.solveReadiness = null;
+    await act(async () => render());
+    expect(mocks.planSolveDesign).toHaveBeenCalled();
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
+    if (outcome === 'model change') act(() => useDesignStore.getState().replaceDocument({ ...designForFamily('OSSE'), L: 321 }));
+    if (outcome === 'engine change') act(() => useSolveOptionsStore.getState().setEngine('beat-cpu'));
+    if (outcome === 'stop') act(() => solveControlStore.getSnapshot()!.stopWaiting());
+    if (outcome === 'unmount') await act(async () => root.render(null));
+    await act(async () => preflight.resolve(mocks.solvePlan));
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
+  });
+
+  it('does not downgrade a warming intention on repeated Solve during plan refresh', async () => {
+    act(() => {
+      blockedCad(); useImportedSolveOptionsStore.setState({ engine: 'beat-metal' });
+      mocks.importedPlan.plan.readiness = { ...blocker, remedies: [{ kind: 'wait' }] };
+    });
+    const render = () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    await act(async () => render());
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
+    mocks.importedPlan.isPending = true; mocks.importedPlan.plan.readiness = null;
+    await act(async () => render());
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
+    act(() => { readyCad('wgi_another_model'); });
+    mocks.importedPlan.isPending = false;
+    mocks.importedPlan.plan.engine = 'beat-metal';
+    await act(async () => render());
+    expect(mocks.solveModel).not.toHaveBeenCalled();
+  });
+
+  it('keeps a warming Fusion request held until its explicit Wait and solve action', async () => {
+    const posts: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') posts.push(String(url));
+      return json({ job_id: 'held-fusion' });
+    }));
+    const waiting = { ...blocker, remedies: [{ kind: 'wait' as const }] };
+    act(() => {
+      blockedCad(true);
+      mocks.importedPlan.plan.readiness = waiting;
+      mocks.capabilities.engines = [{ name: 'beat-metal', available: false, runtime_state: 'preparing',
+        reason: null, version: null, fast_paths: [] } as EngineCapability];
+    });
+    const render = () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    await act(async () => render());
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
+    mocks.capabilities.engines = [{ ...mocks.capabilities.engines[0], available: true, runtime_state: 'ready' } as EngineCapability];
+    mocks.importedPlan.plan = { ...mocks.importedPlan.plan, engine: 'beat-metal', readiness: null };
+    await act(async () => render());
+    expect(posts).toEqual([]);
+    mocks.capabilities.engines = [{ ...mocks.capabilities.engines[0], available: false, runtime_state: 'preparing' } as EngineCapability];
+    mocks.importedPlan.plan = { ...mocks.importedPlan.plan, engine: null, readiness: waiting };
+    await act(async () => render());
+    const button = [...host.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Wait and solve')!;
+    await act(async () => button.click());
+    expect(posts).toEqual([]); // already warming: no duplicate preparation request
+    mocks.capabilities.engines = [{ ...mocks.capabilities.engines[0], available: true, runtime_state: 'ready' } as EngineCapability];
+    await act(async () => render());
+    expect(posts).toEqual(['/api/jobs/job%3Aheld-fusion/solve-again']);
+    expect(mocks.solveModel).not.toHaveBeenCalled();
+  });
+
   it('prepares once across two surfaces and refreshes, without solving', async () => {
     act(() => blockedCad());
     const response = deferred<Response>();
     const fetcher = vi.fn((url: RequestInfo | URL) => String(url).endsWith('/prepare') ? response.promise : Promise.resolve(json({})));
     vi.stubGlobal('fetch', fetcher);
     await act(async () => root.render(<JobsCoordinator><SolveActions/><CurrentReadiness/></JobsCoordinator>));
-    const buttons = [...host.querySelectorAll<HTMLButtonElement>('button')].filter(button => button.textContent === 'Prepare BEAT Metal');
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>('button')].filter(button => button.textContent === 'Prepare BEAT Metal and solve');
     expect(buttons).toHaveLength(2);
     await act(async () => { buttons[0].click(); buttons[1].click(); });
     await act(async () => response.resolve(json({}, 202)));
@@ -592,7 +722,7 @@ describe('solve invocation mutex', () => {
     const preparation = deferred<Response>();
     vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
       if (String(url).endsWith('/prepare')) return preparation.promise;
-      if (init?.method === 'POST') posts.push(String(url));
+      if (init?.method === 'POST' && !String(url).endsWith('/prewarm')) posts.push(String(url));
       return json({ job_id: 'held-fusion' });
     }));
     act(() => {
@@ -633,7 +763,7 @@ describe('solve invocation mutex', () => {
     const posts: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
       if (String(url).endsWith('/prepare')) return preparation.promise;
-      if (init?.method === 'POST') posts.push(String(url));
+      if (init?.method === 'POST' && !String(url).endsWith('/prewarm')) posts.push(String(url));
       return response.promise;
     }));
     act(() => {
@@ -670,7 +800,7 @@ describe('solve invocation mutex', () => {
       const posts: string[] = [];
       vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
         if (String(url).endsWith('/prepare')) return preparation.promise;
-        if (init?.method === 'POST') posts.push(String(url));
+        if (init?.method === 'POST' && !String(url).endsWith('/prewarm')) posts.push(String(url));
         return json({ job_id: 'continued-held' });
       }));
       act(() => {
@@ -791,7 +921,8 @@ describe('solve invocation mutex', () => {
     const progress = host.querySelector('.cad-solve-run')!;
     expect(progress).not.toBeNull();
     expect(progress.textContent).toContain(status === 'running' ? 'frequency 2 of 10' : status === 'error' ? 'The solver failed on this run.' : 'Done');
-    expect(host.querySelector('.solve-readiness')).not.toBeNull();
+    if (status === 'running') expect(host.querySelector('.solve-readiness')).toBeNull();
+    expect(host.querySelector('.solve-readiness')?.textContent ?? '').not.toContain(blocker.message);
     expect(host.querySelector('.current-model-status')?.getAttribute('data-model-status')).toBe(status === 'running' ? 'running' : status === 'error' ? 'failed' : 'solved');
   });
 
@@ -803,6 +934,7 @@ describe('solve invocation mutex', () => {
     const render = () => root.render(<QueryClientProvider client={client}><JobsCoordinator><SolveActions/></JobsCoordinator></QueryClientProvider>);
     await act(async () => render());
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     const button = [...host.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Use BEAT CPU')!;
     expect(button).toBeTruthy();
     await act(async () => button.click());
@@ -993,7 +1125,7 @@ describe('solve invocation mutex', () => {
     mocks.useRealImportedPlan = true;
     mocks.postImportedSolvePlan.mockReset().mockResolvedValue(mocks.importedPlan.plan);
     const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify(mocks.solvePlan)));
-    vi.stubGlobal('fetch', fetcher);
+    vi.stubGlobal('fetch', (url: string, init?: RequestInit) => url.endsWith('/prewarm') ? Promise.resolve(json({})) : fetcher(url, init));
     mocks.submitDesign.mockResolvedValue('job-fresh');
     if (mode === 'cad') readyCad('wgi_select');
     workspaceModeStore.setMode(mode);

@@ -157,30 +157,16 @@ def _publish_status_ready(control_path: Path | None, port: int) -> None:
 
 
 def _start_beat_cpu_provisioning() -> None:
-    """Prepare the selected BEAT CPU runtime on first launch, in the background.
-
-    The source install provisions from ``scripts/bootstrap.py``, which the
-    packaged application never runs: it ships a prebuilt runtime layer with
-    ``beat-engine`` already installed.
-    Without this, nothing would fetch the Julia that backend needs and the engine would be permanently
-    unavailable on exactly the machines it exists for.
-
-    Here rather than in ``create_app`` for the same reason ``solver_warmup`` is
-    decided here: this is the production launcher, and building an app object --
-    which hundreds of tests and any embedder does -- must not start downloading
-    a runtime. Every gate, and the work itself, is in
-    ``server/solver/beat_cpu_runtime.py``; this call only says "in a launched
-    application, do it", and cannot fail the launch.
-    """
-
+    """Prepare the saved selection before the first capability snapshot."""
     try:
-        from server.solver.beat_cpu_runtime import start_cpu_provisioning
+        from server.platform.paths import resolve_data_dir
+        from server.settings import SettingsStore
+        from server.solver.beat_cpu_runtime import start_selected_provisioning
+        from server.solver.warmup import persisted_engine_preference
 
-        start_cpu_provisioning()
+        start_selected_provisioning(persisted_engine_preference(SettingsStore(resolve_data_dir())))
     except Exception:  # noqa: BLE001 - an optional engine never blocks a launch
-        logging.getLogger("wg.launch").exception(
-            "Could not start BEAT CPU runtime provisioning"
-        )
+        logging.getLogger("wg.launch").exception("Could not start selected runtime preparation")
 
 
 def _solver_warmup_enabled() -> bool:

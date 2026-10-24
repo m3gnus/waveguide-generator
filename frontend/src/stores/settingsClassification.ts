@@ -68,6 +68,7 @@ void _noStraySolveOptionKeys;
 export const SETTINGS_NAMESPACE_EFFECTS: Record<SettingsNamespace, PreferenceEffect> = {
   preferences: 'solve-affecting',
   solveOptions: 'solve-affecting',
+  enginePreference: 'solve-affecting',
   viewer: 'render-refreshing',
   theme: 'render-refreshing',
   // Panel sizes and which arrangement they were saved for.

@@ -71,8 +71,9 @@ export function CurrentModelStatus({ record, actions = false }: { record?: CadRe
     }
   }
   return <div className="current-model-status" data-model-status={status.kind}>
-    {status.kind === 'refused' && <b>{STATUS_COPY[status.kind]}</b>}
-    <p className={`cad-solve-run cad-solve-run-${tone}`} role="status" data-run-operation-id={latest.operationId}>{body}</p>
+    {status.kind === 'refused' && !control?.waitingForEngine && <b>{STATUS_COPY[status.kind]}</b>}
+    {!(held && readiness?.code === 'engine_unavailable' && readiness.remedies?.length)
+      && <p className={`cad-solve-run cad-solve-run-${tone}`} role="status" data-run-operation-id={latest.operationId}>{body}</p>}
     {controls}{request}
     {/* No settings were recorded for this model, so WG solved it with its
         defaults; the backend's own words say so and where to change them. */}

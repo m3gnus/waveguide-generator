@@ -221,6 +221,13 @@ export async function getCapabilities(fetcher: typeof fetch = fetch, signal?: Ab
   }
 }
 
+/** The active model's selection owns preparation; inactive setup stores never warm engines. */
+export async function prewarmSelectedEngine(engine: string, fetcher: typeof fetch = fetch): Promise<void> {
+  await fetcher('/api/runtimes/beat/prewarm', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ engine }),
+  });
+}
+
 export async function prepareBeatRuntime(engine: string, fetcher: typeof fetch = fetch): Promise<void> {
   const response = await fetcher(`/api/runtimes/beat/${encodeURIComponent(engine.replace(/^beat-/, ''))}/prepare`, {
     method: 'POST',

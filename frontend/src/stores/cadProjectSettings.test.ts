@@ -456,3 +456,14 @@ it('journals and restores a long unclaimed bundle path using a fixed length key'
   useCadReturnStore.getState().selectBundle(longBundle, null); await waitForCadProjectSettings();
   expect(useCadReturnStore.getState().driveVoltageV).toBe(6);
 });
+
+
+it('keeps the last engine choice when startup reopens a model with an older saved engine', async () => {
+  const fetcher = server(); vi.stubGlobal('fetch', fetcher);
+  const { rememberLastModel } = await import('./lastModel');
+  rememberLastModel({ model_id: model, input: 'cad' });
+  useImportedSolveOptionsStore.getState().setEngine('beat-cpu');
+  resetCadReturnStore(); resetImportedModelStore();
+  expect(await reopenLastModel(fetcher)).toBe(true);
+  expect(useImportedSolveOptionsStore.getState().engine).toBe('beat-cpu');
+});

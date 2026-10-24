@@ -1,5 +1,5 @@
 import { usePrepareEngine } from '../jobs/usePrepareEngine';
-import { heldSolveCancellationReason, heldSolveStillCurrent, useHeldSolvePreparation, type HeldSolveContinuation } from '../jobs/useHeldSolvePreparation';
+import { heldEngineSolveJob, modelSolveCancellationReason, observeSolveInputs, type ModelSolveContinuation, heldSolveCancellationReason, heldSolveStillCurrent, useHeldSolvePreparation, type HeldSolveContinuation } from '../jobs/useHeldSolvePreparation';
 import { messageBlocker, type SolveReadinessState } from '../jobs/solveReadiness';
 import { currentModel, useCurrentModel } from '../model/currentModel';
 import { importedModelBlocker, importedModelId, unchangedSetup, useImportedModelStore } from '../stores/importedModel';
@@ -13,7 +13,7 @@ import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { clearJobLink, jobIdFromLink, openLinkedJob } from '../jobs/jobDeepLink';
 import { compareSelection } from '../api/results';
 import type { CadReturnIngestRecord } from '../api/cadlink';
-import { importedSolvePlanRequestBody, planSolveDesign, postImportedSolvePlan, solveModel, SolveSubmissionRefused, submitDesign, type EngineSubstitution, type ImportedSolveSubmission, type ModelSolvePress, type SolvePlan } from '../jobs/actions';
+import { importedSolvePlanRequestBody, prewarmSelectedEngine, planSolveDesign, postImportedSolvePlan, solveModel, SolveSubmissionRefused, submitDesign, type EngineSubstitution, type ImportedSolveSubmission, type ModelSolvePress, type SolvePlan } from '../jobs/actions';
 import { rerunWithPatch, type RerunPatch } from '../jobs/rerun';
 import {
   useCapabilities,
@@ -35,7 +35,7 @@ import { useDocumentStore } from '../stores/document';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useCadRecoveryNotices } from '../stores/cadRecoveryNotices';
 import { frameSolveBlocker, frameReadInFlight, useCadSolverFrameStore } from '../stores/cadSolverFrame';
-import { polarValidationError, useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
+import { polarValidationError, useImportedSolveOptionsStore, useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 import { useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { buildCadProjectSetup } from './cadSetupPublisher';
@@ -61,6 +61,10 @@ interface SolveControl {
   preparationError: string | null;
   actionError: string | null;
   preparingEngine: string | null;
+  readinessRequested: boolean;
+  waitingForEngine: boolean;
+  waitingEngine: string | null;
+  stopWaiting(): void;
 }
 
 /** No engine on this machine can solve imported geometry right now. The server
@@ -268,6 +272,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   // Parametric mode reads the persisted store, Imported mode its own instance.
   const solveOptions = useScopedSolveOptions();
   const selectedEngine = solveOptions.engine;
+  useEffect(() => { void prewarmSelectedEngine(selectedEngine).catch(() => undefined); }, [selectedEngine]);
   useImportedModelStore();
   const cadReturn = useCadReturnStore();
   const model = useCurrentModel();
@@ -417,7 +422,32 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     }
   }, []);
 
-  const run = useCallback(async (nextDesign: DesignDocument, nextRevision = revision) => {
+  const waitingIntention = useRef<(ModelSolveContinuation & { controller: AbortController; engine: string }) | null>(null);
+  const stopContinuation = useCallback(() => {
+    waitingIntention.current?.controller.abort();
+    waitingIntention.current = null;
+  }, []);
+  const beginContinuation = () => {
+    if (waitingIntention.current) return;
+    const controller = new AbortController();
+    waitingIntention.current = { model: currentModel(), engine: selectedEngine, controller, signal: controller.signal };
+  };
+  const beforePost = (request: ModelSolveContinuation | null): boolean => {
+    if (request && (request.signal.aborted || modelSolveCancellationReason(request))) return false;
+    if (request) request.submitted = true;
+    return true;
+  };
+  useEffect(() => {
+    const unsubscribe = observeSolveInputs(() => {
+      const request = waitingIntention.current;
+      if (!request || request.submitted) return;
+      const engine = currentModel().kind === 'parametric' ? useSolveOptionsStore.getState().engine : useImportedSolveOptionsStore.getState().engine;
+      if (modelSolveCancellationReason(request) || engine !== request.engine) stopContinuation();
+    });
+    return () => { unsubscribe(); stopContinuation(); };
+  }, [stopContinuation]);
+
+  const run = useCallback(async (nextDesign: DesignDocument, nextRevision = revision, continuation: ModelSolveContinuation | null = null) => {
     let designName = '';
     await acceptSubmission(async () => {
       // Solve leaves the live document alone. The server applies BEMPP's
@@ -429,12 +459,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       await planSolveDesign(nextDesign, options);
       designName = document.designName;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
+      if (!beforePost(continuation)) return null;
       return submitDesign(nextDesign, options, fetch, { label, designRevision: nextRevision, designUid: document.designUid, designId: document.identity?.designId, designName, legacyDesignName: document.legacyDesignName });
     }, { onAccepted: () => acceptSubmittedLabel(designName) });
   }, [acceptSubmission, now, revision]);
 
   // One press of a file model's Solve: one POST /api/models/{id}/solve.
-  const solveFileModel = useCallback(async () => {
+  const solveFileModel = useCallback(async (continuation: ModelSolveContinuation | null = null) => {
     let designName = '';
     const jobId = await acceptSubmission(async () => {
       const setup = fileMeshSetup();
@@ -447,6 +478,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         prepared_id: record.ingest_id, client_request_id: `mesh-${crypto.randomUUID()}`, label,
         ...(unchanged ?? { setup: { schema_version: 1, ...setup } as unknown as ModelSolvePress['setup'] }),
       };
+      if (!beforePost(continuation)) return null;
       return solveModel(record.model_id, press)
         .catch((error) => { throw importedSolveError(error, unchanged !== null); });
     }, { onAccepted: () => acceptSubmittedLabel(designName) });
@@ -457,6 +489,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   // makes one call; the server prepares, continues or answers the job in flight.
   const solveCurrentCadImport = useCallback(async (
     clicked?: { cad: ReturnType<typeof useCadReturnStore.getState>; checkPlan: () => Promise<void> },
+    continuation: ModelSolveContinuation | null = null,
   ) => {
     if (submissionInFlight.current) return 'busy' as const;
     const cad = clicked?.cad ?? useCadReturnStore.getState();
@@ -493,6 +526,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         ...(approvals ? { approvals } : {}),
       };
       // The completion claim exists before HTTP: an event may beat the response.
+      if (!beforePost(continuation)) return 'blocked' as const;
       rememberCadSolve(key, designName, ingestId);
       solveAttention.bindOperation(key);
       const jobId = await solveModel(importedModelId(record), press).catch((error) => {
@@ -629,21 +663,45 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   // A press during the debounce or request belongs to the current inputs,
   // never the previous plan. Repeated presses retain just one intent.
   const [pendingSolve, setPendingSolve] = useState<'cad' | 'parametric' | 'file' | null>(null);
-  const solveEnabled = (solveAvailable || planPending) && (fileGeometryActive || !solveOptionsError)
-    && !planError && !submitting && !solveBlocker;
+  const serverReadiness = cadGeometryActive || fileGeometryActive ? importedPlan.plan?.readiness : parametricReadiness;
+  const engineBlocked = !!serverReadiness?.engine;
+  const warming = engineBlocked && serverReadiness?.remedies?.some(remedy => remedy.kind === 'wait');
+  const [preparingRequest, setPreparingRequest] = useState(false);
+  const [requestedSolve, setRequestedSolve] = useState<{ key: string | null; kind: string; engine: string; waiting: boolean } | null>(null);
+  const requestCurrent = requestedSolve !== null && requestedSolve.kind === model.kind && (!requestedSolve.waiting || (requestedSolve.key === model.key && requestedSolve.engine === selectedEngine));
+  const stopWaiting = useCallback(() => { stopContinuation(); setPendingSolve(null); setRequestedSolve(null); if (pendingSolve !== null) solveAttention.releaseSolve(); }, [pendingSolve, stopContinuation]);
+  useEffect(() => {
+    if (requestedSolve && !requestCurrent) stopWaiting();
+  }, [requestedSolve, requestCurrent, stopWaiting]);
+  const solveEnabled = (solveAvailable || planPending || engineBlocked) && (fileGeometryActive || !solveOptionsError)
+    && (!planError || engineBlocked) && !submitting && !solveBlocker;
   const solve = useCallback(async () => {
     // The button, the shortcut and the palette all arrive here: one command.
     if (submissionInFlight.current) return 'busy' as const;
+    if (warming && !heldEngineSolveJob()) beginContinuation();
+    const continuation = waitingIntention.current;
+    setRequestedSolve({ key: continuation?.model.key ?? model.key, kind: continuation?.model.kind ?? model.kind,
+      engine: continuation?.engine ?? selectedEngine, waiting: !!continuation });
     if (!solveEnabled) return 'blocked' as const;
+    if (engineBlocked && !planPending) {
+      if (heldEngineSolveJob()) return 'blocked' as const;
+      if (warming) {
+        solveAttention.armSolve();
+        setPendingSolve(fileGeometryActive ? 'file' : cadGeometryActive ? 'cad' : 'parametric');
+        return 'pending' as const;
+      }
+      return 'blocked' as const;
+    }
     if (planPending) {
       solveAttention.armSolve();
       setPendingSolve(fileGeometryActive ? 'file' : cadGeometryActive ? 'cad' : 'parametric');
       return 'pending' as const;
     }
     setPendingSolve(null);
+    if (!continuation) setRequestedSolve(null);
     const action = async () => {
       if (fileGeometryActive) {
-        await solveFileModel();
+        await solveFileModel(continuation);
         return;
       }
       if (cadGeometryActive) {
@@ -660,14 +718,14 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
           await solveCurrentCadImport({ cad, checkPlan: async () => {
             const freshPlan = await postImportedSolvePlan(body);
             if (!freshPlan.engine) throw new Error(freshPlan.reason || 'No engine can solve these CAD settings.');
-          } });
+          } }, continuation);
           return;
         }
-        await solveCurrentCadImport();
+        await solveCurrentCadImport(undefined, continuation);
         return;
       }
       const current = useDesignStore.getState();
-      await run(current.design, current.designRevision);
+      await run(current.design, current.designRevision, continuation);
     };
     try {
       await action();
@@ -676,20 +734,31 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       // Plain jobs report through acceptSubmission; CAD retains its observer.
       if (cadGeometryActive) reportError(error instanceof Error ? error.message : String(error));
       return 'blocked' as const;
+    } finally {
+      if (continuation && waitingIntention.current === continuation) {
+        stopContinuation();
+        setRequestedSolve(null);
+      }
     }
-  }, [cadGeometryActive, fileGeometryActive, planPending, reportError, run, solveCurrentCadImport, solveEnabled, solveFileModel]);
+  }, [stopContinuation, model.key, model.kind, selectedEngine, engineBlocked, warming, cadGeometryActive, fileGeometryActive, planPending, reportError, run, solveCurrentCadImport, solveEnabled, solveFileModel]);
   useEffect(() => {
     if (pendingSolve === null) return;
-    if ((pendingSolve === 'file' ? !fileGeometryActive : pendingSolve === 'cad' ? !cadGeometryActive : pendingSolve !== workspaceMode) || !solveEnabled) {
+    if ((requestedSolve?.waiting && !waitingIntention.current) || !requestCurrent || (pendingSolve === 'file' ? !fileGeometryActive : pendingSolve === 'cad' ? !cadGeometryActive : pendingSolve !== workspaceMode) || !solveEnabled) {
       setPendingSolve(null);
       if (planError) reportError(planError);
       return;
     }
-    if (planPending) return;
+    if (warming && heldEngineSolveJob()) { setPendingSolve(null); return; }
+    if (warming && requestedSolve && !requestedSolve.waiting) {
+      beginContinuation();
+      setRequestedSolve({ key: model.key, kind: model.kind, engine: selectedEngine, waiting: true });
+    }
+    if (planPending || warming || preparingRequest) return;
+    if (engineBlocked) { setPendingSolve(null); stopContinuation(); return; }
     // Clear before invoking: settlement and further presses cannot replay it.
     setPendingSolve(null);
     solve();
-  }, [cadGeometryActive, fileGeometryActive, pendingSolve, planError, planPending, reportError, solve, solveEnabled, workspaceMode]);
+  }, [requestedSolve, model.key, model.kind, selectedEngine, preparingRequest, requestCurrent, warming, engineBlocked, cadGeometryActive, fileGeometryActive, pendingSolve, planError, planPending, reportError, solve, solveEnabled, workspaceMode]);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && solveEnabled) {
@@ -701,19 +770,34 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     return () => window.removeEventListener('keydown', shortcut);
   }, [solve, solveEnabled]);
 
-  const prepareAndSolve = useHeldSolvePreparation(model, engines, preparation.prepare,
+  const heldPreparation = useHeldSolvePreparation(model, engines, preparation.prepare,
     useCallback((held: HeldSolveContinuation) => continueRun(held.jobId, { held }), [continueRun]), setActionError);
-  const serverReadiness = cadGeometryActive || fileGeometryActive ? importedPlan.plan?.readiness : parametricReadiness;
+  const prepareAndSolve = async (engine: string) => {
+    if (heldEngineSolveJob()) {
+      await heldPreparation.prepareAndSolve(engine);
+      return;
+    }
+    beginContinuation();
+    setRequestedSolve({ key: model.key, kind: model.kind, engine: selectedEngine, waiting: true });
+    setPreparingRequest(true);
+    setPendingSolve(fileGeometryActive ? 'file' : cadGeometryActive ? 'cad' : 'parametric');
+    try { if (!await preparation.prepare(engine)) { setPendingSolve(null); stopContinuation(); } }
+    finally { setPreparingRequest(false); }
+  };
   const readiness = solveBlocker || solveOptionsError
     ? messageBlocker(solveBlocker || solveOptionsError!)
     : serverReadiness ?? (planError ? messageBlocker(planError) : null);
   const control = useMemo<SolveControl>(() => ({
     readiness,
+    readinessRequested: requestCurrent,
+    waitingForEngine: !!heldPreparation.waitingEngine || (requestCurrent && !!waitingIntention.current && !waitingIntention.current.submitted),
+    waitingEngine: heldPreparation.waitingEngine ?? waitingIntention.current?.engine ?? null,
+    stopWaiting: () => { stopWaiting(); heldPreparation.stop(); },
     prepareEngine: preparation.prepare,
     prepareAndSolve,
     preparationError: preparation.error,
     actionError,
-    preparingEngine: preparation.starting ?? engines.find(engine => engine.runtime_state === 'preparing')?.name ?? null,
+    preparingEngine: preparation.starting ?? engines.find(engine => engine.name === selectedEngine && engine.runtime_state === 'preparing')?.name ?? null,
     useEngine: (engine: string) => solveOptions.setEngine(engine),
     plan: solvePlan,
     planPending: solvePlanPending,
@@ -735,7 +819,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
               : cadGeometryActive
                 ? capabilityError ?? importedUnavailable ?? 'No engine can solve imported CAD geometry here'
                 : parametricUnavailable),
-  }), [actionError, engines, readiness, preparation.prepare, preparation.error, preparation.starting, prepareAndSolve, solveOptions, cadGeometryActive, capabilityError, fileBlocker, fileGeometryActive, importedUnavailable, importedEngineLabel, parametricUnavailable, planError, planPending, selectedEngine, solve, solveEnabled, solveBlocker, solvePlan, solvePlanPending, submitting]);
+  }), [heldPreparation.waitingEngine, preparingRequest, requestCurrent, pendingSolve, warming, stopWaiting, actionError, engines, readiness, preparation.prepare, preparation.error, preparation.starting, prepareAndSolve, solveOptions, cadGeometryActive, capabilityError, fileBlocker, fileGeometryActive, importedUnavailable, importedEngineLabel, parametricUnavailable, planError, planPending, selectedEngine, solve, solveEnabled, solveBlocker, solvePlan, solvePlanPending, submitting]);
 
   useEffect(() => {
     publishSolveControl(control);

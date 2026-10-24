@@ -1473,6 +1473,7 @@ textarea:disabled { opacity: .48; }
 
 /* Blocked Solve is actionable at every window width, including the top bar. */
 .current-model-status { min-width: 0; font-size: var(--text-sm); }
+.solve-readiness-note { flex-basis: 100%; }
 .solve-readiness.solve-notice { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; max-width: none; overflow: visible; white-space: normal; }
 .solve-readiness > span:first-child { flex-basis: 100%; }
 .solve-readiness button { white-space: normal; text-align: left; }

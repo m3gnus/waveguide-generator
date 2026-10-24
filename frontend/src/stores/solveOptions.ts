@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { isBeatBackendEngine, LEGACY_BEAT_ENGINE } from '../jobs/engineIdentity';
 import { withEditSignals } from './solveSettingsEdits';
 import { resetParkedImportedOptions } from './importedModel';
 import { createJSONStorage, persist } from 'zustand/middleware';
@@ -396,17 +395,16 @@ const SOLVE_OPTION_EDITS: ReadonlyArray<keyof SolveOptionsStore> = [
 
 export type { SolveOptionsStore };
 
-function requestEnginePrewarm(engine: string): void {
-  // The server owns availability, idempotence and cancellation of its warmup.
-  void fetch('/api/runtimes/beat/prewarm', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ engine }),
-  }).catch(() => {});
+/** One preference for user choices in either mode; saved model setups stay scoped. */
+function rememberEngine(engine: string): void {
+  durableSettings.set('enginePreference', JSON.stringify({ engine }));
 }
 
-function isBeatEngine(engine: string): boolean {
-  return engine === LEGACY_BEAT_ENGINE || isBeatBackendEngine(engine);
+function enginePreference(): { engine?: string } {
+  try {
+    const value = JSON.parse(durableSettings.get('enginePreference') ?? 'null');
+    return typeof value?.engine === 'string' && ENGINE_PATTERN.test(value.engine) ? { engine: value.engine } : {};
+  } catch { return {}; }
 }
 
 function solveOptionsState(
@@ -423,16 +421,12 @@ function solveOptionsState(
     sweepCount: count ?? state.sweepCount,
   })),
   setEngine: (engine) => {
-    const previous = get().engine;
     set({ engine, ...(engine === 'auto' ? {} : { accuracy: 'fast' }) });
-    if (engine !== previous && (isBeatEngine(engine) || isBeatEngine(previous))) {
-      requestEnginePrewarm(engine);
-    }
+    rememberEngine(engine);
   },
   setAccuracy: (accuracy) => {
-    const previous = get().engine;
     set({ accuracy, engine: 'auto' });
-    if (isBeatEngine(previous)) requestEnginePrewarm('auto');
+    rememberEngine('auto');
   },
   setAdaptiveFrequencySampling: (adaptiveFrequencySampling) => set({ adaptiveFrequencySampling }),
   setSolverMode: (solverMode) => set({ solverMode }),
@@ -488,7 +482,7 @@ function solveOptionsState(
  * the parametric one is written to durable storage.
  */
 export function createImportedSolveOptionsStore() {
-  return create<SolveOptionsStore>()((set, get) => solveOptionsState(set, get, 'importedSolveOptions'));
+  return create<SolveOptionsStore>()((set, get) => ({ ...solveOptionsState(set, get, 'importedSolveOptions'), ...enginePreference() }));
 }
 
 export function createPersistedSolveOptionsStore() {
@@ -508,7 +502,7 @@ export function createPersistedSolveOptionsStore() {
   // outside the legal range is kept on screen while it is being typed but is
   // not what the next session loads.
   partialize: (state) => normalizePersistedSolveOptions(state),
-  merge: (persisted, current) => ({ ...current, ...normalizePersistedSolveOptions(persisted, current) }),
+  merge: (persisted, current) => ({ ...current, ...normalizePersistedSolveOptions(persisted, current), ...enginePreference() }),
   }));
 }
 
@@ -614,6 +608,12 @@ export function resetSolveOptionsStore(): void {
 
 // The server's copy is authoritative, so re-read once it has replaced the cache.
 durableSettings.subscribe('solveOptions', () => { void useSolveOptionsStore.persist.rehydrate(); });
+export function restoreEnginePreference(): void {
+  const preference = enginePreference();
+  useSolveOptionsStore.setState(preference);
+  useImportedSolveOptionsStore.setState(preference);
+}
+durableSettings.subscribe('enginePreference', restoreEnginePreference);
 
 /**
  * Apply the directivity settings an opened `.cfg` actually specifies.

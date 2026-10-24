@@ -3,6 +3,8 @@ import { durableSettings } from './durableSettings';
 import { workspaceModeStore } from './workspaceMode';
 import {
   MAX_FREQUENCY_POINTS,
+  createPersistedSolveOptionsStore,
+  createImportedSolveOptionsStore,
   defaultPolarUi,
   normalizePersistedSolveOptions,
   normalizePolarUi,
@@ -16,26 +18,26 @@ import {
   useSolveOptionsStore,
 } from './solveOptions';
 
-describe('engine selection prewarm', () => {
-  it('schedules both parametric and imported BEAT selections without awaiting the server', async () => {
-    const fetcher = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(() => {}));
-    vi.stubGlobal('fetch', fetcher);
+describe('engine selection preference', () => {
+  it('records choices without preparing engines from inactive setup stores', () => {
+    const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
     try {
       resetSolveOptionsStore();
-      useImportedSolveOptionsStore.setState({ engine: 'auto' });
-      useSolveOptionsStore.getState().setEngine('metal');
-      expect(fetcher).not.toHaveBeenCalled();
-      useSolveOptionsStore.getState().setEngine('beat-metal');
       useSolveOptionsStore.getState().setEngine('beat-metal');
       useImportedSolveOptionsStore.getState().setEngine('beat-cpu');
-      useSolveOptionsStore.getState().setEngine('metal');
-      expect(fetcher.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).engine))
-        .toEqual(['beat-metal', 'beat-cpu', 'metal']);
-      expect(fetcher).toHaveBeenCalledWith('/api/runtimes/beat/prewarm', expect.objectContaining({ method: 'POST' }));
-      expect(useSolveOptionsStore.getState().engine).toBe('metal');
-    } finally {
-      vi.unstubAllGlobals();
-    }
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(JSON.parse(durableSettings.get('enginePreference')!)).toEqual({ engine: 'beat-cpu' });
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it('restores the last choice from either picker after a restart without changing saved setup owners', () => {
+    localStorage.clear();
+    resetSolveOptionsStore();
+    useSolveOptionsStore.getState().setEngine('beat-metal');
+    useImportedSolveOptionsStore.getState().setEngine('beat-cpu');
+    expect(useSolveOptionsStore.getState().engine).toBe('beat-metal');
+    expect(createPersistedSolveOptionsStore().getState().engine).toBe('beat-cpu');
+    expect(createImportedSolveOptionsStore().getState().engine).toBe('beat-cpu');
   });
 
   it('keeps engine selection usable when background prewarm fails', async () => {
@@ -162,6 +164,7 @@ describe('solve and directivity options', () => {
 
   it('migrates legacy BEAT CPU and Axisymmetric settings to Fast Full 3D', async () => {
     useSolveOptionsStore.getState().setAccuracy('accurate');
+    localStorage.removeItem('wg2.engine.preference.v1'); // legacy install has no shared preference
     localStorage.setItem('waveguide-v2-solve-options', JSON.stringify({
       state: { engine: 'beat-cpu', solverMode: 'circsym' }, version: 0,
     }));
@@ -415,13 +418,13 @@ describe('the imported solve-options instance', () => {
     expect(useImportedSolveOptionsStore.getState().options()).toEqual(useSolveOptionsStore.getState().options());
   });
 
-  it('is not persisted, and editing it never writes durable storage or the parametric store', () => {
+  it('persists only its explicit engine choice and leaves the parametric setup alone', () => {
     const write = vi.spyOn(durableSettings, 'set');
     const parametric = JSON.stringify(useSolveOptionsStore.getState());
     useImportedSolveOptionsStore.getState().setEngine('bempp');
     useImportedSolveOptionsStore.getState().updatePolar({ distance: 6 });
     useImportedSolveOptionsStore.getState().setFrequencySpacing('linear');
-    expect(write).not.toHaveBeenCalled();
+    expect(write).toHaveBeenCalledExactlyOnceWith('enginePreference', JSON.stringify({ engine: 'bempp' }));
     expect(JSON.stringify(useSolveOptionsStore.getState())).toBe(parametric);
     write.mockRestore();
   });

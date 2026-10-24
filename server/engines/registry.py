@@ -133,6 +133,12 @@ class EngineInfo:
     runtime_state: Literal["unprepared", "preparing", "failed", "ready", "unavailable"] | None = None
     runtime_preparable: bool = False
 
+    def short_label(self) -> str:
+        """Compact solver names for readiness messages and actions."""
+        if self.name == "metal":
+            return "Metal-BEM"
+        return self.display_label().split(" — ")[0].replace(" · ", " ")
+
     def display_label(self) -> str:
         return self.label or self.name
 

@@ -38,7 +38,9 @@ def test_picker_schedules_once_without_waiting_and_deselect_cancels(app, monkeyp
                                                   body={'engine': 'beat-metal'})
         assert status == 202
         task = app.state.beat_prewarm_task
-        await asyncio.sleep(0)
+        async with asyncio.timeout(2):
+            while not calls:
+                await asyncio.sleep(0.001)
         assert calls == ['beat-metal'] and not task.done()
         await app.state.prewarm_beat_worker('beat-metal')
         assert app.state.beat_prewarm_task is task
@@ -136,3 +138,43 @@ def test_reselection_retries_busy_admission_after_cancelled_warmup_drains(monkey
     monkeypatch.setattr(warmup, '_warm_beat', warm)
     assert warmup.prewarm_beat_worker_for_engine('beat-metal', cancellation_callback=lambda: None)
     assert len(attempts) == 2
+
+
+@pytest.mark.parametrize("engine", ["beat-cpu", "beat-metal", "metal", "auto"])
+def test_launcher_reads_one_durable_selection_after_restart(tmp_path, monkeypatch, engine):
+    from launch import serve
+    from server.settings import SettingsStore
+    from server.solver import beat_cpu_runtime
+
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path))
+    store = SettingsStore(tmp_path)
+    store.put("solveOptions", '{"state":{"engine":"beat-metal"}}')
+    store.put("enginePreference", {"engine": engine})
+    assert warmup.persisted_engine_preference(SettingsStore(tmp_path)) == engine
+    calls = []
+    monkeypatch.setattr(beat_cpu_runtime, "start_selected_provisioning", calls.append)
+    serve._start_beat_cpu_provisioning()
+    assert calls == [engine]
+
+
+
+def test_new_selection_cancels_old_preparation_before_provisioning(app, monkeypatch):
+    from server.solver import beat_cpu_runtime
+
+    calls = []
+    active = True
+    def cancel(engine):
+        nonlocal active
+        calls.append(("cancel", engine))
+        active = False
+    monkeypatch.setattr(beat_cpu_runtime, "cpu_preparation_in_flight", lambda: active)
+    monkeypatch.setattr(beat_cpu_runtime, "cancel_unselected_preparation", cancel)
+    monkeypatch.setattr(beat_cpu_runtime, "start_selected_provisioning", lambda engine, **kwargs: calls.append(("prepare", engine)))
+    async def warm(*args, **kwargs):
+        calls.append(("warm", kwargs["requested"]))
+    monkeypatch.setattr(app_module, "beat_worker_prewarm", warm)
+    async def scenario():
+        await app.state.prewarm_beat_worker("beat-cpu")
+        await app.state.beat_prewarm_task
+    asyncio.run(scenario())
+    assert calls == [("cancel", "beat-cpu"), ("prepare", "beat-cpu"), ("warm", "beat-cpu")]

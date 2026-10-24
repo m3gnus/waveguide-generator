@@ -165,18 +165,18 @@ async def select_engine(
             "engine_unavailable",
             "Dry-run solves require WG2_ENABLE_DRYRUN=1.",
         )
-    label = info.display_label() if info else target
+    label = info.short_label() if info else target
     remedies: list[SolveRemedy] = []
     unavailable = answer.stage in {"availability", "adapter"}
     code = "engine_unavailable" if unavailable else (answer.code or "engine_unsupported")
     if unavailable and info and info.runtime_state == "preparing":
-        message = f"{label} is still preparing. Wait for preparation to finish."
+        message = f"{label} is getting ready."
         remedies.append(WaitRemedy())
     elif unavailable and info and info.runtime_state in {"unprepared", "failed"}:
         disabled = None if info.runtime_preparable else info.reason
         remedies.append(PrepareRemedy(engine=target, disabled_reason=disabled))
         message = (
-            f"{label} needs preparing. Prepare {label} to solve."
+            f"{label} needs preparing."
             if disabled is None
             else f"{label} cannot be prepared here: {disabled}"
         )
@@ -202,13 +202,10 @@ async def select_engine(
                 UseEngineRemedy(
                     engine=name,
                     same_solver=same,
-                    label=f"Use {other.display_label()}"
-                    + ("" if same else " (different solver — results will differ)"),
+                    label=f"Use {other.short_label()}",
                 )
             )
     alternatives.sort(key=lambda remedy: not remedy.same_solver)
     remedies.extend(alternatives)
     remedies.append(SettingsRemedy())
-    if alternatives:
-        message += " " + "; ".join(remedy.label for remedy in alternatives) + "."
     return SolveBlocker(code=code, message=message, engine=target, remedies=remedies)

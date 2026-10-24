@@ -331,7 +331,9 @@ def _beat_cpu_leads_bempp() -> bool:
     return bool(statuses.get(beat_adapter.BEAT_CPU_BACKEND, {}).get("available"))
 
 
-def _run_warmup() -> None:
+def _run_warmup(engine: str | None = None) -> None:
+    if engine not in {None, "metal"}:
+        return  # Killable workers own the other engines' warm-up.
     began = time.monotonic()
     handlers = _log_handlers()
     for handler in handlers:
@@ -343,6 +345,8 @@ def _run_warmup() -> None:
         from server.solver import metal as metal_adapter
 
         metal_status = metal_adapter.metal_status()
+        if engine == "metal" and not metal_status.get("available"):
+            return
         if metal_status.get("available"):
             engine = "Metal"
             _warm_metal()
@@ -409,7 +413,7 @@ def _run_warmup() -> None:
         )
 
 
-def start_solver_warmup() -> threading.Thread | None:
+def start_solver_warmup(*, engine: str | None = None) -> threading.Thread | None:
     """Begin an explicitly requested background warmup. Never blocks or raises.
 
     Returns the live thread, or ``None`` when warming is switched off with
@@ -427,7 +431,7 @@ def start_solver_warmup() -> threading.Thread | None:
         if _thread is not None and _thread.is_alive():
             return _thread
         _thread = threading.Thread(
-            target=_run_warmup, name=WARMUP_THREAD_NAME, daemon=True
+            target=_run_warmup, kwargs={"engine": engine}, name=WARMUP_THREAD_NAME, daemon=True
         )
         _thread.start()
         return _thread
@@ -462,6 +466,17 @@ def persisted_engine_preference(settings: object | None) -> str | None:
 
     if settings is None:
         return None
+    try:
+        selected = settings.get("enginePreference")  # type: ignore[attr-defined]
+        if isinstance(selected, str):
+            try:
+                selected = json.loads(selected)
+            except ValueError:
+                selected = None
+        if isinstance(selected, Mapping) and isinstance(selected.get("engine"), str):
+            return selected["engine"].strip().lower() or None
+    except Exception:  # noqa: BLE001 - fall back to the legacy namespace
+        pass
     try:
         stored = settings.get(SOLVE_OPTIONS_NAMESPACE)  # type: ignore[attr-defined]
     except Exception:  # noqa: BLE001 - an unreadable setting is no preference

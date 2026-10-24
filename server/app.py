@@ -242,13 +242,13 @@ async def _run_solver_prewarm(name: str, work: Callable[[], Awaitable[object]]) 
 _SOLVER_PREWARM_TASKS: set[asyncio.Task[None]] = set()
 
 
-async def prewarm_solver() -> None:
+async def prewarm_solver(engine: str | None = None) -> None:
     """Start the solver warmup. Deliberately imported late and never awaited."""
 
     def start() -> None:
         from server.solver.warmup import start_solver_warmup
 
-        start_solver_warmup()
+        start_solver_warmup(**({"engine": engine} if engine is not None else {}))
 
     # Keep a reference: the event loop holds tasks only weakly, so an
     # unreferenced task can be collected before it finishes.
@@ -260,37 +260,8 @@ async def prewarm_solver() -> None:
 async def resolve_prewarm_engine(
     engine_registry: EngineRegistry, requested: str | None
 ) -> str | None:
-    """The engine this host's first solve will actually use.
-
-    AUTO's answer while the picker is on AUTO, and the user's own choice when
-    it is not. That distinction is the whole point: both prewarm hooks used to
-    ask AUTO unconditionally, which is the right question only for a user who
-    never touched the picker. A Mac user who has explicitly selected BEAT gets
-    ``metal`` from AUTO -- correctly, Metal is faster there -- so the hook
-    warmed an engine that user's first solve never reached and left BEAT's
-    40 s of Julia startup, package loading and JIT to be paid on it instead.
-
-    ``EngineRegistry.resolve`` returns ``None`` for an engine this host cannot
-    run, and that is what makes the fallback safe: a saved choice that no
-    longer probes available -- a GPU that has gone, a package that was not
-    installed on this machine -- warms whatever AUTO would reach rather than
-    warming nothing at all.
-
-    ``requested`` is the saved preference, already read by ``worker_prewarm``:
-    it needs the answer before this coroutine can give it one (that is the
-    head start), and reading the store twice could hand the two halves
-    different answers.
-    """
-
-    if requested is not None and requested != "auto":
-        selected = await engine_registry.resolve(requested, solver_mode=None)
-        if selected is not None:
-            return selected
-        logging.getLogger("wg.solver.warmup").info(
-            "Selected engine %r is not available here; warming AUTO's choice instead",
-            requested,
-        )
-    return await engine_registry.resolve("auto", solver_mode=None)
+    """Warm the explicit choice only; Auto may resolve a ready backend."""
+    return await engine_registry.resolve(requested or "auto", solver_mode=None)
 
 
 async def worker_prewarm(
@@ -301,33 +272,7 @@ async def worker_prewarm(
     warm: Callable[[str | None], bool],
     owns: Callable[[str], bool] | None = None,
 ) -> None:
-    """Warm one engine's worker, starting before the probe when we may.
-
-    The capability snapshot costs 2.7-6.6 s per boot on the reference Mac, and
-    until now every prewarm waited out all of it before it could even begin --
-    so a warmup meant to finish before the user's first solve was still
-    compiling at T+19 s while they solved at T+3-8 s, and whoever won the
-    single Julia worker paid the compile. Nothing about that wait is needed
-    when the user has *explicitly* named an engine: the saved preference is the
-    engine their first solve will use, and it is readable from disk in
-    microseconds.
-
-    ``owns`` says which saved names belong to this hook, and defaults to the
-    one ``engine`` names. BEAT needs more than that: its four execution
-    backends are four selectable engines, so a user who picked one has
-    ``beat-metal`` saved, not ``beat`` -- and an equality test would have
-    silently withheld the head start from exactly the users this was measured
-    for, since BEAT's is the long warmup.
-
-    So a saved name starts its warmup immediately, on a thread, and the probe
-    is reconciled with it afterwards rather than gating it. The reconciliation
-    keeps the pre-existing handling of an engine this host cannot run: a
-    warmup for a gone GPU or an uninstalled package raises inside
-    ``prewarm_*_for_engine``, which catches it, logs the reason and returns
-    False -- and then, exactly as before, whatever AUTO resolved to is warmed
-    instead. The cost of guessing early is therefore a failed warmup that is
-    logged, never a missing one.
-    """
+    """Warm only this hook's selected engine, without fallback substitution."""
 
     def read_preference() -> str | None:
         from server.solver.warmup import persisted_engine_preference
@@ -362,7 +307,8 @@ async def worker_prewarm(
             if head_start_succeeded and resolved_matches_request:
                 return
         if resolved is not None:
-            await asyncio.to_thread(warm, resolved)
+            if claims(resolved):
+                await asyncio.to_thread(warm, resolved)
     finally:
         # Only reachable when this coroutine was cancelled -- the shutdown hook
         # cancels it -- and awaiting a task does not cancel that task, so
@@ -682,8 +628,6 @@ def create_app(
                 return
             application.state.beat_prewarm_cancel.set()
             current.cancel()
-        if engine is not None and not (engine == "beat" or engine.startswith("beat-")):
-            return
         import threading
 
         cancelled = threading.Event()
@@ -707,6 +651,28 @@ def create_app(
                 application.state.beat_prewarm_engine = await asyncio.to_thread(
                     persisted_engine_preference, getattr(application.state, "settings", None)
                 )
+            if engine is not None:
+                from server.solver.beat_cpu_runtime import cancel_unselected_preparation, cpu_preparation_in_flight, start_selected_provisioning
+
+                # A previous selection may still be releasing the runtime lock.
+                # Recheck the current task's cancellation before starting new work.
+                await asyncio.to_thread(cancel_unselected_preparation, engine)
+                while await asyncio.to_thread(cpu_preparation_in_flight):
+                    await asyncio.sleep(0.1)
+                check_cancelled()
+                await asyncio.to_thread(start_selected_provisioning, engine, cancellation_callback=check_cancelled)
+                resolved = None if engine == "beat" or engine.startswith("beat-") else await resolve_prewarm_engine(engine_registry, engine)
+                if resolved is not None and resolved.startswith("beat-"):
+                    await beat_worker_prewarm(engine_registry, getattr(application.state, "settings", None),
+                                             requested=resolved, cancellation_callback=check_cancelled)
+                    return
+                if resolved == "bempp":
+                    from server.solver.warmup import prewarm_bempp_worker_for_engine
+
+                    await asyncio.to_thread(prewarm_bempp_worker_for_engine, resolved)
+                    return
+                if not (engine == "beat" or engine.startswith("beat-")):
+                    return
             await beat_worker_prewarm(
                 engine_registry, getattr(application.state, "settings", None),
                 requested=engine, cancellation_callback=check_cancelled,
@@ -808,7 +774,18 @@ def create_app(
     application.router.add_event_handler("startup", prewarm_bempp_worker)
     application.router.add_event_handler("startup", prewarm_beat_worker)
     if solver_warmup:
-        application.router.add_event_handler("startup", prewarm_solver)
+        async def prewarm_selected_native() -> None:
+            def read_preference():
+                from server.solver.warmup import persisted_engine_preference
+
+                return persisted_engine_preference(settings_store)
+
+            requested = await asyncio.to_thread(read_preference)
+            resolved = await resolve_prewarm_engine(engine_registry, requested)
+            if resolved == "metal":
+                await prewarm_solver(resolved)
+
+        application.router.add_event_handler("startup", prewarm_selected_native)
 
     @application.middleware("http")
     async def origin_guard(request: Request, call_next):

@@ -89,7 +89,10 @@ def test_explicit_engine_states(kind, state):
     alternatives = [r for r in blocker.remedies if r.kind == "use_engine"]
     assert [r.engine for r in alternatives] == ["beat-cpu", "metal"]
     assert alternatives[0].same_solver and not alternatives[1].same_solver
-    assert "different solver — results will differ" in alternatives[1].label
+    assert alternatives[1].label == "Use Metal-BEM"
+    assert all(remedy.label not in blocker.message for remedy in alternatives)
+    if state == "preparing":
+        assert blocker.message == "BEAT Metal is getting ready."
     prepare = next((r for r in blocker.remedies if r.kind == "prepare"), None)
     assert bool(prepare) == (state in {"unprepared", "disabled", "failed"})
     if prepare:

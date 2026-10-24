@@ -178,7 +178,7 @@ describe('formatClock', () => {
 
 describe('resolveEngineLabel', () => {
   it('names the known engines, not a bare uppercase of the slug', () => {
-    expect(resolveEngineLabel('metal')).toBe('Metal');
+    expect(resolveEngineLabel('metal')).toBe('Metal-BEM');
     expect(resolveEngineLabel('beat')).toBe('BEAT Engine');
     expect(resolveEngineLabel('official_beat')).toBe('Official BEAT');
     expect(resolveEngineLabel('bempp')).toBe('BEMPP');
@@ -206,7 +206,7 @@ describe('solveDetailLine', () => {
       config_summary: { drive_channel_ids: ['a', 'b', 'c'], symmetry: { resolved: 'half', requested: 'auto' } },
       solve_options: { engine: 'metal', symmetry: 'auto' } as JobItem['solve_options'],
     });
-    expect(line).toBe('Metal · 3 sources · half');
+    expect(line).toBe('Metal-BEM · 3 sources · half');
   });
 
   it('falls back to a frequency count for a parametric design with no drive channels', () => {
@@ -236,7 +236,7 @@ describe('solveDetailLine', () => {
       expect(solveDetailLine({
         config_summary: { symmetry: { resolved } },
         solve_options: { engine: 'metal' } as JobItem['solve_options'],
-      })).toBe('Metal · half');
+      })).toBe('Metal-BEM · half');
     }
   });
 
@@ -245,7 +245,7 @@ describe('solveDetailLine', () => {
       config_summary: {},
       solve_options: { engine: 'metal', symmetry: 'auto', num_frequencies: 10 } as JobItem['solve_options'],
     });
-    expect(line).toBe('Metal · 10 freq');
+    expect(line).toBe('Metal-BEM · 10 freq');
   });
 });
 

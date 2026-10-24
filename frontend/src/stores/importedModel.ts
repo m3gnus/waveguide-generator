@@ -1,3 +1,4 @@
+import { restoreEnginePreference } from './solveOptions';
 import { create } from 'zustand';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { CadSolveSetup } from '../api/cadOperations';
@@ -326,11 +327,13 @@ export async function reopenLastModel(fetcher: typeof fetch = fetch, options: Re
       && !await views.cad?.hasDraft?.(pointer.model_id, reachable)) {
       if (!stillEmpty() || !options.openUnsolved) return false;
       const shown = await options.openUnsolved(pointer, read.latest_prepared);
-      if (shown) rememberLastModel(pointer);
+      if (shown) { restoreEnginePreference(); rememberLastModel(pointer); }
       return shown;
     }
     if (!stillEmpty()) return false;
-    return await openImported({ kind: 'model', modelId: pointer.model_id }, reachable);
+    const opened = await openImported({ kind: 'model', modelId: pointer.model_id }, reachable);
+    if (opened) restoreEnginePreference();
+    return opened;
   } catch (error) {
     if (isDefinitiveRefusal(error)) { clearLastModel(pointer); return false; }
     if (error instanceof NetworkFailure) throw error.original;
