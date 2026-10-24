@@ -50,12 +50,21 @@ def expected(case, kind):
     return json.loads((DATA / "expected" / case["name"] / f"{kind}.json").read_text())
 
 
+# A hang guard, not a speed budget: the product's own default is an hour. The
+# heaviest case (shared-profile-morphed-scaled-extended STEP) takes ~18 s on the
+# macOS runner and ~25 s on Linux, but its 45 s guard expired twice on the
+# Windows runner under four xdist workers (run 40134196208, where FF06 took
+# ~40 s against ~15 s on macOS). 180 s keeps ~4x headroom there and still
+# stops a real hang well inside pytest.ini's 300 s faulthandler backstop.
+BUILD_HANG_GUARD_S = 180
+
+
 @pytest.fixture(autouse=True)
 def bounded_native_builds(monkeypatch):
     # The real killable worker supplies the timeout even under the suite's
     # ambient in-process mode. Never patch or substitute a geometry builder.
     monkeypatch.setenv("WG2_TEST_MESH_IN_PROCESS", "0")
-    monkeypatch.setenv("WG2_MESH_BUILD_TIMEOUT_S", "45")
+    monkeypatch.setenv("WG2_MESH_BUILD_TIMEOUT_S", str(BUILD_HANG_GUARD_S))
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case["name"])

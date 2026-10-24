@@ -14,6 +14,7 @@ from server.cadlink.joblane.default_setup import default_setup
 from server.cadlink.joblane.preparation_inputs import SnapshotContext, _load_setup
 from server.cadlink.joblane.project_setup import inventory_sha256
 from server.jobs.imported_setup import setup_content
+from server.mesh.builder import DENSE_SOLVER_MEMORY_LIMIT_ENV, DENSE_SOLVER_MEMORY_LIMIT_UNSAFE_ENV
 
 from cad_backends import JobsHarness
 from test_cad_preparation import _accept, _manifest, _revision
@@ -291,7 +292,7 @@ def test_nowaistbanding_sized_step_mesh_is_well_below_solver_ceiling(tmp_path: P
 
 @pytest.mark.parametrize("fine_walls", [False, True])
 def test_existing_automatic_nowaistbanding_setup_prepares_and_solves_below_ceiling(
-    harness, tmp_path, record_property, fine_walls,
+    harness, tmp_path, record_property, fine_walls, monkeypatch,
 ) -> None:
     """Real STEP child, ingest and preparation; the harness queues the resulting solve."""
     from server.cadlink.intake.ingest import ingest_bundle
@@ -339,6 +340,12 @@ def test_existing_automatic_nowaistbanding_setup_prepares_and_solves_below_ceili
         assert not harness.submitted
         # The real isolated mesh builder accepts the explicit choice, with the
         # same fine settings. Job-level consent and binding are tested in test_cad_held.
+        # Its dense-solver estimate (~16.4 GiB) passes the memory guard only on
+        # a host with more than ~33 GiB, so give the guard an explicit budget
+        # rather than this host's RAM; the guard itself is tested in
+        # test_mesh_builder and test_cad_child_memory_override.
+        monkeypatch.setenv(DENSE_SOLVER_MEMORY_LIMIT_ENV, str(32 * 1024**3))
+        monkeypatch.setenv(DENSE_SOLVER_MEMORY_LIMIT_UNSAFE_ENV, "1")
         record = ingest_bundle(bundle, setup["geometry"]["mesh"], [], harness.store, harness.data_dir,
                                prep_options={"mesh_limit_override": True})
         assert record["mesh"]["stats"]["triangle_count"] > 22_000
