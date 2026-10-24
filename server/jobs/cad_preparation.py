@@ -489,7 +489,7 @@ def preparation_options(
     """
 
     return {
-        "area_drift_overrides": list(setup.preparation.area_drift_overrides),
+        "area_drift_overrides": sorted(setup.preparation.area_drift_overrides),
         "symmetry_mode": setup.preparation.symmetry_mode,
         **({"mesh_limit_override": True} if mesh_limit_override else {}),
         **(

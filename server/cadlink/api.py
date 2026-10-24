@@ -1051,7 +1051,7 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
             # them may become reachable from a request; keep this literal, and
             # never splat a payload into it.
             prep_options={
-                "area_drift_overrides": payload.area_drift_overrides,
+                "area_drift_overrides": sorted(payload.area_drift_overrides),
                 "symmetry_mode": payload.symmetry_mode,
                 **(
                     {"surface_deviation_mm": payload.surface_deviation_mm}

@@ -678,13 +678,18 @@ def _solve_anyway_carries(
     preparation -- the retained snapshot, the setup's mesh sizes, skipped
     sources and preparation options, and the frame it would be meshed in --
     is normalised as ingestion normalises it (``mesh_preparation``), and
-    carries only when its mesh cache address is the one the record was
-    prepared under. Anything else makes another mesh, which the ceiling asks
+    carries only when its domain plan is the record's and its mesh cache
+    address is the one the record was prepared under. Anything else makes another mesh, which the ceiling asks
     about again. Unknown (no retained copy, or a record from before the key)
     is not the same.
     """
 
     if record.get("mesh_limit_override") is not True or target is None or target.manifest is None:
+        return False
+    # The stored key leaves an evidenced domain plan out, so a press reading
+    # the domain another way (planes [x] for [x, y]) would otherwise carry to
+    # a mesh of another size.
+    if target.domain != record_identity(record)[1]:
         return False
     recorded = record.get("mesh_lookup_key")
     if not isinstance(recorded, str) or not recorded:

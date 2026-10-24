@@ -957,6 +957,21 @@ def test_solve_anyway_carries_only_for_the_preparation_it_was_chosen_for(harness
     assert _carries(harness, record, press, target) is carries
 
 
+def test_solve_anyway_does_not_carry_to_another_domain_reading(harness) -> None:
+    """The mesh key leaves an evidenced domain plan out: a press that records
+    the [x]-only reading of an offer prepared on [x, y] is another (larger) mesh."""
+
+    from dataclasses import replace
+
+    model = _cad_model(harness, mesh_limit_override=True)
+    record = json.loads(harness.store.get_ingest(model["prepared_id"])["record_json"])
+    record["domain_interpretation"] = {"plan": {"planes": ["x", "y"]}}
+    target = _anyway_target(harness, record["manifest_sha256"])
+    same = replace(target, domain={"planes": ["x", "y"]})
+    assert _carries(harness, record, _setup(), same) is True
+    assert _carries(harness, record, _setup(), replace(target, domain={"planes": ["x"]})) is False
+
+
 def test_solve_anyway_does_not_carry_without_the_records_key_or_its_override(harness) -> None:
     model = _cad_model(harness, mesh_limit_override=True)
     record = json.loads(harness.store.get_ingest(model["prepared_id"])["record_json"])
