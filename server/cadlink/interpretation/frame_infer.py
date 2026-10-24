@@ -293,6 +293,31 @@ def choose_axis(suggestion: Mapping[str, Any] | None, allowed: Iterable[str]) ->
     return AxisChoice(chosen, DECISION_FALLBACK, code)
 
 
+def confident_unallowed_axis(
+    suggestion: Mapping[str, Any] | None, allowed: Iterable[str]
+) -> str | None:
+    """The axis a confident survey points along that the domain does not allow, or None.
+
+    A confident verdict (``automatic``) whose axis is not allowed, or an
+    ``unsupported-axis`` abstention backed as a confident verdict would be
+    (at least :data:`MIN_SUPPORTING_EVIDENCE` evidence types). Such a model
+    is never solved along another axis: :func:`choose_axis` would only fall
+    back, so the preparation refuses it (``reduced_axis_not_allowed``).
+    """
+
+    summary = suggestion or {}
+    if summary.get("status") == STATUS_AUTOMATIC:
+        axis = summary.get("axis")
+    elif (
+        summary.get("reasonCode") == "unsupported-axis"
+        and len(summary.get("supportingEvidence") or ()) >= MIN_SUPPORTING_EVIDENCE
+    ):
+        axis = summary.get("unrestrictedAxis")
+    else:
+        return None
+    return str(axis) if axis in AXES and axis not in set(allowed) else None
+
+
 def unavailable(reason: str, *, supported_axes: Iterable[str] = AXES) -> FrameInference:
     """What WG reports when the survey could not run: it asks."""
 
@@ -1190,6 +1215,7 @@ __all__ = [
     "LEGACY_ALGORITHM_VERSIONS",
     "MOUTH",
     "choose_axis",
+    "confident_unallowed_axis",
     "fallback_ranking",
     "evidence_votes",
     "infer_frame",

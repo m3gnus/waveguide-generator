@@ -227,13 +227,18 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
   };
   const unsupported = frame.axes.find((item) => !item.allowed && item.reason)?.reason ?? null;
   const fallback = !view.picked && source === 'fallback';
+  // The model's own axis cannot be used by its reduced domain: said as such,
+  // never shown as another axis.
+  const notAllowed = !view.picked ? frame.notAllowed ?? null : null;
   return <div className="cad-solver-frame" data-frame-preview="ready" data-solver-frame={axis ?? 'automatic'}
     data-frame-source={view.picked ? 'picked' : source ?? 'automatic'}>
     {!choosing && <div className="cad-solver-frame-summary">
       <p className="cad-solver-frame-line">
         {axis
           ? <span>Radiates along <b>{axis}</b></span>
-          : <span>WG works out which way {label} radiates when it solves</span>}
+          : notAllowed
+            ? <span>Radiates along <b>{notAllowed.axis}</b></span>
+            : <span>WG works out which way {label} radiates when it solves</span>}
         {' · '}<button
           className="link-button"
           data-action="change-solver-frame"
@@ -241,6 +246,9 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
           onClick={() => setChanging(true)}
         >Change</button>
       </p>
+      {notAllowed && <p className="cad-detail cad-solver-frame-not-allowed" role="status">
+        {notAllowed.message} {notAllowed.nextStep}
+      </p>}
       {fallback && <p className="cad-detail cad-solver-frame-fallback">
         WG chose {axis}; change it if the model radiates another way.
       </p>}

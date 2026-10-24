@@ -656,7 +656,12 @@ def _press_frame(store: Any, record: Mapping[str, Any], frame_axis: str | None) 
         try:
             confirm_frame(store, record, frame_axis)
         except FrameConfirmationError as exc:
-            raise ModelSolveRefusal(409, FRAME_CONFIRMATION_REQUIRED, str(exc)) from exc
+            detail = str(exc).rstrip(".")
+            raise ModelSolveRefusal(
+                409, FRAME_CONFIRMATION_REQUIRED,
+                f"WG cannot solve this model along {frame_axis}: {detail}. "
+                "Choose another axis in CAD Link, then press Solve.",
+            ) from exc
     return frame_axis
 
 

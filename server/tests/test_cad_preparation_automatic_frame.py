@@ -497,3 +497,56 @@ def test_a_cut_the_provisional_axis_cannot_mirror_is_prepared_again_through_prep
     decision = harness.store.get_frame_decision(record["ingest_id"])
     assert (decision["axis"], decision["provenance"]) == ("+z", DECISION_FALLBACK)
     assert second["frameAxisAutomatic"] == "+z"
+
+
+def _declared_half(step: bytes) -> dict[str, Any]:
+    """The same authored model, sent as a half cut on x = 0: only ±y and ±z lie in its plane."""
+
+    from server.cadlink.wgreturn import REDUCED_DOMAIN_FEATURE
+
+    manifest = _authored(step)
+    manifest["assembly"]["domain"] = {
+        "kind": "half", "cut_planes": ["x0"], "declared_by": "cad-author",
+        "evidence": {"x0": {"min_mm": 0.0, "max_mm": 34.0, "tolerance_mm": 0.05}},
+    }
+    features = list(manifest.get("required_features") or [])
+    if REDUCED_DOMAIN_FEATURE not in features:
+        manifest["required_features"] = [*features, REDUCED_DOMAIN_FEATURE]
+    return manifest
+
+
+def test_a_saved_axis_a_half_model_cannot_use_is_refused_never_replaced(real, monkeypatch) -> None:
+    harness, mesher = real
+    _verdict(monkeypatch, status="automatic", axis="+z")
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    first = _prepare(harness)
+    assert first["state"] == "accepted", first
+    confirm_frame(harness.store, _record(harness, first), "+x")  # the project's own choice
+    meshed = len(mesher.calls)
+
+    half_step = b"STEP authored half"
+    _received(harness, "authored-half", _declared_half(half_step), half_step, command="cmd-2")
+    second = _prepare(harness, "cmd-2", expected_frame_axis=None)
+
+    assert (second["state"], second["reason"]) == ("needs_user_input", "reduced_axis_not_allowed"), second
+    assert second["attention"] == "action"
+    assert "(+x)" in second["message"]
+    assert second["next_step"] == "Send the whole model from Fusion."
+    # Refused before meshing, and never solved along another axis.
+    assert len(mesher.calls) == meshed
+    assert len(harness.submitted) == 1
+
+
+def test_a_confident_survey_a_half_model_cannot_use_is_refused_never_replaced(real, monkeypatch) -> None:
+    harness, _mesher = real
+    _verdict(monkeypatch, status="automatic", axis="+x")
+    step = b"STEP authored half"
+    _received(harness, "authored-half", _declared_half(step), step)
+
+    summary = _prepare(harness)
+
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "reduced_axis_not_allowed"), summary
+    assert summary["attention"] == "action"
+    assert "(+x)" in summary["message"]
+    assert harness.submitted == []

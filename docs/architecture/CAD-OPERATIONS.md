@@ -215,6 +215,7 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `findings_need_review` | `needs_user_input` | The preparation has blocking findings not yet approved on that preparation |
 | `frame_confirmation_required` | `needs_user_input` | Never a question about which way a model radiates: only a Solve that named a person's choice of axis, when another choice replaced it before the solve was prepared (see "Unlinked solver frame"). Runs an earlier build stopped here still show it |
 | `preparation_failed` | `needs_user_input` | Retaining or meshing failed in a way another attempt can overcome: a worker crash, a timeout |
+| `reduced_axis_not_allowed` | `needs_user_input` | The model's radiation axis -- the project's choice, or one WG's survey is confident about -- is one its reduced domain (a declared or recovered cut, a reduced model with FEM regions) cannot be solved along. Never solved along another axis instead; the user sends the whole model from Fusion |
 | `return_unavailable` | `needs_user_input` | Neither the return Fusion sent nor WG's own copy of it can be read now (it left the WGLink folder before WG kept a copy, or the copy is damaged); the user sends it again, or tries again once it is back |
 | `wglink_folder_unset` | `needs_user_input` | No WGLink folder is selected, so the return cannot be read; choosing it and trying again works |
 | `engine_unavailable` | `needs_user_input` | The engine the setup names is not available on this host |
@@ -537,11 +538,15 @@ choices take precedence (see "Automatic axis" below).
     preparation is recorded, and `POST /api/cadlink/ingest` starts it after answering.
     It is cached in `cad_frame_suggestions` by snapshot and algorithm version; a survey
     that could not run is not cached.
-  - It never confirms. **Precedence of the axis shown:** a confirmed frame whose
-    identity matches and the snapshot allows, then a v1 confirmation carried forward,
-    then WG's own decision for the record -- the one stored when it was prepared, else
+  - It never confirms. **Precedence of the axis shown** (`solver_frame.manual_choice`,
+    the one precedence): a person's choice -- a confirmed frame whose identity
+    matches, else a v1 confirmation carried forward -- then WG's own decision for the record -- the one stored when it was prepared, else
     `choose_axis` now (`source: "suggested"` when confident, `"fallback"` when the
-    ranking chose). A record stating no frame shows none; preparing it decides. When a
+    ranking chose). A record stating no frame shows none; preparing it decides. A
+    person's choice the snapshot's domain does not allow, or (with none) an axis the
+    survey is confident about that it does not allow, shows none either: `notAllowed`
+    (`{axis, message, nextStep}`) says the model cannot be solved along it, and Solve
+    ends with `reduced_axis_not_allowed`. When a
     snapshot's automatic suggestion disagrees with the confirmed frame, the preview
     carries a non-blocking notice and the confirmed frame still holds.
 - **Preparation.** An unlinked snapshot is meshed in its project's confirmed frame (or
@@ -570,9 +575,18 @@ choices take precedence (see "Automatic axis" below).
   names none -- is held to it, and only a prepare naming another axis replaces it. `+z` is never written into the ingest options, so no mesh cached before
   this contract is made again.
 - **Automatic axis (every solve with no manual choice).** A matching manual
-  confirmation the snapshot allows wins, followed by a carried v1 choice. Otherwise
+  confirmation wins, followed by a carried v1 choice. Otherwise
   `frame_infer.choose_axis` decides, never asks, for a Fusion request and a Solve in WG
-  alike:
+  alike.
+- **An axis the domain cannot use is never replaced.** A person's choice the
+  snapshot's domain does not allow (before meshing, against the manifest; after it,
+  against the record; or outside a cut the preparation could not mirror along it),
+  and, with no choice, a survey confident about an axis the record does not allow
+  (`frame_infer.confident_unallowed_axis`: an `automatic` verdict, or an
+  `unsupported-axis` abstention backed by at least two evidence types), end the
+  preparation calmly with `reduced_axis_not_allowed` ("<name> arrived cut in a way that
+  cannot be solved along its radiation axis (+y)." -- send the whole model from
+  Fusion), never with a solve along the first allowed axis. The rest of WG's decision:
   - **Inference (`frame-infer-v5`).** The mouth -- where the sources' sound leaves the
     model -- floods the air each source sounds into through a voxel grid to saturation and
     measures its openings out of the model's bounding box by area, so a horn's mouth

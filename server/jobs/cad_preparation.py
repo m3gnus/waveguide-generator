@@ -53,6 +53,7 @@ from server.cadlink.intake.ingest import (
 from server.cadlink.intake.isolation import ChildRefusal
 from server.cadlink.operations import (
     REASON_CODES,
+    axis_not_allowed_message,
     hold_details,
     INTERNAL_FAILURE_CODES,
     is_calm_failure,
@@ -98,6 +99,7 @@ from server.cadlink.interpretation.solver_frame import (
 from server.cadlink.intake.readings import (
     decide_record_frame,
     ensure_frame_suggestion,
+    frame_axis_not_allowed,
     record_frame_refusal,
     record_preparation_diagnostic,
     resolve_for_manifest as resolve_solver_frame,
@@ -618,6 +620,10 @@ def prepare_job_sync(
         # Freeze the effective snapshot-owned inputs before meshing or resuming.
         run.advance(cad={"setup": _setup_record(store, revision_id)})
     solver_frame = resolve_solver_frame(store, retained_manifest, manifest_sha256, automatic=True)
+    if solver_frame is not None and solver_frame.manual_not_allowed is not None:
+        # A person's axis this snapshot's domain cannot use: never solved
+        # along another axis instead.
+        return _refuse_axis_not_allowed(run, solver_frame.manual_not_allowed)
     if decided is not None and solver_frame is not None and not solver_frame.manual:
         # The second pass meshes along the axis the first pass decided.
         solver_frame = replace(solver_frame, automatic_axis=decided.axis)
@@ -737,6 +743,11 @@ def prepare_job_sync(
     # domain failure that only the provisional axis caused is not final.
     domain_refusal = decision_refusal(record)
     if domain_refusal is not None:
+        meshed = _record_frame_axis(record) or AS_MODELLED
+        cut_axes = _refused_cut_axes(record, solver_frame)
+        if solver_frame is not None and solver_frame.manual and cut_axes and meshed not in cut_axes:
+            # The person's axis lies outside the cut: mirroring cannot use it.
+            return _refuse_axis_not_allowed(run, meshed)
         retry_choice = _domain_frame_retry(
             store, record, solver_frame,
             provisional=not automatic_retry,
@@ -773,6 +784,11 @@ def prepare_job_sync(
     except Exception as exc:  # noqa: BLE001 - advisory by construction
         logger.warning("Solver frame suggestion failed for %s: %s", record.get("ingest_id"), exc)
         suggestion = None
+    blocked_axis = frame_axis_not_allowed(store, record, suggestion)
+    if blocked_axis is not None:
+        # A person's choice, or a confident survey, along an axis this
+        # record's domain cannot use: never solved along another one.
+        return _refuse_axis_not_allowed(run, blocked_axis)
     # WG decides, once, and seals the decision on this record for admission,
     # execution, retry and restart. A person's saved choice wins
     # (``decide_record_frame`` is None then).
@@ -914,6 +930,33 @@ def _cut_unsolvable_message(cad: Mapping[str, Any]) -> str:
     )
 
 
+def _refused_cut_axes(record: Mapping[str, Any], solver_frame: Any) -> tuple[str, ...]:
+    """The allowed axes lying in every CAD cut this record could not mirror; () for none."""
+
+    decision = record.get("domain_decision")
+    cuts = decision.get("cad_cuts") if isinstance(decision, Mapping) else None
+    planes = sorted({
+        str(cut.get("plane"))
+        for cut in cuts or ()
+        if isinstance(cut, Mapping) and cut.get("status") in ("refused", "unmirrored")
+    })
+    if not planes or solver_frame is None:
+        return ()
+    return tuple(axis for axis in axes_in_planes(planes) if axis in solver_frame.allowed_axes)
+
+
+def _refuse_axis_not_allowed(run: Any, axis: str) -> tuple[str, None]:
+    """End calmly: the model's radiation axis is one its reduced domain cannot use."""
+
+    snapshot = run.cad.get("snapshot") if isinstance(run.cad.get("snapshot"), Mapping) else {}
+    return run.refuse(
+        REDUCED_AXIS_NOT_ALLOWED, axis_not_allowed_message(snapshot.get("document_name"), axis)
+    )
+
+
+REDUCED_AXIS_NOT_ALLOWED = "reduced_axis_not_allowed"
+
+
 def _domain_frame_retry(
     store: CadLinkStore,
     record: Mapping[str, Any],
@@ -936,18 +979,7 @@ def _domain_frame_retry(
         return None
     from server.cadlink.interpretation.frame_infer import choose_axis
 
-    decision = record.get("domain_decision")
-    cuts = decision.get("cad_cuts") if isinstance(decision, Mapping) else None
-    planes = sorted({
-        str(cut.get("plane"))
-        for cut in cuts or ()
-        if isinstance(cut, Mapping) and cut.get("status") in ("refused", "unmirrored")
-    })
-    if not planes:
-        return None
-    candidates = tuple(
-        axis for axis in axes_in_planes(planes) if axis in solver_frame.allowed_axes
-    )
+    candidates = _refused_cut_axes(record, solver_frame)
     meshed = _record_frame_axis(record) or AS_MODELLED
     if not candidates or meshed in candidates:
         return None

@@ -102,6 +102,7 @@ function frameAnswer(options: {
   preselected?: SolverFrameState['preselected'];
   suggestion?: SolverFrameState['suggestion'];
   differs?: SolverFrameState['differs'];
+  notAllowed?: SolverFrameState['notAllowed'];
   allowed?: readonly SolverFrameAxis[];
 } = {}): SolverFrameState {
   const allowed = options.allowed ?? SOLVER_FRAME_AXES;
@@ -116,7 +117,7 @@ function frameAnswer(options: {
     axes: SOLVER_FRAME_AXES.map((axis) => ({
       axis,
       allowed: allowed.includes(axis),
-      reason: allowed.includes(axis) ? null : 'a half or quarter model is solved only as modelled (+z)',
+      reason: allowed.includes(axis) ? null : `this model's mirror planes contain only ${allowed.join(', ')}`,
       up: fixtureV2.up[axis],
       upSource: 'default',
       solverFromAssembly: fixtureV2.axes[axis],
@@ -125,6 +126,7 @@ function frameAnswer(options: {
     suggestion: options.suggestion ?? null,
     preselected: options.preselected ?? null,
     differs: options.differs ?? null,
+    notAllowed: options.notAllowed ?? null,
   };
 }
 
@@ -537,13 +539,30 @@ describe('M1b: one Solve card, to the revealed result', () => {
     expect(pressOf().frame_axis).toBeUndefined();
   });
 
+  it('says a half model cannot be solved along its own axis, never shows another one, and names none', async () => {
+    frame = frameAnswer({
+      allowed: ['+z'],
+      preselected: null,
+      notAllowed: { axis: '+y', message: 'This model arrived cut in a way that cannot be solved along its radiation axis (+y).', nextStep: 'Send the whole model from Fusion.' },
+    });
+    await mount();
+    expect(host.querySelector('.cad-solver-frame-line')!.textContent).toBe('Radiates along +y · Change');
+    expect(host.querySelector('.cad-solver-frame-not-allowed')!.textContent)
+      .toBe('This model arrived cut in a way that cannot be solved along its radiation axis (+y). Send the whole model from Fusion.');
+    expect(host.querySelector('.cad-solver-frame-fallback')).toBeNull();
+    await pressSolve();
+    // The backend refuses it calmly (reduced_axis_not_allowed); nothing is confirmed or named.
+    expect(puts).toEqual([]);
+    expect(pressOf().frame_axis).toBeUndefined();
+  });
+
   it('offers only the axes the backend supports for this model', async () => {
     frame = frameAnswer({ allowed: ['+z'], preselected: { axis: '+z', source: 'fallback' } });
     await mount();
     await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="change-solver-frame"]')!.click(); });
     const radios = [...host.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
     expect(radios.filter((radio) => !radio.disabled).map((radio) => radio.value)).toEqual(['+z']);
-    expect(radios.find((radio) => radio.value === '-y')!.closest('label')!.title).toContain('only as modelled');
+    expect(radios.find((radio) => radio.value === '-y')!.closest('label')!.title).toBe("this model's mirror planes contain only +z");
     // A disabled axis cannot be picked into what Solve uses.
     act(() => useCadSolverFrameStore.getState().pick('wgi_first', '-y'));
     expect(useCadSolverFrameStore.getState().frames.wgi_first).toMatchObject({ axis: '+z', picked: false });

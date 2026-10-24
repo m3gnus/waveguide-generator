@@ -171,9 +171,9 @@ def test_a_declared_half_facing_along_its_plane_is_suggested(tmp_path: Path) -> 
     assert suggestion["supportedAxes"] == ["+z", "-z", "+y", "-y"]
 
 
-def test_a_declared_half_facing_across_its_plane_falls_back_as_modelled(tmp_path: Path) -> None:
+def test_a_declared_half_facing_across_its_plane_is_never_solved_along_another_axis(tmp_path: Path) -> None:
     """A model facing +x cannot be mirrored on x = 0: never promoted to another axis
-    as confident; the fallback ranking's allowed axis is preselected instead."""
+    as confident, and never silently solved along the fallback's +z either."""
 
     store = CadLinkStore(tmp_path / "cadlink.db")
     record = _record(tmp_path, "+x", domain=True)
@@ -183,7 +183,8 @@ def test_a_declared_half_facing_across_its_plane_falls_back_as_modelled(tmp_path
     assert suggestion["reasonCode"] == "unsupported-axis"
     assert suggestion["unrestrictedAxis"] == "+x"
     assert suggestion["axis"] is None
-    assert preview["preselected"] == {"axis": "+z", "source": "fallback"}
+    assert preview["preselected"] is None
+    assert preview["notAllowed"]["axis"] == "+x"
 
 
 def test_the_route_returns_the_suggestion_and_what_is_preselected(tmp_path: Path, monkeypatch) -> None:

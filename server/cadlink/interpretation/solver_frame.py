@@ -391,26 +391,40 @@ class FrameResolution:
         return self.confirmed_axis is not None and self.confirmed_axis in self.allowed_axes
 
     @property
+    def manual_axis(self) -> str | None:
+        """A person's choice for this snapshot, allowed or not (:func:`manual_choice`)."""
+
+        return manual_choice(self.confirmed_axis, self.carried_axis)
+
+    @property
     def manual(self) -> bool:
         """A person's choice stands for this snapshot: confirmed, or carried from v1."""
 
-        return self.confirmed or (
-            self.carried_axis is not None and self.carried_axis in self.allowed_axes
-        )
+        return self.manual_axis is not None and self.manual_axis in self.allowed_axes
+
+    @property
+    def manual_not_allowed(self) -> str | None:
+        """A person's choice this snapshot's domain cannot be solved along, or None.
+
+        Never replaced by another axis: the preparation ends with
+        ``reduced_axis_not_allowed`` instead.
+        """
+
+        axis = self.manual_axis
+        return axis if axis is not None and axis not in self.allowed_axes else None
 
     @property
     def axis(self) -> str:
-        """The frame a preparation meshes in: the confirmed one, else a v1
-        confirmation carried forward, else WG's own decision, else as modelled.
+        """The frame a preparation meshes in: a person's choice (confirmed, else
+        a v1 confirmation carried forward), else WG's own decision, else as
+        modelled.
 
         A carried v1 choice remains the user's choice under the current
         contract (``record_frame_refusal``).
         """
 
-        if self.confirmed:
-            return self.confirmed_axis  # type: ignore[return-value]
-        if self.carried_axis is not None and self.carried_axis in self.allowed_axes:
-            return self.carried_axis
+        if self.manual:
+            return self.manual_axis  # type: ignore[return-value]
         if self.automatic_axis is not None and self.automatic_axis in self.allowed_axes:
             return self.automatic_axis
         return AS_MODELLED
@@ -427,6 +441,19 @@ class FrameResolution:
             "up_source": source,
             "document_up": self.document_up,
         }
+
+
+def manual_choice(confirmed: str | None, carried: str | None) -> str | None:
+    """A person's choice of axis for a snapshot, whether or not its domain allows it.
+
+    The one precedence every reader applies: the axis confirmed under the
+    snapshot's requirement, else a contract-v1 confirmation carried forward
+    (the two never both stand: they belong to different requirements). Only
+    when nobody chose does WG decide (``frame_infer.choose_axis``). A choice
+    the domain does not allow is never silently replaced by another axis.
+    """
+
+    return confirmed if confirmed is not None else carried
 
 
 def carried_axis(
@@ -605,6 +632,7 @@ __all__ = [
     "frame_requirement",
     "frame_spec",
     "is_unlinked_manifest",
+    "manual_choice",
     "record_confirmation_key",
     "record_frame",
     "record_frame_identity",

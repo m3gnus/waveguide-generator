@@ -105,6 +105,10 @@ REASON_CODES: Mapping[str, str] = {
     # An unlinked (CAD-authored) model whose solver frame its project has not
     # confirmed for this frame requirement (server/cadlink/interpretation/solver_frame.py).
     "frame_confirmation_required": NEEDS_USER_INPUT,
+    # The model's radiation axis -- a person's choice, or one the survey is
+    # confident about -- is one its reduced domain cannot be solved along.
+    # Never solved along another axis instead: send the whole model.
+    "reduced_axis_not_allowed": NEEDS_USER_INPUT,
     "preparation_failed": NEEDS_USER_INPUT,
     "mesh_too_large": NEEDS_USER_INPUT,
     # The solver's dense memory guard refused the mesh (after Solve anyway):
@@ -152,7 +156,7 @@ INTERNAL_FAILURE_CODES = frozenset(
 #: ``model_cut_unsolvable`` is one too, but keeps its stored words.
 USER_ACTION_CODES = frozenset(
     {"snapshot_changed", "return_unavailable", "wglink_folder_unset",
-     "excitation_refused", "solver_memory_exceeded"}
+     "excitation_refused", "solver_memory_exceeded", "reduced_axis_not_allowed"}
 )
 #: Failed preparations the read model words itself, whatever text is stored.
 CALM_FAILURE_CODES = INTERNAL_FAILURE_CODES | USER_ACTION_CODES
@@ -204,6 +208,20 @@ def reason_attention(state: Any, code: Any, message: Any = "") -> str | None:
     return ATTENTION_QUESTION
 
 
+#: What a model whose radiation axis its reduced domain cannot use is told to do.
+AXIS_NOT_ALLOWED_NEXT_STEP = "Send the whole model from Fusion."
+
+
+def axis_not_allowed_message(document_name: Any, axis: str) -> str:
+    """The statement of ``reduced_axis_not_allowed``: the model and its axis."""
+
+    name = str(document_name or "").strip() or "This model"
+    return (
+        f"{name} arrived cut in a way that cannot be solved along its radiation "
+        f"axis ({axis})."
+    )
+
+
 def internal_failure_message(document_name: Any) -> str:
     """The one sentence a user sees for an internal preparation failure."""
 
@@ -240,6 +258,10 @@ def preparation_failure(
         return {"code": code, "message": f"WG cannot read {name}: no WGLink folder is selected.",
                 "next_step": "Choose the WGLink folder in Settings → CAD Link, then try again.",
                 "options": [retry, dismiss]}
+    if code == "reduced_axis_not_allowed":
+        statement = str(detail or "").strip() or axis_not_allowed_message(document_name, "its axis")
+        return {"code": code, "message": statement, "next_step": AXIS_NOT_ALLOWED_NEXT_STEP,
+                "options": [dismiss]}
     if code == "excitation_refused":
         statement = str(detail or "").strip() or f"{name} cannot be driven as its settings say."
         return {"code": code, "message": statement,
@@ -553,6 +575,7 @@ __all__ = [
     "ATTENTION_ACTION",
     "ATTENTION_FAILED",
     "ATTENTION_QUESTION",
+    "AXIS_NOT_ALLOWED_NEXT_STEP",
     "BASELINE_KINDS",
     "CANCELLED",
     "CALM_FAILURE_CODES",
@@ -597,6 +620,7 @@ __all__ = [
     "normalize_request",
     "prepare_and_solve_request",
     "preparation_failure",
+    "axis_not_allowed_message",
     "reason_attention",
     "request_digest",
     "require_kind",

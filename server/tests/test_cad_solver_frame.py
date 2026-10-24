@@ -311,19 +311,47 @@ def test_confirming_refuses_a_linked_record_and_a_disallowed_axis(tmp_path: Path
     assert store.get_frame_confirmation("lineage:wgl_project") is None
 
 
-def test_a_confirmed_axis_this_snapshot_does_not_allow_gives_way_to_wgs_decision(tmp_path: Path) -> None:
-    """A half model cannot take the project's +y: WG decides it, never asks."""
+def test_a_confirmed_axis_this_snapshot_does_not_allow_is_never_replaced(tmp_path: Path) -> None:
+    """A half model cannot take the project's +y: it is refused calmly, never solved along +z."""
 
-    from server.cadlink.intake.readings import decide_record_frame, store_frame_decision
+    from server.cadlink.intake.readings import decide_record_frame, frame_axis_not_allowed
 
     store = CadLinkStore(tmp_path / "cadlink.db")
     confirm_frame(store, _unlinked_record(axis="+y"), "+y")
     half = _unlinked_record(axis=AS_MODELLED, allowed=(AS_MODELLED,))
-    assert frame_preview(store, half)["preselected"] == {"axis": AS_MODELLED, "source": "fallback"}
-    choice = decide_record_frame(store, half, None)
-    assert (choice.axis, choice.provenance) == (AS_MODELLED, "automatic-fallback")
-    store_frame_decision(store, half, choice, None)
-    assert record_frame_refusal(store, half) is None
+    assert frame_axis_not_allowed(store, half, None) == "+y"
+    preview = frame_preview(store, half)
+    assert preview["preselected"] is None
+    assert preview["notAllowed"]["axis"] == "+y"
+    assert "+y" in preview["notAllowed"]["message"]
+    assert preview["notAllowed"]["nextStep"] == "Send the whole model from Fusion."
+    # Nothing decides another axis for it, and no submission solves it.
+    assert decide_record_frame(store, half, None) is None
+    message = record_frame_refusal(store, half)
+    assert message is not None and "+y" in message
+    by_axis = {item["axis"]: item for item in preview["axes"]}
+    assert by_axis["+y"]["reason"] == "this model's mirror planes contain only +z"
+
+
+def test_a_confident_survey_along_an_axis_the_domain_does_not_allow_is_refused(tmp_path: Path) -> None:
+    """Nobody chose: a confident (or confidently backed unsupported) verdict is never swapped for another axis."""
+
+    from server.cadlink.interpretation.frame_infer import confident_unallowed_axis
+    from server.cadlink.intake.readings import frame_axis_not_allowed
+
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    half = _unlinked_record(axis=AS_MODELLED, allowed=("+z", "-z", "+y", "-y"))
+    unsupported = {"status": "ask", "reasonCode": "unsupported-axis", "unrestrictedAxis": "+x",
+                   "supportingEvidence": ["visibility", "aperture"]}
+    assert frame_axis_not_allowed(store, half, unsupported) == "+x"
+    assert confident_unallowed_axis({"status": "automatic", "axis": "-x"}, ("+z",)) == "-x"
+    # Allowed, weakly backed, or not confident: WG decides as before.
+    assert confident_unallowed_axis({"status": "automatic", "axis": "+y"}, ("+z", "+y")) is None
+    assert confident_unallowed_axis({**unsupported, "supportingEvidence": ["mouth"]}, ("+z",)) is None
+    assert confident_unallowed_axis({"status": "ask", "reasonCode": "evidence-weak", "unrestrictedAxis": "+x"}, ("+z",)) is None
+    assert confident_unallowed_axis(None, ("+z",)) is None
+    by_axis = {item["axis"]: item for item in frame_preview(store, half)["axes"]}
+    assert by_axis["+x"]["reason"] == "this model's mirror planes contain only +z, -z, +y, -y"
 
 
 def test_the_preview_names_each_axis_matrix_relative_to_the_displayed_record(tmp_path: Path) -> None:

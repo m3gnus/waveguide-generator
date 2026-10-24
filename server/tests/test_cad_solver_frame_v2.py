@@ -276,10 +276,12 @@ def test_only_a_v1_confirmation_of_the_same_export_frame_carries(tmp_path: Path)
     moved = _record(other, "+z", sha="e")
     preview = frame_preview(store, moved)
     assert preview["preselected"] is None or preview["preselected"]["source"] != "carried"
-    # A declared half cannot take the carried +x: WG's fallback decides it.
+    # A declared half cannot take the carried +x: it says so, and is never
+    # solved along another axis (Solve ends with reduced_axis_not_allowed).
     half = _record(_manifest(domain={"kind": "half", "cut_planes": ["x0"]}), AS_MODELLED, sha="f")
-    assert frame_preview(store, half)["preselected"] == {"axis": "+z", "source": "fallback"}
-    assert record_frame_refusal(store, half) is not None  # no decision sealed for it yet
+    preview = frame_preview(store, half)
+    assert preview["preselected"] is None and preview["notAllowed"]["axis"] == "+x"
+    assert "+x" in record_frame_refusal(store, half)
 
 
 def test_a_suggestion_that_disagrees_with_the_carried_axis_is_only_a_notice(tmp_path: Path) -> None:

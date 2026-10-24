@@ -8,6 +8,7 @@ from typing import Any, TYPE_CHECKING
 
 import numpy as np
 
+from server.cadlink.operations import AXIS_NOT_ALLOWED_NEXT_STEP, axis_not_allowed_message
 from server.cadlink.wgreturn import cut_provenance, declared_domain_planes, domain_kind
 
 from server.cadlink.interpretation.solver_frame import (
@@ -25,6 +26,7 @@ from server.cadlink.interpretation.solver_frame import (
     document_up,
     frame_requirement,
     is_unlinked_manifest,
+    manual_choice,
     record_confirmation_key,
     record_frame,
     record_is_unlinked,
@@ -142,11 +144,7 @@ def resolve_for_manifest(
     confirmed = _confirmed_axis(store, key, requirement)
     carried = carried_axis(store.get_frame_confirmation(key), requirement)
     automatic_axis = None
-    if (
-        automatic
-        and (confirmed is None or confirmed not in allowed)
-        and (carried is None or carried not in allowed)
-    ):
+    if automatic and manual_choice(confirmed, carried) is None:
         from server.cadlink.interpretation.frame_infer import choose_axis
 
         automatic_axis = choose_axis(
@@ -169,25 +167,58 @@ def _algorithm_version() -> str:
     return ALGORITHM_VERSION
 
 
-def _manual_axis(store: CadLinkStore, record: Mapping[str, Any]) -> str | None:
-    """The axis a person chose for this record's project: confirmed, or carried from v1.
-
-    Only one this record's domain allows: a choice a half or quarter model
-    cannot be solved along does not stand for it, and WG decides instead
-    (as ``resolve_for_manifest`` meshes it).
-    """
+def _record_manual_choice(store: CadLinkStore, record: Mapping[str, Any]) -> str | None:
+    """The axis a person chose for this record's project, allowed or not (:func:`manual_choice`)."""
 
     frame = record_frame(record)
     if frame is None:
         return None
     key = record_confirmation_key(record)
     requirement = dict(frame["requirement"])
+    return manual_choice(
+        _confirmed_axis(store, key, requirement),
+        carried_axis(store.get_frame_confirmation(key), requirement),
+    )
+
+
+def _manual_axis(store: CadLinkStore, record: Mapping[str, Any]) -> str | None:
+    """The axis a person chose for this record's project, when its domain allows it.
+
+    A choice a half or quarter model cannot be solved along does not stand,
+    and is never replaced by another axis either: the preparation refuses it
+    (:func:`frame_axis_not_allowed`).
+    """
+
+    frame = record_frame(record)
+    choice = _record_manual_choice(store, record)
+    return choice if frame is not None and choice in _record_allowed(frame) else None
+
+
+def frame_axis_not_allowed(
+    store: CadLinkStore, record: Mapping[str, Any], suggestion: Mapping[str, Any] | None
+) -> str | None:
+    """The radiation axis this record's domain cannot be solved along, or None.
+
+    A person's choice (confirmed, or carried from v1) the domain does not
+    allow; with no choice, an axis the survey is confident about and the
+    domain does not allow (``frame_infer.confident_unallowed_axis``). Never
+    solved along another axis instead: the preparation ends calmly with
+    ``reduced_axis_not_allowed``. None for a linked record and one stating no
+    frame.
+    """
+
+    from server.cadlink.interpretation.frame_infer import confident_unallowed_axis
+
+    if not record_is_unlinked(record):
+        return None
+    frame = record_frame(record)
+    if frame is None:
+        return None
     allowed = _record_allowed(frame)
-    confirmed = _confirmed_axis(store, key, requirement)
-    if confirmed is not None and confirmed in allowed:
-        return confirmed
-    carried = carried_axis(store.get_frame_confirmation(key), requirement)
-    return carried if carried in allowed else None
+    choice = _record_manual_choice(store, record)
+    if choice is not None:
+        return None if choice in allowed else choice
+    return confident_unallowed_axis(suggestion, allowed)
 
 
 def legacy_automatic_axis(store: CadLinkStore, record: Mapping[str, Any]) -> str | None:
@@ -241,7 +272,7 @@ def record_frame_decision(
 
     if not record_is_unlinked(record) or record_frame(record) is None:
         return None
-    if _manual_axis(store, record) is not None:
+    if _record_manual_choice(store, record) is not None:
         return None
     stored = store.get_frame_decision(str(record.get("ingest_id") or ""))
     if stored is not None:
@@ -268,7 +299,8 @@ def decide_record_frame(
     if not record_is_unlinked(record):
         return None
     frame = record_frame(record)
-    if frame is None or _manual_axis(store, record) is not None:
+    # A person's choice wins; one the domain cannot use is refused, never decided over.
+    if frame is None or _record_manual_choice(store, record) is not None:
         return None
     return choose_axis(suggestion, _record_allowed(frame))
 
@@ -396,6 +428,9 @@ def record_frame_refusal(store: CadLinkStore, record: Mapping[str, Any]) -> str 
             "This model was prepared before WG recorded its solver frame. "
             "Prepare it again in WG."
         )
+    blocked = frame_axis_not_allowed(store, record, None)
+    if blocked is not None:
+        return axis_not_allowed_message(None, blocked)
     manual = _manual_axis(store, record)
     if manual is not None:
         if manual == frame["axis"]:
@@ -685,7 +720,8 @@ def frame_preview(store: CadLinkStore, record: Mapping[str, Any]) -> dict[str, A
                     else (
                         "prepare this model again first"
                         if frame is None
-                        else "a half or quarter model is solved only as modelled (+z)"
+                        else "this model's mirror planes contain only "
+                        + ", ".join(allowed)
                     )
                 ),
                 "up": spec.get("up"),
@@ -699,13 +735,17 @@ def frame_preview(store: CadLinkStore, record: Mapping[str, Any]) -> dict[str, A
         suggestion = ensure_frame_suggestion(store, record)
     confirmed_axis = confirmed["axis"] if confirmed is not None else None
     carried = carried_axis(row, requirement) if confirmed is None else None
-    if confirmed_axis is not None and confirmed_axis in allowed:
-        preselected = {"axis": confirmed_axis, "source": "confirmed"}
-    elif carried is not None and carried in allowed:
-        # Confirmed under contract v1: the project's own choice, preselected
-        # ahead of any suggestion, and confirmed under v2 by Solve.
-        preselected = {"axis": carried, "source": "carried"}
-        confirmed_axis = carried
+    # A person's choice first (``manual_choice``), else WG's own decision.
+    chosen = manual_choice(confirmed_axis, carried)
+    blocked = frame_axis_not_allowed(store, record, suggestion) if frame is not None else None
+    if blocked is not None:
+        # Never shown as another axis: Solve ends calmly, saying why.
+        preselected = None
+    elif chosen is not None:
+        # A v1 choice (``carried``) is the project's own, preselected ahead of
+        # any suggestion, and confirmed under v2 by a Solve that names it.
+        preselected = {"axis": chosen, "source": "confirmed" if confirmed_axis is not None else "carried"}
+        confirmed_axis = chosen
     else:
         preselected = _decided_preselection(store, record, suggestion)
     return {
@@ -729,6 +769,11 @@ def frame_preview(store: CadLinkStore, record: Mapping[str, Any]) -> dict[str, A
         "axes": axes,
         "suggestion": suggestion,
         "preselected": preselected,
+        "notAllowed": (
+            {"axis": blocked, "message": axis_not_allowed_message(None, blocked),
+             "nextStep": AXIS_NOT_ALLOWED_NEXT_STEP}
+            if blocked is not None else None
+        ),
         "differs": _differs_notice(confirmed_axis if confirmed_axis in allowed else None, suggestion),
     }
 
@@ -1043,6 +1088,7 @@ def interpretation_view(store: CadLinkStore, record: Mapping[str, Any]) -> dict[
 __all__ = [
     "confirm_frame",
     "ensure_frame_suggestion",
+    "frame_axis_not_allowed",
     "frame_preview",
     "frame_provenance",
     "interpretation_view",

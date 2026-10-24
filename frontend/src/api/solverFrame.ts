@@ -58,7 +58,17 @@ export interface SolverFrameState {
   /** Absent from a server before the automatic frame (M1e). */
   suggestion?: SolverFrameSuggestion | null;
   preselected?: SolverFramePreselection | null;
+  /** The model's radiation axis -- the project's choice, or one WG is
+   * confident about -- is one its reduced domain cannot be solved along. It
+   * is never replaced by another axis: Solve ends calmly, saying this. */
+  notAllowed?: SolverFrameNotAllowed | null;
   differs?: SolverFrameDiffers | null;
+}
+
+export interface SolverFrameNotAllowed {
+  axis: SolverFrameAxis;
+  message: string;
+  nextStep: string;
 }
 
 export type SolverFramePreview = { linked: true } | SolverFrameState;
