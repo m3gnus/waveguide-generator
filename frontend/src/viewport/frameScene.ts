@@ -11,9 +11,8 @@ export interface FrameScene {
   unitsPerMetre: 1 | 1_000;
   hasCurvature: boolean;
   edgeModeUnavailable?: boolean;
-  /** The origin mirror planes a reduced CAD solve was expanded across for
-   * display (solver frame). Set only on CAD scenes; the viewport may mark
-   * them subtly. */
+  /** Authoritative solve-domain boundaries in the solver frame. An empty
+   * array means full domain; absent means the domain is not known yet. */
   symmetryPlanes?: ReadonlyArray<'x0' | 'y0'>;
 }
 

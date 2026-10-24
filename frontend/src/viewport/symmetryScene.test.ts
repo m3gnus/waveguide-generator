@@ -1,7 +1,7 @@
 import { Box3, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import type { FrameScene } from './frameScene';
-import { completeCadCutDisplay, expandImportedSymmetry, markParametricSolvedDomain, quadrantsForSolveMode } from './symmetryScene';
+import { completeCadCutDisplay, expandImportedSymmetry, markParametricSolvedDomain, quadrantsForSolveMode, solvedDomainLabel } from './symmetryScene';
 import type { SceneSurface } from './types';
 
 function surface(positions: number[], indices: number[]): SceneSurface {
@@ -114,5 +114,23 @@ describe('symmetry display geometry', () => {
     expect(marked.surfaces.reduce((count, item) => count + item.indices.length / 3, 0)).toBe(2);
     expect(marked.bounds).toBe(full.bounds);
     expect(marked.surfaces.find((item) => item.solvedDomain)?.indices).toHaveLength(3);
+  });
+});
+
+
+describe('solve-domain labels and boundary marks share the geometry decision', () => {
+  it.each([
+    [1234, [], 'Full model'],
+    [14, ['x0'], 'Half model · x ≥ 0'],
+    [12, ['y0'], 'Half model · y ≥ 0'],
+    [1, ['x0', 'y0'], 'Quarter model · x ≥ 0, y ≥ 0'],
+  ] as const)('labels domain %s on both preview and imported scenes', (quadrants, planes, label) => {
+    const full = scene(surface([1, 1, 0, 2, 1, 0, 1, 2, 0], [0, 1, 2]));
+    const preview = markParametricSolvedDomain(full, quadrants);
+    const imported = expandImportedSymmetry(full, planes);
+    expect(preview.symmetryPlanes).toEqual(planes);
+    expect(imported.symmetryPlanes).toEqual(planes);
+    expect(solvedDomainLabel(preview)).toBe(label);
+    expect(solvedDomainLabel(imported)).toBe(label);
   });
 });

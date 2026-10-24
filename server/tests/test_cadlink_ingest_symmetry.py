@@ -697,7 +697,7 @@ def test_a_return_moved_in_cad_is_normalised_back_with_its_throat_intact(
         assert viewport["transformed_geometry_hash"] == placed["transformed_geometry_hash"]
 
 
-def test_a_leaking_reduced_domain_falls_back_to_the_full_domain(tmp_path: Path) -> None:
+def test_a_leaking_reduced_domain_falls_back_to_the_full_domain(tmp_path: Path, caplog) -> None:
     """A hole in a reduced domain is a wrong answer, not a slower one.
 
     The boolean that cuts the model can drop a face it fails to intersect, so
@@ -726,10 +726,14 @@ def test_a_leaking_reduced_domain_falls_back_to_the_full_domain(tmp_path: Path) 
     finding = next(
         item for item in record["findings"] if item["kind"] == "symmetry-cut-unverified"
     )
-    assert finding["blocking"] is True
+    assert finding["blocking"] is False
     assert finding["rejected_cut_planes"] == ["x0", "y0"]
-    assert "full domain was meshed" in finding["detail"]
-    assert "Re-export" in finding["detail"]
+    assert finding["detail"] == "WG will solve the whole model; symmetry could not be used for this one."
+    diagnostics = [entry.cad_mesh_recovery for entry in caplog.records if hasattr(entry, "cad_mesh_recovery")]
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["symmetry_fallback"] == verification["fallback"]
+    assert diagnostics[0]["user_outcome"] == "proceed"
+    assert diagnostics[0]["solved_planes"] == []
 
     # A full domain is solvable, so the fallback mesh is a real artifact and
     # the polar sweep widened back out with it.
@@ -1561,13 +1565,12 @@ def test_an_inverted_auto_cut_quarter_falls_back_to_the_full_domain(
     finding = next(
         item for item in record["findings"] if item["kind"] == "symmetry-cut-unverified"
     )
-    assert finding["blocking"] is True
+    assert finding["blocking"] is False
     assert finding["rejected_cut_planes"] == ["x0", "y0"]
-    assert "full domain was meshed" in finding["detail"]
-    assert "wound against the model they mirror" in finding["detail"]
-    # The remedy that keeps a reduction on this mesher, not the leak's.
-    assert "Tag a source face that faces the bore" in finding["detail"]
-    assert "Re-export" not in finding["detail"]
+    assert finding["detail"] == "WG will solve the whole model; symmetry could not be used for this one."
+    # Technical reasons/remedies stay in the verification evidence.
+    assert "wound against the model they mirror" in fallback["reason"]
+    assert "Tag a source face that faces the bore" in fallback["remedy"]
 
     # The fault reaches reduced meshes only, so the fallback is the full model
     # wound outward, read from the arrays the solver will read.

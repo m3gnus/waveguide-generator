@@ -241,3 +241,5 @@
 /* Only the dimension text needs hover for its native title tooltip. */
 .viewport-dimensions > span { display: inline-block; white-space: nowrap; pointer-events: auto; }
 .viewport-dimensions.stale { opacity: .45; }
+
+.viewport-notices > .viewport-domain-note { max-width: 100%; color: var(--fg2); font-size: var(--text-micro); }

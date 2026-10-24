@@ -2813,6 +2813,36 @@ describe('CadLinkPanel', () => {
     expect(notes!.querySelectorAll('.cad-check')).toHaveLength(1);
   });
 
+  it('keeps valid mesh recovery calm and leaves technical evidence to diagnostics', async () => {
+    const recovered = {
+      ...record,
+      freshness: { verdict: 'unlinked' as const, instances: [] },
+      symmetry: { cut_planes: [], planes: {} },
+      healing: { performed: true, mode: 'internal-healing-mode', original_mesh_error: 'raw traceback finding-internal-789' },
+      findings: [
+        { id: 'finding-internal-123', kind: 'symmetry-cut-unverified', blocking: false, detail: '11 free edges' },
+        { id: 'finding-internal-456', kind: 'healing-performed', blocking: false, mode: 'internal-healing-mode' },
+      ],
+    } as unknown as CadReturnIngestRecord;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.includes('/receipts?')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false });
+      if (path.endsWith('/recovery-notices')) return json({ notices: [] });
+      return json(recovered);
+    }));
+    await renderAndSelect();
+    await clickIngest();
+    const checks = host.querySelector<HTMLElement>('.cad-checks')!;
+    await act(async () => checks.querySelector<HTMLButtonElement>('.section-head')!.click());
+    expect(checks.querySelector('.cad-check-findings')).toBeNull();
+    expect(checks.querySelector('.cad-check-notes')).toBeNull();
+    expect(checks.textContent).toContain('Full model');
+    expect(checks.textContent).toContain('mesh repaired');
+    expect(host.textContent).not.toMatch(/finding-internal|internal-healing|raw traceback|11 free edges/);
+  });
+
   it('shows the FEM termination warning with a readable title and its remedy', async () => {
     const reason = 'A plane-wave termination is supported only in an interior-only solve. Choose exterior-only.';
     const reviewed = {

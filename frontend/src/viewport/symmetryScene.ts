@@ -85,13 +85,14 @@ export function expandImportedSymmetry(
   const axes = mirrorAxes(cutPlanes);
   if (!axes.length) return {
     ...scene,
+    symmetryPlanes: [],
     surfaces: scene.surfaces.map((surface) => ({ ...surface, solvedDomain: false })),
   };
   const surfaces = mirroredCopies(
     scene.surfaces.map((surface) => ({ ...surface, solvedDomain: true })),
     axes,
   );
-  return { ...scene, surfaces, bounds: sceneBounds(surfaces) };
+  return { ...scene, surfaces, bounds: sceneBounds(surfaces), symmetryPlanes: cutPlanesForQuadrants(quadrantsForCutPlanes(cutPlanes)) };
 }
 
 /** Complete a model that was already cut in CAD on `cadCutPlanes` for display.
@@ -147,6 +148,7 @@ export function markParametricSolvedDomain(
 ): FrameScene {
   if (quadrants === 1234) return {
     ...scene,
+    symmetryPlanes: [],
     surfaces: scene.surfaces.map((surface) => ({ ...surface, solvedDomain: false })),
   };
   const surfaces = scene.surfaces.flatMap((surface): SceneSurface[] => {
@@ -161,7 +163,7 @@ export function markParametricSolvedDomain(
       ...(displayOnly.length ? [{ ...surface, key: `${surface.key}:display-${quadrants}`, indices: Uint32Array.from(displayOnly), solvedDomain: false }] : []),
     ];
   });
-  return { ...scene, surfaces };
+  return { ...scene, surfaces, symmetryPlanes: cutPlanesForQuadrants(quadrants) };
 }
 
 /** Map origin cut planes to the positive-side domain retained by the solver.
@@ -184,4 +186,21 @@ export function quadrantsForSolveMode(
   if (mode === 'half_xz') return 12;
   if (mode === 'half_yz') return 14;
   return mode === 'auto' ? autoQuadrants : 1234;
+}
+
+/** The same origin planes drive domain colouring, boundary marks and the label. */
+export function cutPlanesForQuadrants(quadrants: DisplayQuadrants): Array<'x0' | 'y0'> {
+  return [
+    ...(quadrants === 1 || quadrants === 14 ? ['x0' as const] : []),
+    ...(quadrants === 1 || quadrants === 12 ? ['y0' as const] : []),
+  ];
+}
+
+export function solvedDomainLabel(scene: Pick<FrameScene, 'symmetryPlanes'>): string | null {
+  if (!scene.symmetryPlanes) return null;
+  const quadrants = quadrantsForCutPlanes(scene.symmetryPlanes);
+  if (quadrants === 1) return 'Quarter model · x ≥ 0, y ≥ 0';
+  if (quadrants === 14) return 'Half model · x ≥ 0';
+  if (quadrants === 12) return 'Half model · y ≥ 0';
+  return 'Full model';
 }

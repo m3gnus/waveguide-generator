@@ -29,6 +29,8 @@ export interface ImportedMeshSceneOptions {
   drivenTags?: readonly number[];
   /** The supplied mesh already covers the complete display domain. */
   fullDomain?: boolean;
+  /** False for a refused preparation: it has geometry but no solve domain. */
+  domainKnown?: boolean;
   /** Actual solver-domain count when the supplied visual artifact is separate. */
   solvedTriangleCount?: number;
   /** Stable digest/token supplied by the artifact owner when available. */
@@ -297,10 +299,7 @@ export function createImportedMeshScene(
   const expanded = options.fullDomain
     ? completeCadCutDisplay(solvedScene, options.cadCutPlanes ?? [], symmetryCutPlanes)
     : expandImportedSymmetry(solvedScene, symmetryCutPlanes);
-  // Only a CAD return marks its mirror planes: a parametric solver mesh keeps
-  // the display it always had.
-  const planes = (['x0', 'y0'] as const).filter((plane) => symmetryCutPlanes.includes(plane));
-  const scene = source === 'cad' && planes.length ? { ...expanded, symmetryPlanes: planes } : expanded;
+  const scene = options.domainKnown === false ? { ...expanded, symmetryPlanes: undefined } : expanded;
   return {
     name,
     source,

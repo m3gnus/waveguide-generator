@@ -1911,10 +1911,8 @@ def _ingest_bundle(
         )
     fallback = verification.get("fallback")
     if isinstance(fallback, Mapping):
-        # Blocking, like every other finding that changes what is solved: the
-        # solve is honest but slower than the design deserves, and the user is
-        # the only one who can decide whether to re-export or accept the cost.
-        planes = ", ".join(str(plane) for plane in fallback.get("rejected_cut_planes") or [])
+        # The full mesh has passed the same validity gates as any other solve.
+        # Losing an optimisation is a developer matter, never an approval gate.
         findings.append(
             {
                 "id": _finding_id(
@@ -1922,24 +1920,16 @@ def _ingest_bundle(
                     {"cache_key": cache_key, "reason": fallback.get("reason")},
                 ),
                 "kind": "symmetry-cut-unverified",
-                "blocking": True,
+                "blocking": False,
                 "rejected_cut_planes": list(fallback.get("rejected_cut_planes") or []),
                 "detected_planes": list(fallback.get("detected_planes") or []),
                 "capped_planes": list(fallback.get("capped_planes") or []),
                 "off_plane_free_edge_count": fallback.get("off_plane_free_edge_count"),
-                "detail": (
-                    f"the {planes or 'symmetry'} reduction was discarded because "
-                    f"{fallback.get('reason')}. The full domain was meshed and will be "
-                    "solved instead, at 2-4x the cost. "
-                    + str(
-                        fallback.get("remedy")
-                        or "Re-export a stitched, watertight body to regain the reduction."
-                    )
-                ),
+                "detail": "WG will solve the whole model; symmetry could not be used for this one.",
             }
         )
     if built["healing"]["performed"]:
-        findings.append({"id": _finding_id("healing-performed", {"mode": built["healing"]["mode"], "cache_key": cache_key}), "kind": "healing-performed", "blocking": True, "mode": built["healing"]["mode"]})
+        findings.append({"id": _finding_id("healing-performed", {"mode": built["healing"]["mode"], "cache_key": cache_key}), "kind": "healing-performed", "blocking": False, "mode": built["healing"]["mode"], "detail": "WG repaired the mesh and can solve this model."})
     for item in built.get("role_findings", []):
         kind = str(item.get("kind"))
         if kind in {
@@ -2164,11 +2154,42 @@ def _ingest_bundle(
         if staged_bundle_root is not None:
             shutil.rmtree(staged_bundle_root, ignore_errors=True)
     published = json.loads(str(row["record_json"]))
+    _record_mesh_recovery_diagnostic(published)
     try:
         remember_provenance_reading(store, published)
     except Exception:  # noqa: BLE001 - memory for the next version, never this one's outcome
         logger.warning("Could not remember the domain reading of %s", published.get("ingest_id"), exc_info=True)
     return published
+
+
+def _record_mesh_recovery_diagnostic(record: Mapping[str, Any]) -> None:
+    """One structured developer record for a successful mesh recovery, cached or new.
+
+    Keep technical evidence here and in the immutable preparation, rather than
+    asking the user to approve a correct but slower mesh. Deliberately select
+    fields: bundle paths and exception strings are not diagnostic identifiers.
+    """
+    fallback = (record.get("symmetry_verification") or {}).get("fallback")
+    healing = record.get("healing") or {}
+    if not fallback and not healing.get("performed"):
+        return
+    diagnostic = {
+        "event": "cad_mesh_recovery",
+        "ingest_id": record["ingest_id"],
+        "manifest_sha256": record["manifest_sha256"],
+        "mesh_cache_key": record["mesh_cache_key"],
+        "cache_hit": record["mesh_cache_hit"],
+        "user_outcome": "proceed",
+        "solved_planes": list(imported_domain_planes(record)),
+        "symmetry_fallback": fallback,
+        "healing": {key: healing.get(key) for key in (
+            "performed", "mode", "options", "topology_before", "topology_after",
+        )},
+    }
+    # The application file formatter persists message text. Keep the JSON in
+    # that text as well as extra so structured evidence survives server.log.
+    logger.warning("CAD mesh recovery accepted: %s", json.dumps(diagnostic, sort_keys=True),
+                   extra={"cad_mesh_recovery": diagnostic})
 
 
 # One aggregate budget for all region children, queueing, staging and publication.

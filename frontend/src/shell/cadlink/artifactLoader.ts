@@ -2,7 +2,7 @@ import { deadlineFetch } from '../../api/deadlineFetch';
 import { currentDocumentLoad, isCurrentDocumentLoad } from '../../stores/design';
 import type { CadReturnIngestRecord } from '../../api/cadlink';
 import { jobsSocket } from '../../api/jobsSocket';
-import { displaySymmetry } from '../../api/domainDecision';
+import { displaySymmetry, recordDomainDecision } from '../../api/domainDecision';
 import { useCadReturnStore } from '../../stores/cadReturn';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { createImportedMeshScene } from '../../viewport/importedMesh';
@@ -58,6 +58,7 @@ function cadDisplayScene(record: CadReturnIngestRecord, name: string, meshText: 
     solvedPlanes,
     {
       fullDomain: true,
+      domainKnown: !recordDomainDecision(record)?.refusal,
       cadCutPlanes,
       solvedTriangleCount: record.mesh?.stats.triangle_count,
       artifactToken: record.viewport_mesh?.content_sha256 ?? `${record.ingest_id}:viewport`,
@@ -226,6 +227,7 @@ export async function showIngestedMeshInViewport(
         // Every plane the solver mirrors -- WG's own cuts and CAD cuts alike.
         displaySymmetry(record).solvedPlanes,
         {
+          domainKnown: !recordDomainDecision(record)?.refusal,
           solvedTriangleCount: record.mesh?.stats.triangle_count,
           artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
         },
@@ -296,6 +298,7 @@ export async function showIngestedSolverMeshInViewport(
       ingestId,
       displaySymmetry(record).solvedPlanes,
       {
+        domainKnown: !recordDomainDecision(record)?.refusal,
         solvedTriangleCount: record.mesh?.stats.triangle_count,
         artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
       },

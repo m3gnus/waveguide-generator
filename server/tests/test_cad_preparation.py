@@ -606,6 +606,22 @@ def test_a_worker_crash_is_a_recoverable_outcome(harness: Harness) -> None:
     assert harness.prepare(setup_revision_id=revision)["state"] == "accepted"
 
 
+@pytest.mark.parametrize("kinds", [
+    ["symmetry-cut-unverified"], ["healing-performed"],
+    ["symmetry-cut-unverified", "healing-performed"],
+])
+def test_valid_mesh_recovery_proceeds_to_solve_without_approval(harness: Harness, kinds) -> None:
+    _received(harness)
+    harness.ingest.findings = [
+        {"id": f"internal-{kind}", "kind": kind, "blocking": False} for kind in kinds
+    ]
+    prepared = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
+    assert prepared["state"] == "accepted"
+    assert len(harness.submitted) == 1
+    assert harness.submitted[0].geometry.acknowledged_findings == []
+    assert not any(f"internal-{kind}" in str(prepared.get("message", "")) for kind in kinds)
+
+
 # -- approvals -----------------------------------------------------------------------
 
 

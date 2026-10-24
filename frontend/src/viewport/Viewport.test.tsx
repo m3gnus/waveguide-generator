@@ -848,6 +848,57 @@ describe('Viewport preview errors', () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([
+    [[], 'Full model'], [['x0'], 'Half model · x ≥ 0'],
+    [['y0'], 'Half model · y ≥ 0'], [['x0', 'y0'], 'Quarter model · x ≥ 0, y ≥ 0'],
+  ])('always identifies the CAD solve domain %j', (planes, label) => {
+    const ingestId = 'wgi_domain';
+    act(() => {
+      useCadReturnStore.setState({ ingestRecord: {
+        ingest_id: ingestId, findings: [], symmetry: { cut_planes: planes },
+      } as unknown as CadReturnIngestRecord });
+      importedMeshStore.setCad(createImportedMeshScene('Speaker', parseMSH(meshFixture), 'cad', ingestId, planes as string[]));
+      workspaceModeStore.setMode('cad');
+    });
+    expect(host.querySelector('[aria-label="Solved domain"]')?.textContent).toBe(`Solve domain: ${label}`);
+  });
+
+  it('shows one calm fallback line after a CAD solve, without diagnostic ids or reasons', () => {
+    const ingestId = 'wgi_recovery';
+    act(() => {
+      useCadReturnStore.setState({ ingestRecord: {
+        ingest_id: ingestId, findings: [{
+          id: 'internal-finding-123', kind: 'symmetry-cut-unverified', blocking: false,
+          detail: '11 free edges lie off the cut planes',
+        }], symmetry: { cut_planes: [] },
+      } as unknown as CadReturnIngestRecord });
+      importedMeshStore.setCad(createImportedMeshScene('Speaker', parseMSH(meshFixture), 'cad', ingestId));
+      workspaceModeStore.setMode('cad');
+      publishJobs([{ ...archivedJob(ingestId), id: 'recovered', status: 'complete', has_results: true }]);
+    });
+    const line = 'Solved the whole model; WG could not use symmetry for this one.';
+    expect(host.textContent?.split(line)).toHaveLength(2);
+    expect(host.textContent).not.toContain('internal-finding-123');
+    expect(host.textContent).not.toContain('free edges');
+    expect(host.querySelector('[aria-label="Solved domain"]')?.textContent).toContain('Full model');
+  });
+
+  it.each([
+    [1234, false], [14, false], [12, false], [1, false],
+    [1234, true], [14, true], [12, true], [1, true],
+  ] as const)('uses result domain %s in solver mesh view %s after options change', (quadrants, solverMesh) => {
+    act(() => {
+      useSolveOptionsStore.setState({ symmetry: 'full' });
+      if (solverMesh) importedMeshStore.setSolver({
+        ...createImportedMeshScene('Live full mesh', parseMSH(meshFixture), 'solver'),
+        modelKey: currentModel().key ?? undefined,
+      });
+      publishJobs([{ ...completeJob('recorded-domain', false), symmetry: { resolved_quadrants: quadrants } }]);
+    });
+    const label = host.querySelector('[aria-label="Solved domain"]')?.textContent;
+    expect(label).toContain(quadrants === 1234 ? 'Full model' : quadrants === 1 ? 'Quarter model' : 'Half model');
+  });
+
   it('switches between the parametric scene and matching CAD slot', () => {
     const ingestId = 'wgi_viewport_mode';
     act(() => {

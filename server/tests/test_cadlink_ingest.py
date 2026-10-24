@@ -2494,3 +2494,43 @@ def test_get_older_ingest_marks_only_unverified_evidence(tmp_path, monkeypatch, 
         assert served["evidence_unverified"] is True
         assert served["evidence"] == record["evidence"]
     assert "evidence_unverified" not in record  # Stored/restored evidence stays immutable.
+
+
+@pytest.mark.parametrize("fallback,healed", [(True, False), (False, True), (True, True)])
+def test_valid_mesh_recoveries_are_advisory_and_record_one_diagnostic(
+    monkeypatch, tmp_path: Path, caplog, fallback: bool, healed: bool,
+) -> None:
+    manifest = wgreturn_manifest(b"STEP")
+    source_id = manifest["sources"][0]["id"]
+    bundle = write_bundle(tmp_path / "returns", manifest, step=b"STEP")
+    built = _built_for_source(source_id)
+    if fallback:
+        built["symmetry_verification"] = {"verified": True, "fallback": {
+            "rejected_cut_planes": ["x0", "y0"], "reason": "the reduced domain leaks",
+            "off_plane_free_edge_count": 11,
+        }}
+    if healed:
+        built["healing"] = {"performed": True, "mode": "sew-faces", "options": ["sew_faces"]}
+    monkeypatch.setattr("server.cadlink.intake.ingest.build_imported_mesh_isolated",
+                        lambda *_args, **_kwargs: built)
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    try:
+        record = ingest_bundle(bundle, {
+            "rigid_size_mm": 20, "transition_mm": 30, "source_size_mm": {source_id: 8},
+        }, [], store, tmp_path / "data", expected_design_id=manifest["instances"][0]["design_id"])
+        recovery = [f for f in record["findings"] if f["kind"] in {
+            "symmetry-cut-unverified", "healing-performed",
+        }]
+        assert len(recovery) == int(fallback) + int(healed)
+        assert all(not f["blocking"] for f in recovery)
+        assert all(f["id"] not in f["detail"] for f in recovery)
+        diagnostics = [r.cad_mesh_recovery for r in caplog.records if hasattr(r, "cad_mesh_recovery")]
+        assert len(diagnostics) == 1
+        # Production's plain-text log formatter must retain the JSON evidence.
+        logged = next(r.getMessage() for r in caplog.records if hasattr(r, "cad_mesh_recovery"))
+        assert json.loads(logged.split(": ", 1)[1]) == diagnostics[0]
+        assert diagnostics[0]["ingest_id"] == record["ingest_id"]
+        assert diagnostics[0]["healing"]["performed"] == healed
+        assert diagnostics[0]["solved_planes"] == []
+    finally:
+        store.close()

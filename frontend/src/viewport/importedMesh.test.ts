@@ -189,10 +189,10 @@ describe('the whole model of a reduced CAD solve', () => {
     expect(imported.scene.symmetryPlanes).toEqual(['x0', 'y0']);
   });
 
-  it('marks no plane on a model solved whole, or on a parametric solver mesh', () => {
+  it('records the full domain and marks parametric solver boundaries too', () => {
     expect(createImportedMeshScene('whole.msh', positiveHalf(), 'cad', 'wgi_whole', [], { fullDomain: true }).scene.symmetryPlanes)
-      .toBeUndefined();
+      .toEqual([]);
     expect(createImportedMeshScene('param.msh', positiveHalf(), 'solver', null, ['x0']).scene.symmetryPlanes)
-      .toBeUndefined();
+      .toEqual(['x0']);
   });
 });

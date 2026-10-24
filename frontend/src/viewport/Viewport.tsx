@@ -64,10 +64,11 @@ import type { CameraDirection } from './cameraMath';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
 import { previewBadge, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
-import { markParametricSolvedDomain, quadrantsForSolveMode, type DisplayQuadrants } from './symmetryScene';
+import { markParametricSolvedDomain, quadrantsForSolveMode, solvedDomainLabel, type DisplayQuadrants } from './symmetryScene';
 import { ROLE_MATERIAL_FAMILY, SOURCE_ROLES } from './types';
 import type { DisplayMode, SourceRole, ViewportTheme } from './types';
 import { canRenderWebGL, resetWebGLProbe, type CameraRequest, type ZoomRequest, ViewportCanvas } from './ViewportCanvas';
+import { cadMeshRecoveryNotice } from '../model/cadMeshRecovery';
 import './viewport.css';
 
 /** The role names as the CAD document says them, not as the mesh spells them. */
@@ -434,6 +435,7 @@ export function Viewport() {
     [coherenceContext.key, coherenceContext.lineage, coherenceContext.kind, coherenceContext.viewportShowing, jobs, resultSelection.primary, provisional.entries],
   );
   const availablePlaneJob = availableFemJob ?? availableFieldJob;
+  const resultRun = spatialResult(coherenceContext, resultSelection, jobs, provisional.entries);
   const observationVisible = useObservationStore((state) => state.visible);
   const observationBasis = useObservationStore((state) => state.basis);
   const observationSource = useObservationStore((state) => state.sourceLabel);
@@ -492,7 +494,7 @@ export function Viewport() {
   const [autoQuadrants, setAutoQuadrants] = useState<DisplayQuadrants>(() => displayQuadrants(design.mesh.quadrants));
   const symmetryBody = useMemo(() => JSON.stringify(toSolveDesign(design)), [design]);
   useEffect(() => {
-    if (!preferences.tintSolvedRegion || solveSymmetry !== 'auto' || previewScene === null) return undefined;
+    if (workspaceMode !== 'parametric' || solveSymmetry !== 'auto' || previewScene === null) return undefined;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       void postSymmetry(symmetryBody, fetch, controller.signal)
@@ -505,13 +507,14 @@ export function Viewport() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [design.mesh.quadrants, preferences.tintSolvedRegion, previewScene, solveSymmetry, symmetryBody]);
-  const solvedQuadrants = quadrantsForSolveMode(solveSymmetry, autoQuadrants);
+  }, [design.mesh.quadrants, workspaceMode, previewScene, solveSymmetry, symmetryBody]);
+  const recordedQuadrants = resultRun?.symmetry?.resolved_quadrants;
+  const resultQuadrants = recordedQuadrants === 1 || recordedQuadrants === 12
+    || recordedQuadrants === 14 || recordedQuadrants === 1234 ? recordedQuadrants : null;
+  const solvedQuadrants = resultQuadrants ?? quadrantsForSolveMode(solveSymmetry, autoQuadrants);
   const scene = useMemo(
-    () => previewScene && preferences.tintSolvedRegion
-      ? markParametricSolvedDomain(previewScene, solvedQuadrants)
-      : previewScene,
-    [preferences.tintSolvedRegion, previewScene, solvedQuadrants],
+    () => previewScene ? markParametricSolvedDomain(previewScene, solvedQuadrants) : null,
+    [previewScene, solvedQuadrants],
   );
   const [mode, setMode] = useState<DisplayMode>('clay');
   const [clipMode, setClipMode] = useState<ModelClipMode>('off');
@@ -630,7 +633,12 @@ export function Viewport() {
   const zoom = (direction: ZoomRequest['direction']) => setZoomRequest((current) => ({ direction, nonce: current.nonce + 1 }));
   const toggleProjection = () => setCameraProjection((current) => current === 'perspective' ? 'orthographic' : 'perspective');
   const reportClientFrame = useCallback((milliseconds: number) => setClientFrameMs(milliseconds), []);
-  const activeScene = workspaceMode === 'cad' ? importedMesh?.scene ?? null : importedMesh?.scene ?? scene;
+  // Solver artifacts reconstruct the whole physical model too. A displayed
+  // result owns its domain even if live options have since rebuilt that mesh.
+  const resultMeshScene = useMemo(() => workspaceMode === 'parametric' && importedMesh && resultQuadrants !== null
+    ? markParametricSolvedDomain(importedMesh.scene, resultQuadrants) : importedMesh?.scene,
+  [workspaceMode, importedMesh, resultQuadrants]);
+  const activeScene = workspaceMode === 'cad' ? importedMesh?.scene ?? null : resultMeshScene ?? scene;
   const fieldColormap = useMemo(() => readChartTokens().colormap, [theme]);
   const activeFieldColormap = useMemo(
     () => fieldPlaneColormap(fieldDisplayMode, fieldColormap),
@@ -648,11 +656,14 @@ export function Viewport() {
     ? `requested ${Math.round(fieldFrequencySnap.requestedHz).toLocaleString()} Hz → showing ${Math.round(fieldFrequencies[fieldFrequencySnap.index]).toLocaleString()} Hz`
     : null;
   const sceneMarker = importedMesh
-    ? `msh:${importedMesh.artifactToken}`
+    ? `msh:${importedMesh.artifactToken}:${workspaceMode === 'parametric' ? resultQuadrants ?? 'artifact' : 'cad'}`
     : workspaceMode === 'cad'
       ? 'cad:empty'
       : `${selected?.header.epoch ?? 0}:${selected?.header.seq ?? 0}:${selected?.header.designRevision ?? 0}:${selected?.header.lod ?? ''}:${preferences.tintSolvedRegion ? solvedQuadrants : 'same'}`;
   const surfaces = activeScene?.surfaces ?? [];
+  const domainLabel = activeScene ? solvedDomainLabel(activeScene) : null;
+  const recoveryNotice = coherenceContext.kind === 'cad' && importedMesh
+    ? cadMeshRecoveryNotice(cadRecord, resultRun?.status === 'complete') : null;
 
   // Zebra, normals and curvature replace the surface colour outright, and edge
   // mode does not fill at all, so a colour key would be describing something
@@ -1116,6 +1127,10 @@ export function Viewport() {
       {solverViewSelected && solverMeshRefusal && <div className="solver-plan-adjustment-note" role="note">
         Solve unavailable: {solverMeshRefusal}
       </div>}
+      {activeScene && domainLabel && <div className="viewport-domain-note" role="note" aria-label="Solved domain">
+        Solve domain: {domainLabel}
+      </div>}
+      {recoveryNotice && <div className="viewport-domain-note" role="note">{recoveryNotice}</div>}
       {activeScene && geometryWarnings.length > 0 && <details className="viewport-warning" role="status">
         <summary aria-label={`${geometryWarnings.length} geometry warning${geometryWarnings.length === 1 ? '' : 's'}`}>
           <i />{geometryWarnings.length} warning{geometryWarnings.length === 1 ? '' : 's'}

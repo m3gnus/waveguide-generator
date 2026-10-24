@@ -1,3 +1,4 @@
+import { isMeshRecoveryFinding } from '../model/cadMeshRecovery';
 import { EmptyState } from './EmptyState';
 import { Notice } from './Notice';
 import { cadMeshSizing } from '../api/cadMesh';
@@ -258,7 +259,7 @@ function recordChecks(record: CadReturnIngestRecord): CheckDescriptor[] {
     name: 'Symmetry',
     state: planes.length === 0 ? 'info' : rejectedDeclared.length === 0 ? 'ok' : 'warn',
     verdict: planes.length === 0
-      ? 'no plane verdicts recorded'
+      ? modelSummary
       : rejectedDeclared.length === 0
         ? modelSummary
         : `declared cut ${rejectedDeclared.map(([name]) => planePhrase(name)).join(', ')} does not mirror · solving ${cadDomain}`,
@@ -284,13 +285,10 @@ function recordChecks(record: CadReturnIngestRecord): CheckDescriptor[] {
   checks.push({
     key: 'healing',
     name: 'Healing',
-    state: healed ? 'warn' : 'ok',
-    verdict: healed ? `OCC healing was needed${record.healing.mode ? ` · ${record.healing.mode}` : ''}` : 'not needed',
-    title: 'Whether OCC healing had to repair the exported CAD before it could mesh. Healed geometry can differ subtly from the export.',
-    detail: healed ? <>
-      <p>The exported CAD did not mesh unchanged. OCC healing was used; re-export stitched or imprinted CAD when possible.</p>
-      {'original_mesh_error' in record.healing && <p className="cad-detail">{compactValue(record.healing.original_mesh_error)}</p>}
-    </> : undefined,
+    state: healed ? 'info' : 'ok',
+    verdict: healed ? 'mesh repaired' : 'not needed',
+    title: 'WG repairs the mesh when needed and checks the result before solving.',
+
   });
 
   // Mesh sizing & cost
@@ -425,7 +423,7 @@ const RECORD_ONLY: ReadonlySet<string> = new Set([
  * Fusion-first model: no WG design exists to be stale against, which is what
  * such a model is, not news about it. */
 function isNote(finding: CadReturnFinding): boolean {
-  if (finding.blocking) return false;
+  if (finding.blocking || isMeshRecoveryFinding(finding)) return false;
   return !(finding.kind === 'freshness' && finding.verdict === 'unlinked');
 }
 
