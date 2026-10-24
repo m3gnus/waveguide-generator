@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/m3gnus/wglink.git",
-  "commit": "5d4fbaa89909642cc2f973592a6365b5b3e6c07d",
+  "commit": "44aecee1d7804ab35853de3988dd3acfddae8959",
   "path": "fusion-addins/WGLink/wglink_protocol.py",
   "sha256": "84adc3a89a451712ec66b7a78c338663eac7293fb229bbaa337f8cb898a50d5a",
-  "note": "Shared mesh-sizing-v1 protocol; package pin moves at release."
+  "note": "WGLink 0.3.2 (tag v0.3.2); protocol file unchanged since 5d4fbaa."
 }

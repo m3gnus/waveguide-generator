@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "repository": "https://github.com/m3gnus/wglink.git",
-  "commit": "a1178624dc39422d4815680c9c7f5540f42cb0b7",
+  "commit": "44aecee1d7804ab35853de3988dd3acfddae8959",
   "license": "AGPL-3.0-or-later",
-  "addinVersion": "0.3.1",
-  "note": "WGLink 0.3.1 (tag v0.3.1): immutable export bundles; protocol unchanged."
+  "addinVersion": "0.3.2",
+  "note": "WGLink 0.3.2 (tag v0.3.2): Sources & Mesh dialog and mesh-sizing-v1 settings from Fusion."
 }

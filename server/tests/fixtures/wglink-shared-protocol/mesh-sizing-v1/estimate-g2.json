@@ -1,0 +1,517 @@
+{
+  "gmsh_version": "4.15.2",
+  "g2_imported_sha256": "7463bfd377685ae4aefbae71b26451c1ccedb620b4375f8bb24624c56c792d41",
+  "geometry_owner": "server/tests/test_imported_surface_groups.py::_synthetic_return",
+  "cases": [
+    {
+      "fixture": "f1",
+      "mode": "auto",
+      "groups": true,
+      "area_mm2": 728379.306830165,
+      "triangles": 1053,
+      "solved_fraction": 0.25,
+      "sources": [
+        {
+          "id": "hf",
+          "role": "HF",
+          "required": true,
+          "patch_policy": "single-connected",
+          "expected_connected_components": 1,
+          "selectors": {
+            "advanced_face_indices": [
+              431
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 314.1592653589793,
+            "per_face_area_mm2": [
+              314.1592653589793
+            ]
+          },
+          "suggested_resolution_mm": 6
+        }
+      ],
+      "surface_groups": [
+        {
+          "group_id": "back",
+          "name": "Back",
+          "size_mm": 40,
+          "selectors": {
+            "advanced_face_indices": [
+              342
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 143499.99999999997,
+            "per_face_area_mm2": [
+              143499.99999999997
+            ]
+          }
+        }
+      ],
+      "curvature_regions": [
+        {
+          "area_mm2": 9471.784626241364,
+          "radius_mm": 15.074813431681335
+        }
+      ]
+    },
+    {
+      "fixture": "f1",
+      "mode": "full",
+      "groups": true,
+      "area_mm2": 728379.306830165,
+      "triangles": 4020,
+      "solved_fraction": 1,
+      "sources": [
+        {
+          "id": "hf",
+          "role": "HF",
+          "required": true,
+          "patch_policy": "single-connected",
+          "expected_connected_components": 1,
+          "selectors": {
+            "advanced_face_indices": [
+              431
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 314.1592653589793,
+            "per_face_area_mm2": [
+              314.1592653589793
+            ]
+          },
+          "suggested_resolution_mm": 6
+        }
+      ],
+      "surface_groups": [
+        {
+          "group_id": "back",
+          "name": "Back",
+          "size_mm": 40,
+          "selectors": {
+            "advanced_face_indices": [
+              342
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 143499.99999999997,
+            "per_face_area_mm2": [
+              143499.99999999997
+            ]
+          }
+        }
+      ],
+      "curvature_regions": [
+        {
+          "area_mm2": 9471.784626241364,
+          "radius_mm": 15.074813431681335
+        }
+      ]
+    },
+    {
+      "fixture": "f1",
+      "mode": "auto",
+      "groups": false,
+      "area_mm2": 728379.306830165,
+      "triangles": 1154,
+      "solved_fraction": 0.25,
+      "sources": [
+        {
+          "id": "hf",
+          "role": "HF",
+          "required": true,
+          "patch_policy": "single-connected",
+          "expected_connected_components": 1,
+          "selectors": {
+            "advanced_face_indices": [
+              431
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 314.1592653589793,
+            "per_face_area_mm2": [
+              314.1592653589793
+            ]
+          },
+          "suggested_resolution_mm": 6
+        }
+      ],
+      "surface_groups": [],
+      "curvature_regions": [
+        {
+          "area_mm2": 9471.784626241364,
+          "radius_mm": 15.074813431681335
+        }
+      ]
+    },
+    {
+      "fixture": "f2",
+      "mode": "auto",
+      "groups": true,
+      "area_mm2": 337271.1848223546,
+      "triangles": 6764,
+      "solved_fraction": 1,
+      "sources": [
+        {
+          "id": "hf",
+          "role": "HF",
+          "required": true,
+          "patch_policy": "single-connected",
+          "expected_connected_components": 1,
+          "selectors": {
+            "advanced_face_indices": [
+              1193
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 201.06192982974667,
+            "per_face_area_mm2": [
+              201.06192982974667
+            ]
+          },
+          "suggested_resolution_mm": 6
+        },
+        {
+          "id": "mf",
+          "role": "MF",
+          "required": true,
+          "patch_policy": "single-connected",
+          "expected_connected_components": 1,
+          "selectors": {
+            "advanced_face_indices": [
+              1189
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 804.2477193189867,
+            "per_face_area_mm2": [
+              804.2477193189867
+            ]
+          },
+          "suggested_resolution_mm": 15
+        },
+        {
+          "id": "lf",
+          "role": "LF",
+          "required": true,
+          "patch_policy": "single-connected",
+          "expected_connected_components": 1,
+          "selectors": {
+            "advanced_face_indices": [
+              1185
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 2827.433388230814,
+            "per_face_area_mm2": [
+              2827.433388230814
+            ]
+          },
+          "suggested_resolution_mm": 25
+        },
+        {
+          "id": "passive_cardioid",
+          "role": "PASSIVE_CARDIOID",
+          "required": true,
+          "patch_policy": "single-connected",
+          "expected_connected_components": 1,
+          "selectors": {
+            "advanced_face_indices": [
+              1197
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 452.3893421169303,
+            "per_face_area_mm2": [
+              452.3893421169303
+            ]
+          },
+          "suggested_resolution_mm": 25
+        }
+      ],
+      "surface_groups": [
+        {
+          "group_id": "back",
+          "name": "Back",
+          "size_mm": 40,
+          "selectors": {
+            "advanced_face_indices": [
+              531
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 35874.99999999999,
+            "per_face_area_mm2": [
+              35874.99999999999
+            ]
+          }
+        }
+      ],
+      "curvature_regions": [
+        {
+          "area_mm2": 7563.911319345069,
+          "radius_mm": 12.038338755825075
+        },
+        {
+          "area_mm2": 15271.444428978124,
+          "radius_mm": 24.305258690250554
+        },
+        {
+          "area_mm2": 29519.271206657177,
+          "radius_mm": 46.98137929009748
+        },
+        {
+          "area_mm2": 11390.87257807175,
+          "radius_mm": 18.129136769300406
+        }
+      ]
+    },
+    {
+      "fixture": "f2",
+      "mode": "full",
+      "groups": true,
+      "area_mm2": 337271.1848223546,
+      "triangles": 6764,
+      "solved_fraction": 1,
+      "sources": [
+        {
+          "id": "hf",
+          "role": "HF",
+          "required": true,
+          "patch_policy": "single-connected",
+          "expected_connected_components": 1,
+          "selectors": {
+            "advanced_face_indices": [
+              1193
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 201.06192982974667,
+            "per_face_area_mm2": [
+              201.06192982974667
+            ]
+          },
+          "suggested_resolution_mm": 6
+        },
+        {
+          "id": "mf",
+          "role": "MF",
+          "required": true,
+          "patch_policy": "single-connected",
+          "expected_connected_components": 1,
+          "selectors": {
+            "advanced_face_indices": [
+              1189
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 804.2477193189867,
+            "per_face_area_mm2": [
+              804.2477193189867
+            ]
+          },
+          "suggested_resolution_mm": 15
+        },
+        {
+          "id": "lf",
+          "role": "LF",
+          "required": true,
+          "patch_policy": "single-connected",
+          "expected_connected_components": 1,
+          "selectors": {
+            "advanced_face_indices": [
+              1185
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 2827.433388230814,
+            "per_face_area_mm2": [
+              2827.433388230814
+            ]
+          },
+          "suggested_resolution_mm": 25
+        },
+        {
+          "id": "passive_cardioid",
+          "role": "PASSIVE_CARDIOID",
+          "required": true,
+          "patch_policy": "single-connected",
+          "expected_connected_components": 1,
+          "selectors": {
+            "advanced_face_indices": [
+              1197
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 452.3893421169303,
+            "per_face_area_mm2": [
+              452.3893421169303
+            ]
+          },
+          "suggested_resolution_mm": 25
+        }
+      ],
+      "surface_groups": [
+        {
+          "group_id": "back",
+          "name": "Back",
+          "size_mm": 40,
+          "selectors": {
+            "advanced_face_indices": [
+              531
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 35874.99999999999,
+            "per_face_area_mm2": [
+              35874.99999999999
+            ]
+          }
+        }
+      ],
+      "curvature_regions": [
+        {
+          "area_mm2": 7563.911319345069,
+          "radius_mm": 12.038338755825075
+        },
+        {
+          "area_mm2": 15271.444428978124,
+          "radius_mm": 24.305258690250554
+        },
+        {
+          "area_mm2": 29519.271206657177,
+          "radius_mm": 46.98137929009748
+        },
+        {
+          "area_mm2": 11390.87257807175,
+          "radius_mm": 18.129136769300406
+        }
+      ]
+    },
+    {
+      "fixture": "f2",
+      "mode": "auto",
+      "groups": false,
+      "area_mm2": 337271.1848223546,
+      "triangles": 7042,
+      "solved_fraction": 1,
+      "sources": [
+        {
+          "id": "hf",
+          "role": "HF",
+          "required": true,
+          "patch_policy": "single-connected",
+          "expected_connected_components": 1,
+          "selectors": {
+            "advanced_face_indices": [
+              1193
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 201.06192982974667,
+            "per_face_area_mm2": [
+              201.06192982974667
+            ]
+          },
+          "suggested_resolution_mm": 6
+        },
+        {
+          "id": "mf",
+          "role": "MF",
+          "required": true,
+          "patch_policy": "single-connected",
+          "expected_connected_components": 1,
+          "selectors": {
+            "advanced_face_indices": [
+              1189
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 804.2477193189867,
+            "per_face_area_mm2": [
+              804.2477193189867
+            ]
+          },
+          "suggested_resolution_mm": 15
+        },
+        {
+          "id": "lf",
+          "role": "LF",
+          "required": true,
+          "patch_policy": "single-connected",
+          "expected_connected_components": 1,
+          "selectors": {
+            "advanced_face_indices": [
+              1185
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 2827.433388230814,
+            "per_face_area_mm2": [
+              2827.433388230814
+            ]
+          },
+          "suggested_resolution_mm": 25
+        },
+        {
+          "id": "passive_cardioid",
+          "role": "PASSIVE_CARDIOID",
+          "required": true,
+          "patch_policy": "single-connected",
+          "expected_connected_components": 1,
+          "selectors": {
+            "advanced_face_indices": [
+              1197
+            ]
+          },
+          "observed": {
+            "face_count": 1,
+            "total_area_mm2": 452.3893421169303,
+            "per_face_area_mm2": [
+              452.3893421169303
+            ]
+          },
+          "suggested_resolution_mm": 25
+        }
+      ],
+      "surface_groups": [],
+      "curvature_regions": [
+        {
+          "area_mm2": 7563.911319345069,
+          "radius_mm": 12.038338755825075
+        },
+        {
+          "area_mm2": 15271.444428978124,
+          "radius_mm": 24.305258690250554
+        },
+        {
+          "area_mm2": 29519.271206657177,
+          "radius_mm": 46.98137929009748
+        },
+        {
+          "area_mm2": 11390.87257807175,
+          "radius_mm": 18.129136769300406
+        }
+      ]
+    }
+  ]
+}

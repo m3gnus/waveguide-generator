@@ -26,3 +26,16 @@ WG 0.3.5 / 0.3.6-old: existing delivery/features, without `meshSizing`.
 Regenerate STEP/JSON with `python scripts/generate_mesh_sizing_fixtures.py` in
 an environment containing gmsh. Geometry output may vary across gmsh/OCC
 versions; review regenerated evidence rather than refreshing a hash blindly.
+
+`estimate-g2.json` records six actual surface-mesher counts from G2's separate
+synthetic F1/F2 geometry helper (`server/tests/test_imported_surface_groups.py`,
+`_synthetic_return`), plus its measured areas and analytic conical-wall
+curvature evidence. Its `g2_imported_sha256` identifies the implementation;
+gmsh is 4.15.2. The geometry helper remains in WG; it is not copied here.
+F1 has a recessed source and is measured full and automatically quartered;
+F2 is already drawn as a quarter and is not divided again. Grouped and
+ungrouped cases use the owner defaults. The pure estimate test checks ±40%
+against these actual counts, with source grading and curvature evidence.
+These are different geometries from the flat protocol bundles above. In
+particular the protocol F2 box has closed cut faces and is not evidence of a
+successful declared-quarter solve; G2 refuses its capped cut planes.
