@@ -224,7 +224,7 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `excitation_refused` | `needs_user_input` | The setup's excitation cannot drive the prepared domain (a mirror that does not contain the radiation axis, a motion the mirror changes, a source driven twice); the user changes the drive channels or solves the whole model |
 | `update_restart_pending` | `needs_user_input` | An update restart was approved while the preparation ran, so nothing was submitted. Queued again once no restart is pending (see "Preparation", "Update restart") |
 | `interrupted` | `needs_user_input` | The backend stopped, or the answer was lost, while an attempt held the operation |
-| `ready_to_solve` | `needs_user_input` | Prepared, and waiting for the user to start the solve |
+| `ready_to_solve` | `needs_user_input` | Prepared (a press that asked to stop short of solving), and ready: the user's Solve starts it with the same prepared mesh. Never a question or a failure; kept by Clear failed |
 | `superseded` | `cancelled` | A newer unstarted update for the same exact link replaced this request |
 | `expired` | `cancelled` | An insert remained unclaimed for 30 minutes |
 | `session_changed` | `cancelled` | A return request named a Fusion session that is no longer current |
@@ -243,9 +243,14 @@ alone cannot: it covers real questions and failures alike. The summary (and a jo
 
 - `question`: a choice only the user can make, and only these
   (`operations.QUESTION_CODES`: `mesh_too_large`, `setup_required`,
-  `findings_need_review`, `ready_to_solve`); WG asks it in a pop-up, and Fusion's
+  `findings_need_review`); WG asks it in a pop-up, and Fusion's
   progress panel says so with "Open Waveguide Generator". Only a question reads
   "Waiting for you" or takes the pop-up (`isCadChoiceJob`).
+- `ready`: prepared and kept until the user presses Solve
+  (`operations.READY_CODES`: `ready_to_solve`). Nothing is asked and nothing failed:
+  the job is `held` with the stage message "Ready to solve", Clear failed keeps it
+  (also a row an earlier release stored as an error), and Results and the request's
+  card show "Ready to solve" with Solve, which continues it (`isReadyCadJob`).
 - `action`: the user must change or do something and nothing is asked
   (`operations.USER_ACTION_CODES`: `snapshot_changed`, `return_unavailable`,
   `wglink_folder_unset`, `excitation_refused`, `solver_memory_exceeded`,
@@ -253,7 +258,7 @@ alone cannot: it covers real questions and failures alike. The summary (and a jo
   `engine_cannot_solve_return`, whose home is the Results solve progress; a manual
   axis changed elsewhere, `frame_confirmation_required`; every rejection, such as
   `model_cut_unsolvable`; and any reason not listed). A kept hold (`user_hold`) is a
-  question or such an action that is not a failed preparation.
+  question, a ready request, or such an action that is not a failed preparation.
 - `failed`: WG's own failure (`operations.INTERNAL_FAILURE_CODES`), recorded for the
   developers; Try again.
 - null: nothing is asked (in progress, solved, cancelled, or `update_restart_pending`).

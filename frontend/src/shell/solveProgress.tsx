@@ -50,6 +50,7 @@ export type SolveStageWord =
   | 'Combining'
   | 'Cancelling…'
   | 'Waiting for you'
+  | 'Ready to solve'
   | 'Not prepared'
   | 'Needs recovery'
   | 'Done'
@@ -68,10 +69,11 @@ const RUNNING_STAGE_WORDS: Record<string, SolveStageWord> = {
 
 /** The stage a job is in, in the user's words. Real adapters emit
  * initializing -> mesh -> setup -> solve; dry run starts at mesh. */
-export function solveStageWord(job: Pick<JobItem, 'status' | 'stage'>): SolveStageWord {
+export function solveStageWord(job: Pick<JobItem, 'status' | 'stage'> & Partial<Pick<JobItem, 'cad_state'>>): SolveStageWord {
   switch (job.status) {
     case 'complete': return 'Done';
-    case 'held': return 'Waiting for you';
+    // A prepared request asks nothing: Solve starts it.
+    case 'held': return job.cad_state?.attention === 'ready' ? 'Ready to solve' : 'Waiting for you';
     case 'error': return 'Failed';
     case 'cancelled': return 'Cancelled';
     case 'preparing':
@@ -81,11 +83,11 @@ export function solveStageWord(job: Pick<JobItem, 'status' | 'stage'>): SolveSta
 }
 
 export const MODEL_STATUS_TITLE = {
-  solved: 'Solved', running: 'Solving', preparing: 'Preparing', waiting: 'Waiting for you', refused: 'Solve refused',
+  solved: 'Solved', running: 'Solving', preparing: 'Preparing', waiting: 'Waiting for you', ready: 'Ready to solve', refused: 'Solve refused',
   failed: 'Solve failed', 'prepare-failed': 'Not prepared', 'never-solved': 'Not solved yet',
 };
 
-export function runStatusWord(job: Pick<JobItem, 'status' | 'stage'>): SolveStageWord {
+export function runStatusWord(job: Pick<JobItem, 'status' | 'stage'> & Partial<Pick<JobItem, 'cad_state'>>): SolveStageWord {
   return solveStageWord(job);
 }
 
@@ -97,8 +99,9 @@ export interface OperationProgressLike {
   stage: string | null;
   reason: string | null;
   /** What it asks of the user (`operations.reason_attention`); a kept
-   * operation is "Waiting for you" only for a real question. */
-  attention?: 'question' | 'action' | 'failed' | null;
+   * operation is "Waiting for you" only for a real question, and "Ready to
+   * solve" when it is prepared. */
+  attention?: 'question' | 'ready' | 'action' | 'failed' | null;
 }
 
 /** `server/cadlink/joblane/preparation.py`'s own stages, past "received": the
@@ -148,6 +151,7 @@ export function operationStageWord(operation: OperationProgressLike): SolveStage
     case 'needs_user_input':
       // Only a real question waits for the user; a restart hold is queued again by itself.
       if (operation.attention === 'question') return 'Waiting for you';
+      if (operation.attention === 'ready') return 'Ready to solve';
       return operation.reason === 'update_restart_pending' ? 'Received' : 'Not prepared';
     case 'recovery_required': return 'Needs recovery';
     default: return (operation.stage && OPERATION_STAGE_WORDS[operation.stage]) || 'Received';

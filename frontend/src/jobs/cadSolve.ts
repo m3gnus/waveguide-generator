@@ -80,6 +80,13 @@ export function isCadChoiceJob(job: JobItem): boolean {
   return isHeldCadJob(job) && job.cad_state?.attention === 'question';
 }
 
+/** A prepared request kept until the user presses Solve (`ready_to_solve`):
+ * held, so Clear failed keeps it, but neither a question nor a failure. Its
+ * home is the model's status in Results and its request card, with Solve. */
+export function isReadyCadJob(job: JobItem): boolean {
+  return isHeldCadJob(job) && job.cad_state?.attention === 'ready';
+}
+
 /** Retain only the current child of a chain; timestamps order separate presses. */
 export function latestCadJobs(jobs: JobItem[]): JobItem[] {
   const byId = new Map(jobs.map((job) => [job.id, job]));

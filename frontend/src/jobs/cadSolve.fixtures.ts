@@ -7,11 +7,12 @@ import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 /** `operations.reason_attention` for the reasons fixtures use, as the server
  * writes it on every `cad_state` (pinned server-side by
  * `test_cad_held.py :: EXPECTED_ATTENTION`): only a user's choice is a question. */
-const FIXTURE_QUESTIONS: ReadonlySet<string> = new Set(['mesh_too_large', 'setup_required', 'findings_need_review', 'ready_to_solve']);
+const FIXTURE_QUESTIONS: ReadonlySet<string> = new Set(['mesh_too_large', 'setup_required', 'findings_need_review']);
 const FIXTURE_FAILURES: ReadonlySet<string> = new Set(['preparation_failed', 'submission_refused', 'interrupted', 'snapshot_invalid']);
 function fixtureAttention(state: string, reason: string | null | undefined): CadOperationSummary['attention'] {
   if ((state !== 'needs_user_input' && state !== 'rejected') || !reason || reason === 'update_restart_pending') return null;
   if (FIXTURE_FAILURES.has(reason)) return 'failed';
+  if (state === 'needs_user_input' && reason === 'ready_to_solve') return 'ready';
   return state === 'needs_user_input' && FIXTURE_QUESTIONS.has(reason) ? 'question' : 'action';
 }
 

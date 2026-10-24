@@ -677,6 +677,7 @@
               {
                 "enum": [
                   "question",
+                  "ready",
                   "action",
                   "failed"
                 ],
@@ -1255,6 +1256,7 @@
               {
                 "enum": [
                   "question",
+                  "ready",
                   "action",
                   "failed"
                 ],

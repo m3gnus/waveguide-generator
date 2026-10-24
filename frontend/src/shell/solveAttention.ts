@@ -146,7 +146,8 @@ export { operationNeedsUser } from '../api/cadOperations';
 
 /** What about an operation needs the user, so a new gate is a new event. */
 function attentionKey(operation: CadOperationSummary): string | null {
-  if (!operationNeedsUser(operation)) return null;
+  // A prepared request asks nothing: it never fronts a panel.
+  if (!operationNeedsUser(operation) || operation.attention === 'ready') return null;
   return `${operation.state}:${operation.reason ?? ''}:${operation.attemptGeneration}:${operation.preparationId ?? ''}`;
 }
 

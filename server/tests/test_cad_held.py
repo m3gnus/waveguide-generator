@@ -53,6 +53,62 @@ def test_clear_failed_preserves_new_and_legacy_holds(h: JobsHarness) -> None:
     assert h._loop.run(h.runtime.clear_failed()) == [job["id"]]
 
 
+def test_a_prepared_request_is_ready_survives_clear_failed_and_continues(h: JobsHarness) -> None:
+    _received(h)
+    revision = _revision(h.store, _setup())
+    summary = h.prepare(setup_revision_id=revision, submit=False)
+    assert (summary["reason"], summary["attention"]) == ("ready_to_solve", "ready")
+    ready = h.latest_job()
+    state = job_cad_state(ready)
+    # Kept and ready: not failed, not a question, no error recorded.
+    assert (ready["status"], ready["stage"], ready["stage_message"]) == ("held", "held", "Ready to solve")
+    assert ready["error_message"] is None
+    assert state["held"] is True and state["prepare_failed"] is False
+    assert state["attention"] == "ready"
+    assert state["options"][0] == {"id": "retry", "label": "Solve"}
+    events = [event for event in h.jobs_store.replay_events(0) or [] if event["jobId"] == ready["id"]]
+    assert events and all(event["type"] != "failed" for event in events)
+    assert events[-1]["payload"]["message"] == "Ready to solve"
+    preparation_id = state["preparation"]["preparation_id"]
+
+    # A genuine failure of another model, then Clear failed.
+    _second_return(h)
+
+    def crash(*_args, **_kwargs):
+        raise RuntimeError("gmsh crashed")
+
+    h.prepare("cmd-2", setup_revision_id=revision, ingest=crash)
+    failed = h.jobs_store.latest_cad_job("cmd-2")
+    assert failed["status"] == "error"
+    assert h._loop.run(h.runtime.clear_failed()) == [failed["id"]]
+    kept = _row(h, ready["id"])
+    assert kept["status"] == "held" and job_cad_state(kept)["attention"] == "ready"
+
+    # Solve continues it with the same prepared mesh.
+    child = h._loop.run(h.runtime.solve_cad_again(ready["id"]))
+    _settle(h)
+    row = _row(h, child)
+    assert row["status"] == "queued"
+    assert _cad(row)["preparation"]["preparation_id"] == preparation_id
+
+
+def test_legacy_ready_rows_stored_as_errors_read_ready_and_survive_clear_failed(h: JobsHarness) -> None:
+    _received(h)
+    h.prepare(setup_revision_id=_revision(h.store, _setup()), submit=False)
+    job = h.latest_job()
+    metadata = job["task_metadata"]
+    metadata["cad"].pop("hold")
+    # Earlier releases stored the prepared request as an error, through the refusal path.
+    h.jobs_store.update_job(job["id"], status="error", stage="error", stage_message="Not solved",
+                            error_message="Prepared. Press Solve to start it.",
+                            task_metadata_json=json.dumps(metadata))
+    state = job_cad_state(_row(h, job["id"]))
+    assert state["held"] is True and state["prepare_failed"] is False
+    assert state["attention"] == "ready"
+    assert h._loop.run(h.runtime.clear_failed()) == []
+    assert h.jobs_store.get_job_row(job["id"]) is not None
+
+
 def _lineage(h: JobsHarness, job_id: str, lineage: str) -> None:
     row = _row(h, job_id)
     metadata = row["task_metadata"]
@@ -343,7 +399,8 @@ EXPECTED_ATTENTION = {
     "mesh_too_large": "question",
     "setup_required": "question",
     "findings_need_review": "question",
-    "ready_to_solve": "question",
+    # Prepared: Solve starts it. Neither a question nor a failure.
+    "ready_to_solve": "ready",
     # Something to do; nothing is asked.
     "frame_confirmation_required": "action",
     "reduced_axis_not_allowed": "action",
@@ -397,4 +454,5 @@ def test_a_hold_is_a_question_or_an_action_never_a_failure() -> None:
             continue
         held = user_hold("held", {"refusal": {"code": code, "message": ""}})
         # A user-action failure ends as a failed preparation, never a hold.
-        assert held is (EXPECTED_ATTENTION[code] in {"question", "action"} and code not in USER_ACTION_CODES), code
+        assert held is (EXPECTED_ATTENTION[code] in {"question", "ready", "action"}
+                        and code not in USER_ACTION_CODES), code

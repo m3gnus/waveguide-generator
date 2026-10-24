@@ -35,9 +35,10 @@ export interface CadOperationSummary {
    * not shown). Null or absent when the axis was confirmed. */
   frameAxisAutomatic?: string | null;
   /** What the operation asks of the user (`operations.reason_attention`): a
-   * real `question` (asked in a pop-up), an `action` to take, WG's own
-   * `failed` preparation, or null. `state` alone cannot tell them apart. */
-  attention?: 'question' | 'action' | 'failed' | null;
+   * real `question` (asked in a pop-up), `ready` (prepared; Solve starts it,
+   * nothing is asked), an `action` to take, WG's own `failed` preparation, or
+   * null. `state` alone cannot tell them apart. */
+  attention?: 'question' | 'ready' | 'action' | 'failed' | null;
   jobId: string | null;
   attemptGeneration: number;
   setupRevisionId: string | null;

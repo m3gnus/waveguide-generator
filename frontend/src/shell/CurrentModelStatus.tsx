@@ -4,7 +4,7 @@ import { cadWorkspace } from '../stores/cadWorkspace';
 import type { ReactNode } from 'react';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { JobItem } from '../api/jobsSocket';
-import { cadJobSummary } from '../jobs/cadSolve';
+import { cadJobSummary, isReadyCadJob } from '../jobs/cadSolve';
 import { messageBlocker } from '../jobs/solveReadiness';
 import { useCurrentModelStatus } from '../model/currentModel';
 import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
@@ -43,6 +43,17 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
       ? <button type="button" className="btn" onClick={() => meshCeilingChoice.reopen()}>Choose</button> : undefined}>
       {meshChoiceLine(cad.label)}
     </Notice>
+  </div>;
+  // Prepared and kept until the user presses Solve: calm, never a question
+  // or a failure. Solve continues this very request with its prepared mesh.
+  if (solveStatus && status.kind === 'waiting' && latestJob && isReadyCadJob(latestJob)) return <div className="current-model-status" data-model-status="ready">
+    <Notice tone="info" title={MODEL_STATUS_TITLE.ready} actions={actions
+      ? <button type="button" className="btn-primary" disabled={!!control?.submitting}
+        onClick={() => void jobsCoordinatorBridge.getSnapshot().continueRun(latestJob.id, { mesh_limit_override: false }).catch(() => undefined)}>Solve</button>
+      : undefined}>
+      {status.message}
+    </Notice>
+    {request}
   </div>;
   // A failed preparation: WG's calm sentence and Try again where it can work.
   if (status.kind === 'prepare-failed' && latestJob) {
@@ -105,7 +116,7 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
   } else if (latest.state !== 'accepted') {
     // Preparing and refused intents use the job's CAD stage and gate;
     // bound requests below use the same progress vocabulary for execution.
-    if (latest.state === 'needs_user_input') tone = 'warn';
+    if (latest.state === 'needs_user_input' && latest.attention !== 'ready') tone = 'warn';
     body = <SolveProgressView operation={latest} variant="compact"/>;
   } else {
     const job: JobItem = latestJob!;

@@ -23,7 +23,7 @@ from typing import Any, Callable, Iterator, Mapping, Sequence
 from server.workspace.archive_identity import record_run_segment
 from server.cadlink.operations import (
     REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED,
-    ATTENTION_QUESTION, NEEDS_USER_INPUT, hold_details, reason_attention, user_hold,
+    ATTENTION_QUESTION, ATTENTION_READY, NEEDS_USER_INPUT, hold_details, reason_attention, user_hold,
 )
 from server.jobs.result_contracts import RESULT_ENVELOPE_ADAPTER
 from server.platform.paths import DATA_DIR_ENV, app_root, data_paths
@@ -45,6 +45,10 @@ from server.solver.power_qualification import (
     annotate_stored_text,
 )
 
+
+#: The stage message of a kept request, by what it asks (``reason_attention``):
+#: only a real question waits for the user; a prepared request is ready.
+HOLD_STAGE_MESSAGES = {ATTENTION_QUESTION: "Waiting for you", ATTENTION_READY: "Ready to solve"}
 
 #: ``preparing`` is a CAD solve WG has accepted but not yet meshed and bound to a
 #: request: it holds a CAD intent in ``config_json``, not a ``SolveRequest``. It is
@@ -1426,9 +1430,11 @@ class JobStore:
             # A failed preparation is never a hold: it ends as an error. One
             # owner says what is kept and what is a question (operations).
             held = user_hold("error", metadata["cad"])
-            question = held and reason_attention(NEEDS_USER_INPUT, code, message) == ATTENTION_QUESTION
             if held:
                 metadata["cad"]["hold"] = hold_details(code, message)
+            stage_message = HOLD_STAGE_MESSAGES.get(
+                reason_attention(NEEDS_USER_INPUT, code, message), "Not solved",
+            ) if held else "Not solved"
             conn.execute(
                 """UPDATE simulation_jobs
                    SET status = ?, stage = ?, stage_message = ?,
@@ -1436,13 +1442,12 @@ class JobStore:
                        task_metadata_json = ?
                    WHERE id = ?""",
                 ("held" if held else "error", "held" if held else "error",
-                 "Waiting for you" if question else "Not solved",
-                 None if held else message, now, now, json.dumps(metadata), job_id),
+                 stage_message, None if held else message, now, now, json.dumps(metadata), job_id),
             )
             return self._append_event(
                 conn, job_id, "stage" if held else "failed",
                 {"stage": "held" if held else "error",
-                 "message": "Waiting for you" if held else message, "reason": code},
+                 "message": stage_message if held else message, "reason": code},
             )
 
     def retire_held_cad_requests(self, job_id: str) -> list[dict[str, Any]]:

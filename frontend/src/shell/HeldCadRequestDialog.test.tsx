@@ -175,6 +175,28 @@ describe('held CAD request dialog owner', () => {
     expect(actions.continueRun).toHaveBeenCalledWith('failed');
   });
 
+  it('shows a prepared request as Ready to solve in Results, with Solve, never as a question', async () => {
+    const ready = { ...held('ready'), stage_message: 'Ready to solve',
+      cad_state: { ...held().cad_state!, held: true, reason: 'ready_to_solve', attention: 'ready',
+        message: 'Prepared. Press Solve to start it.', next_step: 'Start the prepared solve when you are ready.',
+        options: [{ id: 'retry', label: 'Solve' }, { id: 'dismiss', label: 'Dismiss request' }] } } as JobItem;
+    publishCadJobs([ready]);
+    const record = { ingest_id: 'mesh', manifest_sha256: ready.cad_state!.snapshot!.manifest_sha256 } as never;
+    workspaceModeStore.setMode('cad');
+    useCadReturnStore.setState({ ingestRecord: record, needsIngest: false });
+    await act(async () => root.render(<><HeldCadRequestDialog/><CurrentModelStatus record={record} actions solveStatus/></>));
+    const status = host.querySelector('[data-model-status="ready"]')!;
+    expect(status.textContent).toContain('Ready to solve');
+    expect(status.textContent).toContain('Start the prepared solve when you are ready.');
+    expect(status.querySelector('.notice-error')).toBeNull();
+    expect(host.textContent).not.toContain('Waiting for you');
+    expect(host.textContent).not.toContain('refused');
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => button('Solve').click());
+    // Solve continues this very request, with its prepared mesh.
+    expect(actions.continueRun).toHaveBeenCalledWith('ready', { mesh_limit_override: false });
+  });
+
   it('never pops up for an engine gate, a frame changed elsewhere or a failed preparation', async () => {
     const engine = held('engine');
     engine.cad_state = { ...engine.cad_state!, reason: 'engine_unavailable', attention: 'action', options: [{ id: 'review', label: 'Review solve' }] };

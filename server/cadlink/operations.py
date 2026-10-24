@@ -161,9 +161,11 @@ USER_ACTION_CODES = frozenset(
 )
 #: The only real questions: choices only the user can make, asked in WG's
 #: pop-up. Every other kept reason asks nothing (``reason_attention``).
-QUESTION_CODES = frozenset(
-    {"mesh_too_large", "setup_required", "findings_need_review", "ready_to_solve"}
-)
+QUESTION_CODES = frozenset({"mesh_too_large", "setup_required", "findings_need_review"})
+#: Prepared and kept, waiting only for the user to press Solve: never a
+#: question, never a failure. Clear failed keeps it; Solve continues it with
+#: the same prepared mesh.
+READY_CODES = frozenset({"ready_to_solve"})
 #: Failed preparations the read model words itself, whatever text is stored.
 CALM_FAILURE_CODES = INTERNAL_FAILURE_CODES | USER_ACTION_CODES
 _MESH_CEILING_PREFIX = "This model meshes to "
@@ -175,6 +177,8 @@ _MESH_CEILING_PREFIX = "This model meshes to "
 #:
 #: - ``question``: a choice only the user can make (:data:`QUESTION_CODES`);
 #:   WG asks it in a pop-up.
+#: - ``ready``: prepared, and ready to solve when the user presses Solve
+#:   (:data:`READY_CODES`); nothing is asked, nothing failed.
 #: - ``action``: the user must change or do something (the design, the
 #:   settings, the mesh, an engine, send the model again, press Solve again);
 #:   nothing is asked. The default for any other reason.
@@ -182,6 +186,7 @@ _MESH_CEILING_PREFIX = "This model meshes to "
 #: - None: nothing is asked (in progress, solved, cancelled, or waiting for an
 #:   update restart).
 ATTENTION_QUESTION = "question"
+ATTENTION_READY = "ready"
 ATTENTION_ACTION = "action"
 ATTENTION_FAILED = "failed"
 
@@ -213,6 +218,8 @@ def reason_attention(state: Any, code: Any, message: Any = "") -> str | None:
         return ATTENTION_FAILED
     if state == NEEDS_USER_INPUT and effective in QUESTION_CODES:
         return ATTENTION_QUESTION
+    if state == NEEDS_USER_INPUT and effective in READY_CODES:
+        return ATTENTION_READY
     # Engine gates (their home is the Results solve progress), a manual axis
     # changed elsewhere, user-action failures, rejections and any reason not
     # listed: something to do, never a question.
@@ -303,7 +310,7 @@ def user_hold(status: str, cad: Mapping[str, Any]) -> bool:
         return False
     # A held row with no stored reason predates reasons on holds; it stays one.
     return not code or reason_attention(NEEDS_USER_INPUT, code, message) in {
-        ATTENTION_QUESTION, ATTENTION_ACTION,
+        ATTENTION_QUESTION, ATTENTION_READY, ATTENTION_ACTION,
     }
 
 
@@ -591,6 +598,7 @@ __all__ = [
     "REASON_UPDATE_RESTART_PENDING",
     "ACCEPTED",
     "ATTENTION_ACTION",
+    "ATTENTION_READY",
     "ATTENTION_FAILED",
     "ATTENTION_QUESTION",
     "AXIS_NOT_ALLOWED_NEXT_STEP",
@@ -639,6 +647,7 @@ __all__ = [
     "prepare_and_solve_request",
     "preparation_failure",
     "QUESTION_CODES",
+    "READY_CODES",
     "axis_not_allowed_message",
     "reason_attention",
     "request_digest",

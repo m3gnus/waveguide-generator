@@ -306,7 +306,7 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
   const message = engineReason || SAID_BY_THE_CARD.has(operation.reason ?? '') || (!showStatus && !waiting) ? null : operation.message;
   const ladder = engineReason ? [] : solveGateLadder(operation, review.error ? null : review);
   const header = solve
-    ? manual ? waiting ? 'Your solve is waiting' : 'Your solve is in progress' : 'Fusion asked for a solve'
+    ? manual ? waiting ? operation.attention === 'ready' ? 'Your solve is ready' : 'Your solve is waiting' : 'Your solve is in progress' : 'Fusion asked for a solve'
     : `CAD operation · ${operation.kind}`;
   return <div className="cad-direction-alert cad-operation" data-operation-id={operation.operationId} data-request-id={job.id} tabIndex={-1}>
     <div>

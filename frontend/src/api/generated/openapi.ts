@@ -2820,7 +2820,7 @@ export interface components {
             /** Attemptgeneration */
             attemptGeneration: number;
             /** Attention */
-            attention?: ("question" | "action" | "failed") | null;
+            attention?: ("question" | "ready" | "action" | "failed") | null;
             blocker?: components["schemas"]["SolveBlocker"] | null;
             /** Createdat */
             createdAt: string | null;
@@ -2981,7 +2981,7 @@ export interface components {
             /** Approvals */
             approvals: components["schemas"]["CadStateApproval"][];
             /** Attention */
-            attention?: ("question" | "action" | "failed") | null;
+            attention?: ("question" | "ready" | "action" | "failed") | null;
             blocker?: components["schemas"]["SolveBlocker"] | null;
             /** Frame Axis Automatic */
             frame_axis_automatic: string | null;

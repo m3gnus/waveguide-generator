@@ -1705,10 +1705,10 @@ class CadOperationSummary(BaseModel):
     #: solve was not shown one; the card says so and offers Change.
     frame_axis_automatic: str | None = Field(default=None, alias="frameAxisAutomatic")
     #: What the operation asks of the user (``operations.reason_attention``):
-    #: ``question`` (a real choice, asked in a pop-up), ``action`` (something
-    #: to change, nothing asked), ``failed`` (WG's own failure, recorded for
+    #: ``question`` (a real choice, asked in a pop-up), ``ready`` (prepared;
+    #: Solve starts it), ``action`` (something to change, nothing asked), ``failed`` (WG's own failure, recorded for
     #: the developers), or null. ``state`` alone cannot tell them apart.
-    attention: Literal["question", "action", "failed"] | None = None
+    attention: Literal["question", "ready", "action", "failed"] | None = None
     job_id: str | None = Field(alias="jobId")
     attempt_generation: int = Field(alias="attemptGeneration")
     setup_revision_id: str | None = Field(alias="setupRevisionId")

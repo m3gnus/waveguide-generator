@@ -92,6 +92,12 @@ describe('operationStageWord', () => {
     expect(operationWaitingReason(op({ state: 'needs_user_input', reason: 'return_unavailable' }))).toBe('its return cannot be read');
   });
 
+  it('says a prepared request is ready to solve, never waiting for you', () => {
+    expect(operationStageWord(op({ state: 'needs_user_input', reason: 'ready_to_solve', attention: 'ready' }))).toBe('Ready to solve');
+    expect(solveStageWord({ status: 'held', stage: 'held', cad_state: { attention: 'ready' } as never })).toBe('Ready to solve');
+    expect(solveStageWord({ status: 'held', stage: 'held', cad_state: { attention: 'question' } as never })).toBe('Waiting for you');
+  });
+
   it('names cancellation and terminal outcomes', () => {
     expect(operationStageWord(op({ state: 'cancel_requested' }))).toBe('Cancelling…');
     expect(operationStageWord(op({ state: 'rejected' }))).toBe('Failed');

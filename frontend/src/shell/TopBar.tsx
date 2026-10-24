@@ -292,7 +292,9 @@ export function AttentionNotices() {
   const requests = selectCadRequests({ jobs, notices, record: null });
   // Engine gates live in solve progress, including automatic warm-up waits,
   // and a failed preparation is not a request waiting for the user.
+  // A prepared request is ready, not waiting: Results and its card offer Solve.
   const waiting = [...requests.earlier, ...requests.current].filter(request => request.operation?.reason !== 'engine_unavailable'
+    && request.operation?.attention !== 'ready'
     && !(request.source === 'job' && isFailedCadPreparation(request.job)));
   const waitingCount = waiting.length;
   // A visible Geometry tab can still have its requests below the scroll fold.
