@@ -133,3 +133,87 @@ def test_plan_validates_the_resolved_mesh_not_the_design_quadrants(enclosure_des
     with pytest.raises(SymmetryValidationError) as error:
         asyncio.run(resolve_submission(request, registry, preview=True))
     _assert_baffle_message(str(error.value), "bottom")
+
+
+@pytest.mark.parametrize("enclosure", [None, {}, {"depth": 0}])
+def test_source_disk_inactive_enclosure_plans_submits_and_meshes(
+    tmp_path, monkeypatch, enclosure,
+):
+    from hornlab_mesher import config_builder
+    from server.tests.test_native_formulas import design_payload
+
+    def no_bounds(*args, **kwargs):
+        pytest.fail("standalone source geometry must not enter enclosure validation")
+
+    monkeypatch.setattr(config_builder, "resolve_enclosure_bounds", no_bounds)
+
+    async def scenario():
+        app = create_app(data_dir=tmp_path, solver_warmup=False)
+        runtime = app.state.jobs_runtime
+        runtime.store.initialize()
+        registry = EngineRegistry(
+            detector=lambda: [EngineInfo("metal", True, "test", "test")],
+            factory=lambda name: object(),
+        )
+        monkeypatch.setattr(runtime.engine_registry, "capabilities", registry.capabilities)
+        monkeypatch.setattr(runtime.engine_registry, "get_engine", registry.get_engine)
+        # Exercise real admission and persistence, leaving the solve queued.
+        monkeypatch.setattr(runtime, "_ensure_scheduler", lambda: None)
+        design = design_payload("SOURCE-DISK")
+        design["enclosure"] = enclosure
+        body = {"design": design, "options": {"engine": "metal"}}
+        try:
+            status, raw = await http_request(app, "POST", "/api/solve/plan", body=body)
+            plan = json.loads(raw)
+            assert status == 200, plan
+            assert not plan.get("refusal")
+
+            status, raw = await http_request(app, "POST", "/api/solver-mesh", body=body)
+            mesh = json.loads(raw)
+            assert status == 200, mesh
+            assert mesh["stats"]["triangle_count"] > 0
+            assert mesh["msh_text"].startswith("$MeshFormat")
+
+            status, raw = await http_request(app, "POST", "/api/solve", body=body)
+            accepted = json.loads(raw)
+            assert status == 200, accepted
+            job = runtime.store.get_job_row(accepted["job_id"])
+            assert job["status"] == "queued"
+        finally:
+            await runtime.shutdown()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        mesh_builder.clear_solver_mesh_cache()
+
+
+def test_source_disk_active_enclosure_remains_unsupported(tmp_path, monkeypatch):
+    from server.tests.test_native_formulas import design_payload
+
+    async def no_build(*args, **kwargs):
+        pytest.fail("an unsupported source enclosure must not start a mesh build")
+
+    monkeypatch.setattr(mesh_builder, "run_mesh_build", no_build)
+
+    async def scenario():
+        app = create_app(data_dir=tmp_path, solver_warmup=False)
+        runtime = app.state.jobs_runtime
+        runtime.store.initialize()
+        registry = EngineRegistry(
+            detector=lambda: [EngineInfo("metal", True, "test", "test")],
+            factory=lambda name: object(),
+        )
+        monkeypatch.setattr(runtime.engine_registry, "capabilities", registry.capabilities)
+        monkeypatch.setattr(runtime.engine_registry, "get_engine", registry.get_engine)
+        design = design_payload("SOURCE-DISK")
+        design["enclosure"] = {"depth": 20}
+        body = {"design": design, "options": {"engine": "metal"}}
+        for path in ("/api/solve/plan", "/api/solve", "/api/solver-mesh"):
+            status, raw = await http_request(app, "POST", path, body=body)
+            payload = json.loads(raw)
+            assert status == 422, payload
+            assert "SOURCE-DISK does not support enclosure.depth" in raw.decode()
+        assert runtime.store.list_jobs() == ([], 0)
+
+    asyncio.run(scenario())
