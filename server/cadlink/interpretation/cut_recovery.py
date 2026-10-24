@@ -465,6 +465,29 @@ def cut_plane_options(
     }
 
 
+def reflected_cad_planes(options: Mapping[str, Any]) -> tuple[str, ...]:
+    """The CAD cut planes whose solve mesh was reflected, from the mesher's options.
+
+    The reflection happens in the solver frame (``reflect_planes``, solver
+    planes): a CAD cut that kept its negative side is reflected only when the
+    frame leaves that side negative, and a positive side the frame turns
+    negative is reflected too. As modelled the planes are the CAD planes.
+    """
+
+    from server.cadlink.interpretation.solver_frame import solver_cut_planes
+
+    reflected = {str(plane) for plane in options.get("reflect_planes") or ()}
+    frame = options.get("solver_frame")
+    if frame is None or options.get("cut_planes_frame") != "solver":
+        return tuple(plane for plane in PLANES if plane in reflected)
+    return tuple(
+        plane
+        for plane in PLANES
+        if plane in {str(item) for item in options.get("cad_cut_planes") or ()}
+        and solver_cut_planes(frame, [plane])[0][0] in reflected
+    )
+
+
 __all__ = [
     "CONDITIONS",
     "CONTRACT",
@@ -476,6 +499,7 @@ __all__ = [
     "cut_plane_options",
     "geometry_cut_planes",
     "recovery_options",
+    "reflected_cad_planes",
     "side_of_name",
     "side_of_source",
 ]

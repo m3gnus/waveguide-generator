@@ -308,7 +308,7 @@ def _off_origin_cut_rims(
     points: np.ndarray,
     components: np.ndarray,
     rigid_free: np.ndarray,
-    rotation: np.ndarray,
+    cad_axes: Sequence[tuple[int, float]],
     tolerance_mm: float,
 ) -> list[dict[str, Any]]:
     """Cut rims on planes parallel to the solver's x0/y0 but off the origin.
@@ -326,9 +326,7 @@ def _off_origin_cut_rims(
         return found
     owners = components[rigid_free[:, 0]]
     for solver_axis in (0, 1):
-        row = rotation[solver_axis]
-        cad_axis = int(np.argmax(np.abs(row)))
-        sign = 1.0 if row[cad_axis] > 0 else -1.0
+        cad_axis, sign = cad_axes[solver_axis]
         others = [axis for axis in range(3) if axis != solver_axis]
         for component in np.unique(owners):
             edges = rigid_free[owners == component]
@@ -444,10 +442,12 @@ def observe(
     ``wg_cut_planes`` are the solver planes WG itself cut, whose rim is WG's.
     """
 
+    from server.cadlink.interpretation.solver_frame import cad_axes_of_solver_axes
+
     points = np.asarray(points_mm, dtype=float).reshape(-1, 3)
     faces = np.asarray(triangles, dtype=np.int64).reshape(-1, 3)
     tags = np.asarray(tags).reshape(-1)
-    rotation = np.asarray(solver_from_assembly, dtype=float)[:3, :3]
+    cad_axes = cad_axes_of_solver_axes(solver_from_assembly)
     cut = {str(plane) for plane in wg_cut_planes}
     edges = np.sort(faces[:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2), axis=1)
     unique, inverse, counts = (
@@ -466,9 +466,7 @@ def observe(
     observed: dict[str, PlaneObservation] = {}
     rim_axes: set[int] = set()
     for solver_axis, solver_plane in enumerate(PLANES):
-        row = rotation[solver_axis]
-        cad_axis = int(np.argmax(np.abs(row)))
-        sign = 1.0 if row[cad_axis] > 0 else -1.0
+        cad_axis, sign = cad_axes[solver_axis]
         coordinate = points[:, solver_axis]
         negative = int(np.count_nonzero(coordinate < -tolerance_mm))
         positive = int(np.count_nonzero(coordinate > tolerance_mm))
@@ -531,7 +529,7 @@ def observe(
         other_open_edges=elsewhere,
         free_edges=int(len(free)),
         off_origin_rims=_off_origin_cut_rims(
-            points, components, free[rigid_free] if len(free) else free, rotation, tolerance_mm
+            points, components, free[rigid_free] if len(free) else free, cad_axes, tolerance_mm
         ),
         oblique_rims=_oblique_cut_rims(
             points, components, free[rigid_free] if len(free) else free, tolerance_mm
@@ -954,7 +952,11 @@ def interpretation_finding(
         planes_list = list(interpretation.get("planes") or [])
         recovery = interpretation.get("cut_recovery") or {}
         kept = recovery.get("kept_sides") or {}
-        reflected = [plane for plane in planes_list if kept.get(plane) == "negative"]
+        # The planes the solve mesh was reflected across, in the frame it was
+        # solved in (``reflected_planes``): a turned frame can keep a negative
+        # CAD side on the side WG mirrors, or turn a positive one away from it.
+        solved_reflected = {str(plane) for plane in interpretation.get("reflected_planes") or ()}
+        reflected = [plane for plane in planes_list if plane in solved_reflected]
         planes = " and ".join(plane_words(plane) for plane in planes_list)
         detail = (
             f"recognised from its geometry as a model already cut on {planes} and solved "
@@ -963,7 +965,7 @@ def interpretation_finding(
         if reflected:
             detail += (
                 "; the kept "
-                + " and ".join(side_words(plane, "negative") for plane in reflected)
+                + " and ".join(side_words(plane, kept.get(plane)) for plane in reflected)
                 + " side was reflected onto the side WG mirrors"
             )
         return {

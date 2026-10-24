@@ -55,6 +55,7 @@ from server.cadlink.interpretation.cut_recovery import (
     cut_plane_options,
     frame_flip_problem,
     recovery_options,
+    reflected_cad_planes,
     side_of_source,
 )
 from server.cadlink.interpretation.domain_decision import decide_domain_and_frame
@@ -1633,7 +1634,8 @@ def _ingest_bundle(
             else:
                 options = mirrored_options
                 applied_planes = evidence_outcome.applied
-                reflected_planes = evidence_outcome.reflect
+                # In the solver frame: a turned frame can undo or make a reflection.
+                reflected_planes = reflected_cad_planes(options)
         built, cache_key, cache_hit, mesh_path = chosen
         built_inline_viewport = bool(applied_planes)
     else:
@@ -1706,7 +1708,7 @@ def _ingest_bundle(
                 options = recovered_options
                 built, cache_key, cache_hit, mesh_path = recovered
                 applied_planes = tuple(recovered_options["domain_interpretation"]["applied"])
-                reflected_planes = recovery.reflect
+                reflected_planes = reflected_cad_planes(options)
                 built_inline_viewport = not defer_viewport
     # AUTO may reduce only when every declared air domain supports the same
     # plane. Rebuild the exterior with rejected planes excluded so its artifact,

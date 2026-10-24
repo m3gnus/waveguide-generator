@@ -699,6 +699,13 @@ def test_a_cut_model_facing_another_way_is_mirrored_in_its_turned_frame(
     assert record["symmetry"]["domain_planes"] == ["x0"]
     assert record["symmetry_verification"]["verified"] is True
     assert decision["reflected_axes"] == (["x"] if reflected else [])
+    # The reflection is recorded in the frame the mesh was solved in, and the
+    # finding words it from that: along +y the kept x <= 0 side is not reflected.
+    assert cut["kept_side"] == "negative" and cut["reflected"] is reflected
+    assert record["domain_interpretation"]["reflected_planes"] == (["x0"] if reflected else [])
+    finding = next(item for item in record["findings"] if item["kind"] == "recovered-reduced-domain")
+    assert finding["reflected_planes"] == (["x0"] if reflected else [])
+    assert ("was reflected" in finding["detail"]) is reflected
     assert record["normalisation"]["solver_frame"]["allowed_axes"] == ["+z", "-z", "+y", "-y"]
     points, triangles, tags = _mesh(record)
     assert points[:, 0].min() == pytest.approx(0.0, abs=1e-9)
@@ -718,6 +725,9 @@ def test_a_cut_model_facing_another_way_is_mirrored_in_its_turned_frame(
     )
     evidenced = _ingest(bundle, tmp_path / "data-provenance", solver_frame=axis)
     assert _decision(evidenced)["refusal"] is None
+    [evidenced_cut] = _decision(evidenced)["cad_cuts"]
+    assert evidenced_cut["reflected"] is reflected
+    assert _decision(evidenced)["reflected_axes"] == (["x"] if reflected else [])
     assert evidenced["symmetry"]["domain_planes"] == ["x0"]
     assert evidenced["normalisation"]["solver_frame"]["axis"] == axis
 
@@ -731,6 +741,7 @@ def test_a_cut_on_cad_y0_is_solved_on_the_solver_x0_when_facing_x(tmp_path: Path
     assert (cut["plane"], cut["solver_plane"], cut["status"]) == ("y0", "x0", "recovered")
     assert record["symmetry"]["domain_planes"] == ["x0"]
     assert decision["reflected_axes"] == ["x"]
+    assert (cut["kept_side"], cut["reflected"]) == ("negative", True)
     points, triangles, _tags = _mesh(record)
     _assert_closed_and_outward(*_mirror_expanded(points, triangles, ["x0"]))
 
@@ -749,6 +760,48 @@ def test_cad_planes_turn_into_solver_mirror_planes_with_their_kept_sides() -> No
     assert turned("+y", ["x0"], negative=["x0"]) == (["x0"], [])
     with pytest.raises(ValueError, match="square to the radiation axis"):
         turned("+x", ["x0"])
+
+
+@pytest.mark.parametrize(
+    ("axis", "planes", "negative", "expected"),
+    [
+        (None, ["x0", "y0"], ["y0"], ("y0",)),
+        ("-y", ["x0"], ["x0"], ("x0",)),
+        ("+y", ["x0"], ["x0"], ()),
+        ("-x", ["y0"], [], ("y0",)),
+        ("+x", ["y0", "z0"], [], ()),
+    ],
+)
+def test_the_reflected_cad_planes_are_read_in_the_solver_frame(axis, planes, negative, expected) -> None:
+    """A turned frame can undo a negative CAD side's reflection, or need one for a positive side."""
+
+    from server.cadlink.interpretation.solver_frame import frame_spec
+
+    options = {} if axis is None else {"solver_frame": frame_spec(axis, {})}
+    assert cr.reflected_cad_planes(cr.cut_plane_options(options, planes, negative=negative)) == expected
+
+
+@pytest.mark.parametrize("axis", ["+z", "-z", "+x", "-x", "+y", "-y"])
+def test_one_mapping_turns_cad_planes_into_solver_planes_and_back(axis: str) -> None:
+    """``solver_cut_planes`` and the observation's CAD names read one owner."""
+
+    from server.cadlink.interpretation.solver_frame import (
+        cad_axes_of_solver_axes,
+        frame_spec,
+        solver_cut_planes,
+        spec_matrix,
+    )
+
+    spec = frame_spec(axis, {})
+    matrix = spec_matrix(spec)[:3, :3]
+    mapping = cad_axes_of_solver_axes(matrix)
+    for solver_axis, (cad_axis, sign) in enumerate(mapping):
+        expected = np.zeros(3)
+        expected[cad_axis] = sign
+        assert np.allclose(matrix[solver_axis], expected)
+        if solver_axis < 2:
+            cad_plane = "xyz"[cad_axis] + "0"
+            assert solver_cut_planes(spec, [cad_plane]) == (["xy"[solver_axis] + "0"], ["xy"[solver_axis] + "0"] if sign < 0 else [])
 
 
 def test_a_cut_through_an_off_centre_driver_is_refused(tmp_path: Path) -> None:

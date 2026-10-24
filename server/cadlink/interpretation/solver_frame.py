@@ -297,6 +297,25 @@ def allowed_axes(
     return inside
 
 
+def cad_axes_of_solver_axes(rotation: Any) -> tuple[tuple[int, float], ...]:
+    """For each solver axis (x, y, z): the CAD axis it is, and its sign.
+
+    The one owner of the CAD-to-solver coordinate-plane mapping. Every solver
+    frame is a proper rotation that permutes the coordinate axes with signs,
+    so solver axis ``i`` is CAD axis ``cad`` scaled by ``sign`` (row ``i`` of
+    the rotation). :func:`solver_cut_planes` turns CAD cuts into solver planes
+    with it, and ``domain_interpretation.observe`` reports each solver plane
+    under the CAD plane it is.
+    """
+
+    rows = np.asarray(rotation, dtype=float)[:3, :3]
+    out = []
+    for row in rows:
+        cad = int(np.argmax(np.abs(row)))
+        out.append((cad, 1.0 if row[cad] > 0 else -1.0))
+    return tuple(out)
+
+
 def solver_cut_planes(
     frame: str | Mapping[str, Any],
     cad_planes: Iterable[str],
@@ -316,20 +335,22 @@ def solver_cut_planes(
     plane square to the radiation axis: it is never a symmetry plane.
     """
 
-    matrix = spec_matrix(frame)[:3, :3]
+    solver_of_cad = {
+        cad: (solver_axis, sign)
+        for solver_axis, (cad, sign) in enumerate(cad_axes_of_solver_axes(spec_matrix(frame)))
+    }
     held_negative = {str(plane) for plane in negative}
     solver: dict[str, bool] = {}
     for plane in cad_planes:
         name = str(plane)
         if len(name) != 2 or name[0] not in "xyz" or name[1] != "0":
             raise ValueError(f"unknown cut plane {plane!r}")
-        column = "xyz".index(name[0])
-        row = int(np.argmax(np.abs(matrix[:, column])))
+        row, sign = solver_of_cad["xyz".index(name[0])]
         if row == 2:
             raise ValueError(
                 f"the cut on {name} is square to the radiation axis, so it is not a symmetry plane"
             )
-        solver["xy"[row] + "0"] = (name in held_negative) != (matrix[row, column] < 0)
+        solver["xy"[row] + "0"] = (name in held_negative) != (sign < 0)
     planes = [plane for plane in ("x0", "y0") if plane in solver]
     return planes, [plane for plane in planes if solver[plane]]
 
@@ -586,6 +607,7 @@ __all__ = [
     "ROTATIONS",
     "allowed_axes",
     "axes_in_planes",
+    "cad_axes_of_solver_axes",
     "carried_axis",
     "confirmation_key",
     "document_up",
