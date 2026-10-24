@@ -295,3 +295,16 @@ it.each(['matching', 'no match'])('holds project-open feedback until the deferre
   }
   expect(ingest).toHaveBeenCalledTimes(result === 'matching' ? 1 : 0);
 });
+
+it('leaves initial selection and later discovery of a Fusion Solve bundle to its request owner', async () => {
+  const autoIngest = vi.fn();
+  const items = [bundle];
+  const reader = createCadReturnArrivalReader({ autoIngestSelected: autoIngest,
+    ownsSolveReturn: item => item.bundlePath === bundle.bundlePath,
+    ownsReturn: item => item.bundlePath === bundle.bundlePath }, vi.fn(async () => json({ cadFolderConfigured: true, items })));
+  await reader.refresh();
+  items[0] = { ...bundle, modifiedAt: '2026-10-24T10:00:00Z' };
+  await reader.refresh({ autoOpenNew: true });
+  expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+  expect(autoIngest).not.toHaveBeenCalled();
+});

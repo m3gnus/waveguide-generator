@@ -766,3 +766,35 @@ it('project open resolves its initial choice when receipt transport retries are 
   expect(cadWorkspace.getSnapshot().status).toContain('Selected the latest matching return');
   expect(calls('/api/cadlink/ingest')).toHaveLength(0);
 });
+
+it('restores initial selection of a bundle whose old completed Fusion request is history', async () => {
+  returns = [{ ...bundle, designIds: ['wgd_open'], modifiedAt: new Date(Date.now() - 900_000).toISOString() }];
+  publishCadJobs([{ ...job(), id: 'old-fusion', created_at: new Date(Date.now() - 900_000).toISOString(),
+    status: 'complete', has_results: true, cad_state: { ...job().cad_state!, state: 'accepted', operation_id: 'old-fusion' },
+    cad_intent: { bundle_path: bundle.bundlePath },
+  } as ReturnType<typeof job>]);
+  stop = mountCadWorkspaceOwners(); await flush();
+  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+});
+
+it('keeps a preparing Fusion request selected across folder refresh without a second preparation', async () => {
+  const request = { ...job(), id: 'arrived-fusion', created_at: new Date().toISOString(),
+    status: 'preparing', run_number: null, cad_source: null,
+    cad_state: { ...job().cad_state!, state: 'processing', operation_id: 'arrived-fusion', preparation: null,
+      snapshot: { document_name: 'Speaker', manifest_sha256: record.manifest_sha256,
+        artifact_sha256: record.artifact_sha256, project_lineage_id: null } },
+  } as ReturnType<typeof job>;
+  request.cad_intent = { bundle_path: bundle.bundlePath };
+  publishCadJobs([request]); stop = mountCadWorkspaceOwners(); await flush();
+  returns = [bundle];
+  await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true }); await flush();
+  expect(useCadReturnStore.getState().selectedBundle?.requestId).toBe(request.id);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+  publishCadJobs([{ ...request, cad_state: { ...request.cad_state!, preparation: {
+    preparation_id: record.ingest_id, ingest_id: record.ingest_id,
+    blocking_finding_ids: [], report_sha256: record.report_sha256 } } }]);
+  await flush();
+  expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+});

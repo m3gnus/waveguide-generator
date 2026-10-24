@@ -1,18 +1,20 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { isActiveJobStatus, jobsSocket } from '../api/jobsSocket';
-import { getIngest, type CadReturnFinding, type CadReturnIngestRecord } from '../api/cadlink';
+import { getIngest, listReturns, type CadReturnFinding, type CadReturnIngestRecord } from '../api/cadlink';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { listCadProjects } from '../api/cadProjects';
 import { isPendingCadOperation, reconcileCadOperation } from '../api/cadOperations';
 import { createCadRequestActions, selectCadRequests, useCadRecoveryNotices, type CadRequest } from '../stores/cadRecoveryNotices';
 import { cadWorkspace } from '../stores/cadWorkspace';
+import { openImported } from '../stores/importedModel';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import { openCadProject } from './CadProjectPanel';
 import { cadJobSummaries, dismissCadJob, useCadJobs } from '../jobs/cadSolve';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { inFlightWords } from './cadOnScreenSettings';
 import { fullTime, relativeTime } from './cadTime';
 import { usePanelVisible } from './panelVisibility';
-import { workspaceNavigation } from './workspaceNavigation';
+import { navigationGeneration, workspaceNavigation } from './workspaceNavigation';
 import { operationStageWord, OPERATION_REASON_WORDS } from './solveProgress';
 
 const RECOVERY_DISMISSED = 'Dismissed this recovery notice. Fusion still needs Undo or repair before you continue modelling.';
@@ -22,6 +24,25 @@ const makeRequestActions = () => createCadRequestActions({
     const project = (await listCadProjects()).find((item) => item.lineageId === lineage);
     if (!project) throw new Error('This copy of WG does not hold that project.');
     await openCadProject(project);
+  },
+  openPrepared: async (job, preparedId) => {
+    workspaceNavigation.navigate('results');
+    const navigation = navigationGeneration();
+    await openImported({ kind: 'cad-preparation', job, preparedId,
+      display: { isCurrent: () => navigationGeneration() === navigation,
+        failureMessage: () => 'WG could not open this model. Send it again from Fusion.',
+        enterCadWorkspace: () => {
+          // Keep this explicit review in Results beside the request's choices.
+          workspaceModeStore.setMode('cad');
+        } } });
+  },
+  openBundle: async (path) => {
+    workspaceNavigation.navigate('results');
+    const navigation = navigationGeneration();
+    const bundle = (await listReturns()).items.find((item) => item.bundlePath === path);
+    if (navigationGeneration() !== navigation) return;
+    if (!bundle?.readable) throw new Error('This model is no longer available in CAD Link. Send it again from Fusion.');
+    cadWorkspace.getSnapshot().selectBundle(bundle);
   },
 });
 

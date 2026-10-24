@@ -25,6 +25,8 @@ export interface CurrentModel {
   ingestId?: string | null;
   design?: DesignDocument;
   manifestSha256?: string | null;
+  /** An arrived Fusion request selected before it has a prepared mesh. */
+  requestId?: string | null;
   /** An explicitly selected legacy run whose snapshot cannot be read. */
   unloadedRunId?: string;
 }
@@ -120,6 +122,7 @@ export function currentModel(): CurrentModel {
   const modelId = registered === 'unfiled' ? null : registered;
   const model: CurrentModel = { kind: file ? 'file' : 'cad', key: sha || ingestId, lineage: modelId || ingestId,
     label: file ? 'Mesh file' : cad.label, modelId, ingestId, unloadedRunId,
+    requestId: file ? null : cad.bundle?.requestId,
     manifestSha256: record?.manifest_sha256,
     viewportShowing: false };
   return { ...model, viewportShowing: !!ingestId && currentModelScene(model, viewport) !== null };
@@ -199,6 +202,7 @@ export function currentModelStatus(model: CurrentModel, jobs: readonly JobItem[]
   const candidates = [...latestCadJobs([...jobs]), ...jobs.filter(job => !job.cad_state)]
     .sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''));
   const job = candidates.filter(job => job.cad_state?.reason !== 'superseded').find(job => runVerdict(job, { ...model, viewportShowing: true }) === 'current'
+    || (model.kind === 'cad' && !model.key && model.requestId === job.id)
     // An unbound Fusion intent has no run identity yet; its captured return
     // manifest ties preparation/refusal to this source, never charts.
     || (model.kind === 'cad' && !job.cad_source && !job.has_results && !!model.manifestSha256

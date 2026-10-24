@@ -145,7 +145,7 @@ describe('operation cards for the model on screen', () => {
     expect(disclosure.textContent).not.toContain(RECOVERY_ID);
     expect(disclosure.textContent).not.toContain('Journal phase');
 
-    await act(async () => { lines[1].querySelector<HTMLButtonElement>('button')!.click(); });
+    await act(async () => { lines[1].querySelector<HTMLButtonElement>('button[aria-label^="Dismiss:"]')!.click(); });
     expect(dismissed).toEqual(['/api/jobs/job%3Amanual-solve%3Aold/dismiss']);
     const dismissNotice = vi.spyOn(cadRecoveryNoticesStore.getState(), 'dismiss').mockResolvedValue(undefined); dismissed = [];
     const clear = [...disclosure.querySelectorAll('button')].find((button) => button.textContent === 'Clear all')!;

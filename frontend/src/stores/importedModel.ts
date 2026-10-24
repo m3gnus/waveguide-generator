@@ -92,12 +92,16 @@ export interface OpenedModel {
   note: string | null;
   /** The run being reopened, for the rail's words. */
   job?: JobItem;
+  /** A preparation read before a numbered run exists; reused by the CAD view. */
+  cadRecord?: CadReturnIngestRecord;
 }
 
 /** How a caller shows a reopened model: its status words and its viewport. */
 export interface ImportedDisplay {
   /** An automatic caller relinquishes the open when the user moves on. */
   isCurrent?(): boolean;
+  /** Automatic handoffs keep internal read failures in developer diagnostics. */
+  failureMessage?(error: unknown): string;
   enterCadWorkspace?(): void;
   reportStatus?(message: string): void;
   reportViewportNotice?(message: string | null): void;
@@ -107,6 +111,7 @@ export interface ImportedDisplay {
 
 export type ImportedSource =
   | { kind: 'run'; job: JobItem; display?: ImportedDisplay }
+  | { kind: 'cad-preparation'; job: JobItem; preparedId: string; display?: ImportedDisplay }
   | { kind: 'model'; modelId: string; preparedId?: string | null; display?: ImportedDisplay; useEnginePreference?: boolean }
   /** A file just registered or prepared (null: a new file not yet prepared), with the setup a replay carries. */
   | { kind: 'file'; prepared: (ImportedPrepared & { source_file?: { filename?: string; transform: { units: string; forward: string; up: string }; source_tags: number[] } }) | null;
@@ -182,8 +187,19 @@ function openKnown(source: Extract<ImportedSource, { kind: 'file' | 'cad' }>): v
   if (!same) captureSetupControls();
 }
 
-async function readOpened(source: Extract<ImportedSource, { kind: 'run' | 'model' }>, input: ImportedInput,
+async function readOpened(source: Extract<ImportedSource, { kind: 'run' | 'model' | 'cad-preparation' }>, input: ImportedInput,
   fetcher: typeof fetch): Promise<OpenedModel> {
+  if (source.kind === 'cad-preparation') {
+    const { getIngest } = await import('../api/cadlink');
+    const record = await getIngest(source.preparedId, fetcher);
+    const manifest = source.job.cad_state?.snapshot?.manifest_sha256;
+    if (record.ingest_id !== source.preparedId || (manifest && record.manifest_sha256 !== manifest)) {
+      throw new Error('The prepared model does not match the Fusion request.');
+    }
+    const modelId = importedModelId(record);
+    return { input: 'cad', model: null, modelId, prepared: { ...record, producer: 'cad', model_id: modelId },
+      originalAvailable: false, setup: null, revisionId: null, exact: true, note: null, job: source.job, cadRecord: record };
+  }
   if (source.kind === 'run') {
     const workspace = await readRunWorkspace(source.job.id, fetcher);
     if (!workspace.prepared) throw new Error(workspace.refusal?.message ?? 'This run has no retained mesh. Import the geometry again.');
@@ -227,7 +243,7 @@ export async function openImported(source: ImportedSource, fetcher: typeof fetch
   if (source.kind === 'file' || source.kind === 'cad') { openKnown(source); return true; }
   // An unnumbered CAD preparation is not an archived run.
   if (source.kind === 'run' && (source.job.config_summary.geometry_type !== 'imported' || source.job.run_number === null)) return false;
-  const input: ImportedInput = source.kind === 'run'
+  const input: ImportedInput = source.kind === 'cad-preparation' ? 'cad' : source.kind === 'run'
     ? (source.job.config_summary.import_origin === 'mesh-file' ? 'file' : 'cad')
     : (source.modelId.startsWith('mesh-file:') ? 'file' : 'cad');
   const view = views[input];
@@ -269,9 +285,10 @@ export async function openImported(source: ImportedSource, fetcher: typeof fetch
     return true;
   } catch (error) {
     if (!current()) return stopped();
-    const message = error instanceof Error ? error.message : String(error);
+    const message = display.failureMessage?.(error) ?? (error instanceof Error ? error.message : String(error));
     useImportedModelStore.setState({ phase: 'failed', error: message });
     rail.fail(message);
+    if (display.failureMessage) throw new Error(message, { cause: error });
     throw error;
   }
 }

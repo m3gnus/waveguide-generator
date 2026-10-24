@@ -88,6 +88,8 @@ export interface CadReturnArrivalReaderIntegration {
   /** Recheck after the listing await: a push may have invalidated the feed meanwhile. */
   sendOwnersKnown(): boolean;
   ownsReturn(bundle: CadReturnBundle): boolean;
+  /** Fusion Solve owns initial display too; a completed Send may be restored. */
+  ownsSolveReturn?(bundle: CadReturnBundle): boolean;
   setError(value: string | null): void;
   setStatus(value: string | null): void;
   setBundles(items: CadReturnBundle[]): void;
@@ -103,7 +105,7 @@ export async function refreshCadReturnArrivals(
   const {
     autoIngestSelected, cadFolderConfigured, enterCadWorkspace, manualSelectionAt, noteCadActivity,
     projectOpenPending, refreshChannelDriverBases, refusedForeignReturn, returnListRequest,
-    seenReturnRevisions, initialChoiceOwed, deferredArrivalRevisions, awaitingReturn, awaitingReceiptDisplay, sendOwnersKnown, ownsReturn,
+    seenReturnRevisions, initialChoiceOwed, deferredArrivalRevisions, awaitingReturn, awaitingReceiptDisplay, sendOwnersKnown, ownsReturn, ownsSolveReturn,
     setError, setStatus, setBundles, setLoading,
   } = integration;
   const background = options.background === true;
@@ -164,7 +166,7 @@ export async function refreshCadReturnArrivals(
       && !useCadReturnStore.getState().selectedBundle;
     const initial = canChooseInitial
       ? response.items.find((item) => (
-          item.readable && (
+          item.readable && !ownsSolveReturn?.(item) && (
             currentDesignId
               ? returnBelongsToProject(item, currentDesignId)
               : (item.designIds ?? []).length === 0
@@ -231,6 +233,9 @@ export async function refreshCadReturnArrivals(
     } else {
       const currentSelected = useCadReturnStore.getState().selectedBundle;
       if (!currentSelected) return;
+      // The request pointer and its eventual retained mesh belong to Solve,
+      // not to a folder poll that happens to find the same exported bundle.
+      if (ownsSolveReturn?.(currentSelected)) return;
       if (currentSelected.bundleOrigin === 'native') return;
       if (!response.cadFolderConfigured) return;
       const current = response.items.find((bundle) => bundle.bundlePath === currentSelected.bundlePath);

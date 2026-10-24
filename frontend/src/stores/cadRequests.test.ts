@@ -156,3 +156,21 @@ it('retries only the failed row after a partial Clear all failure', async () => 
   expect(dismissJob).toHaveBeenCalledTimes(2);
   expect(dismissNotice).toHaveBeenCalledOnce();
 });
+
+it.each(['prepared', 'bundle'] as const)('opens a held unlinked request by its %s instead of requiring a project', async (target) => {
+  const job = cadJobFixture({ ...operation('held'), reason: 'findings_need_review',
+    snapshot: { manifestSha256: 'held-snapshot', documentName: 'Speaker', projectLineageId: null } });
+  job.cad_intent = { bundle_path: 'wgreturn/speaker.wgreturn' };
+  job.cad_state = { ...job.cad_state!, preparation: target === 'prepared'
+    ? { preparation_id: 'held-preparation', ingest_id: 'held-preparation', blocking_finding_ids: [], report_sha256: null } : null };
+  const request = selectCadRequests({ jobs: [job], notices: {}, record: null }).earlier[0];
+  expect(request.openable).toBe(true);
+  const openProject = vi.fn(); const openPrepared = vi.fn(); const openBundle = vi.fn();
+  const actions = createCadRequestActions({ openProject, openPrepared, openBundle });
+  await actions.open(request);
+  expect(openProject).not.toHaveBeenCalled();
+  if (target === 'prepared') {
+    expect(openPrepared).toHaveBeenCalledExactlyOnceWith(job, 'held-preparation');
+    expect(openBundle).not.toHaveBeenCalled();
+  } else expect(openBundle).toHaveBeenCalledExactlyOnceWith('wgreturn/speaker.wgreturn');
+});

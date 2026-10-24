@@ -147,7 +147,8 @@ export function selectCadRequests({ jobs, notices, record }: {
     if (!isPendingCadOperation(operation)) return [];
     return [{ id: job.id, source: 'job' as const, job, operation,
       onScreen: Boolean(record && operation.snapshot?.manifestSha256 && record.manifest_sha256 === operation.snapshot.manifestSha256),
-      openable: operation.state === 'needs_user_input' && (operation.reason === 'setup_required' || operation.reason === 'frame_confirmation_required') && Boolean(operation.snapshot?.projectLineageId) }];
+      openable: operation.state === 'needs_user_input' && Boolean(job.cad_state?.preparation?.ingest_id
+        || job.cad_intent?.bundle_path || operation.snapshot?.projectLineageId) }];
   });
   const recovery = new Map<string, CadRequest>();
   Object.values(notices).forEach((notice) => recovery.set(notice.id, {
@@ -170,11 +171,13 @@ export function selectCadRequests({ jobs, notices, record }: {
 
 /** Capture named requests at the press. Late binding never redirects a dismiss
  * to another job, and overlapping Clear all / Dismiss share one request. */
-export function createCadRequestActions({ recovery = cadRecoveryNoticesStore, dismissJob = dismissCadJob, openProject }: {
+export function createCadRequestActions({ recovery = cadRecoveryNoticesStore, dismissJob = dismissCadJob, openProject, openPrepared, openBundle }: {
   recovery?: CadRecoveryNoticesStore;
   dismissJob?: (job: JobItem) => Promise<void>;
   /** The shell supplies its guarded project opener (discard and selection fences). */
   openProject: (lineageId: string) => Promise<void>;
+  openPrepared?: (job: JobItem, preparedId: string) => Promise<void>;
+  openBundle?: (bundlePath: string) => Promise<void>;
 }) {
   const pending = new Map<string, Promise<void>>();
   const completed = new Set<string>();
@@ -200,9 +203,15 @@ export function createCadRequestActions({ recovery = cadRecoveryNoticesStore, di
     },
     open(request: CadRequest): Promise<void> {
       const lineage = request.operation.snapshot?.projectLineageId;
-      if (!request.openable || !lineage) return Promise.resolve();
+      if (!request.openable) return Promise.resolve();
       if (opening) return opening;
-      opening = Promise.resolve().then(() => openProject(lineage)).finally(() => { opening = null; });
+      const preparedId = request.job?.cad_state?.preparation?.ingest_id;
+      const bundlePath = request.job?.cad_intent?.bundle_path;
+      opening = Promise.resolve().then(async () => {
+        if (preparedId && request.job && openPrepared) await openPrepared(request.job, preparedId);
+        else if (lineage) await openProject(lineage);
+        else if (typeof bundlePath === 'string' && openBundle) await openBundle(bundlePath);
+      }).finally(() => { opening = null; });
       return opening;
     },
   };

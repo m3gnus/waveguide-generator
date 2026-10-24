@@ -347,7 +347,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     solveAttention.bindRun(job.id, job.id);
     // The run names the model its preparation made; show that model once the
     // solve claims its run, while the same return is still on screen.
-    solvedCadModels.claim(job.id, {
+    // Fusion's display owner follows its preparation before acceptance. Only
+    // a WG press needs this same-return adoption path.
+    if (claim.sourceIngestId) solvedCadModels.claim(job.id, {
       manifestSha256: job.cad_state.snapshot?.manifest_sha256 ?? null,
       sourceIngestId: claim.sourceIngestId ?? null,
     });

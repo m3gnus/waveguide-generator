@@ -65,9 +65,9 @@ export async function refreshChannelDriverBases(fetcher: typeof fetch = fetch): 
 export const cadImportedView: ImportedView = {
   hasDraft: hasCadDraftForModel,
   begin({ generation, source, display, fetcher }) {
-    const job = source.kind === 'run' ? source.job : null;
-    const displayName = job ? job.cad_source?.document_name || job.label || `run #${job.run_number}` : 'this model';
-    const from = job ? ` from run #${job.run_number}` : '';
+    const job = source.kind === 'run' || source.kind === 'cad-preparation' ? source.job : null;
+    const displayName = job ? job.cad_source?.document_name || job.cad_state?.snapshot?.document_name || job.label || 'the Fusion model' : 'this model';
+    const from = job?.run_number != null ? ` from run #${job.run_number}` : '';
     const enter = display.enterCadWorkspace ?? enterCadWorkspace;
     const reportStatus = display.reportStatus ?? (() => undefined);
     const reportViewportNotice = display.reportViewportNotice ?? (() => undefined);
@@ -79,18 +79,23 @@ export const cadImportedView: ImportedView = {
     const selection = useCadReturnStore.getState().beginIngestIntent();
     const documentLoad = currentDocumentLoad();
     // A new target owns Solve before any request can fail or stall.
-    useCadReturnStore.setState({ ingestRecord: null, needsIngest: true,
+    const preparedId = source.kind === 'cad-preparation' ? source.preparedId
+      : source.kind === 'run' ? source.job.cad_source?.ingest_id : source.kind === 'model' ? source.preparedId : null;
+    const keepPrepared = preparedId && useCadReturnStore.getState().ingestRecord?.ingest_id === preparedId
+      && importedMeshStore.getSnapshot().cad?.ingestId === preparedId;
+    useCadReturnStore.setState({ ...(!keepPrepared ? { ingestRecord: null } : {}), needsIngest: true,
       ingestStaleReason: 'Loading the selected run’s retained setup.' });
     reportStatus(`Loading ${displayName}${from}…`);
     // The open's own generation fences this too: an open of the other input
     // (a file) never touches CAD's ingest intent, and must still win.
     const current = () => isCurrentOpen(generation)
-      && useCadReturnStore.getState().isCurrentIngestIntent(selection) && isCurrentDocumentLoad(documentLoad);
+      && useCadReturnStore.getState().isCurrentIngestIntent(selection) && isCurrentDocumentLoad(documentLoad)
+      && display.isCurrent?.() !== false;
     return {
       current,
       async fill(opened) {
-        if (!opened.setup && source.kind !== 'model') throw new Error('This run’s settings are no longer retained. Select the run again.');
-        const record = await getIngest(opened.prepared.ingest_id, fetcher).catch((reason: unknown) => {
+        if (!opened.setup && source.kind === 'run') throw new Error('This run’s settings are no longer retained. Select the run again.');
+        const record = opened.cadRecord ?? await getIngest(opened.prepared.ingest_id, fetcher).catch((reason: unknown) => {
           throw reason instanceof CadLinkApiError && reason.status === 404
             ? new Error('The archived CAD model and mesh are no longer available.') : reason;
         });
@@ -123,9 +128,14 @@ export const cadImportedView: ImportedView = {
         if (!opened.setup) seedImportedSolveOptionsFromParametric();
         await migrateCadProfiles(fetcher);
         if (!current()) return null;
-        const draft = restoreCadProjectSettings(opened.setup, record, source.kind === 'model', opened.revisionId);
+        const draft = restoreCadProjectSettings(opened.setup, record, source.kind !== 'run', opened.revisionId);
         if (draft) { opened.setup = null; opened.revisionId = null; }
-        await showIngestedMesh(record, name, reportViewportNotice, fetcher, generation);
+        if (importedMeshStore.getSnapshot().cad?.ingestId !== record.ingest_id) {
+          await showIngestedMesh(record, name, reportViewportNotice, fetcher, generation);
+        } else if (workspaceModeStore.getSnapshot().mode === 'cad'
+          && workspaceModeStore.getSnapshot().importedInput === 'cad') {
+          importedMeshStore.showCad(generation);
+        }
         if (!current()) return null;
         if (importedMeshStore.getSnapshot().cad?.ingestId !== record.ingest_id) return null;
         reportStatus(`Showing ${name}${from}. ${opened.note ?? 'Stored solve settings restored.'}`);

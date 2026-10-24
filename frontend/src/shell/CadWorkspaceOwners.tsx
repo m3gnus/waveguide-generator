@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react';
-import { getFusionCadStatus } from '../api/cadlink';
+import { getFusionCadStatus, type CadReturnBundle } from '../api/cadlink';
 import { getOnshapeConnection, getOnshapeStatus } from '../api/onshape';
 import { cadCoordinationStore } from '../api/cadCoordination';
 import { jobsSocket } from '../api/jobsSocket';
@@ -78,6 +78,7 @@ export function mountCadWorkspaceOwners(): () => void {
     }
   };
   const autoIngestSelected = () => { void actions.ingestSelected().catch(() => undefined); };
+  const ownsSolveReturn = (bundle: CadReturnBundle) => fusionSolves.ownsReturn(bundle.bundlePath, jobsSocket.getSnapshot().jobs, true);
   const rereadDrivers = () => { void refreshChannelDriverBases().then((channels) => {
     if (channels.length) reportStatus(`Re-read ${channels.length} driver${channels.length === 1 ? '' : 's'} from the driver library.`);
   }).catch(() => undefined); };
@@ -88,7 +89,9 @@ export function mountCadWorkspaceOwners(): () => void {
     awaitingReturn: () => waiter.getState().pullingFromFusion,
     awaitingReceiptDisplay,
     sendOwnersKnown: () => cadReceiptsStore.getState().loadedAt !== null,
+    ownsSolveReturn,
     ownsReturn: (bundle) => Boolean((bundle.requestId && claimedReturns.has(bundle.requestId))
+      || fusionSolves.ownsReturn(bundle.bundlePath, jobsSocket.getSnapshot().jobs)
       || Object.values(cadReceiptsStore.getState().receipts).some((receipt) => receipt.bundle_path === bundle.bundlePath)
       || cadReceiptsStore.getState().frontedBundles.some((entry) => entry.path === bundle.bundlePath)),
     setError: reportError, setStatus: reportStatus,
@@ -165,7 +168,7 @@ export function mountCadWorkspaceOwners(): () => void {
     readFusionStatus: () => getFusionCadStatus(useDesignStore.getState().design, useDocumentStore.getState().identity,
       useCadReturnStore.getState().selectedBundle?.bundlePath ?? null, fetch, fusionInstance),
     reloadReturns: () => refreshReturns({ background: true,
-      autoOpenNew: useCadConnectionStore.getState().fusionStatus?.addinInboxTransfer !== true }),
+      autoOpenNew: useCadConnectionStore.getState().fusionStatus?.addinInboxTransfer === false }),
     reloadReceipts: async (ids) => {
       await cadReceiptsStore.getState().load();
       const pulls = await waiter.reconcile(ids);
@@ -272,6 +275,7 @@ export function mountCadWorkspaceOwners(): () => void {
       actions.supersedePreparation(); waiter.supersede(); arrivals.cancel();
       stopDisplay(); stopDisplay = connectCadReceiptDisplay(displayReceipt, cadReceiptsStore, fusionActive);
       if (!fusionActive()) publish({ loading: false });
+      else fusionSolves.resume();
     }
     changed();
     if (preferencesStore.getSnapshot().cadApplication === 'onshape') void refreshOnshapeStatus();
