@@ -397,11 +397,17 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     ? 'Checking which engines can solve this imported mesh…'
     : importedPlan.plan?.reason ?? importedPlan.error;
 
+  const reportError = useCallback((message: string) => {
+    setActionError(message);
+    // Results owns action errors; front it even when Runs covers its tab.
+    workspaceNavigation.activate('results');
+  }, []);
+
   const acceptSubmission = useCallback(async (
     submit: () => Promise<string | null>, opts: SubmissionAcceptanceOptions = {},
   ): Promise<string | null> => {
     if (submissionInFlight.current) {
-      if (opts.busyMessage) setActionError(opts.busyMessage);
+      if (opts.busyMessage) reportError(opts.busyMessage);
       return null;
     }
     submissionInFlight.current = true;
@@ -418,13 +424,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       return jobId;
     } catch (error) {
       solveAttention.releaseSolve();
-      if (!(error instanceof DOMException && error.name === 'AbortError')) setActionError(error instanceof Error ? error.message : String(error));
+      if (!(error instanceof DOMException && error.name === 'AbortError')) reportError(error instanceof Error ? error.message : String(error));
       throw error;
     } finally {
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, []);
+  }, [reportError]);
 
   const solveAvailable = cadGeometryActive || fileGeometryActive
     ? importedEngine !== null
@@ -604,7 +610,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     });
   }, [acceptSubmission, beforePost, completeCadSolve]);
 
-  const reportError = useCallback((message: string) => setActionError(message), []);
   // An empty `?job=` names no run; drop it at once.
   useEffect(() => {
     if (linkedJobId.current === null) clearJobLink();
@@ -776,7 +781,7 @@ export function solvePlanTitle(plan: SolvePlan, requestedEngine: string): string
   const requested = requestedEngine.trim().toLowerCase();
   const resolved = plan.engine.trim().toLowerCase();
   if (requested === 'auto') {
-    return `Solve current design with AUTO (${resolved.toUpperCase()})`;
+    return `Solve current design with Auto (${resolved.toUpperCase()})`;
   }
   if (plan.engine_substitution) {
     // This reports a requested backend that does not exist on this machine.

@@ -59,6 +59,25 @@ describe('the dock reports to the navigation seam', () => {
     expect(navigationGeneration()).toBe(0);
   });
 
+  it('brings Results forward from Runs for an action error', () => {
+    workspaceNavigation.activate('jobs');
+    expect(workspaceNavigation.isVisible('results')).toBe(false);
+    expect(workspaceNavigation.activate('results')).toBe(true);
+    expect(workspaceNavigation.isVisible('results')).toBe(true);
+    expect(workspaceNavigation.isVisible('jobs')).toBe(false);
+  });
+
+  it('reopens Results for an action error without rebuilding a custom layout', () => {
+    const originalJobs = dock.api.getPanel('jobs');
+    dock.api.removePanel(dock.api.getPanel('results')!);
+    expect(workspaceNavigation.activate('results')).toBe(true);
+    expect(workspaceNavigation.isVisible('results')).toBe(true);
+    expect(dock.api.getPanel('jobs')).toBe(originalJobs);
+    expect(dock.api.totalPanels).toBe(5);
+    workspaceNavigation.activate('results');
+    expect(dock.api.panels.filter(panel => panel.id === 'results')).toHaveLength(1);
+  });
+
   it('counts a tab chosen by pointer as explicit navigation, which disarms the reveal', () => {
     solveAttention.armSolve();
     tab('Jobs').dispatchEvent(new Event('pointerdown', { bubbles: true }));

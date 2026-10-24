@@ -14,7 +14,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cadJobFixture, publishCadSummary } from '../jobs/cadSolve.fixtures';
-import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
+import { JobModelProtectionError, jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import type { CadOperationSummary, CadSolveSetup } from '../api/cadOperations';
 import { compareSelection } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
@@ -54,6 +54,7 @@ import { toWire } from '../results/crossoverSpec';
 import { CrossoverAdvanced } from '../design/CrossoverAdvanced';
 import { expandLegacy } from '../results/crossoverSpec';
 import { JobsPanel } from './JobsPanel';
+import { workspaceNavigation } from './workspaceNavigation';
 import { ResultsPanel } from './ResultsPanel';
 import { resetSolveAttentionForTests, solveAttention } from './solveAttention';
 
@@ -845,6 +846,51 @@ describe('solve invocation mutex', () => {
       await act(async () => { if (change !== 'unmount') render(); });
       expect(mocks.submitDesign).not.toHaveBeenCalled();
     });
+
+  it.each(['Stop', 'Retry', 'delete', 'Clear failed'] as const)('reveals the single Results error home after a refused Runs %s action', async action => {
+    const run = failedJob();
+    if (action === 'Stop') run.status = 'running';
+    const reason = `Server refused ${action}.`;
+    const method = action === 'Stop' ? 'stopJob' : action === 'Retry' ? 'retryJob' : action === 'delete' ? 'deleteJob' : 'clearFailed';
+    const request = vi.spyOn(jobsSocket, method).mockRejectedValue(new Error(reason));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const activate = vi.spyOn(workspaceNavigation, 'activate').mockImplementation(panel => {
+      if (panel === 'results') host.querySelector<HTMLElement>('[data-results-tab]')!.hidden = false;
+      return true;
+    });
+    publishJobs([run]);
+    await act(async () => { root.render(<JobsCoordinator>
+      <div data-results-tab hidden><ResultsPanel/></div><JobsPanel/>
+    </JobsCoordinator>); });
+    expect(host.querySelector<HTMLElement>('[data-results-tab]')!.hidden).toBe(true);
+    const button = action === 'delete' ? host.querySelector<HTMLButtonElement>('.jobs-panel .job-remove')!
+      : [...host.querySelectorAll<HTMLButtonElement>('.jobs-panel button')].find(button => button.textContent === action)!;
+    expect(button).toBeDefined();
+    await act(async () => { button.click(); });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(activate).toHaveBeenCalledWith('results');
+    expect(host.querySelector<HTMLElement>('[data-results-tab]')!.hidden).toBe(false);
+    expect(host.querySelector('.results-panel')?.textContent).toContain(reason);
+    expect([...host.querySelectorAll('[role="alert"]')].filter(node => node.textContent?.includes(reason))).toHaveLength(1);
+  });
+
+  it('shows a failed Delete anyway inside the still-open confirmation dialog', async () => {
+    const run = failedJob();
+    const remove = vi.spyOn(jobsSocket, 'deleteJob')
+      .mockRejectedValueOnce(new JobModelProtectionError('The model could not be protected.'))
+      .mockRejectedValueOnce(new Error('Server refused deletion.'));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    publishJobs([run]);
+    await act(async () => { root.render(<JobsCoordinator><ResultsPanel/><JobsPanel/></JobsCoordinator>); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('.job-remove')!.click(); });
+    await act(async () => {
+      [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')]
+        .find(button => button.textContent === 'Delete anyway')!.click();
+    });
+    expect(remove).toHaveBeenLastCalledWith(run.id, { skipModelProtection: true });
+    expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toContain('Server refused deletion.');
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toContain('Server refused deletion.');
+  });
 
   it('keeps readiness and action errors in Results when the other solve surfaces are mounted', async () => {
     const record = blockedCad();
@@ -2026,7 +2072,7 @@ describe('solve invocation mutex', () => {
 
     const solve = host.querySelector<HTMLButtonElement>('button')!;
     expect(solve.disabled).toBe(false);
-    expect(solve.title).toBe('Solve current design with AUTO (BEMPP)');
+    expect(solve.title).toBe('Solve current design with Auto (BEMPP)');
   });
 
   // A result picked by hand pins the primary slot, and pinning outlived the

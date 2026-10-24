@@ -29,14 +29,19 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
   const engineGate = held || !!readiness?.engine || control?.waitingForEngine;
   const pending = solveStatus && (control?.waitingForEngine || control?.actionError || control?.preparationError
     || (readiness && (!readiness.engine || held || control?.readinessRequested)));
-  if (activeOnly && (!pending || !control) && status.kind !== 'running' && status.kind !== 'preparing') return null;
+  const terminalFailure = status.kind === 'failed' || (status.kind === 'refused' && !held);
+  const latestAttempt = activeOnly && terminalFailure;
+  const readinessVisible = !readiness?.engine || held || control?.readinessRequested;
+  const diagnosticCovered = pending && ((!control?.waitingForEngine && readinessVisible && readiness?.message === status.message)
+    || control?.actionError?.endsWith(status.message) || control?.preparationError?.endsWith(status.message));
+  if (activeOnly && (!pending || !control) && !terminalFailure && status.kind !== 'running' && status.kind !== 'preparing') return null;
   const controls = actions || pending ? <>
-    {pending && !engineGate && <SolveProgressView showReadiness readiness={readiness}/>}
+    {pending && (!engineGate || terminalFailure) && <SolveProgressView showReadiness readiness={readiness}/>}
     {actions && (status.kind === 'failed' && latestJob
       ? <button type="button" className="btn" onClick={() => void jobsCoordinatorBridge.getSnapshot().continueRun(latestJob.id).catch(() => undefined)}>Retry</button>
       : <button type="button" className="btn-primary" disabled={!control || control.disabled} title={control?.title ?? 'Solve is not available here.'} onClick={() => void control?.solve()}>Solve</button>)}
   </> : undefined;
-  if (pending && engineGate) return <div className="current-model-status" data-model-status={status.kind}>
+  if (pending && engineGate && !terminalFailure) return <div className="current-model-status" data-model-status={status.kind}>
     <SolveProgressView showReadiness readiness={readiness} held={held}/>
     {!control?.waitingForEngine && controls}
   </div>;
@@ -44,18 +49,18 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
   if (held && !solveStatus) return <div className="current-model-status" data-model-status={status.kind}>{controls}</div>;
   if (!latest) return <div className="current-model-status" data-model-status={status.kind}>
     <Notice tone={status.kind === 'failed' || status.kind === 'refused' ? 'error' : 'info'}
-      title={actions && status.kind === 'solved' ? 'Loading results' : MODEL_STATUS_TITLE[status.kind]}
+      title={latestAttempt ? `Latest attempt · ${MODEL_STATUS_TITLE[status.kind]}` : actions && status.kind === 'solved' ? 'Loading results' : MODEL_STATUS_TITLE[status.kind]}
       actions={controls}>
       {latestJob && (status.kind === 'preparing' || status.kind === 'running')
         ? <SolveProgressView job={latestJob} variant="compact"/>
-        : pending && (status.kind !== 'failed' || control?.actionError?.endsWith(status.message) || control?.preparationError?.endsWith(status.message)) ? null : status.message}
+        : diagnosticCovered || (pending && !terminalFailure) ? null : status.message}
     </Notice>
     {request}
   </div>;
   let tone: 'ok' | 'info' | 'warn' = 'info';
   let body: ReactNode;
-  if (latest.state === 'rejected') {
-    body = <Notice tone="error" title={MODEL_STATUS_TITLE.refused}>{pending ? null : latest.message ?? latest.reason ?? 'No reason given.'}</Notice>;
+  if (latest.state === 'rejected' || (latest.state === 'needs_user_input' && solveStatus && !held)) {
+    body = <Notice tone="error" title={latestAttempt ? `Latest attempt · ${MODEL_STATUS_TITLE.refused}` : MODEL_STATUS_TITLE.refused}>{diagnosticCovered ? null : latest.message ?? latest.reason ?? 'No reason given.'}</Notice>;
     tone = 'warn';
   } else if (latest.state === 'cancelled') {
     body = 'Dismissed before it was solved.';
@@ -83,7 +88,7 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
       case 'cancelled':
         clearSolveStageClock(job.id);
         body = <Notice tone={job.status === 'error' ? 'error' : 'info'}
-          title={<span className="job-stage-word">{runStatusWord(job)}</span>}>
+          title={<span className="job-stage-word">{latestAttempt ? `Latest attempt · ${MODEL_STATUS_TITLE[status.kind]}` : runStatusWord(job)}</span>}>
           {job.status === 'complete' ? 'Results are in Results' : job.error_message}
         </Notice>;
         tone = job.status === 'complete' ? 'ok' : job.status === 'error' ? 'warn' : 'info';

@@ -363,7 +363,42 @@ describe('results run coherence', () => {
     expect(host.textContent).toContain('Not solved yet');
   });
 
-  it('shows a refused on-screen CAD solve using the server message', async () => {
+  it.each([['parametric', false], ['cad', false], ['parametric', true], ['cad', true]] as const)('keeps older %s charts beside the latest failed attempt and Retry (engine gate: %s)', async (kind, engineGate) => {
+    if (engineGate) vi.spyOn(solveControlStore, 'getSnapshot').mockReturnValue({
+      readiness: { message: 'Prepare the engine before solving again.', code: 'engine_unavailable', engine: 'metal' },
+      readinessRequested: true, disabled: true, cadMode: kind === 'cad',
+    } as never);
+    const imported = kind === 'cad';
+    const solved = job('solved', 20, imported ? null : liveDesign(), imported);
+    const failed: JobItem = { ...job('failed', 21, imported ? null : liveDesign(), imported),
+      cad_source: solved.cad_source, status: 'error' as const, has_results: false,
+      error_message: 'The latest solve could not finish.' };
+    if (imported) {
+      failed.cad_state = { ...refusedCad.cad_state, state: 'accepted' };
+      workspaceModeStore.setMode('cad');
+      useCadReturnStore.setState({ ingestRecord: { ingest_id: solved.cad_source!.ingest_id } as never });
+      importedMeshStore.setCad({ source: 'cad', ingestId: solved.cad_source!.ingest_id } as never);
+    }
+    const continueRun = vi.fn().mockResolvedValue('retry-child');
+    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({ ...jobsCoordinatorBridge.getSnapshot(), continueRun });
+    publishJobs([failed, solved]);
+    compareSelection.setPrimary(solved.id);
+    await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
+    expect(host.querySelector('.result-grid')).not.toBeNull();
+    expect(host.querySelector('[data-result-primary]')?.getAttribute('data-result-primary')).toBe(solved.id);
+    expect(host.querySelector('[data-model-status="failed"]')?.textContent).toContain('Latest attempt · Solve failed');
+    expect(host.textContent).toContain(failed.error_message);
+    await act(async () => { toolbarButton(host, 'Retry')!.click(); });
+    expect(continueRun).toHaveBeenCalledWith(failed.id);
+  });
+
+  it.each(['none', 'different', 'hidden matching'] as const)('shows a refused on-screen CAD solve using the server message (other readiness: %s)', async otherReadiness => {
+    if (otherReadiness !== 'none') vi.spyOn(solveControlStore, 'getSnapshot').mockReturnValue({
+      readiness: { message: otherReadiness === 'hidden matching' ? refusedCad.cad_state.message : 'Choose a solver for the next attempt.', code: 'engine_unavailable', engine: 'metal' },
+      readinessRequested: otherReadiness !== 'hidden matching',
+      actionError: otherReadiness === 'hidden matching' ? 'Could not stop the earlier run.' : null,
+      disabled: true, cadMode: true,
+    } as never);
     const ingestId = refusedCad.cad_intent.bundle_path.split('/').at(-1)!;
     const refused = { ...job('refused', 22, null, true), ...refusedCad, cad_source: null, status: 'preparing', has_results: false } as JobItem;
     workspaceModeStore.setMode('cad');
@@ -372,7 +407,7 @@ describe('results run coherence', () => {
     publishJobs([refused]);
     await act(async () => { root.render(<ResultsPanel/>); });
     expect(host.textContent).toContain('Solve refused');
-    expect(host.textContent).toContain(refusedCad.cad_state.message);
+    expect(host.textContent?.split(refusedCad.cad_state.message)).toHaveLength(2);
     expect(host.querySelector('.result-grid')).toBeNull();
   });
 

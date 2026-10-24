@@ -288,6 +288,15 @@ export function bindDockNavigation(api: DockviewApi, host: HTMLElement): () => v
         ...(reference ? { position: { referencePanel: reference, direction: simulation ? 'within' as const : 'left' as const } } : {}),
       });
     }
+    // Action errors live in Results, even if a custom layout closed it.
+    if (!target && panel === 'results') {
+      const jobs = api.getPanel('jobs');
+      const reference = jobs ?? api.getPanel('viewport') ?? api.activePanel;
+      target = api.addPanel({
+        id: 'results', component: 'results', title: 'Results',
+        ...(reference ? { position: { referencePanel: reference, direction: jobs ? 'within' as const : 'right' as const } } : {}),
+      });
+    }
     if (!target) return false;
     target.api.setActive();
     publish();

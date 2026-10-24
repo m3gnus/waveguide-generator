@@ -2194,7 +2194,7 @@ describe('CadLinkPanel', () => {
       .find((notice) => notice.textContent?.includes('return changed'));
     expect(staleNotice).toBeTruthy();
     expect(staleNotice?.classList.contains('notice-error')).toBe(false);
-    expect(host.querySelector('.cad-solver-unavailable.notice-info[role="status"]')).toBeTruthy();
+    expect(host.querySelector('.cad-solver-unavailable')).toBeNull();
   });
 
   it('does not claim no engine can solve a CAD model when BEAT · Metal is offered', async () => {
@@ -2219,7 +2219,7 @@ describe('CadLinkPanel', () => {
     expect(host.textContent).not.toContain('No engine here');
   });
 
-  it('says no engine can solve a CAD model when none that could is available', async () => {
+  it('leaves engine availability to Results when no CAD engine is available', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
@@ -2235,8 +2235,10 @@ describe('CadLinkPanel', () => {
       return json(record);
     }));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
-    await vi.waitFor(() => expect(host.querySelector('.cad-solver-unavailable')).toBeTruthy());
-    expect(host.textContent).toContain('No engine here can solve this CAD model');
+    await vi.waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith('/api/capabilities'))).toBe(true));
+    expect(host.querySelector('.cad-solver-unavailable')).toBeNull();
+    expect(host.textContent).not.toContain('No engine here');
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('/api/solve/imported-plan'))).toBe(false);
   });
 
   it('shows the connection state with its settings link and the symmetric outbound action', async () => {

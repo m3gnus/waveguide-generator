@@ -19,8 +19,6 @@ import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions'
 import { useDocumentStore } from '../stores/document';
 import { designNameSlug, UNTITLED_SLUG } from '../stores/designName';
 import { useCapabilities } from '../jobs/useCapabilities';
-import { choosableForImportedGeometry } from '../design/backendSupport';
-import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { returnBelongsToProject } from './cadlink/arrivals';
 import { fusionLinkDisplayName, fusionParameterDriftDetail, fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView } from './cadWorkflowView';
@@ -704,27 +702,7 @@ export function CadLinkPanel() {
   };
 
   const workflow = onshape ? onshapeWorkflowView(onshapeStatus) : fusionWorkflowView(fusionStatus);
-  // Imported geometry is solved by an engine that declares it (runtime.py
-  // `resolve_imported_submission`): Metal, and BEAT's CPU backend, which every
-  // desktop platform provisions; or by BEAT · Metal when it is picked
-  // explicitly (`_BEAT_FAST_IMPORTED_EXPLICIT`). This counts what the engine
-  // select offers (`choosableForImportedGeometry`). Where none is available the whole
-  // round trip still works as a CAD workflow and only the solve is out of
-  // reach, so this states the boundary up front instead of hiding the panel or
-  // letting someone discover it after exporting and preparing the model.
-  // Once a return is prepared, the server's per-engine verdict on it decides;
-  // before that, only what the engine select offers.
-  const { engines: solverEngines, isLoading: capabilitiesLoading, femRegionsOffered } = useCapabilities();
-  const importedEngines = solverEngines.filter(choosableForImportedGeometry);
-  const planVerdicts = useImportedSolvePlan(true).plan?.engines ?? null;
-  const importedSolverUnavailable = planVerdicts
-    ? !planVerdicts.some((verdict) => verdict.solves)
-    : !capabilitiesLoading && !importedEngines.some((engine) => engine.available);
-  const importedSolverReasons = planVerdicts
-    ? planVerdicts
-      .filter((verdict) => verdict.stage !== 'declaration')
-      .map((verdict) => `${verdict.label}: ${verdict.reason ?? 'cannot solve this return'}`)
-    : importedEngines.map((engine) => `${engine.label || engine.name}: ${engine.reason ?? 'unavailable'}`);
+  const { femRegionsOffered } = useCapabilities();
   const designName = designNameSlug(documentName);
   const shownName = designName === UNTITLED_SLUG ? 'this design' : designName;
   const canRequestFusionReturn = Boolean(
@@ -919,13 +897,6 @@ export function CadLinkPanel() {
         >{freshnessSummary(record) === 'unlinked' ? `from ${onshape ? 'Onshape' : 'Fusion'}` : freshnessSummary(record)}</span>}
         <time dateTime={record?.created_at || bundle.modifiedAt} title={fullTime(record?.created_at || bundle.modifiedAt)}>{relativeTime(record?.created_at || bundle.modifiedAt)}</time>
       </div>}
-      {importedSolverUnavailable && <Notice className="cad-solver-unavailable" title="No engine here can solve this CAD model right now.">
-        {importedSolverReasons.length
-          ? `${importedSolverReasons.join('; ')}.`
-          : 'No engine here solves ingested models.'}{' '}
-        The round trip still works for building and exporting geometry, and the
-        parametric workspace still solves here.
-      </Notice>}
       {bundle && !state.setupLoading && !buildCadProjectSetup(state, undefined, state.projectLineageId ?? 'unclaimed') && <p className="cad-detail" role="status">Fusion solves use the last complete setup.</p>}
       {state.setupLoading && <Notice>Loading model settings…</Notice>}
       {state.ingestStaleReason && <Notice>{state.ingestStaleReason} Prepare the model again before solving.</Notice>}

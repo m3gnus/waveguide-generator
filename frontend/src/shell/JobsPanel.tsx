@@ -401,6 +401,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
       <div ref={deletionDialog} className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-run-title" aria-describedby="delete-run-reason delete-run-consequence">
         <header><h2 id="delete-run-title">Delete “{runDisplayName(blockedDeletion.job)}” anyway?</h2></header>
         <div className="settings-scroll">
+          {coordinator.actionError && <Notice tone="error">{coordinator.actionError}</Notice>}
           <p id="delete-run-reason">{blockedDeletion.reason}</p>
           <p id="delete-run-consequence">Delete anyway removes this run and its saved results from job history without protecting its Fusion model. No files on disk will be deleted.</p>
           <button className="btn" disabled={deletingAnyway} onClick={closeDeletion}>Cancel</button>
