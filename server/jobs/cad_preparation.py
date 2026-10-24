@@ -707,8 +707,17 @@ def prepare_job_sync(
         # Fusion showed no axis: WG decides, once, and seals the decision on
         # this record for admission, execution, retry and restart. A person's
         # saved choice wins (``decide_record_frame`` is None then).
-        choice = decided if decided is not None else decide_record_frame(store, record, suggestion)
+        choice = decide_record_frame(store, record, suggestion)
         meshed_axis = _record_frame_axis(record)
+        if (
+            choice is not None
+            and decided is not None
+            and choice.axis != decided.axis
+            and decided.axis == meshed_axis
+        ):
+            # This pass was meshed for the first pass's decision; the survey of
+            # the new record does not move it again.
+            choice = decided
         if choice is not None and choice.axis != meshed_axis:
             if not automatic_retry:
                 logger.info(

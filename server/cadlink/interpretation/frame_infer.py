@@ -69,9 +69,10 @@ from server.contracts.geometry import SYMMETRY_PLANE_AXIS as _PLANE_AXIS
 # deterministic fallback ranking for every abstention; v2's weights,
 # thresholds and confident verdicts are unchanged where the mouth agrees.
 ALGORITHM_VERSION = "frame-infer-v4"
-#: The versions earlier releases cached. Their confident verdicts still stand
-#: for the records prepared under them (``readings.legacy_automatic_axis``).
-LEGACY_ALGORITHM_VERSIONS: tuple[str, ...] = ("frame-infer-v2",)
+#: The versions earlier builds cached. Their confident verdicts still stand
+#: for the records prepared under them (``readings.legacy_automatic_axis``);
+#: v3 was an unreleased build whose confident verdicts were v2's.
+LEGACY_ALGORITHM_VERSIONS: tuple[str, ...] = ("frame-infer-v2", "frame-infer-v3")
 
 AXES: tuple[str, ...] = ("+z", "-z", "+x", "-x", "+y", "-y")
 _AXIS_VECTORS = np.asarray(

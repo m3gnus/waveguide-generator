@@ -383,3 +383,46 @@ def test_a_submission_frame_conflict_never_asks_fusion_to_choose_an_axis(real, m
     assert "choose" not in summary["message"].lower()
     assert "frame changed while binding" not in summary["message"]
     assert harness.bound_request() is None
+
+
+def test_a_cut_refused_only_by_the_provisional_axis_is_prepared_again_along_one_it_contains(tmp_path) -> None:
+    """A recoverable CAD cut on x = 0 cannot be mirrored along +x: not final.
+
+    The refusal depends on the provisional automatic axis, so the preparation
+    is made again along the first axis of the ranking that lies in the cut
+    (recorded as a fallback); a refusal along an axis the cut contains, or
+    along an axis a person chose, is final.
+    """
+
+    from server.cadlink.interpretation.frame_infer import DECISION_FALLBACK
+    from server.cadlink.interpretation.solver_frame import AXES, FrameResolution
+    from server.cadlink.store import CadLinkStore
+
+    store = CadLinkStore(tmp_path / "cadlink.db")
+
+    def record(axis: str) -> dict[str, Any]:
+        return {
+            "manifest_sha256": "sha256:" + "a" * 64,
+            "normalisation": {"solver_frame": {"axis": axis}},
+            "domain_decision": {"cad_cuts": [{"plane": "x0", "status": "refused"}]},
+        }
+
+    provisional = FrameResolution(
+        key="snapshot:a", requirement={}, allowed_axes=AXES, confirmed_axis=None, automatic_axis="+x",
+    )
+    store.record_frame_suggestion(
+        "sha256:" + "a" * 64, ALGORITHM_VERSION,
+        {"status": "automatic", "axis": "+x", "fallbackRanking": ["+x", "-y", "+z", "-z", "+y", "-x"]},
+        "wgi_first",
+    )
+    retry = job_preparation._domain_frame_retry(store, record("+x"), provisional, provisional=True)
+    assert retry is not None
+    assert (retry.axis, retry.provenance, retry.reason_code) == ("-y", DECISION_FALLBACK, "axis-not-allowed")
+    # Along an axis the cut contains, the refusal is the cut's own: final.
+    assert job_preparation._domain_frame_retry(store, record("+z"), provisional, provisional=True) is None
+    # Never on the second pass, and never against a person's choice.
+    assert job_preparation._domain_frame_retry(store, record("+x"), provisional, provisional=False) is None
+    chosen = FrameResolution(
+        key="snapshot:a", requirement={}, allowed_axes=AXES, confirmed_axis="+x",
+    )
+    assert job_preparation._domain_frame_retry(store, record("+x"), chosen, provisional=True) is None
