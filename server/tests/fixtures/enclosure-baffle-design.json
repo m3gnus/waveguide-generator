@@ -1,0 +1,56 @@
+{
+  "L": 120.0,
+  "R": 100.0,
+  "a": 0.0,
+  "a0": "15.5",
+  "coverage_angle": 0.0,
+  "curl": 0.0,
+  "depth": 109.0,
+  "enclosure": {
+    "back_resolution": 40.0,
+    "depth": 280.0,
+    "edge_radius": 0.0,
+    "edge_type": 1.0,
+    "front_resolution": 25.0,
+    "space_b": 0.0,
+    "space_l": 0.0,
+    "space_r": 0.0,
+    "space_t": 0.0
+  },
+  "formula": "ICW",
+  "hold_end": 0.7,
+  "hold_start": 0.3,
+  "k": 0.0,
+  "length_mode": "total",
+  "mesh": {
+    "angular_segments": "50",
+    "length_segments": "20",
+    "mouth_resolution": "8",
+    "quadrants": "1",
+    "rear_resolution": "25",
+    "throat_resolution": "5",
+    "wall_thickness": 0.0
+  },
+  "morph": {
+    "allow_shrinkage": 1.0,
+    "fixed_part": 0.0,
+    "target_height": 400.0,
+    "target_shape": 1.0,
+    "target_width": 300.0
+  },
+  "n_coeff": 6.0,
+  "output": {
+    "stl": "0"
+  },
+  "q": 0.0,
+  "r0": "12.7",
+  "simulation": {
+    "f1": "100",
+    "f2": "20000",
+    "num_frequencies": "40",
+    "sim_type": "freestanding"
+  },
+  "source": {},
+  "termination": "rollback",
+  "theta1_deg": 160.0
+}

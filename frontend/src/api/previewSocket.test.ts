@@ -337,6 +337,18 @@ describe('preview socket state machine', () => {
     manager.stop();
   });
 
+  it('keeps the mesher enclosure refusal readable for the viewport', () => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    const message = 'The enclosure leaves 0.00 mm of baffle beside the mouth on the top; set the top margin to at least 0.1 mm.';
+    manager.start();
+    socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, designRevision: 1,
+      code: 'validation', fields: { design: message } }));
+    expect(manager.getSnapshot()).toMatchObject({ error: message, errorFields: { design: message }, stale: true });
+    manager.stop();
+  });
+
   it('preserves validated field errors and keeps unknown keys globally actionable', () => {
     const socket = new MockSocket();
     const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');

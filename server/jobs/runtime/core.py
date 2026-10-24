@@ -908,6 +908,19 @@ async def resolve_submission(
         symmetry_metadata["solver_plan"].setdefault("adjustments", []).append(
             wall_adjustment
         )
+    if request.design.root.enclosure is not None:
+        from hornlab_mesher.config_builder import resolve_enclosure_bounds
+        from server.mesh.builder import _solver_mesher_config
+
+        # Validate the exact execution domain, including engine adjustments.
+        # The mesher owns both the resolved mouth and the baffle predicate;
+        # symmetry sampling alone never constructs the enclosure bounds.
+        execution = _execution_request(request, resolved_quadrants=resolved_quadrants)
+        try:
+            config = _solver_mesher_config(execution.design)
+            await asyncio.to_thread(resolve_enclosure_bounds, config, warn_prefix=None)
+        except ValueError as exc:
+            raise SymmetryValidationError(str(exc)) from exc
     if refusal is not None:
         symmetry_metadata["solver_plan"]["refusal"] = refusal
     return SubmissionResolution(

@@ -194,16 +194,19 @@ describe('useSolvePlan', () => {
     expect(text()).toBe('ready');
   });
 
-  it('takes a refusal as the answer: no retry, no polling, message shown', async () => {
+  it.each([
+    'symmetry plane intersects the mouth',
+    'The enclosure leaves 0.00 mm of baffle beside the mouth on the right; set the right margin to at least 0.1 mm.',
+  ])('takes a refusal as the answer: no retry, no polling, message shown (%s)', async (message) => {
     // 422 is the server considering the submission and declining it. Asking
     // again cannot change it, and polling would replace the reason the user
     // needs with a pending state.
     fetchMock.mockImplementation(async () => new Response(
-      JSON.stringify({ detail: 'symmetry plane intersects the mouth' }),
+      JSON.stringify({ detail: message }),
       { status: 422, headers: { 'Content-Type': 'application/json' } },
     ));
     await mount();
-    expect(text()).toContain('symmetry plane intersects the mouth');
+    expect(text()).toContain(message);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_RECOVERY_MS * 4); });
     await flushReact();

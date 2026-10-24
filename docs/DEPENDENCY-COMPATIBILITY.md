@@ -1,6 +1,14 @@
 # Dependency compatibility
 
-The mesher pin `7b803c63` supplies native source-contour, front-baffle woofer,
+The mesher pin `13f6111b` is an untagged interim pin pending the 0.3.6 release.
+It refuses enclosures that leave less than 0.1 mm of front baffle beside the
+mouth on any physical wall side. Preview and mesh construction share the
+mesher's enclosure-bounds validation; solve admission calls its public
+`resolve_enclosure_bounds()` with the final execution domain. The refusal
+names the side and the margin to increase. Measurement-only callers use
+`measure_enclosure_box_bounds()` without admitting geometry for construction.
+
+This pin also supplies native source-contour, front-baffle woofer,
 shared horn/woofer and passive phase-plug contracts, and the public
 `printable_surface_tags()` that STL export uses. Its ATH import contract is
 versioned: designs saved with the `ath-2026-08c-v1` stamp build exactly as

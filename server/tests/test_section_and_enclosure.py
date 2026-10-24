@@ -102,10 +102,10 @@ def test_wg_file_round_trip():
 
 
 def test_depth_margin_honoured_for_rectangle():
-    from hornlab_mesher.builders.enclosure import enclosure_box_bounds
+    from hornlab_mesher.builders.enclosure import measure_enclosure_box_bounds
     config = design_to_mesher_config(design(enclosure={'depth':1,'depth_margin_mm':7}))
     resolved = resolve_geometry(config)
-    bounds = enclosure_box_bounds(resolved.geometry.inner_points, resolved.geometry.enclosure, closed=True, symmetry_planes=())
+    bounds = measure_enclosure_box_bounds(resolved.geometry.inner_points, resolved.geometry.enclosure, closed=True, symmetry_planes=())
     assert bounds['enc_depth'] >= 67
 
 
@@ -190,11 +190,11 @@ def test_preview_solver_and_profile_export_retain_new_controls():
 def test_cad_datums_honour_rectangle_clearance_with_elliptical_section():
     from hornlab_mesher.datums import derive_datums
     from hornlab_mesher.geometry import BuiltGeometry
-    from hornlab_mesher.builders.enclosure import enclosure_box_bounds
+    from hornlab_mesher.builders.enclosure import measure_enclosure_box_bounds
 
     root = design(cross_section={'aspect_ratio':1.5}, enclosure={'depth':1,'depth_margin_mm':7,'edge_radius':0})
     geometry = resolve_geometry(design_to_mesher_config(root)).geometry
-    bounds = enclosure_box_bounds(geometry.inner_points, geometry.enclosure, closed=True, symmetry_planes=())
+    bounds = measure_enclosure_box_bounds(geometry.inner_points, geometry.enclosure, closed=True, symmetry_planes=())
     built = BuiltGeometry(surface_groups={}, axial_bounds_mm=(0,60), enclosure_bounds=bounds)
     datums = derive_datums(geometry, built)
     assert datums['WG_ENC_BACK_PLANE']['origin_mm'][2] == pytest.approx(-7)

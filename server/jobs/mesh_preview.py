@@ -81,6 +81,7 @@ async def solver_mesh_response(
 
     # Deferred like the other builder consumers: the mesher import graph is
     # heavy and a process that never builds must never pay for it.
+    from hornlab_mesher.mesher import MesherError
     from server.mesh.builder import build_solver_mesh
 
     options = (options or SolveOptions()).model_copy(deep=True)
@@ -94,7 +95,7 @@ async def solver_mesh_response(
         )
         quadrants = int(resolved.symmetry_metadata["resolved_quadrants"])
         execution = _execution_request(resolved.request, resolved_quadrants=quadrants)
-    except ValueError as exc:
+    except (ValueError, MesherError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     disconnected = threading.Event()
@@ -125,7 +126,7 @@ async def solver_mesh_response(
         raise HTTPException(status_code=499, detail=str(exc)) from exc
     except MesherShuttingDownError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except (RuntimeError, ValueError) as exc:
+    except (RuntimeError, ValueError, MesherError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:
         if watcher is not None:

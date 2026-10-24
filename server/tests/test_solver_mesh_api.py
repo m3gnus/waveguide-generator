@@ -47,6 +47,26 @@ def _rosse(**extra: Any) -> DesignConfig:
 STUB_MSH = "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n"
 
 
+@pytest.mark.parametrize("error_type", ["ConfigError", "MesherError"])
+def test_mesher_refusals_return_422_with_the_readable_message(monkeypatch, error_type):
+    from hornlab_mesher.config_parser import ConfigError
+    from hornlab_mesher.mesher import MesherError
+
+    message = "The enclosure leaves 0.00 mm of baffle beside the mouth on the top; set the top margin to at least 0.1 mm."
+    error = {"ConfigError": ConfigError, "MesherError": MesherError}[error_type]
+
+    async def refuse(*args, **kwargs):
+        raise error(message)
+
+    monkeypatch.setattr(mesh_builder, "build_solver_mesh", refuse)
+    app = FastAPI()
+    mount_solver_mesh(app, EngineRegistry(detector=lambda: []))
+    with TestClient(app) as client:
+        response = client.post("/api/solver-mesh", json={"design": _rosse().model_dump(mode="json")})
+    assert response.status_code == 422
+    assert response.json()["detail"] == message
+
+
 def _stub_worker(calls: list[int]):
     async def worker(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         calls.append(1)

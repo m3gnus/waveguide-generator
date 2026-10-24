@@ -1017,6 +1017,28 @@ describe('solve invocation mutex', () => {
     }));
   });
 
+  it('disables Solve and blocks clicks, shortcuts and direct invocation for a refused enclosure', async () => {
+    const { client, fetcher } = await mountPlanning('parametric');
+    const message = 'The enclosure leaves 0.00 mm of baffle beside the mouth on the right; set the right margin to at least 0.1 mm.';
+    fetcher.mockImplementation(async () => new Response(JSON.stringify({ detail: message }), { status: 422 }));
+    act(() => {
+      const design = designForFamily('ICW');
+      design.morph = { ...design.morph, target_shape: 1, target_width: 300, target_height: 400, fixed_part: 0, allow_shrinkage: 1 };
+      design.enclosure = { ...design.enclosure, depth: 280, space_l: 0, space_r: 0, space_t: 0, space_b: 0 };
+      design.mesh.wall_thickness = 0;
+      useDesignStore.getState().replaceDocument(design);
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_DEBOUNCE_MS); });
+    await flushPlan(client);
+    const solve = host.querySelector<HTMLButtonElement>('button')!;
+    expect(solve.disabled).toBe(true);
+    expect(solve.title).toBe(message);
+    for (const press of ['click', 'Cmd+Enter', 'Ctrl+Enter']) pressSolve(press);
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
+    client.clear();
+  });
+
   it('cancels a queued CAD Solve when File is selected within Imported mesh', async () => {
     const { client } = await mountPlanning('cad');
     const plan = deferred<typeof mocks.importedPlan.plan>();
