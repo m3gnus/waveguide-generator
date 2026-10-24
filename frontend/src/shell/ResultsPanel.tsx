@@ -2286,7 +2286,7 @@ export function ResultsPanel() {
       if (runVerdict(awaited, coherenceContext) === 'current') compareSelection.followLatest(awaited.id);
       else compareSelection.setPrimary(awaited.id);
       solveAttention.resultsReady(awaited.id);
-    } else if (awaited && (awaited.status === 'error' || awaited.status === 'cancelled')) compareSelection.awaitRun(null);
+    } else if (awaited && (awaited.status === 'error' || awaited.status === 'cancelled' || awaited.status === 'held')) compareSelection.awaitRun(null);
   }, [selection.awaiting, jobs, provisional, coherenceContext.key, coherenceContext.viewportShowing]);
   const ids = resolved.ids;
   const selectionKey = ids.join('\u0000');

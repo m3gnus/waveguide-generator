@@ -81,7 +81,7 @@ export function solveStageWord(job: Pick<JobItem, 'status' | 'stage'>): SolveSta
 
 export const MODEL_STATUS_TITLE = {
   solved: 'Solved', running: 'Solving', preparing: 'Preparing', waiting: 'Waiting for you', refused: 'Solve refused',
-  failed: 'Solve failed', 'never-solved': 'Not solved yet',
+  failed: 'Solve failed', 'prepare-failed': 'Not prepared', 'never-solved': 'Not solved yet',
 };
 
 export function runStatusWord(job: Pick<JobItem, 'status' | 'stage'>): SolveStageWord {
@@ -257,7 +257,7 @@ const STAGE_WORD_RANK: Partial<Record<SolveStageWord, number>> = {
  */
 function progressObservedForJob(job: JobProgressLike): ObservedJobProgress {
   const stageWord = solveStageWord(job);
-  if (job.status === 'complete' || job.status === 'error' || job.status === 'cancelled') {
+  if (job.status === 'complete' || job.status === 'error' || job.status === 'cancelled' || job.status === 'held') {
     stageClocks.delete(job.id);
     observedJobProgress.delete(job.id);
     return { stageWord, frequency: null };
@@ -290,7 +290,7 @@ export function clearSolveStageClock(jobId: string): void {
 }
 
 function stageSample(job: JobProgressLike, stageWord: SolveStageWord, frequency: FrequencyProgress | null, now: number): { elapsed: number; gained: number } {
-  if (job.status === 'complete' || job.status === 'error' || job.status === 'cancelled') {
+  if (job.status === 'complete' || job.status === 'error' || job.status === 'cancelled' || job.status === 'held') {
     stageClocks.delete(job.id);
     return { elapsed: 0, gained: 0 };
   }

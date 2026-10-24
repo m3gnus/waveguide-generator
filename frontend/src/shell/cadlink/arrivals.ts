@@ -17,6 +17,7 @@ import { useDocumentStore } from '../../stores/document';
 import { useCadReturnStore } from '../../stores/cadReturn';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { resolvePreparationTarget } from './preparationTarget';
+import { meshCeilingChoice } from '../../stores/meshCeilingChoice';
 
 export interface RefreshOptions {
   background?: boolean;
@@ -179,7 +180,6 @@ export async function refreshCadReturnArrivals(
     const projectMismatch = Boolean(
       opened && returnBelongsToAnotherProject(opened, currentDesignId),
     );
-    const prepareInitial = projectOpenPending.current || workspaceModeStore.getSnapshot().mode === 'cad';
     const destination = projectOpenPending.current
       ? useDocumentStore.getState().identity?.lineageId ?? null
       : undefined;
@@ -203,7 +203,7 @@ export async function refreshCadReturnArrivals(
     if (projectOpenPending.current && canChooseInitial) {
       projectOpenPending.current = false;
       setStatus(initial
-        ? `Project design loaded. Selected the latest matching return from ${initial.documentName ?? initial.name}; preparing Simulation geometry.`
+        ? `Project design loaded. Selected the latest matching return from ${initial.documentName ?? initial.name}; prepare it to restore Simulation geometry.`
         : 'Project design loaded. No matching CAD return is available yet; return the project from Fusion or Onshape to prepare Simulation geometry.');
     } else if (projectOpenPending.current && useCadReturnStore.getState().selectedBundle) {
       // A receipt or another selection owner resolved the project choice.
@@ -226,11 +226,10 @@ export async function refreshCadReturnArrivals(
         }`);
       enterCadWorkspace();
       if (!heldForManualPick) autoIngestSelected();
-    } else if (initial) {
-      // A restored choice is prepared just like a newly arrived or manually
-      // selected return, through the same settings and intent fences.
-      if (prepareInitial) autoIngestSelected();
-    } else {
+    } else if (!initial) {
+      // A restored choice is never meshed again in the background: it stays
+      // selected and not prepared until the user prepares it (or a retained
+      // preparation is reopened by its own owner), so a launch costs no mesh.
       const currentSelected = useCadReturnStore.getState().selectedBundle;
       if (!currentSelected) return;
       // The request pointer and its eventual retained mesh belong to Solve,
@@ -304,7 +303,7 @@ export function createCadArrivalActions(
     setViewportNotice, setBundles, reportViewportNotice, enterCadWorkspace: activateWorkspace,
     autoIngestSelected, rereadDrivers,
     onshapeInstanceId, showIngestedMesh } = adapter;
-  const ingestSelected = async (): Promise<CadReturnIngestRecord> => {
+  const ingestSelected = async (options: { meshLimitOverride?: boolean } = {}): Promise<CadReturnIngestRecord> => {
     if (useCadReturnStore.getState().projectLineageId && !await waitForCadProjectSettings()) throw new Error('Model settings could not be loaded. Select the return again.');
     const current = useCadReturnStore.getState();
     if (!current.selectedBundle) throw new Error('Select a CAD return before preparing a simulation.');
@@ -321,6 +320,7 @@ export function createCadArrivalActions(
     // win even when this ingest's mesh fetch eventually completes.
     const viewportGeneration = importedMeshStore.beginIntent();
     setIngesting(true); setIngestError(null); setError(null); setStatus(null); setViewportNotice(null);
+    meshCeilingChoice.clear();
     try {
       const skipped = new Set(current.skippedSourceIds);
       const record = await ingestReturn({
@@ -339,6 +339,8 @@ export function createCadArrivalActions(
         expectedDesignId: useDocumentStore.getState().identity?.designId ?? null,
         expectedInstanceId: resolvePreparationTarget(current.selectedBundle),
         symmetryMode: useCadReturnStore.getState().symmetryMode,
+        // The user chose Solve anyway over the triangle ceiling for this model.
+        ...(options.meshLimitOverride ? { meshLimitOverride: true } : {}),
       }, fetcher, abortController.signal);
       if (!isCurrentDocumentLoad(documentLoad)
         || !useCadReturnStore.getState().applyIngest(record, ingestGeneration)) {
@@ -374,6 +376,15 @@ export function createCadArrivalActions(
         throw new SupersededError(superseded);
       }
       const message = reason instanceof Error ? reason.message : String(reason);
+      if (reason instanceof CadLinkApiError && reason.code === 'mesh_too_large' && request === ingestRequest.current) {
+        // A choice, not a failure: the same pop-up as a held Fusion request.
+        meshCeilingChoice.ask({
+          name: current.selectedBundle.documentName || current.selectedBundle.name,
+          nextStep: reason.nextStep ?? message,
+          bundlePath: current.selectedBundle.bundlePath,
+        });
+        throw reason;
+      }
       if (request === ingestRequest.current && mounted.current) {
         const structured = reason instanceof CadLinkApiError ? reason.areaDriftSources : [];
         structured.forEach(current.flagAreaDrift);

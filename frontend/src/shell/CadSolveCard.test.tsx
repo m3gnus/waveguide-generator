@@ -79,10 +79,6 @@ function publishOperation(op: CadOperationSummary): void {
 }
 
 describe('CAD Solve card run status', () => {
-  it('renders nothing before any solve request for this model', async () => {
-    await act(async () => root.render(<CadSolveCard record={record()} label="Speaker"/>));
-    expect(host.innerHTML).toBe('');
-  });
   let host: HTMLDivElement;
   let root: Root;
 
@@ -108,6 +104,15 @@ describe('CAD Solve card run status', () => {
     currentOperation = null;
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it('keeps Solve and the model summary before the first solve, without a never-solved line', async () => {
+    await act(async () => root.render(<CadSolveCard record={record()} label="Speaker"/>));
+    expect(host.querySelector('.cad-solve-card')).not.toBeNull();
+    expect(host.querySelector('[data-action="solve"]')).not.toBeNull();
+    expect(host.querySelector('.cad-solve-settings')).not.toBeNull();
+    expect(host.querySelector('[data-model-status]')).toBeNull();
+    expect(host.textContent).not.toContain('Not solved yet');
   });
 
   it('shows meshing and an update restart hold from real stage events', async () => {
@@ -342,7 +347,6 @@ describe('CAD Solve card run status', () => {
   });
 
   it('shows the imported instance\'s engine and sweep, not the parametric ones', async () => {
-    publishOperation(operation());
     useSolveOptionsStore.getState().setEngine('bempp');
     useImportedSolveOptionsStore.getState().setFrequencyMode('list');
     useImportedSolveOptionsStore.getState().setFrequencyListText('300 700 1500');
@@ -424,7 +428,6 @@ describe('CAD Solve card run status', () => {
   });
 
   it('states the concluded domain from the record\'s decision on the model card', async () => {
-    publishOperation(operation());
     const interpretation = {
       contract: 'cad-domain-interpretation-v1', reading: 'reduced', planes: ['x0'], domain_planes: ['x0'],
       looks_cut: [], ambiguous: [], evidence: { source: null, recovered: true }, reflected_planes: ['x0'], choices: [],

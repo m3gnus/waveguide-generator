@@ -27,8 +27,8 @@ import { BrandMark, Icon } from './icons';
 import { useSolveControl } from './JobsCoordinator';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { CommandPalette, type PaletteEntry } from './CommandPalette';
-import { HeldCadRequestDialog, openHeldRequest } from './HeldCadRequestDialog';
-import { isHeldCadJob } from '../jobs/cadSolve';
+import { HeldCadRequestDialog } from './HeldCadRequestDialog';
+import { isFailedCadPreparation } from '../jobs/cadSolve';
 import { ExportDestinationDialog } from './ExportDestinationDialog';
 import { ReportDialog } from './ReportDialog';
 import { commandShortcutLabel } from './platformKeys';
@@ -290,8 +290,10 @@ export function AttentionNotices() {
   const readyRun = useReadyRun();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const requests = selectCadRequests({ jobs, notices, record: null });
-  // Engine gates live in solve progress, including automatic warm-up waits.
-  const waiting = [...requests.earlier, ...requests.current].filter(request => request.source === 'job' && isHeldCadJob(request.job));
+  // Engine gates live in solve progress, including automatic warm-up waits,
+  // and a failed preparation is not a request waiting for the user.
+  const waiting = [...requests.earlier, ...requests.current].filter(request => request.operation?.reason !== 'engine_unavailable'
+    && !(request.source === 'job' && isFailedCadPreparation(request.job)));
   const waitingCount = waiting.length;
   // A visible Geometry tab can still have its requests below the scroll fold.
   const showWaiting = waitingCount > 0;
@@ -311,7 +313,7 @@ export function AttentionNotices() {
       className="attention-notice attention-waiting"
       title={first?.message ?? waitingLabel}
       onClick={() => {
-        if (waiting[0]?.source === 'job') openHeldRequest(waiting[0].job.id);
+        workspaceNavigation.reveal('cad-requests');
       }}
     ><i/>{waitingLabel} · Show</button>}
     {showRefused && <button

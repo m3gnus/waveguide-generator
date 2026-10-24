@@ -956,7 +956,7 @@ describe('CadLinkPanel', () => {
     expect(buttonTexts(operationCard('op-v1'))).toEqual(['Open Tritonia v1', 'Dismiss']);
   });
 
-  it('lists a request whose model has no project yet as a quiet line to dismiss', async () => {
+  it('lists a request whose model has no project yet as an earlier line that opens its own bundle', async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     act(() => {
       applyCadRequest(cadOperation({
@@ -968,7 +968,8 @@ describe('CadLinkPanel', () => {
     const card = operationCard('op-first');
     expect(card.closest('.cad-earlier-requests')).not.toBeNull();
     expect(card.textContent).toContain('Tritonia v2');
-    expect(buttonTexts(card)).toEqual(['Dismiss']);
+    // No project yet: Open falls back to the request's own bundle (audit F5).
+    expect(buttonTexts(card)).toEqual(['Open Tritonia v2', 'Dismiss']);
   });
 
   it('solves a stored snapshot with Fusion closed: one Solve of the model, which the server prepares', async () => {
@@ -1984,8 +1985,7 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
 
-    act(() => publishCadJobs([cadJobFixture({ operationId: 'op-settings', kind: 'prepare_and_solve', state: 'processing', stage: 'preparing-mesh', snapshot: { manifestSha256: record.manifest_sha256 }, jobId: 'job-settings' } as CadOperationSummary)]));
-    // The settings line on a requested Solve card opens them where they live.
+    // The settings line on the Solve card opens them where they live.
     const open = host.querySelector<HTMLButtonElement>('.cad-solve-card button[data-action="open-settings"]')!;
     expect(open.textContent).toBe('Settings…');
     // The hover tooltip names the inputs that moved to the Simulation tab.
@@ -1994,10 +1994,12 @@ describe('CadLinkPanel', () => {
     expect(activate).toHaveBeenCalledWith('simulation');
   });
 
-  it('hides the Solve card before a request even while a finding still stands', async () => {
+  it('shows the Solve card, never a "prepared" claim, while a finding still stands before the solve', async () => {
     await renderAndSelect();
     await clickIngest();
-    expect(host.querySelector('.cad-model-card .cad-solve-card')).toBeNull();
+    // The record's blocking finding still needs approving: the Solve card is
+    // what is there, and it claims nothing about readiness.
+    expect(host.querySelector('.cad-model-card .cad-solve-card')).not.toBeNull();
     expect(host.textContent).not.toContain('Prepared for simulation');
   });
 

@@ -36,8 +36,9 @@ export interface CadWorkspaceSnapshot {
   refreshOnshapeStatus(committed?: DesignIdentity): Promise<void>;
   returnFromOnshape(): Promise<void>;
   selectBundle(bundle: CadReturnBundle, projectLineageId?: string | null): void;
-  ingest(): Promise<void>;
-  ingestSelected(): Promise<CadReturnIngestRecord>;
+  /** `meshLimitOverride`: the user chose Solve anyway over the triangle ceiling. */
+  ingest(options?: { meshLimitOverride?: boolean }): Promise<void>;
+  ingestSelected(options?: { meshLimitOverride?: boolean }): Promise<CadReturnIngestRecord>;
   pullFromFusion(): Promise<CadReturnBundle>;
   pullAndSolve(): Promise<'solving' | 'blocked' | 'failed'>;
   /** The one Fusion outbound path: derives open-vs-update and the expected

@@ -64,6 +64,8 @@ export const SETTINGS_NAMESPACES = {
   sourceAssemblyAuthoring: 'wg2.source-assembly-authoring.v1',
   /** Sketch canvas view toggles: dimensions, names, constraints. */
   sketchView: 'wg2.sketch.view.v1',
+  /** Held CAD requests the user answered "Later" for: the pop-up never opens them by itself again. */
+  cadHeldLater: 'wg2.cad.held.later.v1',
 } as const;
 
 export type SettingsNamespace = keyof typeof SETTINGS_NAMESPACES;

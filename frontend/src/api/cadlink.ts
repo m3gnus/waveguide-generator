@@ -453,12 +453,19 @@ export interface CadReturnIngestRecord {
 export class CadLinkApiError extends Error {
   readonly areaDriftSources: string[];
   readonly status: number | null;
+  /** The server's reason code for a structured refusal (e.g. `mesh_too_large`). */
+  readonly code: string | null;
+  /** The server's user-facing next step, when the refusal is a choice. */
+  readonly nextStep: string | null;
 
-  constructor(message: string, areaDriftSources: string[] = [], status: number | null = null) {
+  constructor(message: string, areaDriftSources: string[] = [], status: number | null = null,
+    code: string | null = null, nextStep: string | null = null) {
     super(message);
     this.name = 'CadLinkApiError';
     this.areaDriftSources = areaDriftSources;
     this.status = status;
+    this.code = code;
+    this.nextStep = nextStep;
   }
 }
 
@@ -467,14 +474,16 @@ async function responseError(response: Response): Promise<CadLinkApiError> {
     const body = await response.json() as { detail?: unknown };
     if (typeof body.detail === 'string') return new CadLinkApiError(body.detail, [], response.status);
     if (body.detail && typeof body.detail === 'object') {
-      const detail = body.detail as { message?: unknown; msg?: unknown; area_drift_sources?: unknown };
+      const detail = body.detail as { message?: unknown; msg?: unknown; area_drift_sources?: unknown; code?: unknown; next_step?: unknown };
       const message = typeof detail.message === 'string'
         ? detail.message
         : typeof detail.msg === 'string' ? detail.msg : null;
       const sources = Array.isArray(detail.area_drift_sources)
         ? detail.area_drift_sources.filter((value): value is string => typeof value === 'string')
         : [];
-      if (message) return new CadLinkApiError(message, sources, response.status);
+      if (message) return new CadLinkApiError(message, sources, response.status,
+        typeof detail.code === 'string' ? detail.code : null,
+        typeof detail.next_step === 'string' ? detail.next_step : null);
     }
   } catch { /* status remains useful */ }
   return new CadLinkApiError(`Request failed: ${response.status} ${response.statusText}`.trim(), [], response.status);

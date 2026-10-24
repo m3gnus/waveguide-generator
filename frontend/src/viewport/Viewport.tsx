@@ -335,9 +335,16 @@ export function cadViewportEmptyCopy(options: {
   bundleReadable: boolean;
   phase: CadModelPhase;
   cadApplication: string;
+  /** WG's own words for a request whose preparation failed on the server. */
+  failureMessage?: string | null;
 }): { title: string; detail: string } {
-  const { bundleName, bundleReadable, phase, cadApplication } = options;
-  if (!bundleReadable) {
+  const { bundleName, bundleReadable, phase, cadApplication, failureMessage } = options;
+  // A Fusion request WG prepares itself has no readable bundle of its own yet;
+  // its server-side state is still this model's state.
+  if (failureMessage && phase === 'prepare-failed') {
+    return { title: `${bundleName} is not prepared`, detail: failureMessage };
+  }
+  if (!bundleReadable && phase !== 'preparing' && phase !== 'waiting') {
     return {
       title: 'No CAD geometry yet',
       detail: `Bring a model back from ${cadApplication}; CAD Link will prepare it automatically.`,
@@ -427,6 +434,7 @@ export function Viewport() {
     bundleReadable: cadBundleReadable,
     phase: cad.phase,
     cadApplication,
+    failureMessage: cad.failureMessage,
   });
   const resultSelection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const coherenceContext = useCurrentModel();

@@ -1,4 +1,4 @@
-import { isHeldCadJob } from '../jobs/cadSolve';
+import { isFailedCadPreparation, isHeldCadJob } from '../jobs/cadSolve';
 import { EmptyState } from './EmptyState';
 import { Notice } from './Notice';
 import { useRunFilters, runModelKey } from '../jobs/runFilters';
@@ -339,7 +339,9 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
     if (preferences.minRating > 0) lastMinimumRating.current = preferences.minRating;
   }, [preferences.minRating]);
 
-  const runJobs = useMemo(() => snapshot.jobs.filter(job => !isHeldCadJob(job)
+  // A held request and a failed preparation never became runs; CAD Link and
+  // Results present them.
+  const runJobs = useMemo(() => snapshot.jobs.filter(job => !isHeldCadJob(job) && !isFailedCadPreparation(job)
     && !(job.cad_intent && job.cad_state?.reason === 'superseded')), [snapshot.jobs]);
   const preferenceJobs = useMemo(() => applyJobPreferences(runJobs, preferences.jobSort, preferences.minRating), [runJobs, preferences.jobSort, preferences.minRating]);
   const visibleJobs = useMemo(() => {

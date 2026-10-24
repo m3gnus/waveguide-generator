@@ -168,7 +168,10 @@ export function mountCadWorkspaceOwners(): () => void {
     readFusionStatus: () => getFusionCadStatus(useDesignStore.getState().design, useDocumentStore.getState().identity,
       useCadReturnStore.getState().selectedBundle?.bundlePath ?? null, fetch, fusionInstance),
     reloadReturns: () => refreshReturns({ background: true,
-      autoOpenNew: useCadConnectionStore.getState().fusionStatus?.addinInboxTransfer === false }),
+      // Folder arrivals open by themselves unless the add-in reports that its
+      // requests travel through the inbox; an older add-in, or one that has
+      // not reported (coordination off), keeps opening them.
+      autoOpenNew: useCadConnectionStore.getState().fusionStatus?.addinInboxTransfer !== true }),
     reloadReceipts: async (ids) => {
       await cadReceiptsStore.getState().load();
       const pulls = await waiter.reconcile(ids);
@@ -218,7 +221,7 @@ export function mountCadWorkspaceOwners(): () => void {
     loading: fusionActive() && document.visibilityState !== 'hidden',
     refresh, refreshOnshapeStatus, selectBundle,
     returnFromOnshape: actions.returnFromOnshape,
-    ingest: async () => { await actions.ingestSelected().catch(() => undefined); }, ingestSelected: actions.ingestSelected,
+    ingest: async (options) => { await actions.ingestSelected(options).catch(() => undefined); }, ingestSelected: actions.ingestSelected,
     pullFromFusion: waiter.pullFromFusion, pullAndSolve,
     sendWgToFusion: outbound.sendWgToFusion, cancelFusionConflict: outbound.cancelFusionConflict,
     clearFeedback: () => {

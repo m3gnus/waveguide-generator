@@ -5,6 +5,7 @@ import { useCadReturnStore } from '../stores/cadReturn';
 import { parseFrequencyList } from '../stores/frequencyList';
 import { useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { CurrentModelStatus } from './CurrentModelStatus';
+import { CurrentModelRequests } from './CadOperationsSection';
 import { CadDomainInterpretation } from './CadDomainInterpretation';
 import { CadSolverFrame } from './CadSolverFrameConfirm';
 import type { DomainInterpretation } from '../api/domainInterpretation';
@@ -132,7 +133,9 @@ export function CadSolveCard({ record, label, fetcher }: {
 }) {
   const solve = useOptionalSolveControl();
   const { status } = useCurrentModelStatus(record);
-  if (status.kind === 'never-solved' && !status.job) return null;
+  // Before the first solve the card keeps Solve, the frame and the domain; only
+  // the "not solved yet" line is redundant (Results says it), so it is left out.
+  const neverSolved = status.kind === 'never-solved' && !status.job;
   const unlinked = record.freshness?.verdict === 'unlinked';
   // Only the CAD command: this card exists only in CAD Link mode.
   const available = Boolean(solve?.cadMode);
@@ -148,7 +151,7 @@ export function CadSolveCard({ record, label, fetcher }: {
     />}
     {unlinked && <CadSolverFrame ingestId={record.ingest_id} manifestSha256={record.manifest_sha256} label={label} fetcher={fetcher}/>}
     <SettingsLine record={record}/>
-    <CurrentModelStatus record={record}/>
+    {neverSolved ? <CurrentModelRequests record={record}/> : <CurrentModelStatus record={record}/>}
     <div className="cad-solve-actions">
       <button
         className="btn-primary cad-primary-action"

@@ -103,6 +103,8 @@ export const SETTINGS_NAMESPACE_EFFECTS: Record<SettingsNamespace, PreferenceEff
   sourceAssemblyAuthoring: 'inert',
   // Display only: which annotations the sketch canvas draws.
   sketchView: 'inert',
+  // Display only: which held CAD requests the pop-up leaves behind the chip.
+  cadHeldLater: 'inert',
 };
 
 export type UnclassifiedNamespace = Exclude<keyof typeof SETTINGS_NAMESPACE_EFFECTS, SettingsNamespace>;

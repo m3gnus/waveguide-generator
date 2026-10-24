@@ -159,6 +159,17 @@ describe('CAD viewport empty-state copy', () => {
     expect(copy.title).toBe('CAD preparation failed');
     expect(copy.detail).toContain('“Prepare simulation” to retry');
   });
+
+  it('follows a Fusion request WG prepares itself, before it has a readable bundle or mesh', () => {
+    const pointer = { bundleName: 'Tritonia', bundleReadable: false, cadApplication: 'Fusion 360' };
+    expect(cadViewportEmptyCopy({ ...pointer, phase: 'preparing' }).title).toBe('Preparing Tritonia…');
+    expect(cadViewportEmptyCopy({ ...pointer, phase: 'waiting' }).title).toBe('Tritonia is waiting for you');
+    const failed = cadViewportEmptyCopy({ ...pointer, phase: 'prepare-failed',
+      failureMessage: 'WG could not prepare Tritonia. This has been recorded for the developers.' });
+    expect(failed).toEqual({ title: 'Tritonia is not prepared',
+      detail: 'WG could not prepare Tritonia. This has been recorded for the developers.' });
+    expect(cadViewportEmptyCopy({ ...pointer, phase: 'selected-unprepared' }).title).toBe('No CAD geometry yet');
+  });
 });
 
 describe('Viewport preview errors', () => {

@@ -1,5 +1,5 @@
 import type { CadReturnIngestRecord } from '../api/cadlink';
-import { latestCadJobs, isHeldCadJob } from '../jobs/cadSolve';
+import { latestCadJobs, isFailedCadPreparation, isHeldCadJob } from '../jobs/cadSolve';
 import { previewSocket } from '../api/previewSocket';
 import { useSyncExternalStore } from 'react';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
@@ -210,6 +210,11 @@ export function currentModelStatus(model: CurrentModel, jobs: readonly JobItem[]
   const state = job?.cad_state;
   if (job && isHeldCadJob(job)) return {
     kind: 'waiting' as const, job, message: state?.next_step || state?.message || 'Waiting for you',
+  };
+  // A failed preparation is told calmly, in the server's words, never as a refusal.
+  if (job && isFailedCadPreparation(job)) return {
+    kind: 'prepare-failed' as const, job,
+    message: [state?.message, state?.next_step].filter(Boolean).join(' ') || 'WG could not prepare this model.',
   };
   if (state?.state === 'rejected' || state?.state === 'needs_user_input') return {
     kind: 'refused' as const, job, message: state.message || state.reason || job?.error_message || 'Solve refused.',

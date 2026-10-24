@@ -1,6 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
-import { jobsSocket } from '../api/jobsSocket';
-import { dismissCadJob, isHeldCadJob, latestCadJobs, useCadJobs } from '../jobs/cadSolve';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { jobsSocket, type JobItem } from '../api/jobsSocket';
+import { dismissCadJob, isCadChoiceJob, latestCadJobs, useCadJobs } from '../jobs/cadSolve';
+import { cadWorkspace } from '../stores/cadWorkspace';
+import { durableSettings } from '../stores/durableSettings';
+import { meshCeilingChoice } from '../stores/meshCeilingChoice';
 import { useModalDialogFocus } from './dialogFocus';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
@@ -8,10 +11,40 @@ import { workspaceNavigation } from './workspaceNavigation';
 let openRequest: ((id: string) => void) | null = null;
 export function openHeldRequest(id: string): void { openRequest?.(id); }
 
-/** One modal owns held-request choices, including requests arriving from Fusion. */
+/** Requests held before this window opened stay behind the toolbar chip and
+ * Results; only a request held during this session opens the pop-up itself. */
+let sessionStartedAt = Date.now();
+export function resetHeldRequestSessionForTests(startedAt = Date.now()): void {
+  sessionStartedAt = startedAt;
+  writeLater([]);
+}
+
+/** "Later" holds for the request, across restarts, not only this window. */
+const LATER_LIMIT = 200;
+function readLater(): string[] {
+  try {
+    const value: unknown = JSON.parse(durableSettings.get('cadHeldLater') ?? '[]');
+    return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : [];
+  } catch { return []; }
+}
+function writeLater(ids: string[]): void {
+  try { durableSettings.set('cadHeldLater', JSON.stringify(ids.slice(-LATER_LIMIT))); } catch { /* a convenience */ }
+}
+
+function heldThisSession(job: JobItem): boolean {
+  const at = Date.parse(job.completed_at ?? job.created_at ?? '');
+  return Number.isFinite(at) && at >= sessionStartedAt;
+}
+
+const GENERIC_NEXT_STEP = 'This request needs your choice before WG can solve it.';
+
+/** One modal owns held-request choices: Fusion requests WG holds for the user,
+ * and a Prepare simulation the triangle ceiling holds in this window. It shows
+ * only the user-facing next step and the choices, never a raw reason. */
 export function HeldCadRequestDialog() {
   const jobs = useCadJobs();
-  const [seen, setSeen] = useState<Set<string>>(() => new Set());
+  const ceiling = useSyncExternalStore(meshCeilingChoice.subscribe, meshCeilingChoice.getSnapshot, meshCeilingChoice.getSnapshot);
+  const [later, setLater] = useState<Set<string>>(() => new Set(readLater()));
   const [requested, setRequested] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const inFlight = useRef(false);
@@ -20,53 +53,67 @@ export function HeldCadRequestDialog() {
     openRequest = setRequested;
     return () => { openRequest = null; };
   }, []);
-  const held = latestCadJobs(jobs).filter(isHeldCadJob);
-  const job = held.find(item => item.id === requested) ?? held.find(item => !seen.has(item.id));
+  const held = latestCadJobs(jobs).filter(isCadChoiceJob);
+  const job = held.find(item => item.id === requested)
+    ?? (ceiling ? undefined : held.find(item => !later.has(item.id) && heldThisSession(item)));
+  const id = job?.id ?? (ceiling ? `ceiling:${ceiling.bundlePath}` : null);
+  const remember = (requestId: string) => {
+    setLater(previous => {
+      const next = new Set(previous).add(requestId);
+      writeLater([...next]);
+      return next;
+    });
+  };
   const close = () => {
-    if (!job || inFlight.current) return;
-    setSeen(previous => new Set(previous).add(job.id));
+    if (!id || inFlight.current) return;
+    if (job) remember(job.id);
+    else meshCeilingChoice.clear();
     setRequested(null);
   };
-  const dialog = useModalDialogFocus<HTMLDivElement>({ open: !!job, onClose: close });
-  if (!job) return null;
-  const state = job.cad_state;
-  const options = state?.options?.length ? state.options : [
-    { id: 'review', label: 'Review request' }, { id: 'dismiss', label: 'Dismiss request' },
-  ];
-  const choose = async (id: string) => {
+  const dialog = useModalDialogFocus<HTMLDivElement>({ open: !!id, onClose: close });
+  if (!id) return null;
+  const state = job?.cad_state;
+  const name = job ? state?.snapshot?.document_name : ceiling?.name;
+  const nextStep = job ? state?.next_step || GENERIC_NEXT_STEP : ceiling!.nextStep;
+  const options = job
+    ? state?.options?.length ? state.options : [{ id: 'review', label: 'Review request' }, { id: 'dismiss', label: 'Dismiss request' }]
+    : [{ id: 'solve_anyway', label: 'Solve anyway' }];
+  const choose = async (option: string) => {
     if (inFlight.current) return;
     inFlight.current = true;
-    setBusy(job.id);
+    setBusy(id);
     setError(null);
     try {
-      if (id === 'dismiss') await dismissCadJob(job);
-      else if (id === 'solve_anyway' || id === 'retry') {
-        const child = await jobsCoordinatorBridge.getSnapshot().continueRun(job.id, { mesh_limit_override: id === 'solve_anyway' });
+      if (!job) {
+        // The browser Prepare path: prepare again, accepting the ceiling.
+        meshCeilingChoice.clear();
+        await cadWorkspace.getSnapshot().ingest({ meshLimitOverride: true });
+      } else if (option === 'dismiss') await dismissCadJob(job);
+      else if (option === 'solve_anyway' || option === 'retry') {
+        const child = await jobsCoordinatorBridge.getSnapshot().continueRun(job.id, { mesh_limit_override: option === 'solve_anyway' });
         if (!child) throw new Error('Request could not continue');
         await jobsSocket.refresh();
-      } else if (id === 'review') {
-        if (state?.reason === 'engine_unavailable') workspaceNavigation.navigate('results');
-        else workspaceNavigation.reveal('cad-requests');
+      } else if (option === 'review') {
+        workspaceNavigation.reveal('cad-requests');
       }
-      setSeen(previous => new Set(previous).add(job.id));
+      if (job) remember(job.id);
       setRequested(null);
     } catch {
-      setError({ id: job.id, message: 'WG could not apply that choice. Please try again.' });
+      setError({ id, message: 'WG could not apply that choice. Please try again.' });
     } finally {
       inFlight.current = false;
       setBusy(null);
     }
   };
   return <div className="modal-backdrop">
-    <div ref={dialog} className="update-dialog" role="dialog" aria-modal="true" aria-labelledby="held-request-title" aria-busy={busy === job.id}>
+    <div ref={dialog} className="update-dialog" role="dialog" aria-modal="true" aria-labelledby="held-request-title" aria-busy={busy === id}>
       <header><div>
         <h2 id="held-request-title">Waiting for you</h2>
-        {state?.snapshot?.document_name && <p>{state.snapshot.document_name}</p>}
+        {name && <p>{name}</p>}
       </div></header>
       <div className="update-dialog-body">
-        <p>{state?.message || 'This request needs your choice before WG can solve it.'}</p>
-        {state?.next_step && <p>{state.next_step}</p>}
-        {error?.id === job.id && <p role="alert">{error.message}</p>}
+        <p>{nextStep}</p>
+        {error?.id === id && <p role="alert">{error.message}</p>}
       </div>
       <footer>
         <button disabled={busy !== null} onClick={close}>Later</button>

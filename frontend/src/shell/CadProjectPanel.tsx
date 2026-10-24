@@ -21,7 +21,7 @@ import {
 } from '../design/openCadProject';
 import { showProjectRuns } from '../jobs/runFilters';
 import { workspaceNavigation } from './workspaceNavigation';
-import { useCadModelState } from '../stores/cadModelState';
+import { cadModelHeaderLine, useCadModelState } from '../stores/cadModelState';
 import { useDocumentStore } from '../stores/document';
 import { discardConfirmation, replacingWouldLose } from '../design/replacementCheck';
 import { fullTime, pluralized, relativeTime } from './cadTime';
@@ -57,7 +57,10 @@ export function projectName(
 export function useCurrentCadProjectLineage(): string | null {
   const identity = useDocumentStore((state) => state.identity);
   const model = useCadModelState();
-  return model.authoredInCad ? model.lineageId : model.lineageId ?? identity?.lineageId ?? null;
+  // A CAD-authored model never borrows the open design's project. A restored
+  // record with neither bundle nor freshness names no origin, and keeps it.
+  const ownLineageOnly = model.authoredInCad && !!(model.bundle || model.record?.freshness);
+  return ownLineageOnly ? model.lineageId : model.lineageId ?? identity?.lineageId ?? null;
 }
 
 export function useCurrentCadProject(): { lineageId: string; name: string; archiveFolder: string | null } | null {
@@ -268,13 +271,13 @@ export function CadProjectHeader() {
       <div className="cad-project-title">
         <h3 className="cad-project-heading"><ProjectSwitcher
           current={project?.lineageId ?? null}
-          label={project?.name ?? (model.selected ? `${model.label} · from ${model.application}` : 'No CAD project open')}
+          label={project?.name ?? (model.selected ? model.bundle ? `${model.label} · from ${model.application}` : model.label : 'No CAD project open')}
           onOpened={(name) => setNotice(`Opened ${name}`)}
           onError={setError}
         /></h3>
         <p className="cad-project-meta">{project
           ? (runs.length ? `${pluralized(runs.length, 'run')} in this project` : 'No runs in this project yet')
-          : model.selected ? 'Prepare simulation to use this model in WG.' : 'Send a design to CAD, or switch to one you already have.'}</p>
+          : model.selected ? cadModelHeaderLine(model) : 'Send a design to CAD, or switch to one you already have.'}</p>
       </div>
       <ProjectOverflowMenu project={project} onNotice={setNotice} onError={setError}/>
     </header>

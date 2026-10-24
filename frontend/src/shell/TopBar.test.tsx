@@ -63,6 +63,22 @@ describe('workspace mode switch', () => {
     expect(host.querySelector('.attention-waiting')).toBeNull();
   });
 
+  it('leaves engine gates and failed preparations out of the chip, and Show reveals the requests', async () => {
+    const state = cadJobSummary(legacyHold as unknown as JobItem);
+    const engine = cadJobFixture({ ...state, reason: 'engine_unavailable', jobId: 'engine' }, { status: 'held' });
+    const failed = cadJobFixture({ ...state, reason: 'preparation_failed', jobId: 'failed' }, { status: 'error' });
+    failed.cad_state = { ...failed.cad_state!, held: false, prepare_failed: true };
+    act(() => publishCadJobs([engine, failed]));
+    await act(async () => root.render(<AttentionNotices/>));
+    expect(host.querySelector('.attention-waiting')).toBeNull();
+    const choice = cadJobFixture({ ...state, reason: 'setup_required', jobId: 'choice' }, { status: 'held' });
+    act(() => publishCadJobs([engine, failed, choice]));
+    expect(host.querySelector('.attention-waiting')?.textContent).toContain('A solve is waiting for you');
+    const reveal = vi.spyOn(workspaceNavigation, 'reveal').mockReturnValue(true);
+    act(() => host.querySelector<HTMLButtonElement>('.attention-waiting')!.click());
+    expect(reveal).toHaveBeenCalledWith('cad-requests');
+  });
+
   it('routes first-time CAD Link users directly to the setup workflow', () => {
     const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
     const group = host.querySelector('[role="radiogroup"]')!;

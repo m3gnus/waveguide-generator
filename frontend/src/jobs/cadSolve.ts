@@ -60,8 +60,22 @@ export function cadJobOperationId(job: JobItem): string | null {
 
 /** Historical refusals remain waiting requests after upgrading. */
 export function isHeldCadJob(job: JobItem): boolean {
+  if (isFailedCadPreparation(job)) return false;
   return job.cad_state?.held ?? (job.status === 'held' || (job.status === 'error'
     && job.cad_state?.state === 'needs_user_input' && !!job.cad_state.reason));
+}
+
+/** A preparation that ended without a result and without needing a choice
+ * (the server's `prepare_failed`): its message is WG's calm sentence and its
+ * options are what can still work (Try again, Dismiss). Never a hold. */
+export function isFailedCadPreparation(job: JobItem): boolean {
+  return job.cad_state?.prepare_failed === true;
+}
+
+/** A held request that asks the user to choose. An engine gate is held too,
+ * but its home is the Results solve progress, never the pop-up or the chip. */
+export function isCadChoiceJob(job: JobItem): boolean {
+  return isHeldCadJob(job) && job.cad_state?.reason !== 'engine_unavailable';
 }
 
 /** Retain only the current child of a chain; timestamps order separate presses. */
@@ -123,7 +137,7 @@ export async function approveCadJob(jobId: string, approvals: NonNullable<CadSol
 }
 export async function dismissCadJob(job: JobItem): Promise<void> {
   const current = jobsSocket.getSnapshot().jobs.find((item) => item.id === job.id) ?? job;
-  if (!isHeldCadJob(current) || !current.cad_state || !operationNeedsUser(cadJobSummary(current))) {
+  if (!(isHeldCadJob(current) || isFailedCadPreparation(current)) || !current.cad_state || !operationNeedsUser(cadJobSummary(current))) {
     throw new Error('Only a refused solve can be dismissed. Use Stop for an active solve.');
   }
   // The backend deletes the refused chain in one transaction, so a reconnect

@@ -18,16 +18,15 @@ beforeEach(() => {
 afterEach(() => { importedMeshStore.clear(); vi.restoreAllMocks(); });
 
 describe('selection actions without the coordinator', () => {
-  it('auto-prepares a restored CAD selection through the arrival preparation action', async () => {
+  it('restores a CAD selection at launch without meshing it again', async () => {
     workspaceModeStore.setMode('cad');
     const prepare = vi.fn();
     const reader = createCadReturnArrivalReader({ autoIngestSelected: prepare },
       (async () => json({ cadFolderConfigured: true, items: [bundle] })) as typeof fetch);
     await reader.refresh();
     expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
-    expect(prepare).toHaveBeenCalledOnce();
     await reader.refresh();
-    expect(prepare).toHaveBeenCalledOnce();
+    expect(prepare).not.toHaveBeenCalled();
   });
 
   it('does not let initial background discovery replace a parametric viewport', async () => {
@@ -293,7 +292,7 @@ it.each(['matching', 'no match'])('holds project-open feedback until the deferre
     expect(useCadReturnStore.getState().selectedBundle).toBeNull();
     expect(status).toHaveBeenCalledWith(expect.stringContaining('No matching CAD return'));
   }
-  expect(ingest).toHaveBeenCalledTimes(result === 'matching' ? 1 : 0);
+  expect(ingest).not.toHaveBeenCalled();
 });
 
 it('leaves initial selection and later discovery of a Fusion Solve bundle to its request owner', async () => {

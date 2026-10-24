@@ -27,12 +27,26 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
     && latestJob.cad_state.reason === 'engine_unavailable';
   const request: ReactNode = record ? <CurrentModelRequests record={record}/> : null;
   // The pop-up owns the choice; the request's card stays, as Review reveals it.
-  if (cad.phase === 'waiting' && cad.heldRequest === latestJob && latestJob) return <div className="current-model-status" data-model-status="waiting">
+  // Results is the one home of the Waiting notice; the CAD Solve card keeps its
+  // run line and the request's card.
+  if (solveStatus && cad.phase === 'waiting' && cad.heldRequest === latestJob && latestJob) return <div className="current-model-status" data-model-status="waiting">
     <Notice tone="info" title="Waiting for you" actions={<button type="button" className="btn" onClick={() => openHeldRequest(latestJob.id)}>Review request</button>}>
       {status.message}
     </Notice>
     {request}
   </div>;
+  // A failed preparation: WG's calm sentence and Try again where it can work.
+  if (status.kind === 'prepare-failed' && latestJob) {
+    const retry = latestJob.cad_state?.options?.find(option => option.id === 'retry');
+    return <div className="current-model-status" data-model-status="prepare-failed">
+      <Notice tone="info" title={MODEL_STATUS_TITLE['prepare-failed']} actions={actions && retry
+        ? <button type="button" className="btn" onClick={() => void jobsCoordinatorBridge.getSnapshot().continueRun(latestJob.id).catch(() => undefined)}>{retry.label}</button>
+        : undefined}>
+        {status.message}
+      </Notice>
+      {request}
+    </div>;
+  }
   const engineGate = held || !!readiness?.engine || control?.waitingForEngine;
   const pending = solveStatus && (control?.waitingForEngine || control?.actionError || control?.preparationError
     || (readiness && (held || control?.readinessRequested)));

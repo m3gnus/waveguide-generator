@@ -342,6 +342,7 @@ function isCadState(value: unknown): value is components['schemas']['CadState'] 
     .every((key) => isNullableString(value[key]))) return false;
   if (typeof value.state !== 'string' || typeof value.setup_defaults !== 'boolean') return false;
   if (hasOwn(value, 'held') && typeof value.held !== 'boolean') return false;
+  if (hasOwn(value, 'prepare_failed') && typeof value.prepare_failed !== 'boolean') return false;
   if (hasOwn(value, 'next_step') && !isNullableString(value.next_step)) return false;
   if (hasOwn(value, 'options') && !(Array.isArray(value.options) && value.options.every(option => (
     isRecord(option) && typeof option.id === 'string' && typeof option.label === 'string'
