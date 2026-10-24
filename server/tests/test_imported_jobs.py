@@ -1349,6 +1349,32 @@ def test_an_unlinked_record_with_no_confirmed_frame_is_refused_at_submission(
     asyncio.run(scenario())
 
 
+def test_a_record_whose_axis_its_reduced_domain_cannot_use_is_refused_as_the_design(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never "confirm the frame again": the whole model is needed (``reduced_axis_not_allowed``)."""
+
+    from server.jobs.runtime import core
+
+    monkeypatch.setattr(core, "frame_axis_not_allowed", lambda _store, _record, _suggestion: "+y")
+
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path, _unlinked_changes())
+        try:
+            with pytest.raises(ImportedSolveRefusal) as caught:
+                await runtime.submit(_request(ingest_id))
+            assert caught.value.reason_code == "reduced_axis_not_allowed"
+            message = str(caught.value)
+            assert "cannot be solved along its radiation axis (+y)" in message
+            assert message.endswith("Send the whole model from Fusion.")
+            assert "frame_confirmation_required" not in message
+            assert "+y" in caught.value.details["statement"]
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 def _assert_prepare_again(message: str) -> None:
     """A submission that shows no axis is never asked to choose one."""
 

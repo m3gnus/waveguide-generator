@@ -1146,6 +1146,14 @@ async def _bind(
                 "WG could not prepare this model's solver frame. Try again.",
             )
             return "refused"
+        if code == REDUCED_AXIS_NOT_ALLOWED:
+            # The design's: its reduced domain cannot use the axis. The same
+            # calm failure a preparation ends with, in its own statement.
+            await asyncio.to_thread(
+                run.refuse, REDUCED_AXIS_NOT_ALLOWED,
+                str(getattr(exc, "details", {}).get("statement") or exc),
+            )
+            return "refused"
         await asyncio.to_thread(
             run.refuse, _submission_refusal_reason(exc, code), str(exc),
             blocker=getattr(exc, "details", {}).get("blocker")

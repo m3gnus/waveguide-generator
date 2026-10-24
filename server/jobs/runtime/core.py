@@ -33,10 +33,10 @@ from server.cadlink.interpretation.domain_decision import (
 )
 from server.cadlink.operations import (
     REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED, hold_details,
-    hold_stage_message, is_calm_failure, user_hold,
+    AXIS_NOT_ALLOWED_NEXT_STEP, axis_not_allowed_message, hold_stage_message, is_calm_failure, user_hold,
 )
 from server.cadlink.interpretation.solver_frame import REASON as FRAME_CONFIRMATION_REQUIRED
-from server.cadlink.intake.readings import record_frame_refusal
+from server.cadlink.intake.readings import frame_axis_not_allowed, record_frame_refusal
 from server.cadlink.store import CadLinkStore
 from server.workspace import archive_identity
 from server.design.defaults import default_sweep_start_hz
@@ -2052,9 +2052,22 @@ class JobRuntime:
         # stored for this record at preparation, never a re-derivation
         # (docs/architecture/CAD-OPERATIONS.md, "Unlinked solver frame").
         file_mesh = record.get("producer") == "mesh-file"
-        frame_refusal = None if file_mesh or record.get("native_source") is not None else await asyncio.to_thread(
+        gated = not file_mesh and record.get("native_source") is None
+        # A radiation axis the model's reduced domain cannot use is the
+        # design's, not a frame to confirm again: the whole model is needed.
+        blocked = await asyncio.to_thread(
+            frame_axis_not_allowed, self.cadlink_store, record, None
+        ) if gated else None
+        if blocked is not None:
+            project = record.get("project") if isinstance(record.get("project"), Mapping) else {}
+            statement = axis_not_allowed_message(project.get("document_name"), blocked)
+            raise ImportedSolveRefusal(
+                "reduced_axis_not_allowed", f"{statement} {AXIS_NOT_ALLOWED_NEXT_STEP}",
+                details={"ingest_id": geometry.ingest_id, "statement": statement},
+            )
+        frame_refusal = await asyncio.to_thread(
             record_frame_refusal, self.cadlink_store, record
-        )
+        ) if gated else None
         if frame_refusal is not None:
             raise ImportedSolveRefusal(
                 FRAME_CONFIRMATION_REQUIRED,
