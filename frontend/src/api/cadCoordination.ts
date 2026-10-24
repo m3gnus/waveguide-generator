@@ -22,10 +22,6 @@ export const cadCoordinationStore = {
   },
 };
 
-export function cadCoordinationOff(): boolean {
-  return state !== 'on';
-}
-
 /** Tests only. */
 export function resetCadCoordinationForTests(value: CadCoordination = 'unknown'): void {
   state = value;

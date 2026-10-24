@@ -70,7 +70,6 @@ from server.cadlink.joblane.preparation_inputs import (
     _DefaultsUnavailable,
     _copy_is_whole,
     _default_setup,
-    _is_default_setup,
     _load_setup,
     _project_gate,
     _record_frame_axis,
@@ -85,7 +84,7 @@ from server.cadlink.joblane.preparation_inputs import (
 )
 from server.cadlink.joblane.project_setup import compose_solve_request
 from server.jobs.imported_setup import DEFAULTS_ORIGIN
-from server.jobs.imported_setup import setup_content, setup_digest, snapshot_setup
+from server.jobs.imported_setup import is_default_setup, setup_content, setup_digest, snapshot_setup
 from server.cadlink.interpretation.solver_frame import (
     AS_MODELLED,
     REASON as FRAME_CONFIRMATION_REQUIRED,
@@ -368,7 +367,7 @@ def _setup_record(store: CadLinkStore, revision_id: str) -> dict[str, Any]:
     return {
         "revision_id": revision_id,
         "digest": revision["content_sha256"] if revision is not None else None,
-        "origin": "wg_defaults" if _is_default_setup(store, revision_id) else "user",
+        "origin": "wg_defaults" if is_default_setup(store, revision_id) else "user",
     }
 
 

@@ -62,9 +62,9 @@ from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json
 from server.jobs.cad_intent import CAD_INTENT, cad_of
 from server.jobs.imported_setup import (
-    DEFAULTS_ORIGIN,
     CadSolveSetup,
     ImportedSolveSetup,
+    is_default_setup,
     setup_content,
     setup_digest,
     setup_of_request,
@@ -268,14 +268,6 @@ class SolveTarget:
     manifest: Mapping[str, Any] | None = None
 
 
-def _is_defaults(store: Any, revision_id: str | None) -> bool:
-    row = store.get_setup_revision(revision_id) if revision_id else None
-    try:
-        return row is not None and json.loads(row["setup_json"]).get("origin") == DEFAULTS_ORIGIN
-    except (TypeError, ValueError, AttributeError):
-        return False
-
-
 def _matches(
     store: Any, row: Mapping[str, Any], model_id: str, record: Mapping[str, Any],
     target: SolveTarget, cache: dict[str, str | None], standing: list[str | None],
@@ -291,7 +283,7 @@ def _matches(
     prepared_row = store.get_ingest(prepared) if prepared else None
     preparing = row.get("status") == "preparing"
     if preparing and prepared_row is None and target.adopts and (
-        revision is None or _is_defaults(store, revision)
+        revision is None or is_default_setup(store, revision)
     ):
         # Not yet past choosing its settings: it prepares with the model's
         # setup, which this press is about to make its own.
@@ -444,8 +436,8 @@ def _record_for_model(store: Any, model_id: str, record: Mapping[str, Any], revi
         # Preserve user ownership when an old automatic run is selected
         # again, including a user setup recorded before the sticky provenance
         # table existed. Merely solving unedited defaults is not a user edit.
-        user_choice = not _is_defaults(store, revision_id) or (
-            standing is not None and not _is_defaults(store, standing["revision_id"])
+        user_choice = not is_default_setup(store, revision_id) or (
+            standing is not None and not is_default_setup(store, standing["revision_id"])
         )
         store.record_model_setup(model_id, inventory, revision_id, user_choice=user_choice)
 

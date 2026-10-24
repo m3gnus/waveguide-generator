@@ -500,21 +500,6 @@ function retainedChannelDrivers(
   }));
 }
 
-/**
- * Fit a set of driver forms to a channel list they were not filled in against.
- *
- * The same rule `retainedChannelDrivers` applies to a listing revision, for the
- * case where the forms come from the project rather than from the state being
- * revised: a form is kept only where that channel still exists and can still
- * carry a driver.
- */
-export function driversForChannels(
-  drivers: Record<string, ChannelDriverForm>,
-  channels: CadDriveChannel[],
-): Record<string, ChannelDriverForm> {
-  return retainedChannelDrivers({ channelDrivers: drivers, driveChannels: [] }, channels);
-}
-
 function groupChannels(sourceChannels: Array<{ sourceId: string; channelId: string; motion: 'normal' | 'axial' }>): CadDriveChannel[] {
   const grouped = new Map<string, CadDriveChannel>();
   sourceChannels.forEach(({ sourceId, channelId, motion }) => {

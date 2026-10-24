@@ -10,6 +10,7 @@ the setup a first-time manual Solve in WG records for the same model
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -24,6 +25,8 @@ from server.cadlink.joblane.default_setup import (
 )
 from server.cadlink.joblane.setup import DEFAULTS_ORIGIN, setup_content, validate_setup
 from server.jobs.models import SolveOptions
+from server.jobs.imported_setup import is_default_setup
+from server.cadlink.store import CadLinkStore
 
 
 _FIXTURE_DIR = Path(__file__).parent / "fixtures" / "cad_default_setup"
@@ -157,3 +160,31 @@ def test_a_role_default_outside_the_sweep_falls_back_inside_it(monkeypatch) -> N
     # 2 kHz sweep start, so the log-spaced frequency is used instead.
     assert combine["members"] == ["drive-lf", "drive-hf"]
     assert combine["channels"]["drive-lf"]["lp"]["fc_hz"] == 6325
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("{ malformed", False),
+        ("null", False),
+        ("[]", False),
+        ('"legacy"', False),
+        ("42", False),
+        ("{}", False),
+        ('{"origin": "user"}', False),
+        ('{"origin": "wg_defaults"}', True),
+    ],
+)
+def test_saved_setup_origin_classification_preserves_revision(
+    tmp_path: Path, content: str, expected: bool,
+) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    revision = store.create_setup_revision(content, hashlib.sha256(content.encode()).hexdigest())
+
+    assert is_default_setup(store, revision["revision_id"]) is expected
+    assert store.get_setup_revision(revision["revision_id"]) == revision
+
+
+@pytest.mark.parametrize("revision_id", [None, "missing-revision"])
+def test_missing_saved_setup_is_not_defaults(tmp_path: Path, revision_id: str | None) -> None:
+    assert is_default_setup(CadLinkStore(tmp_path / "cadlink.db"), revision_id) is False

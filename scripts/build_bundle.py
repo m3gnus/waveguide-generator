@@ -264,9 +264,9 @@ def windows_launcher_files(python_series: str = PYTHON_SERIES) -> tuple[tuple[st
     Windows has no bundle format, so the launcher and the interpreter DLLs it
     loads live in the application folder rather than inside the swappable
     ``runtime`` directory. One definition therefore serves two owners: the
-    builder copies these files out of a fresh runtime, and the updater refreshes
-    them from a newly installed runtime, which is what keeps a launcher from
-    outliving the interpreter it was taken from.
+    builder copies these files out of a fresh runtime and records the same
+    inventory in its manifest. Full installers replace the launcher and runtime
+    together, keeping their interpreter versions aligned.
     """
 
     tag = python_series.replace(".", "")
@@ -275,8 +275,8 @@ def windows_launcher_files(python_series: str = PYTHON_SERIES) -> tuple[tuple[st
         (f"python{tag}.dll", f"python{tag}.dll"),
         ("python3.dll", "python3.dll"),
         *((name, name) for name in MSVC_RUNTIME_DLLS),
-        # The retained v0.3.2 receiver publishes these entries sequentially.
-        # Publish native startup only after its interpreter/DLL prerequisites.
+        # Keep native startup after its interpreter/DLL prerequisites in the
+        # builder's copy order and manifest inventory.
         (WINDOWS_NATIVE_NAME, WINDOWS_LAUNCHER_NAME),
     )
 
@@ -308,9 +308,8 @@ def write_runtime_manifest(
         "runtimeId": runtime_id,
     }
     if platform_name == WINDOWS_PLATFORM:
-        # The runtime describes its own launcher files so that an update can
-        # refresh them without the updater carrying a second, driftable copy of
-        # this list: a runtime built for a later Python names its own DLLs.
+        # Record the builder's launcher inventory with its runtime: a runtime
+        # built for a later Python names its own DLLs.
         payload["launcherFiles"] = [
             {
                 "source": source,
@@ -1195,8 +1194,8 @@ else
 fi
 here=$(CDPATH= cd -- "$(dirname -- "$resolved")" && pwd -P)
 
-# Whole-installer replacement is independent of the receiving layer bridge.
-# Never enter its tree while its native lock or recovery ledger exists.
+# Full-installer replacement owns the installation tree.
+# Never enter it while its native lock or recovery ledger exists.
 installer_lock="${here%/*}/.${here##*/}.install.lock"
 installer_recovery_dir="${here%/*}/.${here##*/}.installer-recovery"
 if [ -e "$installer_lock" ] || [ -L "$installer_lock" ] ||

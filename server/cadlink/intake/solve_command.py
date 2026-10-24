@@ -55,6 +55,7 @@ from server.cadlink.operations import (
     prepare_and_solve_request,
     request_digest,
 )
+from server.cadlink.wglink_protocol import SOLVE_COMMAND_SCHEMA_VERSION, WG_REQUEST_SCHEMA_VERSION
 from server.platform.private_paths import ensure_private_directory
 
 if TYPE_CHECKING:
@@ -67,12 +68,12 @@ SOLVE_REQUEST_FILENAME = ".wg-solve-request.json"
 LEGACY_SCHEMA_VERSION = 1
 OLDER_SCHEMA_VERSION = 2
 _SLOT_SCHEMAS = frozenset({LEGACY_SCHEMA_VERSION})
-_FILE_SCHEMAS = frozenset({OLDER_SCHEMA_VERSION, 3, 4})
+_FILE_SCHEMAS = frozenset({OLDER_SCHEMA_VERSION, SOLVE_COMMAND_SCHEMA_VERSION, WG_REQUEST_SCHEMA_VERSION})
 #: The schemas WG accepts as current: 3 is a solve, 4 names its kind. Anything
 #: else it can identify is an older add-in's, refused with the remedy.
-CURRENT_SCHEMAS = frozenset({3, 4})
+CURRENT_SCHEMAS = frozenset({SOLVE_COMMAND_SCHEMA_VERSION, WG_REQUEST_SCHEMA_VERSION})
 #: The schema whose requests name their kind (receive_snapshot or prepare_and_solve).
-KINDED_SCHEMA_VERSION = 4
+KINDED_SCHEMA_VERSION = WG_REQUEST_SCHEMA_VERSION
 _KINDS = frozenset({PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT})
 _OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 UNREADABLE_CLAIM_REASON = "This file is not a request WG can read: not JSON, or no version WG knows."
@@ -126,7 +127,7 @@ def _held(error: OSError) -> bool:
 # One file per command, named <commandId>.json. A producer stages a file under
 # a name starting with "." (or not ending in .json) and renames it into place.
 SOLVE_REQUESTS_DIRECTORY = ".wg-solve-requests"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = SOLVE_COMMAND_SCHEMA_VERSION
 OUTDATED_ADDIN_REASON = (
     "This solve request came from an older Waveguide Generator add-in in Fusion that this WG "
     "no longer accepts. Restart Fusion so it loads the add-in that WG installed, "

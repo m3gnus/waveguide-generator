@@ -101,10 +101,6 @@ def plane_words(plane: str) -> str:
     return f"{_LETTER[plane]} = 0"
 
 
-def _positive_side(plane: str) -> str:
-    return f"{_LETTER[plane]} ≥ 0"
-
-
 def side_words(plane: str, side: str | None) -> str:
     """``x ≥ 0`` / ``x ≤ 0``: the side of a plane a cut kept."""
 

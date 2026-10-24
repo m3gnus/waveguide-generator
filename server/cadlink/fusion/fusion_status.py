@@ -251,12 +251,6 @@ def heartbeat_now() -> datetime:
     return _utc_now()
 
 
-def heartbeat_updated_at(payload: Mapping[str, Any]) -> datetime | None:
-    """A heartbeat's ``updatedAt`` as an aware UTC time, or None."""
-
-    return _timestamp(payload.get("updatedAt"))
-
-
 def heartbeat_problem(payload: object, checked_at: datetime | None = None) -> tuple[str, str] | None:
     """Why a heartbeat object is unusable at ``checked_at`` (default: now), or None.
 
@@ -901,7 +895,6 @@ __all__ = [
     "fusion_process_state",
     "heartbeat_now",
     "heartbeat_problem",
-    "heartbeat_updated_at",
     "read_fusion_status",
     "select_heartbeat",
     "settleable_heartbeat",

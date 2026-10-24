@@ -42,6 +42,20 @@ _PLACEHOLDER_INGEST_ID = "wgi_" + "0" * 26
 _PLACEHOLDER_SHA256 = "sha256:" + "0" * 64
 
 
+def is_default_setup(store: Any, revision_id: str | None) -> bool:
+    """Whether a saved revision was made from WG defaults.
+
+    Missing or malformed legacy content is not classified as defaults, so it
+    cannot cause a user's saved settings to be refreshed.
+    """
+
+    row = store.get_setup_revision(revision_id) if revision_id else None
+    try:
+        return row is not None and json.loads(row["setup_json"]).get("origin") == DEFAULTS_ORIGIN
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+
 class DriverReference(BaseModel):
     """Where a channel's resolved driver numbers came from, for the record."""
 

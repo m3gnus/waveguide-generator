@@ -39,18 +39,22 @@ from server.platform.private_paths import ensure_private_directory
 
 from server.cadlink.ipc import IPC_SUBDIRECTORY, ipc_folder
 from server.cadlink.build_flags import fem_regions_enabled
+from server.cadlink.wglink_protocol import (
+    FUSION_REQUEST_DELIVERY_VERSION,
+    WG_REQUEST_SCHEMA_VERSION,
+)
 
 
 CAPABILITIES_FILENAME = "wg-capabilities.json"
 CAPABILITIES_SCHEMA_VERSION = 1
 # The one delivery version WG speaks, in both directions. The add-in reports
 # its own in the heartbeat's ``deliveryVersion``; below this, WG refuses it.
-DELIVERY_VERSION = 3
+DELIVERY_VERSION = FUSION_REQUEST_DELIVERY_VERSION
 # The WG request inbox (M1 transfer contract, C3): 4 reads requests that name
 # their kind, a Send as well as a Solve. It moves on its own; the heartbeat's
 # delivery version and Fusion-bound request files stay 3, or every add-in
 # reporting 3 would be refused and every Fusion-bound file rewritten.
-SOLVE_COMMAND_DELIVERY = 4
+SOLVE_COMMAND_DELIVERY = WG_REQUEST_SCHEMA_VERSION
 FUSION_REQUEST_DELIVERY = DELIVERY_VERSION
 SCHEMA_VERSION = DELIVERY_VERSION
 # WG reads returns that require ``source-identity-v1`` (``wgreturn.py``). The

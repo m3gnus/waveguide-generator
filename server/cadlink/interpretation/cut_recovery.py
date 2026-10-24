@@ -445,10 +445,6 @@ def recovery_options(
     }
 
 
-def planes_in_words(planes: Iterable[str]) -> str:
-    return " and ".join(plane_words(plane) for plane in planes)
-
-
 __all__ = [
     "CONDITIONS",
     "CONTRACT",

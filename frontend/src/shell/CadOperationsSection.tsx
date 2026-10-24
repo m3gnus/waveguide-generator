@@ -198,7 +198,6 @@ const SAID_BY_THE_CARD: ReadonlySet<string> = new Set([
 
 interface Guidance {
   text: string | null;
-  simulation: boolean;
   /** The action the reason calls for, offered on this card while it waits;
    * null when Solve is the action. */
   action: 'approve' | null;
@@ -208,39 +207,36 @@ interface Guidance {
  * ever shown for the model on screen (`CadOperationsSection`). */
 function guidance(operation: CadOperationSummary): Guidance {
   if (operation.reason?.startsWith('engine_') || operation.reason === 'submission_refused') {
-    return { text: null, simulation: false, action: null };
+    return { text: null, action: null };
   }
   switch (operation.reason) {
     case 'setup_required':
       return {
         text: 'This model is on screen: check the settings above, then press Solve. WG remembers them for this project.',
-        simulation: false,
         action: null,
       };
     case 'findings_need_review':
       return {
         text: 'Approving applies to this preparation only; a new preparation needs its own review.',
-        simulation: false,
         action: 'approve',
       };
     case 'frame_confirmation_required':
       // An unlinked model: the backend solves nothing until its project's
       // solver frame is confirmed, whichever way the solve was asked for.
       // The frame line above says which way; Solve confirms it.
-      return { text: null, simulation: false, action: null };
+      return { text: null, action: null };
     case 'update_restart_pending':
       // The backend queues it again by itself; Solve now would only be refused until then.
       return {
         text: 'WG is about to restart to install an update, so it starts nothing now. It prepares this again by itself once it has restarted, or once the restart is called off.',
-        simulation: false,
         action: null,
       };
     case 'ready_to_solve':
-      return { text: null, simulation: false, action: null };
+      return { text: null, action: null };
     default:
       // A failed or interrupted preparation: Solve tries it again, with the
       // settings shown, as the same request.
-      return { text: 'Press Solve to try it again with the settings shown.', simulation: false, action: null };
+      return { text: 'Press Solve to try it again with the settings shown.', action: null };
   }
 }
 
@@ -349,10 +345,6 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
         onClick={() => ask('stop', () => jobsSocket.stopJob(job.id))}
       >Stop</button>}
       {review.error && operation.reason === 'findings_need_review' && <button aria-label={`Retry reading the findings for ${label}`} onClick={review.retry}>Retry</button>}
-      {help.simulation && <button
-        aria-label={`Open Simulation for ${label}`}
-        onClick={() => workspaceNavigation.navigate('simulation')}
-      >Open Simulation</button>}
       {waiting && help.action === 'approve' && reviewedPreparation && <>
         {approvalUnavailable && <span role="status">{approvalUnavailable}</span>}
         <button

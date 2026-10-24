@@ -184,9 +184,9 @@ def test_the_lane_uses_no_attempt_generation_and_writes_nothing_of_the_operation
         return refuse
 
     for name in (
-        "claim", "advance_operation", "admit_frame_axis", "attempt_is_current", "bind_request",
+        "claim", "advance_operation", "attempt_is_current", "bind_request",
         "add_approvals", "record_preparation", "record_outcome", "request_cancel",
-        "requeue_operation", "settle_cancel", "record_snapshot", "record_legacy_outcome",
+        "record_snapshot", "record_legacy_outcome",
     ):
         monkeypatch.setattr(CadLinkStore, name, forbidden(name))
 

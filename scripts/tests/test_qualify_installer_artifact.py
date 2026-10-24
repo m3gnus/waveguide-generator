@@ -97,7 +97,9 @@ def test_full_tree_equality_records_signed_identity_without_native_claim(case, p
     result = gate.verify(**case(platform))
     assert result["artifactComparisonPassed"]
     assert result["nativeQualificationComplete"] is False
-    assert result["nativeScenariosOwed"]
+    assert result["nativeScenariosOwed"] == gate.NATIVE_SCENARIOS_OWED
+    assert "signed full-installer updater" in result["nativeScenariosOwed"][0]
+    assert "manual full-installer upgrade" in result["nativeScenariosOwed"][1]
     assert result["payload"]["identity"]["commit"] == "a" * 40
     assert result["beforeIdentity"]["version"] == "0.3.4-rc.1"
     assert result["removalProofComplete"]
@@ -158,7 +160,7 @@ def test_removal_fixture_must_have_existed_before(case):
         gate.verify(**args)
 
 
-def test_bridge_verification_can_record_no_removal_proof(case):
+def test_installer_verification_can_record_no_removal_proof(case):
     args = case()
     args.update(require_removals=False, removed_app=[], removed_runtime=[])
     assert gate.verify(**args)["removalProofComplete"] is False

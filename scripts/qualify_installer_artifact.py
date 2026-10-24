@@ -31,8 +31,8 @@ VERSION = re.compile(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 NATIVE_SCENARIOS_OWED = [
-    "actual v0.3.2 to bridge B through the old updater",
-    "actual bridge B to next RC through the full-installer updater",
+    "supported installed release to candidate through the signed full-installer updater",
+    "manual full-installer upgrade from releases without a supported in-app update path",
     "native crash/kill, corruption and rollback recovery matrix",
     "live process/mutex and updater/install exclusion",
     "macOS Gatekeeper/quarantine or Windows SmartScreen/installer behavior",
@@ -574,7 +574,7 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("--platform", choices=PLATFORMS, required=True)
     check.add_argument("--removed-app", action="append", default=[], metavar="RELATIVE.py")
     check.add_argument("--removed-runtime", action="append", default=[], metavar="RELATIVE-PACKAGE")
-    check.add_argument("--require-removals", action="store_true", help="B to next RC requires both pre-existing removed fixtures")
+    check.add_argument("--require-removals", action="store_true", help="require proof that both pre-existing app and runtime fixtures were removed")
     check.add_argument("--outcome", type=Path)
     check.add_argument("--stopped", action="store_true", required=True, help="attest all WG/helper writers are stopped again")
     args = parser.parse_args(argv)

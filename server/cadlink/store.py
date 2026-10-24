@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
-from datetime import datetime, timezone
 import json
 import logging
-import math
 import os
 from pathlib import Path
 import sqlite3
@@ -36,7 +34,6 @@ from .operations import (
     DIGEST_VERSION,
     INSERT_LINK,
     MUTATING_KINDS,
-    NEEDS_USER_INPUT,
     PREPARE_AND_SOLVE,
     PROCESSING,
     RECEIVED,
@@ -1188,32 +1185,6 @@ class CadLinkStore:
             ).fetchone()
         return self._row(row)
 
-    def admit_frame_axis(self, operation_id: str, frame_axis: str, generation: int) -> bool:
-        """Keep the solver frame axis a user's Solve named, as it is admitted.
-
-        Written before anything can return early -- a restart approved while
-        the press is reconciled leaves the operation ``received`` -- so every
-        later attempt, the delivery loop's included, is held to it.
-
-        Fenced by the attempt generation the press read when it was admitted
-        (compare-and-set): once a newer press has claimed an attempt, a
-        superseded press's write, however late it lands, changes nothing, and
-        the newer attempt's own first write holds its axis. ``updated_at`` is
-        left alone, so a client's ordering of the row's states does not move.
-        False when the operation moved on, is finished, or is unknown.
-        """
-
-        attempt = _require_generation(generation)
-        self.initialize()
-        with self._lock, self._transaction() as conn:
-            cursor = conn.execute(
-                "UPDATE cad_operations SET frame_axis = ? "
-                "WHERE operation_id = ? AND attempt_generation = ? "
-                f"AND state NOT IN ({', '.join('?' for _ in TERMINAL_STATES)})",
-                (frame_axis, operation_id, attempt, *sorted(TERMINAL_STATES)),
-            )
-            return cursor.rowcount == 1
-
     def attempt_is_current(
         self, conn: sqlite3.Connection, operation_id: str, generation: int
     ) -> bool:
@@ -1426,19 +1397,6 @@ class CadLinkStore:
             ).fetchone()
         return self._row(row)
 
-    def record_job_dismissal(self, operation_id: str, updated_at: str) -> None:
-        """Persist dismissal ordering before deleting its newer refusal job."""
-        self.initialize()
-        with self._lock, self._transaction() as conn:
-            row = conn.execute("SELECT updated_at FROM cad_operations WHERE operation_id = ?", (operation_id,)).fetchone()
-            timestamps = [datetime.now(timezone.utc), datetime.fromisoformat(updated_at).astimezone(timezone.utc)]
-            if row:
-                timestamps.append(datetime.fromisoformat(row["updated_at"]).astimezone(timezone.utc))
-            latest = datetime.fromtimestamp(math.ceil(max(timestamps).timestamp()), timezone.utc)
-            conn.execute("UPDATE cad_operations SET updated_at = ? WHERE operation_id = ?",
-                         (latest.strftime("%Y-%m-%dT%H:%M:%SZ"), operation_id))
-        self.make_durable()
-
     def note_admission_retry(self, operation_id: str, message: str) -> dict[str, Any] | None:
         """Expose a retry without replacing the pending attempt's original refusal."""
         self.initialize()
@@ -1485,54 +1443,6 @@ class CadLinkStore:
                 (operation_id,),
             ).fetchone()
         return self._row(row)
-
-    def requeue_operation(
-        self, operation_id: str, generation: int, *, reason: str
-    ) -> dict[str, Any] | None:
-        """Put an operation that waits for ``reason`` back to ``received``.
-
-        Conditional on the generation the caller read and on the operation
-        still waiting for exactly that reason, so a user who acted on it
-        meanwhile keeps what they started. The generation is kept, so the
-        delivery loop starts it as an untouched operation; its snapshot,
-        preparation and approvals are kept, so that attempt resumes them.
-        Returns the row, or None when nothing changed.
-        """
-
-        attempt = _require_generation(generation)
-        self.initialize()
-        with self._lock, self._transaction() as conn:
-            cursor = conn.execute(
-                "UPDATE cad_operations SET state = ?, stage = ?, reason = NULL, "
-                "outcome_json = NULL, updated_at = ? "
-                "WHERE operation_id = ? AND attempt_generation = ? AND state = ? AND reason = ?",
-                (
-                    RECEIVED, STAGE_RECEIVED, utc_now(), operation_id, attempt,
-                    NEEDS_USER_INPUT, reason,
-                ),
-            )
-            row = conn.execute(
-                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
-                (operation_id,),
-            ).fetchone()
-        return self._row(row) if cursor.rowcount == 1 else None
-
-    def settle_cancel(self, operation_id: str, generation: int) -> dict[str, Any] | None:
-        """The attempt a dismissal fenced records the dismissal."""
-
-        attempt = _require_generation(generation)
-        self.initialize()
-        with self._lock, self._transaction() as conn:
-            cursor = conn.execute(
-                "UPDATE cad_operations SET state = ?, updated_at = ? "
-                "WHERE operation_id = ? AND attempt_generation = ? AND state = ?",
-                (CANCELLED, utc_now(), operation_id, attempt, CANCEL_REQUESTED),
-            )
-            row = conn.execute(
-                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
-                (operation_id,),
-            ).fetchone()
-        return self._row(row) if cursor.rowcount == 1 else None
 
     def create_setup_revision(self, setup_json: str, content_sha256: str) -> dict[str, Any]:
         """Store an immutable setup revision; identical content is one revision."""

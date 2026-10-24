@@ -26,7 +26,6 @@ RELEASE_TAGS: tuple[str, ...] = ("v0.3.1", "v0.3.2", "v0.3.3-rc.1", "v0.3.4", "v
 
 #: The most recent stable release -- what a rollback/upgrade test compares
 #: "the build under test" against. A pre-release is never this.
-LATEST_RELEASE_TAG = "v0.3.2"
 
 #: The releases a CAD Link registry this build wrote must still open in, and
 #: that must refuse a jobs database this build upgraded: v0.3.2, every

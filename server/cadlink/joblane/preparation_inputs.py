@@ -31,6 +31,7 @@ from server.cadlink.intake.readings import snapshot_project, solver_anchor
 from server.jobs.imported_setup import (
     DEFAULTS_ORIGIN,
     CadSolveSetup,
+    is_default_setup,
     setup_content,
     setup_digest,
     validate_setup,
@@ -424,7 +425,7 @@ def _remember_default_setup(
     sources = [source for source in manifest.get("sources") or [] if isinstance(source, Mapping)]
     inventory = inventory_sha256(sources)
     standing = store.record_project_setup_if_absent(lineage_id, inventory, revision_id)
-    if standing["revision_id"] == revision_id or _is_default_setup(store, standing["revision_id"]):
+    if standing["revision_id"] == revision_id or is_default_setup(store, standing["revision_id"]):
         # Ours, or WG's defaults recorded before (with another engine, say):
         # nothing a person chose, so this solve goes on as it is.
         return None
@@ -454,7 +455,7 @@ def cad_provenance_record(
         provenance["setup"] = {
             "revision_id": revision["revision_id"],
             "digest": revision["content_sha256"],
-            "origin": "wg_defaults" if _is_default_setup(store, revision_id) else "user",
+            "origin": "wg_defaults" if is_default_setup(store, revision_id) else "user",
         }
     prepared_id = str(getattr(solve_request.geometry, "ingest_id", "") or "")
     # Marked used before it is read: the job this provenance goes on names it.
@@ -480,18 +481,6 @@ def cad_provenance_record(
             "meshing_semantics": preparation["meshing_semantics"],
         }
     return provenance
-
-
-def _is_default_setup(store: CadLinkStore, revision_id: str | None) -> bool:
-    """Whether a setup revision is WG's default settings (``default_setup``)."""
-
-    row = store.get_setup_revision(revision_id) if revision_id else None
-    if row is None:
-        return False
-    try:
-        return json.loads(row["setup_json"]).get("origin") == DEFAULTS_ORIGIN
-    except (TypeError, ValueError, AttributeError):
-        return False
 
 
 def _submission_refusal_reason(exc: BaseException, code: str) -> str:

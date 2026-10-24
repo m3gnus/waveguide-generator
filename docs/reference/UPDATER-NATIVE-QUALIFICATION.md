@@ -6,11 +6,15 @@ architecture, running versions, app commits, artifact hashes, commands, helper l
 and observed results. A unit fixture, source checkout, successful download, or a
 file comparison alone does not qualify the native updater.
 
-The required sequence is **actual v0.3.2 → bridge B through the old updater**, then
-**that installed B → next RC through the full-installer updater**. Keep a separate
-evidence directory and ledger for each platform and transition. Do not substitute
-a direct installation of B for the old-path transition. Obtain owner-approved
-signed candidates; this procedure neither builds nor publishes them.
+Qualify an actual supported installed release → candidate through the signed
+full-installer updater, following [the current client contract](INSTALLER-CLIENT-CONTRACT.md)
+and [handoff contract](INSTALLER-HANDOFF-CONTRACT.md). Also qualify a manual
+full-installer upgrade for releases without a supported in-app update path;
+0.3.3-rc and earlier require downloading the installer. The layer-update receiver
+was removed in 0.3.6, so the old 0.3.2 → bridge B sequence is no longer a
+qualification requirement. Keep a separate evidence directory and ledger for each
+platform and transition. Obtain owner-approved signed candidates; this procedure
+neither builds nor publishes them.
 
 ## Prepare the controls
 
@@ -33,10 +37,10 @@ target and never followed; nominate the developer source directory separately to
 prove its content was preserved too. Use disjoint ordinary directories as control
 roots. Symlink or Windows junction roots are refused.
 
-For the second transition, nominate one `.py` module and one runtime package that
-are present in B and deliberately absent from the next candidate. Use an approved
-qualification candidate that actually contains this removal, and record its exact
-commit. A made-up absent path cannot satisfy the proof. An unchanged production
+For removal qualification, nominate one `.py` module and one runtime package that
+are present in the installed release and deliberately absent from the candidate.
+Use an approved qualification candidate that actually contains this removal, and
+record its exact commit. A made-up absent path cannot satisfy the proof. An unchanged production
 package that has no removal fixture leaves this scenario owed.
 
 ## Snapshot before each transition
@@ -107,17 +111,19 @@ ACLs, signatures, quarantine, and registry changes require the native checks bel
 
 ## Execute and verify each actual update
 
-Start the actual old installation and use its real update UI/API. Record the
-selected release, eligibility, download, approval, helper start, shutdown, and
-restart sequence. After it finishes, inspect the running version/commit and
-readiness on that host. Preserve the raw outcome journal and helper log before an
+For the in-app path, start the actual supported installation and use its real
+update UI/API. Record the selected release, eligibility, download, approval,
+helper start, shutdown, and restart sequence. For the manual path, download and
+run the full installer at the existing installation destination and record its
+native installation and restart sequence. After it finishes, inspect the running
+version/commit and readiness on that host. Preserve the raw outcome journal and helper log before an
 app startup consumes the journal. Then stop all writers again.
 
 ```text
 python scripts/qualify_installer_artifact.py verify --snapshot <evidence-dir>/before.json --artifact <exact-full-installer> --manifest <release-dir>/SHA256SUMS --signature <release-dir>/SHA256SUMS.sig --tag <v-target-version> --from-version <actual-before-version> --platform <platform> --candidate-root <golden-bundle> --installed-root <same-installed-bundle> --extraction-method <recorded-native-extraction-method> --outcome <preserved-outcome.json> --stopped --out <evidence-dir>/after.json
 ```
 
-For **B → next RC**, add:
+For **removal qualification** on either path, add:
 
 ```text
 --require-removals --removed-app <relative-module.py> --removed-runtime <relative-runtime-package-dir>
@@ -150,8 +156,9 @@ unit test cannot mark these rows passed.
 
 | Scenario | Required native evidence |
 | --- | --- |
-| Old-path bridge | Actual v0.3.2 → B through the old updater; installed app/runtime equal B; successful outcome and restart. |
-| New full-installer update | That installed B → next RC, one helper, successful outcome/restart, exact candidate equality and real module/package removals. |
+| Signed full-installer update | Supported installed release → candidate through the real update UI/API; one helper, successful outcome/restart and exact candidate equality. |
+| Manual full-installer upgrade | Release without a supported in-app path → candidate at the existing destination; native install/restart succeeds and installed files equal the candidate. |
+| Removal proof | Pre-existing app module and runtime package absent after full-installer replacement; exact candidate equality. |
 | Data and WGLink | Data hashes unchanged; no new WGLink without consent; developer and other-install controls untouched during silent update. |
 | Kill during copy | Kill the owned installer/helper mid-copy; restart runs the previous version; journal says failed and recovery/backup state is observed. |
 | Invalid download | Corrupt byte, truncation, wrong signature/version, and foreign origin are refused before restart approval latches. |
