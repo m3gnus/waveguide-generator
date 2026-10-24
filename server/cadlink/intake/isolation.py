@@ -264,8 +264,8 @@ def describe_exit(returncode: int | None) -> str:
 
 def terminate_process_tree(
     process: subprocess.Popen[bytes], job: Any = None, *, group: int | None = None
-) -> None:
-    child_process.terminate_process_tree(
+) -> bool:
+    return child_process.terminate_process_tree(
         process, job, group=group, grace_seconds=_TERMINATE_GRACE_S
     )
 
@@ -757,8 +757,9 @@ def _run_child(
     finally:
         # Do this even after a clean exit. The root may have returned a valid
         # result while one of its native helpers still owns the process group
-        # and can mutate staging.
-        terminate_process_tree(process, job, group=process_group)
+        # and can mutate staging. Nothing in staging is read until the whole
+        # tree is confirmed gone.
+        tree_stopped = terminate_process_tree(process, job, group=process_group)
         # The drain owns the pipe and closes it at EOF. Closing it from here
         # while a read is blocked would wait for that read, which never ends
         # if something outside the tree still holds the far end.
@@ -768,6 +769,13 @@ def _run_child(
                 job.close()
 
     try:
+        if not tree_stopped:
+            raise ChildRefusal(
+                stage,
+                "the isolated CAD child's helper processes could not be confirmed "
+                "stopped, so nothing it produced was trusted",
+                diagnostics=diagnostics,
+            )
         return _verified_answer(
             envelope,
             staging=staging,

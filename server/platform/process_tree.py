@@ -39,6 +39,7 @@ import multiprocessing
 import os
 import signal
 import subprocess
+import time
 from typing import Any
 
 
@@ -48,6 +49,12 @@ logger = logging.getLogger("wg.solve")
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 #: ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE``.
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+#: ``JobObjectBasicProcessIdList``.
+_JOB_OBJECT_BASIC_PROCESS_ID_LIST = 3
+_ERROR_MORE_DATA = 234
+_SYNCHRONIZE = 0x00100000
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_WAIT_OBJECT_0 = 0
 
 
 #: The pid that successfully called :func:`adopt_process_group`, if any.
@@ -109,20 +116,113 @@ class WindowsJob:
 
     def contains(self, pid: int) -> bool:
         """Whether a confirmed backend pid is in this spawned stub's tree."""
+        process = self._open_member(pid, _PROCESS_QUERY_LIMITED_INFORMATION)
+        if process is None:
+            return False
+        self._kernel32.CloseHandle(process)
+        return True
+
+    def _open_member(self, pid: int, access: int) -> Any:
+        """A handle to ``pid`` if it is in this job, else ``None``.
+
+        Membership is checked on the opened handle, so a pid the system reused
+        for an unrelated process after the member exited is never mistaken for it.
+        """
         import ctypes
         from ctypes import wintypes
 
         kernel = self._kernel32
         kernel.IsProcessInJob.argtypes = (wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL))
         kernel.IsProcessInJob.restype = wintypes.BOOL
-        process = kernel.OpenProcess(0x1000, False, pid)
+        process = kernel.OpenProcess(access, False, pid)
         if not process:
-            return False
+            return None
+        member = wintypes.BOOL()
+        if kernel.IsProcessInJob(process, self._handle, ctypes.byref(member)) and member.value:
+            return process
+        kernel.CloseHandle(process)
+        return None
+
+    def _member_ids(self) -> list[int]:
+        """The ids of the processes the job currently lists as members."""
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = self._kernel32
+        kernel.QueryInformationJobObject.argtypes = (
+            wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p,
+        )
+        kernel.QueryInformationJobObject.restype = wintypes.BOOL
+        capacity = 64
+        while True:
+            class ProcessIdList(ctypes.Structure):
+                _fields_ = [
+                    ("NumberOfAssignedProcesses", wintypes.DWORD),
+                    ("NumberOfProcessIdsInList", wintypes.DWORD),
+                    ("ProcessIdList", ctypes.c_size_t * capacity),
+                ]
+
+            listing = ProcessIdList()
+            if kernel.QueryInformationJobObject(
+                self._handle, _JOB_OBJECT_BASIC_PROCESS_ID_LIST,
+                ctypes.byref(listing), ctypes.sizeof(listing), None,
+            ):
+                count = min(int(listing.NumberOfProcessIdsInList), capacity)
+                return [int(pid) for pid in listing.ProcessIdList[:count]]
+            error = ctypes.get_last_error()
+            if error != _ERROR_MORE_DATA or capacity >= 65536:
+                raise OSError(error, "QueryInformationJobObject failed")
+            capacity = max(capacity * 2, int(listing.NumberOfAssignedProcesses))
+
+    def _open_members(self) -> list[Any]:
+        handles = []
         try:
-            member = wintypes.BOOL()
-            return bool(kernel.IsProcessInJob(process, self._handle, ctypes.byref(member)) and member.value)
+            for pid in self._member_ids():
+                handle = self._open_member(pid, _SYNCHRONIZE | _PROCESS_QUERY_LIMITED_INFORMATION)
+                if handle is not None:
+                    handles.append(handle)
+        except BaseException:
+            for handle in handles:
+                self._kernel32.CloseHandle(handle)
+            raise
+        return handles
+
+    def stop(self, timeout: float) -> bool:
+        """Terminate every member and wait, bounded, until each one has exited.
+
+        ``TerminateJobObject`` only starts termination; a member can still be
+        running, holding files, when the call returns. Members are opened
+        before the kill, since a process that has begun exiting need not be
+        listed any more while it is still running down. Returns whether every
+        member was confirmed gone within ``timeout`` seconds.
+        """
+        from ctypes import wintypes
+
+        kernel = self._kernel32
+        kernel.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
+        deadline = time.monotonic() + timeout
+        confirmed = True
+        held: list[Any] = []
+        try:
+            try:
+                held = self._open_members()
+            except Exception:
+                # Still kill the tree; only the confirmation is lost.
+                confirmed = False
+            self.terminate()
+            # A member that joined between the snapshot and the kill is listed
+            # now; one already exiting is in the snapshot.
+            held.extend(self._open_members())
+            for handle in held:
+                remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+                if kernel.WaitForSingleObject(handle, remaining_ms) != _WAIT_OBJECT_0:
+                    return False
+            return confirmed
         finally:
-            kernel.CloseHandle(process)
+            for handle in held:
+                with contextlib.suppress(Exception):
+                    kernel.CloseHandle(handle)
 
     def terminate(self) -> None:
         if not self._suppress_errors:

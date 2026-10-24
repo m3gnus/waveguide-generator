@@ -54,8 +54,9 @@ class FakeJob:
     def __init__(self):
         self.calls = []
 
-    def terminate(self):
-        self.calls.append("terminate")
+    def stop(self, timeout):
+        self.calls.append("stop")
+        return True
 
     def close(self):
         self.calls.append("close")
@@ -94,7 +95,7 @@ def test_worker_uses_contained_start_and_cleans_up_after_success(monkeypatch, fa
     })]
     assert child.timeouts == [native_source.isolation.MESH_BUDGET.wall_time_s]
     assert result.returncode == 0 and result.stdout == "worker output"
-    assert job.calls == ["terminate", "close"]
+    assert job.calls == ["stop", "close"]
     assert child.stdout.closed and child.stderr.closed
 
 
@@ -157,7 +158,7 @@ def test_communicate_exception_still_terminates_and_closes(
         native_source._run_worker(_STAGE)
     assert raised.value is error
     assert child.poll() is not None
-    assert job.calls == ["terminate", "close"]
+    assert job.calls == ["stop", "close"]
     assert child.stdout.closed and child.stderr.closed
 
 
@@ -175,7 +176,7 @@ def test_second_communicate_timeout_is_bounded_and_suppressed(
         native_source.__name__, logging.WARNING,
         "Native-source worker exceeded its 0.1 second deadline (pid 1234) and was stopped",
     )]
-    assert job.calls == ["terminate", "close"]
+    assert job.calls == ["stop", "close"]
     assert child.stdout.closed and child.stderr.closed
 
 
@@ -244,7 +245,7 @@ def test_nonzero_exit_preserves_refusal_text(
     with pytest.raises(error) as raised:
         native_source._run_worker(_STAGE)
     assert str(raised.value) == message
-    assert job.calls == ["terminate", "close"]
+    assert job.calls == ["stop", "close"]
     assert child.stdout.closed and child.stderr.closed
 
 

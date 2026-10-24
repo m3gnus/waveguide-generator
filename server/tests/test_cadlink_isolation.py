@@ -330,6 +330,20 @@ def test_descendants_are_killed_before_a_clean_child_result_is_trusted(
     assert not _any_descendant_alive(marker), "a clean-exit descendant survived verification"
 
 
+def test_a_result_is_refused_when_the_tree_cannot_be_confirmed_gone(
+    step_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = isolation.terminate_process_tree
+
+    def unconfirmed(*args: object, **kwargs: object) -> bool:
+        real(*args, **kwargs)  # type: ignore[arg-type]
+        return False
+
+    monkeypatch.setattr(isolation, "terminate_process_tree", unconfirmed)
+    with pytest.raises(ChildRefusal, match="could not be confirmed stopped"):
+        _run(step_file, "ok")
+
+
 def _any_descendant_alive(marker: Path) -> bool:
     """True while the child PID recorded in the marker still exists."""
 

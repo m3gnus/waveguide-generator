@@ -229,16 +229,90 @@ def test_tree_stop_escalates_the_resolved_group_and_reaps(monkeypatch):
         lambda *args: calls.append(("wait", args[1:])) or next(waits),
     )
     process = SimpleNamespace(poll=lambda: None, kill=lambda: calls.append("kill"))
-    job = SimpleNamespace(terminate=lambda: calls.append("job"))
-    child_process.terminate_process_tree(process, job, group=20, grace_seconds=2.0)
+    job = SimpleNamespace(stop=lambda timeout: calls.append(("job", timeout)) or True)
+    assert child_process.terminate_process_tree(process, job, group=20, grace_seconds=2.0)
     assert calls == [
-        "job",
+        ("job", 2.0),
         (20, signal.SIGTERM),
         ("wait", (20, 2.0)),
         (20, signal.SIGKILL),
         "kill",
         ("wait", (20, 2.0)),
     ]
+
+
+@pytest.mark.parametrize("stop", ["survivor", "raises"])
+def test_tree_stop_reports_a_job_member_it_could_not_confirm_gone(monkeypatch, stop):
+    def job_stop(timeout):
+        if stop == "raises":
+            raise OSError("job query failed")
+        return False
+
+    monkeypatch.setattr(child_process, "_wait_for_tree_exit", lambda *args: True)
+    process = SimpleNamespace(poll=lambda: 0)
+    assert not child_process.terminate_process_tree(
+        process, SimpleNamespace(stop=job_stop), grace_seconds=0.1
+    )
+
+
+def test_tree_stop_reports_a_root_that_outlived_the_kill(monkeypatch):
+    monkeypatch.setattr(child_process, "_wait_for_tree_exit", lambda *args: False)
+    process = SimpleNamespace(poll=lambda: None, terminate=lambda: None, kill=lambda: None)
+    assert not child_process.terminate_process_tree(process, grace_seconds=0.1)
+
+
+def _fake_job_kernel(members, *, survivors=()):
+    """The Win32 calls ``WindowsJob.stop`` makes, over a scripted member table.
+
+    Plain functions, not bound methods: the wrapper declares ``argtypes`` on them.
+    """
+
+    state = {"members": list(members)}
+    events, open_handles = [], set()
+
+    def query(job, info_class, listing, size, returned):
+        assert info_class == 3
+        listing._obj.NumberOfAssignedProcesses = len(state["members"])
+        listing._obj.NumberOfProcessIdsInList = len(state["members"])
+        for index, pid in enumerate(state["members"]):
+            listing._obj.ProcessIdList[index] = pid
+        events.append(("list", tuple(state["members"])))
+        return True
+
+    def open_process(access, inherit, pid):
+        open_handles.add(1000 + pid)
+        return 1000 + pid
+
+    def is_in_job(process, job, member):
+        member._obj.value = True
+        return True
+
+    def terminate(job, code):
+        events.append("terminate")
+        # Exiting members leave the id list before they have finished exiting.
+        state["members"] = []
+        return True
+
+    def wait(handle, timeout_ms):
+        events.append(("wait", handle - 1000))
+        return 0x102 if handle - 1000 in survivors else 0
+
+    kernel = SimpleNamespace(
+        QueryInformationJobObject=query, OpenProcess=open_process,
+        IsProcessInJob=is_in_job, TerminateJobObject=terminate,
+        WaitForSingleObject=wait, CloseHandle=open_handles.discard,
+    )
+    return kernel, events, open_handles
+
+
+@pytest.mark.parametrize("survivors,stopped", [((), True), ((8,), False)])
+def test_windows_job_stop_waits_for_every_member_it_saw_before_the_kill(survivors, stopped):
+    kernel, events, open_handles = _fake_job_kernel([7, 8], survivors=survivors)
+    job = process_tree.WindowsJob(55, kernel, suppress_errors=False)
+    assert job.stop(1.0) is stopped
+    assert events[:3] == [("list", (7, 8)), "terminate", ("list", ())]
+    assert [event[1] for event in events[3:]] == [7, 8]
+    assert open_handles == set(), "member handles leaked"
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX server-group guard")

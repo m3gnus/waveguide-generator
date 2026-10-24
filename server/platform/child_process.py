@@ -110,18 +110,24 @@ def terminate_process_tree(
     *,
     group: int | None = None,
     grace_seconds: float = 2.0,
-) -> None:
-    """Stop the child and everything it started.
+) -> bool:
+    """Stop the child and everything it started; return whether it is all gone.
 
     A child that spawned helpers and then hung must not leave them holding the
     STEP or the CPU.  On POSIX the child owns a fresh session, so its process
     group is exactly the tree and ``killpg`` reaches all of it; on Windows the
-    job object terminates its members in one call.
+    job object terminates its members in one call, and ``job.stop`` waits until
+    each of them has actually exited.  ``True`` means the whole tree was
+    confirmed gone within the bounded waits; ``False`` means some part of it
+    may still be running.
     """
 
+    job_stopped = True
     if job is not None:
-        with contextlib.suppress(Exception):
-            job.terminate()
+        try:
+            job_stopped = bool(job.stop(grace_seconds))
+        except Exception:
+            job_stopped = False
     resolved_group = (
         group
         if group is not None
@@ -134,13 +140,13 @@ def terminate_process_tree(
         with contextlib.suppress(Exception):
             process.terminate()
     if _wait_for_tree_exit(process, resolved_group, grace_seconds):
-        return
+        return job_stopped
     if resolved_group is not None and resolved_group != os.getpgid(0):
         with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
             os.killpg(resolved_group, signal.SIGKILL)
     with contextlib.suppress(Exception):
         process.kill()
-    _wait_for_tree_exit(process, resolved_group, grace_seconds)
+    return _wait_for_tree_exit(process, resolved_group, grace_seconds) and job_stopped
 
 
 def process_group_rss_bytes(group: int) -> int | None:
