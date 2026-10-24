@@ -1,7 +1,12 @@
 # Dependency compatibility
 
-The mesher pin `13f6111b` is an untagged interim pin pending the 0.3.6 release.
-It refuses enclosures that leave less than 0.1 mm of front baffle beside the
+The mesher pin `b09819ca` is an untagged interim pin pending the 0.3.6 release.
+When it cuts a solid to its symmetry domain it keeps periodic (seam-closed) faces
+such as a throat cylinder, which the earlier cutter could drop, and it raises
+`RuntimeError` ("OCC cut lost retained portions") rather than return a cut that
+lost retained geometry; WG then meshes the whole model.
+
+It also refuses enclosures that leave less than 0.1 mm of front baffle beside the
 mouth on any physical wall side. Preview and mesh construction share the
 mesher's enclosure-bounds validation; solve admission calls its public
 `resolve_enclosure_bounds()` with the final execution domain. The refusal
