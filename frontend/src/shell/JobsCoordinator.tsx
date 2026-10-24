@@ -1,4 +1,4 @@
-import { useRequestedSolve, solveCancellationReason, type HeldSolveContinuation, type ModelSolveContinuation } from '../jobs/useRequestedSolve';
+import { useRequestedSolve, awaitSolveStep, solveCancellationReason, type HeldSolveContinuation, type ModelSolveContinuation } from '../jobs/useRequestedSolve';
 import { usePrepareEngine } from '../jobs/usePrepareEngine';
 import { heldEngineSolveJob, useHeldSolvePreparation } from '../jobs/useHeldSolvePreparation';
 import { messageBlocker, type SolveReadinessState } from '../jobs/solveReadiness';
@@ -418,7 +418,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       return jobId;
     } catch (error) {
       solveAttention.releaseSolve();
-      setActionError(error instanceof Error ? error.message : String(error));
+      if (!(error instanceof DOMException && error.name === 'AbortError')) setActionError(error instanceof Error ? error.message : String(error));
       throw error;
     } finally {
       submissionInFlight.current = false;
@@ -438,11 +438,18 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const warming = engineBlocked && serverReadiness?.remedies?.some(remedy => remedy.kind === 'wait');
   const solveEnabled = (solveAvailable || planPending || engineBlocked) && (fileGeometryActive || !solveOptionsError)
     && (!planError || engineBlocked || planPending) && !submitting && !solveBlocker;
+  // The job retains its warming intention even if capabilities finish and the
+  // plan cache refreshes before the held Fusion request reaches this browser.
+  const heldJob = heldEngineSolveJob();
+  const heldReadiness = heldJob?.cad_state?.blocker;
+  const heldWarmingEngine = heldReadiness?.remedies?.some(remedy => remedy.kind === 'wait') ? heldReadiness.engine
+    : !planPending && warming && (heldReadiness?.engine ?? heldJob?.solve_options?.engine) === serverReadiness?.engine
+      ? serverReadiness?.engine ?? null : null;
   const requested = useRequestedSolve(refreshCapabilities, setActionError, solveAttention.releaseSolve, {
-    enabled: solveEnabled, pending: planPending, blocked: engineBlocked,
+    enabled: solveEnabled, busy: submitting, pending: planPending, blocked: engineBlocked,
     warmingEngine: warming ? serverReadiness?.engine ?? selectedEngine : null,
-    error: planError, heldJobId: heldEngineSolveJob()?.id, engines,
-    resume: token => token.jobId ? continueRun(token.jobId, { held: token as HeldSolveContinuation }) : solve(),
+    error: planError, engines, heldFusion: heldJob && heldWarmingEngine ? { jobId: heldJob.id, engine: heldWarmingEngine } : null, prepare: preparation.prepare,
+    resume: token => token.jobId ? continueRun(token.jobId, { held: token as HeldSolveContinuation }) : performRequestedSolve(token),
   });
   const { beforePost } = requested;
 
@@ -455,7 +462,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       const symmetryError = nativeSymmetryLimitation(nextDesign.formula, options.symmetry);
       if (symmetryError) throw new Error(symmetryError);
       const document = useDocumentStore.getState();
-      await planSolveDesign(nextDesign, options);
+      await awaitSolveStep(planSolveDesign(nextDesign, options), continuation);
       designName = document.designName;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
       if (!beforePost(continuation)) return null;
@@ -513,10 +520,10 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       // The axis this card shows -- a read under way answers first; a later
       // pick cannot replace it. The server confirms it as part of the press.
       const reading = frameReadInFlight(ingestId);
-      if (reading) await reading;
+      if (reading) await awaitSolveStep(reading, continuation);
       const view = frameAtPress?.status === 'ready' ? frameAtPress : useCadSolverFrameStore.getState().frames[ingestId];
       const frameAxis = view && !view.linked && view.status === 'ready' ? view.axis : null;
-      if (clicked) await clicked.checkPlan();
+      if (clicked) await awaitSolveStep(clicked.checkPlan(), continuation);
       const approvals = reviewedFindings(record);
       const press: ModelSolvePress = {
         prepared_id: ingestId, client_request_id: clientRequestId, label,
@@ -557,7 +564,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         const approvals = patch.approvals;
         if (patch.held) {
           const reading = frameReadInFlight(patch.held.model.ingestId);
-          if (reading) await reading;
+          if (reading) await awaitSolveStep(reading, patch.held);
         }
         solveAttention.bindOperation(jobId);
         let child;
@@ -651,76 +658,41 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const parametricUnavailable = solveOptionsError
     ?? solvePlanError
     ?? (solvePlanPending ? 'Planning solve for the current design…' : 'Solve plan is unavailable');
-  const requestCurrent = requested.request !== null;
-  const pendingSolve = requested.request?.queued && !requested.request.jobId;
-  const stopWaiting = useCallback(() => {
-    requested.cancel();
-    solveAttention.releaseSolve();
-  }, [requested.cancel]);
+  const requestCurrent = requested.state.active !== null;
+  const performRequestedSolve = async (continuation: ModelSolveContinuation) => {
+    if (fileGeometryActive) return solveFileModel(continuation);
+    if (cadGeometryActive) {
+      solveAttention.armSolve();
+      const draftError = getCrossoverDraftError();
+      if (draftError) throw new Error(draftError);
+      if (continuation.checkCadPlan) {
+        const cad = useCadReturnStore.getState();
+        const body = importedSolvePlanRequestBody(buildImportedSubmission(cad));
+        return solveCurrentCadImport({ cad, checkPlan: async () => {
+          const freshPlan = await postImportedSolvePlan(body);
+          if (!freshPlan.engine) throw new Error(freshPlan.reason || 'No engine can solve these CAD settings.');
+        } }, continuation);
+      }
+      return solveCurrentCadImport(undefined, continuation);
+    }
+    const current = useDesignStore.getState();
+    await run(current.design, current.designRevision, continuation);
+    return 'submitted' as const;
+  };
   const solve = useCallback(async () => {
-    // The button, the shortcut and the palette all arrive here: one command.
     if (submissionInFlight.current) return 'busy' as const;
     if (engineBlocked) workspaceNavigation.activate('results');
-    // A focused crossover commits as part of this press, before its inputs
-    // are captured. Subsequent edits still cancel the request.
     const focused = document.activeElement;
     const commitCrossover = cadGeometryActive && focused instanceof HTMLInputElement && focused.matches('[data-crossover-frequency]');
     if (commitCrossover) focused.blur();
-    const continuation = requested.begin(heldEngineSolveJob()?.id);
-    if (warming) requested.update(continuation, { waiting: true, preparationEngine: serverReadiness?.engine ?? selectedEngine });
-    if (!solveEnabled) return 'blocked' as const;
-    if (engineBlocked && !planPending) {
-      if (heldEngineSolveJob()) return 'blocked' as const;
-      if (warming) {
-        solveAttention.armSolve();
-        requested.update(continuation, { queued: true });
-        return 'pending' as const;
-      }
+    const held = heldEngineSolveJob();
+    if (held && engineBlocked) {
+      await requested.fusion(held.id, serverReadiness?.engine ?? selectedEngine);
       return 'blocked' as const;
     }
-    if (planPending) {
-      solveAttention.armSolve();
-      requested.update(continuation, { queued: true });
-      return 'pending' as const;
-    }
-    if (continuation.continuing) return 'busy' as const;
-    requested.update(continuation, { queued: false, continuing: true });
-    const action = async () => {
-      if (fileGeometryActive) {
-        await solveFileModel(continuation);
-        return;
-      }
-      if (cadGeometryActive) {
-        solveAttention.armSolve();
-        const draftError = getCrossoverDraftError();
-        if (draftError) throw new Error(draftError);
-        if (commitCrossover) {
-          if (getCrossoverDraftError()) throw new Error(getCrossoverDraftError()!);
-          const cad = useCadReturnStore.getState();
-          const body = importedSolvePlanRequestBody(buildImportedSubmission(cad));
-          await solveCurrentCadImport({ cad, checkPlan: async () => {
-            const freshPlan = await postImportedSolvePlan(body);
-            if (!freshPlan.engine) throw new Error(freshPlan.reason || 'No engine can solve these CAD settings.');
-          } }, continuation);
-          return;
-        }
-        await solveCurrentCadImport(undefined, continuation);
-        return;
-      }
-      const current = useDesignStore.getState();
-      await run(current.design, current.designRevision, continuation);
-    };
-    try {
-      await action();
-      return 'submitted' as const;
-    } catch (error) {
-      // Plain jobs report through acceptSubmission; CAD retains its observer.
-      if (cadGeometryActive) reportError(error instanceof Error ? error.message : String(error));
-      return 'blocked' as const;
-    } finally {
-      requested.finish(continuation);
-    }
-  }, [requested.begin, requested.update, requested.finish, serverReadiness, selectedEngine, engineBlocked, warming, cadGeometryActive, fileGeometryActive, planPending, reportError, run, solveCurrentCadImport, solveEnabled, solveFileModel]);
+    if (warming || planPending) solveAttention.armSolve();
+    return requested.press(undefined, commitCrossover);
+  }, [requested.press, requested.fusion, serverReadiness, selectedEngine, engineBlocked, warming, cadGeometryActive, planPending]);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && solveEnabled) {
@@ -732,21 +704,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     return () => window.removeEventListener('keydown', shortcut);
   }, [solve, solveEnabled]);
 
-  // The job retains its warming intention even if capabilities finish and the
-  // plan cache refreshes before the held Fusion request reaches this browser.
-  const heldJob = heldEngineSolveJob();
-  const heldReadiness = heldJob?.cad_state?.blocker;
-  const heldWarmingEngine = heldReadiness?.remedies?.some(remedy => remedy.kind === 'wait') ? heldReadiness.engine
-    : !planPending && warming && (heldReadiness?.engine ?? heldJob?.solve_options?.engine) === serverReadiness?.engine
-      ? serverReadiness?.engine ?? null : null;
-  const heldPreparation = useHeldSolvePreparation(requested, model, engines, preparation.prepare,
-    setActionError, heldWarmingEngine);
+  const heldPreparation = useHeldSolvePreparation(requested, engines, setActionError);
   const prepareAndSolve = async (engine: string) => {
     if (heldEngineSolveJob()) {
       await heldPreparation.prepareAndSolve(engine);
       return;
     }
-    await requested.prepare(requested.begin(), engine, () => preparation.prepare(engine));
+    await requested.press(engine);
   };
   const readiness = solveBlocker || solveOptionsError
     ? messageBlocker(solveBlocker || solveOptionsError!)
@@ -754,9 +718,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const control = useMemo<SolveControl>(() => ({
     readiness,
     readinessRequested: requestCurrent,
-    waitingForEngine: !!requested.request?.waiting && !requested.current.current?.submitted,
-    waitingEngine: requested.request?.waiting ? requested.request.preparationEngine ?? requested.request.engine : null,
-    stopWaiting: () => { heldPreparation.stop(); stopWaiting(); },
+    waitingForEngine: !!requested.state.active?.preparationEngine && !['submitting', 'cancelling'].includes(requested.state.phase),
+    waitingEngine: requested.state.active?.preparationEngine ?? null,
+    stopWaiting: heldPreparation.stop,
     prepareEngine: preparation.prepare,
     prepareAndSolve,
     preparationError: preparation.error,
@@ -783,7 +747,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
               : cadGeometryActive
                 ? capabilityError ?? importedUnavailable ?? 'No engine can solve imported CAD geometry here'
                 : parametricUnavailable),
-  }), [requested.request, requestCurrent, pendingSolve, warming, stopWaiting, actionError, engines, readiness, preparation.prepare, preparation.error, preparation.starting, prepareAndSolve, solveOptions, cadGeometryActive, capabilityError, fileBlocker, fileGeometryActive, importedUnavailable, importedEngineLabel, parametricUnavailable, planError, planPending, selectedEngine, solve, solveEnabled, solveBlocker, solvePlan, solvePlanPending, submitting]);
+  }), [requested.state, requestCurrent, warming, actionError, engines, readiness, preparation.prepare, preparation.error, preparation.starting, prepareAndSolve, solveOptions, cadGeometryActive, capabilityError, fileBlocker, fileGeometryActive, importedUnavailable, importedEngineLabel, parametricUnavailable, planError, planPending, selectedEngine, solve, solveEnabled, solveBlocker, solvePlan, solvePlanPending, submitting]);
 
   useEffect(() => {
     publishSolveControl(control);

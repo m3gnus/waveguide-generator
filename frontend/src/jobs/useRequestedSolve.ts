@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { currentModel, currentModelStatus, type CurrentModel } from '../model/currentModel';
+import { currentModel, type CurrentModel } from '../model/currentModel';
 import { jobsSocket } from '../api/jobsSocket';
 import { previewSocket } from '../api/previewSocket';
 import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
@@ -14,8 +14,7 @@ import { useMeshImportStore, fileMeshSetup } from '../stores/meshImport';
 import { subscribeSolveSettingsEdits } from '../stores/solveSettingsEdits';
 import { buildImportedSubmission } from './importedSubmission';
 import type { EngineCapability } from './actions';
-
-const PREPARATION_FAILED = 'Prepare and solve was cancelled because engine preparation failed.';
+import { initialRequestedSolve, reduceRequestedSolve, type RequestedSolveEvent, type SolveRequest } from './requestedSolveMachine';
 
 export interface ModelSolveContinuation {
   model: CurrentModel;
@@ -23,20 +22,24 @@ export interface ModelSolveContinuation {
   mode: string;
   setupRevision: string;
   signal: AbortSignal;
-  /** Set synchronously at the POST boundary, before job events can arrive. */
-  submitted?: boolean;
+  requestId?: number;
+  checkCadPlan?: boolean;
 }
 export interface HeldSolveContinuation extends ModelSolveContinuation { jobId: string }
-export type RequestedSolve = ModelSolveContinuation & {
-  controller: AbortController;
-  jobId?: string;
-  preparationEngine?: string;
-  queued: boolean;
-  waiting: boolean;
-  preparing: boolean;
-  preparationRequested?: boolean;
-  continuing: boolean;
-};
+type SolveInputs = Omit<ModelSolveContinuation, 'signal' | 'requestId'>;
+export type RequestedSolve = ModelSolveContinuation & { requestId: number; jobId?: string };
+
+/** Abort only this request's wait; the shared frame read can finish for its other consumers. */
+export async function awaitSolveStep<T>(step: Promise<T>, token: ModelSolveContinuation | null): Promise<T> {
+  if (!token) return step;
+  const { signal } = token;
+  if (signal.aborted) throw new DOMException('Solve cancelled', 'AbortError');
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => { reject(new DOMException('Solve cancelled', 'AbortError')); };
+    signal.addEventListener('abort', abort, { once: true });
+    step.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
+}
 
 function solveInputs() {
   const model = currentModel();
@@ -56,10 +59,10 @@ function solveInputs() {
         : [imported.restoredRevisionId, imported.setup, imported.setupEditBase] }) };
 }
 
-export function captureSolveInputs(): Omit<ModelSolveContinuation, 'signal'> { return solveInputs(); }
+export function captureSolveInputs(): SolveInputs { return solveInputs(); }
 
 /** The one live-input guard used by observers and by every delayed POST. */
-export function solveCancellationReason(request: ModelSolveContinuation & { jobId?: string }): string | null {
+export function solveCancellationReason(request: SolveInputs & { jobId?: string }): string | null {
   const inputs = solveInputs();
   const model = inputs.model;
   if (model.key !== request.model.key || model.kind !== request.model.kind || model.ingestId !== request.model.ingestId
@@ -68,7 +71,7 @@ export function solveCancellationReason(request: ModelSolveContinuation & { jobI
   if (inputs.engine !== request.engine) return 'Prepare and solve was cancelled because the selected engine changed.';
   if (inputs.setupRevision !== request.setupRevision) return 'Prepare and solve was cancelled because the solve setup changed.';
   if (request.jobId) {
-    const job = currentModelStatus(model, jobsSocket.getSnapshot().jobs).job;
+    const job = jobsSocket.getSnapshot().jobs.find(job => job.id === request.jobId);
     if (job?.id !== request.jobId || job.status !== 'error' || job.cancellation_requested
       || job.cad_state?.state !== 'needs_user_input' || job.cad_state.reason !== 'engine_unavailable') {
       return 'Prepare and solve was cancelled because the waiting job changed.';
@@ -77,162 +80,164 @@ export function solveCancellationReason(request: ModelSolveContinuation & { jobI
   return null;
 }
 
-export function solveStillCurrent(request: ModelSolveContinuation): boolean {
-  return !request.signal.aborted && solveCancellationReason(request) === null;
-}
-
 interface SolveReadiness {
   enabled: boolean;
+  busy: boolean;
   pending: boolean;
   blocked: boolean;
   warmingEngine: string | null;
   error: string | null;
-  heldJobId?: string;
   engines: readonly EngineCapability[];
+  heldFusion: { jobId: string; engine: string } | null;
+  prepare: (engine: string) => Promise<boolean>;
   resume: (token: RequestedSolve) => Promise<unknown>;
 }
 
-/** One owner from the press (or held Fusion intention) through the POST. */
+function requestPlan(readiness: SolveReadiness) {
+  return {
+    ordinary: readiness.blocked ? 'blocked' as const : readiness.pending ? 'pending' as const : readiness.enabled ? 'ready' as const : 'disabled' as const,
+    busy: readiness.busy, warmingEngine: readiness.warmingEngine, engines: readiness.engines, error: readiness.error,
+  };
+}
+
+/** React is an interpreter for the pure owner: stores dispatch facts, effects do IO. */
 export function useRequestedSolve(refresh: () => void | Promise<void>, reportNotice: (message: string | null) => void,
   releaseAttention: () => void, readiness: SolveReadiness) {
-  const [request, setRequest] = useState<RequestedSolve | null>(null);
-  const current = useRef<RequestedSolve | null>(null);
-  const report = useRef(reportNotice);
-  report.current = reportNotice;
-  const release = useRef(releaseAttention);
-  release.current = releaseAttention;
-  const cancel = useCallback((reason?: string) => {
-    const held = current.current;
-    if (!held) return;
-    held.controller.abort();
-    current.current = null;
-    setRequest(null);
-    if (!held.submitted) release.current();
-    if (!held.submitted && reason) report.current(reason);
-  }, []);
-  const update = useCallback((token: RequestedSolve, patch: Partial<RequestedSolve>) => {
-    if (current.current !== token) return;
-    Object.assign(token, patch);
-    setRequest({ ...token });
-  }, []);
-  const begin = useCallback((jobId?: string) => {
-    const previous = current.current;
-    if (previous) {
-      // A saved Fusion request supersedes an ordinary wait. Its saved setup
-      // must be continued by job ID, never rebuilt as a browser submission.
-      // Once continuation has started, it owns the submission through the POST.
-      if (!jobId || previous.jobId || previous.continuing || previous.submitted) return previous;
-      cancel();
+  const machine = useRef(initialRequestedSolve<SolveInputs>());
+  const [state, setState] = useState(machine.current);
+  const services = useRef({ readiness, reportNotice, releaseAttention, refresh });
+  services.current = { readiness, reportNotice, releaseAttention, refresh };
+  const observationTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const executions = useRef(new Map<number, { token: RequestedSolve; controller: AbortController }>());
+  const tasks = useRef(new Map<number, Promise<unknown>>());
+  const preparations = useRef(new Map<number, Promise<void>>());
+  const tokenFor = useCallback((request: SolveRequest<SolveInputs>) => {
+    let token = executions.current.get(request.id)?.token;
+    if (!token) {
+      const controller = new AbortController();
+      token = { ...request.inputs, requestId: request.id, jobId: request.jobId, signal: controller.signal };
+      executions.current.set(request.id, { token, controller });
     }
-    const controller = new AbortController();
-    const token: RequestedSolve = { ...captureSolveInputs(), jobId, controller, signal: controller.signal,
-      queued: false, waiting: false, preparing: false, continuing: false };
-    current.current = token;
-    setRequest({ ...token });
-    report.current(null);
     return token;
-  }, [cancel]);
-  const finish = useCallback((token: RequestedSolve) => { if (current.current === token) cancel(); }, [cancel]);
-  const prepare = useCallback(async (token: RequestedSolve, engine: string, action: () => Promise<boolean>) => {
-    if (current.current !== token || token.preparing || token.continuing) return;
-    update(token, { queued: !token.jobId, waiting: true, preparing: true, preparationRequested: true, preparationEngine: engine });
-    let success = false;
-    try { success = await action(); }
-    finally {
-      if (current.current === token) {
-        if (!success) cancel(PREPARATION_FAILED);
-        else update(token, { preparing: false });
+  }, []);
+  const dispatch = useCallback(function dispatch(event: RequestedSolveEvent<SolveInputs>) {
+    const result = reduceRequestedSolve(machine.current, event);
+    machine.current = result.state; // Claim ownership before any effect or synchronous store event.
+    if (result.state.mounted) setState(result.state);
+    // Allocate cancellation resources before effects can synchronously notify stores.
+    for (const effect of result.effects) if (effect.type === 'continue') tokenFor(effect.request);
+    for (const effect of result.effects) {
+      const io = services.current;
+      switch (effect.type) {
+        case 'notice': io.reportNotice(effect.message); break;
+        case 'release': io.releaseAttention(); break;
+        case 'abort': executions.current.get(effect.id)?.controller.abort(); break;
+        case 'observe-start': {
+          let refreshing = false;
+          const observe = async () => {
+            if (refreshing) return;
+            refreshing = true;
+            try { await services.current.refresh(); } catch { /* A transient network failure does not end the request. */ }
+            finally { refreshing = false; }
+          };
+          void observe();
+          observationTimer.current = setInterval(() => { void observe(); }, 1000);
+          break;
+        }
+        case 'observe-stop':
+          if (observationTimer.current !== null) clearInterval(observationTimer.current);
+          observationTimer.current = null;
+          break;
+        case 'prepare': {
+          const task = (async () => {
+            let success = false;
+            try { success = await io.readiness.prepare(effect.request.preparationEngine!); }
+            finally { dispatch({ type: success ? 'preparation-done' : 'preparation-failed', id: effect.request.id }); }
+          })();
+          preparations.current.set(effect.request.id, task);
+          void task.finally(() => preparations.current.delete(effect.request.id)).catch(() => undefined);
+          break;
+        }
+        case 'continue': {
+          const token = tokenFor(effect.request);
+          const task = (async () => {
+            try {
+              const value = await io.readiness.resume(token);
+              dispatch({ type: machine.current.active?.id === token.requestId && machine.current.phase === 'submitting' ? 'post-succeeded' : 'continuation-settled', id: token.requestId });
+              return value;
+            } catch (error) {
+              dispatch({ type: machine.current.active?.id === token.requestId && machine.current.phase === 'submitting' ? 'post-failed' : 'continuation-settled', id: token.requestId, message: error instanceof Error ? error.message : String(error) });
+              return 'blocked';
+            } finally {
+              tasks.current.delete(token.requestId);
+              executions.current.delete(token.requestId);
+            }
+          })();
+          tasks.current.set(token.requestId, task);
+          break;
+        }
+        case 'post': break; // The synchronous POST boundary consumes this authorization below.
       }
     }
-  }, [cancel, update]);
+    return result;
+  }, [tokenFor]);
   const beforePost = useCallback((token: ModelSolveContinuation | null): boolean => {
     if (!token) return true;
-    if (!solveStillCurrent(token)) return false;
-    token.submitted = true;
-    if (current.current === token) setRequest({ ...current.current });
-    return true;
-  }, []);
+    if (token.signal.aborted) return false;
+    const reason = solveCancellationReason(token);
+    if (token.requestId === undefined) return reason === null;
+    if (reason) dispatch({ type: 'inputs-changed', ids: [token.requestId], reason });
+    return dispatch({ type: 'frame-resolved', id: token.requestId }).effects.some(effect => effect.type === 'post');
+  }, [dispatch]);
+  const cancel = useCallback(() => { dispatch({ type: 'stop' }); }, [dispatch]);
+  const press = useCallback(async (prepareEngine?: string, checkCadPlan = false) => {
+    dispatch({ type: 'plan-ready', plan: requestPlan(services.current.readiness) });
+    const result = dispatch({ type: 'press', inputs: { ...captureSolveInputs(), checkCadPlan }, prepareEngine });
+    const active = result.state.active;
+    if (!active) return 'blocked' as const;
+    if (prepareEngine) { await preparations.current.get(active.id); return 'pending' as const; }
+    const task = tasks.current.get(active.id);
+    if (task) {
+      const value = await task;
+      return value === 'blocked' ? 'blocked' as const : value === 'busy' ? 'busy' as const : 'submitted' as const;
+    }
+    return active.preparationEngine || result.state.plan.ordinary === 'pending' ? 'pending' as const : 'blocked' as const;
+  }, [dispatch]);
+  const fusion = useCallback(async (jobId: string, engine: string, prepare = false) => {
+    const result = dispatch({ type: 'fusion-request', inputs: captureSolveInputs(), jobId, engine, prepare });
+    if (result.state.active?.jobId === jobId) await preparations.current.get(result.state.active.id);
+  }, [dispatch]);
   useEffect(() => {
+    dispatch({ type: 'mount' });
     const validate = () => {
-      const token = current.current;
-      if (!token || token.submitted) return;
-      const reason = solveCancellationReason(token);
-      if (reason) cancel(token.jobId ? reason : undefined);
+      const state = machine.current;
+      const requests = [...state.queue, ...(state.active && state.phase !== 'submitting' ? [state.active] : [])];
+      for (const request of requests) {
+        const reason = solveCancellationReason({ ...request.inputs, jobId: request.jobId });
+        if (reason) dispatch({ type: 'inputs-changed', ids: [request.id], reason: request.jobId ? reason : undefined });
+      }
     };
-    // Store observers latch leave/return and change/undo inside one React batch.
     const stops = [jobsSocket.subscribe(validate), previewSocket.subscribe(validate), useCadReturnStore.subscribe(validate), useCadSolverFrameStore.subscribe(validate),
       workspaceModeStore.subscribe(validate), importedMeshStore.subscribe(validate), useDesignStore.subscribe(validate),
       useDocumentStore.subscribe(validate), useImportedModelStore.subscribe(validate), useMeshImportStore.subscribe(validate),
       useSolveOptionsStore.subscribe(validate), useImportedSolveOptionsStore.subscribe(validate),
       subscribeSolveSettingsEdits(edit => {
-        const token = current.current;
-        if (!token || token.submitted) return;
-        const parametric = token.model.kind === 'parametric';
-        if ((edit?.source === 'solveOptions') !== parametric) return;
-        cancel(token.jobId ? 'Prepare and solve was cancelled because the solve setup changed.' : undefined);
+        const state = machine.current;
+        const requests = [...state.queue, ...(state.active && state.phase !== 'submitting' ? [state.active] : [])];
+        const edited = requests.filter(request => (edit?.source === 'solveOptions') === (request.inputs.model.kind === 'parametric'));
+        dispatch({ type: 'inputs-changed', ids: edited.map(request => request.id),
+          reason: edited.some(request => request.jobId) ? 'Prepare and solve was cancelled because the solve setup changed.' : undefined });
       })];
-    return () => {
-      stops.forEach(stop => stop());
-      if (current.current && !current.current.submitted) release.current();
-      current.current?.controller.abort();
-      current.current = null;
-    };
-  }, [cancel]);
+    return () => { stops.forEach(stop => stop()); dispatch({ type: 'unmount' }); };
+  }, [dispatch]);
   useEffect(() => {
-    const token = current.current;
-    if (!token || token.submitted || token.preparing) return;
-    const engine = readiness.engines.find(engine => engine.name === token.preparationEngine);
-    // Failure must also cancel a continuation awaiting preflight/frame reads.
-    if (token.waiting && (engine?.runtime_state === 'failed' || engine?.runtime_state === 'unavailable')) {
-      cancel(PREPARATION_FAILED);
-      return;
+    const held = readiness.heldFusion;
+    const inputs = captureSolveInputs();
+    if (held && inputs.model.viewportShowing && ['auto', 'beat', held.engine].includes(inputs.engine)) {
+      dispatch({ type: 'fusion-request', inputs, ...held });
     }
-    if (token.continuing) return;
-    if (token.jobId) {
-      if (!token.waiting) return;
-      if (!engine?.available || engine.runtime_state !== 'ready') return;
-      update(token, { continuing: true });
-      void readiness.resume(token).catch(() => undefined).finally(() => finish(token));
-      return;
-    }
-    // Let the Fusion adapter install its saved request before resuming an
-    // ordinary wait, even if readiness and the job arrive in the same render.
-    if (!token.queued || readiness.heldJobId) return;
-    if (!readiness.enabled) {
-      cancel();
-      if (readiness.error) report.current(readiness.error);
-      return;
-    }
-    if (readiness.warmingEngine) {
-      if (!token.waiting || token.preparationEngine !== readiness.warmingEngine) {
-        update(token, { waiting: true, preparationEngine: readiness.warmingEngine });
-      }
-      return;
-    }
-    if (readiness.pending) return;
-    if (readiness.blocked) {
-      // Preparation can finish before the refreshed plan arrives. Retain that
-      // wait through a cached unprepared verdict; failure above ends it.
-      if (!token.preparationRequested) update(token, { queued: false, waiting: false });
-      return;
-    }
-    // The ordinary command claims `continuing` synchronously before awaiting.
-    void readiness.resume(token);
-  }, [request, readiness, cancel, update, finish]);
-  const observing = !!request && !request.submitted && (request.queued || request.waiting);
-  useEffect(() => {
-    if (!observing) return;
-    let refreshing = false;
-    const observe = async () => {
-      if (refreshing) return;
-      refreshing = true;
-      try { await refresh(); } catch { /* Keep observing through transient network failures. */ }
-      finally { refreshing = false; }
-    };
-    void observe();
-    const timer = setInterval(() => { void observe(); }, 1000);
-    return () => clearInterval(timer);
-  }, [observing, refresh]);
-  return { request, current, begin, update, cancel, finish, prepare, beforePost };
+    dispatch({ type: 'plan-ready', plan: requestPlan(readiness) });
+  }, [dispatch, readiness.busy, readiness.enabled, readiness.pending, readiness.blocked, readiness.warmingEngine, readiness.engines, readiness.error, readiness.heldFusion?.jobId, readiness.heldFusion?.engine]);
+  return { state, press, fusion, cancel, beforePost };
 }
 export type RequestedSolveOwner = ReturnType<typeof useRequestedSolve>;

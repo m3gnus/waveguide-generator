@@ -676,6 +676,62 @@ describe('solve invocation mutex', () => {
     expect(solveControlStore.getSnapshot()!.waitingForEngine).toBe(false);
   });
 
+  it.each(['pre-POST frame wait', 'POST in flight', 'POST done'] as const)(
+    'Fusion survives an ordinary continuation in %s', async arrival => {
+      vi.useFakeTimers();
+      const frame = deferred<Response>();
+      const ordinaryPost = deferred<string>();
+      const posts: string[] = [];
+      vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === 'POST') posts.push(String(url));
+        return json({ job_id: 'fusion-child' });
+      }));
+      mocks.solveModel.mockReturnValue(ordinaryPost.promise);
+      act(() => {
+        blockedCad();
+        useCadSolverFrameStore.getState().apply('wgi_readiness', { linked: true });
+        useImportedSolveOptionsStore.setState({ engine: 'beat-metal' });
+        mocks.importedPlan.plan.readiness = { ...blocker, remedies: [{ kind: 'wait' }] };
+        mocks.capabilities.engines = [{ name: 'beat-metal', available: false, runtime_state: 'preparing' } as EngineCapability];
+      });
+      const render = () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+      await act(async () => render());
+      await act(async () => { expect(await solveControlStore.getSnapshot()!.solve()).toBe('pending'); });
+      let frameRead!: Promise<void>;
+      act(() => { frameRead = useCadSolverFrameStore.getState().load('wgi_readiness', () => frame.promise); });
+      mocks.capabilities.engines = [{ name: 'beat-metal', available: true, runtime_state: 'ready' } as EngineCapability];
+      mocks.importedPlan.plan = { ...mocks.importedPlan.plan, engine: 'beat-metal', readiness: null };
+      await act(async () => render());
+      expect(solveControlStore.getSnapshot()!.submitting).toBe(true);
+      expect(mocks.solveModel).not.toHaveBeenCalled();
+      if (arrival !== 'pre-POST frame wait') await act(async () => { frame.resolve(json({ linked: true })); await frameRead; });
+      if (arrival === 'POST done') await act(async () => ordinaryPost.resolve('ordinary-job'));
+      await act(async () => {
+        const parent = cadJobFixture(operation('frame-fusion', 'needs_user_input', {
+          reason: 'engine_unavailable', setupRevisionId: 'fusion-saved-setup',
+        }), { solve_options: { engine: 'beat-metal' } as JobItem['solve_options'] });
+        publishJobs([{ ...parent, cad_state: { ...parent.cad_state!, blocker: { ...blocker, remedies: [{ kind: 'wait' }] } } }]);
+        render();
+      });
+      // Supersession aborts the ordinary frame wait and releases its mutex now,
+      // while Fusion joins the shared frame read under its own request ID.
+      expect(mocks.solveModel).toHaveBeenCalledTimes(arrival === 'pre-POST frame wait' ? 0 : 1);
+      if (arrival === 'pre-POST frame wait') await act(async () => { frame.resolve(json({ linked: true })); await frameRead; });
+      if (arrival === 'POST in flight') await act(async () => {
+        const held = jobsSocket.getSnapshot().jobs[0];
+        // The ordinary acceptance may become the newest displayed job before
+        // its HTTP response. Fusion still owns the saved waiting parent by ID.
+        publishJobs([{ ...held, id: 'ordinary-job', created_at: '2026-10-24T12:00:00Z', status: 'preparing',
+          cad_state: { ...held.cad_state!, state: 'accepted' } }, held]);
+        ordinaryPost.resolve('ordinary-job');
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(3100); render(); });
+      expect(posts.filter(url => url.endsWith('/solve-again'))).toEqual(['/api/jobs/job%3Aframe-fusion/solve-again']);
+      expect(mocks.solveModel).toHaveBeenCalledTimes(arrival === 'pre-POST frame wait' ? 0 : 1);
+      expect(solveControlStore.getSnapshot()!.waitingForEngine).toBe(false);
+      expect(solveControlStore.getSnapshot()!.readinessRequested).toBe(false);
+    });
+
   // Exercise the real owner/adapter as a small event machine. Fusion arrives
   // before the ordinary request can submit; Stop/engine edits cancel that intent.
   const eventOrders = [
