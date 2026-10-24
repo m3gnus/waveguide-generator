@@ -99,7 +99,7 @@ export function FemFieldControls({ field, rendering, setRendering, sequential, c
     </div>}
     {children}
     <div role="status" aria-live="polite">{field.loading || planeResult.loading ? 'Loading FEM field…' : planeResult.error ?? field.error}
-      {(field.error || planeResult.error) && <button type="button" onClick={planeResult.error ? planeResult.retry : field.retry}>Retry</button>}
+      {(field.error || planeResult.error) && <button type="button" className="btn" onClick={planeResult.error ? planeResult.retry : field.retry}>Retry</button>}
     </div>
   </div>;
 }

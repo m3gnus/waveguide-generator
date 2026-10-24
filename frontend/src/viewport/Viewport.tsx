@@ -1053,7 +1053,7 @@ export function Viewport() {
         {workspaceMode === 'parametric' && <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>}
         {workspaceMode === 'parametric' && behindDesign && !importedMesh && !showNoticeRefresh && <button
           type="button"
-          className="viewport-refresh"
+          className="btn viewport-refresh"
           disabled={refreshRequestedAt !== null}
           title={staleReason(preferences.liveUpdate, preview.connection, preview.error)}
           aria-label={`Rebuild the preview. ${staleReason(preferences.liveUpdate, preview.connection, preview.error)}`}
@@ -1101,7 +1101,7 @@ export function Viewport() {
           </span>}
           {showCadSolverError && <><span>Solve mesh unavailable</span><b>{cadSolverError}</b></>}
         </div>
-        {showNoticeRefresh && <button type="button"
+        {showNoticeRefresh && <button type="button" className="btn"
           disabled={(showPreviewError || showStalledPreview) && refreshRequestedAt !== null
             || showSolverMeshNotice && solverMeshState.building || showCadSolverError && cadSolverLoading}
           onClick={refreshNotice}>Refresh</button>}
@@ -1131,7 +1131,7 @@ export function Viewport() {
     {activeScene && renderFailure && <div className="viewport-empty" role="status">
       <b>WebGL renderer stopped</b>
       <span>{renderFailure}. Retry to rebuild the viewport; if it stops again, check that graphics acceleration is enabled.</span>
-      <button type="button" className="viewport-retry" onClick={retryRenderer}><Icon name="reset"/>Retry</button>
+      <button type="button" className="btn viewport-retry" onClick={retryRenderer}><Icon name="reset"/>Retry</button>
     </div>}
     {activeScene && mode === 'curvature' && !activeScene.hasCurvature && <div className="viewport-mode-empty">
       <b>Curvature heatmap unavailable</b><span>This frame has no analytic curvature section. Neutral geometry remains visible while inspection data is requested.</span>
@@ -1320,7 +1320,7 @@ export function Viewport() {
         && <div className="field-plane-note" role="note">{fieldMaskState.snappedVertexCount.toLocaleString()} vertices snapped to symmetry plane</div>}
       {fieldStatus !== 'ready' && <div className={`field-plane-status ${fieldStatus}`} role="status" aria-live="polite">
         <span>{fieldStatus === 'loading' ? 'loading field plane…' : fieldError ?? 'field plane idle'}</span>
-        {fieldStatus === 'error' && fieldJobId && <button type="button" onClick={() => useFieldPlaneStore.getState().retry()}>Retry</button>}
+        {fieldStatus === 'error' && fieldJobId && <button type="button" className="btn" onClick={() => useFieldPlaneStore.getState().retry()}>Retry</button>}
       </div>}
     </div>}
 

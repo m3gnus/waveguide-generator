@@ -1,3 +1,4 @@
+import { EmptyState } from '../shell/EmptyState';
 import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, OSSE_SWITCH_NOTICE, type OsseFeatures } from './osseFeatures';
 import { FreeformProfileInspection } from './ProfileInspection';
 import { registerParameterPanel } from './parameterPanelValidity';
@@ -1141,7 +1142,7 @@ function CadMeshDetail() {
 
 function CadSimulationEmpty() {
   const cadApplication = cadApplicationName(usePreferences().cadApplication);
-  return <div className="cad-mode-empty" role="status"><b>Prepare CAD geometry to unlock these inputs</b><span>Drivers, crossover, sweep, directivity and solve options appear here after CAD Link brings the finished geometry back from {cadApplication}.</span><button className="primary" onClick={() => workspaceNavigation.navigate('geometry')}>Open CAD Link setup</button></div>;
+  return <EmptyState title="Prepare CAD geometry to unlock these inputs" detail={<>Drivers, crossover, sweep, directivity and solve options appear here after CAD Link brings the finished geometry back from {cadApplication}.</>} action={<button className="btn-primary" onClick={() => workspaceNavigation.navigate('geometry')}>Open CAD Link setup</button>}/>;
 }
 
 const osseChoices = [

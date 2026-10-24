@@ -158,6 +158,7 @@
   --field-w: 132px;
   --control-h: 32px;
   --control-h-sm: 28px;
+  --control-h-xs: 24px;
   --r: 0px;
   --r2: 0px;
   --r3: 0px;
@@ -204,6 +205,7 @@
 }
 
 [data-theme="light"] {
+  --control-h-xs: 24px;
   --source-moving: #176d68;
   --sketch-selected: #0b9691;
   --sketch-construction: #a34e00;

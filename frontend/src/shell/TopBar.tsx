@@ -262,6 +262,7 @@ export function SolveActions() {
     {source && <span className={`cad-source-line cad-source-${source.tone}`} role="status" title={source.text}>
       <span>{source.text}</span>
       {source.refresh && <button
+        className="btn-link"
         type="button"
         disabled={cadWorkspaceView.pullingFromFusion}
         aria-busy={cadWorkspaceView.pullingFromFusion}

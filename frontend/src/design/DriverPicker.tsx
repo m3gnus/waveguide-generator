@@ -1,3 +1,4 @@
+import { EmptyState } from '../shell/EmptyState';
 import { prefillExteriorDriver } from '../stores/exteriorTransducer';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import {
@@ -507,12 +508,9 @@ function DriverSearch({ channel, roleHint, counts, onPick }: {
           : driverCountText(matchTotal, kind)}
         {query.trim() ? ' match' : ''}
       </p>}
-      {empty && <div className="empty-state driver-empty" role="status">
-        <b>{empty.title}</b>
-        <span>{empty.detail}</span>
-        {escape && <button
+      {empty && <EmptyState className="driver-empty" title={empty.title} detail={empty.detail} action={escape ? <button
           type="button"
-          className="driver-empty-action"
+          className="btn driver-empty-action"
           // Without this the input blurs, the dropdown closes, and the button
           // is gone before its own click lands.
           onMouseDown={(event) => event.preventDefault()}
@@ -521,8 +519,7 @@ function DriverSearch({ channel, roleHint, counts, onPick }: {
             chooseKind(escape.kind);
             input.current?.focus();
           }}
-        >{escape.label}</button>}
-      </div>}
+        >{escape.label}</button> : undefined}/>}
       {/* Matches the library knows and cannot drive. When they are the only
           answer the empty state above has already said so; this line is for
           when they sit behind rows that did come back. */}

@@ -1,3 +1,5 @@
+import { EmptyState } from './EmptyState';
+import { Notice } from './Notice';
 import { CurrentModelStatus } from './CurrentModelStatus';
 import { selectJob } from '../jobs/selectJob';
 import { samplingNotes } from '../results/sampling';
@@ -2178,7 +2180,7 @@ export function ResultsChartGrid({ chartTypes, result, named, tokens, live = fal
   radiationArtifact?: RadiationArtifactView;
 } & SummarySourceProps) {
   if (!chartTypes.length) {
-    return <div className="result-grid-empty" role="status"><b>NO CHARTS OPEN</b><span>Add a chart to rebuild the results workspace.</span><button onClick={() => preferencesStore.addChart()}>+ Add chart</button></div>;
+    return <EmptyState className="result-grid-empty" title="No charts open" detail="Add a chart to rebuild the results workspace." action={<button className="btn-primary" onClick={() => preferencesStore.addChart()}>+ Add chart</button>}/>;
   }
   return <div className={`result-grid ${resultLayoutClass(chartTypes.length)}`} data-chart-count={chartTypes.length}>
     {chartTypes.map((chartType, index) => <ChartCard key={`${index}-${chartType}`} index={index} chartType={chartType} result={result} named={named} tokens={tokens} live={live} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifact} wrapper={wrapper} job={job} channelId={channelId}/>) }
@@ -2593,7 +2595,7 @@ export function ResultsPanel() {
   }, []);
 
   const emptyModel = <div className="empty-state" role="status">
-    {primaryJob && resolved.verdict !== 'current' && <button type="button" onClick={showPrimaryModel}>Show that run's model</button>}
+    {primaryJob && resolved.verdict !== 'current' && <button type="button" className="btn" onClick={showPrimaryModel}>Show that run's model</button>}
   </div>;
 
   return <div
@@ -2716,15 +2718,13 @@ export function ResultsPanel() {
       {measuredError && <span className="result-recombine-error" role="alert">{measuredError}</span>}
     </div>}
     {preferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}
-    {error && <div className="job-error" role="status" style={{ margin: 7, fontSize: 'var(--text-micro)' }}>{error}<button type="button" onClick={() => { setFetchError(null); setFetchAttempt((value) => value + 1); }}>Retry</button></div>}
+    {error && <Notice tone="error" actions={<button type="button" className="btn" onClick={() => { setFetchError(null); setFetchAttempt((value) => value + 1); }}>Retry</button>}>{error}</Notice>}
     {showingPrevious && <div className="job-warning" role="status" style={{ margin: 7 }}>Showing previous results while fetching the selected run…</div>}
     {/* Three different empty docks, said apart: a failed fetch, a fetch still
         in flight, and nothing selected at all. The last used to claim it was
         loading, which is how a dock with no selection looked like a hang. */}
     <CurrentModelStatus actions solveStatus activeOnly={!!(charts && resolved.job) || !!error || !!cleanedUpRun}/>
     {resolved.modelNotLoaded && <div role="status">Run model not loaded</div>}
-    {!resolved.job ? emptyModel : charts ?? (cleanedUpRun ? <div className="empty-state" role="status">
-      <b>Results cleaned up</b><span>{cleanedUpMessage(cleanedUpRun)}</span>
-    </div> : error ? <div className="empty-state" role="status"><b>Results unavailable</b><span>Retry above, or select another run in the Jobs rail.</span></div> : emptyModel)}
+    {!resolved.job ? emptyModel : charts ?? (cleanedUpRun ? <EmptyState title="Results cleaned up" detail={cleanedUpMessage(cleanedUpRun)}/> : error ? <EmptyState title="Results unavailable" detail="Retry above, or select another run in the Jobs rail."/> : emptyModel)}
   </div>;
 }

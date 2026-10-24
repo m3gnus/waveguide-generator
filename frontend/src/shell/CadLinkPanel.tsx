@@ -1,3 +1,5 @@
+import { EmptyState } from './EmptyState';
+import { Notice } from './Notice';
 import { cadMeshSizing } from '../api/cadMesh';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { buildCadProjectSetup, useCadFeedbackError } from './cadSetupPublisher';
@@ -787,7 +789,7 @@ export function CadLinkPanel() {
     <h2 className="sr-only">CAD Link</h2>
     {/* One notice channel. Transient events land here, at the top of the rail;
         persistent conditions render inside the card they belong to. */}
-    {error && <div className="cad-alert cad-alert-error" role="alert">
+    {error && <Notice tone="error">
       {error}
       {/* The report behind the sentence: the adapter's own words, the entity
           ids and the internal invariants. It belongs to this exact message,
@@ -797,7 +799,7 @@ export function CadLinkPanel() {
         <summary>Diagnostics</summary>
         <p className="cad-detail">{errorDiagnostics.detail}</p>
       </details>}
-    </div>}
+    </Notice>}
     {status && <div className="cad-status-strip" role="status">{status}</div>}
 
     {/* 1 · Project: what am I working on? */}
@@ -888,8 +890,8 @@ export function CadLinkPanel() {
         <small>Freshness, geometry requests and updates use this exact managed body.</small>
       </label>}
       {!onshape && cadLimitation && <p className="section-note">{cadLimitation}</p>}
-      {onshape && publicOnly && !confirmPublicDocument && <div className="cad-alert cad-alert-notice" role="status"><b>This Onshape plan creates public documents.</b> {onshapeConnection?.plan?.name ?? 'The Free plan'} makes every document world-readable — anyone with the link can view this waveguide. Confidential designs belong in Fusion 360 or on a paid Onshape plan.</div>}
-      {onshape && onshapeConnection?.insecureKeyFile && <div className="cad-alert cad-alert-error" role="alert">The Onshape key file at {onshapeConnection.credentialsPath} is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.</div>}
+      {onshape && publicOnly && !confirmPublicDocument && <Notice tone="warning" title="This Onshape plan creates public documents.">{onshapeConnection?.plan?.name ?? 'The Free plan'} makes every document world-readable — anyone with the link can view this waveguide. Confidential designs belong in Fusion 360 or on a paid Onshape plan.</Notice>}
+      {onshape && onshapeConnection?.insecureKeyFile && <Notice tone="error">The Onshape key file at {onshapeConnection.credentialsPath} is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.</Notice>}
       {onshape && confirmPublicDocument && <div className="cad-direction-alert" role="alert"><div><b>This document will be public</b><span>{confirmPublicDocument}</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmPublicDocument(null)}>Cancel</button><button className="primary" disabled={sendingToOnshape} onClick={() => void sendToOnshape(true)}>Continue: create a public document</button></div></div>}
       {onshape && confirmUnlink && linkedDocument && <div className="cad-direction-alert" role="alert"><div><b>Unlink {linkedDocument.documentName}?</b><span>WG forgets this link. The Onshape document is left exactly as it is, and the next send creates a new document.</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmUnlink(false)}>Cancel</button><button className="primary" disabled={unlinkingOnshape} onClick={() => void unlinkFromOnshape()}>Unlink {linkedDocument.documentName}</button></div></div>}
     </section>
@@ -907,12 +909,9 @@ export function CadLinkPanel() {
           onClick={() => void cadWorkspaceView.refresh()}
         ><Icon name="reset"/></button>
       </header>
-      {!bundle && !record && <div className="empty-state">
-        <b>No CAD model yet.</b>
-        <span>{onshape
+      {!bundle && !record && <EmptyState title="No CAD model yet." detail={onshape
           ? 'Send this design to Onshape, then bring its geometry back here.'
-          : 'Send a design from Fusion 360 and it will appear here.'}</span>
-      </div>}
+          : 'Send a design from Fusion 360 and it will appear here.'}/>}
       {bundle && <div className="cad-model-identity">
         <b className="cad-model-name" title={bundle.documentName ?? bundle.name}>{returnDisplayName(bundle)}</b>
         {bundle.bundleOrigin === 'native' && <ExperimentalBadge/>}
@@ -922,25 +921,24 @@ export function CadLinkPanel() {
         >{freshnessSummary(record) === 'unlinked' ? `from ${onshape ? 'Onshape' : 'Fusion'}` : freshnessSummary(record)}</span>}
         <time dateTime={record?.created_at || bundle.modifiedAt} title={fullTime(record?.created_at || bundle.modifiedAt)}>{relativeTime(record?.created_at || bundle.modifiedAt)}</time>
       </div>}
-      {importedSolverUnavailable && <div className="cad-alert cad-alert-notice cad-solver-unavailable" role="status">
-        <b>No engine here can solve this CAD model right now.</b>{' '}
+      {importedSolverUnavailable && <Notice className="cad-solver-unavailable" title="No engine here can solve this CAD model right now.">
         {importedSolverReasons.length
           ? `${importedSolverReasons.join('; ')}.`
           : 'No engine here solves ingested models.'}{' '}
         The round trip still works for building and exporting geometry, and the
         parametric workspace still solves here.
-      </div>}
+      </Notice>}
       {bundle && !state.setupLoading && !buildCadProjectSetup(state, undefined, state.projectLineageId ?? 'unclaimed') && <p className="cad-detail" role="status">Fusion solves use the last complete setup.</p>}
-      {state.setupLoading && <div className="cad-alert cad-alert-notice" role="status">Loading model settings…</div>}
-      {state.ingestStaleReason && <div className="cad-alert cad-alert-notice" role="status">{state.ingestStaleReason} Prepare the model again before solving.</div>}
-      {viewportNotice && <div className="cad-alert cad-alert-notice" role="status">{viewportNotice}</div>}
+      {state.setupLoading && <Notice>Loading model settings…</Notice>}
+      {state.ingestStaleReason && <Notice>{state.ingestStaleReason} Prepare the model again before solving.</Notice>}
+      {viewportNotice && <Notice>{viewportNotice}</Notice>}
       {/* Beside the button that starts the solve, not only in the rail where
           the drivers are set: this is what the run will and will not produce,
           and it was previously only discoverable from the empty chart. */}
       {record && !staleModel && importedSubmissionNotices(state).map((notice) => (
-        <div className="cad-alert cad-alert-notice" role="status" key={notice}>{notice}</div>
+        <Notice key={notice}>{notice}</Notice>
       ))}
-      {ingestError && <div className="cad-alert cad-alert-error" role="alert">Preparation failed — {ingestError}</div>}
+      {ingestError && <Notice tone="error">Preparation failed — {ingestError}</Notice>}
       {bundle?.readable && (ingesting || !record || staleModel || ingestError) && <button
         className="primary cad-primary-action"
         disabled={ingesting}

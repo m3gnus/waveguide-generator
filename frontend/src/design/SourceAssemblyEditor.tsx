@@ -258,7 +258,7 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
       </details>}
       <h3>Front layout</h3><svg aria-label="Assembly front layout" viewBox={`${-dimensions.width_mm/2-8} ${-dimensions.height_mm/2-8} ${Math.max(1, dimensions.width_mm)+16} ${Math.max(1,dimensions.height_mm)+16}`} className="assembly-preview">
         <rect x={-dimensions.width_mm/2} y={-dimensions.height_mm/2} width={Math.max(0,dimensions.width_mm)} height={Math.max(0,dimensions.height_mm)} fill="none" stroke="currentColor" strokeWidth=".4"/>
-        <circle cx={dimensions.horn_xy_mm[0]} cy={-dimensions.horn_xy_mm[1]} r={Math.max(0,dimensions.mouth_radius_mm)} fill="none" stroke="var(--accent, #77aaff)" strokeWidth=".5"/>
+        <circle cx={dimensions.horn_xy_mm[0]} cy={-dimensions.horn_xy_mm[1]} r={Math.max(0,dimensions.mouth_radius_mm)} fill="none" stroke="var(--acc)" strokeWidth=".5"/>
         {draft.woofer && <circle cx={dimensions.woofer_xy_mm[0]} cy={-dimensions.woofer_xy_mm[1]} r={Math.max(0,dimensions.aperture_radius_mm)} fill="none" stroke="currentColor" strokeWidth=".5"/>}
       </svg>
       <h3>Horn section</h3><p>Axial Z → · radial R ↑. Plug Z is measured from the horn source rim.</p><svg viewBox="0 0 620 240" className="source-meridian" aria-label="Phase plug passage section">

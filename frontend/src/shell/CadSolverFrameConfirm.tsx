@@ -1,3 +1,4 @@
+import { Notice } from './Notice';
 import { deadlineFetch } from '../api/deadlineFetch';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { confirmSolverFrame, type SolverFrameState } from '../api/solverFrame';
@@ -264,21 +265,20 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
         : <p className="cad-detail">Choose the model axis that points out of the mouth; the preview shows it as the solver +Z.</p>}
       {changing && <button className="link-button" data-action="done-solver-frame" onClick={done}>Done</button>}
     </>}
-    {view.changedFrom && axis && <p className="cad-alert cad-alert-notice cad-solver-frame-changed" role="status">
+    {view.changedFrom && axis && <Notice tone="warning" className="cad-solver-frame-changed">
       This project’s solver frame was changed elsewhere to {axis}; this card showed {view.changedFrom}. Solve now solves along {axis}.
-    </p>}
+    </Notice>}
     {axis && frame.recordAxis !== axis && <p className="cad-detail">
       Prepared along {frame.recordAxis}; Solve prepares it again along {axis}.
     </p>}
-    {differs && <div className="cad-alert cad-alert-notice cad-solver-frame-differs" role="status">
-      <span>{differs.message}</span>{' '}
-      <button
-        className="link-button"
+    {differs && <Notice className="cad-solver-frame-differs" actions={<button
+        className="btn"
         data-action="switch-solver-frame"
         disabled={switching}
         onClick={() => switchTo(differs.suggestedAxis)}
-      >Switch to {differs.suggestedAxis}</button>
-    </div>}
+      >Switch to {differs.suggestedAxis}</button>}>
+      {differs.message}
+    </Notice>}
     {switchError && <p className="cad-solver-frame-error" role="alert">Could not switch the solver frame: {switchError}</p>}
   </div>;
 }

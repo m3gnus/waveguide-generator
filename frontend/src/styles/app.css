@@ -92,19 +92,19 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
    hovered usefully, and this text exists for exactly that case. It is bounded
    and ellipsised so a long capability reason cannot push the window controls
    off the end of the top bar; the full text stays reachable as the title. */
-.solve-notice { min-width: 0; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); line-height: 1.2; }
+.solve-notice { min-width: 0; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-base); line-height: 1.2; }
 .solve-notice-blocked { color: var(--red); }
 .solve-notice-substituted { color: var(--amber); }
 /* Where the CAD model on screen came from. Never a claim that it is Fusion's
    latest unless that was measured; Refresh is its own explicit action. */
-.cad-source-line { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 46ch; font-size: var(--text-sm); color: var(--fg2); white-space: nowrap; }
+.cad-source-line { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 46ch; font-size: var(--text-base); color: var(--fg2); white-space: nowrap; }
 .cad-source-line > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.cad-source-line button { flex: none; height: 22px; padding: 0 7px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-sm); }
+.cad-source-line button { flex: none; }
 .cad-source-changed { color: var(--amber); }
 .cad-source-unverified { color: var(--fg3); }
 /* The route to something that finished out of sight: a request waiting for
    the user, or results that arrived after they moved on. */
-.attention-notice { display: flex; flex: none; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border: 1px solid rgba(var(--amber-rgb), .45); border-radius: var(--r3); background: rgba(var(--amber-rgb), .1); color: var(--amber); font-size: var(--text-sm); font-weight: 600; white-space: nowrap; }
+.attention-notice { display: flex; flex: none; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border: 1px solid rgba(var(--amber-rgb), .45); border-radius: var(--r3); background: rgba(var(--amber-rgb), .1); color: var(--amber); font-size: var(--text-base); font-weight: 600; white-space: nowrap; }
 .attention-notice i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .attention-ready { border-color: rgba(var(--acc-rgb), .45); background: rgba(var(--acc-rgb), .1); color: var(--acc); }
 .solve-button kbd { border-color: var(--solve-kbd-bd); background: var(--solve-kbd); color: var(--solve-kbd-fg); }
@@ -230,7 +230,6 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .pill.result-power-check { flex: none; border-color: rgba(var(--amber-rgb), .38); background: rgba(var(--amber-rgb), .1); color: var(--amber); letter-spacing: 0; text-transform: none; white-space: nowrap; }
 .panel-text-action { min-height: 26px; padding-inline: 6px; border-radius: var(--r3); background: transparent; color: var(--fg2); font-size: var(--text-micro); }
 .panel-text-action:hover { background: var(--ov3); color: var(--fg); }
-.panel-text-action--danger { color: var(--red); }
 .preferences-surface { padding: 4px 8px; border-bottom: 1px solid var(--hair-soft); color: var(--fg2); }
 .job-naming-preferences { display: flex; flex-wrap: wrap; align-items: end; gap: 6px; padding: 6px 0; }
 .job-name-preview { flex-basis: 100%; overflow: hidden; color: var(--fg4); font: var(--text-micro) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
@@ -335,9 +334,10 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 /* Empty, loading, and failed states. A dashed border reads as "not built";
    these are built and simply have nothing to show yet, so they get the same
    hairline every other resting surface has. */
-.empty-state { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 2px; padding: 12px 12px; border: 1px solid var(--border-subtle); border-radius: var(--r2); background: var(--ov1); color: var(--fg3); }
-.empty-state b { color: var(--fg1); font: 660 var(--text-micro) var(--ui); letter-spacing: .1em; text-transform: uppercase; }
-.empty-state span { line-height: 1.45; }
+.empty-state { display: flex; flex-direction: column; gap: var(--space-4); margin: var(--space-6) 0 var(--space-2); padding: var(--space-12); border: 1px solid var(--border-subtle); border-radius: var(--r2); background: var(--ov1); color: var(--fg3); }
+.empty-state b { color: var(--fg1); font: 600 var(--text-base) var(--ui); letter-spacing: 0; text-transform: none; }
+.empty-state-detail { color: var(--fg3); line-height: 1.45; }
+.empty-state-action { margin-top: var(--space-2); }
 
 /* viewport placeholder */
 .viewport-panel { position: relative; width: 100%; height: 100%; min-height: 180px; overflow: hidden; background: var(--vp-grad); box-shadow: var(--vp-vig); }
@@ -547,8 +547,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .result-summary[data-density="full"] .result-summary-group > h3 { margin-bottom: 8px; }
 .result-summary[data-density="full"] .result-summary-group > dl { gap: 6px; }
 .result-summary[data-density="full"] .result-summary-row { grid-template-columns: minmax(110px, .75fr) minmax(0, 1fr); gap: 12px; }
-.result-grid-empty { display: grid; place-content: center; justify-items: center; flex: 1; min-height: 120px; color: var(--fg3); text-align: center; }
-.result-grid-empty b { color: var(--fg1); font: var(--text-micro) var(--mono); letter-spacing: .1em; }.result-grid-empty span { margin: 4px 0 8px; }.result-grid-empty button { padding: 4px 8px; border: 1px solid rgba(var(--acc-rgb), .35); border-radius: var(--r3); background: rgba(var(--acc-rgb), .1); color: var(--acc); }
+.result-grid-empty { align-items: center; justify-content: center; flex: 1; min-height: 120px; text-align: center; }
 .chart-placeholder { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: var(--chart-bg); cursor: crosshair; }
 .chart-stub { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 8px; padding: 24px 16px 16px; color: var(--fg3); font-size: var(--text-micro); text-align: center; }
 .chart-stub button { padding: 4px 8px; border: 1px solid rgba(var(--acc-rgb), .38); border-radius: var(--r3); background: rgba(var(--acc-rgb), .1); color: var(--acc); cursor: pointer; }
@@ -633,10 +632,10 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .jobs-output-folder-path { flex: 1; min-width: 0; height: var(--field-h); background: transparent; color: var(--fg2); font-size: var(--text-micro); text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .jobs-output-folder-path:hover:not(:disabled) { color: var(--fg); text-decoration: underline; }
 .jobs-output-folder-open { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: var(--r2); background: transparent; color: var(--fg3); }
-.jobs-output-folder-open:hover:not(:disabled) { color: var(--fg); background: var(--hover-bg); }
+.jobs-output-folder-open:hover:not(:disabled) { color: var(--fg); background: var(--ov3); }
 .jobs-output-folder-open:disabled { opacity: .4; }
 .jobs-output-folder-open svg { width: 12px; height: 12px; }
-.jobs-output-folder-error { flex-basis: 100%; padding: 0 0 4px; color: var(--danger, #d66); font-size: var(--text-micro); }
+.jobs-output-folder-error { flex-basis: 100%; padding: 0 0 4px; color: var(--red); font-size: var(--text-micro); }
 .jobs-filter { display: flex; align-items: center; gap: 6px; margin: 6px 6px 2px; padding: 0 5px 0 7px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--input-bg); color: var(--fg3); }
 .jobs-filter:focus-within { border-color: rgba(var(--acc-rgb), .5); box-shadow: 0 0 0 2px rgba(var(--acc-rgb), .08); }
 .jobs-filter svg { width: 12px; height: 12px; flex: none; }
@@ -695,7 +694,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
    the card is narrow. */
 .solve-progress-compact { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
 .solve-progress-meta { color: var(--fg3); }
-.job-card footer { display: flex; gap: 4px; margin-top: 7px; }.job-card footer button, .job-card footer > a { padding: 2px 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg2); font-size: var(--text-micro); text-decoration: none; }.job-card footer .primary { border-color: rgba(var(--acc-rgb), .3); color: var(--acc); }
+.job-card footer { display: flex; gap: 4px; margin-top: 7px; }
 .job-card footer .run-export-control { margin-inline: 0 auto; }
 .job-card footer .action-menu-split { height: 23px; border-radius: var(--r3); }
 .job-card footer .action-menu-primary { min-width: 58px; padding: 0 6px; border: 0; background: transparent; font-size: var(--text-micro); }
@@ -709,7 +708,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .run-export-control.compact:focus-within { opacity: 1; pointer-events: auto; }
 .run-export-feedback.error { border-color: rgba(var(--red-rgb), .35); color: var(--red); }
 .score { display: flex; gap: 6px; margin-top: 6px; }.score span { color: var(--amber); font-size: var(--text-micro); letter-spacing: 1px; }.score em { color: var(--fg4); font-style: normal; }.score b { color: var(--fg1); font: var(--text-micro) var(--mono); }
-.job-error { margin-top: 7px; padding: 4px 6px; border: 1px solid rgba(var(--red-rgb), .2); border-radius: var(--r3); background: rgba(var(--red-rgb), .07); color: var(--red); font-size: var(--text-micro); }
+
 .job-retention-note { margin-top: 5px; color: var(--fg3); font-size: var(--text-micro); }
 .cad-solve-inputs { margin-top: 5px; color: var(--fg3); font-size: var(--text-micro); }
 .cad-solve-inputs summary { width: fit-content; cursor: pointer; color: var(--fg2); }
@@ -884,14 +883,6 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .export-dialog > footer button:hover:not(:disabled),
 .update-install-actions button:hover:not(:disabled) { border-color: var(--hair-hi); background: var(--ctl-grad-h); color: var(--fg); }
 .update-install-actions button svg { width: 13px; height: 13px; }
-/* The workspace's own highest-emphasis control -- the solid inverted ground the
-   Solve button wears -- rather than the accent wash the report dialog uses for
-   a link-shaped action. This is the one thing the dialog exists to offer, and
-   the wash measured 4.15:1 in Console against the footer it sits on. */
-.update-dialog .primary,
-.export-dialog .primary { border-color: transparent; background: var(--inv-bg); color: var(--inv-fg); font-weight: 550; }
-.update-dialog .primary:hover:not(:disabled),
-.export-dialog .primary:hover:not(:disabled) { background: var(--inv-bg); border-color: var(--acc); color: var(--inv-fg); }
 .update-release-link { color: var(--acc-text); font-size: var(--text-micro); text-decoration: none; }
 .update-release-link:hover { text-decoration: underline; }
 .update-release-link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; box-shadow: 0 0 0 4px var(--focus-halo); }
@@ -1113,6 +1104,7 @@ textarea:disabled { opacity: .48; }
 .job-card > p { font-size: var(--text-micro); }
 .job-actions button { min-height: 27px; padding: 4px 8px; border-radius: var(--r3); font-size: var(--text-micro); }
 .job-error {
+  margin-top: 7px; border: 1px solid rgba(var(--red-rgb), .2); border-radius: var(--r3); background: rgba(var(--red-rgb), .07); color: var(--red);
   display: -webkit-box;
   overflow: hidden;
   padding: 6px 8px;
@@ -1234,7 +1226,6 @@ textarea:disabled { opacity: .48; }
 .result-detail > header b,
 .frame-stat-card dt,
 .frame-stat-card > span,
-.empty-state b,
 .panel-preferences-popover > header b,
 .viewer-preferences header b,
 .viewer-pref-scroll h3 {
@@ -1254,7 +1245,7 @@ textarea:disabled { opacity: .48; }
 .result-recombine-mode { display: inline-flex; align-items: center; gap: 4px; color: var(--fg3); white-space: nowrap; }
 .result-recombine-chip { flex: none; padding: 0 5px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg2); font: var(--text-micro) var(--mono); white-space: nowrap; }
 .result-recombine-chip.warn { border-color: rgba(var(--amber-rgb), .38); background: rgba(var(--amber-rgb), .1); color: var(--amber); }
-.result-recombine-error { color: var(--danger, #c65b4e); white-space: nowrap; }
+.result-recombine-error { color: var(--red); white-space: nowrap; }
 
 /* Measured responses overlaid on the on-axis SPL chart. */
 .result-measured { border-bottom: 1px solid var(--hair-soft); text-transform: none; }
@@ -1297,16 +1288,7 @@ textarea:disabled { opacity: .48; }
 /* How much of the library answered, above the rows that did. The search asks
    for forty at a time, so the page size alone would understate a wide match. */
 .driver-results-head { margin: 0; padding: 3px 5px 4px; border-bottom: 1px solid var(--hair-soft); color: var(--fg3); font: var(--text-micro) var(--mono); letter-spacing: .02em; }
-/* The shared empty state, at the picker's density. This is the block that has
-   to answer "is this database empty?", so it keeps its border and its title
-   instead of collapsing into one more grey hint line. */
-.driver-results .driver-empty { gap: 5px; margin: 0; padding: 8px 8px 9px; }
-/* Sentence case here alone: the title quotes back what the user typed, and the
-   shared block's uppercase tracking mangles a driver model. */
-.driver-results .driver-empty b { font: 600 var(--text-micro) var(--ui); letter-spacing: 0; text-transform: none; }
-.driver-results .driver-empty span { font-size: var(--text-micro); }
-.driver-empty-action { align-self: flex-start; height: 20px; margin-top: 3px; padding: 0 8px; border: 1px solid rgba(var(--acc-rgb), .45); border-radius: var(--r3); background: rgba(var(--acc-rgb), .12); color: var(--acc); font-size: var(--text-micro); }
-.driver-empty-action:hover { background: rgba(var(--acc-rgb), .2); }
+.driver-results .driver-empty { margin: 0; padding: var(--space-8); }
 .driver-result { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px; width: 100%; padding: 3px 5px; border: 0; border-radius: var(--r3); background: transparent; text-align: left; }
 .driver-result.active, .driver-result:hover { background: var(--ov3); }
 .driver-result-name { overflow: hidden; color: var(--fg1); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }
@@ -1358,7 +1340,6 @@ textarea:disabled { opacity: .48; }
 .driver-sheet-actions button { height: 20px; padding: 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg2); font-size: var(--text-micro); }
 .driver-sheet-actions button:hover:not(:disabled) { border-color: var(--hair-hi); color: var(--fg1); }
 .driver-sheet-actions button:disabled { opacity: .45; }
-.driver-sheet-actions button.primary { border-color: rgba(var(--acc-rgb), .45); background: rgba(var(--acc-rgb), .14); color: var(--acc); }
 .driver-library-counts { display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: baseline; }
 /* The split by driver type, on its own line under the totals: it is the number
    the note beneath is about, so it reads before the explanation, not inside it. */
@@ -1426,7 +1407,6 @@ textarea:disabled { opacity: .48; }
 .report-summary pre { max-height: 180px; margin: 0; padding: 8px 10px; overflow: auto; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg2); font-size: var(--text-micro); line-height: 1.45; white-space: pre-wrap; }
 .report-dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .report-dialog-actions :is(button, a) { display: inline-flex; align-items: center; min-height: 32px; padding: 6px 12px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); text-decoration: none; }
-.report-dialog-actions a.primary { border-color: rgba(var(--acc-rgb), .45); background: rgba(var(--acc-rgb), .12); color: var(--acc-text); }
 
 /* The shared header lets identity and an arbitrary number of bands use the
    available left space, while chart actions retain their intrinsic widths. */
@@ -1472,7 +1452,56 @@ textarea:disabled { opacity: .48; }
 .imported-input-toggle button { width: auto; padding-inline: 10px; white-space: nowrap; }
 
 /* Pre-job stages use the solve progress area, with no banner treatment. */
-.current-model-status { min-width: 0; font-size: var(--text-sm); }
+.current-model-status { min-width: 0; font-size: var(--text-base); }
 .solve-readiness { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
 .solve-readiness-note { flex-basis: 100%; }
 .solve-readiness button { white-space: normal; text-align: left; }
+
+/* Shared status actions. Dialogs keep their sizing but share the primary look. */
+.btn, .btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  height: var(--control-h-xs);
+  padding: 0 var(--space-8);
+  border: 1px solid var(--hair);
+  border-radius: var(--r3);
+  background: var(--ctl-grad);
+  color: var(--fg1);
+  font: var(--text-micro) var(--ui);
+  letter-spacing: 0;
+  text-transform: none;
+  text-decoration: none;
+}
+.btn:hover:not(:disabled) { border-color: var(--hair-hi); background: var(--ctl-grad-h); }
+.btn-primary,
+.update-dialog .primary,
+.export-dialog .primary,
+.driver-sheet-actions button.primary,
+.report-dialog-actions a.primary {
+  border-color: rgba(var(--acc-rgb), .45);
+  background: rgba(var(--acc-rgb), .12);
+  color: var(--acc-text);
+  font-weight: 550;
+}
+.btn-primary:hover:not(:disabled),
+.update-dialog .primary:hover:not(:disabled),
+.export-dialog .primary:hover:not(:disabled),
+.driver-sheet-actions button.primary:hover:not(:disabled),
+.report-dialog-actions a.primary:hover {
+  border-color: var(--acc);
+  background: rgba(var(--acc-rgb), .2);
+  color: var(--acc-text);
+}
+.btn-link { padding: 0; border: 0; background: transparent; color: var(--acc-text); text-transform: none; }
+.btn-link:hover:not(:disabled) { text-decoration: underline; }
+.btn:disabled, .btn-primary:disabled, .btn-link:disabled { opacity: .5; }
+
+/* Shared block notices: title, detail, then actions. */
+.notice { display: block; margin: 0 0 var(--space-8); padding: var(--space-6) var(--space-8); border: 1px solid var(--hair); background: var(--surface-raised); overflow-wrap: anywhere; font-size: var(--text-base); }
+.notice-title { margin-bottom: var(--space-4); color: var(--fg1); font-weight: 600; }
+.notice-detail { color: var(--fg2); }
+.notice-actions { display: flex; flex-wrap: wrap; gap: var(--space-6); margin-top: var(--space-6); }
+.notice-warning { border-color: var(--amber); background: color-mix(in srgb, var(--amber) 8%, transparent); }
+.notice-error { border-color: var(--red); background: color-mix(in srgb, var(--red) 8%, transparent); }

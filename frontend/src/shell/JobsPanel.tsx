@@ -1,3 +1,5 @@
+import { EmptyState } from './EmptyState';
+import { Notice } from './Notice';
 import { useRunFilters, runModelKey } from '../jobs/runFilters';
 import { runSourceForJob } from '../jobs/exportNaming';
 import { runDocumentName, runSourceLabel, runSourceText } from '../jobs/runIdentity';
@@ -107,6 +109,7 @@ export const RADIATION_IMPEDANCE_STAGE = 'radiation_impedance';
 export function RadiationImpedanceButton({ job }: { job: JobItem }) {
   if (!job.has_radiation_impedance_artifact) return null;
   return <a
+    className="btn"
     title="Download the port-exit radiation-impedance matrix (NPZ) solved for this run's passive-cardioid campaign"
     href={`/api/radiation-impedance/${encodeURIComponent(job.id)}`}
     download
@@ -281,15 +284,15 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
           20-second stall in the middle of an otherwise familiar progress bar. */}
       {job.stage === RADIATION_IMPEDANCE_STAGE && <p className="job-stage-note">Extra pass before the main solve: the passive-cardioid port needs its own radiation-impedance matrix over the port aperture.</p>}
       {job.log_tail.length > 0 && <p title={job.log_tail.at(-1)}>{job.log_tail.at(-1)}</p>}
-      <footer><button disabled={job.cancellation_requested} onClick={() => void jobsSocket.stopJob(job.id).catch((error) => onError(String(error)))}>{job.cancellation_requested ? 'Stopping…' : 'Stop'}</button><button onClick={() => setLogOpen(true)}>Log</button></footer>
+      <footer><button className="btn" disabled={job.cancellation_requested} onClick={() => void jobsSocket.stopJob(job.id).catch((error) => onError(String(error)))}>{job.cancellation_requested ? 'Stopping…' : 'Stop'}</button><button className="btn" onClick={() => setLogOpen(true)}>Log</button></footer>
     </> : failed ? <>
       <p>failed after {duration(secondsBetween(job.started_at ?? job.queued_at, job.completed_at, now))} · {job.stage ?? 'solve'} stage</p>
       <div className="job-error" title={job.error_message ?? undefined}>{job.error_message ?? 'Simulation failed without a diagnostic.'}</div>
       <DesignAvailabilityNotice job={job}/>
-      <footer><RerunButton job={job} onRerun={retry} label="Retry" className=""/><button onClick={() => setLogOpen(true)}>Open log</button></footer>
+      <footer><RerunButton job={job} onRerun={retry} label="Retry" className="btn"/><button className="btn" onClick={() => setLogOpen(true)}>Open log</button></footer>
     </> : cancelled ? <>
       <p>cancelled after {duration(secondsBetween(job.started_at ?? job.queued_at, job.completed_at, now))}</p>
-      <footer><RerunButton job={job} onRerun={retry}/><button onClick={() => setLogOpen(true)}>Log</button></footer>
+      <footer><RerunButton job={job} onRerun={retry} className="btn"/><button className="btn" onClick={() => setLogOpen(true)}>Log</button></footer>
     </> : expanded && <>
       <p>{metrics(job, now)}</p>
       {/* The mesh diagnoses that used to end the solve. The run finished, so
@@ -299,7 +302,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
       {Object.values(job.auto_export_formats).some((format) => format.status === 'blocked') && <div className="job-warning" role="status">
         Automatic export blocked: {[...new Set(Object.values(job.auto_export_formats).filter((format) => format.status === 'blocked').map((format) => format.reason))].join(' ')}
         <p>Choose another WG folder or resolve the existing files, then retry. Retry preserves existing files and does not overwrite them.</p>
-        <button type="button" onClick={() => { void retryBlockedExport(job.id).catch((error) => onError(error instanceof Error ? error.message : String(error))); }}>Retry automatic export</button>
+        <button type="button" className="btn" onClick={() => { void retryBlockedExport(job.id).catch((error) => onError(error instanceof Error ? error.message : String(error))); }}>Retry automatic export</button>
       </div>}
       <Rating job={job} onError={onError}/>
       {/* Selecting the run already loaded its design and results, so the only
@@ -307,7 +310,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
           without a design Waveguide Generator can read, in which case rerunning it would
           silently run whatever is on screen instead, under its name. */}
       <DesignAvailabilityNotice job={job}/>
-      <footer><RerunButton job={job} onRerun={retry}/>{selected && canExportRun(job) && <RunExportControl job={job} onOpenExportSettings={onOpenExportSettings}/>}<RadiationImpedanceButton job={job}/><button onClick={() => setLogOpen(true)}>Log</button></footer>
+      <footer><RerunButton job={job} onRerun={retry} className="btn"/>{selected && canExportRun(job) && <RunExportControl job={job} onOpenExportSettings={onOpenExportSettings}/>}<RadiationImpedanceButton job={job}/><button className="btn" onClick={() => setLogOpen(true)}>Log</button></footer>
     </>}
   </article>;
 }, jobCardPropsEqual);
@@ -400,8 +403,8 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
         <div className="settings-scroll">
           <p id="delete-run-reason">{blockedDeletion.reason}</p>
           <p id="delete-run-consequence">Delete anyway removes this run and its saved results from job history without protecting its Fusion model. No files on disk will be deleted.</p>
-          <button disabled={deletingAnyway} onClick={closeDeletion}>Cancel</button>
-          <button disabled={deletingAnyway} onClick={() => void deleteAnyway()}>{deletingAnyway ? 'Deleting…' : 'Delete anyway'}</button>
+          <button className="btn" disabled={deletingAnyway} onClick={closeDeletion}>Cancel</button>
+          <button className="btn" disabled={deletingAnyway} onClick={() => void deleteAnyway()}>{deletingAnyway ? 'Deleting…' : 'Delete anyway'}</button>
         </div>
       </div>
     </div>, document.body)}
@@ -427,7 +430,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
     />}
     {exportPreferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setExportPreferencesOpen(false)}/>}
     <div className="jobs-history-actions">
-      {failedCount > 0 && <button className="panel-text-action panel-text-action--danger" title={`Remove ${failedCount} failed run${failedCount === 1 ? '' : 's'}`} onClick={clearFailed}>Clear failed</button>}
+      {failedCount > 0 && <button className="panel-text-action" title={`Remove ${failedCount} failed run${failedCount === 1 ? '' : 's'}`} onClick={clearFailed}>Clear failed</button>}
       <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => { setExportPreferencesOpen(false); setPreferencesOpen((value) => !value); }}><Icon name="settings"/></button>
     </div>
     <div className="jobs-filter"><Icon name="search"/><input aria-label="Filter runs" placeholder="Filter runs" value={query} onChange={(event) => setQuery(event.target.value)}/><button className={`jobs-kept-toggle${preferences.minRating > 0 ? ' on' : ''}`} aria-label="Show kept runs only" aria-pressed={preferences.minRating > 0} title="Show kept runs only" onClick={() => preferencesStore.update({ minRating: preferences.minRating > 0 ? 0 : lastMinimumRating.current })}>★</button></div>
@@ -441,13 +444,13 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
       <select aria-label="Run model" value={model} onChange={e => useRunFilters.setState({ model: e.target.value })}>
         <option value="">All models</option>{[...models].map(([id, name]) => <option key={id} value={id}>{name}</option>)}
       </select>
-      {(source !== 'all' || project || model || query) && <button onClick={() => useRunFilters.setState({ source: 'all', project: '', model: '', query: '' })}>Clear filters</button>}
+      {(source !== 'all' || project || model || query) && <button className="btn" onClick={() => useRunFilters.setState({ source: 'all', project: '', model: '', query: '' })}>Clear filters</button>}
     </div>
-    {(coordinator.actionError || snapshot.error) && <div className="job-error" role="alert" style={{ margin: 7 }}>{coordinator.actionError ?? snapshot.error}</div>}
-    {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <div className="empty-state"><b>No runs yet</b><span>{project
+    {(coordinator.actionError || snapshot.error) && <Notice tone="error">{coordinator.actionError ?? snapshot.error}</Notice>}
+    {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <EmptyState title="No runs yet" detail={project
       ? 'Prepare the CAD model and press Solve to start this project’s first run.'
-      : 'Solve the model on screen to start one. Every run is kept here with its results, so you can compare and re-run it later.'}</span></div>}
-    {snapshot.jobs.length > 0 && visibleJobs.length === 0 && <div className="empty-state"><b>No runs match the filter</b><span>{source !== 'all' || project || model ? 'Clear filters to show runs from other sources, projects or models.' : query.trim() && preferences.minRating > 0 ? 'Clear the search or turn off the kept-only filter.' : query.trim() ? 'Clear the search to show runs.' : 'Turn off the kept-only filter to show more.'}</span></div>}
+      : 'Solve the model on screen to start one. Every run is kept here with its results, so you can compare and re-run it later.'}/>}
+    {snapshot.jobs.length > 0 && visibleJobs.length === 0 && <EmptyState title="No runs match the filter" detail={source !== 'all' || project || model ? 'Clear filters to show runs from other sources, projects or models.' : query.trim() && preferences.minRating > 0 ? 'Clear the search or turn off the kept-only filter.' : query.trim() ? 'Clear the search to show runs.' : 'Turn off the kept-only filter to show more.'}/>}
     {visibleJobs.length > 0 && <div className="job-list" role="list" aria-label="Run history">
       {visibleJobs.map(job => <JobCard key={job.id} job={job} now={now} selected={job.id === selection.primary} retryJob={coordinator.continueRun} onError={coordinator.reportError} onRemove={remove} onOpenExportSettings={openExportSettings}/>)}
     </div>}

@@ -1580,7 +1580,7 @@ describe('CadLinkPanel', () => {
     expect(host.querySelector<HTMLButtonElement>('.cad-primary-action')?.textContent)
       .toContain('in Onshape');
     expect(host.textContent).toContain('makes every document world-readable');
-    expect([...host.querySelectorAll('.cad-alert-notice[role="status"]')]
+    expect([...host.querySelectorAll('.notice-warning[role="status"]')]
       .some((notice) => notice.textContent?.includes('makes every document world-readable'))).toBe(true);
     // The Onshape leg needs no workspace folder and no Fusion heartbeat.
     expect(calls.some((path) => path.includes('/fusion-status'))).toBe(false);
@@ -1860,8 +1860,8 @@ describe('CadLinkPanel', () => {
         plan: { name: 'Professional', group: 'Professional', publicOnly: false },
       },
     );
-    expect(host.querySelector('.cad-alert-error[role="alert"]')?.textContent).toContain('chmod 600');
-    expect(host.querySelector('.cad-alert-notice[role="alert"]')).toBeNull();
+    expect(host.querySelector('.notice-error[role="alert"]')?.textContent).toContain('chmod 600');
+    expect(host.querySelector('.notice-info[role="alert"]')).toBeNull();
   });
 
   it('reports an Onshape send failure without claiming success', async () => {
@@ -1873,7 +1873,7 @@ describe('CadLinkPanel', () => {
       host.querySelector<HTMLButtonElement>('.cad-primary-action')!.click();
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     });
-    expect(host.querySelector('.cad-alert-error[role="alert"]')?.textContent).toContain('rate limit');
+    expect(host.querySelector('.notice-error[role="alert"]')?.textContent).toContain('rate limit');
     expect(host.querySelector('.cad-status-strip')).toBeNull();
   });
 
@@ -2189,11 +2189,11 @@ describe('CadLinkPanel', () => {
   it('routes neutral notices separately from errors', async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     act(() => useCadReturnStore.setState({ ingestStaleReason: 'The return changed after preparation.' }));
-    const staleNotice = [...host.querySelectorAll<HTMLElement>('.cad-alert-notice[role="status"]')]
+    const staleNotice = [...host.querySelectorAll<HTMLElement>('.notice-info[role="status"]')]
       .find((notice) => notice.textContent?.includes('return changed'));
     expect(staleNotice).toBeTruthy();
-    expect(staleNotice?.classList.contains('cad-alert-error')).toBe(false);
-    expect(host.querySelector('.cad-solver-unavailable.cad-alert-notice[role="status"]')).toBeTruthy();
+    expect(staleNotice?.classList.contains('notice-error')).toBe(false);
+    expect(host.querySelector('.cad-solver-unavailable.notice-info[role="status"]')).toBeTruthy();
   });
 
   it('does not claim no engine can solve a CAD model when BEAT · Metal is offered', async () => {
@@ -2406,7 +2406,7 @@ describe('CadLinkPanel', () => {
       await Promise.resolve();
     });
 
-    const alert = host.querySelector<HTMLElement>('.cad-alert-error[role="alert"]')!;
+    const alert = host.querySelector<HTMLElement>('.notice-error[role="alert"]')!;
     expect(alert).not.toBeNull();
     const disclosure = alert.querySelector<HTMLDetailsElement>('details.cad-alert-diagnostics')!;
     expect(disclosure).not.toBeNull();
@@ -2437,7 +2437,7 @@ describe('CadLinkPanel', () => {
     // the refusal, so it goes with it rather than standing under a headline it
     // does not explain.
     await act(async () => { cadWorkspace.getSnapshot().reportError('The jobs system is not answering.'); });
-    const replaced = host.querySelector<HTMLElement>('.cad-alert-error[role="alert"]')!;
+    const replaced = host.querySelector<HTMLElement>('.notice-error[role="alert"]')!;
     expect(replaced.textContent).toContain('The jobs system is not answering.');
     expect(replaced.querySelector('details.cad-alert-diagnostics')).toBeNull();
     expect(replaced.textContent).not.toContain('393aaad4');
@@ -2948,7 +2948,7 @@ describe('CadLinkPanel', () => {
     await clickIngest();
     expect(useCadReturnStore.getState().areaDriftSourceIds).toContain('source-hf');
     expect(host.querySelector('.cad-model-card')?.textContent).toContain('Preparation failed');
-    expect(host.querySelector('.cad-alert-error[role="alert"]')?.textContent).toContain('Role resolution refused');
+    expect(host.querySelector('.notice-error[role="alert"]')?.textContent).toContain('Role resolution refused');
     expect([...host.querySelectorAll<HTMLButtonElement>('button')]
       .some((button) => button.textContent === 'Prepare simulation')).toBe(true);
     expect(host.textContent).not.toContain('Allow recorded area drift');

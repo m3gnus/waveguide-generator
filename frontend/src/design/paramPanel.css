@@ -79,9 +79,6 @@
 .realized-dimension-row dt code { margin-top: 1px; color: var(--fg4); font-size: var(--text-micro); }
 .realized-dimension-row dd { margin: 0; color: var(--fg); font: 600 var(--text-base) var(--mono); }
 .realized-dimension-row dd small { margin-left: 4px; color: var(--fg3); font: var(--text-micro) var(--ui); }
-.cad-mode-empty { display: grid; gap: 6px; margin: 10px 8px; padding: 14px; border: 1px solid color-mix(in srgb, var(--acc) 38%, var(--hair)); background: color-mix(in srgb, var(--acc) 6%, var(--surface-panel)); }
-.cad-mode-empty span { color: var(--fg3); font-size: var(--text-micro); }
-.cad-mode-empty button { justify-content: center; min-height: 30px; }
 .cad-solve-fact { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0; padding: 6px 8px; border: 1px solid var(--hair-soft); background: var(--ov1); color: var(--fg2); font-size: var(--text-micro); }
 /* Metal is a hard requirement for imported solves, so on a host without it
    this row reports a blocker rather than a setting. */

@@ -115,7 +115,7 @@
 .field-plane-probe-position { color: var(--fg4); }
 .field-plane-status { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--hair); color: var(--amber); font-size: var(--text-micro); line-height: 1.35; }
 .field-plane-status.error { color: var(--red); }
-.field-plane-status button { flex: none; padding: 2px 6px; border: 1px solid currentColor; border-radius: var(--r3); background: transparent; color: currentColor; font: 650 var(--text-micro) var(--mono); text-transform: uppercase; }
+.field-plane-status button { flex: none; }
 .viewport-empty,
 .viewport-mode-empty { position: absolute; top: 50%; left: 50%; display: flex; flex-direction: column; gap: 4px; width: min(370px, 70%); padding: 16px 20px; border: 1px solid var(--glass-bd); border-radius: var(--r3); background: linear-gradient(145deg, var(--glass-bg), rgba(var(--acc-rgb), .045)); box-shadow: var(--glass-sh), 0 0 70px -28px rgba(var(--acc-rgb), .36); transform: translate(-50%, -50%); backdrop-filter: blur(12px) saturate(1.3); }
 .viewport-empty b,
@@ -124,9 +124,8 @@
 .viewport-mode-empty span { color: var(--fg3); font-size: var(--text-micro); line-height: 1.45; }
 .viewport-mode-empty { border-color: rgba(var(--amber-rgb), .25); }
 .viewport-mode-empty b { color: var(--amber); }
-.viewport-retry { display: inline-flex; align-self: flex-start; align-items: center; gap: 5px; margin-top: 6px; padding: 3px 9px; border: 1px solid rgba(var(--acc-rgb), .38); border-radius: var(--r3); background: rgba(var(--acc-rgb), .12); color: var(--acc); font: 600 var(--text-micro) var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.viewport-retry { align-self: flex-start; margin-top: var(--space-6); }
 .viewport-retry svg { width: 10px; height: 10px; }
-.viewport-retry:hover { border-color: rgba(var(--acc-rgb), .6); background: rgba(var(--acc-rgb), .2); }
 .viewport-empty-mark { position: relative; width: 34px; height: 24px; margin-bottom: 5px; border: 1px solid rgba(var(--acc-rgb), .28); border-radius: 50%; box-shadow: 0 0 20px rgba(var(--acc-rgb), .12) inset; transform: perspective(60px) rotateX(58deg); }
 .viewport-empty-mark::before,
 .viewport-empty-mark::after,
@@ -156,15 +155,14 @@
 .viewport-warning-details ul { display: grid; gap: 6px; margin: 0; padding: 0 0 0 16px; }
 .viewport-warning-details li { padding-left: 2px; }
 .viewport-error-banner { gap: 8px; width: max-content; padding: 6px 6px 6px 8px; border-color: rgba(var(--red-rgb), .35); color: var(--red); }
-.viewport-error-banner button { display: grid; flex: none; place-items: center; width: 20px; height: 20px; border-radius: var(--r3); background: transparent; color: currentColor; font-size: 15px; line-height: 1; }
-.viewport-connection-banner button,
-.viewport-error-banner button:not([aria-label]) { width: auto; padding: 0 8px; border: 1px solid currentColor; border-radius: var(--r3); font: 600 var(--text-micro) var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.viewport-error-banner button[aria-label] { display: grid; flex: none; place-items: center; width: 20px; height: 20px; border-radius: var(--r3); background: transparent; color: currentColor; font-size: 15px; line-height: 1; }
+
 .viewport-connection-banner button:disabled,
 .viewport-error-banner button:disabled { opacity: .45; }
-.viewport-refresh { display: inline-flex; flex: none; align-items: center; gap: 4px; height: 17px; padding: 0 6px; border: 1px solid rgba(var(--amber-rgb), .34); border-radius: var(--r3); background: rgba(var(--amber-rgb), .11); color: var(--amber); font: 600 var(--text-micro) var(--mono); letter-spacing: .09em; text-transform: uppercase; }
+.viewport-refresh { flex: none; }
 .viewport-refresh svg { width: 9px; height: 9px; }
 .viewport-refresh:disabled { opacity: .5; }
-.viewport-error-banner button:hover { background: rgba(var(--red-rgb), .12); }
+.viewport-error-banner button[aria-label]:hover { background: rgba(var(--red-rgb), .12); }
 .viewport-error-banner button svg { width: 13px; height: 13px; }
 .wg2-viewport .reconnect-badge { border: 1px solid rgba(var(--amber-rgb), .34); background: rgba(var(--amber-rgb), .13); color: var(--amber); }
 

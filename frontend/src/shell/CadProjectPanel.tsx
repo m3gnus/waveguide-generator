@@ -1,3 +1,4 @@
+import { Notice } from './Notice';
 import { MoveRunsButton } from './MoveRunsDialog';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
@@ -276,7 +277,7 @@ export function CadProjectHeader() {
       <ProjectOverflowMenu project={project} onNotice={setNotice} onError={setError}/>
     </header>
     {notice && <div className="cad-status-strip" role="status">{notice}</div>}
-    {error && <div className="cad-alert cad-alert-error" role="alert">{error}</div>}
+    {error && <Notice tone="error">{error}</Notice>}
   </section>;
 }
 

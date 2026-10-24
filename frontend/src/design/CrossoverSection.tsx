@@ -293,7 +293,7 @@ function LiveNote({ shown, live, busy, error, members, outside }: {
     return <div className="section-note warning" role="status" aria-live="polite">
       <CurrentModelStatus/>
       The {outside} Hz crossover is outside the solved band [{start}, {end}] Hz. The combined response cannot update until that frequency is solved.{' '}
-      <button type="button" className="crossover-recall" disabled={!solve || solve.disabled} title={solve?.title ?? 'Solve is not available here.'} onClick={() => {
+      <button type="button" className="btn" disabled={!solve || solve.disabled} title={solve?.title ?? 'Solve is not available here.'} onClick={() => {
         const cad = useCadReturnStore.getState();
         cad.setSweep(outside < start ? { frequencyStartHz: outside } : { frequencyEndHz: outside });
         useImportedSolveOptionsStore.getState().setFrequencyMode('range');
