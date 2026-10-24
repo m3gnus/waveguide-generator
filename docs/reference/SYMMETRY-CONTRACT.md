@@ -234,8 +234,8 @@ open over its whole section on one side with no cap and no other
 opening; the mesher's declared-domain verification (open section, leaks,
 winding) passes; the sources resolved by their own faces; and, at every
 submission, the excitation is invariant under the reflection
-(`excitation_problem`). A reduced reading is solved only as modelled (+Z) until
-M1d.
+(`excitation_problem`). A reduced reading is solved along any axis lying in all
+of its cut planes (see **Frame** below).
 
 The reading is recorded on the ingestion record (`domain_interpretation`),
 enters the mesh cache key whenever it changes what is solved, and is part of a
@@ -270,12 +270,21 @@ A job records the decision's summary; a run's details (Results → summary,
 the frame and the decision's hash.
 
 **Frame.** A model cut in CAD (declared, mirrored on evidence or recovered)
-is still solved only as modelled (+Z). Every direction lying in the cut
-plane would map it onto a solver origin plane with a proper rotation, but the
-recovery, the reflection and the evidence checks are made on the planes as
-modelled, and the frame is confirmed before the domain is decided; allowing
-other axes would change the solve inputs of S3-1/S3-2 rather than their
-display. The model card says so ("Radiates along +z as modelled …"), and the
-frame control keeps offering the other axes disabled with their reason. A
-full model WG cuts itself is unaffected: it is cut in whichever frame the user
-confirmed.
+is solved along any axis lying in all of its cut planes: a mirror plane must
+contain the radiation axis, and the proper frame rotation turns each such CAD
+plane into the solver's x = 0 or y = 0 (`solver_frame.solver_cut_planes`). The
+plane's kept side turns with it; when the rotation leaves the mesh on the
+solver plane's negative side, the mesh is reflected onto the positive side,
+recorded apart from the rotation (which stays proper). The recovery and
+evidence checks read the observations in CAD terms, each with its solver plane,
+so they judge the same cut in any frame; only a cut square to the radiation
+axis is refused (`front-back-cut`; `frame-not-as-modelled` is retired). The
+mesher receives the turned planes with `cut_planes_frame: "solver"` and refuses
+rotated planes stated in CAD terms. As modelled (+Z) nothing changes: the same
+options, mesh cache keys and meshes. A return with FEM regions keeps a reduced
+domain as modelled. When Fusion did not show an axis, WG chooses among the
+axes the cuts allow; an inferred axis square to a cut is recorded as a
+fallback (`automatic-fallback`), and a cut refused only because the
+provisional axis was square to it is prepared again along an axis it contains.
+A full model WG cuts itself is unaffected: it is cut in whichever frame it is
+solved in.

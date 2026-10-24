@@ -449,10 +449,11 @@ whatever project is open. Nothing on the backend reads the live UI:
 ## Unlinked solver frame
 
 A return with no WG instance -- a model drawn from scratch in CAD -- carries no throat
-frame, so WG infers which way it radiates. A Solve from Fusion always chooses the
-most likely allowed axis from the available evidence, records weak evidence for
-developers, and proceeds without a frame question. The user can change the axis
-afterwards. Saved manual choices take precedence (see "Automatic axis" below).
+frame, so WG infers which way it radiates. A Solve from Fusion never asks: WG uses
+its confident inference, or else a documented fallback ranking, records a fallback
+as such for developers, and stores the decision on the record it prepared. The user
+can change the axis afterwards. Saved manual choices take precedence (see "Automatic
+axis" below).
 `server/cadlink/interpretation/solver_frame.py` is the executable half of this section, and
 `server/cadlink/interpretation/frame_infer.py` the inference.
 
@@ -541,25 +542,51 @@ afterwards. Saved manual choices take precedence (see "Automatic axis" below).
   later attempt -- an automatic continuation after the update restart, a retry that
   names none -- is held to it, and only a prepare naming another axis replaces it. `+z` is never written into the ingest options, so no mesh cached before
   this contract is made again.
-- **Automatic axis (Solve without a shown axis).** Fusion always decides with
-  `automatic_solve_axis(best_effort=True)`. A matching manual confirmation wins,
-  followed by a carried v1 choice. Otherwise WG uses the v2 survey's winner, or its
-  confidence-weighted aperture, normals and visibility votes when the survey abstains
-  before voting. With no decisive votes it uses normalised positive scores; ties or
-  missing evidence choose the first allowed axis in the stable order beginning at `+z`.
-  The v3 survey retains v2 weights, thresholds and confident verdicts; its cache key
-  changes because LF-only and source-identity abstentions now include geometry evidence.
-  The survey's confidence remains unchanged. A weak/unavailable decision emits a
-  structured developer log record (`stage`, `evidence`, `chosen_axis`) through
-  `record_preparation_diagnostic`, the single replacement point for diagnostics capture.
-  Preparation meshes along that axis, retrying at most once after the survey, and runtime
-  submission validates the same decision. A second-pass disagreement is an internal
-  preparation failure, never a frame question. No confirmation row is written. The
-  accepted job records `frameAxisAutomatic`; Change still opens the existing chooser
-  and saves a manual override for subsequent solves.
-  A failed cut-recovery mesh first rebuilds with symmetry disabled and retains the
-  recovery failure in `domain_interpretation.cut_recovery`. Any remaining domain refusal
-  is handled before frame inference/retry or finding approvals, so neither can mask it.
+- **Automatic axis (Solve without a shown axis).** A matching manual confirmation wins,
+  followed by a carried v1 choice. Otherwise `frame_infer.choose_axis` decides, never
+  asks:
+  - **Inference (`frame-infer-v4`).** The mouth -- where the sources' sound leaves the
+    model, found by flooding the free air from in front of each source through a voxel
+    grid until it leaves the model's bounding box -- is the primary evidence; a folded
+    horn faces its mouth, not its hidden driver's normal. The line-of-sight verdict
+    (normals, visibility, aperture) is v2's, unchanged. A clear mouth of an HF/MF source
+    agreeing with a confident line-of-sight verdict confirms it; disagreeing, it is a
+    conflict; where the line of sight cannot decide (hidden sources, weak or cancelling
+    normals) and visibility does not contradict it, the mouth decides with confidence.
+  - **Fallback.** When the survey abstains (weak, conflicting, no HF/MF source,
+    unvalidated sources, inverted surfaces, unavailable) or names an axis the domain
+    cannot use, WG takes the first allowed axis of the survey's documented
+    `fallbackRanking`: mouth share, then the v2 votes (counting evidence gathered before
+    any abstention), then the stable order as modelled (`+z`) first. The choice is
+    recorded as `automatic-fallback`, never as confident inference, with a developer
+    diagnostic (`stage: frame-fallback`, evidence, chosen axis) through
+    `record_preparation_diagnostic`, the single replacement point for diagnostics capture.
+  - **One recorded decision.** Preparation meshes along the chosen axis, retrying at most
+    once after the survey, and seals the decision on the prepared record
+    (`cad_frame_decisions`, keyed by `ingest_id`: axis, provenance, reason, algorithm,
+    allowed axes). Admission, execution, retry and restart read it through
+    `record_frame_refusal`; nothing re-derives an axis from the version-keyed suggestion
+    cache. A record prepared before decisions were stored keeps the confident verdict of
+    its own time (`frame-infer-v2`'s cached `automatic` axis equal to the axis it was meshed
+    in, under its own v1 or v2 matrix). A second-pass disagreement is an internal
+    preparation failure, never a frame question. No confirmation row is written. The
+    accepted job records `frameAxisAutomatic` and, in its frame provenance, the
+    decision's own provenance; Change still opens the existing chooser and saves a manual
+    override for subsequent solves.
+  - **Domain first.** A failed cut-recovery mesh first rebuilds with symmetry disabled and
+    retains the recovery failure in `domain_interpretation.cut_recovery`. A remaining
+    domain refusal is handled before the survey (an open cut misleads it) and before
+    finding approvals. A refusal caused only by the provisional automatic axis being square
+    to a CAD cut is prepared again, once, along the first allowed axis that every cut
+    contains. A deterministic open-cut refusal (a cut WG cannot rebuild into the whole
+    speaker) is rejected as `model_cut_unsolvable` with a calm line asking for the uncut
+    model, never a "Try again" that cannot succeed; other domain refusals stay internal
+    preparation failures.
+  - **Symmetry fallback.** When the reduced domain does not verify, or the mesher's
+    cutter refuses a cut that would lose a retained portion of a face, WG meshes the
+    whole model, solves it, and says so in one line worded from the planes actually
+    solved (`solved_domain`): the whole model, or the half/quarter cut in CAD when only
+    WG's own cut was dropped.
 - **Axial drive (`per-source-axis-v2`).** An `axial` channel moves each of its sources
   as a rigid piston along that source's own axis, resolved once from the solve mesh in
   solver coordinates (`server/solver/imported.py`, `resolve_source_axes`), never from the
@@ -599,9 +626,9 @@ afterwards. Saved manual choices take precedence (see "Automatic axis" below).
     the source's extent) lie in the plane; a source that merely touches it at a vertex
     is not projected, so a tilted one refuses the reduction.
 - **Every submission.** The jobs system refuses, at submission, an unlinked record whose
-  frame is neither the confirmed one under the same requirement nor, while nothing is
-  confirmed, WG's best available automatic axis the record was meshed in
-  (`frame_confirmation_required`), so `/api/solve`, a retry, a CAD operation's own
+  frame is neither the confirmed one under the same requirement, the project's v1 choice
+  carried forward, nor, while nothing is confirmed, the decision WG stored for exactly
+  this record when it prepared it (`frame_confirmation_required`), so `/api/solve`, a retry, a CAD operation's own
   submission and a recovered bound request all meet it. A record prepared before the
   contract states no frame and is never taken as confirmed or automatic; it is prepared
   again. A refusal with that code releases the binding and keeps the reason.
@@ -806,7 +833,12 @@ A preparation is identified by its ingestion record, whose mesh is keyed by ever
 that decides it. The key also names WG's own meshing semantics -- the sizing constants in
 `server/mesh/imported.py` -- whenever they differ from those every earlier key was made
 under. So no existing mesh is re-made, and a later change of those constants, with every
-keyed input unchanged, is a new preparation. The fingerprint rounds those constants to 12
+keyed input unchanged, is a new preparation. The same fingerprint also names semantic
+contracts such as `precut_section_contract` and `cut_recovery_fallback`
+(`ingest.meshing_semantics`): adding `cut_recovery_fallback: full-domain-v1` (0.3.6)
+changed the fingerprint, and so every mesh cache key and preparation identity: each
+snapshot is meshed and prepared once more on its next solve after the upgrade, while
+saved runs keep the mesh their own record names. The fingerprint rounds those constants to 12
 decimal places, so a last-bit difference between platforms' maths libraries is not a new
 identity. A run keeps the mesh its own record names: collection never removes a mesh any run
 names (see "Retention").
