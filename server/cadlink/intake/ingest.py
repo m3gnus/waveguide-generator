@@ -141,6 +141,9 @@ def meshing_semantics() -> dict[str, Any]:
         # M1c-auto lets an already-cut open shell reduce on a second valid
         # plane. Older cached declared halves must not be reused as halves.
         "precut_reduction_contract": "smallest-domain-v1",
+        # Padded OCC bounds no longer turn a planar B-spline cut rim into a
+        # crossing curve. Re-evaluate preparations refused under the old guard.
+        "precut_section_contract": "planar-line-moments-v1",
     }
     # Rounded: a constant computed at import (``math.log``) may differ in its
     # last bit between platforms' maths libraries, and the fingerprint must not.

@@ -829,6 +829,37 @@ def test_an_asymmetric_section_is_read_on_the_cad_curves() -> None:
     assert [item["angle_from_normal_deg"] for item in kinks] == pytest.approx([30.0, 30.0], abs=1e-6)
 
 
+@pytest.mark.parametrize("bow_mm", [0.0, 0.1])
+def test_padded_spline_bounds_do_not_turn_a_planar_cut_rim_into_a_crossing(monkeypatch, bow_mm):
+    from server.mesh.imported import asymmetric_section
+
+    def run():
+        gmsh.clear()
+        occ = gmsh.model.occ
+        points = [occ.addPoint(x, y, z) for x, y, z in
+                  ((12.7, 0, 0), (40, bow_mm, 25), (100, bow_mm, 90), (162, 0, 109))]
+        curve = occ.addBSpline(points)
+        occ.synchronize()
+        original = gmsh.model.getBoundingBox
+
+        def padded(dim, tag):
+            bounds = list(original(dim, tag))
+            if (dim, tag) == (1, curve):
+                bounds[1] -= .006
+                bounds[4] += .006
+            return tuple(bounds)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(gmsh.model, "getBoundingBox", padded)
+            return asymmetric_section(gmsh, ["y0"])
+
+    found = _run_in_gmsh_session(run)
+    if bow_mm:
+        assert len(found) == 2  # A real departure from the plane still refuses.
+    else:
+        assert found == []
+
+
 @pytest.mark.parametrize("name", ["MFLeft", "MFRight"])
 def test_an_acronym_prefixed_side_name_refuses_the_reduction(tmp_path: Path, name: str) -> None:
     """Review S3-2b, finding 1: "MFLeft" is as sided as "woofer-left"."""

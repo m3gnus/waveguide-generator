@@ -52,7 +52,7 @@ import numpy as np
 
 from server.contracts.geometry import SYMMETRY_PLANE_AXIS as _PLANE_AXIS
 
-ALGORITHM_VERSION = "frame-infer-v1"
+ALGORITHM_VERSION = "frame-infer-v2"
 
 AXES: tuple[str, ...] = ("+z", "-z", "+x", "-x", "+y", "-y")
 _AXIS_VECTORS = np.asarray(
@@ -87,7 +87,8 @@ MIN_SOURCE_PIXELS = 5
 MAX_SAMPLES = 2_500_000
 #: A role seen less than this (mean projected fraction) is unseen.
 UNSEEN_VISIBILITY = 0.02
-#: WG asks when unseen roles carry at least this share of the voting weight.
+#: At most this share may be unseen; a visible HF can establish a horn's
+#: front even when its recessed MF taps have little direct line of sight.
 MAX_UNSEEN_WEIGHT_SHARE = 0.25
 #: WG asks when more of the silhouette than this shows back faces.
 BACKFACE_LIMIT = 0.20
@@ -516,7 +517,7 @@ def infer_frame(mesh: SurveyMesh, *, supported_axes: Iterable[str] = AXES) -> Fr
     unseen = [role for index, role in enumerate(roles_present) if visibility[index].max() < UNSEEN_VISIBILITY]
     unseen_share = sum(ROLE_WEIGHTS[role] for role in unseen) / total_weight
     evidence["unseenRoles"] = unseen
-    if unseen_share >= MAX_UNSEEN_WEIGHT_SHARE:
+    if unseen_share > MAX_UNSEEN_WEIGHT_SHARE:
         names = " and ".join(_role_words(role) for role in unseen)
         return ask(
             "sources-not-visible",

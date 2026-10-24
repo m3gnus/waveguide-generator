@@ -146,6 +146,20 @@ def test_the_rear_facing_source_is_outvoted_by_role_not_by_area() -> None:
     assert roles["LF"]["areaMm2"] > 4 * roles["HF"]["areaMm2"]
 
 
+@pytest.mark.parametrize("axis", ["+z", "-x"])
+def test_unseen_mf_does_not_veto_a_visible_hf_horn(axis: str) -> None:
+    def horn_with_hidden_mf():
+        rules = fx.horn_box()
+        occ = fx._occ()
+        occ.cut(occ.getEntities(3), [fx._box(40, -10, -50, 50, 10, -30)])
+        return [*rules, ("MF", "mf", fx.face((45, 0, -50), (0, 0, 1), within=1))]
+
+    result = infer_frame(_mesh(horn_with_hidden_mf, 5.0).survey(fx.POSES[axis]))
+    assert result.evidence["unseenRoles"] == ["MF"]
+    assert result.status == STATUS_AUTOMATIC, (result.reason, result.evidence)
+    assert result.axis == axis
+
+
 def test_equal_area_sources_are_told_apart_by_their_tags() -> None:
     """Areas cannot separate the two sources; the production tags do."""
 

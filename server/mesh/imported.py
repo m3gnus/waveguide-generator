@@ -661,6 +661,31 @@ SECTION_ANGLE_TOLERANCE_DEG = 1.0
 SECTION_PLANE_TOLERANCE_MM = 1.0e-3
 
 
+def _curve_lies_in_section_plane(gmsh: Any, curve: int, axis: int, box: Sequence[float]) -> bool:
+    if abs(box[axis]) <= SECTION_PLANE_TOLERANCE_MM and abs(box[axis + 3]) <= SECTION_PLANE_TOLERANCE_MM:
+        return True
+    # OCC pads imported B-spline bounds by the edge tolerance, which can be
+    # larger than our plane tolerance. Its exact line moments distinguish a
+    # planar cut rim from a curve that actually leaves the plane. Do not infer
+    # containment from a few samples, or widen the crossing-curve tolerance.
+    try:
+        center = gmsh.model.occ.getCenterOfMass(1, curve)
+        mass = float(gmsh.model.occ.getMass(1, curve))
+        inertia = np.asarray(gmsh.model.occ.getMatrixOfInertia(1, curve), dtype=float).reshape(3, 3)
+    except Exception:  # An unavailable moment cannot exempt a crossing.
+        return False
+    if mass <= 0 or not math.isfinite(mass) or not np.isfinite(inertia).all():
+        return False
+    if not math.isfinite(center[axis]) or abs(center[axis]) > SECTION_PLANE_TOLERANCE_MM:
+        return False
+    diagonal = np.diag(inertia)
+    # I is about the curve's centre of mass: trace(I)/2 - I_aa is
+    # integral((coordinate_a - centre_a)^2 ds). Only roundoff counts as zero.
+    moment = float(diagonal.sum() / 2 - diagonal[axis])
+    roundoff = 32 * np.finfo(float).eps * float(np.abs(diagonal).sum())
+    return abs(moment) <= roundoff
+
+
 def asymmetric_section(gmsh: Any, planes: Iterable[str]) -> list[dict[str, Any]]:
     """Curves that meet a pre-cut mirror plane at an angle, in the OCC model.
 
@@ -687,7 +712,7 @@ def asymmetric_section(gmsh: Any, planes: Iterable[str]) -> list[dict[str, Any]]
         except Exception:  # noqa: BLE001 - a curve without a parametrisation has no tangent
             continue
         for axis in axes:
-            if abs(box[axis]) <= SECTION_PLANE_TOLERANCE_MM and abs(box[axis + 3]) <= SECTION_PLANE_TOLERANCE_MM:
+            if _curve_lies_in_section_plane(gmsh, curve, axis, box):
                 continue  # lies in the plane
             for parameter in (float(low[0]), float(high[0])):
                 point = np.asarray(gmsh.model.getValue(1, curve, [parameter]), dtype=float)
