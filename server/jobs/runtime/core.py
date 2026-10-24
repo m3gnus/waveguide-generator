@@ -1070,16 +1070,19 @@ async def resolve_imported_submission(
     async def alternative(info):
         return await verdict(info, explicit=True)
 
+    fem_reference = ("Interior-only FEM uses CPU float64" if _fem_interior_only(request, imported_record)
+                     else "AUTO FEM uses the CPU float64 reference") if fem else None
     selection = await select_engine(requested, request.options.accuracy, detected, verdict,
                                     alternative_verdict=alternative, preferred=("beat-cpu",) if fem else ())
     if isinstance(selection, SolveBlocker):
+        if fem_reference and requested in {"auto", "beat"} and selection.engine == "beat-cpu":
+            selection.message += f" {fem_reference}."
         _raise_engine_blocker(selection, imported=True)
     selected = selection.engine
     passed_over = selection.passed_over
     cpu_fallback = selection.fallback_reason
     if fem and requested in {"auto", "beat"} and selected == "beat-cpu":
-        cpu_fallback = ("Interior-only FEM uses CPU float64" if _fem_interior_only(request, imported_record)
-                        else "AUTO FEM uses the CPU float64 reference")
+        cpu_fallback = fem_reference
     reason = ("AUTO selected the first available engine, in AUTO order, that declares imported geometry"
               if requested == "auto" else "legacy engine='beat' selected the best available BEAT backend that declares imported geometry"
               if requested == "beat" else cpu_fallback or f"explicit engine={requested!r} declares imported geometry")

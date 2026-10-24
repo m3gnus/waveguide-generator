@@ -26,6 +26,7 @@ import { buildImportedSubmission, CadLinkPanel, declaredDomainPhrase, fusionWork
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { CadWorkspaceOwners } from './CadWorkspaceOwners';
 import { JobsCoordinator } from './JobsCoordinator';
+import { CurrentModelStatus } from './CurrentModelStatus';
 import { workspaceNavigation } from './workspaceNavigation';
 
 const listing: CadReturnListing = {
@@ -86,9 +87,11 @@ function CadLinkTestSurface() {
   return <QueryClientProvider client={capabilityClient}><CadWorkspaceOwners/><CadLinkPanel/></QueryClientProvider>;
 }
 
-function FullCadLinkTestSurface() {
+function FullCadLinkTestSurface({ results = false }: { results?: boolean }) {
   return <QueryClientProvider client={capabilityClient}>
-    <JobsCoordinator><CadWorkspaceOwners/><CadLinkPanel/></JobsCoordinator>
+    <JobsCoordinator><CadWorkspaceOwners/><CadLinkPanel/>
+      {results && <section aria-label="Results"><CurrentModelStatus actions solveStatus/></section>}
+    </JobsCoordinator>
   </QueryClientProvider>;
 }
 
@@ -734,6 +737,11 @@ describe('CadLinkPanel', () => {
     }));
     await renderAndSelect(true);
     await clickIngest();
+    // Results uses this same status surface. Readiness is absent until a
+    // solve is requested, and never belongs to either CAD settings card.
+    await act(async () => root.render(<FullCadLinkTestSurface results/>));
+    const results = host.querySelector('[aria-label="Results"]')!;
+    expect(host.querySelector('.solve-readiness')).toBeNull();
     const manual = 'manual-solve:op-wg';
     const posted = recordOperationRequests({
       detail: {
@@ -762,18 +770,19 @@ describe('CadLinkPanel', () => {
     await vi.waitFor(() => expect(host.querySelector('.cad-status-strip')?.textContent).toBeTruthy());
     expect(host.querySelector('.cad-status-strip')?.textContent).not.toContain('Fusion sent');
 
-    // After engine_unavailable the card asks for another engine, then Solve:
-    // the Solve card's one Solve, which sends the settings on screen
-    // (M1bSolveCard.test.tsx). No second Solve here.
+    // The requested solve's engine refusal appears with progress in Results.
+    // Continuing with new settings still uses the one shared Solve command.
     act(() => {
       applyCadRequest(cadOperation({
         operationId: 'op-fusion', reason: 'engine_unavailable', createdAt: '2026-09-14T10:00:03Z',
         message: 'Choose an available engine, then press Solve.',
       }));
     });
-    expect(host.querySelector('.cad-solve-card .solve-readiness')?.textContent).toContain('Choose an available engine, then press Solve.');
-    expect(operationCard('op-fusion').querySelector('.solve-readiness')).toBeNull();
-    expect(buttonIn(operationCard('op-fusion'), 'Solve now')).toBeUndefined();
+    expect(results.querySelector('.solve-readiness')?.textContent).toContain('Choose an available engine, then press Solve.');
+    expect(host.querySelector('.cad-solve-card .solve-readiness')).toBeNull();
+    expect(operationCard('op-fusion')).toBeNull();
+    expect(buttonIn(host.querySelector('.cad-solve-card')!, 'Solve')?.disabled).toBe(false);
+    expect([...host.querySelectorAll('button')].some(button => button.textContent === 'Solve now')).toBe(false);
     expect(posted).toHaveLength(2);
   });
 
@@ -1072,7 +1081,11 @@ describe('CadLinkPanel', () => {
     expect(regions.textContent).toContain('Miki lining: 30 mm · 5000 Pa·s/m²');
     expect(regions.textContent).toContain('Unclaimed walls');
     expect(regions.textContent).toContain('rigid · 400 triangles · 3,400 mm²');
-    await act(async () => capabilityClient.setQueryData(['capabilities'], { engines: [], femRegions: false }));
+    // Preserve the request generation: an undated fixture is correctly
+    // rejected as stale once a dated capability response has arrived.
+    await act(async () => capabilityClient.setQueryData(['capabilities'], (previous: object) => ({
+      ...previous, engines: [], femRegions: false,
+    })));
     await vi.waitFor(() => expect(host.querySelector('.cad-fem-regions')).toBeNull());
     await act(async () => useCadReturnStore.setState({ ingestRecord: { ...record, fem_regions: [] } }));
     expect(host.querySelector('.cad-fem-regions')).toBeNull();

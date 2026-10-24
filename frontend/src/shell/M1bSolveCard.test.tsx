@@ -49,11 +49,13 @@ import {
 
 const mocks = vi.hoisted(() => ({
   solveModel: vi.fn(),
+  refreshCapabilities: vi.fn(async () => undefined),
+  capabilityIssueSequence: () => 0,
 }));
 
 vi.mock('../jobs/actions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../jobs/actions')>();
-  return { ...actual, solveModel: mocks.solveModel };
+  return { ...actual, solveModel: mocks.solveModel, prewarmSelectedEngine: vi.fn(async () => undefined) };
 });
 
 /** The n-th press WG sent (POST /api/models/{id}/solve): [model, body]. */
@@ -64,6 +66,9 @@ vi.mock('../jobs/useCapabilities', () => ({
     engineSelection: { default: 'auto', resolvedDefault: 'metal', full3dOrder: ['metal'] },
     error: null,
     isLoading: false,
+    capabilityGeneration: 0,
+    capabilityIssueSequence: mocks.capabilityIssueSequence,
+    refreshCapabilities: mocks.refreshCapabilities,
   }),
   useCapabilityRefreshOnReconnect: () => undefined,
   useLegacyBeatEngineMigration: () => undefined,

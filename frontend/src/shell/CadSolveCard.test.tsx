@@ -231,7 +231,7 @@ describe('CAD Solve card run status', () => {
     // Elapsed since the job started, at 0 s here.
     expect(host.querySelector('.cad-solve-run')?.textContent).toContain('0:00');
     // Engine/sources/domain, the same detail line the full variant shows.
-    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('Metal · 3 sources · half');
+    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('Metal-BEM · 3 sources · half');
 
     await act(async () => { vi.advanceTimersByTime(20_000); });
     act(() => publishJobs([job({

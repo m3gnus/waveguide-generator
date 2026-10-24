@@ -3592,7 +3592,7 @@ def test_imported_explicit_beat_cpu_refuses_a_y_only_half_by_name(tmp_path: Path
     assert caught.value.details["engine"] == "beat-cpu"
     assert caught.value.details["reason_code"] == "imported_symmetry_unsupported_by_engine"
     assert caught.value.details["capable_engines"] == ["metal"]
-    assert "Use metal (different solver — results will differ)" in str(caught.value)
+    assert "Use Metal-BEM (different solver — results will differ)" in str(caught.value)
 
 
 def test_imported_accurate_refuses_xz_half_without_switching_to_metal(tmp_path: Path) -> None:
@@ -3609,7 +3609,7 @@ def test_imported_accurate_refuses_xz_half_without_switching_to_metal(tmp_path: 
             symmetry_metadata={"resolved_quadrants": 12},
         ))
     assert "beat-cpu cannot solve" in str(caught.value)
-    assert "Use metal (different solver — results will differ)" in str(caught.value)
+    assert "Use Metal-BEM (different solver — results will differ)" in str(caught.value)
     assert caught.value.details["engine"] == "beat-cpu"
 
 
@@ -3789,7 +3789,8 @@ def test_explicit_beat_cuda_or_rocm_fast_is_refused_with_the_real_way_forward(gp
     message = str(caught.value)
     assert "solves CAD returns only in Accurate" in message
     assert "choose Accurate" in message
-    assert "Use metal" in message
+    assert "Use beat-metal" in message
+    assert "Use Metal-BEM (different solver — results will differ)" in message
     # A machine without a provisioned BEAT CPU is never sent to it.
     assert "CPU" not in message
     assert caught.value.reason_code == "imported_engine_unsupported"
@@ -4355,7 +4356,8 @@ def test_the_imported_plan_refuses_an_explicit_engine_without_swapping_it(
     assert plan["engine"] is None
     assert plan["requested"] == "bempp"
     assert plan["code"] == "imported_engine_unsupported"
-    assert "metal" in plan["reason"] and "beat-cpu" in plan["reason"]
+    assert "Use Metal-BEM (different solver — results will differ)" in plan["reason"]
+    assert "beat-cpu" in plan["reason"]
     assert _verdicts(plan)["metal"]["solves"] is True
 
 

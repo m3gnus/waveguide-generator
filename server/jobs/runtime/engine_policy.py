@@ -181,4 +181,12 @@ async def select_engine(
     alternatives.sort(key=lambda remedy: not remedy.same_solver)
     remedies.extend(alternatives)
     remedies.append(SettingsRemedy())
+    # Capability refusals also reach callers that display only the reason.
+    # Short button labels must not remove the actual alternatives or the
+    # consequence of choosing a different solver from that explanation.
+    if not unavailable and alternatives:
+        message += " " + "; ".join(
+            remedy.label + ("" if remedy.same_solver else " (different solver — results will differ)")
+            for remedy in alternatives
+        ) + "."
     return SolveBlocker(code=code, message=message, engine=target, remedies=remedies)

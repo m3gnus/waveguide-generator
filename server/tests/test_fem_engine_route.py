@@ -1024,11 +1024,11 @@ def test_default_fem_admission_refuses_without_a_capable_engine(
                                                 imported_msh_text=MESH))
 
 
-@pytest.mark.parametrize("state,remedy", [
-    ("preparing", "BEAT CPU is still preparing"),
-    ("unprepared", "Prepare BEAT CPU"),
+@pytest.mark.parametrize("state,message,kind", [
+    ("preparing", "BEAT CPU is warming up", "wait"),
+    ("unprepared", "BEAT CPU needs preparing", "prepare"),
 ])
-def test_fem_unavailable_remedy_tracks_cpu_preparation(monkeypatch, state, remedy):
+def test_fem_unavailable_remedy_tracks_cpu_preparation(monkeypatch, state, message, kind):
     import asyncio
     from server.engines.registry import EngineInfo
     from server.jobs.runtime import EngineUnavailableError
@@ -1049,8 +1049,14 @@ def test_fem_unavailable_remedy_tracks_cpu_preparation(monkeypatch, state, remed
               "domain_interpretation": {"observations": {"planes": {
                   plane: {"rigid_cut_rim_edges": 0, "solver_plane": plane}
                   for plane in ("x0", "y0", "z0")}}}}
-    with pytest.raises(EngineUnavailableError, match=remedy):
+    with pytest.raises(EngineUnavailableError, match=message) as caught:
         asyncio.run(resolve_imported_submission(request, Registry(), imported_record=record))
+    blocker = caught.value.blocker
+    assert blocker.engine == request.options.engine == "beat-cpu"
+    assert [r.kind for r in blocker.remedies] == [kind, "settings"]
+    if kind == "prepare":
+        assert blocker.remedies[0].engine == "beat-cpu"
+        assert blocker.remedies[0].disabled_reason is None
 
 
 @pytest.mark.parametrize("backend", ["cpu", "metal", "cuda", "rocm"])
@@ -1350,8 +1356,13 @@ def test_fem_auto_preparing_cpu_explains_reference_policy(monkeypatch, ready_gpu
             return [EngineInfo("beat-cpu", False, "fixture", None, label="BEAT CPU", runtime_state="preparing",
                                geometry_sources=("imported",), imported_features=("fem-regions",)), *(
                 [_beat_engine_info("cuda", {"available": True, "state": "ready"})] if ready_gpu else [])]
-    with pytest.raises(EngineUnavailableError, match="BEAT CPU is still preparing"):
+    with pytest.raises(EngineUnavailableError, match="BEAT CPU is warming up") as caught:
         asyncio.run(resolve_imported_submission(job, Registry(), imported_record=record))
+    blocker = caught.value.blocker
+    assert blocker.engine == "beat-cpu"
+    assert "Interior-only FEM uses CPU float64" in blocker.message
+    assert [r.kind for r in blocker.remedies] == ["wait", "settings"]
+    assert job.options.engine == "auto"
 
 
 @pytest.mark.parametrize("engine", ["auto", "beat-cuda", "beat-rocm"])
