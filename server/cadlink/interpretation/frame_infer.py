@@ -3,8 +3,9 @@
 docs/architecture/CAD-OPERATIONS.md, "Unlinked solver frame". A return with no
 WG instance carries no throat frame. Instead of asking the user every time, WG
 infers the forward axis from the tessellated model and preselects it; Solve
-confirms the visible, preselected axis (M1b), and WG asks only when this module
-abstains.
+confirms the visible, preselected axis (M1b). The survey may abstain; a Fusion
+request still decides through :func:`best_available_axis`, recording weak
+evidence for developers while leaving the user's axis override available.
 
 One pure function, :func:`infer_frame`, over the full model in CAD
 coordinates. Three kinds of evidence each score the six assembly axes:
@@ -52,7 +53,9 @@ import numpy as np
 
 from server.contracts.geometry import SYMMETRY_PLANE_AXIS as _PLANE_AXIS
 
-ALGORITHM_VERSION = "frame-infer-v2"
+# V3 retains v2's weights, thresholds and confident verdicts, but collects
+# evidence before LF-only/source-identity abstentions so Fusion can decide.
+ALGORITHM_VERSION = "frame-infer-v3"
 
 AXES: tuple[str, ...] = ("+z", "-z", "+x", "-x", "+y", "-y")
 _AXIS_VECTORS = np.asarray(
@@ -162,6 +165,46 @@ class FrameInference:
             "supportedAxes": list(self.supported_axes),
             "evidence": self.evidence,
         }
+
+
+def evidence_votes(evidence: Mapping[str, Any]) -> dict[str, float]:
+    """The survey's confidence-scaled votes, including evidence before an ask gate."""
+
+    votes = dict.fromkeys(AXES, 0.0)
+    for name in EVIDENCE_WEIGHTS:
+        item = evidence.get(name) or {}
+        axis = item.get("axis")
+        if axis in votes:
+            votes[axis] += EVIDENCE_WEIGHTS[name] * max(float(item.get("strength") or 0.0), VOTE_FLOOR)
+    return votes
+
+
+def best_available_axis(suggestion: Mapping[str, Any] | None, allowed: Iterable[str]) -> str:
+    """Always decide for a headless Fusion request; ties keep the modelled axis.
+
+    Reuse the v2 survey's votes even when a confidence/visibility gate abstained.
+    With no decisive evidence, use its normalised positive scores. A restricted
+    domain chooses among its supported axes, preserving the domain contract.
+    """
+
+    allowed_set = set(allowed)
+    candidates = tuple(axis for axis in AXES if axis in allowed_set)
+    if not candidates:
+        raise ValueError("a solver frame needs at least one supported axis")
+    suggestion = suggestion or {}
+    winner = suggestion.get("axis") or suggestion.get("unrestrictedAxis")
+    if winner in candidates:
+        return str(winner)
+    evidence = suggestion.get("evidence") or {}
+    votes = evidence_votes(evidence)
+    if not any(votes[axis] > 0 for axis in candidates):
+        for name, weight in EVIDENCE_WEIGHTS.items():
+            scores = (evidence.get(name) or {}).get("scores") or {}
+            peak = max((max(float(value), 0.0) for value in scores.values()), default=0.0)
+            if peak > 0:
+                for axis in candidates:
+                    votes[axis] += weight * max(float(scores.get(axis) or 0.0), 0.0) / peak
+    return max(candidates, key=votes.__getitem__)
 
 
 def unavailable(reason: str, *, supported_axes: Iterable[str] = AXES) -> FrameInference:
@@ -417,21 +460,16 @@ def infer_frame(mesh: SurveyMesh, *, supported_axes: Iterable[str] = AXES) -> Fr
     roles_present = sorted(role_area, key=lambda role: (-ROLE_WEIGHTS[role], role))
     evidence: dict[str, Any] = {"roles": {role: {"weight": ROLE_WEIGHTS[role], "areaMm2": round(role_area[role], 3)} for role in roles_present}}
 
-    if not DIRECTIONAL_ROLES & set(roles_present):
+    def no_directional_source() -> FrameInference:
         return ask(
             "no-directional-source",
             "This model has no high- or mid-frequency source, so WG cannot tell which "
             "way it faces. Pick the front.",
             evidence=evidence,
         )
-    if mesh.identity_problem:
-        return ask(
-            "source-identity-unvalidated",
-            f"WG could not confirm which faces are the sources ({mesh.identity_problem}), "
-            "so it will not guess which way the model faces. Pick the front.",
-            evidence=evidence,
-        )
 
+    if not roles_present:
+        return no_directional_source()
     total_weight = sum(ROLE_WEIGHTS[role] for role in roles_present)
 
     # Evidence 1: role-weighted mean oriented normals.
@@ -506,6 +544,18 @@ def infer_frame(mesh: SurveyMesh, *, supported_axes: Iterable[str] = AXES) -> Fr
         "backfaceFraction": _round_scores(backface),
     }
 
+    # Keep the survey's original abstention reasons, but retain the available
+    # geometry evidence so Fusion can still make the most likely choice.
+    if not DIRECTIONAL_ROLES & set(roles_present):
+        return no_directional_source()
+    if mesh.identity_problem:
+        return ask(
+            "source-identity-unvalidated",
+            f"WG could not confirm which faces are the sources ({mesh.identity_problem}), "
+            "so it will not guess which way the model faces. Pick the front.",
+            evidence=evidence,
+        )
+
     if float(backface.max()) > BACKFACE_LIMIT:
         return ask(
             "orientation-unreliable",
@@ -526,7 +576,13 @@ def infer_frame(mesh: SurveyMesh, *, supported_axes: Iterable[str] = AXES) -> Fr
             evidence=evidence,
         )
 
-    votes = np.zeros(len(AXES))
+    # Share aggregation with the best-effort decision, using full precision
+    # here so the frozen v2 confidence thresholds retain their exact meaning.
+    votes = np.asarray(list(evidence_votes({
+        NORMALS: {"axis": normal_axis, "strength": normal_confidence},
+        VISIBILITY: {"axis": visibility_axis, "strength": visibility_confidence},
+        APERTURE: {"axis": aperture_axis, "strength": aperture_confidence},
+    }).values()))
     supporters: dict[str, list[str]] = {axis: [] for axis in AXES}
     for name, axis, confidence in (
         (NORMALS, normal_axis, normal_confidence),
@@ -535,7 +591,6 @@ def infer_frame(mesh: SurveyMesh, *, supported_axes: Iterable[str] = AXES) -> Fr
     ):
         if axis is None:
             continue
-        votes[AXES.index(axis)] += EVIDENCE_WEIGHTS[name] * max(confidence, VOTE_FLOOR)
         if confidence >= MIN_EVIDENCE_STRENGTH:
             supporters[axis].append(name)
     total = float(votes.sum())
@@ -807,6 +862,8 @@ __all__ = [
     "SurveyMesh",
     "SurveySource",
     "SurveyUnavailable",
+    "best_available_axis",
+    "evidence_votes",
     "infer_frame",
     "infer_record_frame",
     "mirror_back",

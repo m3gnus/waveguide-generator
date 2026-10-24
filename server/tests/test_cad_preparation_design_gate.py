@@ -23,7 +23,6 @@ import pytest
 
 from server.cadlink.intake import ingest as ingest_module
 from server.cadlink.intake.readings import snapshot_project
-from server.cadlink.intake.readings import confirm_frame
 from server.design.textcfg import parse
 from server.exports.geometry_identity import geometry_hash_for_design
 from server.mesh.imported import polar_grid_from_symmetry
@@ -268,15 +267,8 @@ def test_a_cad_authored_return_is_ingested_as_before_with_no_design_named(
     monkeypatch.setattr(ingest_module, "ingest_bundle", recording_ingest)
 
     revision = _revision(harness.store, _setup())
-    waiting = _prepare(harness, setup_revision_id=revision)
-    # Prepared as modelled, then held for its solver frame (test_cad_preparation_solver_frame.py).
-    assert (waiting["state"], waiting["reason"]) == (
-        "needs_user_input", "frame_confirmation_required"
-    ), waiting
-    assert named == [{}]
-    confirm_frame(harness.store, _record(harness, waiting), "+z")
-
     summary = _prepare(harness, setup_revision_id=revision)
+    assert summary["frameAxisAutomatic"] == "+z"
 
     assert (summary["state"], summary["jobId"]) == ("accepted", "job-1"), summary
     assert named == [{}]

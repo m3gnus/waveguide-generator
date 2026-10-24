@@ -59,6 +59,15 @@ if TYPE_CHECKING:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 
+def record_preparation_diagnostic(
+    stage: str, evidence: Mapping[str, Any], *, chosen_axis: str | None = None
+) -> None:
+    """One replacement point for the diagnostics capture API supplied separately."""
+
+    diagnostic = {"stage": stage, "evidence": dict(evidence), "chosen_axis": chosen_axis}
+    logger.warning("CAD preparation diagnostic: %s", diagnostic, extra={"cad_diagnostic": diagnostic})
+
+
 def solver_anchor(manifest: Mapping[str, Any]) -> Mapping[str, Any] | None:
     """A snapshot's solver anchor instance: the one its frame names, else its only one.
 
@@ -118,11 +127,12 @@ def resolve_for_manifest(
     manifest_sha256: str,
     *,
     automatic: bool = False,
+    best_effort: bool = False,
 ) -> FrameResolution | None:
     """The frame state of a snapshot about to be prepared; None when it is linked.
 
-    ``automatic``: a Solve that may use WG's confident automatic axis
-    (:func:`automatic_solve_axis`) meshes in it when nothing is confirmed.
+    ``automatic`` meshes in WG's inferred axis when no manual choice stands.
+    ``best_effort`` always decides for Fusion, even when the survey abstains.
     """
 
     if not is_unlinked_manifest(manifest):
@@ -135,7 +145,8 @@ def resolve_for_manifest(
     automatic_axis = None
     if automatic and (confirmed is None or confirmed not in allowed) and carried is None:
         automatic_axis = automatic_solve_axis(
-            store.get_frame_suggestion(manifest_sha256, _algorithm_version()), allowed
+            store.get_frame_suggestion(manifest_sha256, _algorithm_version()), allowed,
+            best_effort=best_effort,
         )
     return FrameResolution(
         key=key,
@@ -154,12 +165,15 @@ def _algorithm_version() -> str:
     return ALGORITHM_VERSION
 
 
-def record_automatic_axis(store: CadLinkStore, record: Mapping[str, Any]) -> str | None:
-    """The confident automatic axis this record's snapshot would be solved along.
+def record_automatic_axis(
+    store: CadLinkStore, record: Mapping[str, Any], *, best_effort: bool = False
+) -> str | None:
+    """The automatic axis this record's snapshot would be solved along.
 
     None for a linked record, a record stating no frame, one whose project (or
     snapshot) already confirmed a frame under this requirement, one with a v1
-    confirmation carried forward, and whenever WG is not confident.
+    confirmation carried forward, and (unless ``best_effort``) when confidence
+    is insufficient.
     """
 
     if not record_is_unlinked(record):
@@ -173,19 +187,21 @@ def record_automatic_axis(store: CadLinkStore, record: Mapping[str, Any]) -> str
         return None
     if carried_axis(store.get_frame_confirmation(key), requirement) is not None:
         return None
-    return automatic_solve_axis(_cached_suggestion(store, record), _record_allowed(frame))
+    return automatic_solve_axis(
+        _cached_suggestion(store, record), _record_allowed(frame), best_effort=best_effort
+    )
 
 
 def record_solved_frame_provenance(
     store: CadLinkStore, record: Mapping[str, Any]
 ) -> str | None:
-    """``"automatic"`` when this record solves along WG's own confident axis
+    """``"automatic"`` when this record solves along WG's own inferred axis
     with no confirmation behind it, else None."""
 
     frame = record_frame(record) if record_is_unlinked(record) else None
     if frame is None:
         return None
-    return "automatic" if record_automatic_axis(store, record) == frame.get("axis") else None
+    return "automatic" if record_automatic_axis(store, record, best_effort=True) == frame.get("axis") else None
 
 
 def _frame_for_axis(frame: Mapping[str, Any], axis: str) -> dict[str, Any]:
@@ -211,8 +227,13 @@ def _record_allowed(frame: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(axis for axis in AXES if axis in allowed)
 
 
-def record_frame_refusal(store: CadLinkStore, record: Mapping[str, Any]) -> str | None:
-    """Why this record cannot be solved yet, or None when its frame is confirmed.
+def record_frame_refusal(
+    store: CadLinkStore, record: Mapping[str, Any], *, best_effort: bool = False
+) -> str | None:
+    """Why the prepared frame cannot be solved, or None for a usable frame.
+
+    ``best_effort`` accepts the automatic choice for Fusion without requiring
+    survey confidence, and preserves a carried v1 manual choice.
 
     A linked record is never gated. An unlinked record solves only when its
     project (or, with no project, this snapshot) confirmed exactly the frame it
@@ -233,10 +254,14 @@ def record_frame_refusal(store: CadLinkStore, record: Mapping[str, Any]) -> str 
     requirement = dict(frame["requirement"])
     confirmed = _confirmed_axis(store, key, requirement)
     allowed = _record_allowed(frame)
-    automatic = record_automatic_axis(store, record) if confirmed is None else None
+    if best_effort and carried_axis(store.get_frame_confirmation(key), requirement) == frame["axis"]:
+        return None  # A saved v1 choice remains the user's choice under v2.
+    automatic = (
+        record_automatic_axis(store, record, best_effort=best_effort)
+        if confirmed is None else None
+    )
     if confirmed is None and automatic == frame["axis"]:
-        # WG is confident which way it faces and this is the frame it was
-        # meshed in: solved along it, and never recorded as a confirmation.
+        # This is the inferred frame it was meshed in; no confirmation is written.
         return None
     if confirmed is None and automatic is not None:
         # Meshed as modelled, but WG is confident of another axis: the next
@@ -862,6 +887,7 @@ __all__ = [
     "reading_key",
     "record_automatic_axis",
     "record_frame_refusal",
+    "record_preparation_diagnostic",
     "record_reading",
     "record_solved_frame_provenance",
     "remember_provenance_reading",

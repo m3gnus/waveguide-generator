@@ -340,3 +340,50 @@ def test_a_reduced_record_is_not_judged_without_its_mirror_image() -> None:
     assert planes == ["y0"]
     record, text = _record(reduced, matrix, [])
     assert infer_record_frame(record, text).status != STATUS_AUTOMATIC
+
+
+@pytest.mark.parametrize("name", ["folded horn", "dipole baffle", "MF-only opposing taps", "occluded HF"])
+def test_weak_fixture_evidence_still_decides_for_fusion(name: str) -> None:
+    from server.cadlink.interpretation.solver_frame import automatic_solve_axis
+
+    builder, size, _, _ = FIXTURES[name]
+    result = infer_frame(_mesh(builder, size).survey())
+    assert result.status == STATUS_ASK
+    chosen = automatic_solve_axis(result.to_json(), frame_infer.AXES, best_effort=True)
+    assert chosen in frame_infer.AXES
+    # Confidence remains truthful; the Fusion policy makes the final decision.
+    assert result.axis is None and result.confidence == 0.0
+    if result.unrestricted_axis is not None:
+        assert chosen == result.unrestricted_axis
+    else:
+        votes = frame_infer.evidence_votes(result.evidence)
+        assert votes[chosen] == max(votes.values())
+
+
+@pytest.mark.parametrize(
+    ("evidence", "expected"),
+    [
+        ({"aperture": {"axis": "-y", "strength": 0.8}}, "-y"),
+        ({"normals": {"axis": "+x", "strength": 0.2},
+          "visibility": {"axis": "-x", "strength": 0.9},
+          "aperture": {"axis": "-x", "strength": 0.6}}, "-x"),
+        ({"visibility": {"scores": {"+z": 0.01, "-z": 0.015}}}, "-z"),
+        ({}, "+z"),
+    ],
+)
+def test_best_available_axis_uses_v2_evidence_and_deterministic_ties(evidence, expected) -> None:
+    from server.cadlink.interpretation.solver_frame import automatic_solve_axis
+
+    suggestion = {"status": "ask", "axis": None, "evidence": evidence}
+    assert automatic_solve_axis(suggestion, iter(frame_infer.AXES), best_effort=True) == expected
+    assert automatic_solve_axis(suggestion, ("+z",), best_effort=True) == "+z"
+
+
+@pytest.mark.parametrize("pose", ["+x", "-y"])
+def test_lf_only_abstention_retains_evidence_for_fusions_axis(pose: str) -> None:
+    from server.cadlink.interpretation.solver_frame import automatic_solve_axis
+
+    result = infer_frame(_mesh(fx.lf_only_box, 12.0).survey(fx.POSES[pose]))
+    assert result.status == STATUS_ASK and result.reason_code == "no-directional-source"
+    assert set(frame_infer.EVIDENCE_WEIGHTS) <= result.evidence.keys()
+    assert automatic_solve_axis(result.to_json(), frame_infer.AXES, best_effort=True) == pose

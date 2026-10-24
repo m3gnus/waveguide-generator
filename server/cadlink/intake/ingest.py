@@ -144,6 +144,8 @@ def meshing_semantics() -> dict[str, Any]:
         # Padded OCC bounds no longer turn a planar B-spline cut rim into a
         # crossing curve. Re-evaluate preparations refused under the old guard.
         "precut_section_contract": "planar-line-moments-v1",
+        # Failed cut recovery discards provisional cuts before domain gates.
+        "cut_recovery_fallback": "full-domain-v1",
     }
     # Rounded: a constant computed at import (``math.log``) may differ in its
     # last bit between platforms' maths libraries, and the fingerprint must not.
@@ -1689,6 +1691,15 @@ def _ingest_bundle(
                     if ASYMMETRIC_SECTION + ":" in denial
                     else Failure(MESH_DENIED, f"its reduced mesh does not verify ({denial})")
                 )
+                # Discard every provisional WG cut before later domain/frame
+                # gates. Keep the failed recovery on this record, even when a
+                # full-domain mesh is valid; a later axis retry must not erase it.
+                options = {**options, "symmetry_mode": "full"}
+                built, cache_key, cache_hit, mesh_path = mesh_for(
+                    options, include_viewport=not defer_viewport
+                )
+                observations = observe_record_mesh(built)
+                built_inline_viewport = not defer_viewport
             else:
                 options = recovered_options
                 built, cache_key, cache_hit, mesh_path = recovered

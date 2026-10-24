@@ -522,7 +522,7 @@ def test_a_known_excitation_incompatibility_stops_the_solve(real, monkeypatch) -
     harness, _mesher = real
     step = b"STEP authored"
     _received(harness, "authored", _new_add_in(_authored(step)), step)
-    confirm_frame(harness.store, _record(harness, _prepare(harness)), "+z")
+    confirm_frame(harness.store, _record(harness, _prepare(harness, submit=False)), "+z")
     seen = []
 
     def incompatible(record, channels):

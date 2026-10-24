@@ -1,4 +1,4 @@
-"""No path prepares an unlinked (CAD-authored) snapshot into a solve before its frame is confirmed.
+"""Explicit manual frame choices keep their meaning while Fusion decides automatically.
 
 docs/architecture/CAD-OPERATIONS.md, "Unlinked solver frame". Every test runs the
 production ``ingest_bundle`` (bundle reader, gates, record publication); only the
@@ -81,6 +81,15 @@ def real(request, tmp_path, monkeypatch):
 
 def _prepare(harness: Harness, operation_id: str = "cmd-1", **kwargs: Any) -> dict[str, Any]:
     kwargs.setdefault("setup_revision_id", _revision(harness.store, _setup()))
+    # Model the manual Solve card, which names the axis currently shown.
+    # Fusion scenarios explicitly pass None (no axis was shown to the user).
+    lineage = harness.store.get_lineage_for_cad_document(NATIVE_ID)
+    confirmed = (
+        harness.store.get_frame_confirmation(f"lineage:{lineage['lineage_id']}")
+        if lineage else None
+    )
+    shown = confirmed["axis"] if confirmed else "+z"
+    kwargs.setdefault("expected_frame_axis", shown)
     return harness.prepare(operation_id, ingest=ingest_module.ingest_bundle, **kwargs)
 
 
@@ -304,7 +313,7 @@ def test_the_axis_shown_holds_across_retries_and_a_restart_until_a_press_names_a
 
     # Another window confirms +x; a retry that names no axis is held to +z.
     confirm_frame(harness.store, _record(harness, waiting), "+x")
-    retried = _prepare(harness)
+    retried = _prepare(harness, expected_frame_axis=None)
     assert _waiting_for_frame(retried) and "not the +z WG showed" in retried["message"]
     assert harness.submitted == []
 
@@ -315,14 +324,14 @@ def test_the_axis_shown_holds_across_retries_and_a_restart_until_a_press_names_a
     assert _record(harness, solved)["normalisation"]["solver_frame"]["axis"] == "+x"
 
 
-def test_a_request_no_one_named_an_axis_for_is_held_to_none(real) -> None:
+def test_a_request_no_one_named_an_axis_for_uses_the_confirmed_frame(real) -> None:
     """Fusion's own request, never pressed in WG: the confirmed frame decides (the control)."""
 
     harness, _mesher = real
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
-    confirm_frame(harness.store, _record(harness, _prepare(harness)), "+y")
-    solved = _prepare(harness)
+    confirm_frame(harness.store, _record(harness, _prepare(harness, expected_frame_axis=None, submit=False)), "+y")
+    solved = _prepare(harness, expected_frame_axis=None)
     assert (solved["state"], solved["jobId"]) == ("accepted", "job-1"), solved
     assert harness.held_axis() is None
 
@@ -499,8 +508,8 @@ def test_a_jobs_refusal_for_the_frame_keeps_that_reason_and_releases_the_binding
     assert harness.bound_request() is None
 
 
-def test_the_delivery_loop_reaches_the_frame_gate(real, monkeypatch) -> None:
-    """Fusion's Solve in WG: the loop prepares from the project's setup, then waits."""
+def test_the_delivery_loop_decides_the_frame_and_solves(real, monkeypatch) -> None:
+    """Fusion's Solve in WG prepares from the project's setup and infers the axis."""
 
     harness, _mesher = real
     step = b"STEP authored"
@@ -516,14 +525,15 @@ def test_the_delivery_loop_reaches_the_frame_gate(real, monkeypatch) -> None:
     harness.ingest = ingest_module.ingest_bundle  # the loop meshes through the production ingest
     assert harness.delivery_pass() == ["cmd-1"]
     summary = harness.summary()
-    assert _waiting_for_frame(summary), summary
-    assert harness.submitted == []
-    # Waiting for the user is never retried unasked.
+    assert summary["state"] == "accepted", summary
+    assert summary["frameAxisAutomatic"] == "+z"
+    assert len(harness.submitted) == 1
+    # Delivery is consumed once.
     assert harness.delivery_pass() == []
 
 
-def test_a_file_delivery_reaches_the_frame_gate(tmp_path, monkeypatch) -> None:
-    """The request inbox meets the solver frame gate."""
+def test_a_file_delivery_decides_its_frame_and_still_allows_manual_change(tmp_path, monkeypatch) -> None:
+    """The request inbox infers an axis; the existing Change API can override it."""
 
     from server.cadlink.api import _preparation_context
     from server.tests.cad_file_harness import wg
@@ -549,19 +559,25 @@ def test_a_file_delivery_reaches_the_frame_gate(tmp_path, monkeypatch) -> None:
             await run_cad_preparation(runtime._cad_port, runtime._cad_host, job_id)
             return operation_summary(context.store.get_operation("op-1"), runtime.store)
 
-        waiting = asyncio.run(prepare(True))
-        assert _waiting_for_frame(waiting), waiting
+        first = asyncio.run(prepare(True))
+        # The empty mesher stand-in cannot compose a real solve, but the
+        # actual submission boundary must never turn it into a frame question.
+        assert first["reason"] == "submission_refused", first
+        waiting = asyncio.run(prepare(False))
+        assert waiting["reason"] == "ready_to_solve", waiting
 
         confirmed = app.client.request(
             "PUT", "/api/cadlink/solver-frame",
             headers={"content-type": "application/json"},
-            body=json.dumps({"operationId": "op-1", "axis": "+z"}).encode("utf-8"),
+            body=json.dumps({"operationId": "op-1", "axis": "+y"}).encode("utf-8"),
         )
         assert confirmed.status_code == 200, confirmed.text
-        assert confirmed.json()["confirmed"]["axis"] == "+z"
+        assert confirmed.json()["confirmed"]["axis"] == "+y"
 
         ready = asyncio.run(prepare(False))
         assert (ready["state"], ready["reason"]) == ("needs_user_input", "ready_to_solve"), ready
+        record = json.loads(app.store.get_ingest(ready["preparationId"])["record_json"])
+        assert record["normalisation"]["solver_frame"]["axis"] == "+y"
 
 
 def test_post_ingest_meshes_an_authored_model_in_its_confirmed_frame(real, monkeypatch) -> None:

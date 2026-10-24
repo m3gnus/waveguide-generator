@@ -1,12 +1,4 @@
-"""A Solve that was never shown an axis uses WG's confident automatic one.
-
-docs/architecture/CAD-OPERATIONS.md, "Unlinked solver frame". A Fusion-initiated
-Solve of a never-confirmed model: when ``frame_infer`` is confident (status
-``automatic``) the model is meshed and solved along that axis and the operation
-records it as automatic; no confirmation is written. When it is not confident the
-solve still stops at the frame gate. Uses the same production ingest as
-``test_cad_preparation_solver_frame``; only the survey's verdict is set.
-"""
+"""Fusion always chooses an axis, retaining weak evidence and manual overrides."""
 
 from __future__ import annotations
 
@@ -34,11 +26,16 @@ from test_cad_preparation import _accept
 from test_cad_preparation_solver_frame import (
     Recording,
     _authored,
-    _prepare,
+    _prepare as _manual_prepare,
     _received,
     _record,
     _waiting_for_frame,
 )
+
+
+def _prepare(harness, operation_id="cmd-1", **kwargs):
+    kwargs.setdefault("expected_frame_axis", None)
+    return _manual_prepare(harness, operation_id, **kwargs)
 
 
 @pytest.fixture(params=BACKENDS)
@@ -51,7 +48,10 @@ def real(request, tmp_path, monkeypatch) -> tuple[Harness, Recording]:
     next(backend, None)
 
 
-def _verdict(monkeypatch: pytest.MonkeyPatch, *, status: str, axis: str | None) -> list[str]:
+def _verdict(
+    monkeypatch: pytest.MonkeyPatch, *, status: str, axis: str | None,
+    evidence: dict | None = None,
+) -> list[str]:
     """The survey's answer for a snapshot, cached as ``ensure_frame_suggestion`` caches it."""
 
     surveyed: list[str] = []
@@ -66,6 +66,7 @@ def _verdict(monkeypatch: pytest.MonkeyPatch, *, status: str, axis: str | None) 
                 "status": status,
                 "axis": axis,
                 "confidence": 0.9,
+                "evidence": evidence or {},
                 "snapshotSha256": record["manifest_sha256"],
                 "reason": "test verdict",
             },
@@ -132,18 +133,30 @@ def _bundle_of(harness, name: str) -> tuple[str, str]:
     ("status", "axis"),
     [("ask", None), ("unavailable", None), ("automatic", "+z-not-an-axis")],
 )
-def test_a_solve_without_a_confident_axis_still_stops_with_the_reason(real, monkeypatch, status, axis) -> None:
+def test_a_solve_without_a_confident_axis_decides_and_records_a_diagnostic(
+    real, monkeypatch, caplog, status, axis
+) -> None:
     harness, _mesher = real
-    _verdict(monkeypatch, status=status, axis=axis)
+    evidence = {"normals": {"axis": "-x", "strength": 0.2}}
+    _verdict(monkeypatch, status=status, axis=axis, evidence=evidence)
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
 
     summary = _prepare(harness)
 
-    assert _waiting_for_frame(summary), summary
-    assert "solver frame" in summary["message"]
-    assert summary["frameAxisAutomatic"] is None
-    assert harness.submitted == []
+    assert summary["state"] == "accepted", summary
+    assert summary["frameAxisAutomatic"] == "-x"
+    assert _record(harness, summary)["normalisation"]["solver_frame"]["axis"] == "-x"
+    assert harness.store.get_frame_confirmation(_key(harness, summary)) is None
+    diagnostics = [r.cad_diagnostic for r in caplog.records if hasattr(r, "cad_diagnostic")]
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["stage"] == "frame-inference"
+    assert diagnostics[0]["evidence"]["evidence"] == evidence
+    assert diagnostics[0]["chosen_axis"] == "-x"
+    # The preparation harness stubs composition. Cross the actual runtime
+    # validation boundary too, so a second frame gate cannot reintroduce asking.
+    validated = harness._loop.run(harness.runtime._validate_imported_submission(harness.submitted[0]))
+    assert validated.record["ingest_id"] == summary["preparationId"]
 
 
 def test_a_confident_axis_the_snapshot_does_not_allow_is_not_used() -> None:
@@ -170,8 +183,9 @@ def test_the_automatic_axis_is_never_taken_as_a_confirmation_later(real, monkeyp
     _verdict(monkeypatch, status="ask", axis=None)
     other = b"STEP another authored"
     _received(harness, "other", _authored(other, native_id=None), other, command="cmd-3")
-    stopped = _prepare(harness, "cmd-3")
-    assert _waiting_for_frame(stopped), stopped
+    solved = _prepare(harness, "cmd-3")
+    assert solved["state"] == "accepted", solved
+    assert solved["frameAxisAutomatic"] == "+z"
     assert harness.store.get_frame_confirmation(_key(harness, first)) is None
 
 
@@ -231,8 +245,8 @@ def test_the_jobs_second_mesh_is_bounded_when_the_two_sides_disagree(tmp_path, m
         mesher = Recording()
         monkeypatch.setattr(ingest_module, "build_imported_mesh_isolated", mesher)
         _verdict(monkeypatch, status="automatic", axis="+x")
-        monkeypatch.setattr(job_preparation, "record_automatic_axis", lambda store, record: "-y")
-        monkeypatch.setattr(readings, "record_automatic_axis", lambda store, record: "-y")
+        monkeypatch.setattr(job_preparation, "record_automatic_axis", lambda store, record, **kwargs: "-y")
+        monkeypatch.setattr(readings, "record_automatic_axis", lambda store, record, **kwargs: "-y")
         passes: list[bool] = []
         real_prepare = job_preparation.prepare_job_sync
 
@@ -250,7 +264,8 @@ def test_the_jobs_second_mesh_is_bounded_when_the_two_sides_disagree(tmp_path, m
         assert passes == [False, True]
         assert len(mesher.calls) == 2
         assert mesher.calls[-1]["options"]["solver_frame"]["axis"] == "+x"
-        assert _waiting_for_frame(summary), summary
+        assert summary["reason"] == "preparation_failed", summary
+        assert not _waiting_for_frame(summary)
         assert harness.submitted == []
         row = harness.latest_job()
         assert row["status"] == "error" and intent_of(row) is not None
@@ -259,3 +274,100 @@ def test_the_jobs_second_mesh_is_bounded_when_the_two_sides_disagree(tmp_path, m
         assert sum(event["payload"].get("stage") == "validating" for event in events) == 1
     finally:
         harness.close()
+
+
+@pytest.mark.parametrize("denial", ["asymmetric-section: section disagrees", "reduced mesh refused"])
+@pytest.mark.parametrize("whole_model", [False, True])
+def test_failed_cut_recovery_uses_full_domain_and_precedes_frame_and_findings(
+    real, monkeypatch, caplog, denial, whole_model
+) -> None:
+    from server.cadlink.interpretation.cut_recovery import CutRecovery
+    from test_cadlink_cut_reflection import _observations
+
+    harness, mesher = real
+    observations = _observations()
+    calls = []
+    monkeypatch.setattr(ingest_module, "observe_record_mesh", lambda built: (
+        None if whole_model and calls[-1].get("symmetry_mode") == "full" else observations
+    ))
+    monkeypatch.setattr(ingest_module, "assess_cut_recovery", lambda *args, **kwargs: CutRecovery(
+        planes=("x0",), kept_sides={"x0": "positive"},
+    ))
+    original = mesher.__call__
+
+    def mesh(*args, **kwargs):
+        options = dict(kwargs.get("options") or {})
+        calls.append(options)
+        if options.get("declared_cut_planes"):
+            raise ingest_module.IngestRefusal("stage 6 symmetry", denial)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(ingest_module, "build_imported_mesh_isolated", mesh)
+    # The full-domain fallback still has an open half: it must be refused on
+    # that domain, never masked by a frame survey/retry or a blocking finding.
+    if whole_model:
+        _verdict(monkeypatch, status="ask", axis=None)
+    else:
+        monkeypatch.setattr(job_preparation, "ensure_frame_suggestion", lambda *_args: pytest.fail(
+            "domain failure reached the frame survey"
+        ))
+    step = b"STEP authored open half"
+    _received(harness, "authored", _authored(step), step)
+    summary = _prepare(harness)
+
+    if whole_model:
+        assert summary["state"] == "accepted", summary
+        assert len(harness.submitted) == 1
+    else:
+        assert summary["reason"] == "preparation_failed", summary
+        assert harness.submitted == []
+    record = _record(harness, summary)
+    recovery = record["domain_interpretation"]["cut_recovery"]
+    assert recovery["recoverable"] is False
+    assert recovery["failures"]["x0"][0]["code"] in {"mesh-denied", "asymmetric-section"}
+    if whole_model:
+        assert record["domain_decision"]["refusal"] is None
+    else:
+        assert record["domain_decision"]["refusal"]["code"] == "imported_open_half_shell"
+    assert record["symmetry"]["cut_planes"] == []
+    assert calls[-1]["symmetry_mode"] == "full"
+    assert len(calls) == 3
+    if not whole_model:
+        assert any(getattr(r, "cad_diagnostic", {}).get("stage") == "domain" for r in caplog.records)
+
+
+def test_fusion_preserves_a_saved_v1_axis_without_asking_again(real, monkeypatch) -> None:
+    from server.cadlink.interpretation.solver_frame import CONTRACT_V1
+
+    harness, mesher = real
+    _verdict(monkeypatch, status="ask", axis=None)
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    ready = _prepare(harness, submit=False)
+    harness.store.record_frame_confirmation(
+        _key(harness, ready), {"contract": CONTRACT_V1, "export_frame": "root-component"}, "+y"
+    )
+    solved = _prepare(harness)
+    assert solved["state"] == "accepted", solved
+    assert _record(harness, solved)["normalisation"]["solver_frame"]["axis"] == "+y"
+    assert mesher.calls[-1]["options"]["solver_frame"]["axis"] == "+y"
+    assert harness.provenance[-1]["frame"]["provenance"] == "carried"
+    validated = harness._loop.run(harness.runtime._validate_imported_submission(harness.submitted[0]))
+    assert validated.record["ingest_id"] == solved["preparationId"]
+
+
+def test_a_submission_frame_conflict_never_asks_fusion_to_choose_an_axis(real, monkeypatch) -> None:
+    class FrameConflict(ValueError):
+        reason_code = "frame_confirmation_required"
+
+    harness, _mesher = real
+    _verdict(monkeypatch, status="ask", axis=None)
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    harness.submit_error = FrameConflict("frame changed while binding")
+    harness.refusals.append(FrameConflict)
+    summary = _prepare(harness)
+    assert summary["reason"] == "preparation_failed", summary
+    assert "choose" not in summary["message"].lower()
+    assert "frame changed while binding" not in summary["message"]
+    assert harness.bound_request() is None

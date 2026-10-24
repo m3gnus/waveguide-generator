@@ -449,11 +449,10 @@ whatever project is open. Nothing on the backend reads the live UI:
 ## Unlinked solver frame
 
 A return with no WG instance -- a model drawn from scratch in CAD -- carries no throat
-frame, so nothing in it says which way it radiates. It is not solvable until its solver
-frame is confirmed, once per project, or WG is confident enough to choose it itself (see
-"Automatic axis" below). WG infers the frame from the geometry and preselects it, so
-confirming it is normally one press of Solve in WG, and a Solve from Fusion needs no
-press at all when WG is confident.
+frame, so WG infers which way it radiates. A Solve from Fusion always chooses the
+most likely allowed axis from the available evidence, records weak evidence for
+developers, and proceeds without a frame question. The user can change the axis
+afterwards. Saved manual choices take precedence (see "Automatic axis" below).
 `server/cadlink/interpretation/solver_frame.py` is the executable half of this section, and
 `server/cadlink/interpretation/frame_infer.py` the inference.
 
@@ -523,7 +522,8 @@ press at all when WG is confident.
   the axis a v1 confirmation carries forward), or as modelled (`+z`) until one is, and its record states the frame
   (`normalisation.solver_frame`: contract, axis, up, up source, stated document up,
   requirement, allowed axes, matrix). Right after the preparation is recorded, and before
-  findings and approvals, an unconfirmed frame waits as `frame_confirmation_required`;
+  findings and approvals, an explicit manual Solve checks its shown axis; an unconfirmed
+  manual frame waits as `frame_confirmation_required`;
   the preparation it made is the preview's geometry. Confirming `+z` resumes that
   preparation; any other axis makes a new one, and approvals never carry to it. A
   preparation is resumed only in the same complete frame -- contract, forward axis,
@@ -541,33 +541,25 @@ press at all when WG is confident.
   later attempt -- an automatic continuation after the update restart, a retry that
   names none -- is held to it, and only a prepare naming another axis replaces it. `+z` is never written into the ingest options, so no mesh cached before
   this contract is made again.
-- **Automatic axis (Solve without a shown axis).** A Solve that was never shown the
-  axis -- a Fusion Solve of an unlinked model nothing has confirmed, including every
-  Solve of an unsaved document, whose snapshot and so confirmation key are new on each
-  Send -- does not stop when WG is **confident**. Confident is `frame_infer`'s own verdict,
-  not a second heuristic: the cached suggestion has status `automatic` (vote share, lead
-  and supporting evidence all passed) and names an axis the snapshot allows
-  (`solver_frame.automatic_solve_axis`). Then the preparation surveys the mesh it just
-  made and, when the automatic axis is not the one it was meshed in, meshes again along
-  it once (`resolve_for_manifest(automatic=True)`; the next Solve of that snapshot finds
-  the cached suggestion and meshes along it at once). The frame gate -- backend
-  preparation and the jobs system's submission gate alike (`record_frame_refusal`) --
-  accepts exactly that frame while no confirmation exists and no v1 confirmation is
-  carried. **Nothing is confirmed:** no `cad_frame_confirmations` row is written, so it
-  is never taken as the user's confirmation for a later solve; a later WG Solve confirms
-  the axis it shows, and a Change to another axis is a confirmation like any other and
-  is the axis of every later solve of that project. For an unsaved document (no
-  project) a confirmation belongs to that exact snapshot, so a Change applies to it only
-  and the next Send is a new snapshot that WG judges again. In the card, Change from an
-  automatic run confirms the axis picked when Done is pressed (a Fusion Solve shows no
-  axis, so nothing else would). The second mesh is made once (an explicit single
-  retry; if it still disagrees the frame gate answers), keeps the stage, and leaves the
-  as-modelled ingest of the survey pass unreferenced until cleanup. The accepted operation records the axis in its
-  outcome (`frame_axis_automatic`, summary `frameAxisAutomatic`); the CAD solve card says
-  "Solved along the automatic axis +x" with a Change that opens the frame card's chooser,
-  and the run details say the same. When WG is not confident (`ask`, `unavailable`, an
-  axis the snapshot does not allow) the solve still stops at `frame_confirmation_required`
-  with the frame card's question.
+- **Automatic axis (Solve without a shown axis).** Fusion always decides with
+  `automatic_solve_axis(best_effort=True)`. A matching manual confirmation wins,
+  followed by a carried v1 choice. Otherwise WG uses the v2 survey's winner, or its
+  confidence-weighted aperture, normals and visibility votes when the survey abstains
+  before voting. With no decisive votes it uses normalised positive scores; ties or
+  missing evidence choose the first allowed axis in the stable order beginning at `+z`.
+  The v3 survey retains v2 weights, thresholds and confident verdicts; its cache key
+  changes because LF-only and source-identity abstentions now include geometry evidence.
+  The survey's confidence remains unchanged. A weak/unavailable decision emits a
+  structured developer log record (`stage`, `evidence`, `chosen_axis`) through
+  `record_preparation_diagnostic`, the single replacement point for diagnostics capture.
+  Preparation meshes along that axis, retrying at most once after the survey, and runtime
+  submission validates the same decision. A second-pass disagreement is an internal
+  preparation failure, never a frame question. No confirmation row is written. The
+  accepted job records `frameAxisAutomatic`; Change still opens the existing chooser
+  and saves a manual override for subsequent solves.
+  A failed cut-recovery mesh first rebuilds with symmetry disabled and retains the
+  recovery failure in `domain_interpretation.cut_recovery`. Any remaining domain refusal
+  is handled before frame inference/retry or finding approvals, so neither can mask it.
 - **Axial drive (`per-source-axis-v2`).** An `axial` channel moves each of its sources
   as a rigid piston along that source's own axis, resolved once from the solve mesh in
   solver coordinates (`server/solver/imported.py`, `resolve_source_axes`), never from the
@@ -608,7 +600,7 @@ press at all when WG is confident.
     is not projected, so a tilted one refuses the reduction.
 - **Every submission.** The jobs system refuses, at submission, an unlinked record whose
   frame is neither the confirmed one under the same requirement nor, while nothing is
-  confirmed, WG's confident automatic axis the record was meshed in
+  confirmed, WG's best available automatic axis the record was meshed in
   (`frame_confirmation_required`), so `/api/solve`, a retry, a CAD operation's own
   submission and a recovered bound request all meet it. A record prepared before the
   contract states no frame and is never taken as confirmed or automatic; it is prepared

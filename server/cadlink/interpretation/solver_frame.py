@@ -5,9 +5,9 @@ WG instance carries no throat frame: nothing in it says which way the model
 radiates. WG used to solve it in the assembly frame as modelled (+Z) and warn
 nothing; a mis-framed model then gave wrong directivity in silence. Now the
 forward axis is confirmed once per project, after WG infers it from the
-geometry (``frame_infer``) and shows it. Until then only WG's own confident
-automatic axis may be solved (``record_automatic_axis``); otherwise no path
-solves it.
+geometry (``frame_infer``) and shows it. Fusion requests always use WG's best
+available automatic axis when no manual choice stands; weak evidence is
+recorded for developers and the user may change the axis afterwards.
 
 Two contracts exist. Both name the forward ``axis``, one of
 ``+z -z +x -x +y -y``, and map it to the solver's +Z about the assembly origin.
@@ -51,15 +51,15 @@ bound ``ingest_id``.
 
 The automatic suggestion (``frame_infer``) is computed inside the explicit
 import and preparation commands and cached per snapshot and algorithm version.
-It preselects; it never confirms. A **confident** suggestion (status
-``automatic``) is also the axis a Solve uses when nothing is confirmed and the
-user was not shown one -- a Fusion Solve of a never-confirmed model: the
-preparation meshes in it (``resolve_for_manifest(automatic=True)``), the frame
-gate accepts exactly that frame (``record_frame_refusal``), and the operation
-records it as automatic (``record_solved_frame_provenance``). No confirmation
-is written; a suggestion that is not confident still stops the solve. A confirmed frame whose identity matches
-always wins over it, and a suggestion that clearly disagrees with the
-confirmed frame is reported, never acted on.
+It preselects; it never confirms. Fusion requests (a Solve with no shown axis)
+always decide through ``automatic_solve_axis(best_effort=True)``: the v2 survey's
+winner, then its aperture/normals/visibility votes, then normalised scores, with
+a deterministic modelled-axis tie break within the allowed domain. Weak or
+unavailable evidence produces a developer diagnostic. The model is meshed along
+that axis, with at most one retry after the survey. No confirmation is written.
+A matching manual choice, including a carried v1 choice, takes precedence.
+Manual solves still check the axis the user was shown.
+
 """
 
 from __future__ import annotations
@@ -378,18 +378,21 @@ def carried_axis(
 
 
 def automatic_solve_axis(
-    suggestion: Mapping[str, Any] | None, allowed: Iterable[str]
+    suggestion: Mapping[str, Any] | None, allowed: Iterable[str], *, best_effort: bool = False
 ) -> str | None:
     """The axis a Solve may use without asking, or None when WG must ask.
 
     "Confident" is ``frame_infer``'s own verdict, not a new one: the suggestion
     has status ``automatic`` (vote share, lead and supporting evidence all
     passed; ``frame_infer.infer_frame``) and names an axis this snapshot allows.
-    An ``ask`` or ``unavailable`` suggestion never qualifies.
+    ``best_effort`` lets a Fusion request decide even when the survey abstains;
+    manual solves retain their confirmation checks.
     """
 
-    from server.cadlink.interpretation.frame_infer import STATUS_AUTOMATIC
+    from server.cadlink.interpretation.frame_infer import STATUS_AUTOMATIC, best_available_axis
 
+    if best_effort:
+        return best_available_axis(suggestion, allowed)
     if suggestion is None or suggestion.get("status") != STATUS_AUTOMATIC:
         return None
     axis = suggestion.get("axis")

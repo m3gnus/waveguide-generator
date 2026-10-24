@@ -44,6 +44,7 @@ from server.cadlink.joblane.default_setup import (
     SolveDefaultsDamaged,
 )
 from server.cadlink.intake.readings import resolve_domain_plan
+from server.cadlink.interpretation.domain_decision import decision_refusal
 from server.cadlink.intake.ingest import (
     IngestRefusal,
     ingest_bundle,
@@ -92,6 +93,7 @@ from server.cadlink.intake.readings import (
     ensure_frame_suggestion,
     record_automatic_axis,
     record_frame_refusal,
+    record_preparation_diagnostic,
     resolve_for_manifest as resolve_solver_frame,
 )
 from server.cadlink.store import CadLinkStore, StaleAttempt
@@ -406,7 +408,7 @@ def prepare_job_sync(
     ``("bind", (request, revision_id, preparation))`` when a request is ready.
     The lane's claim has already moved the job to ``validating``.
     ``automatic_retry`` marks the one second pass made to mesh along WG's
-    confident automatic axis: it never starts another.
+    inferred automatic axis: it never starts another.
 
     Binding is one transaction. A stop ends the job, and the next progress
     write finds it ended.
@@ -420,6 +422,7 @@ def prepare_job_sync(
     )
     ledger = _retention_row(store, intent, run.cad)
     expected_frame_axis = intent.frame_axis
+    infer_automatically = expected_frame_axis is None  # Fusion did not show an axis.
     retained = _retained(host.data_dir, ledger)
     if retained is not None and not _copy_is_whole(retained):
         # WG's own copy is no longer the bundle its digest names: replaced from
@@ -523,7 +526,8 @@ def prepare_job_sync(
         # Freeze the effective snapshot-owned inputs before meshing or resuming.
         run.advance(cad={"setup": _setup_record(store, revision_id)})
     solver_frame = resolve_solver_frame(
-        store, retained_manifest, manifest_sha256, automatic=True
+        store, retained_manifest, manifest_sha256, automatic=True,
+        best_effort=infer_automatically,
     )
     frame_axis = solver_frame.axis if solver_frame is not None else None
     frame_identity = resolution_identity(solver_frame) if solver_frame is not None else None
@@ -601,37 +605,6 @@ def prepare_job_sync(
                 automatic_retry=automatic_retry,
             )
 
-    # The automatic frame suggestion (M1e), inside this explicit command and
-    # cached per snapshot: the frame card preselects it. It never confirms, and a
-    # survey that fails only leaves the card asking.
-    try:
-        ensure_frame_suggestion(store, record)
-        automatic = record_automatic_axis(store, record)
-    except Exception as exc:  # noqa: BLE001 - advisory by construction
-        logger.warning("Solver frame suggestion failed for %s: %s", record.get("ingest_id"), exc)
-        automatic = None
-    if (
-        solver_frame is not None
-        and automatic is not None
-        and automatic != solver_frame.automatic_axis
-        and automatic != _record_frame_axis(record)
-        and not automatic_retry
-    ):
-        # Nothing confirmed and WG is confident which way the model faces: the
-        # model is meshed again along it, once.
-        logger.info(
-            "CAD job %s: preparing again along the automatic axis %s.", run.job_id, automatic
-        )
-        return prepare_job_sync(host, run, intent, automatic_retry=True)
-    if automatic_retry and automatic is not None and automatic != _record_frame_axis(record):
-        # Bounded: a second pass that still disagrees is a defect, not a reason
-        # to mesh again. The frame gate below answers it.
-        logger.error(
-            "CAD job %s: the automatic axis %s was not the axis meshed (%s) on the "
-            "second pass; not preparing again.",
-            run.job_id, automatic, _record_frame_axis(record),
-        )
-
     blocking = [
         str(finding.get("id"))
         for finding in record.get("findings") or []
@@ -662,12 +635,66 @@ def prepare_job_sync(
         },
     )
 
+    # A failed recovery belongs to this record. Resolve domain failures before
+    # frame inference can retry and before a finding can mask their cause.
+    domain_refusal = decision_refusal(record)
+    if domain_refusal is not None:
+        record_preparation_diagnostic("domain", record.get("domain_interpretation") or {})
+        return run.refuse(
+            "preparation_failed", "WG could not prepare the whole model correctly. Try again."
+        )
+
+    # Survey inside the command, without writing a user's confirmation. Fusion
+    # always gets the best available axis; an explicit manual choice still wins.
+    try:
+        suggestion = ensure_frame_suggestion(store, record)
+        automatic = record_automatic_axis(store, record, best_effort=infer_automatically)
+    except Exception as exc:  # noqa: BLE001 - advisory by construction
+        logger.warning("Solver frame suggestion failed for %s: %s", record.get("ingest_id"), exc)
+        suggestion = None
+        automatic = record_automatic_axis(store, record, best_effort=infer_automatically)
+    if (infer_automatically and automatic is not None and not automatic_retry
+            and ((suggestion or {}).get("status") != "automatic"
+                 or (suggestion or {}).get("axis") != automatic)):
+        record_preparation_diagnostic(
+            "frame-inference", suggestion or {"reasonCode": "survey-unavailable"},
+            chosen_axis=automatic,
+        )
+    if (
+        solver_frame is not None
+        and automatic is not None
+        and automatic != solver_frame.automatic_axis
+        and automatic != _record_frame_axis(record)
+        and not automatic_retry
+    ):
+        # Remesh once along the inferred axis; saved manual choices take priority.
+        logger.info(
+            "CAD job %s: preparing again along the automatic axis %s.", run.job_id, automatic
+        )
+        return prepare_job_sync(host, run, intent, automatic_retry=True)
+    if automatic_retry and automatic is not None and automatic != _record_frame_axis(record):
+        # Bounded: disagreement after a second pass is an internal failure.
+        logger.error(
+            "CAD job %s: the automatic axis %s was not the axis meshed (%s) on the "
+            "second pass; not preparing again.",
+            run.job_id, automatic, _record_frame_axis(record),
+        )
+
+        if infer_automatically:
+            return run.refuse(
+                "preparation_failed", "WG could not prepare this model's solver frame. Try again."
+            )
+
     # Before findings and approvals: a frame confirmed differently is a new
     # preparation, and approvals never carry to it. Read from the record, for
     # every preparation: it says what was prepared, linked or not, and which
-    # frame; only that frame, confirmed, may be solved.
-    frame_refusal = record_frame_refusal(store, record)
+    # frame; the accepted inferred or manually chosen frame must match it.
+    frame_refusal = record_frame_refusal(store, record, best_effort=infer_automatically)
     if frame_refusal is not None:
+        if infer_automatically:
+            return run.refuse(
+                "preparation_failed", "WG could not prepare this model's solver frame. Try again."
+            )
         return run.refuse(FRAME_CONFIRMATION_REQUIRED, frame_refusal)
     prepared_axis = _record_frame_axis(record)
     if (
@@ -872,6 +899,18 @@ async def _bind(
     except port.binding_refusals as exc:
         # The jobs system refused this exact request; nothing was created.
         code = str(getattr(exc, "reason_code", "") or getattr(exc, "code", "") or "")
+        if code == FRAME_CONFIRMATION_REQUIRED and run.intent.frame_axis is None:
+            # A concurrent change between preparation and binding is internal
+            # recovery work for Fusion, never a request to choose its axis.
+            record_preparation_diagnostic(
+                "frame-submission", {"reason": str(exc)},
+                chosen_axis=(provenance.get("frame") or {}).get("axis"),
+            )
+            await asyncio.to_thread(
+                run.refuse, "preparation_failed",
+                "WG could not prepare this model's solver frame. Try again.",
+            )
+            return "refused"
         await asyncio.to_thread(
             run.refuse, _submission_refusal_reason(exc, code), str(exc),
             blocker=getattr(exc, "details", {}).get("blocker")
