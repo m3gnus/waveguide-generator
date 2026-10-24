@@ -264,7 +264,9 @@ class WorkerHost:
     def bind(self) -> r.HostRecord:
         """Bind while the caller holds spawn exclusion; publication is separate."""
         endpoint = endpoint_for(self.identifier, self.directory)
-        self._server = endpoint.listen()
+        # Every client and pending peer may arrive in one burst while the
+        # accept loop is not scheduled; the kernel queue must hold them all.
+        self._server = endpoint.listen(backlog=MAX_CLIENTS + MAX_PENDING)
         if endpoint.kind == "unix":
             info = endpoint.path.lstat()
             self._socket_identity = info.st_dev, info.st_ino

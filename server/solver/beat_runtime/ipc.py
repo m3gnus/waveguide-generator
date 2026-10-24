@@ -181,8 +181,14 @@ class Endpoint:
     def _address(self) -> str | tuple[str, int]:
         return str(self.path) if self.kind == "unix" else ("127.0.0.1", self.port)
 
-    def listen(self) -> socket.socket:
-        """Bind without removing existing endpoints or enabling address reuse."""
+    def listen(self, *, backlog: int = 16) -> socket.socket:
+        """Bind without removing existing endpoints or enabling address reuse.
+
+        ``backlog`` must cover every connection the caller is prepared to
+        triage after ``accept``: a connection the kernel queue cannot hold is
+        dropped (TCP on Linux, so the peer waits out a SYN retry), reset
+        (macOS) or refused (Windows) before the caller sees it.
+        """
         if self.kind == "unix":
             paths.checked_root(self.path.parent)
         server = self._socket()
@@ -196,7 +202,7 @@ class Endpoint:
             bound = True
             if self.kind == "unix" and os.name == "posix":
                 os.chmod(self.path, 0o600)
-            server.listen(16)
+            server.listen(backlog)
             if self.kind == "tcp":
                 self.port = server.getsockname()[1]
         except BaseException:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import errno
+import os
+import signal
 import threading
 import time
 
@@ -85,6 +87,32 @@ def test_pending_peers_cannot_reserve_authenticated_capacity(launch):
     finally:
         for peer in pending:
             peer.close()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="SIGSTOP freezes the host's accept loop")
+def test_the_listen_backlog_holds_every_connection_the_host_triages(launch):
+    """The kernel queue must not refuse what the host would admit or evict.
+
+    Pending peers are triaged only once accepted. A backlog smaller than the
+    host's client and pending budgets drops connections whenever its accept
+    loop is not scheduled for a moment, so a burst within those budgets
+    timed out on a loaded runner. Freezing the host makes that moment certain.
+    """
+
+    key, directory, _ = launch
+    record = spawn.start_host(key, directory)
+    pending = []
+    os.kill(record.pid, signal.SIGSTOP)
+    try:
+        for _ in range(host.MAX_CLIENTS + host.MAX_PENDING):
+            pending.append(record.endpoint.connect(1))
+    finally:
+        os.kill(record.pid, signal.SIGCONT)
+        for peer in pending:
+            peer.close()
+    with authenticated(record) as client:
+        ipc.send_frame(client, {'op': 'ping'})
+        assert ipc.receive_frame(client)['type'] == 'pong'
 
 
 def test_authenticated_capacity_is_enforced_at_admission(launch, monkeypatch):
