@@ -20,7 +20,7 @@ from typing import Any, Callable, Iterator
 import uuid
 
 from server.platform.acl_repair import path_has_reparse_point
-from server.platform.json_file import write_json_atomic
+from server.platform.json_file import json_bytes, write_json_atomic
 from server.platform.rename import rename_absent
 from server.workspace import archive_identity as identity
 from server.workspace.archive import _capture_sidecars, _sidecar_document, archive_folder_slug
@@ -580,7 +580,7 @@ class RunMoves:
         digest_name = hashlib.sha256(digest.encode()).hexdigest()[:16]
         destination = document.with_name(f"{document.stem.removesuffix('.pinned')}_{digest_name}.pinned.cad.json")
         data = {**data, "modelFile": document.name}
-        content = (json.dumps(data, indent=2) + "\n").encode()
+        content = json_bytes(data)
         return destination, self._content_manifest(content), content
 
     def _sidecar_operation(self, src: Path, dst: Path, live_src: Path, content: bytes) -> dict:
@@ -855,7 +855,7 @@ class RunMoves:
 
     def _replace_pointer(self, record: dict, path: Path, data: dict, *, undo: bool = False) -> None:
         self._verify_pointer(record, path, undo=undo)
-        evidence = self._content_manifest((json.dumps(data, indent=2) + "\n").encode())["files"]["."]
+        evidence = self._content_manifest(json_bytes(data))["files"]["."]
         writes = record.setdefault("pointer_writes", [])
         if not any(item["after"] == evidence for item in writes):
             writes.append({"path": str(path), "after": evidence})
@@ -1155,7 +1155,7 @@ class RunMoves:
             # Reference replay may already have restored the journaled pointer.
             pointer = Path(record["folder"]) / "design.json"
             if record.get("pointer_before") is not None and pointer.is_file():
-                content = (json.dumps(json.loads(record["pointer_before"]), indent=2) + "\n").encode()
+                content = json_bytes(json.loads(record["pointer_before"]))
                 if pointer.read_bytes() == content:
                     files[pointer] = self._content_manifest(content)["files"]["."]
         # Verify maximal roots; nested snapshots have been merged above.
