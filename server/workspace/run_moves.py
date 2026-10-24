@@ -942,7 +942,11 @@ class RunMoves:
                     for old_path, new_path in ((old_run, new_run), (Path(old_run.parent.name) / old_run.name, Path(new_run.parent.name) / new_run.name)):
                         member = Path(value)
                         if member == old_path or old_path in member.parents:
-                            updated = str(new_path / member.relative_to(old_path))
+                            moved_member = new_path / member.relative_to(old_path)
+                            # Keep the recorded spelling: relative members are stored
+                            # with "/" (archive.py writes as_posix()), and str() of a
+                            # Windows path would rewrite them with backslashes.
+                            updated = str(moved_member) if "\\" in value else moved_member.as_posix()
                             break
                     indexed.append(updated)
                 metadata["exported_files"] = indexed
