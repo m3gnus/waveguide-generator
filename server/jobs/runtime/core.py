@@ -3299,7 +3299,10 @@ class JobRuntime:
             try:
                 await self.protect_cad_document(row)
             except OSError as exc:
-                raise JobProtectionError(str(exc)) from exc
+                # str(OSError) quotes the filename with repr(), which doubles
+                # every Windows backslash; name the real path instead.
+                detail = f"{exc.strerror}: {exc.filename}" if exc.strerror and exc.filename else str(exc)
+                raise JobProtectionError(detail) from exc
 
     async def delete(self, job_id: str, *, skip_model_protection: bool = False) -> None:
         await self.start()
