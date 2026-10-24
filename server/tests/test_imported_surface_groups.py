@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import gc
 import hashlib
 import json
 import re
 from pathlib import Path
-from time import monotonic
+from time import process_time
 from types import SimpleNamespace
 
 import numpy as np
@@ -289,10 +290,22 @@ def test_disconnected_face_components_are_linear():
         return [(1, face * 4 + edge) for edge in range(4)]
 
     model = SimpleNamespace(getBoundary=boundary)
-    start = monotonic()
-    assert _face_components(SimpleNamespace(model=model), range(2000)) == 2000
-    assert monotonic() - start < .2
-    assert len(calls) == 2000
+    # 20,000 disconnected faces take about 0.05 s of CPU here; the former
+    # all-remaining-faces scan is quadratic and needs about 20 s. Measure this
+    # process's CPU time with the collector paused, so neither a busy runner
+    # nor a full collection of the suite's heap is counted as algorithm time.
+    faces = 20_000
+    collecting = gc.isenabled()
+    gc.disable()
+    try:
+        start = process_time()
+        assert _face_components(SimpleNamespace(model=model), range(faces)) == faces
+        elapsed = process_time() - start
+    finally:
+        if collecting:
+            gc.enable()
+    assert elapsed < 2.0
+    assert len(calls) == faces
 
 
 def test_face_components_preserve_shared_edge_connectivity():
