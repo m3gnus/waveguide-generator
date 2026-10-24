@@ -23,10 +23,14 @@ The records are
 * **self-redacting**: a record keeps, in ``redactionNames``, the names of the
   model it is about (the document's, its components', bodies' and features'),
   from the caller and from what its ids lead to (:func:`configure_incidents`'s
-  ``names``). They are never shown; a redacted export, and the summary a
-  problem report puts on the clipboard, replace them with stand-ins even when
-  the model's bundle and run are long gone. A record without the field was
-  written where no name could be known, and cannot be redacted;
+  ``names``). A redacted export and the summary a problem report puts on the
+  clipboard never show them: they replace them with stand-ins even when the
+  model's bundle and run are long gone. A problem report's saved file carries
+  the records as they are, names included, like the evidence they redact (its
+  dialog says the file may name models and parts). A record without the field
+  was written where no name could be known, and cannot be redacted. A caught
+  interface error's words are the interface's own, which no name source covers:
+  neither shows them;
 * **independent of the run list**: deleting runs (Clear failed) never deletes a
   record, and the job logs it removes are copied, as bounded tails, into the
   records that name those jobs first (:func:`retain_job_logs`).
@@ -53,6 +57,8 @@ import tempfile
 import threading
 import traceback
 from typing import Any
+import unicodedata
+from urllib.parse import unquote
 
 from .json_file import write_json_atomic
 from .scrub import HOME_PLACEHOLDER, ScrubRules, location_roots, usable_root
@@ -111,49 +117,112 @@ _VOLATILE = re.compile(
 
 
 #: Identifier formats that name a run, a request, a design or a CAD document,
-#: wherever they appear in free text: Autodesk URNs, WG's prefixed ULIDs
-#: (``wgd_``, ``wgr_``, ``wgi_`` ..., also cut short), manual-solve request
-#: ids, UUIDs, and 32- and 64-hex digests and request ids.
+#: wherever they appear in free text: Autodesk URNs and their fragments
+#: (``dm.lineage:…``, ``lineage:…``, ``vf.…``), WG's prefixed ULIDs (``wgd_``,
+#: ``wgr_``, ``wgi_`` ..., also cut short or run into a word), manual-solve
+#: request ids, UUIDs, and 32- and 64-hex digests and request ids. Matched in
+#: :func:`comparable_text`, so a percent-encoded URN is one too.
 IDENTIFIER_PATTERN = re.compile(
     r"urn:adsk[^\s'\"<>()\[\]{},;]*"
-    r"|(?<![A-Za-z0-9])wg[a-z]{1,2}_[0-9A-Z]{10,}(?![A-Za-z0-9])"
+    r"|(?<![A-Za-z0-9])(?:adsk\.[a-z]+:)?(?:dm|fs)\.(?:lineage|file|folder|version):[^\s'\"<>()\[\]{},;]+"
+    r"|(?<![A-Za-z0-9.])lineage:[A-Za-z0-9._-]{6,}"
+    r"|(?<![A-Za-z0-9])(?:vf|co)\.[A-Za-z0-9_-]{12,}"
+    r"|wg[a-z]{1,2}_[0-9A-Z]{10,}(?![A-Za-z0-9])"
     r"|(?:cad-solve:)?manual-solve:[A-Za-z0-9_.:-]+"
     r"|(?<![A-Za-z0-9-])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![A-Za-z0-9-])"
     r"|(?:sha256:)?(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])"
     r"|(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])",
     re.IGNORECASE,
 )
+#: A word of a multi-word name this long is a name of its own: ``Kusten`` alone
+#: still names ``Höga Kusten Design``. Shorter words (``v3``, ``of``) are not.
+MIN_NAME_WORD = 4
+#: What may follow a name of at least :data:`MIN_NAME_WORD` characters and
+#: still be it: a plural (``Designs``, ``Boxes``) or a number (``Design2``).
+_NAME_SUFFIX = r"(?:e?s|\d+)?"
+_NAME_WORD = re.compile(r"^[^\w]+|[^\w]+$")
 
 
-def name_pattern(names: Iterable[str]) -> re.Pattern[str] | None:
-    """One pattern for these names: whole tokens, any case, the longest first.
+def comparable_text(text: str) -> str:
+    """Text as names and ids are matched in: percent-escapes decoded, then NFC.
 
-    A name matches only where it is not part of a longer word (a letter or a
-    digit on either side), so a body called ``open`` leaves ``opened`` alone.
-    ``_`` and ``-`` separate tokens: a parameter prefix's stem is found in
-    ``wg_<stem>_length``.
+    A URL's ``urn%3Aadsk…`` is the URN, and a name typed in decomposed form
+    (``o`` and a combining diaeresis) is the name typed composed. Redacted text
+    is written in this form.
     """
 
-    terms = sorted(
-        {str(name).strip() for name in names if len(str(name).strip()) >= MIN_REDACTION_NAME},
-        key=lambda term: (-len(term), term),
-    )
-    if not terms:
-        return None
-    alternatives = []
-    for term in terms:
-        before = r"(?<![^\W_])" if term[0].isalnum() else ""
-        after = r"(?![^\W_])" if term[-1].isalnum() else ""
-        alternatives.append(before + re.escape(term) + after)
-    return re.compile("|".join(alternatives), re.IGNORECASE)
+    for _ in range(3):  # twice-encoded ids too
+        if "%" not in text:
+            break
+        decoded = unquote(text)
+        if decoded == text:
+            break
+        text = decoded
+    return unicodedata.normalize("NFC", text)
+
+
+class NameMatcher:
+    """The names of one model, found in text whatever their form.
+
+    Whole tokens, any case, the longest first, compared composed (NFC): a name
+    matches only where it is not part of a longer word (a letter or a digit on
+    either side), so a body called ``open`` leaves ``opened`` alone; ``_``,
+    ``-``, ``.`` and ``'`` separate tokens (``wg_<stem>_length``, ``<name>.f3d``,
+    ``<name>'s``). A name of :data:`MIN_NAME_WORD` characters or more also
+    matches with a plural or a number after it, and each such word of a
+    multi-word name is a name of its own: redacting too much is the safe side.
+    :meth:`sub` hands the replacement the name a match belongs to.
+    """
+
+    def __init__(self, names: Iterable[str]) -> None:
+        self._owners: dict[str, str] = {}
+        whole = [unicodedata.normalize("NFC", str(name)).strip() for name in names]
+        whole = [name for name in whole if len(name) >= MIN_REDACTION_NAME]
+        for name in whole:
+            self._owners.setdefault(name.lower(), name)
+        for name in whole:
+            words = [_NAME_WORD.sub("", word) for word in name.split()]
+            if len(words) > 1:
+                for word in words:
+                    if len(word) >= MIN_NAME_WORD and any(character.isalpha() for character in word):
+                        self._owners.setdefault(word.lower(), name)
+        alternatives = []
+        for term in sorted(self._owners, key=lambda item: (-len(item), item)):
+            before = r"(?<![^\W_])" if term[0].isalnum() else ""
+            after = ""
+            if term[-1].isalnum():
+                after = (_NAME_SUFFIX if len(term) >= MIN_NAME_WORD else "") + r"(?![^\W_])"
+            alternatives.append(before + re.escape(term) + after)
+        self._pattern = re.compile("|".join(alternatives), re.IGNORECASE) if alternatives else None
+
+    def __bool__(self) -> bool:
+        return self._pattern is not None
+
+    def owner(self, matched: str) -> str:
+        """The name a match found (a plural or a number after it dropped)."""
+
+        key = unicodedata.normalize("NFC", matched).lower()
+        for candidate in (key, key.rstrip("0123456789"), key[:-1], key[:-2]):
+            if candidate in self._owners:
+                return self._owners[candidate]
+        longest = sorted(self._owners.items(), key=lambda item: -len(item[0]))
+        return next((owner for term, owner in longest if key.startswith(term)), longest[0][1])
+
+    def sub(self, replace: str | Callable[[str], str], text: str) -> str:
+        """``text`` (composed) with every name replaced by ``replace`` or ``replace(name)``."""
+
+        text = unicodedata.normalize("NFC", text)
+        if self._pattern is None:
+            return text
+        if isinstance(replace, str):
+            return self._pattern.sub(lambda _match: replace, text)
+        return self._pattern.sub(lambda match: replace(self.owner(match.group(0))), text)
 
 
 def redact_names(text: str, names: Iterable[str], *, placeholder: str = "<name>", ids: str | None = "<id>") -> str:
     """``text`` without these names (and, unless ``ids`` is None, without identifiers)."""
 
-    pattern = name_pattern(names)
-    if pattern is not None:
-        text = pattern.sub(placeholder, text)
+    text = NameMatcher(names).sub(placeholder, comparable_text(text))
     return IDENTIFIER_PATTERN.sub(ids, text) if ids is not None else text
 
 
@@ -603,7 +672,8 @@ def summary(record: Mapping[str, Any], *, public: bool = False) -> dict[str, Any
     ``public``: for text a user may paste anywhere (a problem report's
     summary). The first words lose the record's ``redactionNames`` and every
     identifier, and a record that cannot be redacted (no ``redactionNames``)
-    shows none.
+    and a caught interface error (the interface's own words, whatever names
+    they hold) show none.
     """
 
     latest = record.get("latest") or {}
@@ -613,7 +683,8 @@ def summary(record: Mapping[str, Any], *, public: bool = False) -> dict[str, Any
         or evidence.get("reason") or evidence.get("code") or ""
     if public:
         names = record.get("redactionNames")
-        message = redact_names(str(message), names) if isinstance(names, list) and message else ""
+        vouched = isinstance(names, list) and record.get("kind") != INTERFACE_ERROR_KIND
+        message = redact_names(str(message), names) if vouched and message else ""
     return {
         "id": record.get("id"),
         "kind": record.get("kind"),
@@ -734,16 +805,18 @@ __all__ = [
     "MAX_INTERFACE_RECORDS",
     "MAX_RECORDS",
     "MAX_REDACTION_NAMES",
+    "MIN_NAME_WORD",
     "MIN_REDACTION_NAME",
+    "NameMatcher",
     "Redactor",
     "account_name",
     "bounded",
+    "comparable_text",
     "configure_incidents",
     "configured_store",
     "fingerprint",
     "incident_id",
     "incidents_dir",
-    "name_pattern",
     "read_log_tail",
     "record_incident",
     "redact_names",

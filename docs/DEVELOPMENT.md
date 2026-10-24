@@ -258,15 +258,18 @@ folder and location variables as a problem report writes them (`~`,
 fingerprinted, cut or written. Each record also keeps, in `redactionNames`, the
 names of the model it is about: those the caller knows and those its ids lead to
 (the run's snapshot, the CAD Link ingest and WG's retained bundle, read when the
-failure is recorded). They are never shown; they let a redacted export and the
-problem report's summary replace the names after the bundle (24 h) and the run
-are gone, and in a record taken from a problem report. Clear failed
+failure is recorded). A redacted export and the problem report's summary never
+show them: they let both replace the names after the bundle (24 h) and the run
+are gone, and in a record taken from a problem report. The report's saved file
+(`incidents/`) carries the records as they are, names included, at the same
+disclosure level as their evidence, which the report dialog says may name models
+and parts. Clear failed
 and other run deletions never remove a record; the tails of the job logs they
 delete are copied into the records that name those jobs first. Problem reports
 carry the 50 newest records (`incidents/` in the zip), with job-log tails only in
 the ten newest and in those naming the selected run, and the summary (the
 clipboard text) lists the newest ten with their names and ids replaced; a record
-without `redactionNames` shows no message there. Only the running app configures the store, so tests, `cad_replay`
+without `redactionNames`, and a caught interface error, shows no message there. Only the running app configures the store, so tests, `cad_replay`
 and child processes never write records.
 
 ```bash
@@ -285,13 +288,26 @@ is gone, exit 2). `export` writes the record and WG's retained copy of
 the bundle, which never holds the CAD document; `--redact` also replaces every
 name the record and the bundle hold, and those the record kept and its ids still
 lead to (document, components, bodies, features, shells, appearances, occurrence
-paths, STEP products: `redacted-model`, `name-<n>`, whole words, the same
-stand-in everywhere), and every id (`<redacted>`, also anything shaped like one:
-`urn:adsk…`, `wgd_…` and the other prefixed ids, UUIDs, digests, manual-solve
-request ids; the manifest's design, export and return ids by stand-ins, its
-document and origin-bundle ids dropped). Protocol words are never rewritten
-(the record's kind, phase, code and stage, the manifest's enumerated fields, the
-STEP schema and context entities), the job logs are keyed `job-<n>`, the STEP
+paths, STEP products: `redacted-model`, `name-<n>`, the same stand-in everywhere),
+and every id (`<redacted>`, also anything shaped like one: `urn:adsk…` and its
+`dm.lineage:…`/`lineage:…` fragments, `wgd_…` and the other prefixed ids, UUIDs,
+digests, manual-solve request ids; the manifest's design, export and return ids
+by stand-ins, its document and origin-bundle ids dropped). Names are matched
+whole-word in any case, composed (NFC: a decomposed `ö` is the same letter), in
+text whose percent-escapes are decoded (a URL's `urn%3Aadsk…`), with a plural or
+a number after a name of four letters or more (`Designs`, `Design2`), and each
+such word of a multi-word name on its own: redacting too much is the safe side.
+The redacted text is written in that decoded, composed form. Protocol words are
+never rewritten: the record's kind, phase and fingerprint, the manifest's
+enumerated fields, the STEP schema and context entities, and a vocabulary field
+(code, stage, status, source, operation, outcome, type, reason code, severity,
+versions, provenance; and a mapping key) whose value is one of WG's words
+(lower-case ASCII, no spaces: `open_half`, `cad-preparation`); any other value
+there is redacted like free text. A caught interface error's own text (message,
+stack, context, an operation that is not one of WG's words) is the interface's,
+which no name source covers: the export withholds it (`<client message
+withheld>` and a 12-hex fingerprint), sets `clientTextWithheld` and says so on
+stderr. The job logs are keyed `job-<n>`, the STEP
 header's author fields and description are blanked and the manifest's file
 hashes updated, so the fixture still validates and replays. A record with no
 name source at all (no bundle, no `redactionNames`, no run or ingest left) is

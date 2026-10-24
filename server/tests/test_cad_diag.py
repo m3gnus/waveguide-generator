@@ -333,6 +333,189 @@ def test_cli_export_refuses_to_redact_when_no_name_can_be_known(tmp_path: Path, 
     assert code == 0
 
 
+#: A name in non-ASCII letters, three words long, the last one a common word.
+NORDIC = "Höga Kusten Design"
+#: What must never survive a redacted export of a record about ``NORDIC``.
+NORDIC_SECRETS = ("Höga", "Kusten", "Hoga")
+
+
+def _leaks(out_dir: Path, secrets) -> list[tuple[str, str]]:
+    """Every secret any exported file still holds, in any spelling a reader could decode.
+
+    Its JSON decoded (``\\u00f6``), its STEP escapes decoded, percent-escapes
+    decoded, composed and decomposed, any case; and the file names.
+    """
+
+    import unicodedata
+    from urllib.parse import unquote
+
+    from server.tools.cad_diag import _step_decode
+
+    found = []
+    for path in sorted(out_dir.rglob("*")):
+        name = path.relative_to(out_dir).as_posix()
+        texts = [name]
+        if path.is_file():
+            raw = path.read_text(encoding="utf-8")
+            texts += [raw, unquote(unquote(raw))]
+            if path.suffix == ".json":
+                texts.append(json.dumps(json.loads(raw), ensure_ascii=False))
+            if path.suffix.lower() in (".step", ".stp"):
+                texts.append(_step_decode(raw))
+        for text in texts:
+            for form in ("NFC", "NFD"):
+                haystack = unicodedata.normalize(form, text).lower()
+                found += [(name, secret) for secret in secrets
+                          if unicodedata.normalize(form, secret).lower() in haystack]
+    return sorted(set(found))
+
+
+def _export(capsys, tmp_path: Path, incident: str, name: str = "x") -> tuple[int, Path, str]:
+    from server.tools import cad_diag
+
+    out_dir = tmp_path / name
+    code = cad_diag.main(["--data-dir", str(tmp_path / "data"), "export", incident, "--out", str(out_dir), "--redact"])
+    return code, out_dir, capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("names_form", "text_form"), [("NFC", "NFD"), ("NFD", "NFC")])
+def test_names_match_in_either_unicode_form(tmp_path: Path, capsys, names_form: str, text_form: str) -> None:
+    import unicodedata
+
+    named = unicodedata.normalize(names_form, NORDIC)
+    written = unicodedata.normalize(text_form, NORDIC)
+    store = _store(tmp_path)
+    incident = store.record("domain", "cad-preparation", redaction_names=[named], evidence={
+        "code": "open_half", "message": f"opening {written}", "detail": f"{written.upper()} failed"})
+    code, out_dir, _err = _export(capsys, tmp_path, incident)
+    assert code == 0
+    assert _leaks(out_dir, NORDIC_SECRETS) == []
+    evidence = json.loads((out_dir / "incident.json").read_text(encoding="utf-8"))["latest"]["evidence"]
+    assert evidence["message"] == "opening redacted-model" and evidence["code"] == "open_half"
+    # The clipboard summary matches the same way: one owner of name matching.
+    from server.platform.incidents import summary
+
+    store.record("domain", "x2", redaction_names=[named], evidence={
+        "detail": f"{written}'s plural {written}s, urn%3Aadsk%3Awipprod%3Adm.lineage%3ASECRET"})
+    [line] = [summary(record, public=True) for record in store.list() if record["phase"] == "x2"]
+    assert line["message"] == "<name>'s plural <name>, <id>"
+
+
+def test_step_and_manifest_names_match_in_either_unicode_form(tmp_path: Path, capsys) -> None:
+    """The manifest says it decomposed, the STEP file composed and escaped, the record both."""
+
+    import unicodedata
+
+    decomposed = unicodedata.normalize("NFD", NORDIC)
+    digest = "d" * 64
+    bundle = tmp_path / "data" / "imports" / "bundles" / f"{digest}.wgreturn"
+    bundle.mkdir(parents=True)
+    (bundle / "assembly.step").write_text(
+        "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('x','',(''),(''),'','','');\n"
+        "ENDSEC;\nDATA;\n"
+        "#1=PRODUCT('H\\X2\\00F6\\X0\\ga Kusten Design','Ho\\X2\\0308\\X0\\ga Kusten Designs','',(#9));\n"
+        "#2=MANIFOLD_SOLID_BREP('Kusten body',#7);\nENDSEC;\nEND-ISO-10303-21;\n", encoding="utf-8")
+    (bundle / "wgreturn.json").write_text(json.dumps({
+        "document": {"name": decomposed, "native_id": None},
+        "files": {"assembly.step": {"sha256": "sha256:old", "size_bytes": 1, "purpose": "exterior-assembly"}},
+    }), encoding="utf-8")
+    store = _store(tmp_path)
+    incident = store.record("domain", "cad-preparation", ids={"manifest_sha256": digest}, evidence={
+        "code": "open_half", "message": f"{NORDIC} / {decomposed}"})
+    code, out_dir, _err = _export(capsys, tmp_path, incident)
+    assert code == 0
+    assert _leaks(out_dir, NORDIC_SECRETS) == []
+    step = (out_dir / "model.wgreturn" / "assembly.step").read_text(encoding="ascii")
+    # The document's name, however spelled, is the document's stand-in; the plural is a name of its own.
+    assert "#1=PRODUCT('redacted-model','name-" in step
+
+
+def test_percent_encoded_and_fragmentary_ids_are_redacted(tmp_path: Path, capsys) -> None:
+    from urllib.parse import quote
+
+    urn = "urn:adsk.wipprod:dm.lineage:XYZSECRET123"
+    known = "ingest:SECRETINGEST-2"  # a known id that a URL spells differently
+    store = _store(tmp_path)
+    incident = store.record("domain", "cad-preparation", ids={"ingest_id": known}, redaction_names=[NORDIC],
+                            evidence={"code": "x", "message": " / ".join((
+                                quote(urn, safe=""), quote(urn), quote(quote(urn, safe=""), safe=""),
+                                f"https://example.invalid/open?id={quote(known, safe='')}",
+                                "lineage:XYZSECRET123", "dm.lineage:XYZSECRET123", "vf.XYZSECRET1234567",
+                                "designwgd_01JSECRETDESIGNAAAAAAAAA", quote("wgd_01JSECRETDESIGNAAAAAAAAA"),
+                                f"file:///d/{quote(NORDIC)}.f3d",
+                            ))})
+    code, out_dir, _err = _export(capsys, tmp_path, incident)
+    assert code == 0
+    assert _leaks(out_dir, ("XYZSECRET", "SECRETINGEST", "SECRETDESIGN", "adsk", *NORDIC_SECRETS)) == []
+
+
+def test_plural_and_numbered_names_are_redacted(tmp_path: Path, capsys) -> None:
+    store = _store(tmp_path)
+    incident = store.record("domain", "cad-preparation", redaction_names=[NORDIC, "Waveguide"], evidence={
+        "code": "x",
+        "message": f"{NORDIC}s failed; {NORDIC}'s body; {NORDIC}2; {NORDIC}_v2; {NORDIC}.f3d; "
+                   "project Kusten; Höga alone; Waveguides and Waveguide12 and waveguide_3",
+    })
+    code, out_dir, _err = _export(capsys, tmp_path, incident)
+    assert code == 0
+    assert _leaks(out_dir, (*NORDIC_SECRETS, "waveguide")) == []
+    message = json.loads((out_dir / "incident.json").read_text(encoding="utf-8"))["latest"]["evidence"]["message"]
+    assert message.startswith("redacted-model failed; redacted-model's body; redacted-model; redacted-model_v2")
+
+
+def test_vocabulary_fields_keep_only_wgs_own_words(tmp_path: Path, capsys) -> None:
+    store = _store(tmp_path)
+    vocabulary = ("status", "source", "operation", "outcome", "type", "reason_code", "severity", "stage",
+                  "provenance")
+    evidence = {key: f"{NORDIC} {key}" for key in vocabulary}
+    evidence.update({
+        "code": "open_half", "kind": "domain", "versions": {"model": NORDIC, "wg": "0.3.6"},
+        "outcome": [{"stage": NORDIC}, "positive"], "type": "Err_Kusten",
+        "bodies": {NORDIC: {"n": 1}}, "list": [{f"{NORDIC}2": 1}],
+    })
+    incident = store.record("domain", "cad-preparation", redaction_names=[NORDIC, "domain", "positive"],
+                            evidence=evidence)
+    code, out_dir, _err = _export(capsys, tmp_path, incident)
+    assert code == 0
+    assert _leaks(out_dir, NORDIC_SECRETS) == []
+    record = json.loads((out_dir / "incident.json").read_text(encoding="utf-8"))
+    kept = record["latest"]["evidence"]
+    # One of WG's words stays, even when a body is named like it.
+    assert (kept["code"], kept["kind"], kept["versions"]["wg"], kept["outcome"][1]) == (
+        "open_half", "domain", "0.3.6", "positive")
+    assert kept["status"] == "redacted-model status" and kept["versions"]["model"] == "redacted-model"
+    assert kept["bodies"] == {"redacted-model": {"n": 1}}
+
+
+def test_interface_errors_never_export_the_interfaces_words(tmp_path: Path, capsys) -> None:
+    """The interface's text names nothing WG can vouch for: it is withheld, and the export says so."""
+
+    from server.platform.incidents import summary
+
+    store = _store(tmp_path)
+    for phase in ("run-archive", f"Export {NORDIC}"):
+        incident = store.record("interface-error", phase, ids={"job_id": "job-1"}, redaction_names=(), evidence={
+            "message": f"cannot archive {NORDIC}", "stack": f"at open ({NORDIC}.js:1)",
+            "source": "caught", "operation": phase, "at": "2026-10-24T09:00:00.000Z",
+            "context": {"job_id": "job-1", "note": NORDIC, NORDIC: 2},
+        })
+        code, out_dir, err = _export(capsys, tmp_path, incident, name=f"x-{len(phase)}")
+        assert code == 0 and "withheld" in err
+        assert _leaks(out_dir, NORDIC_SECRETS) == []
+        record = json.loads((out_dir / "incident.json").read_text(encoding="utf-8"))
+        assert record["clientTextWithheld"] is True
+        evidence = record["latest"]["evidence"]
+        assert evidence["message"].startswith("<client message withheld> ")
+        assert evidence["stack"].startswith("<client message withheld> ")
+        assert (evidence["source"], evidence["at"]) == ("caught", "2026-10-24T09:00:00.000Z")
+        if phase == "run-archive":
+            assert record["phase"] == evidence["operation"] == "run-archive"
+        else:
+            assert record["phase"].startswith("<client message withheld> ")
+        # Nor does the clipboard summary show them.
+        assert summary(store.get(incident), public=True)["message"] is None
+
+
 def test_names_like_protocol_words_never_rewrite_what_failed(tmp_path: Path, capsys) -> None:
     store = _store(tmp_path)
     names = ["Component", "cad", "open", "positive", "domain", "preparation"]

@@ -18,6 +18,7 @@ import argparse
 import bisect
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -30,11 +31,13 @@ from typing import Any
 from server.cadlink.wgreturn import identifying_names
 from server.platform.incidents import (
     IDENTIFIER_PATTERN,
+    INTERFACE_ERROR_KIND,
     MIN_REDACTION_NAME,
     IncidentStore,
+    NameMatcher,
     Redactor,
     account_name,
-    name_pattern,
+    comparable_text,
     redaction_rules,
     summary,
 )
@@ -197,9 +200,11 @@ IDENTIFYING_KEYS = frozenset({
 })
 #: Keys whose values are a model's or a body's name.
 NAME_KEYS = frozenset({"document_name", "documentName", "model_name", "modelName"})
-#: Record fields that are WG's vocabulary, never a user's words: what failed
-#: and how (``kind``, ``phase``, ``code``, a stage or an axis) is kept as it is,
-#: even when a body is named like it, so the export still reads and replays.
+#: Record fields that are WG's vocabulary: what failed and how (``kind``,
+#: ``phase``, ``code``, a stage or an axis). A value that is one of WG's words
+#: (:data:`_WG_WORD`) is kept as it is, even when a body is named like it, so
+#: the export still reads and replays; any other value (a sentence, a name) is
+#: redacted like free text.
 _RECORD_VOCABULARY = frozenset({
     "kind", "phase", "code", "stage", "reason_code", "reasonCode", "chosen_axis", "axis", "meshed_axis",
     "allowed_axes", "allowedAxes", "outcome", "status", "severity", "type", "provenance", "algorithm",
@@ -208,6 +213,19 @@ _RECORD_VOCABULARY = frozenset({
 })
 #: A record's own fields, written by WG: kept as they are.
 _RECORD_HEADER = ("schema", "id", "kind", "phase", "fingerprint", "firstSeen", "lastSeen", "count")
+#: One of WG's own words: a code, a stage, a kind, a version (``open_half``,
+#: ``cad-preparation``, ``0.3.6``). Lower-case ASCII, no spaces.
+_WG_WORD = re.compile(r"[a-z0-9]+(?:[_.:-][a-z0-9]+)*")
+#: What a caught interface error's own words become in a redacted export.
+WITHHELD = "<client message withheld>"
+#: Interface-error fields that are the interface's own words for what failed:
+#: kept when they are one of WG's words, withheld otherwise.
+_CLIENT_WORDS = frozenset({"operation", "source"})
+_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T[0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?")
+WITHHELD_NOTE = (
+    "Caught interface errors carry the interface's own text, which no name source covers: "
+    f"the export replaces each such text with {WITHHELD!r} and its fingerprint."
+)
 #: Manifest values that are protocol vocabulary, never a user's words: a body
 #: named like one must not turn the manifest invalid. Every enumerated field
 #: of the wgreturn validator (``server.cadlink.wglink_protocol``) is here.
@@ -295,8 +313,11 @@ class ExportRedactor:
     """Every name and id an exported incident carries, replaced consistently.
 
     Names (the document's, the components', bodies', features', shells' and
-    occurrences') become ``redacted-model`` and ``name-<n>``, matched as whole
-    words in any case; ids become ``<redacted>``: the ones the record and the
+    occurrences') become ``redacted-model`` and ``name-<n>``, matched as
+    :class:`~server.platform.incidents.NameMatcher` finds them (whole words,
+    any case, composed, plurals and numbers, each long word of a multi-word
+    name) in text whose percent-escapes are decoded (``comparable_text``,
+    which is the form written); ids become ``<redacted>``: the ones the record and the
     bundle name, and anything shaped like one (``IDENTIFIER_PATTERN``). The
     same original always becomes the same stand-in, in the record, the logs,
     the manifest and the STEP file alike, so the fixture still replays.
@@ -306,12 +327,12 @@ class ExportRedactor:
         self._base = base
         self._names: dict[str, str] = {}
         self._ids: set[str] = set()
-        self._name_pattern: re.Pattern[str] | None = None
+        self._matcher = NameMatcher(())
         self._id_pattern: re.Pattern[str] | None = None
         self._stale = True
 
     def add_name(self, value: Any, placeholder: str | None = None) -> None:
-        name = str(value or "").strip()
+        name = comparable_text(str(value or "")).strip()
         if len(name) < MIN_REDACTION_NAME or name.lower() in self._names or name == REDACTED_NAME:
             return
         self._names[name.lower()] = placeholder or f"name-{len(self._names) + 1}"
@@ -322,7 +343,7 @@ class ExportRedactor:
             self.add_name(name, REDACTED_NAME if document_first and index == 0 and not self._names else None)
 
     def add_id(self, value: Any) -> None:
-        text = str(value or "").strip()
+        text = comparable_text(str(value or "")).strip()
         for spelling in {text, text.removeprefix("sha256:")}:
             if len(spelling) >= 4 and spelling != REDACTED:
                 self._ids.add(spelling)
@@ -333,7 +354,7 @@ class ExportRedactor:
 
     def _compile(self) -> None:
         if self._stale:
-            self._name_pattern = name_pattern(self._names)
+            self._matcher = NameMatcher(self._names)
             ids = sorted({item.lower() for item in self._ids}, key=len, reverse=True)
             self._id_pattern = re.compile("|".join(map(re.escape, ids)), re.IGNORECASE) if ids else None
             self._stale = False
@@ -341,43 +362,48 @@ class ExportRedactor:
     def text(self, value: str, *, names: bool = True) -> str:
         """Paths, the account name and ids replaced; and the names, unless ``names`` is false."""
 
-        value = self._base.text(value)
+        value = self._base.text(comparable_text(value))
         self._compile()
         if self._id_pattern is not None:
             value = self._id_pattern.sub(REDACTED, value)
         value = IDENTIFIER_PATTERN.sub(REDACTED, value)
-        if names and self._name_pattern is not None:
-            value = self._name_pattern.sub(lambda match: self._names[match.group(0).lower()], value)
+        if names:
+            value = self._matcher.sub(lambda name: self._names[name.lower()], value)
         return value
+
+    def word(self, value: str) -> str:
+        """One of WG's words as it is (ids and paths still go); anything else as free text."""
+
+        return self.text(value, names=not _WG_WORD.fullmatch(comparable_text(value)))
 
     def value(self, value: Any) -> Any:
         if isinstance(value, str):
             return self.text(value)
         if isinstance(value, Mapping):
-            # A key is vocabulary ("code", "detail"), never a name: a body
-            # called like one must not rename the record's fields, nor the
-            # values that say what failed.
+            # A key that is one of WG's words ("code", "detail") stays: a body
+            # called like one must not rename the record's fields. A key that
+            # is not (a body's name keying its counts) is redacted.
             result = {}
             for key, item in value.items():
                 name = str(key)
                 if name in IDENTIFYING_KEYS and item not in (None, "", [], {}):
-                    result[self.text(name, names=False)] = REDACTED
+                    result[self.word(name)] = REDACTED
                 elif name in _RECORD_VOCABULARY:
-                    result[self.text(name, names=False)] = self._vocabulary(item)
+                    result[self.word(name)] = self._vocabulary(item)
                 else:
-                    result[self.text(name, names=False)] = self.value(item)
+                    result[self.word(name)] = self.value(item)
             return result
         if isinstance(value, (list, tuple)):
             return [self.value(item) for item in value]
         return value
 
     def _vocabulary(self, value: Any) -> Any:
-        """A vocabulary value: ids and paths still go, names never replace a word of it."""
+        """A vocabulary value, at any depth: one of WG's words stays, anything else is free text."""
 
         if isinstance(value, str):
-            return self.text(value, names=False)
+            return self.word(value)
         if isinstance(value, Mapping):
-            return {key: self._vocabulary(item) for key, item in value.items()}
+            return {self.word(str(key)): self._vocabulary(item) for key, item in value.items()}
         if isinstance(value, (list, tuple)):
             return [self._vocabulary(item) for item in value]
         return value
@@ -446,7 +472,7 @@ class ExportRedactor:
                 return match.group(0)
             decoded = _step_decode(match.group(1))
             redacted = self.text(decoded)
-            return match.group(0) if redacted == decoded else f"'{_step_encode(redacted)}'"
+            return match.group(0) if redacted == comparable_text(decoded) else f"'{_step_encode(redacted)}'"
 
         return header + _STEP_STRING.sub(literal, body)
 
@@ -488,6 +514,31 @@ class ExportRedactor:
         return value
 
 
+def _withhold(value: Any, key: str | None = None) -> Any:
+    """A caught interface error's own words, withheld: each text becomes its fingerprint.
+
+    What the interface sent (its message, stack and context) may hold any name,
+    and no name source covers it. Only what says which operation failed and
+    how (``operation`` and ``source``, when they are one of WG's words) and when
+    (``at``, a timestamp) stays; numbers and flags stay too.
+    """
+
+    if isinstance(value, str):
+        text = comparable_text(value)
+        if (key in _CLIENT_WORDS and _WG_WORD.fullmatch(text)) or (key == "at" and _TIMESTAMP.fullmatch(text)):
+            return value
+        digest = hashlib.sha256(text.encode("utf-8", errors="surrogatepass")).hexdigest()[:12]
+        return f"{WITHHELD} {digest}"
+    if isinstance(value, Mapping):
+        return {
+            (str(name) if _WG_WORD.fullmatch(str(name)) else _withhold(str(name))): _withhold(item, str(name))
+            for name, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_withhold(item) for item in value]
+    return value
+
+
 def _mappings(value: Any) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
@@ -499,6 +550,7 @@ def _occurrence_ids(record: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 
 def export_incident(
     record: Mapping[str, Any], data_dir: Path, destination: Path, *, redact: bool,
+    notes: list[str] | None = None,
 ) -> list[Path]:
     """Write the record, and its retained bundle when there is one, as a fixture.
 
@@ -514,7 +566,11 @@ def export_incident(
     the record kept (``redactionNames``), and the run, ingest and bundle its
     ids lead to. With none of them the names in its text cannot be known, and
     a redacted export is refused (:class:`CannotRedact`) rather than written
-    with them in it.
+    with them in it. A caught interface error's own text (its message, stack
+    and context, and an operation that is not one of WG's words) is the
+    interface's, which no name source covers: it is withheld (:data:`WITHHELD`
+    and its fingerprint), the record says so (``clientTextWithheld``), and so
+    does a line added to ``notes``.
     """
 
     if destination.exists() and any(destination.iterdir()):
@@ -573,10 +629,22 @@ def export_incident(
         f"job-{index}": log for index, log in enumerate((record.get("jobLogs") or {}).values(), start=1)
     }
     exported["redacted"] = True
+    client = record.get("kind") == INTERFACE_ERROR_KIND
+    if client:
+        latest = dict(exported.get("latest") or {})
+        for key in ("evidence", "exception"):
+            if latest.get(key) is not None:
+                latest[key] = _withhold(latest[key])
+        exported["latest"] = latest
+        exported["clientTextWithheld"] = True
+        if notes is not None:
+            notes.append(WITHHELD_NOTE)
     redacted = redactor.value(exported)
     # WG's own words about the record (its id, kind, phase, fingerprint and
     # times), whatever a body is called.
     redacted.update({key: record[key] for key in _RECORD_HEADER if key in record})
+    if client and not _WG_WORD.fullmatch(comparable_text(str(record.get("phase") or ""))):
+        redacted["phase"] = _withhold(str(record.get("phase") or ""))
     destination.mkdir(parents=True, exist_ok=True)
     written = [destination / "incident.json"]
     written[0].write_text(json.dumps(redacted, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -688,11 +756,14 @@ def main(
     if args.command == "show":
         print(json.dumps(record, indent=2, sort_keys=True))
         return 0
+    notes: list[str] = []
     try:
-        written = export_incident(record, data_dir, args.out.expanduser().resolve(), redact=args.redact)
+        written = export_incident(record, data_dir, args.out.expanduser().resolve(), redact=args.redact, notes=notes)
     except CannotRedact as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    for note in notes:
+        print(note, file=sys.stderr)
     for path in written:
         print(path)
     return 0

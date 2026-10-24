@@ -515,7 +515,8 @@ def _member_note(name: str) -> str:
     if name in _MEMBER_NOTES:
         return _MEMBER_NOTES[name]
     if name.startswith("incidents/"):
-        return ("One incident record: versions, ids, evidence and stack; the newest ten and any naming "
+        return ("One incident record: versions, ids, evidence and stack, and the names of the model it is "
+                "about (redactionNames, as its evidence may name them); the newest ten and any naming "
                 "the selected run also keep the tails of the run logs they name.")
     if name.startswith("logs/job-"):
         return "The log of the run selected in the report dialog."
