@@ -212,7 +212,7 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `snapshot_unavailable` | `rejected` | A received snapshot's bundle stayed unreadable for 24 hours (see "Snapshot settlement through files"). Sending it again is a new operation |
 | `setup_required` | `needs_user_input` | The settings named or recorded cannot be used, or WG's defaults cannot solve a first-time model (a source with no suggested mesh size); a CAD-authored model never borrows the open project's |
 | `findings_need_review` | `needs_user_input` | The preparation has blocking findings not yet approved on that preparation |
-| `frame_confirmation_required` | `needs_user_input` | An unlinked (CAD-authored) snapshot whose project has not confirmed the solver frame it was prepared in and for which WG is not confident of its own (see "Unlinked solver frame") |
+| `frame_confirmation_required` | `needs_user_input` | Never a question about which way a model radiates: only a Solve that named a person's choice of axis, when another choice replaced it before the solve was prepared (see "Unlinked solver frame"). Runs an earlier build stopped here still show it |
 | `preparation_failed` | `needs_user_input` | Retaining or meshing failed in a way another attempt can overcome: a worker crash, a timeout, a return that is not in the WGLink folder and has no retained copy |
 | `engine_unavailable` | `needs_user_input` | The engine the setup names is not available on this host |
 | `engine_cannot_solve_return` | `needs_user_input` | The engine the setup names is present but cannot solve this record (for example a BEAT accelerator that takes CAD returns only in Accurate); the message names the engines here that can |
@@ -402,7 +402,7 @@ whatever project is open. Nothing on the backend reads the live UI:
   first-time model's setup (WG's defaults, below).
 - **The job keeps its settings.** The revision a preparation selects is recorded on the
   job before it meshes, so it survives a preparation that fails. A follow-up that
-  names no revision -- a frame confirmation, an approval, a retry -- continues with the
+  names no revision -- an approval, a retry -- continues with the
   revision the job holds, or its last preparation's, so approvals given on that
   preparation still apply. A named revision always wins: an action that chooses settings
   ("Use these settings and solve", a new engine after `engine_unavailable` or `engine_cannot_solve_return`) sends one.
@@ -449,11 +449,14 @@ whatever project is open. Nothing on the backend reads the live UI:
 ## Unlinked solver frame
 
 A return with no WG instance -- a model drawn from scratch in CAD -- carries no throat
-frame, so WG infers which way it radiates. A Solve from Fusion never asks: WG uses
-its confident inference, or else a documented fallback ranking, records a fallback
-as such for developers, and stores the decision on the record it prepared. The user
-can change the axis afterwards. Saved manual choices take precedence (see "Automatic
-axis" below).
+frame, so WG infers which way it radiates. WG never asks: every solve nobody chose
+an axis for -- a Fusion request, a Solve in WG's own panel, a manually imported or CAD
+Link prepared model, a restored run, a re-solve -- uses its confident inference, or
+else a documented fallback ranking, records a fallback as such for developers, and
+stores the decision on the record it prepared. The Solve card shows the chosen axis as
+information with **Change** (a fallback adds one calm line, "WG chose +Z; change it if
+the model radiates another way."), never a confirmation Solve waits on. Saved manual
+choices take precedence (see "Automatic axis" below).
 `server/cadlink/interpretation/solver_frame.py` is the executable half of this section, and
 `server/cadlink/interpretation/frame_infer.py` the inference.
 
@@ -474,8 +477,8 @@ axis" below).
     that meaning: a v1 record still resolves, previews and solves as v1 while its v1
     confirmation stands. A project confirmed under v1 is not asked again: for the same
     `export_frame`, its v1 axis is carried forward to a v2 preparation, which is meshed
-    in it and preselects it (`source: "carried"`), and Solve confirms it under v2. It is
-    never taken as confirmed before that. The frontend fixture
+    in it, preselects it (`source: "carried"`) and solves along it as the project's own
+    choice. A Solve that names it confirms it under v2. The frontend fixture
     (`frontend/src/viewport/solverFrame.fixture.json`) pins the v1 matrices; the frontend
     applies whatever matrices the server hands it.
   - `spec_matrix` is the only producer of these matrices: preparation meshes with it,
@@ -504,8 +507,9 @@ axis" below).
   role-weighted far-observer visibility survey with small tilts, and the largest
   envelope opening the sources reach. The result is automatic only when the vote share
   is at least 0.60, the normalised lead at least 0.25, and at least two evidence types,
-  one of them geometric, support the winner at a minimum strength. Otherwise it asks,
-  with the reason in words, as it does with no HF or MF source, unvalidated source
+  one of them geometric, support the winner at a minimum strength. Otherwise it
+  abstains (`status: "ask"`, a survey verdict, never a question shown), with the reason
+  recorded, as it does with no HF or MF source, unvalidated source
   identity, sources that cannot be seen from outside, an unreliable surface
   orientation, or an unrestricted winner the snapshot does not allow (it never
   promotes a weaker allowed axis). Weights and thresholds are frozen under the
@@ -514,27 +518,31 @@ axis" below).
     preparation is recorded, and `POST /api/cadlink/ingest` starts it after answering.
     It is cached in `cad_frame_suggestions` by snapshot and algorithm version; a survey
     that could not run is not cached.
-  - It preselects; it never confirms. **Precedence:** a confirmed frame whose identity
-    matches, then a v1 confirmation carried forward, then an automatic suggestion the
-    snapshot allows, else nothing. When a
+  - It never confirms. **Precedence of the axis shown:** a confirmed frame whose
+    identity matches and the snapshot allows, then a v1 confirmation carried forward,
+    then WG's own decision for the record -- the one stored when it was prepared, else
+    `choose_axis` now (`source: "suggested"` when confident, `"fallback"` when the
+    ranking chose). A record stating no frame shows none; preparing it decides. When a
     snapshot's automatic suggestion disagrees with the confirmed frame, the preview
     carries a non-blocking notice and the confirmed frame still holds.
 - **Preparation.** An unlinked snapshot is meshed in its project's confirmed frame (or
-  the axis a v1 confirmation carries forward), or as modelled (`+z`) until one is, and its record states the frame
+  the axis a v1 confirmation carries forward) when the snapshot allows it, else along
+  WG's own decision (below), and its record states the frame
   (`normalisation.solver_frame`: contract, axis, up, up source, stated document up,
   requirement, allowed axes, matrix). Right after the preparation is recorded, and before
-  findings and approvals, an explicit manual Solve checks its shown axis; an unconfirmed
-  manual frame waits as `frame_confirmation_required`;
-  the preparation it made is the preview's geometry. Confirming `+z` resumes that
-  preparation; any other axis makes a new one, and approvals never carry to it. A
+  findings and approvals, the record's frame is checked against that one answer; a
+  mismatch is an internal preparation failure, never a question. A manual choice made
+  after a preparation (Change) resumes it when it is the axis meshed; any other axis
+  makes a new one, and approvals never carry to it. A
   preparation is resumed only in the same complete frame -- contract, forward axis,
   resolved up and its provenance, stated document up, export frame and transform
   (`resolution_identity` against `record_frame_identity`) -- never on the forward axis
   alone; the mesh cache key holds the same transform. A
-  prepare request may name `frameAxis`, the axis WG showed when Solve was pressed: an
-  unlinked snapshot is then solved only along it, and a confirmation changed elsewhere
-  in the meantime stops at `frame_confirmation_required`, saying so, instead of changing
-  the axis solved. The operation keeps that axis (`cad_operations.frame_axis`), written
+  prepare request may name `frameAxis`, a person's choice WG showed when Solve was
+  pressed (WG's own decision is never named): an unlinked snapshot is then solved only
+  along it, and a manual choice changed elsewhere in the meantime stops at
+  `frame_confirmation_required`, saying so, instead of changing the axis solved. With
+  no manual choice standing, WG's decision is solved whatever an older press named. The operation keeps that axis (`cad_operations.frame_axis`), written
   when the press is admitted -- by the route, and again by `prepare_operation` before any
   early return -- so a press the update restart overtakes still carries it. Each such
   write is fenced by the attempt generation the press read (compare-and-set), so a
@@ -542,9 +550,10 @@ axis" below).
   later attempt -- an automatic continuation after the update restart, a retry that
   names none -- is held to it, and only a prepare naming another axis replaces it. `+z` is never written into the ingest options, so no mesh cached before
   this contract is made again.
-- **Automatic axis (Solve without a shown axis).** A matching manual confirmation wins,
-  followed by a carried v1 choice. Otherwise `frame_infer.choose_axis` decides, never
-  asks:
+- **Automatic axis (every solve with no manual choice).** A matching manual
+  confirmation the snapshot allows wins, followed by a carried v1 choice. Otherwise
+  `frame_infer.choose_axis` decides, never asks, for a Fusion request and a Solve in WG
+  alike:
   - **Inference (`frame-infer-v5`).** The mouth -- where the sources' sound leaves the
     model -- floods the air each source sounds into through a voxel grid to saturation and
     measures its openings out of the model's bounding box by area, so a horn's mouth
@@ -575,8 +584,8 @@ axis" below).
     its own time: the cached `automatic` axis of `frame-infer-v1` (released 0.3.5),
     `frame-infer-v2` or the unreleased `-v3`, equal to the axis it was meshed in, under
     the frame and matrix its record states (contract v1 or v2). Such a record with no
-    confident verdict of its time, solved by a request that shows no axis, is refused
-    with a calm "prepare it again", never a request to choose an axis. A second-pass disagreement is an internal
+    confident verdict of its time is refused with a calm "prepare it again" (the
+    preparation lane then decides), never a request to choose an axis. A second-pass disagreement is an internal
     preparation failure, never a frame question. No confirmation row is written. The
     accepted job records `frameAxisAutomatic` and, in its frame provenance, the
     decision's own provenance; Change still opens the existing chooser and saves a manual
@@ -636,10 +645,12 @@ axis" below).
 - **Every submission.** The jobs system refuses, at submission, an unlinked record whose
   frame is neither the confirmed one under the same requirement, the project's v1 choice
   carried forward, nor, while nothing is confirmed, the decision WG stored for exactly
-  this record when it prepared it (`frame_confirmation_required`), so `/api/solve`, a retry, a CAD operation's own
+  this record when it prepared it (`frame_confirmation_required`, with a "prepare it
+  again" message, never a question), so `/api/solve`, a retry, a CAD operation's own
   submission and a recovered bound request all meet it. A record prepared before the
   contract states no frame and is never taken as confirmed or automatic; it is prepared
-  again. A refusal with that code releases the binding and keeps the reason.
+  again. A CAD preparation whose binding meets that refusal releases the binding and
+  ends as an internal `preparation_failed`.
   - **One exception: jobs already queued.** A job accepted before an upgrade to this
     contract and still queued is requeued by `JobRuntime.start` as it was submitted; it
     is not submitted again, so it is not re-gated. Every later solve of that model is.
@@ -650,15 +661,16 @@ axis" below).
     modelled where WG is confident about another axis is refused, and the refusal says
     to prepare it again in WG; Stage 6 owes the CLI the same automatic frame, so that
     a first headless solve needs no second preparation).
-    The frame is confirmed in WG's CAD Link panel or through the route below, for
-    example `PUT /api/cadlink/solver-frame` with `{"ingestId": "wgi_…", "axis": "+z"}`.
+    A manual axis is chosen in WG's CAD Link panel (Change) or through the route below,
+    for example `PUT /api/cadlink/solver-frame` with `{"ingestId": "wgi_…", "axis": "+z"}`.
 - **Routes.** `GET /api/cadlink/solver-frame?operationId=|ingestId=` answers every axis's
   `solverFromAssembly` and `previewFromRecord` (the matrix that turns the record's
   geometry into that axis's frame) and its up, the record's contract and frame, the
   requirement, the project's confirmation (with its recorded frame), the snapshot's
   `suggestion` (`status` `automatic`/`ask`/`unavailable`, `axis`, `confidence`,
   `reason`, `reasonCode`, `algorithm`, per-evidence scores), `preselected`
-  (`{axis, source: "confirmed" | "carried" | "suggested"}` or null) and `differs` (the non-blocking
+  (`{axis, source: "confirmed" | "carried" | "suggested" | "fallback"}`, null only for a
+  record stating no frame) and `differs` (the non-blocking
   notice, or null). It computes the suggestion if the import's survey has not finished.
   `PUT /api/cadlink/solver-frame` `{operationId | ingestId, axis}` confirms it (422 for a
   linked snapshot or an axis the snapshot does not allow). Confirming prepares nothing,
@@ -728,13 +740,14 @@ nothing is ever filed under it, and no setup can be recorded for it.
   the same one, and made again otherwise; a changed engine is a new revision and
   so a new preparation. Revisions that differ only in their label count as the
   same settings, and a continuation keeps the revision its parent holds. An
-  unlinked model's displayed axis (`frame_axis`) is confirmed for its project as
-  part of the press; with no axis shown and none confirmed or confidently
-  suggested, the press is refused.
+  unlinked model's axis is named (`frame_axis`) only when a person chose it
+  (Change, or the project's own frame), and is then confirmed for its project as
+  part of the press; otherwise the press names none and the lane decides it. A
+  press is never refused for its frame.
 - **In flight.** While a job for the same model, prepared snapshot, setup
   inputs, solver frame and domain plan is preparing, queued or running,
   including a Fusion "Solve in WG" accepted first, the press answers that job
-  instead of starting another. The press's axis is confirmed first, so a job
+  instead of starting another. A press's chosen axis is confirmed first, so a job
   meshed along another axis, or under another domain reading, is never the
   answer. A Fusion request still choosing its settings (no setup yet, or WG's
   defaults before it has prepared) takes up the press's setup: the press records
@@ -963,7 +976,7 @@ under `frontend/src/` unless they start with `server/`.
 | 16 | An interrupted Insert/Update is loud only for the active Fusion document, settles from evidence, and Dismiss never repeats it | none | `server/cadlink/fusion/recovery_api.py`, `server/cadlink/fusion/fusion_outcomes.py`, `stores/cadRecoveryNotices.ts`; `shell/CadOperationsSection.tsx` Check Fusion again asks the server to reconcile the exact mutation, then refreshes status/notices; notices alone write delivery-health recovery errors | `cadRecoveryNotices.test.ts` status changes/expiry, dismissal fences, sole health-feedback ownership and delayed unmount failure; `CadOperationsSection.onScreen.test.tsx` exact reconcile before refresh; `test_cad_recovery_notices.py` exact document evidence |
 | 17 | Sending WG changes picks guarded Insert/Update from current evidence, confirms a two-way conflict and fences late identity adoption | none | `shell/cadlink/outbound.ts` retains published IDs and consumes operation outcomes for observation/reconnect, shared guards in `shell/cadlink/send.ts`, `stores/cadConnection.ts` observations | `CadWorkspaceOwners.test.ts` polling until settlement; `outbound.test.ts` every guard/entry point, folder joins, conflict confirmation and identity fences; `DesignFileMenu.test.tsx` silent supersession |
 | 18 | Solve captures the snapshot and settings on screen before any await, under the right project | *job* (press captured into `POST /api/models/{id}/solve`) | `shell/JobsCoordinator.tsx` captures the clicked snapshot/settings before any await and names its model; the server records them under that model and refuses a mismatched one (`model_mismatch`) | `JobsCoordinator.mutex.test.tsx :: uses the clicked settings while the fresh Advanced plan is pending`; `:: keeps the snapshot and settings captured at the press across the frame read`; `test_model_solve.py :: test_refusals_of_the_press_itself` |
-| 19 | Solve confirms the axis actually shown and reports a frame changed elsewhere | *job* (axis passed explicitly) | Ingest-keyed `stores/cadSolverFrame.ts`; `shell/JobsCoordinator.tsx` sends the axis shown (`frame_axis`) and `server/jobs/model_solve.py` confirms it with the press | `cadSolverFrame.test.ts`; `M1bSolveCard.test.tsx :: never solves along an axis the card did not show…` |
+| 19 | Solve confirms only an axis a person chose, never asks, and reports a manual frame changed elsewhere | *job* (axis passed only when chosen) | Ingest-keyed `stores/cadSolverFrame.ts` (`chosenFrameAxis`); `shell/JobsCoordinator.tsx` sends a chosen axis (`frame_axis`) and `server/jobs/model_solve.py` confirms it with the press; otherwise the lane decides (`choose_axis`) | `cadSolverFrame.test.ts`; `M1bSolveCard.test.tsx :: never solves along an axis the card did not show…`, `… a weak-evidence model shows WG's fallback as information…` |
 | 20 | Only deliberate settings edits publish a project setup, with retries and correct-project flushing | *re-homed* (not tied to a job) | `shell/cadSetupPublisher.ts :: CadSetupPublisher` mounted in Shell, settings stores and its own save-feedback store | `cadSetupPublisher.test.ts` deliberate edits, retries and correct-project flushing; `ParamPanel.test.tsx` publisher failure feedback |
 | 21 | A compatible arrival keeps the project's solve settings; a changed inventory resets them | none | `stores/cadProjectSettings.ts` model/inventory setup reads and drafts via `shell/cadlink/arrivals.ts` and `shell/cadlink/receiptDisplay.ts` | `arrivals.test.ts :: keeps settings for a compatible arrival and resets a changed inventory`; `receiptDisplay.test.ts` shared continuity tests; `cadReturn.test.ts` |
 | 22 | A return for another project never replaces the parametric design or its undo history | none | `shell/cadlink/arrivals.ts`, `shell/cadlink/restores.ts`, `shell/cadlink/receiptDisplay.ts` design-identity fences | `arrivals.test.ts :: refuses a foreign arrival without replacing design or undo history`; `receiptDisplay.test.ts` foreign project and undo tests |

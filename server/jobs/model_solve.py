@@ -15,7 +15,8 @@ revision, or the setup itself -- and the server decides everything else:
   whose preparation is resumed when nothing it depends on changed and made
   again when the setup did (a changed engine is a new revision). A refused
   CAD solve of the same snapshot is continued (Solve again) instead of starting
-  beside it. An unlinked model's displayed solver frame is confirmed here.
+  beside it. An unlinked model's solver frame is confirmed here only when the
+  user chose one; otherwise WG decides it and never asks.
 - **In flight.** While a job for the same model, prepared mesh and setup is
   preparing, queued or running -- a Fusion "Solve in WG" included -- the press
   is that job: the server returns it rather than starting a second one.
@@ -106,8 +107,9 @@ class ModelSolveRequest(JobModel):
         description="Stable id of this press; a replay recovers its original job.",
     )
     label: str | None = None
-    #: The solver frame axis the press showed for an unlinked CAD model. It is
-    #: confirmed for the model's project, and the solve is held to it.
+    #: The solver frame axis a person chose for an unlinked CAD model, if any.
+    #: It is confirmed for the model's project, and the solve is held to it.
+    #: Absent, WG decides the axis itself and never asks.
     frame_axis: str | None = None
     #: Blocking findings the user reviewed on one preparation.
     approvals: CadApprovalsRequest | None = None
@@ -630,23 +632,17 @@ async def _solve_file(
 
 
 def _press_frame(store: Any, record: Mapping[str, Any], frame_axis: str | None) -> str | None:
-    """Confirm the axis the press showed for an unlinked model; the solve is held to it.
+    """Confirm the axis a press named for an unlinked model; the solve is held to it.
 
-    A linked model is solved in its design's frame and names none. With no
-    axis shown, the model solves along its project's confirmed frame or WG's
-    confident automatic one, and is refused when it has neither.
+    A press names an axis only when a person chose it (Change, or the
+    project's own frame). A linked model is solved in its design's frame and
+    names none. With no axis named, nothing asks: the preparation lane solves
+    along the project's choice or WG's own decision (``frame_infer.choose_axis``).
     """
 
-    if not record_is_unlinked(record):
+    if frame_axis is None or not record_is_unlinked(record):
         return None
     preview = frame_preview(store, record)
-    if frame_axis is None:
-        if preview.get("preselected") is None:
-            raise ModelSolveRefusal(
-                409, FRAME_CONFIRMATION_REQUIRED,
-                "Choose which way this model radiates, in the CAD Link panel, then press Solve.",
-            )
-        return None
     confirmed = preview.get("confirmed")
     if not isinstance(confirmed, Mapping) or confirmed.get("axis") != frame_axis:
         try:

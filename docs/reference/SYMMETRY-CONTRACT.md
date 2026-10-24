@@ -282,7 +282,7 @@ axis is refused (`front-back-cut`; `frame-not-as-modelled` is retired). The
 mesher receives the turned planes with `cut_planes_frame: "solver"` and refuses
 rotated planes stated in CAD terms. As modelled (+Z) nothing changes: the same
 options, mesh cache keys and meshes. A return with FEM regions keeps a reduced
-domain as modelled. When Fusion did not show an axis, WG chooses among the
+domain as modelled. When nobody chose an axis, WG chooses among the
 axes the cuts allow; an inferred axis square to a cut is recorded as a
 fallback (`automatic-fallback`), and a cut refused only because the
 provisional axis was square to it is prepared again along an axis it contains.

@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SolverFrameAxisOption, SolverFramePreview, SolverFrameState } from '../api/solverFrame';
+import { beforeEach, describe, expect, it } from 'vitest';
+import type { SolverFrameAxisOption, SolverFramePreselection, SolverFramePreview, SolverFrameState } from '../api/solverFrame';
 import type { SolverFrameAxis } from '../viewport/solverFrame';
 import {
-  confirmDisplayedFrame,
+  chosenFrameAxis,
   resetCadSolverFrameStore,
   useCadSolverFrameStore,
 } from './cadSolverFrame';
@@ -13,6 +13,7 @@ const ALL: SolverFrameAxis[] = ['+z', '-z', '+x', '-x', '+y', '-y'];
 function frame(
   preselected: SolverFrameAxis | null,
   confirmed: SolverFrameAxis | null = null,
+  source: SolverFramePreselection['source'] = confirmed ? 'confirmed' : 'suggested',
 ): SolverFrameState {
   const axes: SolverFrameAxisOption[] = ALL.map((axis) => ({
     axis, allowed: true, reason: null, solverFromAssembly: IDENTITY, previewFromRecord: IDENTITY,
@@ -27,83 +28,53 @@ function frame(
     confirmed: confirmed ? { axis: confirmed, confirmedAt: '2026-09-29T10:00:00Z' } : null,
     axes,
     suggestion: null,
-    preselected: preselected ? { axis: preselected, source: confirmed ? 'confirmed' : 'suggested' } : null,
+    preselected: preselected ? { axis: preselected, source } : null,
     differs: null,
   };
-}
-
-function answering(confirmedAxis: SolverFrameAxis) {
-  const calls: Array<{ url: string; method: string | undefined; body: unknown }> = [];
-  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    calls.push({ url: String(input), method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : null });
-    return new Response(JSON.stringify(frame(confirmedAxis, confirmedAxis)), {
-      status: 200, headers: { 'Content-Type': 'application/json' },
-    });
-  }) as unknown as typeof fetch;
-  return { calls, fetcher };
 }
 
 function show(preview: SolverFramePreview): void {
   useCadSolverFrameStore.getState().apply('wgi_1', preview);
 }
 
-describe('confirmDisplayedFrame', () => {
+const shown = () => useCadSolverFrameStore.getState().frames.wgi_1;
+
+describe('chosenFrameAxis', () => {
   beforeEach(() => resetCadSolverFrameStore());
 
-  it('confirms the axis the card shows, and takes the server answer as the new frame', async () => {
+  it("names no axis for WG's own decision, confident or fallback: the backend decides", () => {
     show(frame('+y'));
-    const { calls, fetcher } = answering('+y');
-
-    await expect(confirmDisplayedFrame('wgi_1', fetcher)).resolves.toBe('+y');
-
-    expect(calls).toEqual([{
-      url: '/api/cadlink/solver-frame', method: 'PUT', body: { ingestId: 'wgi_1', axis: '+y' },
-    }]);
-    expect(useCadSolverFrameStore.getState().frames.wgi_1.frame?.confirmed?.axis).toBe('+y');
+    expect(shown().axis).toBe('+y');
+    expect(chosenFrameAxis(shown())).toBeNull();
+    show(frame('+z', null, 'fallback'));
+    expect(shown().axis).toBe('+z');
+    expect(chosenFrameAxis(shown())).toBeNull();
   });
 
-  it('confirms the user\'s pick rather than the preselection', async () => {
-    show(frame('+y'));
+  it("names the user's pick (Change) rather than the preselection", () => {
+    show(frame('+z', null, 'fallback'));
     useCadSolverFrameStore.getState().pick('wgi_1', '-x');
-    const { calls, fetcher } = answering('-x');
-
-    await expect(confirmDisplayedFrame('wgi_1', fetcher)).resolves.toBe('-x');
-
-    expect(calls.map(({ body }) => body)).toEqual([{ ingestId: 'wgi_1', axis: '-x' }]);
+    expect(chosenFrameAxis(shown())).toBe('-x');
   });
 
-  it('does not send an axis the project already confirmed', async () => {
+  it("names the project's own frame, confirmed or carried from v1", () => {
     show(frame('+y', '+y'));
-    const { calls, fetcher } = answering('+y');
-
-    await expect(confirmDisplayedFrame('wgi_1', fetcher)).resolves.toBe('+y');
-
-    expect(calls).toEqual([]);
+    expect(chosenFrameAxis(shown())).toBe('+y');
+    show(frame('-x', null, 'carried'));
+    expect(chosenFrameAxis(shown())).toBe('-x');
   });
 
-  it('sends nothing when the card never showed a frame, is loading, failed, or shows a linked model', async () => {
-    const { calls, fetcher } = answering('+z');
-
-    await expect(confirmDisplayedFrame('wgi_1', fetcher)).resolves.toBeNull();
-
+  it('names nothing when the card never showed a frame, failed, shows none, or shows a linked model', () => {
+    expect(chosenFrameAxis(undefined)).toBeNull();
+    show(frame(null));
+    expect(shown().axis).toBeNull();
+    expect(chosenFrameAxis(shown())).toBeNull();
     show({ linked: true });
-    await expect(confirmDisplayedFrame('wgi_1', fetcher)).resolves.toBeNull();
-
+    expect(chosenFrameAxis(shown())).toBeNull();
     useCadSolverFrameStore.setState({ frames: { wgi_1: {
-      ingestId: 'wgi_1', status: 'error', frame: frame('+z'), linked: false, axis: '+z', picked: false,
+      ingestId: 'wgi_1', status: 'error', frame: frame('+z', '+z'), linked: false, axis: '+z', picked: true,
       changedFrom: null, error: 'unreachable',
     } } });
-    await expect(confirmDisplayedFrame('wgi_1', fetcher)).resolves.toBeNull();
-
-    expect(calls).toEqual([]);
-  });
-
-  it('refuses, and sends nothing, while the user still has to choose an axis', async () => {
-    show(frame(null));
-    const { calls, fetcher } = answering('+z');
-
-    await expect(confirmDisplayedFrame('wgi_1', fetcher)).rejects.toThrow(/Choose which way/);
-
-    expect(calls).toEqual([]);
+    expect(chosenFrameAxis(shown())).toBeNull();
   });
 });

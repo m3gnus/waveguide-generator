@@ -116,7 +116,7 @@ export const OPERATION_REASON_WORDS: Record<string, string> = {
   interrupted: 'interrupted',
   setup_required: 'needs its solve settings',
   findings_need_review: 'blocking findings to review',
-  frame_confirmation_required: 'needs its solver frame confirmed',
+  frame_confirmation_required: 'its solver frame changed; press Solve again',
   update_restart_pending: 'held for the update restart',
   ready_to_solve: 'ready to solve',
   engine_unavailable: 'the selected engine cannot solve it',

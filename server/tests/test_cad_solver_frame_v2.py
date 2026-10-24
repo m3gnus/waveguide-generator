@@ -204,9 +204,10 @@ def test_a_historical_record_keeps_its_contract(tmp_path: Path) -> None:
     for axis in AXES:
         assert by_axis[axis]["solverFromAssembly"] == frame_matrix(axis).tolist()
     assert preview["confirmed"]["axis"] == "+x"
-    # The v1 confirmation is not a v2 one: a new preparation is confirmed anew.
+    # A new v2 preparation along the v1 choice solves under it: the project's
+    # own choice carries, and nobody is asked again.
     new = _record(_manifest(), "+x", sha="d")
-    assert record_frame_refusal(store, new) is not None
+    assert record_frame_refusal(store, new) is None
     # Confirming it moves the project to v2. The old record still states its
     # v1 frame, and is prepared again rather than solved under a frame the
     # project no longer confirms.
@@ -230,12 +231,11 @@ def test_a_v1_confirmation_is_preselected_for_a_v2_preparation(tmp_path: Path) -
     _v1_confirmed(store, "+x")
     new = _record(_manifest("+z"), "+x", sha="d")
     preview = frame_preview(store, new)
-    # Not asked again: the project's own v1 choice is what Solve confirms...
+    # Not asked again: the project's own v1 choice is preselected and solved...
     assert preview["preselected"] == {"axis": "+x", "source": "carried"}
-    # ...but it is not a v2 confirmation, and nothing is solved until Solve
-    # confirms it under v2.
+    # ...without being a v2 confirmation until a person chooses under v2.
     assert preview["confirmed"] is None
-    assert record_frame_refusal(store, new) is not None
+    assert record_frame_refusal(store, new) is None
     row = confirm_frame(store, new, "+x")
     assert row["requirement"] == frame_requirement(_manifest("+z"))
     assert row["frame"]["contract"] == CONTRACT_V2
@@ -276,9 +276,10 @@ def test_only_a_v1_confirmation_of_the_same_export_frame_carries(tmp_path: Path)
     moved = _record(other, "+z", sha="e")
     preview = frame_preview(store, moved)
     assert preview["preselected"] is None or preview["preselected"]["source"] != "carried"
-    # A declared half cannot take the carried +x.
+    # A declared half cannot take the carried +x: WG's fallback decides it.
     half = _record(_manifest(domain={"kind": "half", "cut_planes": ["x0"]}), AS_MODELLED, sha="f")
-    assert frame_preview(store, half)["preselected"] is None
+    assert frame_preview(store, half)["preselected"] == {"axis": "+z", "source": "fallback"}
+    assert record_frame_refusal(store, half) is not None  # no decision sealed for it yet
 
 
 def test_a_suggestion_that_disagrees_with_the_carried_axis_is_only_a_notice(tmp_path: Path) -> None:

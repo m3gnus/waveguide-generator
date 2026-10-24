@@ -134,7 +134,7 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
       && <p className="cad-detail cad-solve-defaults" data-setup-defaults="true">
         {defaultSettingsNote(latest.message, latestJob?.status === 'complete')}
       </p>}
-    {/* WG was confident which way the model faces and solved along that axis
+    {/* WG decided which way the model faces (confident or by its fallback) and solved along that axis
         without asking; the frame card above has the Change. */}
     {latest.state === 'accepted' && latest.frameAxisAutomatic
       && <p className="cad-detail cad-solve-frame-automatic" data-frame-axis-automatic={latest.frameAxisAutomatic}>

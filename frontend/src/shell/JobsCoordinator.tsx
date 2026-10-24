@@ -35,7 +35,7 @@ import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useCadRecoveryNotices } from '../stores/cadRecoveryNotices';
-import { frameSolveBlocker, frameReadInFlight, useCadSolverFrameStore } from '../stores/cadSolverFrame';
+import { chosenFrameAxis, frameReadInFlight, useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { polarValidationError, useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 import { useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -217,14 +217,9 @@ const CAD_VIEWPORT_MISMATCH =
 /** The complete CAD-mode readiness rule, read from live store state so the
  * Solve button, the keyboard shortcut, and every automatic caller apply one
  * gate. The viewport check is evidence about what the user is looking at; the
- * rest is the shared imported-submission blocker. */
+ * rest is the shared imported-submission blocker. The solver frame never
+ * blocks: WG decides it when nobody chose one. */
 export function cadSolveBlockerNow(): string | null {
-  return cadInputBlockerNow() ?? frameSolveBlocker(useCadReturnStore.getState().ingestRecord?.ingest_id);
-}
-
-/** The same rule without the frame, which a Solve judges once the frame read
- * the card has under way has answered. */
-function cadInputBlockerNow(): string | null {
   const opening = importedModelBlocker('cad');
   if (opening) return opening;
   const cadReturn = useCadReturnStore.getState();
@@ -412,7 +407,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const cadSolveBlocker = cadGeometryMismatch
     ? CAD_VIEWPORT_MISMATCH
     : cadGeometryActive
-      ? importedSubmissionBlocker(cadReturn, solveOptions) ?? frameSolveBlocker(cadReturn.ingestRecord?.ingest_id)
+      ? importedSubmissionBlocker(cadReturn, solveOptions)
       : null;
   const directivityError = polarValidationError(solveOptions.polar);
   const solveBlocker = fileGeometryActive ? fileBlocker : (cadGeometryActive ? crossoverDraftError : null) ?? cadSolveBlocker ?? directivityError;
@@ -546,7 +541,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     if (!record) throw new Error('Prepare this model before solving.');
     const ingestId = record.ingest_id;
     const frameAtPress = useCadSolverFrameStore.getState().frames[ingestId];
-    const blocker = cadInputBlockerNow();
+    const blocker = cadSolveBlockerNow();
     if (blocker) throw new Error(blocker);
     // The settings on screen, or the setup an unedited reopened run was opened with.
     const unchanged = unchangedSetup('cad', ingestId);
@@ -560,12 +555,14 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     try {
       setSubmitting(true);
       setActionError(null);
-      // The axis this card shows -- a read under way answers first; a later
-      // pick cannot replace it. The server confirms it as part of the press.
+      // The axis a person chose (Change, or the project's frame) -- a read
+      // under way answers first; a later pick cannot replace it. The server
+      // confirms it as part of the press. Otherwise none is named and WG
+      // decides; it never asks.
       const reading = frameReadInFlight(ingestId);
       if (reading) await awaitSolveStep(reading, continuation);
       const view = frameAtPress?.status === 'ready' ? frameAtPress : useCadSolverFrameStore.getState().frames[ingestId];
-      const frameAxis = view && !view.linked && view.status === 'ready' ? view.axis : null;
+      const frameAxis = chosenFrameAxis(view);
       if (clicked) await awaitSolveStep(clicked.checkPlan(), continuation);
       const approvals = reviewedFindings(record);
       const press: ModelSolvePress = {

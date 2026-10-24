@@ -311,12 +311,19 @@ def test_confirming_refuses_a_linked_record_and_a_disallowed_axis(tmp_path: Path
     assert store.get_frame_confirmation("lineage:wgl_project") is None
 
 
-def test_a_confirmed_axis_this_snapshot_does_not_allow_is_refused(tmp_path: Path) -> None:
+def test_a_confirmed_axis_this_snapshot_does_not_allow_gives_way_to_wgs_decision(tmp_path: Path) -> None:
+    """A half model cannot take the project's +y: WG decides it, never asks."""
+
+    from server.cadlink.intake.readings import decide_record_frame, store_frame_decision
+
     store = CadLinkStore(tmp_path / "cadlink.db")
     confirm_frame(store, _unlinked_record(axis="+y"), "+y")
     half = _unlinked_record(axis=AS_MODELLED, allowed=(AS_MODELLED,))
-    message = record_frame_refusal(store, half)
-    assert message is not None and "half" in message
+    assert frame_preview(store, half)["preselected"] == {"axis": AS_MODELLED, "source": "fallback"}
+    choice = decide_record_frame(store, half, None)
+    assert (choice.axis, choice.provenance) == (AS_MODELLED, "automatic-fallback")
+    store_frame_decision(store, half, choice, None)
+    assert record_frame_refusal(store, half) is None
 
 
 def test_the_preview_names_each_axis_matrix_relative_to_the_displayed_record(tmp_path: Path) -> None:

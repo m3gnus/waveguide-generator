@@ -340,13 +340,15 @@ describe('M1b: one Solve card, to the revealed result', () => {
     workspaceModeStore.setMode('parametric');
   });
 
-  it('captures the displayed setup and axis, remembers them for the project, and follows the run', async () => {
+  it('captures the displayed setup, leaves WG its own axis, and follows the run', async () => {
     await mount();
     expect(host.querySelector('.cad-solve-settings > span')!.textContent).toContain('Auto (Metal)');
+    expect(host.querySelector('.cad-solver-frame-line')!.textContent).toBe('Radiates along +x · Change');
     await pressSolve();
-    // One call: the server confirms the axis shown and records the setup for the model.
+    // One call, confirming nothing: WG's own axis is the backend's to decide again.
     expect(puts).toEqual([]);
-    expect(mocks.solveModel).toHaveBeenCalledWith('wgl_test', expect.objectContaining({ prepared_id: 'wgi_first', frame_axis: '+x' }));
+    expect(mocks.solveModel).toHaveBeenCalledWith('wgl_test', expect.objectContaining({ prepared_id: 'wgi_first' }));
+    expect(pressOf().frame_axis).toBeUndefined();
     const press = pressOf();
     expect(press.setup!.options).toMatchObject({ frequency_range: [50, 20000], num_frequencies: 36 });
     await jobs([cadJobFixture(operation(`manual-solve:${press.client_request_id}`, 'accepted', { jobId: 'job-1' }), cadJob('job-1'))]);
@@ -437,24 +439,25 @@ describe('M1b: one Solve card, to the revealed result', () => {
     await pressSolve();
     expect(pressOf().frame_axis).toBe('+z');
     await deliver(operation('manual-solve:first', 'needs_user_input', { jobId: 'job-1', reason: 'frame_confirmation_required', message: 'The project frame changed elsewhere.' }));
-    expect(host.textContent).toContain('check which way it radiates');
+    expect(host.textContent).toContain('its solver frame was changed meanwhile');
     await act(async () => useCadSolverFrameStore.getState().load('wgi_first'));
     expect(host.textContent).toContain('changed');
     await pressSolve();
     expect(pressOf(1).frame_axis).toBe('+x');
   });
 
-  it('leaves Solve disabled while the initial frame read waits', async () => {
+  it('never holds Solve for the frame: a press during the initial read waits for it and submits once', async () => {
     let release!: () => void;
     const read = new Promise<void>((resolve) => { release = resolve; });
     const api = vi.fn(async () => { await read; return json(frame); });
     const loading = useCadSolverFrameStore.getState().load('wgi_first', api);
     await act(async () => { root.render(<JobsCoordinator><CadSolveCard record={useCadReturnStore.getState().ingestRecord!} label="Speaker"/></JobsCoordinator>); });
-    expect(solveButton().disabled).toBe(true);
-    await expect(solveControlStore.getSnapshot()!.solve()).resolves.toBe('blocked');
-    await act(async () => { release(); await loading; });
+    expect(solveButton().disabled).toBe(false);
+    let solving: Promise<unknown> = Promise.resolve();
+    await act(async () => { solving = solveControlStore.getSnapshot()!.solve(); await flush(); });
     expect(mocks.solveModel).not.toHaveBeenCalled();
-    await pressSolve();
+    await act(async () => { release(); await loading; await solving; await flush(); });
+    expect(mocks.solveModel).toHaveBeenCalledOnce();
     expect(pressOf().prepared_id).toBe('wgi_first');
   });
 
@@ -517,26 +520,39 @@ describe('M1b: one Solve card, to the revealed result', () => {
     }
   });
 
-  it('offers only the axes the backend supports for this model', async () => {
+  it('a weak-evidence model shows WG\'s fallback as information, never a question, and solves', async () => {
     frame = frameAnswer({
       allowed: ['+z'],
       suggestion: { ...asking!, reason: 'This model faces -y, which a declared half cannot be solved along yet. Pick the front.', reasonCode: 'unsupported-axis' },
+      preselected: { axis: '+z', source: 'fallback' },
     });
     await mount();
+    expect(host.querySelector('input[type="radio"]')).toBeNull();
+    expect(host.querySelector('.cad-solver-frame-line')!.textContent).toBe('Radiates along +z · Change');
+    expect(host.querySelector('.cad-solver-frame-fallback')!.textContent).toBe('WG chose +z; change it if the model radiates another way.');
+    expect(host.textContent).not.toContain('Pick the front');
+    await pressSolve();
+    // Nothing confirmed, no axis named: the backend decides and records its fallback.
+    expect(puts).toEqual([]);
+    expect(pressOf().frame_axis).toBeUndefined();
+  });
+
+  it('offers only the axes the backend supports for this model', async () => {
+    frame = frameAnswer({ allowed: ['+z'], preselected: { axis: '+z', source: 'fallback' } });
+    await mount();
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="change-solver-frame"]')!.click(); });
     const radios = [...host.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
     expect(radios.filter((radio) => !radio.disabled).map((radio) => radio.value)).toEqual(['+z']);
     expect(radios.find((radio) => radio.value === '-y')!.closest('label')!.title).toContain('only as modelled');
-    // A disabled axis cannot be picked into what Solve confirms.
+    // A disabled axis cannot be picked into what Solve uses.
     act(() => useCadSolverFrameStore.getState().pick('wgi_first', '-y'));
-    expect(useCadSolverFrameStore.getState().frames.wgi_first.axis).toBeNull();
-    expect(solveButton().disabled).toBe(true);
-    await act(async () => { host.querySelector<HTMLInputElement>('input[value="+z"]')!.click(); await flush(); });
+    expect(useCadSolverFrameStore.getState().frames.wgi_first).toMatchObject({ axis: '+z', picked: false });
     await pressSolve();
     expect(puts).toEqual([]);
-    expect(pressOf().frame_axis).toBe('+z');
+    expect(pressOf().frame_axis).toBeUndefined();
   });
 
-  it('changes the axis on the card, and Solve confirms the one shown', async () => {
+  it('changes the axis on the card, and Solve confirms the user\'s choice', async () => {
     await mount();
     await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="change-solver-frame"]')!.click(); });
     const checked = () => host.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.value;

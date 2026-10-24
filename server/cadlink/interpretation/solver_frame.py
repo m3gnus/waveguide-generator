@@ -51,16 +51,18 @@ bound ``ingest_id``.
 
 The automatic suggestion (``frame_infer``) is computed inside the explicit
 import and preparation commands and cached per snapshot and algorithm version.
-It preselects; it never confirms. Fusion requests (a Solve with no shown axis)
-always decide through ``frame_infer.choose_axis``: the confident answer, or the
-first allowed axis of the survey's documented fallback ranking (mouth, then the
-v2 votes, then as modelled first), recorded as ``automatic-fallback`` with a
-developer diagnostic. The model is meshed along that axis, with at most one
-retry after the survey, and the decision is stored on the prepared record
+It never confirms. WG never asks which way a model radiates: every solve with
+no manual choice behind it -- a Fusion request, a Solve in WG's own panel, a
+manual import, a restored run, a re-solve -- decides through
+``frame_infer.choose_axis``: the confident answer, or the first allowed axis of
+the survey's documented fallback ranking (mouth, then the v2 votes, then as
+modelled first), recorded as ``automatic-fallback`` with a developer
+diagnostic. The model is meshed along that axis, with at most one retry after
+the survey, and the decision is stored on the prepared record
 (``readings.record_frame_decision``): admission, execution, retry and restart
-read that, never a re-derivation. No confirmation is written. A matching manual
-choice, including a carried v1 choice, takes precedence. Manual solves still
-check the axis the user was shown.
+read that, never a re-derivation. No confirmation is written. A manual choice
+(Change), including a carried v1 choice, takes precedence while the snapshot
+allows it; a Solve that names its axis is held to it.
 
 """
 
@@ -378,10 +380,10 @@ class FrameResolution:
     #: The axis the project confirmed under contract v1 (``carried_axis``):
     #: preselected and meshed in, never taken as confirmed.
     carried_axis: str | None = None
-    #: The axis WG's own confident automatic inference names, when nothing is
+    #: The axis WG decides (``frame_infer.choose_axis``), when nothing is
     #: confirmed or carried and the caller asked for it (``resolve_for_manifest``
-    #: ``automatic=True``): a Solve that never showed the axis meshes in it and
-    #: solves along it. Never a confirmation.
+    #: ``automatic=True``): the preparation meshes in it and the solve runs
+    #: along it. Never a confirmation.
     automatic_axis: str | None = None
 
     @property
@@ -389,13 +391,20 @@ class FrameResolution:
         return self.confirmed_axis is not None and self.confirmed_axis in self.allowed_axes
 
     @property
+    def manual(self) -> bool:
+        """A person's choice stands for this snapshot: confirmed, or carried from v1."""
+
+        return self.confirmed or (
+            self.carried_axis is not None and self.carried_axis in self.allowed_axes
+        )
+
+    @property
     def axis(self) -> str:
         """The frame a preparation meshes in: the confirmed one, else a v1
-        confirmation carried forward, else as modelled.
+        confirmation carried forward, else WG's own decision, else as modelled.
 
-        Meshing in the carried axis is what lets Solve confirm it under the
-        current contract without preparing the model again; the solve still
-        waits for that confirmation (``record_frame_refusal``).
+        A carried v1 choice remains the user's choice under the current
+        contract (``record_frame_refusal``).
         """
 
         if self.confirmed:
@@ -427,8 +436,9 @@ def carried_axis(
 
     Contract v2 changed only the roll: the forward axis a user confirmed under
     v1 still names the same CAD direction. So an existing CAD project is not
-    asked again. Its v1 axis is preselected for a v2 preparation, which Solve
-    then confirms under v2, and it is never taken as confirmed until then.
+    asked again. Its v1 axis is preselected for a v2 preparation, meshed in and
+    solved along as the project's own choice; it becomes a v2 confirmation only
+    when a Solve names it.
     Only for the same ``export_frame``: a snapshot written in another
     component's coordinates is a different frame under every contract.
     """
@@ -445,26 +455,6 @@ def carried_axis(
         return None
     axis = row.get("axis")
     return axis if axis in ROTATIONS else None
-
-
-def automatic_solve_axis(
-    suggestion: Mapping[str, Any] | None, allowed: Iterable[str], *, best_effort: bool = False
-) -> str | None:
-    """The axis a Solve may use without asking.
-
-    ``frame_infer.choose_axis`` is the one rule. Without ``best_effort`` only
-    its confident answer (the suggestion's own ``automatic`` verdict, on an
-    axis this snapshot allows) is returned, else None. With it -- a Solve that
-    shows no axis, a Fusion request -- the fallback ranking's first allowed
-    axis when WG is not confident: it always decides.
-    """
-
-    from server.cadlink.interpretation.frame_infer import DECISION_AUTOMATIC, choose_axis
-
-    choice = choose_axis(suggestion, allowed)
-    if best_effort or choice.provenance == DECISION_AUTOMATIC:
-        return choice.axis
-    return None
 
 
 def record_solver_frame(
@@ -615,7 +605,6 @@ __all__ = [
     "frame_requirement",
     "frame_spec",
     "is_unlinked_manifest",
-    "automatic_solve_axis",
     "record_confirmation_key",
     "record_frame",
     "record_frame_identity",

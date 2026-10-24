@@ -188,16 +188,18 @@ def test_frame_refusals_and_confirmation(harness) -> None:
     )
     model = {"model_id": "wgl_authored", "prepared_id": str(row["ingest_id"])}
 
-    # Authored in CAD, no axis confirmed and none shown: the press is refused.
+    # Authored in CAD, no axis confirmed and none chosen: never a frame
+    # question. WG decides in the preparation lane; this record's solve waits
+    # only for its retained return, which it has none of.
     status, refused = _solve(harness, app, model, client_request_id="press-1", setup=_setup())
-    assert status == 409 and refused["error"]["code"] == "frame_confirmation_required"
+    assert status == 409 and refused["error"]["code"] == "prepared_unavailable"
     # An axis this half model cannot be solved in is refused, and nothing is confirmed.
     status, refused = _solve(harness, app, model, client_request_id="press-2", setup=_setup(),
                              frame_axis="+q")
     assert status == 422
     assert _job_count(harness) == 0
 
-    # The axis shown is confirmed for the model's project as part of the press.
+    # An axis the user chose is confirmed for the model's project as part of the press.
     from server.cadlink.intake.readings import frame_preview
     from server.cadlink.interpretation.solver_frame import record_confirmation_key
 

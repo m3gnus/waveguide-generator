@@ -1,4 +1,8 @@
-"""Explicit manual frame choices keep their meaning while Fusion decides automatically.
+"""Explicit manual frame choices keep their meaning while WG decides every other axis.
+
+Nothing here ever asks which way a model radiates: a solve nobody chose an axis
+for -- a Solve in WG as much as a Fusion request -- is decided by WG
+(``frame_infer.choose_axis``) and solved.
 
 docs/architecture/CAD-OPERATIONS.md, "Unlinked solver frame". Every test runs the
 production ``ingest_bundle`` (bundle reader, gates, record publication); only the
@@ -81,16 +85,29 @@ def real(request, tmp_path, monkeypatch):
 
 def _prepare(harness: Harness, operation_id: str = "cmd-1", **kwargs: Any) -> dict[str, Any]:
     kwargs.setdefault("setup_revision_id", _revision(harness.store, _setup()))
-    # Model the manual Solve card, which names the axis currently shown.
-    # Fusion scenarios explicitly pass None (no axis was shown to the user).
+    # Model the manual Solve card, which names an axis only when a person chose
+    # it (the project's confirmed frame); otherwise WG decides, as for Fusion.
     lineage = harness.store.get_lineage_for_cad_document(NATIVE_ID)
     confirmed = (
         harness.store.get_frame_confirmation(f"lineage:{lineage['lineage_id']}")
         if lineage else None
     )
-    shown = confirmed["axis"] if confirmed else "+z"
-    kwargs.setdefault("expected_frame_axis", shown)
+    kwargs.setdefault("expected_frame_axis", confirmed["axis"] if confirmed else None)
     return harness.prepare(operation_id, ingest=ingest_module.ingest_bundle, **kwargs)
+
+
+def _prepared(harness: Harness, operation_id: str = "cmd-1", **kwargs: Any) -> dict[str, Any]:
+    """A preparation that stops before submitting, so a later press can change it."""
+
+    summary = _prepare(harness, operation_id, submit=False, **kwargs)
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "ready_to_solve"), summary
+    return summary
+
+
+def _decision(harness: Harness, summary: dict[str, Any]) -> str | None:
+    from server.cadlink.intake.readings import record_solved_frame_provenance
+
+    return record_solved_frame_provenance(harness.store, _record(harness, summary))
 
 
 def _patch_everywhere(monkeypatch: pytest.MonkeyPatch, name: str, replacement: Any) -> None:
@@ -133,30 +150,34 @@ def _with_degraded_skip(manifest: dict[str, Any]) -> dict[str, Any]:
     return manifest
 
 
-def test_an_unconfirmed_authored_model_is_prepared_as_modelled_and_waits(real) -> None:
+def test_an_unconfirmed_authored_model_is_decided_by_wg_and_solves_without_asking(real) -> None:
+    """A Solve in WG on weak evidence: the fallback ranking decides, recorded as such."""
+
     harness, mesher = real
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
 
     summary = _prepare(harness)
 
-    assert _waiting_for_frame(summary), summary
-    assert summary["jobId"] is None and harness.submitted == []
-    assert "solver frame" in summary["message"]
-    # Prepared as modelled, so the confirmation step has geometry to preview.
+    assert (summary["state"], summary["jobId"]) == ("accepted", "job-1"), summary
+    assert summary["frameAxisAutomatic"] == "+z"
     record = _record(harness, summary)
     assert record["normalisation"]["solver_frame"]["axis"] == "+z"
     assert "solver_frame" not in mesher.calls[-1]["options"]
-    # Waiting is not a rejection, and asking again does not get past it.
-    again = _prepare(harness)
-    assert _waiting_for_frame(again) and harness.submitted == []
+    # The stand-in mesh cannot be surveyed: the documented ranking chose.
+    decision = harness.store.get_frame_decision(summary["preparationId"])
+    assert (decision["axis"], decision["provenance"]) == ("+z", "automatic-fallback")
+    assert harness.store.get_frame_confirmation(
+        f"lineage:{harness.store.get_lineage_for_cad_document(NATIVE_ID)['lineage_id']}"
+    ) is None
+    assert len(harness.submitted) == 1
 
 
 def test_confirming_the_modelled_frame_resumes_that_preparation_and_solves(real) -> None:
     harness, mesher = real
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
-    waiting = _prepare(harness)
+    waiting = _prepared(harness)
     confirm_frame(harness.store, _record(harness, waiting), "+z")
 
     solved = _prepare(harness)
@@ -167,22 +188,18 @@ def test_confirming_the_modelled_frame_resumes_that_preparation_and_solves(real)
 
 
 def test_revisionless_manual_solve_followups_reuse_the_preparations_settings(real) -> None:
-    """The UI sends no revision when confirming a frame or approving a finding."""
+    """The UI sends no revision when approving a finding; no frame stop comes first."""
 
     harness, mesher = real
     step = b"STEP authored with one degraded skip"
     _received(harness, "authored", _with_degraded_skip(_authored(step)), step)
     revision = _revision(harness.store, _setup())
 
-    waiting = _prepare(harness, setup_revision_id=revision)
-    assert _waiting_for_frame(waiting), waiting
-    confirm_frame(harness.store, _record(harness, waiting), "+z")
-
-    review = harness.prepare("cmd-1", ingest=ingest_module.ingest_bundle)
+    review = _prepare(harness, setup_revision_id=revision)
     assert (review["state"], review["reason"]) == (
         "needs_user_input", "findings_need_review"
     ), review
-    assert review["preparationId"] == waiting["preparationId"]
+    waiting = review
     blocking = [
         finding["id"]
         for finding in _record(harness, review)["findings"]
@@ -217,7 +234,7 @@ def test_preparation_surveys_the_frame_inside_its_command(real, monkeypatch) -> 
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
     summary = _prepare(harness)
-    assert _waiting_for_frame(summary), summary
+    assert summary["state"] == "accepted", summary
     assert surveyed == [summary["preparationId"]]
 
 
@@ -230,14 +247,16 @@ def test_a_failing_survey_never_fails_the_preparation(real, monkeypatch) -> None
     _patch_everywhere(monkeypatch, "ensure_frame_suggestion", survey)
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
-    assert _waiting_for_frame(_prepare(harness))
+    summary = _prepare(harness)
+    assert (summary["state"], summary["frameAxisAutomatic"]) == ("accepted", "+z"), summary
+    assert _decision(harness, summary) == "automatic-fallback"
 
 
 def test_confirming_another_axis_prepares_again_in_that_frame(real) -> None:
     harness, mesher = real
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
-    waiting = _prepare(harness)
+    waiting = _prepared(harness)
     confirm_frame(harness.store, _record(harness, waiting), "+y")
 
     solved = _prepare(harness)
@@ -253,14 +272,15 @@ def test_confirming_another_axis_prepares_again_in_that_frame(real) -> None:
 
 
 def test_a_frame_changed_elsewhere_stops_the_solve_instead_of_changing_its_axis(real) -> None:
-    """The axis shown is the axis solved: Solve names the axis it showed."""
+    """A person's choice named by Solve is the axis solved: Solve names the axis it showed."""
 
     harness, mesher = real
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
-    waiting = _prepare(harness)
-    # The card showed +z and was about to solve along it; another window
-    # confirmed +y for the project in the meantime.
+    waiting = _prepared(harness)
+    confirm_frame(harness.store, _record(harness, waiting), "+z")
+    # The card showed the chosen +z and was about to solve along it; another
+    # window confirmed +y for the project in the meantime.
     confirm_frame(harness.store, _record(harness, waiting), "+y")
 
     stopped = _prepare(harness, expected_frame_axis="+z")
@@ -282,7 +302,7 @@ def test_an_automatic_continuation_after_the_update_restart_keeps_the_axis_shown
     harness, _mesher = real
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
-    confirm_frame(harness.store, _record(harness, _prepare(harness)), "+z")
+    confirm_frame(harness.store, _record(harness, _prepared(harness)), "+z")
     harness.blocked = "An update restart is pending."
 
     parked = _prepare(harness, expected_frame_axis="+z")
@@ -305,8 +325,9 @@ def test_the_axis_shown_holds_across_retries_and_a_restart_until_a_press_names_a
     harness, _mesher = real
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
-    waiting = _prepare(harness, expected_frame_axis="+z")
-    assert _waiting_for_frame(waiting)
+    confirm_frame(harness.store, _record(harness, _prepared(harness)), "+z")
+    waiting = _prepare(harness, expected_frame_axis="+z", submit=False)
+    assert waiting["reason"] == "ready_to_solve", waiting
     # Kept durably: a restarted WG reads it back.
     harness.restart()
     assert harness.held_axis() == "+z"
@@ -441,7 +462,7 @@ def test_a_later_export_of_the_same_project_reuses_the_confirmed_frame(real) -> 
     harness, mesher = real
     first = b"STEP authored"
     _received(harness, "authored", _authored(first), first)
-    confirm_frame(harness.store, _record(harness, _prepare(harness)), "-x")
+    confirm_frame(harness.store, _record(harness, _prepared(harness)), "-x")
 
     second = b"STEP authored, edited in Fusion"
     _received(harness, "authored-2", _authored(second), second, command="cmd-2")
@@ -451,18 +472,21 @@ def test_a_later_export_of_the_same_project_reuses_the_confirmed_frame(real) -> 
     assert mesher.calls[-1]["options"]["solver_frame"]["axis"] == "-x"
 
 
-def test_an_export_in_another_components_coordinates_asks_again(real) -> None:
+def test_an_export_in_another_components_coordinates_is_decided_again(real) -> None:
     harness, mesher = real
     first = b"STEP authored"
     _received(harness, "authored", _authored(first), first)
-    confirm_frame(harness.store, _record(harness, _prepare(harness)), "-x")
+    confirm_frame(harness.store, _record(harness, _prepared(harness)), "-x")
 
     second = b"STEP of one occurrence"
     moved = _authored(second, export_frame="selected-occurrence-component")
     _received(harness, "occurrence", moved, second, command="cmd-2")
-    summary = _prepare(harness, "cmd-2")
+    # The card shows no project frame for it (another requirement): it names none.
+    summary = _prepare(harness, "cmd-2", expected_frame_axis=None)
 
-    assert _waiting_for_frame(summary), summary
+    # The -x choice was for another frame: WG decides this one, and solves.
+    assert (summary["state"], summary["frameAxisAutomatic"]) == ("accepted", "+z"), summary
+    assert _decision(harness, summary) == "automatic-fallback"
     assert "solver_frame" not in mesher.calls[-1]["options"]
     assert _record(harness, summary)["normalisation"]["solver_frame"]["requirement"] == {
         "contract": CONTRACT, "export_frame": "selected-occurrence-component", "document_up": None,
@@ -473,12 +497,15 @@ def test_an_unsaved_document_is_confirmed_for_that_export_only(real) -> None:
     harness, _mesher = real
     first = b"STEP unsaved"
     _received(harness, "unsaved", _authored(first, native_id=None), first)
-    confirm_frame(harness.store, _record(harness, _prepare(harness)), "+z")
-    assert _prepare(harness)["state"] == "accepted"
+    confirm_frame(harness.store, _record(harness, _prepared(harness)), "+y")
+    solved = _prepare(harness, expected_frame_axis="+y")
+    assert solved["state"] == "accepted" and _decision(harness, solved) is None
 
     second = b"STEP unsaved again"
     _received(harness, "unsaved-2", _authored(second, native_id=None), second, command="cmd-2")
-    assert _waiting_for_frame(_prepare(harness, "cmd-2"))
+    # Another unsaved export does not inherit +y: WG decides it.
+    other = _prepare(harness, "cmd-2")
+    assert (other["state"], other["frameAxisAutomatic"]) == ("accepted", "+z"), other
 
 
 def test_a_linked_return_is_never_asked_and_its_options_are_unchanged(real) -> None:
@@ -491,11 +518,11 @@ def test_a_linked_return_is_never_asked_and_its_options_are_unchanged(real) -> N
     assert "solver_frame" not in mesher.calls[-1]["options"]
 
 
-def test_a_jobs_refusal_for_the_frame_keeps_that_reason_and_releases_the_binding(real) -> None:
+def test_a_jobs_refusal_for_the_frame_is_internal_and_releases_the_binding(real) -> None:
     harness, _mesher = real
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
-    confirm_frame(harness.store, _record(harness, _prepare(harness)), "+z")
+    confirm_frame(harness.store, _record(harness, _prepared(harness)), "+z")
 
     class FrameRefused(ValueError):
         reason_code = "frame_confirmation_required"
@@ -504,7 +531,9 @@ def test_a_jobs_refusal_for_the_frame_keeps_that_reason_and_releases_the_binding
     harness.refusals.append(FrameRefused)
     summary = _prepare(harness, setup_revision_id=_revision(harness.store, _setup()))
 
-    assert _waiting_for_frame(summary), summary
+    # Never a question about the axis: calm, internal words.
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed"), summary
+    assert summary["message"].startswith("WG could not prepare ")
     assert harness.bound_request() is None
 
 
@@ -593,7 +622,7 @@ def test_post_ingest_meshes_an_authored_model_in_its_confirmed_frame(real, monke
     monkeypatch.setattr("server.cadlink.api._schedule_frame_suggestion", lambda *_args, **_kwargs: None)
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
-    waiting = _prepare(harness)
+    waiting = _prepared(harness)
     app = create_app(data_dir=harness.data_dir)
     app.state.cadlink_store = harness.store
     app.state.cad_workspace.select(harness.workspace)
@@ -612,8 +641,8 @@ def test_post_ingest_meshes_an_authored_model_in_its_confirmed_frame(real, monke
         CadReturnIngestRequest.model_validate({**copy.deepcopy(payload.model_dump(by_alias=True)), "solverFrame": "+x"})
 
 
-def test_the_record_is_gated_even_when_the_manifest_resolution_says_linked(real, monkeypatch) -> None:
-    """The gate reads what was prepared, not only what the manifest was read as."""
+def test_the_record_is_decided_even_when_the_manifest_resolution_says_linked(real, monkeypatch) -> None:
+    """The decision reads what was prepared, not only what the manifest was read as."""
 
     harness, _mesher = real
     step = b"STEP authored"
@@ -622,8 +651,9 @@ def test_the_record_is_gated_even_when_the_manifest_resolution_says_linked(real,
 
     summary = _prepare(harness)
 
-    assert _waiting_for_frame(summary), summary
-    assert harness.submitted == []
+    # Solved only under a recorded decision for the unlinked record it made.
+    assert summary["state"] == "accepted", summary
+    assert _decision(harness, summary) == "automatic-fallback"
 
 
 def test_an_unreadable_retained_manifest_is_replaced_and_still_never_read_as_linked(
@@ -633,8 +663,8 @@ def test_an_unreadable_retained_manifest_is_replaced_and_still_never_read_as_lin
 
     A retained copy WG cannot read is replaced from the WGLink folder
     (``ingest._stage_bundle_cas``), so the snapshot goes on as what it is: an
-    unlinked model still waiting for its frame. What must not happen is a solve
-    submitted on a guessed frame.
+    unlinked model WG decides the frame of. What must not happen is a solve
+    submitted as if it were linked.
     """
 
     from server.cadlink.intake.ingest import retained_snapshot_path
@@ -642,16 +672,15 @@ def test_an_unreadable_retained_manifest_is_replaced_and_still_never_read_as_lin
     harness, mesher = real
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
-    first = _prepare(harness)
-    assert _waiting_for_frame(first)
+    _prepared(harness)
     manifest_sha = harness.snapshot()["manifest_sha256"]
     copy = retained_snapshot_path(harness.data_dir, manifest_sha)
     (copy / "wgreturn.json").write_text("{not json", encoding="utf-8")
 
     summary = _prepare(harness)
 
-    assert _waiting_for_frame(summary), summary
-    assert summary["jobId"] is None and harness.submitted == []
+    assert summary["state"] == "accepted", summary
+    assert _decision(harness, summary) == "automatic-fallback"  # read as unlinked
     assert json.loads((copy / "wgreturn.json").read_text(encoding="utf-8"))["document"] == {
         "name": "Authored horn",
         "native_id": NATIVE_ID,
@@ -666,7 +695,7 @@ def test_an_unreadable_retained_manifest_with_the_return_gone_waits(real) -> Non
     harness, mesher = real
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
-    assert _waiting_for_frame(_prepare(harness))
+    _prepared(harness)
     manifest_sha = harness.snapshot()["manifest_sha256"]
     (retained_snapshot_path(harness.data_dir, manifest_sha) / "wgreturn.json").write_text(
         "{not json", encoding="utf-8"
@@ -729,7 +758,7 @@ def test_a_solved_job_records_a_chosen_frame_and_a_suggested_one(real) -> None:
     harness, _mesher = real
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
-    waiting = _prepare(harness)
+    waiting = _prepared(harness)
     record = _record(harness, waiting)
     axis = record["normalisation"]["solver_frame"]["axis"]
     confirm_frame(harness.store, record, axis)  # no survey: the user chose it
@@ -760,3 +789,46 @@ def test_a_solve_press_takes_only_a_known_frame_axis() -> None:
     for invalid in (ModelSolveRequest, CadSolveAgainRequest):
         with pytest.raises(ValidationError):
             invalid.model_validate({**(press if invalid is ModelSolveRequest else {}), "frame_axis": "y"})
+
+
+def test_a_browser_solve_of_a_weak_evidence_model_never_asks_and_a_change_is_kept(real) -> None:
+    """WG's own Solve (``POST /api/models/{id}/solve``) on a model WG cannot read
+    the front of: no frame question, the fallback decides and is recorded as
+    such; a later Change is confirmed for the project and solved along."""
+
+    from server.cadlink.interpretation.solver_frame import record_confirmation_key
+    from test_model_solve import _models_app, _settle, _solve
+
+    harness, mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    on_screen = _record(harness, _prepared(harness))  # the model WG has on screen
+    harness.ingest = ingest_module.ingest_bundle
+    lineage = harness.store.get_lineage_for_cad_document(NATIVE_ID)["lineage_id"]
+    model = {"model_id": lineage, "prepared_id": on_screen["ingest_id"]}
+    app = _models_app(harness)
+
+    # The card names no axis (nobody chose one): WG decides.
+    status, body = _solve(harness, app, model, client_request_id="press-1", setup=_setup())
+    assert status == 200, body
+    _settle(harness)
+    job = harness.jobs_store.get_job_row(body["job_id"])
+    cad = job["task_metadata"]["cad"]
+    assert "refusal" not in cad and job["status"] == "queued", (job["status"], cad)
+    prepared = harness.store.get_ingest(cad["preparation"]["preparation_id"])
+    record = json.loads(prepared["record_json"])
+    assert record["normalisation"]["solver_frame"]["axis"] == "+z"
+    assert _decision(harness, {"preparationId": record["ingest_id"]}) == "automatic-fallback"
+    assert harness.store.get_frame_confirmation(record_confirmation_key(record)) is None
+
+    # Change: the user picks +y; the press confirms it and solves along it.
+    status, body = _solve(harness, app, model, client_request_id="press-2", setup=_setup(), frame_axis="+y")
+    assert status == 200, body
+    _settle(harness)
+    cad = harness.jobs_store.get_job_row(body["job_id"])["task_metadata"]["cad"]
+    assert "refusal" not in cad, cad
+    changed = json.loads(harness.store.get_ingest(cad["preparation"]["preparation_id"])["record_json"])
+    assert changed["normalisation"]["solver_frame"]["axis"] == "+y"
+    assert mesher.calls[-1]["options"]["solver_frame"]["axis"] == "+y"
+    assert harness.store.get_frame_confirmation(record_confirmation_key(changed))["axis"] == "+y"
+    assert _decision(harness, {"preparationId": changed["ingest_id"]}) is None  # a person's choice

@@ -358,14 +358,15 @@ loads without a FEM region. Structural vibration and cone breakup are not modell
 ## 7. Check the axis and symmetry
 
 1. For a model drawn from scratch, check **Radiates along** on the Solve card.
-   WG uses a confident automatic axis and records it in the run. If it cannot
-   decide, it asks **“Which way does the mouth face? (CAD axes)”**. Choose +X,
-   −X, +Y, −Y, +Z or −Z and inspect the side/top previews. The outgoing direction
-   becomes solver +Z, shown in blue; sources are orange. **Solve** confirms the
-   shown choice for the project. Use **Change** if you rotate the model later.
-   Exporting in a different component's coordinates can require confirmation
-   again. An unsaved Fusion document remembers confirmation only for that
-   snapshot; save the document for continuity between returns.
+   WG never asks which way a model radiates: it works the axis out from the
+   model and records it in the run. When the evidence is weak it uses its
+   documented fallback and says so: “WG chose +Z; change it if the model
+   radiates another way.” Solve never waits on it. To pick another axis, use
+   **Change**, choose +X, −X, +Y, −Y, +Z or −Z and inspect the side/top
+   previews. The outgoing direction becomes solver +Z, shown in blue; sources
+   are orange. **Solve** keeps your choice for the project. Exporting in a
+   different component's coordinates, or from an unsaved Fusion document, is
+   decided again by WG; save the document for continuity between returns.
 2. Prefer sending the whole speaker. WG checks the finished geometry and each
    source identity for mirror symmetry. One accepted transverse mirror gives a
    half solve; two give a quarter; otherwise WG keeps the full domain. Keep

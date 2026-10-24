@@ -107,14 +107,15 @@ def test_the_suggestion_is_computed_once_per_snapshot_and_algorithm(tmp_path: Pa
     assert store.get_frame_suggestion(record["manifest_sha256"], "frame-infer-test") is None
 
 
-def test_an_unsurveyable_record_asks_and_preselects_nothing(tmp_path: Path) -> None:
+def test_an_unsurveyable_record_preselects_wgs_fallback_and_never_asks(tmp_path: Path) -> None:
     store = CadLinkStore(tmp_path / "cadlink.db")
     record = _record(tmp_path, "+x")
     Path(record["mesh_store_path"]).write_text("damaged", encoding="utf-8")
     preview = frame_preview(store, record)
     assert preview["suggestion"]["status"] == "unavailable"
-    assert preview["preselected"] is None
-    assert preview["differs"] is None
+    # The documented ranking's first choice (as modelled), shown as a fallback.
+    assert preview["preselected"] == {"axis": "+z", "source": "fallback"}
+    assert preview["confirmed"] is None and preview["differs"] is None
 
 
 def test_an_automatic_suggestion_is_preselected_but_not_confirmed(tmp_path: Path) -> None:
@@ -170,8 +171,9 @@ def test_a_declared_half_facing_along_its_plane_is_suggested(tmp_path: Path) -> 
     assert suggestion["supportedAxes"] == ["+z", "-z", "+y", "-y"]
 
 
-def test_a_declared_half_facing_across_its_plane_is_asked_about(tmp_path: Path) -> None:
-    """A model facing +x cannot be mirrored on x = 0: never promoted to another axis."""
+def test_a_declared_half_facing_across_its_plane_falls_back_as_modelled(tmp_path: Path) -> None:
+    """A model facing +x cannot be mirrored on x = 0: never promoted to another axis
+    as confident; the fallback ranking's allowed axis is preselected instead."""
 
     store = CadLinkStore(tmp_path / "cadlink.db")
     record = _record(tmp_path, "+x", domain=True)
@@ -181,7 +183,7 @@ def test_a_declared_half_facing_across_its_plane_is_asked_about(tmp_path: Path) 
     assert suggestion["reasonCode"] == "unsupported-axis"
     assert suggestion["unrestrictedAxis"] == "+x"
     assert suggestion["axis"] is None
-    assert preview["preselected"] is None
+    assert preview["preselected"] == {"axis": "+z", "source": "fallback"}
 
 
 def test_the_route_returns_the_suggestion_and_what_is_preselected(tmp_path: Path, monkeypatch) -> None:

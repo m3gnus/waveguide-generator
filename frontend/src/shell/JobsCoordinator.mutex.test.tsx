@@ -2674,16 +2674,18 @@ describe('solve invocation mutex', () => {
     expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceNext: 2 });
   });
 
-  it('blocks Solve during the initial frame read without queuing a hidden solve', async () => {
+  it('never blocks Solve on the frame: a press during the initial read waits for it and submits once', async () => {
     act(() => { readyCad('wgi_captured'); workspaceModeStore.setMode('cad'); });
     const read = deferred<Response>();
     act(() => { void useCadSolverFrameStore.getState().load('wgi_captured', (() => read.promise) as typeof fetch); });
-    await expect(solveControlStore.getSnapshot()!.solve()).resolves.toBe('blocked');
-    expect(solveControlStore.getSnapshot()!.title).toContain('Reading which way');
-    await act(async () => { read.resolve(new Response(JSON.stringify({ linked: true }))); });
+    expect(solveControlStore.getSnapshot()!.title ?? '').not.toContain('Reading which way');
+    let solving: Promise<unknown> = Promise.resolve();
+    await act(async () => { solving = solveControlStore.getSnapshot()!.solve(); await Promise.resolve(); });
     expect(mocks.solveModel).not.toHaveBeenCalled();
-    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
+    await act(async () => { read.resolve(new Response(JSON.stringify({ linked: true }))); await solving; });
+    expect(mocks.solveModel).toHaveBeenCalledOnce();
     expect(press().prepared_id).toBe('wgi_captured');
+    expect(press().frame_axis).toBeUndefined();
   });
 
   it('caches no press: after a lost response the next press is a new id the server answers', async () => {

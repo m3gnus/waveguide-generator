@@ -140,13 +140,15 @@ const SOURCE_WORDS: Record<string, string> = {
 
 /**
  * Which way a model authored in CAD radiates, on its Solve card (PLAN.md
- * M1b/M1e): "Radiates along +x · Change" when WG has an answer -- the
- * project's frame, or the one it worked out from the model -- and the
- * question, in CAD axes with its reason in words, only when it has none.
+ * M1b/M1e): "Radiates along +x · Change", as information. WG never asks: the
+ * axis shown is the project's frame or WG's own decision (confident, or the
+ * documented fallback, which says so in one calm line), and Solve never
+ * waits on it. Change opens the axis chooser; a pick is the user's choice,
+ * which Solve confirms for the project (`chosenFrameAxis`).
  *
- * Nothing here confirms a frame except the one-click switch a "differs"
- * notice offers: Solve confirms the axis shown (`confirmDisplayedFrame`). The
- * preview applies the server's matrices; nothing here computes a frame.
+ * Nothing else here confirms a frame except the one-click switch a "differs"
+ * notice offers. The preview applies the server's matrices; nothing here
+ * computes a frame.
  */
 export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetch }: {
   ingestId: string;
@@ -201,13 +203,13 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
   if (view.linked) return null;
   if (!frame) {
     return <p className="cad-solver-frame cad-detail" role="status">
-      WG could not read which way {label} radiates ({view.error}). If WG is not sure which way it faces, Solve stops to ask.
+      WG could not read which way {label} radiates ({view.error}). Solve still works it out from the model.
     </p>;
   }
   const axis = view.axis;
-  const suggestion = frame.suggestion ?? null;
   const source = frame.preselected?.source ?? (frame.confirmed ? 'confirmed' : null);
-  const asking = axis === null || changing;
+  // Only the user's own Change opens the chooser: it is never a question.
+  const choosing = changing;
   const differs = frame.differs ?? null;
   const switchTo = (target: SolverFrameAxis) => {
     setSwitching(true);
@@ -224,24 +226,29 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
     setConfirmOnDone(false);
   };
   const unsupported = frame.axes.find((item) => !item.allowed && item.reason)?.reason ?? null;
-  return <div className="cad-solver-frame" data-frame-preview="ready" data-solver-frame={axis ?? 'unset'}>
-    {!asking && <div className="cad-solver-frame-summary">
+  const fallback = !view.picked && source === 'fallback';
+  return <div className="cad-solver-frame" data-frame-preview="ready" data-solver-frame={axis ?? 'automatic'}
+    data-frame-source={view.picked ? 'picked' : source ?? 'automatic'}>
+    {!choosing && <div className="cad-solver-frame-summary">
       <p className="cad-solver-frame-line">
-        <span>Radiates along <b>{axis}</b></span>
+        {axis
+          ? <span>Radiates along <b>{axis}</b></span>
+          : <span>WG works out which way {label} radiates when it solves</span>}
         {' · '}<button
           className="link-button"
           data-action="change-solver-frame"
-          title="Choose another axis. Solve confirms the one shown; runs already solved keep their frame."
+          title="Choose another axis. Solve uses the one shown; runs already solved keep their frame."
           onClick={() => setChanging(true)}
         >Change</button>
       </p>
-      {(view.picked || source) && <small className="cad-detail cad-solver-frame-source">{view.picked ? 'your choice' : SOURCE_WORDS[source!]}</small>}
-      <FramePreview frame={frame} axis={axis!} mesh={mesh} views="side"/>
+      {fallback && <p className="cad-detail cad-solver-frame-fallback">
+        WG chose {axis}; change it if the model radiates another way.
+      </p>}
+      {!fallback && (view.picked || (source && SOURCE_WORDS[source])) && <small className="cad-detail cad-solver-frame-source">{view.picked ? 'your choice' : SOURCE_WORDS[source!]}</small>}
+      {axis && <FramePreview frame={frame} axis={axis} mesh={mesh} views="side"/>}
     </div>}
-    {asking && <>
-      <p className="cad-solver-frame-question">Which way does the mouth face? (CAD axes)</p>
-      {/* Why WG asks, in words; never its code. */}
-      {!changing && suggestion && suggestion.status !== 'automatic' && <p className="cad-detail cad-solver-frame-reason">{suggestion.reason}</p>}
+    {choosing && <>
+      <p className="cad-solver-frame-chooser">Which way does the mouth face? (CAD axes)</p>
       <fieldset>
         <legend>Radiates along</legend>
         {frame.axes.map((item) => <label key={item.axis} title={item.reason ?? undefined}>
@@ -260,10 +267,10 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
       {axis
         ? <>
           <FramePreview frame={frame} axis={axis} mesh={mesh} views="both"/>
-          <p className="cad-detail">Solver frame: model {axis} → solver +Z (blue arrow). Drive sources are shown in orange. {confirmOnDone ? 'Done confirms it for this project.' : 'Solve confirms it for this project.'}</p>
+          <p className="cad-detail">Solver frame: model {axis} → solver +Z (blue arrow). Drive sources are shown in orange. {view.picked ? (confirmOnDone ? 'Done keeps it for this project.' : 'Solve keeps it for this project.') : ''}</p>
         </>
-        : <p className="cad-detail">Choose the model axis that points out of the mouth; the preview shows it as the solver +Z.</p>}
-      {changing && <button className="link-button" data-action="done-solver-frame" onClick={done}>Done</button>}
+        : <p className="cad-detail">Pick the model axis that points out of the mouth; the preview shows it as the solver +Z.</p>}
+      <button className="link-button" data-action="done-solver-frame" onClick={done}>Done</button>
     </>}
     {view.changedFrom && axis && <Notice tone="warning" className="cad-solver-frame-changed">
       This project’s solver frame was changed elsewhere to {axis}; this card showed {view.changedFrom}. Solve now solves along {axis}.

@@ -1,13 +1,14 @@
 """Which way a CAD-authored model radiates: the automatic solver frame.
 
 docs/architecture/CAD-OPERATIONS.md, "Unlinked solver frame". A return with no
-WG instance carries no throat frame. Instead of asking the user every time, WG
-infers the forward axis from the tessellated model and preselects it; Solve
-confirms the visible, preselected axis (M1b). A Solve that shows no axis -- a
-Fusion request -- never asks: :func:`choose_axis` takes the confident answer,
-or else the first allowed axis of the documented fallback ranking, recorded as
-``automatic-fallback`` with a developer diagnostic. The user can change the
-axis afterwards.
+WG instance carries no throat frame. WG never asks which way it radiates: it
+infers the forward axis from the tessellated model, and every solve nobody
+chose an axis for -- a Fusion request, a Solve in WG, a manual import, a
+restored run, a re-solve -- decides through :func:`choose_axis`: the confident
+answer, or else the first allowed axis of the documented fallback ranking,
+recorded as ``automatic-fallback`` with a developer diagnostic. The user can
+change the axis afterwards. An ``ask`` status below is the survey abstaining,
+never a question shown to anyone.
 
 One pure function, :func:`infer_frame`, over the full model in CAD
 coordinates. Four kinds of evidence each score the six assembly axes:

@@ -167,13 +167,16 @@ def test_a_solve_without_a_confident_axis_decides_and_records_a_diagnostic(
 
 
 def test_a_confident_axis_the_snapshot_does_not_allow_is_not_used() -> None:
-    from server.cadlink.interpretation.solver_frame import automatic_solve_axis
+    from server.cadlink.interpretation.frame_infer import choose_axis
 
     confident = {"status": "automatic", "axis": "+x"}
-    assert automatic_solve_axis(confident, ("+z",)) is None  # a declared half: only as modelled
-    assert automatic_solve_axis(confident, ("+z", "+x")) == "+x"
-    assert automatic_solve_axis({"status": "ask", "axis": "+x"}, ("+x",)) is None
-    assert automatic_solve_axis(None, ("+x",)) is None
+    # A declared half: only as modelled, recorded as a fallback, never confident.
+    assert choose_axis(confident, ("+z",)).to_json() == {
+        "axis": "+z", "provenance": "automatic-fallback", "reasonCode": "axis-not-allowed",
+    }
+    assert choose_axis(confident, ("+z", "+x")).provenance == "automatic"
+    assert choose_axis({"status": "ask", "axis": "+x"}, ("+x",)).provenance == "automatic-fallback"
+    assert choose_axis(None, ("+x",)).axis == "+x"
 
 
 def test_the_automatic_axis_is_never_taken_as_a_confirmation_later(real, monkeypatch) -> None:

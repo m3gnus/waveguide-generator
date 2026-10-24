@@ -75,7 +75,7 @@ describe('Show reveals the requests it counts', () => {
     expect(disclosure.open).toBe(true);
     expect(document.activeElement).toBe(first);
     expect(first.textContent).toContain('Solve request · kleinuhringur v1');
-    expect(first.textContent).toContain('needs its solver frame confirmed');
+    expect(first.textContent).toContain('its solver frame changed; press Solve again');
     expect(first.textContent).toContain(migratedCadRequestFixture().cad_state!.message);
     expect(first.querySelector('time')?.dateTime).toBe(migratedCadRequestFixture().created_at);
     expect(first.querySelector('button')?.textContent).toBe('Open kleinuhringur v1');

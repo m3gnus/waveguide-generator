@@ -20,7 +20,6 @@ from server.cadlink.interpretation.solver_frame import (
     FrameResolution,
     ROTATIONS,
     allowed_axes,
-    automatic_solve_axis,
     carried_axis,
     confirmation_key,
     document_up,
@@ -127,12 +126,12 @@ def resolve_for_manifest(
     manifest_sha256: str,
     *,
     automatic: bool = False,
-    best_effort: bool = False,
 ) -> FrameResolution | None:
     """The frame state of a snapshot about to be prepared; None when it is linked.
 
-    ``automatic`` meshes in WG's inferred axis when no manual choice stands.
-    ``best_effort`` always decides for Fusion, even when the survey abstains.
+    ``automatic`` meshes in WG's own decision (``frame_infer.choose_axis``:
+    the confident axis, else the fallback ranking's first allowed axis) when
+    no manual choice stands. It always decides; nothing asks.
     """
 
     if not is_unlinked_manifest(manifest):
@@ -143,11 +142,16 @@ def resolve_for_manifest(
     confirmed = _confirmed_axis(store, key, requirement)
     carried = carried_axis(store.get_frame_confirmation(key), requirement)
     automatic_axis = None
-    if automatic and (confirmed is None or confirmed not in allowed) and carried is None:
-        automatic_axis = automatic_solve_axis(
-            store.get_frame_suggestion(manifest_sha256, _algorithm_version()), allowed,
-            best_effort=best_effort,
-        )
+    if (
+        automatic
+        and (confirmed is None or confirmed not in allowed)
+        and (carried is None or carried not in allowed)
+    ):
+        from server.cadlink.interpretation.frame_infer import choose_axis
+
+        automatic_axis = choose_axis(
+            store.get_frame_suggestion(manifest_sha256, _algorithm_version()), allowed
+        ).axis
     return FrameResolution(
         key=key,
         requirement=requirement,
@@ -166,17 +170,24 @@ def _algorithm_version() -> str:
 
 
 def _manual_axis(store: CadLinkStore, record: Mapping[str, Any]) -> str | None:
-    """The axis a person chose for this record's project: confirmed, or carried from v1."""
+    """The axis a person chose for this record's project: confirmed, or carried from v1.
+
+    Only one this record's domain allows: a choice a half or quarter model
+    cannot be solved along does not stand for it, and WG decides instead
+    (as ``resolve_for_manifest`` meshes it).
+    """
 
     frame = record_frame(record)
     if frame is None:
         return None
     key = record_confirmation_key(record)
     requirement = dict(frame["requirement"])
+    allowed = _record_allowed(frame)
     confirmed = _confirmed_axis(store, key, requirement)
-    if confirmed is not None:
+    if confirmed is not None and confirmed in allowed:
         return confirmed
-    return carried_axis(store.get_frame_confirmation(key), requirement)
+    carried = carried_axis(store.get_frame_confirmation(key), requirement)
+    return carried if carried in allowed else None
 
 
 def legacy_automatic_axis(store: CadLinkStore, record: Mapping[str, Any]) -> str | None:
@@ -363,21 +374,18 @@ def _record_allowed(frame: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(axis for axis in AXES if axis in allowed)
 
 
-def record_frame_refusal(
-    store: CadLinkStore, record: Mapping[str, Any], *, carried_ok: bool = False
-) -> str | None:
+def record_frame_refusal(store: CadLinkStore, record: Mapping[str, Any]) -> str | None:
     """Why the prepared frame cannot be solved, or None for a usable frame.
 
     A linked record is never gated. An unlinked record solves in the frame it
-    was meshed in when that is the one its project (or, with no project, this
-    snapshot) confirmed under the same requirement, or WG's own decision
-    stored for exactly this record at preparation (:func:`record_frame_decision`)
-    -- the one decision every submission, retry and restart reads. With
-    ``carried_ok`` (a Solve that shows no axis, and the jobs system's
-    submission gate) a project's v1 choice carried forward is the user's
-    choice too. A record nobody chose and WG never decided is refused; a
+    was meshed in when that is its project's (or, with no project, this
+    snapshot's) manual choice under the same requirement -- a v1 choice
+    carried forward included -- or WG's own decision stored for exactly this
+    record at preparation (:func:`record_frame_decision`), the one decision
+    every submission, retry and restart reads. Nothing here asks: every
+    refusal is an internal inconsistency that preparing again resolves. A
     record prepared before the frame contract states no frame and is never
-    taken as confirmed.
+    taken as decided.
     """
 
     if not record_is_unlinked(record):
@@ -385,55 +393,32 @@ def record_frame_refusal(
     frame = record_frame(record)
     if frame is None:
         return (
-            "This model was prepared before WG asked for its solver frame. "
-            "Prepare it again in WG and confirm the axis it radiates along."
+            "This model was prepared before WG recorded its solver frame. "
+            "Prepare it again in WG."
         )
-    key = record_confirmation_key(record)
-    requirement = dict(frame["requirement"])
-    confirmed = _confirmed_axis(store, key, requirement)
-    allowed = _record_allowed(frame)
-    if confirmed is None:
-        carried = carried_axis(store.get_frame_confirmation(key), requirement)
-        if carried is not None:
-            if carried_ok and carried == frame["axis"]:
-                return None  # A saved v1 choice remains the user's choice under v2.
-            return (
-                "Confirm this model's solver frame in WG first: choose the axis it "
-                "radiates along and check the preview, then solve it."
-            )
-        decision = record_frame_decision(store, record)
-        if decision is not None and decision.get("axis") == frame["axis"]:
-            # WG's own decision for this record: never written as a confirmation.
+    manual = _manual_axis(store, record)
+    if manual is not None:
+        if manual == frame["axis"]:
             return None
-        if decision is not None:
-            return (
-                f"This model was prepared along {frame['axis']}, but WG decided to solve "
-                f"it along {decision.get('axis')}. Prepare it again in WG."
-            )
-        if carried_ok:
-            # A request that shows no axis (a Fusion press, a retry or a
-            # restart) never asks for one. A record an earlier build prepared
-            # without recording how it chose its axis is prepared again.
-            return (
-                "WG has no record of how it chose this model's solver frame when it "
-                "was prepared. Prepare it again."
-            )
         return (
-            "Confirm this model's solver frame in WG first: choose the axis it "
-            "radiates along and check the preview, then solve it."
+            f"This model was prepared along {frame['axis']}, but its solver frame is "
+            f"{manual}. Prepare it again in WG to solve it in that frame."
         )
-    if confirmed not in allowed:
+    decision = record_frame_decision(store, record)
+    if decision is not None and decision.get("axis") == frame["axis"]:
+        # WG's own decision for this record: never written as a confirmation.
+        return None
+    if decision is not None:
         return (
-            f"The confirmed solver frame ({confirmed}) cannot be used: this model is "
-            f"solved as a half or quarter model, which can be solved only along "
-            f"{', '.join(allowed)}. Choose one of those, or return the whole model."
+            f"This model was prepared along {frame['axis']}, but WG decided to solve "
+            f"it along {decision.get('axis')}. Prepare it again in WG."
         )
-    if confirmed != frame["axis"]:
-        return (
-            f"This model was prepared along {frame['axis']}, but its confirmed solver "
-            f"frame is {confirmed}. Prepare it again in WG to solve it in that frame."
-        )
-    return None
+    # A record an earlier build prepared without recording how it chose its
+    # axis is prepared again; WG then decides.
+    return (
+        "WG has no record of how it chose this model's solver frame when it "
+        "was prepared. Prepare it again."
+    )
 
 
 def confirm_frame(
@@ -623,13 +608,40 @@ def _differs_notice(confirmed_axis: str | None, suggestion: Mapping[str, Any] | 
     }
 
 
+def _decided_preselection(
+    store: CadLinkStore, record: Mapping[str, Any], suggestion: Mapping[str, Any] | None
+) -> dict[str, Any] | None:
+    """The axis WG solves this record along when nobody chose one, and how.
+
+    The decision stored for this record when it was prepared, else the one
+    :func:`decide_record_frame` makes now -- ``frame_infer.choose_axis``, the
+    same owner a preparation seals. ``suggested``: confident inference;
+    ``fallback``: the documented ranking chose. None for a record stating no
+    frame (preparing it again decides).
+    """
+
+    from server.cadlink.interpretation.frame_infer import DECISION_AUTOMATIC
+
+    decision = record_frame_decision(store, record)
+    if decision is not None:
+        axis, provenance = decision.get("axis"), decision.get("provenance") or DECISION_AUTOMATIC
+    else:
+        choice = decide_record_frame(store, record, suggestion)
+        if choice is None:
+            return None
+        axis, provenance = choice.axis, choice.provenance
+    if axis not in AXES:
+        return None
+    return {"axis": axis, "source": "suggested" if provenance == DECISION_AUTOMATIC else "fallback"}
+
+
 def frame_preview(store: CadLinkStore, record: Mapping[str, Any]) -> dict[str, Any]:
     """Every axis's matrix, relative to the frame this record's geometry is shown in.
 
     Also the automatic suggestion for the snapshot, which axis is preselected
     and why -- a matching confirmed frame first, then a v1 confirmation
-    carried forward, then an automatic suggestion the snapshot allows, else
-    none -- and, when the suggestion clearly
+    carried forward, then WG's own decision (:func:`_decided_preselection`),
+    which is never a question -- and, when the suggestion clearly
     disagrees with the confirmed frame, a notice that never changes it.
     """
 
@@ -694,14 +706,8 @@ def frame_preview(store: CadLinkStore, record: Mapping[str, Any]) -> dict[str, A
         # ahead of any suggestion, and confirmed under v2 by Solve.
         preselected = {"axis": carried, "source": "carried"}
         confirmed_axis = carried
-    elif (
-        suggestion is not None
-        and suggestion.get("status") == "automatic"
-        and suggestion.get("axis") in allowed
-    ):
-        preselected = {"axis": suggestion["axis"], "source": "suggested"}
     else:
-        preselected = None
+        preselected = _decided_preselection(store, record, suggestion)
     return {
         "linked": False,
         "ingestId": record.get("ingest_id"),

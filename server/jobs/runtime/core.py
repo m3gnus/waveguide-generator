@@ -2053,7 +2053,7 @@ class JobRuntime:
         # (docs/architecture/CAD-OPERATIONS.md, "Unlinked solver frame").
         file_mesh = record.get("producer") == "mesh-file"
         frame_refusal = None if file_mesh or record.get("native_source") is not None else await asyncio.to_thread(
-            record_frame_refusal, self.cadlink_store, record, carried_ok=True
+            record_frame_refusal, self.cadlink_store, record
         )
         if frame_refusal is not None:
             raise ImportedSolveRefusal(

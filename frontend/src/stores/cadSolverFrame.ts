@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import {
-  confirmSolverFrame,
   getSolverFrame,
   type SolverFramePreview,
   type SolverFrameState,
@@ -13,10 +12,13 @@ import type { SolverFrameAxis } from '../viewport/solverFrame';
  *
  * One answer per ingestion: what the server says about the frame, and the axis
  * the card shows as chosen. That axis is the server's preselection -- the
- * project's confirmed frame, a v1 confirmation carried forward, or the
- * automatic suggestion -- until the user picks another. Solve confirms exactly
- * that visible axis (`confirmDisplayedFrame`); nothing here confirms on its own,
- * and a suggestion that disagrees with the project's frame never switches it.
+ * project's confirmed frame, a v1 confirmation carried forward, or WG's own
+ * decision (confident, or the documented fallback) -- until the user picks
+ * another (Change). WG never asks which way a model radiates: Solve names an
+ * axis only when a person chose it (`chosenFrameAxis`), and otherwise the
+ * backend decides through the same rule the preselection shows. Nothing here
+ * confirms on its own, and a suggestion that disagrees with the project's
+ * frame never switches it.
  */
 export interface CadFrameView {
   ingestId: string;
@@ -24,7 +26,8 @@ export interface CadFrameView {
   /** The server's answer; null while loading, after an error, and for a linked model. */
   frame: SolverFrameState | null;
   linked: boolean;
-  /** The axis Solve confirms, or null while the user still has to choose one. */
+  /** The axis shown as chosen; null only when the server preselects none (a
+   * record from before the frame contract, or an older server): WG decides at Solve. */
   axis: SolverFrameAxis | null;
   /** The user picked `axis` here rather than taking the preselection. */
   picked: boolean;
@@ -43,7 +46,7 @@ interface CadSolverFrameStore {
   /** The card took the request (opened its chooser); it is not asked again on a remount. */
   consumeChange: (ingestId: string) => void;
   load: (ingestId: string, fetcher?: typeof fetch) => Promise<void>;
-  /** The user's pick among the allowed axes, shown and confirmed by Solve. */
+  /** The user's pick among the allowed axes (Change), confirmed by Solve. */
   pick: (ingestId: string, axis: SolverFrameAxis) => void;
   /** A fresh server answer (after a confirmation), taken as the new preselection. */
   apply: (ingestId: string, preview: SolverFramePreview) => void;
@@ -144,45 +147,23 @@ export function frameReadInFlight(ingestId: string | null | undefined): Promise<
   return (ingestId ? loads.get(ingestId) : undefined) ?? null;
 }
 
-/** Why Solve cannot confirm the frame shown for this ingestion, or null. */
-export function frameSolveBlocker(ingestId: string | null | undefined): string | null {
-  if (!ingestId) return null;
-  const view = useCadSolverFrameStore.getState().frames[ingestId];
-  if (!view || view.linked) return null;
-  if (view.status === 'loading' && !view.frame) return 'Reading which way this model radiates…';
-  if (view.status === 'ready' && view.frame && view.axis === null) {
-    return 'Choose which way this model radiates, in the CAD Link panel, then press Solve.';
-  }
-  return null;
-}
+/** Sources of a preselection that are a person's own choice. */
+const CHOSEN_SOURCES: ReadonlySet<string> = new Set(['confirmed', 'carried']);
 
 /**
- * Confirm the axis the Solve card shows for this ingestion, as part of Solve,
- * and answer it: the preparation is then held to exactly that axis
- * (`frameAxis` on prepare), so a project confirmation changed elsewhere after
- * this card last read it stops the solve at the frame gate instead of
- * changing the axis solved.
- *
- * Only a frame the card has on screen is confirmed: with nothing read (the
- * card never showed one) or a read that failed, nothing is sent, and the
- * backend decides: it solves along its own confident automatic axis, or stops
- * at its frame gate and asks. An axis already
- * confirmed for the project is not sent again. Whether the confirmation agrees
- * with the automatic suggestion is the server's to record.
+ * The axis a Solve names for this ingestion's frame: the user's pick (Change),
+ * or the project's own confirmed (or carried v1) frame, which the press then
+ * holds the solve to. Null for WG's own decision, a linked model, a frame not
+ * read, or none shown: the backend then decides (`frame_infer.choose_axis`)
+ * and never asks.
  */
-export async function confirmDisplayedFrame(
-  ingestId: string,
-  fetcher: typeof fetch = fetch,
-  displayed: CadFrameView | undefined = useCadSolverFrameStore.getState().frames[ingestId],
-): Promise<SolverFrameAxis | null> {
-  const view = displayed;
-  if (!view || view.linked || !view.frame || view.status !== 'ready') return null;
-  if (!view.axis) throw new Error('Choose which way this model radiates, in the CAD Link panel, then press Solve.');
-  const axis = view.axis!;
-  if (view.frame.confirmed?.axis === axis) return axis;
-  const answer = await confirmSolverFrame({ ingestId }, axis, fetcher);
-  useCadSolverFrameStore.getState().apply(ingestId, answer);
-  return axis;
+export function chosenFrameAxis(view: CadFrameView | undefined): SolverFrameAxis | null {
+  if (!view || view.linked || !view.frame || view.status !== 'ready' || !view.axis) return null;
+  if (view.picked) return view.axis;
+  const source = view.frame.preselected?.source
+    // A server before the automatic frame preselects nothing: its confirmed axis is the project's.
+    ?? (view.frame.preselected === undefined && view.frame.confirmed?.axis === view.axis ? 'confirmed' : null);
+  return source && CHOSEN_SOURCES.has(source) ? view.axis : null;
 }
 
 /** Tests only. */

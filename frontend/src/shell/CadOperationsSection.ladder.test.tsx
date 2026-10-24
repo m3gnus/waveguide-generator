@@ -117,7 +117,7 @@ describe('the needs_user_input ladder', () => {
     const [frame, findings] = steps(ladder);
     expect(frame.current).toBe(true);
     expect(findings.current).toBe(false);
-    expect(frame.text).toBe('Now: check which way it radiates, above, and press Solve to confirm it.');
+    expect(frame.text).toBe('Now: its solver frame was changed meanwhile; press Solve to solve along the one shown above.');
     expect(findings.text).toBe('Then: approve 1 finding.');
     // The gate's action is the Solve card's Solve: no second chooser here.
     expect(host.querySelector('[data-action="confirm-frame"]')).toBeNull();

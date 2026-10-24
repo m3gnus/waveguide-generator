@@ -105,7 +105,7 @@
 .cad-solve-settings .link-button { margin-left: auto; }
 .cad-solver-frame-summary { display: grid; gap: 2px; }
 .cad-solver-frame-summary .cad-frame-view figcaption { display: none; }
-.cad-solver-frame-question { margin: 0; color: var(--fg1); font-weight: 600; }
+.cad-solver-frame-chooser { margin: 0; color: var(--fg1); font-weight: 600; }
 .cad-solve-actions { display: grid; gap: 4px; }
 .cad-solve-run-warn { color: var(--amber); }
 .cad-solver-frame-error { color: var(--red); }

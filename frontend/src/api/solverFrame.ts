@@ -29,11 +29,12 @@ export interface SolverFrameSuggestion {
 }
 
 /** The axis WG shows as chosen, and why: the project's confirmation, a
- * confirmation made under frame contract v1 and carried forward, or the
- * automatic suggestion. Solve confirms it. */
+ * confirmation made under frame contract v1 and carried forward, or WG's own
+ * decision -- `suggested` (confident inference) or `fallback` (the evidence was
+ * weak and the documented ranking chose). Never a question. */
 export interface SolverFramePreselection {
   axis: SolverFrameAxis;
-  source: 'confirmed' | 'carried' | 'suggested';
+  source: 'confirmed' | 'carried' | 'suggested' | 'fallback';
 }
 
 /** A new snapshot that looks like it faces another way than the project's

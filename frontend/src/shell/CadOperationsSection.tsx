@@ -158,12 +158,15 @@ export function solveGateLadder(
   switch (operation.reason) {
     case 'frame_confirmation_required':
       return [
+        // Only a person's choice changed elsewhere while this solve was being
+        // prepared stops here (WG never asks for an axis): Solve again takes
+        // the frame shown above.
         {
           gate: 'frame', current: true,
-          text: 'Now: check which way it radiates, above, and press Solve to confirm it.',
+          text: 'Now: its solver frame was changed meanwhile; press Solve to solve along the one shown above.',
         },
-        // Confirming the frame approves nothing: a finding still unapproved
-        // is the next stop, and only then is it named.
+        // Solving again approves nothing: a finding still unapproved is the
+        // next stop, and only then is it named.
         ...(unapproved.length ? [{
           gate: 'findings' as const, current: false,
           text: `Then: approve ${findingCount(unapproved.length)}.`,
@@ -221,9 +224,9 @@ function guidance(operation: CadOperationSummary): Guidance {
         action: 'approve',
       };
     case 'frame_confirmation_required':
-      // An unlinked model: the backend solves nothing until its project's
-      // solver frame is confirmed, whichever way the solve was asked for.
-      // The frame line above says which way; Solve confirms it.
+      // A person's frame choice changed while this was prepared (or a run
+      // stopped here by an earlier build): the frame line above says which
+      // way, and Solve solves along it. Nothing asks for an axis.
       return { text: null, action: null };
     case 'update_restart_pending':
       // The backend queues it again by itself; Solve now would only be refused until then.
