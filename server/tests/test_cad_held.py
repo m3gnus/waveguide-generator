@@ -109,6 +109,33 @@ def test_legacy_ready_rows_stored_as_errors_read_ready_and_survive_clear_failed(
     assert h.jobs_store.get_job_row(job["id"]) is not None
 
 
+@pytest.mark.parametrize(("code", "attention", "stage_message"), [
+    ("ready_to_solve", "ready", "Ready to solve"),
+    ("mesh_too_large", "question", "Waiting for you"),
+    ("frame_confirmation_required", "action", "Needs a change"),
+    ("engine_cannot_solve_return", "action", "Needs a change"),
+])
+def test_a_migrated_refusal_is_kept_as_the_one_classifier_says(
+    h: JobsHarness, code: str, attention: str, stage_message: str,
+) -> None:
+    """An operation from an earlier release, accepted on first launch with its refusal."""
+
+    from server.jobs.cad_intent import CadSolveIntent
+
+    h.runtime._ensure_prep_lane = lambda: None
+    job_id = h._loop.run(h.runtime.accept_cad_solve(
+        CadSolveIntent(operation_id="cmd-legacy", bundle_path="old.wgreturn",
+                       manifest_sha256="sha256:" + "4" * 64, return_id="return"),
+        "cad-solve:cmd-legacy", prepare=False, cad_record={},
+        refusal={"code": code, "message": "Stored words"},
+    ))
+    row = _row(h, job_id)
+    state = job_cad_state(row)
+    assert (row["status"], row["stage_message"], row["error_message"]) == ("held", stage_message, None)
+    assert state["held"] is True and state["attention"] == attention
+    assert h._loop.run(h.runtime.clear_failed()) == []
+
+
 def _lineage(h: JobsHarness, job_id: str, lineage: str) -> None:
     row = _row(h, job_id)
     metadata = row["task_metadata"]

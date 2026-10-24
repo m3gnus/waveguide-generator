@@ -171,7 +171,8 @@ describe('F8: a blocked operation reaches the user in either mode', () => {
     expect(activations).toEqual([]);
     expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
     const notice = host.querySelector<HTMLButtonElement>('.attention-waiting');
-    expect(notice?.textContent).toContain('A solve is waiting for you');
+    // A frame changed elsewhere names a change; it is not a question.
+    expect(notice?.textContent).toContain('A solve needs a change');
     expect(notice?.title).toContain('solver frame');
 
     // Reviewing the request preserves the user's working mode.
@@ -182,7 +183,7 @@ describe('F8: a blocked operation reaches the user in either mode', () => {
     expect(workspaceNavigation.isVisible('geometry')).toBe(true);
     expect(navigationGeneration()).toBeGreaterThan(generation);
     // The request still waits, and can be below the fold even with Geometry visible.
-    expect(host.querySelector('.attention-waiting')?.textContent).toContain('A solve is waiting for you');
+    expect(host.querySelector('.attention-waiting')?.textContent).toContain('A solve needs a change');
   });
 
   it('does not yank a user who navigated after the request arrived; the notice is their route', () => {
@@ -192,7 +193,7 @@ describe('F8: a blocked operation reaches the user in either mode', () => {
     activations.length = 0;
     arrive(waiting('op-fusion', { updatedAt: '2026-09-21T10:00:05Z' }));
     expect(activations).toEqual([]);
-    expect(host.querySelector('.attention-waiting')?.textContent).toContain('A solve is waiting for you');
+    expect(host.querySelector('.attention-waiting')?.textContent).toContain('A solve needs a change');
   });
 
   it('does not repeat a job gate or inherit a fresh arm after navigation when a child arrives', () => {

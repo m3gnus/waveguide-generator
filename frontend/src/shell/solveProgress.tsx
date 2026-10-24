@@ -51,6 +51,7 @@ export type SolveStageWord =
   | 'Cancelling…'
   | 'Waiting for you'
   | 'Ready to solve'
+  | 'Needs a change'
   | 'Not prepared'
   | 'Needs recovery'
   | 'Done'
@@ -72,8 +73,11 @@ const RUNNING_STAGE_WORDS: Record<string, SolveStageWord> = {
 export function solveStageWord(job: Pick<JobItem, 'status' | 'stage'> & Partial<Pick<JobItem, 'cad_state'>>): SolveStageWord {
   switch (job.status) {
     case 'complete': return 'Done';
-    // A prepared request asks nothing: Solve starts it.
-    case 'held': return job.cad_state?.attention === 'ready' ? 'Ready to solve' : 'Waiting for you';
+    // What a kept request asks (`operations.reason_attention`): only a real
+    // question waits for the user; a prepared one is ready; any other names
+    // something to change. A hold with no class predates them: a question.
+    case 'held': return job.cad_state?.attention === 'ready' ? 'Ready to solve'
+      : job.cad_state?.attention === 'action' ? 'Needs a change' : 'Waiting for you';
     case 'error': return 'Failed';
     case 'cancelled': return 'Cancelled';
     case 'preparing':
@@ -83,7 +87,7 @@ export function solveStageWord(job: Pick<JobItem, 'status' | 'stage'> & Partial<
 }
 
 export const MODEL_STATUS_TITLE = {
-  solved: 'Solved', running: 'Solving', preparing: 'Preparing', waiting: 'Waiting for you', ready: 'Ready to solve', refused: 'Solve refused',
+  solved: 'Solved', running: 'Solving', preparing: 'Preparing', waiting: 'Waiting for you', ready: 'Ready to solve', change: 'Needs a change', refused: 'Solve refused',
   failed: 'Solve failed', 'prepare-failed': 'Not prepared', 'never-solved': 'Not solved yet',
 };
 

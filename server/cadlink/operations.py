@@ -314,6 +314,24 @@ def user_hold(status: str, cad: Mapping[str, Any]) -> bool:
     }
 
 
+def hold_stage_message(code: Any, message: Any = "") -> str:
+    """The stage message of a kept request (:func:`user_hold`), from :func:`reason_attention`.
+
+    Only a real question waits for the user; a prepared request is ready; any
+    other hold names something to change, calmly, never as a refusal. A held
+    row with no stored reason predates reasons on holds and stays a question.
+    """
+
+    if not code:
+        return "Waiting for you"
+    attention = reason_attention(NEEDS_USER_INPUT, code, message)
+    if attention == ATTENTION_QUESTION:
+        return "Waiting for you"
+    if attention == ATTENTION_READY:
+        return "Ready to solve"
+    return "Needs a change"
+
+
 #: The triangle ceiling's next step; each surface adds the choice it offers.
 MESH_CEILING_NEXT_STEP = "Change the mesh resolution in Sources & Mesh… in Fusion, or check the model size."
 
@@ -641,6 +659,7 @@ __all__ = [
     "check_transition",
     "fusion_mutation_precheck",
     "hold_details",
+    "hold_stage_message",
     "internal_failure_message",
     "is_calm_failure",
     "normalize_request",

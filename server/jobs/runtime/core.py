@@ -32,8 +32,8 @@ from server.cadlink.interpretation.domain_decision import (
     decision_summary,
 )
 from server.cadlink.operations import (
-    REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED, NEEDS_USER_INPUT, hold_details,
-    is_calm_failure,
+    REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED, hold_details,
+    hold_stage_message, is_calm_failure, user_hold,
 )
 from server.cadlink.interpretation.solver_frame import REASON as FRAME_CONFIRMATION_REQUIRED
 from server.cadlink.intake.readings import record_frame_refusal
@@ -2311,9 +2311,12 @@ class JobRuntime:
                 )
                 record.update(stage_message=calm, error_message=calm)
                 record["task_metadata"]["cad"]["refusal"] = {**dict(refusal), "message": calm}
-            elif CAD_REASON_STATES.get(refusal["code"]) == NEEDS_USER_INPUT:
-                record.update(status="held", stage="held", stage_message="Waiting for you", error_message=None)
-                record["task_metadata"]["cad"]["hold"] = hold_details(str(refusal["code"]), str(refusal["message"] or ""))
+            elif user_hold("error", record["task_metadata"]["cad"]):
+                # The one classification says what is kept and what it asks.
+                code, words = str(refusal["code"]), str(refusal["message"] or "")
+                record.update(status="held", stage="held", stage_message=hold_stage_message(code, words),
+                              error_message=None)
+                record["task_metadata"]["cad"]["hold"] = hold_details(code, words)
         if cancelled:
             record.update(status="cancelled", stage="cancelled", stage_message="Solve cancelled",
                           cancellation_requested=True, completed_at=_now_iso())

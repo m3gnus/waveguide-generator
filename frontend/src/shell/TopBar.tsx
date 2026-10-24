@@ -291,8 +291,8 @@ export function AttentionNotices() {
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const requests = selectCadRequests({ jobs, notices, record: null });
   // Engine gates live in solve progress, including automatic warm-up waits,
-  // and a failed preparation is not a request waiting for the user.
-  // A prepared request is ready, not waiting: Results and its card offer Solve.
+  // and a failed preparation is not a request waiting for the user. A
+  // prepared request is ready, not waiting: Results and its card offer Solve.
   const waiting = [...requests.earlier, ...requests.current].filter(request => request.operation?.reason !== 'engine_unavailable'
     && request.operation?.attention !== 'ready'
     && !(request.source === 'job' && isFailedCadPreparation(request.job)));
@@ -308,7 +308,11 @@ export function AttentionNotices() {
     ? ''
     : waitingCount > 1
       ? `${waitingCount} CAD requests need you`
-      : first?.kind === 'prepare_and_solve' ? 'A solve is waiting for you' : 'A CAD update needs recovery';
+      : first?.kind !== 'prepare_and_solve' ? 'A CAD update needs recovery'
+      // The words follow the server's one classification: only a real
+      // question waits for the user; anything else names a change to make.
+      : first.attention === 'question' ? 'A solve is waiting for you'
+      : first.attention === 'action' ? 'A solve needs a change' : 'A solve is on hold';
   return <>
     {showWaiting && <button
       type="button"

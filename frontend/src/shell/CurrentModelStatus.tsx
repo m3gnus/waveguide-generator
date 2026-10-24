@@ -55,6 +55,17 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
     </Notice>
     {request}
   </div>;
+  // A kept request that names something to change (a frame changed
+  // elsewhere, an engine that cannot solve this return): calm, in its next
+  // step, never a red refusal. The engine gate keeps its own readiness view.
+  if (solveStatus && status.kind === 'waiting' && latestJob && !held && latestJob.cad_state?.attention === 'action') return <div className="current-model-status" data-model-status="change">
+    <Notice tone="info" title={MODEL_STATUS_TITLE.change} actions={actions
+      ? <button type="button" className="btn-primary" disabled={!control || control.disabled} title={control?.title ?? 'Solve is not available here.'} onClick={() => void control?.solve()}>Solve</button>
+      : undefined}>
+      {status.message}
+    </Notice>
+    {request}
+  </div>;
   // A failed preparation: WG's calm sentence and Try again where it can work.
   if (status.kind === 'prepare-failed' && latestJob) {
     const retry = latestJob.cad_state?.options?.find(option => option.id === 'retry');
