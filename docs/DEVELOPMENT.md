@@ -195,6 +195,45 @@ Hosted CI runs Linux and Windows on every push to `dev` (a diagnostic after land
 not a landing gate), and the full three-platform matrix when dispatched or called by
 a release workflow. Pushes to other branches and pull requests run nothing.
 
+### Replaying CAD inbox failures
+
+Use the developer-only replay tool to reproduce a WGLink return without starting
+WG or changing its live state:
+
+```bash
+python -m server.tools.cad_replay speaker.wgreturn --json
+python -m server.tools.cad_replay speaker.wgreturn --data-dir ./replay-scratch
+python -m server.tools.cad_replay --from-request REQUEST_ID --live-data-dir LIVE_DATA --json
+python -m server.tools.cad_replay speaker.wgreturn --solve --engine beat-cpu
+```
+
+The tool calls the inbox's `prepare_job_sync` and `ingest_bundle`, including the
+bounded automatic-frame retry, default setup, validation, symmetry/cut recovery,
+solver mesh and submission gates. It reports nested stages with outcomes and
+elapsed seconds, full frame inference evidence (votes, visibility and vetoes),
+domain decisions, findings, internal refusal codes/messages and exception
+tracebacks, including available isolated-worker diagnostics. JSON is a single
+report on stdout; pipeline output goes to stderr. Exit 0 means preparation (and
+solve, if requested) succeeded; refusal or exception exits 1; invalid CLI usage
+exits 2. These internal diagnostics belong in developer reports, not user UI.
+
+By default it retains a new temporary scratch directory and prints its location.
+`--data-dir` must be new or empty. It refuses overlaps with WG's development or
+installed data directories, the configured `WG2_DATA_DIR`, the source bundle,
+and `--live-data-dir`, including symlink aliases. It never takes its destination
+from `WG2_DATA_DIR`. Request lookup reads the `cad_operations` row by inbox request
+ID and locates its retained bundle by manifest hash. It queries a private copy of
+the live database and WAL, so even SQLite shared-memory files in the live directory
+are untouched. A missing retained bundle or a database changing during the copy
+is an explicit failure. Replay uses fresh WG defaults and scratch project memory;
+it does not copy live setup revisions, confirmations, approvals or export history.
+Linked returns may therefore stop at findings requiring their original registry.
+
+`--solve` requires an explicit `--engine` and uses the real job runtime, retaining
+its job log and results in scratch. Apply the usual compute-broker policy to
+solves and corpus replays. Running the tool in a separate process keeps its
+scoped diagnostic taps out of the running application.
+
 ### Running targeted tests
 
 Run a subset with the launcher, not with a hand-built `pytest` line:
