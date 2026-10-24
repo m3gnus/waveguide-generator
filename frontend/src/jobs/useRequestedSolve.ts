@@ -13,6 +13,9 @@ import { useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/so
 import { useMeshImportStore, fileMeshSetup } from '../stores/meshImport';
 import { subscribeSolveSettingsEdits } from '../stores/solveSettingsEdits';
 import { buildImportedSubmission } from './importedSubmission';
+import type { EngineCapability } from './actions';
+
+const PREPARATION_FAILED = 'Prepare and solve was cancelled because engine preparation failed.';
 
 export interface ModelSolveContinuation {
   model: CurrentModel;
@@ -31,6 +34,7 @@ export type RequestedSolve = ModelSolveContinuation & {
   queued: boolean;
   waiting: boolean;
   preparing: boolean;
+  preparationRequested?: boolean;
   continuing: boolean;
 };
 
@@ -77,9 +81,20 @@ export function solveStillCurrent(request: ModelSolveContinuation): boolean {
   return !request.signal.aborted && solveCancellationReason(request) === null;
 }
 
+interface SolveReadiness {
+  enabled: boolean;
+  pending: boolean;
+  blocked: boolean;
+  warmingEngine: string | null;
+  error: string | null;
+  heldJobId?: string;
+  engines: readonly EngineCapability[];
+  resume: (token: RequestedSolve) => Promise<unknown>;
+}
+
 /** One owner from the press (or held Fusion intention) through the POST. */
 export function useRequestedSolve(refresh: () => void | Promise<void>, reportNotice: (message: string | null) => void,
-  releaseAttention: () => void) {
+  releaseAttention: () => void, readiness: SolveReadiness) {
   const [request, setRequest] = useState<RequestedSolve | null>(null);
   const current = useRef<RequestedSolve | null>(null);
   const report = useRef(reportNotice);
@@ -101,7 +116,14 @@ export function useRequestedSolve(refresh: () => void | Promise<void>, reportNot
     setRequest({ ...token });
   }, []);
   const begin = useCallback((jobId?: string) => {
-    if (current.current) return current.current;
+    const previous = current.current;
+    if (previous) {
+      // A saved Fusion request supersedes an ordinary wait. Its saved setup
+      // must be continued by job ID, never rebuilt as a browser submission.
+      // Once continuation has started, it owns the submission through the POST.
+      if (!jobId || previous.jobId || previous.continuing || previous.submitted) return previous;
+      cancel();
+    }
     const controller = new AbortController();
     const token: RequestedSolve = { ...captureSolveInputs(), jobId, controller, signal: controller.signal,
       queued: false, waiting: false, preparing: false, continuing: false };
@@ -109,8 +131,20 @@ export function useRequestedSolve(refresh: () => void | Promise<void>, reportNot
     setRequest({ ...token });
     report.current(null);
     return token;
-  }, []);
+  }, [cancel]);
   const finish = useCallback((token: RequestedSolve) => { if (current.current === token) cancel(); }, [cancel]);
+  const prepare = useCallback(async (token: RequestedSolve, engine: string, action: () => Promise<boolean>) => {
+    if (current.current !== token || token.preparing || token.continuing) return;
+    update(token, { queued: !token.jobId, waiting: true, preparing: true, preparationRequested: true, preparationEngine: engine });
+    let success = false;
+    try { success = await action(); }
+    finally {
+      if (current.current === token) {
+        if (!success) cancel(PREPARATION_FAILED);
+        else update(token, { preparing: false });
+      }
+    }
+  }, [cancel, update]);
   const beforePost = useCallback((token: ModelSolveContinuation | null): boolean => {
     if (!token) return true;
     if (!solveStillCurrent(token)) return false;
@@ -144,6 +178,47 @@ export function useRequestedSolve(refresh: () => void | Promise<void>, reportNot
       current.current = null;
     };
   }, [cancel]);
+  useEffect(() => {
+    const token = current.current;
+    if (!token || token.submitted || token.preparing) return;
+    const engine = readiness.engines.find(engine => engine.name === token.preparationEngine);
+    // Failure must also cancel a continuation awaiting preflight/frame reads.
+    if (token.waiting && (engine?.runtime_state === 'failed' || engine?.runtime_state === 'unavailable')) {
+      cancel(PREPARATION_FAILED);
+      return;
+    }
+    if (token.continuing) return;
+    if (token.jobId) {
+      if (!token.waiting) return;
+      if (!engine?.available || engine.runtime_state !== 'ready') return;
+      update(token, { continuing: true });
+      void readiness.resume(token).catch(() => undefined).finally(() => finish(token));
+      return;
+    }
+    // Let the Fusion adapter install its saved request before resuming an
+    // ordinary wait, even if readiness and the job arrive in the same render.
+    if (!token.queued || readiness.heldJobId) return;
+    if (!readiness.enabled) {
+      cancel();
+      if (readiness.error) report.current(readiness.error);
+      return;
+    }
+    if (readiness.warmingEngine) {
+      if (!token.waiting || token.preparationEngine !== readiness.warmingEngine) {
+        update(token, { waiting: true, preparationEngine: readiness.warmingEngine });
+      }
+      return;
+    }
+    if (readiness.pending) return;
+    if (readiness.blocked) {
+      // Preparation can finish before the refreshed plan arrives. Retain that
+      // wait through a cached unprepared verdict; failure above ends it.
+      if (!token.preparationRequested) update(token, { queued: false, waiting: false });
+      return;
+    }
+    // The ordinary command claims `continuing` synchronously before awaiting.
+    void readiness.resume(token);
+  }, [request, readiness, cancel, update, finish]);
   const observing = !!request && !request.submitted && (request.queued || request.waiting);
   useEffect(() => {
     if (!observing) return;
@@ -158,6 +233,6 @@ export function useRequestedSolve(refresh: () => void | Promise<void>, reportNot
     const timer = setInterval(() => { void observe(); }, 1000);
     return () => clearInterval(timer);
   }, [observing, refresh]);
-  return { request, current, begin, update, cancel, finish, beforePost };
+  return { request, current, begin, update, cancel, finish, prepare, beforePost };
 }
 export type RequestedSolveOwner = ReturnType<typeof useRequestedSolve>;

@@ -426,7 +426,24 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     }
   }, []);
 
-  const requested = useRequestedSolve(refreshCapabilities, setActionError, solveAttention.releaseSolve);
+  const solveAvailable = cadGeometryActive || fileGeometryActive
+    ? importedEngine !== null
+    : solvePlan !== null && !solvePlanPending && solvePlanError === null;
+  const planPending = cadGeometryActive || fileGeometryActive ? importedPlan.isPending : solvePlanPending;
+  const planError = cadGeometryActive || fileGeometryActive ? importedPlan.error ?? (importedPlan.plan && !importedPlan.plan.engine ? importedPlan.plan.reason : null) : solvePlanError;
+  // A press during the debounce or request belongs to the current inputs,
+  // never the previous plan. Repeated presses retain just one intent.
+  const serverReadiness = cadGeometryActive || fileGeometryActive ? importedPlan.plan?.readiness : parametricReadiness;
+  const engineBlocked = !!serverReadiness?.engine;
+  const warming = engineBlocked && serverReadiness?.remedies?.some(remedy => remedy.kind === 'wait');
+  const solveEnabled = (solveAvailable || planPending || engineBlocked) && (fileGeometryActive || !solveOptionsError)
+    && (!planError || engineBlocked || planPending) && !submitting && !solveBlocker;
+  const requested = useRequestedSolve(refreshCapabilities, setActionError, solveAttention.releaseSolve, {
+    enabled: solveEnabled, pending: planPending, blocked: engineBlocked,
+    warmingEngine: warming ? serverReadiness?.engine ?? selectedEngine : null,
+    error: planError, heldJobId: heldEngineSolveJob()?.id, engines,
+    resume: token => token.jobId ? continueRun(token.jobId, { held: token as HeldSolveContinuation }) : solve(),
+  });
   const { beforePost } = requested;
 
   const run = useCallback(async (nextDesign: DesignDocument, nextRevision = revision, continuation: ModelSolveContinuation | null = null) => {
@@ -634,24 +651,12 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const parametricUnavailable = solveOptionsError
     ?? solvePlanError
     ?? (solvePlanPending ? 'Planning solve for the current design…' : 'Solve plan is unavailable');
-  const solveAvailable = cadGeometryActive || fileGeometryActive
-    ? importedEngine !== null
-    : solvePlan !== null && !solvePlanPending && solvePlanError === null;
-  const planPending = cadGeometryActive || fileGeometryActive ? importedPlan.isPending : solvePlanPending;
-  const planError = cadGeometryActive || fileGeometryActive ? importedPlan.error ?? (importedPlan.plan && !importedPlan.plan.engine ? importedPlan.plan.reason : null) : solvePlanError;
-  // A press during the debounce or request belongs to the current inputs,
-  // never the previous plan. Repeated presses retain just one intent.
-  const serverReadiness = cadGeometryActive || fileGeometryActive ? importedPlan.plan?.readiness : parametricReadiness;
-  const engineBlocked = !!serverReadiness?.engine;
-  const warming = engineBlocked && serverReadiness?.remedies?.some(remedy => remedy.kind === 'wait');
   const requestCurrent = requested.request !== null;
   const pendingSolve = requested.request?.queued && !requested.request.jobId;
   const stopWaiting = useCallback(() => {
     requested.cancel();
     solveAttention.releaseSolve();
   }, [requested.cancel]);
-  const solveEnabled = (solveAvailable || planPending || engineBlocked) && (fileGeometryActive || !solveOptionsError)
-    && (!planError || engineBlocked || planPending) && !submitting && !solveBlocker;
   const solve = useCallback(async () => {
     // The button, the shortcut and the palette all arrive here: one command.
     if (submissionInFlight.current) return 'busy' as const;
@@ -717,19 +722,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     }
   }, [requested.begin, requested.update, requested.finish, serverReadiness, selectedEngine, engineBlocked, warming, cadGeometryActive, fileGeometryActive, planPending, reportError, run, solveCurrentCadImport, solveEnabled, solveFileModel]);
   useEffect(() => {
-    const token = requested.current.current;
-    if (!pendingSolve || !token || token.jobId) return;
-    if (!solveEnabled) {
-      requested.cancel();
-      if (planError) reportError(planError);
-      return;
-    }
-    if (warming) requested.update(token, { waiting: true, preparationEngine: serverReadiness?.engine ?? selectedEngine });
-    if (planPending || warming || token.preparing) return;
-    if (engineBlocked) { requested.update(token, { queued: false, waiting: false }); return; }
-    void solve();
-  }, [pendingSolve, warming, engineBlocked, planError, planPending, reportError, solve, solveEnabled]);
-  useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && solveEnabled) {
         event.preventDefault();
@@ -748,16 +740,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     : !planPending && warming && (heldReadiness?.engine ?? heldJob?.solve_options?.engine) === serverReadiness?.engine
       ? serverReadiness?.engine ?? null : null;
   const heldPreparation = useHeldSolvePreparation(requested, model, engines, preparation.prepare,
-    useCallback((held: HeldSolveContinuation) => continueRun(held.jobId, { held }), [continueRun]), setActionError, heldWarmingEngine);
+    setActionError, heldWarmingEngine);
   const prepareAndSolve = async (engine: string) => {
     if (heldEngineSolveJob()) {
       await heldPreparation.prepareAndSolve(engine);
       return;
     }
-    const token = requested.begin();
-    requested.update(token, { queued: true, waiting: true, preparing: true, preparationEngine: engine });
-    try { if (!await preparation.prepare(engine)) requested.finish(token); }
-    finally { requested.update(token, { preparing: false }); }
+    await requested.prepare(requested.begin(), engine, () => preparation.prepare(engine));
   };
   const readiness = solveBlocker || solveOptionsError
     ? messageBlocker(solveBlocker || solveOptionsError!)

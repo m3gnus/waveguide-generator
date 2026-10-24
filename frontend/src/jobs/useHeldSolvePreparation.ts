@@ -3,7 +3,7 @@ import { currentModel, currentModelStatus, type CurrentModel } from '../model/cu
 import { jobsSocket } from '../api/jobsSocket';
 import { dismissCadJob } from './cadSolve';
 import type { EngineCapability } from './actions';
-import { captureSolveInputs, type HeldSolveContinuation, type RequestedSolveOwner } from './useRequestedSolve';
+import { captureSolveInputs, type RequestedSolveOwner } from './useRequestedSolve';
 
 /** The current Fusion request held by the selected engine gate. */
 export function heldEngineSolveJob() {
@@ -12,40 +12,22 @@ export function heldEngineSolveJob() {
     && status.job.cad_state.reason === 'engine_unavailable' ? status.job : null;
 }
 
-const PREPARATION_FAILED = 'Prepare and solve was cancelled because engine preparation failed.';
-
 /** Fusion adapts its saved request to the same owner as an ordinary Solve. */
 export function useHeldSolvePreparation(owner: RequestedSolveOwner, model: CurrentModel, engines: readonly EngineCapability[],
-  prepare: (engine: string) => Promise<boolean>, continueRun: (request: HeldSolveContinuation) => Promise<unknown>,
+  prepare: (engine: string) => Promise<boolean>,
   reportNotice: (message: string | null) => void, warmingEngine: string | null = null) {
   const autoStarted = useRef(new Set<string>());
-  const held = owner.request?.jobId ? owner.request : null;
-  useEffect(() => {
-    const token = owner.current.current;
-    if (!held || !token?.jobId || token.preparing) return;
-    const engine = engines.find(engine => engine.name === held.preparationEngine);
-    if (engine?.available && engine.runtime_state === 'ready') {
-      if (token.continuing) return;
-      owner.update(token, { continuing: true });
-      void continueRun(token as HeldSolveContinuation).catch(() => undefined).finally(() => owner.finish(token));
-    } else if (engine?.runtime_state === 'failed' || engine?.runtime_state === 'unavailable') owner.cancel(PREPARATION_FAILED);
-  }, [held, engines, continueRun, owner.update, owner.finish, owner.cancel]);
   const prepareAndSolve = async (engine: string, alreadyWarming = false) => {
-    if (owner.current.current?.waiting || owner.current.current?.continuing) return;
+    const existing = owner.current.current;
+    if (existing?.continuing || existing?.submitted) return;
     const model = currentModel();
     const job = heldEngineSolveJob();
     if (!model.key || !model.viewportShowing || !job) return;
+    if (existing?.jobId === job.id && existing.waiting) return;
     const token = owner.begin(job.id);
     autoStarted.current.add(`${job.id}:${engine}`);
-    owner.update(token, { waiting: true, preparing: true, preparationEngine: engine });
-    let success = false;
-    try { success = alreadyWarming || engines.some(item => item.name === engine && item.runtime_state === 'preparing') || await prepare(engine); }
-    finally {
-      if (owner.current.current === token) {
-        if (!success) owner.cancel(PREPARATION_FAILED);
-        else owner.update(token, { preparing: false });
-      }
-    }
+    await owner.prepare(token, engine, async () => alreadyWarming
+      || engines.some(item => item.name === engine && item.runtime_state === 'preparing') || await prepare(engine));
   };
   const jobId = heldEngineSolveJob()?.id;
   useEffect(() => {

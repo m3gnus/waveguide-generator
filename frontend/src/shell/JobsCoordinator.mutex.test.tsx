@@ -610,6 +610,151 @@ describe('solve invocation mutex', () => {
     expect(mocks.refreshCapabilities).not.toHaveBeenCalled();
   });
 
+  it.each(['parametric', 'cad'] as const)('regression: %s Prepare and solve resumes when the plan becomes ready before preparation finishes', async mode => {
+    vi.useFakeTimers();
+    const preparation = deferred<Response>();
+    vi.stubGlobal('fetch', vi.fn(async () => preparation.promise));
+    act(() => {
+      if (mode === 'cad') blockedCad();
+      else { mocks.solvePlan = null; mocks.solveReadiness = blocker; }
+      mocks.capabilities.engines = [{ name: 'beat-metal', available: false, runtime_state: 'failed' } as EngineCapability];
+    });
+    const render = () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    await act(async () => render());
+    let preparing!: Promise<void>;
+    await act(async () => { preparing = solveControlStore.getSnapshot()!.prepareAndSolve('beat-metal'); });
+    expect(solveControlStore.getSnapshot()!.waitingForEngine).toBe(true); // retry tolerates the cached failure
+    mocks.capabilities.engines = [{ name: 'beat-metal', available: true, runtime_state: 'ready' } as EngineCapability];
+    mocks.solvePlan = { engine: 'beat-metal', formulation: 'full-3d', reason: 'ready', eligibility_reasons: [] };
+    mocks.solveReadiness = null;
+    mocks.importedPlan.plan = { ...mocks.importedPlan.plan, engine: 'beat-metal', readiness: null };
+    await act(async () => render());
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
+    expect(mocks.solveModel).not.toHaveBeenCalled();
+    await act(async () => { preparation.resolve(json({}, 202)); await preparing; });
+    expect(mode === 'cad' ? mocks.solveModel : mocks.submitDesign).toHaveBeenCalledOnce();
+    expect(solveControlStore.getSnapshot()!.waitingForEngine).toBe(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3100); });
+    expect(mode === 'cad' ? mocks.solveModel : mocks.submitDesign).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])('regression: a warming Fusion request supersedes a blocked ordinary Solve with its saved setup (ready on arrival: %s)', async readyOnArrival => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn<typeof fetch>(async () => json({ job_id: 'fusion-child' }));
+    vi.stubGlobal('fetch', fetcher);
+    act(() => {
+      blockedCad();
+      if (readyOnArrival) mocks.importedPlan.plan.readiness = { ...blocker, remedies: [{ kind: 'wait' }] };
+      useImportedSolveOptionsStore.setState({ engine: 'beat-metal' });
+      mocks.capabilities.engines = [{ name: 'beat-metal', available: false, runtime_state: 'preparing' } as EngineCapability];
+    });
+    const render = () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    await act(async () => render());
+    await act(async () => { expect(await solveControlStore.getSnapshot()!.solve()).toBe(readyOnArrival ? 'pending' : 'blocked'); });
+    expect(solveControlStore.getSnapshot()!.readinessRequested).toBe(true);
+    act(() => {
+      blockedCad(true);
+      const parent = jobsSocket.getSnapshot().jobs[0];
+      publishJobs([{ ...parent, cad_state: { ...parent.cad_state!, blocker: { ...blocker, remedies: [{ kind: 'wait' }] } } }]);
+      mocks.importedPlan.plan.readiness = { ...blocker, remedies: [{ kind: 'wait' }] };
+      if (readyOnArrival) {
+        mocks.capabilities.engines = [{ name: 'beat-metal', available: true, runtime_state: 'ready' } as EngineCapability];
+        mocks.importedPlan.plan = { ...mocks.importedPlan.plan, engine: 'beat-metal', readiness: null };
+      }
+    });
+    await act(async () => render());
+    expect(solveControlStore.getSnapshot()!.waitingForEngine).toBe(!readyOnArrival);
+    mocks.capabilities.engines = [{ name: 'beat-metal', available: true, runtime_state: 'ready' } as EngineCapability];
+    mocks.importedPlan.plan = { ...mocks.importedPlan.plan, engine: 'beat-metal', readiness: null };
+    await act(async () => render());
+    await act(async () => { await vi.advanceTimersByTimeAsync(3100); });
+    const posts = fetcher.mock.calls.filter(([, init]) => init?.method === 'POST');
+    // No browser setup or engine overrides: solve-again replays the Fusion job.
+    expect(posts).toEqual([['/api/jobs/job%3Aheld-fusion/solve-again', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }]]);
+    expect(mocks.solveModel).not.toHaveBeenCalled();
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
+    expect(solveControlStore.getSnapshot()!.waitingForEngine).toBe(false);
+  });
+
+  // Exercise the real owner/adapter as a small event machine. Fusion arrives
+  // before the ordinary request can submit; Stop/engine edits cancel that intent.
+  const eventOrders = [
+    ['Fusion', 'plan ready', 'preparation done'],
+    ['Fusion', 'preparation done', 'plan ready'],
+    ['plan ready', 'Fusion', 'preparation done'],
+    ['preparation done', 'Fusion', 'plan ready'],
+    ['plan ready', 'preparation done'],
+    ['preparation done', 'plan ready'],
+  ];
+  const eventCases = eventOrders.flatMap(events => ['submit', 'engine change', 'Stop'].map(outcome => ({
+    events: outcome === 'submit' ? events : [...events.slice(0, -1), outcome, events.at(-1)!],
+    outcome,
+  })));
+  it.each(eventCases)('requested-solve event machine: press → $events ($outcome)', async ({ events, outcome }) => {
+    vi.useFakeTimers();
+    const preparation = deferred<Response>();
+    const posts: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url).endsWith('/prepare')) return preparation.promise;
+      if (init?.method === 'POST') posts.push(String(url));
+      return json({ job_id: 'fusion-child' });
+    }));
+    act(() => {
+      blockedCad();
+      useImportedSolveOptionsStore.setState({ engine: 'beat-metal' });
+      mocks.capabilities.engines = [{ name: 'beat-metal', available: false, runtime_state: 'preparing' } as EngineCapability];
+    });
+    const render = () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    await act(async () => render());
+    let preparing!: Promise<void>;
+    await act(async () => { preparing = solveControlStore.getSnapshot()!.prepareAndSolve('beat-metal'); });
+    let planReady = false;
+    let preparationDone = false;
+    let fusion = false;
+    let cancelled = false;
+    for (const event of events) {
+      await act(async () => {
+        if (event === 'Fusion') {
+          fusion = true;
+          const parent = cadJobFixture(operation('machine-fusion', 'needs_user_input', {
+            reason: 'engine_unavailable', setupRevisionId: 'fusion-saved-setup',
+          }), { solve_options: { engine: 'beat-metal' } as JobItem['solve_options'] });
+          publishJobs([{ ...parent, cad_state: { ...parent.cad_state!, blocker: { ...blocker, remedies: [{ kind: 'wait' }] } } }]);
+        }
+        if (event === 'plan ready') {
+          planReady = true;
+          mocks.importedPlan.plan = { ...mocks.importedPlan.plan, engine: 'beat-metal', readiness: null };
+        }
+        if (event === 'preparation done') {
+          preparationDone = true;
+          preparation.resolve(json({}, 202));
+          await preparing;
+        }
+        // Engine readiness follows both gates, so every order exercises a wait.
+        if (planReady && preparationDone) mocks.capabilities.engines = [
+          { name: 'beat-metal', available: true, runtime_state: 'ready' } as EngineCapability];
+        if (event === 'engine change') {
+          cancelled = true;
+          useImportedSolveOptionsStore.getState().setEngine('metal');
+          useImportedSolveOptionsStore.getState().setEngine('beat-metal'); // undo cannot resurrect the intent
+        }
+        if (event === 'Stop') { cancelled = true; solveControlStore.getSnapshot()!.stopWaiting(); }
+        render();
+      });
+      const submissions = posts.filter(url => url.endsWith('/solve-again')).length + mocks.solveModel.mock.calls.length;
+      expect(submissions).toBe(!cancelled && planReady && preparationDone ? 1 : 0);
+    }
+    await act(async () => { await vi.advanceTimersByTimeAsync(3100); render(); });
+    expect(posts.filter(url => url.endsWith('/solve-again'))).toEqual(outcome === 'submit' && fusion
+      ? ['/api/jobs/job%3Amachine-fusion/solve-again'] : []);
+    expect(mocks.solveModel).toHaveBeenCalledTimes(outcome === 'submit' && !fusion ? 1 : 0);
+    if (outcome === 'submit' && !fusion) expect(mocks.solveModel).toHaveBeenCalledWith('wgl_readiness',
+      expect.objectContaining({ prepared_id: 'wgi_readiness', setup: expect.objectContaining({ options: expect.objectContaining({ engine: 'beat-metal' }) }) }));
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
+    expect(solveControlStore.getSnapshot()!.waitingForEngine).toBe(false);
+    expect(solveControlStore.getSnapshot()!.readinessRequested).toBe(false);
+  });
+
   it.each(['model', 'engine', 'setup', 'mode', 'stop', 'unmount'] as const)(
     'a Solve pressed before the plan arrives cannot migrate after %s changes', async change => {
       mocks.solvePlan = null; mocks.solvePlanPending = true;
