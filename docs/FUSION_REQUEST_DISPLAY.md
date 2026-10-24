@@ -19,14 +19,20 @@ A skipped/failed open stays pending, with one developer diagnostic per request
 through the existing client-log endpoint. Jobs updates retry transient read
 failures. Returning to CAD or explicitly returning to Results rearms navigation
 only; it never rearms an obsolete document, model choice or settings snapshot.
-Held requests remain eligible across restart; old completed jobs remain history.
+Only a request that arrives or changes in this session (or within the
+recent-completion startup window) takes over the screen; an older held request
+is reached through the request list and the toolbar chip, never at start. The
+held-request pop-up follows the same rule, and "Later" is remembered per
+request.
 
 `JobsCoordinator` adopts prepared models only for WG-initiated solves. Folder
 arrival discovery defers to Fusion Solve for job-owned bundles and cannot
 re-ingest those bundles after completion. Historical bundles remain eligible for
-initial selection. Inbox-capable add-ins send through receipts/jobs; automatic
-folder ingestion is used only when the observed add-in explicitly reports the
-legacy folder-transfer capability.
+initial selection, which is never meshed again in the background: it stays
+selected and not prepared until the user prepares it. Inbox-capable add-ins send
+through receipts/jobs; folder arrivals open by themselves unless the observed
+add-in reports inbox transfer, so an older add-in, or one that has not reported
+(coordination off), keeps opening them.
 
 ## 0.3.7 follow-up
 

@@ -263,7 +263,7 @@ it('reports an unavailable prepared record without solving again or inventing a 
   const f = fixture(vi.fn(async () => json({ detail: 'missing' }, 404)));
   await f.observe([external()]);
   expect(f.display.showIngestedMesh).not.toHaveBeenCalled();
-  expect(f.display.reportStatus).toHaveBeenLastCalledWith(expect.stringContaining('will retry'));
+  expect(f.display.reportStatus).toHaveBeenLastCalledWith(expect.stringContaining('when you return to CAD or Results'));
   expect(f.display.reportDiagnostic).toHaveBeenCalledWith('fusion', 'open-failed', expect.any(Error));
   expect(cadSolveClaim(external())?.modelDisplayAcknowledged).not.toBe(true);
 });
@@ -288,11 +288,18 @@ it('follows an approved external continuation whose parent has only an empty Fus
   expect(compareSelection.getSnapshot().awaiting).toBe(child.id);
 });
 
-it('shows an old held request after restart while completed history remains gated', async () => {
+it('leaves an earlier held request to the request list at start, and shows one held in this session', async () => {
   const request = preparing();
-  request.status = 'error'; request.created_at = new Date(NOW - 3_600_000).toISOString();
-  request.cad_state = { ...request.cad_state!, state: 'needs_user_input' };
+  request.status = 'held'; request.created_at = new Date(NOW - 3_600_000).toISOString();
+  request.completed_at = new Date(NOW - 3_000_000).toISOString();
+  request.cad_state = { ...request.cad_state!, state: 'needs_user_input', held: true };
+  const mode = workspaceModeStore.getSnapshot().mode;
   const f = fixture(); await f.observe([request]);
+  expect(f.display.showIngestedMesh).not.toHaveBeenCalled();
+  expect(useCadReturnStore.getState().selectedBundle?.requestId).not.toBe(request.id);
+  expect(workspaceModeStore.getSnapshot().mode).toBe(mode);
+  // The same request held again just now (a continuation answered elsewhere, or a newer hold) is shown.
+  await f.observe([{ ...request, completed_at: new Date(NOW).toISOString() }]);
   expect(f.display.showIngestedMesh).toHaveBeenCalledOnce();
 });
 

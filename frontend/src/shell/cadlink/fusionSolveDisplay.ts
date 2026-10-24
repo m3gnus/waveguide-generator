@@ -27,7 +27,7 @@ export function reportFusionDisplayDiagnostic(jobId: string, reason: string, err
 }
 
 type Intent = { navigation: number; edits: number; choice: number; document: ReturnType<typeof currentDocumentLoad> };
-const DISPLAY_FAILURE = 'WG could not show the Fusion model. It will retry when CAD Link reconnects.';
+const DISPLAY_FAILURE = 'WG could not show the Fusion model. It tries again when the request updates or when you return to CAD or Results.';
 
 /** Fusion Solve alone owns its request's model, from preparation through results.
  * A successful open is handled; a guard or failed read leaves it retryable.
@@ -47,10 +47,13 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
   let disposed = false;
   let edits = 0;
   let opening: { current(): boolean; generation: number } | null = null;
-  const eligible = (job: JobItem) => {
-    const sentAt = Date.parse(job.created_at);
-    return Number.isFinite(sentAt) && (isActiveJobStatus(job.status) || job.cad_state?.state === 'needs_user_input' || sentAt >= since);
-  };
+  // The last time the request arrived or changed (a hold or a failure ends it).
+  const changedAt = (job: JobItem) => Math.max(Date.parse(job.created_at), Date.parse(job.completed_at ?? '') || -Infinity);
+  // Only a request that arrives or changes in this session (or within the
+  // restart window) takes over the screen. An older held request is reached
+  // through the request list, never by taking over at start.
+  const eligible = (job: JobItem) => Number.isFinite(Date.parse(job.created_at))
+    && (isActiveJobStatus(job.status) || changedAt(job) >= since);
   const diagnostic = (jobId: string, reason: string, error?: unknown) => {
     const key = `${jobId}:${reason === 'open-failed' ? 'failure' : 'skip'}`;
     if (reported.has(key)) return;
