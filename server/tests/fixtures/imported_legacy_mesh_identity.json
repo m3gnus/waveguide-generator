@@ -1,6 +1,7 @@
 {
   "base_commit": "9334aa1657ddde9af7d06128fc51ce037f1d384e",
   "environment": "Python 3.13.1 / gmsh 4.15.2 / hornlab-waveguide-mesher 0.2.7",
+  "platform": "Darwin-arm64",
   "cases": [
     {
       "name": "automatic-capped-half",

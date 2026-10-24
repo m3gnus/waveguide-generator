@@ -1,7 +1,8 @@
 {
   "reference": {
     "waveguide_generator": "47ce742d1178369ffcfa416af09232899163a9cb",
-    "mesher": "1702cfd5c3bf23060b864af824023710936d7861"
+    "mesher": "1702cfd5c3bf23060b864af824023710936d7861",
+    "platform": "Darwin-arm64"
   },
   "cases": [
     {

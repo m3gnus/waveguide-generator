@@ -9,10 +9,12 @@ import sys
 import pytest
 
 from server.tests import freeform_oldconfig_support as support
+from server.tests._frozen_bytes import off_frozen_platform
 from server.design.textcfg import parse, serialize
 from server.tests.freeform_oldconfig_support import (
     CASES,
     DATA,
+    MANIFEST,
     canonical,
     config_snapshot,
     load_case,
@@ -74,15 +76,27 @@ def test_resolved_config_and_no_silent_migration(case, stamped_corpus):
     ],
 )
 def test_solve_mesh_bytes(case, stamped_corpus):
+    frozen = expected(case, "mesh")
     actual = asyncio.run(observe_artifact(case, "mesh"))
-    assert actual == expected(case, "mesh"), f"{case['name']}: mesh differs: {actual}"
+    # Refusals are platform-independent; produced bytes are not.
+    elsewhere = None if "error" in frozen else off_frozen_platform(MANIFEST["reference"]["platform"])
+    if elsewhere:
+        assert "error" not in actual, f"{case['name']}: mesh is now refused: {actual}"
+        pytest.skip(elsewhere)
+    assert actual == frozen, f"{case['name']}: mesh differs: {actual}"
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case["name"])
 def test_step_bytes(case, stamped_corpus):
+    frozen = expected(case, "step")
     actual = asyncio.run(observe_artifact(case, "step"))
-    assert actual == expected(case, "step"), f"{case['name']}: STEP differs: {actual}"
+    # Refusals are platform-independent; produced bytes are not.
+    elsewhere = None if "error" in frozen else off_frozen_platform(MANIFEST["reference"]["platform"])
+    if elsewhere:
+        assert "error" not in actual, f"{case['name']}: STEP is now refused: {actual}"
+        pytest.skip(elsewhere)
+    assert actual == frozen, f"{case['name']}: STEP differs: {actual}"
 
 
 def test_step_normalization_keeps_geometry_version_and_product_suffixes():

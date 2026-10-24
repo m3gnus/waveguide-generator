@@ -15,6 +15,7 @@ import pytest
 
 from server.mesh.gmsh_worker import _run_in_gmsh_session
 from server.mesh.imported import ImportedMeshError, RoleResolutionError, build_imported_mesh
+from server.tests._frozen_bytes import off_frozen_platform
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -251,32 +252,52 @@ IDENTITY = json.loads((FIXTURES / "imported_legacy_mesh_identity.json").read_tex
 @pytest.mark.parametrize("group_option", [{}, {"surface_groups": None}, {"surface_groups": []}],
                          ids=["absent", "none", "empty"])
 def test_legacy_mesh_bytes_equal_base_commit(case, group_option, tmp_path, monkeypatch):
-    if case.get("geometry", case["name"]) == "coupled-box":
-        from server.tests.test_fem_coupling import SIZES, _coupled, _coupling_bundle
-
-        monkeypatch.setenv("WG2_FEM_REGIONS", "1")
-        assert case["sizes"] == SIZES
-        bundle, manifest, region = _coupling_bundle(tmp_path / "returns")
-        built = _coupled(bundle, manifest, region, options={**case["options"], **group_option})
-        assert hashlib.sha256(built["exterior"]["msh_text"].encode()).hexdigest() == case["msh_sha256"]
-        assert built["exterior"]["stats"]["triangles"] == case["triangles"]
-        assert {key: hashlib.sha256(value["msh_text"].encode()).hexdigest()
-                for key, value in built["regions"].items()} == case["region_msh_sha256"]
-        return
     geometry = case.get("geometry", case["name"])
-    if geometry in {"synthetic-f1", "synthetic-f2"}:
-        path = tmp_path / "assembly.step"
-        manifest, _ = _synthetic_return(path, quarter=geometry == "synthetic-f2")
-    else:
-        bundle = FIXTURES / "cadlink-endpoint-oracle" / (case["name"] + ".wgreturn")
-        path = bundle / "assembly.step"
-        manifest = json.loads((bundle / "wgreturn.json").read_text())
-    options = deepcopy(case["options"])
-    if "rigid_face_sizes_mm" in options:
-        options["rigid_face_sizes_mm"] = {int(key): value for key, value in options["rigid_face_sizes_mm"].items()}
-    result = _build(path, manifest, case["sizes"], **options, **group_option)
-    assert hashlib.sha256(result["msh_text"].encode()).hexdigest() == case["msh_sha256"]
-    assert result["stats"]["triangle_count"] == case["triangles"]
+
+    def sha(text):
+        return hashlib.sha256(text.encode()).hexdigest()
+
+    def observe(option, root):
+        if geometry == "coupled-box":
+            from server.tests.test_fem_coupling import SIZES, _coupled, _coupling_bundle
+
+            monkeypatch.setenv("WG2_FEM_REGIONS", "1")
+            assert case["sizes"] == SIZES
+            bundle, manifest, region = _coupling_bundle(root / "returns")
+            built = _coupled(bundle, manifest, region, options={**case["options"], **option})
+            return {"msh": sha(built["exterior"]["msh_text"]),
+                    "triangles": built["exterior"]["stats"]["triangles"],
+                    "regions": {key: sha(value["msh_text"]) for key, value in built["regions"].items()}}
+        if geometry in {"synthetic-f1", "synthetic-f2"}:
+            path = root / "assembly.step"
+            manifest, _ = _synthetic_return(path, quarter=geometry == "synthetic-f2")
+        else:
+            bundle = FIXTURES / "cadlink-endpoint-oracle" / (case["name"] + ".wgreturn")
+            path = bundle / "assembly.step"
+            manifest = json.loads((bundle / "wgreturn.json").read_text())
+        options = deepcopy(case["options"])
+        if "rigid_face_sizes_mm" in options:
+            options["rigid_face_sizes_mm"] = {int(key): value for key, value in options["rigid_face_sizes_mm"].items()}
+        result = _build(path, manifest, case["sizes"], **options, **option)
+        return {"msh": sha(result["msh_text"]), "triangles": result["stats"]["triangle_count"]}
+
+    root = tmp_path / "option"
+    root.mkdir()
+    actual = observe(group_option, root)
+    elsewhere = off_frozen_platform(IDENTITY["platform"])
+    if elsewhere:
+        # Off the freezing platform, the portable half of the contract: no,
+        # None and an empty list of surface groups build the same mesh bytes.
+        if not group_option:
+            pytest.skip(elsewhere)
+        legacy = tmp_path / "legacy"
+        legacy.mkdir()
+        assert actual == observe({}, legacy)
+        return
+    frozen = {"msh": case["msh_sha256"], "triangles": case["triangles"]}
+    if geometry == "coupled-box":
+        frozen["regions"] = case["region_msh_sha256"]
+    assert actual == frozen
 
 
 def test_disconnected_face_components_are_linear():

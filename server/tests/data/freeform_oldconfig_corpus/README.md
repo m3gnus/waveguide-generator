@@ -14,6 +14,16 @@ solver's domain/placement configuration, plus the loaded FREEFORM state.
 `mesh.json` hashes the exact UTF-8 solve `msh_text`; `step.json` hashes the
 manufacturable STEP returned by the public solid export builder. SHA-256 comparisons
 are exact, with no numeric tolerance, sorting of entities or mesh reordering.
+
+Mesh and STEP bytes are frozen on, and compared only on, the reference
+platform that `manifest.json` names (`Darwin-arm64`). Gmsh, OpenCASCADE and
+NumPy are not bit-reproducible across operating systems and CPUs, and Gmsh's
+meshing follows the last bits: with identical package versions FF01 meshes to
+1116 nodes on macOS arm64 and to 1110 on one Linux x86-64 host, and GitHub's
+Linux and Windows runners produce different bytes again. On any other platform
+the byte checks still require every successful case to build and every frozen
+refusal to repeat exactly, then skip the byte identity with the platform named.
+Resolved configs and round trips are compared on every platform.
 The STEP export includes saved wall and enclosure geometry. The app falls back
 to a surface body for a bare design with no material to enclose.
 
@@ -71,8 +81,9 @@ python scripts/freeze_freeform_oldconfig_corpus.py --case FF01-default --artifac
 ```
 
 An existing artifact is refused unless `--overwrite` is explicitly appended.
-The script checks that production files match the reference and that the installed
-mesher's direct-URL commit matches the reference. The test suite never regenerates
+The script checks that production files match the reference, that the installed
+mesher's direct-URL commit matches the reference, and that mesh and STEP bytes
+are frozen on the reference platform. The test suite never regenerates
 fixtures. Inspect any deliberate replacement as a compatibility decision.
 
 Regeneration rebuilds twice in one native worker and refuses differing hashes.

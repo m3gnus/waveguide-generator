@@ -15,6 +15,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from server.tests._frozen_bytes import current_platform  # noqa: E402
 from server.tests.freeform_oldconfig_support import (  # noqa: E402
     CASES,
     DATA,
@@ -63,6 +64,9 @@ def main() -> None:
     )
     if direct.get("vcs_info", {}).get("commit_id") != reference["mesher"]:
         parser.error("freezing requires the pinned reference mesher " + reference["mesher"])
+    if args.artifact != "config" and current_platform() != reference["platform"]:
+        # Mesh and STEP bytes are evidence only on the platform that froze them.
+        parser.error("freezing mesh or STEP bytes requires the reference platform " + reference["platform"])
     os.environ["WG2_TEST_MESH_IN_PROCESS"] = "0"
     os.environ["WG2_MESH_BUILD_TIMEOUT_S"] = "45"
     started = time.monotonic()
