@@ -24,11 +24,16 @@ import sys
 from typing import Any
 import zipfile
 
+from server.jobs.models import JobStatusName
 from server.platform.paths import DataPaths
 from .scrub import ScrubRules, scrub_text, scrub_value
 
 
 SCHEMA_VERSION = 1
+
+#: The one job status a failed run has (``server.jobs.models.JobStatusName``).
+#: A held request waits for the user and is not a failure.
+FAILED_JOB_STATUS: JobStatusName = "error"
 
 #: The whole application log, both generations. ``RotatingFileHandler`` already
 #: caps each at 5 MB (``server/platform/logging_setup.py``), so this ceiling is
@@ -360,7 +365,7 @@ def summary_text(summary: Mapping[str, Any]) -> str:
         lines.append(f"Module drift: {', '.join(str(item) for item in drift)}")
 
     jobs = summary.get("recentJobs") or []
-    failed = [job for job in jobs if job.get("status") == "failed"]
+    failed = [job for job in jobs if job.get("status") == FAILED_JOB_STATUS]
     if failed:
         lines.append("")
         lines.append("Recent failures:")
@@ -506,6 +511,7 @@ def bundle_filename(summary: Mapping[str, Any]) -> str:
 
 __all__ = [
     "DESIGN_NAMESPACES",
+    "FAILED_JOB_STATUS",
     "MAX_APP_LOG_BYTES",
     "MAX_UPDATE_LOG_BYTES",
     "UPDATE_LOG_NAMES",

@@ -176,7 +176,7 @@ def test_the_bundle_downloads_as_a_named_zip(tmp_path: Path) -> None:
 
 
 def test_a_selected_run_adds_its_log(tmp_path: Path) -> None:
-    rows = [{"id": "run-1", "run_number": 1, "status": "failed", "config_json": {"throat": 25.4}}]
+    rows = [{"id": "run-1", "run_number": 1, "status": "error", "config_json": {"throat": 25.4}}]
     client = client_for(tmp_path, jobs=FakeRuntime(FakeStore(rows)))
     _status, _headers, payload = client.request("GET", "/api/diagnostics/bundle", query="job=run-1")
     members = zipfile.ZipFile(io.BytesIO(payload)).namelist()
@@ -186,7 +186,7 @@ def test_a_selected_run_adds_its_log(tmp_path: Path) -> None:
 
 
 def test_a_selected_run_ships_its_request_only_with_the_design_box(tmp_path: Path) -> None:
-    rows = [{"id": "run-1", "run_number": 1, "status": "failed", "config_json": {"throat": 25.4}}]
+    rows = [{"id": "run-1", "run_number": 1, "status": "error", "config_json": {"throat": 25.4}}]
     client = client_for(tmp_path, jobs=FakeRuntime(FakeStore(rows)))
     _status, _headers, payload = client.request(
         "GET", "/api/diagnostics/bundle", query="job=run-1&design=true"

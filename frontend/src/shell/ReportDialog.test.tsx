@@ -2,6 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bundleUrl, issueUrl, platformOption, MAX_ISSUE_URL_BYTES, type DiagnosticsSummary } from '../api/diagnostics';
+import { JOB_STATUSES } from '../api/jobsSocket';
 import { ReportDialog, defaultJob, type ReportJob } from './ReportDialog';
 
 const SUMMARY: DiagnosticsSummary = {
@@ -19,9 +20,10 @@ const SUMMARY: DiagnosticsSummary = {
 };
 
 const JOBS: ReportJob[] = [
-  { id: 'run-c', status: 'succeeded', run_number: 3 },
-  { id: 'run-b', status: 'failed', run_number: 2 },
-  { id: 'run-a', status: 'failed', run_number: 1 },
+  { id: 'run-d', status: 'held', run_number: 4 },
+  { id: 'run-c', status: 'complete', run_number: 3 },
+  { id: 'run-b', status: 'error', run_number: 2 },
+  { id: 'run-a', status: 'error', run_number: 1 },
 ];
 
 describe('defaultJob', () => {
@@ -30,7 +32,15 @@ describe('defaultJob', () => {
   });
 
   it('falls back to the newest run when nothing failed', () => {
-    expect(defaultJob([{ id: 'run-c', status: 'succeeded', run_number: 3 }])).toBe('run-c');
+    expect(defaultJob([{ id: 'run-c', status: 'complete', run_number: 3 }])).toBe('run-c');
+  });
+
+  it('never takes a held request for a failure: it waits for the user', () => {
+    expect(defaultJob([{ id: 'held', status: 'held' }, { id: 'failed', status: 'error' }])).toBe('failed');
+  });
+
+  it('reads only statuses the jobs API sends', () => {
+    expect(JOBS.every((job) => JOB_STATUSES.includes(job.status))).toBe(true);
   });
 
   it('has no answer when there are no runs at all', () => {

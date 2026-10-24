@@ -1,5 +1,6 @@
 import { httpErrorMessage } from './httpError';
 import { deadlineFetch } from './deadlineFetch';
+import type { JobStatus } from './jobsSocket';
 /**
  * The problem-report surface.
  *
@@ -35,7 +36,7 @@ export interface DiagnosticsSummary {
   engines: DiagnosticsEngine[] | { status: string; reason: string };
   dependencies: { drift: string[]; pinned: Record<string, string>; installed: Record<string, string | null> } | null;
   storage: unknown;
-  recentJobs: { id: string; run: number | null; status: string; engine: string | null; error: string | null }[];
+  recentJobs: { id: string; run: number | null; status: JobStatus; engine: string | null; error: string | null }[];
   frontendErrors: number;
 }
 

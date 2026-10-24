@@ -6,12 +6,13 @@ import {
   openLogsFolder,
   type DiagnosticsReport,
 } from '../api/diagnostics';
+import type { JobStatus } from '../api/jobsSocket';
 import { Icon } from './icons';
 import { useModalDialogFocus } from './dialogFocus';
 
 export interface ReportJob {
   id: string;
-  status: string;
+  status: JobStatus;
   run_number?: number | null;
   label?: string | null;
 }
@@ -25,8 +26,11 @@ export interface ReportJob {
  * result is wrong", which is the other half of the reports that arrive.
  */
 export function defaultJob(jobs: readonly ReportJob[]): string | undefined {
-  return (jobs.find((job) => job.status === 'failed') ?? jobs[0])?.id;
+  return (jobs.find((job) => job.status === FAILED_JOB_STATUS) ?? jobs[0])?.id;
 }
+
+/** A failed run's status (the server's `JobStatusName`); a held request waits for the user. */
+export const FAILED_JOB_STATUS: JobStatus = 'error';
 
 export function jobLabel(job: ReportJob): string {
   const run = job.run_number ? `Run ${job.run_number}` : job.id.slice(0, 8);

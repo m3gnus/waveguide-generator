@@ -261,7 +261,7 @@ def test_job_errors_are_scrubbed_into_the_summary() -> None:
             {
                 "id": "run-3",
                 "run_number": 3,
-                "status": "failed",
+                "status": "error",
                 "created_at": "2026-08-31T00:00:00Z",
                 "error_message": "mesh write failed: /home/ada/runs/3",
                 "config_summary_json": {"engine": "bempp"},
@@ -270,6 +270,28 @@ def test_job_errors_are_scrubbed_into_the_summary() -> None:
     )
     assert summary["recentJobs"][0]["error"] == "mesh write failed: ~/runs/3"
     assert "~/runs/3" in summary_text(summary)
+
+
+def test_recent_failures_are_the_runs_whose_status_is_error() -> None:
+    """Jobs fail with ``error`` (the schema's status); a held request is not a failure."""
+
+    from typing import get_args
+
+    from server.diagnostics.bundle import FAILED_JOB_STATUS
+    from server.jobs.models import JobStatusName
+
+    assert FAILED_JOB_STATUS in get_args(JobStatusName)
+    jobs = [
+        {"id": f"run-{index}", "run_number": index, "status": status,
+         "error_message": f"{status} message {index}", "config_summary_json": {"engine": "bempp"}}
+        for index, status in enumerate(("complete", "held", "error", "cancelled"), start=1)
+    ]
+    assert {job["status"] for job in jobs} <= set(get_args(JobStatusName))
+    text = summary_text(summary_for(jobs=jobs))
+    assert "Recent failures:" in text
+    assert "run 3 · bempp · error message 3" in text
+    assert "held message" not in text and "complete message" not in text
+    assert "Recent failures:" not in summary_text(summary_for(jobs=jobs[:2]))
 
 
 def test_the_filename_names_the_build() -> None:
