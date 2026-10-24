@@ -69,6 +69,20 @@ describe('useCapabilities', () => {
 
   const textOf = (tag: string) => host.querySelector(`[data-tag="${tag}"]`)?.textContent ?? '';
 
+  it('versions successful observations even when an unchanged result shares its cached data', async () => {
+    let snapshot!: ReturnType<typeof useCapabilities>;
+    function Observer() { snapshot = useCapabilities(); return null; }
+    await render(<Observer/>);
+    const generation = snapshot.capabilityGeneration;
+    const engines = snapshot.engines;
+    expect(generation).toBeGreaterThan(0);
+    await render(<Observer/>);
+    expect(snapshot.capabilityGeneration).toBe(generation);
+    await act(async () => snapshot.refreshCapabilities());
+    expect(snapshot.engines).toBe(engines); // Query structural sharing keeps the same array.
+    expect(snapshot.capabilityGeneration).toBe(generation + 1);
+  });
+
   it('refreshes cached warming plans even when the capability fingerprint is unchanged', async () => {
     let refresh!: () => Promise<void>;
     function WaitingSolve() {

@@ -12,7 +12,7 @@ vi.mock('../jobs/showJobModel', async (importOriginal) => ({
   showJobModel: mocks.showJobModel,
 }));
 vi.mock('../jobs/useCapabilities', () => ({
-  useCapabilities: () => ({ refreshCapabilities: async () => undefined, engines: [], engineSelection: { default: 'auto', resolvedDefault: null, full3dOrder: [] }, error: null, isLoading: false }),
+  useCapabilities: () => ({ capabilityGeneration: 1, refreshCapabilities: async () => undefined, engines: [], engineSelection: { default: 'auto', resolvedDefault: null, full3dOrder: [] }, error: null, isLoading: false }),
   useCapabilityRefreshOnReconnect: () => undefined,
   useLegacyBeatEngineMigration: () => undefined,
 }));

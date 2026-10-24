@@ -81,6 +81,7 @@ export function solveCancellationReason(request: SolveInputs & { jobId?: string 
 }
 
 interface SolveReadiness {
+  capabilityGeneration: number;
   enabled: boolean;
   busy: boolean;
   pending: boolean;
@@ -95,6 +96,7 @@ interface SolveReadiness {
 
 function requestPlan(readiness: SolveReadiness) {
   return {
+    capabilityGeneration: readiness.capabilityGeneration,
     ordinary: readiness.blocked ? 'blocked' as const : readiness.pending ? 'pending' as const : readiness.enabled ? 'ready' as const : 'disabled' as const,
     busy: readiness.busy, warmingEngine: readiness.warmingEngine, engines: readiness.engines, error: readiness.error,
   };
@@ -105,8 +107,12 @@ export function useRequestedSolve(refresh: () => void | Promise<void>, reportNot
   releaseAttention: () => void, readiness: SolveReadiness) {
   const machine = useRef(initialRequestedSolve<SolveInputs>());
   const [state, setState] = useState(machine.current);
-  const services = useRef({ readiness, reportNotice, releaseAttention, refresh });
-  services.current = { readiness, reportNotice, releaseAttention, refresh };
+  const plan = requestPlan(readiness);
+  // Observe the arrival of an intention, not every render of its readiness.
+  // Terminal requests may be retried, but an unchanged held observation is no new request.
+  const observedFusion = useRef<string | null>(null);
+  const services = useRef({ readiness, plan, reportNotice, releaseAttention, refresh });
+  services.current = { readiness, plan, reportNotice, releaseAttention, refresh };
   const observationTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const executions = useRef(new Map<number, { token: RequestedSolve; controller: AbortController }>());
   const tasks = useRef(new Map<number, Promise<unknown>>());
@@ -191,7 +197,7 @@ export function useRequestedSolve(refresh: () => void | Promise<void>, reportNot
   }, [dispatch]);
   const cancel = useCallback(() => { dispatch({ type: 'stop' }); }, [dispatch]);
   const press = useCallback(async (prepareEngine?: string, checkCadPlan = false) => {
-    dispatch({ type: 'plan-ready', plan: requestPlan(services.current.readiness) });
+    dispatch({ type: 'plan-ready', plan: services.current.plan });
     const result = dispatch({ type: 'press', inputs: { ...captureSolveInputs(), checkCadPlan }, prepareEngine });
     const active = result.state.active;
     if (!active) return 'blocked' as const;
@@ -204,7 +210,7 @@ export function useRequestedSolve(refresh: () => void | Promise<void>, reportNot
     return active.preparationEngine || result.state.plan.ordinary === 'pending' ? 'pending' as const : 'blocked' as const;
   }, [dispatch]);
   const fusion = useCallback(async (jobId: string, engine: string, prepare = false) => {
-    const result = dispatch({ type: 'fusion-request', inputs: captureSolveInputs(), jobId, engine, prepare });
+    const result = dispatch({ type: 'fusion-request', inputs: captureSolveInputs(), jobId, engine, prepare, plan: services.current.plan });
     if (result.state.active?.jobId === jobId) await preparations.current.get(result.state.active.id);
   }, [dispatch]);
   useEffect(() => {
@@ -228,16 +234,24 @@ export function useRequestedSolve(refresh: () => void | Promise<void>, reportNot
         dispatch({ type: 'inputs-changed', ids: edited.map(request => request.id),
           reason: edited.some(request => request.jobId) ? 'Prepare and solve was cancelled because the solve setup changed.' : undefined });
       })];
-    return () => { stops.forEach(stop => stop()); dispatch({ type: 'unmount' }); };
+    validate();
+    return () => {
+      stops.forEach(stop => stop());
+      dispatch({ type: 'unmount' });
+      // StrictMode replays setup synchronously. Keep its request and executor;
+      // a real unmount blocks POST immediately and aborts at the microtask checkpoint.
+      queueMicrotask(() => { if (!machine.current.mounted) dispatch({ type: 'stop' }); });
+    };
   }, [dispatch]);
   useEffect(() => {
     const held = readiness.heldFusion;
     const inputs = captureSolveInputs();
-    if (held && inputs.model.viewportShowing && ['auto', 'beat', held.engine].includes(inputs.engine)) {
-      dispatch({ type: 'fusion-request', inputs, ...held });
-    }
-    dispatch({ type: 'plan-ready', plan: requestPlan(readiness) });
-  }, [dispatch, readiness.busy, readiness.enabled, readiness.pending, readiness.blocked, readiness.warmingEngine, readiness.engines, readiness.error, readiness.heldFusion?.jobId, readiness.heldFusion?.engine]);
+    if (held && observedFusion.current !== held.jobId && inputs.model.viewportShowing && ['auto', 'beat', held.engine].includes(inputs.engine)) {
+      observedFusion.current = held.jobId;
+      dispatch({ type: 'fusion-request', inputs, ...held, plan: services.current.plan });
+    } else dispatch({ type: 'plan-ready', plan: services.current.plan });
+    if (!held) observedFusion.current = null;
+  }, [dispatch, readiness.capabilityGeneration, readiness.busy, readiness.enabled, readiness.pending, readiness.blocked, readiness.warmingEngine, readiness.engines, readiness.error, readiness.heldFusion?.jobId, readiness.heldFusion?.engine]);
   return { state, press, fusion, cancel, beforePost };
 }
 export type RequestedSolveOwner = ReturnType<typeof useRequestedSolve>;

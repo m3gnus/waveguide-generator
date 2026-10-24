@@ -1,6 +1,8 @@
 /** Pure request ownership. Async work may only advance the matching request ID. */
 export type SolvePhase = 'idle' | 'waiting-readiness' | 'continuing' | 'cancelling' | 'submitting' | 'done' | 'cancelled';
 export interface RequestPlan {
+  /** Monotonic identity of the capability snapshot, independent of plan renders. */
+  capabilityGeneration: number;
   ordinary: 'ready' | 'pending' | 'blocked' | 'disabled';
   warmingEngine: string | null;
   engines: readonly { name: string; available: boolean; runtime_state?: string | null }[];
@@ -9,6 +11,7 @@ export interface RequestPlan {
 }
 export interface SolveRequest<T> {
   id: number;
+  acceptedCapabilityGeneration: number;
   inputs: T;
   jobId?: string;
   preparationEngine?: string;
@@ -18,15 +21,13 @@ export interface RequestedSolveState<T> {
   phase: SolvePhase;
   active: SolveRequest<T> | null;
   queue: readonly SolveRequest<T>[];
-  /** Job identities belong to the owner, including cancelled/completed intentions. */
-  seenFusion: readonly string[];
   nextId: number;
   mounted: boolean;
   plan: RequestPlan;
 }
 export type RequestedSolveEvent<T> =
   | { type: 'press'; inputs: T; prepareEngine?: string }
-  | { type: 'fusion-request'; inputs: T; jobId: string; engine: string; prepare?: boolean }
+  | { type: 'fusion-request'; inputs: T; jobId: string; engine: string; prepare?: boolean; plan?: RequestPlan }
   | { type: 'plan-ready'; plan: RequestPlan }
   | { type: 'preparation-done' | 'preparation-failed' | 'frame-resolved' | 'post-succeeded' | 'post-failed' | 'continuation-settled'; id: number; message?: string }
   | { type: 'inputs-changed'; ids: readonly number[]; reason?: string }
@@ -38,8 +39,8 @@ export type RequestedSolveEffect<T> =
   | { type: 'release' | 'observe-start' | 'observe-stop' };
 export const PREPARATION_FAILED = 'Prepare and solve was cancelled because engine preparation failed.';
 export function initialRequestedSolve<T>(): RequestedSolveState<T> {
-  return { phase: 'idle', active: null, queue: [], seenFusion: [], nextId: 1, mounted: true,
-    plan: { ordinary: 'pending', warmingEngine: null, engines: [], error: null, busy: false } };
+  return { phase: 'idle', active: null, queue: [], nextId: 1, mounted: true,
+    plan: { capabilityGeneration: 0, ordinary: 'pending', warmingEngine: null, engines: [], error: null, busy: false } };
 }
 export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event: RequestedSolveEvent<T>):
   { state: RequestedSolveState<T>; effects: RequestedSolveEffect<T>[] } {
@@ -52,9 +53,12 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
     if (request.preparation === 'pending') effects.push({ type: 'prepare', request });
   };
   const advance = (phase: 'done' | 'cancelled') => {
-    const [next, ...queue] = state.queue;
-    set({ active: null, phase, queue });
-    if (next && state.mounted) activate(next);
+    set({ active: null, phase });
+    if (state.mounted && state.queue.length) {
+      const [next, ...queue] = state.queue;
+      set({ queue });
+      activate(next);
+    }
   };
   const cancel = (reason?: string) => {
     const active = state.active;
@@ -65,13 +69,31 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
     if (state.phase === 'continuing') set({ phase: 'cancelling' });
     else advance('cancelled');
   };
+  const updatePlan = (plan: RequestPlan) => {
+    const a = state.plan;
+    if (plan.capabilityGeneration < a.capabilityGeneration) return;
+    // Older/equal snapshot identities cannot replace newer capability evidence.
+    const b = plan.capabilityGeneration > a.capabilityGeneration ? plan
+      : { ...plan, engines: a.engines, capabilityGeneration: a.capabilityGeneration };
+    if (a.capabilityGeneration !== b.capabilityGeneration || a.ordinary !== b.ordinary || a.warmingEngine !== b.warmingEngine || a.error !== b.error || a.busy !== b.busy
+      || a.engines.length !== b.engines.length || a.engines.some((engine, index) => {
+        const next = b.engines[index];
+        return engine.name !== next.name || engine.available !== next.available || engine.runtime_state !== next.runtime_state;
+      })) set({ plan: b });
+  };
   switch (event.type) {
-    case 'mount': if (!state.mounted) set({ mounted: true }); break;
+    case 'mount':
+      if (!state.mounted) {
+        set({ mounted: true });
+        if (!state.active && state.queue.length) advance('done');
+      }
+      break;
     case 'press':
     case 'fusion-request': {
       if (!state.mounted) break;
       const fusion = event.type === 'fusion-request';
-      if (fusion && state.seenFusion.includes(event.jobId)) {
+      if (fusion && event.plan) updatePlan(event.plan);
+      if (fusion && (state.active?.jobId === event.jobId || state.queue.some(request => request.jobId === event.jobId))) {
         if (!event.prepare) break;
         if (state.active?.jobId === event.jobId) {
           if (state.phase === 'waiting-readiness' && state.active.preparation !== 'pending') {
@@ -86,8 +108,6 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
             ? { ...request, preparation: 'pending', preparationEngine: event.engine } : request) });
           break;
         }
-        // A deliberate Prepare press can retry a terminal request. Repeated
-        // automatic job observations still cannot resurrect a cancelled intent.
       }
       if (!fusion && state.active) {
         if (event.prepareEngine && state.phase === 'waiting-readiness' && state.active.preparation !== 'pending') {
@@ -97,12 +117,11 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
         }
         break;
       }
-      const request: SolveRequest<T> = { id: state.nextId, inputs: event.inputs,
+      const request: SolveRequest<T> = { id: state.nextId, acceptedCapabilityGeneration: state.plan.capabilityGeneration, inputs: event.inputs,
         ...(fusion ? { jobId: event.jobId, preparationEngine: event.engine }
           : { preparationEngine: event.prepareEngine ?? state.plan.warmingEngine ?? undefined }),
         preparation: (fusion ? event.prepare : event.prepareEngine) ? 'pending' : 'none' };
-      set({ nextId: state.nextId + 1,
-        seenFusion: fusion && !state.seenFusion.includes(event.jobId) ? [...state.seenFusion, event.jobId] : state.seenFusion });
+      set({ nextId: state.nextId + 1 });
       if (!state.active) activate(request);
       else {
         set({ queue: [...state.queue, request] });
@@ -111,18 +130,11 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
       }
       break;
     }
-    case 'plan-ready': {
-      const a = state.plan, b = event.plan;
-      if (a.ordinary !== b.ordinary || a.warmingEngine !== b.warmingEngine || a.error !== b.error || a.busy !== b.busy
-        || a.engines.length !== b.engines.length || a.engines.some((engine, index) => {
-          const next = b.engines[index];
-          return engine.name !== next.name || engine.available !== next.available || engine.runtime_state !== next.runtime_state;
-        })) set({ plan: b });
-      break;
-    }
+    case 'plan-ready': updatePlan(event.plan); break;
     case 'preparation-done':
       if (state.active?.id === event.id && state.phase === 'waiting-readiness' && state.active.preparation === 'pending') {
-        set({ active: { ...state.active, preparation: 'done' } });
+        // A successful explicit preparation supersedes any failure cached during it.
+        set({ active: { ...state.active, preparation: 'done', acceptedCapabilityGeneration: state.plan.capabilityGeneration } });
       }
       break;
     case 'preparation-failed':
@@ -130,7 +142,7 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
       break;
     // All pre-POST async steps have completed; authorize the matching POST once.
     case 'frame-resolved':
-      if (state.active?.id === event.id && state.phase === 'continuing') {
+      if (state.mounted && state.active?.id === event.id && state.phase === 'continuing') {
         set({ phase: 'submitting' });
         effects.push({ type: 'post', id: event.id });
       }
@@ -155,9 +167,13 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
       set({ queue: state.queue.filter(request => !event.ids.includes(request.id)) });
       if (state.active && event.ids.includes(state.active.id)) cancel(event.reason);
       break;
-    case 'stop':
+    // Effect cleanup suspends ownership. A replay mounts the same live request;
+    // the adapter sends stop after cleanup only if no remount followed.
     case 'unmount':
-      set({ queue: [], ...(event.type === 'unmount' ? { mounted: false } : {}) });
+      if (state.mounted) set({ mounted: false });
+      break;
+    case 'stop':
+      set({ queue: [] });
       cancel();
       break;
   }
@@ -165,11 +181,10 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
   // same readiness fact immediately; no extra render or poll is needed.
   for (let remaining = state.queue.length + 2; remaining > 0; remaining--) {
     const request = state.active;
-    if (!request || !['waiting-readiness', 'continuing'].includes(state.phase) || request.preparation === 'pending') break;
+    if (!state.mounted || !request || !['waiting-readiness', 'continuing'].includes(state.phase) || request.preparation === 'pending') break;
     const engine = state.plan.engines.find(engine => engine.name === request.preparationEngine);
-    // Only a readiness event supplies a new failure fact. A cached failure
-    // must not cancel a new request or a successful preparation completion.
-    if (event.type === 'plan-ready' && request.preparationEngine && (engine?.runtime_state === 'failed' || engine?.runtime_state === 'unavailable')) cancel(PREPARATION_FAILED);
+    // Failure evidence must postdate acceptance, even for queued requests.
+    if (state.plan.capabilityGeneration > request.acceptedCapabilityGeneration && request.preparationEngine && (engine?.runtime_state === 'failed' || engine?.runtime_state === 'unavailable')) cancel(PREPARATION_FAILED);
     else if (state.phase === 'waiting-readiness') {
       if (!request.jobId && !!request.preparationEngine && request.preparation === 'none' && state.plan.ordinary === 'blocked' && !state.plan.warmingEngine) cancel();
       else if (!request.jobId && !state.plan.busy && state.plan.ordinary === 'disabled') cancel(state.plan.error ?? undefined);

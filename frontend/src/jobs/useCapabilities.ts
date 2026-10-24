@@ -60,6 +60,8 @@ const qualificationClocks = new WeakMap<QueryClient, {
 }>();
 
 export interface CapabilitiesSnapshot {
+  /** Successful query observation count; cached renders retain this identity. */
+  capabilityGeneration: number;
   femRegionsOffered: boolean;
   hostPlatform: string | null;
   engines: readonly EngineCapability[];
@@ -78,6 +80,9 @@ export function useCapabilities(): CapabilitiesSnapshot {
   const connection = useSyncExternalStore(subscribeConnection, connectionSnapshot);
   const backendLost = connection === 'reconnecting' || connection === 'disconnected';
   const client = useQueryClient();
+  const subscribeCapabilities = useCallback((listener: () => void) => client.getQueryCache().subscribe(listener), [client]);
+  const capabilitySnapshot = useCallback(() => client.getQueryState(CAPABILITIES_QUERY_KEY)?.dataUpdateCount ?? 0, [client]);
+  const capabilityGeneration = useSyncExternalStore(subscribeCapabilities, capabilitySnapshot);
   let clock = qualificationClocks.get(client);
   if (!clock) {
     clock = { started: null, generation: 0, listeners: new Set() };
@@ -155,6 +160,7 @@ export function useCapabilities(): CapabilitiesSnapshot {
     plannerSupportByClient.set(client, plannerSupport);
   }, [client, plannerSupport]);
   return {
+    capabilityGeneration,
     hostPlatform: data?.hostPlatform ?? null,
     femRegionsOffered: data?.femRegions === true,
     engines: data?.engines ?? NO_ENGINES,

@@ -9,7 +9,7 @@ const restoreCadJobModel = (run: JobItem, display = {}, fetcher: typeof fetch = 
 import { currentModel, currentModelStatus, runVerdict, shownResult, spatialResult } from '../model/currentModel';
 import { previewSocket } from '../api/previewSocket';
 import { currentDocumentLoad, serializeDesign } from '../stores/design';
-import { act } from 'react';
+import { act, StrictMode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -63,6 +63,8 @@ function SolveActions() {
 }
 
 const mocks = vi.hoisted(() => ({
+  capabilityGeneration: 1,
+  lastCapabilityEngines: null as EngineCapability[] | null,
   refreshCapabilities: vi.fn(),
   prewarmSelectedEngine: vi.fn(),
   planSolveDesign: vi.fn(),
@@ -116,13 +118,20 @@ vi.mock('../jobs/actions', async (importOriginal) => {
   };
 });
 vi.mock('../jobs/useCapabilities', () => ({
-  useCapabilities: () => ({
-    engines: mocks.capabilities.engines,
-    engineSelection: mocks.capabilities.engineSelection,
-    error: null,
-    refreshCapabilities: mocks.refreshCapabilities,
-    isLoading: false,
-  }),
+  useCapabilities: () => {
+    if (mocks.lastCapabilityEngines !== mocks.capabilities.engines) {
+      mocks.lastCapabilityEngines = mocks.capabilities.engines;
+      mocks.capabilityGeneration++;
+    }
+    return {
+      capabilityGeneration: mocks.capabilityGeneration,
+      engines: mocks.capabilities.engines,
+      engineSelection: mocks.capabilities.engineSelection,
+      error: null,
+      refreshCapabilities: mocks.refreshCapabilities,
+      isLoading: false,
+    };
+  },
   useActiveBackendCapability: () => null,
   usePlannedBackendCapabilities: () => [],
   useCapabilityRefreshOnReconnect: () => undefined,
@@ -1045,6 +1054,99 @@ describe('solve invocation mutex', () => {
     expect(mocks.solveModel).not.toHaveBeenCalled();
     await act(async () => { if (outcome !== 'unmount') render(); });
     expect(posts).toHaveLength(outcome === 'ready' || outcome === 'stop' ? 1 : 0);
+  });
+
+  it.each(['failed', 'unprepared'] as const)('regression: cached %s before a warming Fusion arrival cannot cancel its request', async runtimeState => {
+    vi.useFakeTimers();
+    const posts: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') posts.push(String(url));
+      return json({ job_id: 'continued-fusion' });
+    }));
+    act(() => {
+      blockedCad();
+      mocks.importedPlan.plan.readiness = { ...blocker, remedies: [{ kind: 'wait' }] };
+      mocks.capabilities.engines = [{ name: 'beat-metal', available: false, runtime_state: runtimeState } as EngineCapability];
+    });
+    const render = () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    await act(async () => render()); // Cache the failure before the request exists.
+    act(() => { blockedCad(true); mocks.importedPlan.plan.readiness = { ...blocker, remedies: [{ kind: 'wait' }] }; });
+    await act(async () => render()); // Same capability snapshot, new intention.
+    expect(solveControlStore.getSnapshot()?.waitingForEngine).toBe(true);
+    expect(posts).toEqual([]);
+    mocks.capabilities.engines = [{ name: 'beat-metal', available: true, runtime_state: 'ready' } as EngineCapability];
+    mocks.importedPlan.plan = { ...mocks.importedPlan.plan, engine: 'beat-metal', readiness: null };
+    await act(async () => render());
+    for (let poll = 0; poll < 3; poll++) await act(async () => { await vi.advanceTimersByTimeAsync(1000); render(); });
+    expect(posts).toEqual(['/api/jobs/job%3Aheld-fusion/solve-again']);
+    expect(mocks.solveModel).not.toHaveBeenCalled();
+  });
+
+  it('allows a new Fusion Solve for the same job after a fresh preparation failure', async () => {
+    const posts: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') posts.push(String(url));
+      return json({ job_id: 'continued-fusion' });
+    }));
+    act(() => {
+      blockedCad(true);
+      mocks.importedPlan.plan.readiness = { ...blocker, remedies: [{ kind: 'wait' }] };
+      mocks.capabilities.engines = [{ name: 'beat-metal', available: false, runtime_state: 'preparing' } as EngineCapability];
+    });
+    const render = () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    await act(async () => render());
+    mocks.capabilities.engines = [{ name: 'beat-metal', available: false, runtime_state: 'failed' } as EngineCapability];
+    await act(async () => render());
+    expect(solveControlStore.getSnapshot()?.waitingForEngine).toBe(false);
+    expect(posts).toEqual([]);
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
+    expect(solveControlStore.getSnapshot()?.waitingForEngine).toBe(true);
+    mocks.capabilities.engines = [{ name: 'beat-metal', available: true, runtime_state: 'ready' } as EngineCapability];
+    mocks.importedPlan.plan = { ...mocks.importedPlan.plan, engine: 'beat-metal', readiness: null };
+    await act(async () => render());
+    await act(async () => render());
+    expect(posts).toEqual(['/api/jobs/job%3Aheld-fusion/solve-again']);
+    expect(mocks.solveModel).not.toHaveBeenCalled();
+  });
+
+  it.each(['waiting', 'frame wait', 'ready'] as const)('regression: StrictMode mount replay preserves a held intention exactly once during %s', async phase => {
+    vi.useFakeTimers();
+    await act(async () => root.render(null));
+    const frame = deferred<Response>();
+    const posts: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url).includes('/solver-frame')) return frame.promise;
+      if (init?.method === 'POST') posts.push(String(url));
+      return json({ job_id: 'continued-fusion' });
+    }));
+    act(() => {
+      blockedCad(true);
+      const held = jobsSocket.getSnapshot().jobs[0];
+      publishJobs([{ ...held, cad_state: { ...held.cad_state!, blocker: { ...blocker, remedies: [{ kind: 'wait' }] } } }]);
+      mocks.importedPlan.plan.readiness = { ...blocker, remedies: [{ kind: 'wait' }] };
+      mocks.capabilities.engines = [{ name: 'beat-metal', available: phase !== 'waiting',
+        runtime_state: phase === 'waiting' ? 'preparing' : 'ready' } as EngineCapability];
+      if (phase !== 'frame wait') useCadSolverFrameStore.getState().apply('wgi_readiness', { linked: true });
+    });
+    let frameRead: Promise<void> | undefined;
+    if (phase === 'frame wait') act(() => { frameRead = useCadSolverFrameStore.getState().load('wgi_readiness'); });
+    const render = () => root.render(<StrictMode><JobsCoordinator><SolveActions/></JobsCoordinator></StrictMode>);
+    await act(async () => render());
+    if (phase === 'waiting') expect(solveControlStore.getSnapshot()?.waitingForEngine).toBe(true);
+    if (phase !== 'ready') expect(posts).toEqual([]);
+    mocks.capabilities.engines = [{ name: 'beat-metal', available: true, runtime_state: 'ready' } as EngineCapability];
+    mocks.importedPlan.plan = { ...mocks.importedPlan.plan, engine: 'beat-metal', readiness: null };
+    await act(async () => {
+      render();
+      frame.resolve(json({ linked: true }));
+      await frameRead;
+    });
+    for (let poll = 0; poll < 3; poll++) await act(async () => { await vi.advanceTimersByTimeAsync(1000); render(); });
+    expect(posts).toEqual(['/api/jobs/job%3Aheld-fusion/solve-again']);
+    expect(mocks.solveModel).not.toHaveBeenCalled();
+    const refreshed = mocks.refreshCapabilities.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+    expect(mocks.refreshCapabilities).toHaveBeenCalledTimes(refreshed);
   });
 
   it('does not resume a legacy held request through a different selected engine’s warm-up', async () => {

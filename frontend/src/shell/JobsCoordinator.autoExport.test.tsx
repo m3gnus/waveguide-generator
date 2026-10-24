@@ -18,7 +18,7 @@ vi.mock('../results/exporters', () => ({
   runAutomaticWorkspaceExport: mocks.runAutomaticWorkspaceExport,
 }));
 vi.mock('../jobs/useCapabilities', () => ({
-  useCapabilities: () => ({ refreshCapabilities: async () => undefined,
+  useCapabilities: () => ({ capabilityGeneration: 1, refreshCapabilities: async () => undefined,
     engines: [],
     engineSelection: { default: 'auto', resolvedDefault: null, full3dOrder: [] },
     error: null,

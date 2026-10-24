@@ -285,7 +285,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const preferences = usePreferences();
   const automation = useRef(new JobAutomation()).current;
   const {
-    error: capabilityError, engines, refreshCapabilities,
+    error: capabilityError, engines, capabilityGeneration, refreshCapabilities,
   } = useCapabilities();
   useEffect(() => {
     void prewarmSelectedEngine(selectedEngine).catch(() => undefined).finally(() => refreshCapabilities());
@@ -446,7 +446,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     : !planPending && warming && (heldReadiness?.engine ?? heldJob?.solve_options?.engine) === serverReadiness?.engine
       ? serverReadiness?.engine ?? null : null;
   const requested = useRequestedSolve(refreshCapabilities, setActionError, solveAttention.releaseSolve, {
-    enabled: solveEnabled, busy: submitting, pending: planPending, blocked: engineBlocked,
+    capabilityGeneration, enabled: solveEnabled, busy: submitting, pending: planPending, blocked: engineBlocked,
     warmingEngine: warming ? serverReadiness?.engine ?? selectedEngine : null,
     error: planError, engines, heldFusion: heldJob && heldWarmingEngine ? { jobId: heldJob.id, engine: heldWarmingEngine } : null, prepare: preparation.prepare,
     resume: token => token.jobId ? continueRun(token.jobId, { held: token as HeldSolveContinuation }) : performRequestedSolve(token),

@@ -1,30 +1,37 @@
 import { describe, expect, it } from 'vitest';
 import { initialRequestedSolve, reduceRequestedSolve, type RequestPlan, type RequestedSolveEvent, type RequestedSolveState } from './requestedSolveMachine';
 
-const cold: RequestPlan = { ordinary: 'blocked', warmingEngine: 'engine', error: null, busy: false,
+const cold: RequestPlan = { capabilityGeneration: 1, ordinary: 'blocked', warmingEngine: 'engine', error: null, busy: false,
   engines: [{ name: 'engine', available: false, runtime_state: 'preparing' }] };
-const ready: RequestPlan = { ordinary: 'ready', warmingEngine: null, error: null, busy: false,
+const ready: RequestPlan = { capabilityGeneration: 2, ordinary: 'ready', warmingEngine: null, error: null, busy: false,
   engines: [{ name: 'engine', available: true, runtime_state: 'ready' }] };
 type Input = { model: string; engine: string; setup: string };
 const inputs: Input = { model: 'model', engine: 'engine', setup: 'setup' };
 type Event = RequestedSolveEvent<Input>;
 type State = RequestedSolveState<Input>;
-type Step = 'press' | 'prepare' | 'Fusion A' | 'Fusion B' | 'ready' | 'prepared' | 'failed' | 'frame' | 'success' | 'post failure' | 'change' | 'stop' | 'unmount';
-const alphabet: Step[] = ['press', 'prepare', 'Fusion A', 'Fusion B', 'ready', 'prepared', 'failed', 'frame', 'success', 'post failure', 'change', 'stop'];
+type Step = 'cold' | 'cached' | 'stale failed' | 'fresh failed' | 'stale ready' | 'settled' | 'stale settled' | 'mount' | 'press' | 'prepare' | 'Fusion A' | 'Fusion B' | 'ready' | 'prepared' | 'failed' | 'frame' | 'success' | 'post failure' | 'change' | 'stop' | 'unmount';
+const alphabet: Step[] = ['press', 'prepare', 'Fusion A', 'Fusion B', 'ready', 'prepared', 'failed', 'frame', 'success', 'post failure', 'change', 'stop', 'cold', 'cached', 'stale failed', 'fresh failed', 'stale ready', 'settled', 'stale settled', 'mount', 'unmount'];
 function eventFor(step: Step, state: State): Event {
   const id = state.active?.id ?? 0;
   switch (step) {
     case 'press': return { type: 'press', inputs };
     case 'prepare': return { type: 'press', inputs, prepareEngine: 'engine' };
     case 'Fusion A': case 'Fusion B': return { type: 'fusion-request', inputs, jobId: step, engine: 'engine' };
-    case 'ready': return { type: 'plan-ready', plan: ready };
+    case 'cold': case 'ready': case 'fresh failed': case 'stale failed': case 'stale ready':
+      return { type: 'plan-ready', plan: {
+        ...(step.includes('failed') ? { ...cold, engines: [{ name: 'engine', available: false, runtime_state: 'failed' }] }
+          : step === 'cold' ? cold : ready),
+        capabilityGeneration: state.plan.capabilityGeneration + (step.startsWith('stale') ? -1 : 1),
+      } };
+    case 'cached': return { type: 'plan-ready', plan: state.plan };
+    case 'settled': case 'stale settled': return { type: 'continuation-settled', id: step === 'settled' ? id : id - 1 };
     case 'prepared': return { type: 'preparation-done', id };
     case 'failed': return { type: 'preparation-failed', id };
     case 'frame': return { type: 'frame-resolved', id };
     case 'success': return { type: 'post-succeeded', id };
     case 'post failure': return { type: 'post-failed', id };
     case 'change': return { type: 'inputs-changed', ids: [...state.queue.map(request => request.id), id], reason: 'inputs changed' };
-    case 'stop': case 'unmount': return { type: step };
+    case 'stop': case 'unmount': case 'mount': return { type: step };
   }
 }
 function assert(condition: unknown, message: string): asserts condition {
@@ -35,6 +42,7 @@ function assert(condition: unknown, message: string): asserts condition {
 function verify(sequence: readonly Step[]) {
   let state = { ...initialRequestedSolve<Input>(), plan: cold };
   const accepted = new Map<number, string>();
+  const acceptedGeneration = new Map<number, number>();
   const cancelled = new Set<number>();
   const posted = new Set<number>();
   const started = new Set<number>();
@@ -42,13 +50,17 @@ function verify(sequence: readonly Step[]) {
     const before = state;
     const active = before.active;
     const live = [...before.queue, ...(active && before.phase !== 'submitting' ? [active] : [])];
-    if (event.type === 'stop' || event.type === 'unmount' || event.type === 'inputs-changed') {
+    if (event.type === 'stop' || event.type === 'inputs-changed') {
       for (const request of live) if (event.type !== 'inputs-changed' || event.ids.includes(request.id)) cancelled.add(request.id);
     }
     if (event.type === 'preparation-failed' && active?.id === event.id && active.preparation === 'pending') cancelled.add(active.id);
-    const newFusion = event.type === 'fusion-request' && before.mounted && !before.seenFusion.includes(event.jobId);
+    if (event.type === 'continuation-settled' && active?.id === event.id && ['continuing', 'cancelling'].includes(before.phase)) cancelled.add(active.id);
+    if (event.type === 'preparation-done' && active?.id === event.id && active.preparation === 'pending' && before.phase === 'waiting-readiness') acceptedGeneration.set(active.id, before.plan.capabilityGeneration);
+    const newFusion = event.type === 'fusion-request' && before.mounted
+      && ![...before.queue, ...(active ? [active] : [])].some(request => request.jobId === event.jobId);
     const newPress = event.type === 'press' && before.mounted && !active;
     if (newFusion || newPress) {
+      acceptedGeneration.set(before.nextId, before.plan.capabilityGeneration);
       accepted.set(before.nextId, newFusion && event.type === 'fusion-request' ? event.jobId : 'ordinary');
       if (newFusion && active && !active.jobId && before.phase !== 'submitting') cancelled.add(active.id);
     }
@@ -69,7 +81,15 @@ function verify(sequence: readonly Step[]) {
         assert(!cancelled.has(effect.id), 'cancelled request posted');
         posted.add(effect.id);
       }
-      if (effect.type === 'abort') assert(cancelled.has(effect.id), 'request aborted without a cancellation or supersession');
+      if (effect.type === 'abort') {
+        const request = live.find(request => request.id === effect.id);
+        const plan = event.type === 'plan-ready' && event.plan.capabilityGeneration > before.plan.capabilityGeneration ? event.plan : before.plan;
+        const failure = request && request.preparation !== 'pending'
+          && plan.capabilityGeneration > acceptedGeneration.get(effect.id)!
+          && plan.engines.some(engine => engine.runtime_state === 'failed' || engine.runtime_state === 'unavailable');
+        assert(cancelled.has(effect.id) || failure, 'request aborted without a cancellation, supersession or fresh failure');
+        cancelled.add(effect.id);
+      }
     }
     assert(state.phase !== 'submitting' || !!state.active && posted.has(state.active.id), 'submitting without POST');
     const ids = [...state.queue.map(request => request.id), ...(state.active ? [state.active.id] : [])];
@@ -78,7 +98,8 @@ function verify(sequence: readonly Step[]) {
   for (const step of sequence) send(eventFor(step, state));
   // Fair completion: readiness and async effects eventually answer. This detects
   // stranded waits without adding timer/poll events to rescue the machine.
-  send({ type: 'plan-ready', plan: ready });
+  send({ type: 'mount' });
+  send({ type: 'plan-ready', plan: { ...ready, capabilityGeneration: state.plan.capabilityGeneration + 1 } });
   for (let remaining = accepted.size + 2; state.active && remaining > 0; remaining--) {
     const id = state.active.id;
     switch (state.phase) {
@@ -105,16 +126,19 @@ function* permutations<T>(items: readonly T[]): Generator<T[]> {
 }
 
 describe('requested-solve pure reducer', () => {
-  it('exhausts all 271,453 event words of length 0–5, including repeated/out-of-order callbacks', () => {
+  it.each([
+    { depth: 5, events: alphabet.slice(0, 12), count: 271_453, label: 'original events' },
+    { depth: 4, events: alphabet, count: 204_205, label: 'fresh/stale snapshots, settlement and mount replay' },
+  ])('exhausts $count event words of length 0–$depth with $label', ({ depth, events, count: expected }) => {
     let count = 0;
     function visit(prefix: Step[]) {
       try { verify(prefix); } catch (error) { throw new Error(`${prefix.join(' → ')}: ${String(error)}`); }
       count++;
-      if (prefix.length < 5) for (const step of alphabet) visit([...prefix, step]);
+      if (prefix.length < depth) for (const step of events) visit([...prefix, step]);
     }
     visit([]);
-    expect(count).toBe(271_453);
-  }, 60_000);
+    expect(count).toBe(expected);
+  }, 20_000);
 
   it.each(['stop', 'change', 'unmount'] as const)('exhausts 40,320 eight-event permutations with %s', cancellation => {
     let count = 0;
@@ -123,7 +147,16 @@ describe('requested-solve pure reducer', () => {
       count++;
     }
     expect(count).toBe(40_320);
-  }, 60_000);
+  }, 20_000);
+
+  it('exhausts 40,320 deeper interleavings of capability failure, settlement and mount replay', () => {
+    let count = 0;
+    for (const sequence of permutations<Step>(['Fusion A', 'fresh failed', 'ready', 'settled', 'unmount', 'mount', 'frame', 'success'])) {
+      try { verify(sequence); } catch (error) { throw new Error(`${sequence.join(' → ')}: ${String(error)}`); }
+      count++;
+    }
+    expect(count).toBe(40_320);
+  }, 20_000);
 
   it('covers the reported pre-POST order and Fusion during/after ordinary POST', () => {
     verify(['press', 'ready', 'Fusion A', 'frame']);
@@ -164,10 +197,10 @@ describe('requested-solve pure reducer', () => {
     expect(preparing.state.active!.id).toBe(state.active!.id);
     expect(preparing.effects.map(effect => effect.type)).toEqual(['prepare']);
     state = reduceRequestedSolve(preparing.state, { type: 'preparation-failed', id: state.active!.id }).state;
-    expect(reduceRequestedSolve(state, event).state.active).toBeNull(); // observations do not retry
-    const retry = reduceRequestedSolve(state, { ...event, prepare: true });
+    const retry = reduceRequestedSolve(state, event);
     expect(retry.state.active!.id).toBeGreaterThan(preparing.state.active!.id);
-    expect(retry.effects.some(effect => effect.type === 'prepare')).toBe(true);
+    expect(retry.state.active!.preparation).toBe('none');
+    expect(reduceRequestedSolve(retry.state, event).state.active!.id).toBe(retry.state.active!.id);
   });
 
   it.each(['waiting-readiness', 'continuing', 'submitting'] as const)('preparation failure cancels pre-POST work while preserving posted work: %s', phase => {
@@ -175,7 +208,7 @@ describe('requested-solve pure reducer', () => {
     if (phase !== 'waiting-readiness') state = reduceRequestedSolve(state, { type: 'plan-ready', plan: ready }).state;
     const id = state.active!.id;
     if (phase === 'submitting') state = reduceRequestedSolve(state, { type: 'frame-resolved', id }).state;
-    const failed = reduceRequestedSolve(state, { type: 'plan-ready', plan: { ...cold, engines: [{ name: 'engine', available: false, runtime_state: 'failed' }] } });
+    const failed = reduceRequestedSolve(state, { type: 'plan-ready', plan: { ...cold, capabilityGeneration: 3, engines: [{ name: 'engine', available: false, runtime_state: 'failed' }] } });
     expect(failed.state.phase).toBe(phase === 'submitting' ? 'submitting' : phase === 'continuing' ? 'cancelling' : 'cancelled');
     expect(failed.effects.some(effect => effect.type === 'abort')).toBe(phase !== 'submitting');
   });
@@ -187,12 +220,45 @@ describe('requested-solve pure reducer', () => {
     state = reduceRequestedSolve(state, { type: 'preparation-done', id: state.active!.id }).state;
     expect(state.phase).toBe('waiting-readiness');
     expect(reduceRequestedSolve(state, { type: 'plan-ready', plan: ready }).state.phase).toBe('continuing');
-    expect(reduceRequestedSolve(state, { type: 'plan-ready', plan: failedPlan }).state.phase).toBe('cancelled');
+    expect(reduceRequestedSolve(state, { type: 'plan-ready', plan: { ...failedPlan, capabilityGeneration: 3 } }).state.phase).toBe('cancelled');
 
     const automatic = reduceRequestedSolve({ ...initialRequestedSolve<Input>(), plan: failedPlan },
       { type: 'fusion-request', inputs, jobId: 'late-Fusion', engine: 'engine' });
     expect(automatic.state.active?.jobId).toBe('late-Fusion');
+    expect(reduceRequestedSolve(automatic.state, { type: 'plan-ready', plan: failedPlan }).state.phase).toBe('waiting-readiness');
     expect(reduceRequestedSolve(automatic.state, { type: 'plan-ready', plan: ready }).state.phase).toBe('continuing');
+  });
+
+  it('rejects stale ready snapshots after a fresh failure, then accepts a later request for the same job', () => {
+    const event = { type: 'fusion-request' as const, inputs, jobId: 'Fusion', engine: 'engine' };
+    let state = reduceRequestedSolve({ ...initialRequestedSolve<Input>(), plan: cold }, event).state;
+    const failed = { ...cold, capabilityGeneration: 3, engines: [{ name: 'engine', available: false, runtime_state: 'failed' }] };
+    state = reduceRequestedSolve(state, { type: 'plan-ready', plan: failed }).state;
+    expect(state.active).toBeNull();
+    state = reduceRequestedSolve(state, event).state;
+    const id = state.active!.id;
+    const stale = reduceRequestedSolve(state, { type: 'plan-ready', plan: ready });
+    expect(stale.state.plan).toBe(failed);
+    expect(stale.state.phase).toBe('waiting-readiness');
+    expect(stale.effects).toEqual([]);
+    const fresh = reduceRequestedSolve(stale.state, { type: 'plan-ready', plan: { ...ready, capabilityGeneration: 4 } });
+    expect(fresh.state.active!.id).toBe(id);
+    expect(fresh.effects.filter(effect => effect.type === 'continue')).toHaveLength(1);
+  });
+
+  it('retains queued Fusion ownership when a POST settles between unmount and remount', () => {
+    let state = reduceRequestedSolve({ ...initialRequestedSolve<Input>(), plan: ready }, { type: 'press', inputs }).state;
+    const id = state.active!.id;
+    state = reduceRequestedSolve(state, { type: 'frame-resolved', id }).state;
+    state = reduceRequestedSolve(state, { type: 'fusion-request', inputs, jobId: 'Fusion', engine: 'engine' }).state;
+    const fusionId = state.queue[0].id;
+    state = reduceRequestedSolve(state, { type: 'unmount' }).state;
+    state = reduceRequestedSolve(state, { type: 'post-succeeded', id }).state;
+    expect(state.active).toBeNull();
+    expect(state.queue.map(request => request.id)).toEqual([fusionId]);
+    const remount = reduceRequestedSolve(state, { type: 'mount' });
+    expect(remount.state.active!.id).toBe(fusionId);
+    expect(remount.effects.filter(effect => effect.type === 'continue')).toHaveLength(1);
   });
 
   it('cancels pre-POST failures and reports them through effects', () => {
