@@ -334,6 +334,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [selectedEngine, refreshCapabilities]);
   const preparation = usePrepareEngine(engines, refreshCapabilities);
   const [actionError, setActionError] = useState<string | null>(null);
+  // "Solve did not start" says an error waits in Results: once that error is
+  // gone, so is the indication.
+  useEffect(() => { if (actionError === null) solveAttention.dismissFailure(); }, [actionError]);
   const revealActionError = useActionErrorReveal();
   const [submitting, setSubmitting] = useState(false);
   const submissionInFlight = useRef(false);
@@ -458,15 +461,16 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     setSubmitting(true);
     setActionError(null);
     // Inherited from the action, never captured here: a delayed submission
-    // after the user navigated away must not move them back.
-    if (opts.arm) solveAttention.armSolve(opts.attention);
-    else solveAttention.inheritSolve(opts.attention);
+    // after the user navigated away must not move them back. The token
+    // travels with this submission, never through a shared slot another
+    // press could take over while it awaits.
+    const token = opts.arm ? solveAttention.armSolve(opts.attention) : opts.attention ?? null;
     try {
       const jobId = await submit();
       if (jobId === null) { solveAttention.releaseSolve(); return null; }
       opts.onAccepted?.(jobId);
       compareSelection.awaitRun(jobId);
-      solveAttention.bindRun(jobId);
+      solveAttention.bindRun(jobId, undefined, token);
       await jobsSocket.refresh();
       return jobId;
     } catch (error) {
@@ -501,9 +505,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   // Every failure of a requested solve reports through reportError with the
   // token its press captured: revealed while the user is still there,
   // indicated once they have moved on.
-  const reportRequestNotice = useCallback((message: string | null, attention?: number) => {
+  // A notice whose action the user's own edit replaced is indicated only.
+  const reportRequestNotice = useCallback((message: string | null, attention?: number, indicate = false) => {
     if (message === null) setActionError(null);
-    else reportError(message, attention);
+    else if (indicate) {
+      setActionError(message);
+      if (attention !== undefined) solveAttention.indicateFailure(message);
+    } else reportError(message, attention);
   }, [reportError]);
   const requested = useRequestedSolve(refreshCapabilities, reportRequestNotice, solveAttention.releaseSolve, {
     capabilityGeneration, capabilityIssueSequence, enabled: solveEnabled, busy: submitting, pending: planPending, blocked: engineBlocked,
@@ -600,8 +608,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       if (!beforePost(continuation)) return 'blocked' as const;
       rememberCadSolve(key, designName, ingestId);
       // The press's token, inherited: never captured again here.
-      solveAttention.inheritSolve(continuation?.attention);
-      solveAttention.bindOperation(key);
+      solveAttention.bindOperation(key, continuation?.attention ?? null);
       const jobId = await solveModel(importedModelId(record), press).catch((error) => {
         if (error instanceof SolveSubmissionRefused) {
           // Refused: no job exists for this press, so nothing may claim it.
@@ -612,7 +619,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       });
       rememberCadSolve(jobId, designName, ingestId);
       solveAttention.followJob(key, jobId);
-      solveAttention.bindRun(jobId, key);
+      solveAttention.bindRun(jobId, key, continuation?.attention ?? null);
       if (frameAxis && view?.frame?.confirmed?.axis !== frameAxis) void useCadSolverFrameStore.getState().load(ingestId);
       await jobsSocket.refresh();
       const job = jobsSocket.getSnapshot().jobs.find((candidate) => candidate.id === jobId);
@@ -636,7 +643,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
           const reading = frameReadInFlight(patch.held.model.ingestId);
           if (reading) await awaitSolveStep(reading, patch.held);
         }
-        solveAttention.bindOperation(jobId);
+        solveAttention.bindOperation(jobId, attention ?? null);
         let child;
         try {
           if (approvals) await approveCadJob(jobId, approvals);
@@ -646,8 +653,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
             solveAttention.releaseOperation(jobId);
             // An observer may already have reported and latched the cancellation.
             // Unmount also aborts the token, and must stay silent.
-            if (!patch.held.signal.aborted) reportError(solveCancellationReason(patch.held)
-              ?? 'Prepare and solve was cancelled because the waiting job changed.', attention);
+            // What changed replaced the press's intention: indicated, never revealed.
+            if (!patch.held.signal.aborted) reportRequestNotice(solveCancellationReason(patch.held)
+              ?? 'Prepare and solve was cancelled because the waiting job changed.', attention, true);
             return null;
           }
           child = await solveCadAgain(jobId, { approvals, ...(patch.mesh_limit_override !== undefined ? { mesh_limit_override: patch.mesh_limit_override } : {}) });
@@ -673,7 +681,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         }
       },
     });
-  }, [acceptSubmission, beforePost, completeCadSolve, reportError]);
+  }, [acceptSubmission, beforePost, completeCadSolve, reportRequestNotice]);
 
   // An empty `?job=` names no run; drop it at once.
   useEffect(() => {

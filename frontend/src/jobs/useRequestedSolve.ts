@@ -108,7 +108,7 @@ function requestPlan(readiness: SolveReadiness) {
 }
 
 /** React is an interpreter for the pure owner: stores dispatch facts, effects do IO. */
-export function useRequestedSolve(refresh: () => void | Promise<void>, reportNotice: (message: string | null, attention?: number) => void,
+export function useRequestedSolve(refresh: () => void | Promise<void>, reportNotice: (message: string | null, attention?: number, indicate?: boolean) => void,
   releaseAttention: () => void, readiness: SolveReadiness) {
   const machine = useRef(initialRequestedSolve<SolveInputs>());
   const [state, setState] = useState(machine.current);
@@ -137,13 +137,19 @@ export function useRequestedSolve(refresh: () => void | Promise<void>, reportNot
       ...event, capabilityIssueSequence: services.current.readiness.capabilityIssueSequence?.(),
     });
     machine.current = result.state; // Claim ownership before any effect or synchronous store event.
+    // A press that joined a request already continuing: its submission carries the newest token.
+    const joined = result.state.active && executions.current.get(result.state.active.id)?.token;
+    if (joined && result.state.active) {
+      if (result.state.active.attention === undefined) delete joined.attention;
+      else joined.attention = result.state.active.attention;
+    }
     if (result.state.mounted) setState(result.state);
     // Allocate cancellation resources before effects can synchronously notify stores.
     for (const effect of result.effects) if (effect.type === 'continue') tokenFor(effect.request);
     for (const effect of result.effects) {
       const io = services.current;
       switch (effect.type) {
-        case 'notice': io.reportNotice(effect.message, effect.attention); break;
+        case 'notice': io.reportNotice(effect.message, effect.attention, effect.indicate); break;
         case 'release': io.releaseAttention(); break;
         case 'abort': executions.current.get(effect.id)?.controller.abort(); break;
         case 'observe-start': {

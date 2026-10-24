@@ -79,8 +79,10 @@ def _cad_model(
             "project": {"lineage_id": lineage},
             "anchor": {"instance_id": "instance-1", "design_id": design_id, "throat_frame": None},
             "sources": sources,
-            # Prepared with Solve anyway over the triangle ceiling.
-            **({"mesh_limit_override": True} if mesh_limit_override else {}),
+            # Prepared with Solve anyway over the triangle ceiling, with the
+            # mesh sizes of ``_setup()``.
+            **({"mesh_limit_override": True, "mesh_sizes": _setup()["geometry"]["mesh"],
+                "skipped_source_ids": []} if mesh_limit_override else {}),
         })
 
     row = harness.store.allocate_ingest(
@@ -185,6 +187,21 @@ def test_solve_anyway_never_applies_to_a_mesh_prepared_without_it(harness) -> No
     model = _cad_model(harness)
     status, body = _solve(harness, app, model, client_request_id="press-1",
                           setup=_setup(engine="metal"), mesh_limit_override=True)
+    assert status == 200, body
+    _settle(harness)
+    job = harness.jobs_store.get_job_row(body["job_id"])
+    assert "mesh_limit_override" not in job["task_metadata"]["cad"]
+    assert "mesh_limit_override" not in harness.ingest.calls[-1]["prep_options"]
+
+
+def test_solve_anyway_stays_with_the_mesh_sizes_it_was_chosen_for(harness) -> None:
+    """A press with other mesh sizes makes another mesh: the ceiling asks again,
+    even though the record on screen was prepared with Solve anyway."""
+
+    app = _models_app(harness)
+    model = _cad_model(harness, mesh_limit_override=True)
+    status, body = _solve(harness, app, model, client_request_id="press-1",
+                          setup=_setup(rigid=25.0, engine="metal"), mesh_limit_override=True)
     assert status == 200, body
     _settle(harness)
     job = harness.jobs_store.get_job_row(body["job_id"])

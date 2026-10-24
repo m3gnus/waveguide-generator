@@ -1367,6 +1367,8 @@ def test_a_record_whose_axis_its_reduced_domain_cannot_use_is_refused_as_the_des
             message = str(caught.value)
             assert "cannot be solved along its radiation axis (+y)" in message
             assert message.endswith("Send the whole model from Fusion.")
+            # The user's sentence, never prefixed with its reason code.
+            assert not message.startswith("reduced_axis_not_allowed")
             assert "frame_confirmation_required" not in message
             assert "+y" in caught.value.details["statement"]
         finally:

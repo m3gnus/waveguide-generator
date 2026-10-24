@@ -148,7 +148,7 @@ describe('Enable & rerun wiring', () => {
     expect(blocked).not.toHaveBeenCalled();
     await act(async () => { pending.resolve('job-new'); await pending.promise; });
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'parametric-run', following: true, awaiting: 'job-new' });
-    expect(bind).toHaveBeenCalledWith('job-new');
+    expect(bind.mock.calls.map(([id]) => id)).toContain('job-new');
     expect(jobsSocket.refresh).toHaveBeenCalledOnce();
     expect(solveAttention.resultsReady('job-new')).toBe('revealed');
     expect(rerun.rerunWithPatch).toHaveBeenCalledWith(

@@ -427,7 +427,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     await act(async () => jobsCoordinatorBridge.getSnapshot().continueRun('job-child'));
     expect(retry).toHaveBeenCalledWith('job-child');
     expect(compareSelection.getSnapshot().awaiting).toBe('retry-child');
-    expect(bind).toHaveBeenCalledWith('retry-child');
+    expect(bind.mock.calls.map(([id]) => id)).toContain('retry-child');
     expect(useImportedSolveOptionsStore.getState().engine).toBe('bempp');
     expect(useCadReturnStore.getState().frequencyCount).toBe(12);
     expect(mocks.solveModel).toHaveBeenCalledOnce();

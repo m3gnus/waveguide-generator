@@ -1824,7 +1824,7 @@ describe('solve invocation mutex', () => {
     expect(host.querySelector<HTMLButtonElement>('button')!.disabled).toBe(true);
     await act(async () => { accepted.resolve('new-child'); await accepted.promise; });
     expect(compareSelection.getSnapshot().awaiting).toBe('new-child');
-    expect(bind).toHaveBeenCalledWith('new-child');
+    expect(bind.mock.calls.map(([id]) => id)).toContain('new-child');
     expect(refresh).toHaveBeenCalledOnce();
     expect(bind.mock.invocationCallOrder.at(-1)!).toBeLessThan(refresh.mock.invocationCallOrder[0]);
     await act(async () => {
@@ -3117,7 +3117,7 @@ describe('solve invocation mutex', () => {
 
     await act(async () => { await jobsCoordinatorBridge.getSnapshot().continueRun(parent.id); });
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: pinned.id, awaiting: child.id });
-    expect(bindRun).toHaveBeenCalledWith(child.id);
+    expect(bindRun.mock.calls.map(([id]) => id)).toContain(child.id);
 
     await act(async () => { publishJobs([{ ...child, status: 'complete', has_results: true }, parent, pinned]); });
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: child.id, awaiting: null });

@@ -82,6 +82,19 @@ describe('workspace mode switch', () => {
     expect(host.querySelector('[data-attention="solve-failed"]')).toBeNull();
   });
 
+  it('words the chip by what the requests ask: changes to make, or WG\'s own failure', async () => {
+    const state = cadJobSummary(legacyHold as unknown as JobItem);
+    const one = cadJobFixture({ ...state, reason: 'frame_confirmation_required', jobId: 'one' }, { status: 'held' });
+    act(() => publishCadJobs([one, { ...one, id: 'two' }]));
+    await act(async () => root.render(<AttentionNotices/>));
+    expect(host.querySelector('.attention-waiting')?.textContent).toContain('2 CAD requests need a change');
+    const question = cadJobFixture({ ...state, reason: 'setup_required', jobId: 'question' }, { status: 'held' });
+    act(() => publishCadJobs([one, question]));
+    expect(host.querySelector('.attention-waiting')?.textContent).toContain('2 CAD requests need you');
+    act(() => publishCadJobs([{ ...one, cad_state: { ...one.cad_state!, attention: 'failed' } }]));
+    expect(host.querySelector('.attention-waiting')?.textContent).toContain('A solve could not be prepared');
+  });
+
   it('leaves engine gates and failed preparations out of the chip, and Show reveals the requests', async () => {
     const state = cadJobSummary(legacyHold as unknown as JobItem);
     const engine = cadJobFixture({ ...state, reason: 'engine_unavailable', jobId: 'engine' }, { status: 'held' });

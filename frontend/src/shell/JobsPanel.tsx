@@ -367,8 +367,12 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
   const models = new Map(runJobs.filter(job => (source === 'all' || runSourceForJob(job) === source)
     && (!project || job.cad_source?.lineage_id === project)).map(job => [runModelKey(job),
       `${job.cad_source?.document_name ?? job.label ?? 'Model'} · …${runModelKey(job).slice(-10)}`]));
-  const visibleFailedCount = visibleJobs.filter((job) => job.status === 'error').length;
-  const failedCount = runJobs.filter((job) => job.status === 'error').length;
+  // Clear failed removes failures only: a kept CAD request stored as an error
+  // by an earlier release (a prepared one, a question) survives it, so it is
+  // not counted either.
+  const clearable = (job: JobItem) => job.status === 'error' && !isHeldCadJob(job);
+  const visibleFailedCount = visibleJobs.filter(clearable).length;
+  const failedCount = runJobs.filter(clearable).length;
   const activeCount = runJobs.filter((job) => isActiveJobStatus(job.status)).length;
   const hiddenByFilter = runJobs.length - visibleJobs.length;
   const notConnected = snapshot.connection !== 'connected';

@@ -13,9 +13,11 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 
 const actions = vi.hoisted(() => ({ continueRun: vi.fn(), dismiss: vi.fn() }));
 const coordinator = vi.hoisted(() => ({ continueRun: (...args: unknown[]) => actions.continueRun(...args) }));
+/** The one Solve owner, when a test puts one on screen. */
+const solveControl = vi.hoisted(() => ({ current: null as null | Record<string, unknown> }));
 vi.mock('./JobsCoordinator', () => ({
   jobsCoordinatorBridge: { getSnapshot: () => coordinator, subscribe: () => () => undefined },
-  useOptionalSolveControl: () => null,
+  useOptionalSolveControl: () => solveControl.current,
 }));
 vi.mock('../jobs/cadSolve', async (load) => ({
   ...await load<typeof import('../jobs/cadSolve')>(), dismissCadJob: actions.dismiss,
@@ -48,6 +50,7 @@ describe('held CAD request dialog owner', () => {
   });
   afterEach(() => {
     act(() => root.unmount());
+    solveControl.current = null;
     useCadReturnStore.setState({ ingestRecord: null, needsIngest: true });
     workspaceModeStore.setMode('parametric');
     host.remove();
@@ -176,6 +179,9 @@ describe('held CAD request dialog owner', () => {
   });
 
   it('shows a prepared request as Ready to solve in Results, with Solve, never as a question', async () => {
+    const solve = vi.fn().mockResolvedValue('submitted');
+    solveControl.current = { solve, disabled: false, title: 'Solve', cadMode: true, submitting: false,
+      readiness: null, readinessRequested: false, waitingForEngine: false, actionError: null, preparationError: null };
     const ready = { ...held('ready'), stage_message: 'Ready to solve',
       cad_state: { ...held().cad_state!, held: true, reason: 'ready_to_solve', attention: 'ready',
         message: 'Prepared. Press Solve to start it.', next_step: 'Start the prepared solve when you are ready.',
@@ -192,9 +198,58 @@ describe('held CAD request dialog owner', () => {
     expect(host.textContent).not.toContain('Waiting for you');
     expect(host.textContent).not.toContain('refused');
     expect(host.querySelector('[role="dialog"]')).toBeNull();
+    // One Solve, never a second competing one.
+    expect([...host.querySelectorAll('button')].filter(node => node.textContent === 'Solve')).toHaveLength(1);
     await act(async () => button('Solve').click());
-    // Solve continues this very request, with its prepared mesh.
-    expect(actions.continueRun).toHaveBeenCalledWith('ready', { mesh_limit_override: false });
+    // The one Solve owner solves the settings and frame on screen; the server
+    // resumes this request's preparation when they are unchanged.
+    expect(solve).toHaveBeenCalledOnce();
+    expect(actions.continueRun).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an engine warming for the press', { waitingForEngine: true, readinessRequested: true }],
+    ['a failed press', { actionError: 'Solve refused: choose settings.' }],
+  ])('shows %s first, never a competing Ready to solve', async (_name, state) => {
+    const solve = vi.fn().mockResolvedValue('submitted');
+    solveControl.current = { solve, disabled: false, title: 'Solve', cadMode: true, submitting: false,
+      readiness: null, readinessRequested: false, waitingForEngine: false, waitingEngine: 'beat-metal', actionError: null, preparationError: null,
+      stopWaiting: vi.fn(), ...state };
+    const ready = { ...held('ready'), stage_message: 'Ready to solve',
+      cad_state: { ...held().cad_state!, held: true, reason: 'ready_to_solve', attention: 'ready',
+        message: 'Prepared. Press Solve to start it.', next_step: 'Start the prepared solve when you are ready.',
+        options: [{ id: 'retry', label: 'Solve' }] } } as JobItem;
+    publishCadJobs([ready]);
+    const record = { ingest_id: 'mesh', manifest_sha256: ready.cad_state!.snapshot!.manifest_sha256 } as never;
+    workspaceModeStore.setMode('cad');
+    useCadReturnStore.setState({ ingestRecord: record, needsIngest: false });
+    await act(async () => root.render(<CurrentModelStatus record={record} actions solveStatus/>));
+    expect(host.querySelector('[data-model-status="ready"]')).toBeNull();
+    expect(host.textContent).not.toContain('Ready to solve');
+    if ('waitingForEngine' in state) {
+      expect(host.textContent).toContain('is warming up');
+      expect([...host.querySelectorAll('button')].filter(node => node.textContent === 'Solve')).toHaveLength(0);
+    } else {
+      expect(host.querySelector('[role="alert"]')?.textContent).toBe('Solve refused: choose settings.');
+      expect([...host.querySelectorAll('button')].filter(node => node.textContent === 'Solve')).toHaveLength(1);
+    }
+  });
+
+  it('keeps an engine that cannot solve the return in its readiness view, never "Needs a change"', async () => {
+    solveControl.current = { solve: vi.fn(), disabled: false, title: 'Solve', cadMode: true, submitting: false,
+      readiness: null, readinessRequested: false, waitingForEngine: false, actionError: null, preparationError: null };
+    const engine = { ...held('engine'), stage_message: 'Needs a change',
+      cad_state: { ...held().cad_state!, held: true, reason: 'engine_cannot_solve_return', attention: 'action',
+        message: 'BEAT · CUDA solves CAD returns only in Accurate. Choose Accurate, or Metal / AUTO.',
+        options: [{ id: 'dismiss', label: 'Dismiss request' }] } } as JobItem;
+    publishCadJobs([engine]);
+    const record = { ingest_id: 'mesh', manifest_sha256: engine.cad_state!.snapshot!.manifest_sha256 } as never;
+    workspaceModeStore.setMode('cad');
+    useCadReturnStore.setState({ ingestRecord: record, needsIngest: false });
+    await act(async () => root.render(<CurrentModelStatus record={record} actions solveStatus/>));
+    expect(host.querySelector('[data-model-status="change"]')).toBeNull();
+    expect(host.textContent).not.toContain('Needs a change');
+    expect(host.textContent).toContain('Choose Accurate, or Metal / AUTO.');
   });
 
   it('never pops up for an engine gate, a frame changed elsewhere or a failed preparation', async () => {

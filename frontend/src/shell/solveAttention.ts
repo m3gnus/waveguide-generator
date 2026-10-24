@@ -27,7 +27,9 @@ import { navigationGeneration, workspaceNavigation } from './workspaceNavigation
  */
 
 /** Explicit-navigation count captured by a Solve press, until a run or
- * operation takes it over. */
+ * operation takes it over. Only for a caller that binds without naming its
+ * token; the coordinator's submissions carry theirs (`bindRun`'s `token`), so
+ * another press meanwhile can never take it over. */
 let pendingSolve: number | null = null;
 /** Run id -> the count its command was given at. */
 const runArms = new Map<string, number>();
@@ -71,19 +73,14 @@ export const solveAttention = {
 
   /** The user pressed Solve (button, shortcut, palette, or a pull and solve).
    * Returns the action's identity: the one token every continuation of this
-   * press inherits (`inheritSolve`) and every failure of it reports with. Call
-   * it once per user action, never on a delayed continuation. */
+   * press carries (`bindRun`/`bindOperation`'s `token`) and every failure of
+   * it reports with. Call it once per user action, never on a delayed
+   * continuation. */
   armSolve(token: number = navigationGeneration()): number {
     pendingSolve = token;
     setReadyRun(null);
     setFailedAction(null);
     return token;
-  },
-  /** A continuation of a press submits now: it carries that press's token,
-   * captured when the user acted, so a later navigation still counts. Without
-   * one (nobody pressed) the run it creates is indicated, never revealed. */
-  inheritSolve(token: number | undefined): void {
-    pendingSolve = token ?? null;
   },
   /** A Solve the user asked for failed while they were elsewhere: say so,
    * without moving them, until Results is seen. */
@@ -98,11 +95,15 @@ export const solveAttention = {
   releaseSolve(): void {
     pendingSolve = null;
   },
-  /** The operation a Solve press created or recovered carries its arm. */
-  bindOperation(operationId: string): void {
-    if (pendingSolve === null) return;
-    operationArms.set(operationId, pendingSolve);
-    pendingSolve = null;
+  /** The operation a Solve press created or recovered carries its arm.
+   * `token`: the press's own (`armSolve`), carried with the request; null when
+   * nobody pressed (its outcome is indicated, never revealed). Omitted, the
+   * last unbound press's. */
+  bindOperation(operationId: string, token?: number | null): void {
+    const armed = token === undefined ? pendingSolve : token;
+    if (token === undefined || pendingSolve === token) pendingSolve = null;
+    if (armed === null) return;
+    operationArms.set(operationId, armed);
   },
   /** A press bound to an operation was refused: nothing will claim its arm. */
   releaseOperation(operationId: string): void {
@@ -128,10 +129,10 @@ export const solveAttention = {
   /** A run was claimed for the user: the arm follows it from its operation, or
    * from the Solve press that submitted it. A run nobody armed is claimed
    * without one, and its results are indicated rather than revealed. */
-  bindRun(jobId: string, operationId?: string): void {
+  bindRun(jobId: string, operationId?: string, token?: number | null): void {
     const fromOperation = operationId !== undefined ? operationArms.get(operationId) : undefined;
-    const armed = fromOperation ?? pendingSolve;
-    if (fromOperation === undefined) pendingSolve = null;
+    const armed = fromOperation ?? (token === undefined ? pendingSolve : token);
+    if ((fromOperation === undefined && token === undefined) || (token !== undefined && pendingSolve === token)) pendingSolve = null;
     if (armed !== null && armed !== undefined && !runArms.has(jobId)) runArms.set(jobId, armed);
   },
   /**

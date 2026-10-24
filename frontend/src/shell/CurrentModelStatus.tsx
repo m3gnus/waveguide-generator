@@ -22,10 +22,14 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
   const latestJob = status.job;
   const latest = latestJob?.cad_state ? cadJobSummary(latestJob) : null;
   const unavailable = !control || (!!record && !control.cadMode);
-  const readiness = control?.readiness ?? latestJob?.cad_state?.blocker ?? (status.kind === 'refused' || status.kind === 'waiting' ? messageBlocker(latestJob?.cad_state?.message || status.message)
+  // A prepared request blocks nothing: its sentence is never a readiness blocker.
+  const ready = status.kind === 'waiting' && !!latestJob && isReadyCadJob(latestJob);
+  const readiness = control?.readiness ?? latestJob?.cad_state?.blocker ?? (status.kind === 'refused' || (status.kind === 'waiting' && !ready) ? messageBlocker(latestJob?.cad_state?.message || status.message)
     : unavailable ? messageBlocker('Solve is not available here.') : null);
-  const held = status.kind === 'waiting' && latestJob?.cad_state?.state === 'needs_user_input'
-    && latestJob.cad_state.reason === 'engine_unavailable';
+  const heldReason = status.kind === 'waiting' && latestJob?.cad_state?.state === 'needs_user_input' ? latestJob.cad_state.reason : null;
+  const held = heldReason === 'engine_unavailable';
+  // Every engine gate keeps its own readiness view, never "Needs a change".
+  const engineHold = held || heldReason === 'engine_cannot_solve_return';
   const request: ReactNode = record ? <CurrentModelRequests record={record}/> : null;
   // The pop-up owns the choice; the request's card stays, as Review reveals it.
   // Results is the one home of the Waiting notice; the CAD Solve card keeps its
@@ -44,28 +48,6 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
       {meshChoiceLine(cad.label)}
     </Notice>
   </div>;
-  // Prepared and kept until the user presses Solve: calm, never a question
-  // or a failure. Solve continues this very request with its prepared mesh.
-  if (solveStatus && status.kind === 'waiting' && latestJob && isReadyCadJob(latestJob)) return <div className="current-model-status" data-model-status="ready">
-    <Notice tone="info" title={MODEL_STATUS_TITLE.ready} actions={actions
-      ? <button type="button" className="btn-primary" disabled={!!control?.submitting}
-        onClick={() => void jobsCoordinatorBridge.getSnapshot().continueRun(latestJob.id, { mesh_limit_override: false }).catch(() => undefined)}>Solve</button>
-      : undefined}>
-      {status.message}
-    </Notice>
-    {request}
-  </div>;
-  // A kept request that names something to change (a frame changed
-  // elsewhere, an engine that cannot solve this return): calm, in its next
-  // step, never a red refusal. The engine gate keeps its own readiness view.
-  if (solveStatus && status.kind === 'waiting' && latestJob && !held && latestJob.cad_state?.attention === 'action') return <div className="current-model-status" data-model-status="change">
-    <Notice tone="info" title={MODEL_STATUS_TITLE.change} actions={actions
-      ? <button type="button" className="btn-primary" disabled={!control || control.disabled} title={control?.title ?? 'Solve is not available here.'} onClick={() => void control?.solve()}>Solve</button>
-      : undefined}>
-      {status.message}
-    </Notice>
-    {request}
-  </div>;
   // A failed preparation: WG's calm sentence and Try again where it can work.
   if (status.kind === 'prepare-failed' && latestJob) {
     const retry = latestJob.cad_state?.options?.find(option => option.id === 'retry');
@@ -78,14 +60,34 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
       {request}
     </div>;
   }
-  const engineGate = held || !!readiness?.engine || control?.waitingForEngine;
+  const engineGate = engineHold || !!readiness?.engine || control?.waitingForEngine;
   const pending = solveStatus && (control?.waitingForEngine || control?.actionError || control?.preparationError
-    || (readiness && (held || control?.readinessRequested)));
+    || (readiness && (engineHold || control?.readinessRequested)));
   const terminalFailure = status.kind === 'failed' || (status.kind === 'refused' && !held);
   const latestAttempt = activeOnly && terminalFailure;
   const readinessVisible = held || control?.readinessRequested;
   const diagnosticCovered = pending && ((!control?.waitingForEngine && readinessVisible && readiness?.message === status.message)
     || control?.actionError?.endsWith(status.message) || control?.preparationError?.endsWith(status.message));
+  const solveButton = <button type="button" className="btn-primary" disabled={!control || control.disabled} title={control?.title ?? 'Solve is not available here.'} onClick={() => void control?.solve()}>Solve</button>;
+  // A kept request that is prepared, or names something to change (a frame
+  // changed elsewhere): calm, in its next step, never a red refusal, with the
+  // one Solve, which solves the settings and frame on screen (the server
+  // resumes this request's preparation when they are unchanged). A press in
+  // progress or failed comes first: its progress, readiness and error.
+  if (solveStatus && latestJob && (ready || (status.kind === 'waiting' && !engineHold && latestJob.cad_state?.attention === 'action'))
+    && !(pending && engineGate)) {
+    if (pending) return <div className="current-model-status" data-model-status={status.kind}>
+      <SolveProgressView showReadiness readiness={readiness}/>
+      {actions && solveButton}
+      {request}
+    </div>;
+    return <div className="current-model-status" data-model-status={ready ? 'ready' : 'change'}>
+      <Notice tone="info" title={MODEL_STATUS_TITLE[ready ? 'ready' : 'change']} actions={actions ? solveButton : undefined}>
+        {status.message}
+      </Notice>
+      {request}
+    </div>;
+  }
   if (actions && status.kind === 'never-solved' && model.kind === 'cad' && cad.selected
     && (cad.needsPreparation || cad.phase === 'preparing')) return <div className="current-model-status" data-model-status="not-prepared">
     <Notice title={cad.phase === 'preparing' ? `Preparing ${cad.label}…` : 'Not prepared yet'}
@@ -99,10 +101,10 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
     {pending && (!engineGate || terminalFailure) && <SolveProgressView showReadiness readiness={readiness}/>}
     {actions && (status.kind === 'failed' && latestJob
       ? <button type="button" className="btn" onClick={() => void jobsCoordinatorBridge.getSnapshot().continueRun(latestJob.id).catch(() => undefined)}>Retry</button>
-      : <button type="button" className="btn-primary" disabled={!control || control.disabled} title={control?.title ?? 'Solve is not available here.'} onClick={() => void control?.solve()}>Solve</button>)}
+      : solveButton)}
   </> : undefined;
   if (pending && engineGate && !terminalFailure) return <div className="current-model-status" data-model-status={status.kind}>
-    <SolveProgressView showReadiness readiness={readiness} held={held}/>
+    <SolveProgressView showReadiness readiness={readiness} held={engineHold}/>
     {!control?.waitingForEngine && controls}
   </div>;
   // Engine gates are described only in Results, including held Fusion requests.

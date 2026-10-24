@@ -67,9 +67,10 @@ function verify(sequence: readonly Step[], responses?: Record<'A' | 'B', string>
   const cancelled = new Set<number>();
   const posted = new Set<number>();
   const started = new Set<number>();
-  // The token invariant: a request's token comes from the one user action
-  // that created it (or the first that joined a request nobody pressed), and
-  // once it has one it is never re-armed; no token belongs to two requests.
+  // The token invariant: a request's token comes from the user action that
+  // created it, or the latest that joined it; nothing else ever changes it;
+  // no token belongs to two requests; and every press's token ends up on a
+  // request (or reports a visible outcome), never dropped.
   const tokens = new Map<number, number | undefined>();
   const owners = new Map<number, number>();
   function send(event: Event) {
@@ -89,7 +90,8 @@ function verify(sequence: readonly Step[], responses?: Record<'A' | 'B', string>
     }
     const newFusion = event.type === 'fusion-request' && before.mounted
       && ![...before.queue, ...(active ? [active] : [])].some(request => request.jobId === event.jobId);
-    const newPress = event.type === 'press' && before.mounted && !active;
+    // A press while a request is being cancelled is a new request behind it.
+    const newPress = event.type === 'press' && before.mounted && (!active || before.phase === 'cancelling');
     if (newFusion || newPress) {
       acceptedGeneration.set(before.nextId, before.plan.capabilityGeneration);
       acceptedAt.set(before.nextId, time);
@@ -132,8 +134,8 @@ function verify(sequence: readonly Step[], responses?: Record<'A' | 'B', string>
       const known = tokens.has(request.id);
       const previous = tokens.get(request.id);
       if (!known) assert(request.attention === eventToken, 'a new request did not take its press token');
-      else if (previous !== undefined) assert(request.attention === previous, 'a request was re-armed');
-      else assert(request.attention === undefined || request.attention === eventToken, 'a token appeared without a user action');
+      else assert(request.attention === previous || (eventToken !== undefined && request.attention === eventToken),
+        'a request token changed without a user action joining it');
       tokens.set(request.id, request.attention);
       if (request.attention !== undefined) {
         const owner = owners.get(request.attention);
@@ -141,7 +143,14 @@ function verify(sequence: readonly Step[], responses?: Record<'A' | 'B', string>
         owners.set(request.attention, request.id);
       }
     }
+    if (eventToken !== undefined && before.mounted) {
+      const held = [...state.queue, ...(state.active ? [state.active] : [])].some(request => request.attention === eventToken);
+      const reported = result.effects.some(effect => effect.type === 'notice' && effect.message !== null && effect.attention === eventToken);
+      assert(held || reported, 'a press lost its token');
+    }
     for (const effect of result.effects) {
+      // The user's own edit replaced the press: its notice is indicated, never revealed.
+      if (effect.type === 'notice' && effect.message !== null && event.type === 'inputs-changed') assert(effect.indicate === true, 'an edit revealed its cancellation');
       if (effect.type === 'notice' && effect.message !== null && effect.attention !== undefined) {
         assert(owners.has(effect.attention), 'a failure reported with a token no request holds');
       }

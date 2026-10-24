@@ -72,7 +72,7 @@ from server.jobs.imported_setup import (
     snapshot_setup,
     validate_setup,
 )
-from server.jobs.models import CadApprovalsRequest, ImportedGeometrySource, SolveRequest
+from server.jobs.models import CadApprovalsRequest, ImportedGeometrySource, ImportedMeshSizes, SolveRequest
 from server.jobs.runtime import (
     EngineUnavailableError,
     ImportedSolveRefusal,
@@ -665,8 +665,41 @@ def _press_frame(store: Any, record: Mapping[str, Any], frame_axis: str | None) 
     return frame_axis
 
 
+def _solve_anyway_carries(
+    record: Mapping[str, Any], setup: CadSolveSetup, target: SolveTarget | None,
+) -> bool:
+    """Whether the press's preparation remakes the mesh Solve anyway was chosen for.
+
+    Solve anyway answers the triangle ceiling for the prepared mesh on screen
+    (its record says ``mesh_limit_override``) and for nothing else, as
+    ``solve_again_intent`` keeps it to one preparation: the press must keep
+    that record's mesh sizes and skipped sources and the frame it was meshed
+    in. Other settings or another axis make another mesh, which the ceiling
+    asks about again. Unknown (no retained copy) is not the same.
+    """
+
+    if record.get("mesh_limit_override") is not True or target is None:
+        return False
+    if target.frame != record_identity(record)[0]:
+        return False
+    recorded = record.get("mesh_sizes")
+    skipped = set(record.get("skipped_source_ids") or ())
+    effective = snapshot_setup(setup, target.manifest) if target.manifest is not None else setup
+    geometry = effective.geometry
+    if not isinstance(recorded, Mapping) or not set(geometry.get("skipped_source_ids") or ()) <= skipped:
+        return False
+    try:
+        sizes = ImportedMeshSizes.model_validate(geometry.get("mesh")).model_dump(mode="json")
+    except ValueError:
+        return False
+    sizes["source_size_mm"] = {
+        source: size for source, size in sizes["source_size_mm"].items() if source not in skipped
+    }
+    return sizes == dict(recorded)
+
+
 def _press(
-    body: ModelSolveRequest, revision_id: str, frame_axis: str | None, record: Mapping[str, Any],
+    body: ModelSolveRequest, revision_id: str, frame_axis: str | None, solve_anyway: bool,
 ) -> dict[str, Any]:
     return {
         "setup_revision_id": revision_id,
@@ -675,8 +708,9 @@ def _press(
         "approve_finding_ids": tuple(body.approvals.finding_ids) if body.approvals else (),
         "submit": True,
         # Solve anyway answers the ceiling for the prepared mesh on screen
-        # only: a press naming it for a mesh prepared without it asks again.
-        "mesh_limit_override": body.mesh_limit_override and record.get("mesh_limit_override") is True,
+        # only (``_solve_anyway_carries``): a press naming it for another
+        # preparation asks again.
+        "mesh_limit_override": body.mesh_limit_override and solve_anyway,
     }
 
 
@@ -717,9 +751,12 @@ async def _solve_cad(
         # The axis the press showed is confirmed first: the frame it is
         # compared and prepared under is then the one the user chose.
         frame_axis = await asyncio.to_thread(_press_frame, store, record, body.frame_axis)
-        press = _press(body, revision_id, frame_axis, record)
         target = await asyncio.to_thread(
             _lane_target, store, Path(state.data_dir), record, setup, adopts=adopts
+        )
+        press = _press(
+            body, revision_id, frame_axis,
+            body.mesh_limit_override and _solve_anyway_carries(record, setup, target),
         )
         if started is None and target is not None:
             match = await asyncio.to_thread(active_model_match, runtime, store, model_id, record, target)

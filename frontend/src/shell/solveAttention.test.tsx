@@ -51,6 +51,20 @@ describe('solve attention: reveal only while the user is still waiting', () => {
     bindWorkspaceNavigation((panel) => { activations.push(panel); return true; });
   });
 
+  it('binds a submission to the token it carries, never to a press made meanwhile', () => {
+    const first = solveAttention.armSolve();
+    // Another press (made after a navigation) arms while the first submission awaits.
+    noteExplicitNavigation();
+    const second = solveAttention.armSolve();
+    solveAttention.bindRun('job-first', undefined, first);
+    solveAttention.bindRun('job-second', undefined, second);
+    // Nobody pressed for this one: its token is explicitly none.
+    solveAttention.bindRun('job-unasked', undefined, null);
+    expect(solveAttention.resultsReady('job-first')).toBe('indicated');
+    expect(solveAttention.resultsReady('job-second')).toBe('revealed');
+    expect(solveAttention.resultsReady('job-unasked')).toBe('indicated');
+  });
+
   it('reveals Results for an armed run, once', () => {
     solveAttention.armSolve();
     solveAttention.bindRun('job-1');

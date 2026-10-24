@@ -310,12 +310,17 @@ export function AttentionNotices() {
   const waitingLabel = !first && !Object.keys(notices).length
     ? ''
     : waitingCount > 1
-      ? `${waitingCount} CAD requests need you`
+      // Only a real question waits for the user: requests that all name a
+      // change to make say so.
+      ? waiting.every(request => request.operation?.kind === 'prepare_and_solve' && request.operation.attention === 'action')
+        ? `${waitingCount} CAD requests need a change` : `${waitingCount} CAD requests need you`
       : first?.kind !== 'prepare_and_solve' ? 'A CAD update needs recovery'
       // The words follow the server's one classification: only a real
-      // question waits for the user; anything else names a change to make.
+      // question waits for the user; anything else names a change to make,
+      // or WG's own failed preparation.
       : first.attention === 'question' ? 'A solve is waiting for you'
-      : first.attention === 'action' ? 'A solve needs a change' : 'A solve is on hold';
+      : first.attention === 'action' ? 'A solve needs a change'
+      : first.attention === 'failed' ? 'A solve could not be prepared' : 'A solve is on hold';
   return <>
     {showWaiting && <button
       type="button"

@@ -28,6 +28,11 @@ from server.solver.imported import (
 )
 
 
+#: Refusals whose message is already the user's sentence: the reason code
+#: stays on ``reason_code`` and never prefixes the words a person reads.
+WORDED_REFUSAL_CODES = frozenset({"reduced_axis_not_allowed"})
+
+
 class ImportedSolveRefusal(ValueError):
     """A typed imported-geometry eligibility refusal at the runtime boundary."""
 
@@ -40,7 +45,8 @@ class ImportedSolveRefusal(ValueError):
     ) -> None:
         self.reason_code = reason_code
         self.details = dict(details or {})
-        super().__init__(message if self.details.get("blocker") else f"{reason_code}: {message}")
+        worded = self.details.get("blocker") or reason_code in WORDED_REFUSAL_CODES
+        super().__init__(message if worded else f"{reason_code}: {message}")
 
 
 def _imported_decision_refusal(record: Mapping[str, Any] | None) -> tuple[str, str] | None:

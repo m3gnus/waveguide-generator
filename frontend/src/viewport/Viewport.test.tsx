@@ -949,10 +949,11 @@ describe('Viewport preview errors', () => {
 
   it('shows the ingested solve mesh in CAD Link when a display artifact exists', async () => {
     const ingestId = 'wgi_viewport_cadmesh';
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      expect(String(input)).toBe(`/api/cadlink/ingest/${ingestId}/mesh`);
-      return new Response(meshFixture, { status: 200 });
-    });
+    const meshUrl = `/api/cadlink/ingest/${ingestId}/mesh`;
+    // Other requests (status polls) may run meanwhile: only the mesh is counted.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => (
+      String(input) === meshUrl ? new Response(meshFixture, { status: 200 }) : new Response('{}', { status: 404 })));
+    const meshFetches = () => fetchSpy.mock.calls.filter(([input]) => String(input) === meshUrl).length;
     act(() => {
       useCadReturnStore.setState({
         ingestRecord: {
@@ -974,9 +975,9 @@ describe('Viewport preview errors', () => {
       buttons()[1].click();
       await Promise.resolve();
     });
-    expect(fetchSpy).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(importedMeshStore.getSnapshot().cadSolver?.ingestId).toBe(ingestId));
+    expect(meshFetches()).toBe(1);
     expect(buttons()[1].getAttribute('aria-pressed')).toBe('true');
-    expect(importedMeshStore.getSnapshot().cadSolver?.ingestId).toBe(ingestId);
 
     // The artifact is immutable: reselecting it must re-serve the cached scene
     // rather than fetching the same mesh again.
@@ -988,7 +989,7 @@ describe('Viewport preview errors', () => {
       buttons()[1].click();
       await Promise.resolve();
     });
-    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(meshFetches()).toBe(1);
 
     fetchSpy.mockRestore();
     act(() => {

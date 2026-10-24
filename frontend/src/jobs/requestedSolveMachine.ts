@@ -19,7 +19,9 @@ export interface SolveRequest<T> {
   /** The user action that asked for this solve: the explicit-navigation
    * count captured once, at the press (`solveAttention.armSolve`). Every
    * continuation, readiness wait and submission inherits it and every failure
-   * reports with it; it is never captured again. Absent for a request nobody
+   * reports with it; it is never captured again. A later press that joins
+   * this request (it is already active or queued) is the user's latest
+   * action, so its token replaces this one. Absent for a request nobody
    * pressed (a Fusion request observed arriving). */
   attention?: number;
 }
@@ -45,8 +47,10 @@ export type RequestedSolveEvent<T> = (
 export type RequestedSolveEffect<T> =
   | { type: 'continue' | 'prepare'; request: SolveRequest<T> }
   | { type: 'abort' | 'post'; id: number }
-  /** `attention`: the action the message reports on (`SolveRequest.attention`). */
-  | { type: 'notice'; message: string | null; attention?: number }
+  /** `attention`: the action the message reports on (`SolveRequest.attention`).
+   * `indicate`: the user's own edit replaced that action, so the message may
+   * only be indicated, never move the dock. */
+  | { type: 'notice'; message: string | null; attention?: number; indicate?: boolean }
   | { type: 'release' | 'observe-start' | 'observe-stop' };
 export const PREPARATION_FAILED = 'Prepare and solve was cancelled because engine preparation failed.';
 export function initialRequestedSolve<T>(): RequestedSolveState<T> {
@@ -71,11 +75,13 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
       activate(next);
     }
   };
-  const cancel = (reason?: string) => {
+  /** `ownEdit`: the user's own edit replaced the press's intention, so its
+   * notice is indicated, never revealed. */
+  const cancel = (reason?: string, ownEdit = false) => {
     const active = state.active;
     if (!active || state.phase === 'submitting' || state.phase === 'cancelling') return;
     effects.push({ type: 'abort', id: active.id }, { type: 'release' });
-    if (reason) effects.push({ type: 'notice', message: reason, attention: active.attention });
+    if (reason) effects.push({ type: 'notice', message: reason, attention: active.attention, ...(ownEdit ? { indicate: true } : {}) });
     // Wait for the aborted executor to release the shared submission mutex.
     if (state.phase === 'continuing') set({ phase: 'cancelling' });
     else advance('cancelled');
@@ -92,10 +98,10 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
         return engine.name !== next.name || engine.available !== next.available || engine.runtime_state !== next.runtime_state;
       })) set({ plan: b });
   };
-  // A user action joining a request nobody pressed gives it its identity; a
-  // request that has one keeps it.
-  const adopt = (request: SolveRequest<T>): SolveRequest<T> => request.attention === undefined
-    && (event.type === 'press' || event.type === 'fusion-request') && event.attention !== undefined
+  // A user action joining an existing request gives it its identity: the
+  // latest press is what the user holds now. Nobody's arrival changes nothing.
+  const adopt = (request: SolveRequest<T>): SolveRequest<T> => (event.type === 'press' || event.type === 'fusion-request')
+    && event.attention !== undefined && request.attention !== event.attention
     ? { ...request, attention: event.attention } : request;
   switch (event.type) {
     case 'mount':
@@ -110,10 +116,16 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
       const fusion = event.type === 'fusion-request';
       if (fusion && event.plan) updatePlan(event.plan);
       if (fusion && (state.active?.jobId === event.jobId || state.queue.some(request => request.jobId === event.jobId))) {
-        if (!event.prepare) break;
+        if (!event.prepare) {
+          // The same request, pressed again: it carries this press's token.
+          if (state.active?.jobId === event.jobId) set({ active: adopt(state.active) });
+          else set({ queue: state.queue.map(request => request.jobId === event.jobId ? adopt(request) : request) });
+          break;
+        }
         if (state.active?.jobId === event.jobId) {
+          set({ active: adopt(state.active) });
           if (state.phase === 'waiting-readiness' && state.active.preparation !== 'pending') {
-            const request = { ...adopt(state.active), preparation: 'pending' as const, preparationEngine: event.engine };
+            const request = { ...state.active, preparation: 'pending' as const, preparationEngine: event.engine };
             set({ active: request });
             effects.push({ type: 'prepare', request });
           }
@@ -125,9 +137,13 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
           break;
         }
       }
-      if (!fusion && state.active) {
+      // A press while a request is being cancelled is a new request, queued
+      // behind the cancellation; any other press joins the active request,
+      // which carries its token from now on.
+      if (!fusion && state.active && state.phase !== 'cancelling') {
+        set({ active: adopt(state.active) });
         if (event.prepareEngine && state.phase === 'waiting-readiness' && state.active.preparation !== 'pending') {
-          const request = { ...adopt(state.active), preparation: 'pending' as const, preparationEngine: event.prepareEngine };
+          const request = { ...state.active, preparation: 'pending' as const, preparationEngine: event.prepareEngine };
           set({ active: request });
           effects.push({ type: 'prepare', request });
         }
@@ -182,7 +198,9 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
       break;
     case 'inputs-changed':
       set({ queue: state.queue.filter(request => !event.ids.includes(request.id)) });
-      if (state.active && event.ids.includes(state.active.id)) cancel(event.reason);
+      // The user's own edit replaced the intention: its notice is
+      // indicated, never revealed in the press's name.
+      if (state.active && event.ids.includes(state.active.id)) cancel(event.reason, true);
       break;
     // Effect cleanup suspends ownership. A replay mounts the same live request;
     // the adapter sends stop after cleanup only if no remount followed.

@@ -566,6 +566,8 @@ export function Viewport() {
   const [cadSolverLoading, setCadSolverLoading] = useState(false);
   const [cadSolverError, setCadSolverError] = useState<string | null>(null);
   const [cadSolverRetry, setCadSolverRetry] = useState(0);
+  /** Solver-mesh loads in flight, by ingestion id and Retry. */
+  const cadSolverLoads = useRef(new Map<string, ReturnType<typeof showIngestedSolverMeshInViewport>>());
   // Without an independently tessellated display artifact the CAD geometry on
   // screen already *is* the solve mesh, so there is nothing to switch between.
   const cadHasSeparateViewportMesh = cadRecord?.viewport_mesh?.available === true;
@@ -939,7 +941,17 @@ export function Viewport() {
     let cancelled = false;
     setCadSolverLoading(true);
     setCadSolverError(null);
-    void showIngestedSolverMeshInViewport(record, cadName).then((error) => {
+    // One load per ingestion (and Retry) in flight: a re-run of this effect
+    // (a renamed return, a re-render) joins it rather than fetching again.
+    const key = `${cadIngestId}\u0000${cadSolverRetry}`;
+    let load = cadSolverLoads.current.get(key);
+    if (!load) {
+      load = showIngestedSolverMeshInViewport(record, cadName);
+      cadSolverLoads.current.set(key, load);
+      const settled = load;
+      void settled.finally(() => { if (cadSolverLoads.current.get(key) === settled) cadSolverLoads.current.delete(key); }).catch(() => undefined);
+    }
+    void load.then((error) => {
       if (cancelled) return;
       setCadSolverLoading(false);
       setCadSolverError(error);
