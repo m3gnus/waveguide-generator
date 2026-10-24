@@ -666,6 +666,9 @@ def create_app(
                     await beat_worker_prewarm(engine_registry, getattr(application.state, "settings", None),
                                              requested=resolved, cancellation_callback=check_cancelled)
                     return
+                if resolved == "metal":
+                    await prewarm_solver(resolved)
+                    return
                 if resolved == "bempp":
                     from server.solver.warmup import prewarm_bempp_worker_for_engine
 

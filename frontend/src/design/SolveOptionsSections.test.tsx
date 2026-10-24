@@ -536,6 +536,7 @@ describe('solve and directivity control help', () => {
     // formulation and domain stay facts.
     expect(host.querySelector('#cad-solve-engine')).not.toBeNull();
     expect(host.textContent).toContain('Runs on');
+    expect(host.textContent).toContain('See solve readiness in Results.');
     expect(host.textContent).toContain('x0, y0');
     expect(host.querySelector('#mesh-validation-mode')).not.toBeNull();
     expect(host.querySelector('#cad-solve-frequency-mode')).not.toBeNull();

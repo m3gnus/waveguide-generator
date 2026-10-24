@@ -1,4 +1,4 @@
-import { restoreEnginePreference } from './solveOptions';
+import { enginePreference, restoreEnginePreference, useImportedSolveOptionsStore } from './solveOptions';
 import { create } from 'zustand';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { CadSolveSetup } from '../api/cadOperations';
@@ -56,6 +56,8 @@ export interface ImportedModelState {
   setupEditBase: { retained: ImportedSetup; controls: ImportedSetup } | null;
   /** The saved revision `setup` is; an unedited Solve sends it. */
   restoredRevisionId: string | null;
+  /** Startup model follows late durable preference hydration until an explicit edit/open. */
+  followEnginePreference: boolean;
   fileDraft: FileDraft;
   generation: number;
   phase: ImportedPhase;
@@ -67,7 +69,7 @@ export const EMPTY_FILE_DRAFT: Readonly<FileDraft> = Object.freeze({ units: '', 
 function emptyState(input: ImportedInput | null): Omit<ImportedModelState, 'generation'> {
   return {
     input, model: null, modelId: null, prepared: null, originalAvailable: false, setup: null,
-    restoredRevisionId: null, setupEditBase: null, fileDraft: { ...EMPTY_FILE_DRAFT, selected: [] }, phase: 'empty', error: null,
+    restoredRevisionId: null, followEnginePreference: false, setupEditBase: null, fileDraft: { ...EMPTY_FILE_DRAFT, selected: [] }, phase: 'empty', error: null,
   };
 }
 
@@ -105,7 +107,7 @@ export interface ImportedDisplay {
 
 export type ImportedSource =
   | { kind: 'run'; job: JobItem; display?: ImportedDisplay }
-  | { kind: 'model'; modelId: string; preparedId?: string | null; display?: ImportedDisplay }
+  | { kind: 'model'; modelId: string; preparedId?: string | null; display?: ImportedDisplay; useEnginePreference?: boolean }
   /** A file just registered or prepared (null: a new file not yet prepared), with the setup a replay carries. */
   | { kind: 'file'; prepared: (ImportedPrepared & { source_file?: { filename?: string; transform: { units: string; forward: string; up: string }; source_tags: number[] } }) | null;
     setup?: ImportedSetup | null }
@@ -201,9 +203,13 @@ async function readOpened(source: Extract<ImportedSource, { kind: 'run' | 'model
     ? (await readImportedModel(source.modelId, preparedId, fetcher)).prepared : read.latest_prepared);
   if (!prepared) throw new Error('This model has no retained preparation. Import it again.');
   const saved = await readImportedSetup(source.modelId, prepared.ingest_id, fetcher);
+  const engine = source.useEnginePreference ? enginePreference().engine : undefined;
+  const changedEngine = saved.setup && engine !== undefined && engine !== saved.setup.options.engine;
+  const setup = changedEngine
+    ? { ...saved.setup!, options: { ...saved.setup!.options, engine: engine! } } : saved.setup;
   return {
     input, model: read.model, modelId: read.model.model_id, prepared, originalAvailable: read.original_available,
-    setup: saved.setup ?? null, revisionId: saved.setup ? saved.revision_id ?? null : null, exact: true, note: null,
+    setup: setup ?? null, revisionId: setup && !changedEngine ? saved.revision_id ?? null : null, exact: true, note: null,
   };
 }
 
@@ -256,8 +262,9 @@ export async function openImported(source: ImportedSource, fetcher: typeof fetch
       setup: opened.setup && opened.exact ? structuredClone(opened.setup) : null,
       restoredRevisionId: opened.setup && opened.exact ? opened.revisionId : null,
       fileDraft: input === 'file' ? fileDraftOf(opened.prepared) : useImportedModelStore.getState().fileDraft,
-      phase: 'ready', error: null,
+      phase: 'ready', error: null, followEnginePreference: source.kind === 'model' && source.useEnginePreference === true,
     });
+    if (source.kind === 'model' && source.useEnginePreference) restoreEnginePreference();
     captureSetupControls();
     return true;
   } catch (error) {
@@ -331,8 +338,11 @@ export async function reopenLastModel(fetcher: typeof fetch = fetch, options: Re
       return shown;
     }
     if (!stillEmpty()) return false;
-    const opened = await openImported({ kind: 'model', modelId: pointer.model_id }, reachable);
-    if (opened) restoreEnginePreference();
+    restoreEnginePreference();
+    // Apply the remembered choice before the rail projects the retained setup.
+    // Explicit run opens use their recorded revision without this override.
+    const opened = await openImported({ kind: 'model', modelId: pointer.model_id,
+      useEnginePreference: true }, reachable);
     return opened;
   } catch (error) {
     if (isDefinitiveRefusal(error)) { clearLastModel(pointer); return false; }
@@ -340,6 +350,20 @@ export async function reopenLastModel(fetcher: typeof fetch = fetch, options: Re
     noteLastModelFailure(pointer);
     throw error;
   }
+}
+
+/** Keep the active setup and its option projection on one engine during late hydration. */
+export function applyImportedEnginePreference(engine: string | undefined): string | undefined {
+  const state = useImportedModelStore.getState();
+  const retained = state.setup ?? state.setupEditBase?.retained;
+  if (retained && !state.followEnginePreference) return retained.options.engine;
+  if (engine && state.setup && state.setup.options.engine !== engine) {
+    useImportedModelStore.setState({ setup: { ...state.setup, options: { ...state.setup.options, engine } },
+      restoredRevisionId: null });
+    useImportedSolveOptionsStore.setState({ engine });
+    captureSetupControls();
+  }
+  return engine;
 }
 
 /** This open (by its generation) still owns the store and the viewport: no newer open of either input. */
@@ -403,7 +427,7 @@ export function restoreCadImportedSetup(modelId: string, prepared: ImportedPrepa
   if (workspaceModeStore.getSnapshot().importedInput !== 'cad') return;
   useImportedModelStore.setState({ input: 'cad', modelId, prepared,
     setup: setup ? structuredClone(setup) : null, restoredRevisionId: setup ? revisionId : null,
-    setupEditBase: null, phase: prepared ? 'ready' : 'empty', error: null });
+    setupEditBase: null, followEnginePreference: false, phase: prepared ? 'ready' : 'empty', error: null });
   captureSetupControls();
 }
 
@@ -449,6 +473,7 @@ subscribeSolveSettingsEdits((edit) => {
     return;
   }
   const state = useImportedModelStore.getState();
+  if (state.followEnginePreference) useImportedModelStore.setState({ followEnginePreference: false });
   if (state.phase === 'loading') {
     useImportedModelStore.setState({ phase: 'failed',
       error: 'Settings changed while this run was loading. Select the run again before solving.' });

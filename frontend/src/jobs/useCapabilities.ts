@@ -132,6 +132,12 @@ export function useCapabilities(): CapabilitiesSnapshot {
     pollingClock.generation += 1;
     for (const listener of pollingClock.listeners) listener();
     await client.refetchQueries({ queryKey: CAPABILITIES_QUERY_KEY });
+    // A warming refusal may outlive its capability fingerprint (for example
+    // when worker warm-up ends after runtime preparation). Observe both plans.
+    await Promise.all([
+      client.invalidateQueries({ queryKey: ['solve-plan'] }),
+      client.invalidateQueries({ queryKey: ['imported-solve-plan'] }),
+    ]);
   }, [client, pollingClock]);
   const onshapeOffered = data === undefined ? null : data.onshape === true;
   useEffect(() => {

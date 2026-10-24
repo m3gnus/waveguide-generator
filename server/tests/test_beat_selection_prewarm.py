@@ -178,3 +178,25 @@ def test_new_selection_cancels_old_preparation_before_provisioning(app, monkeypa
         await app.state.beat_prewarm_task
     asyncio.run(scenario())
     assert calls == [("cancel", "beat-cpu"), ("prepare", "beat-cpu"), ("warm", "beat-cpu")]
+
+
+def test_picker_warms_metal_through_the_native_hook(app, monkeypatch):
+    calls = []
+
+    async def resolve(_registry, requested):
+        return requested
+
+    async def warm(engine):
+        calls.append(engine)
+
+    monkeypatch.setattr(app_module, "resolve_prewarm_engine", resolve)
+    monkeypatch.setattr(app_module, "prewarm_solver", warm)
+
+    async def scenario():
+        status, _, _ = await _request_with_headers(app, 'POST', '/api/runtimes/beat/prewarm',
+                                                  body={'engine': 'metal'})
+        assert status == 202
+        await app.state.beat_prewarm_task
+        assert calls == ['metal']
+
+    asyncio.run(scenario())

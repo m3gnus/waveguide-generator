@@ -69,6 +69,20 @@ describe('useCapabilities', () => {
 
   const textOf = (tag: string) => host.querySelector(`[data-tag="${tag}"]`)?.textContent ?? '';
 
+  it('refreshes cached warming plans even when the capability fingerprint is unchanged', async () => {
+    let refresh!: () => Promise<void>;
+    function WaitingSolve() {
+      refresh = useCapabilities().refreshCapabilities;
+      return null;
+    }
+    await render(<WaitingSolve/>);
+    const keys = [['solve-plan', 'same-inputs'], ['imported-solve-plan', 'same-inputs']];
+    for (const key of keys) client.setQueryData(key, { readiness: { remedies: [{ kind: 'wait' }] } });
+    await act(async () => refresh());
+    for (const key of keys) expect(client.getQueryState(key)?.isInvalidated).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('replaces stale capability information with a backend connection notice', async () => {
     const manager = jobsSocket as unknown as { snapshot: ReturnType<typeof jobsSocket.getSnapshot>; listeners: Set<() => void> };
     const previous = manager.snapshot;

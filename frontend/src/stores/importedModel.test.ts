@@ -9,12 +9,13 @@ import {
   reopenLastModel, resetImportedModelStore, unchangedSetup, useImportedModelStore,
 } from './importedModel';
 import { migrateLastModel, readLastModel, rememberLastModel } from './lastModel';
-import { useMeshImportStore } from './meshImport';
+import { fileMeshSetup, useMeshImportStore } from './meshImport';
 import { useCadReturnStore } from './cadReturn';
 import { noteSolveSettingsEdit } from './solveSettingsEdits';
 import '../shell/cadlink/restores';
-import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
+import { resetSolveOptionsStore, restoreEnginePreference, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
 import { workspaceModeStore } from './workspaceMode';
+import { durableSettings, SETTINGS_NAMESPACES } from './durableSettings';
 
 const MSH = new TextDecoder().decode(readFileSync('../server/tests/fixtures/mesh_import/tetra.msh'));
 const mesh: RegisteredMesh = { ingest_id: 'wgi_file', model_id: 'mesh-file:sha256:artifact', producer: 'mesh-file',
@@ -43,7 +44,7 @@ beforeEach(() => {
   resetSolveOptionsStore();
   resetImportedModelStore();
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('openImported', () => {
   it('opens a run from its workspace alone: model, prepared mesh, original, draft and setup revision', async () => {
@@ -268,6 +269,46 @@ describe('the last model', () => {
     expect(await reopenLastModel(fetcher)).toBe(true);
     expect(useImportedModelStore.getState()).toMatchObject({ phase: 'ready', input: 'file', modelId: mesh.model_id, restoredRevisionId: 'wgs_saved' });
     expect(workspaceModeStore.getSnapshot()).toMatchObject({ mode: 'cad', importedInput: 'file' });
+  });
+
+  it('applies the remembered engine to the submitted setup on restart, but a saved run wins when opened', async () => {
+    useImportedSolveOptionsStore.getState().setEngine('beat-cpu');
+    rememberLastModel({ model_id: mesh.model_id, input: 'file' });
+    workspaceModeStore.setMode('cad');
+    expect(await reopenLastModel(fileFetcher())).toBe(true);
+    expect(useImportedSolveOptionsStore.getState().engine).toBe('beat-cpu');
+    const replay = unchangedSetup('file', mesh.ingest_id);
+    expect(replay).toMatchObject({ setup: { options: { engine: 'beat-cpu', frequencies_hz: [100, 200, 400] } } });
+    await openImported({ kind: 'run', job: run() }, vi.fn<typeof fetch>(async () => json(workspace())));
+    expect(useImportedSolveOptionsStore.getState().engine).toBe('metal');
+    restoreEnginePreference(); // Durable settings can finish hydrating after a run opens.
+    expect(useImportedSolveOptionsStore.getState().engine).toBe('metal');
+    expect(unchangedSetup('file', mesh.ingest_id)).toEqual({ setup_revision_id: 'wgs_run' });
+  });
+
+  it.each([false, true])('applies a late server preference to startup setup unless explicitly edited: %s', async edited => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => json({ namespaces: {
+      enginePreference: JSON.stringify({ engine: 'beat-cpu' }),
+    } })));
+    localStorage.setItem(SETTINGS_NAMESPACES.enginePreference, JSON.stringify({ engine: 'metal' }));
+    // Settle previous tests' successful writes before simulating a new server read.
+    durableSettings.flush();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    rememberLastModel({ model_id: mesh.model_id, input: 'file' });
+    workspaceModeStore.setMode('cad');
+    expect(await reopenLastModel(fileFetcher())).toBe(true);
+    expect(unchangedSetup('file', mesh.ingest_id)).toEqual({ setup_revision_id: 'wgs_saved' });
+    if (edited) useImportedSolveOptionsStore.getState().setSweep({ startHz: 123 });
+    await durableSettings.hydrate();
+    const engine = edited ? 'metal' : 'beat-cpu';
+    expect(useImportedSolveOptionsStore.getState().engine).toBe(engine);
+    expect(fileMeshSetup().options.engine).toBe(engine);
+    if (!edited) expect(unchangedSetup('file', mesh.ingest_id)).toMatchObject({ setup: { options: {
+      engine: 'beat-cpu', frequencies_hz: [100, 200, 400],
+    } } });
+    useImportedSolveOptionsStore.getState().setEngine('bempp');
+    restoreEnginePreference();
+    expect(useImportedSolveOptionsStore.getState().engine).toBe('bempp');
   });
 
   it('opens nothing and does not change the mode in Parametric', async () => {

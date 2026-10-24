@@ -1,5 +1,6 @@
 import './cadlink/restores';
 import { archivedRequest, job as archivedJob, json, mesh as archivedMesh, record as archivedRecord, workspaceFor } from './cadlink/selection.fixtures';
+import { captureSolveInputs } from '../jobs/useRequestedSolve';
 import { openImported, resetImportedModelStore, useImportedModelStore } from '../stores/importedModel';
 
 /** Reopen a CAD run as history does: `openImported` of the run, shown by the CAD rail. */
@@ -574,6 +575,61 @@ describe('solve invocation mutex', () => {
     }), { solve_options: { engine: 'beat-metal' } as JobItem['solve_options'] })]);
     return record;
   }
+  it.each(['ordinary', 'Fusion'])('observes %s readiness after picker prewarm even when the cached capability has no preparation in flight', async source => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn(async () => json({ job_id: 'continued-fusion' })));
+    act(() => {
+      useSolveOptionsStore.setState({ engine: 'beat-metal' });
+      mocks.solvePlan = null;
+      mocks.solveReadiness = { ...blocker, remedies: [{ kind: 'wait' }] };
+      if (source === 'Fusion') {
+        blockedCad(true);
+        useImportedSolveOptionsStore.setState({ engine: 'beat-metal' });
+        mocks.importedPlan.plan.readiness = { ...blocker, remedies: [{ kind: 'wait' }] };
+      }
+      mocks.capabilities.engines = [{ name: 'beat-metal', available: false, runtime_state: 'unprepared' } as EngineCapability];
+    });
+    const render = () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    await act(async () => render());
+    expect(mocks.refreshCapabilities).toHaveBeenCalled();
+    mocks.refreshCapabilities.mockClear();
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+    expect(mocks.refreshCapabilities.mock.calls.length).toBeGreaterThanOrEqual(2);
+    mocks.solvePlan = { engine: 'beat-metal', formulation: 'full-3d', reason: 'ready', eligibility_reasons: [] };
+    mocks.solveReadiness = null;
+    if (source === 'Fusion') {
+      mocks.capabilities.engines = [{ name: 'beat-metal', available: true, runtime_state: 'ready' } as EngineCapability];
+      mocks.importedPlan.plan = { ...mocks.importedPlan.plan, engine: 'beat-metal', readiness: null };
+    }
+    await act(async () => render());
+    if (source === 'ordinary') expect(mocks.submitDesign).toHaveBeenCalledOnce();
+    else expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/solve-again'))).toHaveLength(1);
+    mocks.refreshCapabilities.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+    expect(mocks.refreshCapabilities).not.toHaveBeenCalled();
+  });
+
+  it.each(['model', 'engine', 'setup', 'mode', 'stop', 'unmount'] as const)(
+    'a Solve pressed before the plan arrives cannot migrate after %s changes', async change => {
+      mocks.solvePlan = null; mocks.solvePlanPending = true;
+      const render = () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+      await act(async () => render());
+      await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
+      act(() => {
+        if (change === 'model') useDesignStore.getState().replaceDocument({ ...designForFamily('OSSE'), L: 321 });
+        if (change === 'engine') useSolveOptionsStore.getState().setEngine('bempp');
+        if (change === 'setup') useSolveOptionsStore.getState().setSweep({ startHz: 123 });
+        if (change === 'mode') { workspaceModeStore.setMode('cad'); workspaceModeStore.setMode('parametric'); }
+        if (change === 'stop') solveControlStore.getSnapshot()!.stopWaiting();
+        if (change === 'unmount') root.render(null);
+      });
+      mocks.solvePlanPending = false;
+      mocks.solvePlan = { engine: 'metal', formulation: 'full-3d', reason: 'ready', eligibility_reasons: [] };
+      await act(async () => { if (change !== 'unmount') render(); });
+      expect(mocks.submitDesign).not.toHaveBeenCalled();
+    });
+
   it.each(['top bar', 'Results empty', 'CAD card', 'crossover', 'Simulation'])('readiness parity: %s stays quiet until Solve is requested', async surface => {
     let record!: CadReturnIngestRecord;
     act(() => {
@@ -748,7 +804,7 @@ describe('solve invocation mutex', () => {
     expect(mocks.solveModel).not.toHaveBeenCalled();
   });
 
-  it.each(['ready', 'stop', 'model change', 'failure', 'unmount'])('a warming Fusion request waits in solve progress and continues automatically: %s', async outcome => {
+  it.each(['ready', 'stop', 'model change', 'engine change', 'setup change', 'failure', 'unmount'])('a warming Fusion request waits in solve progress and continues automatically: %s', async outcome => {
     const posts: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === 'POST') posts.push(String(url));
@@ -770,6 +826,8 @@ describe('solve invocation mutex', () => {
     expect(posts).toEqual([]); // Fusion already requested Solve; no extra click or prepare POST.
     if (outcome === 'stop') await act(async () => progress.querySelector<HTMLButtonElement>('button')!.click());
     if (outcome === 'model change') act(() => readyCad('wgi_changed_while_waiting'));
+    if (outcome === 'engine change') act(() => useImportedSolveOptionsStore.getState().setEngine('bempp'));
+    if (outcome === 'setup change') act(() => useImportedSolveOptionsStore.getState().setSweep({ startHz: 123 }));
     if (outcome === 'unmount') await act(async () => root.render(null));
     if (outcome === 'failure') {
       mocks.capabilities.engines = [{ ...mocks.capabilities.engines[0], runtime_state: 'failed' } as EngineCapability];
@@ -846,7 +904,7 @@ describe('solve invocation mutex', () => {
     await act(async () => { buttons[0].click(); buttons[0].click(); });
     await act(async () => response.resolve(json({}, 202)));
     expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/prepare'))).toEqual([['/api/runtimes/beat/metal/prepare', { method: 'POST' }]]);
-    expect(mocks.refreshCapabilities).toHaveBeenCalledOnce();
+    expect(mocks.refreshCapabilities).toHaveBeenCalled();
     expect(mocks.solveModel).not.toHaveBeenCalled();
   });
   it.each(['unchanged', 'model changed', 'settings changed'])('held Fusion continues its saved request once: %s', async changed => {
@@ -881,17 +939,18 @@ describe('solve invocation mutex', () => {
     expect(posts).toEqual([]);
     act(() => { mocks.capabilities.engines = [{ ...mocks.capabilities.engines[0], available: true, runtime_state: 'ready' } as EngineCapability]; });
     await act(async () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>));
-    expect(posts).toEqual(changed === 'model changed' ? [] : ['/api/jobs/job%3Aheld-fusion/solve-again']);
+    expect(posts).toEqual(changed !== 'unchanged' ? [] : ['/api/jobs/job%3Aheld-fusion/solve-again']);
     expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe(changed === 'model changed'
-      ? 'Prepare and solve was cancelled because the model on screen changed.' : null);
-    if (changed !== 'model changed') {
+      ? 'Prepare and solve was cancelled because the model on screen changed.'
+      : changed === 'settings changed' ? 'Prepare and solve was cancelled because the solve setup changed.' : null);
+    if (changed === 'unchanged') {
       const continuation = vi.mocked(fetch).mock.calls.find(([url]) => String(url).endsWith('/solve-again'))!;
       expect(JSON.parse(String(continuation[1]?.body))).toEqual({}); // inherit the held job’s setup, frame and identity
     }
     expect(mocks.solveModel).not.toHaveBeenCalled();
     expect(mocks.submitDesign).not.toHaveBeenCalled();
     await act(async () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>));
-    expect(posts).toHaveLength(changed === 'model changed' ? 0 : 1);
+    expect(posts).toHaveLength(changed !== 'unchanged' ? 0 : 1);
   });
   it.each(['before response', 'during refresh'])('a successful continuation stays silent when its child arrives %s', async arrival => {
     const preparation = deferred<Response>();
@@ -929,7 +988,7 @@ describe('solve invocation mutex', () => {
     expect(host.textContent).not.toContain('Prepare and solve was cancelled');
   });
 
-  it.each(['unmount', 'leave and return', 'model change and return', 'held job moves on', 'held job cancelled', 'preparation fails', 'unchanged'])(
+  it.each(['engine change and return', 'setup change', 'frame pick', 'unmount', 'leave and return', 'model change and return', 'held job moves on', 'held job cancelled', 'preparation fails', 'unchanged'])(
     'held continuation checks its lifetime after the frame read: %s', async change => {
       const preparation = deferred<Response>();
       const frame = deferred<Response>();
@@ -959,6 +1018,18 @@ describe('solve invocation mutex', () => {
         if (notice) notices.push(notice);
       });
       await act(async () => {
+        if (change === 'engine change and return') {
+          const engine = useImportedSolveOptionsStore.getState().engine;
+          useImportedSolveOptionsStore.getState().setEngine('bempp');
+          useImportedSolveOptionsStore.getState().setEngine(engine);
+        }
+        if (change === 'setup change') useImportedSolveOptionsStore.getState().setSweep({ startHz: 123 });
+        if (change === 'frame pick') {
+          useCadSolverFrameStore.getState().apply('wgi_readiness', { linked: false, axes: [
+            { axis: '+z', allowed: true }, { axis: '+x', allowed: true },
+          ], preselected: { axis: '+z' } } as never);
+          useCadSolverFrameStore.getState().pick('wgi_readiness', '+x');
+        }
         if (change === 'unmount') root.render(<span>gone</span>);
         if (change === 'leave and return') {
           const scene = importedMeshStore.getSnapshot().cad!;
@@ -986,7 +1057,9 @@ describe('solve invocation mutex', () => {
       });
       await act(async () => { frame.resolve(json({ linked: true })); await frameRead; });
       expect(posts).toEqual(change === 'unchanged' ? ['/api/jobs/job%3Aheld-fusion/solve-again'] : []);
-      const reason = change === 'leave and return' ? 'the model left the viewport'
+      const reason = change === 'engine change and return' ? 'the selected engine changed'
+        : change === 'setup change' || change === 'frame pick' ? 'the solve setup changed'
+        : change === 'leave and return' ? 'the model left the viewport'
         : change === 'model change and return' ? 'the model on screen changed'
           : change.startsWith('held job') ? 'the waiting job changed'
             : change === 'preparation fails' ? 'engine preparation failed' : null;
@@ -1023,7 +1096,7 @@ describe('solve invocation mutex', () => {
   it.each([false, true])('the final held guard reports cancellation unless already aborted: %s', async aborted => {
     act(() => blockedCad(true));
     const controller = new AbortController();
-    const held = { model: currentModel(), jobId: 'job:held-fusion', signal: controller.signal };
+    const held = { ...captureSolveInputs(), jobId: 'job:held-fusion', signal: controller.signal };
     if (aborted) controller.abort(); // Includes coordinator unmount cleanup.
     act(() => readyCad('wgi_changed_before_post'));
     vi.stubGlobal('fetch', vi.fn());
@@ -1400,7 +1473,7 @@ describe('solve invocation mutex', () => {
       client.clear();
     });
 
-    it('waits for the latest inputs when another select change races the pending response', async () => {
+    it('requires a new press when another select change races the pending response', async () => {
       const { client, fetcher } = await mountPlanning(mode);
       const oldParametric = deferred<Response>();
       const oldImported = deferred<typeof mocks.importedPlan.plan>();
@@ -1418,6 +1491,10 @@ describe('solve invocation mutex', () => {
       expect(mocks.submitDesign).not.toHaveBeenCalled();
       expect(mocks.solveModel).not.toHaveBeenCalled();
       await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_DEBOUNCE_MS); });
+      await flushPlan(client);
+      expect(mocks.submitDesign).not.toHaveBeenCalled();
+      expect(mocks.solveModel).not.toHaveBeenCalled();
+      pressSolve('click');
       await flushPlan(client);
       if (mode === 'parametric') {
         expect(mocks.submitDesign).toHaveBeenCalledOnce();
@@ -1469,9 +1546,10 @@ describe('solve invocation mutex', () => {
     let second!: Promise<unknown>;
 
     await act(async () => {
-      const run = runCurrentDesign;
-      first = run(design);
-      second = run(design);
+      useDesignStore.getState().replaceDocument(design);
+      const run = () => solveControlStore.getSnapshot()!.solve();
+      first = run();
+      second = run();
       await second;
     });
 
@@ -1920,7 +1998,7 @@ describe('solve invocation mutex', () => {
     client.clear();
   });
 
-  it('uses the clicked settings while the fresh Advanced plan is pending', async () => {
+  it('cancels when settings change while the fresh Advanced plan is pending', async () => {
     act(() => root.unmount());
     root = createRoot(host);
     mocks.useRealImportedPlan = true;
@@ -1958,9 +2036,7 @@ describe('solve invocation mutex', () => {
     await act(async () => { solve.click(); await Promise.resolve(); });
     act(() => useCadReturnStore.setState({ frequencyCount: 71 }));
     await act(async () => { pending.resolve(mocks.importedPlan.plan); await pending.promise; });
-    const setup = mocks.solveModel.mock.calls[0][1].setup as CadSolveSetup;
-    expect(setup.options.num_frequencies).toBe(24);
-    expect(JSON.stringify(setup)).toContain('"fc_hz":800');
+    expect(mocks.solveModel).not.toHaveBeenCalled();
     expect(useCadReturnStore.getState().frequencyCount).toBe(71);
     client.clear();
   });

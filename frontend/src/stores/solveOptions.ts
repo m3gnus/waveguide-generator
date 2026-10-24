@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { withEditSignals } from './solveSettingsEdits';
-import { resetParkedImportedOptions } from './importedModel';
+import { resetParkedImportedOptions, applyImportedEnginePreference } from './importedModel';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { DEFAULT_ATH_POLAR_UI, MIN_POLAR_DISTANCE_M, athPolarObservationOrigin, athPolarOverrides } from './athPolars';
 import { durableSettings } from './durableSettings';
@@ -400,7 +400,7 @@ function rememberEngine(engine: string): void {
   durableSettings.set('enginePreference', JSON.stringify({ engine }));
 }
 
-function enginePreference(): { engine?: string } {
+export function enginePreference(): { engine?: string } {
   try {
     const value = JSON.parse(durableSettings.get('enginePreference') ?? 'null');
     return typeof value?.engine === 'string' && ENGINE_PATTERN.test(value.engine) ? { engine: value.engine } : {};
@@ -608,10 +608,14 @@ export function resetSolveOptionsStore(): void {
 
 // The server's copy is authoritative, so re-read once it has replaced the cache.
 durableSettings.subscribe('solveOptions', () => { void useSolveOptionsStore.persist.rehydrate(); });
-export function restoreEnginePreference(): void {
+export function restoreEnginePreference(): { engine?: string } {
   const preference = enginePreference();
   useSolveOptionsStore.setState(preference);
-  useImportedSolveOptionsStore.setState(preference);
+  // An opened setup is also what Solve will submit. Late preference hydration
+  // must not replace a saved run's displayed/warmed engine with another one.
+  const engine = applyImportedEnginePreference(preference.engine);
+  if (engine !== undefined) useImportedSolveOptionsStore.setState({ engine });
+  return preference;
 }
 durableSettings.subscribe('enginePreference', restoreEnginePreference);
 
