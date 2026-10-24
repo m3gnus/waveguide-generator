@@ -333,6 +333,12 @@ def test_failed_cut_recovery_uses_full_domain_and_precedes_frame_and_findings(
         assert "cut open" in summary["message"] and "uncut model" in summary["message"]
         assert denial.split(":")[-1].strip() not in summary["message"]
         assert harness.submitted == []
+        # A user-facing rejection in its own words: neither a hold nor an
+        # internal failure that would replace them with WG's calm sentence.
+        from server.cadlink.operations import is_calm_failure
+
+        assert summary["state"] == "rejected" and not is_calm_failure(summary["reason"])
+        assert harness.latest_job()["status"] == "error"
     record = _record(harness, summary)
     recovery = record["domain_interpretation"]["cut_recovery"]
     assert recovery["recoverable"] is False

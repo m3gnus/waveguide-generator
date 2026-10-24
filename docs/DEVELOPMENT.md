@@ -211,8 +211,9 @@ The tool calls the inbox's `prepare_job_sync` and `ingest_bundle`, including the
 bounded automatic-frame retry, default setup, validation, symmetry/cut recovery,
 solver mesh and submission gates. It reports nested stages with outcomes and
 elapsed seconds, full frame inference evidence (votes, visibility and vetoes),
-domain decisions, findings, internal refusal codes/messages and exception
-tracebacks, including available isolated-worker diagnostics. JSON is a single
+domain decisions, findings, refusal codes and messages (for an internal failure,
+whose stored message is WG's calm sentence, the recorded raw `detail` too) and
+exception tracebacks, including available isolated-worker diagnostics. JSON is a single
 report on stdout; pipeline output goes to stderr. Exit 0 means preparation (and
 solve, if requested) succeeded; refusal or exception exits 1; invalid CLI usage
 exits 2. These internal diagnostics belong in developer reports, not user UI.

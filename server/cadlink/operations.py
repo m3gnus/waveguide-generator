@@ -131,6 +131,8 @@ REASON_CODES: Mapping[str, str] = {
 #: WG's own pipeline failures: developer matters, never a choice for the user.
 #: They end as a calm failed preparation ("WG could not prepare ..."), with the
 #: raw detail recorded for developers, never as a "Waiting for you" hold.
+#: A rejection the user can act on (``model_cut_unsolvable``: send the uncut
+#: model) is not internal: it keeps its own words and is never a hold either.
 INTERNAL_FAILURE_CODES = frozenset(
     {"preparation_failed", "submission_refused", "interrupted", "snapshot_invalid"}
 )

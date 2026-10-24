@@ -161,6 +161,23 @@ class Report:
             self.depth -= 1
             entry["seconds"] = round(time.perf_counter() - started, 6)
 
+    def with_internal_detail(self, refusal: dict[str, Any] | None) -> dict[str, Any] | None:
+        """The stored refusal plus the raw detail an internal failure records for developers.
+
+        The job keeps only WG's calm words (``cad_preparation.calm_refusal_message``);
+        the detail lives in that refusal's ``internal-failure`` diagnostic.
+        """
+
+        if refusal is None:
+            return None
+        details = [
+            diagnostic["evidence"].get("detail")
+            for message in self.payload.get("logs", [])
+            if (diagnostic := message.get("cad_diagnostic") or {}).get("stage") == "internal-failure"
+            and diagnostic["evidence"].get("code") == refusal.get("code")
+        ]
+        return {**refusal, "detail": details[-1]} if details else refusal
+
     @contextmanager
     def capture_logs(self):
         messages = self.payload.setdefault("logs", [])
@@ -171,6 +188,7 @@ class Report:
                     "logger": record.name, "level": record.levelname,
                     "message": record.getMessage(),
                     "traceback": "".join(traceback.format_exception(*record.exc_info)) if record.exc_info else None,
+                    **({"cad_diagnostic": record.cad_diagnostic} if hasattr(record, "cad_diagnostic") else {}),
                 })
 
         handler = Capture()
@@ -330,7 +348,7 @@ def replay(bundle_path: Path, data: Path, report: Report, *, retained: bool = Fa
                 entry["evidence"] = {"step": step, "cad": run.cad, "refusal": refusal}
                 if step != "bind":
                     entry["outcome"] = "refused"
-                    report.payload.update(outcome="refused", refusal=refusal)
+                    report.payload.update(outcome="refused", refusal=report.with_internal_detail(refusal))
                     return
                 request, revision, preparation = value
                 entry["evidence"]["request"] = request.model_dump(mode="json")
