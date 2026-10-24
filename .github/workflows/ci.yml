@@ -417,7 +417,17 @@ jobs:
         # --durations reports setup/call/teardown separately, which is the
         # split the macOS anomaly above needs and that -v timestamps cannot
         # give.
-        run: python -m pytest ${{ matrix.paths }} -v --durations=25
+        #
+        # Windows server runs on four xdist workers, the suite's documented
+        # parallel mode (--dist=loadgroup keeps `serial` groups on one
+        # worker). Serially it no longer fits: 12.5k tests took 72.3m of
+        # pytest in run 40080407608 and run 40112935982 was cancelled at the
+        # 80m cap at 97%, still passing tests every second -- no hang, just
+        # a single core on a four-vCPU runner. The cost is spread over
+        # hundreds of files at ~1.6x Linux's per-test time, so no single file
+        # wins it back. A crashed or hung worker is still named: faulthandler
+        # exits that worker and xdist reports the test it was running.
+        run: python -m pytest ${{ matrix.paths }} -v --durations=25 ${{ matrix.os == 'windows-latest' && matrix.suite == 'server' && '-n 4 --dist=loadgroup' || '' }}
 
   windows-installer-replay:
     name: Replay retained Windows installer gates
