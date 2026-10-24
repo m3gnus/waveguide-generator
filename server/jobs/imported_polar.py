@@ -4,7 +4,7 @@ from collections.abc import Mapping
 import math
 from typing import Any
 
-from server.jobs.models import SolveRequest
+from server.jobs.models import PolarConfig, SolveRequest
 
 _POLAR_AXIS_ORDER = ("horizontal", "vertical", "diagonal")
 _DEFAULT_DIAGONAL_INCLINATION_DEG = 45
@@ -22,10 +22,10 @@ def widen_polar_to_derivation(request: SolveRequest, derivation: Any) -> SolveRe
     axes = derivation.get("axes") if isinstance(derivation, Mapping) else None
     if not isinstance(axes, Mapping) or not axes:
         return request
-    data = request.model_dump(mode="json")
-    polar = (data.get("options") or {}).get("polar_config")
-    if not isinstance(polar, dict):
-        return request
+    # Only the polar grid changes, and only it is validated again: the rest of
+    # the request is the caller's, already validated (a stored request may
+    # predate a stricter validator), and is carried over as it is.
+    polar = request.options.polar_config.model_dump(mode="json")
     start, end, count = (float(polar["angle_range"][0]), float(polar["angle_range"][1]),
                          int(polar["angle_range"][2]))
     step = (end - start) / (count - 1) if count > 1 else 5.0
@@ -48,4 +48,5 @@ def widen_polar_to_derivation(request: SolveRequest, derivation: Any) -> SolveRe
         # A diagonal the user never enabled carries no inclination intent; the
         # runtime accepts only the supported default for one forced on.
         polar["inclination"] = _DEFAULT_DIAGONAL_INCLINATION_DEG
-    return SolveRequest.model_validate(data)
+    options = request.options.model_copy(update={"polar_config": PolarConfig.model_validate(polar)})
+    return request.model_copy(update={"options": options})
