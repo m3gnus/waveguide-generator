@@ -25,6 +25,7 @@ from typing import Any
 import zipfile
 
 from server.jobs.models import JobStatusName
+from server.platform.incidents import summary as incident_summary
 from server.platform.paths import DataPaths
 from .scrub import ScrubRules, scrub_text, scrub_value
 
@@ -86,6 +87,7 @@ _MEMBER_NOTES = {
     "settings.json": "Interface configuration; design and driver data withheld.",
     "workspace.json": "Export and CAD folder locations, scrubbed.",
     "frontend-errors.json": "Interface errors this session reported to the server.",
+    "incidents.json": "WG's own recent unexpected failures, one line each (details under incidents/).",
     "logs/server.log": "The application log.",
     "logs/server.log.1": "The previous application log, kept across rotation.",
     "logs/update.log": "The updater's log: installs, rollbacks and healthy-start cleanup (its last 64 KB).",
@@ -261,6 +263,7 @@ def build_summary(
     frontend_error_count: int = 0,
     rules: ScrubRules,
     system: Mapping[str, Any] | None = None,
+    incidents: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """The short form: what a maintainer reads first, and what pastes anywhere."""
 
@@ -308,6 +311,7 @@ def build_summary(
         "storage": storage,
         "recentJobs": [_job_digest(job, rules) for job in jobs],
         "frontendErrors": frontend_error_count,
+        "recentIncidents": [scrub_value(dict(incident), rules) for incident in incidents],
     }
 
 
@@ -372,6 +376,17 @@ def summary_text(summary: Mapping[str, Any]) -> str:
         for job in failed[:3]:
             lines.append(f"  run {job.get('run')} · {job.get('engine') or 'engine unknown'} · {job.get('error') or 'no message'}")
 
+    incidents = summary.get("recentIncidents") or []
+    if incidents:
+        lines.append("")
+        lines.append("Recent internal problems (developer records):")
+        for incident in incidents[:3]:
+            lines.append(
+                f"  {incident.get('id')} · {incident.get('phase')} · seen {incident.get('count')}× · "
+                f"last {incident.get('lastSeen')}"
+                + (f" · {incident['message']}" if incident.get("message") else "")
+            )
+
     if summary.get("frontendErrors"):
         lines.append(f"Interface errors this session: {summary['frontendErrors']}")
     return "\n".join(lines)
@@ -391,6 +406,7 @@ def build_bundle(
     design_draft: Any = None,
     include_design: bool = False,
     frontend_errors: Sequence[Mapping[str, Any]] = (),
+    incidents: Sequence[Mapping[str, Any]] = (),
 ) -> bytes:
     """Zip every available member, and never fail because one was missing.
 
@@ -418,6 +434,11 @@ def build_bundle(
     add_json("settings.json", collect_settings(settings_envelope))
     add_json("workspace.json", _workspace_state(paths))
     add_json("frontend-errors.json", list(frontend_errors))
+    # Incident records outlive the runs they name: a run deleted by Clear
+    # failed still has its evidence here, with the tail of its log.
+    add_json("incidents.json", [incident_summary(record) for record in incidents])
+    for record in incidents:
+        add_json(f"incidents/{_member_safe(str(record.get('id') or 'incident'))}.json", record)
 
     flush_log_sinks()
     for name, path, tail in (
@@ -479,11 +500,17 @@ def build_bundle(
 def _member_note(name: str) -> str:
     if name in _MEMBER_NOTES:
         return _MEMBER_NOTES[name]
+    if name.startswith("incidents/"):
+        return "One incident record: versions, ids, evidence, stack and the tails of the logs it names."
     if name.startswith("logs/job-"):
         return "The log of the run selected in the report dialog."
     if name.startswith("design/"):
         return "Your design, included because the report dialog's design box was ticked."
     return ""
+
+
+def _member_safe(name: str) -> str:
+    return "".join(character if character.isalnum() or character in "-._" else "-" for character in name)[:80]
 
 
 def _workspace_state(paths: DataPaths) -> dict[str, Any]:

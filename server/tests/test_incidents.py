@@ -1,0 +1,312 @@
+"""Incident records: bounded, deduplicated, privacy-safe and independent of the run list."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+import io
+import json
+from pathlib import Path
+import zipfile
+
+
+from server.platform import incidents
+from server.platform.incidents import (
+    MAX_JOB_LOG_TAIL_BYTES,
+    MAX_LIST_ITEMS,
+    MAX_OCCURRENCES,
+    MAX_RECORDS,
+    MAX_STRING_CHARS,
+    IncidentStore,
+    configure_incidents,
+    record_incident,
+)
+
+
+class Clock:
+    def __init__(self, start: datetime) -> None:
+        self.moment = start
+
+    def __call__(self) -> datetime:
+        return self.moment
+
+    def advance(self, **delta: float) -> None:
+        self.moment += timedelta(**delta)
+
+
+def _store(tmp_path: Path, **kwargs) -> IncidentStore:
+    kwargs.setdefault("app_root", tmp_path / "app")
+    kwargs.setdefault("home", tmp_path / "home")
+    kwargs.setdefault("user", "ada-lovelace")
+    kwargs.setdefault("versions", {"wg": "0.3.6", "build": {"commit_short": "abc1234"}})
+    return IncidentStore(tmp_path / "data", **kwargs)
+
+
+def _failure(message: str) -> Exception:
+    try:
+        raise RuntimeError(message)
+    except RuntimeError as exc:
+        return exc
+
+
+def test_unconfigured_process_records_nothing(tmp_path: Path) -> None:
+    assert incidents.configured_store() is None
+    assert record_incident("internal-failure", "cad-preparation", evidence={"detail": "x"}) is None
+
+
+def test_same_failure_is_one_record_with_count_and_occurrences(tmp_path: Path) -> None:
+    clock = Clock(datetime(2026, 10, 24, 12, tzinfo=timezone.utc))
+    store = _store(tmp_path, now=clock)
+    first = store.record(
+        "internal-failure", "cad-preparation",
+        ids={"job_id": "job-1", "operation_id": "op-1"},
+        exception=_failure("mesh 1234 failed at 0xdeadbeef00"),
+        evidence={"code": "preparation_failed", "detail": "the mesh had 1234 triangles"},
+    )
+    clock.advance(minutes=5)
+    second = store.record(
+        "internal-failure", "cad-preparation",
+        ids={"job_id": "job-2", "operation_id": "op-2"},
+        exception=_failure("mesh 98 failed at 0xfeedface11"),
+        evidence={"code": "preparation_failed", "detail": "the mesh had 98 triangles"},
+    )
+    assert first == second
+    record = store.get(first)
+    assert record["count"] == 2
+    assert record["firstSeen"] == "2026-10-24T12:00:00+00:00"
+    assert record["lastSeen"] == "2026-10-24T12:05:00+00:00"
+    assert [item["ids"]["job_id"] for item in record["occurrences"]] == ["job-1", "job-2"]
+    assert record["latest"]["ids"] == {"job_id": "job-2", "operation_id": "op-2"}
+    assert "RuntimeError" in record["latest"]["exception"]["stack"]
+    assert record["versions"]["build"]["commit_short"] == "abc1234"
+    # A different failure is a different record.
+    other = store.record("internal-failure", "cad-preparation", evidence={"code": "interrupted"})
+    assert other != first
+    assert {item["id"] for item in store.list()} == {first, other}
+    assert store.list(kind="frame-gate") == []
+    # Ids by unique prefix.
+    assert store.get(first[:-3])["id"] == first
+
+
+def test_occurrences_are_bounded(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    for index in range(MAX_OCCURRENCES + 5):
+        incident = store.record("frame-gate", "cad-preparation", ids={"job_id": f"job-{index}"},
+                                evidence={"reason": "mismatch"})
+    record = store.get(incident)
+    assert record["count"] == MAX_OCCURRENCES + 5
+    assert len(record["occurrences"]) == MAX_OCCURRENCES
+    assert record["occurrences"][-1]["ids"]["job_id"] == f"job-{MAX_OCCURRENCES + 4}"
+
+
+def test_evidence_is_bounded_and_never_copies_geometry(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    incident = store.record("domain", "cad-preparation", evidence={
+        "message": "x" * (MAX_STRING_CHARS * 3),
+        "vertices": [[0.0, 1.0, 2.0]] * 5000,
+        "triangles": [[0, 1, 2]] * 5000,
+        "axes": list(range(1000)),
+        "nested": {"a": {"b": {"c": {"d": {"e": {"f": {"g": 1}}}}}}},
+        "triangle_count": 5000,
+    })
+    evidence = store.get(incident)["latest"]["evidence"]
+    assert len(evidence["message"]) < MAX_STRING_CHARS + 100
+    assert evidence["vertices"] == evidence["triangles"] == "[withheld: geometry]"
+    assert len(evidence["axes"]) == MAX_LIST_ITEMS + 1
+    assert evidence["triangle_count"] == 5000
+    assert "below depth" in json.dumps(evidence["nested"])
+    assert (store.root / f"{incident}.json").stat().st_size < 64 * 1024
+
+
+def test_paths_and_the_account_name_are_rewritten(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    data, app, home = tmp_path / "data", tmp_path / "app", tmp_path / "home"
+    incident = store.record(
+        "internal-failure", "cad-preparation",
+        exception=_failure(f"could not read {data}/imports/bundles/x.wgreturn"),
+        evidence={
+            "detail": f"{app}/server/mesh.py failed for {home}/Documents/Ada-Lovelace/horn.step",
+            "owner": "ada-lovelace",
+            f"{home}/key": "value",
+        },
+    )
+    text = (store.root / f"{incident}.json").read_text(encoding="utf-8")
+    assert str(tmp_path) not in text
+    assert "ada-lovelace" not in text.lower()
+    record = json.loads(text)
+    assert record["latest"]["evidence"]["detail"] == (
+        "<wg>/server/mesh.py failed for <home>/Documents/<user>/horn.step"
+    )
+    assert record["latest"]["evidence"]["owner"] == "<user>"
+    assert "<home>/key" in record["latest"]["evidence"]
+    assert "<data>/imports/bundles/x.wgreturn" in record["latest"]["exception"]["message"]
+
+
+def test_pruning_keeps_thirty_days_and_two_hundred_records(tmp_path: Path) -> None:
+    clock = Clock(datetime(2026, 9, 1, tzinfo=timezone.utc))
+    store = _store(tmp_path, now=clock)
+    old = store.record("frame-fallback", "cad-preparation", evidence={"reason_code": "old"})
+    clock.advance(days=31)
+    recent = store.record("frame-fallback", "cad-preparation", evidence={"reason_code": "new"})
+    assert store.get(old) is None
+    assert store.get(recent) is not None
+    for index in range(MAX_RECORDS + 10):
+        clock.advance(seconds=1)
+        # Letters only: digits are volatile and fingerprint alike.
+        code = chr(97 + index // 26) + chr(97 + index % 26)
+        store.record("domain", "cad-preparation", evidence={"code": code})
+    remaining = store.list()
+    assert len(remaining) == MAX_RECORDS
+    # The oldest go first; the newest stays.
+    assert store.get(recent) is None
+    assert remaining[0]["lastSeen"] == clock.moment.isoformat(timespec="seconds")
+
+
+def test_preparation_diagnostic_records_an_incident_with_the_handled_stack(tmp_path: Path, caplog) -> None:
+    from server.cadlink.intake.readings import record_preparation_diagnostic
+
+    store = configure_incidents(tmp_path / "data", app_root=tmp_path / "app")
+    with caplog.at_level("WARNING"):
+        try:
+            raise ValueError("synthetic preparation failure")
+        except ValueError:
+            incident = record_preparation_diagnostic(
+                "internal-failure",
+                {"code": "preparation_failed", "job_id": "job-7", "operation_id": "op-7",
+                 "detail": "synthetic preparation failure"},
+            )
+    record = store.get(incident)
+    assert record["kind"] == "internal-failure" and record["phase"] == "cad-preparation"
+    assert record["latest"]["ids"] == {"job_id": "job-7", "operation_id": "op-7"}
+    assert "synthetic preparation failure" in record["latest"]["exception"]["stack"]
+    # The log line stays, for the replay tool, and names the incident.
+    logged = [entry.cad_diagnostic for entry in caplog.records if hasattr(entry, "cad_diagnostic")]
+    assert logged[-1]["stage"] == "internal-failure"
+    assert logged[-1]["incident"] == incident
+
+
+def test_job_log_tails_survive_clear_failed(tmp_path: Path) -> None:
+    from server.jobs.store import JobStore
+
+    store = configure_incidents(tmp_path / "data", app_root=tmp_path / "app")
+    jobs = JobStore.for_data_dir(tmp_path / "data")
+    jobs.initialize()
+    try:
+        now = "2026-10-24T12:00:00Z"
+        jobs.create_job({
+            "id": "job-failed", "status": "error", "created_at": now, "updated_at": now,
+            "queued_at": now, "config_json": {}, "config_summary_json": {},
+        })
+        log_path = jobs._job_log_path("job-failed")
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("early line\n" * 4000 + "the failing stage\n", encoding="utf-8")
+        incident = record_incident(
+            "internal-failure", "cad-preparation", ids={"job_id": "job-failed"},
+            evidence={"code": "preparation_failed"},
+        )
+        ids, _events = jobs.delete_jobs_by_status_with_events(["error"])
+        assert ids == ["job-failed"]
+        assert not log_path.exists()
+        record = store.get(incident)
+        kept = record["jobLogs"]["job-failed"]
+        assert kept["tail"].endswith("the failing stage\n")
+        assert kept["truncated"] is True
+        assert len(kept["tail"].encode("utf-8")) <= MAX_JOB_LOG_TAIL_BYTES
+        assert kept["tail"].startswith("early line\n")  # a whole line, never part of one
+    finally:
+        jobs.close()
+
+
+def test_recording_never_raises(tmp_path: Path, monkeypatch) -> None:
+    configure_incidents(tmp_path / "data")
+
+    def broken(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(incidents, "write_json_atomic", broken)
+    assert record_incident("domain", "cad-preparation", evidence={}) is None
+
+
+# -- problem reports --------------------------------------------------------------
+
+
+def test_report_zip_and_summary_carry_incidents(tmp_path: Path) -> None:
+    from server.diagnostics.bundle import build_bundle, build_summary, summary_text
+    from server.diagnostics.incidents import bundle_incidents, recent_incidents
+    from server.diagnostics.scrub import scrub_rules
+    from server.platform.paths import data_paths
+
+    store = _store(tmp_path)
+    incident = store.record("internal-failure", "cad-preparation", ids={"job_id": "job-1"},
+                            evidence={"code": "preparation_failed", "detail": "the mesh failed"})
+    rules = scrub_rules(home="/home/nobody", environ={}, system="Linux")
+    lines = recent_incidents(tmp_path / "data")
+    summary = build_summary(build={"label": "x"}, version="0.3.6", data_dir=tmp_path / "data",
+                            capabilities=None, rules=rules, incidents=lines)
+    assert summary["recentIncidents"][0]["id"] == incident
+    text = summary_text(summary)
+    assert "Recent internal problems" in text and incident in text and "the mesh failed" in text
+    payload = build_bundle(
+        paths=data_paths(tmp_path / "data"), summary=summary, system={}, capabilities=None,
+        settings_envelope=None, rules=rules, incidents=bundle_incidents(tmp_path / "data"),
+    )
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        names = set(archive.namelist())
+        assert f"incidents/{incident}.json" in names
+        assert json.loads(archive.read("incidents.json"))[0]["id"] == incident
+        manifest = json.loads(archive.read("manifest.json"))
+    assert any(member["name"] == f"incidents/{incident}.json" and member["note"]
+               for member in manifest["members"])
+
+
+def test_bundle_endpoint_includes_incidents(tmp_path: Path) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from server.diagnostics.api import create_diagnostics_router
+
+    class Registry:
+        async def capabilities(self):
+            return ()
+
+        def cpu_preparation_in_flight(self) -> bool:
+            return False
+
+    store = _store(tmp_path)
+    incident = store.record("frame-gate", "cad-preparation", evidence={"reason": "mismatch"})
+    application = FastAPI()
+    application.include_router(create_diagnostics_router(
+        data_dir=tmp_path / "data", version="0.3.6", build={"label": "x"}, engine_registry=Registry(),
+    ))
+    client = TestClient(application)
+    response = client.get("/api/diagnostics/bundle")
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert f"incidents/{incident}.json" in archive.namelist()
+    assert client.get("/api/diagnostics/summary").json()["summary"]["recentIncidents"][0]["id"] == incident
+
+
+def test_caught_interface_errors_with_an_operation_become_incidents(tmp_path: Path) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from server.diagnostics.api import create_diagnostics_router
+
+    store = configure_incidents(tmp_path / "data")
+    application = FastAPI()
+    router = create_diagnostics_router(
+        data_dir=tmp_path / "data", version="0.3.6", build={}, engine_registry=object(),
+    )
+    application.include_router(router)
+    client = TestClient(application)
+    assert client.post("/api/diagnostics/client-log", json={
+        "message": "Run archive failed: disk full", "stack": "Error: disk full\n at archive",
+        "source": "caught", "operation": "run-archive", "context": {"job_id": "job-3"},
+    }).json() == {"recorded": True}
+    entry = router.client_errors.snapshot()[-1]
+    assert entry["operation"] == "run-archive" and entry["context"] == {"job_id": "job-3"}
+    [record] = store.list(kind="interface-error")
+    assert record["phase"] == "run-archive"
+    assert record["latest"]["ids"] == {"job_id": "job-3"}
+    # An uncaught error without an operation stays in the session buffer only.
+    client.post("/api/diagnostics/client-log", json={"message": "render loop", "source": "render"})
+    assert len(store.list()) == 1

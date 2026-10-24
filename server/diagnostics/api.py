@@ -14,7 +14,8 @@ from typing import Any
 from fastapi import APIRouter, Body, FastAPI, HTTPException, Query
 from fastapi.responses import Response
 
-from server.platform.paths import data_paths
+from server.platform.incidents import bounded, configure_incidents, record_incident, summary as incident_summary
+from server.platform.paths import app_root, data_paths
 from server.platform.process import background_process_kwargs
 from server.workspace.api import open_folder_command
 from .bundle import (
@@ -26,6 +27,12 @@ from .bundle import (
     summary_text,
 )
 from .capabilities import PROBE_TIMEOUT_SECONDS, capabilities_or_none
+from .incidents import (
+    SUMMARY_INCIDENTS,
+    bundle_incidents,
+    incident_versions,
+    recent_incidents,
+)
 from .scrub import scrub_rules
 
 
@@ -134,6 +141,7 @@ def create_diagnostics_router(
         capabilities = await capabilities_or_none(engine_registry, timeout=probe_timeout)
         rules = scrub_rules()
         jobs_rows = await asyncio.to_thread(_recent_jobs)
+        incidents = await asyncio.to_thread(recent_incidents, paths.root)
         return build_summary(
             build=build,
             version=version,
@@ -142,6 +150,7 @@ def create_diagnostics_router(
             jobs=jobs_rows,
             frontend_error_count=len(errors),
             rules=rules,
+            incidents=incidents,
         )
 
     @router.get("/summary")
@@ -158,6 +167,7 @@ def create_diagnostics_router(
         rules = scrub_rules()
         system = collect_system()
         jobs_rows = await asyncio.to_thread(_recent_jobs)
+        incidents = await asyncio.to_thread(bundle_incidents, paths.root)
         summary = build_summary(
             build=build,
             version=version,
@@ -167,6 +177,7 @@ def create_diagnostics_router(
             frontend_error_count=len(errors),
             rules=rules,
             system=system,
+            incidents=[incident_summary(record) for record in incidents[:SUMMARY_INCIDENTS]],
         )
 
         job_log: str | None = None
@@ -200,6 +211,7 @@ def create_diagnostics_router(
             design_draft=draft,
             include_design=design,
             frontend_errors=errors.snapshot(),
+            incidents=incidents,
         )
         log.info(
             "Problem report built: %d bytes, job=%s, design=%s", len(payload), job or "-", design
@@ -241,6 +253,14 @@ def create_diagnostics_router(
             "source": str(entry.get("source") or "unknown")[:64],
             "at": str(entry.get("at") or "")[:64] or None,
         }
+        # A caught failure of a named operation (an export, an archive, a CAD
+        # automation step) also says which, and with what.
+        operation = str(entry.get("operation") or "")[:64] or None
+        context = entry.get("context") if isinstance(entry.get("context"), Mapping) else None
+        if operation:
+            record["operation"] = operation
+        if context:
+            record["context"] = bounded(context, limit=512)
         if not errors.record(record):
             # 202, not 429: the interface is already failing, and a rejected
             # error report is not a second failure it should try to handle.
@@ -248,6 +268,13 @@ def create_diagnostics_router(
         client_log.warning(
             "Interface error (%s): %s", record["source"], record["message"].splitlines()[0][:400]
         )
+        if operation:
+            # Kept beyond this session, like the server's own incidents.
+            record_incident(
+                "interface-error", operation,
+                ids={key: (context or {}).get(key) for key in ("job_id", "operation_id", "ingest_id")},
+                evidence=record, signature={"operation": operation, "message": record["message"]},
+            )
         return {"recorded": True}
 
     return router
@@ -284,6 +311,11 @@ def mount_diagnostics(
     a second copy of it.
     """
 
+    # From here on, WG's own unexpected failures are kept as incident records
+    # in this data directory, beside the report that carries them.
+    configure_incidents(
+        Path(data_dir), app_root=app_root(), versions=incident_versions(version=version, build=build),
+    )
     router = create_diagnostics_router(
         data_dir=Path(data_dir),
         version=version,

@@ -33,6 +33,7 @@ from server.mesh.artifact import (
 from server.mesh.errors import MeshTooLarge, SolverMemoryTooLarge
 from server.platform.acl_repair import path_has_reparse_point
 from server.platform.cad_launch import launch_disabled, open_cad_document
+from server.platform.incidents import record_incident
 from server.platform.process import background_process_kwargs
 from server.workspace.api import (
     CadWorkspaceState,
@@ -933,7 +934,10 @@ def _ingest_error(exc: Exception) -> HTTPException:
         })
     if isinstance(exc, SolverMemoryTooLarge):
         # The guard's figures are for the developers; the user gets its one wording.
-        record_preparation_diagnostic("memory-guard", {"code": "solver_memory_exceeded", "detail": str(exc)})
+        record_preparation_diagnostic(
+            "memory-guard", {"code": "solver_memory_exceeded", "detail": str(exc)},
+            phase="cad-ingest", exception=exc,
+        )
         return HTTPException(status_code=422, detail={
             "code": "solver_memory_exceeded", "message": SolverMemoryTooLarge.USER_MESSAGE,
             "next_step": SolverMemoryTooLarge.NEXT_STEP,
@@ -2030,6 +2034,7 @@ def _track(state: Any, task: asyncio.Task[Any]) -> None:
             logger.error(
                 "A CAD preparation failed unexpectedly.", exc_info=finished.exception()
             )
+            record_incident("preparation-crash", "cad-preparation", exception=finished.exception())
 
     task.add_done_callback(done)
 

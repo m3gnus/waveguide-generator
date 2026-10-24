@@ -26,6 +26,7 @@ from server.cadlink.operations import (
     hold_details, hold_stage_message, user_hold,
 )
 from server.jobs.result_contracts import RESULT_ENVELOPE_ADAPTER
+from server.platform.incidents import retain_job_logs
 from server.platform.paths import DATA_DIR_ENV, app_root, data_paths
 from server.platform.sqlite import JournalModeStatus, configure_connection
 from shared.build_identity import build_label
@@ -3829,6 +3830,7 @@ class JobStore:
         self._job_logs_dir_ready = True
 
     def _delete_job_logs(self, job_ids: Sequence[str]) -> None:
+        retain_job_logs(job_ids, self._job_log_path)  # incidents outlive the run list
         for job_id in dict.fromkeys(job_ids):
             try:
                 self._job_log_path(job_id).unlink(missing_ok=True)

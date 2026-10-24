@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import logging
+import sys
 from typing import Any, TYPE_CHECKING
 
 import numpy as np
 
 from server.cadlink.operations import AXIS_NOT_ALLOWED_NEXT_STEP, axis_not_allowed_message
 from server.cadlink.wgreturn import cut_provenance, declared_domain_planes, domain_kind
+from server.platform.incidents import record_incident
 
 from server.cadlink.interpretation.solver_frame import (
     AS_MODELLED,
@@ -60,13 +62,34 @@ if TYPE_CHECKING:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 
-def record_preparation_diagnostic(
-    stage: str, evidence: Mapping[str, Any], *, chosen_axis: str | None = None
-) -> None:
-    """One replacement point for the diagnostics capture API supplied separately."""
+#: Evidence keys that identify the request rather than describe the failure.
+_DIAGNOSTIC_IDS = ("job_id", "operation_id", "ingest_id", "preparation_id", "manifest_sha256")
 
+
+def record_preparation_diagnostic(
+    stage: str, evidence: Mapping[str, Any], *, chosen_axis: str | None = None,
+    phase: str = "cad-preparation", exception: BaseException | None = None,
+) -> str | None:
+    """Record a developer diagnostic: one incident record, and the log line.
+
+    ``stage`` is the incident's kind. The exception is the one being handled
+    when none is named, so a catch-all's stack is kept without passing it. The
+    log line (``extra["cad_diagnostic"]``) stays: the replay tool reads it.
+    Returns the incident id, or ``None`` when no store is configured.
+    """
+
+    failure = exception if exception is not None else sys.exc_info()[1]
     diagnostic = {"stage": stage, "evidence": dict(evidence), "chosen_axis": chosen_axis}
+    incident = record_incident(
+        stage, phase,
+        ids={key: evidence.get(key) for key in _DIAGNOSTIC_IDS},
+        exception=failure if isinstance(failure, Exception) else None,
+        evidence={**dict(evidence), "chosen_axis": chosen_axis},
+    )
+    if incident is not None:
+        diagnostic["incident"] = incident
     logger.warning("CAD preparation diagnostic: %s", diagnostic, extra={"cad_diagnostic": diagnostic})
+    return incident
 
 
 def solver_anchor(manifest: Mapping[str, Any]) -> Mapping[str, Any] | None:

@@ -296,3 +296,14 @@ def isolated_native_admission():
         yield
     finally:
         patcher.undo()
+
+
+@pytest.fixture(autouse=True)
+def _no_test_inherits_an_incident_store():
+    """Each test represents a server process: an app another test created must
+    not leave ``record_incident`` writing into that test's data directory."""
+    from server.platform.incidents import reset_incidents
+
+    reset_incidents()
+    yield
+    reset_incidents()

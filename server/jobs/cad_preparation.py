@@ -240,9 +240,12 @@ def calm_refusal_message(
 
     if not is_calm_failure(code, message):
         return message
-    if record:
-        record_refusal_diagnostic(code, message, job_id=job_id, operation_id=operation_id)
     snapshot = cad.get("snapshot") if isinstance(cad.get("snapshot"), Mapping) else {}
+    if record:
+        record_refusal_diagnostic(
+            code, message, job_id=job_id, operation_id=operation_id,
+            manifest_sha256=snapshot.get("manifest_sha256"),
+        )
     return str(preparation_failure(
         code, snapshot.get("document_name"), detail=message, manual=_is_manual(operation_id),
     )["message"])
@@ -255,14 +258,28 @@ _DIAGNOSED_CODES = INTERNAL_FAILURE_CODES | {"solver_memory_exceeded"}
 
 def record_refusal_diagnostic(
     code: str, message: str, *, job_id: str | None, operation_id: str | None,
+    manifest_sha256: str | None = None,
 ) -> None:
     """Record a calm failure's raw detail for the developers, once, where it is diagnosed."""
 
     if code in _DIAGNOSED_CODES:
         record_preparation_diagnostic(
             "memory-guard" if code == "solver_memory_exceeded" else "internal-failure",
-            {"code": code, "job_id": job_id, "operation_id": operation_id, "detail": message},
+            {"code": code, "job_id": job_id, "operation_id": operation_id,
+             "manifest_sha256": manifest_sha256, "detail": message},
         )
+
+
+def _run_ids(run: _Run, record: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The ids a developer diagnostic names, so its incident can be found and replayed."""
+
+    snapshot = run.cad.get("snapshot")
+    return {
+        "job_id": run.job_id,
+        "operation_id": run.intent.operation_id,
+        "ingest_id": (record or {}).get("ingest_id"),
+        "manifest_sha256": snapshot.get("manifest_sha256") if isinstance(snapshot, Mapping) else None,
+    }
 
 
 def _is_manual(operation_id: Any) -> bool:
@@ -778,6 +795,7 @@ def prepare_job_sync(
         record_preparation_diagnostic(
             "domain",
             {
+                **_run_ids(run, record),
                 "code": domain_refusal[0],
                 "message": domain_refusal[1],
                 "axis": _record_frame_axis(record),
@@ -830,7 +848,7 @@ def prepare_job_sync(
         # Bounded: disagreement after a second pass is an internal failure.
         record_preparation_diagnostic(
             "frame-second-pass",
-            {"ingest_id": record.get("ingest_id"), "meshed_axis": meshed_axis},
+            {**_run_ids(run, record), "meshed_axis": meshed_axis},
             chosen_axis=choice.axis,
         )
         return run.refuse(
@@ -853,7 +871,7 @@ def prepare_job_sync(
         # Never a question: the decided or chosen frame always matches the
         # record it meshed, so a mismatch is internal.
         record_preparation_diagnostic(
-            "frame-gate", {"ingest_id": record.get("ingest_id"), "reason": frame_refusal},
+            "frame-gate", {**_run_ids(run, record), "reason": frame_refusal},
             chosen_axis=_record_frame_axis(record),
         )
         return run.refuse(
@@ -1153,7 +1171,7 @@ async def _bind(
             # A concurrent change between preparation and binding is internal
             # recovery work, never a request to choose its axis.
             record_preparation_diagnostic(
-                "frame-submission", {"reason": str(exc)},
+                "frame-submission", {**_run_ids(run, None), "reason": str(exc)},
                 chosen_axis=(provenance.get("frame") or {}).get("axis"),
             )
             await asyncio.to_thread(

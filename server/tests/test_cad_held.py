@@ -500,3 +500,31 @@ def test_a_hold_is_a_question_or_an_action_never_a_failure() -> None:
         # A user-action failure ends as a failed preparation, never a hold.
         assert held is (EXPECTED_ATTENTION[code] in {"question", "ready", "action"}
                         and code not in USER_ACTION_CODES), code
+
+
+def test_internal_failure_is_an_incident_that_survives_clear_failed(h: JobsHarness, tmp_path: Path) -> None:
+    """The user's run list and the developers' evidence are independent."""
+
+    from server.platform.incidents import configure_incidents
+
+    incidents = configure_incidents(tmp_path / "wg-data", app_root=tmp_path / "app")
+    _received(h)
+
+    def crash(*_args, **_kwargs):
+        raise RuntimeError(f"gmsh crashed in {tmp_path}/worker.py")
+
+    h.prepare(setup_revision_id=_revision(h.store, _setup()), ingest=crash)
+    job = h.latest_job()
+    assert job["status"] == "error"
+    [record] = incidents.list(kind="internal-failure")
+    assert record["latest"]["ids"]["job_id"] == job["id"]
+    assert "gmsh crashed" in record["latest"]["evidence"]["detail"]
+    assert "crash" in record["latest"]["exception"]["stack"]  # the handled exception's stack
+    assert str(tmp_path) not in json.dumps(record)
+    log_path = h.jobs_store._job_log_path(job["id"])
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("preparing\nmeshing failed\n", encoding="utf-8")
+    assert h._loop.run(h.runtime.clear_failed()) == [job["id"]]
+    assert h.jobs_store.get_job_row(job["id"]) is None
+    kept = incidents.get(record["id"])
+    assert kept["jobLogs"][job["id"]]["tail"] == "preparing\nmeshing failed\n"
