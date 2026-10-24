@@ -210,3 +210,13 @@ it('does not use a retained parametric solver mesh belonging to another model', 
   importedMeshStore.setSolver({ source: 'solver', modelKey: modelForRun(job).key! } as never);
   expect(shownResult(currentModel(), { primary: job.id }, [job]).job).toBe(job);
 });
+
+
+it('reads held and historical error-state CAD requests as waiting', () => {
+  const job = { ...oldRuns[3], ...refused, cad_source: null, status: 'held', has_results: false } as JobItem;
+  const model = { ...modelForRun(job), kind: 'cad' as const, manifestSha256: job.cad_state!.snapshot!.manifest_sha256 };
+  expect(currentModelStatus(model, [job])).toMatchObject({ kind: 'waiting', message: refused.cad_state.message });
+  expect(currentModelStatus(model, [{ ...job, status: 'error' }])).toMatchObject({ kind: 'waiting' });
+  const error = { ...job, status: 'error', cad_state: { ...job.cad_state!, held: false, reason: null }, error_message: 'Preparation failed' } as JobItem;
+  expect(currentModelStatus(model, [error]).kind).not.toBe('waiting');
+});

@@ -70,6 +70,7 @@ const RUNNING_STAGE_WORDS: Record<string, SolveStageWord> = {
 export function solveStageWord(job: Pick<JobItem, 'status' | 'stage'>): SolveStageWord {
   switch (job.status) {
     case 'complete': return 'Done';
+    case 'held': return 'Waiting for you';
     case 'error': return 'Failed';
     case 'cancelled': return 'Cancelled';
     case 'preparing':
@@ -79,7 +80,7 @@ export function solveStageWord(job: Pick<JobItem, 'status' | 'stage'>): SolveSta
 }
 
 export const MODEL_STATUS_TITLE = {
-  solved: 'Solved', running: 'Solving', preparing: 'Preparing', refused: 'Solve refused',
+  solved: 'Solved', running: 'Solving', preparing: 'Preparing', waiting: 'Waiting for you', refused: 'Solve refused',
   failed: 'Solve failed', 'never-solved': 'Not solved yet',
 };
 

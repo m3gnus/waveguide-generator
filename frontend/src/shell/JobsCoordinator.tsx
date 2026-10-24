@@ -120,7 +120,7 @@ interface SubmissionAcceptanceOptions {
   errorNavigation?: number;
 }
 
-export type ContinueRunPatch = RerunPatch & Pick<CadSolvePress, 'approvals'> & { held?: HeldSolveContinuation };
+export type ContinueRunPatch = RerunPatch & Pick<CadSolvePress, 'approvals' | 'mesh_limit_override'> & { held?: HeldSolveContinuation };
 
 interface CoordinatorBridgeSnapshot {
   available: boolean;
@@ -600,7 +600,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
 
   const continueRun = useCallback(async (jobId: string, patch: ContinueRunPatch = {}) => {
     const errorNavigation = patch.held ? undefined : navigationGeneration();
-    const cad = patch.approvals !== undefined || patch.held !== undefined;
+    const cad = patch.approvals !== undefined || patch.held !== undefined || patch.mesh_limit_override !== undefined;
     return acceptSubmission(async () => {
       if (cad) {
         const approvals = patch.approvals;
@@ -622,7 +622,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
               ?? 'Prepare and solve was cancelled because the waiting job changed.');
             return null;
           }
-          child = await solveCadAgain(jobId, { approvals });
+          child = await solveCadAgain(jobId, { approvals, ...(patch.mesh_limit_override !== undefined ? { mesh_limit_override: patch.mesh_limit_override } : {}) });
         } catch (error) {
           solveAttention.releaseOperation(jobId);
           throw error;

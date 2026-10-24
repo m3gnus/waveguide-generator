@@ -269,7 +269,7 @@ def test_a_preparing_job_is_stopped_where_it_is(h: JobsHarness) -> None:
 # -- refusal and Solve again ---------------------------------------------------------------
 
 
-def test_a_refusal_ends_the_job_as_an_error_with_the_operations_reason_and_words(
+def test_a_user_refusal_holds_the_job_with_the_operations_reason_and_words(
     h: JobsHarness,
 ) -> None:
     _received(h, sized=False)
@@ -277,9 +277,9 @@ def test_a_refusal_ends_the_job_as_an_error_with_the_operations_reason_and_words
     summary = h.prepare()
 
     job = h.latest_job()
-    assert job["status"] == "error" and job["run_number"] is None
+    assert job["status"] == "held" and job["run_number"] is None
     assert _cad(job)["refusal"] == {"code": "setup_required", "message": summary["message"]}
-    assert job["error_message"] == summary["message"]
+    assert job["error_message"] is None
     assert (summary["state"], summary["reason"]) == ("needs_user_input", "setup_required")
     assert job["config_json"]["type"] == CAD_INTENT  # never had a request
     with pytest.raises(JobConflictError, match="ended before it had a solve request"):
@@ -303,7 +303,7 @@ def test_solve_again_is_a_new_job_that_carries_what_the_first_recorded(h: JobsHa
     assert child["parent_job_id"] == parent["id"]
     assert _cad(child)["setup"]["revision_id"] == revision  # the recorded setup, named by no one
     assert len(h.ingest.calls) == 1  # its preparation was resumed, not made again
-    assert _row(h, parent["id"])["status"] == "error"  # the first stays as it ended
+    assert _row(h, parent["id"])["status"] == "held"  # the first stays as it ended
 
 
 def test_two_solve_again_presses_share_one_continuation(h: JobsHarness) -> None:
@@ -352,7 +352,7 @@ def test_each_continuation_has_its_own_client_request_id(h: JobsHarness) -> None
     h.submit_error = RuntimeError("second bind refused")
     child = h._loop.run(h.runtime.solve_cad_again(parent))
     _settle(h)
-    assert _row(h, child)["status"] == "error"
+    assert _row(h, child)["status"] == "held"
     grandchild = h._loop.run(h.runtime.solve_cad_again(child))
     _settle(h)
     assert _row(h, grandchild)["status"] == "queued"
@@ -374,7 +374,7 @@ def test_a_changed_parent_press_continues_the_newest_refused_child(h: JobsHarnes
     child = h._loop.run(h.runtime.solve_cad_again(parent))
     _settle(h)
     assert intent_of(_row(h, child)) is not None
-    assert _row(h, child)["status"] == "error"
+    assert _row(h, child)["status"] == "held"
 
     revision = _revision(h.store, _setup(rigid=12.0))
     h.blocked = "An update restart is pending."
@@ -425,7 +425,7 @@ def test_a_double_parent_press_after_the_new_child_is_refused_is_still_one_child
     grandchild, repeated = h._loop.run(double_press())
     assert grandchild == repeated
     _settle(h)
-    assert _row(h, grandchild)["status"] == "error"
+    assert _row(h, grandchild)["status"] == "held"
     assert _cad(_row(h, grandchild))["setup"]["revision_id"] == revision
     assert h._loop.run(h.runtime.solve_cad_again(parent, setup_revision_id=revision)) == grandchild
     assert h.jobs_store.list_jobs(limit=50)[1] == 3
@@ -826,7 +826,7 @@ def test_the_state_a_cad_solve_needs_is_kept_while_it_can_still_run(h: JobsHarne
     h.blocked = None
     _settle(h)
     assert _row(h, child)["status"] == "queued"
-    assert h.jobs_store.get_job_row(parent)["status"] == "error"
+    assert h.jobs_store.get_job_row(parent)["status"] == "held"
     # Bound and queued: the ordinary rule holds it (no document capture in the stand-in record,
     # so what remains is the carried state on the queued job, which the store does not read).
     assert h.held_return_states() == []
@@ -885,7 +885,7 @@ def test_an_unexpected_failure_ends_the_job_refused_and_never_strands_it(h: Jobs
     summary = h.prepare(setup_revision_id=_revision(h.store, _setup()))
 
     job = h.latest_job()
-    assert (job["status"], summary["reason"]) == ("error", "preparation_failed")
+    assert (job["status"], summary["reason"]) == ("held", "preparation_failed")
     assert "Preparing this request failed unexpectedly" in _cad(job)["refusal"]["message"]
     assert "Press Solve now to try again." in summary["message"]
     # The intent it ended with can be solved again, and the lane is free for it.

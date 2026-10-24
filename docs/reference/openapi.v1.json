@@ -463,6 +463,25 @@
         "title": "CadDriveChannelIdentity",
         "type": "object"
       },
+      "CadHoldOption": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "CadHoldOption",
+        "type": "object"
+      },
       "CadIdentityInstance": {
         "additionalProperties": false,
         "description": "CAD-authored addresses for one linked placement in an imported run.",
@@ -954,6 +973,11 @@
             ],
             "title": "Frame Axis"
           },
+          "mesh_limit_override": {
+            "default": false,
+            "title": "Mesh Limit Override",
+            "type": "boolean"
+          },
           "setup_revision_id": {
             "anyOf": [
               {
@@ -1226,6 +1250,11 @@
             ],
             "title": "Frame Axis Automatic"
           },
+          "held": {
+            "default": false,
+            "title": "Held",
+            "type": "boolean"
+          },
           "job_id": {
             "anyOf": [
               {
@@ -1248,6 +1277,17 @@
             ],
             "title": "Message"
           },
+          "next_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Step"
+          },
           "operation_id": {
             "anyOf": [
               {
@@ -1258,6 +1298,13 @@
               }
             ],
             "title": "Operation Id"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/CadHoldOption"
+            },
+            "title": "Options",
+            "type": "array"
           },
           "preparation": {
             "anyOf": [
@@ -6831,6 +6878,7 @@
           "status": {
             "enum": [
               "preparing",
+              "held",
               "queued",
               "running",
               "complete",
@@ -7579,6 +7627,7 @@
           "status": {
             "enum": [
               "preparing",
+              "held",
               "queued",
               "running",
               "complete",

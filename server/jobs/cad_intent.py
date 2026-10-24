@@ -75,6 +75,7 @@ class CadSolveIntent:
     label: str | None = None
     parent_job_id: str | None = None
     submission_key: str | None = None
+    mesh_limit_override: bool = False
 
     def to_config(self) -> dict[str, Any]:
         """The ``config_json`` of a preparing job."""
@@ -97,6 +98,8 @@ class CadSolveIntent:
         config.update({key: value for key, value in optional.items() if value is not None})
         if not self.submit:
             config["submit"] = False
+        if self.mesh_limit_override:
+            config["mesh_limit_override"] = True
         return config
 
     @classmethod
@@ -120,6 +123,7 @@ class CadSolveIntent:
             label=_optional_text(config.get("label")),
             parent_job_id=_optional_text(config.get("parent_job_id")),
             submission_key=_optional_text(config.get("submission_key")),
+            mesh_limit_override=config.get("mesh_limit_override") is True,
         )
 
     def delivery_digest(self) -> str:
@@ -154,7 +158,7 @@ def intent_of(row: Mapping[str, Any]) -> CadSolveIntent | None:
 #: continues from: its retained snapshot, the captured-document state cleanup
 #: keeps for it, the setup it prepared with, and its preparation with the
 #: approvals given on it.
-CARRIED = ("snapshot", "return_state_hash", "setup", "frame", "preparation")
+CARRIED = ("snapshot", "return_state_hash", "setup", "frame", "preparation", "mesh_limit_override")
 
 
 def solve_again_intent(
@@ -166,6 +170,7 @@ def solve_again_intent(
     approve_finding_ids: Sequence[str] = (),
     submit: bool = True,
     label: str | None = None,
+    mesh_limit_override: bool = False,
 ) -> CadSolveIntent:
     """The intent of the job that continues an unbound CAD job (Solve again).
 
@@ -193,6 +198,7 @@ def solve_again_intent(
         submit=submit,
         label=label or intent.label,
         parent_job_id=str(parent["id"]),
+        mesh_limit_override=mesh_limit_override or intent.mesh_limit_override,
     )
 
 

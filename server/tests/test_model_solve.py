@@ -801,5 +801,5 @@ def test_snapshot_with_different_saved_drive_sources_records_a_refusal(harness):
     assert status == 200, result
     _settle(harness)
     job = harness.jobs_store.get_job_row(result['job_id'])
-    assert job['status'] == 'error'
+    assert job['status'] == 'held'
     assert job['task_metadata']['cad']['refusal']['code'] == 'setup_required'

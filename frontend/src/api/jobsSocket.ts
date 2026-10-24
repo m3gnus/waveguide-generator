@@ -22,7 +22,7 @@ function shallowEqual(a: object, b: object): boolean {
  * request: it is active and stoppable, has no results, and cannot be retried
  * or reopened. Nothing creates one yet. */
 export type JobStatus = components['schemas']['JobItem']['status'];
-export const JOB_STATUSES: readonly JobStatus[] = ['preparing', 'queued', 'running', 'complete', 'error', 'cancelled'];
+export const JOB_STATUSES: readonly JobStatus[] = ['preparing', 'held', 'queued', 'running', 'complete', 'error', 'cancelled'];
 /** A job that is still owed work: preparing, queued or running. */
 export function isActiveJobStatus(status: JobStatus): boolean {
   return status === 'preparing' || status === 'queued' || status === 'running';
@@ -341,6 +341,11 @@ function isCadState(value: unknown): value is components['schemas']['CadState'] 
   if (!['operation_id', 'stage', 'reason', 'message', 'job_id', 'frame_axis_automatic']
     .every((key) => isNullableString(value[key]))) return false;
   if (typeof value.state !== 'string' || typeof value.setup_defaults !== 'boolean') return false;
+  if (hasOwn(value, 'held') && typeof value.held !== 'boolean') return false;
+  if (hasOwn(value, 'next_step') && !isNullableString(value.next_step)) return false;
+  if (hasOwn(value, 'options') && !(Array.isArray(value.options) && value.options.every(option => (
+    isRecord(option) && typeof option.id === 'string' && typeof option.label === 'string'
+  )))) return false;
   if (!isNullableTimestamp(value.received_at) || !isNullableTimestamp(value.updated_at)) return false;
   const snapshot = value.snapshot;
   if (!(snapshot === null || (isRecord(snapshot)
@@ -1202,7 +1207,7 @@ export class JobsSocketManager {
     if (!job) return true;
     // Preparation stages can also change the CAD gate, including restart holds.
     if (message.type === 'stage' && job.cad_state
-      && (job.status === 'preparing' || (job.status === 'error' && job.cad_intent))) return true;
+      && (job.status === 'preparing' || ((job.status === 'error' || job.status === 'held') && job.cad_intent))) return true;
     return message.type === 'queued'
       || message.type === 'completed'
       || message.type === 'failed'

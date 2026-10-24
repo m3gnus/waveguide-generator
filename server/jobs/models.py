@@ -1333,6 +1333,7 @@ class CadSolveAgainRequest(JobModel):
     frame_axis: str | None = None
     approvals: CadApprovalsRequest | None = None
     submit: bool = True
+    mesh_limit_override: bool = False
 
     @field_validator("frame_axis")
     @classmethod
@@ -1350,6 +1351,7 @@ class CadSolveAgainRequest(JobModel):
             "approve_preparation_id": self.approvals.preparation_id if self.approvals else None,
             "approve_finding_ids": tuple(self.approvals.finding_ids) if self.approvals else (),
             "submit": self.submit,
+            "mesh_limit_override": self.mesh_limit_override,
         }
 
 
@@ -1407,6 +1409,11 @@ class CadStateApproval(JobModel):
     finding_id: str
 
 
+class CadHoldOption(JobModel):
+    id: str
+    label: str
+
+
 class CadState(JobModel):
     """The CAD solve's state, derived entirely from this job's record."""
 
@@ -1416,6 +1423,9 @@ class CadState(JobModel):
     reason: str | None
     message: str | None
     blocker: SolveBlocker | None = None
+    held: bool = False
+    next_step: str | None = None
+    options: list[CadHoldOption] = Field(default_factory=list)
     job_id: str | None
     snapshot: CadStateSnapshot | None
     preparation: CadStatePreparation | None
@@ -1438,7 +1448,7 @@ class StopResponse(JobModel):
 
 #: ``preparing`` is a CAD solve WG has accepted but not yet bound to a request;
 #: its stored config is a ``cad_intent``, not a ``SolveRequest``.
-JobStatusName = Literal["preparing", "queued", "running", "complete", "error", "cancelled"]
+JobStatusName = Literal["preparing", "held", "queued", "running", "complete", "error", "cancelled"]
 
 
 class CadIdentityInstance(JobModel):

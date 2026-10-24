@@ -20,14 +20,16 @@ class MeshTooLarge(RuntimeError):
     def message(self) -> str:
         message = (
             f"This model meshes to {self.count:,} triangles; WG's limit is "
-            f"{self.limit:,} for the part it solves. "
+            f"{self.limit:,} triangles before asking you to continue. "
         )
         if self.mesh_sizes is None:
-            return message + "Use coarser throat/mouth/rear resolution before solving again."
+            return (f"This model meshes to {self.count:,} triangles; WG's limit is "
+                    f"{self.limit:,} for the part it solves. "
+                    "Use coarser throat/mouth/rear resolution before solving again.")
         wall = self.mesh_sizes["rigid_size_mm"]
         default_wall = default_cad_wall_size_mm()
         return (
             message + "In Fusion, open Waveguide Generator ▸ Sources & Mesh…, "
             f"raise Walls (now {wall:g} mm; default {default_wall:g} mm) "
-            "or add a Coarse surface group, and Send again."
+            "or add a Coarse surface group. Check the model size, or choose Solve anyway."
         )

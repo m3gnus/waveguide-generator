@@ -1,3 +1,6 @@
+import legacyHold from '../jobs/cadRefusedJob.fixture.json';
+import { cadJobFixture, publishCadJobs } from '../jobs/cadSolve.fixtures';
+import { cadJobSummary } from '../jobs/cadSolve';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -6,7 +9,7 @@ import { preferencesStore } from '../prefs/preferences';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { buildParameterPaletteEntries, WorkspaceModeSwitch, workspaceModePaletteEntries } from './TopBar';
+import { AttentionNotices, buildParameterPaletteEntries, WorkspaceModeSwitch, workspaceModePaletteEntries } from './TopBar';
 import { workspaceNavigation } from './Workspace';
 
 function solvedParametricJob(id: string, design: ReturnType<typeof designForFamily>): JobItem {
@@ -45,6 +48,19 @@ describe('workspace mode switch', () => {
     workspaceModeStore.setMode('parametric');
     vi.restoreAllMocks();
     host.remove();
+  });
+
+  it('counts only live held requests in the toolbar chip', async () => {
+    const state = cadJobSummary(legacyHold as unknown as JobItem);
+    const one = cadJobFixture({ ...state, reason: 'setup_required', jobId: 'one' }, { status: 'held' });
+    const two = { ...one, id: 'two' };
+    const old = { ...one, id: 'old', status: 'cancelled',
+      cad_state: { ...one.cad_state!, state: 'cancelled', reason: 'superseded', held: false } } as JobItem;
+    act(() => publishCadJobs([one, two, old]));
+    await act(async () => root.render(<AttentionNotices/>));
+    expect(host.querySelector('.attention-waiting')?.textContent).toContain('2 CAD requests need you');
+    act(() => publishCadJobs([old]));
+    expect(host.querySelector('.attention-waiting')).toBeNull();
   });
 
   it('routes first-time CAD Link users directly to the setup workflow', () => {

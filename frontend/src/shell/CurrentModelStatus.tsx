@@ -5,6 +5,7 @@ import { cadJobSummary } from '../jobs/cadSolve';
 import { messageBlocker } from '../jobs/solveReadiness';
 import { currentModelStatus, useCurrentModel } from '../model/currentModel';
 import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
+import { openHeldRequest } from './HeldCadRequestDialog';
 import { CurrentModelRequests } from './CadOperationsSection';
 import { automaticAxisNote, defaultSettingsNote } from './CadSolveInputs';
 import { jobsCoordinatorBridge, useOptionalSolveControl } from './JobsCoordinator';
@@ -20,10 +21,15 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
   const status = currentModelStatus(model, jobs);
   const latestJob = status.job;
   const latest = latestJob?.cad_state ? cadJobSummary(latestJob) : null;
+  if (status.kind === 'waiting' && latestJob && latestJob.cad_state?.reason !== 'engine_unavailable') return <div className="current-model-status" data-model-status="waiting">
+    <Notice tone="info" title="Waiting for you" actions={<button type="button" className="btn" onClick={() => openHeldRequest(latestJob.id)}>Review request</button>}>
+      {status.message}
+    </Notice>
+  </div>;
   const unavailable = !control || (!!record && !control.cadMode);
-  const readiness = control?.readiness ?? latestJob?.cad_state?.blocker ?? (status.kind === 'refused' ? messageBlocker(status.message)
+  const readiness = control?.readiness ?? latestJob?.cad_state?.blocker ?? (status.kind === 'refused' || status.kind === 'waiting' ? messageBlocker(latestJob?.cad_state?.message || status.message)
     : unavailable ? messageBlocker('Solve is not available here.') : null);
-  const held = status.kind === 'refused' && latestJob?.cad_state?.state === 'needs_user_input'
+  const held = status.kind === 'waiting' && latestJob?.cad_state?.state === 'needs_user_input'
     && latestJob.cad_state.reason === 'engine_unavailable';
   const request: ReactNode = record ? <CurrentModelRequests record={record}/> : null;
   const engineGate = held || !!readiness?.engine || control?.waitingForEngine;

@@ -7,7 +7,7 @@ import type { RequestedSolveOwner } from './useRequestedSolve';
 /** The current Fusion request held by the selected engine gate. */
 export function heldEngineSolveJob() {
   const status = currentModelStatus(currentModel(), jobsSocket.getSnapshot().jobs);
-  return status.kind === 'refused' && status.job?.cad_state?.state === 'needs_user_input'
+  return (status.kind === 'waiting' || status.kind === 'refused') && status.job?.cad_state?.state === 'needs_user_input'
     && status.job.cad_state.reason === 'engine_unavailable' ? status.job : null;
 }
 

@@ -1,3 +1,4 @@
+import legacyHold from '../jobs/cadRefusedJob.fixture.json';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { archivedRequest, workspaceFor } from './cadlink/selection.fixtures';
 import { useRunFilters } from '../jobs/runFilters';
@@ -72,6 +73,18 @@ describe('jobs panel run list', () => {
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
+  });
+
+  it('excludes held and legacy waiting requests from Runs and failed counts', async () => {
+    const waiting = { ...job(1, 'Waiting request'), ...legacyHold, id: 'waiting', status: 'held',
+      cad_state: { ...legacyHold.cad_state, held: true } } as JobItem;
+    const old = { ...waiting, id: 'legacy-waiting', status: 'error', cad_state: { ...waiting.cad_state!, held: undefined } } as JobItem;
+    const failed = { ...job(3, 'Real failure'), status: 'error', error_message: 'Could not solve' } as JobItem;
+    publishJobs([waiting, old, failed]);
+    await act(async () => root.render(<JobsPanel/>));
+    expect(host.querySelectorAll('.job-card')).toHaveLength(1);
+    expect(host.querySelector('.job-card')?.textContent).toContain('Real failure');
+    expect(host.querySelector('[title="Remove 1 failed run"]')).not.toBeNull();
   });
 
   it('filters source, stable project and retained model without joining same-named imports', async () => {

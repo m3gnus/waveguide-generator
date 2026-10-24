@@ -1113,13 +1113,23 @@ solve scheduler, prepares it (`server/jobs/cad_preparation.py`):
   meshing_semantics, approvals}`, `return_state_hash`, `last_stage` and, on a refusal,
   `refusal {code, message}`. The `cad_operations` row is the acceptance ledger: the lane
   reads its retained snapshot and never writes it, and `cad_preparations` is not used.
-- **Refusal.** A solve that cannot go on ends the job `error` with `refusal = {code,
-  message}` in the operations' vocabulary (`operations.REASON_CODES`: `setup_required`,
-  `findings_need_review`, `frame_confirmation_required`, `preparation_failed`,
-  `engine_unavailable`, `engine_cannot_solve_return`, `submission_refused`, `interrupted`,
-  `ready_to_solve`, and `snapshot_invalid` for a return WG rejects). `job_operation_view`
-  reads a job in the operations' `state`, `stage`, `reason` and `message` (the read model
-  used by the compatibility routes).
+- **Held requests.** A `NEEDS_USER_INPUT` reason ends preparation with status and
+  stage `held`, stage message `Waiting for you`, and `cad.hold {code, message,
+  next_step, options}`. `cad.refusal {code, message}` remains for compatibility.
+  The job read model exposes `held`, `next_step` and option buttons. Historical
+  errors with those refusal codes read as held too, and survive Clear failed.
+  A rejection such as `snapshot_invalid` remains an error. Held requests have no
+  run number and do not appear in Runs. One shell dialog owns their choices;
+  Results uses a calm waiting status and the requests chip counts live holds.
+  A newer request with the same project lineage retires older holds as
+  `superseded`, including an older preparation reaching a hold after the newer
+  request arrived. A superseded request cannot be continued.
+- **Mesh choice.** CAD meshes above 22,000 triangles hold with `mesh_too_large`.
+  The dialog recommends Sources & Mesh… in Fusion or checking the model size,
+  and offers Solve anyway. That explicit continuation records
+  `cad.mesh_limit_override {accepted: true, source: solve_anyway}` on the job
+  and passes the override through isolated meshing. The independent dense-memory
+  guard still applies. A new Fusion request has no inherited override.
 - **Solve again.** `JobRuntime.solve_cad_again(job_id, ...)` (and `retry` for a job that
   holds an intent) makes a new `preparing` job that continues a refused or stopped one: the
   same return, the setup and preparation the first recorded (copied into the new job's
@@ -1149,6 +1159,13 @@ solve scheduler, prepares it (`server/jobs/cad_preparation.py`):
   during meshing ends the held job as `interrupted` on the next start.
 - **Retention.** `unreleased_cad_return_states` also holds the captured-document state of a
   `preparing` job, and of a refused job the user can answer until another job continues it.
+
+### Held-status database upgrade
+
+Jobs schema 7 adds `held` to the status CHECK using the existing guarded table
+rebuild. Schema-6 rows remain readable without changing historical refusal data.
+Before upgrading a schema-6 database, WG saves `.pre-schema-7.bak`; the older
+pre-schema-6 rollback snapshot remains intact. Older readers refuse schema 7.
 
 ### S4-F1 compatibility and rollback
 

@@ -519,11 +519,12 @@ def _mesh_policy(
 
 
 def _enforce_artifact_triangle_ceiling(
-    triangle_count: int, *, mesh_sizes: Mapping[str, Any] | None = None
+    triangle_count: int, *, mesh_sizes: Mapping[str, Any] | None = None,
+    mesh_limit_override: bool = False,
 ) -> None:
     """Enforce the solver's triangle limit on the parsed output."""
 
-    if triangle_count > MAX_SOLVER_MESH_ARTIFACT_TRIANGLES:
+    if triangle_count > MAX_SOLVER_MESH_ARTIFACT_TRIANGLES and not mesh_limit_override:
         raise MeshTooLarge(
             triangle_count, MAX_SOLVER_MESH_ARTIFACT_TRIANGLES, mesh_sizes=mesh_sizes,
         )

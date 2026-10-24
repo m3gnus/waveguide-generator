@@ -5,7 +5,7 @@ import type { CadOperationSummary } from '../api/cadOperations';
 import { isPendingCadOperation, operationNeedsUser } from '../api/cadOperations';
 import { jsonRequest, type CadReturnIngestRecord } from '../api/cadlink';
 import { isActiveJobStatus, jobsSocket, type JobItem, type JobsSocketManager } from '../api/jobsSocket';
-import { cadJobSummary, latestCadJobs, dismissCadJob } from '../jobs/cadSolve';
+import { cadJobSummary, latestCadJobs, dismissCadJob, isHeldCadJob } from '../jobs/cadSolve';
 import { useCadDeliveryHealthStore } from './cadDeliveryHealth';
 import { useCadConnectionStore, type CadConnectionStore } from './cadConnection';
 
@@ -180,7 +180,7 @@ export function createCadRequestActions({ recovery = cadRecoveryNoticesStore, di
   const completed = new Set<string>();
   let opening: Promise<void> | null = null;
   const dismiss = (request: CadRequest): Promise<void> => {
-    if (!operationNeedsUser(request.operation) || (request.source === 'job' && request.job.status !== 'error')) return Promise.resolve();
+    if (!operationNeedsUser(request.operation) || (request.source === 'job' && !isHeldCadJob(request.job))) return Promise.resolve();
     const key = `${request.source}:${request.id}`;
     if (completed.has(key)) return Promise.resolve();
     const held = pending.get(key);

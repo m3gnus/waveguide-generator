@@ -148,7 +148,7 @@ def test_after_the_new_app_migrated_an_older_app_refuses_and_the_snapshot_restor
     store.create_job(_preparing())
     store.checkpoint()
     store.close()
-    assert _user_version(db) == 6
+    assert _user_version(db) == 7
     assert _snapshot(snapshot) == before_rows
 
     # Reinstalling the older release is the only way back on this path. It
@@ -180,7 +180,7 @@ def test_the_upgrade_snapshots_and_migrates(
     store = JobStore(db)
     store.initialize()
     store.close()
-    assert _user_version(db) == 6
+    assert _user_version(db) == 7
     assert _snapshot(store.rollback_snapshot_path) == before_rows
 
 
@@ -245,7 +245,7 @@ def test_a_held_previous_snapshot_never_stops_a_second_upgrade(
     store.initialize()
     store.close()
 
-    assert _user_version(db) == 6
+    assert _user_version(db) == 7
     held_copies = list(db.parent.glob(snapshot.name + ".held-*"))
     if held_for == "transient":
         # Retried like the bridge's renames: rotated, then published normally.
@@ -280,7 +280,7 @@ def test_a_held_orphan_from_an_earlier_snapshot_is_logged_and_left(
     store = JobStore(db)
     store.initialize()
     store.close()
-    assert _user_version(db) == 6 and orphan.exists()
+    assert _user_version(db) == 7 and orphan.exists()
     assert any(str(orphan) in record.getMessage() for record in caplog.records)
 
 
@@ -347,7 +347,7 @@ def test_a_held_stale_sidecar_never_sits_beside_a_new_snapshot(
     store.close()
     monkeypatch.setattr(store_module.sqlite3, "connect", real_connect)
 
-    assert _user_version(db) == 6
+    assert _user_version(db) == 7
     assert wal.read_bytes() == b"stale -wal"
     # The invalid main moved away, but the new snapshot is not published at
     # the live name while the old WAL is still there.
@@ -387,7 +387,7 @@ def test_a_failed_publication_after_rotation_reports_where_each_snapshot_is(
     store.initialize()  # never fails startup
     store.close()
 
-    assert _user_version(db) == 6
+    assert _user_version(db) == 7
     assert _snapshot(rotated) == first_rows and not snapshot.exists()
     held = list(db.parent.glob(snapshot.name + ".held-*"))
     message = " ".join(record.getMessage() for record in caplog.records)
@@ -418,7 +418,7 @@ def test_every_held_file_shares_one_retry_budget(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(store_module.sqlite3, "connect", real_connect)
     assert all(Path(str(snapshot) + suffix).exists() for suffix in ("", "-wal", "-shm", "-journal"))
     # Four held files (main and three sidecars) used to wait 20 s each.
-    assert _user_version(db) == 6
+    assert _user_version(db) == 7
     assert clock.slept <= store_module._HELD_FILE_RETRY_SECONDS + store_module._HELD_FILE_RETRY_INTERVAL
 
 
@@ -473,7 +473,7 @@ def test_a_snapshot_held_by_another_connection_is_held_not_invalid(
             clock.holder.rollback()
             clock.holder.close()
 
-    assert _user_version(db) == 6
+    assert _user_version(db) == 7
     # Never quarantined as invalid, and its main file never rewritten.
     assert not list(db.parent.glob(snapshot.name + ".invalid-*"))
     held = list(db.parent.glob(snapshot.name + ".held-*"))
@@ -591,7 +591,7 @@ def test_a_crash_at_any_rotation_step_loses_no_committed_snapshot_row(tmp_path: 
     assert _user_version(db) == 5  # the migration never committed
 
     assert _upgrade_child(db, "none") == 0
-    assert _user_version(db) == 6
+    assert _user_version(db) == 7
     assert _label_in_set(rotated, tmp_path / "after-bak1") == WAL_ONLY_LABEL
     assert _snapshot(snapshot) == live_rows
     assert not any(Path(str(snapshot) + suffix).exists() for suffix in ("-wal", "-journal"))
@@ -670,7 +670,7 @@ def test_a_holder_taken_after_validation_cannot_stall_the_copy(
             holder.rollback()
             holder.close()
 
-    assert _user_version(db) == 6
+    assert _user_version(db) == 7
     held = list(db.parent.glob(snapshot.name + ".held-*"))
     assert len(held) == 1 and _snapshot(held[0]) == live_rows
     # The previous snapshot is untouched, with no partial copy anywhere.
@@ -780,7 +780,7 @@ def test_continuous_writes_to_the_previous_snapshot_cannot_stall_the_copy(
     assert len(writes) > 1
     assert steps[0][0] == steps[-1][0] == sqlite3.SQLITE_OK
     assert steps[-1][1] >= steps[0][1] > 0, "commits must restart the real backup"
-    assert _user_version(db) == 6
+    assert _user_version(db) == 7
     held = list(db.parent.glob(snapshot.name + ".held-*"))
     assert len(held) == 1 and _snapshot(held[0]) == live_rows
     assert not Path(str(snapshot) + ".1").exists()

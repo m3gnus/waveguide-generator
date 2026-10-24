@@ -1,3 +1,4 @@
+import { isHeldCadJob } from '../jobs/cadSolve';
 import { EmptyState } from './EmptyState';
 import { Notice } from './Notice';
 import { useRunFilters, runModelKey } from '../jobs/runFilters';
@@ -338,7 +339,9 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
     if (preferences.minRating > 0) lastMinimumRating.current = preferences.minRating;
   }, [preferences.minRating]);
 
-  const preferenceJobs = useMemo(() => applyJobPreferences(snapshot.jobs, preferences.jobSort, preferences.minRating), [snapshot.jobs, preferences.jobSort, preferences.minRating]);
+  const runJobs = useMemo(() => snapshot.jobs.filter(job => !isHeldCadJob(job)
+    && !(job.cad_intent && job.cad_state?.reason === 'superseded')), [snapshot.jobs]);
+  const preferenceJobs = useMemo(() => applyJobPreferences(runJobs, preferences.jobSort, preferences.minRating), [runJobs, preferences.jobSort, preferences.minRating]);
   const visibleJobs = useMemo(() => {
     const wanted = query.trim().toLocaleLowerCase();
     const scoped = preferenceJobs.filter(job => (source === 'all' || runSourceForJob(job) === source)
@@ -353,19 +356,19 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
     });
   }, [preferenceJobs, query, source, project, model]);
   const projects = new Map<string, string>();
-  for (const job of snapshot.jobs) {
+  for (const job of runJobs) {
     const cad = job.cad_source;
     if (cad?.lineage_id && !projects.has(cad.lineage_id)) projects.set(cad.lineage_id,
       cad.document_name ?? cad.archive_stem ?? 'CAD project');
   }
   if (project && !projects.has(project)) projects.set(project, 'Current project');
-  const models = new Map(snapshot.jobs.filter(job => (source === 'all' || runSourceForJob(job) === source)
+  const models = new Map(runJobs.filter(job => (source === 'all' || runSourceForJob(job) === source)
     && (!project || job.cad_source?.lineage_id === project)).map(job => [runModelKey(job),
       `${job.cad_source?.document_name ?? job.label ?? 'Model'} · …${runModelKey(job).slice(-10)}`]));
   const visibleFailedCount = visibleJobs.filter((job) => job.status === 'error').length;
-  const failedCount = snapshot.jobs.filter((job) => job.status === 'error').length;
-  const activeCount = snapshot.jobs.filter((job) => isActiveJobStatus(job.status)).length;
-  const hiddenByFilter = snapshot.jobs.length - visibleJobs.length;
+  const failedCount = runJobs.filter((job) => job.status === 'error').length;
+  const activeCount = runJobs.filter((job) => isActiveJobStatus(job.status)).length;
+  const hiddenByFilter = runJobs.length - visibleJobs.length;
   const notConnected = snapshot.connection !== 'connected';
 
   const now = useSolveClock(activeCount > 0);
@@ -454,10 +457,10 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
       {(source !== 'all' || project || model || query) && <button className="btn" onClick={() => useRunFilters.setState({ source: 'all', project: '', model: '', query: '' })}>Clear filters</button>}
     </div>
     {snapshot.error && <Notice tone="error">{snapshot.error}</Notice>}
-    {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <EmptyState title="No runs yet" detail={project
+    {runJobs.length === 0 && snapshot.connection === 'connected' && <EmptyState title="No runs yet" detail={project
       ? 'Prepare the CAD model and press Solve to start this project’s first run.'
       : 'Solve the model on screen to start one. Every run is kept here with its results, so you can compare and re-run it later.'}/>}
-    {snapshot.jobs.length > 0 && visibleJobs.length === 0 && <EmptyState title="No runs match the filter" detail={source !== 'all' || project || model ? 'Clear filters to show runs from other sources, projects or models.' : query.trim() && preferences.minRating > 0 ? 'Clear the search or turn off the kept-only filter.' : query.trim() ? 'Clear the search to show runs.' : 'Turn off the kept-only filter to show more.'}/>}
+    {runJobs.length > 0 && visibleJobs.length === 0 && <EmptyState title="No runs match the filter" detail={source !== 'all' || project || model ? 'Clear filters to show runs from other sources, projects or models.' : query.trim() && preferences.minRating > 0 ? 'Clear the search or turn off the kept-only filter.' : query.trim() ? 'Clear the search to show runs.' : 'Turn off the kept-only filter to show more.'}/>}
     {visibleJobs.length > 0 && <div className="job-list" role="list" aria-label="Run history">
       {visibleJobs.map(job => <JobCard key={job.id} job={job} now={now} selected={job.id === selection.primary} retryJob={coordinator.continueRun} onError={coordinator.reportError} onRemove={remove} onOpenExportSettings={openExportSettings}/>)}
     </div>}

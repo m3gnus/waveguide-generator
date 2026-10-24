@@ -100,6 +100,7 @@ REASON_CODES: Mapping[str, str] = {
     # confirmed for this frame requirement (server/cadlink/interpretation/solver_frame.py).
     "frame_confirmation_required": NEEDS_USER_INPUT,
     "preparation_failed": NEEDS_USER_INPUT,
+    "mesh_too_large": NEEDS_USER_INPUT,
     "engine_unavailable": NEEDS_USER_INPUT,
     # The engine the setup names is present but cannot solve this return.
     "engine_cannot_solve_return": NEEDS_USER_INPUT,
@@ -119,6 +120,36 @@ REASON_CODES: Mapping[str, str] = {
     "adapter_failed": REJECTED,
     "adapter_not_started": CANCELLED,
 }
+
+
+def user_hold(status: str, cad: Mapping[str, Any]) -> bool:
+    """Include refusals saved before holds had their own job status."""
+
+    refusal = cad.get("refusal") or {}
+    return status == "held" or (
+        status == "error" and REASON_CODES.get(refusal.get("code")) == NEEDS_USER_INPUT
+    )
+
+
+def hold_details(code: str, message: str) -> dict[str, Any]:
+    """One vocabulary for persisted holds and historical request readers."""
+
+    choice_code = "mesh_too_large" if code == "preparation_failed" and message.startswith("This model meshes to ") else code
+    action, label, next_step = {
+        "mesh_too_large": (
+            "solve_anyway", "Solve anyway",
+            "Change the mesh resolution in Sources & Mesh… in Fusion, or check the model size. You can also solve anyway.",
+        ),
+        "setup_required": ("review", "Review settings", "Review this model's solve settings, then solve."),
+        "findings_need_review": ("review", "Review model", "Review this model's preparation before solving."),
+        "engine_unavailable": ("review", "Review solve", "Open Results to prepare the solve engine."),
+        "engine_cannot_solve_return": ("review", "Review settings", "Review this model's solve settings."),
+        "ready_to_solve": ("retry", "Solve", "Start the prepared solve when you are ready."),
+        **{reason: ("retry", "Try again", "Try preparing this request again, or send an updated model from Fusion.")
+           for reason in ("preparation_failed", "submission_refused", "interrupted")},
+    }.get(choice_code, ("review", "Review request", "Review this request in CAD Link before solving."))
+    return {"code": code, "message": message, "next_step": next_step,
+            "options": [{"id": action, "label": label}, {"id": "dismiss", "label": "Dismiss request"}]}
 BASELINE_KINDS = frozenset({"document_signature_hash"})
 OUTCOME_FIELDS = frozenset(
     {"message", "reconciled", "evidence", "setup_defaults", "frame_axis_automatic"}

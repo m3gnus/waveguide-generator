@@ -14,7 +14,7 @@ generation, ``stage`` or ``bind_request`` of a ``cad_operations`` row:
 - every write of progress is a compare-and-set on the job's own row
   (``JobStore.advance_preparing_job`` and its siblings), so the lane is fenced
   by the job still being ``preparing`` and not stopped, and needs no takeover;
-- a solve that cannot go on ends the job as ``error`` carrying
+- a solve needing the user ends preparation as ``held`` carrying
   ``task_metadata.cad.refusal = {code, message}``, with the reason codes and
   the words the operations use (``operations.REASON_CODES``), and the user's
   remedy is a new job, "Solve again" (``JobRuntime.solve_cad_again``);
@@ -53,6 +53,8 @@ from server.cadlink.intake.ingest import (
 from server.cadlink.intake.isolation import ChildRefusal
 from server.cadlink.operations import (
     REASON_CODES,
+    hold_details,
+    user_hold,
     REASON_UPDATE_RESTART_PENDING,
     REJECTED,
     STAGE_PREPARING_MESH,
@@ -161,12 +163,13 @@ def job_operation_view(row: Mapping[str, Any]) -> dict[str, Any]:
         job_id = str(row["id"])
         if setup and setup.get("origin") == DEFAULTS_ORIGIN:
             message = DEFAULT_SETTINGS_NOTE
-    elif status == "error" and refusal is not None:
+    elif status in {"held", "error"} and refusal is not None:
         reason, message = refusal.get("code"), refusal.get("message")
         state = REASON_CODES.get(reason, "needs_user_input")
         stage = _last_stage(cad)
     elif status == "cancelled":
         state, stage = "cancelled", _last_stage(cad)
+        reason = (refusal or {}).get("code")
     elif status == "preparing" and stage == STAGE_WAITING_FOR_RESTART:
         state, reason, message = "needs_user_input", REASON_UPDATE_RESTART_PENDING, str(row.get("stage_message") or "")
         stage = _last_stage(cad)
@@ -177,7 +180,10 @@ def job_operation_view(row: Mapping[str, Any]) -> dict[str, Any]:
         message = row.get("error_message")
     snapshot = cad.get("snapshot") if isinstance(cad.get("snapshot"), Mapping) else None
     accepted = acceptance_details(row)
+    held = user_hold(status, cad)
+    hold = cad.get("hold") or (hold_details(str(reason), str(message or "")) if held else {})
     return {
+        "held": held, "next_step": hold.get("next_step"), "options": hold.get("options", []),
         "operationId": cad.get("operation_id"),
         "state": state,
         "stage": stage,
@@ -223,7 +229,7 @@ def job_cad_state(row: Mapping[str, Any]) -> dict[str, Any] | None:
     preparation = cad.get("preparation")
     return {
         "operation_id": view["operationId"] or (_optional_operation_id(intent) if intent else None),
-        **{key: view[key] for key in ("state", "stage", "reason", "message", "blocker")},
+        **{key: view[key] for key in ("state", "stage", "reason", "message", "blocker", "held", "next_step", "options")},
         "job_id": view["jobId"],
         "snapshot": (
             {key: snapshot.get(key) for key in ("document_name", "manifest_sha256", "artifact_sha256", "project_lineage_id")}
@@ -324,6 +330,8 @@ class _Run:
             raise _Fenced()
         self.cad.update(changes)
         self.port.publish(event)
+        if changes.get("snapshot"):
+            self.retire_older_holds()
         if stage:
             logger.info("CAD job %s (operation %s): stage %s.", self.job_id, self.intent.operation_id, stage)
 
@@ -341,7 +349,12 @@ class _Run:
             f": {message}" if REASON_CODES.get(code) != REJECTED else "",
         )
         self.port.publish(event)
+        self.retire_older_holds()
         return "done", None
+
+    def retire_older_holds(self) -> None:
+        for event in self.port.job_store.retire_held_cad_requests(self.job_id):
+            self.port.publish(event)
 
     def is_held(self) -> bool:
         """The ingest's commit guard: the job is still preparing and not stopped."""
@@ -500,6 +513,8 @@ def prepare_job_sync(
     # Keep the requested settings even if reading the retained copy fails.
     run.advance(cad={"setup": _setup_record(store, revision_id)})
     manifest_sha256 = str(retained["manifest_sha256"])
+    if run.intent.mesh_limit_override:
+        run.advance(cad={"mesh_limit_override": {"accepted": True, "source": "solve_anyway"}})
     semantics = meshing_semantics_fingerprint()
     retained_manifest = _retained_manifest(retained)
     if retained_manifest is None:
@@ -558,6 +573,7 @@ def prepare_job_sync(
                 prep_options={
                     "area_drift_overrides": list(setup.preparation.area_drift_overrides),
                     "symmetry_mode": setup.preparation.symmetry_mode,
+                    **({"mesh_limit_override": True} if run.intent.mesh_limit_override else {}),
                     **(
                         {"surface_deviation_mm": setup.preparation.surface_deviation_mm}
                         if setup.preparation.surface_deviation_mm is not None
@@ -577,7 +593,7 @@ def prepare_job_sync(
         except StaleAttempt as exc:
             raise _Fenced() from exc
         except MeshTooLarge as exc:
-            return run.refuse("preparation_failed", exc.message())
+            return run.refuse("mesh_too_large", exc.message())
         except WgReturnError as exc:
             return run.refuse("snapshot_invalid", str(exc))
         except IngestRefusal as exc:
@@ -977,7 +993,7 @@ def _job_provenance(
         preparation=preparation,
         approvals=preparation.get("approvals") or [],
     )
-    for key in ("snapshot", "return_state_hash"):
+    for key in ("snapshot", "return_state_hash", "mesh_limit_override"):
         if key in run.cad:
             record[key] = run.cad[key]
     if run.intent.frame_axis:

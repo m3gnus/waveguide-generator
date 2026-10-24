@@ -58,6 +58,12 @@ export function cadJobOperationId(job: JobItem): string | null {
   return typeof id === 'string' && id ? id : null;
 }
 
+/** Historical refusals remain waiting requests after upgrading. */
+export function isHeldCadJob(job: JobItem): boolean {
+  return job.cad_state?.held ?? (job.status === 'held' || (job.status === 'error'
+    && job.cad_state?.state === 'needs_user_input' && !!job.cad_state.reason));
+}
+
 /** Retain only the current child of a chain; timestamps order separate presses. */
 export function latestCadJobs(jobs: JobItem[]): JobItem[] {
   const byId = new Map(jobs.map((job) => [job.id, job]));
@@ -109,8 +115,7 @@ async function post<T>(path: string, body: T): Promise<{ job_id: string }> {
   return jsonRequest(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, fetch);
 }
 export function solveCadAgain(jobId: string, press: CadSolvePress): Promise<{ job_id: string }> {
-  const { setup_revision_id, frame_axis, approvals, submit } = press;
-  return post(`/api/jobs/${encodeURIComponent(jobId)}/solve-again`, { setup_revision_id, frame_axis, approvals, submit });
+  return post(`/api/jobs/${encodeURIComponent(jobId)}/solve-again`, press);
 }
 /** Record approval only; JobsCoordinator owns continuing the solve. */
 export async function approveCadJob(jobId: string, approvals: NonNullable<CadSolvePress['approvals']>): Promise<void> {
@@ -118,7 +123,7 @@ export async function approveCadJob(jobId: string, approvals: NonNullable<CadSol
 }
 export async function dismissCadJob(job: JobItem): Promise<void> {
   const current = jobsSocket.getSnapshot().jobs.find((item) => item.id === job.id) ?? job;
-  if (current.status !== 'error' || !current.cad_state || !operationNeedsUser(cadJobSummary(current))) {
+  if (!isHeldCadJob(current) || !current.cad_state || !operationNeedsUser(cadJobSummary(current))) {
     throw new Error('Only a refused solve can be dismissed. Use Stop for an active solve.');
   }
   // The backend deletes the refused chain in one transaction, so a reconnect

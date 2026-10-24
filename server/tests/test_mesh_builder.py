@@ -374,9 +374,9 @@ def test_imported_mesh_refusal_names_count_limit_and_all_sizes() -> None:
         _enforce_artifact_triangle_ceiling(28_944, mesh_sizes=sizes)
     assert (error.value.count, error.value.limit, error.value.mesh_sizes) == (28_944, 22_000, sizes)
     assert str(error.value) == (
-        "This model meshes to 28,944 triangles; WG's limit is 22,000 for the part it solves. "
+        "This model meshes to 28,944 triangles; WG's limit is 22,000 triangles before asking you to continue. "
         "In Fusion, open Waveguide Generator ▸ Sources & Mesh…, raise Walls (now 4 mm; default 25 mm) "
-        "or add a Coarse surface group, and Send again."
+        "or add a Coarse surface group. Check the model size, or choose Solve anyway."
     )
 
 

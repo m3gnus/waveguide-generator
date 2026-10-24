@@ -327,16 +327,21 @@ def test_existing_automatic_nowaistbanding_setup_prepares_and_solves_below_ceili
 
     summary = harness.prepare(ingest=ingest_bundle)
     if fine_walls:
-        assert summary["reason"] == "preparation_failed", summary
+        assert summary["reason"] == "mesh_too_large", summary
         message = summary["message"]
         assert message.startswith("This model meshes to "), message
         assert "WG's limit is 22,000" in message
         assert "Waveguide Generator ▸ Sources & Mesh…" in message
         assert "raise Walls (now 4 mm; default 25 mm)" in message
-        assert "Coarse surface group, and Send again." in message
+        assert "Coarse surface group. Check the model size, or choose Solve anyway." in message
         assert "Preparing the mesh failed" not in message
         assert summary.get("preparationId") is None
         assert not harness.submitted
+        # The real isolated mesh builder accepts the explicit choice, with the
+        # same fine settings. Job-level consent and binding are tested in test_cad_held.
+        record = ingest_bundle(bundle, setup["geometry"]["mesh"], [], harness.store, harness.data_dir,
+                               prep_options={"mesh_limit_override": True})
+        assert record["mesh"]["stats"]["triangle_count"] > 22_000
         return
     assert summary["state"] == "accepted", summary
     assert summary["setupRevisionId"] != old

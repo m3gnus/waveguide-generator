@@ -27,6 +27,8 @@ import { BrandMark, Icon } from './icons';
 import { useSolveControl } from './JobsCoordinator';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { CommandPalette, type PaletteEntry } from './CommandPalette';
+import { HeldCadRequestDialog, openHeldRequest } from './HeldCadRequestDialog';
+import { isHeldCadJob } from '../jobs/cadSolve';
 import { ExportDestinationDialog } from './ExportDestinationDialog';
 import { ReportDialog } from './ReportDialog';
 import { commandShortcutLabel } from './platformKeys';
@@ -289,7 +291,7 @@ export function AttentionNotices() {
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const requests = selectCadRequests({ jobs, notices, record: null });
   // Engine gates live in solve progress, including automatic warm-up waits.
-  const waiting = [...requests.earlier, ...requests.current].filter(request => request.operation?.reason !== 'engine_unavailable');
+  const waiting = [...requests.earlier, ...requests.current].filter(request => request.source === 'job' && isHeldCadJob(request.job));
   const waitingCount = waiting.length;
   // A visible Geometry tab can still have its requests below the scroll fold.
   const showWaiting = waitingCount > 0;
@@ -309,7 +311,7 @@ export function AttentionNotices() {
       className="attention-notice attention-waiting"
       title={first?.message ?? waitingLabel}
       onClick={() => {
-        workspaceNavigation.reveal('cad-requests');
+        if (waiting[0]?.source === 'job') openHeldRequest(waiting[0].job.id);
       }}
     ><i/>{waitingLabel} · Show</button>}
     {showRefused && <button
@@ -508,7 +510,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
     <ReportDialog open={reportOpen} jobs={jobs} onClose={() => setReportOpen(false)}/>
     {/* Mounted once, for every export surface in the window: the File menu, the
       * Results panel and each run's export menu all ask this one dialog. */}
-    <ExportDestinationDialog/>
+    <ExportDestinationDialog/><HeldCadRequestDialog/>
     <RunMoveRecoveryNotice/>
   </header>;
 }

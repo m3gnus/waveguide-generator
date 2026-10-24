@@ -31,7 +31,9 @@ from server.mesh.records import get_prepared_mesh as get_ingestion_record
 from server.cadlink.interpretation.domain_decision import (
     decision_summary,
 )
-from server.cadlink.operations import REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED
+from server.cadlink.operations import (
+    REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED, NEEDS_USER_INPUT, hold_details,
+)
 from server.cadlink.interpretation.solver_frame import REASON as FRAME_CONFIRMATION_REQUIRED
 from server.cadlink.intake.readings import record_frame_refusal
 from server.cadlink.store import CadLinkStore
@@ -2289,13 +2291,17 @@ class JobRuntime:
             record.update(status="error", stage="error", stage_message=refusal["message"] or "Preparation stopped",
                           error_message=refusal["message"], completed_at=_now_iso())
             record["task_metadata"]["cad"]["refusal"] = dict(refusal)
+            if CAD_REASON_STATES.get(refusal["code"]) == NEEDS_USER_INPUT:
+                record.update(status="held", stage="held", stage_message="Waiting for you", error_message=None)
+                record["task_metadata"]["cad"]["hold"] = hold_details(str(refusal["code"]), str(refusal["message"] or ""))
         if cancelled:
             record.update(status="cancelled", stage="cancelled", stage_message="Solve cancelled",
                           cancellation_requested=True, completed_at=_now_iso())
         if cancelled:
             initial_event = ("cancelled", {"message": record["stage_message"]})
         elif refusal:
-            initial_event = ("error", {"code": refusal["code"], "message": record["stage_message"]})
+            initial_event = ("stage" if record["status"] == "held" else "failed",
+                             {"stage": record["stage"], "code": refusal["code"], "message": record["stage_message"]})
         else:
             initial_event = ("stage", {"stage": "received", "message": record["stage_message"], "progress": 0.0})
         job_id, created, event = await asyncio.to_thread(
@@ -2306,6 +2312,8 @@ class JobRuntime:
             initial_event=initial_event,
         )
         if created:
+            for retired in await asyncio.to_thread(self.store.retire_held_cad_requests, job_id):
+                self.events.publish(retired)
             if prepare and not refusal and not cancelled:
                 self._offer_to_prep_lane(job_id, event)
             elif event is not None:
@@ -2365,6 +2373,7 @@ class JobRuntime:
         job_id: str, *, setup_revision_id: str | None = None,
         frame_axis: str | None = None, approve_preparation_id: str | None = None,
         approve_finding_ids: tuple[str, ...] | list[str] = (), submit: bool = True,
+        mesh_limit_override: bool = False,
     ) -> str:
         return hashlib.sha256(json.dumps({
             "parent_job_id": job_id,
@@ -2373,6 +2382,7 @@ class JobRuntime:
             "approve_preparation_id": approve_preparation_id,
             "approve_finding_ids": sorted(approve_finding_ids),
             "submit": submit,
+            **({"mesh_limit_override": True} if mesh_limit_override else {}),
         }, sort_keys=True).encode()).hexdigest()
 
     def recover_cad_solve_press(self, job_id: str, **press: Any) -> str | None:
@@ -2385,7 +2395,7 @@ class JobRuntime:
         # ended, and while it still prepares. Only a preparation refused or
         # stopped before binding takes the same settings as a new Solve again.
         if cad_of(row).get("first_press_sha256") == digest and (
-            intent_of(row) is None or row["status"] not in {"error", "cancelled"}
+            intent_of(row) is None or row["status"] not in {"held", "error", "cancelled"}
         ):
             return job_id
         seen = {job_id}
@@ -2409,6 +2419,7 @@ class JobRuntime:
         submit: bool = True,
         request_id: str | None = None,
         label: str | None = None,
+        mesh_limit_override: bool = False,
     ) -> str:
         """Solve again a CAD solve that ended before it had a request: a new job.
 
@@ -2434,11 +2445,13 @@ class JobRuntime:
             job_id, setup_revision_id=setup_revision_id, frame_axis=frame_axis,
             approve_preparation_id=approve_preparation_id,
             approve_finding_ids=approve_finding_ids, submit=submit,
+            mesh_limit_override=mesh_limit_override,
         )
         replay = await asyncio.to_thread(
             self.recover_cad_solve_press, job_id, setup_revision_id=setup_revision_id,
             frame_axis=frame_axis, approve_preparation_id=approve_preparation_id,
             approve_finding_ids=approve_finding_ids, submit=submit,
+            mesh_limit_override=mesh_limit_override,
         )
         if replay is not None:
             return replay
@@ -2456,6 +2469,8 @@ class JobRuntime:
             continuation_key = f"cad-solve-again:{row['id']}"
             existing = await asyncio.to_thread(self.store.job_for_submission_key, continuation_key)
             if existing is None:
+                if refusal is not None and refusal.get("code") == "superseded":
+                    raise JobConflictError("This request was replaced by a newer request from Fusion.")
                 if cad.get("solve_again_press_sha256") == press_sha256:
                     return str(row["id"])
                 intent = solve_again_intent(
@@ -2466,6 +2481,7 @@ class JobRuntime:
                     approve_finding_ids=approve_finding_ids,
                     submit=submit,
                     label=label,
+                    mesh_limit_override=mesh_limit_override,
                 )
                 intent = replace(intent, submission_key=continuation_key)
                 record = self._preparing_record(intent)
@@ -2491,6 +2507,8 @@ class JobRuntime:
                     ),
                 )
                 if created:
+                    for retired in await asyncio.to_thread(self.store.retire_held_cad_requests, existing):
+                        self.events.publish(retired)
                     self._offer_to_prep_lane(existing, event)
                     return existing
             # Check the durable intent both after lookup and after a competing
@@ -2498,7 +2516,7 @@ class JobRuntime:
             child = self._require_job(existing)
             if cad_of(child).get("solve_again_press_sha256") == press_sha256:
                 return existing
-            if intent_of(child) is None or child["status"] not in {"preparing", "error"}:
+            if intent_of(child) is None or child["status"] not in {"preparing", "held", "error"}:
                 raise JobConflictError(existing_child_message)
             if child["status"] == "preparing":
                 raise JobConflictError(existing_child_message)

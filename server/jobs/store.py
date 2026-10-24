@@ -21,7 +21,10 @@ import time
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from server.workspace.archive_identity import record_run_segment
-from server.cadlink.operations import REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED
+from server.cadlink.operations import (
+    REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED,
+    NEEDS_USER_INPUT, hold_details, user_hold,
+)
 from server.jobs.result_contracts import RESULT_ENVELOPE_ADAPTER
 from server.platform.paths import DATA_DIR_ENV, app_root, data_paths
 from server.platform.sqlite import JournalModeStatus, configure_connection
@@ -48,7 +51,7 @@ from server.solver.power_qualification import (
 #: an active status like ``queued`` and ``running`` (it can be stopped, not deleted).
 #: Delivery and compatibility routes accept these through JobRuntime.
 ALLOWED_STATUSES = frozenset(
-    {"preparing", "queued", "running", "complete", "error", "cancelled"}
+    {"preparing", "held", "queued", "running", "complete", "error", "cancelled"}
 )
 #: Statuses in which a job is still owed work, so it cannot be deleted.
 ACTIVE_STATUSES = frozenset({"preparing", "queued", "running"})
@@ -73,7 +76,7 @@ UPDATE_RESTART_INTERRUPTION_KEY = "interrupted_by_update_restart"
 #: ``error_message``; kept as a literal here rather than imported, because
 #: ``runtime`` imports this module and the reverse would cycle.
 RECOVERED_USER_CANCELLATION_MESSAGE = "Simulation cancelled by user"
-SUPPORTED_SCHEMA_VERSION = 6
+SUPPORTED_SCHEMA_VERSION = 7
 ALLOWED_JOB_UPDATE_FIELDS = frozenset(
     {
         "status",
@@ -187,7 +190,7 @@ def _replace_unless_held(source: Path, destination: Path, deadline: float) -> bo
 _SQLITE_HELD_CODES = frozenset({5, 6})  # SQLITE_BUSY, SQLITE_LOCKED
 
 
-def _snapshot_validity(path: Path, deadline: float) -> bool | None:
+def _snapshot_validity(path: Path, deadline: float, ceiling: int = 6) -> bool | None:
     """Whether a previous snapshot is a readable pre-schema-6 jobs DB.
 
     Read-only, so the old snapshot's main file is never changed (a WAL-mode
@@ -200,7 +203,7 @@ def _snapshot_validity(path: Path, deadline: float) -> bool | None:
         try:
             with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0)) as snapshot:
                 return (snapshot.execute("PRAGMA quick_check").fetchone()[0] == "ok"
-                        and snapshot.execute("PRAGMA user_version").fetchone()[0] < 6
+                        and snapshot.execute("PRAGMA user_version").fetchone()[0] < ceiling
                         and snapshot.execute("SELECT 1 FROM sqlite_master WHERE name = 'simulation_jobs'").fetchone() is not None)
         except sqlite3.Error as exc:
             code = getattr(exc, "sqlite_errorcode", None)
@@ -362,7 +365,7 @@ _SAFE_LOG_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 _SCHEMA_STATEMENTS = (
     """CREATE TABLE IF NOT EXISTS simulation_jobs (
       id TEXT PRIMARY KEY,
-      status TEXT NOT NULL CHECK (status IN ('preparing','queued','running','complete','error','cancelled')),
+      status TEXT NOT NULL CHECK (status IN ('preparing','held','queued','running','complete','error','cancelled')),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       queued_at TEXT NOT NULL,
@@ -641,16 +644,18 @@ class JobStore:
             _unlink_or_log(orphan)
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
         exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'simulation_jobs'").fetchone()
-        if version >= 6 or exists is None:
+        if version >= SUPPORTED_SCHEMA_VERSION or exists is None:
             return
-        target = self.rollback_snapshot_path
+        target = (self.db_path.with_name(self.db_path.name + ".pre-schema-7.bak")
+                  if version >= 6 else self.rollback_snapshot_path)
         deadline = time.monotonic() + _HELD_FILE_RETRY_SECONDS
         # True once any file of the previous snapshot set could not be moved:
         # the new snapshot must then never be published beside a stale sidecar.
         blocked = False
         previous = target  # where the previous snapshot's main file is
         if target.exists():
-            valid = _snapshot_validity(target, deadline)
+            valid = (_snapshot_validity(target, deadline, SUPPORTED_SCHEMA_VERSION)
+                     if version >= 6 else _snapshot_validity(target, deadline))
             if valid is None:
                 # Held by another SQLite connection past the budget: neither
                 # judged invalid nor rotated, and never published beside.
@@ -763,7 +768,7 @@ class JobStore:
                 _unlink_or_log(Path(str(temporary) + suffix))
 
     def _status_check_is_stale(self) -> bool:
-        """True when an existing ``simulation_jobs`` predates the ``preparing`` status."""
+        """True when an existing ``simulation_jobs`` predates the ``held`` status."""
 
         with self._lock:
             conn = self._connect()
@@ -771,10 +776,10 @@ class JobStore:
                 "SELECT sql FROM sqlite_master "
                 "WHERE type = 'table' AND name = 'simulation_jobs'"
             ).fetchone()
-        return row is not None and "'preparing'" not in str(row["sql"])
+        return row is not None and not all(f"'{status}'" in str(row["sql"]) for status in ("preparing", "held"))
 
     def _rebuild_simulation_jobs(self, conn: sqlite3.Connection) -> None:
-        """Widen the status CHECK to admit ``preparing``, keeping every row.
+        """Widen the status CHECK to admit ``held``, keeping every row.
 
         SQLite cannot alter a CHECK constraint, so the table is rebuilt: create
         the new shape, copy every row and column by name, drop the old table,
@@ -905,7 +910,7 @@ class JobStore:
                 "SELECT sql FROM sqlite_master "
                 "WHERE type = 'table' AND name = 'simulation_jobs'"
             ).fetchone()
-            if row is not None and "'preparing'" not in str(row["sql"]):
+            if row is not None and not all(f"'{status}'" in str(row["sql"]) for status in ("preparing", "held")):
                 self._rebuild_simulation_jobs(conn)
             self._backfill_job_identity(conn)
             conn.execute(f"PRAGMA user_version = {SUPPORTED_SCHEMA_VERSION}")
@@ -1045,7 +1050,7 @@ class JobStore:
                 SELECT simulation_jobs.*, job_identity.run_number, job_identity.parent_job_id
                 FROM simulation_jobs
                 LEFT JOIN job_identity ON job_identity.job_id = simulation_jobs.id
-                WHERE simulation_jobs.status = 'error'
+                WHERE simulation_jobs.status IN ('held', 'error')
                   AND json_extract(simulation_jobs.config_json, '$.type') = 'cad_intent'
                   AND json_extract(simulation_jobs.config_json, '$.manifest_sha256') = ?
                 ORDER BY simulation_jobs.created_at DESC
@@ -1221,7 +1226,7 @@ class JobStore:
         with self._lock, self._transaction() as conn:
             row = conn.execute(
                 "SELECT config_json, task_metadata_json FROM simulation_jobs "
-                "WHERE id = ? AND status = 'error'", (job_id,),
+                "WHERE id = ? AND status IN ('held', 'error')", (job_id,),
             ).fetchone()
             if row is None or json.loads(row["config_json"]).get("type") != "cad_intent":
                 raise ValueError("This solve is not waiting for preparation approvals.")
@@ -1397,12 +1402,10 @@ class JobStore:
         cad: Mapping[str, Any] | None = None,
         blocker: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        """End a preparing job as refused: an ``error`` carrying its reason and message.
+        """Hold a request needing the user; retain refusal for older readers.
 
-        ``task_metadata.cad.refusal`` is ``{code, message}``, in the vocabulary
-        the CAD operations use (``operations.REASON_CODES``). Only a job that is
-        still preparing and not stopped is ended: a stop that landed first
-        stands. Returns the ``failed`` event, or None when the job had moved on.
+        A rejection stays an error. Only a still-preparing, unstopped job can
+        change: a stop that landed first stands.
         """
 
         now = _now_iso()
@@ -1420,17 +1423,77 @@ class JobStore:
                 **dict(cad or {}),
                 "refusal": {"code": code, "message": message, **({"blocker": dict(blocker)} if blocker else {})},
             }
+            held = CAD_REASON_STATES.get(code) == NEEDS_USER_INPUT
+            if held:
+                metadata["cad"]["hold"] = hold_details(code, message)
             conn.execute(
                 """UPDATE simulation_jobs
-                   SET status = 'error', stage = 'error', stage_message = 'Not solved',
+                   SET status = ?, stage = ?, stage_message = ?,
                        error_message = ?, completed_at = ?, updated_at = ?,
                        task_metadata_json = ?
                    WHERE id = ?""",
-                (message, now, now, json.dumps(metadata), job_id),
+                ("held" if held else "error", "held" if held else "error",
+                 "Waiting for you" if held else "Not solved",
+                 None if held else message, now, now, json.dumps(metadata), job_id),
             )
             return self._append_event(
-                conn, job_id, "failed", {"message": message, "reason": code}
+                conn, job_id, "stage" if held else "failed",
+                {"stage": "held" if held else "error",
+                 "message": "Waiting for you" if held else message, "reason": code},
             )
+
+    def retire_held_cad_requests(self, job_id: str) -> list[dict[str, Any]]:
+        """The newest request for a lineage retires older holds, including old errors.
+
+        Called when a snapshot arrives and when a preparation stops: an older
+        lane finishing after a newer request cannot revive its waiting choice.
+        """
+
+        with self._lock, self._transaction() as conn:
+            lineage = conn.execute(
+                "SELECT json_extract(task_metadata_json, '$.cad.snapshot.project_lineage_id') "
+                "FROM simulation_jobs WHERE id = ?", (job_id,),
+            ).fetchone()
+            if lineage is None or not lineage[0]:
+                return []
+            rows = conn.execute(
+                "SELECT simulation_jobs.id, status, task_metadata_json, "
+                "COALESCE(json_extract(config_json, '$.parent_job_id'), job_identity.parent_job_id) AS parent_id "
+                "FROM simulation_jobs LEFT JOIN job_identity ON job_identity.job_id = simulation_jobs.id "
+                "WHERE json_extract(task_metadata_json, '$.cad.snapshot.project_lineage_id') = ? "
+                "ORDER BY created_at DESC, simulation_jobs.id DESC", (lineage[0],),
+            ).fetchall()
+            # Only a new Fusion press replaces earlier choices. Separate WG
+            # model solves can deliberately keep different settings side by side;
+            # continuing a request also keeps its original delivery identity.
+            newest = None
+            for index, row in enumerate(rows):
+                cad = json.loads(row["task_metadata_json"] or "{}").get("cad") or {}
+                operation_id = str(cad.get("operation_id") or "")
+                if not row["parent_id"] and operation_id and not operation_id.startswith("manual-solve:"):
+                    newest = index
+                    break
+            if newest is None:
+                return []
+            events = []
+            for row in rows[newest + 1:]:
+                metadata = json.loads(row["task_metadata_json"] or "{}")
+                cad = metadata.get("cad") or {}
+                if not user_hold(row["status"], cad):
+                    continue
+                cad["refusal"] = {"code": "superseded", "message": "Replaced by a newer request from Fusion."}
+                cad.pop("hold", None)
+                cad["superseded_by"] = str(rows[newest]["id"])
+                metadata["cad"] = cad
+                now = _now_iso()
+                conn.execute(
+                    "UPDATE simulation_jobs SET status = 'cancelled', stage = 'superseded', "
+                    "stage_message = 'Replaced by a newer request', error_message = NULL, "
+                    "completed_at = ?, updated_at = ?, task_metadata_json = ? WHERE id = ?",
+                    (now, now, json.dumps(metadata), row["id"]),
+                )
+                events.append(self._append_event(conn, str(row["id"]), "cancelled", {"reason": "superseded"}))
+            return events
 
     def bind_preparing_job(
         self,
@@ -2039,7 +2102,7 @@ class JobStore:
                   AND (
                         status = 'preparing'
                         OR (
-                            status = 'error'
+                            status IN ('held', 'error')
                             AND json_extract(
                                 task_metadata_json, '$.cad.refusal.code'
                             ) NOT IN ({",".join("?" for _ in rejected)})
@@ -2763,9 +2826,12 @@ class JobStore:
         placeholders = ",".join("?" for _ in normalized)
         with self._lock, self._transaction() as conn:
             rows = conn.execute(
-                f"SELECT id FROM simulation_jobs WHERE status IN ({placeholders})", normalized
+                f"SELECT id, status, task_metadata_json FROM simulation_jobs WHERE status IN ({placeholders})", normalized
             ).fetchall()
-            ids = [str(row["id"]) for row in rows]
+            # Pre-hold versions stored waiting requests as errors. Clear failed
+            # must preserve those too, without rewriting historical jobs.
+            ids = [str(row["id"]) for row in rows
+                   if not user_hold(row["status"], json.loads(row["task_metadata_json"] or "{}").get("cad") or {})]
             if not ids:
                 return [], []
             id_placeholders = ",".join("?" for _ in ids)

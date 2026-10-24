@@ -588,7 +588,7 @@ describe('solve invocation mutex', () => {
     mocks.importedPlan.plan = { ...mocks.importedPlan.plan, engine: null, reason: blocker.message, readiness: blocker };
     if (held) publishJobs([cadJobFixture(operation('held-fusion', 'needs_user_input', {
       reason: 'engine_unavailable', message: blocker.message, setupRevisionId: 'held-setup',
-    }), { solve_options: { engine: 'beat-metal' } as JobItem['solve_options'] })]);
+    }), { status: 'held', solve_options: { engine: 'beat-metal' } as JobItem['solve_options'] })]);
     return record;
   }
   it.each(['ordinary', 'Fusion'])('observes %s readiness after picker prewarm even when the cached capability has no preparation in flight', async source => {
@@ -1095,7 +1095,7 @@ describe('solve invocation mutex', () => {
     const progress = host.querySelector('.results-panel .solve-progress.solve-readiness')!;
     expect(progress.textContent).toBe('BEAT Metal is warming up. The solve starts when it is ready.Stop');
     expect(host.querySelectorAll('.solve-readiness')).toHaveLength(1);
-    expect(host.querySelector('[data-toolbar-solve]')?.textContent).not.toMatch(/warm|ready|waiting|refused/i);
+    expect(host.querySelector('[data-toolbar-solve] .solve-button')?.textContent).not.toMatch(/warm|ready|waiting|refused/i);
     expect(host.querySelector('.beat-runtime-preparation')).toBeNull();
     expect(host.querySelectorAll('.solve-notice')).toHaveLength(0);
     // Readiness temporarily disappears while the plan cache refreshes. The
@@ -1142,7 +1142,7 @@ describe('solve invocation mutex', () => {
     expect(notice.classList.contains('solve-notice-blocked')).toBe(false);
     expect(notice.textContent).toBe('BEAT Metal is warming up. The solve starts when it is ready.Stop');
     expect(notice.closest('.solve-progress')).not.toBeNull();
-    expect(host.querySelector('[data-toolbar-solve]')?.textContent).not.toMatch(/warm|ready|waiting/i);
+    expect(host.querySelector('[data-toolbar-solve] .solve-button')?.textContent).not.toMatch(/warm|ready|waiting/i);
     expect(mocks.solveModel).not.toHaveBeenCalled();
     if (outcome === 'stop') await act(async () => notice.querySelector<HTMLButtonElement>('button')!.click());
     if (outcome === 'model change') act(() => readyCad('wgi_changed_while_waiting'));
@@ -1223,7 +1223,7 @@ describe('solve invocation mutex', () => {
     const progress = host.querySelector('.solve-progress.solve-readiness')!;
     expect(progress.textContent).toBe('BEAT Metal is warming up. The solve starts when it is ready.Stop');
     expect([...progress.querySelectorAll('button')].map(button => button.textContent)).toEqual(['Stop']);
-    expect(host.querySelector('[data-toolbar-solve]')?.textContent).not.toMatch(/warm|ready|waiting|refused/i);
+    expect(host.querySelector('[data-toolbar-solve] .solve-button')?.textContent).not.toMatch(/warm|ready|waiting|refused/i);
     expect(posts).toEqual([]); // Fusion already requested Solve; no extra click or prepare POST.
     if (outcome === 'stop') await act(async () => progress.querySelector<HTMLButtonElement>('button')!.click());
     if (outcome === 'model change') act(() => readyCad('wgi_changed_while_waiting'));
@@ -1714,6 +1714,22 @@ describe('solve invocation mutex', () => {
     expect(mocks.solveModel).toHaveBeenCalledExactlyOnceWith('wgl_test', expect.objectContaining({ prepared_id: 'wgi_refused_results' }));
     expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST').map(([url]) => url)).toEqual(['/api/models/wgl_test/solve']);
     expect(mocks.submitDesign).not.toHaveBeenCalled();
+  });
+
+  it('records Solve anyway through the existing continuation lock and API', async () => {
+    const response = deferred<Response>();
+    const fetcher = vi.fn<typeof fetch>(() => response.promise);
+    vi.stubGlobal('fetch', fetcher);
+    let continuation!: Promise<unknown>;
+    await act(async () => {
+      continuation = jobsCoordinatorBridge.getSnapshot().continueRun('held-mesh', { mesh_limit_override: true });
+      expect(await jobsCoordinatorBridge.getSnapshot().continueRun('held-mesh', { mesh_limit_override: true })).toBeNull();
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0][0]).toBe('/api/jobs/held-mesh/solve-again');
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({ mesh_limit_override: true });
+    await act(async () => { response.resolve(json({ job_id: 'mesh-child' })); await continuation; });
+    expect(compareSelection.getSnapshot().awaiting).toBe('mesh-child');
   });
 
   it.each(['accepted', 'approval refused', 'continuation refused'])('CAD continuation holds the Solve lock through both requests: %s', async (outcome) => {

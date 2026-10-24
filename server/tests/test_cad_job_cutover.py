@@ -70,7 +70,7 @@ def test_upgrade_migrates_every_pending_state_once_without_losing_preparation(h,
     assert h._loop.run(migrate()) == 0
     job = h.jobs_store.latest_cad_job("cmd-1")
     assert job is not None
-    expected = {"received": "preparing", "needs_user_input": "error", "processing": "error", "cancel_requested": "cancelled", "bound": "queued"}
+    expected = {"received": "preparing", "needs_user_input": "held", "processing": "held", "cancel_requested": "cancelled", "bound": "queued"}
     assert job["status"] == expected[state]
     assert (job["run_number"] is not None) == (state == "bound")
     if state != "received":
@@ -81,10 +81,10 @@ def test_upgrade_migrates_every_pending_state_once_without_losing_preparation(h,
         assert cad["frame"] == {"axis": None, "provenance": "linked", "confirmed": False, "requirement": None}
     if state == "needs_user_input":
         assert cad_of(job)["refusal"] == {"code": "findings_need_review", "message": "Review exactly this finding."}
-        assert job["stage_message"] == "Review exactly this finding."
+        assert job["stage_message"] == "Waiting for you"
         events = h.jobs_store.replay_events(0)
-        assert events[-1]["type"] == "error"
-        assert events[-1]["payload"]["message"] == "Review exactly this finding."
+        assert events[-1]["type"] == "stage"
+        assert events[-1]["payload"]["message"] == "Waiting for you"
     if state == "bound":
         assert job["config_json"] == json.loads(before["request_json"])
         assert job["has_mesh_artifact"]
@@ -254,7 +254,7 @@ def test_an_inadmissible_legacy_bind_migrates_to_a_refused_job_and_the_sweep_con
     ctx = replace(h.context(), submission_refusals=(EngineUnavailableError,))
     assert h._loop.run(sweep_pending_solves(ctx)) == 2
     refused = h.jobs_store.latest_cad_job("cmd-2")
-    assert refused["status"] == ("cancelled" if cancelled else "error")
+    assert refused["status"] == ("cancelled" if cancelled else "held")
     assert refused["run_number"] is None
     if not cancelled:
         assert cad_of(refused)["refusal"]["code"] == "engine_unavailable"
@@ -298,7 +298,7 @@ def test_upgrade_refuses_a_processing_retry_even_when_it_carries_an_old_reason(h
     h.runtime._ensure_prep_lane = lambda: None
     assert h._loop.run(sweep_pending_solves(h.context())) == 1
     job = h.jobs_store.latest_cad_job("cmd-1")
-    assert job["status"] == "error" and job["run_number"] is None
+    assert job["status"] == "held" and job["run_number"] is None
     assert cad_of(job)["refusal"] == {"code": "interrupted", "message": INTERRUPTED_MESSAGE}
 
 

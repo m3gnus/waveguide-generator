@@ -2756,6 +2756,13 @@ export interface components {
             /** Source Ids */
             source_ids: string[];
         };
+        /** CadHoldOption */
+        CadHoldOption: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+        };
         /**
          * CadIdentityInstance
          * @description CAD-authored addresses for one linked placement in an imported run.
@@ -2881,6 +2888,11 @@ export interface components {
             approvals?: components["schemas"]["CadApprovalsRequest"] | null;
             /** Frame Axis */
             frame_axis?: string | null;
+            /**
+             * Mesh Limit Override
+             * @default false
+             */
+            mesh_limit_override?: boolean;
             /** Setup Revision Id */
             setup_revision_id?: string | null;
             /**
@@ -2964,12 +2976,21 @@ export interface components {
             blocker?: components["schemas"]["SolveBlocker"] | null;
             /** Frame Axis Automatic */
             frame_axis_automatic: string | null;
+            /**
+             * Held
+             * @default false
+             */
+            held?: boolean;
             /** Job Id */
             job_id: string | null;
             /** Message */
             message: string | null;
+            /** Next Step */
+            next_step?: string | null;
             /** Operation Id */
             operation_id: string | null;
+            /** Options */
+            options?: components["schemas"]["CadHoldOption"][];
             preparation: components["schemas"]["CadStatePreparation"] | null;
             /** Reason */
             reason: string | null;
@@ -4740,7 +4761,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "preparing" | "queued" | "running" | "complete" | "error" | "cancelled";
+            status: "preparing" | "held" | "queued" | "running" | "complete" | "error" | "cancelled";
             /** Symmetry */
             symmetry?: {
                 [key: string]: unknown;
@@ -4958,7 +4979,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "preparing" | "queued" | "running" | "complete" | "error" | "cancelled";
+            status: "preparing" | "held" | "queued" | "running" | "complete" | "error" | "cancelled";
             /** Symmetry */
             symmetry?: {
                 [key: string]: unknown;

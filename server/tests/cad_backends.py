@@ -499,7 +499,7 @@ class JobsHarness(Harness):
         elif row["status"] == "preparing" and row.get("started_at") is None:
             await runtime.prepare_cad_solve(latest, setup_revision_id=kwargs.get("setup_revision_id"),
                                             frame_axis=kwargs.get("expected_frame_axis"), submit=kwargs.get("submit", True))
-        elif row["status"] == "error":
+        elif row["status"] in {"held", "error"}:
             try:
                 self._latest[operation_id] = await runtime.solve_cad_again(
                     latest,

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { currentModel, type CurrentModel } from '../model/currentModel';
+import { isHeldCadJob } from './cadSolve';
 import { jobsSocket } from '../api/jobsSocket';
 import { previewSocket } from '../api/previewSocket';
 import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
@@ -72,7 +73,7 @@ export function solveCancellationReason(request: SolveInputs & { jobId?: string 
   if (inputs.setupRevision !== request.setupRevision) return 'Prepare and solve was cancelled because the solve setup changed.';
   if (request.jobId) {
     const job = jobsSocket.getSnapshot().jobs.find(job => job.id === request.jobId);
-    if (job?.id !== request.jobId || job.status !== 'error' || job.cancellation_requested
+    if (job?.id !== request.jobId || !isHeldCadJob(job) || job.cancellation_requested
       || job.cad_state?.state !== 'needs_user_input' || job.cad_state.reason !== 'engine_unavailable') {
       return 'Prepare and solve was cancelled because the waiting job changed.';
     }

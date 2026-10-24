@@ -140,6 +140,7 @@ describe('jobs websocket state machine', () => {
 
   it.each([
     { setup_defaults: 'yes' }, { state: null }, { stage: 3 },
+    { held: 'yes' }, { next_step: 2 }, { options: [{ id: 'retry', label: 2 }] },
     { received_at: 'invalid' }, { updated_at: false },
     { snapshot: { manifest_sha256: 3 } },
     { preparation: { preparation_id: 'prep', blocking_finding_ids: [3], report_sha256: null } },
@@ -159,6 +160,32 @@ describe('jobs websocket state machine', () => {
     expect(manager.getSnapshot().jobs[0].cad_state).toEqual(state);
     socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 2, jobs: [{ ...job(), cad_state: { ...state, ...invalid } }] });
     expect(manager.getSnapshot().cursor).toBe(1);
+    manager.stop();
+  });
+
+  it('refreshes a preparing CAD job into a held request from its stage event', async () => {
+    const socket = new MockSocket();
+    const state: NonNullable<JobItem['cad_state']> = {
+      operation_id: 'op', state: 'needs_user_input', stage: 'preparing-mesh', reason: 'mesh_too_large',
+      message: 'Choose how to continue.', job_id: null, snapshot: null, preparation: null, approvals: [],
+      setup_defaults: false, frame_axis_automatic: null, held: true, next_step: 'Check mesh resolution.',
+      options: [{ id: 'solve_anyway', label: 'Solve anyway' }],
+      received_at: '2026-08-03T10:00:00Z', updated_at: '2026-08-03T10:00:00Z',
+    };
+    const held = job({ status: 'held', stage: 'held', run_number: null, cad_state: state,
+      cad_intent: { type: 'cad_intent', operation_id: 'op' } });
+    const fetcher = vi.fn(async () => json(held));
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 1,
+      jobs: [{ ...held, status: 'preparing', cad_state: { ...state, held: false, state: 'processing' } }] });
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: 2, jobId: held.id, type: 'stage',
+      payload: { stage: 'held', message: 'Waiting for you' } });
+    await flush();
+    await flush();
+    expect(manager.getSnapshot().jobs[0]).toMatchObject({ status: 'held', run_number: null, cad_state: state });
+    expect(isActiveJobStatus('held')).toBe(false);
     manager.stop();
   });
 
