@@ -14,6 +14,7 @@ import { CadProjectHeader, CadProjectHistory, newestReturnForProject, projectNam
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { JobsPanel } from './JobsPanel';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
+import { navigationGeneration } from './workspaceNavigation';
 import { preferencesStore } from '../prefs/preferences';
 import { useRunFilters } from '../jobs/runFilters';
 import type { CadReturnBundle } from '../api/cadlink';
@@ -218,12 +219,13 @@ describe('CAD project history', () => {
     setJobs([run({ id: 'a' })]);
     await render(<CadProjectHistory/>);
 
+    const actionNavigation = navigationGeneration();
     await act(async () => {
       host.querySelector<HTMLButtonElement>('.job-remove')!.click();
       await Promise.resolve();
     });
 
-    expect(reportError).toHaveBeenCalledWith(expect.stringContaining('Run is still exporting.'));
+    expect(reportError).toHaveBeenCalledExactlyOnceWith('Run is still exporting.', actionNavigation);
   });
 
   it('shows a run when its row is chosen', async () => {
