@@ -1,6 +1,7 @@
 """Synthetic owner-shaped trees, fault injection and byte-preserving relocation."""
 from __future__ import annotations
 
+import io
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,26 @@ def isolated_move_locks():
     yield
     moves_module._BLOCKED.clear()
     moves_module._WRITERS.clear()
+
+
+@pytest.fixture(params=["native", "windows"])
+def text_newlines(request, monkeypatch):
+    """Optionally give text-mode writes Windows newline translation (\\n -> \\r\\n).
+
+    WG journals each design.json by the checksum of the bytes it writes; on
+    Windows a text-mode writer used to store different bytes than it hashed.
+    os.fdopen and Path.open both open files through io.open.
+    """
+    if request.param == "windows":
+        real = io.open
+
+        def windows_open(file, mode="r", buffering=-1, encoding=None, errors=None, newline=None, *args, **kwargs):
+            if "b" not in mode and any(flag in mode for flag in "wax+") and newline is None:
+                newline = "\r\n"
+            return real(file, mode, buffering, encoding, errors, newline, *args, **kwargs)
+
+        monkeypatch.setattr(io, "open", windows_open)
+    return request.param
 
 
 def setup(tmp_path, key=KEY, name="250728solana"):
@@ -60,7 +81,7 @@ def move_plan(manager, name="250728solana", key=KEY, **kwargs):
     return manager.preview(key, name, selected=[c["job_id"] for c in initial["candidates"]], **kwargs)
 
 
-def test_name_only_owner_shape_is_unticked_and_ten_folders_move_byte_exact(tmp_path):
+def test_name_only_owner_shape_is_unticked_and_ten_folders_move_byte_exact(tmp_path, text_newlines):
     manager, root, jobs, cad = setup(tmp_path)
     originals = [run(manager, root, n) for n in range(1, 11)]
     before = {job: (path / "run.json").read_bytes() for job, path in originals}
@@ -110,15 +131,29 @@ def test_identity_match_preselected_but_foreign_or_unknown_folders_are_never_can
     assert [(c["job_id"], c["preselected"]) for c in preview["candidates"]] == [("job1", True)]
 
 
+_STAT_SEQUENCE = {"st_mode", "st_ino", "st_dev", "st_nlink", "st_uid", "st_gid", "st_size"}
+
+
+def _with_device(result: os.stat_result, offset: int) -> os.stat_result:
+    """Shift st_dev, keeping every platform-only field (st_flags, st_file_attributes...).
+
+    os.stat_result(sequence) alone sets those to None. Path.lstat is
+    stat(follow_symlinks=False), so this fake also answers WG's reparse-point
+    check, which on Windows reads st_file_attributes from that lstat.
+    """
+    fields = list(result)
+    fields[2] += offset
+    return os.stat_result(fields, {name: getattr(result, name) for name in dir(result)
+                                   if name.startswith("st_") and name not in _STAT_SEQUENCE})
+
+
 def cross_device(monkeypatch, sources):
     original = Path.stat
     source_set = set(sources)
     def fake(path, *args, **kwargs):
         result = original(path, *args, **kwargs)
         if not source_set.isdisjoint({path, *path.parents}):
-            fields = list(result)
-            fields[2] += 10
-            return os.stat_result(fields)
+            return _with_device(result, 10)
         return result
     monkeypatch.setattr(Path, "stat", fake)
 
@@ -281,7 +316,7 @@ def test_links_and_changed_preview_refused(tmp_path):
     assert source.exists()
 
 
-def test_explicit_rename_updates_registry_aliases_mirrors_and_can_undo(tmp_path):
+def test_explicit_rename_updates_registry_aliases_mirrors_and_can_undo(tmp_path, text_newlines):
     manager, root, jobs, cad = setup(tmp_path, key="lineage:wgl_test", name="Original")
     key = "lineage:wgl_test"
     _, source = run(manager, root, key=key, name="Original", folder="Original")
