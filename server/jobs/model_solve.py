@@ -665,14 +665,18 @@ def _press_frame(store: Any, record: Mapping[str, Any], frame_axis: str | None) 
     return frame_axis
 
 
-def _press(body: ModelSolveRequest, revision_id: str, frame_axis: str | None) -> dict[str, Any]:
+def _press(
+    body: ModelSolveRequest, revision_id: str, frame_axis: str | None, record: Mapping[str, Any],
+) -> dict[str, Any]:
     return {
         "setup_revision_id": revision_id,
         "frame_axis": frame_axis,
         "approve_preparation_id": body.approvals.preparation_id if body.approvals else None,
         "approve_finding_ids": tuple(body.approvals.finding_ids) if body.approvals else (),
         "submit": True,
-        "mesh_limit_override": body.mesh_limit_override,
+        # Solve anyway answers the ceiling for the prepared mesh on screen
+        # only: a press naming it for a mesh prepared without it asks again.
+        "mesh_limit_override": body.mesh_limit_override and record.get("mesh_limit_override") is True,
     }
 
 
@@ -713,7 +717,7 @@ async def _solve_cad(
         # The axis the press showed is confirmed first: the frame it is
         # compared and prepared under is then the one the user chose.
         frame_axis = await asyncio.to_thread(_press_frame, store, record, body.frame_axis)
-        press = _press(body, revision_id, frame_axis)
+        press = _press(body, revision_id, frame_axis, record)
         target = await asyncio.to_thread(
             _lane_target, store, Path(state.data_dir), record, setup, adopts=adopts
         )

@@ -2533,6 +2533,9 @@ class JobRuntime:
                 # Carry the newest refused job's record, exactly as a press on it
                 # would: retained snapshot, setup, preparation and its approvals.
                 record["task_metadata"]["cad"].update(carried_record(row))
+                if not intent.mesh_limit_override:
+                    # A Solve anyway that did not carry (other settings) is not this solve's.
+                    record["task_metadata"]["cad"].pop("mesh_limit_override", None)
                 carried_frame = record["task_metadata"]["cad"].get("frame")
                 if frame_axis and isinstance(carried_frame, Mapping) and carried_frame.get("axis") != frame_axis:
                     # The press names another axis: the parent's frame record no

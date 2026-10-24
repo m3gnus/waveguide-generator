@@ -47,7 +47,9 @@ def _models_app(harness: JobsHarness) -> FastAPI:
     return app
 
 
-def _cad_model(harness: JobsHarness, *, name: str = "speaker", mesh_snapshot: bool = False) -> dict[str, Any]:
+def _cad_model(
+    harness: JobsHarness, *, name: str = "speaker", mesh_snapshot: bool = False, mesh_limit_override: bool = False,
+) -> dict[str, Any]:
     """A CAD model as WG has it on screen: a project's return, retained and ingested."""
 
     design_id, lineage = _project(harness, 90.0)
@@ -77,6 +79,8 @@ def _cad_model(harness: JobsHarness, *, name: str = "speaker", mesh_snapshot: bo
             "project": {"lineage_id": lineage},
             "anchor": {"instance_id": "instance-1", "design_id": design_id, "throat_frame": None},
             "sources": sources,
+            # Prepared with Solve anyway over the triangle ceiling.
+            **({"mesh_limit_override": True} if mesh_limit_override else {}),
         })
 
     row = harness.store.allocate_ingest(
@@ -153,7 +157,7 @@ def test_a_press_of_a_mesh_prepared_with_solve_anyway_carries_the_choice(harness
     from server.jobs.model_solve import ModelSolveRequest, press_digest
 
     app = _models_app(harness)
-    model = _cad_model(harness)
+    model = _cad_model(harness, mesh_limit_override=True)
     status, body = _solve(harness, app, model, client_request_id="press-1",
                           setup=_setup(engine="metal"), mesh_limit_override=True)
     assert status == 200, body
@@ -171,6 +175,21 @@ def test_a_press_of_a_mesh_prepared_with_solve_anyway_carries_the_choice(harness
     assert press_digest(plain) == "sha256:" + hashlib.sha256(
         canonical_utf8_strict_json(before).encode("utf-8")).hexdigest()
     assert press_digest(plain) != press_digest(plain.model_copy(update={"mesh_limit_override": True}))
+
+
+def test_solve_anyway_never_applies_to_a_mesh_prepared_without_it(harness) -> None:
+    """The choice belongs to the prepared mesh it was made for: a press naming
+    it for another preparation is asked about the ceiling again."""
+
+    app = _models_app(harness)
+    model = _cad_model(harness)
+    status, body = _solve(harness, app, model, client_request_id="press-1",
+                          setup=_setup(engine="metal"), mesh_limit_override=True)
+    assert status == 200, body
+    _settle(harness)
+    job = harness.jobs_store.get_job_row(body["job_id"])
+    assert "mesh_limit_override" not in job["task_metadata"]["cad"]
+    assert "mesh_limit_override" not in harness.ingest.calls[-1]["prep_options"]
 
 
 def _revision_of(harness: JobsHarness, setup: dict[str, Any]) -> str:

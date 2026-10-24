@@ -186,6 +186,13 @@ def solve_again_intent(
     intent = intent_of(parent)
     if intent is None:
         raise ValueError("only a CAD solve that never had a request can be solved again")
+    # Solve anyway answered the ceiling for one preparation: it carries only
+    # while the press keeps the setup and the axis that preparation was made
+    # from. Others make another mesh, which the ceiling asks about again.
+    recorded = (cad_of(parent).get("setup") or {}).get("revision_id")
+    same_preparation = (setup_revision_id is None or setup_revision_id in {intent.setup_revision_id, recorded}) and (
+        frame_axis is None or frame_axis == intent.frame_axis
+    )
     return replace(
         intent,
         setup_revision_id=setup_revision_id,
@@ -198,7 +205,7 @@ def solve_again_intent(
         submit=submit,
         label=label or intent.label,
         parent_job_id=str(parent["id"]),
-        mesh_limit_override=mesh_limit_override or intent.mesh_limit_override,
+        mesh_limit_override=mesh_limit_override or (intent.mesh_limit_override and same_preparation),
     )
 
 

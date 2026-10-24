@@ -136,6 +136,23 @@ def test_a_migrated_refusal_is_kept_as_the_one_classifier_says(
     assert h._loop.run(h.runtime.clear_failed()) == []
 
 
+def test_solve_anyway_carries_only_while_the_preparation_is_the_same() -> None:
+    from server.jobs.cad_intent import CadSolveIntent, solve_again_intent
+
+    intent = CadSolveIntent(operation_id="cmd-1", bundle_path="b.wgreturn", manifest_sha256="sha256:" + "1" * 64,
+                            return_id="r", setup_revision_id="rev-a", frame_axis="+z", mesh_limit_override=True)
+    parent = {"id": "parent", "config_json": intent.to_config(),
+              "task_metadata": {"cad": {"setup": {"revision_id": "rev-a"},
+                                        "mesh_limit_override": {"accepted": True, "source": "solve_anyway"}}}}
+    assert solve_again_intent(parent).mesh_limit_override is True
+    assert solve_again_intent(parent, setup_revision_id="rev-a", frame_axis="+z").mesh_limit_override is True
+    # Other settings, or another axis, make another mesh: the ceiling asks again.
+    assert solve_again_intent(parent, setup_revision_id="rev-b").mesh_limit_override is False
+    assert solve_again_intent(parent, frame_axis="+y").mesh_limit_override is False
+    # A new Solve anyway on the new preparation is its own choice.
+    assert solve_again_intent(parent, setup_revision_id="rev-b", mesh_limit_override=True).mesh_limit_override is True
+
+
 def _lineage(h: JobsHarness, job_id: str, lineage: str) -> None:
     row = _row(h, job_id)
     metadata = row["task_metadata"]
