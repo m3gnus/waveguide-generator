@@ -44,7 +44,7 @@ from server.cadlink.joblane.default_setup import (
     SolveDefaultsDamaged,
 )
 from server.cadlink.intake.readings import resolve_domain_plan
-from server.cadlink.interpretation.domain_decision import decision_refusal
+from server.cadlink.interpretation.domain_decision import OPEN_HALF_CODE, decision_refusal
 from server.cadlink.intake.ingest import (
     IngestRefusal,
     ingest_bundle,
@@ -88,14 +88,16 @@ from server.jobs.imported_setup import is_default_setup, setup_content, setup_di
 from server.cadlink.interpretation.solver_frame import (
     AS_MODELLED,
     REASON as FRAME_CONFIRMATION_REQUIRED,
+    axes_in_planes,
     resolution_identity,
 )
 from server.cadlink.intake.readings import (
+    decide_record_frame,
     ensure_frame_suggestion,
-    record_automatic_axis,
     record_frame_refusal,
     record_preparation_diagnostic,
     resolve_for_manifest as resolve_solver_frame,
+    store_frame_decision,
 )
 from server.cadlink.store import CadLinkStore, StaleAttempt
 from server.cadlink.wgreturn import WgReturnError
@@ -413,6 +415,7 @@ def prepare_job_sync(
     intent: CadSolveIntent,
     *,
     automatic_retry: bool = False,
+    decided: Any = None,
 ) -> tuple[str, Any]:
     """The blocking half: retain, mesh and record the job preparation.
 
@@ -420,7 +423,8 @@ def prepare_job_sync(
     ``("bind", (request, revision_id, preparation))`` when a request is ready.
     The lane's claim has already moved the job to ``validating``.
     ``automatic_retry`` marks the one second pass made to mesh along WG's
-    inferred automatic axis: it never starts another.
+    automatic axis, ``decided`` (a ``frame_infer.AxisChoice``) the decision
+    the first pass made: it never starts another, and seals that decision.
 
     Binding is one transaction. A stop ends the job, and the next progress
     write finds it ended.
@@ -543,6 +547,14 @@ def prepare_job_sync(
         store, retained_manifest, manifest_sha256, automatic=True,
         best_effort=infer_automatically,
     )
+    if (
+        decided is not None
+        and solver_frame is not None
+        and not solver_frame.confirmed
+        and solver_frame.carried_axis is None
+    ):
+        # The second pass meshes along the axis the first pass decided.
+        solver_frame = replace(solver_frame, automatic_axis=decided.axis)
     frame_axis = solver_frame.axis if solver_frame is not None else None
     frame_identity = resolution_identity(solver_frame) if solver_frame is not None else None
 
@@ -617,7 +629,7 @@ def prepare_job_sync(
             run.advance(cad={"setup": _setup_record(store, standing)})
             return prepare_job_sync(
                 host, run, replace(intent, setup_revision_id=standing),
-                automatic_retry=automatic_retry,
+                automatic_retry=automatic_retry, decided=decided,
             )
 
     blocking = [
@@ -650,63 +662,90 @@ def prepare_job_sync(
         },
     )
 
-    # A failed recovery belongs to this record. Resolve domain failures before
-    # frame inference can retry and before a finding can mask their cause.
+    # A failed recovery belongs to this record. Domain failures are resolved
+    # before the survey (an open cut misleads it) and before findings, but a
+    # domain failure that only the provisional axis caused is not final.
     domain_refusal = decision_refusal(record)
     if domain_refusal is not None:
-        record_preparation_diagnostic("domain", record.get("domain_interpretation") or {})
+        retry_choice = _domain_frame_retry(
+            store, record, solver_frame,
+            provisional=infer_automatically and not automatic_retry,
+        )
+        if retry_choice is not None:
+            logger.info(
+                "CAD job %s: its cut cannot be mirrored along %s; preparing again along %s.",
+                run.job_id, _record_frame_axis(record), retry_choice.axis,
+            )
+            return prepare_job_sync(
+                host, run, intent, automatic_retry=True, decided=retry_choice
+            )
+        record_preparation_diagnostic(
+            "domain",
+            {
+                "code": domain_refusal[0],
+                "message": domain_refusal[1],
+                "axis": _record_frame_axis(record),
+                "cad_cuts": (record.get("domain_decision") or {}).get("cad_cuts"),
+            },
+        )
+        if domain_refusal[0] == OPEN_HALF_CODE:
+            # Deterministic: the model as sent is part of a speaker WG cannot
+            # rebuild, and preparing it again cannot change that.
+            return run.refuse(MODEL_CUT_UNSOLVABLE, _cut_unsolvable_message(run.cad))
         return run.refuse(
             "preparation_failed", "WG could not prepare the whole model correctly. Try again."
         )
 
-    # Survey inside the command, without writing a user's confirmation. Fusion
-    # always gets the best available axis; an explicit manual choice still wins.
+    # Survey inside the command, without writing a user's confirmation; a
+    # survey that fails leaves the decision to the fallback ranking.
     try:
         suggestion = ensure_frame_suggestion(store, record)
-        automatic = record_automatic_axis(store, record, best_effort=infer_automatically)
     except Exception as exc:  # noqa: BLE001 - advisory by construction
         logger.warning("Solver frame suggestion failed for %s: %s", record.get("ingest_id"), exc)
         suggestion = None
-        automatic = record_automatic_axis(store, record, best_effort=infer_automatically)
-    if (infer_automatically and automatic is not None and not automatic_retry
-            and ((suggestion or {}).get("status") != "automatic"
-                 or (suggestion or {}).get("axis") != automatic)):
-        record_preparation_diagnostic(
-            "frame-inference", suggestion or {"reasonCode": "survey-unavailable"},
-            chosen_axis=automatic,
-        )
-    if (
-        solver_frame is not None
-        and automatic is not None
-        and automatic != solver_frame.automatic_axis
-        and automatic != _record_frame_axis(record)
-        and not automatic_retry
-    ):
-        # Remesh once along the inferred axis; saved manual choices take priority.
-        logger.info(
-            "CAD job %s: preparing again along the automatic axis %s.", run.job_id, automatic
-        )
-        return prepare_job_sync(host, run, intent, automatic_retry=True)
-    if automatic_retry and automatic is not None and automatic != _record_frame_axis(record):
-        # Bounded: disagreement after a second pass is an internal failure.
-        logger.error(
-            "CAD job %s: the automatic axis %s was not the axis meshed (%s) on the "
-            "second pass; not preparing again.",
-            run.job_id, automatic, _record_frame_axis(record),
-        )
-
-        if infer_automatically:
+    if infer_automatically:
+        # Fusion showed no axis: WG decides, once, and seals the decision on
+        # this record for admission, execution, retry and restart. A person's
+        # saved choice wins (``decide_record_frame`` is None then).
+        choice = decided if decided is not None else decide_record_frame(store, record, suggestion)
+        meshed_axis = _record_frame_axis(record)
+        if choice is not None and choice.axis != meshed_axis:
+            if not automatic_retry:
+                logger.info(
+                    "CAD job %s: preparing again along the automatic axis %s.",
+                    run.job_id, choice.axis,
+                )
+                return prepare_job_sync(
+                    host, run, intent, automatic_retry=True, decided=choice
+                )
+            # Bounded: disagreement after a second pass is an internal failure.
+            record_preparation_diagnostic(
+                "frame-second-pass",
+                {"ingest_id": record.get("ingest_id"), "meshed_axis": meshed_axis},
+                chosen_axis=choice.axis,
+            )
             return run.refuse(
                 "preparation_failed", "WG could not prepare this model's solver frame. Try again."
             )
+        if choice is not None:
+            try:
+                store_frame_decision(store, record, choice, suggestion)
+            except Exception as exc:  # noqa: BLE001 - the gate below answers
+                logger.warning(
+                    "CAD job %s: could not record its frame decision: %s", run.job_id, exc
+                )
 
     # Before findings and approvals: a frame confirmed differently is a new
     # preparation, and approvals never carry to it. Read from the record, for
     # every preparation: it says what was prepared, linked or not, and which
-    # frame; the accepted inferred or manually chosen frame must match it.
-    frame_refusal = record_frame_refusal(store, record, best_effort=infer_automatically)
+    # frame; the decided or manually chosen frame must match it.
+    frame_refusal = record_frame_refusal(store, record, carried_ok=infer_automatically)
     if frame_refusal is not None:
         if infer_automatically:
+            record_preparation_diagnostic(
+                "frame-gate", {"ingest_id": record.get("ingest_id"), "reason": frame_refusal},
+                chosen_axis=_record_frame_axis(record),
+            )
             return run.refuse(
                 "preparation_failed", "WG could not prepare this model's solver frame. Try again."
             )
@@ -772,6 +811,64 @@ def prepare_job_sync(
     if intent.parent_job_id:
         solve_request.parent_job_id = intent.parent_job_id
     return "bind", (solve_request, revision_id, preparation)
+
+
+#: A model that arrived cut open in a way WG cannot rebuild into the whole
+#: speaker: rejected, because preparing the same return again cannot succeed.
+MODEL_CUT_UNSOLVABLE = "model_cut_unsolvable"
+
+
+def _cut_unsolvable_message(cad: Mapping[str, Any]) -> str:
+    snapshot = cad.get("snapshot") if isinstance(cad.get("snapshot"), Mapping) else {}
+    name = str(snapshot.get("document_name") or "").strip() or "This model"
+    return (
+        f"{name} arrived cut open, and WG cannot rebuild the whole speaker from that cut. "
+        "Send the uncut model from Fusion: WG finds its symmetry and reduces it itself."
+    )
+
+
+def _domain_frame_retry(
+    store: CadLinkStore,
+    record: Mapping[str, Any],
+    solver_frame: Any,
+    *,
+    provisional: bool,
+) -> Any:
+    """The axis to prepare again along when only the provisional axis refused a cut.
+
+    A cut in CAD can be mirrored only along an axis that lies in its plane. A
+    domain refusal made along a provisional automatic axis (nobody chose it,
+    no second pass yet) that is square to a refused cut is therefore not
+    final: the fallback ranking picks among the axes every cut contains. None
+    when the refusal does not depend on the axis.
+    """
+
+    if not provisional or solver_frame is None:
+        return None
+    if solver_frame.confirmed or solver_frame.carried_axis is not None:
+        return None
+    from server.cadlink.interpretation.frame_infer import choose_axis
+
+    decision = record.get("domain_decision")
+    cuts = decision.get("cad_cuts") if isinstance(decision, Mapping) else None
+    planes = sorted({
+        str(cut.get("plane"))
+        for cut in cuts or ()
+        if isinstance(cut, Mapping) and cut.get("status") in ("refused", "unmirrored")
+    })
+    if not planes:
+        return None
+    candidates = tuple(
+        axis for axis in axes_in_planes(planes) if axis in solver_frame.allowed_axes
+    )
+    meshed = _record_frame_axis(record) or AS_MODELLED
+    if not candidates or meshed in candidates:
+        return None
+    from server.cadlink.interpretation.frame_infer import ALGORITHM_VERSION
+
+    snapshot = str(record.get("manifest_sha256") or "")
+    suggestion = store.get_frame_suggestion(snapshot, ALGORITHM_VERSION) if snapshot else None
+    return choose_axis(suggestion, candidates)
 
 
 def _named_setup_revision(intent: CadSolveIntent, recorded: Mapping[str, Any]) -> str | None:

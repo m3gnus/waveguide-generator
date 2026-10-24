@@ -3,13 +3,20 @@
 docs/architecture/CAD-OPERATIONS.md, "Unlinked solver frame". A return with no
 WG instance carries no throat frame. Instead of asking the user every time, WG
 infers the forward axis from the tessellated model and preselects it; Solve
-confirms the visible, preselected axis (M1b). The survey may abstain; a Fusion
-request still decides through :func:`best_available_axis`, recording weak
-evidence for developers while leaving the user's axis override available.
+confirms the visible, preselected axis (M1b). A Solve that shows no axis -- a
+Fusion request -- never asks: :func:`choose_axis` takes the confident answer,
+or else the first allowed axis of the documented fallback ranking, recorded as
+``automatic-fallback`` with a developer diagnostic. The user can change the
+axis afterwards.
 
 One pure function, :func:`infer_frame`, over the full model in CAD
-coordinates. Three kinds of evidence each score the six assembly axes:
+coordinates. Four kinds of evidence each score the six assembly axes:
 
+- **mouth** (primary, geometric, frame-infer-v4): where each source role's
+  sound leaves the model. The free air is flooded through a voxel grid from in
+  front of the sources until it leaves the model's bounding box; the face it
+  leaves across is the mouth -- a horn's, a folded path's, a port's -- found
+  without any line of sight from the source. A sealed source says nothing.
 - **normals** (the prior): the mean oriented normal of each source role, then
   the roles weighted HF 9 : MF 3 : LF 1, passive cardioid 0. Averaging within a
   role first keeps a large LF area from outvoting the HF throat. Opposing
@@ -21,14 +28,19 @@ coordinates. Three kinds of evidence each score the six assembly axes:
 - **aperture** (geometric): the largest recessed opening of the envelope seen
   from each axis that the sources reach -- a horn mouth, a driver recess.
 
-Each evidence type that decides casts a confidence-scaled vote. The result is
-automatic only when the vote share, the normalised lead and the number of
-distinct evidence types supporting the winner (at least one geometric) all
-pass; otherwise WG asks, with the reason in words. It also asks when there is
-no HF or MF source, when source identity is not validated, when the sources
-cannot be seen from outside, when the surface orientation is unreliable, and
-when the unrestricted winner is not a supported axis. It never promotes a
-weaker supported axis.
+The line-of-sight verdict (normals, visibility, aperture) is frame-infer-v2's,
+unchanged: each evidence type that decides casts a confidence-scaled vote, and
+the result is confident only when the vote share, the normalised lead and the
+number of distinct evidence types supporting the winner (at least one
+geometric) all pass. The mouth then decides first: a clear mouth of a
+directional (HF/MF) source that disagrees with a confident line-of-sight
+verdict is a conflict; one that agrees, or that stands where the line of sight
+could not decide (hidden sources in a folded path, weak or conflicting
+normals) and that visibility does not contradict, is confident. WG abstains
+-- and the fallback ranking chooses -- when there is no HF or MF source, when
+source identity is not validated, when the surface orientation is unreliable,
+when the evidence conflicts or is weak, and when the winner is not a supported
+axis. Abstaining never names a weaker axis as confident.
 
 Everything here -- weights, thresholds, sampling -- is frozen under
 :data:`ALGORITHM_VERSION`; a change is a new version, and the suggestion cache
@@ -45,7 +57,7 @@ was meshed in.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 from typing import Any
 
@@ -53,9 +65,13 @@ import numpy as np
 
 from server.contracts.geometry import SYMMETRY_PLANE_AXIS as _PLANE_AXIS
 
-# V3 retains v2's weights, thresholds and confident verdicts, but collects
-# evidence before LF-only/source-identity abstentions so Fusion can decide.
-ALGORITHM_VERSION = "frame-infer-v3"
+# v4 adds the air-path mouth (the primary direction evidence) and a recorded,
+# deterministic fallback ranking for every abstention; v2's weights,
+# thresholds and confident verdicts are unchanged where the mouth agrees.
+ALGORITHM_VERSION = "frame-infer-v4"
+#: The versions earlier releases cached. Their confident verdicts still stand
+#: for the records prepared under them (``readings.legacy_automatic_axis``).
+LEGACY_ALGORITHM_VERSIONS: tuple[str, ...] = ("frame-infer-v2",)
 
 AXES: tuple[str, ...] = ("+z", "-z", "+x", "-x", "+y", "-y")
 _AXIS_VECTORS = np.asarray(
@@ -72,6 +88,11 @@ VISIBILITY = "visibility"
 APERTURE = "aperture"
 EVIDENCE_WEIGHTS: dict[str, float] = {NORMALS: 0.40, VISIBILITY: 0.35, APERTURE: 0.25}
 GEOMETRIC_EVIDENCE = frozenset({VISIBILITY, APERTURE})
+#: Where the sources' sound leaves the model (:func:`_mouth_exits`). Not one of
+#: the weighted votes: it decides first, and the votes confirm it.
+MOUTH = "mouth"
+#: The mouth decides only at or above this relative margin over the next axis.
+MOUTH_MIN_STRENGTH = 0.5
 
 MIN_VOTE_SHARE = 0.60
 MIN_LEAD = 0.25
@@ -108,6 +129,13 @@ IDENTITY_FINDINGS = frozenset(
 STATUS_AUTOMATIC = "automatic"
 STATUS_ASK = "ask"
 STATUS_UNAVAILABLE = "unavailable"
+
+#: How a solve's axis was decided (:func:`choose_axis`). ``automatic``: WG's
+#: confident inference. ``automatic-fallback``: the evidence was weak,
+#: contradictory, unavailable or named an axis the domain cannot use, and the
+#: documented ranking chose; a developer diagnostic records why.
+DECISION_AUTOMATIC = "automatic"
+DECISION_FALLBACK = "automatic-fallback"
 
 
 class SurveyUnavailable(ValueError):
@@ -149,6 +177,9 @@ class FrameInference:
     reason: str
     supported_axes: tuple[str, ...]
     evidence: dict[str, Any] = field(default_factory=dict)
+    #: Every axis, most likely first, by the documented fallback rule
+    #: (:func:`fallback_ranking`). What a solve uses when WG is not confident.
+    fallback_ranking: tuple[str, ...] = AXES
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -164,6 +195,7 @@ class FrameInference:
             "reason": self.reason,
             "supportedAxes": list(self.supported_axes),
             "evidence": self.evidence,
+            "fallbackRanking": list(self.fallback_ranking),
         }
 
 
@@ -179,32 +211,75 @@ def evidence_votes(evidence: Mapping[str, Any]) -> dict[str, float]:
     return votes
 
 
-def best_available_axis(suggestion: Mapping[str, Any] | None, allowed: Iterable[str]) -> str:
-    """Always decide for a headless Fusion request; ties keep the modelled axis.
+def fallback_ranking(evidence: Mapping[str, Any]) -> tuple[str, ...]:
+    """Every axis, most likely first: the documented rule for a weak survey.
 
-    Reuse the v2 survey's votes even when a confidence/visibility gate abstained.
-    With no decisive evidence, use its normalised positive scores. A restricted
-    domain chooses among its supported axes, preserving the domain contract.
+    1. The mouth: the role-weighted share of the sources' air path that leaves
+       the model across each face (:func:`_mouth_exits`).
+    2. The v2 votes (:func:`evidence_votes`), counting the evidence gathered
+       before any abstention.
+    3. The stable axis order, as modelled (+z) first.
+
+    Deterministic for a given survey, so a retry or restart decides the same.
     """
 
-    allowed_set = set(allowed)
-    candidates = tuple(axis for axis in AXES if axis in allowed_set)
+    mouth = ((evidence.get(MOUTH) or {}).get("scores")) or {}
+    votes = evidence_votes(evidence)
+    return tuple(
+        sorted(
+            AXES,
+            key=lambda axis: (
+                -max(float(mouth.get(axis) or 0.0), 0.0),
+                -votes[axis],
+                AXES.index(axis),
+            ),
+        )
+    )
+
+
+@dataclass(frozen=True)
+class AxisChoice:
+    """The axis a solve with no shown axis uses, and how it was decided."""
+
+    axis: str
+    provenance: str  # DECISION_AUTOMATIC or DECISION_FALLBACK
+    #: Why: ``inferred``, or the survey's reason code (``survey-unavailable``,
+    #: ``sources-not-visible``, ``axis-not-allowed`` ...).
+    reason_code: str
+
+    def to_json(self) -> dict[str, Any]:
+        return {"axis": self.axis, "provenance": self.provenance, "reasonCode": self.reason_code}
+
+
+def choose_axis(suggestion: Mapping[str, Any] | None, allowed: Iterable[str]) -> AxisChoice:
+    """Always decide, never ask: the confident axis, else the fallback ranking.
+
+    A confident suggestion is used when the domain allows its axis. Otherwise
+    the first allowed axis of the suggestion's fallback ranking is chosen
+    (no suggestion: as modelled first) and the choice is recorded as a
+    fallback -- never presented as confident inference. Only axes the domain
+    allows are candidates: a mirror plane must contain the radiation axis.
+    """
+
+    candidates = tuple(axis for axis in AXES if axis in set(allowed))
     if not candidates:
         raise ValueError("a solver frame needs at least one supported axis")
     suggestion = suggestion or {}
-    winner = suggestion.get("axis") or suggestion.get("unrestrictedAxis")
-    if winner in candidates:
-        return str(winner)
-    evidence = suggestion.get("evidence") or {}
-    votes = evidence_votes(evidence)
-    if not any(votes[axis] > 0 for axis in candidates):
-        for name, weight in EVIDENCE_WEIGHTS.items():
-            scores = (evidence.get(name) or {}).get("scores") or {}
-            peak = max((max(float(value), 0.0) for value in scores.values()), default=0.0)
-            if peak > 0:
-                for axis in candidates:
-                    votes[axis] += weight * max(float(scores.get(axis) or 0.0), 0.0) / peak
-    return max(candidates, key=votes.__getitem__)
+    axis = suggestion.get("axis")
+    if suggestion.get("status") == STATUS_AUTOMATIC and axis in candidates:
+        return AxisChoice(str(axis), DECISION_AUTOMATIC, "inferred")
+    # A suggestion cached without a ranking ranks from its own evidence.
+    ranking = [
+        item
+        for item in suggestion.get("fallbackRanking") or fallback_ranking(suggestion.get("evidence") or {})
+        if item in candidates
+    ]
+    chosen = ranking[0] if ranking else candidates[0]
+    if suggestion.get("status") == STATUS_AUTOMATIC:
+        code = "axis-not-allowed"
+    else:
+        code = str(suggestion.get("reasonCode") or "survey-unavailable")
+    return AxisChoice(chosen, DECISION_FALLBACK, code)
 
 
 def unavailable(reason: str, *, supported_axes: Iterable[str] = AXES) -> FrameInference:
@@ -398,6 +473,107 @@ def _aperture(render: _Render, source_visible: np.ndarray, depth: float, pixel: 
     return float(np.max(sizes)) / max(render.silhouette_px, 1)
 
 
+#: Voxels across the model's bounding-box diagonal for the air-path survey.
+MOUTH_RESOLUTION = 200
+#: Empty voxels kept around the model's bounding box: the free air.
+MOUTH_PAD_VOXELS = 6
+#: How far, in voxels, the air path spreads after it first leaves the model.
+MOUTH_SPREAD_VOXELS = 3
+#: The voxel budget of the air-path survey; a larger model uses coarser voxels.
+MOUTH_MAX_VOXELS = 12_000_000
+
+
+def _mouth_exits(
+    samples: _Samples,
+    sample_role: Mapping[str, np.ndarray],
+    roles: Iterable[str],
+    low: np.ndarray,
+    high: np.ndarray,
+    pixel: float,
+) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+    """Which way each role's sound leaves the model: the mouth of its air path.
+
+    The surface is rasterised into wall voxels and the free air through the
+    model is flooded from just in front of each role's faces (their oriented
+    normals point into the air), until the flood first leaves the model's
+    bounding box and spreads :data:`MOUTH_SPREAD_VOXELS` further. The voxels
+    reached beyond each face of the box are counted per axis: a horn mouth,
+    a folded path's exit, a port. A source in a sealed cavity never leaves and
+    so says nothing. Unlike visibility, this does not need a line of sight
+    from the source: a folded horn's mouth is found through its fold.
+    """
+
+    diagonal = float(np.linalg.norm(high - low))
+    voxel = max(pixel, diagonal / MOUTH_RESOLUTION)
+    while True:
+        inner = np.floor((high - low) / voxel).astype(np.int64) + 1
+        dims = inner + 2 * MOUTH_PAD_VOXELS
+        if int(np.prod(dims)) <= MOUTH_MAX_VOXELS:
+            break
+        voxel *= 1.25
+    origin = low - MOUTH_PAD_VOXELS * voxel
+
+    def cells(points: np.ndarray) -> np.ndarray:
+        index = np.floor((points - origin) / voxel).astype(np.int64)
+        return np.clip(index, 0, dims - 1)
+
+    strides = np.array((dims[1] * dims[2], dims[2], 1), dtype=np.int64)
+    wall = np.zeros(int(np.prod(dims)), dtype=bool)
+    wall[cells(samples.points) @ strides] = True
+    # The face of the box each voxel lies beyond, per axis (+z, -z, +x, ...).
+    first = MOUTH_PAD_VOXELS
+    last = MOUTH_PAD_VOXELS + inner - 1
+    neighbours = np.concatenate([strides, -strides])
+    exits: dict[str, np.ndarray] = {}
+    reached: dict[str, int] = {}
+    for role in roles:
+        mask = sample_role[role]
+        starts = []
+        for offset in (1.0, 1.75):
+            starts.append(cells(samples.points[mask] + offset * voxel * samples.normals[mask]))
+        start = np.unique(np.concatenate(starts) @ strides)
+        start = start[~wall[start]]
+        visited = wall.copy()
+        visited[start] = True
+        frontier = start
+        steps = 0
+        left_at: int | None = None
+        outside: list[np.ndarray] = []
+        limit = int(dims.sum()) * 4
+        while len(frontier) and steps <= limit:
+            coordinates = np.stack(
+                [frontier // strides[0], (frontier // strides[1]) % dims[1], frontier % dims[2]], axis=1
+            )
+            beyond = (coordinates < first) | (coordinates > last)
+            if left_at is None and beyond.any():
+                left_at = steps
+            if left_at is not None:
+                outside.append(coordinates[beyond.any(axis=1)])
+                if steps >= left_at + MOUTH_SPREAD_VOXELS:
+                    break
+            candidates = (frontier[:, None] + neighbours[None, :]).reshape(-1)
+            # Neighbours across the grid's own edge wrap around; the padding
+            # is free air on every side, so a wrapped step stays in free air.
+            candidates = candidates[(candidates >= 0) & (candidates < len(wall))]
+            candidates = np.unique(candidates)
+            candidates = candidates[~visited[candidates]]
+            visited[candidates] = True
+            frontier = candidates
+            steps += 1
+        counts = np.zeros(len(AXES))
+        if outside:
+            beyond_cells = np.concatenate(outside)
+            for axis_index, axis in enumerate(AXES):
+                component = "xyz".index(axis[1])
+                if axis[0] == "+":
+                    counts[axis_index] = np.count_nonzero(beyond_cells[:, component] > last[component])
+                else:
+                    counts[axis_index] = np.count_nonzero(beyond_cells[:, component] < first)
+        exits[role] = counts
+        reached[role] = -1 if left_at is None else int(left_at)
+    return exits, {"voxelMm": round(voxel, 6), "stepsToLeave": reached}
+
+
 # -- the decision ----------------------------------------------------------------
 
 
@@ -422,6 +598,7 @@ def infer_frame(mesh: SurveyMesh, *, supported_axes: Iterable[str] = AXES) -> Fr
         return unavailable("the mesh has non-finite points", supported_axes=supported)
 
     def ask(code: str, reason: str, **extra: Any) -> FrameInference:
+        evidence_held = extra.pop("evidence", {})
         return FrameInference(
             algorithm=ALGORITHM_VERSION,
             status=STATUS_ASK,
@@ -434,7 +611,8 @@ def infer_frame(mesh: SurveyMesh, *, supported_axes: Iterable[str] = AXES) -> Fr
             reason_code=code,
             reason=reason,
             supported_axes=supported,
-            evidence=extra.pop("evidence", {}),
+            evidence=evidence_held,
+            fallback_ranking=fallback_ranking(evidence_held),
         )
 
     corners = points[triangles]
@@ -544,8 +722,34 @@ def infer_frame(mesh: SurveyMesh, *, supported_axes: Iterable[str] = AXES) -> Fr
         "backfaceFraction": _round_scores(backface),
     }
 
-    # Keep the survey's original abstention reasons, but retain the available
-    # geometry evidence so Fusion can still make the most likely choice.
+    # Evidence 4, the primary one: where the sources' sound leaves the model.
+    exits, mouth_survey = _mouth_exits(samples, sample_role, roles_present, low, high, pixel)
+    exiting = [role for role in roles_present if exits[role].sum() > 0]
+    mouth_scores = np.zeros(len(AXES))
+    exiting_weight = sum(ROLE_WEIGHTS[role] for role in exiting)
+    for role in exiting:
+        mouth_scores += ROLE_WEIGHTS[role] * exits[role] / exits[role].sum()
+    if exiting_weight > 0.0:
+        mouth_scores /= exiting_weight
+    mouth_axis, mouth_confidence = _decide(mouth_scores, relative=True)
+    # A front needs a directional source whose sound leaves: an LF-only path
+    # still ranks, but never makes the answer confident.
+    mouth_decisive = (
+        mouth_axis is not None
+        and mouth_confidence >= MOUTH_MIN_STRENGTH
+        and bool(DIRECTIONAL_ROLES & set(exiting))
+    )
+    evidence[MOUTH] = {
+        "axis": mouth_axis,
+        "strength": round(mouth_confidence, 6),
+        "scores": _round_scores(mouth_scores),
+        "roleExits": {role: _round_scores(exits[role]) for role in roles_present},
+        "sealedRoles": [role for role in roles_present if role not in exiting],
+        **mouth_survey,
+    }
+
+    # The survey's abstention reasons stand, with every piece of evidence kept
+    # so the fallback ranking can still choose the most likely axis.
     if not DIRECTIONAL_ROLES & set(roles_present):
         return no_directional_source()
     if mesh.identity_problem:
@@ -564,105 +768,174 @@ def infer_frame(mesh: SurveyMesh, *, supported_axes: Iterable[str] = AXES) -> Fr
             evidence=evidence,
         )
 
-    unseen = [role for index, role in enumerate(roles_present) if visibility[index].max() < UNSEEN_VISIBILITY]
-    unseen_share = sum(ROLE_WEIGHTS[role] for role in unseen) / total_weight
-    evidence["unseenRoles"] = unseen
-    if unseen_share > MAX_UNSEEN_WEIGHT_SHARE:
-        names = " and ".join(_role_words(role) for role in unseen)
-        return ask(
-            "sources-not-visible",
-            f"The {names} cannot be seen from outside the model (for example, inside a "
-            "folded path), so WG cannot tell which way it faces. Pick the front.",
+    def mouth_inference(code: str, reason: str) -> FrameInference:
+        """The mouth decides when the line-of-sight evidence could not."""
+
+        assert mouth_axis is not None
+        total = float(mouth_scores.sum())
+        ordered = np.sort(mouth_scores)[::-1]
+        agreeing = [
+            name for name, axis, strength in (
+                (NORMALS, normal_axis, normal_confidence),
+                (VISIBILITY, visibility_axis, visibility_confidence),
+                (APERTURE, aperture_axis, aperture_confidence),
+            )
+            if axis == mouth_axis and strength >= MIN_EVIDENCE_STRENGTH
+        ]
+        backing = (MOUTH, *agreeing)
+        if mouth_axis not in supported:
+            return ask(
+                "unsupported-axis",
+                f"This model appears to face {mouth_axis}, but it can be solved only along "
+                f"{', '.join(supported) or 'no axis'}. Check the model, or send the whole model.",
+                unrestricted_axis=mouth_axis, supporting=backing, evidence=evidence,
+            )
+        return FrameInference(
+            algorithm=ALGORITHM_VERSION,
+            status=STATUS_AUTOMATIC,
+            axis=mouth_axis,
+            unrestricted_axis=mouth_axis,
+            confidence=float(mouth_confidence),
+            vote_share=float(ordered[0]) / total,
+            vote_lead=float(ordered[0] - ordered[1]) / total,
+            supporting_evidence=backing,
+            reason_code=code,
+            reason=reason,
+            supported_axes=supported,
+            evidence=evidence,
+            fallback_ranking=fallback_ranking(evidence),
+        )
+
+    def _line_of_sight_verdict() -> FrameInference:
+        """frame-infer-v2's verdict from normals, visibility and aperture (frozen)."""
+
+        unseen = [role for index, role in enumerate(roles_present) if visibility[index].max() < UNSEEN_VISIBILITY]
+        unseen_share = sum(ROLE_WEIGHTS[role] for role in unseen) / total_weight
+        evidence["unseenRoles"] = unseen
+        if unseen_share > MAX_UNSEEN_WEIGHT_SHARE:
+            names = " and ".join(_role_words(role) for role in unseen)
+            return ask(
+                "sources-not-visible",
+                f"The {names} cannot be seen from outside the model (for example, inside a "
+                "folded path), so WG cannot tell which way it faces. Pick the front.",
+                evidence=evidence,
+            )
+        # Full precision, so the frozen v2 thresholds keep their exact meaning.
+        votes = np.asarray(list(evidence_votes({
+            NORMALS: {"axis": normal_axis, "strength": normal_confidence},
+            VISIBILITY: {"axis": visibility_axis, "strength": visibility_confidence},
+            APERTURE: {"axis": aperture_axis, "strength": aperture_confidence},
+        }).values()))
+        supporters: dict[str, list[str]] = {axis: [] for axis in AXES}
+        for name, axis, confidence in (
+            (NORMALS, normal_axis, normal_confidence),
+            (VISIBILITY, visibility_axis, visibility_confidence),
+            (APERTURE, aperture_axis, aperture_confidence),
+        ):
+            if axis is not None and confidence >= MIN_EVIDENCE_STRENGTH:
+                supporters[axis].append(name)
+        total = float(votes.sum())
+        evidence["votes"] = _round_scores(votes)
+        if total <= 0.0:
+            return ask(
+                "no-evidence",
+                _cancelled_reason(role_normals, roles_present)
+                or "Nothing in this model's geometry shows which way it faces. Pick the front.",
+                evidence=evidence,
+            )
+        order = np.argsort(-votes, kind="stable")
+        winner = AXES[int(order[0])]
+        share = float(votes[order[0]]) / total
+        lead = float(votes[order[0]] - votes[order[1]]) / total
+        backing = tuple(supporters[winner])
+        common = {
+            "unrestricted_axis": winner,
+            # Only an automatic answer carries a confidence; an asked one has none.
+            "confidence": 0.0,
+            "vote_share": share,
+            "vote_lead": lead,
+            "supporting": backing,
+            "evidence": evidence,
+        }
+        if share < MIN_VOTE_SHARE or lead < MIN_LEAD:
+            rival = AXES[int(order[1])]
+            return ask(
+                "evidence-conflicts",
+                _cancelled_reason(role_normals, roles_present)
+                or f"The evidence disagrees: parts of it point along {winner}, parts along "
+                f"{rival}. Pick the front.",
+                **common,
+            )
+        if len(backing) < MIN_SUPPORTING_EVIDENCE or not GEOMETRIC_EVIDENCE & set(backing):
+            return ask(
+                "evidence-weak",
+                _cancelled_reason(role_normals, roles_present)
+                or f"Only {_evidence_words(backing)} points along {winner}; WG needs two "
+                "independent signs, one of them from the geometry. Pick the front.",
+                **common,
+            )
+        if winner not in supported:
+            allowed = ", ".join(supported) or "no axis"
+            return ask(
+                "unsupported-axis",
+                f"This model appears to face {winner}, but it can be solved only along "
+                f"{allowed}. Check the model, or send the whole model.",
+                **common,
+            )
+        strengths = {
+            NORMALS: normal_confidence,
+            VISIBILITY: visibility_confidence,
+            APERTURE: aperture_confidence,
+        }
+        # The vote's lead, scaled by how strongly the agreeing evidence decided.
+        confidence = lead * float(np.mean([strengths[name] for name in backing]))
+        return FrameInference(
+            algorithm=ALGORITHM_VERSION,
+            status=STATUS_AUTOMATIC,
+            axis=winner,
+            unrestricted_axis=winner,
+            confidence=confidence,
+            vote_share=share,
+            vote_lead=lead,
+            supporting_evidence=backing,
+            reason_code="inferred",
+            reason=f"Radiates along {winner}: {_evidence_words(backing)} agree.",
+            supported_axes=supported,
             evidence=evidence,
         )
 
-    # Share aggregation with the best-effort decision, using full precision
-    # here so the frozen v2 confidence thresholds retain their exact meaning.
-    votes = np.asarray(list(evidence_votes({
-        NORMALS: {"axis": normal_axis, "strength": normal_confidence},
-        VISIBILITY: {"axis": visibility_axis, "strength": visibility_confidence},
-        APERTURE: {"axis": aperture_axis, "strength": aperture_confidence},
-    }).values()))
-    supporters: dict[str, list[str]] = {axis: [] for axis in AXES}
-    for name, axis, confidence in (
-        (NORMALS, normal_axis, normal_confidence),
-        (VISIBILITY, visibility_axis, visibility_confidence),
-        (APERTURE, aperture_axis, aperture_confidence),
-    ):
-        if axis is None:
-            continue
-        if confidence >= MIN_EVIDENCE_STRENGTH:
-            supporters[axis].append(name)
-    total = float(votes.sum())
-    evidence["votes"] = _round_scores(votes)
-    if total <= 0.0:
-        return ask(
-            "no-evidence",
-            _cancelled_reason(role_normals, roles_present)
-            or "Nothing in this model's geometry shows which way it faces. Pick the front.",
-            evidence=evidence,
-        )
-    order = np.argsort(-votes, kind="stable")
-    winner = AXES[int(order[0])]
-    share = float(votes[order[0]]) / total
-    lead = float(votes[order[0]] - votes[order[1]]) / total
-    backing = tuple(supporters[winner])
-    common = {
-        "unrestricted_axis": winner,
-        # Only an automatic answer carries a confidence; an asked one has none.
-        "confidence": 0.0,
-        "vote_share": share,
-        "vote_lead": lead,
-        "supporting": backing,
-        "evidence": evidence,
-    }
-    if share < MIN_VOTE_SHARE or lead < MIN_LEAD:
-        rival = AXES[int(order[1])]
-        return ask(
-            "evidence-conflicts",
-            _cancelled_reason(role_normals, roles_present)
-            or f"The evidence disagrees: parts of it point along {winner}, parts along "
-            f"{rival}. Pick the front.",
-            **common,
-        )
-    if len(backing) < MIN_SUPPORTING_EVIDENCE or not GEOMETRIC_EVIDENCE & set(backing):
-        return ask(
-            "evidence-weak",
-            _cancelled_reason(role_normals, roles_present)
-            or f"Only {_evidence_words(backing)} points along {winner}; WG needs two "
-            "independent signs, one of them from the geometry. Pick the front.",
-            **common,
-        )
-    if winner not in supported:
-        allowed = ", ".join(supported) or "no axis"
-        return ask(
-            "unsupported-axis",
-            f"This model appears to face {winner}, but it can be solved only along "
-            f"{allowed} (a half or quarter declared in CAD is solved as modelled). "
-            "Check the model, or send the whole model.",
-            **common,
-        )
-    strengths = {
-        NORMALS: normal_confidence,
-        VISIBILITY: visibility_confidence,
-        APERTURE: aperture_confidence,
-    }
-    # The vote's lead, scaled by how strongly the agreeing evidence decided.
-    confidence = lead * float(np.mean([strengths[name] for name in backing]))
-    return FrameInference(
-        algorithm=ALGORITHM_VERSION,
-        status=STATUS_AUTOMATIC,
-        axis=winner,
-        unrestricted_axis=winner,
-        confidence=confidence,
-        vote_share=share,
-        vote_lead=lead,
-        supporting_evidence=backing,
-        reason_code="inferred",
-        reason=f"Radiates along {winner}: {_evidence_words(backing)} agree.",
-        supported_axes=supported,
-        evidence=evidence,
+    visibility_contradicts = (
+        visibility_axis is not None
+        and visibility_confidence >= MIN_EVIDENCE_STRENGTH
+        and visibility_axis != mouth_axis
     )
+    v2 = _line_of_sight_verdict()
+    if v2.status == STATUS_AUTOMATIC:
+        if mouth_decisive and mouth_axis != v2.axis:
+            return ask(
+                "evidence-conflicts",
+                f"The model's opening faces {mouth_axis}, but its sources face {v2.axis}. "
+                "Pick the front.",
+                unrestricted_axis=v2.axis, vote_share=v2.vote_share, vote_lead=v2.vote_lead,
+                supporting=v2.supporting_evidence, evidence=evidence,
+            )
+        if mouth_decisive:
+            return replace(
+                v2,
+                supporting_evidence=(*v2.supporting_evidence, MOUTH),
+                reason=f"Radiates along {v2.axis}: "
+                f"{_evidence_words((*v2.supporting_evidence, MOUTH))} agree.",
+                fallback_ranking=fallback_ranking(evidence),
+            )
+        return replace(v2, fallback_ranking=fallback_ranking(evidence))
+    if v2.reason_code != "unsupported-axis" and mouth_decisive and not visibility_contradicts:
+        # Hidden or weak line-of-sight evidence, but one clear opening: a folded
+        # horn's mouth, not its driver's normal, is its front.
+        return mouth_inference(
+            "mouth",
+            f"Radiates along {mouth_axis}: {_evidence_words((MOUTH,))} faces that way.",
+        )
+    return v2
 
 
 _ROLE_WORDS = {"HF": "high-frequency source", "MF": "midrange sources", "LF": "low-frequency sources"}
@@ -670,6 +943,7 @@ _EVIDENCE_WORDS = {
     NORMALS: "the way the sources face",
     VISIBILITY: "where the sources can be seen from",
     APERTURE: "the opening the sources sit in",
+    MOUTH: "the opening the sound leaves the model through",
 }
 
 
@@ -862,7 +1136,13 @@ __all__ = [
     "SurveyMesh",
     "SurveySource",
     "SurveyUnavailable",
-    "best_available_axis",
+    "AxisChoice",
+    "DECISION_AUTOMATIC",
+    "DECISION_FALLBACK",
+    "LEGACY_ALGORITHM_VERSIONS",
+    "MOUTH",
+    "choose_axis",
+    "fallback_ranking",
     "evidence_votes",
     "infer_frame",
     "infer_record_frame",

@@ -93,6 +93,9 @@ REASON_CODES: Mapping[str, str] = {
     "request_payload_invalid": REJECTED,
     # A received snapshot whose bundle stayed unreadable past its bound.
     "snapshot_unavailable": REJECTED,
+    # A model cut open in CAD that WG cannot rebuild into the whole speaker
+    # (``cad_preparation.MODEL_CUT_UNSOLVABLE``): the same return never solves.
+    "model_cut_unsolvable": REJECTED,
     # Cannot proceed now: each waits for the user, and the operation is kept.
     "setup_required": NEEDS_USER_INPUT,
     "findings_need_review": NEEDS_USER_INPUT,

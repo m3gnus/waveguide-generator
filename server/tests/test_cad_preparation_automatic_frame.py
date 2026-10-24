@@ -6,7 +6,6 @@ from typing import Any
 
 import pytest
 
-from server.cadlink.intake import readings
 from server.jobs import cad_preparation as job_preparation
 from server.jobs.cad_intent import intent_of
 from server.cadlink.interpretation.frame_infer import ALGORITHM_VERSION
@@ -150,9 +149,17 @@ def test_a_solve_without_a_confident_axis_decides_and_records_a_diagnostic(
     assert harness.store.get_frame_confirmation(_key(harness, summary)) is None
     diagnostics = [r.cad_diagnostic for r in caplog.records if hasattr(r, "cad_diagnostic")]
     assert len(diagnostics) == 1
-    assert diagnostics[0]["stage"] == "frame-inference"
-    assert diagnostics[0]["evidence"]["evidence"] == evidence
+    assert diagnostics[0]["stage"] == "frame-fallback"
+    assert diagnostics[0]["evidence"]["suggestion"]["status"] == status
     assert diagnostics[0]["chosen_axis"] == "-x"
+    # One decision, recorded on the prepared record as a fallback, never as
+    # confident inference; the job states the same.
+    record = _record(harness, summary)
+    decision = harness.store.get_frame_decision(record["ingest_id"])
+    assert (decision["axis"], decision["provenance"]) == ("-x", "automatic-fallback")
+    assert record_solved_frame_provenance(harness.store, record) == "automatic-fallback"
+    frame = harness.provenance[0]["frame"]
+    assert (frame["provenance"], frame["decision"]["provenance"]) == ("automatic", "automatic-fallback")
     # The preparation harness stubs composition. Cross the actual runtime
     # validation boundary too, so a second frame gate cannot reintroduce asking.
     validated = harness._loop.run(harness.runtime._validate_imported_submission(harness.submitted[0]))
@@ -220,7 +227,7 @@ def test_the_jobs_gate_accepts_only_the_frame_the_record_was_meshed_in(real, mon
     record = _record(harness, summary)
     assert record_frame_refusal(harness.store, record) is None
 
-    # A record meshed as modelled while WG is confident about +x is not solved.
+    # The same record stated as meshed along another axis than WG decided is not solved.
     modelled = _record_meshed_in(harness, record, "+z")
     refusal = record_frame_refusal(harness.store, modelled)
     assert refusal is not None
@@ -244,9 +251,9 @@ def test_the_jobs_second_mesh_is_bounded_when_the_two_sides_disagree(tmp_path, m
     try:
         mesher = Recording()
         monkeypatch.setattr(ingest_module, "build_imported_mesh_isolated", mesher)
-        _verdict(monkeypatch, status="automatic", axis="+x")
-        monkeypatch.setattr(job_preparation, "record_automatic_axis", lambda store, record, **kwargs: "-y")
-        monkeypatch.setattr(readings, "record_automatic_axis", lambda store, record, **kwargs: "-y")
+        _verdict(monkeypatch, status="automatic", axis="-y")
+        # The record keeps stating another axis than the one asked for.
+        monkeypatch.setattr(job_preparation, "_record_frame_axis", lambda record: "+x")
         passes: list[bool] = []
         real_prepare = job_preparation.prepare_job_sync
 
@@ -263,7 +270,7 @@ def test_the_jobs_second_mesh_is_bounded_when_the_two_sides_disagree(tmp_path, m
 
         assert passes == [False, True]
         assert len(mesher.calls) == 2
-        assert mesher.calls[-1]["options"]["solver_frame"]["axis"] == "+x"
+        assert mesher.calls[-1]["options"]["solver_frame"]["axis"] == "-y"
         assert summary["reason"] == "preparation_failed", summary
         assert not _waiting_for_frame(summary)
         assert harness.submitted == []
@@ -320,7 +327,11 @@ def test_failed_cut_recovery_uses_full_domain_and_precedes_frame_and_findings(
         assert summary["state"] == "accepted", summary
         assert len(harness.submitted) == 1
     else:
-        assert summary["reason"] == "preparation_failed", summary
+        # Deterministic: the same open half can never be prepared, so it is
+        # rejected in calm words, never a "Try again" that cannot succeed.
+        assert summary["reason"] == "model_cut_unsolvable", summary
+        assert "cut open" in summary["message"] and "uncut model" in summary["message"]
+        assert denial.split(":")[-1].strip() not in summary["message"]
         assert harness.submitted == []
     record = _record(harness, summary)
     recovery = record["domain_interpretation"]["cut_recovery"]

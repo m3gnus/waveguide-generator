@@ -306,6 +306,19 @@ _SCHEMA = (
       PRIMARY KEY (snapshot_sha256, algorithm)
     )
     """,
+    # The solver axis WG decided for one prepared record of an unlinked model
+    # when nobody chose it (server/cadlink/interpretation/frame_infer.py,
+    # ``choose_axis``): written once at preparation, then read by admission,
+    # execution, retry and restart instead of deciding again. Keyed by the
+    # ingestion record, never by an algorithm version. Additive, like the
+    # tables above: an older release never opens it.
+    """
+    CREATE TABLE IF NOT EXISTS cad_frame_decisions (
+      ingest_id TEXT PRIMARY KEY,
+      decision_json TEXT NOT NULL,
+      decided_at TEXT NOT NULL
+    )
+    """,
     # How a model's domain is read, per project (or per snapshot when it
     # belongs to none): the user's own reading (Change), or a reading that
     # recorded Fusion cut provenance backed (server/cadlink/
@@ -1670,6 +1683,37 @@ class CadLinkStore:
         )
         return json.loads(row["suggestion_json"]) if row is not None else None
 
+    def record_frame_decision(self, ingest_id: str, decision: Mapping[str, Any]) -> dict[str, Any]:
+        """Record the solver axis decided for one prepared record; the first one stays.
+
+        A record is meshed in exactly one frame, so a second decision for it
+        (two preparations racing to the same mesh) is the same axis and is not
+        written; the stored one is returned.
+        """
+
+        if not ingest_id or decision.get("axis") not in {"+z", "-z", "+x", "-x", "+y", "-y"}:
+            raise ValueError("a frame decision names its record and a solver frame axis")
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO cad_frame_decisions (ingest_id, decision_json, decided_at) "
+                "VALUES (?, ?, ?)",
+                (ingest_id, canonical_json(dict(decision)), utc_now()),
+            )
+            row = conn.execute(
+                "SELECT decision_json FROM cad_frame_decisions WHERE ingest_id = ?", (ingest_id,)
+            ).fetchone()
+        return json.loads(row["decision_json"])
+
+    def get_frame_decision(self, ingest_id: str) -> dict[str, Any] | None:
+        if not ingest_id:
+            return None
+        self.initialize()
+        row = self._read_one(
+            "SELECT decision_json FROM cad_frame_decisions WHERE ingest_id = ?", (ingest_id,)
+        )
+        return json.loads(row["decision_json"]) if row is not None else None
+
     def record_domain_reading(self, key: str, reading: Mapping[str, Any]) -> dict[str, Any]:
         """Remember how a lineage's (or snapshot's) domain is read; the latest wins."""
 
@@ -2454,6 +2498,7 @@ class CadLinkStore:
             ).fetchone():
                 return None
             conn.execute("DELETE FROM ingests WHERE ingest_id = ?", (ingest_id,))
+            conn.execute("DELETE FROM cad_frame_decisions WHERE ingest_id = ?", (ingest_id,))
         return dict(row)
 
     def ingest_records(self) -> list[str]:

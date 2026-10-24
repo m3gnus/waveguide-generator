@@ -2045,13 +2045,14 @@ class JobRuntime:
         geometry = request.geometry
         assert isinstance(geometry, ImportedGeometrySource)
         record = await self._prepared_model_record(request)
-        # Every submission validates the frame actually meshed. A saved manual
-        # choice wins; otherwise Fusion may use the survey's best available axis,
-        # including weak evidence (docs/architecture/CAD-OPERATIONS.md,
-        # "Unlinked solver frame").
+        # Every submission -- a direct solve, a retry, a restart, a CAD
+        # operation's own -- validates the frame the record was meshed in
+        # against one recorded answer: the person's choice, or WG's decision
+        # stored for this record at preparation, never a re-derivation
+        # (docs/architecture/CAD-OPERATIONS.md, "Unlinked solver frame").
         file_mesh = record.get("producer") == "mesh-file"
         frame_refusal = None if file_mesh or record.get("native_source") is not None else await asyncio.to_thread(
-            record_frame_refusal, self.cadlink_store, record, best_effort=True
+            record_frame_refusal, self.cadlink_store, record, carried_ok=True
         )
         if frame_refusal is not None:
             raise ImportedSolveRefusal(

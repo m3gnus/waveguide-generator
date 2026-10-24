@@ -76,11 +76,13 @@ FIXTURES = {
     "two-way box": (fx.two_way_box, 6.0, "+z", None),
     "conventional ported box": (fx.ported_box, 12.0, "+z", None),
     "coaxial": (fx.coaxial, 10.0, "+z", None),
-    "folded horn": (fx.folded_horn, 10.0, ASK, "sources-not-visible"),
+    # Its source is hidden behind the fold; the mouth it leaves through faces +z.
+    "folded horn": (fx.folded_horn, 10.0, "+z", None),
     "dipole baffle": (fx.dipole_baffle, 12.0, ASK, None),
     "cardioid": (fx.cardioid, 10.0, "+z", None),
     "equal-area sources": (fx.equal_area_front_back, 8.0, "+z", None),
-    "MF-only opposing taps": (fx.mf_only_opposing_taps, 10.0, ASK, None),
+    # The taps face each other, but the bore they sound into opens at the front.
+    "MF-only opposing taps": (fx.mf_only_opposing_taps, 10.0, "+z", None),
     "missing roles (LF only)": (fx.lf_only_box, 12.0, ASK, "no-directional-source"),
     "occluded HF": (fx.occluded_hf, 10.0, ASK, "sources-not-visible"),
 }
@@ -101,11 +103,17 @@ def test_fixture_expectation(name: str) -> None:
     else:
         assert result.status == STATUS_AUTOMATIC, (name, result.reason_code, result.reason, result.evidence)
         assert result.axis == expected
-        assert 0.0 < result.confidence <= result.vote_lead
-        assert result.vote_share >= frame_infer.MIN_VOTE_SHARE
-        assert result.vote_lead >= frame_infer.MIN_LEAD
-        assert len(result.supporting_evidence) >= 2
-        assert set(result.supporting_evidence) & frame_infer.GEOMETRIC_EVIDENCE
+        assert result.evidence[frame_infer.MOUTH]["axis"] == expected
+        if result.reason_code == "mouth":
+            # Decided by the mouth where the line of sight could not.
+            assert result.supporting_evidence[0] == frame_infer.MOUTH
+            assert result.confidence >= frame_infer.MOUTH_MIN_STRENGTH
+        else:
+            assert 0.0 < result.confidence <= result.vote_lead
+            assert result.vote_share >= frame_infer.MIN_VOTE_SHARE
+            assert result.vote_lead >= frame_infer.MIN_LEAD
+            assert len(result.supporting_evidence) >= 2
+            assert set(result.supporting_evidence) & frame_infer.GEOMETRIC_EVIDENCE
 
 
 @pytest.mark.parametrize("axis", sorted(fx.POSES))
@@ -113,7 +121,7 @@ def test_party_meh_like_is_found_in_every_orientation(axis: str) -> None:
     result = infer_frame(_party().survey(fx.POSES[axis]))
     assert result.status == STATUS_AUTOMATIC, (axis, result.reason, result.evidence)
     assert result.axis == axis
-    assert set(result.supporting_evidence) == {"normals", "visibility", "aperture"}
+    assert set(result.supporting_evidence) == {"normals", "visibility", "aperture", "mouth"}
 
 
 @pytest.mark.parametrize("axis", ["-x", "+y"])
@@ -174,14 +182,18 @@ def test_equal_area_sources_are_told_apart_by_their_tags() -> None:
     assert infer_frame(mesh.survey(sources=swapped)).axis == "-z"
 
 
-def test_opposed_taps_cancel_in_the_normals_but_not_in_the_visibility() -> None:
-    """Discrimination control: the fixture would catch a plain normal average."""
+def test_opposed_taps_cancel_in_the_normals_but_not_in_the_mouth() -> None:
+    """Discrimination control: the fixture would catch a plain normal average.
+
+    The normals cancel, so the line of sight alone cannot decide; the bore the
+    taps sound into opens at the front, and that mouth decides.
+    """
 
     result = infer_frame(_mesh(fx.mf_only_opposing_taps, 10.0).survey())
-    assert result.status == STATUS_ASK
     assert np.linalg.norm(result.evidence["normals"]["roleMeanNormals"]["MF"]) < 0.05
     assert result.evidence["normals"]["axis"] is None
-    assert "face different ways" in result.reason
+    assert result.status == STATUS_AUTOMATIC and result.reason_code == "mouth"
+    assert result.axis == "+z"
 
 
 def test_an_inverted_winding_asks_instead_of_answering_backwards() -> None:
@@ -342,48 +354,89 @@ def test_a_reduced_record_is_not_judged_without_its_mirror_image() -> None:
     assert infer_record_frame(record, text).status != STATUS_AUTOMATIC
 
 
-@pytest.mark.parametrize("name", ["folded horn", "dipole baffle", "MF-only opposing taps", "occluded HF"])
-def test_weak_fixture_evidence_still_decides_for_fusion(name: str) -> None:
-    from server.cadlink.interpretation.solver_frame import automatic_solve_axis
+@pytest.mark.parametrize("pose", ["+z", "-x", "+y"])
+def test_a_folded_horn_faces_its_mouth_not_its_driver(pose: str) -> None:
+    """The driver at the closed end of the fold faces -z; the mouth faces +z."""
+
+    result = infer_frame(_mesh(fx.folded_horn, 10.0).survey(fx.POSES[pose]))
+    driver = fx.POSES[pose] @ np.array((0.0, 0.0, -1.0))
+    assert result.evidence["normals"]["axis"] == _axis_name(driver)
+    assert result.status == STATUS_AUTOMATIC and result.reason_code == "mouth"
+    assert result.axis == pose
+    assert result.evidence["mouth"]["stepsToLeave"]["HF"] > 100  # through the fold
+
+
+@pytest.mark.parametrize(("name", "code"), [("dipole baffle", None), ("occluded HF", "sources-not-visible")])
+def test_weak_fixture_evidence_decides_by_the_documented_fallback(name: str, code) -> None:
+    from server.cadlink.interpretation.frame_infer import DECISION_FALLBACK, choose_axis
 
     builder, size, _, _ = FIXTURES[name]
     result = infer_frame(_mesh(builder, size).survey())
     assert result.status == STATUS_ASK
-    chosen = automatic_solve_axis(result.to_json(), frame_infer.AXES, best_effort=True)
-    assert chosen in frame_infer.AXES
-    # Confidence remains truthful; the Fusion policy makes the final decision.
+    if code is not None:
+        assert result.reason_code == code
+    # Confidence remains truthful; the choice is recorded as a fallback.
     assert result.axis is None and result.confidence == 0.0
-    if result.unrestricted_axis is not None:
-        assert chosen == result.unrestricted_axis
-    else:
-        votes = frame_infer.evidence_votes(result.evidence)
-        assert votes[chosen] == max(votes.values())
+    choice = choose_axis(result.to_json(), frame_infer.AXES)
+    assert choice.provenance == DECISION_FALLBACK
+    assert choice.axis == result.fallback_ranking[0]
+    assert choice.reason_code == result.reason_code
+
+
+def test_an_occluded_hf_falls_back_to_the_mouth_of_the_sources_that_sound() -> None:
+    """The sealed HF says nothing; the front LF's mouth leads the ranking."""
+
+    result = infer_frame(_mesh(fx.occluded_hf, 10.0).survey())
+    assert result.evidence["mouth"]["sealedRoles"] == ["HF"]
+    assert result.fallback_ranking[0] == "+z"
 
 
 @pytest.mark.parametrize(
     ("evidence", "expected"),
     [
+        ({"mouth": {"scores": {"-y": 0.9, "+z": 0.1}}, "normals": {"axis": "+z", "strength": 0.9}}, "-y"),
         ({"aperture": {"axis": "-y", "strength": 0.8}}, "-y"),
         ({"normals": {"axis": "+x", "strength": 0.2},
           "visibility": {"axis": "-x", "strength": 0.9},
           "aperture": {"axis": "-x", "strength": 0.6}}, "-x"),
-        ({"visibility": {"scores": {"+z": 0.01, "-z": 0.015}}}, "-z"),
         ({}, "+z"),
     ],
 )
-def test_best_available_axis_uses_v2_evidence_and_deterministic_ties(evidence, expected) -> None:
-    from server.cadlink.interpretation.solver_frame import automatic_solve_axis
+def test_the_fallback_ranking_puts_the_mouth_first_then_the_votes(evidence, expected) -> None:
+    from server.cadlink.interpretation.frame_infer import DECISION_FALLBACK, choose_axis, fallback_ranking
 
-    suggestion = {"status": "ask", "axis": None, "evidence": evidence}
-    assert automatic_solve_axis(suggestion, iter(frame_infer.AXES), best_effort=True) == expected
-    assert automatic_solve_axis(suggestion, ("+z",), best_effort=True) == "+z"
+    ranking = fallback_ranking(evidence)
+    assert ranking[0] == expected and sorted(ranking) == sorted(frame_infer.AXES)
+    suggestion = {"status": "ask", "axis": None, "reasonCode": "evidence-weak", "fallbackRanking": list(ranking)}
+    assert choose_axis(suggestion, frame_infer.AXES).axis == expected
+    # A restricted domain takes the first axis it allows, recorded as a fallback.
+    restricted = choose_axis(suggestion, ("+z", "-z"))
+    assert restricted.provenance == DECISION_FALLBACK
+    assert restricted.axis == next(axis for axis in ranking if axis in ("+z", "-z"))
+
+
+def test_a_confident_axis_the_domain_cannot_use_is_a_recorded_fallback_not_a_forced_one() -> None:
+    from server.cadlink.interpretation.frame_infer import DECISION_AUTOMATIC, DECISION_FALLBACK, choose_axis
+
+    result = infer_frame(_party().survey(fx.POSES["-y"]))
+    assert result.status == STATUS_AUTOMATIC and result.axis == "-y"
+    assert choose_axis(result.to_json(), frame_infer.AXES).provenance == DECISION_AUTOMATIC
+    restricted = choose_axis(result.to_json(), ("+z", "-z", "+x", "-x"))
+    assert restricted.provenance == DECISION_FALLBACK
+    assert restricted.reason_code == "axis-not-allowed"
+    assert restricted.axis == next(axis for axis in result.fallback_ranking if axis in ("+z", "-z", "+x", "-x"))
+    # No suggestion at all: as modelled first, still a fallback.
+    assert choose_axis(None, frame_infer.AXES).to_json() == {
+        "axis": "+z", "provenance": DECISION_FALLBACK, "reasonCode": "survey-unavailable",
+    }
 
 
 @pytest.mark.parametrize("pose", ["+x", "-y"])
 def test_lf_only_abstention_retains_evidence_for_fusions_axis(pose: str) -> None:
-    from server.cadlink.interpretation.solver_frame import automatic_solve_axis
+    from server.cadlink.interpretation.frame_infer import DECISION_FALLBACK, choose_axis
 
     result = infer_frame(_mesh(fx.lf_only_box, 12.0).survey(fx.POSES[pose]))
     assert result.status == STATUS_ASK and result.reason_code == "no-directional-source"
-    assert set(frame_infer.EVIDENCE_WEIGHTS) <= result.evidence.keys()
-    assert automatic_solve_axis(result.to_json(), frame_infer.AXES, best_effort=True) == pose
+    assert {*frame_infer.EVIDENCE_WEIGHTS, frame_infer.MOUTH} <= result.evidence.keys()
+    choice = choose_axis(result.to_json(), frame_infer.AXES)
+    assert (choice.axis, choice.provenance) == (pose, DECISION_FALLBACK)

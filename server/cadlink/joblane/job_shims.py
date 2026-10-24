@@ -122,7 +122,7 @@ def migration_record(store: Any, row: Mapping[str, Any]) -> dict[str, Any]:
             ingest_record = json.loads(ingest["record_json"])
             record["frame"] = frame_provenance(
                 store, ingest_record,
-                automatic=record_solved_frame_provenance(store, ingest_record) == "automatic",
+                automatic=record_solved_frame_provenance(store, ingest_record) is not None,
             )
             document = ingest_record.get("document") or {}
             if document.get("return_state_hash"):

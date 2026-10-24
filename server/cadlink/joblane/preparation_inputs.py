@@ -466,7 +466,7 @@ def cad_provenance_record(
         record = json.loads(ingest["record_json"])
         provenance["frame"] = frame_provenance(
             store, record,
-            automatic=record_solved_frame_provenance(store, record) == "automatic",
+            automatic=record_solved_frame_provenance(store, record) is not None,
         )
     if preparation is not None:
         provenance["preparation"] = {

@@ -52,13 +52,15 @@ bound ``ingest_id``.
 The automatic suggestion (``frame_infer``) is computed inside the explicit
 import and preparation commands and cached per snapshot and algorithm version.
 It preselects; it never confirms. Fusion requests (a Solve with no shown axis)
-always decide through ``automatic_solve_axis(best_effort=True)``: the v2 survey's
-winner, then its aperture/normals/visibility votes, then normalised scores, with
-a deterministic modelled-axis tie break within the allowed domain. Weak or
-unavailable evidence produces a developer diagnostic. The model is meshed along
-that axis, with at most one retry after the survey. No confirmation is written.
-A matching manual choice, including a carried v1 choice, takes precedence.
-Manual solves still check the axis the user was shown.
+always decide through ``frame_infer.choose_axis``: the confident answer, or the
+first allowed axis of the survey's documented fallback ranking (mouth, then the
+v2 votes, then as modelled first), recorded as ``automatic-fallback`` with a
+developer diagnostic. The model is meshed along that axis, with at most one
+retry after the survey, and the decision is stored on the prepared record
+(``readings.record_frame_decision``): admission, execution, retry and restart
+read that, never a re-derivation. No confirmation is written. A matching manual
+choice, including a carried v1 choice, takes precedence. Manual solves still
+check the axis the user was shown.
 
 """
 
@@ -380,23 +382,21 @@ def carried_axis(
 def automatic_solve_axis(
     suggestion: Mapping[str, Any] | None, allowed: Iterable[str], *, best_effort: bool = False
 ) -> str | None:
-    """The axis a Solve may use without asking, or None when WG must ask.
+    """The axis a Solve may use without asking.
 
-    "Confident" is ``frame_infer``'s own verdict, not a new one: the suggestion
-    has status ``automatic`` (vote share, lead and supporting evidence all
-    passed; ``frame_infer.infer_frame``) and names an axis this snapshot allows.
-    ``best_effort`` lets a Fusion request decide even when the survey abstains;
-    manual solves retain their confirmation checks.
+    ``frame_infer.choose_axis`` is the one rule. Without ``best_effort`` only
+    its confident answer (the suggestion's own ``automatic`` verdict, on an
+    axis this snapshot allows) is returned, else None. With it -- a Solve that
+    shows no axis, a Fusion request -- the fallback ranking's first allowed
+    axis when WG is not confident: it always decides.
     """
 
-    from server.cadlink.interpretation.frame_infer import STATUS_AUTOMATIC, best_available_axis
+    from server.cadlink.interpretation.frame_infer import DECISION_AUTOMATIC, choose_axis
 
-    if best_effort:
-        return best_available_axis(suggestion, allowed)
-    if suggestion is None or suggestion.get("status") != STATUS_AUTOMATIC:
-        return None
-    axis = suggestion.get("axis")
-    return axis if isinstance(axis, str) and axis in set(allowed) else None
+    choice = choose_axis(suggestion, allowed)
+    if best_effort or choice.provenance == DECISION_AUTOMATIC:
+        return choice.axis
+    return None
 
 
 def record_solver_frame(

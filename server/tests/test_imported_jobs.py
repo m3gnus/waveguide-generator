@@ -1328,7 +1328,13 @@ def test_unlinked_freshness_finding_does_not_block_a_confirmed_frame(tmp_path: P
 def test_an_unlinked_record_with_no_confirmed_frame_is_refused_at_submission(
     tmp_path: Path,
 ) -> None:
-    """``/api/solve`` and every other submission meet the frame gate."""
+    """``/api/solve`` and every other submission meet the frame gate.
+
+    A record nobody chose an axis for and WG never decided one for (no
+    preparation stored a decision) is still refused: the gate reads a recorded
+    answer, it never invents one. A Fusion preparation always records one, so
+    its submissions never meet this (see the next test).
+    """
 
     async def scenario() -> None:
         runtime, ingest_id, _ = await _runtime_fixture(tmp_path, _unlinked_changes())
@@ -1336,6 +1342,83 @@ def test_an_unlinked_record_with_no_confirmed_frame_is_refused_at_submission(
             with pytest.raises(ImportedSolveRefusal) as caught:
                 await runtime.submit(_request(ingest_id))
             assert caught.value.reason_code == "frame_confirmation_required"
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("axis", ["+z", "-x"])
+@pytest.mark.parametrize("provenance", ["automatic", "automatic-fallback"])
+def test_the_frame_decision_stored_at_preparation_admits_submission_and_retry(
+    tmp_path: Path, axis: str, provenance: str
+) -> None:
+    """One recorded decision: submission and retry read it, with no frame question.
+
+    Nothing is re-derived from a survey cache keyed by algorithm version, so a
+    later algorithm, a weak verdict or no verdict at all changes nothing.
+    """
+
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path, _unlinked_changes(axis))
+        runtime.cadlink_store.record_frame_decision(
+            ingest_id, {"axis": axis, "provenance": provenance, "reasonCode": "evidence-weak"}
+        )
+        runtime.cadlink_store.record_frame_suggestion(
+            MANIFEST_SHA, "frame-infer-v9", {"status": "automatic", "axis": "+y"}, ingest_id
+        )
+        try:
+            source_id = await runtime.submit(_request(ingest_id))
+            assert runtime.store.get_job_row(source_id) is not None
+            # A retry or restart revalidates the same record through the same
+            # gate (``_validate_imported_submission``), reading the same decision.
+            again = await runtime._validate_imported_submission(_request(ingest_id))
+            assert again.record["ingest_id"] == ingest_id
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_a_decision_for_another_axis_than_the_record_was_meshed_in_is_refused(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path, _unlinked_changes("+z"))
+        runtime.cadlink_store.record_frame_decision(ingest_id, {"axis": "-x", "provenance": "automatic"})
+        try:
+            with pytest.raises(ImportedSolveRefusal) as caught:
+                await runtime.submit(_request(ingest_id))
+            assert caught.value.reason_code == "frame_confirmation_required"
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(("status", "admitted"), [("automatic", True), ("ask", False)])
+def test_a_run_prepared_under_frame_infer_v2_keeps_its_confident_axis(
+    tmp_path: Path, status: str, admitted: bool
+) -> None:
+    """Prepared before decisions were stored, along v2's confident automatic -x.
+
+    Retry and restart read v2's own cached verdict for its snapshot, never the
+    current algorithm's (which has no entry), so no frame question appears. A
+    weak v2 verdict was never solved automatically and still is not.
+    """
+
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path, _unlinked_changes("-x"))
+        runtime.cadlink_store.record_frame_suggestion(
+            MANIFEST_SHA, "frame-infer-v2",
+            {"status": status, "axis": "-x" if status == "automatic" else None}, ingest_id,
+        )
+        try:
+            if admitted:
+                job_id = await runtime.submit(_request(ingest_id))
+                assert runtime.store.get_job_row(job_id) is not None
+            else:
+                with pytest.raises(ImportedSolveRefusal) as caught:
+                    await runtime.submit(_request(ingest_id))
+                assert caught.value.reason_code == "frame_confirmation_required"
         finally:
             await runtime.shutdown()
 

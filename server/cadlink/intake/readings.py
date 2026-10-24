@@ -165,43 +165,178 @@ def _algorithm_version() -> str:
     return ALGORITHM_VERSION
 
 
-def record_automatic_axis(
-    store: CadLinkStore, record: Mapping[str, Any], *, best_effort: bool = False
-) -> str | None:
-    """The automatic axis this record's snapshot would be solved along.
+def _manual_axis(store: CadLinkStore, record: Mapping[str, Any]) -> str | None:
+    """The axis a person chose for this record's project: confirmed, or carried from v1."""
 
-    None for a linked record, a record stating no frame, one whose project (or
-    snapshot) already confirmed a frame under this requirement, one with a v1
-    confirmation carried forward, and (unless ``best_effort``) when confidence
-    is insufficient.
-    """
-
-    if not record_is_unlinked(record):
-        return None
     frame = record_frame(record)
     if frame is None:
         return None
     key = record_confirmation_key(record)
     requirement = dict(frame["requirement"])
-    if _confirmed_axis(store, key, requirement) is not None:
-        return None
-    if carried_axis(store.get_frame_confirmation(key), requirement) is not None:
-        return None
-    return automatic_solve_axis(
-        _cached_suggestion(store, record), _record_allowed(frame), best_effort=best_effort
+    confirmed = _confirmed_axis(store, key, requirement)
+    if confirmed is not None:
+        return confirmed
+    return carried_axis(store.get_frame_confirmation(key), requirement)
+
+
+def legacy_automatic_axis(store: CadLinkStore, record: Mapping[str, Any]) -> str | None:
+    """The confident automatic axis a record prepared before stored decisions was solved in.
+
+    Records prepared before :func:`store_frame_decision` existed carry no
+    decision. Each was solved along the confident verdict of the survey of
+    its time, which its snapshot's cache still holds (``frame-infer-v2``), or
+    of the current one; only a confident verdict naming the axis the record
+    was meshed in counts, never a weak one. The record's own frame (its v1 or
+    v2 matrix) is what it solves in; nothing is re-meshed.
+    """
+
+    from server.cadlink.interpretation.frame_infer import (
+        ALGORITHM_VERSION,
+        LEGACY_ALGORITHM_VERSIONS,
+        STATUS_AUTOMATIC,
     )
+
+    frame = record_frame(record)
+    snapshot = _snapshot(record)
+    if frame is None or not snapshot:
+        return None
+    allowed = _record_allowed(frame)
+    for algorithm in (*LEGACY_ALGORITHM_VERSIONS, ALGORITHM_VERSION):
+        suggestion = store.get_frame_suggestion(snapshot, algorithm)
+        if (
+            suggestion is not None
+            and suggestion.get("status") == STATUS_AUTOMATIC
+            and suggestion.get("axis") == frame["axis"]
+            and frame["axis"] in allowed
+        ):
+            return str(frame["axis"])
+    return None
+
+
+def record_frame_decision(
+    store: CadLinkStore, record: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    """The automatic decision this record is solved by, or None.
+
+    One canonical answer for admission, execution, retry and restart: the
+    decision stored for this exact record when it was prepared
+    (:func:`store_frame_decision`); for a record prepared before decisions
+    were stored, its snapshot's confident verdict of the time
+    (:func:`legacy_automatic_axis`). Never re-derived from today's survey.
+    None for a linked record, one stating no frame, and one whose project
+    (or snapshot) chose its axis -- a person's choice wins.
+    """
+
+    if not record_is_unlinked(record) or record_frame(record) is None:
+        return None
+    if _manual_axis(store, record) is not None:
+        return None
+    stored = store.get_frame_decision(str(record.get("ingest_id") or ""))
+    if stored is not None:
+        return stored
+    legacy = legacy_automatic_axis(store, record)
+    if legacy is not None:
+        return {"axis": legacy, "provenance": "automatic", "reasonCode": "inferred", "legacy": True}
+    return None
+
+
+def decide_record_frame(
+    store: CadLinkStore, record: Mapping[str, Any], suggestion: Mapping[str, Any] | None
+) -> Any:
+    """The axis WG would solve this record's snapshot along when nobody chose one.
+
+    ``frame_infer.choose_axis`` over the record's allowed axes: the confident
+    answer, else the fallback ranking's first allowed axis. None when a person
+    chose (or a v1 choice is carried), for a linked record, and for one
+    stating no frame.
+    """
+
+    from server.cadlink.interpretation.frame_infer import choose_axis
+
+    if not record_is_unlinked(record):
+        return None
+    frame = record_frame(record)
+    if frame is None or _manual_axis(store, record) is not None:
+        return None
+    return choose_axis(suggestion, _record_allowed(frame))
+
+
+def store_frame_decision(
+    store: CadLinkStore,
+    record: Mapping[str, Any],
+    choice: Any,
+    suggestion: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Seal ``choice`` as this record's decision; the record must be meshed along it.
+
+    Written once per record, at preparation. A fallback is recorded as such
+    (``automatic-fallback``), with a developer diagnostic, never as confident
+    inference.
+    """
+
+    from server.cadlink.interpretation.frame_infer import ALGORITHM_VERSION, DECISION_FALLBACK
+
+    frame = record_frame(record)
+    if frame is None or frame.get("axis") != choice.axis:
+        raise ValueError("a frame decision is stored only for the record meshed along it")
+    ingest_id = str(record.get("ingest_id") or "")
+    held = store.get_frame_decision(ingest_id)
+    if held is not None:
+        return held
+    summary = suggestion or {}
+    decision = {
+        **choice.to_json(),
+        "algorithm": ALGORITHM_VERSION,
+        "snapshotSha256": _snapshot(record),
+        "suggestion": {
+            "algorithm": summary.get("algorithm"),
+            "status": summary.get("status"),
+            "axis": summary.get("axis"),
+            "reasonCode": summary.get("reasonCode"),
+            "confidence": summary.get("confidence"),
+        } if suggestion is not None else None,
+        "allowedAxes": list(_record_allowed(frame)),
+    }
+    stored = store.record_frame_decision(ingest_id, decision)
+    if stored.get("provenance") == DECISION_FALLBACK:
+        record_preparation_diagnostic(
+            "frame-fallback",
+            {
+                "ingest_id": ingest_id,
+                "reason_code": stored.get("reasonCode"),
+                "suggestion": stored.get("suggestion"),
+                "allowed_axes": stored.get("allowedAxes"),
+                "fallback_ranking": list(summary.get("fallbackRanking") or []),
+            },
+            chosen_axis=str(stored.get("axis")),
+        )
+    return stored
+
+
+def record_automatic_axis(store: CadLinkStore, record: Mapping[str, Any]) -> str | None:
+    """The axis this record solves along by WG's own decision, or None."""
+
+    decision = record_frame_decision(store, record)
+    return str(decision["axis"]) if decision is not None else None
 
 
 def record_solved_frame_provenance(
     store: CadLinkStore, record: Mapping[str, Any]
 ) -> str | None:
-    """``"automatic"`` when this record solves along WG's own inferred axis
-    with no confirmation behind it, else None."""
+    """How WG itself decided the axis this record solves along, or None.
+
+    ``automatic`` (confident inference) or ``automatic-fallback`` (the
+    documented ranking chose), for a record solving along its stored decision
+    with nobody's choice behind it.
+    """
 
     frame = record_frame(record) if record_is_unlinked(record) else None
     if frame is None:
         return None
-    return "automatic" if record_automatic_axis(store, record, best_effort=True) == frame.get("axis") else None
+    decision = record_frame_decision(store, record)
+    if decision is None or decision.get("axis") != frame.get("axis"):
+        return None
+    return str(decision.get("provenance") or "automatic")
 
 
 def _frame_for_axis(frame: Mapping[str, Any], axis: str) -> dict[str, Any]:
@@ -228,16 +363,18 @@ def _record_allowed(frame: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 def record_frame_refusal(
-    store: CadLinkStore, record: Mapping[str, Any], *, best_effort: bool = False
+    store: CadLinkStore, record: Mapping[str, Any], *, carried_ok: bool = False
 ) -> str | None:
     """Why the prepared frame cannot be solved, or None for a usable frame.
 
-    ``best_effort`` accepts the automatic choice for Fusion without requiring
-    survey confidence, and preserves a carried v1 manual choice.
-
-    A linked record is never gated. An unlinked record solves only when its
-    project (or, with no project, this snapshot) confirmed exactly the frame it
-    was meshed in, under the same requirement -- and so the same contract. A
+    A linked record is never gated. An unlinked record solves in the frame it
+    was meshed in when that is the one its project (or, with no project, this
+    snapshot) confirmed under the same requirement, or WG's own decision
+    stored for exactly this record at preparation (:func:`record_frame_decision`)
+    -- the one decision every submission, retry and restart reads. With
+    ``carried_ok`` (a Solve that shows no axis, and the jobs system's
+    submission gate) a project's v1 choice carried forward is the user's
+    choice too. A record nobody chose and WG never decided is refused; a
     record prepared before the frame contract states no frame and is never
     taken as confirmed.
     """
@@ -254,23 +391,24 @@ def record_frame_refusal(
     requirement = dict(frame["requirement"])
     confirmed = _confirmed_axis(store, key, requirement)
     allowed = _record_allowed(frame)
-    if best_effort and carried_axis(store.get_frame_confirmation(key), requirement) == frame["axis"]:
-        return None  # A saved v1 choice remains the user's choice under v2.
-    automatic = (
-        record_automatic_axis(store, record, best_effort=best_effort)
-        if confirmed is None else None
-    )
-    if confirmed is None and automatic == frame["axis"]:
-        # This is the inferred frame it was meshed in; no confirmation is written.
-        return None
-    if confirmed is None and automatic is not None:
-        # Meshed as modelled, but WG is confident of another axis: the next
-        # preparation meshes along it (headless preparation owes the same).
-        return (
-            f"This model was prepared along {frame['axis']}, but WG would solve it "
-            f"along {automatic}. Prepare it again in WG."
-        )
     if confirmed is None:
+        carried = carried_axis(store.get_frame_confirmation(key), requirement)
+        if carried is not None:
+            if carried_ok and carried == frame["axis"]:
+                return None  # A saved v1 choice remains the user's choice under v2.
+            return (
+                "Confirm this model's solver frame in WG first: choose the axis it "
+                "radiates along and check the preview, then solve it."
+            )
+        decision = record_frame_decision(store, record)
+        if decision is not None and decision.get("axis") == frame["axis"]:
+            # WG's own decision for this record: never written as a confirmation.
+            return None
+        if decision is not None:
+            return (
+                f"This model was prepared along {frame['axis']}, but WG decided to solve "
+                f"it along {decision.get('axis')}. Prepare it again in WG."
+            )
         return (
             "Confirm this model's solver frame in WG first: choose the axis it "
             "radiates along and check the preview, then solve it."
@@ -278,8 +416,8 @@ def record_frame_refusal(
     if confirmed not in allowed:
         return (
             f"The confirmed solver frame ({confirmed}) cannot be used: this model is "
-            "solved as a half or quarter model, which is solved only in the frame "
-            "it was modelled in (+z). Confirm +z, or return the whole model."
+            f"solved as a half or quarter model, which can be solved only along "
+            f"{', '.join(allowed)}. Choose one of those, or return the whole model."
         )
     if confirmed != frame["axis"]:
         return (
@@ -376,6 +514,8 @@ def frame_provenance(
         provenance = held if held in ("chosen", "suggested") else "confirmed"
         confirmed = True
     elif automatic:
+        # The user-facing provenance is WG's automatic axis either way; how it
+        # was decided (confident or fallback) is the decision's own field.
         provenance = "automatic"
     elif carried_axis(row, requirement) == axis:
         provenance = "carried"
@@ -392,6 +532,14 @@ def frame_provenance(
             "axis": suggestion.get("axis"),
             "confidence": suggestion.get("confidence"),
         }
+    if provenance == "automatic":
+        decision = record_frame_decision(store, record)
+        if decision is not None:
+            out["decision"] = {
+                key: decision.get(key)
+                for key in ("provenance", "reasonCode", "algorithm", "legacy")
+                if decision.get(key) is not None
+            }
     return out
 
 
@@ -885,12 +1033,16 @@ __all__ = [
     "interpretation_view",
     "lineage_reading",
     "reading_key",
+    "decide_record_frame",
+    "legacy_automatic_axis",
     "record_automatic_axis",
+    "record_frame_decision",
     "record_frame_refusal",
     "record_preparation_diagnostic",
     "record_reading",
     "record_solved_frame_provenance",
     "remember_provenance_reading",
+    "store_frame_decision",
     "resolve_domain_plan",
     "resolve_for_manifest",
     "snapshot_project",
