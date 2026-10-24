@@ -57,7 +57,9 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
         parentId = parent?.parent_job_id ?? null;
       }
       // A WG press already owns its ingestion and its normal completion path.
-      if (claim?.sourceIngestId || claim?.completionAcknowledged || job.cad_provenance?.manual_waiting) return;
+      // JobsCoordinator may already have selected the result. Only this
+      // owner's successful model open means the viewport has followed it.
+      if (claim?.sourceIngestId || claim?.modelDisplayAcknowledged || job.cad_provenance?.manual_waiting) return;
       if (!observed.has(job.id)) {
         observed.set(job.id, { navigation: navigationGeneration(), edits, choice: useCadReturnStore.getState().captureModelChoice(),
           document: currentDocumentLoad() });
@@ -86,6 +88,7 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
           return false;
         });
       if (!shown || !current()) return;
+      acknowledgeCadSolve(job, 'display');
       compareSelection.awaitRun(job.id);
       if (job.client_request_id) solveAttention.followJob(job.client_request_id, job.id);
       solveAttention.bindRun(job.id, job.id);

@@ -48,6 +48,7 @@ const mocks = vi.hoisted(() => ({
   solveModel: vi.fn(),
   submitDesign: vi.fn(),
   planSolveDesign: vi.fn(),
+  refreshCapabilities: vi.fn(),
 }));
 
 vi.mock('../jobs/actions', async (importOriginal) => {
@@ -60,6 +61,7 @@ vi.mock('../jobs/useCapabilities', () => ({
     engineSelection: { default: 'auto', resolvedDefault: 'metal', full3dOrder: ['metal'] },
     error: null,
     isLoading: false,
+    refreshCapabilities: mocks.refreshCapabilities,
   }),
   useCapabilityRefreshOnReconnect: () => undefined,
   useLegacyBeatEngineMigration: () => undefined,

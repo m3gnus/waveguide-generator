@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { compareSelection } from '../../api/results';
-import { cadSolveClaim, rememberCadSolve } from '../../jobs/cadSolve';
+import { acknowledgeCadSolve, cadSolveClaim, rememberCadSolve } from '../../jobs/cadSolve';
 import { currentModel, runVerdict } from '../../model/currentModel';
 import { resetCadReturnStore, useCadReturnStore } from '../../stores/cadReturn';
 import { resetDesignStore, useDesignStore } from '../../stores/design';
@@ -53,8 +53,17 @@ it('loads the exact solved model when WG first sees a Fusion job already accepte
   expect(runVerdict(run, currentModel())).toBe('current');
   expect(compareSelection.getSnapshot().awaiting).toBe(run.id);
   expect(cadSolveClaim(run)?.completionAcknowledged).toBe(true);
+  expect(cadSolveClaim(run)?.modelDisplayAcknowledged).toBe(true);
   await f.observe([run]);
   expect(f.display.showIngestedMesh).toHaveBeenCalledOnce();
+});
+
+it('does not reopen a displayed Fusion run when the display owner remounts', async () => {
+  const first = fixture(); const run = external();
+  await first.observe([run]); first.dispose();
+  const remounted = fixture();
+  await remounted.observe([run]);
+  expect(remounted.fetcher).not.toHaveBeenCalled();
 });
 
 it('recovers a recent completed Fusion solve but does not replay old finished history', async () => {
@@ -63,6 +72,18 @@ it('recovers a recent completed Fusion solve but does not replay old finished hi
   expect(f.fetcher).not.toHaveBeenCalled();
   await f.observe([{ ...external('recent'), status: 'complete', has_results: true }]);
   expect(f.display.showIngestedMesh).toHaveBeenCalledOnce();
+});
+
+it('shows the Fusion model even when the jobs coordinator acknowledged its result first', async () => {
+  const f = fixture(); const run = external();
+  await f.observe([{ ...run, status: 'preparing', cad_state: { ...run.cad_state!, state: 'processing' } }]);
+  // JobsCoordinator claims the processing row and acknowledges acceptance in
+  // its React effect. That selects a result, but has not displayed its model.
+  rememberCadSolve(run.id, '');
+  acknowledgeCadSolve(run, 'completion');
+  await f.observe([run]);
+  expect(f.display.showIngestedMesh).toHaveBeenCalledOnce();
+  expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
 });
 
 it('leaves a WG-owned solve on its existing completion path', async () => {
@@ -126,6 +147,7 @@ it('reports an unavailable prepared record without solving again or inventing a 
   await f.observe([external()]);
   expect(f.display.showIngestedMesh).not.toHaveBeenCalled();
   expect(f.display.reportStatus).toHaveBeenLastCalledWith(expect.stringContaining('missing'));
+  expect(cadSolveClaim(external())?.modelDisplayAcknowledged).not.toBe(true);
 });
 
 it.each([true, false])('leaves a WG continuation alone when its parent row is present: %s', async (present) => {

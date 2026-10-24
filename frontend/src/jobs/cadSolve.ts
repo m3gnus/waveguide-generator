@@ -13,6 +13,9 @@ const CLAIM = 'wg2.cad.solve.claim.v1:';
 export interface CadSolveClaim {
   designName: string;
   completionAcknowledged: boolean;
+  /** The Fusion display owner has opened this run's retained model. Result
+   * selection alone does not mean its geometry reached the viewport. */
+  modelDisplayAcknowledged?: boolean;
   refusalAcknowledged?: boolean;
   /** The ingestion a WG press solved from; a Fusion request has none. */
   sourceIngestId?: string | null;
@@ -40,10 +43,12 @@ export function forgetCadSolve(key: string): void {
 export function cadSolveClaim(job: Pick<JobItem, 'id' | 'client_request_id'>): CadSolveClaim | null {
   return read(CLAIM + job.id) ?? (job.client_request_id ? read(CLAIM + job.client_request_id) : null);
 }
-export function acknowledgeCadSolve(job: JobItem, outcome: 'completion' | 'refusal'): CadSolveClaim | null {
+export function acknowledgeCadSolve(job: JobItem, outcome: 'completion' | 'refusal' | 'display'): CadSolveClaim | null {
   const claim = cadSolveClaim(job);
-  if (!claim || (outcome === 'completion' ? claim.completionAcknowledged : claim.refusalAcknowledged)) return null;
-  const next = { ...claim, [outcome === 'completion' ? 'completionAcknowledged' : 'refusalAcknowledged']: true };
+  const field = outcome === 'completion' ? 'completionAcknowledged'
+    : outcome === 'display' ? 'modelDisplayAcknowledged' : 'refusalAcknowledged';
+  if (!claim || claim[field]) return null;
+  const next = { ...claim, [field]: true };
   write(CLAIM + job.id, next);
   if (job.client_request_id) write(CLAIM + job.client_request_id, next);
   return claim;
