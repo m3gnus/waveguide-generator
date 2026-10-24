@@ -910,3 +910,42 @@ def test_a_recorded_setup_that_cannot_be_used_still_waits_rather_than_using_defa
     assert (summary["state"], summary["reason"]) == ("needs_user_input", "setup_required")
     assert "cannot be used" in summary["message"]
     assert harness.submitted == [] and harness.ingest.calls == []
+
+
+@pytest.mark.parametrize(
+    ("axes", "angle_range", "enabled", "inclination", "expected_range", "expected_axes", "expected_inclination"),
+    [
+        ({"horizontal": {}}, [0, 90, 10], ["vertical"], 35, [-180, 180, 37], ["horizontal", "vertical"], 35),
+        ({"diagonal": {}}, [0, 180, 37], ["horizontal"], 35, [-180, 180, 73], ["horizontal", "diagonal"], 45),
+        ({"diagonal": {}}, [0, 180, 37], ["diagonal"], 35, [-180, 180, 73], ["diagonal"], 35),
+        # 360 / 16 = 22.5: retain half-up rounding, rather than bankers' rounding.
+        ({"vertical": {}}, [0, 160, 11], ["horizontal"], 35, [-180, 180, 24], ["horizontal", "vertical"], 35),
+        ({"horizontal": {"minimum_deg": 0, "maximum_deg": 180}}, [0, 180, 19], ["horizontal"], 35, [0, 180, 19], ["horizontal"], 35),
+    ],
+)
+def test_effective_polar_is_a_projection_of_user_intent(
+    axes, angle_range, enabled, inclination, expected_range, expected_axes, expected_inclination,
+) -> None:
+    from server.jobs.imported_setup import setup_content, setup_digest
+
+    setup = validate_setup({**_setup(), "options": {
+        "frequencies_hz": [1000], "polar_config": {
+            "angle_range": angle_range, "angle_step": 7,
+            "enabled_axes": enabled, "inclination": inclination,
+        },
+    }})
+    original = setup_content(setup), setup_digest(setup)
+    request = solve_request_for(
+        setup, ingest_id="wgi_" + "1" * 26, manifest_sha256="sha256:" + "1" * 64,
+        artifact_sha256="sha256:" + "2" * 64, acknowledged_findings=[],
+    )
+    before = request.model_dump(mode="json")
+    effective = widen_polar_to_derivation(request, {"axes": axes})
+    polar = effective.options.polar_config
+    assert list(polar.angle_range) == expected_range
+    assert polar.enabled_axes == expected_axes
+    assert polar.inclination == expected_inclination
+    assert polar.angle_step == 7  # requested metadata stays distinct from the resolved step
+    assert widen_polar_to_derivation(effective, {"axes": axes}) == effective
+    assert request.model_dump(mode="json") == before
+    assert (setup_content(setup), setup_digest(setup)) == original

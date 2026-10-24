@@ -6317,6 +6317,9 @@
             ],
             "title": "Domain Decision"
           },
+          "effective_polar_config": {
+            "$ref": "#/components/schemas/PolarConfig"
+          },
           "engine": {
             "anyOf": [
               {
@@ -6360,6 +6363,7 @@
         },
         "required": [
           "ingest_id",
+          "effective_polar_config",
           "requested",
           "engine",
           "reason",

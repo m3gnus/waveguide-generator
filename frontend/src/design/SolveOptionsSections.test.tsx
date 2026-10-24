@@ -11,7 +11,7 @@ import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDesignStore } from '../stores/design';
 import type { ImportedSolvePlan } from '../jobs/actions';
 import type { ImportedSolvePlanSnapshot } from '../jobs/useImportedSolvePlan';
-import { defaultPolarUi, resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { defaultPolarUi, polarConfigFromUi, resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { useDesignStore } from '../stores/design';
 import { accuracyExplainer, AdaptiveFrequencyControls, MeshValidationControl, DirectivityMapControls, effectiveGridView, FrequencySweepControls, runPolarFromJob, SolveOptionsControls } from './SolveOptionsSections';
 
@@ -600,22 +600,24 @@ describe('solve and directivity control help', () => {
     expect(options.get('bempp')!.disabled).toBe(true);
   });
 
-  it('reports widened and unchanged effective display grids through the submission derivation', () => {
+  it('displays the effective server grid without deriving coverage locally', () => {
     const widened = effectiveGridView(
       { ...structuredClone(defaultPolarUi), angleEnd: 90, enabledAxes: ['horizontal'] },
-      { axes: { vertical: { minimum_deg: -180, maximum_deg: 180, symmetry_accepted: false } } },
+      { ingest_id: 'prepared', requested: 'auto', engine: 'metal', reason: 'ready', engines: [],
+        effective_polar_config: { ...polarConfigFromUi(defaultPolarUi), angle_range: [-180, 180, 73], enabled_axes: ['horizontal', 'vertical'] } },
     );
     expect(widened).toMatchObject({ widened: true });
-    expect(widened.summary).toContain('−180° … 180°');
-    expect(widened.summary).toContain('H + V');
-    expect(widened.detail).toContain('Widened from your settings');
+    expect(widened!.summary).toContain('−180° … 180°');
+    expect(widened!.summary).toContain('H + V');
+    expect(widened!.detail).toContain('Widened from your settings');
 
     const unchanged = effectiveGridView(
       structuredClone(defaultPolarUi),
-      { axes: { horizontal: { minimum_deg: 0, maximum_deg: 180, symmetry_accepted: true } } },
+      { ingest_id: 'prepared', requested: 'auto', engine: 'metal', reason: 'ready', engines: [],
+        effective_polar_config: polarConfigFromUi(defaultPolarUi) },
     );
     expect(unchanged).toMatchObject({ widened: false });
-    expect(unchanged.detail).toContain('no widening is required');
+    expect(unchanged!.detail).toContain('no widening is required');
   });
 
   it.each([
@@ -632,7 +634,7 @@ describe('solve and directivity control help', () => {
     expect(host.querySelector('.polar-grid-error')?.textContent).toContain(message);
     expect(host.querySelector('#polar-angle-start')?.getAttribute('aria-invalid')).toBe('true');
 
-    render(<DirectivityMapControls effectiveDerivation={{ axes: { horizontal: { minimum_deg: -180, maximum_deg: 180 } } }}/>);
+    render(<DirectivityMapControls/>);
     expect(host.querySelector('#polar-angle-start')).not.toBeNull();
     expect(host.querySelector('.polar-grid-error')?.textContent).toContain(message);
     expect(host.querySelector('.effective-grid-readout')).toBeNull();

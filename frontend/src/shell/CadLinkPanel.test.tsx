@@ -2538,7 +2538,7 @@ describe('CadLinkPanel', () => {
   });
 
 
-  it('widens the polar request to the derivation instead of submitting a narrowing grid', () => {
+  it('sends authored polar intent for the server to plan and submit', () => {
     useCadReturnStore.getState().selectBundle(listing.items[0]);
     useCadReturnStore.getState().applyIngest(record, useCadReturnStore.getState().beginIngestIntent());
     const submission = buildImportedSubmission(useCadReturnStore.getState());
@@ -2546,12 +2546,9 @@ describe('CadLinkPanel', () => {
       angle_range: [number, number, number];
       enabled_axes: string[];
     };
-    // The record pins vertical and diagonal (rejected mirror planes): the
-    // default 0..180/37 grid must widen to a full circle at the same 5° step,
-    // with every pinned axis enabled.
-    expect(polar.angle_range[0]).toBe(-180);
-    expect(polar.angle_range[1]).toBe(180);
-    expect(polar.angle_range[2]).toBe(73);
+    // Rejected mirror planes are interpreted by the server. The frontend
+    // neither widens the planning input nor rewrites the saved user settings.
+    expect(polar.angle_range).toEqual([0, 180, 37]);
     expect(polar.enabled_axes).toEqual(expect.arrayContaining(['vertical', 'diagonal']));
   });
 

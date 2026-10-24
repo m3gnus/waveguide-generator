@@ -63,6 +63,7 @@ from server.jobs.cad_intent import (
 from server.platform.feature_flags import fem_regions_enabled
 from server.jobs.design_availability import resolve_job_design
 from server.jobs.retention import MAX_RETAINED_RESULTS, RESULT_RETENTION_DAYS
+from server.jobs.imported_polar import widen_polar_to_derivation
 from server.jobs.models import (
     JobArchiveIdentity,
     JobDesignIdentity,
@@ -634,6 +635,7 @@ class SubmissionResolution:
 
 @dataclass(frozen=True)
 class _ImportedValidation:
+    request: SolveRequest
     record: dict[str, Any]
     msh_text: str
     symmetry_metadata: dict[str, Any]
@@ -1040,6 +1042,7 @@ async def resolve_imported_submission(
             "resolve_imported_submission resolves imported geometry only; "
             "parametric submissions resolve through resolve_submission"
         )
+    request = widen_polar_to_derivation(request, (imported_record or {}).get("polar_grid_derivation"))
     _refuse_removed_solver(request)
     original_requested = request.options.engine
     fem = bool(imported_record and imported_record.get("fem_regions") and not request.geometry.exterior_only)
@@ -1134,6 +1137,7 @@ async def plan_imported_submission(
 
     if not isinstance(request.geometry, ImportedGeometrySource):
         raise ValueError("the imported plan resolves imported geometry only")
+    request = widen_polar_to_derivation(request, (imported_record or {}).get("polar_grid_derivation"))
     _refuse_removed_solver(request)
     detected = await engine_registry.capabilities()
     resolved_quadrants = (symmetry_metadata or {}).get("resolved_quadrants")
@@ -1191,6 +1195,7 @@ async def plan_imported_submission(
         reason = str(resolution.symmetry_metadata["solver_plan"]["reason"])
     return {
         "ingest_id": request.geometry.ingest_id,
+        "effective_polar_config": request.options.polar_config.model_dump(mode="json"),
         "readiness": readiness,
         "requested": request.options.engine,
         "engine": engine,
@@ -2010,6 +2015,7 @@ class JobRuntime:
         _refuse_removed_solver(request)
         if isinstance(request.geometry, ImportedGeometrySource):
             imported = await self._validate_imported_submission(request)
+            request = imported.request
             inputs = dict(
                 symmetry_metadata=imported.symmetry_metadata,
                 imported_record=imported.record, imported_msh_text=imported.msh_text,
@@ -2098,6 +2104,7 @@ class JobRuntime:
         symmetry_metadata = _imported_symmetry_metadata(
             record, request.options.symmetry, _ground_plane_axis(request)
         )
+        request = widen_polar_to_derivation(request, record.get("polar_grid_derivation"))
         _validate_imported_polar_grid(geometry, request, record)
         polar = request.options.polar_config
         if "diagonal" in polar.enabled_axes and not math.isclose(
@@ -2120,7 +2127,7 @@ class JobRuntime:
         effective_polar_grid(request)
         # Validate provenance before any archive identity is claimed as well.
         identity = _cad_identity_provenance(record, geometry)
-        return _ImportedValidation(dict(record), msh_text, symmetry_metadata, identity)
+        return _ImportedValidation(request, dict(record), msh_text, symmetry_metadata, identity)
 
     async def _prepare_imported_submission(
         self, request: SolveRequest, *, validated: _ImportedValidation | None = None,

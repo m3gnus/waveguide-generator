@@ -32,6 +32,7 @@ from server.jobs.models import (
     FieldPlaneSpec,
     ImportedGeometrySource,
     JobListResponse,
+    PolarConfig,
     JobMetadataPatch,
     JobStatusResponse,
     MetadataResponse,
@@ -234,6 +235,7 @@ class ImportedSolvePlanResponse(BaseModel):
 
     readiness: SolveBlocker | None = None
     ingest_id: str
+    effective_polar_config: PolarConfig
     requested: str
     engine: str | None
     code: str | None = None

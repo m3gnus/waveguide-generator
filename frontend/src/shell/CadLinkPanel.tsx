@@ -41,7 +41,7 @@ import './cadLinkPanel.css';
 // Kept as public panel helpers for existing callers; implementation lives next
 // to the two solve entry points so the global command can share it.
 import { importedSubmissionNotices } from '../jobs/importedSubmission';
-export { buildImportedSubmission, widenPolarToDerivation } from '../jobs/importedSubmission';
+export { buildImportedSubmission } from '../jobs/importedSubmission';
 export { newestReturnArrival } from './cadlink/arrivals';
 export { showIngestedMeshInViewport } from './cadlink/artifactLoader';
 

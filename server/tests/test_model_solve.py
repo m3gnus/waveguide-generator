@@ -803,3 +803,29 @@ def test_snapshot_with_different_saved_drive_sources_records_a_refusal(harness):
     job = harness.jobs_store.get_job_row(result['job_id'])
     assert job['status'] == 'held'
     assert job['task_metadata']['cad']['refusal']['code'] == 'setup_required'
+
+
+def test_polar_projection_keeps_the_saved_user_setup_and_digest(harness) -> None:
+    app = _models_app(harness)
+    model = _cad_model(harness)
+    setup = _setup(engine="metal")
+    setup["options"]["polar_config"] = {
+        "angle_range": [0, 160, 11], "angle_step": 16,
+        "enabled_axes": ["horizontal"], "inclination": 35,
+    }
+    revision_id = _revision_of(harness, setup)
+    before = dict(harness.store.get_setup_revision(revision_id))
+    harness.ingest.polar_grid_derivation = {"axes": {axis: {} for axis in ("horizontal", "vertical", "diagonal")}}
+
+    status, response = _solve(harness, app, model, client_request_id="polar-press", setup=setup)
+    assert status == 200, response
+    _settle(harness)
+    row = harness.jobs_store.get_job_row(response["job_id"])
+    assert row["status"] == "queued", row
+    submitted = row["config_json"]
+    assert submitted["options"]["polar_config"]["angle_range"] == [-180, 180, 24]
+    assert submitted["options"]["polar_config"]["inclination"] == 45
+    assert dict(harness.store.get_setup_revision(revision_id)) == before
+    saved = project_setup(harness.store, model["model_id"], model["sources"])
+    assert saved is not None and saved[1] == revision_id
+    assert saved[0].options["polar_config"]["angle_range"] == [0, 160, 11]

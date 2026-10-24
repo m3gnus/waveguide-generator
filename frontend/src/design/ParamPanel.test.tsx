@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { waitForCadProjectSettings } from '../stores/cadProjectSettings';
 import type { CadRealizedDimensions, CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { toSolveDesign } from '../jobs/actions';
+import { capabilityFingerprint } from '../jobs/capabilityFingerprint';
 import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
 import { sharedDelayMode, withPair } from '../results/crossoverSpec';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
@@ -20,7 +21,7 @@ import { resetDriverLibraryStore, useDriverLibraryStore } from '../stores/driver
 import { hydrateDesignDocument } from '../api/designIo';
 import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, type OsseFeatures } from './osseFeatures';
 import { NATIVE_FAMILIES, designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
-import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { defaultPolarUi, polarConfigFromUi, resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { ParamPanel, RealizedDimensionsSection, channelHeadingText, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
 
@@ -1196,6 +1197,11 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('[data-section="Model Type"]')).toBeNull();
     expect(host.textContent).not.toContain('Mesh');
 
+    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, { engines: [], cpuPreparationInFlight: false });
+    queryClient.setQueryData(['imported-solve-plan', JSON.stringify(buildImportedSubmission()), capabilityFingerprint([])], {
+      ingest_id: cadRecord.ingest_id, requested: 'auto', engine: 'metal', reason: 'ready', engines: [],
+      effective_polar_config: { ...polarConfigFromUi(defaultPolarUi), angle_range: [-180, 180, 73] },
+    });
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     expect(titles()).toEqual(['Mesh detail', 'Frequency Sweep', 'Directivity Map', 'Drivers', 'Crossover', 'Passive cardioid', 'Solve options']);
     for (const hidden of ['Source Definition', 'Solve & export mesh', 'Output & Passthrough']) expect(host.textContent).not.toContain(hidden);

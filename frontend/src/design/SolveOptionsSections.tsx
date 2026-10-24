@@ -1,4 +1,4 @@
-import type { EngineCapability } from '../jobs/actions';
+import type { EngineCapability, ImportedSolvePlan } from '../jobs/actions';
 import { SelectRow } from './SelectRow';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
 import { useEffect, useState, useSyncExternalStore } from 'react';
@@ -14,7 +14,7 @@ import { useSolveControlBackend } from '../jobs/useSolveControlBackend';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import type { CadReturnIngestRecord } from '../api/cadlink';
-import { widenPolarToDerivation } from '../jobs/importedSubmission';
+import { importedPolarFromPlan } from '../jobs/importedSubmission';
 import { HelpTipRow, useHelpTip } from './HelpTip';
 import {
   MAX_FREQUENCY_POINTS,
@@ -434,22 +434,16 @@ export interface EffectiveGridView {
   widened: boolean;
 }
 
-/** Preview the exact imported-submit mutation on a disposable options object.
- * This must call widenPolarToDerivation: presenting a separately reimplemented
- * approximation would recreate the silent-submit mismatch this readout fixes. */
+/** Format the server's effective grid; the form keeps the user's own values. */
 export function effectiveGridView(
   polar: PolarUiState,
-  derivation: Record<string, unknown>,
-): EffectiveGridView {
+  plan: ImportedSolvePlan,
+): EffectiveGridView | null {
   const before = polarConfigFromUi(polar);
-  const options = {
-    engine: 'metal', symmetry: 'auto' as const, mesh_validation_mode: 'warn' as const,
-    verbose: false, frequency_spacing: 'log' as const, polar_config: structuredClone(before),
-  };
-  widenPolarToDerivation(options, derivation);
-  const effective = options.polar_config;
+  const effective = importedPolarFromPlan(plan);
+  if (!effective) return null;
   const [start, end, count] = effective.angle_range;
-  const step = count > 1 ? (end - start) / (count - 1) : effective.angle_step;
+  const step = (end - start) / (count - 1);
   const axes = effective.enabled_axes.map((axis) => AXIS_INITIALS[axis]).join(' + ');
   const widened = before.angle_range.some((value, index) => value !== effective.angle_range[index])
     || before.enabled_axes.some((axis, index) => axis !== effective.enabled_axes[index])
@@ -548,7 +542,7 @@ export function SolvedWithReadout() {
   </div>;
 }
 
-export function DirectivityMapControls({ effectiveDerivation }: { effectiveDerivation?: Record<string, unknown> } = {}) {
+export function DirectivityMapControls() {
   const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const { capability } = useSolveControlBackend();
   const fieldReason = capability && capability.field_traces !== true
@@ -566,7 +560,9 @@ export function DirectivityMapControls({ effectiveDerivation }: { effectiveDeriv
   const axisHelp = useHelpTip({ title: 'Directivity planes', text: 'Which planes through the horn axis are measured. Horizontal and vertical are the usual pair; diagonal catches what a non-round mouth does between them.' });
   const axisDescribedBy = [axisHelp.triggerProps['aria-describedby'], validationError ? validationErrorId : null]
     .filter(Boolean).join(' ') || undefined;
-  const effective = effectiveDerivation && !validationError ? effectiveGridView(polar, effectiveDerivation) : null;
+  const importedPlan = useImportedSolvePlan(mode === 'cad' && !validationError);
+  const effective = mode === 'cad' && !validationError && importedPlan.plan
+    ? effectiveGridView(polar, importedPlan.plan) : null;
   // A diagonal on a multiple of 90 degrees is literally the horizontal or the
   // vertical plane, so the solve measures the same plane twice. It is a legal
   // request and stays one -- the file round-trips it -- but it costs a second

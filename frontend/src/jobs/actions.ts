@@ -419,6 +419,7 @@ export interface ImportedEngineVerdict {
  * the request as set up would be refused.
  */
 export interface ImportedSolvePlan {
+  effective_polar_config?: components['schemas']['ImportedSolvePlanResponse']['effective_polar_config'];
   readiness?: SolveBlocker | null;
   ingest_id: string;
   requested: string;

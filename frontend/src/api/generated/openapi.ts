@@ -4588,6 +4588,7 @@ export interface components {
             domain_decision?: {
                 [key: string]: unknown;
             } | null;
+            effective_polar_config: components["schemas"]["PolarConfig"];
             /** Engine */
             engine: string | null;
             /** Engines */

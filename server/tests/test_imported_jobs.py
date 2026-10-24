@@ -1770,13 +1770,6 @@ def test_malformed_fem_evidence_does_not_crash_result_metadata(tmp_path: Path, e
             "unacknowledged_findings",
         ),
         (
-            lambda value, _record: value.options.polar_config.__setattr__(
-                "angle_range", (0.0, 180.0, 37)
-            ),
-            {},
-            "polar_grid_narrowing",
-        ),
-        (
             lambda value, _record: value.options.__setattr__("engine", "bempp"),
             {},
             "imported_engine_unsupported",
@@ -1785,13 +1778,6 @@ def test_malformed_fem_evidence_does_not_crash_result_metadata(tmp_path: Path, e
             lambda _value, _record: None,
             {"infinite_baffle": True},
             "imported_infinite_baffle_unsupported",
-        ),
-        (
-            lambda value, _record: value.options.polar_config.__setattr__(
-                "enabled_axes", ["horizontal"]
-            ),
-            {},
-            "polar_grid_narrowing",
         ),
         (
             lambda value, _record: value.options.polar_config.__setattr__(
@@ -5120,7 +5106,7 @@ def test_imported_geometry_wait_is_off_loop_cancellable_and_holds_no_lane(monkey
             async def started_runtime():
                 pass
             async def prepared(*args):
-                return SimpleNamespace(record={}, msh_text=None, symmetry_metadata={})
+                return SimpleNamespace(request=request, record={}, msh_text=None, symmetry_metadata={})
             monkeypatch.setattr(runtime, 'start', started_runtime)
             monkeypatch.setattr(runtime, '_validate_imported_submission', prepared)
             task = asyncio.create_task(runtime.submit(request))
@@ -5332,3 +5318,36 @@ def test_async_job_recheck_reuses_admission_verdict_by_mesh_content(monkeypatch)
         assert await core._imported_request_refusal_async(request, record, cancel_check=lambda: None) is None
         assert len(calls) == 2
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("extent", [{}, {"minimum_deg": -180, "maximum_deg": 180}])
+@pytest.mark.parametrize("grid", [(0, 180, 37), (0, 160, 11)])
+def test_effective_polar_plan_matches_the_submitted_job(tmp_path, extent, grid) -> None:
+    """The HTTP plan and persisted execution request share one polar owner."""
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path, {
+            "polar_grid_derivation": {"axes": {axis: extent for axis in ("horizontal", "vertical", "diagonal")}},
+        }, mesh_text=_POSITIVE_MESH)
+        runtime.engine_registry = _AdapterRegistry(_metal())
+        app = FastAPI()
+        app.include_router(create_jobs_router(runtime))
+        request = _request(ingest_id)
+        request.options.polar_config.angle_range = grid
+        request.options.polar_config.angle_step = 7
+        request.options.polar_config.enabled_axes = ["horizontal"]
+        request.options.polar_config.inclination = 35
+        before = request.model_dump(mode="json")
+        try:
+            status, plan = await _asgi_post(app, "/api/solve/imported-plan", before)
+            assert status == 200, plan
+            job_id = await runtime.submit(request)
+            row = runtime.store.get_job_row(job_id)
+            assert row["config_json"]["options"]["polar_config"] == plan["effective_polar_config"]
+            assert plan["effective_polar_config"]["angle_range"] == [-180, 180, 73 if grid[2] == 37 else 24]
+            assert plan["effective_polar_config"]["enabled_axes"] == ["horizontal", "vertical", "diagonal"]
+            assert plan["effective_polar_config"]["inclination"] == 45
+            assert request.model_dump(mode="json") == before
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
