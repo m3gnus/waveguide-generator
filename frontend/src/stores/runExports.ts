@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { ExportFormat } from '../prefs/preferences';
+import { reportCaughtError } from '../shell/clientErrors';
 
 export interface RunExportJobState {
   busy: boolean;
@@ -72,6 +73,7 @@ export const useRunExportStore = create<RunExportStore>((set) => ({
         outcome = await task();
       } catch (error) {
         const reason = message(error);
+        reportCaughtError('run-export', error, { job_id: jobId, formats: formats.join(',') });
         set((state) => ({
           jobs: {
             ...state.jobs,

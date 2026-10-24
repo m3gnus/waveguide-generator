@@ -8,6 +8,7 @@ import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { returnBelongsToAnotherProject } from './arrivals';
 import type { SolvedModelDisplay } from './solvedModel';
 import { resolvePreparationTarget } from './preparationTarget';
+import { reportCadAutomationError } from './caughtErrors';
 
 /** The existing artifact display path is supplied by the shell's display owner.
  * This action owns no parametric-document writes and never submits a solve.
@@ -156,6 +157,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
       report(receipt, 'accepted', `Received ${name} from Fusion 360.`);
       return true;
     } catch (error) {
+      reportCadAutomationError(`receipt-${phase}`, error, { receipt_id: receipt.receipt_id, ingest_id: receipt.ingest_id });
       if (!current()) return superseded();
       const transient = transportFailed || phase === 'listing'
         || (error instanceof CadLinkApiError && (error.status === 408 || error.status === 429 || (error.status ?? 0) >= 500));

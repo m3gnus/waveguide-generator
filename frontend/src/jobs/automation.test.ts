@@ -8,6 +8,18 @@ import { saveMeshArtifactToWorkspace } from '../results/exporters';
 const job: JobItem = { id: 'abcdef123', archive_folder: 'server-folder', archive_run: '7_recorded-run', run_number: 1, parent_job_id: null, status: 'complete', progress: 1, stage: null, stage_message: null, created_at: '2026-08-04T10:00:00Z', queued_at: '2026-08-04T10:00:00Z', started_at: null, completed_at: '2026-08-04T10:01:00Z', config_summary: {}, solve_options: {} as JobItem['solve_options'], has_results: true, has_mesh_artifact: true, label: null, error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null, design_revision: 0, polar_grid: {}, rating: null, exported_files: [], auto_export_completed_at: null, auto_export_formats: {}, archived_at: null, raw_results_file: null, mesh_artifact_file: null, log_tail: [] };
 
 describe('job completion automation', () => {
+  it('reports a caught archive failure for the developers without changing what the user sees', async () => {
+    const automation = new JobAutomation();
+    const failure = new Error('disk full');
+    const reportError = vi.fn();
+    const reportDiagnostic = vi.fn();
+    const dependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted: vi.fn(), markExported: vi.fn(), archiveCompleted: vi.fn().mockRejectedValue(failure), markArchived: vi.fn(), reportError, reportDiagnostic };
+    const preferences = { ...preferencesStore.getSnapshot(), autoDownloadMesh: false, autoExportOnComplete: false, archiveRunsOnComplete: true };
+    await automation.process([job], preferences, dependencies);
+    expect(reportError).toHaveBeenCalledExactlyOnceWith('Run archive failed for abcdef: disk full');
+    expect(reportDiagnostic).toHaveBeenCalledExactlyOnceWith('run-archive', failure, { job_id: job.id });
+  });
+
   it('downloads and exports each eligible job once and records completion', async () => {
     const automation = new JobAutomation();
     const dependencies = { downloadMesh: vi.fn().mockResolvedValue('mesh.msh'), markMeshDownloaded: vi.fn().mockResolvedValue(undefined), exportCompleted: vi.fn().mockResolvedValue({ files: ['result.csv'], failures: [] }), markExported: vi.fn().mockResolvedValue(undefined), archiveCompleted: vi.fn().mockResolvedValue(undefined), markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(), now: () => '2026-08-04T12:00:00Z' };

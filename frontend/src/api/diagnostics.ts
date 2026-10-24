@@ -38,6 +38,19 @@ export interface DiagnosticsSummary {
   storage: unknown;
   recentJobs: { id: string; run: number | null; status: JobStatus; engine: string | null; error: string | null }[];
   frontendErrors: number;
+  /** WG's own recent unexpected failures (developer records), newest first. */
+  recentIncidents?: DiagnosticsIncident[];
+}
+
+export interface DiagnosticsIncident {
+  id: string;
+  kind: string;
+  phase: string;
+  count: number;
+  firstSeen: string;
+  lastSeen: string;
+  ids: Record<string, string>;
+  message: string | null;
 }
 
 export interface DiagnosticsReport {
@@ -127,6 +140,10 @@ export interface ClientErrorReport {
   stack?: string;
   source?: string;
   at?: string;
+  /** The operation a caught error interrupted (an export, an archive, a CAD step). */
+  operation?: string;
+  /** The ids and facts of that operation; never a design or a path. */
+  context?: Record<string, string | number | boolean | null>;
 }
 
 /** Report one interface error so the next problem report carries it. */

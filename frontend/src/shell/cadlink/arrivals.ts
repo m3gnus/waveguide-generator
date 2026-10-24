@@ -18,6 +18,7 @@ import { useCadReturnStore } from '../../stores/cadReturn';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { resolvePreparationTarget } from './preparationTarget';
 import { meshCeilingChoice } from '../../stores/meshCeilingChoice';
+import { reportCadAutomationError } from './caughtErrors';
 
 export interface RefreshOptions {
   background?: boolean;
@@ -247,6 +248,7 @@ export async function refreshCadReturnArrivals(
       useCadReturnStore.getState().refreshSelectedBundle(current ?? null);
     }
   } catch (reason) {
+    reportCadAutomationError('return-list', reason);
     if (request === returnListRequest.current
       && useCadReturnStore.getState().isCurrentSelectionIntent(selection)
       && isCurrentDocumentLoad(documentLoad) && !background) {
@@ -382,6 +384,7 @@ export function createCadArrivalActions(
         throw new SupersededError(superseded);
       }
       const message = reason instanceof Error ? reason.message : String(reason);
+      reportCadAutomationError('prepare', reason);
       if (reason instanceof CadLinkApiError && reason.code === 'mesh_too_large' && request === ingestRequest.current) {
         // A choice, not a failure: the same pop-up as a held Fusion request.
         meshCeilingChoice.ask({
@@ -510,6 +513,7 @@ export function createCadArrivalActions(
         viewportGeneration,
       );
     } catch (reason) {
+      reportCadAutomationError('onshape-return', reason);
       if (mounted.current && request === ingestRequest.current && isCurrentDocumentLoad(documentLoad)
         && onshapeInstanceId() === instanceId
         && useDocumentStore.getState().identity?.designId === identity.designId

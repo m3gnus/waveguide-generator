@@ -2,6 +2,7 @@ import type { JobItem } from '../api/jobsSocket';
 import type { Preferences } from '../prefs/preferences';
 import type { ExportFormat } from '../prefs/preferences';
 import { needsArchiving } from './runArchive';
+import { reportCaughtError } from '../shell/clientErrors';
 
 export interface AutomationDependencies {
   downloadMesh(job: JobItem, reportNotice: (message: string) => void): Promise<string>;
@@ -12,6 +13,8 @@ export interface AutomationDependencies {
   archiveCompleted(job: JobItem): Promise<void>;
   markArchived(job: JobItem, archivedAt: string): Promise<void>;
   reportError(message: string): void;
+  /** Where a caught error's stack goes for the developers; the user still sees `reportError`. */
+  reportDiagnostic?(operation: string, error: unknown, context: { job_id: string }): void;
   now?(): string;
 }
 
@@ -33,6 +36,8 @@ export class JobAutomation {
 
   async process(jobs: JobItem[], preferences: Preferences, dependencies: AutomationDependencies): Promise<void> {
     const tasks: Promise<void>[] = [];
+    const diagnose = (operation: string, job: JobItem, error: unknown) =>
+      (dependencies.reportDiagnostic ?? reportCaughtError)(operation, error, { job_id: job.id });
     if (preferences.autoDownloadMesh) jobs.filter((job) => job.has_mesh_artifact && !job.mesh_artifact_file).forEach((job) => {
       if (this.meshStarted.has(job.id)) return;
       this.meshStarted.add(job.id);
@@ -43,6 +48,7 @@ export class JobAutomation {
         } catch (error) {
           // Nothing was saved, so a later job update may safely retry.
           this.meshStarted.delete(job.id);
+          diagnose('mesh-auto-save', job, error);
           dependencies.reportError(`Mesh auto-save failed for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
           return;
         }
@@ -52,6 +58,7 @@ export class JobAutomation {
           // The file was already saved. Keep the session guard so a failed
           // metadata write cannot duplicate it; an unmarked job retries after
           // an app restart, when this in-memory guard intentionally resets.
+          diagnose('mesh-auto-save-record', job, error);
           dependencies.reportError(`Could not record mesh auto-save for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
         }
       }));
@@ -89,6 +96,7 @@ export class JobAutomation {
         // the next jobs event can duplicate work. Keep one attempt
         // per job per app session; persisted null/failed state remains eligible
         // when a fresh JobAutomation is created after restart.
+        diagnose('auto-export', job, error);
         dependencies.reportError(`Auto-export failed for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
       }));
     });
@@ -105,6 +113,7 @@ export class JobAutomation {
         } catch (error) {
           // Nothing durable was written, so a later job event may retry.
           this.archiveStarted.delete(job.id);
+          diagnose('run-archive', job, error);
           dependencies.reportError(`Run archive failed for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
           return;
         }
@@ -114,6 +123,7 @@ export class JobAutomation {
           // The files are on disk. Keep the session guard so a failed metadata
           // write cannot archive twice; an unmarked job retries after a
           // restart, when this in-memory guard intentionally resets.
+          diagnose('run-archive-record', job, error);
           dependencies.reportError(`Could not record the run archive for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
         }
       }));

@@ -29,6 +29,7 @@ import { propagationReference } from './phaseConvention';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from './types';
 import { buildRunReportHtml } from './runReport';
 import { buildVituixCadProjectFiles, buildZma, hasElectricalImpedance } from './vituixcad';
+import { reportCaughtError } from '../shell/clientErrors';
 
 export interface ExportContext {
   result?: ResultPayload;
@@ -901,7 +902,10 @@ async function runAttributedExportBundle(inputContext: ExportContext, formats: r
         produced.forEach((filename) => { if (!own.includes(filename)) own.push(filename); });
         formatFiles.set(format, own);
       }
-      catch (error) { failures.push({ format, reason: error instanceof Error ? error.message : String(error) }); }
+      catch (error) {
+        reportCaughtError('export-build', error, { job_id: context.jobId ?? null, format });
+        failures.push({ format, reason: error instanceof Error ? error.message : String(error) });
+      }
     }
   }
   if (context.cadIdentity && files.length) {
@@ -1002,6 +1006,7 @@ export async function runAutomaticWorkspaceExport(
       written.files.forEach((file) => { if (!files.includes(file)) files.push(file); });
     } catch (error) {
       const flags = error as { destinationConflict?: boolean; publicationUncertain?: boolean };
+      reportCaughtError('export-write', error, { job_id: context.jobId ?? null, format });
       failures.push({
         format,
         reason: error instanceof Error ? error.message : String(error),

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { reportInterfaceError, resetClientErrorReporting, startClientErrorReporting } from './clientErrors';
+import { reportCaughtError, reportInterfaceError, resetClientErrorReporting, startClientErrorReporting } from './clientErrors';
 
 describe('reportInterfaceError', () => {
   beforeEach(() => resetClientErrorReporting());
@@ -41,6 +41,37 @@ describe('reportInterfaceError', () => {
     reportInterfaceError({ message: 'boom', stack: 'at solve()', source: 'render' }, report);
     expect(sent[0]).toMatchObject({ message: 'boom', stack: 'at solve()', source: 'render' });
     expect(sent[0].at).toBeTruthy();
+  });
+});
+
+describe('reportCaughtError', () => {
+  beforeEach(() => resetClientErrorReporting());
+  afterEach(() => resetClientErrorReporting());
+
+  it('carries the operation, its context and the error stack', () => {
+    const report = vi.fn(async () => true);
+    const error = new Error('disk full');
+    expect(reportCaughtError('run-archive', error, { job_id: 'job-1' }, report)).toBe(true);
+    expect(report).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'run-archive: disk full', stack: error.stack, source: 'caught',
+      operation: 'run-archive', context: { job_id: 'job-1' },
+    }));
+  });
+
+  it('gives a thrown non-Error the stack of the call that caught it', () => {
+    const report = vi.fn(async () => true);
+    reportCaughtError('auto-export', 'plain string', undefined, report);
+    const [[entry]] = report.mock.calls as unknown as [[{ message: string; stack?: string }]];
+    expect(entry.message).toBe('auto-export: plain string');
+    expect(entry.stack).toContain('reportCaughtError');
+  });
+
+  it('reports the same failure of another operation separately, and a repeat once', () => {
+    const report = vi.fn(async () => true);
+    reportCaughtError('export-build', new Error('boom'), undefined, report);
+    reportCaughtError('export-build', new Error('boom'), undefined, report);
+    reportCaughtError('export-write', new Error('boom'), undefined, report);
+    expect(report).toHaveBeenCalledTimes(2);
   });
 });
 

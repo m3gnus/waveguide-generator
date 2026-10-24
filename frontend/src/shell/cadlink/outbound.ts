@@ -15,6 +15,7 @@ import { fusionWorkflowView } from '../cadWorkflowView';
 import { designNameSlug } from '../../stores/designName';
 import { polarConfigFromUi, useSolveOptionsStore } from '../../stores/solveOptions';
 import { runGuardedFusionSend } from './send';
+import { reportCadAutomationError } from './caughtErrors';
 
 export class OutboundSupersededError extends Error {}
 /** UI callers return quietly from their catch when true. */
@@ -166,6 +167,7 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
       });
     } catch (reason) {
       if (reason instanceof ConflictChangedError) return null;
+      if (!(reason instanceof OutboundSupersededError)) reportCadAutomationError('send-to-fusion', reason);
       if (current()) { conflict = null; store.setState({ pendingFusionConflict: false }); }
       if (exportedIdentity !== undefined) {
         rememberSentCopy(null, exportedIdentity?.designId, current() && isCurrentDocumentLoad(load));

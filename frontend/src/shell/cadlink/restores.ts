@@ -22,6 +22,7 @@ import { restoreCadProjectSettings, resetCadProjectSettingsLoad, hasCadDraftForM
 import { cadHistorySetup } from '../../stores/cadSetupRestore';
 import { seedImportedSolveOptionsFromParametric } from '../../stores/solveOptions';
 import { DEFAULT_SWEEP } from '../../stores/solveDefaults';
+import { reportCadAutomationError } from './caughtErrors';
 export { cadHistorySetup } from '../../stores/cadSetupRestore';
 
 export async function refreshChannelDriverBases(fetcher: typeof fetch = fetch): Promise<string[]> {
@@ -266,7 +267,10 @@ export function observeLastModel({
       openUnsolved,
     })
       .then((opened) => { if (opened && active) reportStatus('Reopened the last model.'); })
-      .catch((error: unknown) => { if (active) reportError(error instanceof Error ? error.message : String(error)); })
+      .catch((error: unknown) => {
+        reportCadAutomationError('reopen-last-model', error);
+        if (active) reportError(error instanceof Error ? error.message : String(error));
+      })
       .finally(() => { running = false; });
   };
   attempt();

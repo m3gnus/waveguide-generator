@@ -8,6 +8,7 @@ import { workspaceModeStore } from '../../stores/workspaceMode';
 import { createImportedMeshScene } from '../../viewport/importedMesh';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { parseMSH } from '../../viewport/mshParser';
+import { reportCadAutomationError } from './caughtErrors';
 
 interface FetchedMesh {
   ok: boolean;
@@ -280,6 +281,7 @@ export async function showIngestedSolverMeshInViewport(
   try {
     response = await deadlineFetch(fetcher, `/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
   } catch (error) {
+    reportCadAutomationError('solver-mesh-read', error, { ingest_id: ingestId });
     return current() ? (error instanceof Error ? error.message : String(error)) : null;
   }
   if (!current()) return null;
@@ -305,6 +307,7 @@ export async function showIngestedSolverMeshInViewport(
     ), generation, importedMeshStore.getSnapshot().showing === 'cadSolver');
     return null;
   } catch (error) {
+    reportCadAutomationError('solver-mesh-display', error, { ingest_id: ingestId });
     return current() ? (error instanceof Error ? error.message : String(error)) : null;
   }
 }
