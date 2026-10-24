@@ -42,8 +42,67 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { buildCadProjectSetup } from './cadSetupPublisher';
 import { getCrossoverDraftError, useCrossoverDraftError } from '../design/crossoverDrafts';
 import { solveAttention, useJobAttention, useRecoveryNoticeAttention } from './solveAttention';
-import { workspaceNavigation } from './workspaceNavigation';
+import { navigationGeneration, workspaceNavigation } from './workspaceNavigation';
 import { solvedCadModels } from './cadlink/solvedModel';
+
+/** Action failures may complete a click's intention, but must wait for editing
+ * or a drag to end. Navigation cancels that intention, including while deferred. */
+function useActionErrorReveal(error: string | null): (actionNavigation?: number) => void {
+  const pending = useRef<number | null>(null);
+  const pointers = useRef(new Set<number>());
+  const reveal = useCallback(() => {
+    const generation = pending.current;
+    if (generation === null) return;
+    if (generation !== navigationGeneration()) { pending.current = null; return; }
+    const focused = document.activeElement;
+    if (pointers.current.size || focused?.closest(
+      'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]',
+    )) return;
+    pending.current = null;
+    workspaceNavigation.activate('results');
+  }, []);
+
+  useEffect(() => {
+    if (error === null) pending.current = null;
+  }, [error]);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Wait for the next focus target and the pointer's click/navigation handlers.
+    const retry = () => {
+      clearTimeout(timer);
+      timer = setTimeout(reveal, 0);
+    };
+    const down = (event: PointerEvent) => { pointers.current.add(event.pointerId); };
+    const up = (event: PointerEvent) => { pointers.current.delete(event.pointerId); retry(); };
+    const blur = () => { pointers.current.clear(); };
+    window.addEventListener('pointerdown', down, true);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', up, true);
+    window.addEventListener('blur', blur);
+    document.addEventListener('focusout', retry, true);
+    const unsubscribe = workspaceNavigation.subscribe(() => {
+      if (pending.current !== navigationGeneration()) pending.current = null;
+    });
+    return () => {
+      clearTimeout(timer);
+      pending.current = null;
+      pointers.current.clear();
+      unsubscribe();
+      window.removeEventListener('pointerdown', down, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', up, true);
+      window.removeEventListener('blur', blur);
+      document.removeEventListener('focusout', retry, true);
+    };
+  }, [reveal]);
+
+  return useCallback((actionNavigation?: number) => {
+    // An unarmed report (automation, polling, model loading) only stores an error.
+    pending.current = actionNavigation ?? null;
+    reveal();
+  }, [reveal]);
+}
 
 interface SolveControl {
   /** The coordinator's current parametric plan, also shared with dock panels. */
@@ -84,6 +143,7 @@ interface SubmissionAcceptanceOptions {
   /** Request-specific naming or selection, after HTTP acceptance, before awaitRun. */
   onAccepted?: (jobId: string) => void;
   busyMessage?: string;
+  errorNavigation?: number;
 }
 
 export type ContinueRunPatch = RerunPatch & Pick<CadSolvePress, 'approvals'> & { held?: HeldSolveContinuation };
@@ -92,7 +152,8 @@ interface CoordinatorBridgeSnapshot {
   available: boolean;
   /** Continue a specific run, under the same lock and attention as Solve. */
   continueRun(jobId: string, patch?: ContinueRunPatch): Promise<string | null>;
-  reportError(message: string): void;
+  /** Only a user action captures navigation before awaiting its request. */
+  reportError(message: string, actionNavigation?: number): void;
   actionError: string | null;
 }
 
@@ -292,6 +353,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [selectedEngine, refreshCapabilities]);
   const preparation = usePrepareEngine(engines, refreshCapabilities);
   const [actionError, setActionError] = useState<string | null>(null);
+  const revealActionError = useActionErrorReveal(actionError);
   const [submitting, setSubmitting] = useState(false);
   const submissionInFlight = useRef(false);
   const recoveryNotices = useCadRecoveryNotices((state) => state.notices);
@@ -397,17 +459,16 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     ? 'Checking which engines can solve this imported mesh…'
     : importedPlan.plan?.reason ?? importedPlan.error;
 
-  const reportError = useCallback((message: string) => {
+  const reportError = useCallback((message: string, actionNavigation?: number) => {
     setActionError(message);
-    // Results owns action errors; front it even when Runs covers its tab.
-    workspaceNavigation.activate('results');
-  }, []);
+    revealActionError(actionNavigation);
+  }, [revealActionError]);
 
   const acceptSubmission = useCallback(async (
     submit: () => Promise<string | null>, opts: SubmissionAcceptanceOptions = {},
   ): Promise<string | null> => {
     if (submissionInFlight.current) {
-      if (opts.busyMessage) reportError(opts.busyMessage);
+      if (opts.busyMessage) reportError(opts.busyMessage, opts.errorNavigation);
       return null;
     }
     submissionInFlight.current = true;
@@ -424,7 +485,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       return jobId;
     } catch (error) {
       solveAttention.releaseSolve();
-      if (!(error instanceof DOMException && error.name === 'AbortError')) reportError(error instanceof Error ? error.message : String(error));
+      if (!(error instanceof DOMException && error.name === 'AbortError')) reportError(error instanceof Error ? error.message : String(error), opts.errorNavigation);
       throw error;
     } finally {
       submissionInFlight.current = false;
@@ -564,6 +625,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [completeCadSolve, now]);
 
   const continueRun = useCallback(async (jobId: string, patch: ContinueRunPatch = {}) => {
+    const errorNavigation = patch.held ? undefined : navigationGeneration();
     const cad = patch.approvals !== undefined || patch.held !== undefined;
     return acceptSubmission(async () => {
       if (cad) {
@@ -599,6 +661,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       return patch.options ? rerunWithPatch(jobId, patch) : jobsSocket.retryJob(jobId);
     }, {
       busyMessage: 'Another solve is being submitted. Try again in a moment.',
+      errorNavigation,
       onAccepted: (id) => {
         if (patch.options) compareSelection.followLatest(jobId);
         if (cad) {

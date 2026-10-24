@@ -19,6 +19,7 @@ import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/Pref
 import { runProvenanceMarker } from '../model/currentModel';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
+import { navigationGeneration } from './workspaceNavigation';
 import { Icon } from './icons';
 import { LogDialog } from './LogDialog';
 import { middleEllipsis } from './ResultsPanel';
@@ -121,7 +122,7 @@ export interface JobCardProps {
   now: number;
   selected: boolean;
   retryJob: (jobId: string) => Promise<unknown>;
-  onError: (message: string) => void;
+  onError: (message: string, actionNavigation?: number) => void;
   onRemove: (job: JobItem) => void;
   onOpenExportSettings: () => void;
 }
@@ -284,7 +285,10 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
           20-second stall in the middle of an otherwise familiar progress bar. */}
       {job.stage === RADIATION_IMPEDANCE_STAGE && <p className="job-stage-note">Extra pass before the main solve: the passive-cardioid port needs its own radiation-impedance matrix over the port aperture.</p>}
       {job.log_tail.length > 0 && <p title={job.log_tail.at(-1)}>{job.log_tail.at(-1)}</p>}
-      <footer><button className="btn" disabled={job.cancellation_requested} onClick={() => void jobsSocket.stopJob(job.id).catch((error) => onError(String(error)))}>{job.cancellation_requested ? runStatusWord({ status: 'running', stage: 'cancelling' }) : 'Stop'}</button><button className="btn" onClick={() => setLogOpen(true)}>Log</button></footer>
+      <footer><button className="btn" disabled={job.cancellation_requested} onClick={() => {
+        const actionNavigation = navigationGeneration();
+        void jobsSocket.stopJob(job.id).catch((error) => onError(String(error), actionNavigation));
+      }}>{job.cancellation_requested ? runStatusWord({ status: 'running', stage: 'cancelling' }) : 'Stop'}</button><button className="btn" onClick={() => setLogOpen(true)}>Log</button></footer>
     </> : failed ? <>
       <p>{statusWord} after {duration(secondsBetween(job.started_at ?? job.queued_at, job.completed_at, now))}{job.stage && job.stage !== 'error' ? ` · ${job.stage} stage` : ''}</p>
       <div className="job-error" title={job.error_message ?? undefined}>{job.error_message ?? 'Simulation failed without a diagnostic.'}</div>
@@ -368,9 +372,10 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
 
   const remove = useCallback((job: JobItem) => {
     if (!window.confirm(`Remove “${runDisplayName(job)}” and its saved results?`)) return;
+    const actionNavigation = navigationGeneration();
     void jobsSocket.deleteJob(job.id).catch((error) => {
       if (error instanceof JobModelProtectionError) setBlockedDeletion({ job, reason: error.message });
-      else coordinator.reportError(String(error));
+      else coordinator.reportError(String(error), actionNavigation);
     });
   }, [coordinator.reportError]);
   const deleteAnyway = async () => {
@@ -393,7 +398,8 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
     const hiddenFailed = failedCount - visibleFailedCount;
     const hiddenCopy = hiddenFailed > 0 ? ` This includes ${hiddenFailed} failed run${hiddenFailed === 1 ? '' : 's'} hidden by the current filter.` : '';
     if (!window.confirm(`Remove all ${failedCount} failed run${failedCount === 1 ? '' : 's'} and their saved logs/designs?${hiddenCopy}`)) return;
-    void jobsSocket.clearFailed().catch((error) => coordinator.reportError(String(error)));
+    const actionNavigation = navigationGeneration();
+    void jobsSocket.clearFailed().catch((error) => coordinator.reportError(String(error), actionNavigation));
   };
 
   return <div className="jobs-panel panel-scroll">

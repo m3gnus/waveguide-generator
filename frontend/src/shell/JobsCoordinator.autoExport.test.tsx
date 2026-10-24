@@ -4,17 +4,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { preferencesStore } from '../prefs/preferences';
 import type { ExportContext } from '../results/exporters';
-import { JobsCoordinator } from './JobsCoordinator';
+import { JobsCoordinator, jobsCoordinatorBridge } from './JobsCoordinator';
+import { workspaceNavigation } from './workspaceNavigation';
 
 const mocks = vi.hoisted(() => ({
   fetchJobResults: vi.fn(),
   runAutomaticWorkspaceExport: vi.fn(),
   saveMeshArtifactToWorkspace: vi.fn(),
+  archiveRunToWorkspace: vi.fn(),
 }));
 
 vi.mock('../api/results', () => ({ fetchJobResults: mocks.fetchJobResults }));
 vi.mock('../results/exporters', () => ({
   saveMeshArtifactToWorkspace: mocks.saveMeshArtifactToWorkspace,
+  archiveRunToWorkspace: mocks.archiveRunToWorkspace,
   runAutomaticWorkspaceExport: mocks.runAutomaticWorkspaceExport,
 }));
 vi.mock('../jobs/useCapabilities', () => ({
@@ -110,6 +113,36 @@ describe('completed-job auto-export naming', () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     vi.clearAllMocks();
+  });
+
+  it.each(['mesh save', 'run archive'] as const)('keeps repeated background %s failures in Results without activating it', async kind => {
+    preferencesStore.update({
+      autoExportOnComplete: false,
+      autoDownloadMesh: kind === 'mesh save',
+      archiveRunsOnComplete: kind === 'run archive',
+    });
+    const write = kind === 'mesh save' ? mocks.saveMeshArtifactToWorkspace : mocks.archiveRunToWorkspace;
+    write.mockRejectedValue(new Error('Workspace is unavailable.'));
+    const run = { ...job('job-one', '260808_horn_v01', 101), has_mesh_artifact: true };
+    publishJobs([run]);
+    const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
+    workspaceNavigation.navigate('geometry');
+    activate.mockClear();
+    await act(async () => { root.render(<JobsCoordinator><input/></JobsCoordinator>); });
+    for (let update = 1; update <= 3; update += 1) {
+      await act(async () => {
+        await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(update));
+      });
+      expect(jobsCoordinatorBridge.getSnapshot().actionError).toContain('Workspace is unavailable.');
+      expect(activate).not.toHaveBeenCalled();
+      if (update < 3) act(() => {
+        host.querySelector('input')!.focus();
+        publishJobs([{ ...run }]);
+      });
+    }
+    act(() => host.querySelector('input')!.blur());
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    expect(activate).not.toHaveBeenCalled();
   });
 
   it('uses the completed job identity for each bundle and its persisted filenames', async () => {

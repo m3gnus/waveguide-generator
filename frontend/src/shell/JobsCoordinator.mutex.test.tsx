@@ -874,6 +874,74 @@ describe('solve invocation mutex', () => {
     expect([...host.querySelectorAll('[role="alert"]')].filter(node => node.textContent?.includes(reason))).toHaveLength(1);
   });
 
+  it.each(['Stop', 'Retry', 'delete', 'Clear failed'] as const)(
+    'does not reveal a delayed Runs %s failure after the user navigates', async action => {
+      const run = failedJob();
+      if (action === 'Stop') run.status = 'running';
+      const pending = deferred<never>();
+      const method = action === 'Stop' ? 'stopJob' : action === 'Retry' ? 'retryJob' : action === 'delete' ? 'deleteJob' : 'clearFailed';
+      vi.spyOn(jobsSocket, method).mockReturnValue(pending.promise);
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
+      publishJobs([run]);
+      await act(async () => { root.render(<JobsCoordinator><ResultsPanel/><JobsPanel/></JobsCoordinator>); });
+      const button = action === 'delete' ? host.querySelector<HTMLButtonElement>('.job-remove')!
+        : [...host.querySelectorAll<HTMLButtonElement>('.jobs-panel button')].find(button => button.textContent === action)!;
+      act(() => { button.click(); workspaceNavigation.navigate('geometry'); });
+      activate.mockClear();
+      await act(async () => { pending.reject(new Error('Delayed refusal.')); });
+      expect(jobsCoordinatorBridge.getSnapshot().actionError).toContain('Delayed refusal.');
+      expect(host.querySelector('.results-panel')?.textContent).toContain('Delayed refusal.');
+      expect(activate).not.toHaveBeenCalled();
+    });
+
+  it.each(['input', 'textarea', 'contenteditable', 'drag', 'pointercancel', 'two pointers', 'navigate while deferred'] as const)(
+    'defers an action error reveal during %s', async interaction => {
+      const run = { ...failedJob(), status: 'running' as const };
+      const pending = deferred<never>();
+      vi.spyOn(jobsSocket, 'stopJob').mockReturnValue(pending.promise);
+      const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
+      publishJobs([run]);
+      await act(async () => { root.render(<JobsCoordinator>
+        <ResultsPanel/><JobsPanel/><input/><textarea/><div contentEditable tabIndex={0}/><canvas/>
+      </JobsCoordinator>); });
+      const button = [...host.querySelectorAll<HTMLButtonElement>('.jobs-panel button')].find(button => button.textContent === 'Stop')!;
+      act(() => button.click());
+      const pointer = ['drag', 'pointercancel', 'two pointers'].includes(interaction);
+      const editing = host.querySelector<HTMLElement>(interaction === 'textarea' ? 'textarea'
+        : interaction === 'contenteditable' ? '[contenteditable]' : 'input')!;
+      const canvas = host.querySelector('canvas')!;
+      act(() => {
+        if (pointer) {
+          canvas.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1 }));
+          if (interaction === 'two pointers') canvas.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 2 }));
+        } else editing.focus();
+      });
+      await act(async () => { pending.reject(new Error('Stop refused.')); });
+      expect(jobsCoordinatorBridge.getSnapshot().actionError).toContain('Stop refused.');
+      expect(host.querySelector('.results-panel')?.textContent).toContain('Stop refused.');
+      expect(activate).not.toHaveBeenCalled();
+      if (interaction === 'navigate while deferred') {
+        act(() => workspaceNavigation.navigate('geometry'));
+        activate.mockClear();
+      }
+      await act(async () => {
+        if (pointer) {
+          canvas.dispatchEvent(new PointerEvent(interaction === 'pointercancel' ? 'pointercancel' : 'pointerup', { bubbles: true, pointerId: 1 }));
+        } else editing.blur();
+        await new Promise(resolve => setTimeout(resolve, 10));
+      });
+      if (interaction === 'two pointers') {
+        expect(activate).not.toHaveBeenCalled();
+        await act(async () => {
+          canvas.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 2 }));
+          await new Promise(resolve => setTimeout(resolve, 10));
+        });
+      }
+      if (interaction === 'navigate while deferred') expect(activate).not.toHaveBeenCalled();
+      else expect(activate).toHaveBeenCalledExactlyOnceWith('results');
+    });
+
   it('shows a failed Delete anyway inside the still-open confirmation dialog', async () => {
     const run = failedJob();
     const remove = vi.spyOn(jobsSocket, 'deleteJob')
