@@ -46,8 +46,11 @@ import { navigationGeneration, workspaceNavigation } from './workspaceNavigation
 import { solvedCadModels } from './cadlink/solvedModel';
 
 /** Reveal an action failure only while the user's click still owns attention.
- * Editing, a drag, or later navigation suppresses this reveal permanently. */
-function useActionErrorReveal(): (actionNavigation?: number) => void {
+ * Editing, a drag, or later navigation suppresses this reveal permanently;
+ * the failure is then indicated (`solveAttention.indicateFailure`), never
+ * lost. A report without an action (automation, polling, model loading) only
+ * stores the error. */
+function useActionErrorReveal(): (message: string, actionNavigation?: number) => void {
   const pointers = useRef(new Set<number>());
 
   useEffect(() => {
@@ -67,13 +70,15 @@ function useActionErrorReveal(): (actionNavigation?: number) => void {
     };
   }, []);
 
-  return useCallback((actionNavigation?: number) => {
-    // An unarmed report (automation, polling, model loading) only stores an error.
-    if (actionNavigation === undefined || actionNavigation !== navigationGeneration()) return;
+  return useCallback((message: string, actionNavigation?: number) => {
+    if (actionNavigation === undefined) return;
     const focused = document.activeElement;
-    if (pointers.current.size || focused?.closest(
+    if (actionNavigation !== navigationGeneration() || pointers.current.size || focused?.closest(
       'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]',
-    )) return;
+    )) {
+      solveAttention.indicateFailure(message);
+      return;
+    }
     workspaceNavigation.activate('results');
   }, []);
 }
@@ -82,7 +87,9 @@ interface SolveControl {
   /** The coordinator's current parametric plan, also shared with dock panels. */
   plan: SolvePlan | null;
   planPending: boolean;
-  solve(): Promise<'submitted' | 'busy' | 'blocked' | 'pending'>;
+  /** `attention`: the token of the user action this Solve continues (a pull
+   * and solve), so it is never captured again; omitted, the press is the action. */
+  solve(attention?: number): Promise<'submitted' | 'busy' | 'blocked' | 'pending'>;
   /** CAD Link mode: Solve solves the CAD model on screen. */
   cadMode: boolean;
   disabled: boolean;
@@ -117,7 +124,12 @@ interface SubmissionAcceptanceOptions {
   /** Request-specific naming or selection, after HTTP acceptance, before awaitRun. */
   onAccepted?: (jobId: string) => void;
   busyMessage?: string;
-  errorNavigation?: number;
+  /** The user action this submission belongs to (`solveAttention.armSolve`),
+   * inherited: its run and its failure report with it. */
+  attention?: number;
+  /** This submission is itself the user's action (Retry, Solve anyway): it
+   * arms with `attention` once it is accepted for submission, not when busy. */
+  arm?: boolean;
 }
 
 export type ContinueRunPatch = RerunPatch & Pick<CadSolvePress, 'approvals' | 'mesh_limit_override'> & { held?: HeldSolveContinuation };
@@ -432,20 +444,23 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
 
   const reportError = useCallback((message: string, actionNavigation?: number) => {
     setActionError(message);
-    revealActionError(actionNavigation);
+    revealActionError(message, actionNavigation);
   }, [revealActionError]);
 
   const acceptSubmission = useCallback(async (
     submit: () => Promise<string | null>, opts: SubmissionAcceptanceOptions = {},
   ): Promise<string | null> => {
     if (submissionInFlight.current) {
-      if (opts.busyMessage) reportError(opts.busyMessage, opts.errorNavigation);
+      if (opts.busyMessage) reportError(opts.busyMessage, opts.attention);
       return null;
     }
     submissionInFlight.current = true;
     setSubmitting(true);
     setActionError(null);
-    solveAttention.armSolve();
+    // Inherited from the action, never captured here: a delayed submission
+    // after the user navigated away must not move them back.
+    if (opts.arm) solveAttention.armSolve(opts.attention);
+    else solveAttention.inheritSolve(opts.attention);
     try {
       const jobId = await submit();
       if (jobId === null) { solveAttention.releaseSolve(); return null; }
@@ -456,7 +471,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       return jobId;
     } catch (error) {
       solveAttention.releaseSolve();
-      if (!(error instanceof DOMException && error.name === 'AbortError')) reportError(error instanceof Error ? error.message : String(error), opts.errorNavigation);
+      if (!(error instanceof DOMException && error.name === 'AbortError')) reportError(error instanceof Error ? error.message : String(error), opts.attention);
       throw error;
     } finally {
       submissionInFlight.current = false;
@@ -483,7 +498,14 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const heldWarmingEngine = heldReadiness?.remedies?.some(remedy => remedy.kind === 'wait') ? heldReadiness.engine
     : !planPending && warming && (heldReadiness?.engine ?? heldJob?.solve_options?.engine) === serverReadiness?.engine
       ? serverReadiness?.engine ?? null : null;
-  const requested = useRequestedSolve(refreshCapabilities, setActionError, solveAttention.releaseSolve, {
+  // Every failure of a requested solve reports through reportError with the
+  // token its press captured: revealed while the user is still there,
+  // indicated once they have moved on.
+  const reportRequestNotice = useCallback((message: string | null, attention?: number) => {
+    if (message === null) setActionError(null);
+    else reportError(message, attention);
+  }, [reportError]);
+  const requested = useRequestedSolve(refreshCapabilities, reportRequestNotice, solveAttention.releaseSolve, {
     capabilityGeneration, capabilityIssueSequence, enabled: solveEnabled, busy: submitting, pending: planPending, blocked: engineBlocked,
     warmingEngine: warming ? serverReadiness?.engine ?? selectedEngine : null,
     error: planError, engines, heldFusion: heldJob && heldWarmingEngine ? { jobId: heldJob.id, engine: heldWarmingEngine } : null, prepare: preparation.prepare,
@@ -505,7 +527,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
       if (!beforePost(continuation)) return null;
       return submitDesign(nextDesign, options, fetch, { label, designRevision: nextRevision, designUid: document.designUid, designId: document.identity?.designId, designName, legacyDesignName: document.legacyDesignName });
-    }, { onAccepted: () => acceptSubmittedLabel(designName) });
+    }, { onAccepted: () => acceptSubmittedLabel(designName), attention: continuation?.attention });
   }, [acceptSubmission, now, revision]);
 
   // One press of a file model's Solve: one POST /api/models/{id}/solve.
@@ -525,7 +547,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       if (!beforePost(continuation)) return null;
       return solveModel(record.model_id, press)
         .catch((error) => { throw importedSolveError(error, unchanged !== null); });
-    }, { onAccepted: () => acceptSubmittedLabel(designName) });
+    }, { onAccepted: () => acceptSubmittedLabel(designName), attention: continuation?.attention });
     return jobId === null ? 'busy' as const : 'submitted' as const;
   }, [acceptSubmission, now]);
 
@@ -577,6 +599,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       // The completion claim exists before HTTP: an event may beat the response.
       if (!beforePost(continuation)) return 'blocked' as const;
       rememberCadSolve(key, designName, ingestId);
+      // The press's token, inherited: never captured again here.
+      solveAttention.inheritSolve(continuation?.attention);
       solveAttention.bindOperation(key);
       const jobId = await solveModel(importedModelId(record), press).catch((error) => {
         if (error instanceof SolveSubmissionRefused) {
@@ -601,7 +625,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [completeCadSolve, now]);
 
   const continueRun = useCallback(async (jobId: string, patch: ContinueRunPatch = {}) => {
-    const errorNavigation = patch.held ? undefined : navigationGeneration();
+    // A held Fusion continuation inherits its request's token; any other call
+    // is the user's own action (Retry, Solve anyway, Approve and solve).
+    const attention = patch.held ? patch.held.attention : navigationGeneration();
     const cad = patch.approvals !== undefined || patch.held !== undefined || patch.mesh_limit_override !== undefined;
     return acceptSubmission(async () => {
       if (cad) {
@@ -620,8 +646,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
             solveAttention.releaseOperation(jobId);
             // An observer may already have reported and latched the cancellation.
             // Unmount also aborts the token, and must stay silent.
-            if (!patch.held.signal.aborted) setActionError(solveCancellationReason(patch.held)
-              ?? 'Prepare and solve was cancelled because the waiting job changed.');
+            if (!patch.held.signal.aborted) reportError(solveCancellationReason(patch.held)
+              ?? 'Prepare and solve was cancelled because the waiting job changed.', attention);
             return null;
           }
           child = await solveCadAgain(jobId, { approvals, ...(patch.mesh_limit_override !== undefined ? { mesh_limit_override: patch.mesh_limit_override } : {}) });
@@ -637,7 +663,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       return patch.options ? rerunWithPatch(jobId, patch) : jobsSocket.retryJob(jobId);
     }, {
       busyMessage: 'Another solve is being submitted. Try again in a moment.',
-      errorNavigation,
+      attention, arm: !patch.held,
       onAccepted: (id) => {
         if (patch.options) compareSelection.followLatest(jobId);
         if (cad) {
@@ -647,7 +673,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         }
       },
     });
-  }, [acceptSubmission, beforePost, completeCadSolve]);
+  }, [acceptSubmission, beforePost, completeCadSolve, reportError]);
 
   // An empty `?job=` names no run; drop it at once.
   useEffect(() => {
@@ -706,7 +732,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const performRequestedSolve = async (continuation: ModelSolveContinuation) => {
     if (fileGeometryActive) return solveFileModel(continuation);
     if (cadGeometryActive) {
-      solveAttention.armSolve();
       const draftError = getCrossoverDraftError();
       if (draftError) throw new Error(draftError);
       if (continuation.checkCadPlan) {
@@ -723,19 +748,22 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     await run(current.design, current.designRevision, continuation);
     return 'submitted' as const;
   };
-  const solve = useCallback(async () => {
+  const solve = useCallback(async (inherited?: number) => {
     if (submissionInFlight.current) return 'busy' as const;
+    // The user action's one token: captured here, at the press, unless this
+    // Solve continues an action that already captured it (a pull and solve).
+    // A click handler may pass its event; only a number is a token.
+    const attention = typeof inherited === 'number' ? inherited : solveAttention.armSolve();
     if (engineBlocked) workspaceNavigation.activate('results');
     const focused = document.activeElement;
     const commitCrossover = cadGeometryActive && focused instanceof HTMLInputElement && focused.matches('[data-crossover-frequency]');
     if (commitCrossover) focused.blur();
     const held = heldEngineSolveJob();
     if (held && engineBlocked) {
-      await requested.fusion(held.id, serverReadiness?.engine ?? selectedEngine);
+      await requested.fusion(held.id, serverReadiness?.engine ?? selectedEngine, false, attention);
       return 'blocked' as const;
     }
-    if (warming || planPending) solveAttention.armSolve();
-    return requested.press(undefined, commitCrossover);
+    return requested.press(undefined, commitCrossover, attention);
   }, [requested.press, requested.fusion, serverReadiness, selectedEngine, engineBlocked, warming, cadGeometryActive, planPending]);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
@@ -750,11 +778,12 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
 
   const heldPreparation = useHeldSolvePreparation(requested, engines, setActionError);
   const prepareAndSolve = async (engine: string) => {
+    const attention = solveAttention.armSolve();
     if (heldEngineSolveJob()) {
-      await heldPreparation.prepareAndSolve(engine);
+      await heldPreparation.prepareAndSolve(engine, attention);
       return;
     }
-    await requested.press(engine);
+    await requested.press(engine, false, attention);
   };
   const readiness = solveBlocker || solveOptionsError
     ? messageBlocker(solveBlocker || solveOptionsError!)

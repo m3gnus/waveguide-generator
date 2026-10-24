@@ -63,6 +63,25 @@ describe('workspace mode switch', () => {
     expect(host.querySelector('.attention-waiting')).toBeNull();
   });
 
+  it('indicates a Solve that failed after the user moved on, and Show opens Results', async () => {
+    const { solveAttention, resetSolveAttentionForTests } = await import('./solveAttention');
+    resetSolveAttentionForTests();
+    await act(async () => root.render(<AttentionNotices/>));
+    expect(host.querySelector('[data-attention="solve-failed"]')).toBeNull();
+    act(() => solveAttention.indicateFailure('Choose this model’s settings.'));
+    const notice = host.querySelector<HTMLButtonElement>('[data-attention="solve-failed"]')!;
+    expect(notice.textContent).toBe('Solve did not start · Show');
+    expect(notice.title).toBe('Choose this model’s settings.');
+    const navigate = vi.spyOn(workspaceNavigation, 'navigate').mockReturnValue(true);
+    act(() => notice.click());
+    expect(navigate).toHaveBeenCalledWith('results');
+    expect(host.querySelector('[data-attention="solve-failed"]')).toBeNull();
+    // A new press starts clean.
+    act(() => solveAttention.indicateFailure('Again.'));
+    act(() => { solveAttention.armSolve(); });
+    expect(host.querySelector('[data-attention="solve-failed"]')).toBeNull();
+  });
+
   it('leaves engine gates and failed preparations out of the chip, and Show reveals the requests', async () => {
     const state = cadJobSummary(legacyHold as unknown as JobItem);
     const engine = cadJobFixture({ ...state, reason: 'engine_unavailable', jobId: 'engine' }, { status: 'held' });

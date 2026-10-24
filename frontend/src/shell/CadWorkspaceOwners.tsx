@@ -187,6 +187,8 @@ export function mountCadWorkspaceOwners(): () => void {
     prepared: CadReturnIngestRecord | null,
     bundlePath: string,
     choice: ReturnType<ReturnType<typeof useCadReturnStore.getState>['captureModelChoice']>,
+    /** The token the composed command captured when the user gave it. */
+    attention: number,
   ): Promise<'solving' | 'blocked'> => {
     // This composed command already holds a solve intention. Let the card's
     // initial frame read answer before invoking the same public Solve.
@@ -199,7 +201,8 @@ export function mountCadWorkspaceOwners(): () => void {
     reportStatus('Prepared. Submitting the solve…');
     const control = solveControlStore.getSnapshot();
     if (!control) throw new Error('Solve coordinator is unavailable');
-    const outcome = await control.solve();
+    // The same action continues: its token, never a new one after the wait.
+    const outcome = await control.solve(attention);
     if (outcome === 'busy') {
       reportStatus('Prepared the geometry. A solve is already running — press Solve when it finishes.');
       return 'blocked';
@@ -217,7 +220,7 @@ export function mountCadWorkspaceOwners(): () => void {
     return true;
   };
   const pullAndSolve = async (): Promise<'solving' | 'blocked' | 'failed'> => {
-    solveAttention.armSolve();
+    const attention = solveAttention.armSolve();
     let bundlePath: string | undefined;
     try {
       const returned = await waiter.pullFromFusion();
@@ -225,7 +228,7 @@ export function mountCadWorkspaceOwners(): () => void {
       reportStatus('Received the current Fusion geometry. Preparing the simulation…');
       const choice = useCadReturnStore.getState().captureModelChoice();
       const prepared = await preparation;
-      return await solvePrepared(prepared, returned.bundlePath, choice);
+      return await solvePrepared(prepared, returned.bundlePath, choice, attention);
     } catch (error) {
       if (error instanceof SupersededError) return 'blocked';
       if (ceilingStopped(error, bundlePath)) return 'blocked';
@@ -235,13 +238,13 @@ export function mountCadWorkspaceOwners(): () => void {
     }
   };
   const prepareAndSolve = async (options: { meshLimitOverride?: boolean } = {}): Promise<'solving' | 'blocked' | 'failed'> => {
-    solveAttention.armSolve();
+    const attention = solveAttention.armSolve();
     const bundlePath = useCadReturnStore.getState().selectedBundle?.bundlePath;
     try {
       if (!bundlePath) throw new Error('Select a CAD return before preparing a simulation.');
       const choice = useCadReturnStore.getState().captureModelChoice();
       const prepared = await actions.ingestSelected(options);
-      return await solvePrepared(prepared, bundlePath, choice);
+      return await solvePrepared(prepared, bundlePath, choice, attention);
     } catch (error) {
       if (error instanceof SupersededError) return 'blocked';
       if (ceilingStopped(error, bundlePath)) return 'blocked';

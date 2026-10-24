@@ -13,12 +13,16 @@ type State = RequestedSolveState<Input>;
 type TransportStep = `fetch-start ${'A' | 'B'}` | `fetch-response ${'A' | 'B'}`;
 type Step = TransportStep | 'cold' | 'cached' | 'stale failed' | 'fresh failed' | 'stale ready' | 'settled' | 'stale settled' | 'mount' | 'press' | 'prepare' | 'Fusion A' | 'Fusion B' | 'ready' | 'prepared' | 'failed' | 'frame' | 'success' | 'post failure' | 'change' | 'stop' | 'unmount';
 const alphabet: Step[] = ['press', 'prepare', 'Fusion A', 'Fusion B', 'ready', 'prepared', 'failed', 'frame', 'success', 'post failure', 'change', 'stop', 'cold', 'cached', 'stale failed', 'fresh failed', 'stale ready', 'settled', 'stale settled', 'mount', 'unmount'];
+/** Each user action captures one fresh token (its explicit-navigation count);
+ * Fusion A arrives by itself (no token), Fusion B is a user's click. */
+let nextToken = 1000;
 function eventFor(step: Step, state: State): Event {
   const id = state.active?.id ?? 0;
   switch (step) {
-    case 'press': return { type: 'press', inputs };
-    case 'prepare': return { type: 'press', inputs, prepareEngine: 'engine' };
-    case 'Fusion A': case 'Fusion B': return { type: 'fusion-request', inputs, jobId: step, engine: 'engine' };
+    case 'press': return { type: 'press', inputs, attention: nextToken++ };
+    case 'prepare': return { type: 'press', inputs, prepareEngine: 'engine', attention: nextToken++ };
+    case 'Fusion A': return { type: 'fusion-request', inputs, jobId: step, engine: 'engine' };
+    case 'Fusion B': return { type: 'fusion-request', inputs, jobId: step, engine: 'engine', attention: nextToken++ };
     case 'cold': case 'ready': case 'fresh failed': case 'stale failed': case 'stale ready':
       return { type: 'plan-ready', plan: {
         ...(step.includes('failed') ? { ...cold, engines: [{ name: 'engine', available: false, runtime_state: 'failed' }] }
@@ -63,6 +67,11 @@ function verify(sequence: readonly Step[], responses?: Record<'A' | 'B', string>
   const cancelled = new Set<number>();
   const posted = new Set<number>();
   const started = new Set<number>();
+  // The token invariant: a request's token comes from the one user action
+  // that created it (or the first that joined a request nobody pressed), and
+  // once it has one it is never re-armed; no token belongs to two requests.
+  const tokens = new Map<number, number | undefined>();
+  const owners = new Map<number, number>();
   function send(event: Event) {
     time++;
     if (responses) event = { ...event, capabilityIssueSequence: latestCapabilityRequest(scope) };
@@ -118,6 +127,26 @@ function verify(sequence: readonly Step[], responses?: Record<'A' | 'B', string>
       }
     }
     assert(state.phase !== 'submitting' || !!state.active && posted.has(state.active.id), 'submitting without POST');
+    const eventToken = event.type === 'press' || event.type === 'fusion-request' ? event.attention : undefined;
+    for (const request of [...state.queue, ...(state.active ? [state.active] : [])]) {
+      const known = tokens.has(request.id);
+      const previous = tokens.get(request.id);
+      if (!known) assert(request.attention === eventToken, 'a new request did not take its press token');
+      else if (previous !== undefined) assert(request.attention === previous, 'a request was re-armed');
+      else assert(request.attention === undefined || request.attention === eventToken, 'a token appeared without a user action');
+      tokens.set(request.id, request.attention);
+      if (request.attention !== undefined) {
+        const owner = owners.get(request.attention);
+        assert(owner === undefined || owner === request.id, 'one token owns two requests');
+        owners.set(request.attention, request.id);
+      }
+    }
+    for (const effect of result.effects) {
+      if (effect.type === 'notice' && effect.message !== null && effect.attention !== undefined) {
+        assert(owners.has(effect.attention), 'a failure reported with a token no request holds');
+      }
+      if (effect.type === 'continue') assert(effect.request.attention === tokens.get(effect.request.id), 'continuation lost its token');
+    }
     const ids = [...state.queue.map(request => request.id), ...(state.active ? [state.active.id] : [])];
     assert(new Set(ids).size === ids.length, 'duplicate owner');
   }

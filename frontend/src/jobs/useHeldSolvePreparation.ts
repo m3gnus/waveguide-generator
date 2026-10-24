@@ -14,10 +14,10 @@ export function heldEngineSolveJob() {
 /** Translate Fusion facts into events. Acceptance/deduplication belongs to the reducer. */
 export function useHeldSolvePreparation(owner: RequestedSolveOwner, engines: readonly EngineCapability[],
   reportNotice: (message: string | null) => void) {
-  const prepareAndSolve = async (engine: string) => {
+  const prepareAndSolve = async (engine: string, attention?: number) => {
     const job = heldEngineSolveJob();
     if (!currentModel().viewportShowing || !job) return;
-    await owner.fusion(job.id, engine, !engines.some(item => item.name === engine && item.runtime_state === 'preparing'));
+    await owner.fusion(job.id, engine, !engines.some(item => item.name === engine && item.runtime_state === 'preparing'), attention);
   };
   return { prepareAndSolve, stop: () => {
     const request = owner.state.active;

@@ -16,6 +16,12 @@ export interface SolveRequest<T> {
   jobId?: string;
   preparationEngine?: string;
   preparation: 'none' | 'pending' | 'done';
+  /** The user action that asked for this solve: the explicit-navigation
+   * count captured once, at the press (`solveAttention.armSolve`). Every
+   * continuation, readiness wait and submission inherits it and every failure
+   * reports with it; it is never captured again. Absent for a request nobody
+   * pressed (a Fusion request observed arriving). */
+  attention?: number;
 }
 export interface RequestedSolveState<T> {
   phase: SolvePhase;
@@ -26,8 +32,8 @@ export interface RequestedSolveState<T> {
   plan: RequestPlan;
 }
 export type RequestedSolveEvent<T> = (
-  | { type: 'press'; inputs: T; prepareEngine?: string }
-  | { type: 'fusion-request'; inputs: T; jobId: string; engine: string; prepare?: boolean; plan?: RequestPlan }
+  | { type: 'press'; inputs: T; prepareEngine?: string; attention?: number }
+  | { type: 'fusion-request'; inputs: T; jobId: string; engine: string; prepare?: boolean; plan?: RequestPlan; attention?: number }
   | { type: 'plan-ready'; plan: RequestPlan }
   | { type: 'preparation-done' | 'preparation-failed' | 'frame-resolved' | 'post-succeeded' | 'post-failed' | 'continuation-settled'; id: number; message?: string }
   | { type: 'inputs-changed'; ids: readonly number[]; reason?: string }
@@ -39,7 +45,8 @@ export type RequestedSolveEvent<T> = (
 export type RequestedSolveEffect<T> =
   | { type: 'continue' | 'prepare'; request: SolveRequest<T> }
   | { type: 'abort' | 'post'; id: number }
-  | { type: 'notice'; message: string | null }
+  /** `attention`: the action the message reports on (`SolveRequest.attention`). */
+  | { type: 'notice'; message: string | null; attention?: number }
   | { type: 'release' | 'observe-start' | 'observe-stop' };
 export const PREPARATION_FAILED = 'Prepare and solve was cancelled because engine preparation failed.';
 export function initialRequestedSolve<T>(): RequestedSolveState<T> {
@@ -68,7 +75,7 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
     const active = state.active;
     if (!active || state.phase === 'submitting' || state.phase === 'cancelling') return;
     effects.push({ type: 'abort', id: active.id }, { type: 'release' });
-    if (reason) effects.push({ type: 'notice', message: reason });
+    if (reason) effects.push({ type: 'notice', message: reason, attention: active.attention });
     // Wait for the aborted executor to release the shared submission mutex.
     if (state.phase === 'continuing') set({ phase: 'cancelling' });
     else advance('cancelled');
@@ -85,6 +92,11 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
         return engine.name !== next.name || engine.available !== next.available || engine.runtime_state !== next.runtime_state;
       })) set({ plan: b });
   };
+  // A user action joining a request nobody pressed gives it its identity; a
+  // request that has one keeps it.
+  const adopt = (request: SolveRequest<T>): SolveRequest<T> => request.attention === undefined
+    && (event.type === 'press' || event.type === 'fusion-request') && event.attention !== undefined
+    ? { ...request, attention: event.attention } : request;
   switch (event.type) {
     case 'mount':
       if (!state.mounted) {
@@ -101,7 +113,7 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
         if (!event.prepare) break;
         if (state.active?.jobId === event.jobId) {
           if (state.phase === 'waiting-readiness' && state.active.preparation !== 'pending') {
-            const request = { ...state.active, preparation: 'pending' as const, preparationEngine: event.engine };
+            const request = { ...adopt(state.active), preparation: 'pending' as const, preparationEngine: event.engine };
             set({ active: request });
             effects.push({ type: 'prepare', request });
           }
@@ -109,13 +121,13 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
         }
         if (state.queue.some(request => request.jobId === event.jobId)) {
           set({ queue: state.queue.map(request => request.jobId === event.jobId
-            ? { ...request, preparation: 'pending', preparationEngine: event.engine } : request) });
+            ? { ...adopt(request), preparation: 'pending', preparationEngine: event.engine } : request) });
           break;
         }
       }
       if (!fusion && state.active) {
         if (event.prepareEngine && state.phase === 'waiting-readiness' && state.active.preparation !== 'pending') {
-          const request = { ...state.active, preparation: 'pending' as const, preparationEngine: event.prepareEngine };
+          const request = { ...adopt(state.active), preparation: 'pending' as const, preparationEngine: event.prepareEngine };
           set({ active: request });
           effects.push({ type: 'prepare', request });
         }
@@ -124,7 +136,8 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
       const request: SolveRequest<T> = { id: state.nextId, acceptedCapabilityGeneration: Math.max(event.capabilityIssueSequence ?? 0, state.plan.capabilityGeneration), inputs: event.inputs,
         ...(fusion ? { jobId: event.jobId, preparationEngine: event.engine }
           : { preparationEngine: event.prepareEngine ?? state.plan.warmingEngine ?? undefined }),
-        preparation: (fusion ? event.prepare : event.prepareEngine) ? 'pending' : 'none' };
+        preparation: (fusion ? event.prepare : event.prepareEngine) ? 'pending' : 'none',
+        ...(event.attention !== undefined ? { attention: event.attention } : {}) };
       set({ nextId: state.nextId + 1 });
       if (!state.active) activate(request);
       else {
@@ -155,7 +168,7 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
       if (state.active?.id === event.id && ['continuing', 'cancelling'].includes(state.phase)) {
         if (state.phase === 'continuing') {
           effects.push({ type: 'release' });
-          if (event.message && state.mounted) effects.push({ type: 'notice', message: event.message });
+          if (event.message && state.mounted) effects.push({ type: 'notice', message: event.message, attention: state.active.attention });
         }
         advance('cancelled');
       }
@@ -163,7 +176,7 @@ export function reduceRequestedSolve<T>(previous: RequestedSolveState<T>, event:
     case 'post-succeeded':
     case 'post-failed':
       if (state.active?.id === event.id && state.phase === 'submitting') {
-        if (event.type === 'post-failed' && event.message && state.mounted) effects.push({ type: 'notice', message: event.message });
+        if (event.type === 'post-failed' && event.message && state.mounted) effects.push({ type: 'notice', message: event.message, attention: state.active.attention });
         advance('done');
       }
       break;

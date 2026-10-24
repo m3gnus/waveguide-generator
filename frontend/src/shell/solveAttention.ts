@@ -37,8 +37,17 @@ const operationArms = new Map<string, number>();
 const resolvedRuns = new Set<string>();
 
 let readyRun: string | null = null;
+/** A Solve the user asked for failed after they navigated away from it: the
+ * error waits in Results, and this says so until Results is seen. */
+let failedAction: string | null = null;
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((listener) => listener());
+
+function setFailedAction(message: string | null): void {
+  if (failedAction === message) return;
+  failedAction = message;
+  emit();
+}
 
 function setReadyRun(jobId: string | null): void {
   if (readyRun === jobId) return;
@@ -49,6 +58,7 @@ function setReadyRun(jobId: string | null): void {
 // Seeing Results by any route answers "where did my solve go?".
 workspaceNavigation.subscribe(() => {
   if (readyRun !== null && workspaceNavigation.isVisible('results')) setReadyRun(null);
+  if (failedAction !== null && workspaceNavigation.isVisible('results')) setFailedAction(null);
 });
 
 export const solveAttention = {
@@ -59,10 +69,30 @@ export const solveAttention = {
   /** A finished run the user asked for, whose Results were not revealed. */
   getReadyRun: (): string | null => readyRun,
 
-  /** The user pressed Solve (button, shortcut, palette, or a pull and solve). */
-  armSolve(): void {
-    pendingSolve = navigationGeneration();
+  /** The user pressed Solve (button, shortcut, palette, or a pull and solve).
+   * Returns the action's identity: the one token every continuation of this
+   * press inherits (`inheritSolve`) and every failure of it reports with. Call
+   * it once per user action, never on a delayed continuation. */
+  armSolve(token: number = navigationGeneration()): number {
+    pendingSolve = token;
     setReadyRun(null);
+    setFailedAction(null);
+    return token;
+  },
+  /** A continuation of a press submits now: it carries that press's token,
+   * captured when the user acted, so a later navigation still counts. Without
+   * one (nobody pressed) the run it creates is indicated, never revealed. */
+  inheritSolve(token: number | undefined): void {
+    pendingSolve = token ?? null;
+  },
+  /** A Solve the user asked for failed while they were elsewhere: say so,
+   * without moving them, until Results is seen. */
+  indicateFailure(message: string): void {
+    if (!workspaceNavigation.isVisible('results')) setFailedAction(message);
+  },
+  getFailedAction: (): string | null => failedAction,
+  dismissFailure(): void {
+    setFailedAction(null);
   },
   /** A Solve press that created nothing: its arm must not be adopted later. */
   releaseSolve(): void {
@@ -135,11 +165,16 @@ export function resetSolveAttentionForTests(): void {
   operationArms.clear();
   resolvedRuns.clear();
   readyRun = null;
+  failedAction = null;
   emit();
 }
 
 export function useReadyRun(): string | null {
   return useSyncExternalStore(solveAttention.subscribe, solveAttention.getReadyRun, solveAttention.getReadyRun);
+}
+
+export function useFailedAction(): string | null {
+  return useSyncExternalStore(solveAttention.subscribe, solveAttention.getFailedAction, solveAttention.getFailedAction);
 }
 
 export { operationNeedsUser } from '../api/cadOperations';

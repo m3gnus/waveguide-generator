@@ -17,7 +17,7 @@ import { useCadReturnStore } from '../stores/cadReturn';
 import { waveguideDefinitionAppliesNow } from '../stores/waveguideLink';
 import { selectCadRequests, useCadRecoveryNotices } from '../stores/cadRecoveryNotices';
 import type { FusionCadStatus } from '../api/cadlink';
-import { solveAttention, useReadyRun } from './solveAttention';
+import { solveAttention, useFailedAction, useReadyRun } from './solveAttention';
 import { noteExplicitNavigation } from './workspaceNavigation';
 import { useDesignStore, type DesignDocument, type DesignFamily } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
@@ -257,7 +257,7 @@ export function SolveActions() {
       onMouseDown={(event) => {
         if (document.activeElement?.matches('[data-crossover-frequency]')) event.preventDefault();
       }}
-      onClick={solve.solve}
+      onClick={() => { void solve.solve(); }}
     ><Icon name="play"/>{solve.label}<kbd>{commandShortcutLabel('↵')}</kbd></button>
     {source && <span className={`cad-source-line cad-source-${source.tone}`} role="status" title={source.text}>
       <span>{source.text}</span>
@@ -288,6 +288,7 @@ export function AttentionNotices() {
   const notices = useCadRecoveryNotices((state) => state.notices);
   const unseenRefusals = useCadDeliveryHealthStore((state) => state.unseenRefusals);
   const readyRun = useReadyRun();
+  const failedAction = useFailedAction();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const requests = selectCadRequests({ jobs, notices, record: null });
   // Engine gates live in solve progress, including automatic warm-up waits,
@@ -300,6 +301,8 @@ export function AttentionNotices() {
   // A visible Geometry tab can still have its requests below the scroll fold.
   const showWaiting = waitingCount > 0;
   const showReady = readyRun !== null && !workspaceNavigation.isVisible('results');
+  // A Solve the user asked for failed after they moved on: its error is in Results.
+  const showFailed = failedAction !== null && !workspaceNavigation.isVisible('results');
   // A request WG took and refused has no row to wait in; this is its route.
   const showRefused = unseenRefusals > 0 && !(mode === 'cad' && workspaceNavigation.isVisible('geometry'));
   const readyJob = readyRun ? jobs.find((job) => job.id === readyRun) ?? null : null;
@@ -340,6 +343,16 @@ export function AttentionNotices() {
         workspaceNavigation.navigate('results');
       }}
     ><i/>Results ready · Show</button>}
+    {showFailed && <button
+      type="button"
+      className="attention-notice attention-refused"
+      data-attention="solve-failed"
+      title={failedAction!}
+      onClick={() => {
+        solveAttention.dismissFailure();
+        workspaceNavigation.navigate('results');
+      }}
+    ><i/>Solve did not start · Show</button>}
   </>;
 }
 

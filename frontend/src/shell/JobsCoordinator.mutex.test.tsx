@@ -258,7 +258,7 @@ function readyCad(ingestId: string): CadReturnIngestRecord {
 
 function MainSolveButton() {
   const solve = useSolveControl();
-  return <button disabled={solve.disabled} title={solve.title} onClick={solve.solve}>{solve.label}</button>;
+  return <button disabled={solve.disabled} title={solve.title} onClick={() => { void solve.solve(); }}>{solve.label}</button>;
 }
 
 /** Exercise the public command after putting the test design on screen. */
@@ -2382,6 +2382,62 @@ describe('solve invocation mutex', () => {
     // A job that later shows up under that key is not taken for this press.
     await act(async () => publishJobs([cadJobFixture(operation(key.slice('cad-solve:'.length), 'accepted', { jobId: 'stray' }))]));
     expect(compareSelection.getSnapshot().awaiting).toBeNull();
+  });
+
+  // One user action, one token (solveAttention.armSolve at the press): every
+  // failure of that action reports with it, however late it arrives.
+  it('reveals an initial parametric Solve refusal in Results', async () => {
+    mocks.submitDesign.mockRejectedValueOnce(new Error('Parametric solve refused.'));
+    const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
+    await act(async () => { await runCurrentDesign(designForFamily('OSSE')); });
+    expect(mocks.submitDesign).toHaveBeenCalledOnce();
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe('Parametric solve refused.');
+    expect(activate).toHaveBeenCalledWith('results');
+    expect(solveAttention.getFailedAction()).toBeNull();
+  });
+
+  it('reveals an initial CAD Solve refusal in Results', async () => {
+    mocks.solveModel.mockRejectedValueOnce(new SolveSubmissionRefused('setup_required: choose settings', 409, 'setup_required'));
+    const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
+    await act(async () => { await solveCad('wgi_initial_refusal'); });
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toMatch('choose settings');
+    expect(activate).toHaveBeenCalledWith('results');
+  });
+
+  it('indicates, never reveals, a Solve refusal that arrives after the user navigated away', async () => {
+    const pending = deferred<string>();
+    mocks.solveModel.mockReturnValueOnce(pending.promise);
+    const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
+    let solving!: Promise<unknown>;
+    await act(async () => { solving = solveCad('wgi_late_refusal'); await Promise.resolve(); });
+    act(() => { workspaceNavigation.navigate('geometry'); });
+    activate.mockClear();
+    await act(async () => { pending.reject(new SolveSubmissionRefused('setup_required: choose settings', 409, 'setup_required')); await solving; });
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toMatch('choose settings');
+    expect(activate).not.toHaveBeenCalled();
+    expect(solveAttention.getFailedAction()).toMatch('choose settings');
+  });
+
+  it.each([false, true])('a Solve pressed while the engine warms keeps its press token through the delayed submission (navigated: %s)', async navigated => {
+    act(() => {
+      blockedCad();
+      useImportedSolveOptionsStore.setState({ engine: 'beat-metal' });
+      mocks.importedPlan.plan.readiness = { ...blocker, message: 'BEAT Metal is getting ready.',
+        remedies: [{ kind: 'wait' }, ...(blocker.remedies ?? []).filter(remedy => remedy.kind === 'use_engine')] };
+    });
+    mocks.solveModel.mockResolvedValue('warm-run');
+    const render = () => root.render(<JobsCoordinator><SolveActions/><CurrentReadiness/></JobsCoordinator>);
+    await act(async () => render());
+    const arm = vi.spyOn(solveAttention, 'armSolve');
+    await act(async () => { host.querySelector<HTMLButtonElement>('.solve-button')!.click(); });
+    expect(arm).toHaveBeenCalledOnce();
+    if (navigated) act(() => { workspaceNavigation.navigate('geometry'); });
+    mocks.importedPlan.plan = { ...mocks.importedPlan.plan, engine: 'beat-metal', readiness: null };
+    await act(async () => render());
+    expect(mocks.solveModel).toHaveBeenCalledOnce();
+    // The delayed submission inherited the press: it was never armed again.
+    expect(arm).toHaveBeenCalledOnce();
+    expect(solveAttention.resultsReady('warm-run')).toBe(navigated ? 'indicated' : 'revealed');
   });
 
   it('keeps the claim when the answer was lost, since the job may exist', async () => {

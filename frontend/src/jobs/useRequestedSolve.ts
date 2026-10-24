@@ -25,6 +25,9 @@ export interface ModelSolveContinuation {
   signal: AbortSignal;
   requestId?: number;
   checkCadPlan?: boolean;
+  /** The user action this continues (`SolveRequest.attention`), inherited,
+   * never captured again; absent when nobody pressed. */
+  attention?: number;
 }
 export interface HeldSolveContinuation extends ModelSolveContinuation { jobId: string }
 type SolveInputs = Omit<ModelSolveContinuation, 'signal' | 'requestId'>;
@@ -105,7 +108,7 @@ function requestPlan(readiness: SolveReadiness) {
 }
 
 /** React is an interpreter for the pure owner: stores dispatch facts, effects do IO. */
-export function useRequestedSolve(refresh: () => void | Promise<void>, reportNotice: (message: string | null) => void,
+export function useRequestedSolve(refresh: () => void | Promise<void>, reportNotice: (message: string | null, attention?: number) => void,
   releaseAttention: () => void, readiness: SolveReadiness) {
   const machine = useRef(initialRequestedSolve<SolveInputs>());
   const [state, setState] = useState(machine.current);
@@ -123,7 +126,8 @@ export function useRequestedSolve(refresh: () => void | Promise<void>, reportNot
     let token = executions.current.get(request.id)?.token;
     if (!token) {
       const controller = new AbortController();
-      token = { ...request.inputs, requestId: request.id, jobId: request.jobId, signal: controller.signal };
+      token = { ...request.inputs, requestId: request.id, jobId: request.jobId, signal: controller.signal,
+        ...(request.attention !== undefined ? { attention: request.attention } : {}) };
       executions.current.set(request.id, { token, controller });
     }
     return token;
@@ -139,7 +143,7 @@ export function useRequestedSolve(refresh: () => void | Promise<void>, reportNot
     for (const effect of result.effects) {
       const io = services.current;
       switch (effect.type) {
-        case 'notice': io.reportNotice(effect.message); break;
+        case 'notice': io.reportNotice(effect.message, effect.attention); break;
         case 'release': io.releaseAttention(); break;
         case 'abort': executions.current.get(effect.id)?.controller.abort(); break;
         case 'observe-start': {
@@ -200,9 +204,10 @@ export function useRequestedSolve(refresh: () => void | Promise<void>, reportNot
     return dispatch({ type: 'frame-resolved', id: token.requestId }).effects.some(effect => effect.type === 'post');
   }, [dispatch]);
   const cancel = useCallback(() => { dispatch({ type: 'stop' }); }, [dispatch]);
-  const press = useCallback(async (prepareEngine?: string, checkCadPlan = false) => {
+  /** `attention`: the user action's identity, captured once at the press. */
+  const press = useCallback(async (prepareEngine?: string, checkCadPlan = false, attention?: number) => {
     dispatch({ type: 'plan-ready', plan: services.current.plan });
-    const result = dispatch({ type: 'press', inputs: { ...captureSolveInputs(), checkCadPlan }, prepareEngine });
+    const result = dispatch({ type: 'press', inputs: { ...captureSolveInputs(), checkCadPlan }, prepareEngine, attention });
     const active = result.state.active;
     if (!active) return 'blocked' as const;
     if (prepareEngine) { await preparations.current.get(active.id); return 'pending' as const; }
@@ -213,8 +218,8 @@ export function useRequestedSolve(refresh: () => void | Promise<void>, reportNot
     }
     return active.preparationEngine || result.state.plan.ordinary === 'pending' ? 'pending' as const : 'blocked' as const;
   }, [dispatch]);
-  const fusion = useCallback(async (jobId: string, engine: string, prepare = false) => {
-    const result = dispatch({ type: 'fusion-request', inputs: captureSolveInputs(), jobId, engine, prepare, plan: services.current.plan });
+  const fusion = useCallback(async (jobId: string, engine: string, prepare = false, attention?: number) => {
+    const result = dispatch({ type: 'fusion-request', inputs: captureSolveInputs(), jobId, engine, prepare, plan: services.current.plan, attention });
     if (result.state.active?.jobId === jobId) await preparations.current.get(result.state.active.id);
   }, [dispatch]);
   useEffect(() => {
