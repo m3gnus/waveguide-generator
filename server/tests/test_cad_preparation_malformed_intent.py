@@ -122,3 +122,28 @@ def test_cancel_after_read_fences_damaged_intent_refusal(h, monkeypatch):
     assert cancelled["config_json"] == damaged["config_json"]
     assert "refusal" not in cad_of(cancelled)
     assert [event["type"] for event in h.jobs_store.replay_events(0)] == ["cancelled"]
+
+
+def test_damaged_intent_calm_words_are_written_off_the_event_loop(h, monkeypatch):
+    """The calm message records an incident: it is built in the worker thread, never on the loop."""
+
+    import asyncio
+
+    import server.jobs.cad_preparation as preparation
+
+    damaged = _damaged_job(h, None)
+    original = preparation.calm_refusal_message
+    on_loop = []
+
+    def calm(*args, **kwargs):
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(preparation, "calm_refusal_message", calm)
+    outcome = h._loop.run(run_cad_preparation(h.runtime._cad_port, h.runtime._cad_host, damaged["id"]))
+    assert outcome == "refused"
+    assert on_loop == [False]

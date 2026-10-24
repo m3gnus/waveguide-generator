@@ -272,6 +272,19 @@ def test_job_errors_are_scrubbed_into_the_summary() -> None:
     assert "~/runs/3" in summary_text(summary)
 
 
+def test_job_errors_in_the_summary_lose_the_model_name_and_ids() -> None:
+    summary = summary_for(
+        jobs=[{
+            "id": "run-4", "run_number": 4, "status": "error", "created_at": "2026-08-31T00:00:00Z",
+            "error_message": "Kestrel horn is too large for this machine's memory (urn:adsk.wipprod:fs.file:SECRET).",
+            "task_metadata": {"cad": {"snapshot": {"document_name": "Kestrel horn"}}},
+        }]
+    )
+    text = summary_text(summary)
+    assert "<name> is too large for this machine's memory (<id>)." in text
+    assert "Kestrel" not in text and "SECRET" not in text
+
+
 def test_recent_failures_are_the_runs_whose_status_is_error() -> None:
     """Jobs fail with ``error`` (the schema's status); a held request is not a failure."""
 

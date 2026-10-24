@@ -236,16 +236,27 @@ def test_report_zip_and_summary_carry_incidents(tmp_path: Path) -> None:
     from server.diagnostics.scrub import scrub_rules
     from server.platform.paths import data_paths
 
-    store = _store(tmp_path)
-    incident = store.record("internal-failure", "cad-preparation", ids={"job_id": "job-1"},
-                            evidence={"code": "preparation_failed", "detail": "the mesh failed"})
+    clock = Clock(datetime.now(timezone.utc))
+    store = _store(tmp_path, now=clock)
+    # Written where no name could be known: its first words never reach the clipboard.
+    unknown = store.record("domain", "cad-preparation", evidence={"detail": "Kestrel horn is open"})
+    clock.advance(seconds=1)
+    incident = store.record(
+        "internal-failure", "cad-preparation", ids={"job_id": "job-1"},
+        evidence={"code": "preparation_failed",
+                  "detail": "the mesh of Tritonia speaker failed (urn:adsk.wipprod:dm.lineage:SECRET, "
+                            "design wgd_01JABCDEFGHJKMNPQRSTVWXYZ0)"},
+        redaction_names=["Tritonia speaker"],
+    )
     rules = scrub_rules(home="/home/nobody", environ={}, system="Linux")
     lines = recent_incidents(tmp_path / "data")
     summary = build_summary(build={"label": "x"}, version="0.3.6", data_dir=tmp_path / "data",
                             capabilities=None, rules=rules, incidents=lines)
-    assert summary["recentIncidents"][0]["id"] == incident
+    assert [line["id"] for line in summary["recentIncidents"]] == [incident, unknown]
     text = summary_text(summary)
-    assert "Recent internal problems" in text and incident in text and "the mesh failed" in text
+    assert "Recent internal problems" in text and incident in text and "the mesh of <name> failed" in text
+    for secret in ("Tritonia", "SECRET", "wgd_", "Kestrel", "redactionNames"):
+        assert secret not in text and secret not in json.dumps(summary), secret
     payload = build_bundle(
         paths=data_paths(tmp_path / "data"), summary=summary, system={}, capabilities=None,
         settings_envelope=None, rules=rules, incidents=bundle_incidents(tmp_path / "data"),
@@ -444,3 +455,114 @@ def test_report_keeps_log_tails_for_the_newest_and_the_selected_run(tmp_path: Pa
     assert records[created[1][1]]["jobLogs"] == {} and records[created[1][1]]["jobLogsLeftOut"] == 1
     for job_id, incident in created[-TAILED_INCIDENTS:]:
         assert job_id in records[incident]["jobLogs"]
+
+
+# -- the names a record redacts itself with -------------------------------------
+
+
+def _name_sources(tmp_path: Path) -> str:
+    """A run, its ingest and WG's retained copy of the return, each naming the model."""
+
+    import sqlite3
+
+    data = tmp_path / "data"
+    digest = "c" * 64
+    bundle = data / "imports" / "bundles" / f"{digest}.wgreturn"
+    bundle.mkdir(parents=True)
+    (bundle / "wgreturn.json").write_text(json.dumps({
+        "document": {"name": "Kestrel horn"},
+        "assembly": {"cut_provenance": [{"feature": {"kind": "split-body", "name": "Mirror split"}}]},
+        "scope": {"included": [{"name": "Front baffle", "component": "Horn body", "object_id": "tok-1"}]},
+        "instances": [{"occurrence_path": "Kestrel horn/Horn body:1", "parameter_prefix": "wg_kestrel_"}],
+    }), encoding="utf-8")
+    (data / "db").mkdir(parents=True)
+    with sqlite3.connect(data / "db" / "simulations.db") as connection:
+        connection.execute("CREATE TABLE simulation_jobs (id TEXT PRIMARY KEY, task_metadata_json TEXT)")
+        connection.execute("INSERT INTO simulation_jobs VALUES (?, ?)", ("job-1", json.dumps({"cad": {
+            "snapshot": {"document_name": "Kestrel horn v2"}, "preparation": {"ingest_id": "ingest-1"}}})))
+    with sqlite3.connect(data / "db" / "cadlink.db") as connection:
+        connection.execute("CREATE TABLE ingests (ingest_id TEXT PRIMARY KEY, manifest_sha256 TEXT, record_json TEXT)")
+        connection.execute("INSERT INTO ingests VALUES (?, ?, ?)", ("ingest-1", f"sha256:{digest}", json.dumps({
+            "document": {"name": "Kestrel horn"},
+            "sources": [{"selectors": {"shell_names": ["Throat shell"]}, "observed": {"bodies": ["Front baffle"]}}]})))
+    return digest
+
+
+def test_names_lead_from_a_run_to_its_ingest_and_bundle(tmp_path: Path) -> None:
+    from server.diagnostics.incidents import IncidentNames
+
+    _name_sources(tmp_path)
+    names, sources = IncidentNames(tmp_path / "data").find({"job_id": "job-1"})
+    assert sources == ["run", "ingest", "bundle"]
+    assert names[0] == "Kestrel horn v2"
+    assert {"Kestrel horn", "Throat shell", "Front baffle", "Horn body", "Mirror split", "kestrel", "tok-1"} <= set(names)
+    assert IncidentNames(tmp_path / "data")({"job_id": "job-gone"}) is None
+    assert IncidentNames(tmp_path / "nothing")({"job_id": "job-1"}) is None
+    assert not (tmp_path / "nothing").exists()  # read only
+
+
+def test_records_keep_the_names_they_redact_with(tmp_path: Path) -> None:
+    from server.cadlink.intake.readings import record_preparation_diagnostic
+    from server.diagnostics.incidents import IncidentNames
+
+    _name_sources(tmp_path)
+    store = configure_incidents(tmp_path / "data", app_root=tmp_path / "app",
+                                names=IncidentNames(tmp_path / "data"))
+    incident = record_preparation_diagnostic(
+        "domain", {"job_id": "job-1", "code": "open_half"}, names=["Caller named"])
+    names = store.get(incident)["redactionNames"]
+    assert names[0] == "Caller named" and {"Kestrel horn v2", "Mirror split", "Throat shell"} <= set(names)
+    # A repeat adds its names to the record's; none is lost, none is doubled.
+    again = record_preparation_diagnostic("domain", {"job_id": "job-2", "code": "open_half"}, names=["kestrel HORN", "Other"])
+    assert again == incident
+    kept = store.get(incident)["redactionNames"]
+    assert kept[:len(names)] == names and kept[-1] == "Other" and len(kept) == len(set(map(str.lower, kept)))
+    # A caller that knows there are none says so: the record can redact itself.
+    interface = record_incident("interface-error", "run-archive", evidence={"message": "x"}, redaction_names=())
+    assert store.get(interface)["redactionNames"] == []
+    # Nothing known: no field, and a redacted export refuses it.
+    unknown = record_incident("preparation-crash", "cad-preparation", evidence={"message": "y"})
+    assert "redactionNames" not in store.get(unknown)
+    assert "redactionNames" not in incidents.summary(store.get(incident))
+
+
+def test_redaction_names_are_bounded(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    incident = store.record("domain", "cad-preparation", redaction_names=[f"name {index}" for index in range(1000)]
+                            + ["x" * 5000, "ab", ""])
+    kept = store.get(incident)["redactionNames"]
+    assert len(kept) == incidents.MAX_REDACTION_NAMES and all(len(name) >= 3 for name in kept)
+
+
+def test_a_crash_after_shutdown_is_still_recorded_without_noise(tmp_path: Path, caplog) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from server.cadlink.api import _track
+
+    store = configure_incidents(tmp_path / "data", app_root=tmp_path / "app")
+    refusals = []
+
+    async def scenario() -> None:
+        loop = asyncio.get_running_loop()
+
+        def refused(*_args, **_kwargs):
+            refusals.append(True)
+            raise RuntimeError("cannot schedule new futures after shutdown")
+
+        loop.run_in_executor = refused  # type: ignore[method-assign]
+
+        async def crash() -> None:
+            raise ValueError("lane crashed")
+
+        task = asyncio.create_task(crash())
+        _track(SimpleNamespace(), task)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    with caplog.at_level("ERROR"):
+        asyncio.run(scenario())
+    assert refusals == [True]
+    [record] = store.list(kind="preparation-crash")
+    assert "lane crashed" in record["latest"]["exception"]["message"]
+    assert not any("Exception in callback" in entry.getMessage() for entry in caplog.records)

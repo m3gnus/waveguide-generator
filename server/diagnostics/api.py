@@ -35,6 +35,7 @@ from .bundle import (
 from .capabilities import PROBE_TIMEOUT_SECONDS, capabilities_or_none
 from .incidents import (
     SUMMARY_INCIDENTS,
+    IncidentNames,
     bundle_incidents,
     incident_versions,
     recent_incidents,
@@ -183,7 +184,7 @@ def create_diagnostics_router(
             frontend_error_count=len(errors),
             rules=rules,
             system=system,
-            incidents=[incident_summary(record) for record in incidents[:SUMMARY_INCIDENTS]],
+            incidents=[incident_summary(record, public=True) for record in incidents[:SUMMARY_INCIDENTS]],
         )
 
         job_log: str | None = None
@@ -280,6 +281,9 @@ def create_diagnostics_router(
                 record_incident, INTERFACE_ERROR_KIND, operation,
                 ids={key: (context or {}).get(key) for key in ("job_id", "operation_id", "ingest_id")},
                 evidence=record, signature={"operation": operation, "message": record["message"]},
+                # Its context never names a design (``ClientErrorReport``);
+                # the runs and ingests its ids name add theirs.
+                redaction_names=(),
             )
         return {"recorded": True}
 
@@ -321,6 +325,7 @@ def mount_diagnostics(
     # in this data directory, beside the report that carries them.
     configure_incidents(
         Path(data_dir), app_root=app_root(), versions=incident_versions(version=version, build=build),
+        names=IncidentNames(Path(data_dir)),
     )
     router = create_diagnostics_router(
         data_dir=Path(data_dir),

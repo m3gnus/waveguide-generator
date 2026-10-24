@@ -490,6 +490,57 @@ def cut_provenance(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [dict(entry) for entry in entries or [] if isinstance(entry, Mapping)]
 
 
+def identifying_names(value: Mapping[str, Any]) -> list[str]:
+    """The user's words a manifest (or an ingest record built from one) carries.
+
+    The document's name first, then the occurrence path's components, the
+    parameter prefix's stem, the scope's body names, components and object
+    tokens, the cut features' names, the sources' shell names, appearance
+    labels and observed bodies. What a redacted diagnostic must never show;
+    protocol vocabulary (kinds, planes, sides) is not among them.
+    """
+
+    names: list[str] = []
+
+    def add(item: Any) -> None:
+        text = str(item or "").strip() if isinstance(item, (str, int)) and not isinstance(item, bool) else ""
+        if text and text not in names:
+            names.append(text)
+
+    document = value.get("document") if isinstance(value.get("document"), Mapping) else {}
+    add(document.get("name"))
+    project = value.get("project") if isinstance(value.get("project"), Mapping) else {}
+    add(project.get("document_name"))
+    for instance in _named_mappings(value.get("instances")):
+        for part in re.split(r"[/\\|]+", str(instance.get("occurrence_path") or "")):
+            # ``Name:1`` is occurrence 1 of ``Name``: the name is what is named.
+            add(re.sub(r":\d+$", "", part))
+        add(re.sub(r"^wg_|_$", "", str(instance.get("parameter_prefix") or "")))
+    scope = value.get("scope") if isinstance(value.get("scope"), Mapping) else {}
+    for group in ("included", "skipped", "fem_air_volumes", "fem_regions"):
+        for entry in _named_mappings(scope.get(group)):
+            for key in ("name", "component", "object_id"):
+                add(entry.get(key))
+    assembly = value.get("assembly") if isinstance(value.get("assembly"), Mapping) else {}
+    for entry in _named_mappings(assembly.get("cut_provenance")):
+        feature = entry.get("feature") if isinstance(entry.get("feature"), Mapping) else {}
+        add(feature.get("name"))
+        add(entry.get("body_object_id"))
+    for source in _named_mappings(value.get("sources")):
+        selectors = source.get("selectors") if isinstance(source.get("selectors"), Mapping) else {}
+        for key in ("shell_names", "appearance_labels"):
+            for item in selectors.get(key) or ():
+                add(item)
+        observed = source.get("observed") if isinstance(source.get("observed"), Mapping) else {}
+        for body in observed.get("bodies") or ():
+            add(body)
+    return names
+
+
+def _named_mappings(value: Any) -> list[Mapping[str, Any]]:
+    return [item for item in value if isinstance(item, Mapping)] if isinstance(value, (list, tuple)) else []
+
+
 __all__ = [
     "CUT_ORIGIN_PLANES",
     "DOCUMENT_UP_AXES",
@@ -506,6 +557,7 @@ __all__ = [
     "source_physical_name",
     "SUPPORTED_FEATURES",
     "cut_provenance",
+    "identifying_names",
     "declared_domain_planes",
     "domain_kind",
     "WgReturnBundle",

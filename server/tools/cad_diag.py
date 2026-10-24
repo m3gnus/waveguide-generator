@@ -15,6 +15,7 @@ writes into the live data directory.
 from __future__ import annotations
 
 import argparse
+import bisect
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 import json
@@ -26,7 +27,17 @@ import subprocess
 import sys
 from typing import Any
 
-from server.platform.incidents import IncidentStore, Redactor, account_name, redaction_rules, summary
+from server.cadlink.wgreturn import identifying_names
+from server.platform.incidents import (
+    IDENTIFIER_PATTERN,
+    MIN_REDACTION_NAME,
+    IncidentStore,
+    Redactor,
+    account_name,
+    name_pattern,
+    redaction_rules,
+    summary,
+)
 from server.platform.paths import app_root, resolve_data_dir
 
 
@@ -179,29 +190,61 @@ REDACTED = "<redacted>"
 #: Keys whose values name a run, a request, a design, a document or a return.
 IDENTIFYING_KEYS = frozenset({
     "job_id", "jobId", "operation_id", "operationId", "ingest_id", "ingestId",
-    "preparation_id", "request_id", "run_number", "manifest_sha256", "manifestSha256",
-    "snapshot", "snapshotSha256", "design_id", "designId", "design_ids", "designIds",
-    "export_id", "lineage_id", "bundle_id", "origin_bundle_id", "native_id",
-    "document_native_id", "return_id", "project_id",
+    "preparation_id", "request_id", "client_request_id", "run_number", "manifest_sha256", "manifestSha256",
+    "snapshot", "snapshotSha256", "snapshot_sha256", "artifact_sha256", "design_id", "designId", "design_ids",
+    "designIds", "export_id", "lineage_id", "project_lineage_id", "bundle_id", "origin_bundle_id", "native_id",
+    "document_native_id", "return_id", "project_id", "receipt_id", "receiptId",
 })
 #: Keys whose values are a model's or a body's name.
 NAME_KEYS = frozenset({"document_name", "documentName", "model_name", "modelName"})
+#: Record fields that are WG's vocabulary, never a user's words: what failed
+#: and how (``kind``, ``phase``, ``code``, a stage or an axis) is kept as it is,
+#: even when a body is named like it, so the export still reads and replays.
+_RECORD_VOCABULARY = frozenset({
+    "kind", "phase", "code", "stage", "reason_code", "reasonCode", "chosen_axis", "axis", "meshed_axis",
+    "allowed_axes", "allowedAxes", "outcome", "status", "severity", "type", "provenance", "algorithm",
+    "operation", "source", "versions", "fingerprint", "schema", "firstSeen", "lastSeen", "at", "capturedAt",
+    "truncated", "count", "redacted",
+})
+#: A record's own fields, written by WG: kept as they are.
+_RECORD_HEADER = ("schema", "id", "kind", "phase", "fingerprint", "firstSeen", "lastSeen", "count")
 #: Manifest values that are protocol vocabulary, never a user's words: a body
-#: named like one must not turn the manifest invalid.
+#: named like one must not turn the manifest invalid. Every enumerated field
+#: of the wgreturn validator (``server.cadlink.wglink_protocol``) is here.
 _MANIFEST_VOCABULARY = frozenset({
     "adapter", "adapter_version", "body_kind", "build_mode", "cad_app", "cad_version",
     "chirality", "external_reference", "formula", "handedness", "kind", "length_unit",
     "local_body_state", "matrix_convention", "media_type", "patch_policy", "purpose",
     "reason", "required_features", "role", "selection", "severity", "status",
-    "wgreturn_version", "appearance_labels", "sha256", "signature_hash", "design_hash",
+    "wgreturn_version", "sha256", "signature_hash", "design_hash",
     "geometry_hash", "instance_id", "wglink_instance_id", "solver_anchor_instance_id",
     "default_drive_channel_id", "id", "created_at", "observed_at",
+    "export_frame", "declared_by", "kept_side", "plane", "cut_planes", "origin_plane", "document_up",
+    "settings_origin", "symmetry", "planes",
+    # Ids: replaced by stand-ins (``_MANIFEST_IDS``) or removed, never by names.
+    "design_id", "export_id", "lineage_id", "origin_bundle_id", "native_id",
 })
 #: Manifest identifiers: replaced by stable stand-ins (one per original value).
 _MANIFEST_IDS = ("design_id", "export_id", "lineage_id")
-_MIN_NAME = 3
 _STEP_STRING = re.compile(r"'((?:[^']|'')*)'")
-_STEP_PRODUCT = re.compile(r"\bPRODUCT\s*\(\s*'((?:[^']|'')*)'\s*,\s*'((?:[^']|'')*)'", re.IGNORECASE)
+#: The entities whose first string (and a product's or an occurrence's second) is a user's name.
+_STEP_NAMED = re.compile(
+    r"\b(PRODUCT|NEXT_ASSEMBLY_USAGE_OCCURRENCE|MANIFOLD_SOLID_BREP|BREP_WITH_VOIDS|OPEN_SHELL|CLOSED_SHELL"
+    r"|SHELL_BASED_SURFACE_MODEL|STYLED_ITEM|COLOUR_RGB|PRESENTATION_LAYER_ASSIGNMENT)"
+    r"\s*\(\s*'((?:[^']|'')*)'(?:\s*,\s*'((?:[^']|'')*)')?",
+    re.IGNORECASE,
+)
+_STEP_DESCRIPTION = re.compile(r"FILE_DESCRIPTION\s*\(.*?\)\s*;", re.DOTALL)
+_STEP_DATA = re.compile(r"^\s*DATA\s*;", re.MULTILINE)
+_STEP_ENTITY = re.compile(r"#\d+\s*=\s*\(?\s*([A-Z][A-Z0-9_]*)", re.IGNORECASE)
+#: STEP entities whose strings are the format's own words (schema, context,
+#: pre-defined colours and fonts): never rewritten, whatever a body is called.
+_STEP_PROTOCOL_ENTITIES = frozenset({
+    "APPLICATION_CONTEXT", "APPLICATION_PROTOCOL_DEFINITION", "PRODUCT_CONTEXT", "PRODUCT_DEFINITION_CONTEXT",
+    "MECHANICAL_CONTEXT", "DESIGN_CONTEXT", "PRODUCT_CATEGORY", "PRODUCT_RELATED_PRODUCT_CATEGORY",
+    "GEOMETRIC_REPRESENTATION_CONTEXT", "UNCERTAINTY_MEASURE_WITH_UNIT", "DRAUGHTING_PRE_DEFINED_COLOUR",
+    "DRAUGHTING_PRE_DEFINED_CURVE_FONT", "PRE_DEFINED_MARKER", "DRAUGHTING_PRE_DEFINED_TEXT_FONT",
+})
 _STEP_ESCAPE = re.compile(
     r"\\X2\\((?:[0-9A-F]{4})+)\\X0\\|\\X4\\((?:[0-9A-F]{8})+)\\X0\\|\\X\\([0-9A-F]{2})|\\\\|''",
     re.IGNORECASE,
@@ -244,78 +287,99 @@ def _step_encode(text: str) -> str:
     return "".join(parts)
 
 
+class CannotRedact(Exception):
+    """Nothing says which model a record is about: its names cannot be known."""
+
+
 class ExportRedactor:
     """Every name and id an exported incident carries, replaced consistently.
 
-    Names (the document's, the components', bodies' and occurrences') become
-    ``redacted-model`` and ``name-<n>``; ids become ``<redacted>``. The same
-    original always becomes the same stand-in, in the record, the logs, the
-    manifest and the STEP file alike, so the fixture still replays.
+    Names (the document's, the components', bodies', features', shells' and
+    occurrences') become ``redacted-model`` and ``name-<n>``, matched as whole
+    words in any case; ids become ``<redacted>``: the ones the record and the
+    bundle name, and anything shaped like one (``IDENTIFIER_PATTERN``). The
+    same original always becomes the same stand-in, in the record, the logs,
+    the manifest and the STEP file alike, so the fixture still replays.
     """
 
     def __init__(self, base: Redactor) -> None:
         self._base = base
         self._names: dict[str, str] = {}
         self._ids: set[str] = set()
-        self._pattern: re.Pattern[str] | None = None
+        self._name_pattern: re.Pattern[str] | None = None
+        self._id_pattern: re.Pattern[str] | None = None
+        self._stale = True
 
     def add_name(self, value: Any, placeholder: str | None = None) -> None:
         name = str(value or "").strip()
-        if len(name) < _MIN_NAME or name.lower() in self._names or name == REDACTED_NAME:
+        if len(name) < MIN_REDACTION_NAME or name.lower() in self._names or name == REDACTED_NAME:
             return
         self._names[name.lower()] = placeholder or f"name-{len(self._names) + 1}"
-        self._pattern = None
+        self._stale = True
+
+    def add_names(self, names: Sequence[Any], *, document_first: bool = False) -> None:
+        for index, name in enumerate(names):
+            self.add_name(name, REDACTED_NAME if document_first and index == 0 and not self._names else None)
 
     def add_id(self, value: Any) -> None:
         text = str(value or "").strip()
         for spelling in {text, text.removeprefix("sha256:")}:
             if len(spelling) >= 4 and spelling != REDACTED:
                 self._ids.add(spelling)
-                self._pattern = None
+                self._stale = True
 
     def names(self) -> list[str]:
         return list(self._names)
 
-    def _compiled(self) -> re.Pattern[str] | None:
-        if self._pattern is None:
-            terms = sorted({*self._names, *(item.lower() for item in self._ids)}, key=len, reverse=True)
-            if not terms:
-                return None
-            self._pattern = re.compile("|".join(re.escape(term) for term in terms), re.IGNORECASE)
-        return self._pattern
+    def _compile(self) -> None:
+        if self._stale:
+            self._name_pattern = name_pattern(self._names)
+            ids = sorted({item.lower() for item in self._ids}, key=len, reverse=True)
+            self._id_pattern = re.compile("|".join(map(re.escape, ids)), re.IGNORECASE) if ids else None
+            self._stale = False
 
     def text(self, value: str, *, names: bool = True) -> str:
         """Paths, the account name and ids replaced; and the names, unless ``names`` is false."""
 
         value = self._base.text(value)
-        pattern = self._compiled()
-        if pattern is None:
-            return value
-        lowered_ids = {item.lower() for item in self._ids}
-
-        def replace(match: re.Match[str]) -> str:
-            found = match.group(0).lower()
-            if found in lowered_ids:
-                return REDACTED
-            return self._names[found] if names else match.group(0)
-
-        return pattern.sub(replace, value)
+        self._compile()
+        if self._id_pattern is not None:
+            value = self._id_pattern.sub(REDACTED, value)
+        value = IDENTIFIER_PATTERN.sub(REDACTED, value)
+        if names and self._name_pattern is not None:
+            value = self._name_pattern.sub(lambda match: self._names[match.group(0).lower()], value)
+        return value
 
     def value(self, value: Any) -> Any:
         if isinstance(value, str):
             return self.text(value)
         if isinstance(value, Mapping):
             # A key is vocabulary ("code", "detail"), never a name: a body
-            # called like one must not rename the record's fields.
-            return {
-                self.text(str(key), names=False): (
-                    REDACTED if str(key) in IDENTIFYING_KEYS and item not in (None, "", [], {})
-                    else self.value(item)
-                )
-                for key, item in value.items()
-            }
+            # called like one must not rename the record's fields, nor the
+            # values that say what failed.
+            result = {}
+            for key, item in value.items():
+                name = str(key)
+                if name in IDENTIFYING_KEYS and item not in (None, "", [], {}):
+                    result[self.text(name, names=False)] = REDACTED
+                elif name in _RECORD_VOCABULARY:
+                    result[self.text(name, names=False)] = self._vocabulary(item)
+                else:
+                    result[self.text(name, names=False)] = self.value(item)
+            return result
         if isinstance(value, (list, tuple)):
             return [self.value(item) for item in value]
+        return value
+
+    def _vocabulary(self, value: Any) -> Any:
+        """A vocabulary value: ids and paths still go, names never replace a word of it."""
+
+        if isinstance(value, str):
+            return self.text(value, names=False)
+        if isinstance(value, Mapping):
+            return {key: self._vocabulary(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._vocabulary(item) for item in value]
         return value
 
     # -- what to look for ------------------------------------------------------
@@ -337,45 +401,54 @@ class ExportRedactor:
                 self.collect_record(item)
 
     def collect_manifest(self, manifest: Mapping[str, Any]) -> None:
+        # The document's name first: it is the one ``redacted-model`` stands for.
+        self.add_names(identifying_names(manifest), document_first=True)
         document = manifest.get("document") if isinstance(manifest.get("document"), Mapping) else {}
-        self.add_name(document.get("name"), REDACTED_NAME)
         self.add_id(document.get("native_id"))
         self.add_id((manifest.get("return") or {}).get("id") if isinstance(manifest.get("return"), Mapping) else None)
         for instance in _mappings(manifest.get("instances")):
             for key in (*_MANIFEST_IDS, "origin_bundle_id"):
                 self.add_id(instance.get(key))
-            for part in re.split(r"[/\\|]+", str(instance.get("occurrence_path") or "")):
-                # ``Name:1`` is occurrence 1 of ``Name``: the name is what is replaced.
-                self.add_name(re.sub(r":\d+$", "", part))
-            prefix = str(instance.get("parameter_prefix") or "")
-            self.add_name(re.sub(r"^wg_|_$", "", prefix))
-        scope = manifest.get("scope") if isinstance(manifest.get("scope"), Mapping) else {}
-        for group in ("included", "skipped", "fem_air_volumes"):
-            for entry in _mappings(scope.get(group)):
-                for key in ("name", "component", "object_id"):
-                    self.add_name(entry.get(key))
-        for source in _mappings(manifest.get("sources")):
-            for body in (source.get("observed") or {}).get("bodies") or ():
-                self.add_name(body)
 
     def collect_step(self, text: str) -> None:
-        for match in _STEP_PRODUCT.finditer(text):
-            for raw in match.groups():
-                self.add_name(_step_decode(raw))
+        for match in _STEP_NAMED.finditer(text):
+            for raw in match.groups()[1:]:
+                if raw:
+                    self.add_name(re.sub(r":\d+$", "", _step_decode(raw)))
 
     # -- rewriting -------------------------------------------------------------
 
     def step(self, text: str) -> str:
-        """Every string literal with its names and ids replaced; the file stays valid STEP."""
+        """Every user string with its names and ids replaced; the file stays valid STEP.
 
-        text = _STEP_FILE_NAME.sub(f"FILE_NAME('{REDACTED_NAME}','',(''),(''),'','','');", text, count=1)
+        The header's author fields and description are blanked and its schema
+        kept; in the data section every string literal is rewritten except the
+        format's own words (``_STEP_PROTOCOL_ENTITIES``).
+        """
+
+        data = _STEP_DATA.search(text)
+        split = data.end() if data else len(text)
+        header, body = text[:split], text[split:]
+        header = _STEP_FILE_NAME.sub(f"FILE_NAME('{REDACTED_NAME}','',(''),(''),'','','');", header, count=1)
+
+        def description(match: re.Match[str]) -> str:
+            literals = _STEP_STRING.findall(match.group(0))
+            level = literals[-1] if len(literals) >= 2 else "2;1"
+            return f"FILE_DESCRIPTION((''),'{level}');"
+
+        header = _STEP_DESCRIPTION.sub(description, header, count=1)
+        entities = [(match.start(), match.group(1).upper()) for match in _STEP_ENTITY.finditer(body)]
+        starts = [start for start, _type in entities]
 
         def literal(match: re.Match[str]) -> str:
+            index = bisect.bisect_right(starts, match.start()) - 1
+            if index >= 0 and entities[index][1] in _STEP_PROTOCOL_ENTITIES:
+                return match.group(0)
             decoded = _step_decode(match.group(1))
             redacted = self.text(decoded)
             return match.group(0) if redacted == decoded else f"'{_step_encode(redacted)}'"
 
-        return _STEP_STRING.sub(literal, text)
+        return header + _STEP_STRING.sub(literal, body)
 
     def manifest(self, manifest: dict[str, Any]) -> dict[str, Any]:
         """The manifest with no document or origin-bundle id, stand-in names and ids (valid ULIDs)."""
@@ -419,6 +492,11 @@ def _mappings(value: Any) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
 
+def _occurrence_ids(record: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    occurrences = [record.get("latest") or {}, *(record.get("occurrences") or ())]
+    return [item["ids"] for item in occurrences if isinstance(item, Mapping) and isinstance(item.get("ids"), Mapping)]
+
+
 def export_incident(
     record: Mapping[str, Any], data_dir: Path, destination: Path, *, redact: bool,
 ) -> list[Path]:
@@ -426,11 +504,17 @@ def export_incident(
 
     The bundle is WG's retained copy, which never holds the CAD document. With
     ``redact`` every name the record and the bundle hold (the document's, the
-    components', bodies' and occurrences', the STEP products') becomes
+    components', bodies', features' and occurrences', the STEP products') becomes
     ``redacted-model`` or ``name-<n>``, every id ``<redacted>`` (the manifest's
-    by stand-ins), the STEP header's author fields are blanked (the manifest's
-    file hashes follow), the job logs are keyed ``job-<n>``, and paths and the
-    account name are rewritten.
+    by stand-ins), the STEP header's author fields and description are blanked
+    (the manifest's file hashes follow), the job logs are keyed ``job-<n>``, and
+    paths and the account name are rewritten.
+
+    The names come from every source there is: the retained bundle, the names
+    the record kept (``redactionNames``), and the run, ingest and bundle its
+    ids lead to. With none of them the names in its text cannot be known, and
+    a redacted export is refused (:class:`CannotRedact`) rather than written
+    with them in it.
     """
 
     if destination.exists() and any(destination.iterdir()):
@@ -440,9 +524,9 @@ def export_incident(
     bundle = retained_bundle(data_dir, digest) if _DIGEST.fullmatch(digest) else None
     if bundle is not None and not bundle.is_dir():
         bundle = None
-    destination.mkdir(parents=True, exist_ok=True)
-    written = [destination / "incident.json"]
     if not redact:
+        destination.mkdir(parents=True, exist_ok=True)
+        written = [destination / "incident.json"]
         written[0].write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         if bundle is not None:
             target = destination / bundle.name
@@ -450,7 +534,10 @@ def export_incident(
             written.append(target)
         return written
 
+    from server.diagnostics.incidents import IncidentNames
+
     redactor = ExportRedactor(Redactor(redaction_rules(data_dir=data_dir, app_root=app_root()), user=account_name()))
+    sources: list[str] = []
     manifest: dict[str, Any] | None = None
     if bundle is not None:
         # The manifest first: its document name is the one ``redacted-model`` stands for.
@@ -460,16 +547,39 @@ def export_incident(
             path = bundle / name
             if name.lower().endswith((".step", ".stp")) and path.is_file():
                 redactor.collect_step(path.read_text(encoding="utf-8", errors="surrogateescape"))
+        sources.append("bundle")
+    kept = record.get("redactionNames")
+    if isinstance(kept, list):
+        redactor.add_names(kept, document_first=True)
+        sources.append("record")
+    resolver = IncidentNames(data_dir)
+    for occurrence in _occurrence_ids(record):
+        names, found = resolver.find(occurrence)
+        redactor.add_names(names, document_first=True)
+        sources.extend(found)
+    if not sources:
+        raise CannotRedact(
+            f"{record.get('id')} cannot be exported with --redact: nothing says which model it is about "
+            "(it kept no names, WG's copy of the return is gone, and so are the run and the ingest it "
+            "names), so the names in its text cannot be known. Export it without --redact for your own "
+            "use only."
+        )
     redactor.collect_record(record)
     for job_id in (record.get("jobLogs") or {}):
         redactor.add_id(job_id)
-    exported = dict(record)
+    exported = {key: item for key, item in record.items() if key != "redactionNames"}
     exported["occurrences"] = [{"at": item.get("at")} for item in record.get("occurrences") or ()]
     exported["jobLogs"] = {
         f"job-{index}": log for index, log in enumerate((record.get("jobLogs") or {}).values(), start=1)
     }
     exported["redacted"] = True
-    written[0].write_text(json.dumps(redactor.value(exported), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    redacted = redactor.value(exported)
+    # WG's own words about the record (its id, kind, phase, fingerprint and
+    # times), whatever a body is called.
+    redacted.update({key: record[key] for key in _RECORD_HEADER if key in record})
+    destination.mkdir(parents=True, exist_ok=True)
+    written = [destination / "incident.json"]
+    written[0].write_text(json.dumps(redacted, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if bundle is not None and manifest is not None:
         target = destination / "model.wgreturn"
         _write_redacted_bundle(bundle, manifest, target, redactor)
@@ -539,7 +649,8 @@ def main(
     export.add_argument("id")
     export.add_argument("--out", type=Path, required=True, help="New or empty folder")
     export.add_argument("--redact", action="store_true",
-                        help="Replace every name and id (record, logs, manifest, STEP); blank STEP author fields")
+                        help="Replace every name and id (record, logs, manifest, STEP); blank STEP author "
+                             "fields. Refused (exit 2) when nothing says which model the record is about")
     args = parser.parse_args(argv)
 
     data_dir = (args.data_dir or resolve_data_dir()).expanduser().resolve()
@@ -577,7 +688,11 @@ def main(
     if args.command == "show":
         print(json.dumps(record, indent=2, sort_keys=True))
         return 0
-    written = export_incident(record, data_dir, args.out.expanduser().resolve(), redact=args.redact)
+    try:
+        written = export_incident(record, data_dir, args.out.expanduser().resolve(), redact=args.redact)
+    except CannotRedact as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     for path in written:
         print(path)
     return 0

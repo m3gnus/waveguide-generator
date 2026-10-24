@@ -85,6 +85,21 @@ describe('issueUrl', () => {
     expect(new URL(url).searchParams.get('build')).toBe('0.3.0+gabcd1234');
   });
 
+  it('never carries the summary text or an incident’s words into the public issue', () => {
+    const withIncident: DiagnosticsSummary = {
+      ...SUMMARY,
+      recentIncidents: [{
+        id: 'domain-0123456789ab', kind: 'domain', phase: 'cad-preparation', count: 1,
+        firstSeen: '2026-10-24T00:00:00Z', lastSeen: '2026-10-24T00:00:00Z', ids: { job_id: 'job-1' },
+        message: 'Kestrel horn cannot be rebuilt',
+      }],
+    };
+    const url = decodeURIComponent(issueUrl(withIncident, 'It crashed'));
+    expect(url).not.toContain('Kestrel');
+    expect(url).not.toContain('domain-0123456789ab');
+    expect(new URL(issueUrl(withIncident, 'It crashed')).searchParams.get('what-happened')).toBe('It crashed');
+  });
+
   it('still produces a usable link with no summary yet', () => {
     expect(issueUrl(undefined)).toContain('template=bug.yml');
   });
@@ -137,6 +152,14 @@ describe('ReportDialog', () => {
     expect(document.querySelector('.report-summary pre')?.textContent)
       .toContain('Waveguide Generator 0.3.0');
     expect(document.querySelector<HTMLSelectElement>('.report-field select')?.value).toBe('run-b');
+  });
+
+  it('shows what may be shared before anything is: the copied text, and that the file names parts', async () => {
+    await render();
+    expect(document.querySelector('.report-summary-scope')?.textContent)
+      .toContain('exactly what Copy summary puts on the clipboard');
+    expect(document.querySelector('.report-file-scope')?.textContent)
+      .toContain('Model and part names may appear');
   });
 
   it('opens with the design box clear every time', async () => {

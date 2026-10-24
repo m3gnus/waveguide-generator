@@ -26,7 +26,7 @@ import zipfile
 
 from server.cadlink.operations import user_hold
 from server.jobs.models import JobStatusName
-from server.platform.incidents import summary as incident_summary
+from server.platform.incidents import redact_names, summary as incident_summary
 from server.platform.paths import DataPaths
 from .scrub import ScrubRules, scrub_text, scrub_value
 
@@ -335,8 +335,16 @@ def _job_digest(job: Mapping[str, Any], rules: ScrubRules) -> dict[str, Any]:
         "engine": engine,
         "stage": job.get("stage"),
         "createdAt": job.get("created_at"),
-        "error": scrub_text(str(job["error_message"]), rules) if job.get("error_message") else None,
+        # Pasted anywhere: the model's name (its snapshot's) and ids are replaced.
+        "error": redact_names(scrub_text(str(job["error_message"]), rules), _job_names(cad))
+        if job.get("error_message") else None,
     }
+
+
+def _job_names(cad: Any) -> list[str]:
+    snapshot = cad.get("snapshot") if isinstance(cad, Mapping) else None
+    name = snapshot.get("document_name") if isinstance(snapshot, Mapping) else None
+    return [str(name)] if name else []
 
 
 def summary_text(summary: Mapping[str, Any]) -> str:

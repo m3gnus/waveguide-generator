@@ -937,7 +937,8 @@ def _ingest_error(exc: Exception) -> HTTPException:
         # The guard's figures are for the developers; the user gets its one wording.
         record_preparation_diagnostic(
             "memory-guard", {"code": "solver_memory_exceeded", "detail": str(exc)},
-            phase="cad-ingest", exception=exc,
+            # The guard's own words: figures, never a name.
+            phase="cad-ingest", exception=exc, names=(),
         )
         return HTTPException(status_code=422, detail={
             "code": "solver_memory_exceeded", "message": SolverMemoryTooLarge.USER_MESSAGE,
@@ -2036,10 +2037,15 @@ def _track(state: Any, task: asyncio.Task[Any]) -> None:
             logger.error(
                 "A CAD preparation failed unexpectedly.", exc_info=finished.exception()
             )
-            # Written off the event loop; recording never raises.
-            asyncio.get_running_loop().run_in_executor(None, functools.partial(
+            record = functools.partial(
                 record_incident, "preparation-crash", "cad-preparation", exception=finished.exception(),
-            ))
+            )
+            # Written off the event loop; recording never raises. At shutdown
+            # the executor takes nothing more, and the record is written here.
+            try:
+                asyncio.get_running_loop().run_in_executor(None, record)
+            except RuntimeError:
+                record()
 
     task.add_done_callback(done)
 

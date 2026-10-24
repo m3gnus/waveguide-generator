@@ -68,6 +68,7 @@ _DIAGNOSTIC_IDS = ("job_id", "operation_id", "ingest_id", "preparation_id", "man
 def record_preparation_diagnostic(
     stage: str, evidence: Mapping[str, Any], *, chosen_axis: str | None = None,
     phase: str = "cad-preparation", exception: BaseException | None = None,
+    names: Sequence[Any] | None = None,
 ) -> str | None:
     """Record a developer diagnostic: one incident record, and the log line.
 
@@ -76,6 +77,10 @@ def record_preparation_diagnostic(
     is another failure's. The log line (``extra["cad_diagnostic"]``) stays: the
     replay tool reads it. Returns the incident id, or ``None`` when no store is
     configured.
+
+    ``names`` are the model's names the caller knows (an empty list: none),
+    which the record keeps to redact itself with; the run, ingest and bundle
+    its ids name add theirs (``configure_incidents``).
     """
 
     diagnostic = {"stage": stage, "evidence": dict(evidence), "chosen_axis": chosen_axis}
@@ -84,6 +89,7 @@ def record_preparation_diagnostic(
         ids={key: evidence.get(key) for key in _DIAGNOSTIC_IDS},
         exception=exception,
         evidence={**dict(evidence), "chosen_axis": chosen_axis},
+        redaction_names=None if names is None else [str(name) for name in names if name],
     )
     if incident is not None:
         diagnostic["incident"] = incident

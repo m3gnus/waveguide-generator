@@ -121,6 +121,9 @@ STEP_TEXT = (
     "#2=PRODUCT('Waveguide L\\X2\\00E9\\X0\\on','Waveguide L\\X2\\00E9\\X0\\on','',(#9));\n"
     "#3=NEXT_ASSEMBLY_USAGE_OCCURRENCE('Waveguide L\\X2\\00E9\\X0\\on:1','Waveguide L\\X2\\00E9\\X0\\on:1','',#5,#6,$);\n"
     "#4=MANIFOLD_SOLID_BREP('Front baffle',#7);\n"
+    "#5=OPEN_SHELL('Throat shell L\\X2\\00E9\\X0\\on',(#7));\n"
+    "#6=COLOUR_RGB('Satin Tritonia',0.5,0.5,0.5);\n"
+    "#7=APPLICATION_CONTEXT('core data for automotive mechanical design processes');\n"
     "#8=PRODUCT_DEFINITION('design','',#5,#9);\n"
     "ENDSEC;\nEND-ISO-10303-21;\n"
 )
@@ -128,7 +131,8 @@ SECRETS = (
     DOCUMENT, "Tritonia", "Waveguide L", "Front baffle", "Ada Lovelace", "Lovelace Audio",
     "urn:adsk.wipprod:dm.lineage:SECRETDOC", "wgd_01SECRETDESIGN", "wge_01SECRETEXPORT",
     "wgl_01SECRETLINEAGE", "wgb_01SECRETBUNDLE", "wgr_01SECRETRETURN", "job-secret-9",
-    "op-secret-4", "ingest-secret-2", "b" * 64, "speaker_body_token",
+    "op-secret-4", "ingest-secret-2", "b" * 64, "speaker_body_token", "Mirror cut", "Throat shell",
+    "Satin", "00E9",
 )
 
 
@@ -142,7 +146,11 @@ def _secret_bundle(tmp_path: Path) -> tuple[Path, str]:
     (bundle / "wgreturn.json").write_text(json.dumps({
         "document": {"name": DOCUMENT, "native_id": "urn:adsk.wipprod:dm.lineage:SECRETDOC"},
         "return": {"id": "wgr_01SECRETRETURN", "created_at": "2026-10-24T09:00:00Z"},
-        "assembly": {"file": "assembly.step", "n_bodies_expected": 1},
+        "assembly": {"file": "assembly.step", "n_bodies_expected": 1, "cut_provenance": [{
+            "body_object_id": "speaker_body_token", "feature": {"kind": "split-body", "name": "Mirror cut Léon"},
+            "tool": {"kind": "origin-plane", "origin_plane": "XZ"}, "plane": "y0", "kept_side": "positive",
+            "export_frame": "root-component"}],
+            "domain": {"kind": "half", "cut_planes": ["y0"], "declared_by": "cad-author"}},
         "files": {"assembly.step": {"sha256": "sha256:old", "size_bytes": len(STEP_TEXT), "purpose": "exterior-assembly"}},
         "instances": [{
             "instance_id": "instance-1", "design_id": "wgd_01SECRETDESIGN", "export_id": "wge_01SECRETEXPORT",
@@ -152,7 +160,8 @@ def _secret_bundle(tmp_path: Path) -> tuple[Path, str]:
         }],
         "scope": {"included": [{"name": "Front baffle", "component": "Waveguide Léon",
                                 "object_id": "speaker_body_token", "body_kind": "solid"}]},
-        "sources": [{"id": "source-hf", "role": "HF", "observed": {"bodies": ["Front baffle"]}}],
+        "sources": [{"id": "source-hf", "role": "HF", "observed": {"bodies": ["Front baffle"]},
+                     "selectors": {"shell_names": ["Throat shell Léon"], "appearance_labels": ["Satin Tritonia"]}}],
     }), encoding="utf-8")
     return bundle, digest
 
@@ -213,6 +222,18 @@ def test_cli_export_redacts_every_name_and_id(tmp_path: Path, capsys) -> None:
     assert f"NEXT_ASSEMBLY_USAGE_OCCURRENCE('{component}:1','{component}:1'" in step
     assert instance["occurrence_path"].endswith(f"/{component}:1")
     assert "PRODUCT_DEFINITION('design','',#5,#9);" in step  # vocabulary is untouched
+    # A shell keeps matching its selector, an appearance its label; the header says nothing.
+    [shell] = manifest["sources"][0]["selectors"]["shell_names"]
+    assert f"OPEN_SHELL('{shell}',(#7));" in step
+    [label] = manifest["sources"][0]["selectors"]["appearance_labels"]
+    assert f"COLOUR_RGB('{label}',0.5,0.5,0.5);" in step
+    assert "FILE_DESCRIPTION((''),'2;1');" in step
+    assert "APPLICATION_CONTEXT('core data for automotive mechanical design processes');" in step
+    [cut] = manifest["assembly"]["cut_provenance"]
+    assert cut["feature"]["name"].startswith("name-") and cut["body_object_id"] == manifest["scope"]["included"][0]["object_id"]
+    assert (cut["plane"], cut["kept_side"], cut["export_frame"], cut["tool"]["origin_plane"]) == (
+        "y0", "positive", "root-component", "XZ")
+    assert manifest["assembly"]["domain"] == {"kind": "half", "cut_planes": ["y0"], "declared_by": "cad-author"}
     # Still a STEP file: every entity line is whole and every literal closed.
     for line in step.splitlines():
         if line.startswith("#"):
@@ -220,6 +241,115 @@ def test_cli_export_redacts_every_name_and_id(tmp_path: Path, capsys) -> None:
     payload = exported["model.wgreturn/assembly.step"]
     assert manifest["files"]["assembly.step"]["sha256"] == "sha256:" + hashlib.sha256(payload).hexdigest()
     assert manifest["files"]["assembly.step"]["size_bytes"] == len(payload)
+
+
+def _exported_text(out_dir: Path) -> dict[str, str]:
+    return {path.relative_to(out_dir).as_posix(): path.read_text(encoding="utf-8")
+            for path in out_dir.rglob("*") if path.is_file()}
+
+
+def _record_through_the_app(tmp_path: Path, ids: dict, evidence: dict, **kwargs) -> str:
+    """As the application records: the configured store, which resolves the ids' names."""
+
+    from server.cadlink.intake.readings import record_preparation_diagnostic
+    from server.diagnostics.incidents import IncidentNames
+    from server.platform.incidents import configure_incidents
+
+    configure_incidents(tmp_path / "data", app_root=tmp_path / "app", names=IncidentNames(tmp_path / "data"))
+    return record_preparation_diagnostic("domain", {**ids, **evidence}, **kwargs)
+
+
+#: Ids in free text that no field names: redacted by their shape.
+SHAPED_IDS = (
+    "urn:adsk.wipprod:fs.file:vf.SHAPEDSECRET", "wgd_01JABCDEFGHJKMNPQRSTVWXYZ0",
+    "wgi_01JZZZZZZZZZZZZZZZZZZZZZZZ", "6f1c2d3e-4b5a-4c6d-8e9f-0a1b2c3d4e5f", "manual-solve:client-req-77",
+)
+
+
+def test_cli_export_redacts_after_the_bundle_is_gone(tmp_path: Path, capsys) -> None:
+    """The record redacts itself: the names it kept when the bundle was still there."""
+
+    import shutil
+
+    bundle, digest = _secret_bundle(tmp_path)
+    ids = {"job_id": "job-secret-9", "operation_id": "op-secret-4", "manifest_sha256": f"sha256:{digest}"}
+    incident = _record_through_the_app(tmp_path, ids, {
+        "code": "open_half",
+        "message": f"WG cannot rebuild {DOCUMENT}; design {SHAPED_IDS[1]} ({SHAPED_IDS[0]})",
+        "detail": f"Front baffle and Throat shell Léon of Tritonia speaker v3, cut by Mirror cut Léon; "
+                  f"request {SHAPED_IDS[4]}, instance {SHAPED_IDS[2]}, run {SHAPED_IDS[3]}",
+    })
+    shutil.rmtree(bundle)  # prepared_gc's grace is 24 hours; the record lives 30 days
+    for data_dir in (tmp_path / "data", tmp_path / "elsewhere"):
+        if data_dir.name == "elsewhere":
+            # A record from a problem report: nothing but the record itself.
+            target = data_dir / "diagnostics" / "incidents"
+            target.mkdir(parents=True)
+            shutil.copy(tmp_path / "data" / "diagnostics" / "incidents" / f"{incident}.json", target)
+        out_dir = tmp_path / f"export-{data_dir.name}"
+        code, _out = _cli(capsys, "--data-dir", data_dir, "export", incident, "--out", out_dir, "--redact")
+        assert code == 0
+        exported = _exported_text(out_dir)
+        assert set(exported) == {"incident.json"}
+        for name, text in exported.items():
+            for secret in (*SECRETS, *SHAPED_IDS, "Léon", "SHAPEDSECRET", "redactionNames"):
+                assert secret.lower() not in text.lower(), (data_dir.name, name, secret)
+        evidence = json.loads(exported["incident.json"])["latest"]["evidence"]
+        assert evidence["message"].startswith("WG cannot rebuild redacted-model; design <redacted>")
+        assert evidence["code"] == "open_half"
+
+
+def test_cli_export_takes_the_names_from_the_run_when_the_record_kept_none(tmp_path: Path, capsys) -> None:
+    import sqlite3
+
+    db = tmp_path / "data" / "db"
+    db.mkdir(parents=True)
+    with sqlite3.connect(db / "simulations.db") as connection:
+        connection.execute("CREATE TABLE simulation_jobs (id TEXT PRIMARY KEY, task_metadata_json TEXT)")
+        connection.execute("INSERT INTO simulation_jobs VALUES (?, ?)", (
+            "job-secret-9", json.dumps({"cad": {"snapshot": {"document_name": DOCUMENT}}})))
+    store = _store(tmp_path)  # an older record: no names of its own
+    incident = store.record("internal-failure", "cad-preparation", ids={"job_id": "job-secret-9"},
+                            evidence={"detail": f"{DOCUMENT} could not be meshed"})
+    code, _out = _cli(capsys, "--data-dir", tmp_path / "data", "export", incident, "--out", tmp_path / "x", "--redact")
+    assert code == 0
+    text = (tmp_path / "x" / "incident.json").read_text(encoding="utf-8")
+    assert "Tritonia" not in text and "redacted-model could not be meshed" in text
+
+
+def test_cli_export_refuses_to_redact_when_no_name_can_be_known(tmp_path: Path, capsys) -> None:
+    store = _store(tmp_path)
+    incident = store.record("preparation-crash", "cad-preparation",
+                            evidence={"detail": f"{DOCUMENT} crashed the lane"})
+    from server.tools import cad_diag
+
+    out_dir = tmp_path / "export"
+    code = cad_diag.main(["--data-dir", str(tmp_path / "data"), "export", incident, "--out", str(out_dir), "--redact"])
+    assert code == 2
+    assert "cannot be known" in capsys.readouterr().err
+    assert not out_dir.exists()
+    # Unredacted, for the developer's own use, it still exports.
+    code, _out = _cli(capsys, "--data-dir", tmp_path / "data", "export", incident, "--out", out_dir)
+    assert code == 0
+
+
+def test_names_like_protocol_words_never_rewrite_what_failed(tmp_path: Path, capsys) -> None:
+    store = _store(tmp_path)
+    names = ["Component", "cad", "open", "positive", "domain", "preparation"]
+    incident = store.record(
+        "domain", "cad-preparation", ids={"job_id": "job-1"},
+        evidence={"code": "open_half", "stage": "domain", "kept_side": "positive",
+                  "message": "the open Component was cut by cad on its positive side and reopened"},
+        redaction_names=names,
+    )
+    code, _out = _cli(capsys, "--data-dir", tmp_path / "data", "export", incident, "--out", tmp_path / "x", "--redact")
+    assert code == 0
+    record = json.loads((tmp_path / "x" / "incident.json").read_text(encoding="utf-8"))
+    assert (record["kind"], record["phase"], record["id"]) == ("domain", "cad-preparation", incident)
+    evidence = record["latest"]["evidence"]
+    assert (evidence["code"], evidence["stage"]) == ("open_half", "domain")
+    assert all(word not in evidence["message"].split() for word in names)
+    assert "reopened" in evidence["message"]  # whole words only
 
 
 def test_cli_export_without_redact_copies_the_bundle_but_not_the_document(tmp_path: Path, capsys) -> None:
@@ -267,7 +397,9 @@ def test_cli_replays_a_retained_bundle_through_the_real_pipeline(tmp_path: Path,
     store = _store(tmp_path)
     incident = store.record("internal-failure", "cad-preparation",
                             ids={"operation_id": "manual-solve:1", "manifest_sha256": digest},
-                            evidence={"code": "preparation_failed"})
+                            evidence={"code": "preparation_failed"},
+                            # Names spelled like the protocol's words: the fixture must still validate.
+                            redaction_names=["Component", "cad", "open", "positive", "root", "speaker"])
     reports = []
 
     def runner(arguments):

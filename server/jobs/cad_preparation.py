@@ -31,7 +31,7 @@ Delivery and manual solve routes admit jobs through this same lane.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 import json
 import logging
@@ -246,6 +246,7 @@ def calm_refusal_message(
         record_refusal_diagnostic(
             code, message, job_id=job_id, operation_id=operation_id,
             manifest_sha256=snapshot.get("manifest_sha256"), exception=exception,
+            names=[snapshot.get("document_name")],
         )
     return str(preparation_failure(
         code, snapshot.get("document_name"), detail=message, manual=_is_manual(operation_id),
@@ -260,10 +261,12 @@ _DIAGNOSED_CODES = INTERNAL_FAILURE_CODES | {"solver_memory_exceeded"}
 def record_refusal_diagnostic(
     code: str, message: str, *, job_id: str | None, operation_id: str | None,
     manifest_sha256: str | None = None, exception: BaseException | None = None,
+    names: Sequence[Any] = (),
 ) -> None:
     """Record a calm failure's raw detail for the developers, once, where it is diagnosed.
 
     ``exception`` is the failure's own, when it was one; its stack is kept.
+    ``names`` are the model's names the caller knows (its snapshot's document).
     """
 
     if code in _DIAGNOSED_CODES:
@@ -272,6 +275,7 @@ def record_refusal_diagnostic(
             {"code": code, "job_id": job_id, "operation_id": operation_id,
              "manifest_sha256": manifest_sha256, "detail": message},
             exception=exception if isinstance(exception, Exception) else None,
+            names=names,
         )
 
 
@@ -1088,16 +1092,21 @@ async def run_cad_preparation(port: CadJobPort, host: CadPreparationHost, job_id
         # claiming it, so startup never offers the same unreadable job again.
         # Keep its original config and the validation diagnostic for inspection.
         logger.warning("CAD job %s holds an invalid saved intent: %s", job_id, exc)
-        event = await asyncio.to_thread(
-            store.refuse_preparing_job,
-            job_id,
-            code="preparation_failed",
-            message=calm_refusal_message(
-                "preparation_failed",
-                f"WG could not read this saved CAD request: {exc}. Send the CAD request again.",
-                cad_of(row), job_id=job_id, operation_id=None,
-            ),
-        )
+        unreadable = str(exc)
+
+        def refuse_unreadable() -> Any:
+            # In the thread, as a whole: the calm message records an incident.
+            return store.refuse_preparing_job(
+                job_id,
+                code="preparation_failed",
+                message=calm_refusal_message(
+                    "preparation_failed",
+                    f"WG could not read this saved CAD request: {unreadable}. Send the CAD request again.",
+                    cad_of(row), job_id=job_id, operation_id=None,
+                ),
+            )
+
+        event = await asyncio.to_thread(refuse_unreadable)
         if event is None:
             return "fenced"
         port.publish(event)

@@ -20,6 +20,13 @@ The records are
   variables as a problem report's scrubber writes them (``~``, ``%APPDATA%``,
   ...), and the account name to ``<user>``, before anything is fingerprinted,
   cut or written;
+* **self-redacting**: a record keeps, in ``redactionNames``, the names of the
+  model it is about (the document's, its components', bodies' and features'),
+  from the caller and from what its ids lead to (:func:`configure_incidents`'s
+  ``names``). They are never shown; a redacted export, and the summary a
+  problem report puts on the clipboard, replace them with stand-ins even when
+  the model's bundle and run are long gone. A record without the field was
+  written where no name could be known, and cannot be redacted;
 * **independent of the run list**: deleting runs (Clear failed) never deletes a
   record, and the job logs it removes are copied, as bounded tails, into the
   records that name those jobs first (:func:`retain_job_logs`).
@@ -72,6 +79,11 @@ MAX_STACK_CHARS = 16 * 1024
 MAX_LIST_ITEMS = 32
 MAX_MAPPING_ITEMS = 64
 MAX_DEPTH = 6
+#: Names a record keeps to redact itself with, and the longest one.
+MAX_REDACTION_NAMES = 256
+MAX_REDACTION_NAME_CHARS = 256
+#: Shorter names are not redacted: two letters name nothing, and match everything.
+MIN_REDACTION_NAME = 3
 
 #: Keys whose values are geometry or model content. An incident describes a
 #: failure; it never copies the model it failed on.
@@ -96,6 +108,67 @@ _VOLATILE = re.compile(
     r"|\d+(?:\.\d+)?(?:e[+-]?\d+)?",
     re.IGNORECASE,
 )
+
+
+#: Identifier formats that name a run, a request, a design or a CAD document,
+#: wherever they appear in free text: Autodesk URNs, WG's prefixed ULIDs
+#: (``wgd_``, ``wgr_``, ``wgi_`` ..., also cut short), manual-solve request
+#: ids, UUIDs, and 32- and 64-hex digests and request ids.
+IDENTIFIER_PATTERN = re.compile(
+    r"urn:adsk[^\s'\"<>()\[\]{},;]*"
+    r"|(?<![A-Za-z0-9])wg[a-z]{1,2}_[0-9A-Z]{10,}(?![A-Za-z0-9])"
+    r"|(?:cad-solve:)?manual-solve:[A-Za-z0-9_.:-]+"
+    r"|(?<![A-Za-z0-9-])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![A-Za-z0-9-])"
+    r"|(?:sha256:)?(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])"
+    r"|(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])",
+    re.IGNORECASE,
+)
+
+
+def name_pattern(names: Iterable[str]) -> re.Pattern[str] | None:
+    """One pattern for these names: whole tokens, any case, the longest first.
+
+    A name matches only where it is not part of a longer word (a letter or a
+    digit on either side), so a body called ``open`` leaves ``opened`` alone.
+    ``_`` and ``-`` separate tokens: a parameter prefix's stem is found in
+    ``wg_<stem>_length``.
+    """
+
+    terms = sorted(
+        {str(name).strip() for name in names if len(str(name).strip()) >= MIN_REDACTION_NAME},
+        key=lambda term: (-len(term), term),
+    )
+    if not terms:
+        return None
+    alternatives = []
+    for term in terms:
+        before = r"(?<![^\W_])" if term[0].isalnum() else ""
+        after = r"(?![^\W_])" if term[-1].isalnum() else ""
+        alternatives.append(before + re.escape(term) + after)
+    return re.compile("|".join(alternatives), re.IGNORECASE)
+
+
+def redact_names(text: str, names: Iterable[str], *, placeholder: str = "<name>", ids: str | None = "<id>") -> str:
+    """``text`` without these names (and, unless ``ids`` is None, without identifiers)."""
+
+    pattern = name_pattern(names)
+    if pattern is not None:
+        text = pattern.sub(placeholder, text)
+    return IDENTIFIER_PATTERN.sub(ids, text) if ids is not None else text
+
+
+def _redaction_names(*groups: Iterable[Any] | None) -> list[str]:
+    """The names, in order, each once (any case), bounded."""
+
+    kept: dict[str, str] = {}
+    for group in groups:
+        for item in group or ():
+            if not isinstance(item, str):
+                continue
+            name = item.strip()[:MAX_REDACTION_NAME_CHARS]
+            if len(name) >= MIN_REDACTION_NAME and name.lower() not in kept:
+                kept[name.lower()] = name
+    return list(kept.values())[:MAX_REDACTION_NAMES]
 
 
 def _now() -> datetime:
@@ -343,8 +416,15 @@ class IncidentStore:
         evidence: Mapping[str, Any] | None = None,
         versions: Mapping[str, Any] | None = None,
         signature: Any = None,
+        redaction_names: Iterable[str] | None = None,
     ) -> str:
-        """Record one occurrence and return its incident id."""
+        """Record one occurrence and return its incident id.
+
+        ``redaction_names`` are the names of the model the failure is about
+        that the caller knows (an empty list: it knows there are none). They
+        join the record's ``redactionNames``; ``None`` adds nothing, and a
+        record no caller ever gave names to has no such field.
+        """
 
         redactor = self._redactor
         # Redacted first: the fingerprint and the cuts see placeholders, never
@@ -382,6 +462,11 @@ class IncidentStore:
             current["lastSeen"] = moment
             current["versions"] = bounded({**self.versions(), **dict(versions or {})}, limit=512)
             current["latest"] = occurrence
+            if redaction_names is not None or "redactionNames" in current:
+                kept = current.get("redactionNames")
+                current["redactionNames"] = _redaction_names(
+                    kept if isinstance(kept, list) else (), redaction_names,
+                )
             current["occurrences"] = (
                 list(current.get("occurrences") or []) + [{"at": moment, "ids": occurrence["ids"]}]
             )[-MAX_OCCURRENCES:]
@@ -512,14 +597,23 @@ class IncidentStore:
         return removed
 
 
-def summary(record: Mapping[str, Any]) -> dict[str, Any]:
-    """One record as a line of a list: what, where, how often, and the first words."""
+def summary(record: Mapping[str, Any], *, public: bool = False) -> dict[str, Any]:
+    """One record as a line of a list: what, where, how often, and the first words.
+
+    ``public``: for text a user may paste anywhere (a problem report's
+    summary). The first words lose the record's ``redactionNames`` and every
+    identifier, and a record that cannot be redacted (no ``redactionNames``)
+    shows none.
+    """
 
     latest = record.get("latest") or {}
     exception = latest.get("exception") or {}
     evidence = latest.get("evidence") or {}
     message = exception.get("message") or evidence.get("detail") or evidence.get("message") \
         or evidence.get("reason") or evidence.get("code") or ""
+    if public:
+        names = record.get("redactionNames")
+        message = redact_names(str(message), names) if isinstance(names, list) and message else ""
     return {
         "id": record.get("id"),
         "kind": record.get("kind"),
@@ -535,6 +629,7 @@ def summary(record: Mapping[str, Any]) -> dict[str, Any]:
 # -- the process-wide store ----------------------------------------------------
 
 _store: IncidentStore | None = None
+_names: Callable[[Mapping[str, Any]], Iterable[str] | None] | None = None
 _store_lock = threading.Lock()
 
 
@@ -543,22 +638,30 @@ def configure_incidents(
     *,
     app_root: Path | str | None = None,
     versions: Callable[[], Mapping[str, Any]] | Mapping[str, Any] | None = None,
+    names: Callable[[Mapping[str, Any]], Iterable[str] | None] | None = None,
 ) -> IncidentStore:
-    """Make ``record_incident`` write into this data directory, from now on."""
+    """Make ``record_incident`` write into this data directory, from now on.
 
-    global _store
+    ``names`` turns an occurrence's ids into the names of the model they lead
+    to (a run's snapshot, an ingest, a retained bundle), or ``None`` when they
+    lead nowhere: what the record keeps to redact itself with.
+    """
+
+    global _store, _names
     store = IncidentStore(data_dir, app_root=app_root, versions=versions)
     with _store_lock:
         _store = store
+        _names = names
     return store
 
 
 def reset_incidents() -> None:
     """Record nothing until configured again (the suite's isolation hook)."""
 
-    global _store
+    global _store, _names
     with _store_lock:
         _store = None
+        _names = None
 
 
 def configured_store() -> IncidentStore | None:
@@ -574,20 +677,32 @@ def record_incident(
     evidence: Mapping[str, Any] | None = None,
     versions: Mapping[str, Any] | None = None,
     signature: Any = None,
+    redaction_names: Iterable[str] | None = None,
 ) -> str | None:
     """Record one incident in the configured store; ``None`` when there is none.
 
-    Never raises: the failure being recorded is already being handled, and
-    recording it must not become a second one.
+    ``redaction_names`` are the names the caller knows (see
+    :meth:`IncidentStore.record`); the configured ``names`` adds those the
+    ids lead to. Never raises: the failure being recorded is already being
+    handled, and recording it must not become a second one.
     """
 
-    store = _store
+    store, resolve = _store, _names
     if store is None:
         return None
     try:
+        names = list(redaction_names) if redaction_names is not None else None
+        if resolve is not None and ids:
+            try:
+                found = resolve(ids)
+            except Exception:  # noqa: BLE001 - names help redaction; they never stop a record
+                log.debug("Could not resolve an incident's names", exc_info=True)
+                found = None
+            if found is not None:
+                names = [*(names or ()), *found]
         return store.record(
             kind, phase, ids=ids, exception=exception, evidence=evidence,
-            versions=versions, signature=signature,
+            versions=versions, signature=signature, redaction_names=names,
         )
     except Exception:  # noqa: BLE001 - see the docstring
         log.warning("Could not record a %s incident", kind, exc_info=True)
@@ -608,6 +723,7 @@ def retain_job_logs(job_ids: Iterable[str], log_path: Callable[[str], Path]) -> 
 
 __all__ = [
     "GEOMETRY_KEYS",
+    "IDENTIFIER_PATTERN",
     "INCIDENTS_DIRECTORY",
     "INTERFACE_ERROR_KIND",
     "IncidentStore",
@@ -617,6 +733,8 @@ __all__ = [
     "MAX_OCCURRENCES",
     "MAX_INTERFACE_RECORDS",
     "MAX_RECORDS",
+    "MAX_REDACTION_NAMES",
+    "MIN_REDACTION_NAME",
     "Redactor",
     "account_name",
     "bounded",
@@ -625,8 +743,10 @@ __all__ = [
     "fingerprint",
     "incident_id",
     "incidents_dir",
+    "name_pattern",
     "read_log_tail",
     "record_incident",
+    "redact_names",
     "redaction_rules",
     "reset_incidents",
     "retain_job_logs",

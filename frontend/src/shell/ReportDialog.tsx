@@ -156,7 +156,8 @@ export function ReportDialog({ open, jobs, onClose }: {
           <h3 id="report-summary-title">What this report says about your machine</h3>
           {error && <p className="workspace-settings-error" role="status">{error}</p>}
           <pre tabIndex={0}>{report?.text ?? (error ? 'Unavailable.' : 'Collecting…')}</pre>
-          <p className="cad-settings-note">The saved file adds the application log, the selected run&rsquo;s log, WG&rsquo;s records of its own recent internal problems (what failed, the versions, run and request ids, error stacks, and the last lines of the logs of the runs they name), and a <code>manifest.json</code> listing everything in it. Your user name is rewritten out of every path.</p>
+          <p className="cad-settings-note report-summary-scope">This text is exactly what Copy summary puts on the clipboard. WG replaces the names and ids of the models it knows in it; read it before you paste it anywhere. The GitHub issue starts with only the build, the platform and what you write above.</p>
+          <p className="cad-settings-note report-file-scope">The saved file adds the application log, the selected run&rsquo;s log, WG&rsquo;s records of its own recent internal problems (what failed, the versions, run and request ids, error stacks, and the last lines of the logs of the runs they name), and a <code>manifest.json</code> listing everything in it. Model and part names may appear in it. Your user name is rewritten out of every path.</p>
         </section>
 
         <div className="report-dialog-actions">

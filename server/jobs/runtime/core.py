@@ -2351,10 +2351,13 @@ class JobRuntime:
             if refusal and is_calm_failure(refusal["code"], refusal["message"]):
                 from server.jobs.cad_preparation import record_refusal_diagnostic
 
+                snapshot = record["task_metadata"]["cad"].get("snapshot")
+                snapshot = snapshot if isinstance(snapshot, Mapping) else {}
                 await asyncio.to_thread(
                     record_refusal_diagnostic,
                     str(refusal["code"]), str(refusal["message"] or ""),
                     job_id=job_id, operation_id=intent.operation_id,
+                    manifest_sha256=snapshot.get("manifest_sha256"), names=[snapshot.get("document_name")],
                 )
             for retired in await asyncio.to_thread(self.store.retire_held_cad_requests, job_id):
                 self.events.publish(retired)

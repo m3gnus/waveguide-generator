@@ -255,12 +255,18 @@ keys withheld; pruning reads file times, which are each record's last
 occurrence), and paths are rewritten to `<wg>`, `<data>` and `<tmp>`, the home
 folder and location variables as a problem report writes them (`~`,
 `%APPDATA%`, ...), and the account name to `<user>` before anything is
-fingerprinted, cut or written. Clear failed
+fingerprinted, cut or written. Each record also keeps, in `redactionNames`, the
+names of the model it is about: those the caller knows and those its ids lead to
+(the run's snapshot, the CAD Link ingest and WG's retained bundle, read when the
+failure is recorded). They are never shown; they let a redacted export and the
+problem report's summary replace the names after the bundle (24 h) and the run
+are gone, and in a record taken from a problem report. Clear failed
 and other run deletions never remove a record; the tails of the job logs they
 delete are copied into the records that name those jobs first. Problem reports
 carry the 50 newest records (`incidents/` in the zip), with job-log tails only in
-the ten newest and in those naming the selected run, and the summary lists the
-newest ten. Only the running app configures the store, so tests, `cad_replay`
+the ten newest and in those naming the selected run, and the summary (the
+clipboard text) lists the newest ten with their names and ids replaced; a record
+without `redactionNames` shows no message there. Only the running app configures the store, so tests, `cad_replay`
 and child processes never write records.
 
 ```bash
@@ -277,12 +283,19 @@ runs `server.tools.cad_replay` in its own process on the recorded inbox request
 `fails differently` (exit 3) or `could not replay` (its request or retained bundle
 is gone, exit 2). `export` writes the record and WG's retained copy of
 the bundle, which never holds the CAD document; `--redact` also replaces every
-name the record and the bundle hold (document, components, bodies, occurrence
-paths, STEP products: `redacted-model`, `name-<n>`, the same stand-in everywhere)
-and every id (`<redacted>`; the manifest's design, export and return ids by
-stand-ins, its document and origin-bundle ids dropped), keys the job logs
-`job-<n>`, blanks the STEP header's author fields and updates the manifest's
-file hashes, so the fixture still replays. A typical loop: `list --since 2h`, `replay`, fix,
+name the record and the bundle hold, and those the record kept and its ids still
+lead to (document, components, bodies, features, shells, appearances, occurrence
+paths, STEP products: `redacted-model`, `name-<n>`, whole words, the same
+stand-in everywhere), and every id (`<redacted>`, also anything shaped like one:
+`urn:adsk…`, `wgd_…` and the other prefixed ids, UUIDs, digests, manual-solve
+request ids; the manifest's design, export and return ids by stand-ins, its
+document and origin-bundle ids dropped). Protocol words are never rewritten
+(the record's kind, phase, code and stage, the manifest's enumerated fields, the
+STEP schema and context entities), the job logs are keyed `job-<n>`, the STEP
+header's author fields and description are blanked and the manifest's file
+hashes updated, so the fixture still validates and replays. A record with no
+name source at all (no bundle, no `redactionNames`, no run or ingest left) is
+refused with exit 2: its names cannot be known. A typical loop: `list --since 2h`, `replay`, fix,
 `replay` again.
 
 ### Running targeted tests

@@ -655,7 +655,8 @@ def create_router(data_dir: Path) -> APIRouter:
 
             record_preparation_diagnostic(
                 "memory-guard", {"code": "solver_memory_exceeded", "detail": str(exc)},
-                phase="source-export", exception=exc,
+                # The guard's own words: figures, never a name.
+                phase="source-export", exception=exc, names=(),
             )
             raise HTTPException(422, SolverMemoryTooLarge.USER_MESSAGE) from exc
         except (TypeError, ValueError) as exc:
