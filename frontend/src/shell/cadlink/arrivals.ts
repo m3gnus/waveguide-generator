@@ -200,10 +200,14 @@ export async function refreshCadReturnArrivals(
       importedMeshStore.beginIntent();
       initialChoiceOwed.current = false;
     }
+    // Opening a project is the user's request for its model: its latest return
+    // is prepared, as a selection is. A launch restore never meshes.
+    const openedProject = projectOpenPending.current && canChooseInitial && !!initial
+      && !projectMismatch && opened === initial;
     if (projectOpenPending.current && canChooseInitial) {
       projectOpenPending.current = false;
       setStatus(initial
-        ? `Project design loaded. Selected the latest matching return from ${initial.documentName ?? initial.name}; prepare it to restore Simulation geometry.`
+        ? `Project design loaded. Selected the latest matching return from ${initial.documentName ?? initial.name}; preparing Simulation geometry.`
         : 'Project design loaded. No matching CAD return is available yet; return the project from Fusion or Onshape to prepare Simulation geometry.');
     } else if (projectOpenPending.current && useCadReturnStore.getState().selectedBundle) {
       // A receipt or another selection owner resolved the project choice.
@@ -226,7 +230,9 @@ export async function refreshCadReturnArrivals(
         }`);
       enterCadWorkspace();
       if (!heldForManualPick) autoIngestSelected();
-    } else if (!initial) {
+    } else if (initial) {
+      if (openedProject) autoIngestSelected();
+    } else {
       // A restored choice is never meshed again in the background: it stays
       // selected and not prepared until the user prepares it (or a retained
       // preparation is reopened by its own owner), so a launch costs no mesh.

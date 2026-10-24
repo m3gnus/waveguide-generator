@@ -50,6 +50,7 @@ export type SolveStageWord =
   | 'Combining'
   | 'Cancelling…'
   | 'Waiting for you'
+  | 'Not prepared'
   | 'Needs recovery'
   | 'Done'
   | 'Failed'
@@ -95,6 +96,9 @@ export interface OperationProgressLike {
   state: string;
   stage: string | null;
   reason: string | null;
+  /** What it asks of the user (`operations.reason_attention`); a kept
+   * operation is "Waiting for you" only for a real question. */
+  attention?: 'question' | 'action' | 'failed' | null;
 }
 
 /** `server/cadlink/joblane/preparation.py`'s own stages, past "received": the
@@ -114,6 +118,14 @@ const OPERATION_STAGE_WORDS: Record<string, SolveStageWord> = {
 export const OPERATION_REASON_WORDS: Record<string, string> = {
   preparation_failed: 'preparation failed',
   interrupted: 'interrupted',
+  mesh_too_large: 'above the triangle limit',
+  solver_memory_exceeded: 'too large for this machine\'s memory',
+  snapshot_invalid: 'preparation failed',
+  snapshot_changed: 'changed after Fusion asked',
+  return_unavailable: 'its return cannot be read',
+  wglink_folder_unset: 'no WGLink folder selected',
+  excitation_refused: 'its drive cannot be solved as set',
+  model_cut_unsolvable: 'arrived cut open',
   setup_required: 'needs its solve settings',
   findings_need_review: 'blocking findings to review',
   frame_confirmation_required: 'its solver frame changed; press Solve again',
@@ -132,7 +144,8 @@ export function operationStageWord(operation: OperationProgressLike): SolveStage
     case 'rejected': return 'Failed';
     case 'cancelled': return 'Cancelled';
     case 'cancel_requested': return 'Cancelling…';
-    case 'needs_user_input': return 'Waiting for you';
+    case 'needs_user_input':
+      return operation.attention === 'failed' || operation.attention === 'action' ? 'Not prepared' : 'Waiting for you';
     case 'recovery_required': return 'Needs recovery';
     default: return (operation.stage && OPERATION_STAGE_WORDS[operation.stage]) || 'Received';
   }

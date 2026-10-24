@@ -170,6 +170,16 @@ describe('CAD viewport empty-state copy', () => {
       detail: 'WG could not prepare Tritonia. This has been recorded for the developers.' });
     expect(cadViewportEmptyCopy({ ...pointer, phase: 'selected-unprepared' }).title).toBe('No CAD geometry yet');
   });
+
+  it('says a refused or failed request in its own words, as Results does, never "No CAD geometry yet"', () => {
+    const pointer = { bundleName: 'Tritonia', bundleReadable: false, cadApplication: 'Fusion 360' };
+    expect(cadViewportEmptyCopy({ ...pointer, phase: 'stopped',
+      failureMessage: 'Tritonia arrived cut open, and WG cannot rebuild the whole speaker from that cut.' }))
+      .toEqual({ title: 'Tritonia was not solved',
+        detail: 'Tritonia arrived cut open, and WG cannot rebuild the whole speaker from that cut.' });
+    expect(cadViewportEmptyCopy({ ...pointer, phase: 'waiting', meshChoice: true }).detail)
+      .toBe('Choose how to continue with its mesh size in CAD Link.');
+  });
 });
 
 describe('Viewport preview errors', () => {

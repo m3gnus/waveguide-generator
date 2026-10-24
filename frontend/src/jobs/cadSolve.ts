@@ -112,6 +112,7 @@ export function cadJobSummary(job: JobItem): CadOperationSummary {
     setupRevisionId: job.cad_provenance?.setup?.revision_id
       ?? (typeof job.cad_intent?.setup_revision_id === 'string' ? job.cad_intent.setup_revision_id : null),
     setupDefaults: state.setup_defaults, frameAxisAutomatic: state.frame_axis_automatic,
+    attention: state.attention ?? null,
     snapshot: state.snapshot ? {
       manifestSha256: state.snapshot.manifest_sha256, documentName: state.snapshot.document_name,
       projectLineageId: state.snapshot.project_lineage_id,

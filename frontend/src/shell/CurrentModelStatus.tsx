@@ -1,4 +1,5 @@
-import { useCadModelState } from '../stores/cadModelState';
+import { meshChoiceLine, useCadModelState } from '../stores/cadModelState';
+import { meshCeilingChoice } from '../stores/meshCeilingChoice';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import type { ReactNode } from 'react';
 import type { CadReturnIngestRecord } from '../api/cadlink';
@@ -34,6 +35,14 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
       {status.message}
     </Notice>
     {request}
+  </div>;
+  // A preparation the triangle ceiling stopped in this window, put off with
+  // Later: the model waits for the mesh-size choice, which Choose reopens.
+  if (solveStatus && cad.phase === 'waiting' && cad.meshChoice && !cad.heldRequest) return <div className="current-model-status" data-model-status="waiting">
+    <Notice tone="info" title="Waiting for you" actions={cad.meshChoice.deferred
+      ? <button type="button" className="btn" onClick={() => meshCeilingChoice.reopen()}>Choose</button> : undefined}>
+      {meshChoiceLine(cad.label)}
+    </Notice>
   </div>;
   // A failed preparation: WG's calm sentence and Try again where it can work.
   if (status.kind === 'prepare-failed' && latestJob) {

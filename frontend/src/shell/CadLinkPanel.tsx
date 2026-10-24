@@ -1,5 +1,6 @@
 import { isMeshRecoveryFinding } from '../model/cadMeshRecovery';
-import { useCadModelState } from '../stores/cadModelState';
+import { meshChoiceLine, preparationFailureLine, useCadModelState } from '../stores/cadModelState';
+import { meshCeilingChoice } from '../stores/meshCeilingChoice';
 import { EmptyState } from './EmptyState';
 import { Notice } from './Notice';
 import { cadMeshSizing } from '../api/cadMesh';
@@ -906,7 +907,13 @@ export function CadLinkPanel() {
       {record && !staleModel && importedSubmissionNotices(state).map((notice) => (
         <Notice key={notice}>{notice}</Notice>
       ))}
-      {model.phase === 'prepare-failed' && <Notice>Preparation failed. Use Prepare simulation to try again.</Notice>}
+      {/* WG's words for a failed or stopped request; Prepare simulation is
+          advised only where its button is offered (a Fusion request pointer
+          has none). */}
+      {(model.phase === 'prepare-failed' || model.phase === 'stopped') && <Notice>{preparationFailureLine(model)}</Notice>}
+      {model.meshChoice?.deferred && <Notice actions={<button type="button" className="btn" onClick={() => meshCeilingChoice.reopen()}>Choose</button>}>
+        {meshChoiceLine(model.label)}
+      </Notice>}
       {(model.canPrepare && model.needsPreparation || model.phase === 'preparing') && <button
         className="primary cad-primary-action"
         disabled={!model.canPrepare}

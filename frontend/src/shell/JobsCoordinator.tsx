@@ -570,6 +570,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         ...(unchanged ?? { setup: built!.setup }),
         ...(frameAxis ? { frame_axis: frameAxis } : {}),
         ...(approvals ? { approvals } : {}),
+        // Solve anyway was chosen when this mesh was prepared: the solve's
+        // preparation reuses it instead of asking again.
+        ...(record.mesh_limit_override ? { mesh_limit_override: true } : {}),
       };
       // The completion claim exists before HTTP: an event may beat the response.
       if (!beforePost(continuation)) return 'blocked' as const;

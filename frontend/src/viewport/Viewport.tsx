@@ -337,12 +337,19 @@ export function cadViewportEmptyCopy(options: {
   cadApplication: string;
   /** WG's own words for a request whose preparation failed on the server. */
   failureMessage?: string | null;
+  /** The model waits for the triangle-ceiling choice (`meshCeilingChoice`). */
+  meshChoice?: boolean;
 }): { title: string; detail: string } {
-  const { bundleName, bundleReadable, phase, cadApplication, failureMessage } = options;
+  const { bundleName, bundleReadable, phase, cadApplication, failureMessage, meshChoice } = options;
   // A Fusion request WG prepares itself has no readable bundle of its own yet;
   // its server-side state is still this model's state.
   if (failureMessage && phase === 'prepare-failed') {
     return { title: `${bundleName} is not prepared`, detail: failureMessage };
+  }
+  // Refused, or solved and failed, before a mesh was on screen: the request's
+  // words, as Results has them, never "No CAD geometry yet".
+  if (phase === 'stopped') {
+    return { title: `${bundleName} was not solved`, detail: failureMessage || 'WG could not solve this model.' };
   }
   if (!bundleReadable && phase !== 'preparing' && phase !== 'waiting') {
     return {
@@ -359,7 +366,9 @@ export function cadViewportEmptyCopy(options: {
   if (phase === 'waiting') {
     return {
       title: `${bundleName} is waiting for you`,
-      detail: 'WG needs your choice before it can continue with this model.',
+      detail: meshChoice
+        ? 'Choose how to continue with its mesh size in CAD Link.'
+        : 'WG needs your choice before it can continue with this model.',
     };
   }
   if (phase === 'prepare-failed') {
@@ -435,6 +444,7 @@ export function Viewport() {
     phase: cad.phase,
     cadApplication,
     failureMessage: cad.failureMessage,
+    meshChoice: !!cad.meshChoice,
   });
   const resultSelection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const coherenceContext = useCurrentModel();

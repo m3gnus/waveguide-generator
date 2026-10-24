@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { dismissCadJob, isCadChoiceJob, latestCadJobs, useCadJobs } from '../jobs/cadSolve';
+import { useCadReturnStore } from '../stores/cadReturn';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { durableSettings } from '../stores/durableSettings';
 import { meshCeilingChoice } from '../stores/meshCeilingChoice';
@@ -39,11 +40,18 @@ function heldThisSession(job: JobItem): boolean {
 const GENERIC_NEXT_STEP = 'This request needs your choice before WG can solve it.';
 
 /** One modal owns held-request choices: Fusion requests WG holds for the user,
- * and a Prepare simulation the triangle ceiling holds in this window. It shows
- * only the user-facing next step and the choices, never a raw reason. */
+ * and a preparation the triangle ceiling holds in this window. It shows only
+ * the user-facing next step and the choices, never a raw reason.
+ *
+ * The ceiling's choice says what it does: after Prepare simulation it is
+ * "Prepare anyway" (the prepared mesh carries the choice to the later Solve);
+ * after a Solve it is "Solve anyway", which prepares and starts the solve. It
+ * applies only to the model it was asked for, while that model is selected. */
 export function HeldCadRequestDialog() {
   const jobs = useCadJobs();
-  const ceiling = useSyncExternalStore(meshCeilingChoice.subscribe, meshCeilingChoice.getSnapshot, meshCeilingChoice.getSnapshot);
+  const pending = useSyncExternalStore(meshCeilingChoice.subscribe, meshCeilingChoice.getSnapshot, meshCeilingChoice.getSnapshot);
+  const selectedPath = useCadReturnStore(state => state.selectedBundle?.bundlePath ?? null);
+  const ceiling = pending && !pending.deferred && pending.bundlePath === selectedPath ? pending : null;
   const [later, setLater] = useState<Set<string>>(() => new Set(readLater()));
   const [requested, setRequested] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -67,17 +75,19 @@ export function HeldCadRequestDialog() {
   const close = () => {
     if (!id || inFlight.current) return;
     if (job) remember(job.id);
-    else meshCeilingChoice.clear();
+    // Later: the model waits for the choice, and CAD Link and Results say so.
+    else meshCeilingChoice.defer();
     setRequested(null);
   };
   const dialog = useModalDialogFocus<HTMLDivElement>({ open: !!id, onClose: close });
   if (!id) return null;
   const state = job?.cad_state;
   const name = job ? state?.snapshot?.document_name : ceiling?.name;
-  const nextStep = job ? state?.next_step || GENERIC_NEXT_STEP : ceiling!.nextStep;
+  const nextStep = job ? state?.next_step || GENERIC_NEXT_STEP
+    : `${ceiling!.nextStep} You can also ${ceiling!.then === 'solve' ? 'solve' : 'prepare'} it anyway.`;
   const options = job
     ? state?.options?.length ? state.options : [{ id: 'review', label: 'Review request' }, { id: 'dismiss', label: 'Dismiss request' }]
-    : [{ id: 'solve_anyway', label: 'Solve anyway' }];
+    : [{ id: 'solve_anyway', label: ceiling!.then === 'solve' ? 'Solve anyway' : 'Prepare anyway' }];
   const choose = async (option: string) => {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -85,9 +95,14 @@ export function HeldCadRequestDialog() {
     setError(null);
     try {
       if (!job) {
-        // The browser Prepare path: prepare again, accepting the ceiling.
+        // The browser path: prepare again accepting the ceiling -- and solve,
+        // when a Solve asked -- for the model the question was asked about.
+        const asked = ceiling!;
         meshCeilingChoice.clear();
-        await cadWorkspace.getSnapshot().ingest({ meshLimitOverride: true });
+        if (useCadReturnStore.getState().selectedBundle?.bundlePath === asked.bundlePath) {
+          if (asked.then === 'solve') await cadWorkspace.getSnapshot().prepareAndSolve({ meshLimitOverride: true });
+          else await cadWorkspace.getSnapshot().ingest({ meshLimitOverride: true });
+        }
       } else if (option === 'dismiss') await dismissCadJob(job);
       else if (option === 'solve_anyway' || option === 'retry') {
         const child = await jobsCoordinatorBridge.getSnapshot().continueRun(job.id, { mesh_limit_override: option === 'solve_anyway' });

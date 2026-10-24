@@ -420,6 +420,9 @@ export interface CadReturnIngestRecord {
     finding_id?: string;
   };
   findings: CadReturnFinding[];
+  /** The user chose Solve anyway over the triangle ceiling for this mesh; a
+   * Solve of it carries the choice (`mesh_limit_override`). */
+  mesh_limit_override?: boolean;
   /** The one domain decision ingest sealed (`api/domainDecision.ts`); absent
    * on an earlier build's record. */
   domain_decision?: unknown;

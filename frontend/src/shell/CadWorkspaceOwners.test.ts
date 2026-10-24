@@ -128,6 +128,37 @@ it('Bring in and solve joins the arrival preparation and submits once through th
   expect(solve).toHaveBeenCalledOnce();
 });
 
+it('a Bring in and solve stopped at the triangle ceiling asks Solve anyway, which prepares with the override and solves', async () => {
+  const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
+  const solve = vi.fn(async () => 'submitted' as const);
+  vi.spyOn(solveControlStore, 'getSnapshot').mockReturnValue({ solve } as unknown as NonNullable<ReturnType<typeof solveControlStore.getSnapshot>>);
+  const base = fetcher.getMockImplementation()!;
+  const bodies: Record<string, unknown>[] = [];
+  fetcher.mockImplementation((input, init) => {
+    if (String(input) !== '/api/cadlink/ingest') return base(input, init);
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    bodies.push(body);
+    return Promise.resolve(body.meshLimitOverride ? json({ ...record, mesh_limit_override: true })
+      : json({ detail: { code: 'mesh_too_large', message: 'This model meshes to 28,944 triangles.',
+        next_step: 'Change the mesh resolution in Sources & Mesh… in Fusion, or check the model size.' } }, 422));
+  });
+  stop = mountCadWorkspaceOwners(); await flush();
+  const action = cadWorkspace.getSnapshot().pullAndSolve(); await flush();
+  returns = [{ ...bundle, requestId: 'pull-1' }];
+  await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true });
+  // A choice, not a failure: the Solve waits for the pop-up's answer.
+  expect(await action).toBe('blocked');
+  expect(cadWorkspace.getSnapshot().error).toBeNull();
+  expect(meshCeilingChoice.getSnapshot()).toMatchObject({ bundlePath: bundle.bundlePath, then: 'solve' });
+  expect(solve).not.toHaveBeenCalled();
+  // Solve anyway: one preparation with the override, then the same public Solve.
+  expect(await cadWorkspace.getSnapshot().prepareAndSolve({ meshLimitOverride: true })).toBe('solving');
+  expect(bodies.map((body) => body.meshLimitOverride ?? false)).toEqual([false, true]);
+  expect(useCadReturnStore.getState().ingestRecord?.mesh_limit_override).toBe(true);
+  expect(solve).toHaveBeenCalledOnce();
+  meshCeilingChoice.clear();
+});
+
 it.each([false, true])('Bring in and solve waits for the arrival frame and rechecks supersession (%s)', async (superseded) => {
   const frame = deferred<Response>();
   const reading = useCadSolverFrameStore.getState().load(record.ingest_id, (() => frame.promise) as typeof fetch);

@@ -292,7 +292,8 @@ it.each(['matching', 'no match'])('holds project-open feedback until the deferre
     expect(useCadReturnStore.getState().selectedBundle).toBeNull();
     expect(status).toHaveBeenCalledWith(expect.stringContaining('No matching CAD return'));
   }
-  expect(ingest).not.toHaveBeenCalled();
+  // Opening a project prepares its return, as before; only a launch restore never meshes.
+  expect(ingest).toHaveBeenCalledTimes(result === 'matching' ? 1 : 0);
 });
 
 it('leaves initial selection and later discovery of a Fusion Solve bundle to its request owner', async () => {

@@ -41,6 +41,9 @@ export interface CadWorkspaceSnapshot {
   ingestSelected(options?: { meshLimitOverride?: boolean }): Promise<CadReturnIngestRecord>;
   pullFromFusion(): Promise<CadReturnBundle>;
   pullAndSolve(): Promise<'solving' | 'blocked' | 'failed'>;
+  /** Prepare the selected model, then start its solve: a Solve the triangle
+   * ceiling stopped, finished by Solve anyway (`meshLimitOverride`). */
+  prepareAndSolve(options?: { meshLimitOverride?: boolean }): Promise<'solving' | 'blocked' | 'failed'>;
   /** The one Fusion outbound path: derives open-vs-update and the expected
    * document guard from current evidence, and parks on the two-way conflict
    * (returning null) until the user confirms through the shared conflict dialog. */
@@ -80,6 +83,7 @@ export const emptyCadWorkspace: CadWorkspaceSnapshot = {
   ingestSelected: unavailable,
   pullFromFusion: unavailable,
   pullAndSolve: unavailable,
+  prepareAndSolve: unavailable,
   sendWgToFusion: unavailable,
   cancelFusionConflict: () => undefined,
   clearFeedback: () => undefined,

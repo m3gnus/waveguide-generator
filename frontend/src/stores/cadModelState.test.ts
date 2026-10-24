@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { selectCadModelState, cadModelHeaderLine, cadModelStatusLabel } from './cadModelState';
+import type { MeshCeilingChoice } from './meshCeilingChoice';
 import { bundle, record } from '../shell/cadlink/selection.fixtures';
 import type { JobItem } from '../api/jobsSocket';
 
@@ -59,6 +60,38 @@ describe('selected CAD model state', () => {
     expect(cadModelHeaderLine(waiting)).toContain('Waiting for you');
     // A prepared model on screen is its own state; the request's job does not override it.
     expect(selectCadModelState({ ...pointer, ingestRecord: record, needsIngest: false }, idle, { kind: 'preparing', job }).phase).toBe('prepared');
+  });
+
+  it('follows a refused or failed request of a pointer, so every surface says the same', () => {
+    const pointer = { ...selected, selectedBundle: { ...bundle, readable: false, requestId: 'job-1' } };
+    const job = { id: 'job-1', status: 'error', cad_state: { state: 'rejected', reason: 'model_cut_unsolvable' } } as unknown as JobItem;
+    const refused = selectCadModelState(pointer, idle, { kind: 'refused', job, message: 'Speaker arrived cut open.' });
+    expect(refused).toMatchObject({ phase: 'stopped', failureMessage: 'Speaker arrived cut open.', canPrepare: false });
+    expect(cadModelStatusLabel(refused)).toBe('CAD model · not solved');
+    expect(cadModelHeaderLine(refused)).toBe('Speaker arrived cut open.');
+    const failed = selectCadModelState(pointer, idle, { kind: 'failed', job, message: 'The solve failed.' });
+    expect(failed.phase).toBe('stopped');
+    // A readable bundle can be prepared again; a prepared one is its own state.
+    expect(selectCadModelState(selected, idle, { kind: 'refused', job, message: 'x' }).needsPreparation).toBe(true);
+    expect(selectCadModelState({ ...pointer, ingestRecord: record, needsIngest: false }, idle,
+      { kind: 'refused', job, message: 'x' }).phase).toBe('prepared');
+  });
+
+  it('advises Prepare simulation only where its button exists', () => {
+    const pointer = { ...selected, selectedBundle: { ...bundle, readable: false } };
+    const failing = { ingesting: false, ingestError: 'Role resolution refused.' };
+    expect(cadModelHeaderLine(selectCadModelState(pointer, failing))).toBe('Preparation failed.');
+    expect(cadModelHeaderLine(selectCadModelState(selected, failing)))
+      .toBe('Preparation failed. Use Prepare simulation to try again.');
+  });
+
+  it('waits for a mesh-size choice asked for this model only', () => {
+    const ceiling: MeshCeilingChoice = { name: 'Speaker', nextStep: 'x', bundlePath: bundle.bundlePath, then: 'prepare', deferred: true };
+    const waiting = selectCadModelState(selected, idle, null, null, ceiling);
+    expect(waiting).toMatchObject({ phase: 'waiting', meshChoice: ceiling, heldRequest: null });
+    expect(cadModelHeaderLine(waiting)).toBe('Speaker is waiting for your mesh-size choice.');
+    expect(selectCadModelState(selected, idle, null, null, { ...ceiling, bundlePath: 'another' }).phase).toBe('selected-unprepared');
+    expect(selectCadModelState({ ...selected, ingestRecord: record, needsIngest: false }, idle, null, null, ceiling).phase).toBe('prepared');
   });
 
   it('keeps a retained legacy preparation usable without a workspace bundle', () => {

@@ -151,6 +151,28 @@ describe('CadLinkPanel', () => {
     cadWorkspace.setState(emptyCadWorkspace, true);
   });
 
+  it('tells a Fusion request pointer whose preparation failed WG\'s words, never a Prepare simulation it cannot offer', async () => {
+    const { emptyCadWorkspace } = await import('../stores/cadWorkspace');
+    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false, fusionStatus: closedFusion }, true);
+    workspaceModeStore.setMode('cad');
+    const calm = 'WG could not prepare Speaker. This has been recorded for the developers.';
+    const failed = cadJobFixture({
+      operationId: 'cmd-pointer', kind: 'prepare_and_solve', state: 'needs_user_input', stage: 'validating',
+      reason: 'preparation_failed', message: calm, jobId: null, snapshot: null,
+    } as unknown as CadOperationSummary, { id: 'job-pointer', status: 'error', created_at: new Date().toISOString() });
+    failed.cad_state = { ...failed.cad_state!, held: false, prepare_failed: true, next_step: null,
+      options: [{ id: 'retry', label: 'Try again' }, { id: 'dismiss', label: 'Dismiss request' }] };
+    publishCadJobs([failed]);
+    // The pointer Fusion's request names: no readable bundle of its own, so nothing to prepare here.
+    useCadReturnStore.getState().selectBundle({ ...listing.items[0], readable: false, requestId: 'job-pointer', designIds: [] });
+    await act(async () => root.render(<QueryClientProvider client={capabilityClient}><CadLinkPanel/></QueryClientProvider>));
+    const card = host.querySelector('.cad-model-card')!;
+    expect(card.textContent).toContain(calm);
+    expect(card.textContent).not.toContain('Use Prepare simulation');
+    expect([...card.querySelectorAll('button')].some(button => button.textContent === 'Prepare simulation')).toBe(false);
+    cadWorkspace.setState(emptyCadWorkspace, true);
+  });
+
   it.each([true, false, undefined])('shows the manual Update upgrade notice for capability %s', async (immutableBundles) => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -972,9 +994,10 @@ describe('CadLinkPanel', () => {
     expect(buttonTexts(card)).toEqual(['Open Tritonia v2', 'Dismiss']);
   });
 
-  it('solves a stored snapshot with Fusion closed: one Solve of the model, which the server prepares', async () => {
+  it.each([false, true])('solves a stored snapshot with Fusion closed: one Solve of the model, which the server prepares (Solve anyway chosen: %s)', async (override) => {
     workspaceModeStore.setMode('cad');
-    const withProject = { ...record, project: { lineage_id: 'wgl_speaker' } };
+    // A mesh prepared with Solve anyway says so; its Solve carries the choice.
+    const withProject = { ...record, project: { lineage_id: 'wgl_speaker' }, ...(override ? { mesh_limit_override: true } : {}) };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
@@ -1012,6 +1035,7 @@ describe('CadLinkPanel', () => {
     const pressed = posted.find((item) => item.path.endsWith('/solve'))!;
     expect(pressed.path).toBe('/api/models/wgl_speaker/solve');
     expect(pressed.body).toMatchObject({ prepared_id: record.ingest_id, setup: { schema_version: 1 } });
+    expect((pressed.body as { mesh_limit_override?: boolean }).mesh_limit_override).toBe(override ? true : undefined);
     expect(posted.some((item) => item.path.endsWith('/solve-again') || item.path === '/api/cadlink/operations')).toBe(false);
   });
 

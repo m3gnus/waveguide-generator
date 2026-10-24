@@ -185,18 +185,84 @@ describe('held CAD request dialog owner', () => {
     expect(host.querySelector('[role="dialog"]')).toBeNull();
   });
 
-  it('asks Solve anyway for a Prepare simulation over the triangle ceiling', async () => {
+  const ceilingBundle = (bundlePath: string) => ({ bundlePath, name: bundlePath, documentName: 'NoWaistbanding',
+    readable: true, modifiedAt: '2026-10-24T10:00:00Z' }) as unknown as NonNullable<ReturnType<typeof useCadReturnStore.getState>['selectedBundle']>;
+  const NEXT = 'Change the mesh resolution in Sources & Mesh… in Fusion, or check the model size.';
+
+  it('asks Prepare anyway after Prepare simulation, and the prepared mesh carries the choice', async () => {
+    const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
+    const { cadWorkspace } = await import('../stores/cadWorkspace');
+    const ingest = vi.fn().mockResolvedValue(undefined);
+    const prepareAndSolve = vi.fn().mockResolvedValue('solving');
+    const previous = cadWorkspace.getState();
+    cadWorkspace.setState({ ...previous, ingest, prepareAndSolve });
+    useCadReturnStore.setState({ selectedBundle: ceilingBundle('b') });
+    await act(async () => root.render(<HeldCadRequestDialog/>));
+    act(() => meshCeilingChoice.ask({ name: 'NoWaistbanding', nextStep: NEXT, bundlePath: 'b' }));
+    const dialog = host.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain('NoWaistbanding');
+    expect(dialog?.textContent).toContain('You can also prepare it anyway.');
+    expect(button('Solve anyway')).toBeUndefined();
+    await act(async () => button('Prepare anyway').click());
+    expect(ingest).toHaveBeenCalledWith({ meshLimitOverride: true });
+    expect(prepareAndSolve).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    cadWorkspace.setState(previous, true);
+    useCadReturnStore.setState({ selectedBundle: null });
+  });
+
+  it('asks Solve anyway after a Solve, and prepares and solves in one press', async () => {
+    const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
+    const { cadWorkspace } = await import('../stores/cadWorkspace');
+    const ingest = vi.fn().mockResolvedValue(undefined);
+    const prepareAndSolve = vi.fn().mockResolvedValue('solving');
+    const previous = cadWorkspace.getState();
+    cadWorkspace.setState({ ...previous, ingest, prepareAndSolve });
+    useCadReturnStore.setState({ selectedBundle: ceilingBundle('b') });
+    await act(async () => root.render(<HeldCadRequestDialog/>));
+    act(() => { meshCeilingChoice.ask({ name: 'NoWaistbanding', nextStep: NEXT, bundlePath: 'b' }); meshCeilingChoice.solveAfter('b'); });
+    expect(host.querySelector('[role="dialog"]')?.textContent).toContain('You can also solve it anyway.');
+    await act(async () => button('Solve anyway').click());
+    expect(prepareAndSolve).toHaveBeenCalledWith({ meshLimitOverride: true });
+    expect(ingest).not.toHaveBeenCalled();
+    expect(meshCeilingChoice.getSnapshot()).toBeNull();
+    cadWorkspace.setState(previous, true);
+    useCadReturnStore.setState({ selectedBundle: null });
+  });
+
+  it('never applies the ceiling choice to another selected model', async () => {
     const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
     const { cadWorkspace } = await import('../stores/cadWorkspace');
     const ingest = vi.fn().mockResolvedValue(undefined);
     const previous = cadWorkspace.getState();
     cadWorkspace.setState({ ...previous, ingest });
+    useCadReturnStore.setState({ selectedBundle: ceilingBundle('b') });
     await act(async () => root.render(<HeldCadRequestDialog/>));
-    act(() => meshCeilingChoice.ask({ name: 'NoWaistbanding', nextStep: 'Change the mesh resolution in Sources & Mesh… in Fusion, or check the model size. You can also solve anyway.', bundlePath: 'b' }));
-    expect(host.querySelector('[role="dialog"]')?.textContent).toContain('NoWaistbanding');
-    await act(async () => button('Solve anyway').click());
-    expect(ingest).toHaveBeenCalledWith({ meshLimitOverride: true });
+    act(() => meshCeilingChoice.ask({ name: 'NoWaistbanding', nextStep: NEXT, bundlePath: 'b' }));
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    // A background owner (a Fusion takeover, a folder arrival) selects another model.
+    act(() => useCadReturnStore.setState({ selectedBundle: ceilingBundle('c') }));
     expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(ingest).not.toHaveBeenCalled();
+    act(() => meshCeilingChoice.clear());
     cadWorkspace.setState(previous, true);
+    useCadReturnStore.setState({ selectedBundle: null });
+  });
+
+  it('keeps the model waiting for its mesh-size choice after Later, and Choose asks again', async () => {
+    const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
+    useCadReturnStore.setState({ selectedBundle: ceilingBundle('b'), ingestRecord: null });
+    workspaceModeStore.setMode('cad');
+    await act(async () => root.render(<><HeldCadRequestDialog/><CurrentModelStatus solveStatus/></>));
+    act(() => meshCeilingChoice.ask({ name: 'NoWaistbanding', nextStep: NEXT, bundlePath: 'b' }));
+    await act(async () => button('Later').click());
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(meshCeilingChoice.getSnapshot()?.deferred).toBe(true);
+    const status = host.querySelector('[data-model-status="waiting"]')!;
+    expect(status.textContent).toContain('NoWaistbanding is waiting for your mesh-size choice.');
+    await act(async () => button('Choose').click());
+    expect(host.querySelector('[role="dialog"]')?.textContent).toContain('NoWaistbanding');
+    act(() => meshCeilingChoice.clear());
+    useCadReturnStore.setState({ selectedBundle: null });
   });
 });

@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react';
-import { getFusionCadStatus, type CadReturnBundle } from '../api/cadlink';
+import { CadLinkApiError, getFusionCadStatus, type CadReturnBundle, type CadReturnIngestRecord } from '../api/cadlink';
 import { getOnshapeConnection, getOnshapeStatus } from '../api/onshape';
 import { cadCoordinationStore } from '../api/cadCoordination';
 import { jobsSocket } from '../api/jobsSocket';
@@ -11,6 +11,7 @@ import { cadRecoveryNoticesStore, connectCadRecoveryNotices } from '../stores/ca
 import { frameReadInFlight } from '../stores/cadSolverFrame';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { cadWorkspace, emptyCadWorkspace } from '../stores/cadWorkspace';
+import { meshCeilingChoice } from '../stores/meshCeilingChoice';
 import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
 import { subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
@@ -180,36 +181,73 @@ export function mountCadWorkspaceOwners(): () => void {
       return new Set([...pulls, ...sends]);
     },
   });
+  /** The one composed Solve after a preparation: the same public Solve the
+   * card's button presses, once the prepared mesh is still the selection. */
+  const solvePrepared = async (
+    prepared: CadReturnIngestRecord | null,
+    bundlePath: string,
+    choice: ReturnType<ReturnType<typeof useCadReturnStore.getState>['captureModelChoice']>,
+  ): Promise<'solving' | 'blocked'> => {
+    // This composed command already holds a solve intention. Let the card's
+    // initial frame read answer before invoking the same public Solve.
+    if (prepared) await frameReadInFlight(prepared.ingest_id);
+    const selected = useCadReturnStore.getState();
+    if (!prepared || selected.ingestRecord !== prepared || selected.needsIngest
+      || !selected.isCurrentModelChoice(choice) || selected.selectedBundle?.bundlePath !== bundlePath) {
+      throw new SupersededError('A newer model selection superseded this geometry request.');
+    }
+    reportStatus('Prepared. Submitting the solve…');
+    const control = solveControlStore.getSnapshot();
+    if (!control) throw new Error('Solve coordinator is unavailable');
+    const outcome = await control.solve();
+    if (outcome === 'busy') {
+      reportStatus('Prepared the geometry. A solve is already running — press Solve when it finishes.');
+      return 'blocked';
+    }
+    if (outcome === 'blocked') { reportStatus(control.title); return 'blocked'; }
+    reportStatus('Solving the current geometry.');
+    return 'solving';
+  };
+  /** A Solve the triangle ceiling stopped waits for the pop-up, whose
+   * Solve anyway prepares and solves; it is not a failure. */
+  const ceilingStopped = (error: unknown, bundlePath: string | undefined): boolean => {
+    if (!(error instanceof CadLinkApiError) || error.code !== 'mesh_too_large' || !bundlePath) return false;
+    meshCeilingChoice.solveAfter(bundlePath);
+    reportStatus(null);
+    return true;
+  };
   const pullAndSolve = async (): Promise<'solving' | 'blocked' | 'failed'> => {
     solveAttention.armSolve();
+    let bundlePath: string | undefined;
     try {
       const returned = await waiter.pullFromFusion();
+      bundlePath = returned.bundlePath;
       reportStatus('Received the current Fusion geometry. Preparing the simulation…');
       const choice = useCadReturnStore.getState().captureModelChoice();
       const prepared = await preparation;
-      // This composed command already holds a solve intention. Let the card's
-      // initial frame read answer before invoking the same public Solve.
-      if (prepared) await frameReadInFlight(prepared.ingest_id);
-      const selected = useCadReturnStore.getState();
-      if (!prepared || selected.ingestRecord !== prepared || selected.needsIngest
-        || !selected.isCurrentModelChoice(choice) || selected.selectedBundle?.bundlePath !== returned.bundlePath) {
-        throw new SupersededError('A newer model selection superseded this geometry request.');
-      }
-      reportStatus('Prepared. Submitting the solve…');
-      const control = solveControlStore.getSnapshot();
-      if (!control) throw new Error('Solve coordinator is unavailable');
-      const outcome = await control.solve();
-      if (outcome === 'busy') {
-        reportStatus('Prepared the Fusion geometry. A solve is already running — press Solve when it finishes.');
-        return 'blocked';
-      }
-      if (outcome === 'blocked') { reportStatus(control.title); return 'blocked'; }
-      reportStatus('Solving the current Fusion geometry.');
-      return 'solving';
+      return await solvePrepared(prepared, returned.bundlePath, choice);
     } catch (error) {
       if (error instanceof SupersededError) return 'blocked';
+      if (ceilingStopped(error, bundlePath)) return 'blocked';
       reportStatus(null);
       reportError(error instanceof Error ? error.message : String(error));
+      return useCadReturnStore.getState().ingestRecord ? 'blocked' : 'failed';
+    }
+  };
+  const prepareAndSolve = async (options: { meshLimitOverride?: boolean } = {}): Promise<'solving' | 'blocked' | 'failed'> => {
+    solveAttention.armSolve();
+    const bundlePath = useCadReturnStore.getState().selectedBundle?.bundlePath;
+    try {
+      if (!bundlePath) throw new Error('Select a CAD return before preparing a simulation.');
+      const choice = useCadReturnStore.getState().captureModelChoice();
+      const prepared = await actions.ingestSelected(options);
+      return await solvePrepared(prepared, bundlePath, choice);
+    } catch (error) {
+      if (error instanceof SupersededError) return 'blocked';
+      if (ceilingStopped(error, bundlePath)) return 'blocked';
+      reportStatus(null);
+      // A failed preparation already reported itself in CAD Link.
+      if (!(error instanceof CadLinkApiError)) reportError(error instanceof Error ? error.message : String(error));
       return useCadReturnStore.getState().ingestRecord ? 'blocked' : 'failed';
     }
   };
@@ -222,7 +260,7 @@ export function mountCadWorkspaceOwners(): () => void {
     refresh, refreshOnshapeStatus, selectBundle,
     returnFromOnshape: actions.returnFromOnshape,
     ingest: async (options) => { await actions.ingestSelected(options).catch(() => undefined); }, ingestSelected: actions.ingestSelected,
-    pullFromFusion: waiter.pullFromFusion, pullAndSolve,
+    pullFromFusion: waiter.pullFromFusion, pullAndSolve, prepareAndSolve,
     sendWgToFusion: outbound.sendWgToFusion, cancelFusionConflict: outbound.cancelFusionConflict,
     clearFeedback: () => {
       reportError(null); reportStatus(null);

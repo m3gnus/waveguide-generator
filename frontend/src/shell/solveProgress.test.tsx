@@ -82,6 +82,13 @@ describe('operationStageWord', () => {
       .toBe('the selected engine cannot solve this return');
   });
 
+  it('is "Waiting for you" only for a real question, never for a failure', () => {
+    expect(operationStageWord(op({ state: 'needs_user_input', reason: 'mesh_too_large', attention: 'question' }))).toBe('Waiting for you');
+    expect(operationStageWord(op({ state: 'needs_user_input', reason: 'preparation_failed', attention: 'failed' }))).toBe('Not prepared');
+    expect(operationStageWord(op({ state: 'needs_user_input', reason: 'return_unavailable', attention: 'action' }))).toBe('Not prepared');
+    expect(operationWaitingReason(op({ state: 'needs_user_input', reason: 'return_unavailable' }))).toBe('its return cannot be read');
+  });
+
   it('names cancellation and terminal outcomes', () => {
     expect(operationStageWord(op({ state: 'cancel_requested' }))).toBe('Cancelling…');
     expect(operationStageWord(op({ state: 'rejected' }))).toBe('Failed');
