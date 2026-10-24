@@ -80,36 +80,20 @@ describe('solve and directivity control help', () => {
     expect(fetchMock.mock.calls.length).toBeGreaterThan(count + 1);
   });
 
-  it.each(['parametric', 'cad'] as const)('prepares a failed BEAT runtime beside the backend select in %s and polls until ready', async (mode) => {
-    const failedEngine = { name: 'beat-cpu', label: 'BEAT · CPU', available: false,
-      reason: 'Preparation failed: offline.', runtime_state: 'failed', runtime_preparable: true,
-      geometry_sources: ['parametric', 'imported'], fast_paths: [], version: null };
-    const payload = { engines: [failedEngine], cpuPreparationInFlight: false };
-    const ready = { ...payload, engines: [{ ...failedEngine, available: true, runtime_state: 'ready', runtime_preparable: false }] };
-    let pollCount = 0;
-    const fetcher = vi.fn(async (url: string) => {
-      if (url.endsWith('/prepare')) return new Response('{}', { status: 202 });
-      if (url !== '/api/capabilities') return new Response('{}');
-      pollCount += 1;
-      return new Response(JSON.stringify(pollCount === 1
-        ? { ...payload, cpuPreparationInFlight: true,
-            engines: [{ ...failedEngine, runtime_state: 'preparing', runtime_preparable: false, reason: 'Downloading Julia…' }] }
-        : ready));
-    });
+  it.each(['parametric', 'cad'] as const)('keeps runtime readiness out of the %s picker while allowing cold selections', async mode => {
+    const fetcher = vi.fn(async () => new Response('{}'));
     vi.stubGlobal('fetch', fetcher);
-    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, payload);
-    render(<SolveOptionsControls mode={mode} />);
+    for (const state of ['unprepared', 'preparing', 'failed', 'unavailable', 'ready'] as const) {
+      const engine = { name: 'beat-cpu', label: 'BEAT CPU', available: state === 'ready',
+        reason: 'Preparation failed: offline.', runtime_state: state, runtime_preparable: state === 'unprepared' || state === 'failed',
+        geometry_sources: ['parametric', 'imported'], fast_paths: [], version: null };
+      queryClient.setQueryData(CAPABILITIES_QUERY_KEY, { engines: [engine], cpuPreparationInFlight: state === 'preparing' });
+      render(<SolveOptionsControls mode={mode}/>);
+      expect(host.querySelector('.beat-runtime-preparation')).toBeNull();
+      expect(host.querySelector('[role="status"]')?.textContent ?? '').not.toContain(engine.reason);
+      expect(host.querySelector<HTMLOptionElement>('option[value="beat-cpu"]')!.disabled).toBe(state === 'unavailable');
+    }
     expect(fetcher).not.toHaveBeenCalled();
-    const panel = host.querySelector('.beat-runtime-preparation')!;
-    expect(panel.textContent).toContain('Preparation failed: offline.');
-    await act(async () => { panel.querySelector<HTMLButtonElement>('button')!.click(); await vi.advanceTimersByTimeAsync(1); });
-    expect(host.querySelector('.beat-runtime-preparation')?.textContent).toContain('Downloading Julia');
-    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
-    expect(host.querySelector<HTMLOptionElement>('option[value="beat-cpu"]')!.disabled).toBe(false);
-    expect(pollCount).toBeGreaterThanOrEqual(2);
-    const completedPolls = pollCount;
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    expect(pollCount).toBe(completedPolls);
   });
 
   it.each([

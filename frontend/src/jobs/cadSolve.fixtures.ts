@@ -28,7 +28,7 @@ export function cadJobFixture(operation: CadOperationSummary, overrides: Partial
     } : { operation_id: operation.operationId },
     cad_state: {
       operation_id: operation.operationId, job_id: operation.jobId,
-      state: operation.state, stage: operation.stage, reason: operation.reason, message: operation.message,
+      state: operation.state, stage: operation.stage, reason: operation.reason, message: operation.message, blocker: operation.blocker ?? null,
       snapshot: operation.snapshot ? {
         manifest_sha256: operation.snapshot.manifestSha256, artifact_sha256: null,
         document_name: operation.snapshot.documentName ?? null, project_lineage_id: operation.snapshot.projectLineageId ?? null,

@@ -41,6 +41,7 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { buildCadProjectSetup } from './cadSetupPublisher';
 import { getCrossoverDraftError, useCrossoverDraftError } from '../design/crossoverDrafts';
 import { solveAttention, useJobAttention, useRecoveryNoticeAttention } from './solveAttention';
+import { workspaceNavigation } from './workspaceNavigation';
 import { solvedCadModels } from './cadlink/solvedModel';
 
 interface SolveControl {
@@ -678,6 +679,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const solve = useCallback(async () => {
     // The button, the shortcut and the palette all arrive here: one command.
     if (submissionInFlight.current) return 'busy' as const;
+    if (engineBlocked) workspaceNavigation.activate('results');
     if (warming && !heldEngineSolveJob()) beginContinuation();
     const continuation = waitingIntention.current;
     setRequestedSolve({ key: continuation?.model.key ?? model.key, kind: continuation?.model.kind ?? model.kind,
@@ -770,8 +772,15 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     return () => window.removeEventListener('keydown', shortcut);
   }, [solve, solveEnabled]);
 
+  // The job retains its warming intention even if capabilities finish and the
+  // plan cache refreshes before the held Fusion request reaches this browser.
+  const heldJob = heldEngineSolveJob();
+  const heldReadiness = heldJob?.cad_state?.blocker;
+  const heldWarmingEngine = heldReadiness?.remedies?.some(remedy => remedy.kind === 'wait') ? heldReadiness.engine
+    : !planPending && warming && (heldReadiness?.engine ?? heldJob?.solve_options?.engine) === serverReadiness?.engine
+      ? serverReadiness?.engine ?? null : null;
   const heldPreparation = useHeldSolvePreparation(model, engines, preparation.prepare,
-    useCallback((held: HeldSolveContinuation) => continueRun(held.jobId, { held }), [continueRun]), setActionError);
+    useCallback((held: HeldSolveContinuation) => continueRun(held.jobId, { held }), [continueRun]), setActionError, heldWarmingEngine);
   const prepareAndSolve = async (engine: string) => {
     if (heldEngineSolveJob()) {
       await heldPreparation.prepareAndSolve(engine);

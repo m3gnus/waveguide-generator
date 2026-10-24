@@ -2961,6 +2961,7 @@ export interface components {
         CadState: {
             /** Approvals */
             approvals: components["schemas"]["CadStateApproval"][];
+            blocker?: components["schemas"]["SolveBlocker"] | null;
             /** Frame Axis Automatic */
             frame_axis_automatic: string | null;
             /** Job Id */

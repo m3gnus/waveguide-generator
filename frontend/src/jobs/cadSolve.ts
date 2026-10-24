@@ -82,7 +82,7 @@ export function cadJobSummary(job: JobItem): CadOperationSummary {
   return {
     operationId: state.operation_id ?? cadJobOperationId(job) ?? job.id,
     kind: 'prepare_and_solve', state: state.state, stage: state.stage,
-    reason: state.reason, message: state.message, jobId: job.id,
+    reason: state.reason, message: state.message, blocker: state.blocker, jobId: job.id,
     attemptGeneration: 0, preparationId: state.preparation?.preparation_id ?? null,
     setupRevisionId: job.cad_provenance?.setup?.revision_id
       ?? (typeof job.cad_intent?.setup_revision_id === 'string' ? job.cad_intent.setup_revision_id : null),

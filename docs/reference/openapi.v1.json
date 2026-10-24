@@ -1205,6 +1205,16 @@
             "title": "Approvals",
             "type": "array"
           },
+          "blocker": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SolveBlocker"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "frame_axis_automatic": {
             "anyOf": [
               {

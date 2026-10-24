@@ -9,11 +9,10 @@ import { CurrentModelRequests } from './CadOperationsSection';
 import { automaticAxisNote, defaultSettingsNote } from './CadSolveInputs';
 import { jobsCoordinatorBridge, useOptionalSolveControl } from './JobsCoordinator';
 import { clearSolveStageClock, SolveProgressView } from './solveProgress';
-import { SolveReadiness } from './SolveReadiness';
 
 const STATUS_COPY = { solved: 'Solved', running: 'Solving', preparing: 'Preparing', refused: 'Solve refused', failed: 'Solve failed', 'never-solved': 'Not solved yet' };
 
-export function CurrentModelStatus({ record, actions = false }: { record?: CadReturnIngestRecord; actions?: boolean }) {
+export function CurrentModelStatus({ record, actions = false, solveStatus = false, validation = true, activeOnly = false }: { record?: CadReturnIngestRecord; actions?: boolean; solveStatus?: boolean; validation?: boolean; activeOnly?: boolean }) {
   const current = useCurrentModel();
   const model = record ? { ...current, kind: 'cad' as const, key: record.solve_model_sha256 || record.ingest_id,
     ingestId: record.ingest_id, manifestSha256: record.manifest_sha256 } : current;
@@ -23,17 +22,27 @@ export function CurrentModelStatus({ record, actions = false }: { record?: CadRe
   const latestJob = status.job;
   const latest = latestJob?.cad_state ? cadJobSummary(latestJob) : null;
   const unavailable = !control || (!!record && !control.cadMode);
-  const readiness = control?.readiness ?? (status.kind === 'refused' ? messageBlocker(status.message)
+  const readiness = control?.readiness ?? latestJob?.cad_state?.blocker ?? (status.kind === 'refused' ? messageBlocker(status.message)
     : unavailable ? messageBlocker('Solve is not available here.') : null);
   const held = status.kind === 'refused' && latestJob?.cad_state?.state === 'needs_user_input'
     && latestJob.cad_state.reason === 'engine_unavailable';
   const request: ReactNode = record ? <CurrentModelRequests record={record}/> : null;
+  const engineGate = held || !!readiness?.engine || control?.waitingForEngine;
+  const pending = (solveStatus || (validation && !engineGate)) && (control?.waitingForEngine || control?.actionError
+    || (readiness && (!readiness.engine || held || control?.readinessRequested)));
+  if (activeOnly && (!pending || !control) && status.kind !== 'running' && status.kind !== 'preparing') return null;
   const controls = <>
-    <SolveReadiness readiness={readiness} held={held}/>
+    {pending && !engineGate && <SolveProgressView showReadiness readiness={readiness}/>}
     {actions && (status.kind === 'failed' && latestJob
       ? <button type="button" onClick={() => void jobsCoordinatorBridge.getSnapshot().continueRun(latestJob.id).catch(() => undefined)}>Retry</button>
       : <button type="button" className="solve-button" disabled={!control || control.disabled} title={control?.title ?? 'Solve is not available here.'} onClick={() => void control?.solve()}>Solve</button>)}
   </>;
+  if (pending && engineGate) return <div className="current-model-status" data-model-status={status.kind}>
+    <SolveProgressView showReadiness readiness={readiness} held={held}/>
+    {!control?.waitingForEngine && controls}
+  </div>;
+  // Engine gates are described only in Results, including held Fusion requests.
+  if (held) return <div className="current-model-status">{controls}</div>;
   if (!latest) return <div className="current-model-status" data-model-status={status.kind}>
     <b>{actions && status.kind === 'solved' ? 'Loading results' : STATUS_COPY[status.kind]}</b>
     {latestJob ? <SolveProgressView job={latestJob} variant="compact"/> : !readiness && !control?.disabled && <span>{status.message}</span>}

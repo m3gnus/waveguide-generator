@@ -221,7 +221,7 @@ def job_cad_state(row: Mapping[str, Any]) -> dict[str, Any] | None:
     preparation = cad.get("preparation")
     return {
         "operation_id": view["operationId"] or (_optional_operation_id(intent) if intent else None),
-        **{key: view[key] for key in ("state", "stage", "reason", "message")},
+        **{key: view[key] for key in ("state", "stage", "reason", "message", "blocker")},
         "job_id": view["jobId"],
         "snapshot": (
             {key: snapshot.get(key) for key in ("document_name", "manifest_sha256", "artifact_sha256", "project_lineage_id")}

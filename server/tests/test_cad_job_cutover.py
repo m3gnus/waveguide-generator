@@ -725,6 +725,11 @@ def test_f2_cad_state_matches_the_operation_view_using_only_the_job(h, status, r
     record.update(status=status, stage=stage, stage_message="Restart pending", started_at="2026-10-01T00:00:00Z" if stage == "preparing-mesh" else None)
     if reason:
         cad["refusal"] = {"code": reason, "message": "Refused precisely"}
+        if reason == "engine_unavailable":
+            cad["refusal"]["blocker"] = {
+                "code": reason, "engine": "beat-metal", "message": "BEAT Metal is warming up.",
+                "remedies": [{"kind": "wait"}],
+            }
     if status == "queued":
         record["config_json"] = {"geometry": {"type": "imported"}}
     job_id, _, _ = h.jobs_store.create_job_idempotent(record, submission_key="cad-solve:cmd-1", request_sha256="delivery")
@@ -735,7 +740,7 @@ def test_f2_cad_state_matches_the_operation_view_using_only_the_job(h, status, r
     assert state["state"] == summary["state"] == expected
     for job_field, operation_field in [("operation_id", "operationId"), ("job_id", "jobId"), ("setup_defaults", "setupDefaults"), ("frame_axis_automatic", "frameAxisAutomatic"), ("updated_at", "updatedAt")]:
         assert state[job_field] == summary[operation_field]
-    for field in ("stage", "reason", "message"):
+    for field in ("stage", "reason", "message", "blocker"):
         assert state[field] == summary[field]
     assert state["received_at"] == job["created_at"]
     assert state["snapshot"] == cad["snapshot"]

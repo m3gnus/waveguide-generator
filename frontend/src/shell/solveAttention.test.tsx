@@ -151,6 +151,14 @@ describe('F8: a blocked operation reaches the user in either mode', () => {
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
   });
 
+  it('fronts Results for an engine gate without toolbar readiness text', () => {
+    act(() => workspaceModeStore.setMode('cad'));
+    arrive(waiting('warming-fusion', { reason: 'engine_unavailable', message: 'BEAT Metal is warming up.' }));
+    expect(activations).toEqual(['results']);
+    expect(host.querySelector('.attention-waiting')).toBeNull();
+    expect(host.textContent).not.toContain('warming');
+  });
+
   it('fronts it again when the request moves on to the next gate', () => {
     act(() => workspaceModeStore.setMode('cad'));
     arrive(waiting('op-fusion'));

@@ -11,6 +11,7 @@ import { preferencesStore } from '../prefs/preferences';
 import { resultViewStore } from '../stores/resultView';
 import { useRunExportStore } from '../stores/runExports';
 import { provideExportDestinationPrompt } from './exportDestinationPrompt';
+import * as coordinator from './JobsCoordinator';
 import { ResultsPanel } from './ResultsPanel';
 
 const exportMocks = vi.hoisted(() => ({
@@ -128,6 +129,28 @@ describe('atomic results display transitions', () => {
     provisionalResults.clear();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it('shows a new warming solve once alongside the previous results', async () => {
+    const control = vi.spyOn(coordinator, 'useOptionalSolveControl').mockReturnValue(null);
+    await act(async () => root.render(<ResultsPanel/>));
+    await act(async () => pending.get('old')!(response([100])));
+    expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe('old');
+    expect(host.textContent).not.toContain('Loading results');
+    control.mockReturnValue({
+      plan: null, planPending: false, cadMode: false, disabled: false, submitting: false, label: 'Solve',
+      title: 'BEAT Metal is warming up.', readinessRequested: true, waitingForEngine: true, waitingEngine: 'beat-metal',
+      readiness: { code: 'engine_unavailable', engine: 'beat-metal', message: 'BEAT Metal is warming up.',
+        remedies: [{ kind: 'wait' }, { kind: 'use_engine', engine: 'beat-cpu', label: 'Use BEAT CPU', same_solver: true }] },
+      solve: vi.fn(), prepareEngine: vi.fn(), prepareAndSolve: vi.fn(), useEngine: vi.fn(), stopWaiting: vi.fn(),
+      preparationError: null, actionError: null, preparingEngine: null,
+    });
+    await act(async () => root.render(<ResultsPanel/>));
+    expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe('old');
+    const progress = host.querySelectorAll('.solve-progress.solve-readiness');
+    expect(progress).toHaveLength(1);
+    expect(progress[0].textContent).toBe('BEAT Metal is warming up. The solve starts when it is ready.Stop');
+    expect([...progress[0].querySelectorAll('button')].map(button => button.textContent)).toEqual(['Stop']);
   });
 
   it('keeps one complete previous set until the new set swaps atomically', async () => {

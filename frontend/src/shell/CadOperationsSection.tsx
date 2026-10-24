@@ -1,5 +1,3 @@
-import { SolveReadiness } from './SolveReadiness';
-import { messageBlocker } from '../jobs/solveReadiness';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { isActiveJobStatus, jobsSocket } from '../api/jobsSocket';
 import { getIngest, type CadReturnFinding, type CadReturnIngestRecord } from '../api/cadlink';
@@ -313,7 +311,6 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
       <b>{header}{documentName ? ` · ${documentName}` : ''}</b>
       {showStatus && <span role="status">{status}</span>}
       {message && <span>{message}</span>}
-      {engineReason && showStatus && <SolveReadiness readiness={operation.blocker ?? messageBlocker(operation.message || 'Solve refused.')}/>}
       {ladder.length > 0 && <ol className="cad-operation-ladder" aria-label="What this solve still needs">
         {ladder.map((step) => <li
           key={step.gate}

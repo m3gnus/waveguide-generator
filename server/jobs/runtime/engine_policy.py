@@ -1,46 +1,17 @@
 """One engine selection and actionable refusal policy for every solve caller."""
 
 from dataclasses import dataclass, field
-from typing import Annotated, Awaitable, Callable, Literal, Sequence
-
-from pydantic import BaseModel, Field
+from typing import Awaitable, Callable, Sequence
 
 from server.engines.registry import EngineInfo, full3d_engine_order
-
-
-class PrepareRemedy(BaseModel):
-    kind: Literal["prepare"] = "prepare"
-    engine: str
-    disabled_reason: str | None = None
-
-
-class UseEngineRemedy(BaseModel):
-    kind: Literal["use_engine"] = "use_engine"
-    engine: str
-    label: str
-    same_solver: bool
-
-
-class WaitRemedy(BaseModel):
-    kind: Literal["wait"] = "wait"
-
-
-class SettingsRemedy(BaseModel):
-    kind: Literal["settings"] = "settings"
-    section: str = "simulation"
-
-
-SolveRemedy = Annotated[
-    PrepareRemedy | UseEngineRemedy | WaitRemedy | SettingsRemedy,
-    Field(discriminator="kind"),
-]
-
-
-class SolveBlocker(BaseModel):
-    code: str
-    message: str
-    engine: str
-    remedies: list[SolveRemedy] = Field(default_factory=list)
+from server.jobs.models import (
+    PrepareRemedy,
+    SettingsRemedy,
+    SolveBlocker as SolveBlocker,
+    SolveRemedy as SolveRemedy,
+    UseEngineRemedy,
+    WaitRemedy,
+)
 
 
 class EngineUnavailableError(RuntimeError):
@@ -170,13 +141,15 @@ async def select_engine(
     unavailable = answer.stage in {"availability", "adapter"}
     code = "engine_unavailable" if unavailable else (answer.code or "engine_unsupported")
     if unavailable and info and info.runtime_state == "preparing":
-        message = f"{label} is getting ready."
+        message = f"{label} is warming up."
         remedies.append(WaitRemedy())
     elif unavailable and info and info.runtime_state in {"unprepared", "failed"}:
         disabled = None if info.runtime_preparable else info.reason
         remedies.append(PrepareRemedy(engine=target, disabled_reason=disabled))
         message = (
-            f"{label} needs preparing."
+            f"{label} could not warm up. {info.reason or answer.reason or 'Preparation failed.'}"
+            if info.runtime_state == "failed"
+            else f"{label} needs preparing."
             if disabled is None
             else f"{label} cannot be prepared here: {disabled}"
         )

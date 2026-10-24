@@ -258,7 +258,7 @@ export function SolveActions() {
       }}
       onClick={solve.solve}
     ><Icon name="play"/>{solve.label}<kbd>{commandShortcutLabel('↵')}</kbd></button>
-    <CurrentModelStatus/>
+    <CurrentModelStatus validation={false}/>
     {source && <span className={`cad-source-line cad-source-${source.tone}`} role="status" title={source.text}>
       <span>{source.text}</span>
       {source.refresh && <button
@@ -289,7 +289,8 @@ export function AttentionNotices() {
   const readyRun = useReadyRun();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const requests = selectCadRequests({ jobs, notices, record: null });
-  const waiting = [...requests.earlier, ...requests.current];
+  // Engine gates live in solve progress, including automatic warm-up waits.
+  const waiting = [...requests.earlier, ...requests.current].filter(request => request.operation?.reason !== 'engine_unavailable');
   const waitingCount = waiting.length;
   // A visible Geometry tab can still have its requests below the scroll fold.
   const showWaiting = waitingCount > 0;

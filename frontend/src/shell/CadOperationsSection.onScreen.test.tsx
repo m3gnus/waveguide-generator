@@ -203,17 +203,17 @@ describe('operation cards for the model on screen', () => {
     expect([...card.querySelectorAll('button')].map((button) => button.textContent)).toEqual(['Dismiss']);
   });
 
-  it('keeps the backend message for a reason the card does not already explain', async () => {
+  it('leaves engine reasons to the Results solve progress area', async () => {
     await show([solve({ reason: 'engine_unavailable', message: 'Engines that can: bempp, beat-cpu.' })]);
-    expect(cards()[0].textContent).toContain('Engines that can: bempp, beat-cpu.');
+    expect(cards()[0].textContent).not.toContain('Engines that can: bempp, beat-cpu.');
   });
 
   it('names an engine that cannot solve the return by what it is, not as unavailable', async () => {
     await show([solve({ reason: 'engine_cannot_solve_return', message: 'BEAT · CUDA solves CAD returns only in Accurate. Choose Accurate, or Metal / AUTO.' })]);
     const text = cards()[0].textContent ?? '';
     expect(text).not.toContain('the selected engine cannot solve this return');
-    expect(cards()[0].querySelector('.solve-readiness')).not.toBeNull();
-    expect(text).toContain('Choose Accurate, or Metal / AUTO.');
+    expect(cards()[0].querySelector('.solve-readiness')).toBeNull(); // Engine remedies belong to Results solve progress.
+    expect(text).not.toContain('Choose Accurate, or Metal / AUTO.');
   });
 
   it('at the frame gate says it once: no repeated guidance, no finding ids, no filler, and approval named as a later step', async () => {

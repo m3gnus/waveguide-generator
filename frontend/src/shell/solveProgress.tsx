@@ -1,3 +1,6 @@
+import { useOptionalSolveControl } from './JobsCoordinator';
+import type { SolveReadinessState } from '../jobs/solveReadiness';
+import { workspaceNavigation } from './workspaceNavigation';
 import { useCallback, useSyncExternalStore } from 'react';
 import { isActiveJobStatus, type JobItem } from '../api/jobsSocket';
 
@@ -413,6 +416,50 @@ function frequencyLine(frequency: FrequencyProgress, eta: number | null, overall
   return parts.join(' · ');
 }
 
+/** Readiness is a pre-job stage of this same progress view. */
+function useReadinessProgress(enabled: boolean, readiness?: SolveReadinessState | null, held = false) {
+  const control = useOptionalSolveControl();
+  if (!enabled) return null;
+  const blocker = readiness === undefined ? control?.readiness : readiness;
+  const engineBlocked = !!blocker?.engine;
+  const visible = !engineBlocked || held || control?.readinessRequested;
+  const waiting = control?.waitingForEngine === true;
+  const warmingEngine = control?.waitingEngine && control.waitingEngine !== 'auto' ? control.waitingEngine : blocker?.engine ?? control?.waitingEngine;
+  const message = waiting ? `${resolveEngineLabel(warmingEngine) || warmingEngine} is warming up. The solve starts when it is ready.` : visible ? blocker?.message ?? (control?.disabled ? control.title : null) : null;
+  if (!message && !control?.actionError) return null;
+  const order = (remedy: NonNullable<SolveReadinessState['remedies']>[number]) =>
+    remedy.kind === 'use_engine' ? remedy.same_solver ? 1 : 2 : remedy.kind === 'settings' ? 3 : 0;
+  const remedies = [...(visible && !waiting ? blocker?.remedies ?? [] : [])].sort((a, b) => order(a) - order(b));
+  return <div className="solve-progress solve-readiness" role="status" aria-live="polite">
+    {message && <span>{message}</span>}
+    {waiting && <button type="button" onClick={() => control?.stopWaiting()}>Stop</button>}
+    {remedies.map((remedy, index) => {
+      switch (remedy.kind) {
+        case 'prepare': {
+          const label = resolveEngineLabel(remedy.engine) || remedy.engine;
+          if (remedy.disabled_reason) return message?.includes(remedy.disabled_reason) ? null : <span key={index}>{remedy.disabled_reason}</span>;
+          return <button type="button" key={index} disabled={!control || !!control.preparingEngine}
+            onClick={() => { void control?.prepareAndSolve(remedy.engine); }}>
+            {control?.preparingEngine === remedy.engine ? `Preparing ${label}…` : `Prepare ${label} and solve`}
+          </button>;
+        }
+        case 'use_engine': {
+          const label = resolveEngineLabel(remedy.engine) || remedy.engine;
+          return <button type="button" key={index} disabled={!control} onClick={() => control?.useEngine(remedy.engine)}>
+            Use {label}
+          </button>;
+        }
+        case 'wait': return null;
+        case 'settings': return <button type="button" key={index} onClick={() => workspaceNavigation.navigate('simulation')}>Open settings</button>;
+      }
+    })}
+    {remedies.some(remedy => remedy.kind === 'use_engine' && !remedy.same_solver)
+      && <span className="solve-readiness-note">Another solver’s results will differ.</span>}
+    {!waiting && control?.actionError && <span>{control.actionError}</span>}
+    {!waiting && control?.preparationError && <span role="alert">{control.preparationError}</span>}
+  </div>;
+}
+
 /**
  * The one progress display, fed by nothing but a `JobItem` (or, before a
  * CAD-submitted job exists, a `CadOperationSummary`'s own state) -- the row
@@ -429,10 +476,17 @@ function frequencyLine(frequency: FrequencyProgress, eta: number | null, overall
 export function SolveProgressView({
   job,
   operation,
+  showReadiness = false,
+  readiness,
+  held = false,
   now,
   variant = 'full',
 }: {
   job?: JobProgressLike | null;
+  /** Only the Results solve status owns pre-job readiness and remedies. */
+  showReadiness?: boolean;
+  readiness?: SolveReadinessState | null;
+  held?: boolean;
   /** A CAD operation with no job yet: `variant="compact"` only. */
   operation?: OperationProgressLike | null;
   /** `Date.now()`-scale clock driving the live elapsed/ETA readout. */
@@ -441,6 +495,8 @@ export function SolveProgressView({
 }) {
   const tick = useSolveClock(Boolean(job && isActiveJobStatus(job.status)));
   const time = now ?? tick;
+  const pending = useReadinessProgress(showReadiness, readiness, held);
+  if (pending) return pending;
   if (!job) {
     if (!operation) return null;
     const stageWord = operationStageWord(operation);

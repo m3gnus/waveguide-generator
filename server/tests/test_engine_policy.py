@@ -92,7 +92,9 @@ def test_explicit_engine_states(kind, state):
     assert alternatives[1].label == "Use Metal-BEM"
     assert all(remedy.label not in blocker.message for remedy in alternatives)
     if state == "preparing":
-        assert blocker.message == "BEAT Metal is getting ready."
+        assert blocker.message == "BEAT Metal is warming up."
+    if state in {"failed", "unavailable"}:
+        assert ("failed" if state == "failed" else "No device") in blocker.message
     prepare = next((r for r in blocker.remedies if r.kind == "prepare"), None)
     assert bool(prepare) == (state in {"unprepared", "disabled", "failed"})
     if prepare:

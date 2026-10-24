@@ -178,7 +178,7 @@ export function useOperationAttention(operations: Record<string, CadOperationSum
 export function useJobAttention(jobs: JobItem[]): void {
   const seen = useRef(new Map<string, string | null>());
   useEffect(() => {
-    let front = false;
+    let front: 'geometry' | 'results' | null = null;
     for (const job of latestCadJobs(jobs)) {
       const operation = cadJobSummary(job);
       if (job.parent_job_id) solveAttention.followJob(job.parent_job_id, job.id);
@@ -188,9 +188,9 @@ export function useJobAttention(jobs: JobItem[]): void {
       const previous = seen.current.get(job.id);
       seen.current.set(job.id, key);
       if (key === null || key === previous) continue;
-      if (solveAttention.operationArmed(job.id)) front = true;
+      if (solveAttention.operationArmed(job.id)) front = operation.reason === 'engine_unavailable' ? 'results' : 'geometry';
     }
-    if (front && workspaceModeStore.getSnapshot().mode === 'cad') workspaceNavigation.activate('geometry');
+    if (front && workspaceModeStore.getSnapshot().mode === 'cad') workspaceNavigation.activate(front);
   }, [jobs]);
 }
 

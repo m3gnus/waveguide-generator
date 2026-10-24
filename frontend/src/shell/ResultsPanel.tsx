@@ -2593,7 +2593,6 @@ export function ResultsPanel() {
   }, []);
 
   const emptyModel = <div className="empty-state" role="status">
-    <CurrentModelStatus actions/>
     {primaryJob && resolved.verdict !== 'current' && <button type="button" onClick={showPrimaryModel}>Show that run's model</button>}
   </div>;
 
@@ -2722,6 +2721,7 @@ export function ResultsPanel() {
     {/* Three different empty docks, said apart: a failed fetch, a fetch still
         in flight, and nothing selected at all. The last used to claim it was
         loading, which is how a dock with no selection looked like a hang. */}
+    <CurrentModelStatus actions solveStatus activeOnly={!!(charts && resolved.job) || !!error || !!cleanedUpRun}/>
     {resolved.modelNotLoaded && <div role="status">Run model not loaded</div>}
     {!resolved.job ? emptyModel : charts ?? (cleanedUpRun ? <div className="empty-state" role="status">
       <b>Results cleaned up</b><span>{cleanedUpMessage(cleanedUpRun)}</span>

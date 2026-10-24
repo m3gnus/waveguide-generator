@@ -6,7 +6,7 @@ import math
 import re
 from typing import Annotated, Any, Literal, Self, cast
 
-from pydantic import Field, SerializerFunctionWrapHandler, field_validator, model_serializer, model_validator
+from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, field_validator, model_serializer, model_validator
 
 from server.contracts.canonical import canonical_utf8_strict_json
 
@@ -1353,6 +1353,41 @@ class CadSolveAgainRequest(JobModel):
         }
 
 
+class PrepareRemedy(BaseModel):
+    kind: Literal["prepare"] = "prepare"
+    engine: str
+    disabled_reason: str | None = None
+
+
+class UseEngineRemedy(BaseModel):
+    kind: Literal["use_engine"] = "use_engine"
+    engine: str
+    label: str
+    same_solver: bool
+
+
+class WaitRemedy(BaseModel):
+    kind: Literal["wait"] = "wait"
+
+
+class SettingsRemedy(BaseModel):
+    kind: Literal["settings"] = "settings"
+    section: str = "simulation"
+
+
+SolveRemedy = Annotated[
+    PrepareRemedy | UseEngineRemedy | WaitRemedy | SettingsRemedy,
+    Field(discriminator="kind"),
+]
+
+
+class SolveBlocker(BaseModel):
+    code: str
+    message: str
+    engine: str
+    remedies: list[SolveRemedy] = Field(default_factory=list)
+
+
 class CadStateSnapshot(JobModel):
     document_name: str | None
     manifest_sha256: str | None
@@ -1380,6 +1415,7 @@ class CadState(JobModel):
     stage: str | None
     reason: str | None
     message: str | None
+    blocker: SolveBlocker | None = None
     job_id: str | None
     snapshot: CadStateSnapshot | None
     preparation: CadStatePreparation | None

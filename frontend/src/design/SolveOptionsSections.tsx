@@ -1,7 +1,6 @@
-import { useOptionalSolveControl } from '../shell/JobsCoordinator';
+import type { EngineCapability } from '../jobs/actions';
 import { CurrentModelStatus } from '../shell/CurrentModelStatus';
 import { SelectRow } from './SelectRow';
-import { BeatRuntimePreparation } from './BeatRuntimePreparation';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { jobsSocket } from '../api/jobsSocket';
@@ -36,6 +35,12 @@ import { useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { runDisplayName } from '../prefs/preferences';
 import { useDesignStore } from '../stores/design';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
+
+// Selecting a cold runtime starts its warm-up; readiness does not gate the picker.
+function selectableEngine(engine: EngineCapability): boolean {
+  return engine.available || !!engine.runtime_preparable || engine.runtime_state === 'preparing'
+    || engine.qualification === 'pending';
+}
 
 const ACCURATE_HELP = 'Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions.';
 
@@ -186,7 +191,6 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
   /** A caller that already renders driver guidance can suppress duplicates. */
   showOpenclGuidance?: boolean;
 } = {}) {
-  const solve = useOptionalSolveControl();
   const store = useScopedSolveOptions();
   const { engines, hostPlatform, error, isLoading: capabilitiesLoading,
     qualificationRefreshNeeded, refreshCapabilities } = useCapabilities();
@@ -217,7 +221,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
     <SelectRow revealId="solve-engine" text="Advanced engine override. AUTO follows the Fast or Accurate choice. An explicit engine takes precedence."><label htmlFor="solve-engine">Advanced backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
         <option value="auto">Automatic — follow accuracy</option>
         {store.engine === 'beat' && <option value="beat">BEAT — legacy family selection</option>}
-        {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available && engine.qualification !== 'pending'}>{engine.label || engine.name}{engine.qualification === 'pending' ? qualificationRefreshNeeded || error ? '' : ' · checking OpenCL…' : engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${!engine.name.startsWith('beat-') && engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
+        {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!selectableEngine(engine)}>{engine.label || engine.name}{engine.qualification === 'pending' ? qualificationRefreshNeeded || error ? '' : ' · checking OpenCL…' : engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${!engine.name.startsWith('beat-') && engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
       </select></SelectRow>
     </> : <>
       {/* The engine is the same choice as the parametric workspace's: the
@@ -231,7 +235,8 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
           const verdict = verdicts.get(engine.name.toLowerCase());
           const imported = choosableForImportedGeometry(engine);
           const version = engine.version ? ` · ${engine.version}` : '';
-          const refused = verdict ? !verdict.solves : !engine.available || !imported;
+          const refused = verdict ? !verdict.solves && !(verdict.stage === 'availability' && selectableEngine(engine))
+            : !selectableEngine(engine) || !imported;
           const note = engine.qualification === 'pending' ? qualificationRefreshNeeded || error ? '' : ' · checking OpenCL…' : verdict
             ? verdict.solves ? version : ` · ${verdict.reason ?? 'cannot solve this return'}`
             : !imported
@@ -243,7 +248,6 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
       <p className="cad-solve-fact"><b>Runs on</b><span>{importedEngine ? `${importedEngine} · full 3-D · free space` : 'See solve readiness below.'}</span></p>
       <p className="cad-solve-fact"><b>Ingested cut planes</b><span>{ingestRecord?.symmetry.cut_planes?.length ? ingestRecord.symmetry.cut_planes.join(', ') : 'none · full domain'}</span></p>
     </>}
-    {!solve?.readiness && <BeatRuntimePreparation engines={engines} selected={store.engine} refreshCapabilities={refreshCapabilities} />}
     {error ? <span className="section-note" role="status">Capability refresh failed. Check the backend connection. <button type="button" onClick={refreshCapabilities}>Refresh</button></span> : qualificationRefreshNeeded
       ? <span className="section-note" role="status">BEMPP · <button type="button" onClick={refreshCapabilities}>Refresh</button></span>
       : engines.some((engine) => engine.name === 'bempp' && engine.qualification === 'pending')

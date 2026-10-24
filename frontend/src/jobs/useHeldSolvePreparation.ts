@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { currentModel, type CurrentModel, currentModelStatus } from '../model/currentModel';
 import { jobsSocket } from '../api/jobsSocket';
+import { dismissCadJob } from './cadSolve';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -36,7 +37,7 @@ export function observeSolveInputs(validate: () => void): () => void {
   return () => stops.forEach(stop => stop());
 }
 
-/** The held request is continued only by its explicit Prepare/Wait and solve action. */
+/** The current Fusion request held by the selected engine gate. */
 export function heldEngineSolveJob() {
   const status = currentModelStatus(currentModel(), jobsSocket.getSnapshot().jobs);
   return status.kind === 'refused' && status.job?.cad_state?.state === 'needs_user_input'
@@ -70,12 +71,14 @@ type Intention = HeldSolveContinuation & {
   continuing: boolean;
 };
 
-/** Only this explicit intention may continue after runtime preparation. */
+/** A warming held request carries its existing solve intention; other gates need an explicit choice. */
 export function useHeldSolvePreparation(model: CurrentModel, engines: readonly EngineCapability[],
   prepare: (engine: string) => Promise<boolean>, continueRun: (request: HeldSolveContinuation) => Promise<unknown>,
-  reportNotice: (message: string | null) => void) {
+  reportNotice: (message: string | null) => void, warmingEngine: string | null = null) {
   const [held, setHeld] = useState<Intention | null>(null);
   const intention = useRef<Intention | null>(null);
+  // Stop, failure or a model change must not re-arm the same Fusion request.
+  const autoStarted = useRef(new Set<string>());
   const report = useRef(reportNotice);
   report.current = reportNotice;
   const cancel = (reason?: string) => {
@@ -114,7 +117,7 @@ export function useHeldSolvePreparation(model: CurrentModel, engines: readonly E
       });
     } else if (engine?.runtime_state !== 'preparing') cancel(PREPARATION_FAILED);
   }, [held, model.key, model.kind, model.viewportShowing, engines, continueRun]);
-  const prepareAndSolve = async (engine: string) => {
+  const prepareAndSolve = async (engine: string, alreadyWarming = false) => {
     if (intention.current) return;
     const model = currentModel();
     const job = heldEngineSolveJob();
@@ -126,7 +129,7 @@ export function useHeldSolvePreparation(model: CurrentModel, engines: readonly E
     report.current(null);
     setHeld(request);
     let success = false;
-    try { success = engines.some(item => item.name === engine && item.runtime_state === 'preparing') || await prepare(engine); }
+    try { success = alreadyWarming || engines.some(item => item.name === engine && item.runtime_state === 'preparing') || await prepare(engine); }
     finally {
       if (intention.current === request) {
         const reason = heldSolveCancellationReason(request);
@@ -139,5 +142,25 @@ export function useHeldSolvePreparation(model: CurrentModel, engines: readonly E
       }
     }
   };
-  return { prepareAndSolve, waitingEngine: held?.engine ?? null, stop: () => cancel() };
+  const jobId = heldEngineSolveJob()?.id;
+  useEffect(() => {
+    if (!jobId || !warmingEngine || !model.viewportShowing) return;
+    const key = `${jobId}:${warmingEngine}`;
+    if (autoStarted.current.has(key)) return;
+    // The plan and capabilities refresh independently. Join an actual warm-up,
+    // or a warm-up that has just finished, without issuing another prepare POST.
+    const engine = engines.find(item => item.name === warmingEngine);
+    if (engine?.runtime_state !== 'preparing' && engine?.runtime_state !== 'ready') return;
+    autoStarted.current.add(key);
+    void prepareAndSolve(warmingEngine, true);
+  }, [jobId, warmingEngine, model.key, model.kind, model.viewportShowing, engines]);
+  return { prepareAndSolve, waitingEngine: held && !held.submitted ? held.engine : null, stop: () => {
+    const request = intention.current;
+    const job = heldEngineSolveJob();
+    cancel();
+    if (request && !request.submitted && job?.id === request.jobId) {
+      void dismissCadJob(job).catch(error => report.current(error instanceof Error ? error.message : String(error)));
+    }
+  } };
+
 }
