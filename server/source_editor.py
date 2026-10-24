@@ -14,6 +14,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from server.design.schema import DesignConfig
+from server.mesh.errors import SolverMemoryTooLarge
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, field_validator
 
 Number = Annotated[StrictFloat | StrictInt, Field(allow_inf_nan=False)]
@@ -648,6 +649,14 @@ def create_router(data_dir: Path) -> APIRouter:
                 "mesh": record["mesh"]["stats"],
                 "geometric_quality": record["mesh"]["geometric_quality"],
             }
+        except SolverMemoryTooLarge as exc:
+            # One wording for the guard; its figures are for the developers.
+            from server.cadlink.intake.readings import record_preparation_diagnostic
+
+            record_preparation_diagnostic(
+                "memory-guard", {"code": "solver_memory_exceeded", "detail": str(exc)}
+            )
+            raise HTTPException(422, SolverMemoryTooLarge.USER_MESSAGE) from exc
         except (TypeError, ValueError) as exc:
             detail = str(exc)
             if "export failed" in detail or "ingestion failed" in detail:

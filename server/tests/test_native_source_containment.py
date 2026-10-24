@@ -15,6 +15,7 @@ import time
 import pytest
 
 from server.cadlink.intake import native_source
+from server.mesh.errors import SolverMemoryTooLarge
 from server.platform import child_process, process_tree, running_exclusion
 from server.platform.job_start import ContainedStartError
 
@@ -225,19 +226,22 @@ def test_ingest_native_source_bounds_real_worker(monkeypatch, tmp_path):
         store.close()
 
 
-@pytest.mark.parametrize(("stderr", "message"), [
+@pytest.mark.parametrize(("stderr", "error", "message"), [
     (
+        # Typed as on the isolated path: callers word the guard, its figures
+        # are only a developer diagnostic.
         "Traceback\nRuntimeError: Solver mesh uses 123 DOFs, exceeding the safety ceiling\n",
+        SolverMemoryTooLarge,
         "Solver mesh uses 123 DOFs, exceeding the safety ceiling",
     ),
-    ("gmsh failed\n", "native source ingestion failed: gmsh failed\n"),
+    ("gmsh failed\n", ValueError, "native source ingestion failed: gmsh failed\n"),
 ])
 def test_nonzero_exit_preserves_refusal_text(
-    monkeypatch, stderr, message, fake_child_has_no_process_group
+    monkeypatch, stderr, error, message, fake_child_has_no_process_group
 ):
     child, job = FakeChild(returncode=1, stderr=stderr), FakeJob()
     monkeypatch.setattr(process_tree, "popen_in_windows_job", lambda *a, **kw: (child, job))
-    with pytest.raises(ValueError) as raised:
+    with pytest.raises(error) as raised:
         native_source._run_worker(_STAGE)
     assert str(raised.value) == message
     assert job.calls == ["terminate", "close"]

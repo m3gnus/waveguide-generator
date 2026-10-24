@@ -17,6 +17,7 @@ import tempfile
 
 from server.contracts.canonical import canonical_ascii_strict_bytes as _canonical
 from server.cadlink.intake import isolation
+from server.mesh.errors import SolverMemoryTooLarge
 from server.platform import process_tree
 from server.platform.job_start import ContainedStartError
 
@@ -481,9 +482,10 @@ def _run_worker(stage):
     if child.returncode:
         ceiling = _memory_ceiling_message(stderr)
         if ceiling:
-            # The ceiling's own text names the DOF count, estimate, limit and
-            # host memory; the generic "ingestion failed" message hides them.
-            raise ValueError(ceiling)
+            # Typed as on the isolated path (``isolated._reraise_typed``): its
+            # DOF and GiB figures are a developer diagnostic, and every caller
+            # words the guard itself.
+            raise SolverMemoryTooLarge(ceiling)
         raise ValueError("native source ingestion failed: " + stderr)
     return subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
 

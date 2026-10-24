@@ -100,18 +100,24 @@ def test_real_editor_export_ingestion_mesh_and_excitation(client, tmp_path, fami
         validate_contour_request(bad.geometry, record)
 
 
-def test_memory_ceiling_refusal_reaches_the_user(client, monkeypatch):
-    # The worker subprocess inherits the lowered ceiling; the 422 must carry the
-    # ceiling's own explanation, not the generic "could not be built" text.
+def test_memory_ceiling_refusal_reaches_the_user(client, monkeypatch, caplog):
+    # The worker subprocess inherits the lowered ceiling; the 422 carries the
+    # guard's one wording and next step, never its DOF or memory figures, which
+    # are recorded for the developers instead.
+    import logging
+
+    from server.mesh.errors import SolverMemoryTooLarge
+
     monkeypatch.setenv("WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES", str(1024**2))
-    response = client.post("/api/source-editor/assembly/ingest", json=body("OSSE"))
+    with caplog.at_level(logging.WARNING, logger="server.cadlink.intake.readings"):
+        response = client.post("/api/source-editor/assembly/ingest", json=body("OSSE"))
     assert response.status_code == 422, response.text
     detail = response.json()["detail"]
-    assert "P1 vertex/DOFs" in detail
-    assert "conservative dense-solver memory estimate" in detail
-    assert "1,048,576 bytes safety ceiling" in detail
-    assert "coarsen" in detail
-    assert "could not be built" not in detail
+    assert detail == SolverMemoryTooLarge.USER_MESSAGE
+    assert "DOFs" not in detail and "GiB" not in detail and "could not be built" not in detail
+    diagnostics = [record.cad_diagnostic for record in caplog.records if hasattr(record, "cad_diagnostic")]
+    assert any(item["stage"] == "memory-guard" and "1,048,576 bytes safety ceiling" in item["evidence"]["detail"]
+               for item in diagnostics)
 
 
 @pytest.mark.parametrize("mutation", ["noncircular", "rim", "datum", "shell", "unknown"])
