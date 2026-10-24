@@ -728,8 +728,8 @@ export function CadLinkPanel() {
     : undefined;
   const solvesOnScreen = onScreenSolves(cadJobSummaries(jobs), record);
   const fusionBothChanged = Boolean(fusionStatus?.wgChangesAvailable && fusionStatus.fusionChangesAvailable);
-  const staleModel = model.phase === 'stale';
-  const solveCard = model.phase === 'prepared';
+  const staleModel = model.preparation === 'stale';
+  const solveCard = model.preparation === 'prepared';
   const onshapeActionLabel = workflow.action === 'update' ? 'Send WG changes to Onshape' : `Create ${shownName} in Onshape`;
   const unlinkButton = <button
     className="link-button cad-onshape-unlink"

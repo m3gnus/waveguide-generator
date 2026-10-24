@@ -20,17 +20,19 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
   const control = useOptionalSolveControl();
   const latestJob = status.job;
   const latest = latestJob?.cad_state ? cadJobSummary(latestJob) : null;
-  if (status.kind === 'waiting' && latestJob && latestJob.cad_state?.reason !== 'engine_unavailable') return <div className="current-model-status" data-model-status="waiting">
-    <Notice tone="info" title="Waiting for you" actions={<button type="button" className="btn" onClick={() => openHeldRequest(latestJob.id)}>Review request</button>}>
-      {status.message}
-    </Notice>
-  </div>;
   const unavailable = !control || (!!record && !control.cadMode);
   const readiness = control?.readiness ?? latestJob?.cad_state?.blocker ?? (status.kind === 'refused' || status.kind === 'waiting' ? messageBlocker(latestJob?.cad_state?.message || status.message)
     : unavailable ? messageBlocker('Solve is not available here.') : null);
   const held = status.kind === 'waiting' && latestJob?.cad_state?.state === 'needs_user_input'
     && latestJob.cad_state.reason === 'engine_unavailable';
   const request: ReactNode = record ? <CurrentModelRequests record={record}/> : null;
+  // The pop-up owns the choice; the request's card stays, as Review reveals it.
+  if (cad.phase === 'waiting' && cad.heldRequest === latestJob && latestJob) return <div className="current-model-status" data-model-status="waiting">
+    <Notice tone="info" title="Waiting for you" actions={<button type="button" className="btn" onClick={() => openHeldRequest(latestJob.id)}>Review request</button>}>
+      {status.message}
+    </Notice>
+    {request}
+  </div>;
   const engineGate = held || !!readiness?.engine || control?.waitingForEngine;
   const pending = solveStatus && (control?.waitingForEngine || control?.actionError || control?.preparationError
     || (readiness && (held || control?.readinessRequested)));

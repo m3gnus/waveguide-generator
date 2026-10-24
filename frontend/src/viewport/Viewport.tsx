@@ -349,6 +349,12 @@ export function cadViewportEmptyCopy(options: {
       detail: 'CAD Link is building the viewport and solver mesh.',
     };
   }
+  if (phase === 'waiting') {
+    return {
+      title: `${bundleName} is waiting for you`,
+      detail: 'WG needs your choice before it can continue with this model.',
+    };
+  }
   if (phase === 'prepare-failed') {
     return {
       title: 'CAD preparation failed',

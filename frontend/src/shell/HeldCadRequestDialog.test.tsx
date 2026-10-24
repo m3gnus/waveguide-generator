@@ -8,10 +8,13 @@ import legacy from '../jobs/cadRefusedJob.fixture.json';
 import { HeldCadRequestDialog, openHeldRequest } from './HeldCadRequestDialog';
 import { CurrentModelStatus } from './CurrentModelStatus';
 import { workspaceNavigation } from './workspaceNavigation';
+import { useCadReturnStore } from '../stores/cadReturn';
+import { workspaceModeStore } from '../stores/workspaceMode';
 
 const actions = vi.hoisted(() => ({ continueRun: vi.fn(), dismiss: vi.fn() }));
+const coordinator = vi.hoisted(() => ({ continueRun: (...args: unknown[]) => actions.continueRun(...args) }));
 vi.mock('./JobsCoordinator', () => ({
-  jobsCoordinatorBridge: { getSnapshot: () => ({ continueRun: actions.continueRun }) },
+  jobsCoordinatorBridge: { getSnapshot: () => coordinator, subscribe: () => () => undefined },
   useOptionalSolveControl: () => null,
 }));
 vi.mock('../jobs/cadSolve', async (load) => ({
@@ -43,6 +46,8 @@ describe('held CAD request dialog owner', () => {
   });
   afterEach(() => {
     act(() => root.unmount());
+    useCadReturnStore.setState({ ingestRecord: null, needsIngest: true });
+    workspaceModeStore.setMode('parametric');
     host.remove();
     vi.restoreAllMocks();
   });
@@ -80,7 +85,11 @@ describe('held CAD request dialog owner', () => {
   it('uses a calm Results status and reopens the same choice', async () => {
     const job = held();
     publishCadJobs([job]);
-    await act(async () => root.render(<><HeldCadRequestDialog/><CurrentModelStatus record={{ ingest_id: 'mesh', manifest_sha256: job.cad_state!.snapshot!.manifest_sha256 } as never}/></>));
+    // The held request belongs to the selected CAD model, whose owner presents it as waiting.
+    const record = { ingest_id: 'mesh', manifest_sha256: job.cad_state!.snapshot!.manifest_sha256 } as never;
+    workspaceModeStore.setMode('cad');
+    useCadReturnStore.setState({ ingestRecord: record, needsIngest: false });
+    await act(async () => root.render(<><HeldCadRequestDialog/><CurrentModelStatus record={record}/></>));
     const status = host.querySelector('[data-model-status="waiting"]');
     expect(status?.textContent).toContain('Waiting for you');
     expect(status?.querySelector('.notice-error')).toBeNull();

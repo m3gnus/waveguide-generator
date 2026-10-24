@@ -5,7 +5,7 @@ import { useSyncExternalStore } from 'react';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { canLoadJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { designFingerprint, jobDesignFingerprint } from '../results/runCoherence';
-import { cadModelState, useCadModelState } from '../stores/cadModelState';
+import { cadModelSelection, useCadModelSelection } from '../stores/cadModelState';
 import { currentDesignLoadSource, currentDocumentLoad, useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useImportedModelStore } from '../stores/importedModel';
@@ -114,7 +114,7 @@ export function currentModel(): CurrentModel {
       ? viewport.solver.modelKey === parametricKey : previewShowing, unloadedRunId,
   };
   const file = workspace.importedInput === 'file';
-  const cad = cadModelState();
+  const cad = cadModelSelection();
   const record = file ? imported.input === 'file' ? imported.prepared : null : cad.record;
   const ingestId = record?.ingest_id ?? null;
   const sha = (record as { solve_model_sha256?: string } | null)?.solve_model_sha256;
@@ -132,7 +132,7 @@ export function useCurrentModel(): CurrentModel {
   useDesignStore(s => s.design);
   useDocumentStore(s => s.identity);
   useDocumentStore(s => s.designName);
-  useCadModelState();
+  useCadModelSelection();
   useImportedModelStore();
   useSyncExternalStore(previewSocket.subscribe, previewSocket.getSnapshot, previewSocket.getSnapshot);
   useDesignStore(s => s.designRevision);
