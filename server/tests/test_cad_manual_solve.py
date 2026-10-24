@@ -226,10 +226,11 @@ def test_a_manual_solve_whose_only_copy_is_damaged_waits_rather_than_rejects(
         "manual-1", setup_revision_id=_revision(harness.store, _setup(engine="metal"))
     )
 
-    assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed")
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "return_unavailable")
     assert "bundlePath" not in summary["message"]
-    # An internal failure: WG's calm words; the detail is for the developers.
-    assert summary["message"].startswith("WG could not prepare ")
+    # Something the user can act on: a solve started in WG is prepared again there.
+    assert summary["message"].startswith("WG cannot read the copy of ")
+    assert summary["attention"] == "action"
     assert harness.ingest.calls == [] and harness.submitted == []
 
 

@@ -53,6 +53,8 @@ from cad_backends import (
 )
 
 CALM_PREFIX = "WG could not prepare "
+#: A return or copy WG cannot read: the user sends it again (or tries again).
+UNREADABLE_PREFIX = "WG cannot read the copy of "
 
 
 def _manifest(
@@ -388,9 +390,9 @@ def test_an_operation_whose_return_is_not_there_waits_instead_of_failing(
 
     waiting = harness.prepare(setup_revision_id=revision)
 
-    assert (waiting["state"], waiting["reason"]) == ("needs_user_input", "preparation_failed")
-    # An internal failure reads in WG's calm words (owner decision, 2026-10-24).
-    assert waiting["message"].startswith(CALM_PREFIX)
+    assert (waiting["state"], waiting["reason"]) == ("needs_user_input", "return_unavailable")
+    # The user can act on it: send it again, or try again once it is back.
+    assert waiting["message"].startswith(UNREADABLE_PREFIX)
     moved.rename(harness.workspace / bundle_path)
     assert harness.prepare(setup_revision_id=revision)["state"] == "accepted"
 
@@ -401,8 +403,8 @@ def test_a_return_that_changed_after_the_request_is_refused(harness: Harness) ->
 
     summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
 
-    assert (summary["state"], summary["reason"]) == ("rejected", "snapshot_invalid")
-    assert summary["message"].startswith(CALM_PREFIX)
+    assert (summary["state"], summary["reason"]) == ("rejected", "snapshot_changed")
+    assert summary["message"].endswith("changed after Fusion asked WG to solve it.")
     assert harness.submitted == []
 
 
@@ -423,8 +425,8 @@ def test_a_domain_mirrored_off_the_radiation_axis_is_refused_through_preparation
 
     refused = harness.prepare(setup_revision_id=revision)
 
-    assert (refused["state"], refused["reason"]) == ("needs_user_input", "submission_refused"), refused
-    assert refused["message"].startswith(CALM_PREFIX)
+    assert (refused["state"], refused["reason"]) == ("needs_user_input", "excitation_refused"), refused
+    assert "radiation axis" in refused["message"]  # the design statement, not WG's failure
     assert harness.submitted == []
 
 
@@ -1123,8 +1125,8 @@ def test_an_unreadable_copy_with_the_return_gone_says_what_the_user_can_do(
 
     summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
 
-    assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed")
-    assert summary["message"].startswith(CALM_PREFIX)
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "return_unavailable")
+    assert summary["message"].startswith(UNREADABLE_PREFIX)
 
 
 def test_a_copy_damaged_after_it_was_taken_asks_for_another_attempt(
@@ -1144,8 +1146,8 @@ def test_a_copy_damaged_after_it_was_taken_asks_for_another_attempt(
 
     summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
 
-    assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed")
-    assert summary["message"].startswith(CALM_PREFIX)
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "return_unavailable")
+    assert summary["message"].startswith(UNREADABLE_PREFIX)
 
 
 def _plant(harness: Harness, copy: Path, name: str = "b.wgreturn", step: bytes = b"ANOTHER STEP") -> str:
@@ -1269,9 +1271,9 @@ def test_a_damaged_copy_that_cannot_be_replaced_waits_rather_than_rejects(
 
     summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
 
-    assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed")
-    # WG's own fault, in WG's calm words: never the user's return.
-    assert summary["message"].startswith(CALM_PREFIX)
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "return_unavailable")
+    # Something the user can act on, in WG's words: never the internal path string.
+    assert summary["message"].startswith(UNREADABLE_PREFIX)
     assert "bundlePath" not in summary["message"]
     assert harness.ingest.calls == [] and harness.submitted == []
 
@@ -1682,7 +1684,7 @@ def test_a_claim_whose_return_stays_unreadable_is_acknowledged_at_the_bound(
     row = harness.row()
     assert (row["state"], row["snapshot_json"]) == ("accepted", None)
     summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
-    assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed")
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "return_unavailable")
 
 
 def test_a_return_that_can_never_be_retained_is_acknowledged_at_once(harness: Harness) -> None:
@@ -1696,7 +1698,7 @@ def test_a_return_that_can_never_be_retained_is_acknowledged_at_once(harness: Ha
     _assert_admitted_ack(harness)
     assert harness.row()["snapshot_json"] is None
     summary = harness.prepare()
-    assert (summary["state"], summary["reason"]) == ("rejected", "snapshot_invalid")
+    assert (summary["state"], summary["reason"]) == ("rejected", "snapshot_changed")
 
 
 @backend_free

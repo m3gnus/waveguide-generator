@@ -135,6 +135,14 @@ class WgReturnIntegrityError(WgReturnError):
     """The on-disk bundle contradicts its checksummed member table."""
 
 
+class WgReturnChanged(WgReturnError):
+    """The bundle no longer is the one a solve command named: sent again, or edited.
+
+    The user can act on it (send the model again from Fusion), so it keeps its
+    own reason code instead of reading as a WG failure.
+    """
+
+
 @dataclass(frozen=True)
 class WgReturnBundle:
     """A verified bundle and the hashes used by ingestion provenance."""

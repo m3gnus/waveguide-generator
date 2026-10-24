@@ -371,7 +371,7 @@ def test_mesh_too_large_is_an_actionable_refusal_on_both_ingest_routes() -> None
     assert response.status_code == 422
     assert response.detail == {"code": "mesh_too_large", "message": error.message(),
                                "next_step": "Change the mesh resolution in Sources & Mesh… in Fusion, "
-                               "or check the model size. You can also solve anyway.",
+                               "or check the model size.",
                                "triangle_count": 28_944, "limit": 22_000}
 
 
@@ -406,4 +406,5 @@ def test_browser_prepare_answers_the_ceiling_with_a_choice_and_carries_solve_any
         asyncio.run(api.post_ingest(api.CadReturnIngestRequest.model_validate({**body, "meshLimitOverride": True}), request))
     assert seen[-1]["mesh_limit_override"] is True
     assert memory.value.status_code == 422
-    assert memory.value.detail == {"code": "solver_memory_exceeded", "message": SolverMemoryTooLarge.USER_MESSAGE}
+    assert memory.value.detail == {"code": "solver_memory_exceeded", "message": SolverMemoryTooLarge.USER_MESSAGE,
+                                   "next_step": SolverMemoryTooLarge.NEXT_STEP}

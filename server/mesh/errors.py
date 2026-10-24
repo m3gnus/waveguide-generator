@@ -43,7 +43,16 @@ class SolverMemoryTooLarge(RuntimeError):
     the request calmly with :data:`USER_MESSAGE` instead of asking again.
     """
 
-    USER_MESSAGE = (
-        "This model is too large for this machine's memory. "
-        "Use a coarser mesh resolution, then prepare it again."
-    )
+    #: The one wording of the guard on every surface (the API, a job's read
+    #: model, the source editor). The next step is the same for a Fusion,
+    #: Onshape or WG model. The raw detail (DOFs, GiB) is a developer
+    #: diagnostic and never reaches the user.
+    NEXT_STEP = "Use a coarser mesh resolution, then prepare it again."
+    USER_MESSAGE = "This model is too large for this machine's memory. " + NEXT_STEP
+
+    @staticmethod
+    def user_message(document_name: Any = None) -> str:
+        """The guard's sentence for one model, without its next step."""
+
+        name = str(document_name or "").strip() or "This model"
+        return f"{name} is too large for this machine's memory."

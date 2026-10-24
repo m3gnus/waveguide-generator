@@ -143,6 +143,36 @@ def test_a_duplicate_press_while_the_job_is_active_returns_the_same_job(harness)
     assert bound["task_metadata"]["cad"]["setup"]["revision_id"] == _revision_of(harness, _setup(engine="metal"))
 
 
+def test_a_press_of_a_mesh_prepared_with_solve_anyway_carries_the_choice(harness) -> None:
+    """The browser path: Solve anyway prepared the mesh, so its Solve is not asked again.
+
+    The press says so (``mesh_limit_override``); the manual intent records it and
+    its preparation asks for the same override mesh, whose cache key it is part of.
+    """
+
+    from server.jobs.model_solve import ModelSolveRequest, press_digest
+
+    app = _models_app(harness)
+    model = _cad_model(harness)
+    status, body = _solve(harness, app, model, client_request_id="press-1",
+                          setup=_setup(engine="metal"), mesh_limit_override=True)
+    assert status == 200, body
+    _settle(harness)
+    job = harness.jobs_store.get_job_row(body["job_id"])
+    assert job["status"] == "queued"
+    assert job["config_json"]["client_request_id"] == "cad-solve:manual-solve:press-1"
+    assert job["task_metadata"]["cad"]["mesh_limit_override"] == {"accepted": True, "source": "solve_anyway"}
+    assert harness.ingest.calls[-1]["prep_options"]["mesh_limit_override"] is True
+    # A press that did not choose it keeps the digest it had before the field existed.
+    from server.contracts.canonical import canonical_utf8_strict_json
+
+    plain = ModelSolveRequest(prepared_id="p", client_request_id="c", setup=_setup(engine="metal"))
+    before = plain.model_dump(mode="json", exclude={"client_request_id", "mesh_limit_override"})
+    assert press_digest(plain) == "sha256:" + hashlib.sha256(
+        canonical_utf8_strict_json(before).encode("utf-8")).hexdigest()
+    assert press_digest(plain) != press_digest(plain.model_copy(update={"mesh_limit_override": True}))
+
+
 def _revision_of(harness: JobsHarness, setup: dict[str, Any]) -> str:
     parsed = validate_setup(setup)
     return str(harness.store.create_setup_revision(setup_content(parsed), setup_digest(parsed))["revision_id"])

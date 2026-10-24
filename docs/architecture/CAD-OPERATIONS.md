@@ -209,14 +209,18 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `baseline_conflict` | `rejected` | The document no longer matches the expected baseline, and there is no evidence that this operation already applied |
 | `target_not_exact` | `rejected` | The target does not resolve to exactly one instance |
 | `snapshot_invalid` | `rejected` | The snapshot fails verification, or no longer matches the operation's inputs |
+| `snapshot_changed` | `rejected` | The return changed after Fusion asked WG to solve it; the user sends it again from Fusion |
 | `snapshot_unavailable` | `rejected` | A received snapshot's bundle stayed unreadable for 24 hours (see "Snapshot settlement through files"). Sending it again is a new operation |
 | `setup_required` | `needs_user_input` | The settings named or recorded cannot be used, or WG's defaults cannot solve a first-time model (a source with no suggested mesh size); a CAD-authored model never borrows the open project's |
 | `findings_need_review` | `needs_user_input` | The preparation has blocking findings not yet approved on that preparation |
 | `frame_confirmation_required` | `needs_user_input` | Never a question about which way a model radiates: only a Solve that named a person's choice of axis, when another choice replaced it before the solve was prepared (see "Unlinked solver frame"). Runs an earlier build stopped here still show it |
-| `preparation_failed` | `needs_user_input` | Retaining or meshing failed in a way another attempt can overcome: a worker crash, a timeout, a return that is not in the WGLink folder and has no retained copy |
+| `preparation_failed` | `needs_user_input` | Retaining or meshing failed in a way another attempt can overcome: a worker crash, a timeout |
+| `return_unavailable` | `needs_user_input` | Neither the return Fusion sent nor WG's own copy of it can be read now (it left the WGLink folder before WG kept a copy, or the copy is damaged); the user sends it again, or tries again once it is back |
+| `wglink_folder_unset` | `needs_user_input` | No WGLink folder is selected, so the return cannot be read; choosing it and trying again works |
 | `engine_unavailable` | `needs_user_input` | The engine the setup names is not available on this host |
 | `engine_cannot_solve_return` | `needs_user_input` | The engine the setup names is present but cannot solve this record (for example a BEAT accelerator that takes CAD returns only in Accurate); the message names the engines here that can |
 | `submission_refused` | `needs_user_input` | The jobs system refused the request, or submitting it failed without creating a job |
+| `excitation_refused` | `needs_user_input` | The setup's excitation cannot drive the prepared domain (a mirror that does not contain the radiation axis, a motion the mirror changes, a source driven twice); the user changes the drive channels or solves the whole model |
 | `update_restart_pending` | `needs_user_input` | An update restart was approved while the preparation ran, so nothing was submitted. Queued again once no restart is pending (see "Preparation", "Update restart") |
 | `interrupted` | `needs_user_input` | The backend stopped, or the answer was lost, while an attempt held the operation |
 | `ready_to_solve` | `needs_user_input` | Prepared, and waiting for the user to start the solve |
@@ -228,9 +232,24 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `adapter_not_started` | `cancelled` | Fusion discarded a leftover claim with neither evidence nor an applying mark |
 | `adapter_failed` | `rejected` | Fusion reported in its file heartbeat that the request failed before it changed the document (a mutation that failed while executing is `recovery_required` instead) |
 
-The three rejections are final because a refreshed baseline, target or snapshot is a new
+The rejections are final because a refreshed baseline, target or snapshot is a new
 operation. Every `needs_user_input` code keeps the operation, and another
 preparation can proceed.
+
+**`attention`** says what an operation asks of the user, because `needs_user_input`
+alone cannot: it covers real questions and failures alike. The summary (and a job's
+`cad_state`) carries it, from `operations.reason_attention`, the one classification:
+
+- `question`: a choice only the user can make (`mesh_too_large`, `setup_required`,
+  `findings_need_review`, `engine_unavailable`, `ready_to_solve`, ...); WG asks it in a
+  pop-up, and Fusion's progress panel says so with "Open Waveguide Generator".
+- `action`: the user must change something and nothing is asked
+  (`operations.USER_ACTION_CODES`: `snapshot_changed`, `return_unavailable`,
+  `wglink_folder_unset`, `excitation_refused`, `solver_memory_exceeded`; and every other
+  rejection, such as `model_cut_unsolvable`).
+- `failed`: WG's own failure (`operations.INTERNAL_FAILURE_CODES`), recorded for the
+  developers; Try again.
+- null: nothing is asked (in progress, solved, cancelled, or `update_restart_pending`).
 
 `outcome_json` is an object with at most these fields:
 
@@ -1173,9 +1192,15 @@ solve scheduler, prepares it (`server/jobs/cad_preparation.py`):
   "WG could not prepare <name>. This has been recorded for the developers." The read
   model shows that sentence for older rows too, with `prepare_failed: true` and the
   options that can still work (Try again, except for a rejected snapshot; Dismiss).
-  `solver_memory_exceeded` (the dense memory guard, also after Solve anyway) ends the same
-  way: "<name> is too large for this machine's memory.", next step a coarser mesh, no Try
-  again. A legacy `preparation_failed` row whose message is the mesh ceiling's stays a
+  Failures the user can act on (`operations.USER_ACTION_CODES`) end the same way but in
+  their own words, with one next step and Try again only where it can work: the return
+  changed (send it again from Fusion) or cannot be read (send it again; Try again), no WGLink folder (choose it, then
+  Try again), an excitation the design cannot drive (change the drive channels or solve
+  the whole model), and `solver_memory_exceeded` (the dense memory guard, also after Solve
+  anyway): "<name> is too large for this machine's memory.", next step "Use a coarser mesh
+  resolution, then prepare it again." on every surface (`SolverMemoryTooLarge`), with its
+  DOF and memory figures recorded as a developer diagnostic. A continuation (Solve anyway,
+  Try again) retires the hold it continues, so clearing it never brings the question back. A legacy `preparation_failed` row whose message is the mesh ceiling's stays a
   `mesh_too_large` hold. A root WG solve of a model (`manual-solve:`) also retires
   Fusion's older holds of the same snapshot.
 - **Held requests.** A `NEEDS_USER_INPUT` reason that needs a real choice ends preparation with status and

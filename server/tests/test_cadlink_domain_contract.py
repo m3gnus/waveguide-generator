@@ -535,9 +535,10 @@ def test_a_known_excitation_incompatibility_stops_the_solve(real, monkeypatch) -
     monkeypatch.setattr(project_setup, "excitation_problem", incompatible)
     stopped = _prepare(harness)
 
-    assert (stopped["state"], stopped["reason"]) == ("needs_user_input", "submission_refused"), stopped
-    # submission_refused is internal: WG's calm words (the detail is a developer diagnostic).
-    assert stopped["message"].startswith("WG could not prepare ")
+    assert (stopped["state"], stopped["reason"]) == ("needs_user_input", "excitation_refused"), stopped
+    # A design the user changes: the statement itself, never WG's failure sentence.
+    assert stopped["message"].startswith("Drive channel mf moves its sources")
+    assert stopped["attention"] == "action"
     assert harness.submitted == [] and seen and seen[0]
 
 

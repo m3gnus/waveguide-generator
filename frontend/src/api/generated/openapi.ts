@@ -2819,6 +2819,8 @@ export interface components {
             acceptedSeq: number | null;
             /** Attemptgeneration */
             attemptGeneration: number;
+            /** Attention */
+            attention?: ("question" | "action" | "failed") | null;
             blocker?: components["schemas"]["SolveBlocker"] | null;
             /** Createdat */
             createdAt: string | null;
@@ -2978,6 +2980,8 @@ export interface components {
         CadState: {
             /** Approvals */
             approvals: components["schemas"]["CadStateApproval"][];
+            /** Attention */
+            attention?: ("question" | "action" | "failed") | null;
             blocker?: components["schemas"]["SolveBlocker"] | null;
             /** Frame Axis Automatic */
             frame_axis_automatic: string | null;
@@ -5226,6 +5230,11 @@ export interface components {
             frame_axis?: string | null;
             /** Label */
             label?: string | null;
+            /**
+             * Mesh Limit Override
+             * @default false
+             */
+            mesh_limit_override?: boolean;
             /**
              * Prepared Id
              * @description The prepared mesh on screen (its ingest id).

@@ -83,6 +83,7 @@ from server.cadlink.interpretation.solver_frame import (
 from server.cadlink.intake.readings import resolve_for_manifest
 from server.cadlink.wgreturn import (
     WgReturnBundle,
+    WgReturnChanged,
     WgReturnError,
     WgReturnIntegrityError,
     declared_domain_planes,
@@ -741,7 +742,7 @@ def retain_snapshot(
         if not expected.startswith("sha256:"):
             expected = f"sha256:{expected}"
         if bundle.manifest_sha256 != expected:
-            raise WgReturnError(
+            raise WgReturnChanged(
                 "The return bundle changed after Fusion asked WG to solve it. "
                 "Send it again from Fusion."
             )
@@ -2141,6 +2142,9 @@ def _ingest_bundle(
             "transformed_geometry_hash": built["transformed_geometry_hash"],
             "findings": findings,
             "finding_ids": [item["id"] for item in findings],
+            # The user chose Solve anyway over the triangle ceiling for this
+            # mesh: a Solve of it carries the choice, so it is not asked again.
+            **({"mesh_limit_override": True} if options.get("mesh_limit_override") is True else {}),
         }
         # Cross-ingestion run matching must cover the prepared solver input,
         # including the domain and source interpretation. The viewport's

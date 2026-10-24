@@ -672,6 +672,22 @@
             "title": "Attemptgeneration",
             "type": "integer"
           },
+          "attention": {
+            "anyOf": [
+              {
+                "enum": [
+                  "question",
+                  "action",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attention"
+          },
           "blocker": {
             "anyOf": [
               {
@@ -1233,6 +1249,22 @@
             },
             "title": "Approvals",
             "type": "array"
+          },
+          "attention": {
+            "anyOf": [
+              {
+                "enum": [
+                  "question",
+                  "action",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attention"
           },
           "blocker": {
             "anyOf": [
@@ -8512,6 +8544,11 @@
               }
             ],
             "title": "Label"
+          },
+          "mesh_limit_override": {
+            "default": false,
+            "title": "Mesh Limit Override",
+            "type": "boolean"
           },
           "prepared_id": {
             "description": "The prepared mesh on screen (its ingest id).",

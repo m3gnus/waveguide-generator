@@ -527,7 +527,7 @@ def test_solve_again_refuses_what_it_should_and_retry_reaches_it(h: JobsHarness)
     bundle_path, _manifest = _write_return(h.workspace, "moved.wgreturn", step=b"moved")
     _accept(h.store, "cmd-bad", bundle_path, "sha256:" + "f" * 64)
     rejected = h.prepare("cmd-bad", setup_revision_id=revision)
-    assert (rejected["state"], rejected["reason"]) == ("rejected", "snapshot_invalid")
+    assert (rejected["state"], rejected["reason"]) == ("rejected", "snapshot_changed")
     with pytest.raises(JobConflictError, match="."):
         h._loop.run(h.runtime.solve_cad_again(h._latest["cmd-bad"]))
     # A refused, solvable one is solved again by ``retry`` (POST /jobs/{id}/retry).
@@ -826,7 +826,8 @@ def test_the_state_a_cad_solve_needs_is_kept_while_it_can_still_run(h: JobsHarne
     h.blocked = None
     _settle(h)
     assert _row(h, child)["status"] == "queued"
-    assert h.jobs_store.get_job_row(parent)["status"] == "held"
+    # The continuation answered the parent's question: it is retired, not held.
+    assert h.jobs_store.get_job_row(parent)["status"] == "cancelled"
     # Bound and queued: the ordinary rule holds it (no document capture in the stand-in record,
     # so what remains is the carried state on the queued job, which the store does not read).
     assert h.held_return_states() == []

@@ -26,6 +26,7 @@ from server.cadlink.operations import (
     RECEIVED,
     REJECTED,
     TERMINAL_STATES,
+    reason_attention,
 )
 from server.cadlink.intake.solve_command import (
     CAD_SOLVE_SUBMISSION_PREFIX,
@@ -208,6 +209,9 @@ def operation_summary(row: Mapping[str, Any], job_store: Any = None) -> dict[str
             summary.update(state="cancelled", stage=None, reason=None, message=None, jobId=None)
     if not summary["jobId"] and state not in TERMINAL_STATES and outcome.get("admission_retrying"):
         summary.update(reason="admission_retrying", message=outcome["admission_retrying"])
+    # Whether this is a question for the user, something they must change, or
+    # WG's own failure: one classification, whatever answered the summary.
+    summary["attention"] = reason_attention(summary["state"], summary["reason"], summary["message"])
     return summary
 
 

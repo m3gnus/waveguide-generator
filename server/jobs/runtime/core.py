@@ -2304,9 +2304,10 @@ class JobRuntime:
                 # Internal detail goes to the developers; the job keeps calm words.
                 from server.jobs.cad_preparation import calm_refusal_message
 
+                # Recorded once the job exists, so the diagnostic names it.
                 calm = calm_refusal_message(
                     str(refusal["code"]), str(refusal["message"] or ""), record["task_metadata"]["cad"],
-                    job_id=None, operation_id=intent.operation_id,
+                    job_id=None, operation_id=intent.operation_id, record=False,
                 )
                 record.update(stage_message=calm, error_message=calm)
                 record["task_metadata"]["cad"]["refusal"] = {**dict(refusal), "message": calm}
@@ -2331,6 +2332,13 @@ class JobRuntime:
             initial_event=initial_event,
         )
         if created:
+            if refusal and is_calm_failure(refusal["code"], refusal["message"]):
+                from server.jobs.cad_preparation import record_refusal_diagnostic
+
+                record_refusal_diagnostic(
+                    str(refusal["code"]), str(refusal["message"] or ""),
+                    job_id=job_id, operation_id=intent.operation_id,
+                )
             for retired in await asyncio.to_thread(self.store.retire_held_cad_requests, job_id):
                 self.events.publish(retired)
             if prepare and not refusal and not cancelled:
@@ -2369,11 +2377,13 @@ class JobRuntime:
                          "finding_ids": list(press.get("approve_finding_ids") or ())}
                         if press.get("approve_preparation_id") else None
                     ),
+                    # Solve anyway, chosen when the mesh on screen was prepared.
+                    mesh_limit_override=press.get("mesh_limit_override") is True or intent.mesh_limit_override,
                 )
                 press_sha256 = self._cad_solve_press_sha256(job_id, **{
                     key: press[key] for key in (
                         "setup_revision_id", "frame_axis", "approve_preparation_id",
-                        "approve_finding_ids", "submit",
+                        "approve_finding_ids", "submit", "mesh_limit_override",
                     ) if key in press
                 })
                 if await asyncio.to_thread(

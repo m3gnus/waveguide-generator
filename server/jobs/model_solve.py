@@ -113,6 +113,11 @@ class ModelSolveRequest(JobModel):
     frame_axis: str | None = None
     #: Blocking findings the user reviewed on one preparation.
     approvals: CadApprovalsRequest | None = None
+    #: The user chose Solve anyway over the triangle ceiling for the prepared
+    #: mesh on screen (its record says ``mesh_limit_override``). A CAD solve
+    #: carries the choice into its preparation, which then reuses that mesh
+    #: instead of asking again.
+    mesh_limit_override: bool = False
 
     @field_validator("frame_axis")
     @classmethod
@@ -452,7 +457,10 @@ _PRESS_KEY = "model-solve-press:"
 def press_digest(body: ModelSolveRequest) -> str:
     """Everything a press asked for but its id: a replay is this, anything else conflicts."""
 
-    content = body.model_dump(mode="json", exclude={"client_request_id"})
+    # Left out when not chosen, so presses made before the field existed keep
+    # their digests.
+    exclude = {"client_request_id"} | (set() if body.mesh_limit_override else {"mesh_limit_override"})
+    content = body.model_dump(mode="json", exclude=exclude)
     return "sha256:" + hashlib.sha256(canonical_utf8_strict_json(content).encode("utf-8")).hexdigest()
 
 
@@ -659,6 +667,7 @@ def _press(body: ModelSolveRequest, revision_id: str, frame_axis: str | None) ->
         "approve_preparation_id": body.approvals.preparation_id if body.approvals else None,
         "approve_finding_ids": tuple(body.approvals.finding_ids) if body.approvals else (),
         "submit": True,
+        "mesh_limit_override": body.mesh_limit_override,
     }
 
 

@@ -114,6 +114,10 @@ def test_solve_anyway_continues_and_records_explicit_override(h: JobsHarness) ->
     assert row["status"] == "queued" and row["run_number"] == 1
     assert _cad(row)["mesh_limit_override"] == {"accepted": True, "source": "solve_anyway"}
     assert seen == [False, True]
+    # The continuation answered the question: the parent is retired, not held.
+    retired = _row(h, parent["id"])
+    assert retired["status"] == "cancelled" and _cad(retired)["superseded_by"] == child
+    assert job_cad_state(retired)["held"] is False
     # The same explicit press recovers the same child after binding.
     assert h._loop.run(h.runtime.solve_cad_again(parent["id"], mesh_limit_override=True)) == child
     with pytest.raises(MeshTooLarge):
@@ -165,6 +169,7 @@ def test_internal_failure_is_a_calm_failed_preparation_not_a_hold(h: JobsHarness
     name = state["snapshot"]["document_name"] or "this model"
     assert job["status"] == "error" and job["stage_message"] != "Waiting for you"
     assert state["held"] is False and state["prepare_failed"] is True
+    assert state["attention"] == "failed"  # never a question for Fusion's panel
     assert state["message"] == _CALM.format(name)
     assert state["next_step"] is None
     assert [option["id"] for option in state["options"]] == ["retry", "dismiss"]
@@ -209,7 +214,7 @@ def test_legacy_internal_failure_rows_read_calm_and_never_held(h: JobsHarness) -
     assert state["options"][0]["id"] == "solve_anyway"
 
 
-def test_memory_guard_after_solve_anyway_ends_calmly_without_a_hold(h: JobsHarness) -> None:
+def test_memory_guard_after_solve_anyway_ends_calmly_without_a_hold(h: JobsHarness, caplog) -> None:
     from server.mesh.errors import SolverMemoryTooLarge
 
     _received(h)
@@ -222,18 +227,29 @@ def test_memory_guard_after_solve_anyway_ends_calmly_without_a_hold(h: JobsHarne
     h.prepare(setup_revision_id=_revision(h.store, _setup()), ingest=too_big)
     parent = h.latest_job()
     assert parent["status"] == "held"
+    assert job_cad_state(parent)["attention"] == "question"
     h._ingest_override = too_big
-    child = h._loop.run(h.runtime.solve_cad_again(parent["id"], mesh_limit_override=True))
-    _settle(h)
+    with caplog.at_level("WARNING"):
+        child = h._loop.run(h.runtime.solve_cad_again(parent["id"], mesh_limit_override=True))
+        _settle(h)
     row = _row(h, child)
     state = job_cad_state(row)
     assert row["status"] == "error"
     assert state["reason"] == "solver_memory_exceeded"
     assert state["held"] is False and state["prepare_failed"] is True
-    assert state["message"].endswith("is too large for this machine's memory.")
-    assert "coarser mesh" in state["next_step"]
+    assert state["attention"] == "action"
+    assert state["message"] == SolverMemoryTooLarge.user_message(state["snapshot"]["document_name"])
+    assert state["next_step"] == SolverMemoryTooLarge.NEXT_STEP  # the same for every CAD application
+    assert "Fusion" not in state["next_step"]
     assert [option["id"] for option in state["options"]] == ["dismiss"]
     assert "P1 vertex" not in str(row["error_message"])
+    # The guard's figures are recorded for the developers, naming the job.
+    diagnostics = [record.cad_diagnostic for record in caplog.records if getattr(record, "cad_diagnostic", None)]
+    assert any(item["stage"] == "memory-guard" and item["evidence"]["job_id"] == child
+               and "P1 vertex" in item["evidence"]["detail"] for item in diagnostics)
+    # Clearing the failed continuation never brings back the parent's Solve anyway.
+    assert h._loop.run(h.runtime.clear_failed()) == [child]
+    assert job_cad_state(_row(h, parent["id"]))["held"] is False
 
 
 def test_a_wg_solve_of_the_held_model_retires_its_hold(h: JobsHarness) -> None:
@@ -272,3 +288,67 @@ def test_the_memory_guard_keeps_its_type_across_the_child_boundary() -> None:
                            error_type="SolverMemoryTooLarge")
     with pytest.raises(SolverMemoryTooLarge, match="safety ceiling"):
         _reraise_typed(refusal)
+
+
+@pytest.mark.parametrize(("code", "raw", "message", "next_step", "options"), [
+    ("snapshot_changed", "The return bundle changed after Fusion asked WG to solve it. Send it again from Fusion.",
+     "{} changed after Fusion asked WG to solve it.", "Send it again from Fusion.", ["dismiss"]),
+    ("return_unavailable", "The return Fusion sent is not in the WGLink folder, and WG has no copy it can use.",
+     "WG cannot read the copy of {} it was sent.", "Send it again from Fusion.", ["retry", "dismiss"]),
+    ("wglink_folder_unset", "No WGLink folder is selected, so WG cannot read the return Fusion sent.",
+     "WG cannot read {}: no WGLink folder is selected.",
+     "Choose the WGLink folder in Settings → CAD Link, then try again.", ["retry", "dismiss"]),
+    ("excitation_refused", "This model is mirrored on z0, which does not contain the radiation axis; "
+     "WG cannot drive it mirrored.", "This model is mirrored on z0, which does not contain the radiation axis; "
+     "WG cannot drive it mirrored.", "Change the drive channels in this model's solve settings, "
+     "or solve the whole model, then press Solve.", ["dismiss"]),
+])
+def test_failures_the_user_can_act_on_say_what_to_do_and_are_never_holds(
+    h: JobsHarness, code: str, raw: str, message: str, next_step: str, options: list[str],
+) -> None:
+    from server.jobs.cad_preparation import calm_refusal_message
+
+    _received(h, sized=False)
+    h.prepare()
+    job = h.latest_job()
+    metadata = job["task_metadata"]
+    metadata["cad"].pop("hold")
+    stored = calm_refusal_message(code, raw, metadata["cad"], job_id=job["id"], operation_id="cmd-1")
+    metadata["cad"]["refusal"] = {"code": code, "message": stored}
+    h.jobs_store.update_job(job["id"], status="error", stage="error", error_message=stored,
+                            task_metadata_json=json.dumps(metadata))
+    state = job_cad_state(_row(h, job["id"]))
+    name = state["snapshot"]["document_name"] or "this model"
+    assert state["held"] is False and state["prepare_failed"] is True
+    assert state["attention"] == "action"
+    assert state["message"] == message.format(name)
+    assert state["next_step"] == next_step
+    assert [option["id"] for option in state["options"]] == options
+    assert not state["message"].startswith("WG could not prepare ")
+
+
+def test_a_manual_solve_whose_copy_is_gone_is_prepared_again_in_wg() -> None:
+    from server.cadlink.operations import preparation_failure
+
+    assert preparation_failure("return_unavailable", "Horn", manual=True)["next_step"] == (
+        "Prepare it again in CAD Link, then solve it."
+    )
+
+
+def test_attention_tells_questions_from_failures_for_every_reason() -> None:
+    from server.cadlink.operations import REASON_CODES, reason_attention
+
+    assert reason_attention("needs_user_input", "mesh_too_large") == "question"
+    assert reason_attention("needs_user_input", "setup_required") == "question"
+    assert reason_attention("needs_user_input", "preparation_failed", "This model meshes to 1 triangles") == "question"
+    for code in ("preparation_failed", "submission_refused", "interrupted"):
+        assert reason_attention("needs_user_input", code) == "failed", code
+    assert reason_attention("rejected", "snapshot_invalid") == "failed"
+    for code in ("snapshot_changed", "model_cut_unsolvable", "baseline_conflict"):
+        assert reason_attention("rejected", code) == "action", code
+    assert reason_attention("needs_user_input", "update_restart_pending") is None
+    assert reason_attention("accepted", None) is None
+    assert reason_attention("cancelled", "superseded") is None
+    # Every reason a kept operation can carry is classified.
+    assert all(reason_attention(state, code) in {"question", "action", "failed", None}
+               for code, state in REASON_CODES.items())

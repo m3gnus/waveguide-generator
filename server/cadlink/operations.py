@@ -12,6 +12,7 @@ import hashlib
 from typing import Any, Literal
 
 from server.contracts.canonical import canonical_utf8_strict_json as canonical_json
+from server.mesh.errors import SolverMemoryTooLarge
 
 
 DIGEST_VERSION = 1
@@ -90,6 +91,8 @@ REASON_CODES: Mapping[str, str] = {
     "target_not_exact": REJECTED,
     # A snapshot that fails verification, or contradicts the operation's inputs.
     "snapshot_invalid": REJECTED,
+    # The return changed after Fusion asked WG to solve it: send it again.
+    "snapshot_changed": REJECTED,
     "request_payload_invalid": REJECTED,
     # A received snapshot whose bundle stayed unreadable past its bound.
     "snapshot_unavailable": REJECTED,
@@ -111,6 +114,15 @@ REASON_CODES: Mapping[str, str] = {
     # The engine the setup names is present but cannot solve this return.
     "engine_cannot_solve_return": NEEDS_USER_INPUT,
     "submission_refused": NEEDS_USER_INPUT,
+    # The setup's excitation cannot drive the prepared domain (a design the
+    # user changes: the drive channels, or solving the whole model).
+    "excitation_refused": NEEDS_USER_INPUT,
+    # Neither the return Fusion sent nor WG's own copy of it can be read now:
+    # sending it again works (and trying again, if it comes back).
+    "return_unavailable": NEEDS_USER_INPUT,
+    # No WGLink folder is selected, so the return cannot be read; choosing it
+    # and trying again works.
+    "wglink_folder_unset": NEEDS_USER_INPUT,
     "interrupted": NEEDS_USER_INPUT,
     # Held by an approved update restart; re-queued once the latch is down.
     REASON_UPDATE_RESTART_PENDING: NEEDS_USER_INPUT,
@@ -131,14 +143,35 @@ REASON_CODES: Mapping[str, str] = {
 #: WG's own pipeline failures: developer matters, never a choice for the user.
 #: They end as a calm failed preparation ("WG could not prepare ..."), with the
 #: raw detail recorded for developers, never as a "Waiting for you" hold.
-#: A rejection the user can act on (``model_cut_unsolvable``: send the uncut
-#: model) is not internal: it keeps its own words and is never a hold either.
 INTERNAL_FAILURE_CODES = frozenset(
     {"preparation_failed", "submission_refused", "interrupted", "snapshot_invalid"}
 )
+#: Failed preparations the user can act on: each says what to change, in its
+#: own words and with one next step, and offers Try again only where trying
+#: again can work. Never a hold, never recorded as a WG failure.
+#: ``model_cut_unsolvable`` is one too, but keeps its stored words.
+USER_ACTION_CODES = frozenset(
+    {"snapshot_changed", "return_unavailable", "wglink_folder_unset",
+     "excitation_refused", "solver_memory_exceeded"}
+)
 #: Failed preparations the read model words itself, whatever text is stored.
-CALM_FAILURE_CODES = INTERNAL_FAILURE_CODES | {"solver_memory_exceeded"}
+CALM_FAILURE_CODES = INTERNAL_FAILURE_CODES | USER_ACTION_CODES
 _MESH_CEILING_PREFIX = "This model meshes to "
+
+#: What an operation asks of the user, beside its state (``attention``): a
+#: state of ``needs_user_input`` only says the operation is kept and can still
+#: continue, so readers -- Fusion's progress panel among them -- tell from this
+#: which of those is a real question.
+#:
+#: - ``question``: a choice only the user can make; WG asks it in a pop-up.
+#: - ``action``: the user must change something (the design, the settings, the
+#:   mesh, or send the model again); nothing is asked.
+#: - ``failed``: WG's own failure, recorded for the developers; Try again.
+#: - None: nothing is asked (in progress, solved, cancelled, or waiting for an
+#:   update restart).
+ATTENTION_QUESTION = "question"
+ATTENTION_ACTION = "action"
+ATTENTION_FAILED = "failed"
 
 
 def _effective_code(code: Any, message: Any) -> str:
@@ -156,6 +189,21 @@ def is_calm_failure(code: Any, message: Any = "") -> bool:
     return _effective_code(code, message) in CALM_FAILURE_CODES
 
 
+def reason_attention(state: Any, code: Any, message: Any = "") -> str | None:
+    """What an operation in ``state`` with reason ``code`` asks of the user (``ATTENTION_*``)."""
+
+    if state not in {NEEDS_USER_INPUT, REJECTED} or not code:
+        return None
+    effective = _effective_code(code, message)
+    if effective in INTERNAL_FAILURE_CODES:
+        return ATTENTION_FAILED
+    if effective in USER_ACTION_CODES or state == REJECTED:
+        return ATTENTION_ACTION
+    if effective == REASON_UPDATE_RESTART_PENDING:
+        return None
+    return ATTENTION_QUESTION
+
+
 def internal_failure_message(document_name: Any) -> str:
     """The one sentence a user sees for an internal preparation failure."""
 
@@ -163,21 +211,45 @@ def internal_failure_message(document_name: Any) -> str:
     return f"WG could not prepare {name}. This has been recorded for the developers."
 
 
-def preparation_failure(code: str, document_name: Any) -> dict[str, Any]:
-    """The read model of a failed preparation: calm words, and what can still work."""
+def preparation_failure(
+    code: str, document_name: Any, *, detail: Any = None, manual: bool = False,
+) -> dict[str, Any]:
+    """The read model of a failed preparation: calm words, and what can still work.
+
+    ``detail`` is the stored message, used only where it is the user's own
+    design statement (``excitation_refused``). ``manual``: the solve was
+    started in WG, not sent by Fusion.
+    """
 
     name = str(document_name or "").strip() or "this model"
     dismiss = {"id": "dismiss", "label": "Dismiss request"}
+    retry = {"id": "retry", "label": "Try again"}
+    send_again = (
+        "Prepare it again in CAD Link, then solve it." if manual else "Send it again from Fusion."
+    )
     if code == "solver_memory_exceeded":
-        return {
-            "code": code, "message": f"{name} is too large for this machine's memory.",
-            "next_step": "Use a coarser mesh resolution in Sources & Mesh… in Fusion, then send it again.",
-            "options": [dismiss],
-        }
+        return {"code": code, "message": SolverMemoryTooLarge.user_message(document_name),
+                "next_step": SolverMemoryTooLarge.NEXT_STEP, "options": [dismiss]}
+    if code == "snapshot_changed":
+        return {"code": code, "message": f"{name} changed after Fusion asked WG to solve it.",
+                "next_step": "Send it again from Fusion.", "options": [dismiss]}
+    if code == "return_unavailable":
+        return {"code": code, "message": f"WG cannot read the copy of {name} it was sent.",
+                "next_step": send_again, "options": [retry, dismiss]}
+    if code == "wglink_folder_unset":
+        return {"code": code, "message": f"WG cannot read {name}: no WGLink folder is selected.",
+                "next_step": "Choose the WGLink folder in Settings → CAD Link, then try again.",
+                "options": [retry, dismiss]}
+    if code == "excitation_refused":
+        statement = str(detail or "").strip() or f"{name} cannot be driven as its settings say."
+        return {"code": code, "message": statement,
+                "next_step": "Change the drive channels in this model's solve settings, "
+                             "or solve the whole model, then press Solve.",
+                "options": [dismiss]}
     # A rejected snapshot cannot be solved again; only dismissing it works.
-    retry = [] if REASON_CODES.get(code) == REJECTED else [{"id": "retry", "label": "Try again"}]
+    retries = [] if REASON_CODES.get(code) == REJECTED else [retry]
     return {"code": code, "message": internal_failure_message(name), "next_step": None,
-            "options": [*retry, dismiss]}
+            "options": [*retries, dismiss]}
 
 
 def user_hold(status: str, cad: Mapping[str, Any]) -> bool:
@@ -195,15 +267,16 @@ def user_hold(status: str, cad: Mapping[str, Any]) -> bool:
     )
 
 
+#: The triangle ceiling's next step; each surface adds the choice it offers.
+MESH_CEILING_NEXT_STEP = "Change the mesh resolution in Sources & Mesh… in Fusion, or check the model size."
+
+
 def hold_details(code: str, message: str) -> dict[str, Any]:
     """One vocabulary for persisted holds and historical request readers."""
 
     choice_code = _effective_code(code, message)
     action, label, next_step = {
-        "mesh_too_large": (
-            "solve_anyway", "Solve anyway",
-            "Change the mesh resolution in Sources & Mesh… in Fusion, or check the model size. You can also solve anyway.",
-        ),
+        "mesh_too_large": ("solve_anyway", "Solve anyway", MESH_CEILING_NEXT_STEP + " You can also solve anyway."),
         "setup_required": ("review", "Review settings", "Review this model's solve settings, then solve."),
         "findings_need_review": ("review", "Review model", "Review this model's preparation before solving."),
         "engine_unavailable": ("review", "Review solve", "Open Results to prepare the solve engine."),
@@ -477,6 +550,9 @@ def fusion_mutation_precheck(
 __all__ = [
     "REASON_UPDATE_RESTART_PENDING",
     "ACCEPTED",
+    "ATTENTION_ACTION",
+    "ATTENTION_FAILED",
+    "ATTENTION_QUESTION",
     "BASELINE_KINDS",
     "CANCELLED",
     "CALM_FAILURE_CODES",
@@ -487,6 +563,7 @@ __all__ = [
     "INSERT_LINK",
     "INTERNAL_FAILURE_CODES",
     "KINDS",
+    "MESH_CEILING_NEXT_STEP",
     "MUTATING_KINDS",
     "NEEDS_USER_INPUT",
     "PREPARE_AND_SOLVE",
@@ -510,6 +587,7 @@ __all__ = [
     "STATES",
     "TERMINAL_STATES",
     "UPDATE_LINK",
+    "USER_ACTION_CODES",
     "canonical_json",
     "check_transition",
     "fusion_mutation_precheck",
@@ -519,6 +597,7 @@ __all__ = [
     "normalize_request",
     "prepare_and_solve_request",
     "preparation_failure",
+    "reason_attention",
     "request_digest",
     "require_kind",
     "user_hold",

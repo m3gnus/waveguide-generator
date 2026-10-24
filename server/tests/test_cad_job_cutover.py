@@ -441,15 +441,16 @@ def test_return_refusal_keeps_preparations_exact_stage_and_message(h, invalid):
             inputs = json.loads(h.row()["inputs_json"])
             inputs["manifest_sha256"] = "sha256:" + "0" * 64
             conn.execute("UPDATE cad_operations SET inputs_json = ? WHERE operation_id = 'cmd-1'", (json.dumps(inputs),))
-        # snapshot_invalid is internal: the read model shows WG's calm words.
-        expected = _CALM
+        # The user can act on it: the return changed after Fusion asked.
+        expected = "changed after Fusion asked WG to solve it."
     else:
         (h.workspace / bundle / "manifest.json").write_text("{not json")
         expected = None
     result = h._loop.run(compat_prepare(_request(h).app.state, "cmd-1", wait=True))["operation"]
-    assert result["stage"] == "validating" and result["reason"] == "snapshot_invalid"
+    code = "snapshot_changed" if invalid == "changed" else "snapshot_invalid"
+    assert result["stage"] == "validating" and result["reason"] == code
     if expected:
-        assert result["message"] == expected
+        assert result["message"].endswith(expected)
     else:
         assert result["message"] and "retained snapshot" not in result["message"]
 
@@ -514,7 +515,8 @@ def test_startup_keeps_a_persisted_claim_until_its_file_bound_then_lane_refuses(
         await run_delivery_pass(h.context())
         await h.runtime.wait_cad_preparations()
         detail = operation_summary(h.row(), h.jobs_store)
-        assert detail["reason"] == "preparation_failed" and detail["message"]
+        assert detail["reason"] == "return_unavailable" and detail["message"]
+        assert detail["attention"] == "action"
         assert detail["stage"] == "validating"
     h._loop.run(expired())
     assert not claim.exists() and h.submitted == []
@@ -537,8 +539,9 @@ def test_prepare_of_manual_solve_with_missing_copy_keeps_damaged_copy_remedy(h):
     shutil.rmtree(path)
     result = h._loop.run(compat_prepare(_request(h).app.state, "manual-1", wait=True))["operation"]
     assert result["state"] == "needs_user_input" and result["stage"] == "validating"
-    assert result["reason"] == "preparation_failed" and result["message"] == _CALM
-    assert DAMAGED_COPY_MESSAGE != _CALM
+    # Something the user can act on, never the raw damaged-copy text.
+    assert result["reason"] == "return_unavailable" and result["message"].startswith("WG cannot read the copy of ")
+    assert DAMAGED_COPY_MESSAGE not in result["message"]
     assert len(h.ingest.calls) == 1 and h.submitted == []
 
 
@@ -874,7 +877,7 @@ def test_missing_return_after_bound_is_visibly_refused(h, press, state):
             await h.runtime.wait_cad_preparations()
             detail = operation_summary(h.row(), h.jobs_store)
         assert detail["state"] == "needs_user_input"
-        assert detail["reason"] == "preparation_failed" and detail["message"]
+        assert detail["reason"] == "return_unavailable" and detail["message"]
         assert detail["stage"] == "validating"
     h._loop.run(flow())
     assert h.submitted == []

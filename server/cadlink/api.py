@@ -95,7 +95,7 @@ from server.cadlink.joblane.manual_solve import create_manual_solve, recover_man
 # routes and their credentials stay in ``server/cadlink/onshape/``.
 from .build_flags import onshape_enabled
 from .onshape.return_leg import RETURN_SUBDIRECTORY as ONSHAPE_RETURN_SUBDIRECTORY
-from .operations import CANCELLED, KINDS, PREPARE_AND_SOLVE, STATES, TERMINAL_STATES, hold_details
+from .operations import CANCELLED, KINDS, MESH_CEILING_NEXT_STEP, PREPARE_AND_SOLVE, STATES, TERMINAL_STATES
 from server.cadlink.joblane.preparation import (
     PreparationContext,
     operation_summary,
@@ -107,7 +107,7 @@ from server.cadlink.joblane.job_shims import accept_operation_solve, operation_d
 from server.cadlink.joblane.project_setup import SOLVER_SELECTION
 from server.cadlink.joblane.setup import setup_content, setup_digest, validate_setup
 from server.cadlink.interpretation.solver_frame import record_is_unlinked
-from server.cadlink.intake.readings import ensure_frame_suggestion
+from server.cadlink.intake.readings import ensure_frame_suggestion, record_preparation_diagnostic
 from server.cadlink.intake.readings import snapshot_project
 from server.cadlink.intake.returns_folder import return_inventory, selected_workspace_root
 from .store import CadLinkStore
@@ -927,12 +927,16 @@ def _ingest_error(exc: Exception) -> HTTPException:
         # A choice for the user (Solve anyway, or a coarser mesh), not a failure.
         return HTTPException(status_code=422, detail={
             "code": "mesh_too_large", "message": exc.message(),
-            "next_step": hold_details("mesh_too_large", exc.message())["next_step"],
+            # The pop-up adds the choice it offers (Prepare or Solve anyway).
+            "next_step": MESH_CEILING_NEXT_STEP,
             "triangle_count": exc.count, "limit": exc.limit,
         })
     if isinstance(exc, SolverMemoryTooLarge):
+        # The guard's figures are for the developers; the user gets its one wording.
+        record_preparation_diagnostic("memory-guard", {"code": "solver_memory_exceeded", "detail": str(exc)})
         return HTTPException(status_code=422, detail={
             "code": "solver_memory_exceeded", "message": SolverMemoryTooLarge.USER_MESSAGE,
+            "next_step": SolverMemoryTooLarge.NEXT_STEP,
         })
     if isinstance(exc, (WgReturnError, ValueError, TypeError)):
         return HTTPException(status_code=422, detail=str(exc))
@@ -1700,6 +1704,11 @@ class CadOperationSummary(BaseModel):
     #: The solver axis WG chose itself (confident, never confirmed), when the
     #: solve was not shown one; the card says so and offers Change.
     frame_axis_automatic: str | None = Field(default=None, alias="frameAxisAutomatic")
+    #: What the operation asks of the user (``operations.reason_attention``):
+    #: ``question`` (a real choice, asked in a pop-up), ``action`` (something
+    #: to change, nothing asked), ``failed`` (WG's own failure, recorded for
+    #: the developers), or null. ``state`` alone cannot tell them apart.
+    attention: Literal["question", "action", "failed"] | None = None
     job_id: str | None = Field(alias="jobId")
     attempt_generation: int = Field(alias="attemptGeneration")
     setup_revision_id: str | None = Field(alias="setupRevisionId")

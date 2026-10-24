@@ -56,6 +56,7 @@ class FakeIngest:
             {
                 "bundle_path": str(bundle_path),
                 "mesh": dict(mesh),
+                "prep_options": dict(prep_options or {}),
                 "retained_copy": retained_copy,
                 "defer_viewport": defer_viewport,
                 "expected_design_id": expected_design_id,

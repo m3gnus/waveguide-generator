@@ -57,6 +57,7 @@ from server.cadlink.operations import (
     INTERNAL_FAILURE_CODES,
     is_calm_failure,
     preparation_failure,
+    reason_attention,
     user_hold,
     REASON_UPDATE_RESTART_PENDING,
     REJECTED,
@@ -85,7 +86,7 @@ from server.cadlink.joblane.preparation_inputs import (
     cad_provenance_record,
     resumable_record,
 )
-from server.cadlink.joblane.project_setup import compose_solve_request
+from server.cadlink.joblane.project_setup import ExcitationRefused, compose_solve_request
 from server.jobs.imported_setup import DEFAULTS_ORIGIN
 from server.jobs.imported_setup import is_default_setup, setup_content, setup_digest, snapshot_setup
 from server.cadlink.interpretation.solver_frame import (
@@ -103,7 +104,7 @@ from server.cadlink.intake.readings import (
     store_frame_decision,
 )
 from server.cadlink.store import CadLinkStore, StaleAttempt
-from server.cadlink.wgreturn import WgReturnError
+from server.cadlink.wgreturn import WgReturnChanged, WgReturnError
 from server.jobs.cad_intent import (
     BIND_BLOCKED,
     BIND_STOPPED,
@@ -190,10 +191,14 @@ def job_operation_view(row: Mapping[str, Any]) -> dict[str, Any]:
     # (rows written before this rule kept raw exception text).
     prepare_failed = status == "error" and refusal is not None and is_calm_failure(reason, message)
     if prepare_failed:
-        hold = preparation_failure(str(reason), (snapshot or {}).get("document_name"))
+        hold = preparation_failure(
+            str(reason), (snapshot or {}).get("document_name"), detail=message,
+            manual=_is_manual(cad.get("operation_id")),
+        )
         message = hold["message"]
     return {
         "held": held, "prepare_failed": prepare_failed,
+        "attention": reason_attention(state, reason, message),
         "next_step": hold.get("next_step"), "options": hold.get("options", []),
         "operationId": cad.get("operation_id"),
         "state": state,
@@ -221,23 +226,47 @@ def job_operation_view(row: Mapping[str, Any]) -> dict[str, Any]:
 
 def calm_refusal_message(
     code: str, message: str, cad: Mapping[str, Any], *,
-    job_id: str | None, operation_id: str | None,
+    job_id: str | None, operation_id: str | None, record: bool = True,
 ) -> str:
     """The message a refusal is stored with: WG's calm words for a failed preparation.
 
-    An internal failure's raw detail is recorded once for the developers here
-    and never stored where a user can read it.
+    An internal failure's (and the memory guard's) raw detail is recorded once
+    for the developers (``record_refusal_diagnostic``) and never stored where a
+    user can read it. ``record=False`` leaves that to a caller that learns the
+    job id only later.
     """
 
     if not is_calm_failure(code, message):
         return message
-    if code in INTERNAL_FAILURE_CODES:
+    if record:
+        record_refusal_diagnostic(code, message, job_id=job_id, operation_id=operation_id)
+    snapshot = cad.get("snapshot") if isinstance(cad.get("snapshot"), Mapping) else {}
+    return str(preparation_failure(
+        code, snapshot.get("document_name"), detail=message, manual=_is_manual(operation_id),
+    )["message"])
+
+
+#: Calm failures whose raw detail the developers need: WG's own failures and
+#: the memory guard (its DOF and GiB figures).
+_DIAGNOSED_CODES = INTERNAL_FAILURE_CODES | {"solver_memory_exceeded"}
+
+
+def record_refusal_diagnostic(
+    code: str, message: str, *, job_id: str | None, operation_id: str | None,
+) -> None:
+    """Record a calm failure's raw detail for the developers, once, where it is diagnosed."""
+
+    if code in _DIAGNOSED_CODES:
         record_preparation_diagnostic(
-            "internal-failure",
+            "memory-guard" if code == "solver_memory_exceeded" else "internal-failure",
             {"code": code, "job_id": job_id, "operation_id": operation_id, "detail": message},
         )
-    snapshot = cad.get("snapshot") if isinstance(cad.get("snapshot"), Mapping) else {}
-    return str(preparation_failure(code, snapshot.get("document_name"))["message"])
+
+
+def _is_manual(operation_id: Any) -> bool:
+    """A solve started in WG (Solve on a model), not sent by Fusion."""
+
+    return str(operation_id or "").startswith("manual-solve:")
 
 
 def _optional_operation_id(intent: Mapping[str, Any]) -> str | None:
@@ -261,7 +290,7 @@ def job_cad_state(row: Mapping[str, Any]) -> dict[str, Any] | None:
     preparation = cad.get("preparation")
     return {
         "operation_id": view["operationId"] or (_optional_operation_id(intent) if intent else None),
-        **{key: view[key] for key in ("state", "stage", "reason", "message", "blocker", "held", "prepare_failed", "next_step", "options")},
+        **{key: view[key] for key in ("state", "stage", "reason", "message", "blocker", "held", "prepare_failed", "attention", "next_step", "options")},
         "job_id": view["jobId"],
         "snapshot": (
             {key: snapshot.get(key) for key in ("document_name", "manifest_sha256", "artifact_sha256", "project_lineage_id")}
@@ -489,22 +518,30 @@ def prepare_job_sync(
             retained = _retain_from_return(context, ledger)
         except (OSError, ValueError) as exc:
             logger.info("CAD job %s: the damaged copy could not be replaced: %s", run.job_id, exc)
-            return run.refuse("preparation_failed", DAMAGED_COPY_MESSAGE)
+            return run.refuse("return_unavailable", DAMAGED_COPY_MESSAGE)
         run.advance(cad={"snapshot": _snapshot_record(store, retained)})
     if retained is None:
         if intent.bundle_path.startswith("ingest/"):
             # A manual solve has only WG's retained copy. Losing it is a
-            # recoverable damaged-copy refusal, not an invalid Fusion return.
-            return run.refuse("preparation_failed", DAMAGED_COPY_MESSAGE)
+            # damaged-copy refusal the user answers by preparing it again,
+            # not an invalid Fusion return.
+            return run.refuse("return_unavailable", DAMAGED_COPY_MESSAGE)
         try:
             retained = _retain_from_return(context, ledger)
         except SnapshotUnavailable as exc:
-            return run.refuse("preparation_failed", str(exc))
+            # No folder selected (choose it, then try again), or the return
+            # left it before WG kept a copy (send it again).
+            return run.refuse(
+                "wglink_folder_unset" if context.workspace_root is None else "return_unavailable",
+                str(exc),
+            )
+        except WgReturnChanged as exc:
+            return run.refuse("snapshot_changed", str(exc))
         except (WgReturnError, ValueError) as exc:
             return run.refuse("snapshot_invalid", str(exc))
         except OSError as exc:
             return run.refuse(
-                "preparation_failed", f"WG could not read the return Fusion sent: {exc}"
+                "return_unavailable", f"WG could not read the return Fusion sent: {exc}"
             )
         run.advance(cad={"snapshot": _snapshot_record(store, retained)})
 
@@ -563,10 +600,8 @@ def prepare_job_sync(
         # Never guessed: a manifest read as linked would skip the frame the
         # snapshot may need.
         return run.refuse(
-            "preparation_failed",
-            "WG could not read its retained copy of this return. Press Solve now: "
-            "WG takes a fresh copy from the WGLink folder. If the return has left that "
-            "folder, send the model again from Fusion.",
+            "return_unavailable",
+            "WG could not read its retained copy of this return.",
         )
     try:
         effective_setup = snapshot_setup(setup, retained_manifest)
@@ -855,6 +890,9 @@ def prepare_job_sync(
             fem_region_ids=[r["region_id"] for r in
                             (retained_manifest.get("scope") or {}).get("fem_regions", ())],
         )
+    except ExcitationRefused as exc:
+        # The design, not WG: the drive channels or the domain must change.
+        return run.refuse("excitation_refused", str(exc))
     except ValueError as exc:
         return run.refuse("submission_refused", str(exc))
     if intent.parent_job_id:

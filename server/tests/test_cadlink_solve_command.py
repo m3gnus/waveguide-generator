@@ -134,8 +134,10 @@ def test_a_bundle_that_changed_after_the_command_is_refused_when_prepared(solve_
     _collect(harness)
     summary = harness.prepare()
 
-    assert (summary["state"], summary["reason"]) == ("rejected", "snapshot_invalid")
-    assert summary["message"].startswith("WG could not prepare ")  # snapshot_invalid is internal
+    assert (summary["state"], summary["reason"]) == ("rejected", "snapshot_changed")
+    # The user can act on it: send it again from Fusion.
+    assert summary["message"].endswith("changed after Fusion asked WG to solve it.")
+    assert summary["attention"] == "action"
     # The delivery is one-shot, while the store keeps the terminal answer.
     assert ledger_entry(harness.store, "cmd-1")["state"] == "accepted"
     assert harness.summary()["state"] == "rejected"

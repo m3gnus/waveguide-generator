@@ -1427,6 +1427,9 @@ class CadState(JobModel):
     #: The preparation ended without a result and without needing a choice:
     #: ``message`` is WG's calm sentence, ``options`` what can still work.
     prepare_failed: bool = False
+    #: What this asks of the user (``operations.reason_attention``): a real
+    #: ``question``, an ``action`` to take, WG's own ``failed`` preparation, or null.
+    attention: Literal["question", "action", "failed"] | None = None
     next_step: str | None = None
     options: list[CadHoldOption] = Field(default_factory=list)
     job_id: str | None

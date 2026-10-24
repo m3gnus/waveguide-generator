@@ -1448,6 +1448,7 @@ class JobStore:
 
         Called when a snapshot arrives and when a preparation stops: an older
         lane finishing after a newer request cannot revive its waiting choice.
+        A continuation also retires the hold it continues.
         Two presses retire: a new Fusion press, for every older hold of its
         project lineage, and a new WG solve of the model ("manual-solve:"), for
         Fusion's older holds of that same snapshot -- solving the held
@@ -1497,6 +1498,14 @@ class JobStore:
                 # deliberately keep different settings side by side.
                 retire += [(row, job_id) for row in rows if not str(
                     cad_of_row(row).get("operation_id") or "").startswith("manual-solve:")]
+            # A continuation (Solve anyway, Try again) answers the hold it
+            # continues: clearing the continuation later never brings that
+            # question back.
+            continued = str(trigger["parent_id"] or "")
+            if continued:
+                parent = conn.execute(select + "WHERE simulation_jobs.id = ?", (continued,)).fetchone()
+                if parent is not None:
+                    retire.append((parent, job_id))
             events = []
             done: set[str] = set()
             for row, newer in retire:
@@ -1508,8 +1517,10 @@ class JobStore:
                 if not user_hold(row["status"], cad):
                     continue
                 by_fusion = newer != job_id or not is_root_press(trigger, manual=True)
-                cad["refusal"] = {"code": "superseded", "message": "Replaced by a newer request from Fusion."
-                                  if by_fusion else "Replaced by a newer solve of this model in WG."}
+                cad["refusal"] = {"code": "superseded", "message": (
+                    "Continued by a newer solve of this request." if str(row["id"]) == continued
+                    else "Replaced by a newer request from Fusion." if by_fusion
+                    else "Replaced by a newer solve of this model in WG.")}
                 cad.pop("hold", None)
                 cad["superseded_by"] = newer
                 metadata["cad"] = cad
