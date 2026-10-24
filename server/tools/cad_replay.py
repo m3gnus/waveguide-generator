@@ -387,6 +387,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("bundle", type=Path, nargs="?")
     parser.add_argument("--from-request", metavar="REQUEST_ID")
     parser.add_argument("--live-data-dir", type=Path, help="Read-only source for --from-request")
+    parser.add_argument("--retained", action="store_true",
+                        help="The bundle is WG's retained copy, which has no CAD document")
     parser.add_argument("--data-dir", type=Path, help="New or empty scratch data directory; default: retained temporary directory")
     parser.add_argument("--json", action="store_true", help="Emit one JSON report on stdout")
     parser.add_argument("--solve", action="store_true", help="Also submit the prepared request to the real job runtime")
@@ -417,7 +419,7 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError("scratch directory overlaps the source bundle")
                 report.payload["bundle"] = source.name
                 report.payload["request_id"] = args.from_request
-            replay(source, data, report, retained=bool(live), solve=args.solve, engine=args.engine,
+            replay(source, data, report, retained=bool(live) or args.retained, solve=args.solve, engine=args.engine,
                    expected_manifest_sha256=expected_digest)
     except Exception as exc:
         from server.cadlink.intake.ingest import IngestRefusal

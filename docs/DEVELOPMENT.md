@@ -235,6 +235,47 @@ its job log and results in scratch. Apply the usual compute-broker policy to
 solves and corpus replays. Running the tool in a separate process keeps its
 scoped diagnostic taps out of the running application.
 
+### Incident records and `cad_diag`
+
+Internal pipeline failures are developer matters: the user sees one calm sentence,
+and WG keeps the evidence as an incident record (`server/platform/incidents.py`,
+`record_incident`). Every developer diagnostic (`record_preparation_diagnostic`:
+`internal-failure`, `memory-guard`, `frame-fallback`, `frame-gate`, `domain`,
+`frame-second-pass`, `frame-submission`), an unhandled preparation crash, and an
+interface error the frontend caught in export, archive or CAD automation
+(`reportCaughtError`) writes one. The log line stays as well.
+
+Records live in `<data>/diagnostics/incidents/<kind>-<fingerprint>.json`. A repeat
+of the same failure (kind plus a fingerprint of its evidence and stack, with ids
+and numbers ignored) updates the one record: first and last occurrence, count,
+the latest evidence and exception, and the ids of the last 20 occurrences. They
+are bounded (at most 200 records, 30 days since last seen, every field cut to a
+fixed size, geometry keys withheld), and paths are rewritten to `<wg>`, `<data>`,
+`<home>` and `<tmp>` and the account name to `<user>` before writing. Clear failed
+and other run deletions never remove a record; the tails of the job logs they
+delete are copied into the records that name those jobs first. Problem reports
+carry the 50 newest records (`incidents/` in the zip) and the summary lists the
+newest ten. Only the running app configures the store, so tests, `cad_replay`
+and child processes never write records.
+
+```bash
+python -m server.tools.cad_diag list --since 1d [--kind internal-failure] [--json]
+python -m server.tools.cad_diag show <id-or-prefix>
+python -m server.tools.cad_diag replay <id>
+python -m server.tools.cad_diag export <id> --out ./fixture --redact
+```
+
+`--data-dir` selects another data directory (default: this machine's). `replay`
+runs `server.tools.cad_replay` in its own process on the recorded inbox request
+(or the retained bundle, with `--retained`) in a new scratch directory and prints
+`fixed` (exit 0), `still fails` (the recorded diagnostic recurs, exit 1),
+`fails differently` (exit 3) or `could not replay` (its request or retained bundle
+is gone, exit 2). `export` writes the record and WG's retained copy of
+the bundle, which never holds the CAD document; `--redact` also replaces the
+document name, blanks the STEP header's author fields (updating the manifest's
+file hashes) and drops the ids. A typical loop: `list --since 2h`, `replay`, fix,
+`replay` again.
+
 ### Running targeted tests
 
 Run a subset with the launcher, not with a hand-built `pytest` line:
