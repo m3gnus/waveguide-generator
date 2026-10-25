@@ -394,14 +394,17 @@ def test_addin_sizing_is_exactly_the_pinned_mesher(addin: Path, tmp_path: Path):
     pin = json.loads((ROOT / 'pins.json').read_text())['modules']['hornlab-waveguide-mesher']
     manifest = json.loads((addin / 'wglink_mesh_sizing.source.json').read_text())
     assert manifest['repository'] == pin['repo']
-    assert manifest['commit'] == pin['sha']
     assert manifest['path'] == 'hornlab_mesher/mesh_sizing.py'
     source = tmp_path / 'mesher'
     source.mkdir()
     subprocess.run(['git', 'init', '-q', str(source)], check=True)
     subprocess.run(['git', '-C', str(source), 'fetch', '--quiet', '--no-tags', '--depth', '1',
-                    os.environ.get('MESHER_SOURCE_GIT', pin['repo']), pin['sha']], check=True)
-    expected = subprocess.check_output(['git', '-C', str(source), 'show', f"FETCH_HEAD:{manifest['path']}"])
+                    os.environ.get('MESHER_SOURCE_GIT', pin['repo']), pin['sha'], manifest['commit']], check=True)
+    expected = subprocess.check_output(['git', '-C', str(source), 'show', f"{pin['sha']}:{manifest['path']}"])
+    # A version-only mesher release may retain the earlier vendoring provenance.
+    original = subprocess.check_output(['git', '-C', str(source), 'show',
+                                        f"{manifest['commit']}:{manifest['path']}"])
+    assert original == expected
     assert (addin / 'wglink_mesh_sizing.py').read_bytes() == expected
     assert hashlib.sha256(expected).hexdigest() == manifest['sha256']
 

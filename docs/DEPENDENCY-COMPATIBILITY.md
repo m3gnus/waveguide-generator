@@ -1,6 +1,7 @@
 # Dependency compatibility
 
-The mesher pin `b09819ca` is an untagged interim pin pending the 0.3.6 release.
+The mesher pin `1883e32b` is release 0.2.8.
+It differs from the previous interim pin `b09819ca` only in its version string.
 When it cuts a solid to its symmetry domain it keeps periodic (seam-closed) faces
 such as a throat cylinder, which the earlier cutter could drop, and it raises
 `RuntimeError` ("OCC cut lost retained portions") rather than return a cut that
