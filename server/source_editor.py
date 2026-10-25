@@ -13,7 +13,7 @@ from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
-from server.platform.json_file import json_bytes, write_json_atomic
+from server.platform.json_file import json_bytes, staged_json, write_json_atomic
 from server.design.schema import DesignConfig
 from server.mesh.errors import SolverMemoryTooLarge
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, field_validator
@@ -303,17 +303,14 @@ class PresetStore:
         if len(authoring) > self.MAX_ENTRIES:
             raise HTTPException(422, "At most 128 source authoring entries are supported.")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        def publish_authoring(_temporary: Path) -> None:
-            write_json_atomic(
-                self.authoring_path, authoring,
-                encode=partial(json_bytes, indent=None, allow_nan=False, trailing_newline=False),
-            )
-
         try:
-            # Stage the library before committing the companion, so a failed
-            # stage cannot change either file. Revisions protect a failed replace.
-            write_json_atomic(self.path, library, encode=lambda raw: raw,
-                              before_replace=publish_authoring)
+            # Stage the library first so a staging failure changes neither file.
+            with staged_json(self.path, library) as publish_library:
+                write_json_atomic(
+                    self.authoring_path, authoring,
+                    encode=partial(json_bytes, indent=None, allow_nan=False, trailing_newline=False),
+                )
+                publish_library()
         except OSError as exc:
             raise HTTPException(
                 503,

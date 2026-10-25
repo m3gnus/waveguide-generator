@@ -114,9 +114,9 @@ def _atomic_write_json(path: Path, record: Mapping[str, Any]) -> None:
             if not paths.is_link(stale) and stale.is_file() and stale.stat().st_mtime < time.time() - 86400:
                 stale.unlink(missing_ok=True)
     write_json_atomic(
-        path, payload, encode=lambda raw: raw,
+        path, payload,
         temporary_suffix=".tmp", replace_attempts=_REPLACE_ATTEMPTS if _WINDOWS else 1,
-        retry_seconds=lambda attempt: 0.025 * (attempt + 1),
+        retry_seconds=(0.025, 0.05, 0.075, 0.1), create_parent=False,
     )
 
 

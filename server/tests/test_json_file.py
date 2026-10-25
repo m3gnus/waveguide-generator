@@ -21,6 +21,19 @@ def legacy_bytes(payload, *, indent=None, sort_keys=False, ensure_ascii=True,
     return text.replace("\n", os.linesep if native else "\n").encode("utf-8")
 
 
+def observe_creation_modes(monkeypatch):
+    modes = {}
+    real_open = os.open
+
+    def open_stage(path, flags, mode=0o777, *args, **kwargs):
+        if flags & os.O_CREAT:
+            modes[Path(path)] = mode
+        return real_open(path, flags, mode, *args, **kwargs)
+
+    monkeypatch.setattr(json_file.os, "open", open_stage)
+    return modes
+
+
 def caller(name):
     if name == "settings":
         from server.settings.store import _write_json_atomic
@@ -49,15 +62,36 @@ def caller(name):
     if name == "opencl-result":
         from server.solver.bempp_opencl import _write_probe_result
         return _write_probe_result, legacy_bytes(PAYLOAD, trailing_newline=False), False
+    if name == "retirement":
+        from launchers.backend_retire_request import write_request, REQUEST_FILENAME
+        def write(path, payload):
+            assert path.name == REQUEST_FILENAME
+            write_request(path.parent, pid=42, mode="release", reason="räv", now=lambda: 100)
+        payload = {"schema": 1, "pid": 42, "mode": "release", "reason": "räv", "requested_at": 100.0}
+        return write, legacy_bytes(payload, trailing_newline=False), True
+    if name == "release-notice":
+        from launchers.statusapp.controller import StatusController
+        return (lambda path, _: StatusController._write_release_notice(None, path, "räv"),
+                legacy_bytes({"reason": "räv"}), False)
+    if name == "install-transaction":
+        from scripts.install_wglink import _write_transaction
+        return _write_transaction, legacy_bytes(PAYLOAD, indent=2, sort_keys=True, native=False), True
+    if name == "sphere-report":
+        from scripts.beat_conformance.reference_sphere import write_report
+        return (lambda path, payload: write_report(payload, path),
+                legacy_bytes(PAYLOAD, indent=2, native=False), False)
     raise AssertionError(name)
 
 
 @pytest.mark.parametrize("name", ["settings", "fusion", "pending-addin", "beat-state",
-                                  "beat-registry", "publication", "archive", "intake-result", "opencl-result"])
+                                  "beat-registry", "publication", "archive", "intake-result", "opencl-result",
+                                  "retirement", "release-notice", "install-transaction", "sphere-report"])
 @pytest.mark.parametrize("error", [OSError, PermissionError])
 def test_caller_bytes_and_failed_replace(tmp_path, monkeypatch, name, error):
     write, expected, sync_file = caller(name)
-    path = tmp_path / "record.json"
+    modes = observe_creation_modes(monkeypatch)
+    expected_mode = 0o666 if name in {"publication", "intake-result", "opencl-result", "release-notice"} else 0o600
+    path = tmp_path / ("backend-retire.json" if name == "retirement" else "record.json")
     path.write_bytes(b'old record\n')
     real_replace, real_fsync = os.replace, os.fsync
     fsynced = []
@@ -68,6 +102,7 @@ def test_caller_bytes_and_failed_replace(tmp_path, monkeypatch, name, error):
         real_fsync(fd)
 
     def fail(source, destination):
+        assert modes[Path(source)] == expected_mode
         assert Path(source).read_bytes() == expected
         assert Path(destination).read_bytes() == b'old record\n'
         raise error("replace refused")
@@ -88,6 +123,7 @@ def test_caller_bytes_and_failed_replace(tmp_path, monkeypatch, name, error):
 def test_usage_bytes_and_strict_directory_durability(tmp_path, monkeypatch):
     from server.cadlink import usage
 
+    modes = observe_creation_modes(monkeypatch)
     fixed = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
     class Clock:
         @staticmethod
@@ -99,6 +135,7 @@ def test_usage_bytes_and_strict_directory_durability(tmp_path, monkeypatch):
     path = usage.usage_path(tmp_path)
     expected = {"schemaVersion": 1, "reason": "setup-task", "recordedAt": "2026-01-02T03:04:05Z"}
     assert path.read_bytes() == legacy_bytes(expected, sort_keys=True)
+    assert modes and set(modes.values()) == {0o600}
     if os.name == "nt":
         return
     real_sync = os.fsync
@@ -121,6 +158,7 @@ def test_cache_metadata_bytes_and_replace_failure(tmp_path, monkeypatch, viewpor
     from server.contracts.canonical import canonical_normalized_bytes
     from server.mesh.artifact import mesh_text_sha256
 
+    modes = observe_creation_modes(monkeypatch)
     mesh, metadata = tmp_path / "mesh.msh", tmp_path / "mesh.json"
     metadata.write_bytes(b'old metadata')
     content = {"msh_text": "mesh\n", "stats": {"z": 2}, "metadata": {"label": "räv"}}
@@ -131,6 +169,7 @@ def test_cache_metadata_bytes_and_replace_failure(tmp_path, monkeypatch, viewpor
     real_replace = os.replace
     def replace(source, target):
         if Path(target) == metadata:
+            assert modes[Path(source)] == 0o666
             assert Path(source).read_bytes() == canonical_normalized_bytes(expected) + b"\n"
             if fail:
                 raise PermissionError("metadata locked")
@@ -156,6 +195,7 @@ def test_cache_metadata_bytes_and_replace_failure(tmp_path, monkeypatch, viewpor
 def test_presets_pair_bytes_order_and_failure(tmp_path, monkeypatch, failed_target):
     from server.source_editor import PresetStore
 
+    modes = observe_creation_modes(monkeypatch)
     store = PresetStore(tmp_path / "presets.json")
     store.path.write_bytes(b'old library')
     store.authoring_path.write_bytes(b'old authoring')
@@ -166,6 +206,7 @@ def test_presets_pair_bytes_order_and_failure(tmp_path, monkeypatch, failed_targ
     real_replace = os.replace
     replaced = []
     def replace(source, target):
+        assert modes[Path(source)] == 0o600
         kind = "library" if Path(target) == store.path else "authoring"
         assert Path(source).read_bytes() == (library_bytes if kind == "library" else authoring_bytes)
         if failed_target == kind:
@@ -264,7 +305,7 @@ def test_nonprivate_stage_uses_binary_and_nofollow_flags(tmp_path, monkeypatch):
     monkeypatch.setattr(json_file.os, "open", open_stage)
     path = tmp_path / "record.json"
     raw = b'{"label": "r\\u00e4v"}\r\n'
-    json_file.write_json_atomic(path, raw, encode=lambda value: value, creation_mode=0o666)
+    json_file.write_json_atomic(path, raw, creation_mode=0o666)
     assert len(seen) == 1
     assert seen[0] & binary
     assert seen[0] & getattr(os, "O_NOFOLLOW", 0) == getattr(os, "O_NOFOLLOW", 0)
@@ -274,6 +315,7 @@ def test_nonprivate_stage_uses_binary_and_nofollow_flags(tmp_path, monkeypatch):
 def test_release_cache_bytes_and_failed_replace(tmp_path, monkeypatch):
     from server.updates.installer_client import InstallerClient
 
+    modes = observe_creation_modes(monkeypatch)
     client = InstallerClient.__new__(InstallerClient)
     client.data_dir = tmp_path
     client._channel, client._release, client._proof = "stable", {"name": "räv"}, None
@@ -284,6 +326,7 @@ def test_release_cache_bytes_and_failed_replace(tmp_path, monkeypatch):
     path = client._cache_path
     expected = legacy_bytes(payload, trailing_newline=False)
     assert path.read_bytes() == expected
+    assert modes and set(modes.values()) == {0o666}
     monkeypatch.setattr(json_file.os, "replace", lambda *_: (_ for _ in ()).throw(PermissionError("locked")))
     client._checked = 456
     with pytest.raises(PermissionError):
@@ -328,3 +371,171 @@ def test_cache_stage_failure_changes_neither_file(tmp_path, monkeypatch, viewpor
     assert mesh.read_bytes() == b'old mesh'
     assert metadata.read_bytes() == b'old metadata'
     assert set(tmp_path.iterdir()) == {mesh, metadata}
+
+
+@pytest.mark.parametrize("compensation_raises", [False, True])
+def test_failed_compensation_retains_stage_and_original_error(tmp_path, monkeypatch, compensation_raises):
+    path = tmp_path / "record.json"
+    path.write_bytes(b"old")
+    original = PermissionError("publication failed")
+    compensation = RuntimeError("compensation failed")
+
+    def fail(*_):
+        raise original
+
+    def compensate(error):
+        assert error is original
+        if compensation_raises:
+            raise compensation
+        return True
+
+    monkeypatch.setattr(json_file.os, "replace", fail)
+    with pytest.raises(RuntimeError if compensation_raises else PermissionError) as caught:
+        json_file.write_json_atomic(path, PAYLOAD, replace_failed=compensate)
+    assert caught.value is (compensation if compensation_raises else original)
+    if compensation_raises:
+        assert caught.value.__cause__ is original
+    assert path.read_bytes() == b"old"
+    stages = list(tmp_path.glob(".record.json.*"))
+    assert len(stages) == 1
+    assert stages[0].read_bytes() == json_file.json_bytes(PAYLOAD)
+
+
+@pytest.mark.parametrize("name,attempts,delays", [
+    ("fusion", 10, [0.02] * 9),
+    ("beat-registry", 4, [0.01] * 3),
+    ("beat-state", 5, [0.025, 0.05, 0.075, 0.1]),
+])
+@pytest.mark.parametrize("exhausted", [False, True])
+def test_callers_windows_replace_retry_budget(tmp_path, monkeypatch, name, attempts, delays, exhausted):
+    from types import SimpleNamespace
+    from server.solver.beat_runtime import registry, state
+
+    # Patch the registry's platform view without changing pathlib's host OS.
+    monkeypatch.setattr(registry, "os", SimpleNamespace(**(vars(os) | {"name": "nt"})))
+    monkeypatch.setattr(registry, "private_directory", lambda path: path.mkdir(exist_ok=True))
+    monkeypatch.setattr(registry, "_check_path", lambda *_: None)
+    monkeypatch.setattr(state, "_WINDOWS", True)
+    write, expected, _ = caller(name)
+    path = tmp_path / "record.json"
+    path.write_bytes(b"old")
+    real_replace = os.replace
+    calls, sleeps = [], []
+
+    def replace(source, target):
+        calls.append(source)
+        if exhausted or len(calls) < attempts:
+            raise PermissionError("reader holds file")
+        real_replace(source, target)
+
+    monkeypatch.setattr(json_file.os, "replace", replace)
+    monkeypatch.setattr(json_file.time, "sleep", sleeps.append)
+    if exhausted:
+        with pytest.raises(PermissionError):
+            write(path, PAYLOAD)
+    else:
+        write(path, PAYLOAD)
+    assert len(calls) == attempts
+    assert len(set(calls)) == 1
+    assert sleeps == delays
+    assert path.read_bytes() == (b"old" if exhausted else expected)
+    assert list(tmp_path.iterdir()) == [path]
+
+
+@pytest.mark.parametrize("cleanup_failure", [None, PermissionError, ValueError])
+def test_registry_cleanup_checks_root_retries_and_preserves_write_error(tmp_path, monkeypatch, cleanup_failure):
+    from types import SimpleNamespace
+    from server.solver.beat_runtime import registry
+
+    monkeypatch.setattr(registry, "os", SimpleNamespace(**(vars(os) | {"name": "nt"})))
+    monkeypatch.setattr(registry, "private_directory", lambda path: path.mkdir(exist_ok=True))
+    monkeypatch.setattr(registry, "_check_path", lambda *_: None)
+    roots, unlinks, delays = [], [], []
+
+    def check_root(root):
+        roots.append(root)
+        if cleanup_failure is ValueError:
+            raise ValueError("unsafe root")
+        return root
+
+    original = OSError("write failed")
+    def fail_replace(*_):
+        raise original
+
+    real_unlink = Path.unlink
+    def unlink(path, **kwargs):
+        assert roots == [tmp_path]
+        unlinks.append(path)
+        if cleanup_failure is PermissionError or len(unlinks) < 4:
+            raise PermissionError("scanner holds stage")
+        return real_unlink(path, **kwargs)
+
+    monkeypatch.setattr(registry.paths, "checked_root", check_root)
+    monkeypatch.setattr(Path, "unlink", unlink)
+    monkeypatch.setattr(json_file.os, "replace", fail_replace)
+    monkeypatch.setattr(registry.time, "sleep", delays.append)
+    with pytest.raises(OSError) as caught:
+        registry._atomic_json(tmp_path / "record.json", PAYLOAD)
+    assert caught.value is original
+    assert roots == [tmp_path]
+    assert len(unlinks) == (0 if cleanup_failure is ValueError else 4)
+    assert delays == ([] if cleanup_failure is ValueError else [0.01] * 3)
+    assert bool(list(tmp_path.glob(".record.json.*.tmp"))) is (cleanup_failure is not None)
+
+
+@pytest.mark.parametrize("viewport", [False, True])
+def test_cache_sweeps_old_json_stages_but_keeps_recent_and_unrelated_files(tmp_path, monkeypatch, viewport):
+    from server.cadlink.intake import ingest
+
+    stale = tmp_path / ".mesh.json.abandoned"
+    stale.write_bytes(b"partial")
+    old = ingest.time.time() - ingest._ABANDONED_STAGING_AGE - 60
+    os.utime(stale, (old, old))
+    recent = tmp_path / ".mesh.json.active"
+    recent.write_bytes(b"active")
+    unrelated = tmp_path / ".other.txt.abandoned"
+    unrelated.write_bytes(b"other")
+    os.utime(unrelated, (old, old))
+    stage = tmp_path / ".wg2-import-mesh-abandoned"
+    stage.mkdir()
+    (stage / "mesh.msh").write_bytes(b"partial")
+    os.utime(stage, (old, old))
+    content = {"msh_text": "mesh\n", "stats": {}, "metadata": {}}
+    if viewport:
+        ingest._write_viewport_cache(tmp_path / "mesh.msh", tmp_path / "mesh.json", content,
+                                     transformed_geometry_hash="geometry", healing={})
+    else:
+        ingest._write_cache(tmp_path / "mesh.msh", tmp_path / "mesh.json", content)
+    assert not stale.exists() and not stage.exists()
+    assert recent.read_bytes() == b"active"
+    assert unrelated.read_bytes() == b"other"
+
+
+def test_existing_parent_policy_does_not_recreate_a_deleted_private_directory(tmp_path):
+    path = tmp_path / "gone" / "record.json"
+    with pytest.raises(FileNotFoundError):
+        json_file.write_json_atomic(path, PAYLOAD, create_parent=False)
+    assert not path.parent.exists()
+
+
+def test_presets_library_stage_failure_changes_neither_record(tmp_path, monkeypatch):
+    from server.source_editor import PresetStore
+
+    store = PresetStore(tmp_path / "presets.json")
+    store.path.write_bytes(b"old library")
+    store.authoring_path.write_bytes(b"old authoring")
+    real_open = os.open
+
+    def open_stage(path, *args, **kwargs):
+        if Path(path).name.startswith(".presets.json."):
+            raise OSError("cannot stage library")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(json_file.os, "open", open_stage)
+    with pytest.raises(HTTPException) as caught:
+        store._write({"z": {"revision": "r"}}, {"z": {"revision": "r", "authoring": {}}})
+    assert caught.value.status_code == 503
+    assert isinstance(caught.value.__cause__, OSError)
+    assert store.path.read_bytes() == b"old library"
+    assert store.authoring_path.read_bytes() == b"old authoring"
+    assert set(tmp_path.iterdir()) == {store.path, store.authoring_path}

@@ -18,7 +18,7 @@ import stat
 import time
 from typing import Any
 
-from server.platform.json_file import write_json_atomic
+from server.platform.json_file import staged_json
 from server.contracts.canonical import canonical_normalized_bytes as _canonical
 
 from server.cadlink.intake.isolated import (
@@ -621,11 +621,11 @@ def _flush_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def _sweep_abandoned_staging(parent: Path, keep: Path) -> None:
+def _sweep_abandoned_staging(parent: Path, keep: Path, *, cache_json: bool = False) -> None:
     """Remove staging leftovers nothing can still be using.
 
-    Only a staging directory or a superseded copy, only directories, and only
-    by the directory's own modification time, so a copy another attempt is
+    Only known staging directories, superseded copies, or cache JSON stages,
+    by the entry's own modification time, so a copy another attempt is
     making right now is left alone -- and a retained `<digest>.wgreturn` copy,
     however old, is never a candidate.
     """
@@ -637,19 +637,27 @@ def _sweep_abandoned_staging(parent: Path, keep: Path) -> None:
         return
     for candidate in candidates:
         leftover = (
-            candidate.name.startswith(_STAGING_PREFIX) or _SUPERSEDED_SUFFIX in candidate.name
+            candidate.name.startswith((_STAGING_PREFIX, ".wg2-import-mesh-", ".wg2-import-viewport-"))
+            or _SUPERSEDED_SUFFIX in candidate.name
         )
-        if candidate == keep or not leftover:
+        json_stage = cache_json and candidate.name.startswith(".") and ".json." in candidate.name
+        if candidate == keep or not (leftover or json_stage):
             continue
         try:
-            if not candidate.is_dir() or candidate.is_symlink():
+            if candidate.is_symlink() or not (candidate.is_file() if json_stage else candidate.is_dir()):
                 continue
             if candidate.stat().st_mtime > cutoff:
                 continue
         except OSError:
             continue
         logger.info("Removing an abandoned import staging leftover: %s", candidate.name)
-        shutil.rmtree(candidate, ignore_errors=True)
+        if json_stage:
+            try:
+                candidate.unlink(missing_ok=True)
+            except OSError:
+                pass
+        else:
+            shutil.rmtree(candidate, ignore_errors=True)
 
 
 def _stage_bundle_cas(
@@ -976,6 +984,7 @@ def _write_cache(
 ) -> None:
     mesh_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = publish_staging_directory(mesh_path.parent, ".wg2-import-mesh-")
+    _sweep_abandoned_staging(mesh_path.parent, temporary, cache_json=True)
     try:
         staged_mesh = temporary / mesh_path.name
         msh_text = str(result["msh_text"])
@@ -994,10 +1003,11 @@ def _write_cache(
         sidecar["content_sha256"] = mesh_text_sha256(msh_text)
         metadata_bytes = _canonical(sidecar) + b"\n"
         # Metadata is the commit marker: publish mesh first, metadata last.
-        write_json_atomic(
-            metadata_path, metadata_bytes, encode=lambda raw: raw, sync_file=False,
-            creation_mode=0o666, before_replace=lambda _: os.replace(staged_mesh, mesh_path),
-        )
+        with staged_json(
+            metadata_path, metadata_bytes, sync_file=False, creation_mode=0o666,
+        ) as publish_metadata:
+            os.replace(staged_mesh, mesh_path)
+            publish_metadata()
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
 
@@ -1037,15 +1047,17 @@ def _write_viewport_cache(
     }
     mesh_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = publish_staging_directory(mesh_path.parent, ".wg2-import-viewport-")
+    _sweep_abandoned_staging(mesh_path.parent, temporary, cache_json=True)
     try:
         staged_mesh = temporary / mesh_path.name
         staged_mesh.write_text(msh_text, encoding="utf-8")
         metadata_bytes = _canonical(metadata) + b"\n"
         # Stage both files before publishing mesh, then its metadata commit marker.
-        write_json_atomic(
-            metadata_path, metadata_bytes, encode=lambda raw: raw, sync_file=False,
-            creation_mode=0o666, before_replace=lambda _: os.replace(staged_mesh, mesh_path),
-        )
+        with staged_json(
+            metadata_path, metadata_bytes, sync_file=False, creation_mode=0o666,
+        ) as publish_metadata:
+            os.replace(staged_mesh, mesh_path)
+            publish_metadata()
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
     return {**metadata, "msh_text": msh_text}

@@ -885,7 +885,7 @@ def _child_result(mode: str, device: Mapping[str, Any] | None) -> dict[str, Any]
 
 def _write_probe_result(path: Path, result: Mapping[str, Any]) -> None:
     write_json_atomic(
-        path, result, sync_file=False, creation_mode=0o666,
+        path, result, sync_file=False, creation_mode=0o666, create_parent=False,
         encode=lambda value: json_bytes(value, indent=None, trailing_newline=False, newline=None),
     )
 

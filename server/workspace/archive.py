@@ -16,6 +16,7 @@ ASCII result under a case-insensitive uniqueness constraint, and
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from functools import partial
 import json
 import logging
 import os
@@ -290,7 +291,7 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any] | bytes) -> None:
     """Keep captured JSON bytes and the archive's existing flush policy."""
     write_json_atomic(
         path, payload, sync_file=False,
-        encode=lambda value: value if isinstance(value, bytes) else json_bytes(value, sort_keys=True),
+        encode=partial(json_bytes, sort_keys=True),
     )
 
 

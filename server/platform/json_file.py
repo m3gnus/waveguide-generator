@@ -1,11 +1,13 @@
 """Atomic publication of small JSON records."""
 
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 import tempfile
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 import uuid
 
 
@@ -49,13 +51,14 @@ def sync_directory(directory: Path, *, strict: bool = False) -> None:
         os.close(descriptor)
 
 
-def write_json_atomic(
+@contextmanager
+def staged_json(
     path: Path,
     payload: Any,
     *,
     replace_attempts: int = 1,
-    retry_seconds: float | Callable[[int], float] = 0.0,
-    durable_directory: bool = False,
+    retry_seconds: float | Sequence[float] = 0.0,
+    durable_directory: bool | Literal["strict"] = False,
     encode: Callable[[Any], bytes] = json_bytes,
     sync_file: bool = True,
     temporary_prefix: str | None = None,
@@ -63,29 +66,36 @@ def write_json_atomic(
     creation_mode: int = 0o600,
     before_replace: Callable[[Path], bool | None] | None = None,
     replace_failed: Callable[[Exception], bool] | None = None,
-    retryable: Callable[[OSError], bool] | None = None,
-) -> bool:
-    """Publish a small cross-process setting without exposing a torn file.
+    cleanup_staged: Callable[[Path], None] | None = None,
+    create_parent: bool = True,
+) -> Iterator[Callable[[], bool]]:
+    """Stage JSON, then let the caller explicitly publish it inside the context.
 
-    ``replace_attempts`` retries the final replace while another process holds
-    the target (Windows raises ``PermissionError`` while a reader has it open),
-    ``retry_seconds`` apart; a record another process polls needs that.
-    ``durable_directory`` also flushes the folder after the replace, so the new
-    name outlives a power cut. Raises ``OSError`` when the record could not be
-    published; its staged file is removed then, unless the removal fails too.
+    The yielded function owns replace retries and directory durability. Exiting
+    without publishing discards the stage. This lets paired-file callers stage
+    both records before publishing either, without hiding another publication
+    inside a hook. ``write_json_atomic`` is the single-file convenience wrapper.
 
-    ``encode`` preserves a caller's existing JSON wire format (or captured JSON
-    bytes). ``sync_file=False`` preserves callers that only need atomic visibility.
-    A ``before_replace`` hook runs after the staged file is closed and flushed;
-    returning False cancels publication. On failure, ``replace_failed`` may return
-    True to retain the staged JSON as recovery evidence. Neither hook owns retries.
-    A successful publication returns True; a cancelled one returns False.
-    Temporary naming options are for recovery scanners, not visible file names.
-    ``creation_mode`` is filtered by the process umask, as with normal file
-    creation; records are private unless their existing reader contract differs.
+    Bytes are already encoded JSON; other payloads use ``encode``. Native newline
+    and formatting profiles belong to callers. ``sync_file=False`` preserves
+    atomic-visibility-only records. Directory durability is best effort for True
+    and propagates errors for "strict". Retry delays may be a constant or one
+    delay per retry (the initial attempt has no delay).
+
+    ``before_replace`` validates or journals the closed, flushed stage; False
+    cancels publication. ``replace_failed`` returns True to retain recovery
+    evidence. If compensation raises, retain the stage and chain that error
+    from the original failure. ``cleanup_staged`` lets private registries retain
+    their checked-root cleanup boundary. Cleanup failures never mask the write.
+    Creation mode is filtered by umask. Naming options serve recovery scanners.
+    Private/session directories can require an existing parent.
     """
 
-    path.parent.mkdir(parents=True, exist_ok=True)
+    attempts = max(1, replace_attempts)
+    if not isinstance(retry_seconds, (int, float)) and len(retry_seconds) < attempts - 1:
+        raise ValueError("One retry delay is required for each additional attempt")
+    if create_parent:
+        path.parent.mkdir(parents=True, exist_ok=True)
     if creation_mode == 0o600:
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=temporary_prefix if temporary_prefix is not None else f".{path.name}.",
@@ -102,32 +112,53 @@ def write_json_atomic(
     keep_for_recovery = False
     try:
         with os.fdopen(descriptor, "wb") as stream:
-            stream.write(encode(payload))
+            stream.write(payload if isinstance(payload, bytes) else encode(payload))
             stream.flush()
             if sync_file:
                 os.fsync(stream.fileno())
-        if before_replace is not None and before_replace(temporary) is False:
-            return False
-        for attempt in range(max(1, replace_attempts)):
-            try:
-                os.replace(temporary, path)
-                replaced = True
-                break
-            except OSError as exc:
-                can_retry = retryable(exc) if retryable is not None else isinstance(exc, PermissionError)
-                if not can_retry or attempt + 1 >= replace_attempts:
-                    raise
-                time.sleep(retry_seconds(attempt) if callable(retry_seconds) else retry_seconds)
-        if durable_directory:
-            sync_directory(path.parent)
-        return True
+        def publish() -> bool:
+            nonlocal replaced
+            if before_replace is not None and before_replace(temporary) is False:
+                return False
+            for attempt in range(attempts):
+                try:
+                    os.replace(temporary, path)
+                    replaced = True
+                    break
+                except PermissionError:
+                    if attempt + 1 >= attempts:
+                        raise
+                    delay = retry_seconds if isinstance(retry_seconds, (int, float)) else retry_seconds[attempt]
+                    time.sleep(delay)
+            if durable_directory:
+                sync_directory(path.parent, strict=durable_directory == "strict")
+            return True
+
+        yield publish
     except Exception as exc:
         if replace_failed is not None:
-            keep_for_recovery = replace_failed(exc)
+            # A broken compensation cannot prove that discarding evidence is safe.
+            keep_for_recovery = True
+            try:
+                keep_for_recovery = replace_failed(exc)
+            except Exception as compensation_error:
+                raise compensation_error from exc
         raise
     finally:
         if not replaced and not keep_for_recovery:
             try:
-                temporary.unlink(missing_ok=True)
-            except OSError:
+                if cleanup_staged is None:
+                    temporary.unlink(missing_ok=True)
+                else:
+                    cleanup_staged(temporary)
+            except Exception:
                 pass  # a staged file left behind is named with a leading "."; it is never read
+
+
+def write_json_atomic(path: Path, payload: Any, **options: Any) -> bool:
+    """Publish one JSON file atomically; see ``staged_json`` for write policies.
+
+    Return True on publication, False only when ``before_replace`` cancels it.
+    """
+    with staged_json(path, payload, **options) as publish:
+        return publish()

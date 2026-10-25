@@ -8,8 +8,9 @@ import math
 import os
 from pathlib import Path
 import stat
-import tempfile
 import time
+
+from server.platform.json_file import json_bytes, write_json_atomic
 
 REQUEST_FILENAME = "backend-retire.json"
 MAX_REQUEST_BYTES = 4096
@@ -48,17 +49,10 @@ def write_request(locks_dir, *, pid, mode, reason, now=time.time):
     directory = Path(locks_dir)
     directory.mkdir(parents=True, exist_ok=True)
     payload = {"schema": 1, "pid": pid, "mode": mode, "reason": reason, "requested_at": float(now())}
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=directory, delete=False) as stream:
-            temporary = Path(stream.name)
-            json.dump(payload, stream, allow_nan=False)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, directory / REQUEST_FILENAME)
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+    write_json_atomic(
+        directory / REQUEST_FILENAME,
+        json_bytes(payload, indent=None, allow_nan=False, trailing_newline=False, newline=None),
+    )
 
 
 def take_request(locks_dir, *, pid, started_at_wall, now=time.time):

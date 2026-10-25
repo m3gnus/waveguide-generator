@@ -129,6 +129,17 @@ def test_a_dead_processs_cad_sandbox_is_swept_with_its_read_only_step(tmp_path: 
     assert not held.exists()
 
 
+@pytest.mark.parametrize("directory", ["wg-cad-child-import/staging", "wg2-opencl-probe"])
+def test_dead_session_sweep_removes_json_staging_orphans(tmp_path, directory):
+    holder, held = _hold_session(tmp_path)
+    stage = held / directory / ".result.json.abandoned"
+    stage.parent.mkdir(parents=True)
+    stage.write_bytes(b"partial JSON")
+    _release(holder)
+    assert sweep_stale_temporary_directories(tmp_path) == [held]
+    assert not stage.exists()
+
+
 def test_a_tree_that_cannot_be_removed_raises_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -497,7 +497,7 @@ def _jsonable(value: Any) -> Any:
 def _write_result(path: Path, envelope: dict[str, Any]) -> None:
     """Publish the result atomically, so a partial write is never read."""
     write_json_atomic(
-        path, envelope, sync_file=False, creation_mode=0o666,
+        path, envelope, sync_file=False, creation_mode=0o666, create_parent=False,
         encode=partial(json_bytes, indent=None, allow_nan=False, trailing_newline=False,
                        newline=None, default=_jsonable),
     )

@@ -217,9 +217,10 @@ def _atomic_json(path: Path, raw: dict[str, Any]) -> Path:
             _check_path(temporary, temporary.lstat())
 
     write_json_atomic(
-        path, body, encode=lambda raw: raw,
+        path, body,
         temporary_suffix=".tmp", before_replace=check_staged,
         replace_attempts=4 if os.name == "nt" else 1, retry_seconds=0.01,
+        cleanup_staged=unlink_record, create_parent=False,
     )
     return path
 

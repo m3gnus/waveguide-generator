@@ -26,14 +26,14 @@ real and imaginary self-load parts separately use 3 percent; delay error uses 2 
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import os
 from pathlib import Path
-import tempfile
 import time
 
 import numpy as np
+
+from server.platform.json_file import json_bytes, write_json_atomic
 
 from .reference_support import (
     POSITIVE_TIME,
@@ -391,25 +391,10 @@ def write_report(report: dict, destination: Path) -> None:
     """Publish a UTF-8 report atomically on every supported OS."""
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    staging = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            newline="\n",
-            dir=destination.parent,
-            suffix=".json",
-            delete=False,
-        ) as stream:
-            staging = Path(stream.name)
-            json.dump(report, stream, indent=2, allow_nan=False)
-            stream.write("\n")
-        if os.name != "nt":
-            staging.chmod(0o644)
-        os.replace(staging, destination)
-    finally:
-        if staging is not None:
-            staging.unlink(missing_ok=True)
+    write_json_atomic(
+        destination, json_bytes(report, allow_nan=False), sync_file=False, create_parent=False,
+        before_replace=lambda staged: staged.chmod(0o644) if os.name != "nt" else None,
+    )
 
 
 def run_reference(*, julia: str | Path, out: Path) -> dict:

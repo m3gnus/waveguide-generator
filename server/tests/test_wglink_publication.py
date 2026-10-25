@@ -150,7 +150,7 @@ def test_windows_replace_failure_keeps_old_locator(monkeypatch, tmp_path, winerr
 
     def denied(src, dst):
         calls.append((src, dst))
-        error = OSError("sharing violation")
+        error = PermissionError("sharing violation")
         error.winerror = winerror
         raise error
 

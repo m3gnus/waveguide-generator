@@ -35,6 +35,7 @@ from launchers.backend_start import backend_argv, backend_environment
 from launchers.backend_retire_request import write_request
 from server.platform.backend_owner import BackendHandle, backend_from_health, discover_backend
 from server.platform.instance import requested_port
+from server.platform.json_file import json_bytes, write_json_atomic
 from server.platform.job_start import ContainedStartError, JobStart, windows_job_start
 from server.platform.paths import app_root, resolve_data_dir
 from server.platform.process_tree import cancel_blocked_reads
@@ -1468,9 +1469,10 @@ class StatusController:
         return False
 
     def _write_release_notice(self, notice: Path, reason: str) -> None:
-        temporary = notice.with_name(f".{notice.name}.tmp")
-        temporary.write_text(json.dumps({"reason": reason}) + "\n", encoding="utf-8")
-        temporary.replace(notice)
+        write_json_atomic(
+            notice, json_bytes({"reason": reason}, indent=None, newline=None),
+            sync_file=False, creation_mode=0o666, create_parent=False,
+        )
 
     def _log_release_failure(self, reason: str, failure: OSError | None) -> None:
         try:

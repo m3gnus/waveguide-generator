@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Literal
 
-from server.platform.json_file import json_bytes, sync_directory, write_json_atomic
+from server.platform.json_file import json_bytes, write_json_atomic
 from server.platform.paths import data_paths
 
 UsageReason = Literal["setup-task", "install-action", "addin-delivery"]
@@ -49,8 +49,8 @@ def record_usage(data_dir: Path, reason: UsageReason) -> None:
         "reason": reason,
         "recordedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
-    write_json_atomic(path, record, encode=partial(json_bytes, indent=None, sort_keys=True, newline=None))
-    sync_directory(path.parent, strict=True)
+    write_json_atomic(path, record, encode=partial(json_bytes, indent=None, sort_keys=True, newline=None),
+                      durable_directory="strict")
 
 
 def cadlink_in_use(*, data_dir: Path, owned_addin: bool) -> bool:

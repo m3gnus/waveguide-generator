@@ -50,10 +50,9 @@ def atomic_json(path: Path, payload: Mapping[str, object]) -> None:
     write_json_atomic(
         path, payload, creation_mode=0o666,
         encode=partial(json_bytes, indent=None, ensure_ascii=False, allow_nan=False, newline=None),
-        replace_attempts=10, retry_seconds=0.02,
-        retryable=lambda exc: _WINDOWS and getattr(exc, "winerror", None) in {5, 32, 33},
+        replace_attempts=10 if _WINDOWS else 1, retry_seconds=0.02,
+        durable_directory="strict" if not _WINDOWS else False,
     )
-    _sync_directory(path.parent)
 
 
 def bundle_products(path: Path, facts: Mapping[str, object]) -> dict[str, str]:

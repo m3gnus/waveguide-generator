@@ -27,6 +27,7 @@ if str(_IMPORT_ROOT) not in sys.path:
     sys.path.insert(0, str(_IMPORT_ROOT))
 
 from server.cadlink.usage import record_usage  # noqa: E402
+from server.platform.json_file import json_bytes, sync_directory as _sync_directory, write_json_atomic  # noqa: E402
 from server.platform.paths import app_root, data_paths  # noqa: E402
 from server.platform.staging import publish_staging_directory  # noqa: E402
 from shared.safe_names import UnsafeName, collision_key, validate_relative_name  # noqa: E402
@@ -627,50 +628,12 @@ def _remove_entry(path: Path) -> None:
         shutil.rmtree(path)
 
 
-def _sync_directory(path: Path) -> None:
-    """Best-effort durability for a rename or unlink in *path*.
-
-    Windows does not expose directory handles through ``os.open``. The journal
-    file itself is still flushed there; on platforms which permit it, flushing
-    the directory also makes its rename durable across a power loss.
-    """
-
-    descriptor: int | None = None
-    try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        os.fsync(descriptor)
-    except OSError:
-        pass
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-
-
 def _write_transaction(path: Path, transaction: dict[str, object]) -> None:
     """Atomically persist and flush the replacement journal."""
-
-    temporary_name: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            newline="\n",
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            dir=path.parent,
-            delete=False,
-        ) as temporary:
-            temporary_name = temporary.name
-            json.dump(transaction, temporary, indent=2, sort_keys=True)
-            temporary.write("\n")
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        os.replace(temporary_name, path)
-        temporary_name = None
-        _sync_directory(path.parent)
-    finally:
-        if temporary_name is not None:
-            Path(temporary_name).unlink(missing_ok=True)
+    write_json_atomic(
+        path, json_bytes(transaction, sort_keys=True), temporary_suffix=".tmp", durable_directory=True,
+        create_parent=False,
+    )
 
 
 def _file_inventory(root: Path) -> dict[str, str]:
