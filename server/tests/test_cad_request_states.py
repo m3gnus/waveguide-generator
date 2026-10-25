@@ -1,0 +1,53 @@
+"""WG and Fusion read one table of CAD request states.
+
+``fixtures/cad_request_states.json`` holds one job per state. Fusion's
+request-status file is projected from it here (``project_request_status``);
+the frontend's status line classifies the same jobs
+(``frontend/src/stores/cadModelStatusLine.test.ts``). Each row's ``cad_state``
+is what the frontend is given, so it must be the server's own read model of
+the row, and the sentence WG shows must be one the shared protocol accepts.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from server.cadlink.joblane.request_status import project_request_status
+from server.cadlink.wglink_protocol import user_text_violations
+from server.jobs.cad_preparation import job_cad_state
+
+ROWS: list[dict[str, Any]] = json.loads(
+    (Path(__file__).parent / "fixtures" / "cad_request_states.json").read_text(encoding="utf-8")
+)["rows"]
+RECEIPT = {"commandId": "req-1", "outcome": "accepted", "kind": "prepare_and_solve",
+           "manifestSha256": "sha256:" + "a" * 64}
+
+
+def _server_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in row["job"].items() if key != "cad_state"}
+
+
+@pytest.mark.parametrize("row", ROWS, ids=[row["name"] for row in ROWS])
+def test_fusion_and_wg_read_the_same_state(row: dict[str, Any]) -> None:
+    job = _server_row(row)
+    cad = job_cad_state(job)
+    # The frontend's job carries exactly what the server serves for this row.
+    assert cad == row["job"]["cad_state"]
+    record, _incident = project_request_status(RECEIPT, None, job, cad)
+    assert record["state"] == row["request_status"]
+    assert record["documentName"] == "Speaker"
+    # WG's line is a sentence the shared protocol lets a user read.
+    assert not user_text_violations(row["wg"]["text"], names=["Speaker"])
+    failure = record.get("failure") or {}
+    if failure.get("recorded") is False:
+        # A failure the user can act on: Fusion and WG say the same words.
+        assert " ".join(part for part in (failure.get("message"), failure.get("nextStep")) if part) == row["wg"]["text"]
+
+
+def test_the_table_covers_every_request_state_a_job_can_have() -> None:
+    assert {row["request_status"] for row in ROWS} == {
+        "preparing", "queued", "solving", "solved", "needsYou", "couldNotFinish", "cancelled"}

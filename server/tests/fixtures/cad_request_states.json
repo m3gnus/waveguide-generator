@@ -1,0 +1,983 @@
+{
+  "_comment": [
+    "One row per state of a CAD request, read by both sides so WG and Fusion cannot disagree.",
+    "server/tests/test_cad_request_states.py projects each job through request_status (Fusion's status file) and checks",
+    "cad_state is the server's own job_cad_state of the row; frontend/src/stores/cadModelStatusLine.test.ts classifies",
+    "the same jobs (cadRequestState) and checks WG's status line and its one action.",
+    "model: 'prepared' = WG has this model's mesh on screen; 'pointer' = a Fusion request selected before WG has a mesh of it."
+  ],
+  "rows": [
+    {
+      "name": "preparing a request WG has no mesh of",
+      "model": "pointer",
+      "job": {
+        "id": "job-1",
+        "status": "preparing",
+        "progress": 0.0,
+        "run_number": null,
+        "has_results": false,
+        "stage": null,
+        "stage_message": null,
+        "error_message": null,
+        "started_at": "2026-10-25T10:00:00+00:00",
+        "created_at": "2026-10-25T10:00:00+00:00",
+        "updated_at": "2026-10-25T10:00:00+00:00",
+        "completed_at": null,
+        "config_json": {
+          "type": "cad_intent",
+          "operation_id": "req-1"
+        },
+        "task_metadata": {
+          "cad": {
+            "operation_id": "req-1",
+            "snapshot": {
+              "document_name": "Speaker",
+              "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "artifact_sha256": null,
+              "project_lineage_id": null
+            }
+          }
+        },
+        "cad_state": {
+          "operation_id": "req-1",
+          "state": "processing",
+          "stage": null,
+          "reason": null,
+          "message": null,
+          "blocker": null,
+          "held": false,
+          "prepare_failed": false,
+          "attention": null,
+          "next_step": null,
+          "options": [],
+          "job_id": null,
+          "snapshot": {
+            "document_name": "Speaker",
+            "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifact_sha256": null,
+            "project_lineage_id": null
+          },
+          "preparation": null,
+          "approvals": [],
+          "setup_defaults": false,
+          "frame_axis_automatic": null,
+          "received_at": "2026-10-25T10:00:00+00:00",
+          "updated_at": "2026-10-25T10:00:00+00:00"
+        }
+      },
+      "request_status": "preparing",
+      "wg": {
+        "action": "none",
+        "text": "Preparing Speaker…"
+      }
+    },
+    {
+      "name": "preparing a solve of the prepared model",
+      "model": "prepared",
+      "job": {
+        "id": "job-1",
+        "status": "preparing",
+        "progress": 0.0,
+        "run_number": null,
+        "has_results": false,
+        "stage": null,
+        "stage_message": null,
+        "error_message": null,
+        "started_at": "2026-10-25T10:00:00+00:00",
+        "created_at": "2026-10-25T10:00:00+00:00",
+        "updated_at": "2026-10-25T10:00:00+00:00",
+        "completed_at": null,
+        "config_json": {
+          "type": "cad_intent",
+          "operation_id": "req-1"
+        },
+        "task_metadata": {
+          "cad": {
+            "operation_id": "req-1",
+            "snapshot": {
+              "document_name": "Speaker",
+              "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "artifact_sha256": null,
+              "project_lineage_id": null
+            }
+          }
+        },
+        "cad_state": {
+          "operation_id": "req-1",
+          "state": "processing",
+          "stage": null,
+          "reason": null,
+          "message": null,
+          "blocker": null,
+          "held": false,
+          "prepare_failed": false,
+          "attention": null,
+          "next_step": null,
+          "options": [],
+          "job_id": null,
+          "snapshot": {
+            "document_name": "Speaker",
+            "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifact_sha256": null,
+            "project_lineage_id": null
+          },
+          "preparation": null,
+          "approvals": [],
+          "setup_defaults": false,
+          "frame_axis_automatic": null,
+          "received_at": "2026-10-25T10:00:00+00:00",
+          "updated_at": "2026-10-25T10:00:00+00:00"
+        }
+      },
+      "request_status": "preparing",
+      "wg": {
+        "action": "none",
+        "text": "Starting the solve…"
+      }
+    },
+    {
+      "name": "queued",
+      "model": "prepared",
+      "job": {
+        "id": "job-1",
+        "status": "queued",
+        "progress": 0.0,
+        "run_number": null,
+        "has_results": false,
+        "stage": null,
+        "stage_message": null,
+        "error_message": null,
+        "started_at": "2026-10-25T10:00:00+00:00",
+        "created_at": "2026-10-25T10:00:00+00:00",
+        "updated_at": "2026-10-25T10:00:00+00:00",
+        "completed_at": null,
+        "config_json": {
+          "type": "imported"
+        },
+        "task_metadata": {
+          "cad": {
+            "operation_id": "req-1",
+            "snapshot": {
+              "document_name": "Speaker",
+              "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "artifact_sha256": null,
+              "project_lineage_id": null
+            }
+          }
+        },
+        "cad_state": {
+          "operation_id": "req-1",
+          "state": "accepted",
+          "stage": "submitted",
+          "reason": null,
+          "message": null,
+          "blocker": null,
+          "held": false,
+          "prepare_failed": false,
+          "attention": null,
+          "next_step": null,
+          "options": [],
+          "job_id": "job-1",
+          "snapshot": {
+            "document_name": "Speaker",
+            "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifact_sha256": null,
+            "project_lineage_id": null
+          },
+          "preparation": null,
+          "approvals": [],
+          "setup_defaults": false,
+          "frame_axis_automatic": null,
+          "received_at": "2026-10-25T10:00:00+00:00",
+          "updated_at": "2026-10-25T10:00:00+00:00"
+        }
+      },
+      "request_status": "queued",
+      "wg": {
+        "action": "none",
+        "text": "Speaker is queued to solve."
+      }
+    },
+    {
+      "name": "solving",
+      "model": "prepared",
+      "job": {
+        "id": "job-1",
+        "status": "running",
+        "progress": 0.42,
+        "run_number": null,
+        "has_results": false,
+        "stage": "solve",
+        "stage_message": null,
+        "error_message": null,
+        "started_at": "2026-10-25T10:00:00+00:00",
+        "created_at": "2026-10-25T10:00:00+00:00",
+        "updated_at": "2026-10-25T10:00:00+00:00",
+        "completed_at": null,
+        "config_json": {
+          "type": "imported"
+        },
+        "task_metadata": {
+          "cad": {
+            "operation_id": "req-1",
+            "snapshot": {
+              "document_name": "Speaker",
+              "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "artifact_sha256": null,
+              "project_lineage_id": null
+            }
+          }
+        },
+        "frequency_progress": {
+          "done": 13,
+          "total": 36
+        },
+        "cad_state": {
+          "operation_id": "req-1",
+          "state": "accepted",
+          "stage": "submitted",
+          "reason": null,
+          "message": null,
+          "blocker": null,
+          "held": false,
+          "prepare_failed": false,
+          "attention": null,
+          "next_step": null,
+          "options": [],
+          "job_id": "job-1",
+          "snapshot": {
+            "document_name": "Speaker",
+            "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifact_sha256": null,
+            "project_lineage_id": null
+          },
+          "preparation": null,
+          "approvals": [],
+          "setup_defaults": false,
+          "frame_axis_automatic": null,
+          "received_at": "2026-10-25T10:00:00+00:00",
+          "updated_at": "2026-10-25T10:00:00+00:00"
+        }
+      },
+      "request_status": "solving",
+      "wg": {
+        "action": "none",
+        "text": "Solving · 13 of 36 frequencies"
+      }
+    },
+    {
+      "name": "solving a request not on screen",
+      "model": "pointer",
+      "job": {
+        "id": "job-1",
+        "status": "running",
+        "progress": 0.42,
+        "run_number": null,
+        "has_results": false,
+        "stage": "solve",
+        "stage_message": null,
+        "error_message": null,
+        "started_at": "2026-10-25T10:00:00+00:00",
+        "created_at": "2026-10-25T10:00:00+00:00",
+        "updated_at": "2026-10-25T10:00:00+00:00",
+        "completed_at": null,
+        "config_json": {
+          "type": "imported"
+        },
+        "task_metadata": {
+          "cad": {
+            "operation_id": "req-1",
+            "snapshot": {
+              "document_name": "Speaker",
+              "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "artifact_sha256": null,
+              "project_lineage_id": null
+            }
+          }
+        },
+        "frequency_progress": {
+          "done": 13,
+          "total": 36
+        },
+        "cad_state": {
+          "operation_id": "req-1",
+          "state": "accepted",
+          "stage": "submitted",
+          "reason": null,
+          "message": null,
+          "blocker": null,
+          "held": false,
+          "prepare_failed": false,
+          "attention": null,
+          "next_step": null,
+          "options": [],
+          "job_id": "job-1",
+          "snapshot": {
+            "document_name": "Speaker",
+            "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifact_sha256": null,
+            "project_lineage_id": null
+          },
+          "preparation": null,
+          "approvals": [],
+          "setup_defaults": false,
+          "frame_axis_automatic": null,
+          "received_at": "2026-10-25T10:00:00+00:00",
+          "updated_at": "2026-10-25T10:00:00+00:00"
+        }
+      },
+      "request_status": "solving",
+      "wg": {
+        "action": "none",
+        "text": "Solving · 13 of 36 frequencies"
+      }
+    },
+    {
+      "name": "solved",
+      "model": "prepared",
+      "job": {
+        "id": "job-1",
+        "status": "complete",
+        "progress": 1.0,
+        "run_number": 1,
+        "has_results": true,
+        "stage": null,
+        "stage_message": null,
+        "error_message": null,
+        "started_at": "2026-10-25T10:00:00+00:00",
+        "created_at": "2026-10-25T10:00:00+00:00",
+        "updated_at": "2026-10-25T10:00:00+00:00",
+        "completed_at": null,
+        "config_json": {
+          "type": "imported"
+        },
+        "task_metadata": {
+          "cad": {
+            "operation_id": "req-1",
+            "snapshot": {
+              "document_name": "Speaker",
+              "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "artifact_sha256": null,
+              "project_lineage_id": null
+            }
+          }
+        },
+        "cad_state": {
+          "operation_id": "req-1",
+          "state": "accepted",
+          "stage": "submitted",
+          "reason": null,
+          "message": null,
+          "blocker": null,
+          "held": false,
+          "prepare_failed": false,
+          "attention": null,
+          "next_step": null,
+          "options": [],
+          "job_id": "job-1",
+          "snapshot": {
+            "document_name": "Speaker",
+            "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifact_sha256": null,
+            "project_lineage_id": null
+          },
+          "preparation": null,
+          "approvals": [],
+          "setup_defaults": false,
+          "frame_axis_automatic": null,
+          "received_at": "2026-10-25T10:00:00+00:00",
+          "updated_at": "2026-10-25T10:00:00+00:00"
+        }
+      },
+      "request_status": "solved",
+      "wg": {
+        "action": "show-results",
+        "text": "Solved · run #1"
+      }
+    },
+    {
+      "name": "mesh too large, held without a mesh on screen",
+      "model": "pointer",
+      "job": {
+        "id": "job-1",
+        "status": "held",
+        "progress": 0.0,
+        "run_number": null,
+        "has_results": false,
+        "stage": null,
+        "stage_message": null,
+        "error_message": null,
+        "started_at": "2026-10-25T10:00:00+00:00",
+        "created_at": "2026-10-25T10:00:00+00:00",
+        "updated_at": "2026-10-25T10:00:00+00:00",
+        "completed_at": null,
+        "config_json": {
+          "type": "cad_intent",
+          "operation_id": "req-1"
+        },
+        "task_metadata": {
+          "cad": {
+            "operation_id": "req-1",
+            "snapshot": {
+              "document_name": "Speaker",
+              "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "artifact_sha256": null,
+              "project_lineage_id": null
+            },
+            "refusal": {
+              "code": "mesh_too_large",
+              "message": "This model meshes to 54,739 triangles; WG's limit is 22,000."
+            }
+          }
+        },
+        "cad_state": {
+          "operation_id": "req-1",
+          "state": "needs_user_input",
+          "stage": null,
+          "reason": "mesh_too_large",
+          "message": "This model meshes to 54,739 triangles; WG's limit is 22,000.",
+          "blocker": null,
+          "held": true,
+          "prepare_failed": false,
+          "attention": "question",
+          "next_step": "In Fusion, open Sources & Mesh… and raise Walls or add a coarser size zone, or check the model size. You can also solve anyway.",
+          "options": [
+            {
+              "id": "solve_anyway",
+              "label": "Solve anyway"
+            },
+            {
+              "id": "dismiss",
+              "label": "Dismiss request"
+            }
+          ],
+          "job_id": null,
+          "snapshot": {
+            "document_name": "Speaker",
+            "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifact_sha256": null,
+            "project_lineage_id": null
+          },
+          "preparation": null,
+          "approvals": [],
+          "setup_defaults": false,
+          "frame_axis_automatic": null,
+          "received_at": "2026-10-25T10:00:00+00:00",
+          "updated_at": "2026-10-25T10:00:00+00:00"
+        }
+      },
+      "request_status": "needsYou",
+      "wg": {
+        "action": "choose",
+        "text": "Speaker needs your choice: it is larger than WG's limit."
+      }
+    },
+    {
+      "name": "settings required",
+      "model": "pointer",
+      "job": {
+        "id": "job-1",
+        "status": "held",
+        "progress": 0.0,
+        "run_number": null,
+        "has_results": false,
+        "stage": null,
+        "stage_message": null,
+        "error_message": null,
+        "started_at": "2026-10-25T10:00:00+00:00",
+        "created_at": "2026-10-25T10:00:00+00:00",
+        "updated_at": "2026-10-25T10:00:00+00:00",
+        "completed_at": null,
+        "config_json": {
+          "type": "cad_intent",
+          "operation_id": "req-1"
+        },
+        "task_metadata": {
+          "cad": {
+            "operation_id": "req-1",
+            "snapshot": {
+              "document_name": "Speaker",
+              "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "artifact_sha256": null,
+              "project_lineage_id": null
+            },
+            "refusal": {
+              "code": "setup_required",
+              "message": "Speaker needs its solve settings."
+            }
+          }
+        },
+        "cad_state": {
+          "operation_id": "req-1",
+          "state": "needs_user_input",
+          "stage": null,
+          "reason": "setup_required",
+          "message": "Speaker needs its solve settings.",
+          "blocker": null,
+          "held": true,
+          "prepare_failed": false,
+          "attention": "question",
+          "next_step": "Review this model's solve settings, then solve.",
+          "options": [
+            {
+              "id": "review",
+              "label": "Review settings"
+            },
+            {
+              "id": "dismiss",
+              "label": "Dismiss request"
+            }
+          ],
+          "job_id": null,
+          "snapshot": {
+            "document_name": "Speaker",
+            "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifact_sha256": null,
+            "project_lineage_id": null
+          },
+          "preparation": null,
+          "approvals": [],
+          "setup_defaults": false,
+          "frame_axis_automatic": null,
+          "received_at": "2026-10-25T10:00:00+00:00",
+          "updated_at": "2026-10-25T10:00:00+00:00"
+        }
+      },
+      "request_status": "needsYou",
+      "wg": {
+        "action": "choose",
+        "text": "Speaker needs your choice before it can be solved."
+      }
+    },
+    {
+      "name": "prepared and kept until Solve",
+      "model": "prepared",
+      "job": {
+        "id": "job-1",
+        "status": "held",
+        "progress": 0.0,
+        "run_number": null,
+        "has_results": false,
+        "stage": null,
+        "stage_message": null,
+        "error_message": null,
+        "started_at": "2026-10-25T10:00:00+00:00",
+        "created_at": "2026-10-25T10:00:00+00:00",
+        "updated_at": "2026-10-25T10:00:00+00:00",
+        "completed_at": null,
+        "config_json": {
+          "type": "cad_intent",
+          "operation_id": "req-1"
+        },
+        "task_metadata": {
+          "cad": {
+            "operation_id": "req-1",
+            "snapshot": {
+              "document_name": "Speaker",
+              "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "artifact_sha256": null,
+              "project_lineage_id": null
+            },
+            "refusal": {
+              "code": "ready_to_solve",
+              "message": "Speaker is ready to solve."
+            }
+          }
+        },
+        "cad_state": {
+          "operation_id": "req-1",
+          "state": "needs_user_input",
+          "stage": null,
+          "reason": "ready_to_solve",
+          "message": "Speaker is ready to solve.",
+          "blocker": null,
+          "held": true,
+          "prepare_failed": false,
+          "attention": "ready",
+          "next_step": "Start the prepared solve when you are ready.",
+          "options": [
+            {
+              "id": "retry",
+              "label": "Solve"
+            },
+            {
+              "id": "dismiss",
+              "label": "Dismiss request"
+            }
+          ],
+          "job_id": null,
+          "snapshot": {
+            "document_name": "Speaker",
+            "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifact_sha256": null,
+            "project_lineage_id": null
+          },
+          "preparation": null,
+          "approvals": [],
+          "setup_defaults": false,
+          "frame_axis_automatic": null,
+          "received_at": "2026-10-25T10:00:00+00:00",
+          "updated_at": "2026-10-25T10:00:00+00:00"
+        }
+      },
+      "request_status": "needsYou",
+      "wg": {
+        "action": "solve",
+        "text": "Ready to solve · 3,035 triangles"
+      }
+    },
+    {
+      "name": "waiting for the solve engine",
+      "model": "prepared",
+      "job": {
+        "id": "job-1",
+        "status": "held",
+        "progress": 0.0,
+        "run_number": null,
+        "has_results": false,
+        "stage": null,
+        "stage_message": null,
+        "error_message": null,
+        "started_at": "2026-10-25T10:00:00+00:00",
+        "created_at": "2026-10-25T10:00:00+00:00",
+        "updated_at": "2026-10-25T10:00:00+00:00",
+        "completed_at": null,
+        "config_json": {
+          "type": "cad_intent",
+          "operation_id": "req-1"
+        },
+        "task_metadata": {
+          "cad": {
+            "operation_id": "req-1",
+            "snapshot": {
+              "document_name": "Speaker",
+              "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "artifact_sha256": null,
+              "project_lineage_id": null
+            },
+            "refusal": {
+              "code": "engine_unavailable",
+              "message": "The selected engine is not ready."
+            }
+          }
+        },
+        "cad_state": {
+          "operation_id": "req-1",
+          "state": "needs_user_input",
+          "stage": null,
+          "reason": "engine_unavailable",
+          "message": "The selected engine is not ready.",
+          "blocker": null,
+          "held": true,
+          "prepare_failed": false,
+          "attention": "action",
+          "next_step": "Open Results to prepare the solve engine.",
+          "options": [
+            {
+              "id": "review",
+              "label": "Review solve"
+            },
+            {
+              "id": "dismiss",
+              "label": "Dismiss request"
+            }
+          ],
+          "job_id": null,
+          "snapshot": {
+            "document_name": "Speaker",
+            "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifact_sha256": null,
+            "project_lineage_id": null
+          },
+          "preparation": null,
+          "approvals": [],
+          "setup_defaults": false,
+          "frame_axis_automatic": null,
+          "received_at": "2026-10-25T10:00:00+00:00",
+          "updated_at": "2026-10-25T10:00:00+00:00"
+        }
+      },
+      "request_status": "needsYou",
+      "wg": {
+        "action": "none",
+        "text": "Solve engine is getting ready…"
+      }
+    },
+    {
+      "name": "WG could not prepare it",
+      "model": "pointer",
+      "job": {
+        "id": "job-1",
+        "status": "error",
+        "progress": 0.0,
+        "run_number": null,
+        "has_results": false,
+        "stage": null,
+        "stage_message": null,
+        "error_message": null,
+        "started_at": "2026-10-25T10:00:00+00:00",
+        "created_at": "2026-10-25T10:00:00+00:00",
+        "updated_at": "2026-10-25T10:00:00+00:00",
+        "completed_at": null,
+        "config_json": {
+          "type": "cad_intent",
+          "operation_id": "req-1"
+        },
+        "task_metadata": {
+          "cad": {
+            "operation_id": "req-1",
+            "snapshot": {
+              "document_name": "Speaker",
+              "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "artifact_sha256": null,
+              "project_lineage_id": null
+            },
+            "refusal": {
+              "code": "preparation_failed",
+              "message": "stage 1 bundle validation: $.sources[x].suggested_resolution_mm"
+            }
+          }
+        },
+        "cad_state": {
+          "operation_id": "req-1",
+          "state": "needs_user_input",
+          "stage": null,
+          "reason": "preparation_failed",
+          "message": "Waveguide Generator could not prepare Speaker. This has been recorded for the developers.",
+          "blocker": null,
+          "held": false,
+          "prepare_failed": true,
+          "attention": "failed",
+          "next_step": null,
+          "options": [
+            {
+              "id": "retry",
+              "label": "Try again"
+            },
+            {
+              "id": "dismiss",
+              "label": "Dismiss request"
+            }
+          ],
+          "job_id": null,
+          "snapshot": {
+            "document_name": "Speaker",
+            "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifact_sha256": null,
+            "project_lineage_id": null
+          },
+          "preparation": null,
+          "approvals": [],
+          "setup_defaults": false,
+          "frame_axis_automatic": null,
+          "received_at": "2026-10-25T10:00:00+00:00",
+          "updated_at": "2026-10-25T10:00:00+00:00"
+        }
+      },
+      "request_status": "couldNotFinish",
+      "wg": {
+        "action": "try-again",
+        "text": "Waveguide Generator could not prepare Speaker. This has been recorded for the developers."
+      }
+    },
+    {
+      "name": "the model changed after Fusion asked",
+      "model": "pointer",
+      "job": {
+        "id": "job-1",
+        "status": "error",
+        "progress": 0.0,
+        "run_number": null,
+        "has_results": false,
+        "stage": null,
+        "stage_message": null,
+        "error_message": null,
+        "started_at": "2026-10-25T10:00:00+00:00",
+        "created_at": "2026-10-25T10:00:00+00:00",
+        "updated_at": "2026-10-25T10:00:00+00:00",
+        "completed_at": null,
+        "config_json": {
+          "type": "cad_intent",
+          "operation_id": "req-1"
+        },
+        "task_metadata": {
+          "cad": {
+            "operation_id": "req-1",
+            "snapshot": {
+              "document_name": "Speaker",
+              "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "artifact_sha256": null,
+              "project_lineage_id": null
+            },
+            "refusal": {
+              "code": "snapshot_changed",
+              "message": "Speaker changed."
+            }
+          }
+        },
+        "cad_state": {
+          "operation_id": "req-1",
+          "state": "rejected",
+          "stage": null,
+          "reason": "snapshot_changed",
+          "message": "Speaker changed after Fusion asked WG to solve it.",
+          "blocker": null,
+          "held": false,
+          "prepare_failed": true,
+          "attention": "action",
+          "next_step": "Send it again from Fusion.",
+          "options": [
+            {
+              "id": "dismiss",
+              "label": "Dismiss request"
+            }
+          ],
+          "job_id": null,
+          "snapshot": {
+            "document_name": "Speaker",
+            "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifact_sha256": null,
+            "project_lineage_id": null
+          },
+          "preparation": null,
+          "approvals": [],
+          "setup_defaults": false,
+          "frame_axis_automatic": null,
+          "received_at": "2026-10-25T10:00:00+00:00",
+          "updated_at": "2026-10-25T10:00:00+00:00"
+        }
+      },
+      "request_status": "couldNotFinish",
+      "wg": {
+        "action": "none",
+        "text": "Speaker changed after Fusion asked WG to solve it. Send it again from Fusion."
+      }
+    },
+    {
+      "name": "the solve did not finish",
+      "model": "prepared",
+      "job": {
+        "id": "job-1",
+        "status": "error",
+        "progress": 0.0,
+        "run_number": null,
+        "has_results": false,
+        "stage": null,
+        "stage_message": null,
+        "error_message": "Metal device lost",
+        "started_at": "2026-10-25T10:00:00+00:00",
+        "created_at": "2026-10-25T10:00:00+00:00",
+        "updated_at": "2026-10-25T10:00:00+00:00",
+        "completed_at": null,
+        "config_json": {
+          "type": "imported"
+        },
+        "task_metadata": {
+          "cad": {
+            "operation_id": "req-1",
+            "snapshot": {
+              "document_name": "Speaker",
+              "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "artifact_sha256": null,
+              "project_lineage_id": null
+            }
+          }
+        },
+        "cad_state": {
+          "operation_id": "req-1",
+          "state": "accepted",
+          "stage": "submitted",
+          "reason": null,
+          "message": null,
+          "blocker": null,
+          "held": false,
+          "prepare_failed": false,
+          "attention": null,
+          "next_step": null,
+          "options": [],
+          "job_id": "job-1",
+          "snapshot": {
+            "document_name": "Speaker",
+            "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifact_sha256": null,
+            "project_lineage_id": null
+          },
+          "preparation": null,
+          "approvals": [],
+          "setup_defaults": false,
+          "frame_axis_automatic": null,
+          "received_at": "2026-10-25T10:00:00+00:00",
+          "updated_at": "2026-10-25T10:00:00+00:00"
+        }
+      },
+      "request_status": "couldNotFinish",
+      "wg": {
+        "action": "try-again",
+        "text": "WG could not finish solving Speaker."
+      }
+    },
+    {
+      "name": "dismissed",
+      "model": "prepared",
+      "job": {
+        "id": "job-1",
+        "status": "cancelled",
+        "progress": 0.0,
+        "run_number": null,
+        "has_results": false,
+        "stage": null,
+        "stage_message": null,
+        "error_message": null,
+        "started_at": "2026-10-25T10:00:00+00:00",
+        "created_at": "2026-10-25T10:00:00+00:00",
+        "updated_at": "2026-10-25T10:00:00+00:00",
+        "completed_at": null,
+        "config_json": {
+          "type": "imported"
+        },
+        "task_metadata": {
+          "cad": {
+            "operation_id": "req-1",
+            "snapshot": {
+              "document_name": "Speaker",
+              "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "artifact_sha256": null,
+              "project_lineage_id": null
+            }
+          }
+        },
+        "cad_state": {
+          "operation_id": "req-1",
+          "state": "accepted",
+          "stage": "submitted",
+          "reason": null,
+          "message": null,
+          "blocker": null,
+          "held": false,
+          "prepare_failed": false,
+          "attention": null,
+          "next_step": null,
+          "options": [],
+          "job_id": "job-1",
+          "snapshot": {
+            "document_name": "Speaker",
+            "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifact_sha256": null,
+            "project_lineage_id": null
+          },
+          "preparation": null,
+          "approvals": [],
+          "setup_defaults": false,
+          "frame_axis_automatic": null,
+          "received_at": "2026-10-25T10:00:00+00:00",
+          "updated_at": "2026-10-25T10:00:00+00:00"
+        }
+      },
+      "request_status": "cancelled",
+      "wg": {
+        "action": "solve",
+        "text": "Ready to solve · 3,035 triangles"
+      }
+    }
+  ]
+}
