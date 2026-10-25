@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -44,6 +46,39 @@ def probe_session(tmp_path_factory, monkeypatch):
         with monkeypatch.context() as cleanup:
             cleanup.setattr(sys, "platform", native_platform)
             session.close(remove=True)
+
+
+@pytest.mark.parametrize("isolated", [False, True])
+def test_probe_script_publishes_without_checkout_on_pythonpath(tmp_path, isolated):
+    # Match _run_probe's file-path argv, from a moved app root. -I/-S also models a
+    # bundled ._pth interpreter with no cwd, PYTHONPATH or installed packages.
+    source = Path(__file__).resolve().parents[2]
+    app = tmp_path / "Wave guide's Gén" / "app"
+    for relative in (
+        "server/__init__.py", "server/platform/__init__.py", "server/platform/paths.py",
+        "server/platform/json_file.py", "server/solver/bempp_opencl.py",
+    ):
+        target = app / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source / relative, target)
+    # Deterministic inventory, without a native driver or numerical work. The
+    # real script still imports, validates and atomically publishes its result.
+    (app / "bempp_cl").mkdir()
+    (app / "bempp_cl/__init__.py").write_text("", encoding="utf-8")
+    (app / "bempp_cl/api.py").write_text("", encoding="utf-8")
+    (app / "pyopencl.py").write_text("def get_platforms(): return []\n", encoding="utf-8")
+    result_path = tmp_path / "result.json"
+    flags = ["-I", "-S"] if isolated else []
+    completed = subprocess.run(
+        [sys.executable, *flags, str(app / "server/solver/bempp_opencl.py"),
+         "inventory", "null", str(result_path)],
+        cwd=tmp_path, env={k: v for k, v in os.environ.items() if not k.startswith("PYTHON")},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert probe._READY_MARKER in completed.stdout
+    assert result_path.read_bytes() == b'{"ok": true, "devices": []}'
+    assert not list(tmp_path.glob(".result.json.*"))
 
 
 def test_frequency_worker_holds_running_exclusion_before_session_and_initializer(monkeypatch):

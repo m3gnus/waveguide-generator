@@ -421,7 +421,8 @@ def test_a_host_that_survived_quit_does_not_pin_the_app_layer(
         pytest.skip("this runner's own job forbids breakaway")
     app = tmp_path / "bundle" / "app"
     for relative in ("server/__init__.py", "server/solver/__init__.py", "server/platform/__init__.py",
-                     "server/platform/paths.py", "server/tests/beat_runtime/fake_host_worker.py",
+                     "server/platform/paths.py", "server/platform/json_file.py",
+                     "server/tests/beat_runtime/fake_host_worker.py",
                      "server/tests/beat_runtime/fake_host_main.py"):
         target = app / relative
         target.parent.mkdir(parents=True, exist_ok=True)

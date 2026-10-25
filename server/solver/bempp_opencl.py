@@ -25,7 +25,13 @@ import time
 import traceback
 from typing import Any, Mapping
 
-from server.platform.json_file import json_bytes, write_json_atomic
+# The disposable probe is launched by file path, including by interpreters
+# whose ._pth ignores cwd and PYTHONPATH. Establish its app root before loading
+# the shared writer; ordinary package imports already have that root.
+if __name__ == "__main__" and not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from server.platform.json_file import json_bytes, write_json_atomic  # noqa: E402
 
 # Only driver enumeration/kernel execution consumes these budgets. Child
 # interpreter startup and imports compete with the app's own cold imports.

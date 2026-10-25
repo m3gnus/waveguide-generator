@@ -77,18 +77,29 @@ def test_source_launch_uses_bootstrap_app_root_devnull_and_reaping(launch, tmp_p
 
 
 
-def test_packaged_app_root_imports_without_checkout_on_pythonpath(launch, tmp_path, monkeypatch):
-    key, directory, _ = launch
+@pytest.fixture
+def packaged_host_app(tmp_path):
     source = Path(__file__).resolve().parents[3]
     app = tmp_path / "bundle" / "app"
+    # Deliberate host dependency set, not the whole server package. The bundle
+    # builder includes server/ in full; this fixture keeps new dependencies visible.
     for relative in ("server/__init__.py", "server/solver/__init__.py", "server/platform/__init__.py",
-                     "server/platform/paths.py", "server/tests/beat_runtime/fake_host_worker.py",
+                     "server/platform/paths.py", "server/platform/json_file.py",
+                     "server/tests/beat_runtime/fake_host_worker.py",
                      "server/tests/beat_runtime/fake_host_main.py"):
         target = app / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source / relative, target)
     shutil.copytree(source / "server/solver/beat_runtime", app / "server/solver/beat_runtime",
                     ignore=shutil.ignore_patterns("__pycache__"))
+    return app
+
+
+def test_packaged_app_root_imports_without_checkout_on_pythonpath(
+    launch, tmp_path, monkeypatch, packaged_host_app,
+):
+    key, directory, _ = launch
+    app = packaged_host_app
     monkeypatch.setenv("WG2_BUNDLE", "1")
     monkeypatch.setenv("WG2_APP_ROOT", str(app))
     monkeypatch.delenv("PYTHONPATH", raising=False)
@@ -99,6 +110,25 @@ def test_packaged_app_root_imports_without_checkout_on_pythonpath(launch, tmp_pa
     launched = events(key)[0]["kwargs"]["environment"]
     assert {name: launched[name] for name in key["environment"]} == key["environment"]
     assert "PATH" in launched  # The host inherits unkeyed launch settings too.
+
+
+def test_packaged_state_writer_needs_only_the_app_and_stdlib(packaged_host_app, tmp_path):
+    # -I ignores PYTHONPATH/cwd; -S excludes installed dependencies and editable
+    # checkouts. Exercise state too, which the fake host does not use. The host's
+    # registry/IPC has its existing NumPy dependency; state needs only stdlib.
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-c",
+         "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); "
+         "from server.solver.beat_runtime import state; root = Path(sys.argv[2]); "
+         "state._atomic_write_json(root / 'state.json', {'ok': True})",
+         str(packaged_host_app), str(tmp_path / "records")],
+        cwd=tmp_path, env={k: v for k, v in os.environ.items() if not k.startswith("PYTHON")},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "records/state.json").read_bytes() == (
+        '{\n  "ok": true\n}\n'.replace("\n", os.linesep).encode("utf-8")
+    )
 
 
 
