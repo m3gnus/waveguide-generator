@@ -1653,9 +1653,12 @@ class JobItem(JobArchiveIdentity, JobDesignIdentity):
     #: with). Null for every job that has a request.
     cad_intent: dict[str, Any] | None = None
     #: Accepted return identity, from the intent before binding and
-    #: ``task_metadata.cad.return_identity`` afterward. Null for older bound
-    #: rows that did not retain it; bundle paths alone never identify a revision.
-    cad_return: CadReturnIdentity | None = None
+    #: ``task_metadata.cad.return_identity`` afterward. Absent when no identity
+    #: was retained, preserving historical response bytes. A nullable return id
+    #: still names an older delivery whose bundle path is known.
+    cad_return: CadReturnIdentity | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class JobStatusResponse(JobItem):

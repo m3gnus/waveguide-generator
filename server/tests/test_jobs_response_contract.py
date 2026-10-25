@@ -53,6 +53,7 @@ def test_serialized_historical_rows_satisfy_response_contract(config):
     wire = JobRuntime._serialize_job(row)
     parsed = JobItem.model_validate(wire)
     assert parsed.model_dump(mode="json") == wire
+    assert "cad_return" not in wire
     assert all(name in wire and wire[name] is None for name in NULLABLE_FIELDS)
     assert set(wire["design_availability"]) == {
         "reopenable", "source", "reason_code", "reason", "note",
@@ -202,6 +203,22 @@ def test_return_identity_reads_from_retained_metadata_and_tolerates_old_rows(det
     expected = ({"bundle_path": identity["bundle_path"], "return_id": identity.get("return_id")}
                 if identity and identity.get("bundle_path")
                 and identity["bundle_path"] != UNAVAILABLE_BUNDLE_PATH else None)
-    assert wire["cad_return"] == expected
     response = JobStatusResponse if detailed else JobItem
-    assert response.model_validate(wire).model_dump(mode="json")["cad_return"] == expected
+    encoded = response.model_validate(wire).model_dump(mode="json")
+    if expected is None:
+        assert "cad_return" not in wire
+        assert "cad_return" not in encoded
+    else:
+        assert wire["cad_return"] == encoded["cad_return"] == expected
+
+
+@pytest.mark.parametrize("response", [JobItem, JobStatusResponse])
+@pytest.mark.parametrize("explicit_null", [False, True])
+def test_empty_return_identity_is_optional_and_never_changes_default_response_bytes(response, explicit_null):
+    wire = JobRuntime._serialize_job(_row(), detailed=response is JobStatusResponse)
+    if explicit_null:
+        wire["cad_return"] = None  # Tolerate a client or earlier server that sent null.
+    parsed = response.model_validate(wire)
+    assert parsed.cad_return is None
+    assert "cad_return" not in parsed.model_dump(mode="json")
+    assert "cad_return" not in json.loads(parsed.model_dump_json())

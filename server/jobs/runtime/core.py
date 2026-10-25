@@ -5065,7 +5065,7 @@ class JobRuntime:
             "cad_source": cad_source,
             "cad_setup": dict(geometry) if imported else None,
             "cad_intent": cad_intent,
-            "cad_return": cad_return,
+            **({"cad_return": cad_return} if cad_return is not None else {}),
         }
         state = item["cad_state"]
         if state and state.get("prepare_failed"):

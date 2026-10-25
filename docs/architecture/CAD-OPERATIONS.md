@@ -1183,7 +1183,8 @@ switched production intake and operation shims to that lane.
   `cad_return: {bundle_path, return_id}`: the accepted return's immutable
   identity, projected from this intent until binding and then from
   `task_metadata.cad.return_identity`, retained atomically by the binding
-  transaction. Older bound jobs that recorded none expose null. `return_id` may
+  transaction. The field is absent when no identity was retained, preserving
+  historical job response bytes. `return_id` may
   be null for older deliveries. Folder inventory exposes the manifest's
   `returnId`, so reusing a bundle path for a new return never grants an older
   run ownership of it. The display owner and model identity reader both consume

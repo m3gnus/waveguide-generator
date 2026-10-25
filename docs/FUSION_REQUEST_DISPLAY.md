@@ -38,7 +38,7 @@ Binding retains the accepted bundle path and return id atomically in
 `task_metadata.cad.return_identity`. The job read model projects that identity as
 `cad_return`; both the display owner and current-model reader consume it, including
 when the first snapshot is already bound. Older bound rows without this identity
-remain readable and expose null.
+remain readable and omit `cad_return`, preserving their response bytes.
 
 Only the current run of an eligible request that has not been acknowledged as
 displayed owns its return. Folder inventory supplies `returnId`: a new id at the

@@ -28,7 +28,6 @@
     "received_at": "2026-10-06T22:02:04.666832",
     "updated_at": "2026-10-06T22:02:04.666832"
   },
-  "cad_return": null,
   "cad_intent": {
     "type": "cad_intent",
     "operation_id": "b6cab5fb-ff2f-4020-82d2-ad7441d79528",

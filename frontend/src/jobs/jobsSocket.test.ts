@@ -423,6 +423,23 @@ describe('jobs websocket state machine', () => {
     manager.stop();
   });
 
+  it('accepts snapshots and status refreshes with no CAD return identity', async () => {
+    const socket = new MockSocket();
+    const withoutReturn = job();
+    delete withoutReturn.cad_return;
+    const manager = new JobsSocketManager(() => socket, vi.fn(async () => json({ ...withoutReturn, label: 'Refreshed' })), 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 1, jobs: [withoutReturn] });
+    expect(manager.getSnapshot()).toMatchObject({ cursor: 1, error: null });
+    expect(manager.getSnapshot().jobs[0]).not.toHaveProperty('cad_return');
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: 2, jobId: 'job-1', type: 'queued', payload: {} });
+    await vi.waitFor(() => expect(manager.getSnapshot().jobs[0].label).toBe('Refreshed'));
+    expect(manager.getSnapshot()).toMatchObject({ cursor: 2, error: null });
+    expect(manager.getSnapshot().jobs[0]).not.toHaveProperty('cad_return');
+    manager.stop();
+  });
+
   it.each([null, { bundle_path: 'ingest/model', return_id: null },
     { bundle_path: 'ingest/model', return_id: 'wgr_new' }])('accepts CAD return identity: %j', (cadReturn) => {
     const socket = new MockSocket();
