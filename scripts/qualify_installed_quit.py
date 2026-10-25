@@ -18,7 +18,10 @@ platform's packaged runtime (``docs/reference/SHUTDOWN-AND-RECOVERY.md``):
    server must exit on its own, with status 0, inside the status window's
    grace (read from the installed launcher), before this gate would kill it.
 3. **No stray children.** Every process the server started, enumerated while
-   it was alive, must be gone within two seconds of its exit.
+   it was alive, must be gone within two seconds of its exit. On Windows a
+   parent pid is only a number recorded at creation, so a process counts as a
+   descendant only if it was created after its parent, and as still running
+   only while its pid names the process recorded, never a later reuse.
 4. **The next start.** A second start on the same data and temporary
    directories must read the job as interrupted by Quit and leave no ``wg2-*``
    temporary directory but its own; after its own clean stop, none at all.
@@ -359,28 +362,63 @@ def _windows_process_table() -> dict[int, tuple[int, bool]]:
     kernel32.Process32NextW.argtypes = (wintypes.HANDLE, ctypes.POINTER(ProcessEntry))
     kernel32.Process32NextW.restype = wintypes.BOOL
     kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetProcessTimes.argtypes = (wintypes.HANDLE,) + (ctypes.POINTER(wintypes.FILETIME),) * 4
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+    kernel32.GetSystemTimeAsFileTime.argtypes = (ctypes.POINTER(wintypes.FILETIME),)
 
+    def ticks(value: Any) -> int:
+        return (int(value.dwHighDateTime) << 32) | int(value.dwLowDateTime)
+
+    def created(pid: int, taken: int) -> int | None:
+        # None when the process cannot be opened (another user's, protected,
+        # or gone), or when the pid was reused after the snapshot was taken.
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        try:
+            times = [wintypes.FILETIME() for _ in range(4)]
+            if not kernel32.GetProcessTimes(handle, *(ctypes.byref(time_) for time_ in times)):
+                return None
+            value = ticks(times[0])
+            return value if value <= taken else None
+        finally:
+            kernel32.CloseHandle(handle)
+
+    now = wintypes.FILETIME()
+    kernel32.GetSystemTimeAsFileTime(ctypes.byref(now))
     snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
     if not snapshot or snapshot == ctypes.c_void_p(-1).value:
         raise OSError(ctypes.get_last_error(), "CreateToolhelp32Snapshot failed")
     try:
         entry = ProcessEntry()
         entry.dwSize = ctypes.sizeof(ProcessEntry)
-        table: dict[int, tuple[int, bool]] = {}
+        rows: list[tuple[int, int, bool, str]] = []
         more = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
         while more:
-            table[int(entry.th32ProcessID)] = (
+            rows.append((
+                int(entry.th32ProcessID),
                 int(entry.th32ParentProcessID),
                 int(entry.cntThreads) > 0,
-            )
+                str(entry.szExeFile),
+            ))
             more = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
-        return table
     finally:
         kernel32.CloseHandle(snapshot)
+    taken = ticks(now)
+    return {
+        pid: (parent, running, created(pid, taken) if pid else None, name)
+        for pid, parent, running, name in rows
+    }
 
 
-def process_table() -> dict[int, tuple[int, bool]]:
-    """``pid -> (parent pid, running)`` for every process on the host."""
+def process_table() -> dict[int, tuple[Any, ...]]:
+    """``pid -> (parent pid, running)`` for every process on the host.
+
+    On Windows each row also carries the creation time (``None`` when unknown)
+    and the image name: ``(parent pid, running, created, name)``.
+    """
 
     if os.name == "nt":
         return _windows_process_table()
@@ -404,22 +442,75 @@ def process_table() -> dict[int, tuple[int, bool]]:
     return table
 
 
-def descendants(root: int, table: dict[int, tuple[int, bool]] | None = None) -> set[int]:
+def _created(row: tuple[Any, ...]) -> Any:
+    """A row's creation time, or ``None`` where the table has none."""
+
+    return row[2] if len(row) > 2 else None
+
+
+def descendants(root: int, table: dict[int, tuple[Any, ...]] | None = None) -> set[int]:
+    """Every process below ``root``.
+
+    Windows never rewrites a parent pid. A process whose parent exited still
+    names that pid, and once the system reuses it for one of ``root``'s tree,
+    the orphan and everything under it would look like that process's
+    children. Where the table knows creation times, a child must be created
+    after its parent.
+    """
+
     table = process_table() if table is None else table
     found: set[int] = set()
     frontier = [root]
     while frontier:
         parent = frontier.pop()
-        for pid, (ppid, _running) in table.items():
-            if ppid == parent and pid not in found:
-                found.add(pid)
-                frontier.append(pid)
+        born = _created(table[parent]) if parent in table else None
+        for pid, row in table.items():
+            if row[0] != parent or pid in found or pid == root:
+                continue
+            if born is not None and (_created(row) is None or _created(row) < born):
+                continue
+            found.add(pid)
+            frontier.append(pid)
     return found
 
 
-def still_running(pids: set[int]) -> set[int]:
+def births(pids: set[int], table: dict[int, tuple[Any, ...]]) -> dict[int, Any]:
+    """The creation time each pid had in ``table``, where it has one."""
+
+    return {pid: _created(table[pid]) for pid in pids if pid in table and _created(table[pid]) is not None}
+
+
+def still_running(pids: set[int], born: dict[int, Any] | None = None) -> set[int]:
+    """The ``pids`` still running; with ``born``, never a later process reusing one."""
+
     table = process_table()
-    return {pid for pid in pids if pid in table and table[pid][1]}
+    running = set()
+    for pid in pids:
+        row = table.get(pid)
+        if row is None or not row[1]:
+            continue
+        if born and pid in born and _created(row) is not None and _created(row) != born[pid]:
+            continue
+        running.add(pid)
+    return running
+
+
+def describe_processes(pids: set[int]) -> str:
+    """``pid (image, parent pid)`` for each pid, as far as the table can say."""
+
+    try:
+        table = process_table()
+    except (QualificationError, OSError, subprocess.SubprocessError):
+        table = {}
+    parts = []
+    for pid in sorted(pids):
+        row = table.get(pid)
+        if row is None:
+            parts.append(str(pid))
+        else:
+            name = f"{row[3]}, " if len(row) > 3 else ""
+            parts.append(f"{pid} ({name}parent {row[0]})")
+    return ", ".join(parts)
 
 
 def _kill(pid: int) -> None:
@@ -453,6 +544,9 @@ class Run:
     output: Path
     base: str = ""
     children: set[int] = field(default_factory=set)
+    #: Each child's creation time where the table knows it, so a pid the
+    #: system reuses after the child exited is not mistaken for it.
+    born: dict[int, Any] = field(default_factory=dict)
     #: The server's own pid, which names its temporary session
     #: (``wg2-run-<pid>-``). Not always :attr:`pid`: a virtual environment's
     #: ``python.exe`` on Windows is a launcher that runs the server as its child.
@@ -550,7 +644,7 @@ class Run:
             # Whatever the server starts while it stops is its child too. One
             # failed listing is not a verdict about the server; the next try is.
             try:
-                self.children |= descendants(self.pid)
+                note_children(self)
             except (OSError, subprocess.SubprocessError):
                 pass
             if time.monotonic() - asked >= grace:
@@ -590,6 +684,16 @@ class Run:
             errors.append(f"waiting for server {self.pid}: {exc}")
         if errors:
             raise QualificationError("owned process cleanup failed: " + "; ".join(errors))
+
+
+def note_children(run: Run) -> None:
+    """Add the server's current descendants, with their creation times."""
+
+    table = process_table()
+    found = descendants(run.pid, table)
+    run.children |= found
+    for pid, born in births(found, table).items():
+        run.born.setdefault(pid, born)
 
 
 def server_pid(data_dir: Path) -> int:
@@ -743,7 +847,7 @@ def run_gate(
         operation = marker.read_text(encoding="utf-8").strip()
         if not operation.endswith(PARKED_OPERATION_SUFFIX):
             raise QualificationError(f"the gmsh worker parked {operation!r}, not the mesh build")
-        first.children = descendants(first.pid)
+        note_children(first)
         report["children_at_stop"] = len(first.children)
 
         elapsed = first.stop_and_time(grace)
@@ -755,11 +859,13 @@ def run_gate(
             )
             first.children -= beat_processes
         deadline = time.monotonic() + CHILD_REAP_S
-        while still_running(first.children) and time.monotonic() < deadline:
+        while still_running(first.children, first.born) and time.monotonic() < deadline:
             time.sleep(0.1)
-        stray = still_running(first.children)
+        stray = still_running(first.children, first.born)
         if stray:
-            raise QualificationError(f"child processes {sorted(stray)} outlived the server")
+            raise QualificationError(
+                f"child processes {sorted(stray)} outlived the server: {describe_processes(stray)}"
+            )
         report["left_behind_before_restart"] = _temporary_leftovers(temporary)
 
         second = Run.start(interpreter, app, base_environment, data_dir, work / "second")
@@ -783,7 +889,7 @@ def run_gate(
 
         if beat:
             warm_beat_host(second, interpreter, app, base_environment)
-            second.children = descendants(second.pid)
+            note_children(second)
         if beat:
             report["beat_host_after_restart"] = require_detached_host(
                 interpreter, app, base_environment, host, beat_processes, launcher_pid
@@ -795,11 +901,14 @@ def run_gate(
                 interpreter, app, base_environment, host, beat_processes, launcher_pid
             )
             deadline = time.monotonic() + CHILD_REAP_S
-            while still_running(second.children - beat_processes) and time.monotonic() < deadline:
+            while still_running(second.children - beat_processes, second.born) and time.monotonic() < deadline:
                 time.sleep(0.1)
-            stray = still_running(second.children - beat_processes)
+            stray = still_running(second.children - beat_processes, second.born)
             if stray:
-                raise QualificationError(f"child processes {sorted(stray)} outlived the second server")
+                raise QualificationError(
+                    f"child processes {sorted(stray)} outlived the second server: "
+                    f"{describe_processes(stray)}"
+                )
         remaining = _temporary_leftovers(temporary)
         report["left_by_clean_stop"] = remaining
         own = f"wg2-run-{second.server_pid}-"

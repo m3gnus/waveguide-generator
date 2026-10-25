@@ -68,6 +68,80 @@ def test_the_process_table_sees_this_process_and_its_parent() -> None:
     assert os.getpid() in gate.descendants(os.getppid(), table)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="creation times come from the Windows table")
+def test_the_windows_process_table_knows_when_this_process_was_created() -> None:
+    gate = _gate()
+    table = gate.process_table()
+
+    created = table[os.getpid()][2]
+    assert isinstance(created, int)
+    parent = table.get(os.getppid())
+    if parent is not None and parent[2] is not None:
+        assert parent[2] <= created
+
+
+# The Windows harness failure on dev 21e09cbb9 (CI run 40199487515): seven
+# "children" while parked, where the server has three, and four survivors of a
+# clean Quit. Windows keeps an exited parent's pid in its orphans' rows, so an
+# orphan tree whose dead parent's pid was reused by the server looked like its
+# children. Rows are (parent, running, created, image).
+SERVER = 100
+ORPHAN_TREE = {
+    6384: (SERVER, True, 10, "orphan.exe"),
+    6420: (6384, True, 11, "orphan-child.exe"),
+    6464: (6384, True, 12, "orphan-child.exe"),
+    7152: (6420, True, 13, "orphan-grandchild.exe"),
+}
+PARKED_SERVER = {
+    SERVER: (1, True, 50, "python.exe"),
+    101: (SERVER, True, 60, "python.exe"),  # mesher child
+    102: (SERVER, True, 61, "python.exe"),  # BEMPP worker
+    103: (102, True, 62, "python.exe"),  # OpenCL check
+    **ORPHAN_TREE,
+}
+
+
+def test_an_orphan_naming_a_reused_parent_pid_is_not_the_servers_child() -> None:
+    gate = _gate()
+
+    assert gate.descendants(SERVER, PARKED_SERVER) == {101, 102, 103}
+    # Without creation times (ps), the tree is what the parent pids say.
+    untimed = {pid: row[:2] for pid, row in PARKED_SERVER.items()}
+    assert gate.descendants(SERVER, untimed) == {101, 102, 103, *ORPHAN_TREE}
+
+
+def test_a_windows_child_whose_creation_time_is_unknown_is_not_counted() -> None:
+    gate = _gate()
+    table = {**PARKED_SERVER, 104: (SERVER, True, None, "protected.exe")}
+
+    assert gate.descendants(SERVER, table) == {101, 102, 103}
+
+
+def test_orphans_of_a_reused_parent_pid_do_not_fail_a_clean_quit(monkeypatch, tmp_path: Path) -> None:
+    gate = _gate()
+    after_quit = dict(ORPHAN_TREE)
+    tables = iter([PARKED_SERVER, after_quit])
+    monkeypatch.setattr(gate, "process_table", lambda: next(tables))
+    run = gate.Run(SimpleNamespace(pid=SERVER), tmp_path / "stop", tmp_path / "output")
+
+    gate.note_children(run)
+
+    assert run.children == {101, 102, 103}
+    assert gate.still_running(run.children, run.born) == set()
+
+
+def test_a_child_pid_reused_after_the_child_exited_is_not_a_stray(monkeypatch) -> None:
+    gate = _gate()
+    reused = {101: (4, True, 70, "unrelated.exe")}
+    monkeypatch.setattr(gate, "process_table", lambda: reused)
+
+    assert gate.still_running({101}, {101: 60}) == set()
+    # The same process, still there, is a stray.
+    monkeypatch.setattr(gate, "process_table", lambda: {101: (SERVER, True, 60, "python.exe")})
+    assert gate.still_running({101}, {101: 60}) == {101}
+    assert gate.describe_processes({101}) == f"101 (python.exe, parent {SERVER})"
+
+
 def test_a_hung_process_table_fails_the_gate_within_its_bound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -315,6 +389,7 @@ def fake_quit_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             self.server_pid = self.pid
             self.base = f"fake-{self.pid}"
             self.children = set()
+            self.born = {}
             self.process = SimpleNamespace(returncode=None)
             self.stopped = False
             root.mkdir(parents=True)
