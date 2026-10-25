@@ -1129,6 +1129,44 @@ def test_an_unreadable_copy_with_the_return_gone_says_what_the_user_can_do(
     assert summary["message"].startswith(UNREADABLE_PREFIX)
 
 
+@pytest.mark.parametrize("missing", ["manifest", "folder"])
+def test_a_return_not_in_the_folder_yet_can_be_tried_again(harness: Harness, missing: str) -> None:
+    """A return whose folder or manifest is not there (yet) is not an invalid
+    return: the Fusion lane and the browser's Prepare both say it cannot be
+    read now, with Try again."""
+
+    import asyncio
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from server.cadlink.api import CadReturnIngestRequest, post_ingest
+    from server.cadlink.wgreturn import SnapshotUnavailable, read_wgreturn
+
+    bundle_path, _manifest = _received(harness, sized=False)
+    folder = harness.workspace / bundle_path
+    if missing == "manifest":
+        (folder / "wgreturn.json").unlink()
+    else:
+        folder.rename(harness.workspace / "elsewhere")
+    with pytest.raises(SnapshotUnavailable):
+        read_wgreturn(folder)
+
+    summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "return_unavailable")
+
+    if missing == "manifest":
+        app = SimpleNamespace(state=SimpleNamespace(
+            cad_workspace=SimpleNamespace(selected_path=lambda: harness.workspace.resolve()),
+            cadlink_store=harness.store, data_dir=harness.data_dir, jobs_runtime=None))
+        payload = CadReturnIngestRequest.model_validate({"bundlePath": bundle_path, "mesh": {
+            "rigidSizeMm": 20, "transitionMm": 40, "sourceSizeMm": {}}})
+        with pytest.raises(HTTPException) as refused:
+            asyncio.run(post_ingest(payload, SimpleNamespace(app=app)))
+        detail = refused.value.detail
+        assert (detail["code"], detail["failure"], detail["retry"]) == ("return_unavailable", "user_action", True)
+
+
 def test_a_copy_damaged_after_it_was_taken_asks_for_another_attempt(
     harness: Harness, monkeypatch
 ) -> None:

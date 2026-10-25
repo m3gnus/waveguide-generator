@@ -49,7 +49,7 @@ from server.cadlink.intake.readings import (
     record_solved_frame_provenance,
 )
 from server.cadlink.store import UNFILED_MODEL_ID, CadLinkStore
-from server.cadlink.wgreturn import WgReturnError
+from server.cadlink.wgreturn import SnapshotUnavailable as SnapshotUnavailable, WgReturnError
 
 
 logger = logging.getLogger(__name__)
@@ -73,8 +73,6 @@ _ENGINE_CANNOT_SOLVE_CODES = frozenset({
 })
 
 
-class SnapshotUnavailable(OSError):
-    """The return cannot be read now; the operation waits instead of failing for good."""
 
 
 def _inputs(row: Mapping[str, Any]) -> dict[str, Any]:

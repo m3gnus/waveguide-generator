@@ -15,10 +15,14 @@ ways, and are classified here, once, in the codes of
   failure of WG's own pipeline -- a worker, the mesher, its normalisation,
   WG's own code -- is ``preparation_failed``.
 
-A refusal stated in the user's terms (a project or instance gate, a symmetry
-rule, an area drift with its override) is :data:`USER_WORDED`: it is not a
-WG failure, and the browser shows its words. The triangle ceiling and the
-memory guard are their own choices and are handled by their callers.
+A refusal stated in the user's terms -- a modelling mistake the user fixes
+in their model: a project, instance or scope gate, role resolution (a
+required source missing, no throat candidate), a symmetry rule, an area
+drift with its override, a FEM region rule or its wall-clock budget -- is
+:data:`USER_WORDED`. It is never a WG failure and never recorded as one: the
+browser shows its words, and a Fusion request ends as
+``model_needs_change`` in them (:func:`refusal_code`). The triangle ceiling
+and the memory guard are their own choices and are handled by their callers.
 """
 
 from __future__ import annotations
@@ -26,8 +30,8 @@ from __future__ import annotations
 import errno
 
 from server.cadlink.intake.ingest import IngestRefusal
-from server.cadlink.joblane.preparation_inputs import SnapshotUnavailable
-from server.cadlink.wgreturn import WgReturnChanged, WgReturnError, WgReturnUnsupported
+from server.cadlink.wgreturn import SnapshotUnavailable, WgReturnChanged, WgReturnError, WgReturnUnsupported
+from server.mesh.imported import RoleResolutionError
 
 #: A refusal that states what the user can change, in their terms.
 USER_WORDED = None
@@ -35,8 +39,11 @@ USER_WORDED = None
 BUNDLE_VALIDATION_STAGE = "stage 1 bundle validation"
 #: Gates whose refusals are written for the user (``intake/ingest.py``).
 _USER_WORDED_STAGES = frozenset({
-    "stage 2 project gate", "stage 2 instance gate", "stage 2 scope gate", "stage 6 symmetry",
+    "stage 2 project gate", "stage 2 instance gate", "stage 2 scope gate", "stage 5 role resolution",
+    "stage 6 symmetry",
 })
+#: The code a Fusion request ends with for a :data:`USER_WORDED` refusal.
+MODEL_NEEDS_CHANGE = "model_needs_change"
 
 
 def _disk_full(exc: BaseException) -> bool:
@@ -63,16 +70,34 @@ def preparation_failure_code(exc: BaseException) -> str | None:
     """The reason preparing a return failed, or :data:`USER_WORDED`."""
 
     if isinstance(exc, IngestRefusal):
-        if exc.area_drift_sources or exc.stage in _USER_WORDED_STAGES:
-            return USER_WORDED
         if exc.corruption:
             return "snapshot_invalid"
         if exc.stage == BUNDLE_VALIDATION_STAGE:
+            # Classified by what reading the return raised: WG's own bug while
+            # reading (not a refusal of the return) is WG's failure.
             cause = exc.__cause__
-            return return_failure_code(cause) if isinstance(cause, BaseException) else "snapshot_invalid"
+            if isinstance(cause, (OSError, ValueError)):
+                return return_failure_code(cause)
+            return "preparation_failed"
+        # A source selector that does not exist in its checksum-bound STEP
+        # is inconsistent export metadata. Keep that raw identifier detail
+        # with the developers, even though it failed during role resolution.
+        cause = exc.__cause__
+        if isinstance(cause, RoleResolutionError) and cause.invalid_selector:
+            return "preparation_failed"
+        if exc.area_drift_sources or exc.user_worded or exc.stage in _USER_WORDED_STAGES:
+            return USER_WORDED
         return "preparation_failed"
     if isinstance(exc, WgReturnError):
         return return_failure_code(exc)
     if _disk_full(exc):
         return "disk_full"
     return "preparation_failed"
+
+
+def refusal_code(exc: BaseException) -> str:
+    """The reason a Fusion request's failed preparation ends with: a
+    :data:`USER_WORDED` refusal is ``model_needs_change`` (its own words,
+    never recorded as WG's failure); anything else as classified."""
+
+    return preparation_failure_code(exc) or MODEL_NEEDS_CHANGE

@@ -181,13 +181,31 @@ class IngestRefusal(ValueError):
         corruption: bool = False,
         symmetry_plane: str | None = None,
         area_drift_sources: list[str] | tuple[str, ...] = (),
+        user_worded: bool = False,
     ) -> None:
         self.symmetry_plane = symmetry_plane
         self.stage = stage
+        #: The refusal without its stage label.
+        self.detail = message
+        #: A modelling rule the user fixes in their model, stated in their
+        #: terms: never WG's failure (``joblane.failure_codes``).
+        self.user_worded = user_worded
         self.reason_code = reason_code
         self.corruption = corruption
         self.area_drift_sources = tuple(area_drift_sources)
         super().__init__(f"{stage}: {message}")
+
+
+def _fem_rule(exc: BaseException) -> bool:
+    """A FEM region refusal the user fixes in their model: a typed region
+    error (symmetry, a group its faces do not match), or the regions' shared
+    wall-clock budget running out."""
+
+    from server.mesh.fem_regions import FemRegionMeshError
+
+    return isinstance(exc, FemRegionMeshError) or (
+        isinstance(exc, ChildRefusal) and exc.details.get("budget_exhausted") is True
+    )
 
 
 def solve_model_sha256(record: Mapping[str, Any]) -> str:
@@ -1641,6 +1659,7 @@ def _ingest_bundle(
                 # its exit and output tail; the user's refusal keeps stage and wording.
                 raise IngestRefusal(
                     exc.stage, exc.detail, reason_code=exc.details.get("reason_code"),
+                    user_worded=_fem_rule(exc),
                 ) from exc
             except Exception as exc:
                 message = str(exc)
@@ -2344,6 +2363,7 @@ def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], 
         raise IngestRefusal(
             "stage 7 meshing",
             "This return declares FEM regions; this Waveguide Generator has FEM regions turned off.",
+            user_worded=True,
         )
     from server.solver.coupled_admission import fem_group_options_problem
 
@@ -2361,7 +2381,7 @@ def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], 
         ) for region in regions
     )
     if any(p not in {"x0", "y0"} for p in planes):
-        raise IngestRefusal("stage 7 meshing", f"{labels}: FEM symmetry supports only x0 and y0.")
+        raise IngestRefusal("stage 7 meshing", f"{labels}: FEM symmetry supports only x0 and y0.", user_worded=True)
     if final_domain and set(planes) == {"y0"}:
         raise IngestRefusal("stage 6 symmetry", f"{labels}: y0-only FEM returns cannot be solved "
                             "by BEAT. Export without the y0 cut, or keep the x0 cut "
@@ -2396,6 +2416,7 @@ def _mesh_coupled_regions(
         if time.monotonic() >= deadline:
             raise IngestRefusal(
                 "stage 7 meshing", f"{labels}: the total FEM regions wall-clock budget was exhausted.",
+                user_worded=True,
             )
 
     check_deadline()
@@ -2438,7 +2459,8 @@ def _mesh_coupled_regions(
         if "FEM region" not in message:
             message = f"{labels}: {message}"
         raise IngestRefusal("stage 7 meshing", message,
-                            symmetry_plane=getattr(exc, "symmetry_plane", None)) from exc
+                            symmetry_plane=getattr(exc, "symmetry_plane", None),
+                            user_worded=_fem_rule(exc)) from exc
     check_deadline()
     if not interfaces:
         return None, {}
@@ -2482,6 +2504,7 @@ def _mesh_fem_regions(
         raise IngestRefusal(
             "stage 7 meshing",
             "This return declares FEM regions; this Waveguide Generator has FEM regions turned off.",
+            user_worded=True,
         )
     records = []
     if deadline is None:
@@ -2492,6 +2515,7 @@ def _mesh_fem_regions(
             raise IngestRefusal(
                 "stage 7 meshing", f"FEM region {region['name']!r}: the total FEM regions "
                 "wall-clock budget was exhausted.",
+                user_worded=True,
             )
     for region in regions:
         check_deadline(region)
@@ -2515,6 +2539,7 @@ def _mesh_fem_regions(
             raise IngestRefusal(
                 "stage 7 meshing", f"FEM region {region['name']!r}: {exc}",
                 symmetry_plane=getattr(exc, "symmetry_plane", None),
+                user_worded=_fem_rule(exc),
             ) from exc
         check_deadline(region)
         digest = mesh_text_sha256(built["msh_text"])

@@ -136,6 +136,9 @@ REASON_CODES: Mapping[str, str] = {
     "return_unsupported": REJECTED,
     # The disk WG writes the mesh to is full: freeing space and trying again works.
     "disk_full": NEEDS_USER_INPUT,
+    # The model breaks a modelling rule (a required source missing, a FEM
+    # region rule, ...): changed in Fusion and sent again, never WG's failure.
+    "model_needs_change": REJECTED,
     "interrupted": NEEDS_USER_INPUT,
     # Held by an approved update restart; re-queued once the latch is down.
     REASON_UPDATE_RESTART_PENDING: NEEDS_USER_INPUT,
@@ -170,7 +173,7 @@ INTERNAL_FAILURE_CODES = frozenset(
 USER_ACTION_CODES = frozenset(
     {"snapshot_changed", "return_unavailable", "wglink_folder_unset",
      "excitation_refused", "solver_memory_exceeded", "reduced_axis_not_allowed",
-     "return_unsupported", "disk_full",
+     "return_unsupported", "disk_full", "model_needs_change",
      # WG stopped (quit, crash, restart) while preparing: nothing failed,
      # nothing is recorded, and Solve prepares it again.
      "interrupted"}
@@ -278,7 +281,10 @@ def preparation_failure(
     started in WG, not sent by Fusion.
     """
 
-    name = str(document_name or "").strip() or "this model"
+    named = str(document_name or "").strip()
+    name = named or "this model"
+    # The same, to start a sentence: a document's own name is never recased.
+    sentence_name = named or "This model"
     dismiss = {"id": "dismiss", "label": "Dismiss request"}
     retry = {"id": "retry", "label": "Try again"}
     send_again = (
@@ -291,13 +297,13 @@ def preparation_failure(
         return {"code": code, "message": f"Preparing {name} stopped when {APP_NAME} closed.",
                 "next_step": "Solve it again.", "options": [retry, dismiss]}
     if code == "snapshot_changed":
-        return {"code": code, "message": f"{name} changed after Fusion asked WG to solve it.",
+        return {"code": code, "message": f"{sentence_name} changed after Fusion asked WG to solve it.",
                 "next_step": "Send it again from Fusion.", "options": [dismiss]}
     if code == "return_unavailable":
         return {"code": code, "message": f"WG cannot read the copy of {name} it was sent.",
                 "next_step": send_again, "options": [retry, dismiss]}
     if code == "return_unsupported":
-        return {"code": code, "message": f"{name} was sent by a newer Waveguide Generator add-in than this {APP_NAME} can read.",
+        return {"code": code, "message": f"{sentence_name} was sent by a newer Waveguide Generator add-in than this {APP_NAME} can read.",
                 "next_step": f"Update {APP_NAME}, then send it again.", "options": [dismiss]}
     if code == "disk_full":
         return {"code": code, "message": f"The disk is full, so {APP_NAME} cannot prepare {name}.",
@@ -311,11 +317,16 @@ def preparation_failure(
         return {"code": code, "message": statement, "next_step": AXIS_NOT_ALLOWED_NEXT_STEP,
                 "options": [dismiss]}
     if code == "excitation_refused":
-        statement = str(detail or "").strip() or f"{name} cannot be driven as its settings say."
+        statement = str(detail or "").strip() or f"{sentence_name} cannot be driven as its settings say."
         return {"code": code, "message": statement,
                 "next_step": "Change the drive channels in this model's solve settings, "
                              "or solve the whole model, then press Solve.",
                 "options": [dismiss]}
+    if code == "model_needs_change":
+        # A modelling rule the model breaks, in its own words: fixed in Fusion.
+        statement = str(detail or "").strip() or f"{sentence_name} needs a change in Fusion before {APP_NAME} can prepare it."
+        return {"code": code, "message": statement,
+                "next_step": "Change the model in Fusion, then send it again.", "options": [dismiss]}
     # A rejected snapshot cannot be solved again; only dismissing it works.
     retries = [] if REASON_CODES.get(code) == REJECTED else [retry]
     return {"code": code, "message": internal_failure_message(name), "next_step": None,

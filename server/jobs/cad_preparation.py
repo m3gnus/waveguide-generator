@@ -51,7 +51,7 @@ from server.cadlink.intake.ingest import (
     meshing_semantics_fingerprint,
 )
 from server.cadlink.intake.isolation import ChildRefusal
-from server.cadlink.joblane.failure_codes import preparation_failure_code, return_failure_code
+from server.cadlink.joblane.failure_codes import MODEL_NEEDS_CHANGE, refusal_code, return_failure_code
 from server.cadlink.intake.preflight import judged_refusal
 from server.cadlink.operations import (
     PREFLIGHT_BLOCKED,
@@ -640,8 +640,11 @@ def prepare_job_sync(
             f"WG cannot solve {document} with its default settings: {exc}. "
             "Choose its settings in WG, then solve it.",
         )
-    except WgReturnError as exc:
-        return run.refuse("snapshot_invalid", str(exc))
+    except (WgReturnError, OSError) as exc:
+        # Reading WG's copy of the return: the one classification.
+        return run.refuse(
+            return_failure_code(exc, folder_selected=context.workspace_root is not None), str(exc),
+        )
     except ValueError as exc:
         # A recorded setup, or the selected engine, this build cannot take.
         return run.refuse(
@@ -758,13 +761,15 @@ def prepare_job_sync(
             return run.refuse("solver_memory_exceeded", str(exc), exception=exc)
         except (ChildRefusal, RuntimeError, ValueError, OSError) as exc:
             # The one classification the browser's Prepare uses: a return
-            # that cannot be read or is not valid, the disk filling up, or WG's
+            # that cannot be read or is not valid, the disk filling up, WG's
             # own failure (a worker that crashed, ran out of time or memory;
-            # the app survives and the user may solve again). A refusal in the
-            # user's terms is a failed preparation here too: Fusion's user is
-            # not on the screen that would state it.
-            code = preparation_failure_code(exc) or "preparation_failed"
-            message = str(exc) if isinstance(exc, (IngestRefusal, WgReturnError)) else f"Preparing the mesh failed: {exc}"
+            # the app survives and the user may solve again), or a modelling
+            # rule the model breaks -- in its own words, never recorded as
+            # WG's failure (``model_needs_change``).
+            code = refusal_code(exc)
+            message = (exc.detail if code == MODEL_NEEDS_CHANGE and isinstance(exc, IngestRefusal)
+                       else str(exc) if isinstance(exc, (IngestRefusal, WgReturnError))
+                       else f"Preparing the mesh failed: {exc}")
             return run.refuse(code, message, exception=exc)
 
     if setup.origin == DEFAULTS_ORIGIN:

@@ -47,10 +47,11 @@ describe('why a request from Fusion is not moving', () => {
     expect(deliveryHealthLines(null, NOW)).toEqual([]);
   });
 
-  it('names a consumer that is off, and the variable that turned it off', () => {
+  it('says a consumer is off in plain words; the variable that turned it off is developer detail', () => {
     const [line] = deliveryHealthLines(status({ consumer: 'disabled' }), NOW);
     expect(line.tone).toBe('blocked');
-    expect(line.text).toContain('WG2_CAD_DELIVERY=0');
+    expect(line.text).toContain('not collecting CAD Link requests');
+    expect(line.text).not.toContain('WG2_CAD_DELIVERY');
   });
 
   it('says why the last pass started nothing', () => {

@@ -421,6 +421,9 @@ def test_the_memory_guard_keeps_its_type_across_the_child_boundary() -> None:
     ("disk_full", "[Errno 28] No space left on device",
      "The disk is full, so Waveguide Generator cannot prepare {}.", "Free some disk space, then try again.",
      ["retry", "dismiss"]),
+    ("model_needs_change", "role resolution: required source 'HF' is missing",
+     "role resolution: required source 'HF' is missing", "Change the model in Fusion, then send it again.",
+     ["dismiss"]),
     ("excitation_refused", "This model is mirrored on z0, which does not contain the radiation axis; "
      "WG cannot drive it mirrored.", "This model is mirrored on z0, which does not contain the radiation axis; "
      "WG cannot drive it mirrored.", "Change the drive channels in this model's solve settings, "
@@ -479,6 +482,8 @@ EXPECTED_ATTENTION = {
     # A return for a newer WG (update it), and a full disk (free space, try again).
     "return_unsupported": "action",
     "disk_full": "action",
+    # A modelling rule the model breaks: changed in Fusion, in its own words.
+    "model_needs_change": "action",
     "solver_memory_exceeded": "action",
     "snapshot_changed": "action",
     "baseline_conflict": "action",
@@ -517,6 +522,20 @@ def test_attention_classifies_every_reason_and_asks_only_real_questions() -> Non
     # An unknown reason is never a question.
     assert reason_attention("needs_user_input", "some_future_code") == "action"
     assert reason_attention("accepted", None) is None
+
+
+def test_every_reason_a_card_can_show_has_words() -> None:
+    """WG's cards say a reason in words (``OPERATION_REASON_WORDS``), never its code."""
+
+    import re
+
+    from server.cadlink.operations import REASON_CODES
+
+    source = (Path(__file__).resolve().parents[2] / "frontend/src/shell/solveProgress.tsx").read_text(encoding="utf-8")
+    table = source[source.index("export const OPERATION_REASON_WORDS"):]
+    table = table[:table.index("};")]
+    worded = set(re.findall(r"^\s+(\w+):", table, flags=re.M))
+    assert set(REASON_CODES) <= worded, sorted(set(REASON_CODES) - worded)
 
 
 def test_a_hold_is_a_question_or_an_action_never_a_failure() -> None:

@@ -239,10 +239,13 @@ function recordChecks(record: CadReturnIngestRecord): CheckDescriptor[] {
     state: freshness === 'current' ? 'ok' : freshness === 'unlinked' ? 'info' : 'warn',
     verdict: freshness,
     title: FRESHNESS_COPY[freshness.replaceAll(' ', '_')] ?? 'Whether this returned geometry still matches the linked WG design and generator.',
-    detail: record.freshness.instances.length ? <>{record.freshness.instances.map((instance) => <div className={`cad-verdict ${instance.verdict === 'current' ? 'ok' : 'warn'}`} key={instance.instance_id}>
-          <b>{instance.instance_id}</b><span>{FRESHNESS_COPY[instance.verdict] ?? instance.verdict}</span>
+    // Each linked instance's verdict, and an error to act on; which instance
+    // (its id) is developer detail.
+    detail: record.freshness.instances.length ? <>{record.freshness.instances.map((instance, index) => <div className={`cad-verdict ${instance.verdict === 'current' ? 'ok' : 'warn'}`} key={instance.instance_id}>
+          <b>{record.freshness.instances.length > 1 ? `Linked instance ${index + 1}` : 'Linked instance'}</b><span>{FRESHNESS_COPY[instance.verdict] ?? instance.verdict}</span>
           {instance.error && <small>{instance.error}</small>}
         </div>)}</> : undefined,
+    evidence: record.freshness.instances.length ? <p className="cad-detail">Instances: {record.freshness.instances.map((instance) => instance.instance_id).join(', ')}</p> : undefined,
   });
 
   // Symmetry

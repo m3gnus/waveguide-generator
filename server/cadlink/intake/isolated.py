@@ -94,6 +94,7 @@ def _reraise_typed(exc: ChildRefusal) -> None:
         raise RoleResolutionError(
             exc.detail,
             area_drift_sources=[str(value) for value in drift] if isinstance(drift, list) else (),
+            invalid_selector=exc.details.get("invalid_selector") is True,
         ) from exc
     if exc.error_type in {"ImportedMeshError", "StepTextError", "StepBudgetExceeded"}:
         raise ImportedMeshError(exc.detail) from exc

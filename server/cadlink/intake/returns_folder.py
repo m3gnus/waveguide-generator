@@ -25,34 +25,38 @@ _RETURN_INVENTORY_CACHE_LOCK = threading.Lock()
 
 
 def parse_return_manifest(path: Path) -> Mapping[str, Any]:
+    """A return's manifest, read leniently (unvalidated). One larger than any
+    valid manifest (``MAX_WGRETURN_JSON_BYTES``) is never parsed."""
+
+    if path.stat().st_size > MAX_WGRETURN_JSON_BYTES:
+        raise ValueError("manifest is larger than any valid return manifest")
     parsed = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(parsed, Mapping):
         raise ValueError("manifest inventory has the wrong shape")
     return parsed
 
 
-def return_document_name(folder: Path) -> str | None:
-    """A return's document name, read leniently as the returns listing reads it.
+def manifest_document_name(manifest: Mapping[str, Any] | None, folder: Path) -> str | None:
+    """A return's name: its manifest's ``document.name``, else its folder's
+    name without ``.wgreturn``. The one rule, for the listing and for naming
+    a return that could not be read."""
 
-    For naming a model whose manifest failed validation: its own
-    ``document.name`` when the manifest reads at all, else the folder's name
-    without ``.wgreturn``. A manifest over ``MAX_WGRETURN_JSON_BYTES`` is not
-    read. Never raises.
-    """
-
-    try:
-        manifest = folder / "wgreturn.json"
-        # A manifest larger than any valid one is never parsed to find a name.
-        if manifest.stat().st_size > MAX_WGRETURN_JSON_BYTES:
-            raise ValueError("manifest too large")
-        document = parse_return_manifest(manifest).get("document")
-        name = document.get("name") if isinstance(document, Mapping) else None
-        if isinstance(name, str) and name.strip():
-            return name.strip()
-    except (OSError, ValueError, RecursionError):
-        pass
+    document = manifest.get("document") if isinstance(manifest, Mapping) else None
+    name = document.get("name") if isinstance(document, Mapping) else None
+    if isinstance(name, str) and name.strip():
+        return name.strip()
     return folder.name.removesuffix(".wgreturn").strip() or None
 
+
+def return_document_name(folder: Path) -> str | None:
+    """A return's name, for a return whose manifest may fail validation or not
+    read at all (:func:`manifest_document_name`). Never raises."""
+
+    try:
+        manifest = parse_return_manifest(folder / "wgreturn.json")
+    except (OSError, ValueError, RecursionError):
+        manifest = None
+    return manifest_document_name(manifest, folder)
 
 
 def return_inventory(
@@ -223,7 +227,7 @@ def return_inventory(
                 {
                     "readable": True,
                     "returnId": str(returned.get("id") or "") or None,
-                    "documentName": str(document.get("name") or candidate.stem),
+                    "documentName": manifest_document_name(manifest, candidate) or candidate.stem,
                     # The CAD document this is a return of, when the adapter
                     # recorded it: a newer return of the same document is the
                     # only one that may supersede a solve request made for it.

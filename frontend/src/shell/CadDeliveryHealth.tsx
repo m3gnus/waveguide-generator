@@ -32,7 +32,7 @@ export function deliveryHealthLines(status: CadDeliveryStatus | null, now: numbe
   if (status.consumer === 'disabled') {
     return [{
       tone: 'blocked',
-      text: `WG is not collecting CAD Link requests (${status.variable ?? 'WG2_CAD_DELIVERY'}=0). A Send or Solve from Fusion is refused there, and nothing here runs one.`,
+      text: 'WG is not collecting CAD Link requests. A Send or Solve from Fusion is refused there, and nothing here runs one.',
     }];
   }
   if (status.consumer !== 'running') {
@@ -89,6 +89,7 @@ export function CadDeliveryHealth({ now = Date.now }: { now?: () => number }) {
   if (!lines.length && !refused.length) return null;
   return <div className="cad-delivery-health" role="status">
     {lines.map((line) => <p key={line.text} className={`cad-delivery-${line.tone}`}>{line.text}</p>)}
+    {shown && status?.consumer === 'disabled' && <p className="cad-detail">Turned off by {status.variable ?? 'WG2_CAD_DELIVERY'}=0.</p>}
     {refused.length > 0 && <details className="cad-delivery-refusals" open={unseen > 0}>
       <summary>{refused.length === 1 ? 'A request from Fusion was refused' : `${refused.length} requests from Fusion were refused`}</summary>
       <ul>

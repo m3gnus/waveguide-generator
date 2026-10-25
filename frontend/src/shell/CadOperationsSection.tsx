@@ -16,7 +16,7 @@ import { inFlightWords } from './cadOnScreenSettings';
 import { fullTime, relativeTime } from './cadTime';
 import { usePanelVisible } from './panelVisibility';
 import { navigationGeneration, workspaceNavigation } from './workspaceNavigation';
-import { operationStageWord, OPERATION_REASON_WORDS } from './solveProgress';
+import { operationReasonWords, operationStageWord } from './solveProgress';
 
 const RECOVERY_DISMISSED = 'Dismissed this recovery notice. Fusion still needs Undo or repair before you continue modelling.';
 
@@ -182,7 +182,7 @@ export function solveGateLadder(
       return [{ gate: 'solve', current: true, text: 'Now: press Solve to start it.' }];
     default:
       return [
-        { gate: 'other', current: true, text: `Now: ${OPERATION_REASON_WORDS[operation.reason ?? ''] ?? 'it needs your attention'} — see below.` },
+        { gate: 'other', current: true, text: `Now: ${operationReasonWords(operation.reason)} — see below.` },
       ];
   }
 }
@@ -300,7 +300,7 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
   const engineReason = operation.reason?.startsWith('engine_') || operation.reason === 'submission_refused';
   const status = [
     operationStageWord(operation),
-    operation.reason && !engineReason ? OPERATION_REASON_WORDS[operation.reason] ?? operation.reason : null,
+    operation.reason && !engineReason ? operationReasonWords(operation.reason) : null,
   ].filter(Boolean).join(' · ');
   // For the model on screen the card's own guidance and controls say what the
   // backend's message says, which named menus for a model not on screen.
@@ -442,7 +442,7 @@ function EarlierRequests({ requests, requestActions }: { requests: CadRequest[];
         return <li key={`${request.source}:${request.id}`} data-operation-id={operation.operationId} data-request-id={request.id} tabIndex={-1}>
           <span>{label}</span>
           {operation.createdAt && <time dateTime={operation.createdAt} title={fullTime(operation.createdAt)}>{relativeTime(operation.createdAt)}</time>}
-          {operation.reason && <span>{OPERATION_REASON_WORDS[operation.reason] ?? operation.reason}</span>}
+          {operation.reason && <span>{operationReasonWords(operation.reason)}</span>}
           {operation.message && <span>{operation.message}</span>}
           {request.openable && <button
             className="link-button"

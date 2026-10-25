@@ -305,9 +305,12 @@ class RoleResolutionError(ImportedMeshError):
     """Source roles could not be resolved without guessing."""
 
     def __init__(
-        self, message: str, *, area_drift_sources: Iterable[str] = ()
+        self, message: str, *, area_drift_sources: Iterable[str] = (), invalid_selector: bool = False
     ) -> None:
         self.area_drift_sources = tuple(str(source_id) for source_id in area_drift_sources)
+        # A checksum-bound identifier absent from its own STEP is an export/
+        # mapping failure, not a source choice the user can repair in CAD.
+        self.invalid_selector = invalid_selector
         super().__init__(message)
 
 
@@ -1732,7 +1735,7 @@ def _advanced_face_identifier_surfaces(
             raise RoleResolutionError(
                 "role resolution: advanced_face_indices contains unknown "
                 f"STEP ADVANCED_FACE identifier {identifier}; available identifiers "
-                f"are {sorted(mapping)}"
+                f"are {sorted(mapping)}", invalid_selector=True,
             ) from exc
     return selected
 

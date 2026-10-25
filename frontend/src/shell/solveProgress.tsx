@@ -142,7 +142,28 @@ export const OPERATION_REASON_WORDS: Record<string, string> = {
   engine_unavailable: 'the selected engine cannot solve it',
   engine_cannot_solve_return: 'the selected engine cannot solve this return',
   submission_refused: 'the jobs system refused it',
+  return_unsupported: 'needs a newer Waveguide Generator',
+  disk_full: 'the disk is full',
+  model_needs_change: 'needs a change in Fusion',
+  snapshot_unavailable: 'its return could not be read',
+  preflight_blocked: 'Fusion refused it',
+  request_payload_invalid: 'the request could not be read',
+  baseline_conflict: 'the Fusion document changed',
+  target_not_exact: 'the linked instance is ambiguous',
+  superseded: 'replaced by a newer request',
+  expired: 'expired',
+  session_changed: 'Fusion restarted',
+  publication_failed: 'could not be published',
+  adapter_refused: 'Fusion refused it',
+  adapter_failed: 'Fusion could not apply it',
+  adapter_not_started: 'Fusion never started it',
 };
+
+/** A reason in a few plain words; never the raw code (every code the server
+ * can store has words above; `server/tests/test_cad_held.py` checks). */
+export function operationReasonWords(reason: string | null | undefined): string {
+  return (reason && OPERATION_REASON_WORDS[reason]) || 'it needs your attention';
+}
 
 /** The stage word for a CAD operation that has no job yet (or never will --
  * `rejected`/`cancelled` are terminal outcomes). An accepted operation uses
@@ -166,7 +187,7 @@ export function operationStageWord(operation: OperationProgressLike): SolveStage
  * `null` when there is nothing more specific to say than the state itself. */
 export function operationWaitingReason(operation: OperationProgressLike): string | null {
   if (operation.state !== 'needs_user_input' || !operation.reason) return null;
-  return OPERATION_REASON_WORDS[operation.reason] ?? operation.reason;
+  return operationReasonWords(operation.reason);
 }
 
 /** A running solve's frequency count, as the server reads it from the

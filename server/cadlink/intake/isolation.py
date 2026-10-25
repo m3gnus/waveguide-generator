@@ -574,7 +574,8 @@ def isolated_step_task(
             return budget
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise ChildRefusal(stage, "the total FEM regions wall-clock budget was exhausted")
+            raise ChildRefusal(stage, "the total FEM regions wall-clock budget was exhausted",
+                               details={"budget_exhausted": True})
         return replace(budget, wall_time_s=min(budget.wall_time_s, remaining))
 
     acquired = _CHILD_SLOT.acquire(timeout=remaining_budget().wall_time_s)
@@ -751,7 +752,8 @@ def _run_child(
             # Starting and feeding the child also consume the shared deadline.
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise ChildRefusal(stage, "the total FEM regions wall-clock budget was exhausted")
+                raise ChildRefusal(stage, "the total FEM regions wall-clock budget was exhausted",
+                               details={"budget_exhausted": True})
             budget = replace(budget, wall_time_s=min(budget.wall_time_s, remaining))
         killed_for = _supervise(process, budget, job=job, group=process_group)
     finally:

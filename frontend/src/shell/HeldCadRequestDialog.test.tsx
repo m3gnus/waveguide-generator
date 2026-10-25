@@ -78,7 +78,11 @@ describe('held CAD request dialog owner', () => {
     const name = job.cad_state!.snapshot!.document_name!;
     expect(dialog.querySelector('h2')?.textContent).toBe(`${name} is larger than Waveguide Generator's limit`);
     expect(dialog.textContent).toContain('It meshes to 54,739 triangles; Waveguide Generator\'s limit is 22,000. Solving it anyway is slower and needs more memory.');
-    expect([...dialog.querySelectorAll('button')].map(node => node.textContent)).toEqual(['Later', 'Change in Fusion', 'Solve anyway']);
+    expect([...dialog.querySelectorAll('button')].map(node => node.textContent)).toEqual(['Later', "Don't solve", 'Change in Fusion', 'Solve anyway']);
+    // Don't solve lets the request go.
+    await act(async () => button("Don't solve").click());
+    expect(actions.dismiss).toHaveBeenCalledWith(expect.objectContaining({ id: job.id }));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
     expect(dialog.textContent).not.toMatch(/axis|radiat/i);
     expect(dialog.textContent).not.toContain('Dismiss');
   });
@@ -328,6 +332,17 @@ describe('held CAD request dialog owner', () => {
     expect(button('Solve anyway')).toBeDefined();
     act(() => button('Change in Fusion').click());
     await act(async () => button('OK').click());
+    expect(meshCeilingChoice.getSnapshot()).toBeNull();
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    useCadReturnStore.setState({ selectedBundle: null });
+  });
+
+  it('lets this window\'s own ceiling question go with Don\'t solve', async () => {
+    const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
+    useCadReturnStore.setState({ selectedBundle: ceilingBundle('b'), ingestRecord: null });
+    await act(async () => root.render(<HeldCadRequestDialog/>));
+    act(() => meshCeilingChoice.ask({ name: 'NoWaistbanding', nextStep: NEXT, bundlePath: 'b' }));
+    await act(async () => button("Don't solve").click());
     expect(meshCeilingChoice.getSnapshot()).toBeNull();
     expect(host.querySelector('[role="dialog"]')).toBeNull();
     useCadReturnStore.setState({ selectedBundle: null });

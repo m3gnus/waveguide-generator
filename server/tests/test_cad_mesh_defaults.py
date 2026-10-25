@@ -447,8 +447,19 @@ def test_browser_prepare_tells_wgs_own_failure_calmly_and_records_the_raw_text(m
         assert words in f"{detail['message']} {detail['next_step']}", detail
         assert "recorded" not in detail["message"] and "diagnostic" not in detail
     assert api._ingest_error(OSError(errno.ENOSPC, "full"), document_name="Fine horn").detail["code"] == "disk_full"
-    gate = IngestRefusal("stage 2 project gate", "the selected CAD return belongs to another CAD-linked project")
-    assert api._ingest_error(gate).detail == str(gate)
+    # WG's own bug while reading a return is WG's failure, not an invalid return.
+    assert api._ingest_error(stage1(KeyError("files"))).detail["code"] == "preparation_failed"
+    recorded.clear()
+    # Modelling mistakes the user fixes keep their words and are not recorded.
+    for modelling in (
+        IngestRefusal("stage 2 project gate", "the selected CAD return belongs to another CAD-linked project"),
+        IngestRefusal("stage 5 role resolution", "role resolution: required source 'HF' is missing"),
+        IngestRefusal("stage 5 role resolution", "role resolution: source 'HF' has no geometric throat candidate"),
+        IngestRefusal("stage 7 meshing", "This return declares FEM regions; this Waveguide Generator has FEM "
+                      "regions turned off.", user_worded=True),
+        IngestRefusal("stage 7 meshing", "Horn: FEM symmetry supports only x0 and y0.", user_worded=True),
+    ):
+        assert api._ingest_error(modelling).detail == str(modelling), modelling
     drift = IngestRefusal("stage 5 sources", "source 'HF' area drift", area_drift_sources=["HF"])
     assert api._ingest_error(drift).detail["area_drift_sources"] == ["HF"]
     assert recorded == []
@@ -518,3 +529,62 @@ def test_browser_prepare_answers_the_ceiling_with_a_choice_and_carries_solve_any
     assert memory.value.status_code == 422
     assert memory.value.detail == {"code": "solver_memory_exceeded", "message": SolverMemoryTooLarge.USER_MESSAGE,
                                    "next_step": SolverMemoryTooLarge.NEXT_STEP}
+
+
+def test_fem_region_rules_and_their_budget_are_the_users_to_fix_in_both_lanes() -> None:
+    from server.cadlink.intake.ingest import _fem_rule
+    from server.cadlink.intake.isolation import ChildRefusal
+    from server.cadlink.joblane.failure_codes import MODEL_NEEDS_CHANGE, refusal_code
+    from server.cadlink.intake.ingest import IngestRefusal
+    from server.mesh.fem_regions import FemRegionMeshError
+
+    assert _fem_rule(FemRegionMeshError("FEM symmetry supports only x0 and y0"))
+    assert _fem_rule(ChildRefusal("stage 7 meshing", "the total FEM regions wall-clock budget was exhausted",
+                                  details={"budget_exhausted": True}))
+    assert not _fem_rule(ChildRefusal("stage 7 meshing", "worker exited 9"))
+    # The Fusion lane ends such a refusal as model_needs_change, never as WG's failure.
+    assert refusal_code(IngestRefusal("stage 7 meshing", "budget", user_worded=True)) == MODEL_NEEDS_CHANGE
+    assert refusal_code(IngestRefusal("stage 7 meshing", "normalisation mismatch")) == "preparation_failed"
+
+
+@pytest.mark.parametrize("invalid_selector", [False, True])
+def test_source_model_rules_and_inconsistent_step_selectors_have_one_classification(monkeypatch, invalid_selector):
+    import server.cadlink.api as api
+    from server.cadlink.intake.ingest import IngestRefusal
+    from server.cadlink.intake.isolated import _reraise_typed
+    from server.cadlink.intake.isolation import ChildRefusal
+    from server.cadlink.joblane.failure_codes import MODEL_NEEDS_CHANGE, preparation_failure_code, refusal_code
+    from server.mesh.imported import RoleResolutionError, _advanced_face_identifier_surfaces
+
+    # Exercise the real source-identifier resolver, then the child's typed
+    # reconstruction. Source choices are user actions; a numeric selector
+    # absent from the same STEP cannot be repaired by selecting a source.
+    if invalid_selector:
+        with pytest.raises(RoleResolutionError) as caught:
+            _advanced_face_identifier_surfaces([999999], [17], [1])
+        source_error = caught.value
+    else:
+        source_error = RoleResolutionError("role resolution: required source 'HF' is missing")
+    with pytest.raises(RoleResolutionError) as transported:
+        _reraise_typed(ChildRefusal(
+            "stage 7 meshing", str(source_error), error_type="RoleResolutionError",
+            details={"invalid_selector": source_error.invalid_selector},
+        ))
+    try:
+        raise IngestRefusal("stage 5 role resolution", str(transported.value)) from transported.value
+    except IngestRefusal as refusal:
+        error = refusal
+    recorded = []
+    monkeypatch.setattr(api, "record_preparation_diagnostic", lambda *a, **k: recorded.append((a, k)))
+    response = api._ingest_error(error, document_name="Speaker")
+    if invalid_selector:
+        assert preparation_failure_code(error) == refusal_code(error) == "preparation_failed"
+        assert response.detail["failure"] == "internal"
+        assert "999999" not in response.detail["message"]
+        assert "999999" in response.detail["diagnostic"]
+        assert len(recorded) == 1
+    else:
+        assert preparation_failure_code(error) is None
+        assert refusal_code(error) == MODEL_NEEDS_CHANGE
+        assert response.detail == str(error)
+        assert recorded == []

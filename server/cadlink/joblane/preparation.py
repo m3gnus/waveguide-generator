@@ -27,9 +27,12 @@ from server.cadlink.operations import (
     REJECTED,
     PREFLIGHT_BLOCKED,
     TERMINAL_STATES,
+    preparation_failure,
     reason_attention,
 )
 from server.cadlink.intake.preflight import judged_refusal
+from server.cadlink.intake.returns_folder import return_document_name
+from server.cadlink.joblane.failure_codes import return_failure_code
 from server.platform.incidents import record_incident
 from server.cadlink.intake.solve_command import (
     CAD_SOLVE_SUBMISSION_PREFIX,
@@ -253,6 +256,19 @@ def retain_operation_snapshot(
     invalid, so its delivery is acknowledged, as before.
     """
 
+    return _retain(store, data_dir, workspace_root, operation_id)[0]
+
+
+def _retain(
+    store: CadLinkStore, data_dir: Path, workspace_root: Path | None, operation_id: str
+) -> tuple[str, str | None]:
+    """``retain_operation_snapshot``, with the reason a return could not be
+    retained in the one classification (``failure_codes.return_failure_code``):
+    a return that cannot be read now waits (``RETAIN_TRANSIENT``: gone for
+    now, no WGLink folder, a full disk, a busy store); one that never can is
+    ``RETAIN_INVALID`` with its code (``snapshot_invalid``, ``snapshot_changed``,
+    ``return_unsupported``)."""
+
     try:
         row = store.get_operation(operation_id)
         if (
@@ -260,7 +276,7 @@ def retain_operation_snapshot(
             or row["kind"] not in _RETAINED_KINDS
             or row["state"] in TERMINAL_STATES
         ):
-            return RETAINED
+            return RETAINED, None
         if _retained(data_dir, row) is None:
             inputs = _inputs(row)
             retained = retain_snapshot(
@@ -275,21 +291,39 @@ def retain_operation_snapshot(
         except ValueError:
             raise  # Never retainable as named: the invalid outcome below.
         except Exception:  # noqa: BLE001 - recorded there; retried on the next pass
-            return RETAIN_TRANSIENT
+            return RETAIN_TRANSIENT, None
         if refused:
-            return RETAIN_INVALID
-    except (OSError, sqlite3.Error) as exc:
-        # SnapshotUnavailable is an OSError: cannot proceed now, not never.
+            return RETAIN_INVALID, None
+    except sqlite3.Error as exc:
         logger.debug("Could not retain the snapshot of CAD operation %s yet: %s", operation_id, exc)
-        return RETAIN_TRANSIENT
-    except ValueError as exc:
-        # WgReturnError, a changed return, a path outside the WGLink folder.
+        return RETAIN_TRANSIENT, None
+    except (OSError, ValueError) as exc:
+        # WgReturnError, a changed return, a path outside the WGLink folder;
+        # SnapshotUnavailable and any other OSError: cannot proceed now, not never.
+        code = return_failure_code(exc, folder_selected=workspace_root is not None)
+        if code in _RETAIN_LATER_CODES:
+            logger.debug("Could not retain the snapshot of CAD operation %s yet: %s", operation_id, exc)
+            return RETAIN_TRANSIENT, code
         logger.info("The snapshot of CAD operation %s cannot be retained: %s", operation_id, exc)
-        return RETAIN_INVALID
+        return RETAIN_INVALID, code
     except Exception as exc:  # noqa: BLE001 - retention at receive never holds up a delivery
         logger.warning("Could not retain the snapshot of CAD operation %s: %s", operation_id, exc)
-        return RETAIN_INVALID
-    return RETAINED
+        return RETAIN_INVALID, None
+    return RETAINED, None
+
+
+def _return_name(workspace_root: Path | None, row: Mapping[str, Any]) -> str | None:
+    """The name of the return an operation names, read leniently (it was not retained)."""
+
+    try:
+        return return_document_name(exchange_bundle_path(workspace_root, str(_inputs(row).get("bundle_path") or "")))
+    except (OSError, ValueError):
+        return None
+
+
+#: Retention reasons that clear by themselves or by the user's hand: the
+#: delivery waits for another pass instead of being refused.
+_RETAIN_LATER_CODES = frozenset({"return_unavailable", "wglink_folder_unset", "disk_full"})
 
 
 def refuse_blocked_return(store: CadLinkStore, data_dir: Path, row: Mapping[str, Any]) -> bool:
@@ -412,7 +446,7 @@ def settle_snapshot_operation(
     error propagates.
     """
 
-    retention = retain_operation_snapshot(store, data_dir, workspace_root, operation_id)
+    retention, code = _retain(store, data_dir, workspace_root, operation_id)
     row = store.get_operation(operation_id)
     if row is None or row["kind"] != RECEIVE_SNAPSHOT:
         return retention
@@ -427,6 +461,10 @@ def settle_snapshot_operation(
         retention = RETAIN_TRANSIENT
     if retention == RETAINED:
         state, reason, message = ACCEPTED, None, SNAPSHOT_ACCEPTED_MESSAGE
+    elif retention != RETAIN_TRANSIENT and code == "return_unsupported":
+        # Updating WG is the remedy, in WG's words for it.
+        words = preparation_failure(code, _return_name(workspace_root, row))
+        state, reason, message = REJECTED, code, f"{words['message']} {words['next_step']}"
     elif retention != RETAIN_TRANSIENT:
         state, reason, message = REJECTED, "snapshot_invalid", SNAPSHOT_INVALID_MESSAGE
     elif _unreadable_too_long(store, row, _wall_now()):

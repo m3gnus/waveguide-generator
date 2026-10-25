@@ -126,8 +126,11 @@ export function HeldCadRequestDialog() {
   const serverOptions = job
     ? state?.options?.length ? state.options : [{ id: 'review', label: 'Review request' }, { id: 'dismiss', label: 'Dismiss request' }]
     : [{ id: 'solve_anyway', label: 'Solve anyway' }];
+  // "Don't solve" lets the question go: the request is dismissed, or this
+  // window's own choice cleared.
   const options = ceilingQuestion
-    ? [{ id: 'change_in_fusion', label: 'Change in Fusion' }, ...serverOptions.filter(option => option.id !== 'dismiss')]
+    ? [{ id: 'dismiss', label: "Don't solve" }, { id: 'change_in_fusion', label: 'Change in Fusion' },
+      ...serverOptions.filter(option => option.id !== 'dismiss')]
     : serverOptions;
   const changingNow = changing === id && ceilingQuestion !== null;
   const choose = async (option: string) => {
@@ -141,6 +144,8 @@ export function HeldCadRequestDialog() {
         // so Fusion's panel keeps its Sources & Mesh… button, until the next
         // Solve from Fusion replaces it; this window's own choice is let go.
         if (!job) meshCeilingChoice.clear();
+      } else if (!job && option === 'dismiss') {
+        meshCeilingChoice.clear();
       } else if (!job) {
         // The browser path: prepare again accepting the ceiling, and solve,
         // for the model the question was asked about.

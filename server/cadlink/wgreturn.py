@@ -137,6 +137,11 @@ class WgReturnUnsupported(WgReturnValidationError):
     the same return again."""
 
 
+class SnapshotUnavailable(OSError):
+    """The return cannot be read now (its folder or manifest is not there): the
+    operation waits, or the user tries again, instead of failing for good."""
+
+
 class WgReturnIntegrityError(WgReturnError):
     """The on-disk bundle contradicts its checksummed member table."""
 
@@ -311,11 +316,12 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
 
 
 def _needs_newer_reader(manifest: Mapping[str, Any]) -> bool:
-    """Whether a manifest names a major version or a feature this reader lacks."""
+    """Whether a manifest names a newer major version, or a feature this reader
+    lacks. An older or malformed version is an invalid return, not a newer one."""
 
     version = manifest.get("wgreturn_version")
     major = version.split(".", 1)[0] if isinstance(version, str) else None
-    if major is not None and major.isdigit() and int(major) != SUPPORTED_MAJOR:
+    if major is not None and major.isdigit() and int(major) > SUPPORTED_MAJOR:
         return True
     features = manifest.get("required_features")
     return isinstance(features, list) and any(
@@ -337,11 +343,17 @@ def read_wgreturn(
     bundle_path = Path(path)
     if bundle_path.is_symlink():
         raise WgReturnIntegrityError(f"bundle path is a symlink: {bundle_path}")
+    if not bundle_path.exists():
+        raise SnapshotUnavailable(f"CAD-return bundle is not there: {bundle_path}")
     if not bundle_path.is_dir():
         raise WgReturnValidationError(f"CAD-return bundle is not a directory: {bundle_path}")
     manifest_path = bundle_path / "wgreturn.json"
-    if manifest_path.is_symlink() or not manifest_path.is_file():
-        raise WgReturnIntegrityError("wgreturn.json: missing or is a symlink")
+    if manifest_path.is_symlink():
+        raise WgReturnIntegrityError("wgreturn.json: is a symlink")
+    if not manifest_path.exists():
+        raise SnapshotUnavailable("wgreturn.json: not there (yet)")
+    if not manifest_path.is_file():
+        raise WgReturnIntegrityError("wgreturn.json: is not a file")
     # The manifest is CAD-authored, so its size is checked before it is read
     # rather than after: ``json.loads`` on an arbitrarily large document is an
     # allocation an attacker chooses (``docs/plans/STEP-PARSER-ISOLATION.md``).
