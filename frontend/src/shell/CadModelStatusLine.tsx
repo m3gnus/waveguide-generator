@@ -39,7 +39,6 @@ export function runCadStatusAction(line: Line, solve: (() => unknown) | undefine
       if (line.jobId) void jobsCoordinatorBridge.getSnapshot().continueRun(line.jobId).catch(() => undefined);
       else void cadWorkspace.getSnapshot().ingest().catch(() => undefined);
       return;
-    case 'prepare': void cadWorkspace.getSnapshot().ingest().catch(() => undefined); return;
     case 'show-results': workspaceNavigation.navigate('results'); return;
     case 'none': return;
   }

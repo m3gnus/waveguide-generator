@@ -1,13 +1,12 @@
 import { waitForCadProjectSettings } from '../../stores/cadProjectSettings';
-import { CadLinkApiError, ingestReturn, listReturns } from '../../api/cadlink';
+import { CadLinkApiError, listReturns } from '../../api/cadlink';
 import { useCadReturnStore } from '../../stores/cadReturn';
 import { cadReceiptsStore, type CadReceipt, type CadReceiptsStore, type ReceiptFeedback } from '../../stores/cadReceipts';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { useDocumentStore } from '../../stores/document';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
-import { returnBelongsToAnotherProject } from './arrivals';
+import { createCadArrivalActions, SupersededError, returnBelongsToAnotherProject } from './arrivals';
 import type { SolvedModelDisplay } from './solvedModel';
-import { resolvePreparationTarget } from './preparationTarget';
 import { reportCadAutomationError } from './caughtErrors';
 
 /** The existing artifact display path is supplied by the shell's display owner.
@@ -19,6 +18,7 @@ export interface ReceiptDisplay extends SolvedModelDisplay {
   refuseAutomaticRestore?(): void;
   manualSelectionAt?(): number | null;
   automaticSelectionAt?(): number;
+  prepareSelected?: ReturnType<typeof createCadArrivalActions>['ingestSelected'];
 }
 
 /** Receipt-keyed Send display mounted beside the feed.
@@ -27,6 +27,11 @@ export interface ReceiptDisplay extends SolvedModelDisplay {
  */
 export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceiptsStore = cadReceiptsStore,
   fetcher: typeof fetch = fetch): (receipt: CadReceipt) => Promise<boolean> {
+  const prepareSelected = display.prepareSelected ?? createCadArrivalActions({
+    enterCadWorkspace: display.enterCadWorkspace, showIngestedMesh: (record, name, notice, transport = fetcher, generation = importedMeshStore.captureGeneration()) =>
+      display.showIngestedMesh(record, name, notice, transport, generation),
+    reportViewportNotice: display.reportViewportNotice,
+  }, fetcher).ingestSelected;
   let feedId = store.getState().feedId;
   let newestSequence = store.getState().newestSequence;
   let newestSentAt = store.getState().newestSentAt;
@@ -83,7 +88,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
     const inputRevision = workspaceModeStore.getSnapshot().inputRevision;
     const document = useDocumentStore.getState();
     const choice = useCadReturnStore.getState().captureModelChoice();
-    let phase: 'listing' | 'ingest' | 'display' = 'listing';
+    const progress = { phase: 'listing' as 'listing' | 'ingest' | 'display' };
     let generation = useCadReturnStore.getState().beginIngestIntent();
     let baselineViewport = importedMeshStore.beginIntent();
     const current = () => display.isActive?.() !== false && store.getState().feedId === receiptFeed && receipt.cursor === newestCursor
@@ -91,7 +96,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
       && workspaceModeStore.getSnapshot().inputRevision === inputRevision
       && useDocumentStore.getState().identity === document.identity
       && useCadReturnStore.getState().isCurrentModelChoice(choice)
-      && (phase === 'listing' || (useCadReturnStore.getState().isCurrentIngestIntent(generation)
+      && (progress.phase === 'listing' || (useCadReturnStore.getState().isCurrentIngestIntent(generation)
         && importedMeshStore.isCurrentGeneration(baselineViewport)));
     const superseded = () => {
       if (display.isActive?.() === false) return false;
@@ -133,41 +138,39 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
       useCadReturnStore.getState().selectArrivedBundle(bundle, receipt.project_id, transport);
       if (!await waitForCadProjectSettings()) throw new Error('Could not load model settings. Retry the Send.');
       if (!current()) return superseded();
-      const selected = useCadReturnStore.getState();
-      generation = selected.beginIngestIntent();
-      baselineViewport = importedMeshStore.beginIntent();
-      const skipped = new Set(selected.skippedSourceIds);
-      phase = 'ingest';
-      const record = await ingestReturn({
-        bundlePath: bundle.bundlePath, bundleOrigin: bundle.bundleOrigin ?? 'wglink',
-        mesh: { rigidSizeMm: selected.meshSizes.rigid_size_mm, transitionMm: selected.meshSizes.transition_mm,
-          sourceSizeMm: Object.fromEntries(Object.entries(selected.meshSizes.source_size_mm).filter(([id]) => !skipped.has(id))) },
-        skippedSourceIds: selected.skippedSourceIds, areaDriftOverrides: selected.areaDriftOverrides,
-        expectedDesignId: document.identity?.designId ?? null,
-        expectedInstanceId: resolvePreparationTarget(bundle),
-        symmetryMode: useCadReturnStore.getState().symmetryMode,
-      }, transport);
-      if (!current()) return superseded();
-      // A mutable folder entry must not substitute a different snapshot for
-      // the one this receipt accepted. The ingest record is the verified hash.
-      if (receipt.manifest_sha256 && record.manifest_sha256 !== receipt.manifest_sha256) {
-        report(receipt, 'unreadable', `The WGLink folder entry for ${name} changed after this Send. Send it again from Fusion.`);
-        display.enterCadWorkspace();
-        return true;
+      let changedSinceSend = false;
+      try {
+        await prepareSelected({
+          fetcher: transport, isCurrent: current,
+          onStarted: (intent, viewport) => { generation = intent; baselineViewport = viewport; progress.phase = 'ingest'; },
+          validate: (record) => {
+            if (receipt.manifest_sha256 && record.manifest_sha256 !== receipt.manifest_sha256) {
+              changedSinceSend = true;
+              throw new Error(`The WGLink folder entry for ${name} changed after this Send. Send it again from Fusion.`);
+            }
+          },
+          onPrepared: () => { progress.phase = 'display'; },
+        });
+      } catch (error) {
+        if (changedSinceSend) {
+          report(receipt, 'unreadable', error instanceof Error ? error.message : String(error));
+          display.enterCadWorkspace();
+          return true;
+        }
+        throw error;
       }
-      if (!useCadReturnStore.getState().applyIngest(record, generation)) return superseded();
-      display.enterCadWorkspace();
-      phase = 'display';
-      await display.showIngestedMesh(record, name, display.reportViewportNotice, transport, baselineViewport);
       if (!current()) return superseded();
       report(receipt, 'accepted', `Received ${name} from Fusion 360.`);
       return true;
     } catch (error) {
-      reportCadAutomationError(`receipt-${phase}`, error, { receipt_id: receipt.receipt_id, ingest_id: receipt.ingest_id });
-      if (!current()) return superseded();
-      const transient = transportFailed || phase === 'listing'
-        || (error instanceof CadLinkApiError && (error.status === 408 || error.status === 429 || (error.status ?? 0) >= 500));
-      const refusal = phase === 'ingest' && error instanceof CadLinkApiError && !transient;
+      reportCadAutomationError(`receipt-${progress.phase}`, error, { receipt_id: receipt.receipt_id, ingest_id: receipt.ingest_id });
+      if (error instanceof SupersededError || !current()) return superseded();
+      // The shared preparation owner already opened the one ceiling question.
+      if (error instanceof CadLinkApiError && error.code === 'mesh_too_large') return true;
+      const classifiedFailure = error instanceof CadLinkApiError && !!error.failure;
+      const transient = !classifiedFailure && (transportFailed || progress.phase === 'listing'
+        || (error instanceof CadLinkApiError && (error.status === 408 || error.status === 429 || (error.status ?? 0) >= 500)));
+      const refusal = progress.phase === 'ingest' && error instanceof CadLinkApiError && !transient;
       report(receipt, refusal ? 'refused' : 'display_failed',
         `WG could not open ${name}: ${error instanceof Error ? error.message : String(error)}. ${transient ? 'CAD Link will retry.' : 'Send it again from Fusion.'}`);
       display.enterCadWorkspace();

@@ -36,9 +36,8 @@ export function cadRequestState(job: Pick<JobItem, 'status' | 'cad_state'>): Cad
   }
 }
 
-/** The one action a status line offers. `prepare` stands until preparation is
- * automatic (it is the only Prepare left on screen); the rest are the plan's. */
-export type CadStatusAction = 'solve' | 'choose' | 'try-again' | 'show-results' | 'prepare' | 'none';
+/** The one action a status line offers. Preparation runs automatically. */
+export type CadStatusAction = 'solve' | 'choose' | 'try-again' | 'show-results' | 'none';
 
 export type CadStatusTone = 'idle' | 'busy' | 'ready' | 'attention' | 'done';
 
@@ -71,7 +70,7 @@ type CadModelView = Pick<ReturnType<typeof selectCadModelState>,
   & Partial<Pick<ReturnType<typeof selectCadModelState>, 'failureRetry'>>;
 
 const ACTION_LABEL: Record<Exclude<CadStatusAction, 'none'>, string> = {
-  solve: 'Solve', choose: 'Choose…', 'try-again': 'Try again', 'show-results': 'Show results', prepare: 'Prepare',
+  solve: 'Solve', choose: 'Choose…', 'try-again': 'Try again', 'show-results': 'Show results',
 };
 
 /** The holds that wait for a solve engine: Results describes them, with their remedies. */
@@ -162,8 +161,8 @@ export function cadModelStatusLine(model: CadModelView, request: CadModelRequest
   // Its mesh no longer matches the settings or the return: what was solved
   // or prepared before is not what Solve would use now.
   if (model.preparation === 'stale') {
-    return line(`${label} changed since it was prepared.`, 'needs preparing again', 'attention',
-      model.canPrepare ? 'prepare' : 'none', null, 'Prepare again');
+    return model.canPrepare ? line(`Preparing ${label}…`, 'preparing…', 'busy')
+      : line(`${label} changed since it was prepared.`, 'needs preparing again', 'attention');
   }
   if (requestState === 'solved' && request?.kind === 'solved' && job) {
     const run = job.run_number ? ` · run #${job.run_number}` : '';
@@ -192,7 +191,8 @@ export function cadModelStatusLine(model: CadModelView, request: CadModelRequest
     const app = model.application === 'CAD' ? context.application ?? 'Fusion' : model.application;
     return line(`${APP_NAME} cannot read ${label}. Send it again from ${app}.`, 'cannot read it', 'attention');
   }
-  return line(`${label} is not prepared yet.`, 'not prepared', 'attention', model.canPrepare ? 'prepare' : 'none');
+  return model.canPrepare ? line(`Preparing ${label}…`, 'preparing…', 'busy')
+    : line(`${label} is not prepared yet.`, 'not prepared', 'attention');
 }
 
 /** The browser's own failed preparation that the server did not classify as

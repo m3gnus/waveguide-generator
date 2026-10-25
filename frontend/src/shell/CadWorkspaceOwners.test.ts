@@ -332,14 +332,15 @@ function unsolvedProject() {
   });
 }
 
-it('reopens a never-solved CAD model through the owners: the return is ingested and reaches the viewport', async () => {
+it('reopens a prepared but never-solved CAD model using its retained record without ingesting again', async () => {
   unsolvedProject();
   returns = [bundle];
   stop = mountCadWorkspaceOwners(); await flush(); await flush(); await flush();
-  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
-  expect(calls('/api/cadlink/ingest').length).toBeGreaterThan(0);
+  expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
   await vi.waitFor(() => expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id));
-  expect(cadWorkspace.getSnapshot().status).toContain('Speaker');
+  expect(cadWorkspace.getSnapshot().status).toBe('Reopened the last model.');
 });
 
 it('shows the refusal when the never-solved model\'s newest return belongs to another project', async () => {
@@ -911,4 +912,122 @@ it.each(['running', 'complete'] as const)('recovers an already-bound %s Fusion s
   expect(currentModel().ingestId).toBe(record.ingest_id);
   expect(currentModel().viewportShowing).toBe(true);
   expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+});
+
+it('prepares the launch selection after a browser reload with the same preparation inputs', async () => {
+  resetImportedModelStore(); resetDocumentStore(); workspaceModeStore.setMode('cad'); returns = [bundle];
+  stop = mountCadWorkspaceOwners(); await flush();
+  expect(useCadReturnStore.getState()).toMatchObject({ needsIngest: false, ingestRecord: { ingest_id: record.ingest_id } });
+  const firstInputs = JSON.parse(String(calls('/api/cadlink/ingest')[0][1]?.body));
+  stop(); stop = undefined;
+  // The browser has lost its stores; the server still returns its cached preparation.
+  resetCadReturnStore(); resetImportedModelStore(); importedMeshStore.clear(); localStorage.clear();
+  stop = mountCadWorkspaceOwners(); await flush();
+  expect(useCadReturnStore.getState()).toMatchObject({ needsIngest: false, ingestRecord: { ingest_id: record.ingest_id } });
+  expect(JSON.parse(String(calls('/api/cadlink/ingest')[1][1]?.body))).toEqual(firstInputs);
+  expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
+});
+
+it('prepares a version chosen in Model versions and does not prepare again on owner remount', async () => {
+  resetImportedModelStore(); returns = [bundle];
+  stop = mountCadWorkspaceOwners(); await flush();
+  cadWorkspace.getSnapshot().selectBundle(bundle); await flush();
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+  const older = { ...bundle, bundlePath: 'wgreturn/older.wgreturn', returnId: 'older' };
+  returns.push(older);
+  cadWorkspace.getSnapshot().selectBundle(older); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(2);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+  stop(); stop = mountCadWorkspaceOwners(); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(2);
+});
+
+it('prepares once across the StrictMode setup/cleanup/setup sequence', async () => {
+  resetImportedModelStore(); resetDocumentStore(); workspaceModeStore.setMode('cad'); returns = [bundle];
+  stop = mountCadWorkspaceOwners(); stop();
+  stop = mountCadWorkspaceOwners(); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+});
+
+it('stops after an automatic failure across polls and remounts; Try again prepares once', async () => {
+  resetImportedModelStore(); returns = [bundle];
+  const base = fetcher.getMockImplementation()!;
+  let fail = true;
+  fetcher.mockImplementation((input, init) => String(input) === '/api/cadlink/ingest' && fail
+    ? Promise.resolve(json({ detail: { code: 'preparation_failed', failure: 'internal', retry: true,
+      message: 'Waveguide Generator could not prepare Speaker. This has been recorded for the developers.' } }, 422)) : base(input, init));
+  stop = mountCadWorkspaceOwners(); await flush();
+  cadWorkspace.getSnapshot().selectBundle(bundle); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  await cadWorkspace.getSnapshot().refresh(); await vi.advanceTimersByTimeAsync(5_000);
+  stop(); stop = mountCadWorkspaceOwners(); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  expect(cadWorkspace.getSnapshot().ingestFailure).toMatchObject({ recorded: true, retry: true });
+  fail = false;
+  // The status line's Try again command. Concurrent presses share the attempt.
+  await Promise.all([cadWorkspace.getSnapshot().ingest(), cadWorkspace.getSnapshot().ingest()]); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(2);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+});
+
+it('opens the mesh-ceiling pop-up once during automatic preparation, including after remount', async () => {
+  resetImportedModelStore(); returns = [bundle];
+  const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
+  meshCeilingChoice.clear();
+  const ask = vi.spyOn(meshCeilingChoice, 'ask');
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((input, init) => String(input) === '/api/cadlink/ingest'
+    ? Promise.resolve(json({ detail: { code: 'mesh_too_large', message: 'This model is too large.', triangle_count: 28_944, limit: 22_000 } }, 422))
+    : base(input, init));
+  stop = mountCadWorkspaceOwners(); await flush();
+  cadWorkspace.getSnapshot().selectBundle(bundle); await flush();
+  await cadWorkspace.getSnapshot().refresh(); await vi.advanceTimersByTimeAsync(5_000);
+  stop(); stop = mountCadWorkspaceOwners(); await flush();
+  expect(ask).toHaveBeenCalledOnce();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  expect(meshCeilingChoice.getSnapshot()?.meshLimit).toEqual({ triangles: 28_944, limit: 22_000 });
+  meshCeilingChoice.clear();
+});
+
+it('automatically prepares changed settings, including changing back to earlier settings', async () => {
+  resetImportedModelStore(); returns = [bundle];
+  stop = mountCadWorkspaceOwners(); await flush();
+  cadWorkspace.getSnapshot().selectBundle(bundle); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  useCadReturnStore.getState().setAreaDriftOverride('source-hf', true);
+  await vi.advanceTimersByTimeAsync(400);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(2);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+  useCadReturnStore.getState().setAreaDriftOverride('source-hf', false);
+  await vi.advanceTimersByTimeAsync(400);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(3);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+});
+
+it('prepares a new return revision instead of restoring an older retained preparation', async () => {
+  unsolvedProject();
+  returns = [{ ...bundle, returnId: 'wgr_new-revision' }];
+  stop = mountCadWorkspaceOwners(); await flush(); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+});
+
+it('Send from Fusion opens the shared mesh-ceiling choice once and stops receipt retries', async () => {
+  resetImportedModelStore();
+  const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
+  meshCeilingChoice.clear();
+  const ask = vi.spyOn(meshCeilingChoice, 'ask');
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((input, init) => String(input) === '/api/cadlink/ingest'
+    ? Promise.resolve(json({ detail: { code: 'mesh_too_large', message: 'This model is too large.', triangle_count: 28_944, limit: 22_000 } }, 422))
+    : base(input, init));
+  stop = mountCadWorkspaceOwners(); await flush();
+  returns = [bundle]; receipts = [sendReceipt()];
+  channels.forEach((channel) => channel.resync()); await flush();
+  channels.forEach((channel) => channel.resync()); await vi.advanceTimersByTimeAsync(5_000);
+  expect(ask).toHaveBeenCalledOnce();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  expect(cadWorkspace.getSnapshot().ingestError).toBeNull();
+  meshCeilingChoice.clear();
 });

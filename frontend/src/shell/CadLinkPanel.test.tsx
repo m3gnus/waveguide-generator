@@ -145,13 +145,12 @@ describe('CadLinkPanel', () => {
     expect(connection.textContent).not.toMatch(/Open in Fusion 360|Send to Fusion|Send WG changes|This WG design/);
     expect(host.textContent).toContain('Speaker · from Fusion');
     const results = host.querySelector('[aria-label="Results"]')!;
-    expect(results.textContent).toContain('Speaker is not prepared yet.');
+    expect(results.textContent).toContain('Preparing Speaker…');
     expect(results.textContent).not.toMatch(/Not solved yet|Ingest|Solve is not available/);
-    // Results states the line without a button; Prepare is the model card's line's.
+    // Automatic preparation offers no action on either surface.
     expect(results.querySelector('button')).toBeNull();
-    const prepare = host.querySelector<HTMLButtonElement>('.cad-model-card .cad-status-line button[data-action="prepare"]')!;
-    await act(async () => prepare.click());
-    expect(ingest).toHaveBeenCalledOnce();
+    expect(host.querySelector('.cad-model-card .cad-status-line button')).toBeNull();
+    expect(ingest).not.toHaveBeenCalled();
     cadWorkspace.setState(emptyCadWorkspace, true);
   });
 
@@ -792,12 +791,12 @@ describe('CadLinkPanel', () => {
       },
     });
     act(() => applyCadRequest(cadOperation({ operationId: 'op-busy', reason: 'findings_need_review', preparationId: 'wgp_7' })));
-    const card = operationCard('op-busy');
-    await vi.waitFor(() => expect(buttonIn(card, 'Approve and solve')).toBeDefined());
-    const approve = () => buttonIn(card, 'Approve and solve')!;
+    const card = () => operationCard('op-busy');
+    await vi.waitFor(() => expect(buttonIn(card(), 'Approve and solve')).toBeDefined());
+    const approve = () => buttonIn(card(), 'Approve and solve')!;
     if (!withOwner) {
       expect(approve().disabled).toBe(true);
-      expect(card.textContent).toContain('Solve coordinator is unavailable.');
+      expect(card().textContent).toContain('Solve coordinator is unavailable.');
       await act(async () => approve().click());
       expect(posted).toEqual([]);
       return;
@@ -2054,8 +2053,7 @@ describe('CadLinkPanel', () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(listing.items[0].bundlePath);
     expect(host.querySelector('.cad-model-name')?.textContent).toBe('Speaker');
-    // The status line's one action, until preparation is automatic.
-    expect(host.querySelector('.cad-status-line button[data-action="prepare"]')?.textContent).toBe('Prepare');
+    expect(host.querySelector('.cad-status-line button[data-action="prepare"]')).toBeNull();
     expect(host.querySelector('.cad-history .section-head')?.getAttribute('aria-expanded')).toBe('false');
     expect(host.textContent).not.toContain('Mesh detail');
   });
@@ -2103,7 +2101,6 @@ describe('CadLinkPanel', () => {
     }));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
 
-    act(() => host.querySelector<HTMLButtonElement>('.cad-model-card .cad-status-line button[data-action="prepare"]')!.click());
     // Preparing has no button: the line says so, once.
     expect(host.querySelector('.cad-model-card .cad-status-line')?.textContent).toBe('Preparing Speaker…');
     expect(host.querySelector('.cad-model-card .cad-status-line button')).toBeNull();
@@ -2704,7 +2701,7 @@ describe('CadLinkPanel', () => {
     await act(async () => { refresh.click(); await Promise.resolve(); await Promise.resolve(); });
 
     // The model's line says it once; the technical reason is for developer details (U6).
-    expect(host.querySelector('.cad-status-line')?.textContent).toContain('Speaker changed since it was prepared.');
+    expect(host.querySelector('.cad-status-line')?.textContent).toContain('Preparing Speaker…');
     expect(host.textContent).not.toContain('source inventory or source sizing suggestions changed');
     expect(useCadReturnStore.getState().meshSizes.source_size_mm['source-hf']).toBe(2.5);
     expect(importedSubmissionBlocker()).toContain('source inventory or source sizing suggestions changed');

@@ -334,7 +334,6 @@ export function fieldPlaneUnavailableTooltip(jobs: readonly JobItem[]): string {
 const CAD_EMPTY_HINT: Partial<Record<CadModelStatusLine['action'], string>> = {
   choose: 'Choose how to continue on the Imported mesh tab.',
   'try-again': 'Try again on the Imported mesh tab.',
-  prepare: 'Prepare it on the Imported mesh tab.',
   solve: 'Solve it from the top bar.',
   'show-results': 'Its results are in Results.',
 };

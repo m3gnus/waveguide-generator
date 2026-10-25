@@ -9,6 +9,7 @@ import { useCadConnectionStore } from '../stores/cadConnection';
 import { cadReceiptsStore, connectCadReceipts, connectCadReceiptDisplay } from '../stores/cadReceipts';
 import { cadRecoveryNoticesStore, connectCadRecoveryNotices } from '../stores/cadRecoveryNotices';
 import { frameReadInFlight } from '../stores/cadSolverFrame';
+import { useImportedModelStore } from '../stores/importedModel';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { cadWorkspace, emptyCadWorkspace } from '../stores/cadWorkspace';
 import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
@@ -77,7 +78,7 @@ export function mountCadWorkspaceOwners(): () => void {
       void getOnshapeConnection().then((onshapeConnection) => publish({ onshapeConnection })).catch(() => undefined);
     }
   };
-  const autoIngestSelected = () => { void actions.ingestSelected().catch(() => undefined); };
+  const autoIngestSelected = () => actions.requestAutomaticPreparation();
   const ownsSolveReturn = (bundle: CadReturnBundle) => fusionSolves.ownsReturn(bundle, jobsSocket.getSnapshot().jobs);
   const rereadDrivers = () => { void refreshChannelDriverBases().then((channels) => {
     if (channels.length) reportStatus(`Re-read ${channels.length} driver${channels.length === 1 ? '' : 's'} from the driver library.`);
@@ -98,8 +99,9 @@ export function mountCadWorkspaceOwners(): () => void {
     setBundles: (bundles) => publish({ bundles }), setLoading: (loading) => publish({ loading }),
   });
   let firstReturnRead = true;
+  let startupReceiptsPending = true;
   const startupReceipts = cadReceiptsStore.getState().load();
-  void startupReceipts.catch(() => undefined);
+  void startupReceipts.catch(() => undefined).finally(() => { startupReceiptsPending = false; autoIngestSelected(); });
   const refreshReturns = async (options?: Parameters<typeof arrivals.refresh>[0]) => {
     if (!fusionActive()) { publish({ loading: false }); return; }
     // Discover the Send identities before any folder entry can be selected.
@@ -120,10 +122,15 @@ export function mountCadWorkspaceOwners(): () => void {
   const actions = createCadArrivalActions({
     mounted, ingestRequest, ingestAbortController, manualSelectionAt, refusedForeignReturn,
     autoIngestSelected, enterCadWorkspace, rereadDrivers,
+    deferAutomaticPreparation: () => !fusionActive() || refusedForeignReturn.current || startupReceiptsPending
+      || projectOpenPending.current || waiter.getState().pullingFromFusion || awaitingReceiptDisplay()
+      || useImportedModelStore.getState().phase === 'loading'
+      || workspaceModeStore.getSnapshot().mode !== 'cad' || workspaceModeStore.getSnapshot().importedInput !== 'cad'
+      || !!(useCadReturnStore.getState().selectedBundle && ownsSolveReturn(useCadReturnStore.getState().selectedBundle!)),
     onshapeInstanceId: () => onshapeInstance,
     setIngesting: (ingesting) => publish({ ingesting,
       ...(ingesting ? { preparationIntent: useCadReturnStore.getState().captureIngestIntent() } : {}),
-    }), setIngestError: (ingestError, ingestFailure = null) => publish({ ingestError, ingestFailure }),
+    }), setIngestError: (ingestError, ingestFailure = null) => publish({ ingestError, ingestFailure, preparationIntent: useCadReturnStore.getState().captureIngestIntent() }),
     setError: reportError, setStatus: reportStatus, setViewportNotice: reportViewportNotice,
     setBundles: (bundles) => publish({ bundles }), reportViewportNotice,
   });
@@ -258,7 +265,11 @@ export function mountCadWorkspaceOwners(): () => void {
     observation.refresh({ returns: false });
     await Promise.allSettled([refreshReturns(options), refreshOnshapeStatus(), cadRecoveryNoticesStore.getState().load(), waiter.refresh()]);
   };
-  cadWorkspace.setState({ ...emptyCadWorkspace,
+  const previousFeedback = cadWorkspace.getSnapshot();
+  const retainedFailure = previousFeedback.preparationIntent === useCadReturnStore.getState().captureIngestIntent()
+    ? { ingestError: previousFeedback.ingestError, ingestFailure: previousFeedback.ingestFailure,
+      preparationIntent: previousFeedback.preparationIntent } : {};
+  cadWorkspace.setState({ ...emptyCadWorkspace, ...retainedFailure,
     loading: fusionActive() && document.visibilityState !== 'hidden',
     refresh, refreshOnshapeStatus, selectBundle,
     returnFromOnshape: actions.returnFromOnshape,
@@ -285,7 +296,7 @@ export function mountCadWorkspaceOwners(): () => void {
       ...Object.values(cadReceiptsStore.getState().receipts).map((receipt) => Date.parse(receipt.sent_at))),
     onIntent: () => { initialChoiceOwed.current = false; },
   });
-  const display = createReceiptDisplay({ enterCadWorkspace, reportViewportNotice, isActive: fusionActive,
+  const display = createReceiptDisplay({ prepareSelected: actions.ingestSelected, enterCadWorkspace, reportViewportNotice, isActive: fusionActive,
     automaticSelectionAt: fusionSolves.latestSentAt,
     refuseAutomaticRestore: () => { refusedForeignReturn.current = true; },
     showIngestedMesh: showIngestedMeshInViewport, manualSelectionAt: () => manualSelectionAt.current });
@@ -303,7 +314,7 @@ export function mountCadWorkspaceOwners(): () => void {
   const displayReceipt: typeof display = async (receipt) => {
     receiptDisplaysInFlight += 1;
     try { return await display(receipt); }
-    finally { receiptDisplaysInFlight -= 1; refreshOwedInitialChoice(); }
+    finally { receiptDisplaysInFlight -= 1; refreshOwedInitialChoice(); autoIngestSelected(); }
   };
   let stopDisplay = connectCadReceiptDisplay(displayReceipt, cadReceiptsStore, fusionActive);
   let application = preferencesStore.getSnapshot().cadApplication;
@@ -326,6 +337,7 @@ export function mountCadWorkspaceOwners(): () => void {
   };
   let context = '';
   const contextChanged = () => {
+    autoIngestSelected();
     if (useCadReturnStore.getState().selectedBundle) initialChoiceOwed.current = false;
     const nextDesign = useDocumentStore.getState().identity?.designId;
     if (nextDesign !== designId) {
@@ -370,7 +382,8 @@ export function mountCadWorkspaceOwners(): () => void {
     jobsSocket.subscribe(settleModels), solvedCadModels.subscribe(settleModels),
     useDesignStore.subscribe(contextChanged), useDocumentStore.subscribe(contextChanged),
     useCadReturnStore.subscribe(contextChanged), useSolveOptionsStore.subscribe(contextChanged), useImportedSolveOptionsStore.subscribe(contextChanged),
-    workspaceModeStore.subscribe(changed), preferencesStore.subscribe(subscribeContext),
+    workspaceModeStore.subscribe(() => { changed(); autoIngestSelected(); }), preferencesStore.subscribe(subscribeContext),
+    useImportedModelStore.subscribe(autoIngestSelected),
     cadCoordinationStore.subscribe(changed), cadWorkspaceSelection.subscribe(() => observation.refresh()),
     subscribeRevision((event) => { if (event.reason !== 'load') actions.supersedePreparation(); }),
   ];
@@ -378,9 +391,12 @@ export function mountCadWorkspaceOwners(): () => void {
   contextChanged(); followFusionSolve(); settleModels(); void refreshOnshapeStatus();
   return () => {
     mounted.current = false;
+    actions.cancelAutomaticPreparation();
     stops.forEach((stop) => stop()); observation(); arrivals.cancel();
-    waiter.dispose(); outbound.dispose(); actions.supersedePreparation();
-    cadWorkspace.setState(emptyCadWorkspace);
+    waiter.dispose(); outbound.dispose();
+    if (ingestAbortController.current) actions.supersedePreparation();
+    const { ingestError, ingestFailure, preparationIntent } = cadWorkspace.getSnapshot();
+    cadWorkspace.setState({ ...emptyCadWorkspace, ingestError, ingestFailure, preparationIntent });
   };
 }
 

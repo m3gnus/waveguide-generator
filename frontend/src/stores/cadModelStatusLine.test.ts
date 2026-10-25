@@ -33,7 +33,7 @@ function requestFor(job: JobItem): CadModelRequest {
 /** Words a user never reads (server/cadlink/wglink_protocol.py checks the same sentences). */
 const JARGON = ['$.', 'bundle', 'validation', 'wgi_', 'sha256', 'ingest', 'manifest', 'snapshot', 'BEM', 'cut plane',
   'physical group', 'Prepare simulation', 'CAD Link setup', 'needs preparation', 'Not prepared yet', 'No CAD geometry'];
-function expectPlain(line: CadModelStatusLine) {
+function expectNoJargon(line: CadModelStatusLine) {
   for (const word of JARGON) expect(`${line.text} ${line.short}`).not.toContain(word);
 }
 
@@ -55,7 +55,7 @@ describe('the CAD request states shared with Fusion', () => {
     const line = cadModelStatusLine(model, request);
     expect(line.action).toBe(row.wg.action);
     expect(line.text).toBe(row.wg.text);
-    expectPlain(line);
+    expectNoJargon(line);
   });
 });
 
@@ -74,13 +74,15 @@ describe('the CAD model status line', () => {
     expect(line(selected, { ...idle, ingesting: true })).toMatchObject({ text: 'Preparing Speaker…', action: 'none', tone: 'busy' });
     const ready = line(onScreen);
     expect(ready).toMatchObject({ text: 'Ready to solve · 3,035 triangles', short: 'ready · 3,035 triangles', action: 'solve', actionLabel: 'Solve' });
-    expectPlain(ready);
+    expectNoJargon(ready);
   });
 
-  it('offers the one Prepare of an unprepared model until preparation is automatic', () => {
-    expect(line(selected)).toMatchObject({ text: 'Speaker is not prepared yet.', action: 'prepare' });
+  it('prepares selected and changed models automatically without a Prepare action', () => {
+    expectNoJargon(line(selected));
+    expectNoJargon(line({ ...onScreen, needsIngest: true }));
+    expect(line(selected)).toMatchObject({ text: 'Preparing Speaker…', action: 'none' });
     expect(line(pointer)).toMatchObject({ action: 'none' });
-    expect(line({ ...onScreen, needsIngest: true })).toMatchObject({ text: 'Speaker changed since it was prepared.', action: 'prepare', actionLabel: 'Prepare again' });
+    expect(line({ ...onScreen, needsIngest: true })).toMatchObject({ text: 'Preparing Speaker…', action: 'none', actionLabel: null });
   });
 
   it('says Preparing, never "needs preparation", while the server prepares a stale model', () => {
@@ -101,7 +103,7 @@ describe('the CAD model status line', () => {
       message: 'This model meshes to 1 triangles', mesh_limit: { triangles: 54_739, limit: 22_000 } } } as unknown as JobItem;
     const held = line(selected, idle, { kind: 'waiting', job });
     expect(held).toMatchObject({ text: 'Speaker needs your choice: it meshes to 54,739 triangles (limit 22,000).', action: 'choose' });
-    expectPlain(held);
+    expectNoJargon(held);
     const ceiling: MeshCeilingChoice = { name: 'Speaker', nextStep: 'x', bundlePath: bundle.bundlePath, deferred: true,
       meshLimit: { triangles: 30_001, limit: 22_000 } };
     expect(line(selected, idle, null, ceiling).text).toBe('Speaker needs your choice: it meshes to 30,001 triangles (limit 22,000).');
@@ -110,7 +112,7 @@ describe('the CAD model status line', () => {
   it('fails calmly, with Try again only where it can work, and never also says not prepared', () => {
     const failed = line(selected, { ...idle, ingestError: 'stage 1 bundle validation: $.sources[x]' });
     expect(failed).toMatchObject({ text: 'Waveguide Generator could not prepare Speaker.', short: 'could not prepare', action: 'try-again' });
-    expectPlain(failed);
+    expectNoJargon(failed);
     expect(line(pointer, { ...idle, ingestError: 'x' })).toMatchObject({ action: 'none' });
   });
 
@@ -125,7 +127,7 @@ describe('the CAD model status line', () => {
     const recorded = line(selected, { ...idle, ingestError: 'Waveguide Generator could not prepare Speaker. This has been recorded for the developers.',
       ingestFailure: { recorded: true, retry: true, diagnostic: null } });
     expect(recorded.text).toContain('This has been recorded for the developers.');
-    for (const result of [full, newer, recorded]) expectPlain(result);
+    for (const result of [full, newer, recorded]) expectNoJargon(result);
   });
 
   it('words the top-bar chip for requests about other models', () => {

@@ -113,7 +113,7 @@ describe('StatusBar workspace modes', () => {
       workspaceModeStore.setMode('cad');
       useCadReturnStore.setState({ selectedBundle: { name: 'speaker.wgreturn', documentName: 'Speaker', readable: true } as never });
     });
-    expect(host.textContent).toContain('CAD model · not prepared');
+    expect(host.textContent).toContain('CAD model · preparing…');
     expect(host.textContent?.match(/CAD model ·/g)).toHaveLength(1);
     expect(host.textContent).not.toMatch(/ingest|CAD return|No solve plan|SOLVE BLOCKED/i);
   });

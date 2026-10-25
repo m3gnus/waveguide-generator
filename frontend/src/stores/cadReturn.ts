@@ -316,6 +316,20 @@ export function bundleIdentity(bundle: CadReturnBundle): string {
  * identical bundle reappears. */
 export const LISTING_GONE_REASON = 'The prepared return no longer appears in the workspace listing.';
 
+/**
+ * Whether WG prepares the selected model by itself (owner decision M1): a
+ * readable return from Fusion that has no current mesh. A return
+ * the listing has lost for now is left alone -- it heals by itself when the
+ * listing has it again -- and so is one WG cannot read, a recalled archived
+ * run (no return path) and a WG-native assembly, which nothing here prepares.
+ */
+export function preparesAutomatically(state: Pick<CadReturnState, 'selectedBundle' | 'needsIngest'>
+  & Partial<Pick<CadReturnState, 'ingestStaleReason'>>): boolean {
+  const bundle = state.selectedBundle;
+  return !!bundle && bundle.readable && bundle.bundlePath !== '' && (bundle.bundleOrigin ?? 'wglink') === 'wglink'
+    && state.needsIngest && state.ingestStaleReason !== LISTING_GONE_REASON;
+}
+
 /** Whether this bundle is one the workspace listing can speak about.
  *
  * A bundle recalled from an archived run is rebuilt from that run's ingest

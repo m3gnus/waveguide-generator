@@ -26,7 +26,7 @@ describe('selected CAD model state', () => {
   it('recognizes a CAD-authored selection without a preparation or document identity', () => {
     const model = selectCadModelState(selected, idle);
     expect(model).toMatchObject({ selected: true, label: 'Speaker', authoredInCad: true, lineageId: null, canPrepare: true });
-    expect(say(model).short).toBe('not prepared');
+    expect(say(model).short).toBe('preparing…');
     // A bundle naming the open WG design is that design's own return (linked).
     expect(selectCadModelState({ ...selected, selectedBundle: { ...bundle, designIds: ['design-a'] } }, idle, null, 'design-a').authoredInCad).toBe(false);
     // Naming a different WG design, or no open design, never brings parametric Open/Send back.

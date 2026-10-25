@@ -14,12 +14,17 @@ import {
 } from '../../api/cadlink';
 import { preferencesStore } from '../../prefs/preferences';
 import { useDocumentStore } from '../../stores/document';
-import { useCadReturnStore } from '../../stores/cadReturn';
+import { bundleIdentity, preparesAutomatically, useCadReturnStore } from '../../stores/cadReturn';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { resolvePreparationTarget } from './preparationTarget';
 import { meshCeilingChoice } from '../../stores/meshCeilingChoice';
 import type { CadIngestFailure } from '../../stores/cadWorkspace';
 import { reportCadAutomationError } from './caughtErrors';
+
+// A failed/questioned revision stays tried across owner remounts. A new model
+// choice or changed preparation input has a different key; explicit retries
+// bypass this guard. The server owns reuse across browser restarts.
+let attemptedPreparation: string | null = null;
 
 export interface RefreshOptions {
   background?: boolean;
@@ -212,7 +217,7 @@ export async function refreshCadReturnArrivals(
       initialChoiceOwed.current = false;
     }
     // Opening a project is the user's request for its model: its latest return
-    // is prepared, as a selection is. A launch restore never meshes.
+    // is prepared, as a selection is. The mounted owner also prepares launch restores.
     const openedProject = projectOpenPending.current && canChooseInitial && !!initial
       && !projectMismatch && opened === initial;
     if (projectOpenPending.current && canChooseInitial) {
@@ -244,9 +249,8 @@ export async function refreshCadReturnArrivals(
     } else if (initial) {
       if (openedProject) autoIngestSelected();
     } else {
-      // A restored choice is never meshed again in the background: it stays
-      // selected and not prepared until the user prepares it (or a retained
-      // preparation is reopened by its own owner), so a launch costs no mesh.
+      // Reconcile the restored choice. The mounted preparation owner observes
+      // it and reuses the server's cached preparation for unchanged inputs.
       const currentSelected = useCadReturnStore.getState().selectedBundle;
       if (!currentSelected) return;
       // The request pointer and its eventual retained mesh belong to Solve,
@@ -278,6 +282,16 @@ export function enterCadWorkspace(): void {
   workspaceNavigation.activate('geometry');
 }
 
+export interface CadPreparationOptions {
+  meshLimitOverride?: boolean;
+  /** Receipt display keeps its own ordering and verifies its accepted hash. */
+  isCurrent?(): boolean;
+  validate?(record: CadReturnIngestRecord): void;
+  onStarted?(intent: number, viewport: number): void;
+  onPrepared?(): void;
+  fetcher?: typeof fetch;
+}
+
 export interface CadArrivalActionsIntegration {
   ingestRequest: Ref<number>;
   ingestAbortController: Ref<AbortController | null>;
@@ -295,6 +309,8 @@ export interface CadArrivalActionsIntegration {
   enterCadWorkspace(): void;
   autoIngestSelected(): void;
   rereadDrivers(): void;
+  /** A receipt, retained-model open or Fusion job owns preparation/display. */
+  deferAutomaticPreparation(): boolean;
   onshapeInstanceId(): string | null;
   showIngestedMesh: typeof showIngestedMeshInViewport;
 }
@@ -313,7 +329,7 @@ export function createCadArrivalActions(
     setIngesting: noop, setIngestError: noop, setError: noop, setStatus: noop,
     setViewportNotice: noop, setBundles: noop, reportViewportNotice: noop,
     enterCadWorkspace, autoIngestSelected: noop, rereadDrivers: noop,
-    onshapeInstanceId: () => null,
+    deferAutomaticPreparation: () => false, onshapeInstanceId: () => null,
     showIngestedMesh: showIngestedMeshInViewport,
   };
   const adapter = { ...defaults, ...integration };
@@ -322,15 +338,27 @@ export function createCadArrivalActions(
     setViewportNotice, setBundles, reportViewportNotice, enterCadWorkspace: activateWorkspace,
     autoIngestSelected, rereadDrivers,
     onshapeInstanceId, showIngestedMesh } = adapter;
-  const ingestSelected = async (options: { meshLimitOverride?: boolean } = {}): Promise<CadReturnIngestRecord> => {
-    if (useCadReturnStore.getState().projectLineageId && !await waitForCadProjectSettings()) throw new Error('Model settings could not be loaded. Select the return again.');
+  const performIngest = async (options: CadPreparationOptions = {}): Promise<CadReturnIngestRecord> => {
+    const selection = useCadReturnStore.getState().captureSelectionIntent();
+    const documentLoad = currentDocumentLoad();
+    const settingsReady = !useCadReturnStore.getState().projectLineageId || await waitForCadProjectSettings();
+    if (!mounted.current || options.isCurrent?.() === false
+      || !useCadReturnStore.getState().isCurrentSelectionIntent(selection) || !isCurrentDocumentLoad(documentLoad)) {
+      throw new SupersededError('A newer model selection superseded preparation.');
+    }
+    if (!settingsReady) {
+      const message = 'Waveguide Generator could not load this model’s settings. Try again.';
+      if (mounted.current) setIngestError(message);
+      throw new Error(message);
+    }
     const current = useCadReturnStore.getState();
     if (!current.selectedBundle) throw new Error('Select a CAD return before preparing a simulation.');
     if (current.selectedBundle.bundleOrigin === 'native') throw new Error('Edit the native source assembly and prepare it again.');
     // This intent covers the ingest record itself. The viewport has a separate
     // token because its follow-up artifact fetch can be superseded independently.
+    const attempt = preparationKey();
+    attemptedPreparation = attempt;
     const ingestGeneration = current.beginIngestIntent();
-    const documentLoad = currentDocumentLoad();
     const request = ++ingestRequest.current;
     ingestAbortController.current?.abort();
     const abortController = new AbortController();
@@ -338,6 +366,7 @@ export function createCadArrivalActions(
     // Intent starts before the network request. A later viewport choice must
     // win even when this ingest's mesh fetch eventually completes.
     const viewportGeneration = importedMeshStore.beginIntent();
+    options.onStarted?.(ingestGeneration, viewportGeneration);
     setIngesting(true); setIngestError(null); setError(null); setStatus(null); setViewportNotice(null);
     meshCeilingChoice.clear();
     try {
@@ -360,13 +389,16 @@ export function createCadArrivalActions(
         symmetryMode: useCadReturnStore.getState().symmetryMode,
         // The user chose Solve anyway over the triangle ceiling for this model.
         ...(options.meshLimitOverride ? { meshLimitOverride: true } : {}),
-      }, fetcher, abortController.signal);
+      }, options.fetcher ?? fetcher, abortController.signal);
+      if (options.isCurrent?.() === false) throw new SupersededError('A newer model selection superseded preparation.');
+      options.validate?.(record);
       if (!isCurrentDocumentLoad(documentLoad)
         || !useCadReturnStore.getState().applyIngest(record, ingestGeneration)) {
         const superseded = 'Discarded a completed preparation because its selected return or design was superseded. Rebuild the mesh for the current state.';
         if (request === ingestRequest.current && mounted.current) setStatus(superseded);
         throw new SupersededError(superseded);
       }
+      options.onPrepared?.();
       if (request === ingestRequest.current && mounted.current) {
         const origin = current.selectedBundle.bundleOrigin === 'onshape' ? 'Onshape' : 'Fusion';
         setStatus(`Received ${current.selectedBundle.documentName || current.selectedBundle.name} from ${origin}.`);
@@ -381,15 +413,19 @@ export function createCadArrivalActions(
           record,
           current.selectedBundle.documentName || current.selectedBundle.name,
           reportViewportNotice,
-          fetcher,
+          options.fetcher ?? fetcher,
           viewportGeneration,
         );
       }
       return record;
     } catch (reason) {
-      if (reason instanceof SupersededError) throw reason;
+      if (reason instanceof SupersededError) {
+        if (attemptedPreparation === attempt) attemptedPreparation = null;
+        throw reason;
+      }
       if (!isCurrentDocumentLoad(documentLoad)
         || !useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) {
+        if (attemptedPreparation === attempt) attemptedPreparation = null;
         const superseded = 'Discarded a preparation response because its selected return or design was superseded. Rebuild the mesh for the current state.';
         if (request === ingestRequest.current && mounted.current) setStatus(superseded);
         throw new SupersededError(superseded);
@@ -434,6 +470,56 @@ export function createCadArrivalActions(
     }
   };
 
+  // Automatic work and explicit retries both use ingestSelected above. The
+  // model-choice token survives React remounts; input changes make a new key.
+  const preparationKey = () => {
+    const state = useCadReturnStore.getState();
+    return JSON.stringify([state.captureModelChoice(), state.selectedBundle?.bundleOrigin, state.selectedBundle?.bundlePath,
+      state.selectedBundle?.returnId ?? (state.selectedBundle ? bundleIdentity(state.selectedBundle) : null), state.meshSizes, state.skippedSourceIds,
+      state.areaDriftOverrides, state.symmetryMode, useDocumentStore.getState().identity?.designId]);
+  };
+  let inFlight: { key: string; override: boolean; promise: Promise<CadReturnIngestRecord> } | null = null;
+  const ingestSelected = (options: CadPreparationOptions = {}): Promise<CadReturnIngestRecord> => {
+    const key = preparationKey();
+    const override = options.meshLimitOverride === true;
+    if (inFlight?.key === key && inFlight.override === override) return inFlight.promise;
+    const promise = performIngest(options);
+    const entry = { key, override, promise };
+    inFlight = entry;
+    void promise.finally(() => { if (inFlight === entry) inFlight = null; }).catch(() => undefined);
+    return promise;
+  };
+  let automaticTimer: ReturnType<typeof setTimeout> | null = null;
+  let automaticQueued = false;
+  let automaticRunning = false;
+  const requestAutomaticPreparation = () => {
+    const selected = useCadReturnStore.getState();
+    if (!preparesAutomatically(selected)) return;
+    // A fresh version takes priority over a stale model's edit debounce.
+    if (automaticTimer !== null && !selected.ingestRecord) cancelAutomaticPreparation();
+    if (automaticQueued || !mounted.current) return;
+    automaticQueued = true;
+    const evaluate = () => {
+      automaticQueued = false;
+      automaticTimer = null;
+      const state = useCadReturnStore.getState();
+      if (!mounted.current || automaticRunning || ingestAbortController.current || adapter.deferAutomaticPreparation()
+        || !preparesAutomatically(state) || attemptedPreparation === preparationKey()) return;
+      automaticRunning = true;
+      attemptedPreparation = preparationKey();
+      void ingestSelected().catch(() => undefined).finally(() => {
+        automaticRunning = false;
+        requestAutomaticPreparation();
+      });
+    };
+    if (useCadReturnStore.getState().ingestRecord) automaticTimer = setTimeout(evaluate, 400);
+    else queueMicrotask(evaluate);
+  };
+  const cancelAutomaticPreparation = () => {
+    if (automaticTimer !== null) clearTimeout(automaticTimer);
+    automaticTimer = null;
+    automaticQueued = false;
+  };
   const supersedePreparation = () => {
     useCadReturnStore.getState().beginIngestIntent();
     importedMeshStore.beginIntent();
@@ -549,7 +635,7 @@ export function createCadArrivalActions(
     }
   };
 
-  return { ingestSelected, selectBundleAs, returnFromOnshape, supersedePreparation };
+  return { ingestSelected, selectBundleAs, returnFromOnshape, supersedePreparation, requestAutomaticPreparation, cancelAutomaticPreparation };
 }
 
 /** Create a listing reader with its own revision cursor and request fence.

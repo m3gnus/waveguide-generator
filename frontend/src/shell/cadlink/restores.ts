@@ -7,17 +7,19 @@ import {
   useCadReturnStore,
   type DriverBaseUpdate,
 } from '../../stores/cadReturn';
+import { useDocumentStore } from '../../stores/document';
 import { currentDocumentLoad, isCurrentDocumentLoad, subscribeRevision } from '../../stores/design';
 import { useDriverLibraryStore } from '../../stores/driverLibrary';
 import { durableSettings } from '../../stores/durableSettings';
 import type { LastModel } from '../../stores/lastModel';
+import type { PreparedSummary } from '../../api/importedModels';
 import { preferencesStore } from '../../prefs/preferences';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { cadProjectName, listCadProjects, newestReturnForProject } from '../../api/cadProjects';
-import { enterCadWorkspace, type RefreshOptions } from './arrivals';
+import { enterCadWorkspace, returnBelongsToAnotherProject, type RefreshOptions } from './arrivals';
 import { showIngestedMeshInViewport } from './artifactLoader';
-import { isCurrentOpen, registerImportedView, reopenLastModel, type ImportedView } from '../../stores/importedModel';
+import { isCurrentOpen, openImported, registerImportedView, reopenLastModel, type ImportedView } from '../../stores/importedModel';
 import { restoreCadProjectSettings, resetCadProjectSettingsLoad, hasCadDraftForModel, migrateCadProfiles } from '../../stores/cadProjectSettings';
 import { cadHistorySetup } from '../../stores/cadSetupRestore';
 import { seedImportedSolveOptionsFromParametric } from '../../stores/solveOptions';
@@ -85,7 +87,7 @@ export const cadImportedView: ImportedView = {
     const keepPrepared = preparedId && useCadReturnStore.getState().ingestRecord?.ingest_id === preparedId
       && importedMeshStore.getSnapshot().cad?.ingestId === preparedId;
     useCadReturnStore.setState({ ...(!keepPrepared ? { ingestRecord: null } : {}), needsIngest: true,
-      ingestStaleReason: 'Loading the selected run’s retained setup.' });
+      ingestStaleReason: null });
     reportStatus(`Loading ${displayName}${from}…`);
     // The open's own generation fences this too: an open of the other input
     // (a file) never touches CAD's ingest intent, and must still win.
@@ -230,7 +232,7 @@ export function observeLastModel({
   let running = false;
   const tried = new Set<string>();
   const blocked = () => !active || refusedForeignReturn.current || jobLinkPending();
-  const openUnsolved = async (pointer: LastModel): Promise<boolean> => {
+  const openUnsolved = async (pointer: LastModel, prepared: PreparedSummary): Promise<boolean> => {
     if (!selectBundle || preferencesStore.getSnapshot().cadApplication === 'onshape') return false;
     const selection = useCadReturnStore.getState().captureIngestIntent();
     const documentLoad = currentDocumentLoad();
@@ -247,7 +249,26 @@ export function observeLastModel({
       reportStatus('The last CAD project has no return to show yet. Pull one from CAD.');
       return false;
     }
-    // Never solved: no setup to restore, so the return opens on defaults like any new selection.
+    if (returnBelongsToAnotherProject(bundle, useDocumentStore.getState().identity?.designId)) {
+      selectBundle(bundle, project.lineageId);
+      return false;
+    }
+    // A never-solved model still has its prepared record. Reopen that record
+    // when the immutable return identity agrees; the existing retained-model
+    // owner restores its sizes, defaults and viewport without meshing again.
+    if (bundle.returnId) {
+      const retained = await getIngest(prepared.ingest_id, fetcher).catch((error: unknown) => {
+        if (error instanceof CadLinkApiError && error.status === 404) return null;
+        throw error;
+      });
+      if (!empty()) return false;
+      if (retained?.return_id === bundle.returnId && retained.manifest_sha256 === prepared.manifest_sha256
+        && retained.artifact_sha256 === prepared.artifact_sha256) {
+        return openImported({ kind: 'model', modelId: pointer.model_id, preparedId: prepared.ingest_id,
+          useEnginePreference: true }, fetcher);
+      }
+    }
+    // A different revision needs the same automatic preparation as a selection.
     selectBundle(bundle, project.lineageId);
     // A foreign return is refused by the selection itself, which shows why.
     if (refusedForeignReturn.current) return false;
