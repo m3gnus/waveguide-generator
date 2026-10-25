@@ -155,7 +155,7 @@ describe('CadLinkPanel', () => {
     const { emptyCadWorkspace } = await import('../stores/cadWorkspace');
     cadWorkspace.setState({ ...emptyCadWorkspace, loading: false, fusionStatus: closedFusion }, true);
     workspaceModeStore.setMode('cad');
-    const calm = 'WG could not prepare Speaker. This has been recorded for the developers.';
+    const calm = 'Waveguide Generator could not prepare Speaker. This has been recorded for the developers.';
     const failed = cadJobFixture({
       operationId: 'cmd-pointer', kind: 'prepare_and_solve', state: 'needs_user_input', stage: 'validating',
       reason: 'preparation_failed', message: calm, jobId: null, snapshot: null,

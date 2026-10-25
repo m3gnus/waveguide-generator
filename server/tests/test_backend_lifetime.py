@@ -266,6 +266,14 @@ def test_delivery_loop_honours_hold_and_counts_in_flight_work(tmp_path, monkeypa
         monkeypatch.setattr(api, "addin_inbox_session_signature", lambda _root: None)
         monkeypatch.setattr(api, "_preparation_context", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(api, "run_delivery_pass", delivery_pass)
+        published = []
+
+        async def publish_status(_state, reported):
+            # The request-status step runs on every pass, retiring or not.
+            published.append(hold.held)
+            return reported
+
+        monkeypatch.setattr(api, "_publish_request_status", publish_status)
         await api._deliver_solve_commands(app)()
         task = state.cad_delivery_task
         try:
@@ -289,6 +297,7 @@ def test_delivery_loop_honours_hold_and_counts_in_flight_work(tmp_path, monkeypa
             # The pass is over either way; only work the runtime holds counts now.
             assert not state.cad_delivery_in_flight()
             assert await tracker.holds_work() is (not pass_fails)
+            assert published[:2] == [True, True]  # published while retiring, too
             runtime._prep_running.clear()
             assert not await tracker.holds_work()
             resume.put_nowait(True)

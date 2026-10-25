@@ -257,7 +257,7 @@ def test_valid_bundle_with_unresolvable_source_reports_internal_stage(bundle, tm
     assert report["outcome"] == "refused"
     assert report["refusal"]["code"] == "preparation_failed"
     # The job keeps WG's calm words; the replay reports the recorded raw detail.
-    assert report["refusal"]["message"].startswith("WG could not prepare ")
+    assert report["refusal"]["message"].startswith("Waveguide Generator could not prepare ")
     assert "stage 5" in report["refusal"]["detail"]
     ingest = next(stage for stage in report["stages"] if stage["stage"] == "ingest")
     assert ingest["exception"]["stage"] == "stage 5 role resolution"

@@ -214,7 +214,7 @@ export function currentModelStatus(model: CurrentModel, jobs: readonly JobItem[]
   // A failed preparation is told calmly, in the server's words, never as a refusal.
   if (job && isFailedCadPreparation(job)) return {
     kind: 'prepare-failed' as const, job,
-    message: [state?.message, state?.next_step].filter(Boolean).join(' ') || 'WG could not prepare this model.',
+    message: [state?.message, state?.next_step].filter(Boolean).join(' ') || 'Waveguide Generator could not prepare this model.',
   };
   if (state?.state === 'rejected' || state?.state === 'needs_user_input') return {
     kind: 'refused' as const, job, message: state.message || state.reason || job?.error_message || 'Solve refused.',

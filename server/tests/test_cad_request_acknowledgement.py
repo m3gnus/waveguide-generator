@@ -498,9 +498,9 @@ def test_acknowledgements_past_their_retention_are_pruned_and_the_folder_is_boun
     os.utime(stale_temp, (base, base))
 
     # Nothing is old yet.
-    assert prune_acknowledgements(data_dir, now=base + 10, retention_seconds=100) == 0
-    # cmd-0 and cmd-1 and the temp file are past retention.
-    assert prune_acknowledgements(data_dir, now=base + 101.5, retention_seconds=100) == 3
+    assert prune_acknowledgements(data_dir, now=base + 10, retention_seconds=100, staging_retention_seconds=100) == 0
+    # cmd-0 and cmd-1 (receipts that never got a status) and the temp file are past retention.
+    assert prune_acknowledgements(data_dir, now=base + 101.5, retention_seconds=100, staging_retention_seconds=100) == 3
     assert sorted(p.name for p in folder.iterdir()) == ["cmd-2.json", "cmd-3.json"]
     # The cap drops the oldest first.
     assert prune_acknowledgements(data_dir, now=base + 102, retention_seconds=100, max_files=1) == 1

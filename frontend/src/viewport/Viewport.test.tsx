@@ -165,9 +165,9 @@ describe('CAD viewport empty-state copy', () => {
     expect(cadViewportEmptyCopy({ ...pointer, phase: 'preparing' }).title).toBe('Preparing Tritonia…');
     expect(cadViewportEmptyCopy({ ...pointer, phase: 'waiting' }).title).toBe('Tritonia is waiting for you');
     const failed = cadViewportEmptyCopy({ ...pointer, phase: 'prepare-failed',
-      failureMessage: 'WG could not prepare Tritonia. This has been recorded for the developers.' });
+      failureMessage: 'Waveguide Generator could not prepare Tritonia. This has been recorded for the developers.' });
     expect(failed).toEqual({ title: 'Tritonia is not prepared',
-      detail: 'WG could not prepare Tritonia. This has been recorded for the developers.' });
+      detail: 'Waveguide Generator could not prepare Tritonia. This has been recorded for the developers.' });
     expect(cadViewportEmptyCopy({ ...pointer, phase: 'selected-unprepared' }).title).toBe('No CAD geometry yet');
   });
 

@@ -11,6 +11,7 @@ from collections.abc import Mapping
 import hashlib
 from typing import Any, Literal
 
+from server.cadlink.wglink_protocol import APP_NAME, MESH_TOO_LARGE_CODE, could_not_prepare_text
 from server.contracts.canonical import canonical_utf8_strict_json as canonical_json
 from server.mesh.errors import SolverMemoryTooLarge
 
@@ -111,7 +112,7 @@ REASON_CODES: Mapping[str, str] = {
     # Never solved along another axis instead: send the whole model.
     "reduced_axis_not_allowed": NEEDS_USER_INPUT,
     "preparation_failed": NEEDS_USER_INPUT,
-    "mesh_too_large": NEEDS_USER_INPUT,
+    MESH_TOO_LARGE_CODE: NEEDS_USER_INPUT,
     # The solver's dense memory guard refused the mesh (after Solve anyway):
     # the user can only send a coarser mesh. A calm failure, never a hold.
     "solver_memory_exceeded": NEEDS_USER_INPUT,
@@ -149,7 +150,7 @@ REASON_CODES: Mapping[str, str] = {
 #: They end as a calm failed preparation ("WG could not prepare ..."), with the
 #: raw detail recorded for developers, never as a "Waiting for you" hold.
 INTERNAL_FAILURE_CODES = frozenset(
-    {"preparation_failed", "submission_refused", "interrupted", "snapshot_invalid"}
+    {"preparation_failed", "submission_refused", "snapshot_invalid"}
 )
 #: Failed preparations the user can act on: each says what to change, in its
 #: own words and with one next step, and offers Try again only where trying
@@ -157,11 +158,15 @@ INTERNAL_FAILURE_CODES = frozenset(
 #: ``model_cut_unsolvable`` is one too, but keeps its stored words.
 USER_ACTION_CODES = frozenset(
     {"snapshot_changed", "return_unavailable", "wglink_folder_unset",
-     "excitation_refused", "solver_memory_exceeded", "reduced_axis_not_allowed"}
+     "excitation_refused", "solver_memory_exceeded", "reduced_axis_not_allowed",
+     # WG stopped (quit, crash, restart) while preparing: nothing failed,
+     # nothing is recorded, and Solve prepares it again.
+     "interrupted"}
 )
-#: The only real questions: choices only the user can make, asked in WG's
-#: pop-up. Every other kept reason asks nothing (``reason_attention``).
-QUESTION_CODES = frozenset({"mesh_too_large", "setup_required", "findings_need_review"})
+#: The failures whose words a user reads, in Fusion too: WG's own sentence and
+#: next step for each. Every other failure reads as WG's recorded failure.
+USER_WORDED_FAILURE_CODES = USER_ACTION_CODES | {"model_cut_unsolvable"}
+QUESTION_CODES = frozenset({MESH_TOO_LARGE_CODE, "setup_required", "findings_need_review"})
 #: Prepared and kept, waiting only for the user to press Solve: never a
 #: question, never a failure. Clear failed keeps it; Solve continues it with
 #: the same prepared mesh.
@@ -201,7 +206,7 @@ def effective_reason_code(code: Any, message: Any) -> str:
 
     text = str(code or "")
     if text == "preparation_failed" and str(message or "").startswith(_MESH_CEILING_PREFIX):
-        return "mesh_too_large"
+        return MESH_TOO_LARGE_CODE
     return text
 
 
@@ -246,10 +251,9 @@ def axis_not_allowed_message(document_name: Any, axis: str) -> str:
 
 
 def internal_failure_message(document_name: Any) -> str:
-    """The one sentence a user sees for an internal preparation failure."""
+    """The one sentence a user sees for an internal preparation failure (the protocol's)."""
 
-    name = str(document_name or "").strip() or "this model"
-    return f"WG could not prepare {name}. This has been recorded for the developers."
+    return could_not_prepare_text(str(document_name or "").strip() or None)
 
 
 def preparation_failure(
@@ -271,6 +275,9 @@ def preparation_failure(
     if code == "solver_memory_exceeded":
         return {"code": code, "message": SolverMemoryTooLarge.user_message(document_name),
                 "next_step": SolverMemoryTooLarge.NEXT_STEP, "options": [dismiss]}
+    if code == "interrupted":
+        return {"code": code, "message": f"Preparing {name} stopped when {APP_NAME} closed.",
+                "next_step": "Press Solve to prepare it again.", "options": [retry, dismiss]}
     if code == "snapshot_changed":
         return {"code": code, "message": f"{name} changed after Fusion asked WG to solve it.",
                 "next_step": "Send it again from Fusion.", "options": [dismiss]}
@@ -346,7 +353,7 @@ def hold_details(code: str, message: str) -> dict[str, Any]:
 
     choice_code = effective_reason_code(code, message)
     action, label, next_step = {
-        "mesh_too_large": ("solve_anyway", "Solve anyway", MESH_CEILING_NEXT_STEP + " You can also solve anyway."),
+        MESH_TOO_LARGE_CODE: ("solve_anyway", "Solve anyway", MESH_CEILING_NEXT_STEP + " You can also solve anyway."),
         "setup_required": ("review", "Review settings", "Review this model's solve settings, then solve."),
         "findings_need_review": ("review", "Review model", "Review this model's preparation before solving."),
         "engine_unavailable": ("review", "Review solve", "Open Results to prepare the solve engine."),
@@ -636,6 +643,7 @@ __all__ = [
     "INTERNAL_FAILURE_CODES",
     "KINDS",
     "MESH_CEILING_NEXT_STEP",
+    "MESH_TOO_LARGE_CODE",
     "MUTATING_KINDS",
     "NEEDS_USER_INPUT",
     "PREPARE_AND_SOLVE",
@@ -660,6 +668,7 @@ __all__ = [
     "TERMINAL_STATES",
     "UPDATE_LINK",
     "USER_ACTION_CODES",
+    "USER_WORDED_FAILURE_CODES",
     "canonical_json",
     "check_transition",
     "fusion_mutation_precheck",

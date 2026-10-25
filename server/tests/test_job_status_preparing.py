@@ -457,9 +457,10 @@ def test_the_runtime_start_settles_a_preparing_row_a_lane_held(tmp_path: Path) -
 
     status, message = asyncio.run(scenario())
     assert status == "error"
-    # An interrupted preparation reads in WG's calm words, never the stored text.
+    # An interrupted preparation reads in WG's calm words, never the stored text,
+    # and never as WG's own failure: WG stopped, nothing was recorded.
     assert CAD_INTERRUPTED_MESSAGE
-    assert message == "WG could not prepare this model. This has been recorded for the developers."
+    assert message == "Preparing this model stopped when Waveguide Generator closed."
 
 
 # --- runtime and HTTP consumers ---------------------------------------------------

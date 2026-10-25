@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/m3gnus/wglink.git",
-  "commit": "0888f0691d177f9c61b023172225a60d91f0071e",
+  "commit": "1199efb98bac89177d2dc752928df832549e96ea",
   "path": "fusion-addins/WGLink/wglink_protocol.py",
-  "sha256": "eb088478d7a9a629150fe071bd1d93c21f39e3d34b5de7d1732b224031bac579",
-  "note": "WGLink main 8616a7c plus the wg-request-status contract."
+  "sha256": "9313e90d3c0119aac3497af96e76ec9cf23cf8b9ee83c874cfe119490c2572fa",
+  "note": "WGLink main 8616a7c plus the wg-request-status contract (0888f06, 1199efb)."
 }

@@ -52,7 +52,7 @@ from cad_backends import (
     backend_free,
 )
 
-CALM_PREFIX = "WG could not prepare "
+CALM_PREFIX = "Waveguide Generator could not prepare "
 #: A return or copy WG cannot read: the user sends it again (or tries again).
 UNREADABLE_PREFIX = "WG cannot read the copy of "
 

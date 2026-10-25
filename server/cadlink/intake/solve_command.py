@@ -58,7 +58,9 @@ from server.cadlink.wglink_protocol import (
     REQUEST_STATUS_SUFFIX,
     SOLVE_COMMAND_SCHEMA_VERSION,
     WG_REQUEST_SCHEMA_VERSION,
+    request_status_known,
     request_status_terminal,
+    validate_request_status,
 )
 from server.platform.json_file import write_json_atomic
 from server.platform.private_paths import ensure_private_directory
@@ -166,14 +168,18 @@ SOLVE_ACKS_DIRECTORY = ".wg-solve-acks"
 ACK_SCHEMA_VERSION = 1
 ACK_ACCEPTED = "accepted"
 ACK_REFUSED = "refused"
-# An acknowledgement is kept this long after it was written, then pruned; the
-# folder never holds more than ACK_MAX_FILES (oldest go first).
+# A staging file left behind is pruned this long after it was written; the
+# folder never holds more than ACK_MAX_FILES entries (oldest go first).
 ACK_RETENTION_SECONDS = 24 * 3600
 ACK_MAX_FILES = 500
 # A request's status file (``request_status``) is kept this long after its last
 # write once the request is finished, and never while it is under way; its
-# receipt is kept with it.
+# receipt is kept with it. A receipt still waiting for its first status, and a
+# status whose receipt is gone, are kept as long.
 REQUEST_STATUS_RETENTION_SECONDS = 14 * 24 * 3600
+# A status in a state this WG does not know (a newer WG wrote it) is kept at
+# most this long, finished or not.
+REQUEST_STATUS_UNKNOWN_STATE_SECONDS = 30 * 24 * 3600
 # An acknowledgement that cannot be written keeps its claim for this many passes
 # (about half a minute at the loop's cadence). Then WG gives it up, once and
 # loudly, and consumes the request: the operation was made durable first, and a
@@ -869,20 +875,30 @@ def prune_acknowledgements(
     data_dir: Path,
     *,
     now: float | None = None,
-    retention_seconds: float = ACK_RETENTION_SECONDS,
+    retention_seconds: float = REQUEST_STATUS_RETENTION_SECONDS,
     max_files: int = ACK_MAX_FILES,
     status_retention_seconds: float = REQUEST_STATUS_RETENTION_SECONDS,
+    staging_retention_seconds: float = ACK_RETENTION_SECONDS,
+    unknown_state_seconds: float = REQUEST_STATUS_UNKNOWN_STATE_SECONDS,
 ) -> int:
     """Delete acknowledgements past their retention, then the oldest above the cap.
 
     A request's receipt and its status file (``<id>.status.json``) are one
-    entry, kept or deleted together. While the status says the request is not
-    finished (``request_status_terminal``) neither is ever deleted; a finished
-    one is kept ``status_retention_seconds`` from its last write. A receipt
-    without a status, and a stale staging file, keep the receipt rule,
-    ``retention_seconds``. At most ``max_files`` entries remain, the oldest
-    finished ones going first. Returns how many files were removed. A file that
-    cannot be deleted now (held by a reader on Windows) is left for the next prune.
+    entry, kept or deleted together, aged by the newer of the two:
+
+    - a status in a state still under way keeps both for as long as it stays
+      so; one in a state this WG does not know, at most
+      ``unknown_state_seconds``;
+    - a finished, unreadable or invalid status keeps both
+      ``status_retention_seconds``;
+    - a receipt still waiting for its first status keeps ``retention_seconds``;
+      a status whose receipt is gone, ``status_retention_seconds``;
+    - a staging file (a name starting with ".") keeps ``staging_retention_seconds``.
+
+    Above ``max_files`` entries, the oldest that may go go first; a request
+    under way never does. Returns how many files were removed. A file that
+    cannot be deleted now (held by a reader on Windows) is left for the next
+    prune. Never raises for one bad entry.
     """
 
     directory = Path(data_dir) / IPC_SUBDIRECTORY / SOLVE_ACKS_DIRECTORY
@@ -906,17 +922,22 @@ def prune_acknowledgements(
             entries.setdefault(key, []).append((modified, entry))
     except OSError:
         return 0
-    ordered = sorted(entries.values(), key=lambda files: max(item[0] for item in files))
+    ordered = sorted(entries.items(), key=lambda item: max(when for when, _ in item[1]))
     excess = max(0, len(ordered) - max_files)
     removed = 0
-    for files in ordered:
-        modified = max(item[0] for item in files)
-        status = next((path for _, path in files if path.name.endswith(REQUEST_STATUS_SUFFIX)), None)
-        retention = status_retention_seconds if status is not None else retention_seconds
-        if excess <= 0 and now - modified <= retention:
+    for key, files in ordered:
+        try:
+            age = now - max(when for when, _ in files)
+            retention = _entry_retention(
+                key, [path for _, path in files],
+                receipt_seconds=retention_seconds, status_seconds=status_retention_seconds,
+                staging_seconds=staging_retention_seconds, unknown_seconds=unknown_state_seconds,
+            )
+        except Exception:  # noqa: BLE001 - one bad entry never stops the prune
+            logger.debug("Could not judge the acknowledgement %s for pruning.", key, exc_info=True)
             continue
-        if status is not None and not _status_finished(status):
-            continue  # a request still under way keeps its receipt and its status
+        if retention is None or (excess <= 0 and age <= retention):
+            continue
         excess -= 1
         for _, path in files:
             try:
@@ -927,14 +948,30 @@ def prune_acknowledgements(
     return removed
 
 
-def _status_finished(path: Path) -> bool:
-    """Whether a status file says its request is finished; an unreadable one is."""
+def _entry_retention(
+    key: str, files: list[Path], *, receipt_seconds: float, status_seconds: float,
+    staging_seconds: float, unknown_seconds: float,
+) -> float | None:
+    """How long one entry is kept; None while its request is under way (never pruned)."""
 
+    if key.startswith("."):
+        return staging_seconds
+    status = next((path for path in files if path.name.endswith(REQUEST_STATUS_SUFFIX)), None)
+    receipt = next((path for path in files if not path.name.endswith(REQUEST_STATUS_SUFFIX)), None)
+    if status is None:
+        return receipt_seconds  # waiting for its first status
+    if receipt is None:
+        return status_seconds  # an orphan: nothing can follow it any more
     try:
-        record = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(status.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return True
-    return not isinstance(record, Mapping) or request_status_terminal(record)
+        value = None
+    record = validate_request_status(value, request_id=key)
+    if record is None or request_status_terminal(record):
+        return status_seconds
+    if not request_status_known(record):
+        return unknown_seconds
+    return None
 
 
 _last_ack_prune = 0.0

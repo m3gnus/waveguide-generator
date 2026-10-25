@@ -1522,23 +1522,80 @@ REQUEST_STATUS_CANCEL_REASONS = ("stopped", "replaced", "dismissed")
 #: ``cutModel``: the model was solved as cut in CAD, no further symmetry;
 #: ``healed``: WG repaired the mesh before solving.
 REQUEST_STATUS_NOTICES = ("fullModel", "cutModel", "healed")
-#: The prompt code whose remedy is a Fusion action (Sources & Mesh...).
+#: The reason code of the triangle ceiling: WG stores it, and a prompt carrying
+#: it also offers Sources & Mesh... in Fusion. The one spelling of it.
 MESH_TOO_LARGE_CODE = "mesh_too_large"
+#: The name user text gives the application, everywhere.
+APP_NAME = "Waveguide Generator"
 _STATUS_KINDS = ("prepare_and_solve", "receive_snapshot")
 _STATUS_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
-_STATUS_TEXT_LIMIT = 1000
+_STATUS_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+_STATUS_TEXT_LIMIT = 500
+_STATUS_INT_LIMIT = 2 ** 63
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]+")
+
+#: Words no user-visible text may contain (matched case-insensitively, as
+#: whole words): transport, storage and pipeline vocabulary, exception words
+#: and raw role constants. Tests in both repositories hold every user string
+#: to it, and status text drops any WG sentence that trips it.
+USER_TEXT_FORBIDDEN_TERMS = (
+    "bundle", "wgreturn", "cad return", "manifest", "schema", "request id",
+    "return id", "inbox", "ipc", "acknowledgement", "selector", "entity_token",
+    "traceback", "exception", "main thread", "gate", "ingest", "operation",
+    "lineage", "finding", "PASSIVE_CARDIOID", "UTF-8", "refused", "failed",
+    "error",
+)
+
+
+def user_text_violations(text: str) -> list[str]:
+    """The forbidden terms (``USER_TEXT_FORBIDDEN_TERMS``) a user string contains."""
+
+    lowered = str(text).lower()
+    return [term for term in USER_TEXT_FORBIDDEN_TERMS
+            if re.search(r"(?<![a-z0-9_])" + re.escape(term.lower()) + r"(?![a-z0-9_])", lowered)]
+
+
+def could_not_prepare_text(document_name: object) -> str:
+    """The one sentence for WG's own failure to prepare a model (WG's UI and Fusion)."""
+
+    name = _status_text(document_name) or "this model"
+    return f"{APP_NAME} could not prepare {name}. This has been recorded for the developers."
 
 
 def _status_int(value: object, *, minimum: int = 0) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < minimum or value >= _STATUS_INT_LIMIT:
         return None
     return value
 
 
-def _status_text(value: object) -> str | None:
-    if not isinstance(value, str) or not value.strip():
+def _status_number(value: object) -> float | None:
+    """A finite number, or None (never raises, however large the value)."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return value.strip()[:_STATUS_TEXT_LIMIT]
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _status_text(value: object) -> str | None:
+    """Text without control characters, bounded; None when there is none."""
+
+    if not isinstance(value, str):
+        return None
+    cleaned = _CONTROL_CHARACTERS.sub(" ", value).strip()
+    return cleaned[:_STATUS_TEXT_LIMIT] or None
+
+
+def _user_words(value: object) -> str | None:
+    """A WG sentence a user may read, or None when it has none or trips the guard."""
+
+    text = _status_text(value)
+    return None if text is None or user_text_violations(text) else text
 
 
 def _status_choice(value: object, choices: Sequence[str]) -> str | None:
@@ -1548,12 +1605,10 @@ def _status_choice(value: object, choices: Sequence[str]) -> str | None:
 def _status_progress(value: object) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
-    fraction = value.get("fraction")
-    if isinstance(fraction, bool) or not isinstance(fraction, (int, float)):
+    fraction = _status_number(value.get("fraction"))
+    if fraction is None or not 0.0 <= fraction <= 1.0:
         return None
-    if not math.isfinite(fraction) or not 0.0 <= fraction <= 1.0:
-        return None
-    progress: dict[str, Any] = {"fraction": float(fraction)}
+    progress: dict[str, Any] = {"fraction": fraction}
     frequency = value.get("frequency")
     if isinstance(frequency, Mapping):
         done = _status_int(frequency.get("done"))
@@ -1573,57 +1628,54 @@ def _status_prompt(value: object) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
     options = []
-    for option in value.get("options") or []:
+    found = value.get("options")
+    for option in found if isinstance(found, list) else []:
         if isinstance(option, Mapping):
-            option_id, label = _status_text(option.get("id")), _status_text(option.get("label"))
+            option_id, label = _status_text(option.get("id")), _user_words(option.get("label"))
             if option_id and label:
                 options.append({"id": option_id, "label": label})
+    code = value.get("code")
     return {
-        "code": _status_text(value.get("code")),
-        "nextStep": _status_text(value.get("nextStep")),
+        "code": code if isinstance(code, str) and _STATUS_CODE.fullmatch(code) else None,
+        "nextStep": _user_words(value.get("nextStep")),
         "options": options,
         "answerIn": "wg",
     }
 
 
 def _status_job(value: object) -> dict[str, Any] | None:
-    if not isinstance(value, Mapping) or not _status_text(value.get("jobId")):
+    if not isinstance(value, Mapping):
         return None
-    return {"jobId": _status_text(value.get("jobId")),
-            "runNumber": _status_int(value.get("runNumber"), minimum=1)}
+    job_id = value.get("jobId")
+    if not isinstance(job_id, str) or not _STATUS_ID.fullmatch(job_id):
+        return None
+    return {"jobId": job_id, "runNumber": _status_int(value.get("runNumber"), minimum=1)}
 
 
 def _status_mesh(value: object) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
     triangles = _status_int(value.get("trianglesSolved"), minimum=1)
-    fraction = value.get("solvedFraction")
-    if triangles is None or isinstance(fraction, bool) or not isinstance(fraction, (int, float)):
+    fraction = _status_number(value.get("solvedFraction"))
+    if triangles is None or fraction is None or not 0.0 < fraction <= 1.0:
         return None
-    if not math.isfinite(fraction) or not 0.0 < fraction <= 1.0:
-        return None
-    return {"trianglesSolved": triangles, "solvedFraction": float(fraction),
+    return {"trianglesSolved": triangles, "solvedFraction": fraction,
             "domainKind": _status_choice(value.get("domainKind"), _addin_DOMAIN_KINDS)}
 
 
 def _status_failure(value: object) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
-    return {"recorded": value.get("recorded") is True,
-            "message": _status_text(value.get("message")),
-            "nextStep": _status_text(value.get("nextStep"))}
+    failure: dict[str, Any] = {"recorded": value.get("recorded") is True}
+    if not failure["recorded"]:
+        # WG's own words for what the user can do; never shown beside a
+        # failure WG recorded, and dropped when they read as internal detail.
+        failure.update(message=_user_words(value.get("message")),
+                       nextStep=_user_words(value.get("nextStep")))
+    return failure
 
 
-def validate_request_status(value: object, *, request_id: str | None = None) -> dict[str, Any] | None:
-    """A status record as its reader may use it, or None when it is not one.
-
-    None: not a mapping, another contract or version, an id that is not a
-    plain request id, another request's ids, or no state. Unknown fields are
-    dropped and malformed optional fields read as absent, so a newer WG stays
-    readable. A state this reader does not know is kept as it is:
-    ``request_status_text`` says to open WG for it, and it reads as under way.
-    """
-
+def _validate_request_status(value: object, request_id: str | None) -> dict[str, Any] | None:
     if not isinstance(value, Mapping) or value.get("contract") != REQUEST_STATUS_CONTRACT:
         return None
     if _status_int(value.get("schemaVersion"), minimum=1) != REQUEST_STATUS_SCHEMA_VERSION:
@@ -1633,11 +1685,12 @@ def validate_request_status(value: object, *, request_id: str | None = None) -> 
         return None
     if request_id is not None and found != request_id:
         return None
-    if value.get("operationId", found) != found:
+    operation_id = value.get("operationId", found)
+    if not isinstance(operation_id, str) or operation_id != found:
         return None
-    state = _status_text(value.get("state"))
+    state = value.get("state")
     seq = _status_int(value.get("seq"))
-    if state is None or seq is None:
+    if not isinstance(state, str) or not _STATUS_CODE.fullmatch(state.lower()) or seq is None:
         return None
     record: dict[str, Any] = {
         "contract": REQUEST_STATUS_CONTRACT,
@@ -1669,51 +1722,68 @@ def validate_request_status(value: object, *, request_id: str | None = None) -> 
     return record
 
 
-def request_status_terminal(record: Mapping[str, Any]) -> bool:
-    """Whether nothing more happens to the request unless someone acts."""
+def validate_request_status(value: object, *, request_id: str | None = None) -> dict[str, Any] | None:
+    """A status record as its reader may use it, or None when it is not one.
 
-    return record.get("state") in REQUEST_STATUS_TERMINAL
+    None: not a mapping, another contract or version, an id that is not a
+    plain request id, another request's ids, or no state or seq. Unknown
+    fields are dropped, malformed optional fields read as absent, text loses
+    its control characters and is bounded, and a WG sentence that reads as
+    internal detail (``user_text_violations``) is dropped, so a newer WG stays
+    readable and nothing technical reaches a user. A state this reader does
+    not know is kept: ``request_status_text`` says to open WG for it, and it
+    reads as under way. Never raises.
+    """
 
-
-#: Words no user-visible text may contain (matched case-insensitively, as
-#: whole words): transport, storage and pipeline vocabulary, and raw role
-#: constants. Tests in both repositories hold every user string to it.
-USER_TEXT_FORBIDDEN_TERMS = (
-    "bundle", "wgreturn", "cad return", "manifest", "schema", "request id",
-    "return id", "inbox", "ipc", "acknowledgement", "selector", "entity_token",
-    "traceback", "main thread", "gate", "ingest", "operation", "lineage",
-    "finding", "PASSIVE_CARDIOID", "UTF-8", "refused", "failed", "error",
-)
-
-
-def user_text_violations(text: str) -> list[str]:
-    """The forbidden terms (``USER_TEXT_FORBIDDEN_TERMS``) a user string contains."""
-
-    lowered = str(text).lower()
-    return [term for term in USER_TEXT_FORBIDDEN_TERMS
-            if re.search(r"(?<![a-z0-9_])" + re.escape(term.lower()) + r"(?![a-z0-9_])", lowered)]
+    try:
+        return _validate_request_status(value, request_id)
+    except Exception:  # noqa: BLE001 - a record this reader cannot use is not one
+        return None
 
 
-_OPEN_WG = {"id": "openWg", "label": "Open Waveguide Generator"}
+def request_status_terminal(record: object) -> bool:
+    """Whether nothing more happens to the request unless someone acts. Never raises."""
+
+    state = record.get("state") if isinstance(record, Mapping) else None
+    return isinstance(state, str) and state in REQUEST_STATUS_TERMINAL
+
+
+def request_status_known(record: object) -> bool:
+    """Whether the record's state is one this reader knows. Never raises."""
+
+    state = record.get("state") if isinstance(record, Mapping) else None
+    return isinstance(state, str) and state in REQUEST_STATUS_STATES
+
+
+_OPEN_WG = {"id": "openWg", "label": f"Open {APP_NAME}"}
 _OPEN_SOURCES_MESH = {"id": "openSourcesMesh", "label": "Open Sources & Mesh…"}
-_SHOW_RESULTS = {"id": "showResults", "label": "Show results in WG"}
+_SHOW_RESULTS = {"id": "showResults", "label": f"Show results in {APP_NAME}"}
 _NOTICE_TEXT = {
-    "fullModel": "Solved the whole model; WG could not use symmetry for this one.",
-    "cutModel": "Solved the model as cut in CAD; WG could not use any further symmetry for this one.",
-    "healed": "Solved after WG repaired the mesh for this model.",
+    "fullModel": f"Solved the whole model; {APP_NAME} could not use symmetry for this one.",
+    "cutModel": f"Solved the model as cut in CAD; {APP_NAME} could not use any further symmetry for this one.",
+    "healed": f"Solved after {APP_NAME} repaired the mesh for this model.",
 }
 
 
 def request_status_text(record: Mapping[str, Any]) -> dict[str, Any]:
     """What a user reads for one status record: ``{headline, detail, options, actions}``.
 
-    ``detail`` is one more line or None. ``options`` are the labels of the
-    choices WG asks about (``needsYou``), answered in WG. ``actions`` are
-    ``{id, label}`` for the buttons beside the text (``openWg``,
-    ``openSourcesMesh``, ``showResults``). No identifier, path, reason code or
-    exception text is ever part of it.
+    ``record`` is what ``validate_request_status`` returned. ``detail`` is one
+    more line or None. ``options`` are the labels of the choices WG asks about
+    (``needsYou``), answered in WG. ``actions`` are ``{id, label}`` for the
+    buttons beside the text (``openWg``, ``openSourcesMesh``, ``showResults``).
+    No identifier, path, reason code or exception text is ever part of it.
+    Never raises.
     """
 
+    try:
+        return _request_status_text(record)
+    except Exception:  # noqa: BLE001 - a user always gets a sentence
+        return {"headline": f"Open {APP_NAME} to see this request.", "detail": None,
+                "options": [], "actions": [dict(_OPEN_WG)]}
+
+
+def _request_status_text(record: Mapping[str, Any]) -> dict[str, Any]:
     document = _status_text(record.get("documentName"))
     name, inner = document or "This model", document or "this model"
     state = record.get("state")
@@ -1721,15 +1791,17 @@ def request_status_text(record: Mapping[str, Any]) -> dict[str, Any]:
     options: list[str] = []
     actions: list[dict[str, str]] = [dict(_OPEN_WG)]
     if state == "accepted" and record.get("kind") == "receive_snapshot":
-        headline = f"{name} is open in Waveguide Generator."
+        headline = f"{name} is open in {APP_NAME}."
     elif state in {"accepted", "preparing"}:
         headline = f"{name} · Preparing the simulation…"
     elif state == "needsYou":
         prompt = record.get("prompt") if isinstance(record.get("prompt"), Mapping) else {}
-        headline = f"{name} · Waveguide Generator needs you."
-        detail = _status_text(prompt.get("nextStep"))
-        options = [str(option["label"]) for option in prompt.get("options") or []
-                   if isinstance(option, Mapping) and _status_text(option.get("label"))]
+        headline = f"{name} · {APP_NAME} needs you."
+        detail = _user_words(prompt.get("nextStep"))
+        found = prompt.get("options")
+        options = [label for label in (
+            _user_words(option.get("label")) for option in (found if isinstance(found, list) else [])
+            if isinstance(option, Mapping)) if label]
         if prompt.get("code") == MESH_TOO_LARGE_CODE:
             actions.append(dict(_OPEN_SOURCES_MESH))
     elif state == "queued":
@@ -1737,35 +1809,37 @@ def request_status_text(record: Mapping[str, Any]) -> dict[str, Any]:
     elif state == "solving":
         progress = record.get("progress") if isinstance(record.get("progress"), Mapping) else {}
         frequency = progress.get("frequency") if isinstance(progress.get("frequency"), Mapping) else None
+        done = _status_int((frequency or {}).get("done"))
+        total = _status_int((frequency or {}).get("total"), minimum=1)
         headline = f"{name} · Solving"
-        if frequency is not None:
-            headline += f" · {frequency['done']} of {frequency['total']} frequencies"
-        else:
-            headline += "…"
+        headline += f" · {done} of {total} frequencies" if done is not None and total is not None else "…"
     elif state == "solved":
         result = record.get("result") if isinstance(record.get("result"), Mapping) else {}
         run = _status_int(result.get("runNumber"), minimum=1)
         headline = f"{name} · Solved" + (f" (run {run})." if run is not None else ".")
-        detail = _NOTICE_TEXT.get(str(record.get("notice")))
-        actions = [dict(_SHOW_RESULTS)]
+        notice = record.get("notice")
+        detail = _NOTICE_TEXT.get(notice) if isinstance(notice, str) else None
+        actions = [dict(_SHOW_RESULTS)] if result.get("jobId") else [dict(_OPEN_WG)]
     elif state == "couldNotFinish":
         failure = record.get("failure") if isinstance(record.get("failure"), Mapping) else {}
-        message = None if failure.get("recorded") else _status_text(failure.get("message"))
-        if message is not None:
-            headline, detail = message, _status_text(failure.get("nextStep"))
-        elif record.get("phase") == "solving":
-            headline = (f"Waveguide Generator could not finish solving {inner}. "
-                        "This has been recorded for the developers.")
+        if failure.get("recorded") is True:
+            if record.get("phase") == "solving":
+                headline = (f"{APP_NAME} could not finish solving {inner}. "
+                            "This has been recorded for the developers.")
+            else:
+                headline = could_not_prepare_text(document)
         else:
-            headline = (f"Waveguide Generator could not prepare {inner}. "
-                        "This has been recorded for the developers.")
+            message = _user_words(failure.get("message"))
+            headline = message or f"{APP_NAME} could not finish {inner}."
+            detail = _user_words(failure.get("nextStep")) or (
+                None if message else f"Open {APP_NAME} to see what to do.")
     elif state == "cancelled":
         headline = {
             "replaced": f"{name} · Replaced by a newer solve.",
-            "dismissed": f"{name} · Dismissed in Waveguide Generator.",
-        }.get(str(record.get("cancelReason")), f"{name} · Stopped in Waveguide Generator.")
+            "dismissed": f"{name} · Dismissed in {APP_NAME}.",
+        }.get(str(record.get("cancelReason")), f"{name} · Stopped in {APP_NAME}.")
     elif state == "refused":
-        headline = f"Waveguide Generator could not take {inner}."
+        headline = f"{APP_NAME} could not take {inner}."
     else:
-        headline = f"{name} · Open Waveguide Generator to see this request."
+        headline = f"{name} · Open {APP_NAME} to see this request."
     return {"headline": headline, "detail": detail, "options": options, "actions": actions}

@@ -51,7 +51,7 @@ def test_startup_refuses_damaged_intent_once_and_prepares_valid_neighbor(h, valu
     refusal = cad_of(refused)["refusal"]
     assert refusal["code"] == "preparation_failed"
     # WG's calm words; the validation detail went to the developer diagnostic.
-    assert refusal["message"] == "WG could not prepare this model. This has been recorded for the developers."
+    assert refusal["message"] == "Waveguide Generator could not prepare this model. This has been recorded for the developers."
     assert refused["error_message"] == refusal["message"]
     assert h.jobs_store.get_job_row(valid_id)["status"] == "queued"
     assert len(h.ingest.calls) == 1

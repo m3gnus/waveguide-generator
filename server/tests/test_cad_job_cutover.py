@@ -17,7 +17,6 @@ from server.cadlink.joblane.setup import solve_request_for, validate_setup
 from server.jobs.cad_intent import cad_of
 from test_cad_preparation import _received, _revision, _setup
 
-_CALM = "WG could not prepare this model. This has been recorded for the developers."
 
 
 @pytest.fixture
@@ -304,7 +303,8 @@ def test_upgrade_refuses_a_processing_retry_even_when_it_carries_an_old_reason(h
     assert job["status"] == "error" and job["run_number"] is None
     # Stored in WG's calm words, never the old attempt's own text.
     assert INTERRUPTED_MESSAGE
-    assert cad_of(job)["refusal"] == {"code": "interrupted", "message": _CALM.replace("this model", "Tritonia speaker")}
+    assert cad_of(job)["refusal"] == {
+        "code": "interrupted", "message": "Preparing Tritonia speaker stopped when Waveguide Generator closed."}
 
 
 def test_upgrade_keeps_an_unspecified_legacy_refusal_reason_and_message_unspecified(h):

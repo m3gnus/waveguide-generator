@@ -97,7 +97,9 @@ from server.cadlink.joblane.manual_solve import create_manual_solve, recover_man
 # routes and their credentials stay in ``server/cadlink/onshape/``.
 from .build_flags import onshape_enabled
 from .onshape.return_leg import RETURN_SUBDIRECTORY as ONSHAPE_RETURN_SUBDIRECTORY
-from .operations import CANCELLED, KINDS, MESH_CEILING_NEXT_STEP, PREPARE_AND_SOLVE, STATES, TERMINAL_STATES
+from .operations import (
+    CANCELLED, KINDS, MESH_CEILING_NEXT_STEP, MESH_TOO_LARGE_CODE, PREPARE_AND_SOLVE, STATES, TERMINAL_STATES,
+)
 from server.cadlink.joblane.preparation import (
     PreparationContext,
     operation_summary,
@@ -929,7 +931,7 @@ def _ingest_error(exc: Exception) -> HTTPException:
     if isinstance(exc, MeshTooLarge):
         # A choice for the user (Solve anyway, or a coarser mesh), not a failure.
         return HTTPException(status_code=422, detail={
-            "code": "mesh_too_large", "message": exc.message(),
+            "code": MESH_TOO_LARGE_CODE, "message": exc.message(),
             # The pop-up adds the choice it offers (Prepare or Solve anyway).
             "next_step": MESH_CEILING_NEXT_STEP,
             "triangle_count": exc.count, "limit": exc.limit,
@@ -2164,6 +2166,8 @@ def _deliver_solve_commands(application: FastAPI):
                         # update. The check and the mark below have no await
                         # between them, so a retirement check on this loop
                         # either sees the pass or the pass sees the hold.
+                        # Fusion still hears what became of its requests.
+                        status_error = await _publish_request_status(state, status_error)
                         await asyncio.sleep(_DELIVERY_INTERVAL_S)
                         continue
                     pass_active[0] = True
@@ -2270,6 +2274,11 @@ def _recover_on_startup(application: FastAPI):
 
 def _abandon_preparations_on_shutdown(application: FastAPI):
     async def abandon_cad_preparations_on_shutdown() -> None:
+        # The status publisher stops first: a tick in its thread must not
+        # outlive the stores it reads (cancelling the loop does not end it).
+        publisher = getattr(application.state, "cad_request_status", None)
+        if publisher is not None and not await asyncio.to_thread(publisher.stop):
+            logger.warning("The CAD request status publisher was still running at shutdown.")
         delivery = getattr(application.state, "cad_delivery_task", None)
         if delivery is not None:
             delivery.cancel()

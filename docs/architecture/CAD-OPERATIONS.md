@@ -1213,13 +1213,16 @@ solve scheduler, prepares it (`server/jobs/cad_preparation.py`):
   reads its retained snapshot and never writes it, and `cad_preparations` is not used.
 - **Failed preparations are not holds.** WG's own failures
   (`operations.INTERNAL_FAILURE_CODES`: `preparation_failed`, `submission_refused`,
-  `interrupted`, `snapshot_invalid`) end as `error`. `_Run.refuse` records the raw detail
+  `snapshot_invalid`) end as `error`. `_Run.refuse` records the raw detail
   once as a developer diagnostic (`cad_preparation.calm_refusal_message`) and stores only
-  "WG could not prepare <name>. This has been recorded for the developers." The read
+  "Waveguide Generator could not prepare <name>. This has been recorded for the
+  developers." (the shared protocol's `could_not_prepare_text`). The read
   model shows that sentence for older rows too, with `prepare_failed: true` and the
   options that can still work (Try again, except for a rejected snapshot; Dismiss).
   Failures the user can act on (`operations.USER_ACTION_CODES`) end the same way but in
-  their own words, with one next step and Try again only where it can work: the return
+  their own words, with one next step and Try again only where it can work: WG closed
+  while preparing (`interrupted`: "Preparing <name> stopped when Waveguide Generator
+  closed.", "Press Solve to prepare it again."; nothing failed and nothing is recorded), the return
   changed (send it again from Fusion) or cannot be read (send it again; Try again), no WGLink folder (choose it, then
   Try again), an excitation the design cannot drive (change the drive channels or solve
   the whole model), and `solver_memory_exceeded` (the dense memory guard, also after Solve
@@ -1832,8 +1835,8 @@ before it deletes the request. It changes nothing about what is accepted or refu
   by up to about 30 passes while its snapshot is retained. The add-in must not wait for
   ever: after about two minutes with its request gone and no file, it says that WG took the
   request but has not confirmed it, never "refused" and never "solving".
-- A receipt is kept for 24 hours, or with its request status file (below) when it has
-  one; the folder holds at most 500 requests. The delivery pass prunes the oldest, and
+- A receipt is kept with its request status file (below), and 14 days while it waits for
+  its first one; the folder holds at most 500 requests. The delivery pass prunes the oldest, and
   stale staging files, at most once a minute.
 - WG advertises `solveAcknowledgement: 1` in `wg-capabilities.json` while its inbox
   consumer runs. An add-in reads the acknowledgement only when it sees that; against a WG
@@ -1854,10 +1857,16 @@ reference.
   through Solve again) read through `job_cad_state`. Holds, their next step and options
   come from `operations.hold_details` through that read model, so the status has no
   vocabulary of its own: `needsYou` is exactly `operations.user_hold`, which reads
-  `held` rows and the `error` rows older releases stored for the same choices. WG's own
-  preparation failures (`INTERNAL_FAILURE_CODES`) and a solve that ends in an error read
-  `couldNotFinish` with `failure.recorded` and no reason text; failures the user can act
-  on carry WG's own sentence and next step. A stopped job reads `cancelled` (`stopped`, or
+  `held` rows and the `error` rows older releases stored for the same choices. Only the
+  failures the user can act on (`operations.USER_WORDED_FAILURE_CODES`, among them
+  `interrupted`: WG closed while preparing, which is never called WG's failure) carry
+  WG's own sentence and next step, and only while those pass the protocol's
+  `user_text_violations`. Every other failure reads `couldNotFinish` with
+  `failure.recorded` and no reason text, and `recorded` is set only when a developer
+  record exists: WG's own preparation failures (`INTERNAL_FAILURE_CODES`) were recorded
+  where they were diagnosed, and the publisher records the rest (below). The sentence
+  for WG's own preparation failure is the protocol's `could_not_prepare_text`, which
+  WG's UI uses too (`operations.internal_failure_message`). A stopped job reads `cancelled` (`stopped`, or
   `replaced` when a newer request superseded its hold); a request whose jobs were
   dismissed reads `cancelled` (`dismissed`), and one already finished keeps its state when
   its run is removed later.
@@ -1867,20 +1876,33 @@ reference.
   It learns new receipts from the folder's names when the folder changes. At WG start, and
   when its cursor falls out of the retained events, it reconciles every request; every
   30 seconds it re-projects the requests still under way, for a change no event announces.
-  A file is written only when the record changed (ignoring `seq` and `updatedAt`), with
-  `seq` one higher; progress while solving at most every 2 seconds, a change of state at
-  once. A write that fails is tried again on the next pass.
+  It reads its previous records through the protocol's validator and writes exactly the
+  validator's reading of each new one. A file is written only when the record changed
+  (ignoring `seq` and `updatedAt`); `seq` rises with every write, with the wall clock in
+  milliseconds as its floor, so it keeps rising past an unreadable file. Progress while
+  solving is written at most every 2 seconds, a change of state at once. A write that
+  fails is tried again on the next pass, logged once per request, and recorded as a
+  `cad-status-write-failure` incident after 30 consecutive failures. It keeps publishing
+  while a retiring backend holds deliveries, and shutdown stops it, waiting for a pass
+  under way, before the stores close.
 - **Atomic, like the receipt.** Both files go through one writer
   (`solve_command.publish_record` over `server.platform.json_file.write_json_atomic`):
   staged, flushed, `os.replace`d with the Windows `PermissionError` retry, and the folder
   flushed on POSIX.
-- **Developers, not users.** When a solve of a Fusion request ends in an error, the first
-  time its status reads `couldNotFinish` the publisher records a `cad-solve-failure`
-  incident (`server.platform.incidents.record_incident`) with the job's own error. Failed
-  preparations were recorded where they were diagnosed and are not recorded again.
-- **Retention.** A receipt and its status are kept and pruned together. While the status is
-  not terminal neither is ever deleted; a finished request is kept 14 days from its last
-  write. A receipt without a status keeps the receipt's 24-hour rule.
+- **Developers, not users.** When the publisher sees a request change into
+  `couldNotFinish` for a failure no diagnosis recorded -- a solve that ended in an error
+  (`cad-solve-failure`), a preparation that ended without a reason
+  (`cad-preparation-failure`), a reason no list classifies or whose words read as
+  internal detail (`cad-unclassified-failure`) -- it records one incident
+  (`server.platform.incidents.record_incident`) with the job's own error. Only a change it
+  saw counts: a previous record it can read, or a request that arrived while it ran.
+  The first start after an upgrade, or a missing or unreadable status file, records
+  nothing for an old failure.
+- **Retention.** A receipt and its status are kept and pruned together, aged by the newer of
+  the two. While the status is in a known state still under way neither is deleted; a
+  state this WG does not know is kept at most 30 days. A finished, unreadable or invalid
+  status keeps the pair 14 days; so does a receipt still waiting for its first status and
+  a status whose receipt is gone. A staging file is pruned after 24 hours.
 - WG advertises `requestStatus: 1` beside `solveAcknowledgement` and drops it with it when
   the request consumer is off.
 

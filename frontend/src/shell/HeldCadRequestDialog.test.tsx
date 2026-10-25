@@ -160,7 +160,7 @@ describe('held CAD request dialog owner', () => {
   });
 
   it('tells an internal failure calmly in Results, with Try again, never as a hold', async () => {
-    const calm = 'WG could not prepare Speaker. This has been recorded for the developers.';
+    const calm = 'Waveguide Generator could not prepare Speaker. This has been recorded for the developers.';
     const failed = { ...held('failed'), status: 'error', stage: 'error', error_message: calm,
       cad_state: { ...held().cad_state!, state: 'needs_user_input', held: false, prepare_failed: true, reason: 'preparation_failed',
         message: calm, next_step: null, options: [{ id: 'retry', label: 'Try again' }, { id: 'dismiss', label: 'Dismiss request' }] } } as JobItem;
@@ -259,7 +259,7 @@ describe('held CAD request dialog owner', () => {
     const frame = held('frame');
     frame.cad_state = { ...frame.cad_state!, reason: 'frame_confirmation_required', attention: 'action' };
     const failed = { ...held('failed'), status: 'error', cad_state: { ...held().cad_state!, held: false, prepare_failed: true,
-      reason: 'preparation_failed', message: 'WG could not prepare Speaker. This has been recorded for the developers.' } } as JobItem;
+      reason: 'preparation_failed', message: 'Waveguide Generator could not prepare Speaker. This has been recorded for the developers.' } } as JobItem;
     publishCadJobs([engine, frame, failed]);
     await act(async () => root.render(<HeldCadRequestDialog/>));
     expect(host.querySelector('[role="dialog"]')).toBeNull();

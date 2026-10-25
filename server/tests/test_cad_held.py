@@ -253,7 +253,7 @@ def test_schema_six_upgrade_keeps_historical_jobs_and_snapshots_before_rebuild(h
         reopened.close()
 
 
-_CALM = "WG could not prepare {}. This has been recorded for the developers."
+_CALM = "Waveguide Generator could not prepare {}. This has been recorded for the developers."
 
 
 def test_internal_failure_is_a_calm_failed_preparation_not_a_hold(h: JobsHarness, caplog) -> None:
@@ -292,7 +292,6 @@ def test_legacy_internal_failure_rows_read_calm_and_never_held(h: JobsHarness) -
     metadata = job["task_metadata"]
     metadata["cad"].pop("hold")
     for code, raw in (("preparation_failed", "Preparing the mesh failed: Traceback (most recent call last)"),
-                      ("interrupted", "Preparation was interrupted"),
                       ("submission_refused", "ValueError: bad request"),
                       ("snapshot_invalid", "manifest digest mismatch")):
         metadata["cad"]["refusal"] = {"code": code, "message": raw}
@@ -300,7 +299,7 @@ def test_legacy_internal_failure_rows_read_calm_and_never_held(h: JobsHarness) -
                                 task_metadata_json=json.dumps(metadata))
         state = job_cad_state(_row(h, job["id"]))
         assert state["held"] is False and state["prepare_failed"] is True, code
-        assert state["message"].startswith("WG could not prepare "), code
+        assert state["message"].startswith("Waveguide Generator could not prepare "), code
         assert raw not in json.dumps(state)
         item = h._loop.run(h.runtime.get_job(job["id"]))
         assert raw not in str(item["error_message"]) and raw not in json.dumps(item["cad_provenance"])
@@ -312,6 +311,22 @@ def test_legacy_internal_failure_rows_read_calm_and_never_held(h: JobsHarness) -
     state = job_cad_state(_row(h, job["id"]))
     assert state["held"] is True and state["prepare_failed"] is False
     assert state["options"][0]["id"] == "solve_anyway"
+
+
+def test_an_interrupted_preparation_says_wg_stopped_and_claims_no_record(h: JobsHarness) -> None:
+    _received(h, sized=False)
+    h.prepare()
+    job = h.latest_job()
+    metadata = job["task_metadata"]
+    metadata["cad"].pop("hold")
+    metadata["cad"]["refusal"] = {"code": "interrupted", "message": "Preparation was interrupted"}
+    h.jobs_store.update_job(job["id"], status="error", stage="error", task_metadata_json=json.dumps(metadata))
+    state = job_cad_state(_row(h, job["id"]))
+    assert state["held"] is False and state["prepare_failed"] is True and state["attention"] == "action"
+    assert state["message"] == "Preparing Tritonia speaker stopped when Waveguide Generator closed."
+    assert state["next_step"] == "Press Solve to prepare it again."
+    assert "recorded" not in state["message"]
+    assert [option["id"] for option in state["options"]] == ["retry", "dismiss"]
 
 
 def test_memory_guard_after_solve_anyway_ends_calmly_without_a_hold(h: JobsHarness, caplog) -> None:
@@ -424,7 +439,7 @@ def test_failures_the_user_can_act_on_say_what_to_do_and_are_never_holds(
     assert state["message"] == message.format(name)
     assert state["next_step"] == next_step
     assert [option["id"] for option in state["options"]] == options
-    assert not state["message"].startswith("WG could not prepare ")
+    assert not state["message"].startswith("Waveguide Generator could not prepare ")
 
 
 def test_a_manual_solve_whose_copy_is_gone_is_prepared_again_in_wg() -> None:
@@ -465,7 +480,8 @@ EXPECTED_ATTENTION = {
     # WG's own failures.
     "preparation_failed": "failed",
     "submission_refused": "failed",
-    "interrupted": "failed",
+    # WG stopped while preparing: Solve prepares it again; nothing failed.
+    "interrupted": "action",
     "snapshot_invalid": "failed",
     # Nothing asked: queued again by itself, or cancelled.
     "update_restart_pending": None,

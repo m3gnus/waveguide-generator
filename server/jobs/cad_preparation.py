@@ -57,6 +57,7 @@ from server.cadlink.operations import (
     hold_details,
     INTERNAL_FAILURE_CODES,
     is_calm_failure,
+    MESH_TOO_LARGE_CODE,
     preparation_failure,
     reason_attention,
     user_hold,
@@ -722,7 +723,7 @@ def prepare_job_sync(
         except StaleAttempt as exc:
             raise _Fenced() from exc
         except MeshTooLarge as exc:
-            return run.refuse("mesh_too_large", exc.message())
+            return run.refuse(MESH_TOO_LARGE_CODE, exc.message())
         except SolverMemoryTooLarge as exc:
             # Also after Solve anyway: only a coarser mesh helps, so this ends
             # the request calmly instead of holding it for another choice.

@@ -888,8 +888,8 @@ def test_an_unexpected_failure_ends_the_job_refused_and_never_strands_it(h: Jobs
     job = h.latest_job()
     assert (job["status"], summary["reason"]) == ("error", "preparation_failed")
     # WG's calm words; the unexpected failure itself is a developer diagnostic.
-    calm = "WG could not prepare Tritonia speaker. This has been recorded for the developers."
-    assert _cad(job)["refusal"]["message"] == calm and summary["message"].startswith("WG could not prepare ")
+    calm = "Waveguide Generator could not prepare Tritonia speaker. This has been recorded for the developers."
+    assert _cad(job)["refusal"]["message"] == calm and summary["message"].startswith("Waveguide Generator could not prepare ")
     assert "unexpected failure" not in json.dumps(_cad(job)["refusal"])
     # The intent it ended with can be solved again, and the lane is free for it.
     h.ingest.error = None

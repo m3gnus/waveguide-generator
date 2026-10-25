@@ -533,7 +533,7 @@ def test_a_jobs_refusal_for_the_frame_is_internal_and_releases_the_binding(real)
 
     # Never a question about the axis: calm, internal words.
     assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed"), summary
-    assert summary["message"].startswith("WG could not prepare ")
+    assert summary["message"].startswith("Waveguide Generator could not prepare ")
     assert harness.bound_request() is None
 
 

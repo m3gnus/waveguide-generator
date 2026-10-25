@@ -47,13 +47,13 @@ describe('selected CAD model state', () => {
     expect(cadModelStatusLabel(preparing)).toBe('CAD model · preparing…');
     expect(preparing.canPrepare).toBe(false);
     const failedJob = { ...job, status: 'error', cad_state: { state: 'needs_user_input', reason: 'preparation_failed', prepare_failed: true,
-      message: 'WG could not prepare Speaker. This has been recorded for the developers.', next_step: null } } as unknown as JobItem;
+      message: 'Waveguide Generator could not prepare Speaker. This has been recorded for the developers.', next_step: null } } as unknown as JobItem;
     const failed = selectCadModelState(pointer, idle, { kind: 'prepare-failed', job: failedJob });
-    expect(failed).toMatchObject({ phase: 'prepare-failed', failureMessage: 'WG could not prepare Speaker. This has been recorded for the developers.' });
+    expect(failed).toMatchObject({ phase: 'prepare-failed', failureMessage: 'Waveguide Generator could not prepare Speaker. This has been recorded for the developers.' });
     // The status bar and the CAD project header say the same.
     expect(cadModelHeaderLine(preparing)).toBe('Preparing Speaker…');
     expect(cadModelStatusLabel(failed)).toBe('CAD model · preparation failed');
-    expect(cadModelHeaderLine(failed)).toBe('WG could not prepare Speaker. This has been recorded for the developers.');
+    expect(cadModelHeaderLine(failed)).toBe('Waveguide Generator could not prepare Speaker. This has been recorded for the developers.');
     const heldJob = { ...job, status: 'held', cad_state: { state: 'needs_user_input', reason: 'mesh_too_large', held: true, attention: 'question' } } as unknown as JobItem;
     const waiting = selectCadModelState(pointer, idle, { kind: 'waiting', job: heldJob });
     expect(cadModelStatusLabel(waiting)).toBe('CAD model · waiting for you');

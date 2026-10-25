@@ -15,16 +15,18 @@ Two halves:
   latest job of the request (``JobStore.latest_cad_job``) and that job's read
   model (``job_cad_state``) give one record. It owns no vocabulary of its own:
   holds and failed preparations come from ``server.cadlink.operations``
-  through the job read model.
+  through the job read model. Only the failures the user can act on
+  (``operations.USER_WORDED_FAILURE_CODES``) carry WG's words; every other
+  one reads as WG's own failure, recorded for the developers.
 * :class:`RequestStatusPublisher` keeps the files current from the delivery
   loop. It follows the jobs event stream (``JobStore.replay_events``) and
   re-projects only the requests whose jobs changed; a cursor that fell out of
   the retained events, or a WG start, reconciles every request with a receipt.
-  Progress while solving is written at most every :data:`PROGRESS_INTERVAL_S`;
-  every change of state is written at once. WG's own failures to finish a
-  solve are recorded once for the developers (``record_incident``) when the
-  request first reads ``couldNotFinish``; failed preparations were recorded
-  where they were diagnosed. The file never carries either.
+  Every record it writes is the protocol validator's own reading of it, so
+  the file holds nothing a reader would drop. Progress while solving is
+  written at most every :data:`PROGRESS_INTERVAL_S`; every change of state at
+  once. A failure no diagnosis recorded is recorded for the developers
+  (``record_incident``) when the publisher sees the request change into it.
 """
 
 from __future__ import annotations
@@ -34,23 +36,11 @@ import json
 import logging
 import os
 from pathlib import Path
+import threading
 import time
 from typing import TYPE_CHECKING, Any
 
 from server.cadlink.identity import utc_now
-from server.cadlink.ipc import IPC_SUBDIRECTORY
-from server.cadlink.operations import (
-    ATTENTION_FAILED,
-    PREPARE_AND_SOLVE,
-    RECEIVE_SNAPSHOT,
-    effective_reason_code,
-)
-from server.cadlink.wglink_protocol import (
-    REQUEST_STATUS_CONTRACT,
-    REQUEST_STATUS_SCHEMA_VERSION,
-    REQUEST_STATUS_SUFFIX,
-    request_status_terminal,
-)
 from server.cadlink.intake.ingest import SOLVED_DOMAIN_BY_PLANES
 from server.cadlink.intake.solve_command import (
     ACK_REFUSED,
@@ -59,6 +49,24 @@ from server.cadlink.intake.solve_command import (
     _OPERATION_ID,
     publish_record,
 )
+from server.cadlink.ipc import IPC_SUBDIRECTORY
+from server.cadlink.operations import (
+    CANCELLED,
+    INTERNAL_FAILURE_CODES,
+    PREPARE_AND_SOLVE,
+    RECEIVE_SNAPSHOT,
+    USER_WORDED_FAILURE_CODES,
+    effective_reason_code,
+)
+from server.cadlink.wglink_protocol import (
+    REQUEST_STATUS_CONTRACT,
+    REQUEST_STATUS_SCHEMA_VERSION,
+    REQUEST_STATUS_SUFFIX,
+    request_status_terminal,
+    user_text_violations,
+    validate_request_status,
+)
+from server.jobs.cad_intent import cad_of, intent_of
 from server.jobs.cad_preparation import job_cad_state
 from server.platform.incidents import record_incident
 from server.solver.imported import imported_domain_planes
@@ -72,8 +80,12 @@ logger = logging.getLogger(__name__)
 #: A request that is solving is rewritten at most this often for progress alone.
 PROGRESS_INTERVAL_S = 2.0
 #: Every request still under way is re-projected this often, whatever the event
-#: stream said: a change no job event announces (an operation row) still lands.
+#: stream said: a change no job event announces (an operation row) still lands,
+#: and so does a receipt a folder with a coarse modification time hid.
 SWEEP_INTERVAL_S = 30.0
+#: After this many consecutive failed writes of one request's status, the
+#: failure is recorded for the developers (once; about half a minute).
+WRITE_FAILURE_INCIDENT_AFTER = 30
 #: How many jobs that are not a Fusion request's are remembered as such.
 _MAX_OTHER_JOBS = 4096
 #: Fields that change on every write and say nothing about the request.
@@ -84,12 +96,29 @@ def status_path(directory: Path, request_id: str) -> Path:
     return directory / f"{request_id}{REQUEST_STATUS_SUFFIX}"
 
 
+def _wall_ms() -> int:
+    return int(time.time() * 1000)
+
+
 def _read_json(path: Path) -> dict[str, Any] | None:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     return value if isinstance(value, dict) else None
+
+
+def request_kind(receipt: Mapping[str, Any], operation: Mapping[str, Any] | None) -> str:
+    """The one rule for a request's kind: the receipt's, its operation's, else a solve.
+
+    A receipt without a kind follows the legacy solve convention, as
+    ``write_acknowledgement`` does.
+    """
+
+    for kind in (receipt.get("kind"), (operation or {}).get("kind")):
+        if kind in (PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT):
+            return str(kind)
+    return PREPARE_AND_SOLVE
 
 
 def _document_name(operation: Mapping[str, Any] | None, cad: Mapping[str, Any] | None) -> str | None:
@@ -101,20 +130,16 @@ def _document_name(operation: Mapping[str, Any] | None, cad: Mapping[str, Any] |
         except (TypeError, ValueError):
             stored = {}
         name = stored.get("document_name") if isinstance(stored, Mapping) else None
-    return str(name).strip() or None if name else None
+    return (str(name).strip() or None) if name else None
 
 
 def _is_bound(job: Mapping[str, Any]) -> bool:
-    """A job made from the request's prepared mesh (not its preparing intent)."""
+    """A job made from the request's prepared mesh, not its preparing intent."""
 
-    config = job.get("config_json")
-    return not (isinstance(config, Mapping) and config.get("type") == "cad_intent")
-
-
-def _cad(job: Mapping[str, Any]) -> Mapping[str, Any]:
-    metadata = job.get("task_metadata")
-    cad = metadata.get("cad") if isinstance(metadata, Mapping) else None
-    return cad if isinstance(cad, Mapping) else {}
+    try:
+        return intent_of(job) is None
+    except ValueError:
+        return False  # an intent, if an incomplete one
 
 
 def _job_ref(job: Mapping[str, Any]) -> dict[str, Any]:
@@ -128,16 +153,13 @@ def _solved_mesh(job: Mapping[str, Any], ingest: Mapping[str, Any] | None) -> di
 
     stats = job.get("mesh_stats")
     triangles = stats.get("triangle_count") if isinstance(stats, Mapping) else None
-    if isinstance(triangles, bool) or not isinstance(triangles, int) or triangles <= 0:
-        return None
-    mesh: dict[str, Any] = {"trianglesSolved": triangles}
-    if ingest is None:
+    if ingest is None or isinstance(triangles, bool) or not isinstance(triangles, int) or triangles <= 0:
         return None
     planes = len(imported_domain_planes(ingest))
     if planes not in SOLVED_DOMAIN_BY_PLANES:
         return None
-    mesh["domainKind"], mesh["solvedFraction"] = SOLVED_DOMAIN_BY_PLANES[planes], 0.5 ** planes
-    return mesh
+    return {"trianglesSolved": triangles, "domainKind": SOLVED_DOMAIN_BY_PLANES[planes],
+            "solvedFraction": 0.5 ** planes}
 
 
 def _notice(ingest: Mapping[str, Any] | None) -> str | None:
@@ -154,11 +176,36 @@ def _notice(ingest: Mapping[str, Any] | None) -> str | None:
 
 
 def _cancel_reason(job: Mapping[str, Any]) -> str:
-    cad = _cad(job)
+    cad = cad_of(job)
     refusal = cad.get("refusal") if isinstance(cad.get("refusal"), Mapping) else {}
     if cad.get("superseded_by") or refusal.get("code") == "superseded":
         return "replaced"
     return "stopped"
+
+
+def _failure(job: Mapping[str, Any], cad: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """A failure's record, and the incident owed for it (None: none, or one already exists).
+
+    ``recorded`` is true only when the failure has a developer record: WG's
+    own preparation failures were recorded where they were diagnosed; any
+    other failure the user cannot act on is recorded through the returned
+    incident. Failures the user can act on carry WG's own words, unless
+    those read as internal detail -- then they are a recorded failure too.
+    """
+
+    refusal = cad_of(job).get("refusal")
+    if not isinstance(refusal, Mapping):
+        kind = "cad-solve-failure" if _is_bound(job) else "cad-preparation-failure"
+        return {"recorded": True}, {"kind": kind, "code": None}
+    code = effective_reason_code(refusal.get("code"), refusal.get("message"))
+    if code in INTERNAL_FAILURE_CODES:
+        return {"recorded": True}, None
+    if code in USER_WORDED_FAILURE_CODES:
+        message, next_step = cad.get("message"), cad.get("next_step")
+        words = " ".join(str(part) for part in (message, next_step) if part)
+        if message and not user_text_violations(words):
+            return {"recorded": False, "message": message, "nextStep": next_step}, None
+    return {"recorded": True}, {"kind": "cad-unclassified-failure", "code": code}
 
 
 def project_request_status(
@@ -169,48 +216,52 @@ def project_request_status(
     *,
     ingest: Mapping[str, Any] | None = None,
     previous: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """The status record of one request, without ``seq`` and ``updatedAt``.
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """The status record of one request (without ``seq``/``updatedAt``), and any incident owed.
 
     ``receipt`` is the request's schema-1 receipt; ``operation`` its row;
     ``job`` the latest job of its chain (``JobStore.latest_cad_job``) and
     ``cad`` that job's read model (``job_cad_state``); ``ingest`` the record
-    of the mesh a solved job used; ``previous`` the status last written. A
-    Solve whose job is gone was dismissed in WG (or its run removed): it keeps
-    a finished state it already had, and otherwise reads ``cancelled``.
+    of the mesh a solved job used; ``previous`` the status last written, as
+    the validator read it. A Solve whose job is gone was dismissed in WG (or
+    its run removed): it keeps a finished state it already had, without the
+    run it no longer has, and otherwise reads ``cancelled``.
     """
 
     request_id = str(receipt.get("commandId") or receipt.get("operationId"))
-    kind = receipt.get("kind") or (operation or {}).get("kind") or PREPARE_AND_SOLVE
     record: dict[str, Any] = {
         "contract": REQUEST_STATUS_CONTRACT,
         "schemaVersion": REQUEST_STATUS_SCHEMA_VERSION,
         "requestId": request_id,
         "operationId": request_id,
-        "kind": kind,
+        "kind": request_kind(receipt, operation),
         "manifestSha256": receipt.get("manifestSha256"),
         "documentName": _document_name(operation, cad),
     }
     if receipt.get("outcome") == ACK_REFUSED:
-        return {**record, "state": "refused"}
-    if kind == RECEIVE_SNAPSHOT:
-        return {**record, "state": "accepted"}
+        if (operation or {}).get("state") == CANCELLED:
+            # Cancelled before admission: the receipt says refused, the user stopped it.
+            return {**record, "state": "cancelled", "cancelReason": "stopped"}, None
+        return {**record, "state": "refused"}, None
+    if record["kind"] == RECEIVE_SNAPSHOT:
+        return {**record, "state": "accepted"}, None
     if job is None:
         if previous is not None and request_status_terminal(previous) and previous.get("state") != "refused":
-            kept = {key: value for key, value in previous.items() if key not in _VOLATILE_FIELDS}
-            return {**kept, **{key: value for key, value in record.items() if value is not None}}
-        return {**record, "state": "cancelled", "cancelReason": "dismissed"}
+            kept = {key: value for key, value in previous.items()
+                    if key not in (*_VOLATILE_FIELDS, "job", "result")}
+            return {**kept, **{key: value for key, value in record.items() if value is not None}}, None
+        return {**record, "state": "cancelled", "cancelReason": "dismissed"}, None
     record["job"] = _job_ref(job)
     status = str(job.get("status"))
     cad = cad or {}
     if status == "preparing":
-        return {**record, "state": "preparing"}
+        return {**record, "state": "preparing"}, None
     if status == "queued":
-        return {**record, "state": "queued"}
+        return {**record, "state": "queued"}, None
     if status == "running":
         progress = job.get("progress")
         fraction = float(progress) if isinstance(progress, (int, float)) and not isinstance(progress, bool) else 0.0
-        return {**record, "state": "solving", "progress": {"fraction": min(max(fraction, 0.0), 1.0)}}
+        return {**record, "state": "solving", "progress": {"fraction": min(max(fraction, 0.0), 1.0)}}, None
     if status == "complete":
         result: dict[str, Any] = dict(record["job"])
         mesh = _solved_mesh(job, ingest)
@@ -218,34 +269,21 @@ def project_request_status(
             result["mesh"] = mesh
         solved = {**record, "state": "solved", "result": result}
         notice = _notice(ingest)
-        return {**solved, "notice": notice} if notice else solved
+        return ({**solved, "notice": notice} if notice else solved), None
     if status == "cancelled":
-        return {**record, "state": "cancelled", "cancelReason": _cancel_reason(job)}
+        return {**record, "state": "cancelled", "cancelReason": _cancel_reason(job)}, None
     if cad.get("held"):
-        refusal = _cad(job).get("refusal") if isinstance(_cad(job).get("refusal"), Mapping) else {}
+        refusal = cad_of(job).get("refusal")
+        refusal = refusal if isinstance(refusal, Mapping) else {}
         code = effective_reason_code(refusal.get("code"), refusal.get("message")) or None
         options = [{"id": str(option.get("id")), "label": str(option.get("label"))}
                    for option in cad.get("options") or [] if isinstance(option, Mapping)]
         return {**record, "state": "needsYou",
                 "prompt": {"code": code, "nextStep": cad.get("next_step"), "options": options,
-                           "answerIn": "wg"}}
-    # Anything else stopped short of a result: WG's own failure (recorded for
-    # the developers, worded by the protocol) or one the user can act on (WG's
-    # own words for it, from the read model).
+                           "answerIn": "wg"}}, None
+    failure, incident = _failure(job, cad)
     phase = "solving" if _is_bound(job) else "preparing"
-    has_refusal = isinstance(_cad(job).get("refusal"), Mapping)
-    internal = not has_refusal or cad.get("attention") == ATTENTION_FAILED
-    failure: dict[str, Any] = {"recorded": internal}
-    if not internal:
-        failure.update(message=cad.get("message"), nextStep=cad.get("next_step"))
-    return {**record, "state": "couldNotFinish", "phase": phase, "failure": failure}
-
-
-def _needs_incident(job: Mapping[str, Any] | None) -> bool:
-    """A job that failed with no diagnosis of its own: the solve itself failed."""
-
-    return (job is not None and str(job.get("status")) == "error"
-            and not isinstance(_cad(job).get("refusal"), Mapping))
+    return {**record, "state": "couldNotFinish", "phase": phase, "failure": failure}, incident
 
 
 def _comparable(record: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -258,7 +296,8 @@ class RequestStatusPublisher:
     """Keeps every request's status file current. One per application.
 
     :meth:`tick` is called from the delivery loop, off the event loop, one call
-    at a time. ``clock`` is monotonic seconds (injectable for tests).
+    at a time. :meth:`stop` ends it before the stores close. ``clock`` is
+    monotonic seconds (injectable for tests).
     """
 
     def __init__(
@@ -274,47 +313,82 @@ class RequestStatusPublisher:
         self._cursor: int | None = None
         self._folder_stamp: int | None = None
         self._last_sweep: float | None = None
+        self._scanned_once = False
+        #: Requests learned while this process runs (not at its first scan):
+        #: their whole life is observed, so a failure in it owes an incident.
+        self._observed_from_start: set[str] = set()
         self._receipts: dict[str, dict[str, Any]] = {}
+        self._receipt_stamps: dict[str, int] = {}
         self._records: dict[str, dict[str, Any]] = {}
         self._job_requests: dict[str, str] = {}
         self._other_jobs: set[str] = set()
         self._written_at: dict[str, float] = {}
+        self._write_failures: dict[str, int] = {}
         self._deferred: set[str] = set()
         self._dirty: set[str] = set()
+        self._stopped = threading.Event()
+        self._busy = threading.Lock()
+
+    # -- lifetime --------------------------------------------------------------
+
+    def stop(self, timeout: float = 10.0) -> bool:
+        """Stop publishing and wait for a tick under way. False: it is still running."""
+
+        self._stopped.set()
+        acquired = self._busy.acquire(timeout=timeout)
+        if acquired:
+            self._busy.release()
+        return acquired
 
     # -- what to look at -------------------------------------------------------
 
     def _scan(self) -> None:
-        """Learn new receipts and forget pruned ones, from the folder's names."""
+        """Learn new and rewritten receipts and forget pruned ones, from the folder."""
 
+        stamps: dict[str, int] = {}
         try:
-            names = {entry.name for entry in os.scandir(self.directory) if entry.is_file()}
+            with os.scandir(self.directory) as entries:
+                for entry in entries:
+                    name = entry.name
+                    if name.startswith(".") or not name.endswith(".json") or name.endswith(REQUEST_STATUS_SUFFIX):
+                        continue
+                    request_id = name.removesuffix(".json")
+                    if not _OPERATION_ID.fullmatch(request_id):
+                        continue
+                    try:
+                        if entry.is_file(follow_symlinks=False):
+                            stamps[request_id] = entry.stat(follow_symlinks=False).st_mtime_ns
+                    except OSError:
+                        continue
         except OSError:
-            names = set()
-        receipts = {
-            name.removesuffix(".json") for name in names
-            if name.endswith(".json") and not name.endswith(REQUEST_STATUS_SUFFIX)
-            and not name.startswith(".") and _OPERATION_ID.fullmatch(name.removesuffix(".json"))
-        }
-        for request_id in set(self._receipts) - receipts:
+            pass
+        for request_id in set(self._receipts) - set(stamps):
             self._forget(request_id)
-        for request_id in receipts - set(self._receipts):
+        for request_id, stamp in stamps.items():
+            if self._receipt_stamps.get(request_id) == stamp and request_id in self._receipts:
+                continue
             receipt = _read_json(self.directory / f"{request_id}.json")
             if receipt is None or receipt.get("schemaVersion") != ACK_SCHEMA_VERSION:
                 continue
+            if request_id not in self._receipts:
+                previous = validate_request_status(
+                    _read_json(status_path(self.directory, request_id)), request_id=request_id,
+                )
+                if previous is not None:
+                    self._records[request_id] = previous
+                if self._scanned_once:
+                    self._observed_from_start.add(request_id)
             self._receipts[request_id] = receipt
-            previous = _read_json(status_path(self.directory, request_id))
-            if previous is not None and previous.get("contract") == REQUEST_STATUS_CONTRACT:
-                self._records[request_id] = previous
+            self._receipt_stamps[request_id] = stamp
             self._dirty.add(request_id)
-        # A receipt rewritten in place (a redelivery) is re-read when its job changes.
+        self._scanned_once = True
 
     def _forget(self, request_id: str) -> None:
-        self._receipts.pop(request_id, None)
-        self._records.pop(request_id, None)
-        self._written_at.pop(request_id, None)
-        self._deferred.discard(request_id)
-        self._dirty.discard(request_id)
+        for table in (self._receipts, self._receipt_stamps, self._records, self._written_at,
+                      self._write_failures):
+            table.pop(request_id, None)
+        for pending in (self._deferred, self._dirty, self._observed_from_start):
+            pending.discard(request_id)
         for job_id in [job for job, request in self._job_requests.items() if request == request_id]:
             del self._job_requests[job_id]
 
@@ -353,12 +427,7 @@ class RequestStatusPublisher:
                 row = job_store.get_job_row(job_id)
                 if row is None:
                     continue
-                metadata = row.get("task_metadata")
-                cad = metadata.get("cad") if isinstance(metadata, Mapping) else None
-                config = row.get("config_json")
-                request_id = (cad or {}).get("operation_id") if isinstance(cad, Mapping) else None
-                if not request_id and isinstance(config, Mapping) and config.get("type") == "cad_intent":
-                    request_id = config.get("operation_id")
+                request_id = (job_cad_state(row) or {}).get("operation_id")
                 if not isinstance(request_id, str) or request_id not in self._receipts:
                     # Not a Fusion request's job (a solve started in WG, say):
                     # its progress events are not looked up again. Projecting a
@@ -387,65 +456,85 @@ class RequestStatusPublisher:
             return None
         return record if isinstance(record, dict) else None
 
-    def _project(self, request_id: str, job_store: Any) -> tuple[dict[str, Any], Mapping[str, Any] | None]:
+    def _publish(self, request_id: str, job_store: Any, now: float) -> bool:
         receipt = self._receipts[request_id]
         operation = self.store.get_operation(request_id)
-        job = None
-        if job_store is not None and receipt.get("kind", PREPARE_AND_SOLVE) == PREPARE_AND_SOLVE \
-                and receipt.get("outcome") != ACK_REFUSED:
-            job = job_store.latest_cad_job(
-                request_id, receipt.get("jobId") or (operation or {}).get("job_id"),
-            )
+        solve = request_kind(receipt, operation) == PREPARE_AND_SOLVE and receipt.get("outcome") != ACK_REFUSED
+        if solve and job_store is None:
+            return False  # nothing to say about a Solve before the jobs runtime is up
+        job = job_store.latest_cad_job(
+            request_id, receipt.get("jobId") or (operation or {}).get("job_id"),
+        ) if solve else None
         cad = job_cad_state(job) if job is not None else None
         ingest = self._ingest_record(job, cad) if job is not None and job.get("status") == "complete" else None
         if job is not None:
             self._job_requests[str(job["id"])] = request_id
             self._other_jobs.discard(str(job["id"]))
-        record = project_request_status(
-            receipt, operation, job, cad, ingest=ingest, previous=self._records.get(request_id),
-        )
-        return record, job
-
-    def _publish(self, request_id: str, job_store: Any, now: float) -> bool:
-        if job_store is None and self._receipts[request_id].get("kind", PREPARE_AND_SOLVE) == PREPARE_AND_SOLVE \
-                and self._receipts[request_id].get("outcome") != ACK_REFUSED:
-            return False  # nothing to say about a Solve before the jobs runtime is up
-        record, job = self._project(request_id, job_store)
         previous = self._records.get(request_id)
-        if _comparable(record) == _comparable(previous):
+        projected, incident = project_request_status(
+            receipt, operation, job, cad, ingest=ingest, previous=previous,
+        )
+        previous_seq = (previous or {}).get("seq", 0)
+        candidate = validate_request_status(
+            {**projected, "seq": max(previous_seq + 1, _wall_ms()), "updatedAt": utc_now()},
+            request_id=request_id,
+        )
+        if candidate is None:  # pragma: no cover - a projection the reader rejects is a bug
+            logger.error("The status projected for request %s does not validate; not written.", request_id)
+            return False
+        if _comparable(candidate) == _comparable(previous):
             self._deferred.discard(request_id)
             return False
-        if (previous is not None and previous.get("state") == record["state"] == "solving"
+        if (previous is not None and previous.get("state") == candidate["state"] == "solving"
                 and now - self._written_at.get(request_id, float("-inf")) < PROGRESS_INTERVAL_S):
             self._deferred.add(request_id)
             return False
-        seq = previous.get("seq") if previous is not None else 0
-        written = {**record, "seq": (seq if isinstance(seq, int) and not isinstance(seq, bool) else 0) + 1,
-                   "updatedAt": utc_now()}
         try:
-            publish_record(status_path(self.directory, request_id), written)
+            publish_record(status_path(self.directory, request_id), candidate)
         except OSError as exc:
-            logger.debug("Could not write the status of request %s: %s", request_id, exc)
-            self._dirty.add(request_id)  # tried again on the next tick
+            self._write_failed(request_id, exc)
             return False
+        self._write_failures.pop(request_id, None)
         self._deferred.discard(request_id)
-        self._records[request_id] = written
+        self._records[request_id] = candidate
         self._written_at[request_id] = now
-        if written["state"] == "couldNotFinish" and (previous or {}).get("state") != "couldNotFinish" \
-                and _needs_incident(job):
-            self._record_solve_failure(request_id, job, written)
+        observed = (previous is not None and previous.get("state") != "couldNotFinish") or (
+            previous is None and request_id in self._observed_from_start)
+        if incident is not None and candidate["state"] == "couldNotFinish" and observed:
+            self._record_failure(request_id, job, candidate, incident)
         return True
 
-    @staticmethod
-    def _record_solve_failure(request_id: str, job: Mapping[str, Any], record: Mapping[str, Any]) -> None:
-        """A solve of a Fusion request ended in an error: WG's own failure, for the developers."""
+    def _write_failed(self, request_id: str, exc: OSError) -> None:
+        """A status that could not be written: said once, recorded if it keeps failing."""
 
+        failures = self._write_failures.get(request_id, 0) + 1
+        self._write_failures[request_id] = failures
+        self._dirty.add(request_id)  # tried again on the next tick
+        if failures == 1:
+            logger.warning("Could not write the status of request %s: %s", request_id, exc)
+        if failures == WRITE_FAILURE_INCIDENT_AFTER:
+            record_incident(
+                "cad-status-write-failure", "cad-request-status",
+                ids={"request_id": request_id, "operation_id": request_id},
+                exception=exc, evidence={"consecutive_failures": failures},
+            )
+
+    @staticmethod
+    def _record_failure(
+        request_id: str, job: Mapping[str, Any] | None, record: Mapping[str, Any], incident: Mapping[str, Any],
+    ) -> None:
+        """A Fusion request ended in a failure no diagnosis recorded: for the developers."""
+
+        job = job or {}
+        refusal = cad_of(job).get("refusal") if job else None
         record_incident(
-            "cad-solve-failure", "cad-solve",
+            str(incident["kind"]), "cad-solve" if record.get("phase") == "solving" else "cad-preparation",
             ids={"job_id": job.get("id"), "operation_id": request_id, "request_id": request_id,
                  "run_number": job.get("run_number"), "manifest_sha256": record.get("manifestSha256")},
-            evidence={"stage": job.get("stage"), "stage_message": job.get("stage_message"),
-                      "error": job.get("error_message"), "bound": _is_bound(job)},
+            evidence={"code": incident.get("code"), "stage": job.get("stage"),
+                      "stage_message": job.get("stage_message"), "error": job.get("error_message"),
+                      "refusal": dict(refusal) if isinstance(refusal, Mapping) else None,
+                      "bound": _is_bound(job) if job else None},
             redaction_names=[str(record["documentName"])] if record.get("documentName") else [],
         )
 
@@ -454,6 +543,14 @@ class RequestStatusPublisher:
     def tick(self, job_store: Any) -> int:
         """One step: learn, follow, publish. Returns how many files were written."""
 
+        if self._stopped.is_set() or not self._busy.acquire(blocking=False):
+            return 0
+        try:
+            return self._tick(job_store)
+        finally:
+            self._busy.release()
+
+    def _tick(self, job_store: Any) -> int:
         now = self._clock()
         sweep = self._last_sweep is None or now - self._last_sweep >= SWEEP_INTERVAL_S
         if sweep or self._folder_changed():
@@ -464,13 +561,16 @@ class RequestStatusPublisher:
             self._last_sweep = now
             self._dirty.update(
                 request_id for request_id in self._receipts
-                if request_id not in self._records or not request_status_terminal(self._records[request_id])
+                if not request_status_terminal(self._records.get(request_id))
             )
         due = {request_id for request_id in self._deferred
                if now - self._written_at.get(request_id, float("-inf")) >= PROGRESS_INTERVAL_S}
         pending, self._dirty = self._dirty | due, set()
         written = 0
         for request_id in sorted(pending):
+            if self._stopped.is_set():
+                self._dirty.update(pending)  # unpublished; nothing more runs
+                break
             if request_id not in self._receipts:
                 continue
             try:
