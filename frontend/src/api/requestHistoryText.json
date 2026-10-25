@@ -1,0 +1,15 @@
+{
+  "allDocuments": "All documents",
+  "check": "Check in WG",
+  "clearFinished": "Clear finished",
+  "empty": "No Send or Solve yet.",
+  "historyUnavailable": "Earlier request history cannot be read by this version. It has been kept unchanged.",
+  "missing": "Open Waveguide Generator to check this request.",
+  "rowTitle": "{document} \u00b7 {kind} \u00b7 {time}",
+  "send": "Send",
+  "solve": "Solve",
+  "switch": "Switch to Waveguide Generator",
+  "thisDocument": "This document",
+  "unavailable": "This request is no longer in Waveguide Generator.",
+  "unnamedDocument": "This document"
+}

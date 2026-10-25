@@ -415,3 +415,10 @@ def test_mesh_limits_and_surface_deviation_have_one_owner():
         'fullDomainWarning': LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES,
     }
     assert IMPORTED_SURFACE_DEVIATION_MM == wglink_protocol.MESH_DEFAULTS['surface_deviation_mm']
+
+
+def test_frontend_history_words_are_generated_from_the_shared_protocol():
+    text = json.loads((ROOT / "frontend/src/api/requestHistoryText.json").read_text())
+    assert text == wglink_protocol.REQUEST_HISTORY_TEXT
+    for value in text.values():
+        assert not wglink_protocol.user_text_violations(value)

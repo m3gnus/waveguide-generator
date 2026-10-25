@@ -503,13 +503,14 @@ it('captures user intent before fetching an explicit job outside the current pag
   expect(f.display.showIngestedMesh).not.toHaveBeenCalled();
 });
 
-it('allows a new arriving Fusion request after showing history', async () => {
+it('keeps explicit history selected when automatic Fusion requests arrive', async () => {
   const f = fixture(); const old = preparing();
   await f.observe([old]);
   await f.showRequest({ operationId: old.id, jobId: old.id });
   const newer = { ...preparing(null), id: 'new-press', created_at: new Date(NOW + 1000).toISOString() };
   await f.observe([newer, old]);
-  expect(useCadReturnStore.getState().selectedBundle?.requestId).toBe('new-press');
+  expect(currentModel().ingestId).toBe(record.ingest_id);
+  expect(f.display.reportDiagnostic).not.toHaveBeenCalledWith('new-press', expect.anything());
 });
 
 it.each([false, true])('opens a Send through existing CAD selection and respects intervening navigation (%s)', async (navigate) => {
@@ -550,4 +551,66 @@ it('keeps a newer Send while an explicit history model is loading', async () => 
   reply.resolve(json(workspaceFor()));
   await pending;
   expect(f.display.showIngestedMesh).not.toHaveBeenCalled();
+});
+
+
+it('keeps an explicit fetched job through an empty socket page while its model loads', async () => {
+  const reply = deferred<Response>();
+  const old = { ...external('outside-page', NOW - 86400_000), status: 'complete' as const, has_results: true };
+  const f = fixture(vi.fn(async input => String(input).startsWith('/api/status/') ? json(old)
+    : String(input).endsWith('/workspace') ? reply.promise : json(record)));
+  const opening = f.showRequest({ operationId: old.id, jobId: old.id });
+  await vi.waitFor(() => expect(f.fetcher).toHaveBeenCalledWith('/api/runs/outside-page/workspace'));
+  const snapshot = f.observe([]);
+  reply.resolve(json(workspaceFor()));
+  await opening; await snapshot;
+  expect(f.display.showIngestedMesh).toHaveBeenCalledOnce();
+  expect(compareSelection.getSnapshot().primary).toBe(old.id);
+  await f.observe([external('automatic', NOW + 1000)]);
+  expect(compareSelection.getSnapshot().primary).toBe(old.id);
+});
+
+it('allows automatic following again after the person moves on from explicit history', async () => {
+  const f = fixture(); const old = preparing();
+  await f.observe([old]);
+  await f.showRequest({ operationId: old.id, jobId: old.id });
+  noteExplicitNavigation();
+  const newer = { ...preparing(null), id: 'new-press', created_at: new Date(NOW + 1000).toISOString() };
+  await f.observe([newer, old]);
+  expect(useCadReturnStore.getState().selectedBundle?.requestId).toBe('new-press');
+});
+
+it.each(['missing-job', 'missing-operation', 'refused-before-job', 'inactive'] as const)('explains an unavailable explicit request calmly: %s', async (scenario) => {
+  const f = fixture(vi.fn(async () => scenario === 'refused-before-job' ? json({ kind: 'prepare_and_solve' }) : new Response('', { status: 404 })));
+  if (scenario === 'inactive') f.setActive(false);
+  await f.showRequest({ operationId: 'gone', ...(scenario === 'missing-job' ? { jobId: 'gone' } : {}) });
+  expect(f.display.reportStatus).toHaveBeenCalledExactlyOnceWith('This request is no longer in Waveguide Generator.');
+});
+
+
+it('keeps automatic return discovery from overriding an explicit history selection', async () => {
+  const f = fixture(); const old = preparing();
+  await f.observe([old]);
+  await f.showRequest({ operationId: old.id, jobId: old.id });
+  const prepare = vi.fn(async () => ({ ok: true as const }));
+  const later = { ...bundle, bundlePath: 'wgreturn/later.wgreturn', returnId: 'later', modifiedAt: new Date(NOW + 1000).toISOString() };
+  const reader = createCadReturnArrivalReader({ initialChoiceOwed: { current: false },
+    seenReturnRevisions: { current: new Map() },
+    ownsReturn: item => f.ownsReturn(item, []), ownsSolveReturn: item => f.ownsReturn(item, []),
+    autoIngestSelected: prepare,
+  }, (async () => json({ cadFolderConfigured: true, items: [later] })) as typeof fetch);
+  await reader.refresh({ background: true, autoOpenNew: true });
+  expect(prepare).not.toHaveBeenCalled();
+  expect(currentModel().ingestId).toBe(record.ingest_id);
+  noteExplicitNavigation();
+  expect(f.ownsReturn(later, [])).toBe(false);
+});
+
+it('reports one calm line when an explicit run has lost its retained model', async () => {
+  const old = { ...external('lost', NOW - 86400_000), status: 'complete' as const, has_results: true };
+  const f = fixture(vi.fn(async input => String(input).startsWith('/api/status/') ? json(old) : new Response('', { status: 404 })));
+  await f.showRequest({ operationId: old.id, jobId: old.id });
+  const messages = f.display.reportStatus.mock.calls.map(([message]) => message);
+  expect(messages.filter(message => message === 'This request is no longer in Waveguide Generator.')).toHaveLength(1);
+  expect(messages.some(message => message.includes('No run with id') || message.includes('could not show the Fusion model'))).toBe(false);
 });

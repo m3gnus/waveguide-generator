@@ -2385,9 +2385,11 @@ opening a request”.
 consumer runs. A press writes `<requestId>.json` with `schemaVersion`,
 `requestId`, optional `jobId`, and `at`. The delivery pass validates the pointer,
 resolves the request's latest job (ignoring an obsolete supplied job id),
-publishes one jobs-channel event (`operationId`, optional `jobId`), then removes
-the file. It preserves a newer press and defers consumption while no jobs-channel
-subscriber exists, so starting a desktop window after a headless backend cannot
+publishes one jobs-channel event (`operationId`, optional `jobId`, `at`), then removes
+the file after retaining its latest event for replay to each newly connected window
+within the original two-minute lifetime. The socket client also holds a pending
+choice until its display owner mounts. It preserves a newer press and defers
+consumption while no jobs-channel subscriber exists, so starting a desktop window after a headless backend cannot
 lose the choice. This is navigation, never job admission or solve preparation.
 
 `fusionSolveDisplay.ts` is the event's display owner. An explicit choice may
@@ -2395,5 +2397,13 @@ reopen an old or previously acknowledged run; completed runs go through the
 existing `?job=` selection helper with the owner's guarded model opener. A
 Send selects its existing return through CAD's selection path. Later user
 navigation, model choices, edits or document changes cancel pending display,
-and a newer arriving Fusion request can take over normally. No API route or
+and a new Send by the person can take over. An explicit show keeps its fetched
+job even when subsequent socket snapshots omit it, and automatic following cannot
+override it. Only a later person-driven navigation, model choice, edit, document
+change or Send releases that selection. This deliberately bypasses automatic
+arrival age/acknowledgement guards so old history remains reachable. Unavailable
+requests (including refusals before a job and a window outside Fusion mode) show
+the shared history sentence. Invalid, unreadable, oversized or older-than-two-minute
+pointers are discarded; non-regular files are never opened and stale writer temps
+are removed. Every show-request failure is isolated from delivery. No API route or
 OpenAPI schema changes are needed for this additive jobs-channel event.

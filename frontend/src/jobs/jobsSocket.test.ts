@@ -1278,11 +1278,54 @@ it('delivers an explicit Fusion history pointer once and unsubscribes it', () =>
   manager.start();
   socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
   socket.message({ v: 1, kind: 'cadShowRequest', epoch: 1, operationId: 'request', jobId: 'run' });
-  expect(show).toHaveBeenCalledExactlyOnceWith({ operationId: 'request', jobId: 'run' });
+  expect(show).toHaveBeenCalledExactlyOnceWith({ operationId: 'request', jobId: 'run', at: expect.any(String) });
   socket.message({ v: 1, kind: 'cadShowRequest', epoch: 1, operationId: '', jobId: 'run' });
   expect(show).toHaveBeenCalledTimes(1);
   stop();
   socket.message({ v: 1, kind: 'cadShowRequest', epoch: 1, operationId: 'request' });
   expect(show).toHaveBeenCalledTimes(1);
   manager.stop();
+});
+
+
+it('holds a cold-launch history pointer until its display owner mounts once', async () => {
+  const socket = new MockSocket(); const manager = new JobsSocketManager(() => socket);
+  manager.start();
+  socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+  const request = { operationId: 'cold-request', at: new Date().toISOString() };
+  socket.message({ v: 1, kind: 'cadShowRequest', epoch: 1, ...request });
+  const first = vi.fn(); const second = vi.fn();
+  const stopFirst = manager.subscribeCadShowRequest(first);
+  await Promise.resolve();
+  expect(first).toHaveBeenCalledExactlyOnceWith(request);
+  stopFirst();
+  const stopSecond = manager.subscribeCadShowRequest(second);
+  await Promise.resolve();
+  expect(second).not.toHaveBeenCalled();
+  stopSecond(); manager.stop();
+});
+
+it('discards an expired cold-launch history pointer', async () => {
+  const socket = new MockSocket(); const manager = new JobsSocketManager(() => socket);
+  manager.start();
+  socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+  socket.message({ v: 1, kind: 'cadShowRequest', epoch: 1, operationId: 'old', at: new Date(Date.now() - 180_000).toISOString() });
+  const show = vi.fn(); const stop = manager.subscribeCadShowRequest(show);
+  await Promise.resolve();
+  expect(show).not.toHaveBeenCalled();
+  stop(); manager.stop();
+});
+
+
+it('keeps a pending pointer when the first display listener unmounts before replay', async () => {
+  const socket = new MockSocket(); const manager = new JobsSocketManager(() => socket);
+  manager.start(); socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+  socket.message({ v: 1, kind: 'cadShowRequest', epoch: 1, operationId: 'cold', at: new Date().toISOString() });
+  const first = vi.fn(); manager.subscribeCadShowRequest(first)();
+  await Promise.resolve();
+  const next = vi.fn(); const stop = manager.subscribeCadShowRequest(next);
+  await Promise.resolve();
+  expect(first).not.toHaveBeenCalled();
+  expect(next).toHaveBeenCalledOnce();
+  stop(); manager.stop();
 });

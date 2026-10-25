@@ -14,6 +14,7 @@ import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { navigationGeneration, workspaceNavigation } from '../workspaceNavigation';
 import { solveAttention } from '../solveAttention';
 import { openImported, type ImportedDisplay } from '../../stores/importedModel';
+import historyText from '../../api/requestHistoryText.json';
 import './restores';
 
 interface FusionSolveDisplay extends ImportedDisplay {
@@ -50,7 +51,14 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
   let disposed = false;
   let explicitId: string | null = null;
   let showGeneration = 0;
-  let explicitAt = 0;
+  let unavailableGeneration = -1;
+  const reportUnavailable = () => {
+    if (unavailableGeneration === showGeneration) return;
+    unavailableGeneration = showGeneration;
+    display.reportStatus?.(historyText.unavailable);
+  };
+  let explicitJob: JobItem | null = null;
+  let explicitIntent: Intent | null = null;
   let edits = 0;
   let opening: { current(): boolean; generation: number } | null = null;
   // The last time the request arrived or changed (a hold or a failure ends it).
@@ -125,15 +133,27 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
     });
   });
 
+  const explicitCurrent = () => explicitIntent !== null && !disposed && display.isActive()
+    && navigationGeneration() === explicitIntent.navigation && edits === explicitIntent.edits
+    && display.newestSendAt() <= (explicitIntent.sendAt ?? 0) && isCurrentDocumentLoad(explicitIntent.document)
+    && useCadReturnStore.getState().isCurrentModelChoice(explicitIntent.choice);
+
   async function observe(jobs: readonly JobItem[]): Promise<void> {
     latestJobs = jobs;
     cancelObsoleteOpen();
     if (disposed) return;
-    if (explicitId && jobs.some((item) => Date.parse(item.created_at) > explicitAt)) explicitId = null;
-    const job = explicitId ? jobs.find((item) => item.id === explicitId) : latestCadJobs([...jobs])[0];
+    // Only a person moving on ends an explicit selection. Socket pages and
+    // automatically arriving jobs cannot replace the selected history item.
+    if (explicitIntent && !explicitCurrent()) {
+      explicitId = null; explicitJob = null; explicitIntent = null;
+    }
+    if (explicitIntent && !explicitId) return; // an explicit Send owns its return too
+    if (explicitId) explicitJob = jobs.find((item) => item.id === explicitId) ?? explicitJob;
+    const job = explicitId ? explicitJob : latestCadJobs([...jobs])[0];
     if (!job) { newestId = null; return; }
     const sentAt = Date.parse(job.created_at);
     const explicit = explicitId === job.id;
+    const generation = showGeneration;
     if (!explicit && !canFollow(job, jobs)) return;
     if (!explicit && jobs.some((other) => Date.parse(other.created_at) > sentAt)) return;
     const first = !observed.has(job.id);
@@ -147,7 +167,7 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
     display.onIntent();
     const intent = observed.get(job.id)!;
     const blocked = (): string | null => disposed ? 'disposed' : !display.isActive() ? 'inactive'
-      : newestId !== job.id || !latestJobs.some((item) => item.id === job.id) ? 'superseded'
+      : (explicit && generation !== showGeneration) || newestId !== job.id || (!explicit && !latestJobs.some((item) => item.id === job.id)) ? 'superseded'
       : (explicit ? display.newestSendAt() > (intent.sendAt ?? 0)
         : latestJobs.some((item) => Date.parse(item.created_at) > sentAt) || display.newestSendAt() > sentAt) ? 'newer-request'
       : navigationGeneration() !== intent.navigation ? 'navigation'
@@ -171,6 +191,10 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
         }, job.cad_state?.snapshot?.project_lineage_id, true, fetcher);
       }
       workspaceNavigation.activate('results');
+      if (explicit) {
+        intent.navigation = navigationGeneration();
+        intent.choice = useCadReturnStore.getState().captureModelChoice();
+      }
     }
     const accepted = job.cad_state?.state === 'accepted' && job.run_number != null && !!job.cad_source?.ingest_id;
     const preparedId = accepted ? job.cad_source!.ingest_id : job.cad_state?.preparation?.ingest_id;
@@ -190,15 +214,17 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
         // The request's progress belongs to Results. The shared history
         // opener must not front the geometry panel again at each transition.
         enterCadWorkspace: () => workspaceModeStore.setMode('cad'),
-        failureMessage: (error: unknown) => { diagnostic(job.id, 'open-failed', error); return DISPLAY_FAILURE; },
-        reportStatus: (message: string) => display.reportStatus?.(message.startsWith('Cannot show ')
-          ? DISPLAY_FAILURE : message) };
+        failureMessage: (error: unknown) => { diagnostic(job.id, 'open-failed', error); return explicit ? historyText.unavailable : DISPLAY_FAILURE; },
+        reportStatus: (message: string) => {
+          if (explicit && (message === historyText.unavailable || message.startsWith('Cannot show ') || message.startsWith('No run with id '))) reportUnavailable();
+          else display.reportStatus?.(message.startsWith('Cannot show ') ? DISPLAY_FAILURE : message);
+        } };
       let loading: Promise<boolean>;
       if (explicit && accepted) {
         // The ?job= path selects existing runs; the owner supplies its guarded
         // model opener so a later user navigation still cancels this load.
         loading = Promise.resolve(false);
-        openLinkedJob(job.id, latestJobs, (message) => display.reportStatus?.(message), (selected) => {
+        openLinkedJob(job.id, [job], reportUnavailable, (selected) => {
           loading = openImported({ kind: 'run', job: selected, display: guardedDisplay }, fetcher);
           return loading;
         });
@@ -216,7 +242,7 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
       try { shown = await loading; }
       catch {
         diagnostic(job.id, 'open-failed');
-        if (current()) display.reportStatus?.(DISPLAY_FAILURE);
+        if (current()) { if (explicit) reportUnavailable(); else display.reportStatus?.(DISPLAY_FAILURE); }
         return;
       } finally { if (opening === ownOpen) opening = null; }
       if (!shown || !current()) { diagnostic(job.id, blocked() ?? 'not-shown'); return; }
@@ -233,6 +259,8 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
   }
   async function showRequest(request: CadShowRequest): Promise<void> {
     const generation = ++showGeneration;
+    cancelObsoleteOpen();
+    if (!display.isActive()) { reportUnavailable(); return; }
     const intent: Intent = { sendAt: display.newestSendAt(), navigation: navigationGeneration(), edits,
       choice: useCadReturnStore.getState().captureModelChoice(), document: currentDocumentLoad() };
     const current = () => !disposed && display.isActive() && generation === showGeneration
@@ -246,9 +274,9 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
       if (!job && request.jobId) {
         const response = await fetcher(`/api/status/${encodeURIComponent(request.jobId)}`);
         if (!current()) return;
-        if (!response.ok) { display.reportStatus?.(DISPLAY_FAILURE); return; }
+        if (!response.ok) { reportUnavailable(); return; }
         const found = await response.json() as JobItem;
-        if (found.id !== request.jobId) return;
+        if (found.id !== request.jobId) { reportUnavailable(); return; }
         job = found;
       }
       if (!current()) return;
@@ -256,29 +284,35 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
         // Send has no solve job. Select its existing return through CAD's
         // ordinary selection path; never create a browser preparation here.
         const operation = await getCadOperation(request.operationId, fetcher);
-        if (!current() || operation.kind !== 'receive_snapshot') return;
+        if (!current()) return;
+        if (operation.kind !== 'receive_snapshot') { reportUnavailable(); return; }
         const listing = await listReturns(fetcher);
         if (!current()) return;
         const bundle = listing.items.find((item) => item.bundlePath === operation.snapshot?.bundlePath);
-        if (!bundle) { display.reportStatus?.(DISPLAY_FAILURE); return; }
+        if (!bundle) { reportUnavailable(); return; }
         display.onIntent(); display.enterCadWorkspace?.();
         useCadReturnStore.getState().selectBundle(bundle, operation.snapshot?.projectLineageId, true, fetcher);
         workspaceNavigation.activate('results');
+        intent.navigation = navigationGeneration();
+        intent.choice = useCadReturnStore.getState().captureModelChoice();
+        explicitIntent = intent; explicitId = null; explicitJob = null;
         return;
       }
-      explicitId = job.id; explicitAt = now();
+      explicitId = job.id; explicitJob = job; explicitIntent = intent;
       observed.set(job.id, intent); presented.delete(job.id);
       for (const key of handled) if (key.startsWith(`${job.id}:`)) handled.delete(key);
       await observe([job, ...latestJobs.filter((item) => item.id !== job.id)]);
     } catch (error) {
-      if (current()) display.reportStatus?.(DISPLAY_FAILURE);
+      if (current()) reportUnavailable();
       diagnostic(request.jobId ?? request.operationId, 'open-failed', error);
     }
   }
   const stopShowRequest = jobsSocket.subscribeCadShowRequest((request) => { void showRequest(request); });
   return {
     latestSentAt: () => newestSentAt, observe, resume, showRequest,
-    ownsReturn: (bundle: CadReturnBundle, jobs: readonly JobItem[]) => latestCadJobs([...jobs]).some((job) =>
+    // The explicit choice owns automatic discovery too, including new bundles
+    // and jobs omitted by a paged snapshot, until the person moves on.
+    ownsReturn: (bundle: CadReturnBundle, jobs: readonly JobItem[]) => explicitCurrent() || latestCadJobs([...jobs]).some((job) =>
       job.cad_return?.bundle_path === bundle.bundlePath
       && (bundle.returnId && job.cad_return.return_id ? job.cad_return.return_id === bundle.returnId
         : Date.parse(bundle.modifiedAt) <= Date.parse(job.created_at))

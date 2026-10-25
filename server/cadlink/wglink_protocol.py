@@ -2234,6 +2234,7 @@ SHOW_REQUESTS_DIRECTORY = ".wg-show-requests"
 SHOW_REQUEST_SCHEMA_VERSION = 1
 SHOW_REQUEST_CAPABILITY = "showRequest"
 SHOW_REQUEST_EVENT = "cadShowRequest"
+SHOW_REQUEST_MAX_AGE_SECONDS = 120
 REQUEST_HISTORY_FILENAME = ".fusion-request-history.json"
 REQUEST_HISTORY_SCHEMA_VERSION = 1
 REQUEST_HISTORY_LIMIT = 50
@@ -2243,6 +2244,10 @@ REQUEST_HISTORY_TEXT = {
     "clearFinished": "Clear finished", "empty": "No Send or Solve yet.",
     "check": "Check in WG", "missing": f"Open {APP_NAME} to check this request.",
     "switch": f"Switch to {APP_NAME}",
+    "solve": "Solve", "send": "Send", "unnamedDocument": "This document",
+    "rowTitle": "{document} · {kind} · {time}",
+    "unavailable": f"This request is no longer in {APP_NAME}.",
+    "historyUnavailable": "Earlier request history cannot be read by this version. It has been kept unchanged.",
 }
 
 

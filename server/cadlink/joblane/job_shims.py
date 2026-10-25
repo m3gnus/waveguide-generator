@@ -356,13 +356,20 @@ async def run_delivery_pass(
         if note:
             note(blocked)
         return []
-    events = getattr(ctx.runtime, "events", None)
-    if events is not None and events.has_subscribers:
-        for path, record in await asyncio.to_thread(read_show_requests, ctx.data_dir):
-            # Database lookup can touch disk too; publish itself stays on this loop.
-            job = await asyncio.to_thread(ctx.job_store.latest_cad_job, record["requestId"]) if ctx.job_store else None
-            publish_show_request(record, job, events.publish)
-            await asyncio.to_thread(remove_show_request, path, record)
+    try:
+        events = getattr(ctx.runtime, "events", None)
+        # Read even without a listener to discard hostile/expired files.
+        pointers = await asyncio.to_thread(read_show_requests, ctx.data_dir)
+        if events is not None and events.has_subscribers:
+            for path, record in pointers:
+                try:
+                    job = await asyncio.to_thread(ctx.job_store.latest_cad_job, record["requestId"]) if ctx.job_store else None
+                    publish_show_request(record, job, events.publish_latest)
+                    await asyncio.to_thread(remove_show_request, path, record)
+                except Exception:
+                    logger.debug("Could not show Fusion request", exc_info=True)
+    except Exception:  # navigation must never stop Send/Solve delivery
+        logger.debug("Could not process Fusion show requests", exc_info=True)
     if ctx.workspace_root is None:
         if note:
             note(NO_WORKSPACE_REASON)

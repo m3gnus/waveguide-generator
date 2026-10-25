@@ -838,6 +838,7 @@ export class JobsSocketManager {
   }>();
   private readonly listeners = new Set<() => void>();
   private readonly cadOperationListeners = new Set<CadOperationListener>();
+  private pendingCadShowRequest: CadShowRequest | null = null;
   private readonly cadShowRequestListeners = new Set<(request: CadShowRequest) => void>();
   private readonly cadViewportReadyListeners = new Set<(ingestId: string) => void>();
   private snapshot: JobsSnapshot = {
@@ -864,6 +865,15 @@ export class JobsSocketManager {
 
   subscribeCadShowRequest = (listener: (request: CadShowRequest) => void): (() => void) => {
     this.cadShowRequestListeners.add(listener);
+    const pending = this.pendingCadShowRequest;
+    if (pending && Date.now() - Date.parse(pending.at ?? '') <= 120_000) {
+      queueMicrotask(() => {
+        if (this.cadShowRequestListeners.has(listener) && this.pendingCadShowRequest === pending) {
+          this.pendingCadShowRequest = null;
+          listener(pending);
+        }
+      });
+    }
     return () => this.cadShowRequestListeners.delete(listener);
   };
 
@@ -1132,8 +1142,15 @@ export class JobsSocketManager {
         this.update({ error: 'Invalid jobs cadShowRequest message' });
         return;
       }
-      this.cadShowRequestListeners.forEach((listener) => listener({ operationId: decoded.operationId as string,
-        ...(decoded.jobId ? { jobId: decoded.jobId as string } : {}) }));
+      const request: CadShowRequest = { operationId: decoded.operationId,
+        at: typeof decoded.at === 'string' ? decoded.at : new Date().toISOString(),
+        ...(decoded.jobId ? { jobId: decoded.jobId as string } : {}) };
+      if (!Number.isFinite(Date.parse(request.at!)) || Date.now() - Date.parse(request.at!) > 120_000) return;
+      if (!this.cadShowRequestListeners.size) this.pendingCadShowRequest = request;
+      else {
+        this.pendingCadShowRequest = null;
+        this.cadShowRequestListeners.forEach((listener) => listener(request));
+      }
       return;
     }
     if (decoded.kind === 'cadViewportReady') {
@@ -1549,6 +1566,6 @@ export class JobsSocketManager {
   }
 }
 
-export interface CadShowRequest { operationId: string; jobId?: string }
+export interface CadShowRequest { operationId: string; jobId?: string; at?: string }
 
 export const jobsSocket = new JobsSocketManager();
