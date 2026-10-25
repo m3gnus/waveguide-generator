@@ -225,12 +225,12 @@ def test_a_failure_of_the_rules_is_recorded_and_the_return_admitted(h: JobsHarne
     from server.platform.incidents import configure_incidents
 
     incidents = configure_incidents(tmp_path / "wg-data", app_root=tmp_path / "app")
-    import server.cadlink.joblane.preparation as preparation
+    import server.cadlink.intake.preflight as preflight
 
     def broken(_manifest):
         raise RuntimeError("rule crashed")
 
-    monkeypatch.setattr(preparation, "admission_refusal", broken)
+    monkeypatch.setattr(preflight, "admission_refusal", broken)
     bundle_path, manifest = _blocked_return(h.workspace)
     _file(h.data_dir, "cmd-1", bundle_path, manifest, schema=4, kind="prepare_and_solve")
     _collect(h)
@@ -390,3 +390,76 @@ def test_a_fusion_answer_holds_only_for_the_preparation_it_was_given_for(h: Jobs
     assert intent_of(row).mesh_limit_override is True
     h._loop.run(h.runtime.prepare_cad_solve(job_id, setup_revision_id=other))
     assert intent_of(h.jobs_store.get_job_row(job_id)).mesh_limit_override is False
+
+
+def _accepted_blocked_solve(h: JobsHarness) -> None:
+    bundle_path, manifest = _blocked_return(h.workspace)
+    target, inputs = prepare_and_solve_request(return_id="wgr_1", bundle_path=bundle_path, manifest_sha256=manifest)
+    h.store.accept_operation("cmd-1", PREPARE_AND_SOLVE, request_digest(PREPARE_AND_SOLVE, target, inputs),
+                             target, inputs)
+
+
+def test_the_fence_refuses_when_retention_did_not(h: JobsHarness, monkeypatch):
+    """Admission judges again under the operation fence, whatever retention said."""
+    import server.cadlink.joblane.job_shims as job_shims
+    import server.cadlink.joblane.preparation as preparation
+
+    _accepted_blocked_solve(h)
+    real = preparation.refuse_blocked_return
+    monkeypatch.setattr(preparation, "refuse_blocked_return", lambda *a, **k: False)
+    preparation.retain_operation_snapshot(h.store, h.data_dir, h.workspace.resolve(), "cmd-1")
+    monkeypatch.setattr(preparation, "refuse_blocked_return", real)
+    monkeypatch.setattr(job_shims, "retain_operation_snapshot", lambda *a, **k: "retained")
+    assert h.store.get_operation("cmd-1")["state"] == "received"
+    job = h._loop.run(job_shims.accept_operation_solve(h.context(), "cmd-1", schedule=False, delivery_released=True))
+    row = h.store.get_operation("cmd-1")
+    assert job is None and (row["state"], row["reason"]) == ("rejected", PREFLIGHT_BLOCKED)
+    assert h.jobs_store.latest_cad_job("cmd-1") is None
+
+
+def test_a_delivery_admitted_before_wg_held_its_return_is_judged_by_its_first_preparation(
+    h: JobsHarness, monkeypatch,
+):
+    """Its retention wait ran out, so admission never saw the manifest: preparation refuses it, calmly."""
+    import server.cadlink.joblane.job_shims as job_shims
+    import server.cadlink.joblane.preparation as preparation
+
+    _accepted_blocked_solve(h)
+    # Admission without the return held: nothing was there to judge.
+    monkeypatch.setattr(preparation, "refuse_blocked_return", lambda *a, **k: False)
+    monkeypatch.setattr(job_shims, "refuse_blocked_return", lambda *a, **k: False)
+    job_id = h._loop.run(job_shims.accept_operation_solve(h.context(), "cmd-1", schedule=False,
+                                                          delivery_released=True))
+    assert job_id is not None
+    monkeypatch.undo()
+    meshed = []
+    h.prepare(setup_revision_id=_revision(h.store, _setup()), ingest=lambda *a, **k: meshed.append(1))
+    row = h.jobs_store.get_job_row(job_id)
+    assert row["status"] == "error" and meshed == []
+    refusal = row["task_metadata"]["cad"]["refusal"]
+    assert refusal == {"code": PREFLIGHT_BLOCKED, "message": _expected_refusal()}
+
+
+def test_a_malformed_snapshot_record_stays_an_invalid_retention(h: JobsHarness, monkeypatch):
+    import sqlite3
+    from contextlib import closing
+
+    from server.cadlink.joblane.preparation import RETAIN_INVALID, retain_operation_snapshot
+
+    _accepted_blocked_solve(h)
+    with closing(sqlite3.connect(h.store.db_path)) as conn:
+        conn.execute("UPDATE cad_operations SET snapshot_json = '{not json' WHERE operation_id = 'cmd-1'")
+        conn.commit()
+    assert retain_operation_snapshot(h.store, h.data_dir, h.workspace.resolve(), "cmd-1") == RETAIN_INVALID
+
+
+def test_an_invalid_refusal_is_not_retried_forever(h: JobsHarness, monkeypatch):
+    from server.cadlink.joblane.preparation import RETAIN_INVALID, retain_operation_snapshot
+
+    _accepted_blocked_solve(h)
+
+    def invalid(*_a, **_k):
+        raise ValueError("not an outcome this store records")
+
+    monkeypatch.setattr(h.store, "reject_received", invalid)
+    assert retain_operation_snapshot(h.store, h.data_dir, h.workspace.resolve(), "cmd-1") == RETAIN_INVALID

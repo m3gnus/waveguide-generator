@@ -232,7 +232,8 @@ def preflight_findings(draft: Mapping[str, Any], *, limits: Mapping[str, Any] | 
     ``surface_groups`` (``name``), ``groups_out_of_scope`` (names),
     ``open_bodies`` (``name``, ``declared``: the scope classifier included
     it as a meant open shell -- declared with Declare Body… or made by WG --
-    rather than taking the only visible body as the shell) and
+    rather than taking the only visible body as the shell),
+    ``symmetry`` (the mesh settings', ``'auto'`` or ``'off'``) and
     ``triangles_least`` -- the fewest triangles
     WG could plausibly solve (the most reduced domain). ``limits`` is WG's
     advertised ``{'solvedTriangles': n}``.
@@ -301,7 +302,8 @@ def preflight_findings(draft: Mapping[str, Any], *, limits: Mapping[str, Any] | 
             f'{_quoted(open_bodies)} {_plural(len(open_bodies), "is not a closed solid", "are not closed solids")}; '
             'WG may not be able to prepare '
             f'{_plural(len(open_bodies), "it", "them")}.')))
-    ceiling = ceiling_finding(draft.get('triangles_least'), limits=limits)
+    ceiling = ceiling_finding(draft.get('triangles_least'), limits=limits,
+                              symmetry=str(draft.get('symmetry') or 'auto'))
     if draft.get('kind') == 'solve' and ceiling is not None:
         findings.append(ceiling)
     order = {PREFLIGHT_BLOCK: 0, PREFLIGHT_ASK: 1, PREFLIGHT_NOTE: 2}
@@ -315,17 +317,28 @@ def solved_triangle_limit(limits: Mapping[str, Any] | None = None) -> int:
         else DEFAULT_SOLVED_TRIANGLE_LIMIT
 
 
-def ceiling_finding(least: object, *, limits: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
+#: The ceiling's remedy inside Sources & Mesh, where the sizes are on screen.
+CEILING_REMEDY_IN_SOURCES_AND_MESH = 'Larger mesh sizes give fewer triangles; or check the model size.'
+
+
+def ceiling_finding(least: object, *, limits: Mapping[str, Any] | None = None,
+                    symmetry: str = 'auto', in_sources_and_mesh: bool = False) -> dict[str, Any] | None:
     """The ``mesh_ceiling`` finding for the fewest triangles WG could solve, or None.
 
-    Sources & Mesh shows it as a warning; Solve asks it on OK.
+    ``symmetry`` is the mesh settings' (``'auto'`` or ``'off'``): with it off
+    the count is the whole model's, and the words do not mention symmetry.
+    Sources & Mesh shows it as a warning, with the remedy for that dialog;
+    Solve asks it on OK.
     """
     limit = solved_triangle_limit(limits)
     if not isinstance(least, int) or isinstance(least, bool) or least <= limit:
         return None
-    return preflight_finding('mesh_ceiling', (
-        f'Even if WG can use symmetry, this model meshes to about {least:,} triangles, '
-        f'above the {limit:,} limit.'))
+    prefix = 'This model' if symmetry == 'off' else 'Even if WG can use symmetry, this model'
+    finding = preflight_finding('mesh_ceiling', (
+        f'{prefix} meshes to about {least:,} triangles, above the {limit:,} limit.'))
+    if in_sources_and_mesh:
+        finding['remedy'] = CEILING_REMEDY_IN_SOURCES_AND_MESH
+    return finding
 
 
 def manifest_draft(manifest: Mapping[str, Any], *, kind: str | None = None) -> dict[str, Any]:

@@ -1760,9 +1760,12 @@ admission use one rule set, `preflight_findings` in the vendored `wglink_protoco
   rules' words as its message, which its acknowledgement carries back. The rejection
   is one store transaction (`reject_received`: conditional on `received` with no job),
   so no claimed row is left without its outcome and of two passes racing one records
-  it. It is never prepared. A store failure recording it is a developer incident and
-  the delivery is retried, never admitted; a failure of the rules themselves is an
-  incident too, and the return is admitted.
+  it. It is never prepared. A delivery admitted before WG held its return (its retention
+  wait ran out, so admission had no manifest to read) is judged by its first
+  preparation instead and refused the same way, with no mesh and no solve; a Solve
+  again, or a solve started in WG, is not judged again. A store failure recording a
+  refusal is a developer incident and the delivery is retried, never admitted; a
+  failure of the rules themselves is an incident too, and the return is admitted.
 - **ask**: asked once in Fusion's pop-up on OK. The answer that settles a WG hold travels
   as `acknowledged` (`ACKNOWLEDGES`: `mesh_ceiling` answers `mesh_too_large`, Solve
   anyway). Admission makes it the job's `mesh_limit_override`, recorded with

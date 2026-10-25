@@ -15,7 +15,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+import logging
+
 from server.cadlink.wglink_protocol import blocking, finding_text, manifest_draft, preflight_findings
+from server.platform.incidents import record_incident
+
+logger = logging.getLogger(__name__)
 
 
 def blocking_findings(manifest: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -29,3 +34,24 @@ def admission_refusal(manifest: Mapping[str, Any]) -> str | None:
 
     findings = blocking_findings(manifest)
     return " ".join(finding_text(finding) for finding in findings) if findings else None
+
+
+def judged_refusal(manifest: Mapping[str, Any], *, operation_id: str, job_id: str | None = None) -> str | None:
+    """:func:`admission_refusal`, never raising: the one judgement of a delivered return.
+
+    Admission (``joblane.preparation.refuse_blocked_return``) and, for a
+    delivery admitted before WG held its return, the first preparation
+    (``jobs.cad_preparation``) both judge through this. A failure of the
+    rules themselves is WG's own: recorded for the developers, and the return
+    is admitted (None).
+    """
+
+    try:
+        return admission_refusal(manifest)
+    except Exception as exc:  # noqa: BLE001 - a rule failure never refuses a model
+        record_incident("preflight-rules-failed", "cad-admission",
+                        ids={"operation_id": operation_id, **({"job_id": job_id} if job_id else {})},
+                        exception=exc)
+        logger.warning("The preflight rules failed on CAD operation %s; admitted.", operation_id,
+                       exc_info=True)
+        return None

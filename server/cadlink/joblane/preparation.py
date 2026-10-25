@@ -29,7 +29,7 @@ from server.cadlink.operations import (
     TERMINAL_STATES,
     reason_attention,
 )
-from server.cadlink.intake.preflight import admission_refusal
+from server.cadlink.intake.preflight import judged_refusal
 from server.platform.incidents import record_incident
 from server.cadlink.intake.solve_command import (
     CAD_SOLVE_SUBMISSION_PREFIX,
@@ -272,6 +272,8 @@ def retain_operation_snapshot(
             row = store.get_operation(operation_id) or row
         try:
             refused = refuse_blocked_return(store, data_dir, row)
+        except ValueError:
+            raise  # Never retainable as named: the invalid outcome below.
         except Exception:  # noqa: BLE001 - recorded there; retried on the next pass
             return RETAIN_TRANSIENT
         if refused:
@@ -318,18 +320,16 @@ def refuse_blocked_return(store: CadLinkStore, data_dir: Path, row: Mapping[str,
     if not isinstance(inputs, Mapping) or str(inputs.get("bundle_path") or "").startswith("ingest/"):
         return False
     operation_id = str(row["operation_id"])
-    retained = _retained(data_dir, row)
+    try:
+        retained = _retained(data_dir, row)
+    except (TypeError, ValueError):
+        return False  # A malformed snapshot record is refused as such by retention.
     manifest = _retained_manifest(retained) if retained is not None else None
     if manifest is None:
+        # Not held yet: a delivery admitted before WG kept its return is judged
+        # by its first preparation instead (jobs.cad_preparation).
         return False
-    try:
-        refusal = admission_refusal(manifest)
-    except Exception as exc:  # noqa: BLE001 - a rule failure never refuses a model
-        record_incident("preflight-rules-failed", "cad-admission",
-                        ids={"operation_id": operation_id}, exception=exc)
-        logger.warning("The preflight rules failed on CAD operation %s; admitted.", operation_id,
-                       exc_info=True)
-        return False
+    refusal = judged_refusal(manifest, operation_id=operation_id)
     if refusal is None:
         return False
     try:

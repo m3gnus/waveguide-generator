@@ -51,7 +51,9 @@ from server.cadlink.intake.ingest import (
     meshing_semantics_fingerprint,
 )
 from server.cadlink.intake.isolation import ChildRefusal
+from server.cadlink.intake.preflight import judged_refusal
 from server.cadlink.operations import (
+    PREFLIGHT_BLOCKED,
     REASON_CODES,
     axis_not_allowed_message,
     hold_details,
@@ -668,6 +670,14 @@ def prepare_job_sync(
             "return_unavailable",
             "WG could not read its retained copy of this return.",
         )
+    if run.intent.parent_job_id is None and not run.intent.bundle_path.startswith("ingest/"):
+        # A delivery admitted before WG held its return (its retention wait
+        # ran out) was never judged at admission: its first preparation is.
+        # A Solve again continues a return already judged; a solve started in
+        # WG is no delivery.
+        refusal = judged_refusal(retained_manifest, operation_id=run.intent.operation_id, job_id=run.job_id)
+        if refusal is not None:
+            return run.refuse(PREFLIGHT_BLOCKED, refusal)
     try:
         effective_setup = snapshot_setup(setup, retained_manifest)
     except ValueError:
