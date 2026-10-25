@@ -14,6 +14,53 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _isolated_environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    for name in ("PYTEST_XDIST_WORKER", "PYTEST_XDIST_WORKER_COUNT", "PYTEST_XDIST_TESTRUNUID"):
+        environment.pop(name, None)
+    environment["PYTHONPATH"] = str(REPO_ROOT)
+    return environment
+
+
+def test_a_crashed_worker_ends_the_run_instead_of_idling_it(tmp_path):
+    """loadgroup never finishes after replacing a crashed worker; restarts stay off.
+
+    Without the suite's default the inner run below never returns: the
+    surviving worker keeps its last test waiting for work, and the timeout here
+    is what a CI job limit was on 2026-10-25.
+    """
+
+    pytest.importorskip("xdist")
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / "pytest.ini").write_text((REPO_ROOT / "pytest.ini").read_text())
+    (suite / "conftest.py").write_text((REPO_ROOT / "conftest.py").read_text())
+    (suite / "test_crash.py").write_text('''
+import os
+import pytest
+
+@pytest.mark.parametrize("number", range(6))
+def test_before(number):
+    pass
+
+def test_crash():
+    os._exit(1)
+
+@pytest.mark.parametrize("number", range(6))
+def test_after(number):
+    pass
+''')
+    completed = subprocess.run(
+        [sys.executable, "-m", "pytest", str(suite), "-n2", "--dist=loadgroup",
+         "-q", "-p", "no:cacheprovider", f"--basetemp={tmp_path / 'inner-basetemp'}"],
+        cwd=suite, env=_isolated_environment(), capture_output=True, text=True, timeout=60,
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 1, output
+    assert "crashed while running 'test_crash.py::test_crash'" in output
+    assert "1 failed" in output
+
+
 def test_workers_have_private_data_and_serial_marks_stay_on_one_worker(tmp_path):
     pytest.importorskip("xdist")
     suite = tmp_path / "suite"
@@ -54,10 +101,7 @@ def test_group(number):
     output = Path(os.environ["TEST_ISOLATION_EVIDENCE"]) / ("group-" + str(number) + ".json")
     output.write_text(json.dumps(os.getpid()))
 ''')
-    environment = dict(os.environ)
-    for name in ("PYTEST_XDIST_WORKER", "PYTEST_XDIST_WORKER_COUNT", "PYTEST_XDIST_TESTRUNUID"):
-        environment.pop(name, None)
-    environment["PYTHONPATH"] = str(REPO_ROOT)
+    environment = _isolated_environment()
     environment["TEST_ISOLATION_EVIDENCE"] = str(evidence)
     # The children's tmp_path lives under ours, so the outer --basetemp governs
     # every run and none touches the user-wide pytest-of-<user> root.

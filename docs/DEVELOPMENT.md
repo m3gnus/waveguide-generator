@@ -383,7 +383,9 @@ integration tests only when explicitly requested. It never changes the default
 full gate.
 
 Parallel execution requires `--dist=loadgroup` (the launcher adds it for `-n`).
-Prefer isolation: each worker has its own import-time data/add-in sandbox and
+A crashed worker ends the run (the root `conftest.py` defaults
+`--max-worker-restart` to 0): the loadgroup scheduler never finishes after
+replacing one, so a restart would idle the run instead. Prefer isolation: each worker has its own import-time data/add-in sandbox and
 process globals, `tmp_path` is worker-specific, and shutdown harness servers use
 a test-local port-0 reservation and publish the kernel-assigned port. The
 production CLI still validates ports 1–65535. The session-claim guard restores its global

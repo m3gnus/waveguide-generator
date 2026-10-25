@@ -736,6 +736,11 @@ def test_jobs_answer_while_solver_prewarm_is_synchronously_blocked(
 
     Use a real lifespan and HTTP request, with an independent thread releasing
     the stall as a backstop: an asyncio timeout cannot fire on a blocked loop.
+
+    Only the answer is timed against the stall. How long the background chain
+    takes to *reach* it is scheduling, not the property: on a loaded four-worker
+    runner its thread hops have taken over six seconds (dev CI, 2026-10-25), and
+    a deadline on that failed a loop that was answering throughout.
     """
     from server import app as app_module
     from server.solver import beat_cpu_runtime, bempp_process, warmup as solver_warmup
@@ -747,7 +752,7 @@ def test_jobs_answer_while_solver_prewarm_is_synchronously_blocked(
         EngineInfo(saved, True, "test", "0.1.0"),
     ])
     monkeypatch.setattr(solver_warmup, "persisted_engine_preference", lambda _settings: saved)
-    monkeypatch.setattr(solver_warmup, "prewarm_beat_worker_for_engine", lambda _engine: True)
+    monkeypatch.setattr(solver_warmup, "prewarm_beat_worker_for_engine", lambda _engine, **_kwargs: True)
     monkeypatch.setattr(solver_warmup, "start_solver_warmup", lambda **kwargs: None)
     monkeypatch.setattr(bempp_process, "prewarm_bempp_process", lambda: None)
     monkeypatch.setattr(bempp_process, "shutdown_bempp_process", lambda: None)
@@ -762,10 +767,13 @@ def test_jobs_answer_while_solver_prewarm_is_synchronously_blocked(
 
     entered, release, finished = threading.Event(), threading.Event(), threading.Event()
 
+    reach_seconds, answer_seconds = 30, 3
+    backstop_seconds = reach_seconds + answer_seconds + 2
+
     def hang():
         entered.set()
         try:
-            assert release.wait(10), "test backstop must release blocked prewarm"
+            assert release.wait(backstop_seconds + 10), "test backstop must release blocked prewarm"
         finally:
             finished.set()
 
@@ -793,25 +801,27 @@ def test_jobs_answer_while_solver_prewarm_is_synchronously_blocked(
 
     application = create_app(data_dir=tmp_path, solver_warmup=blocked_work == "solver-import")
     client = TestClient(application)
-    backstop = threading.Timer(6, release.set)
+    backstop = threading.Timer(backstop_seconds, release.set)
     backstop.daemon = True
     backstop.start()
 
     async def exercise():
-        began = time.monotonic()
         async with application.router.lifespan_context(application):
             try:
-                async with asyncio.timeout(3):
+                async with asyncio.timeout(reach_seconds):
                     while not entered.is_set():
                         await asyncio.sleep(0.01)
+                stalled = time.monotonic()
+                async with asyncio.timeout(answer_seconds):
                     response = await client.request_async("GET", "/api/jobs")
                 assert response.status_code == 200
                 assert response.json()["items"] == []
-                assert time.monotonic() - began < 3
+                assert time.monotonic() - stalled < answer_seconds
                 assert not release.is_set(), "startup and HTTP must finish during the stall"
             finally:
                 release.set()
-                assert await asyncio.to_thread(finished.wait, 3)
+                if entered.is_set():
+                    assert await asyncio.to_thread(finished.wait, 10)
 
     try:
         asyncio.run(exercise())

@@ -15,6 +15,8 @@ against the pinned mesher before this module existed:
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 
@@ -96,6 +98,22 @@ def _rounded(**mesh: float) -> DesignConfig:
 
 def _params(design: DesignConfig) -> dict:
     return _geometry_params(_stl_mesher_config(_prepared_design(design)))
+
+
+#: Each corner-arc surface plan costs 70-170 s, and four tests here plan the
+#: same design. They share one worker (in file order) and each distinct plan is
+#: made once there, so no test pays two of them against the 300 s faulthandler
+#: limit: the independence test did, took 205-210 s on CI, and was killed on a
+#: loaded Windows runner on 2026-10-25.
+CORNER_SURFACE_PLAN = pytest.mark.xdist_group("corner-surface-plan")
+_SURFACE_PLANS: dict[str, GridPlan] = {}
+
+
+def _planned_surface(design: DesignConfig) -> GridPlan:
+    key = json.dumps(design.model_dump(mode="json"), sort_keys=True)
+    if key not in _SURFACE_PLANS:
+        _SURFACE_PLANS[key] = _surface_grid_plan(design)
+    return _SURFACE_PLANS[key]
 
 
 # --- the measurement itself ----------------------------------------------
@@ -303,6 +321,7 @@ def test_the_written_spline_is_measured_because_the_chord_does_not_bound_it() ->
 
 
 @pytest.mark.slow
+@CORNER_SURFACE_PLAN
 def test_the_surface_plan_for_a_corner_design_is_measured_and_inside_target() -> None:
     """Defect 1 and 2 together, at the planner.
 
@@ -311,7 +330,7 @@ def test_the_surface_plan_for_a_corner_design_is_measured_and_inside_target() ->
     written file is 0.155 mm out.
     """
 
-    plan = _surface_grid_plan(_rounded())
+    plan = _planned_surface(_rounded())
     assert (plan.angular, plan.length) != (96, 56)
     assert plan.deviation_mm is not None
     assert plan.deviation_mm <= STL_CHORD_TOLERANCE_MM
@@ -321,6 +340,7 @@ def test_the_surface_plan_for_a_corner_design_is_measured_and_inside_target() ->
 
 
 @pytest.mark.slow
+@CORNER_SURFACE_PLAN
 def test_a_plan_names_the_grid_the_builder_resolves_it_to() -> None:
     """A plan's counts are requests, so a reading describes what is written.
 
@@ -331,7 +351,7 @@ def test_a_plan_names_the_grid_the_builder_resolves_it_to() -> None:
     from server.exports.sizing import _point_grid
 
     design = _rounded()
-    plan = _surface_grid_plan(design)
+    plan = _planned_surface(design)
     written = _inner_grid(design, grid=(plan.angular, plan.length))
     measured, resolved_angular, resolved_length = measure_deviation(
         _params(design), plan.angular, plan.length
@@ -395,10 +415,11 @@ def test_the_solid_step_still_falls_back_rather_than_read_a_chord_as_a_fit() -> 
 
 
 @pytest.mark.slow
+@CORNER_SURFACE_PLAN
 def test_corner_design_exports_ignore_the_solver_mesh_too() -> None:
     """Independence has to survive the new reading, on the new design."""
 
-    default_surface = _surface_grid_plan(_rounded())
+    default_surface = _planned_surface(_rounded())
     assert (
         _surface_grid_plan(_rounded(mouth_resolution=3, throat_resolution=1.5))
         == default_surface
@@ -787,7 +808,7 @@ def _chord_sagitta(face, u_star: float, step: float) -> float:
                 "rotation": 25,
             },
         },
-        ROUNDED_RECTANGLE_MORPH,
+        pytest.param(ROUNDED_RECTANGLE_MORPH, marks=CORNER_SURFACE_PLAN),
     ],
     ids=[
         "R-OSSE-mouth-rollback",
@@ -857,7 +878,7 @@ def test_written_surface_step_meets_its_chord_target_after_occ_round_trip(
     import gmsh
 
     design = DesignConfig.model_validate(payload)
-    plan = _surface_grid_plan(design)
+    plan = _planned_surface(design)
     source = _inner_grid(design, grid=(plan.angular, plan.length))
     # The morph builder keeps three arc intervals regardless of the requested
     # angular count. A merely 2x/8x angular grid therefore never probes between

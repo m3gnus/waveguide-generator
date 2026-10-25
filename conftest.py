@@ -84,6 +84,15 @@ def pytest_configure(config: pytest.Config) -> None:
         raise pytest.UsageError("Use a bounded worker count: -n 0 through -n 6; never -n auto.")
     if workers and config.getoption("dist", default="no") != "loadgroup":
         raise pytest.UsageError("Parallel tests require --dist=loadgroup to honour serial groups.")
+    if workers and config.getoption("maxworkerrestart", default=None) is None:
+        # pytest-xdist's loadgroup scheduler never finishes once it has replaced
+        # a crashed worker: the survivors each hold their last test, waiting for
+        # work the replacement is never given, and the run idles until something
+        # cancels it. On Server (windows-latest), 2026-10-25, a worker the
+        # faulthandler timeout killed at 10:04 left the job idle from 10:25 to
+        # its 80-minute limit. Without a restart the crash ends the run at once
+        # and is reported as the failure it is. An explicit option still wins.
+        config.option.maxworkerrestart = "0"
 
 
 @pytest.fixture()
