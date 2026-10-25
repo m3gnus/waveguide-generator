@@ -6,6 +6,16 @@ import states from '../../../server/tests/fixtures/cad_request_states.json';
 import { selectCadModelState, type CadModelRequest } from './cadModelState';
 import { cadModelStatusLine, cadRequestState, type CadModelStatusLine } from './cadModelStatusLine';
 import type { MeshCeilingChoice } from './meshCeilingChoice';
+import { cadJobFixture } from '../jobs/cadSolve.fixtures';
+import type { CadOperationSummary } from '../api/cadOperations';
+
+const MANIFEST = `sha256:${'c'.repeat(64)}`;
+function operation(jobId: string, state: string, overrides: Partial<CadOperationSummary> = {}): CadOperationSummary {
+  return { operationId: `op-${jobId}`, kind: 'prepare_and_solve', state, stage: 'submitted', reason: null, message: null,
+    jobId, attemptGeneration: 1, setupRevisionId: null, preparationId: null,
+    snapshot: { manifestSha256: MANIFEST, documentName: 'Speaker' }, legacy: false,
+    createdAt: '2026-10-25T10:00:00Z', updatedAt: '2026-10-25T10:00:00Z', ...overrides } as CadOperationSummary;
+}
 
 const idle = { ingesting: false, ingestError: null };
 const prepared = { ...record, mesh: { stats: { triangle_count: 3035 } } } as typeof record;
@@ -88,7 +98,7 @@ describe('the CAD model status line', () => {
 
   it('fails calmly, with Try again only where it can work, and never also says not prepared', () => {
     const failed = line(selected, { ...idle, ingestError: 'stage 1 bundle validation: $.sources[x]' });
-    expect(failed).toMatchObject({ text: 'WG could not prepare Speaker.', short: 'could not prepare', action: 'try-again' });
+    expect(failed).toMatchObject({ text: 'Waveguide Generator could not prepare Speaker.', short: 'could not prepare', action: 'try-again' });
     expectPlain(failed);
     expect(line(pointer, { ...idle, ingestError: 'x' })).toMatchObject({ action: 'none' });
   });
@@ -108,4 +118,31 @@ describe('the CAD model status line', () => {
     expect(line(onScreen, idle, requestFor({ ...job, frequency_progress: { done: 9, total: 36 } } as JobItem)))
       .toMatchObject({ text: 'Solving · 9 of 36 frequencies', short: 'solving 9/36' });
   });
+
+  it('says what happened to a return WG cannot read, and where a copy comes from, in the user\'s CAD app', () => {
+    const unreadable = { ...selected, selectedBundle: { ...bundle, readable: false } };
+    expect(line(unreadable)).toMatchObject({ text: 'Waveguide Generator cannot read Speaker. Send it again from Fusion.', action: 'none' });
+    expect(line({ ...unreadable, selectedBundle: { ...unreadable.selectedBundle, bundleOrigin: 'onshape' } }).text)
+      .toBe('Waveguide Generator cannot read Speaker. Send it again from Onshape.');
+  });
+
+  it('does not offer Choose… for the question already on screen', () => {
+    const job = { id: 'held-1', status: 'held', cad_state: { state: 'needs_user_input', reason: 'setup_required', held: true, attention: 'question' } } as unknown as JobItem;
+    expect(line(selected, idle, { kind: 'waiting', job }, null, { choiceOpen: true })).toMatchObject({ action: 'none', short: 'needs your choice' });
+    const asked: MeshCeilingChoice = { name: 'Speaker', nextStep: 'x', bundlePath: bundle.bundlePath, then: 'prepare', deferred: false };
+    expect(line(selected, idle, null, asked).action).toBe('none');
+  });
+
+  it('follows a refused continuation child, never its solved parent', () => {
+    const parent = { ...cadJobFixture(operation('job-parent', 'accepted'), { status: 'complete' }), has_results: true, run_number: 1 } as JobItem;
+    const child = cadJobFixture(operation('job-child', 'rejected', { reason: 'model_cut_unsolvable', message: 'Speaker arrived cut open.' }),
+      { parent_job_id: 'job-parent', status: 'error', created_at: '2026-10-25T11:00:00Z' });
+    const model: CurrentModel = { kind: 'cad', key: null, lineage: null, label: 'Speaker', viewportShowing: false,
+      manifestSha256: MANIFEST };
+    const request = currentModelStatus(model, [parent, child]);
+    const said = cadModelStatusLine(selectCadModelState(onScreen, idle, request), request);
+    expect(said).toMatchObject({ text: 'Speaker arrived cut open.', action: 'none' });
+    expect(said.text).not.toContain('Solved');
+  });
 });
+

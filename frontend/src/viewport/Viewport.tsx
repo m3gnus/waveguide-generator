@@ -14,7 +14,6 @@ import { postSymmetry, toSolveDesign } from '../jobs/actions';
 import { planAdjustmentNotice } from '../jobs/planAdjustments';
 import { useOptionalSolveControl } from '../shell/JobsCoordinator';
 import { postSolverMesh, solverMeshArtifactToken, solverMeshDesignKey, solverMeshOptions, solverMeshScene } from '../api/solverMesh';
-import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { cadCameraAxes } from './cadCamera';
@@ -333,9 +332,10 @@ export function fieldPlaneUnavailableTooltip(jobs: readonly JobItem[]): string {
 
 /** Where to act on a CAD model's status line when the viewport has nothing to draw. */
 const CAD_EMPTY_HINT: Partial<Record<CadModelStatusLine['action'], string>> = {
-  choose: 'Choose how to continue in the CAD Link panel.',
-  'try-again': 'Try again from the CAD Link panel.',
-  prepare: 'Prepare it from the CAD Link panel.',
+  choose: 'Choose how to continue on the Imported mesh tab.',
+  'try-again': 'Try again on the Imported mesh tab.',
+  prepare: 'Prepare it on the Imported mesh tab.',
+  solve: 'Solve it from the top bar.',
   'show-results': 'Its results are in Results.',
 };
 
@@ -391,8 +391,7 @@ export function Viewport() {
   const solveSymmetry = useSolveOptionsStore((state) => state.symmetry);
   const designName = useDocumentStore((state) => state.designName);
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
-  const cadApplication = cadApplicationName(usePreferences().cadApplication);
-  const { model: cad, line: cadLine } = useCadModelStatusLine(cadApplication);
+  const { model: cad, line: cadLine } = useCadModelStatusLine();
   const cadRecord = cad.record;
   const cadName = cad.label;
   const theme = useViewportTheme();

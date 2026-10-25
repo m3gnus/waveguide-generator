@@ -904,8 +904,9 @@ export function CadLinkPanel() {
       </div>}
       {state.setupLoading && <Notice>Loading model settings…</Notice>}
       {/* The one status line of the model on screen, and its one action. */}
-      {(bundle || record) && <CadModelStatusLine application={onshape ? 'Onshape' : 'Fusion'}/>}
-      {state.ingestStaleReason && <Notice>{state.ingestStaleReason}</Notice>}
+      {(bundle || record) && <CadModelStatusLine/>}
+      {/* TODO(U6): the stale reason (state.ingestStaleReason) belongs behind the
+          "Show developer details" setting; the line above is the one statement. */}
       {viewportNotice && <Notice>{viewportNotice}</Notice>}
       {/* Beside the button that starts the solve, not only in the rail where
           the drivers are set: this is what the run will and will not produce,

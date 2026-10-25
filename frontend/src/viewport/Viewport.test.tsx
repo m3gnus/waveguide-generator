@@ -140,9 +140,9 @@ describe('CAD viewport empty-state copy', () => {
   it('says the model\'s own status line, and where its action is', () => {
     expect(cadViewportEmptyCopy({ text: 'Preparing Tritonia…', action: 'none' })).toEqual({ title: 'Preparing Tritonia…', detail: '' });
     expect(cadViewportEmptyCopy({ text: 'Tritonia needs your choice: it is larger than WG\'s limit.', action: 'choose' }))
-      .toEqual({ title: 'Tritonia needs your choice: it is larger than WG\'s limit.', detail: 'Choose how to continue in the CAD Link panel.' });
+      .toEqual({ title: 'Tritonia needs your choice: it is larger than WG\'s limit.', detail: 'Choose how to continue on the Imported mesh tab.' });
     expect(cadViewportEmptyCopy({ text: 'Waveguide Generator could not prepare Tritonia. This has been recorded for the developers.', action: 'try-again' }).detail)
-      .toBe('Try again from the CAD Link panel.');
+      .toBe('Try again on the Imported mesh tab.');
   });
 });
 

@@ -83,8 +83,8 @@ describe('selected CAD model state', () => {
   it('offers Try again only where preparing again can work', () => {
     const pointer = { ...selected, selectedBundle: { ...bundle, readable: false } };
     const failing = { ingesting: false, ingestError: 'Role resolution refused.' };
-    expect(say(selectCadModelState(pointer, failing))).toMatchObject({ text: 'WG could not prepare Speaker.', action: 'none' });
-    expect(say(selectCadModelState(selected, failing))).toMatchObject({ text: 'WG could not prepare Speaker.', action: 'try-again' });
+    expect(say(selectCadModelState(pointer, failing))).toMatchObject({ text: 'Waveguide Generator could not prepare Speaker.', action: 'none' });
+    expect(say(selectCadModelState(selected, failing))).toMatchObject({ text: 'Waveguide Generator could not prepare Speaker.', action: 'try-again' });
   });
 
   it('waits for a mesh-size choice asked for this model only', () => {

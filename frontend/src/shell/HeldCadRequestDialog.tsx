@@ -12,8 +12,27 @@ import { workspaceNavigation } from './workspaceNavigation';
 let openRequest: ((id: string) => void) | null = null;
 export function openHeldRequest(id: string): void { openRequest?.(id); }
 
-/** Requests held before this window opened stay behind the toolbar chip and
- * Results; only a request held during this session opens the pop-up itself. */
+/** Which held request the pop-up shows now (null: none), so the model's
+ * status line does not offer Choose… for the question already on screen. */
+let shownRequest: string | null = null;
+const shownListeners = new Set<() => void>();
+export const heldRequestShown = {
+  subscribe(listener: () => void): () => void {
+    shownListeners.add(listener);
+    return () => { shownListeners.delete(listener); };
+  },
+  getSnapshot(): string | null { return shownRequest; },
+};
+function publishShown(id: string | null): void {
+  if (shownRequest === id) return;
+  shownRequest = id;
+  shownListeners.forEach(listener => listener());
+}
+
+/** Requests held before this window opened stay behind the model's status
+ * line (its Choose…, which the status bar also offers from every tab) and,
+ * for a model not on screen, the toolbar chip; only a request held during
+ * this session opens the pop-up itself. */
 let sessionStartedAt = Date.now();
 export function resetHeldRequestSessionForTests(startedAt = Date.now()): void {
   sessionStartedAt = startedAt;
@@ -80,6 +99,11 @@ export function HeldCadRequestDialog() {
     setRequested(null);
   };
   const dialog = useModalDialogFocus<HTMLDivElement>({ open: !!id, onClose: close });
+  const shownJob = job?.id ?? null;
+  useEffect(() => {
+    publishShown(shownJob);
+    return () => publishShown(null);
+  }, [shownJob]);
   if (!id) return null;
   const state = job?.cad_state;
   const name = job ? state?.snapshot?.document_name : ceiling?.name;

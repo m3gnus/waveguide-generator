@@ -4,20 +4,26 @@ import { useCadModelSelection } from '../stores/cadModelState';
 import { cadModelStatusLine, type CadModelStatusLine as Line } from '../stores/cadModelStatusLine';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { meshCeilingChoice } from '../stores/meshCeilingChoice';
-import { openHeldRequest } from './HeldCadRequestDialog';
+import { cadApplicationName, usePreferences } from '../prefs/preferences';
+import { heldRequestShown, openHeldRequest } from './HeldCadRequestDialog';
 import { jobsCoordinatorBridge, useOptionalSolveControl } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
 
-/** The selected CAD model, its request, and its one status line. */
-export function useCadModelStatusLine(application?: string) {
+/** The selected CAD model, its request, and its one status line. Every
+ * surface gets the same words: the CAD app named is the user's (Onshape
+ * users never read Fusion's instruction). */
+export function useCadModelStatusLine() {
   const { status } = useCurrentModelStatus();
   const model = useCadModelSelection(status);
   const control = useOptionalSolveControl();
+  const application = cadApplicationName(usePreferences().cadApplication);
+  const shown = useSyncExternalStore(heldRequestShown.subscribe, heldRequestShown.getSnapshot, heldRequestShown.getSnapshot);
   useSyncExternalStore(workspaceNavigation.subscribe, workspaceNavigation.getSnapshot, workspaceNavigation.getSnapshot);
   const line = cadModelStatusLine(model, status, {
     resultsShown: workspaceNavigation.isVisible('results'),
     waitingForEngine: control?.waitingForEngine ?? false,
     application,
+    choiceOpen: !!shown && shown === model.heldRequest?.id,
   });
   return { model, request: status, line };
 }
@@ -43,8 +49,8 @@ export function runCadStatusAction(line: Line, solve: (() => unknown) | undefine
  * The model card's one status line: what state the selected model is in, and
  * the one thing to do about it. No other surface repeats it with an action.
  */
-export function CadModelStatusLine({ application, actions = true }: { application?: string; actions?: boolean }) {
-  const { line } = useCadModelStatusLine(application);
+export function CadModelStatusLine({ actions = true }: { actions?: boolean }) {
+  const { line } = useCadModelStatusLine();
   const control = useOptionalSolveControl();
   const solveUnavailable = line.action === 'solve' && (!control?.cadMode || control.disabled);
   return <div className={`cad-status-line cad-status-line-${line.tone}`} role="status" data-status-action={line.action}>

@@ -1,4 +1,4 @@
-import { useCadModelStatusLine } from './CadModelStatusLine';
+import { runCadStatusAction, useCadModelStatusLine } from './CadModelStatusLine';
 import { resolveEngineLabel } from './solveProgress';
 import { useSyncExternalStore } from 'react';
 import { previewSocket } from '../api/previewSocket';
@@ -125,7 +125,10 @@ export function StatusBar() {
         limit slot is gone until something computes it, because a readout that
         can only ever say "not calculated" is worse than no readout. */}
     <div className="status-item status-drop-2">{fileActive ? <>Mesh <b>{file.summary?.triangle_count.toLocaleString() ?? 'not imported'}</b> tri</> : mode === 'cad'
-      ? `CAD model · ${cadLine.short}`
+      // A question about the model stays one press away from every tab.
+      ? cadLine.action === 'choose'
+        ? <button type="button" className="statusbar-link" data-action="choose" onClick={() => runCadStatusAction(cadLine, undefined)}>CAD model · {cadLine.short} · Choose…</button>
+        : `CAD model · ${cadLine.short}`
       : <>preview {meshMetrics ? <><b>{meshMetrics.triangles.toLocaleString()}</b> tri · <b>{meshMetrics.vertices.toLocaleString()}</b> vert</> : <b>no frame</b>}</>}</div>
     {mode === 'parametric' && previewError && <div className="status-item preview-error-status" title={previewError}>{previewError}</div>}
     <span className="spacer"/>

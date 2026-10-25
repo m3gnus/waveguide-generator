@@ -395,7 +395,7 @@ describe('results run coherence', () => {
       return;
     }
     // A CAD model's latest attempt is its status line; Try again is the line's.
-    expect(host.querySelector('[data-model-status="failed"]')?.textContent).toContain('WG could not finish solving');
+    expect(host.querySelector('[data-model-status="failed"]')?.textContent).toContain('Waveguide Generator could not finish solving');
     expect(toolbarButton(host, 'Retry')).toBeUndefined();
   });
 

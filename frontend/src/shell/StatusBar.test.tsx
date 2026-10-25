@@ -8,6 +8,7 @@ import { resetDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
+import { meshCeilingChoice } from '../stores/meshCeilingChoice';
 
 const previewSnapshot = vi.hoisted(() => ({ connection: 'connected' as const, epoch: null, frame: null, displayedRevision: null, lastValidRevision: null, stale: false, dropped: 0, error: null, errorRevision: null }));
 
@@ -110,10 +111,26 @@ describe('StatusBar workspace modes', () => {
   it('uses one model cell for a selected unprepared return', () => {
     act(() => {
       workspaceModeStore.setMode('cad');
-      useCadReturnStore.setState({ selectedBundle: { name: 'speaker.wgreturn', documentName: 'Speaker' } as never });
+      useCadReturnStore.setState({ selectedBundle: { name: 'speaker.wgreturn', documentName: 'Speaker', readable: true } as never });
     });
     expect(host.textContent).toContain('CAD model · not prepared');
     expect(host.textContent?.match(/CAD model ·/g)).toHaveLength(1);
     expect(host.textContent).not.toMatch(/ingest|CAD return|No solve plan|SOLVE BLOCKED/i);
+  });
+
+  it('keeps a question about the model one press away from every tab', () => {
+    act(() => {
+      workspaceModeStore.setMode('cad');
+      useCadReturnStore.setState({ selectedBundle: { name: 'speaker.wgreturn', bundlePath: 'b', documentName: 'Speaker', readable: true } as never });
+      meshCeilingChoice.ask({ name: 'Speaker', nextStep: 'x', bundlePath: 'b' });
+      meshCeilingChoice.defer();
+    });
+    const choose = host.querySelector<HTMLButtonElement>('.statusbar button[data-action="choose"]')!;
+    expect(choose.textContent).toBe('CAD model · needs your choice · Choose…');
+    act(() => choose.click());
+    expect(meshCeilingChoice.getSnapshot()?.deferred).toBe(false);
+    // While the question is open, the cell only says so.
+    expect(host.querySelector('.statusbar button[data-action="choose"]')).toBeNull();
+    act(() => meshCeilingChoice.clear());
   });
 });

@@ -729,6 +729,8 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 
 /* status rail */
 .statusbar { display: flex; align-items: center; min-width: 0; padding: 0 8px; border-top: 1px solid var(--hair); background: var(--status-grad); color: var(--fg3); font: var(--text-micro) var(--mono); letter-spacing: .015em; }
+.statusbar-link { padding: 0; border: 0; background: none; color: var(--amber); font: inherit; letter-spacing: inherit; cursor: pointer; }
+.statusbar-link:hover { text-decoration: underline; }
 .status-item { display: flex; align-items: center; gap: 6px; height: 100%; padding: 0 12px; border-right: 1px solid var(--hair-soft); white-space: nowrap; }
 .status-item:first-child { padding-left: 0; }.status-item.right { border-right: 0; border-left: 1px solid var(--hair-soft); }
 .status-item b { color: var(--fg1); font-weight: 500; }.status-item svg { width: 10px; height: 10px; color: var(--fg4); }

@@ -1530,7 +1530,7 @@ describe('ParamPanel inventory UX', () => {
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
     const empty = host.querySelector('.cad-simulation-empty')!;
-    expect(empty.textContent).toMatch(/^WG could not prepare .+\.See the Imported mesh tab\.$/);
+    expect(empty.textContent).toMatch(/^Waveguide Generator could not prepare .+\.See the Imported mesh tab\.$/);
     expect(empty.textContent).not.toContain('$.');
     expect(host.querySelector('[data-section]')).toBeNull();
     act(() => cadWorkspace.setState(before, true));

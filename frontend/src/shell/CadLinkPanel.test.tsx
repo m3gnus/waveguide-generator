@@ -2291,13 +2291,11 @@ describe('CadLinkPanel', () => {
     expect(symmetry.querySelector('summary')?.title).toContain('keeps the larger safe domain');
   });
 
-  it('routes neutral notices separately from errors', async () => {
+  it('states a stale model once, in its line, with no second notice or error', async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     act(() => useCadReturnStore.setState({ ingestStaleReason: 'The return changed after preparation.' }));
-    const staleNotice = [...host.querySelectorAll<HTMLElement>('.notice-info[role="status"]')]
-      .find((notice) => notice.textContent?.includes('return changed'));
-    expect(staleNotice).toBeTruthy();
-    expect(staleNotice?.classList.contains('notice-error')).toBe(false);
+    expect(host.textContent).not.toContain('return changed');
+    expect(host.querySelector('.notice-error')).toBeNull();
     expect(host.querySelector('.cad-solver-unavailable')).toBeNull();
   });
 
@@ -2690,7 +2688,9 @@ describe('CadLinkPanel', () => {
     const refresh = host.querySelector<HTMLButtonElement>('button[aria-label="Refresh CAD returns"]')!;
     await act(async () => { refresh.click(); await Promise.resolve(); await Promise.resolve(); });
 
-    expect(host.textContent).toContain('source inventory or source sizing suggestions changed');
+    // The model's line says it once; the technical reason is for developer details (U6).
+    expect(host.querySelector('.cad-status-line')?.textContent).toContain('Speaker changed since it was prepared.');
+    expect(host.textContent).not.toContain('source inventory or source sizing suggestions changed');
     expect(useCadReturnStore.getState().meshSizes.source_size_mm['source-hf']).toBe(2.5);
     expect(importedSubmissionBlocker()).toContain('source inventory or source sizing suggestions changed');
     expect(host.textContent).not.toContain('Rebuild mesh');
@@ -3082,7 +3082,7 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
     expect(useCadReturnStore.getState().areaDriftSourceIds).toContain('source-hf');
-    expect(host.querySelector('.cad-model-card .cad-status-line')?.textContent).toContain('WG could not prepare Speaker.');
+    expect(host.querySelector('.cad-model-card .cad-status-line')?.textContent).toContain('Waveguide Generator could not prepare Speaker.');
     expect(host.querySelector('.notice-error[role="alert"]')?.textContent).toContain('Role resolution refused');
     expect(host.querySelector('.cad-status-line button[data-action="try-again"]')?.textContent).toBe('Try again');
     expect(host.textContent).not.toContain('Allow recorded area drift');
