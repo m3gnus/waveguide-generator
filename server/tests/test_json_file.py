@@ -1,0 +1,308 @@
+"""Wire bytes and interrupted publication across the JSON owner's consumers."""
+
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+
+from fastapi import HTTPException
+import pytest
+
+from server.platform import json_file
+
+PAYLOAD = {"z": "räv", "a": {"y": 2, "b": [True, None]}}
+
+
+def legacy_bytes(payload, *, indent=None, sort_keys=False, ensure_ascii=True,
+                 trailing_newline=True, native=True):
+    text = json.dumps(payload, indent=indent, sort_keys=sort_keys, ensure_ascii=ensure_ascii)
+    if trailing_newline:
+        text += "\n"
+    return text.replace("\n", os.linesep if native else "\n").encode("utf-8")
+
+
+def caller(name):
+    if name == "settings":
+        from server.settings.store import _write_json_atomic
+        return _write_json_atomic, legacy_bytes(PAYLOAD, indent=2, sort_keys=True), True
+    if name == "fusion":
+        from server.cadlink.fusion.fusion_delivery import _write_json
+        return _write_json, legacy_bytes(PAYLOAD, indent=2, sort_keys=True), True
+    if name == "pending-addin":
+        from server.cadlink.fusion.addin_update import _write_json
+        return _write_json, legacy_bytes(PAYLOAD, indent=2, sort_keys=True, native=False), True
+    if name == "beat-state":
+        from server.solver.beat_runtime.state import _atomic_write_json
+        return _atomic_write_json, legacy_bytes(PAYLOAD, indent=2), True
+    if name == "beat-registry":
+        from server.solver.beat_runtime.registry import _atomic_json
+        return _atomic_json, legacy_bytes(PAYLOAD, sort_keys=True, trailing_newline=False, native=False), True
+    if name == "publication":
+        from server.exports.wglink_publication import atomic_json
+        return atomic_json, legacy_bytes(PAYLOAD, ensure_ascii=False), True
+    if name == "archive":
+        from server.workspace.archive import _write_json_atomic
+        return _write_json_atomic, legacy_bytes(PAYLOAD, indent=2, sort_keys=True, native=False), False
+    if name == "intake-result":
+        from server.cadlink.intake.child_main import _write_result
+        return _write_result, legacy_bytes(PAYLOAD, trailing_newline=False), False
+    if name == "opencl-result":
+        from server.solver.bempp_opencl import _write_probe_result
+        return _write_probe_result, legacy_bytes(PAYLOAD, trailing_newline=False), False
+    raise AssertionError(name)
+
+
+@pytest.mark.parametrize("name", ["settings", "fusion", "pending-addin", "beat-state",
+                                  "beat-registry", "publication", "archive", "intake-result", "opencl-result"])
+@pytest.mark.parametrize("error", [OSError, PermissionError])
+def test_caller_bytes_and_failed_replace(tmp_path, monkeypatch, name, error):
+    write, expected, sync_file = caller(name)
+    path = tmp_path / "record.json"
+    path.write_bytes(b'old record\n')
+    real_replace, real_fsync = os.replace, os.fsync
+    fsynced = []
+    monkeypatch.setattr(json_file.time, "sleep", lambda _: None)
+
+    def fsync(fd):
+        fsynced.append(fd)
+        real_fsync(fd)
+
+    def fail(source, destination):
+        assert Path(source).read_bytes() == expected
+        assert Path(destination).read_bytes() == b'old record\n'
+        raise error("replace refused")
+
+    monkeypatch.setattr(json_file.os, "fsync", fsync)
+    monkeypatch.setattr(json_file.os, "replace", fail)
+    with pytest.raises(error, match="replace refused"):
+        write(path, PAYLOAD)
+    assert bool(fsynced) is sync_file
+    assert list(tmp_path.iterdir()) == [path]
+    assert path.read_bytes() == b'old record\n'
+    monkeypatch.setattr(json_file.os, "replace", real_replace)
+    write(path, PAYLOAD)
+    assert path.read_bytes() == expected
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_usage_bytes_and_strict_directory_durability(tmp_path, monkeypatch):
+    from server.cadlink import usage
+
+    fixed = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    class Clock:
+        @staticmethod
+        def now(zone):
+            return fixed
+
+    monkeypatch.setattr(usage, "datetime", Clock)
+    usage.record_usage(tmp_path, "setup-task")
+    path = usage.usage_path(tmp_path)
+    expected = {"schemaVersion": 1, "reason": "setup-task", "recordedAt": "2026-01-02T03:04:05Z"}
+    assert path.read_bytes() == legacy_bytes(expected, sort_keys=True)
+    if os.name == "nt":
+        return
+    real_sync = os.fsync
+    def fail_directory(fd):
+        import stat
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError("directory flush failed")
+        real_sync(fd)
+    monkeypatch.setattr(json_file.os, "fsync", fail_directory)
+    with pytest.raises(OSError, match="directory flush failed"):
+        usage.record_usage(tmp_path, "install-action")
+    assert json.loads(path.read_bytes())["reason"] == "install-action"
+    assert list(path.parent.iterdir()) == [path]
+
+
+@pytest.mark.parametrize("viewport", [False, True])
+@pytest.mark.parametrize("fail", [False, True])
+def test_cache_metadata_bytes_and_replace_failure(tmp_path, monkeypatch, viewport, fail):
+    from server.cadlink.intake import ingest
+    from server.contracts.canonical import canonical_normalized_bytes
+    from server.mesh.artifact import mesh_text_sha256
+
+    mesh, metadata = tmp_path / "mesh.msh", tmp_path / "mesh.json"
+    metadata.write_bytes(b'old metadata')
+    content = {"msh_text": "mesh\n", "stats": {"z": 2}, "metadata": {"label": "räv"}}
+    expected = {"content_sha256": mesh_text_sha256(content["msh_text"]),
+                "stats": content["stats"], "metadata": content["metadata"]}
+    if viewport:
+        expected.update(transformed_geometry_hash="geometry", healing_mode="none", healing_options=[])
+    real_replace = os.replace
+    def replace(source, target):
+        if Path(target) == metadata:
+            assert Path(source).read_bytes() == canonical_normalized_bytes(expected) + b"\n"
+            if fail:
+                raise PermissionError("metadata locked")
+        real_replace(source, target)
+    monkeypatch.setattr(json_file.os, "replace", replace)
+    def write():
+        if viewport:
+            ingest._write_viewport_cache(mesh, metadata, content,
+                                         transformed_geometry_hash="geometry", healing={})
+        else:
+            ingest._write_cache(mesh, metadata, content)
+    if fail:
+        with pytest.raises(PermissionError, match="metadata locked"):
+            write()
+        assert metadata.read_bytes() == b'old metadata'
+    else:
+        write()
+        assert metadata.read_bytes() == canonical_normalized_bytes(expected) + b"\n"
+    assert set(tmp_path.iterdir()) == {mesh, metadata}
+
+
+@pytest.mark.parametrize("failed_target", ["authoring", "library", None])
+def test_presets_pair_bytes_order_and_failure(tmp_path, monkeypatch, failed_target):
+    from server.source_editor import PresetStore
+
+    store = PresetStore(tmp_path / "presets.json")
+    store.path.write_bytes(b'old library')
+    store.authoring_path.write_bytes(b'old authoring')
+    presets = {"z": {"revision": "r", "label": "räv"}}
+    authoring = {"z": {"revision": "r", "authoring": {"x": 1}}}
+    library_bytes = legacy_bytes({"version": 1, "presets": presets}, trailing_newline=False, native=False)
+    authoring_bytes = legacy_bytes(authoring, trailing_newline=False, native=False)
+    real_replace = os.replace
+    replaced = []
+    def replace(source, target):
+        kind = "library" if Path(target) == store.path else "authoring"
+        assert Path(source).read_bytes() == (library_bytes if kind == "library" else authoring_bytes)
+        if failed_target == kind:
+            raise PermissionError("preset locked")
+        replaced.append(kind)
+        real_replace(source, target)
+    monkeypatch.setattr(json_file.os, "replace", replace)
+    if failed_target:
+        with pytest.raises(HTTPException) as exc:
+            store._write(presets, authoring)
+        assert exc.value.status_code == 503
+        assert isinstance(exc.value.__cause__, PermissionError)
+        assert store.path.read_bytes() == b'old library'
+        assert store.authoring_path.read_bytes() == (b'old authoring' if failed_target == "authoring" else authoring_bytes)
+    else:
+        store._write(presets, authoring)
+        assert replaced == ["authoring", "library"]
+        assert store.path.read_bytes() == library_bytes
+        assert store.authoring_path.read_bytes() == authoring_bytes
+    assert set(tmp_path.iterdir()) == {store.path, store.authoring_path}
+
+
+def test_archive_keeps_captured_json_bytes(tmp_path, monkeypatch):
+    from server.workspace.archive import _write_json_atomic
+
+    raw = b'{ "z": "\\u00e4", "a": 1 }\r\n'
+    path = tmp_path / "capture.json"
+    _write_json_atomic(path, raw)
+    assert path.read_bytes() == raw
+    monkeypatch.setattr(json_file.os, "replace", lambda *_: (_ for _ in ()).throw(OSError("locked")))
+    with pytest.raises(OSError):
+        _write_json_atomic(path, b'{}')
+    assert path.read_bytes() == raw
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_fusion_hooks_run_after_fsync_and_can_cancel(tmp_path, monkeypatch):
+    from server.cadlink.fusion import fusion_delivery
+
+    path = tmp_path / "request.json"
+    path.write_bytes(b'old')
+    events = []
+    monkeypatch.setattr(json_file.os, "fsync", lambda _: events.append("fsync"))
+    def before(payload):
+        assert payload is PAYLOAD
+        assert events == ["fsync"]
+        events.append("before")
+        return "receipt"
+    def should(receipt):
+        assert receipt == "receipt"
+        events.append("should")
+        return False
+    assert fusion_delivery._write_json(path, PAYLOAD, before_replace=before, should_replace=should) == ("receipt", False)
+    assert events == ["fsync", "before", "should"]
+    assert path.read_bytes() == b'old'
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_default_bytes_retry_and_success_never_unlinks_reused_staging_name(tmp_path, monkeypatch):
+    path = tmp_path / "record.json"
+    real_replace = os.replace
+    calls = []
+    def replace(source, target):
+        calls.append(source)
+        if len(calls) == 1:
+            raise PermissionError("reader holds file")
+        real_replace(source, target)
+        Path(source).write_bytes(b'another writer')
+    delays = []
+    monkeypatch.setattr(json_file.os, "replace", replace)
+    monkeypatch.setattr(json_file.time, "sleep", delays.append)
+    json_file.write_json_atomic(path, PAYLOAD, replace_attempts=2, retry_seconds=0.01, durable_directory=True)
+    assert path.read_bytes() == legacy_bytes(PAYLOAD, indent=2, native=False)
+    assert delays == [0.01] and calls[0] == calls[1]
+    assert Path(calls[-1]).read_bytes() == b'another writer'
+
+
+def test_native_newlines_are_explicit_and_checksum_default_stays_lf(monkeypatch):
+    monkeypatch.setattr(json_file.os, "linesep", "\r\n")
+    assert b"\r\n" in json_file.json_bytes(PAYLOAD, newline=None)
+    assert b"\r" not in json_file.json_bytes(PAYLOAD)
+
+
+def test_release_cache_bytes_and_failed_replace(tmp_path, monkeypatch):
+    from server.updates.installer_client import InstallerClient
+
+    client = InstallerClient.__new__(InstallerClient)
+    client.data_dir = tmp_path
+    client._channel, client._release, client._proof = "stable", {"name": "räv"}, None
+    client._checked, client._responses = 123, {}
+    payload = {"schemaVersion": 1, "channel": client._channel, "release": client._release,
+               "proof": None, "checked": 123, "responses": {}}
+    client._save_cache()
+    path = client._cache_path
+    expected = legacy_bytes(payload, trailing_newline=False)
+    assert path.read_bytes() == expected
+    monkeypatch.setattr(json_file.os, "replace", lambda *_: (_ for _ in ()).throw(PermissionError("locked")))
+    client._checked = 456
+    with pytest.raises(PermissionError):
+        client._save_cache()
+    assert path.read_bytes() == expected
+    assert list(path.parent.iterdir()) == [path]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX creation permissions")
+@pytest.mark.parametrize("mode", [0o600, 0o666])
+def test_creation_permissions_match_legacy_open(tmp_path, mode):
+    import stat
+
+    reference = tmp_path / "reference"
+    fd = os.open(reference, os.O_CREAT | os.O_WRONLY | os.O_EXCL, mode)
+    os.close(fd)
+    path = tmp_path / "record.json"
+    json_file.write_json_atomic(path, PAYLOAD, creation_mode=mode)
+    assert stat.S_IMODE(path.stat().st_mode) == stat.S_IMODE(reference.stat().st_mode)
+
+
+@pytest.mark.parametrize("viewport", [False, True])
+def test_cache_stage_failure_changes_neither_file(tmp_path, monkeypatch, viewport):
+    from server.cadlink.intake import ingest
+
+    mesh, metadata = tmp_path / "mesh.msh", tmp_path / "mesh.json"
+    mesh.write_bytes(b'old mesh')
+    metadata.write_bytes(b'old metadata')
+    real_open = os.open
+    def fail_stage(path, *args, **kwargs):
+        if Path(path).name.startswith(".mesh.json."):
+            raise OSError("cannot stage metadata")
+        return real_open(path, *args, **kwargs)
+    monkeypatch.setattr(json_file.os, "open", fail_stage)
+    content = {"msh_text": "mesh\n", "stats": {}, "metadata": {}}
+    with pytest.raises(OSError, match="cannot stage metadata"):
+        if viewport:
+            ingest._write_viewport_cache(mesh, metadata, content,
+                                         transformed_geometry_hash="geometry", healing={})
+        else:
+            ingest._write_cache(mesh, metadata, content)
+    assert mesh.read_bytes() == b'old mesh'
+    assert metadata.read_bytes() == b'old metadata'
+    assert set(tmp_path.iterdir()) == {mesh, metadata}

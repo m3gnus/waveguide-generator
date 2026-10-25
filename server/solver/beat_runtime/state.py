@@ -14,10 +14,10 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
-import tempfile
 import time
 from typing import Any
 
+from server.platform.json_file import json_bytes, write_json_atomic
 from . import paths
 
 # Identity fields may be unknown during a failed or interrupted provisioning.
@@ -106,31 +106,18 @@ def _stamped(record: Mapping[str, Any]) -> dict[str, Any]:
 def _atomic_write_json(path: Path, record: Mapping[str, Any]) -> None:
     """Replace one complete record via a private, unique sibling temporary."""
     paths.checked_root(path.parent)
-    payload = json.dumps(record, indent=2, allow_nan=False) + "\n"
+    payload = json_bytes(record, allow_nan=False, newline=None)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     # Unique siblings can survive a killed writer. Do not sweep active writers.
     for stale in path.parent.glob(f".{path.name}.*.tmp"):
         with suppress(OSError):
             if not paths.is_link(stale) and stale.is_file() and stale.stat().st_mtime < time.time() - 86400:
                 stale.unlink(missing_ok=True)
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    scratch = Path(temporary)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        for attempt in range(_REPLACE_ATTEMPTS):
-            try:
-                os.replace(scratch, path)
-                break
-            except PermissionError:
-                # Windows readers can briefly deny replacement of an open file.
-                if not _WINDOWS or attempt == _REPLACE_ATTEMPTS - 1:
-                    raise
-                time.sleep(0.025 * (attempt + 1))
-    finally:
-        scratch.unlink(missing_ok=True)
+    write_json_atomic(
+        path, payload, encode=lambda raw: raw,
+        temporary_suffix=".tmp", replace_attempts=_REPLACE_ATTEMPTS if _WINDOWS else 1,
+        retry_seconds=lambda attempt: 0.025 * (attempt + 1),
+    )
 
 
 def read_state(directory: Path | None = None, *, backend: str) -> dict[str, Any] | None:

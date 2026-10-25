@@ -25,6 +25,8 @@ import time
 import traceback
 from typing import Any, Mapping
 
+from server.platform.json_file import json_bytes, write_json_atomic
+
 # Only driver enumeration/kernel execution consumes these budgets. Child
 # interpreter startup and imports compete with the app's own cold imports.
 INVENTORY_SECONDS = 10.0
@@ -882,9 +884,10 @@ def _child_result(mode: str, device: Mapping[str, Any] | None) -> dict[str, Any]
 
 
 def _write_probe_result(path: Path, result: Mapping[str, Any]) -> None:
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(result), encoding="utf-8")
-    os.replace(temporary, path)
+    write_json_atomic(
+        path, result, sync_file=False, creation_mode=0o666,
+        encode=lambda value: json_bytes(value, indent=None, trailing_newline=False, newline=None),
+    )
 
 
 def _child_main(mode: str, device: Mapping[str, Any] | None, path: Path) -> None:

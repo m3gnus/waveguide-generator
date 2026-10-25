@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from functools import partial
 import json
-import os
 from pathlib import Path
-import tempfile
 from typing import Literal
 
+from server.platform.json_file import json_bytes, sync_directory, write_json_atomic
 from server.platform.paths import data_paths
 
 UsageReason = Literal["setup-task", "install-action", "addin-delivery"]
@@ -49,28 +49,8 @@ def record_usage(data_dir: Path, reason: UsageReason) -> None:
         "reason": reason,
         "recordedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
-    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(record, stream, sort_keys=True)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    except BaseException:
-        # Only a failed write leaves the temporary file behind.
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
-    if os.name != "nt":
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+    write_json_atomic(path, record, encode=partial(json_bytes, indent=None, sort_keys=True, newline=None))
+    sync_directory(path.parent, strict=True)
 
 
 def cadlink_in_use(*, data_dir: Path, owned_addin: bool) -> bool:

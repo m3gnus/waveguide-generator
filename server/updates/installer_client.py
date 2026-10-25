@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import partial
 import copy
 import json
 import logging
@@ -17,6 +18,7 @@ from typing import Callable
 import urllib.request
 
 from launchers.install_paths import ordinary_path, resolved_path
+from server.platform.json_file import json_bytes, write_json_atomic
 
 from .release_urls import GITHUB_REPOSITORY, _validate_url, open_trusted_url, trusted_asset_url
 from .install_kind import current_platform, probe_install
@@ -204,13 +206,10 @@ class InstallerClient:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"schemaVersion": 1, "channel": self._channel, "release": self._release,
                    "proof": self._proof, "checked": self._checked, "responses": self._responses}
-        temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-        try:
-            with temporary.open("x", encoding="utf-8") as handle:
-                json.dump(payload, handle)
-            temporary.replace(path)
-        finally:
-            temporary.unlink(missing_ok=True)
+        write_json_atomic(
+            path, payload, sync_file=False, creation_mode=0o666,
+            encode=partial(json_bytes, indent=None, trailing_newline=False, newline=None),
+        )
 
     def _start_check(self) -> None:
         if self._checking or self._closed.is_set():

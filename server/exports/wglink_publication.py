@@ -7,6 +7,7 @@ retained indefinitely: neither heartbeat absence nor age proves them unused.
 
 from __future__ import annotations
 
+from functools import partial
 import hashlib
 import json
 import logging
@@ -14,10 +15,10 @@ import os
 from pathlib import Path
 import re
 import threading
-import time
 from typing import Any, Callable, Mapping
 import uuid
 
+from server.platform.json_file import json_bytes, sync_directory, write_json_atomic
 from server.cadlink.operations import CANCELLED, RECEIVED
 from server.cadlink.store import CadLinkStore
 
@@ -41,33 +42,18 @@ def _component(value: object) -> str:
 
 def _sync_directory(folder: Path) -> None:
     if not _WINDOWS:
-        fd = os.open(folder, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        sync_directory(folder, strict=True)
 
 
 def atomic_json(path: Path, payload: Mapping[str, object]) -> None:
     """Replace one file without ever removing the old name first."""
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        with temporary.open("x", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, allow_nan=False)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        for attempt in range(10):
-            try:
-                os.replace(temporary, path)
-                break
-            except OSError as exc:
-                if not _WINDOWS or getattr(exc, "winerror", None) not in {5, 32, 33} or attempt == 9:
-                    raise
-                time.sleep(0.02)
-        _sync_directory(path.parent)
-    finally:
-        temporary.unlink(missing_ok=True)
+    write_json_atomic(
+        path, payload, creation_mode=0o666,
+        encode=partial(json_bytes, indent=None, ensure_ascii=False, allow_nan=False, newline=None),
+        replace_attempts=10, retry_seconds=0.02,
+        retryable=lambda exc: _WINDOWS and getattr(exc, "winerror", None) in {5, 32, 33},
+    )
+    _sync_directory(path.parent)
 
 
 def bundle_products(path: Path, facts: Mapping[str, object]) -> dict[str, str]:

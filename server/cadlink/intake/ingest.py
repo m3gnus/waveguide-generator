@@ -18,6 +18,7 @@ import stat
 import time
 from typing import Any
 
+from server.platform.json_file import write_json_atomic
 from server.contracts.canonical import canonical_normalized_bytes as _canonical
 
 from server.cadlink.intake.isolated import (
@@ -977,7 +978,6 @@ def _write_cache(
     temporary = publish_staging_directory(mesh_path.parent, ".wg2-import-mesh-")
     try:
         staged_mesh = temporary / mesh_path.name
-        staged_meta = temporary / metadata_path.name
         msh_text = str(result["msh_text"])
         if exact_bytes:
             staged_mesh.write_bytes(msh_text.encode("utf-8"))
@@ -992,10 +992,12 @@ def _write_cache(
         # bytes makes a replaced/truncated artifact a miss instead of minting a
         # new ingestion record that blesses the altered bytes as solver input.
         sidecar["content_sha256"] = mesh_text_sha256(msh_text)
-        staged_meta.write_bytes(_canonical(sidecar) + b"\n")
+        metadata_bytes = _canonical(sidecar) + b"\n"
         # Metadata is the commit marker: publish mesh first, metadata last.
-        os.replace(staged_mesh, mesh_path)
-        os.replace(staged_meta, metadata_path)
+        write_json_atomic(
+            metadata_path, metadata_bytes, encode=lambda raw: raw, sync_file=False,
+            creation_mode=0o666, before_replace=lambda _: os.replace(staged_mesh, mesh_path),
+        )
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
 
@@ -1037,12 +1039,13 @@ def _write_viewport_cache(
     temporary = publish_staging_directory(mesh_path.parent, ".wg2-import-viewport-")
     try:
         staged_mesh = temporary / mesh_path.name
-        staged_meta = temporary / metadata_path.name
         staged_mesh.write_text(msh_text, encoding="utf-8")
-        staged_meta.write_bytes(_canonical(metadata) + b"\n")
-        os.replace(staged_mesh, mesh_path)
-        # Metadata is the commit marker and carries the digest for later reads.
-        os.replace(staged_meta, metadata_path)
+        metadata_bytes = _canonical(metadata) + b"\n"
+        # Stage both files before publishing mesh, then its metadata commit marker.
+        write_json_atomic(
+            metadata_path, metadata_bytes, encode=lambda raw: raw, sync_file=False,
+            creation_mode=0o666, before_replace=lambda _: os.replace(staged_mesh, mesh_path),
+        )
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
     return {**metadata, "msh_text": msh_text}

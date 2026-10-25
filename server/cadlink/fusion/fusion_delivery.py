@@ -24,16 +24,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from functools import partial
 import json
 import logging
 import os
 from pathlib import Path
 import re
-import tempfile
 import threading
 import time
 from typing import Any, Callable, Literal, Mapping
 
+from server.platform.json_file import json_bytes, write_json_atomic
 from server.platform.exclusive_rename import take_by_rename
 from server.platform.private_paths import ensure_private_directory
 
@@ -174,53 +175,33 @@ def _write_json(
     should_replace: Callable[[object], bool] | None = None,
     replace_failed: Callable[[object, BaseException], None] | None = None,
 ) -> tuple[object, bool]:
-    """Replace ``path`` atomically; retry briefly while another process holds it.
-
-    The staging name starts with "." and ends in .tmp. Only PermissionError is
-    retried: that is what Windows raises while a reader has the file open.
-    """
-
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name.lstrip('.')}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    keep_for_recovery = False
+    """Publish through the JSON owner, retaining failed compensation evidence."""
     receipt: object = None
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(payload, stream, indent=2, sort_keys=True)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
+
+    def prepare(_temporary: Path) -> bool:
+        nonlocal receipt
         receipt = before_replace(payload) if before_replace is not None else None
-        if should_replace is not None and not should_replace(receipt):
-            return receipt, False
-        for attempt in range(_WRITE_ATTEMPTS):
-            try:
-                os.replace(temporary, path)
-                return receipt, True
-            except PermissionError:
-                if attempt + 1 == _WRITE_ATTEMPTS:
-                    raise
-                time.sleep(_WRITE_RETRY_SECONDS)
-    except Exception as exc:
+        return should_replace is None or bool(should_replace(receipt))
+
+    def failed(exc: Exception) -> bool:
         if replace_failed is not None:
             try:
                 replace_failed(receipt, exc)
             except Exception:
-                # The staged document is durable recovery evidence. If the
-                # compensating store write also fails, startup can finish a
-                # return request; an unpublished handoff is cancelled instead.
-                keep_for_recovery = True
                 logger.warning(
                     "Could not compensate failed Fusion request publication %s.",
-                    path.name,
-                    exc_info=True,
+                    path.name, exc_info=True,
                 )
-        raise
-    finally:
-        if not keep_for_recovery:
-            temporary.unlink(missing_ok=True)
+                return True
+        return False
+
+    published = write_json_atomic(
+        path, payload, encode=partial(json_bytes, sort_keys=True, newline=None),
+        replace_attempts=_WRITE_ATTEMPTS, retry_seconds=_WRITE_RETRY_SECONDS,
+        temporary_prefix=f".{path.name.lstrip('.')}.", temporary_suffix=".tmp",
+        before_replace=prepare, replace_failed=failed,
+    )
+    return receipt, published
 
 
 def _withdraw_and_record(

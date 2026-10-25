@@ -15,10 +15,10 @@ import secrets
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 from typing import TYPE_CHECKING, Any, Callable, Iterator
 
+from server.platform.json_file import json_bytes, write_json_atomic
 from . import paths
 from .ipc import Endpoint, validate_identifier
 
@@ -209,19 +209,18 @@ def unlink_record(path: Path) -> None:
 
 
 def _atomic_json(path: Path, raw: dict[str, Any]) -> Path:
-    body = json.dumps(raw, sort_keys=True, allow_nan=False).encode("utf-8")
+    body = json_bytes(raw, indent=None, sort_keys=True, allow_nan=False, trailing_newline=False)
     private_directory(path.parent)
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(body)
-            stream.flush()
-            os.fsync(stream.fileno())
+
+    def check_staged(temporary: Path) -> None:
         if os.name == "nt":
-            _check_path(Path(temporary), Path(temporary).lstat())
-        _retry_permission(os.replace, temporary, path)
-    finally:
-        unlink_record(Path(temporary))
+            _check_path(temporary, temporary.lstat())
+
+    write_json_atomic(
+        path, body, encode=lambda raw: raw,
+        temporary_suffix=".tmp", before_replace=check_staged,
+        replace_attempts=4 if os.name == "nt" else 1, retry_seconds=0.01,
+    )
     return path
 
 

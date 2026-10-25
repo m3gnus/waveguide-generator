@@ -22,11 +22,11 @@ import os
 from pathlib import Path
 import re
 import shutil
-import tempfile
 import threading
 from typing import Any, Callable, Collection, Mapping, NamedTuple
 import unicodedata
 
+from server.platform.json_file import json_bytes, write_json_atomic
 from server.platform.acl_repair import path_has_reparse_point
 from server.platform.staging import publish_staging_directory
 
@@ -287,15 +287,11 @@ def reclaim_captured_documents(
 
 
 def _write_json_atomic(path: Path, payload: Mapping[str, Any] | bytes) -> None:
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            raw = payload if isinstance(payload, bytes) else (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
-            stream.write(raw)
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    """Keep captured JSON bytes and the archive's existing flush policy."""
+    write_json_atomic(
+        path, payload, sync_file=False,
+        encode=lambda value: value if isinstance(value, bytes) else json_bytes(value, sort_keys=True),
+    )
 
 
 def archive_cad_document(

@@ -23,6 +23,7 @@ result it would report a success in; the parent decides what that means.
 
 from __future__ import annotations
 
+from functools import partial
 import json
 import os
 from pathlib import Path
@@ -32,6 +33,7 @@ import time
 import traceback
 from typing import Any
 
+from server.platform.json_file import json_bytes, write_json_atomic
 from server.cadlink.build_flags import fem_regions_enabled
 
 
@@ -494,13 +496,11 @@ def _jsonable(value: Any) -> Any:
 
 def _write_result(path: Path, envelope: dict[str, Any]) -> None:
     """Publish the result atomically, so a partial write is never read."""
-
-    temporary = path.with_name(path.name + ".partial")
-    temporary.write_text(
-        json.dumps(envelope, allow_nan=False, ensure_ascii=True, default=_jsonable),
-        encoding="utf-8",
+    write_json_atomic(
+        path, envelope, sync_file=False, creation_mode=0o666,
+        encode=partial(json_bytes, indent=None, allow_nan=False, trailing_newline=False,
+                       newline=None, default=_jsonable),
     )
-    os.replace(temporary, path)
 
 
 def main(argv: list[str] | None = None) -> int:

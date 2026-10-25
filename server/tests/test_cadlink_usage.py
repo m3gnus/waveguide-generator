@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from server.platform import json_file
 from server.cadlink import usage
 from server.cadlink.intake import solve_command
 from server.cadlink.operations import PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT
@@ -52,7 +53,7 @@ def test_atomic_write_failure_preserves_previous_record(tmp_path, monkeypatch):
     before = path.read_bytes()
     def fail(*args):
         raise OSError("replace failed")
-    monkeypatch.setattr(usage.os, "replace", fail)
+    monkeypatch.setattr(json_file.os, "replace", fail)
     with pytest.raises(OSError):
         usage.record_usage(tmp_path, "install-action")
     assert path.read_bytes() == before

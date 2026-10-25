@@ -12,6 +12,7 @@ import meshio
 import numpy as np
 import pytest
 
+from server.platform import json_file
 from server.design.native import NATIVE_FORMULAS
 from server.cadlink.intake.native_source import read_native_source
 from server.source_editor import PresetStore, create_router
@@ -195,7 +196,6 @@ def test_app_mount_and_restart_gate(tmp_path):
 
 
 def test_unreadable_library_and_failed_save_preserve_previous_bytes(client, tmp_path, monkeypatch):
-    import server.source_editor as editor
 
     path = tmp_path / "source_presets.json"
     path.write_text('{"version":1,"presets":{"bad":null}}')
@@ -219,7 +219,7 @@ def test_unreadable_library_and_failed_save_preserve_previous_bytes(client, tmp_
     def fail(*args):
         raise OSError("simulated unavailable storage")
 
-    monkeypatch.setattr(editor.os, "replace", fail)
+    monkeypatch.setattr(json_file.os, "replace", fail)
     assert (
         client.put(
             "/api/source-editor/presets/" + saved["id"],
@@ -232,7 +232,8 @@ def test_unreadable_library_and_failed_save_preserve_previous_bytes(client, tmp_
         == 503
     )
     assert path.read_bytes() == original
-    assert not list(tmp_path.glob(".source-presets-*"))
+    assert not list(tmp_path.glob(".source_presets.json.*"))
+    assert not list(tmp_path.glob(".source_preset_authoring.json.*"))
 
 
 @pytest.mark.parametrize(
@@ -366,7 +367,6 @@ def test_stale_authoring_revision_is_ignored_and_pruned_on_write(client, tmp_pat
 
 
 def test_authoring_entry_cap_and_failed_atomic_replace_preserve_library(client, tmp_path, monkeypatch):
-    import server.source_editor as editor
 
     doc = shape(client)["document"]
     path = tmp_path / "source_presets.json"
@@ -377,7 +377,7 @@ def test_authoring_entry_cap_and_failed_atomic_replace_preserve_library(client, 
     body = {"name": "Replacement", "document": doc, "expected_revision": saved["revision"]}
     assert client.put(url, json={**body, "authoring": "x" * (256 * 1024)}).status_code == 422
     assert path.read_bytes() == before and companion.read_bytes() == before_companion
-    replace = editor.os.replace
+    replace = json_file.os.replace
     observed = []
 
     def inspect_atomic(source, destination):
@@ -390,14 +390,15 @@ def test_authoring_entry_cap_and_failed_atomic_replace_preserve_library(client, 
         replace(source, destination)
 
     from pathlib import Path
-    monkeypatch.setattr(editor.os, "replace", inspect_atomic)
+    monkeypatch.setattr(json_file.os, "replace", inspect_atomic)
     assert client.put(url, json={**body, "authoring": {"a": 2}}).status_code == 503
     assert observed == [companion, path]
     assert path.read_bytes() == before
     # A crash between the atomic replacements can lose only optional authoring;
     # it must never attach a new sketch to an old document revision.
     assert client.get("/api/source-editor/presets").json() == [{k: v for k, v in saved.items() if k != "authoring"}]
-    assert not list(tmp_path.glob(".source-presets-*"))
+    assert not list(tmp_path.glob(".source_presets.json.*"))
+    assert not list(tmp_path.glob(".source_preset_authoring.json.*"))
 
 
 def test_authoring_companion_has_128_entry_cap_and_drops_stale_entries(tmp_path):

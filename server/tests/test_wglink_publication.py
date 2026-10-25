@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
+from server.platform import json_file
 from server.cadlink.store import CadLinkStore
 from server.exports import api, cad_handoff, wglink_publication as publication
 from test_wglink_export import _design, _saved, _request, _install_fake_write
@@ -155,7 +156,7 @@ def test_windows_replace_failure_keeps_old_locator(monkeypatch, tmp_path, winerr
 
     monkeypatch.setattr(publication, "_WINDOWS", True)
     monkeypatch.setattr(publication.os, "replace", denied)
-    monkeypatch.setattr(publication.time, "sleep", lambda _: None)
+    monkeypatch.setattr(json_file.time, "sleep", lambda _: None)
     with pytest.raises(OSError):
         publication.atomic_json(path, {"sequence": 2})
     assert len(calls) == 10
@@ -410,7 +411,7 @@ def test_windows_access_denied_is_retried_then_replaced(monkeypatch, tmp_path):
 
     monkeypatch.setattr(publication, "_WINDOWS", True)
     monkeypatch.setattr(publication.os, "replace", busy_once)
-    monkeypatch.setattr(publication.time, "sleep", lambda _: None)
+    monkeypatch.setattr(json_file.time, "sleep", lambda _: None)
     publication.atomic_json(path, {"sequence": 2})
     assert len(calls) == 2
     assert json.loads(path.read_text()) == {"sequence": 2}

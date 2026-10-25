@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from io import BytesIO
+from functools import partial
 import json
-import os
 from pathlib import Path
 import tempfile
 import threading
@@ -13,6 +13,7 @@ from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
+from server.platform.json_file import json_bytes, write_json_atomic
 from server.design.schema import DesignConfig
 from server.mesh.errors import SolverMemoryTooLarge
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, field_validator
@@ -302,25 +303,22 @@ class PresetStore:
         if len(authoring) > self.MAX_ENTRIES:
             raise HTTPException(422, "At most 128 source authoring entries are supported.")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        pending = []
+        def publish_authoring(_temporary: Path) -> None:
+            write_json_atomic(
+                self.authoring_path, authoring,
+                encode=partial(json_bytes, indent=None, allow_nan=False, trailing_newline=False),
+            )
+
         try:
-            for path, raw in ((self.authoring_path, json.dumps(authoring, allow_nan=False).encode()), (self.path, library)):
-                fd, name = tempfile.mkstemp(dir=self.path.parent, prefix=".source-presets-")
-                pending.append((name, path))
-                with os.fdopen(fd, "wb") as stream:
-                    stream.write(raw)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-            for name, path in pending:
-                os.replace(name, path)
+            # Stage the library before committing the companion, so a failed
+            # stage cannot change either file. Revisions protect a failed replace.
+            write_json_atomic(self.path, library, encode=lambda raw: raw,
+                              before_replace=publish_authoring)
         except OSError as exc:
             raise HTTPException(
                 503,
                 "Source preset could not be persisted. Try again after restoring storage access.",
             ) from exc
-        finally:
-            for name, _ in pending:
-                Path(name).unlink(missing_ok=True)
 
     def list(self):
         with self.lock:

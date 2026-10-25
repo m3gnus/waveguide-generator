@@ -65,6 +65,7 @@ for a later supported rollback (:func:`retained_previous_path`).
 
 from __future__ import annotations
 
+from functools import partial
 import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
@@ -76,12 +77,12 @@ import logging
 import os
 from pathlib import Path
 import sys
-import tempfile
 import threading
 import time
 from types import ModuleType
 from typing import Any
 
+from server.platform.json_file import json_bytes, write_json_atomic
 from server.cadlink.fusion.fusion_status import (
     FUSION_CLOSED,
     FUSION_RUNNING,
@@ -409,27 +410,7 @@ def startup_confirmed(
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     """Write, flush, then rename, so a reader never sees half a record."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        newline="\n",
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        delete=False,
-    )
-    try:
-        with temporary:
-            json.dump(payload, temporary, indent=2, sort_keys=True)
-            temporary.write("\n")
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        os.replace(temporary.name, path)
-    except BaseException:
-        Path(temporary.name).unlink(missing_ok=True)
-        raise
+    write_json_atomic(path, payload, encode=partial(json_bytes, sort_keys=True))
 
 
 def read_pending(path: Path) -> tuple[dict[str, Any] | None, str | None]:
