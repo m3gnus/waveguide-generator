@@ -252,7 +252,12 @@ export async function openImported(source: ImportedSource, fetcher: typeof fetch
   const generation = importedMeshStore.beginIntent();
   // Choosing the input first parks the other input's model and options.
   workspaceModeStore.setImportedInput(input);
-  useImportedModelStore.setState({ ...emptyState(input), generation, phase: 'loading' });
+  const previous = useImportedModelStore.getState();
+  const preparedId = source.kind === 'run' ? source.job.cad_source?.ingest_id
+    : source.preparedId;
+  const retained = input === 'cad' && previous.input === input && previous.phase === 'ready'
+    && previous.prepared?.ingest_id === preparedId && importedMeshStore.getSnapshot().cad?.ingestId === preparedId;
+  useImportedModelStore.setState({ ...(retained ? previous : emptyState(input)), generation, phase: 'loading' });
   const rail = view.begin({ generation, source, display, fetcher });
   const current = () => {
     const state = useImportedModelStore.getState();
@@ -264,6 +269,12 @@ export async function openImported(source: ImportedSource, fetcher: typeof fetch
   const stopped = () => {
     const state = useImportedModelStore.getState();
     if (state.generation === generation && state.phase === 'failed' && rail.current()) rail.fail(state.error ?? '');
+    // A cancelled setup read of the mesh still on screen leaves its prior
+    // model usable. Never replace a newer model or revive a failed open.
+    if (retained && state.generation === generation && state.phase === 'loading'
+      && state.prepared?.ingest_id === preparedId && importedMeshStore.getSnapshot().cad?.ingestId === preparedId) {
+      useImportedModelStore.setState({ phase: 'ready' });
+    }
     return false;
   };
   try {
@@ -277,6 +288,7 @@ export async function openImported(source: ImportedSource, fetcher: typeof fetch
       // A setup that may not be the run's exactly fills the rail, but is not replayed.
       setup: opened.setup && opened.exact ? structuredClone(opened.setup) : null,
       restoredRevisionId: opened.setup && opened.exact ? opened.revisionId : null,
+      setupEditBase: null,
       fileDraft: input === 'file' ? fileDraftOf(opened.prepared) : useImportedModelStore.getState().fileDraft,
       phase: 'ready', error: null, followEnginePreference: source.kind === 'model' && source.useEnginePreference === true,
     });

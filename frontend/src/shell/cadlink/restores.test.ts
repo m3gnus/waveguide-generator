@@ -16,7 +16,7 @@ import { workspaceModeStore } from '../../stores/workspaceMode';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { observeLastModel, refreshChannelDriverBases } from './restores';
 import { archivedRequest, bundle, deferred, job, json, mesh, record, workspaceFor } from './selection.fixtures';
-import { openImported, resetImportedModelStore, unchangedSetup, useImportedModelStore, type ImportedDisplay } from '../../stores/importedModel';
+import { effectiveImportedSetup, openImported, resetImportedModelStore, unchangedSetup, useImportedModelStore, type ImportedDisplay } from '../../stores/importedModel';
 
 import type { JobItem } from '../../api/jobsSocket';
 import { createCadArrivalActions, createCadReturnArrivalReader } from './arrivals';
@@ -522,4 +522,18 @@ it('does not hide an edit made while the retained viewport mesh is still loading
   expect(useCadReturnStore.getState().driveVoltageV).toBe(3);
   expect(importedSubmissionBlocker()).toContain('Settings changed');
   expect(() => buildImportedSubmission()).toThrow('Select the run again');
+});
+
+
+it('replaces the prior physics when another run of the shown mesh has a non-exact setup', async () => {
+  await restoreCadJobModel(job(), {}, archiveFetcher);
+  const prior = useImportedModelStore.getState().setup!;
+  useImportedModelStore.setState({ setupEditBase: { retained: prior, controls: prior } });
+  const next = { ...prior, geometry: { ...prior.geometry, drive_voltage_v: 5 } };
+  const workspace = workspaceFor();
+  const fetcher = (async (input: RequestInfo | URL) => isWorkspace(input)
+    ? json({ ...workspace, setup: { ...workspace.setup, content: next, exact: false } }) : json(record)) as typeof fetch;
+  expect(await restoreCadJobModel(job(), {}, fetcher)).toBe(true);
+  expect(useCadReturnStore.getState().driveVoltageV).toBe(5);
+  expect(effectiveImportedSetup('cad', record.ingest_id, () => next).geometry.drive_voltage_v).toBe(5);
 });

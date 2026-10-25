@@ -86,9 +86,12 @@ export const cadImportedView: ImportedView = {
       : source.kind === 'run' ? source.job.cad_source?.ingest_id : source.kind === 'model' ? source.preparedId : null;
     const keepPrepared = preparedId && useCadReturnStore.getState().ingestRecord?.ingest_id === preparedId
       && importedMeshStore.getSnapshot().cad?.ingestId === preparedId;
-    useCadReturnStore.setState({ ...(!keepPrepared ? { ingestRecord: null } : {}), needsIngest: true,
-      ingestStaleReason: null });
-    reportStatus(`Loading ${displayName}${from}…`);
+    // Loading a setup does not change the mesh already on screen. In particular,
+    // a navigation-cancelled read must not leave that preparation stale.
+    if (!keepPrepared) {
+      useCadReturnStore.setState({ ingestRecord: null, needsIngest: true, ingestStaleReason: null });
+      reportStatus(`Loading ${displayName}${from}…`);
+    }
     // The open's own generation fences this too: an open of the other input
     // (a file) never touches CAD's ingest intent, and must still win.
     const current = () => isCurrentOpen(generation)

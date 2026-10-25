@@ -655,3 +655,18 @@ it('does not claim an unseen newer Send while an explicit selection still holds'
   await f.observe([old]); await f.showRequest({ operationId: old.id, jobId: old.id });
   expect(f.ownsReturn({ ...bundle, returnId: 'new-send', modifiedAt: new Date(NOW + 1000).toISOString() }, [])).toBe(false);
 });
+
+it('keeps the shown preparation ready if tab navigation cancels the same run setup load', async () => {
+  const accepted = deferred<Response>();
+  const f = fixture(vi.fn(async input => String(input).endsWith('/workspace') ? accepted.promise : json(record)));
+  await f.observe([preparing()]);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+  const run = external(); const loading = f.observe([run]);
+  noteExplicitNavigation();
+  accepted.resolve(json(workspaceFor())); await loading;
+  await f.observe([{ ...run, status: 'complete', has_results: true }]);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+  expect(useImportedModelStore.getState().phase).toBe('ready');
+  expect(currentModel().viewportShowing).toBe(true);
+  expect(f.display.reportStatus.mock.calls.at(-1)?.[0]).not.toContain('Loading');
+});
