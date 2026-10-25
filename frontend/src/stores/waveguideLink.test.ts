@@ -18,4 +18,12 @@ describe('waveguide definition applicability', () => {
     expect(waveguideDefinitionApplies(undefined)).toBe(true);
     expect(waveguideDefinitionApplies({})).toBe(false);
   });
+
+  it('hides for a selected model authored in CAD, before and after it is prepared', () => {
+    // `selectCadModelState().authoredInCad`: a Fusion return that names no
+    // open WG design, before any preparation recorded a project.
+    expect(waveguideDefinitionApplies(null, true)).toBe(false);
+    expect(waveguideDefinitionApplies({ design_id: 'wgd_1' }, true)).toBe(false);
+    expect(waveguideDefinitionApplies(null, false)).toBe(true);
+  });
 });

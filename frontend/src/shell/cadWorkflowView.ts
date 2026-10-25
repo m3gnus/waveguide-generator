@@ -208,6 +208,25 @@ function notObservedView(view: CadWorkflowView, status: FusionCadStatus): CadWor
   };
 }
 
+/** Activation verdicts that leave Fusion without the add-in that matches WG,
+ * where installing it by hand is the remedy (server/cadlink/fusion/addin_update.py):
+ * not installed, not yet in use, or an install WG could not make. */
+const ADDIN_MISSING_VERDICTS = new Set(['absent', 'not-in-use', 'failed', 'unavailable', 'disabled']);
+
+/** Whether the add-in is missing or out of date, so the CAD Link panel offers
+ * Install add-in. A current add-in, or a status WG has not read yet, offers
+ * nothing: WG keeps a current add-in up to date by itself. */
+export function fusionAddinNeedsInstall(status: FusionCadStatus | null): boolean {
+  if (status === null) return false;
+  if (status.state === 'addin_outdated' || status.state === 'addin_offline') return true;
+  if (status.cadConnectionIssue === 'addin_upgrade_required') return true;
+  const verdict = status.addinRefresh?.verdict ?? '';
+  // A running add-in is there: only too old to follow newer exports on manual
+  // Update, or one WG tried and failed to update, still wants installing.
+  if (status.running) return status.immutableBundles !== true || verdict === 'failed';
+  return ADDIN_MISSING_VERDICTS.has(verdict);
+}
+
 export function fusionWorkflowView(status: FusionCadStatus | null): CadWorkflowView {
   const reported = fusionConnectionView(status);
   const view = status?.statusObserved === false ? notObservedView(reported, status) : reported;

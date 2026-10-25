@@ -149,7 +149,7 @@ export function buildParameterPaletteEntries(family?: DesignFamily, context: Par
   }
 
   const cadEntries: PaletteEntry[] = CAD_CONTROL_DESCRIPTORS
-    .filter((descriptor) => cadControlIsAvailable(descriptor, cadReturnReady, editableCadMesh))
+    .filter((descriptor) => cadControlIsAvailable(descriptor, cadReturnReady, editableCadMesh, waveguideLinked))
     .map((descriptor) => ({
       id: `cad-control-${descriptor.id}`,
       kind: 'Parameters',

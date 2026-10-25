@@ -28,6 +28,7 @@ import { CadWorkspaceOwners } from './CadWorkspaceOwners';
 import { JobsCoordinator, jobsCoordinatorBridge } from './JobsCoordinator';
 import { CurrentModelStatus } from './CurrentModelStatus';
 import { workspaceNavigation } from './workspaceNavigation';
+import { fusionAddinNeedsInstall } from './cadWorkflowView';
 
 const listing: CadReturnListing = {
   cadFolderConfigured: true,
@@ -151,6 +152,54 @@ describe('CadLinkPanel', () => {
     cadWorkspace.setState(emptyCadWorkspace, true);
   });
 
+  it('keeps a quiet connection line below the runs and no Install add-in for a current add-in', async () => {
+    const { emptyCadWorkspace } = await import('../stores/cadWorkspace');
+    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false, fusionStatus: { ...currentFusion, immutableBundles: true } }, true);
+    workspaceModeStore.setMode('cad');
+    useCadReturnStore.getState().selectBundle({ ...listing.items[0], designIds: [] });
+    await act(async () => root.render(<QueryClientProvider client={capabilityClient}><CadLinkPanel/></QueryClientProvider>));
+    const panel = host.querySelector('.cadlink-panel')!;
+    // The last thing on the tab, after the model card and any runs.
+    expect(panel.lastElementChild?.matches('[aria-label="CAD Link connection"]')).toBe(true);
+    expect(panel.querySelector('.cad-model-card')!.compareDocumentPosition(panel.lastElementChild!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(panel.querySelector('[aria-label="CAD Link connection"] .cad-link-quiet')).not.toBeNull();
+    expect([...host.querySelectorAll('button')].some((button) => button.textContent === 'Install add-in')).toBe(false);
+    cadWorkspace.setState(emptyCadWorkspace, true);
+  });
+
+  it('leads with a connection that needs the user, and offers Install add-in for an outdated add-in', async () => {
+    const { emptyCadWorkspace } = await import('../stores/cadWorkspace');
+    cadWorkspace.setState({ ...emptyCadWorkspace, loading: false, fusionStatus: { ...currentFusion, state: 'addin_outdated' } }, true);
+    workspaceModeStore.setMode('cad');
+    await act(async () => root.render(<QueryClientProvider client={capabilityClient}><CadLinkPanel/></QueryClientProvider>));
+    const panel = host.querySelector('.cadlink-panel')!;
+    const connection = panel.querySelector('[aria-label="CAD Link connection"]')!;
+    expect(connection.classList.contains('attention')).toBe(true);
+    expect(connection.compareDocumentPosition(panel.querySelector('.cad-model-card')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect([...connection.querySelectorAll('button')].some((button) => button.textContent === 'Install add-in')).toBe(true);
+    cadWorkspace.setState(emptyCadWorkspace, true);
+  });
+
+  it('offers Install add-in only while the add-in is missing or out of date', () => {
+    const verdict = (value: string) => ({ verdict: value, detail: '' });
+    const current = { ...currentFusion, immutableBundles: true };
+    expect(fusionAddinNeedsInstall(null)).toBe(false);
+    expect(fusionAddinNeedsInstall(current)).toBe(false);
+    expect(fusionAddinNeedsInstall({ ...current, addinRefresh: verdict('current') })).toBe(false);
+    expect(fusionAddinNeedsInstall({ ...current, immutableBundles: false })).toBe(true);
+    expect(fusionAddinNeedsInstall({ ...current, addinRefresh: verdict('failed') })).toBe(true);
+    expect(fusionAddinNeedsInstall({ ...current, state: 'addin_outdated' })).toBe(true);
+    expect(fusionAddinNeedsInstall({ ...current, cadConnectionIssue: 'addin_upgrade_required' })).toBe(true);
+    expect(fusionAddinNeedsInstall({ ...closedFusion, state: 'addin_offline' })).toBe(true);
+    expect(fusionAddinNeedsInstall(closedFusion)).toBe(false);
+    for (const missing of ['absent', 'not-in-use', 'failed', 'unavailable', 'disabled']) {
+      expect(fusionAddinNeedsInstall({ ...closedFusion, addinRefresh: verdict(missing) })).toBe(true);
+    }
+    for (const present of ['current', 'installed', 'updated', 'pending', 'not-detected', 'external', 'developer']) {
+      expect(fusionAddinNeedsInstall({ ...closedFusion, addinRefresh: verdict(present) })).toBe(false);
+    }
+  });
+
   it('tells a Fusion request pointer whose preparation failed WG\'s words, never a Prepare simulation it cannot offer', async () => {
     const { emptyCadWorkspace } = await import('../stores/cadWorkspace');
     cadWorkspace.setState({ ...emptyCadWorkspace, loading: false, fusionStatus: closedFusion }, true);
@@ -187,6 +236,8 @@ describe('CadLinkPanel', () => {
     await vi.waitFor(() => expect(cadWorkspace.getSnapshot().fusionStatus?.running).toBe(true));
     const message = 'Update the Fusion add-in to let manual Update follow newer exports.';
     expect(host.textContent?.includes(message)).toBe(immutableBundles !== true);
+    // A current add-in needs nothing from the user: WG keeps it up to date.
+    expect([...host.querySelectorAll('button')].some((button) => button.textContent === 'Install add-in')).toBe(immutableBundles !== true);
     if (immutableBundles !== true) {
       expect(host.textContent).toContain('Choose Install add-in here, then restart Fusion. Automatic Send still works.');
       const install = Array.from(host.querySelectorAll('button')).find((button) => button.textContent === 'Install add-in');
@@ -229,10 +280,12 @@ describe('CadLinkPanel', () => {
   });
 
   it('replaces a deferred install answer with the status once the add-in is installed', async () => {
-    let refresh = { verdict: 'pending', detail: 'Close Fusion to finish installing the Waveguide Generator add-in in Fusion.' };
+    const pending = { verdict: 'pending', detail: 'Close Fusion to finish installing the Waveguide Generator add-in in Fusion.' };
+    // Not installed, so Install add-in is offered.
+    let refresh = { verdict: 'absent', detail: 'the Waveguide Generator add-in in Fusion is not installed; installation was not requested' };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      if (path.endsWith('/install-addin')) return json(refresh);
+      if (path.endsWith('/install-addin')) { refresh = pending; return json(pending); }
       if (path.endsWith('/fusion-status')) return json({ ...closedFusion, addinRefresh: refresh });
       if (path.endsWith('/returns')) return json(listing);
       return json(record);

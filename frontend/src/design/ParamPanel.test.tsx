@@ -17,6 +17,7 @@ import { CadSetupPublisher, useCadSetupPublisherStore } from '../shell/cadSetupP
 import { buildParameterPaletteEntries } from '../shell/TopBar';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
 import { combineSpecEffective, channelDriverPresent, channelDriverWire, driverEditedKeys, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { useDocumentStore } from '../stores/document';
 import { resetDriverLibraryStore, useDriverLibraryStore } from '../stores/driverLibrary';
 import { hydrateDesignDocument } from '../api/designIo';
 import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, type OsseFeatures } from './osseFeatures';
@@ -63,9 +64,13 @@ const portSource = {
   id: 'source-port', role: 'PORT_EXIT', required: false, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-port',
 };
 
-function setCadReady({ cardioidPort = false }: { cardioidPort?: boolean } = {}): void {
+/** A prepared return of the open WG design (a linked one, so WG's own
+ * waveguide definition applies); `linked: false` makes it Fusion-authored. */
+function setCadReady({ cardioidPort = false, linked = true }: { cardioidPort?: boolean; linked?: boolean } = {}): void {
+  useDocumentStore.setState({ identity: { designId: 'wgd_open', lineageId: 'wgl_open' } as never });
+  const bundle = { ...cadBundle, designIds: linked ? ['wgd_open'] : [] };
   useCadReturnStore.setState({
-    selectedBundle: cardioidPort ? { ...cadBundle, sources: [...cadBundle.sources, portSource] } : cadBundle,
+    selectedBundle: cardioidPort ? { ...bundle, sources: [...bundle.sources, portSource] } : bundle,
     ingestRecord: cadRecord,
     needsIngest: false,
     meshSizes: { ...useCadReturnStore.getState().meshSizes, source_size_mm: { 'source-hf': 2, 'source-mf': 4, ...(cardioidPort ? { 'source-port': 4 } : {}) }, rigid_size_mm: 5, transition_mm: 4 },
@@ -136,6 +141,7 @@ describe('ParamPanel inventory UX', () => {
     localStorage.clear();
     resetDesignStore();
     resetCadReturnStore();
+    useDocumentStore.setState({ identity: null });
     resetImportedModelStore();
 
     resetSolveOptionsStore();
@@ -1248,10 +1254,41 @@ describe('ParamPanel inventory UX', () => {
       workspaceModeStore.setMode('cad');
     });
     const titles = () => [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
-    expect(titles()).toEqual(['Realized dimensions']);
+    // Nor Realized dimensions: they report the linked instance of a WG design.
+    expect(titles()).toEqual([]);
     for (const gone of ['Profile', 'Throat', 'Mouth', 'Mounting', 'Cross-section']) {
       expect(host.querySelector(`[data-section="${gone}"]`)).toBeNull();
     }
+  });
+
+  it('drops the waveguide definition for a Fusion-authored return before it is prepared', () => {
+    act(() => {
+      useDesignStore.getState().setFamily('OSSE');
+      setCadReady({ linked: false });
+      useCadReturnStore.setState({ ingestRecord: null });
+      workspaceModeStore.setMode('cad');
+    });
+    // The bundle names no WG design: nothing proves a link, and the formula of
+    // the design that happens to be open cannot move this model.
+    expect(host.querySelector('[data-section]')).toBeNull();
+    expect(host.textContent).not.toContain('Linked instance unavailable');
+    const ids = buildParameterPaletteEntries(undefined, { mode: 'cad' }).map((entry) => entry.id);
+    expect(ids).not.toContain('cad-control-cad.realized-dimensions');
+    expect(ids.some((id) => id.startsWith('parameter-'))).toBe(false);
+  });
+
+  it('keeps the waveguide definition and Realized dimensions for a linked WG return before it is prepared', () => {
+    act(() => {
+      useDesignStore.getState().setFamily('OSSE');
+      setCadReady();
+      useCadReturnStore.setState({ ingestRecord: null });
+      workspaceModeStore.setMode('cad');
+    });
+    const titles = [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
+    expect(titles).toContain('Profile Dimensions');
+    expect(titles.at(-1)).toBe('Realized dimensions');
+    expect(buildParameterPaletteEntries(undefined, { mode: 'cad' }).map((entry) => entry.id))
+      .toContain('cad-control-cad.realized-dimensions');
   });
 
   it('renders manifest interface roles as read-only per-instance facts and omits informational roles', () => {
@@ -1463,8 +1500,10 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('#cad-force-full-domain')).toBeNull();
   });
 
-  it.each([false, true])('shows mesh settings and a refusal without an ingest (Fusion: %s)', (fusion) => {
-    const refusal = "This model meshes to 28,944 triangles; WG's limit is 22,000 for the part it solves. In Fusion, open Waveguide Generator ▸ Sources & Mesh…, raise Walls (now 4 mm; default 25 mm) or add a Coarse surface group, and Send again.";
+  it.each([false, true])('shows one line and no mesh detail before a Fusion return is prepared (snapshot: %s)', (fusion) => {
+    // A mesh-size refusal is the Imported mesh tab's to show (CadLinkPanel's
+    // notice); the Simulation tab has nothing to set until the model is ready.
+    const refusal = "This model meshes to 28,944 triangles; WG's limit is 22,000 for the part it solves.";
     vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({ ...cadWorkspace.getSnapshot(), error: refusal });
     act(() => {
       useCadReturnStore.setState({ selectedBundle: { ...cadBundle, ...(fusion ? { meshSnapshot: { ...fusionMesh, wall_size_mm: 4 } } : {}) },
@@ -1474,13 +1513,22 @@ describe('ParamPanel inventory UX', () => {
       workspaceModeStore.setMode('cad');
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
-    expect(host.textContent).toContain(fusion ? 'Mesh (set in Fusion)' : 'Mesh (set in WG by an older add-in)');
-    expect(host.textContent).toContain('Walls 4 mm · Grading distance 100 mm · Symmetry Automatic');
-    expect(host.textContent).toContain('HF source 6 mm');
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe(refusal);
-    expect([...host.querySelectorAll('button')].find(button => button.textContent === 'Rebuild mesh')?.disabled).toBe(false);
-    expect(host.querySelector('#cad-force-full-domain')).toBeNull();
-    if (!fusion) expect(host.textContent).toContain('Sizes saved with this model are kept. To change them, open Sources & Mesh… in Fusion (updated Waveguide Generator add-in) and Send again.');
+    expect(host.querySelector('.cad-simulation-empty')?.textContent).toBe('Settings appear when Speaker is ready.');
+    expect(host.querySelector('[data-section]')).toBeNull();
+    expect(host.textContent).not.toMatch(/Mesh \(set in|Rebuild mesh|Open CAD Link setup/);
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(buildParameterPaletteEntries(undefined, { mode: 'cad', cadReturnReady: false }).map((entry) => entry.id))
+      .not.toContain('cad-control-cad.mesh-detail');
+  });
+
+  it('keeps an Onshape return\'s editable mesh sizes before it is prepared', () => {
+    act(() => {
+      useCadReturnStore.setState({ selectedBundle: { ...cadBundle, bundleOrigin: 'onshape' }, ingestRecord: null });
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    expect(host.querySelector('[data-section="Mesh detail"]')).not.toBeNull();
+    expect(host.querySelector('[data-control-reveal-id="cad.mesh.rigid-size"]')).not.toBeNull();
   });
 
   it.each(['skip-source-hf', 'drift-source-hf'])('keeps a recalled Fusion snapshot after toggling %s while measurements become pending', async (toggleId) => {
@@ -1954,13 +2002,14 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('.cad-channel[data-channel-id="drive-hf"] .cad-driver-grid')).not.toBeNull();
   });
 
-  it('shows the CAD simulation empty state without hiding formula editing on Geometry', () => {
+  it('shows the CAD simulation empty line without hiding formula editing on Geometry', () => {
     act(() => workspaceModeStore.setMode('cad'));
     expect(host.querySelector('[data-section="Profile Dimensions"]')).not.toBeNull();
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    expect(host.textContent).toContain('Prepare CAD geometry to unlock these inputs');
-    expect(host.textContent).toContain('Drivers, crossover, sweep');
-    expect(host.textContent).toContain('Open CAD Link setup');
+    // One line; no button that leads back to the tab the model's status is on.
+    expect(host.querySelector('.cad-simulation-empty')?.textContent).toBe('Settings appear when a CAD model is ready.');
+    expect(host.querySelector('button.btn-primary')).toBeNull();
+    expect(host.textContent).not.toContain('Open CAD Link setup');
     expect(host.querySelector('[data-section]')).toBeNull();
   });
 
@@ -2566,6 +2615,7 @@ describe('driver picker', () => {
     localStorage.clear();
     resetDesignStore();
     resetCadReturnStore();
+    useDocumentStore.setState({ identity: null });
     resetImportedModelStore();
 
     resetSolveOptionsStore();

@@ -26,7 +26,9 @@ export interface CadControlDescriptor {
   section: CadControlSection;
   tab: ParameterTab;
   keywords: readonly string[];
-  availability: 'cad-mode' | 'ingested-return' | 'onshape-return';
+  /** `waveguide-linked`: only while WG's own waveguide definition applies
+   * (`waveguideDefinitionApplies`), never for a model authored in CAD. */
+  availability: 'cad-mode' | 'ingested-return' | 'onshape-return' | 'waveguide-linked';
   /** The panel owns the DOM target. The palette only queues this semantic id,
    * so a dock panel that has not mounted yet can still claim and reveal it. */
   reveal: { id: string; target: 'control'; fallbackId?: string };
@@ -52,7 +54,7 @@ function control(
 export const CAD_CONTROLS = {
   realizedDimensions: control(
     'cad.realized-dimensions', 'Realized dimensions', CAD_CONTROL_SECTIONS.realizedDimensions, 'geometry',
-    ['published', 'interface', 'throat diameter', 'mouth width', 'mouth height', 'depth', 'wall thickness', 'enclosure', 'vertical offset'], 'cad-mode',
+    ['published', 'interface', 'throat diameter', 'mouth width', 'mouth height', 'depth', 'wall thickness', 'enclosure', 'vertical offset'], 'waveguide-linked',
   ),
   frequencySweep: control(
     'cad.frequency', 'Frequency Sweep', CAD_CONTROL_SECTIONS.frequencySweep, 'simulation',
@@ -183,7 +185,9 @@ export const CAD_CONTROLS = {
   ),
   meshDetail: control(
     'cad.mesh-detail', 'Mesh detail', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
-    ['CAD mesh', 'surface sizing', 'Fusion', 'Walls', 'Grading distance', 'Symmetry', 'source size', 'surface group', 'rebuild mesh', 'ingest'], 'cad-mode',
+    // A prepared model's mesh; an Onshape return's editable sizes (below)
+    // offer the section before that.
+    ['CAD mesh', 'surface sizing', 'Fusion', 'Walls', 'Grading distance', 'Symmetry', 'source size', 'surface group', 'rebuild mesh', 'ingest'],
   ),
   rigidSize: control(
     'cad.mesh.rigid-size', 'Walls', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
@@ -377,8 +381,9 @@ export const CAD_CONTROL_DESCRIPTORS: readonly CadControlDescriptor[] = [
   ...CAD_CARDIOID_FIELD_CONTROLS,
 ];
 
-export function cadControlIsAvailable(descriptor: CadControlDescriptor, cadReturnReady: boolean, editableMesh = false): boolean {
+export function cadControlIsAvailable(descriptor: CadControlDescriptor, cadReturnReady: boolean, editableMesh = false, waveguideLinked = true): boolean {
   if (descriptor.availability === 'onshape-return') return editableMesh;
+  if (descriptor.availability === 'waveguide-linked') return waveguideLinked;
   return descriptor.availability === 'cad-mode' || cadReturnReady;
 }
 

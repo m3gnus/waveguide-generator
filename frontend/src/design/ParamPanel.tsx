@@ -1,4 +1,3 @@
-import { EmptyState } from '../shell/EmptyState';
 import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, OSSE_SWITCH_NOTICE, type OsseFeatures } from './osseFeatures';
 import { FreeformProfileInspection } from './ProfileInspection';
 import { registerParameterPanel } from './parameterPanelValidity';
@@ -17,7 +16,6 @@ import { useActiveBackendCapability, useCapabilities, usePlannedBackendCapabilit
 import { displaySymmetry, recordDomainDecision } from '../api/domainDecision';
 import { cadMeshIsEditable, cadMeshSizing } from '../api/cadMesh';
 import { backendLimitation, symmetryDomainLimitation } from './backendSupport';
-import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { CadCrossover } from './CrossoverSection';
 import {
   assignableChannelIds,
@@ -32,6 +30,7 @@ import {
 } from '../stores/cadReturn';
 import { ExteriorDriverLibraryPicker, ChannelDriverPicker } from './DriverPicker';
 import { useWaveguideDefinitionApplies } from '../stores/waveguideLink';
+import { useCadModelSelection } from '../stores/cadModelState';
 import { defaultWallThickness, isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
 import { athControlError, lipRadiusWallError, lipUnavailableReason, opusClampNote, opusMountingReason } from './athImportControls';
 import { namespaceStorage } from '../stores/durableSettings';
@@ -67,7 +66,6 @@ import {
 } from './parameterRegistry';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { useCadFeedbackError } from '../shell/cadSetupPublisher';
-import { workspaceNavigation } from '../shell/workspaceNavigation';
 import {
   CAD_CARDIOID_FIELD_CONTROLS,
   CAD_CONTROLS,
@@ -1140,9 +1138,11 @@ function CadMeshDetail() {
   </>;
 }
 
+/** Before the selected model is prepared, the Simulation tab has nothing to
+ * set: one line, and the model's status lives on the Imported mesh tab. */
 function CadSimulationEmpty() {
-  const cadApplication = cadApplicationName(usePreferences().cadApplication);
-  return <EmptyState title="Prepare CAD geometry to unlock these inputs" detail={<>Drivers, crossover, sweep, directivity and solve options appear here after CAD Link brings the finished geometry back from {cadApplication}.</>} action={<button className="btn-primary" onClick={() => workspaceNavigation.navigate('geometry')}>Open CAD Link setup</button>}/>;
+  const model = useCadModelSelection();
+  return <p className="cad-simulation-empty">Settings appear when {model.selected ? model.label : 'a CAD model'} is ready.</p>;
 }
 
 const osseChoices = [
@@ -1225,9 +1225,9 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
   })), [definitions, design, query, workspaceMode]);
   const matchingCadSections = useMemo(() => new Set(CAD_CONTROL_DESCRIPTORS
     .filter((descriptor) => workspaceMode === 'cad' && descriptor.tab === tab)
-    .filter((descriptor) => cadControlIsAvailable(descriptor, Boolean(ingestRecord), cadMeshIsEditable(selectedBundle)))
+    .filter((descriptor) => cadControlIsAvailable(descriptor, Boolean(ingestRecord), cadMeshIsEditable(selectedBundle), waveguideLinked))
     .filter((descriptor) => cadControlMatchesQuery(descriptor, query))
-    .map((descriptor) => descriptor.section)), [ingestRecord, selectedBundle, query, tab, workspaceMode]);
+    .map((descriptor) => descriptor.section)), [ingestRecord, selectedBundle, query, tab, waveguideLinked, workspaceMode]);
   const cadSectionMatches = (section: CadControlSection) => matchingCadSections.has(section);
   const matchingParametricSections = useMemo(() => new Set(PARAMETRIC_CONTROL_DESCRIPTORS
     .filter((descriptor) => workspaceMode === 'parametric' && descriptor.tab === tab)
@@ -1435,7 +1435,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
           {definitions.map(renderRegistrySection)}
           {tab === 'geometry' && cadSectionMatches(CAD_CONTROLS.realizedDimensions.section) && <RealizedDimensionsCard forceOpen={searching}/>}
           {!searching && tab === 'simulation' && !ingestRecord && <CadSimulationEmpty/>}
-          {tab === 'simulation' && (selectedBundle || ingestRecord) && cadSectionMatches(CAD_CONTROLS.meshDetail.section) && <Section title={CAD_CONTROLS.meshDetail.section} description="Mesh settings from Fusion, optional sources, area drift, and mesh regeneration." forceOpen revealId={CAD_CONTROLS.meshDetail.reveal.id}><CadMeshDetail/></Section>}
+          {tab === 'simulation' && cadSectionMatches(CAD_CONTROLS.meshDetail.section) && <Section title={CAD_CONTROLS.meshDetail.section} description="Mesh settings from Fusion, optional sources, area drift, and mesh regeneration." forceOpen revealId={CAD_CONTROLS.meshDetail.reveal.id}><CadMeshDetail/></Section>}
           {tab === 'simulation' && ingestRecord && <>
             {cadSectionMatches(CAD_CONTROLS.frequencySweep.section) && <Section title={CAD_CONTROLS.frequencySweep.section} description="The explicit range submitted with this imported CAD geometry." forceOpen={searching} revealId={CAD_CONTROLS.frequencySweep.reveal.id}><CadFrequencySweep/></Section>}
             {cadSectionMatches(CAD_CONTROLS.directivityMap.section) && <Section title={CAD_CONTROLS.directivityMap.section} description="Display-plane and angular sampling controls, including the effective imported-CAD grid." forceOpen={searching} revealId={CAD_CONTROLS.directivityMap.reveal.id}><DirectivityMapControls/></Section>}
