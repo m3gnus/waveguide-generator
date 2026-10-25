@@ -96,7 +96,9 @@ describe('solve and directivity control help', () => {
       render(<SolveOptionsControls mode={mode}/>);
       expect(host.querySelector('.beat-runtime-preparation')).toBeNull();
       expect(host.querySelector('[role="status"]')?.textContent ?? '').not.toContain(engine.reason);
-      expect(host.querySelector<HTMLOptionElement>('option[value="beat-cpu"]')!.disabled).toBe(state === 'unavailable');
+      const option = host.querySelector<HTMLOptionElement>('option[value="beat-cpu"]');
+      if (mode === 'cad' && state === 'unavailable') expect(option).toBeNull();
+      else expect(option!.disabled).toBe(state === 'unavailable');
     }
     expect(fetcher).not.toHaveBeenCalled();
   });
@@ -234,7 +236,7 @@ describe('solve and directivity control help', () => {
     importedPlan.current.plan = { ingest_id: 'wgi_test', requested: 'auto', engine: 'beat-cpu', engines: [], reason: 'Ready' };
     act(() => useCadReturnStore.setState({ frequencyCount: 23 }));
     render(<SolveOptionsControls mode="cad" />);
-    expect(host.querySelector<HTMLInputElement>('#adaptive-frequency-sampling')!.disabled).toBe(true);
+    expect(host.querySelector('#adaptive-frequency-sampling')).toBeNull();
     act(() => useCadReturnStore.setState({ frequencyCount: 24 }));
     render(<SolveOptionsControls mode="cad" />);
     expect(host.querySelector<HTMLInputElement>('#adaptive-frequency-sampling')!.disabled).toBe(false);
@@ -283,7 +285,7 @@ describe('solve and directivity control help', () => {
     queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
       hostPlatform: 'windows',
       engines: [{ name: 'bempp', available: false, reason: 'Checking OpenCL…', version: null,
-        fast_paths: [], qualification: 'pending', assembly_backend: null, opencl_unavailable_reason: null }],
+        geometry_sources: ['parametric', 'imported'], fast_paths: [], qualification: 'pending', assembly_backend: null, opencl_unavailable_reason: null }],
       engineSelection: { default: 'auto', resolvedDefault: null, full3dOrder: ['bempp'] },
       cpuPreparationInFlight: false,
     });
@@ -567,7 +569,7 @@ describe('solve and directivity control help', () => {
   // Per record, the selector shows the server's verdict, not the capability
   // snapshot: BEMPP here is available and declares imported geometry, and is
   // still refused for this return, with the server's own reason beside it.
-  it('disables an engine the imported plan refuses for this return, with the server reason', () => {
+  it('omits engines the imported plan refuses for this model', () => {
     const imported = ['parametric', 'imported'];
     queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
       engines: [
@@ -596,8 +598,7 @@ describe('solve and directivity control help', () => {
     const options = new Map(
       [...host.querySelector<HTMLSelectElement>('#cad-solve-engine')!.options].map((option) => [option.value, option]),
     );
-    expect(options.get('bempp')!.disabled).toBe(true);
-    expect(options.get('bempp')!.textContent).toContain(refusal);
+    expect(options.has('bempp')).toBe(false);
     expect(options.get('metal')!.disabled).toBe(false);
     expect(options.get('beat-cpu')!.disabled).toBe(false);
     expect(host.textContent).toContain('Metal — Apple GPU · full 3-D · free space');
@@ -623,6 +624,7 @@ describe('solve and directivity control help', () => {
       error: null,
       isPending: false,
     };
+    act(() => useSolveOptionsStore.getState().setEngine('beat-metal'));
     render(<SolveOptionsControls mode="cad" ingestRecord={null} />);
     const option = () => host.querySelector<HTMLOptionElement>('#cad-solve-engine option[value="beat-metal"]')!;
     expect(option().textContent).toBe('BEAT · Metal — Apple GPU · unavailable');
@@ -646,7 +648,7 @@ describe('solve and directivity control help', () => {
       [...host.querySelector<HTMLSelectElement>('#cad-solve-engine')!.options].map((option) => [option.value, option]),
     );
     expect(options.get('beat-metal')!.disabled).toBe(false);
-    expect(options.get('bempp')!.disabled).toBe(true);
+    expect(options.has('bempp')).toBe(false);
   });
 
   it('displays the effective server grid without deriving coverage locally', () => {

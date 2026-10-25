@@ -1,3 +1,4 @@
+import { CAD_CONTROLS, CAD_CONTROL_DESCRIPTORS } from './cadControlRegistry';
 import { describe, expect, it } from 'vitest';
 import { NATIVE_FAMILIES, designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import {
@@ -456,5 +457,17 @@ describe('advanced ICW registry', () => {
     expect(fieldIsVisible(field('icw.icw_coeffs'), design)).toBe(true);
     expect(field('icw.icw_seed').kind).toBe('indicator');
     expect(field('icw.icw_coeffs').kind).toBe('indicator');
+  });
+});
+
+
+describe('CAD simulation control identities', () => {
+  it('retains stable ids and reveals developer controls through their Solver owner', () => {
+    const ids = CAD_CONTROL_DESCRIPTORS.map((control) => control.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(CAD_CONTROLS.channelMotion.reveal).toMatchObject({ id: 'cad.drive-channel.motion', fallbackId: 'cad.drive-channels' });
+    expect(CAD_CONTROLS.meshValidation).toMatchObject({ developerOnly: true, section: 'Solver', reveal: { id: 'mesh-validation-mode', fallbackId: 'cad.solve-options' } });
+    expect(CAD_CONTROLS.rigidSize.id).toBe('cad.mesh.rigid-size');
+    expect(CAD_CONTROLS.meshDetail.id).toBe('cad.mesh-detail');
   });
 });

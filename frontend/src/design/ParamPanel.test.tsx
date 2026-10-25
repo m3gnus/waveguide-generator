@@ -23,7 +23,7 @@ import { resetDriverLibraryStore, useDriverLibraryStore } from '../stores/driver
 import { hydrateDesignDocument } from '../api/designIo';
 import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, type OsseFeatures } from './osseFeatures';
 import { NATIVE_FAMILIES, designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
-import { defaultPolarUi, polarConfigFromUi, resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { defaultPolarUi, polarConfigFromUi, resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { ParamPanel, RealizedDimensionsSection, channelHeadingText, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
 
@@ -1215,7 +1215,7 @@ describe('ParamPanel inventory UX', () => {
       effective_polar_config: { ...polarConfigFromUi(defaultPolarUi), angle_range: [-180, 180, 73] },
     });
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    expect(titles()).toEqual(['Mesh detail', 'Frequency Sweep', 'Directivity Map', 'Drivers', 'Crossover', 'Passive cardioid', 'Solve options']);
+    expect(titles()).toEqual(['Sweep', 'Drivers', 'Crossover', 'Directivity', 'Passive cardioid', 'Solver']);
     for (const hidden of ['Source Definition', 'Solve & export mesh', 'Output & Passthrough']) expect(host.textContent).not.toContain(hidden);
     expect(host.querySelector('#solve-engine')).toBeNull();
     expect(host.querySelector('#solve-symmetry')).toBeNull();
@@ -1223,6 +1223,100 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).toContain('Runs on');
     expect(host.textContent).toContain('Prepared cut planesx0');
     expect(host.textContent).toContain('Effective grid −180° … 180°');
+  });
+
+  it.each([1, 2].flatMap((drivers) => [false, true].map((developer) => ({ drivers, developer }))))(
+    'starts CAD Simulation with $drivers drivers and developer details $developer', ({ drivers, developer }) => {
+      act(() => {
+        preferencesStore.update({ showDeveloperDetails: developer });
+        setCadReady();
+        useCadReturnStore.setState({ driveChannels: useCadReturnStore.getState().driveChannels.slice(0, drivers) });
+        workspaceModeStore.setMode('cad');
+        root.render(withQueryClient(<ParamPanel tab="simulation" />));
+      });
+      const sections = [...host.querySelectorAll<HTMLElement>('[data-section]')];
+      expect(sections.map((section) => section.dataset.section)).toEqual([
+        'Sweep', 'Drivers', ...(drivers > 1 ? ['Crossover'] : []), 'Directivity', 'Solver',
+      ]);
+      for (const section of sections) {
+        const open = ['Sweep', 'Drivers'].includes(section.dataset.section!);
+        expect(section.querySelector('.section-head')?.getAttribute('aria-expanded')).toBe(String(open));
+        expect(section.querySelector<HTMLElement>('.section-body')?.hidden).toBe(!open);
+        if (!open) expect(section.querySelector('.section-summary')?.textContent?.length).toBeGreaterThan(0);
+      }
+      expect(host.querySelector('.cad-channel-more')?.hasAttribute('open')).toBe(false);
+      expect(Boolean(host.querySelector('#mesh-validation-mode'))).toBe(developer);
+      expect(Boolean(host.querySelector('#solve-verbose'))).toBe(developer);
+      expect(host.textContent?.includes('Prepared cut planes')).toBe(developer);
+      expect(Boolean(host.querySelector('.cad-mesh-developer'))).toBe(developer);
+      expect(host.querySelector('.cad-mesh-summary')?.children).toHaveLength(0);
+      expect(host.textContent).not.toContain('Rebuild mesh');
+      if (drivers === 1) expect(host.textContent).not.toContain('Two or more drive channels');
+    },
+  );
+
+  it.each(['cad.drive-channel.motion', 'mesh-validation-mode'])(
+    'reveals the owning disclosure from the palette for %s', async (id) => {
+      act(() => {
+        setCadReady();
+        workspaceModeStore.setMode('cad');
+        root.render(withQueryClient(<ParamPanel tab="simulation" />));
+      });
+      const entry = buildParameterPaletteEntries(undefined, { mode: 'cad', cadReturnReady: true })
+        .find((item) => item.id === `cad-control-${id}`)!;
+      expect(entry).toBeDefined();
+      await act(async () => {
+        entry.run();
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      });
+      const target = host.querySelector<HTMLElement>(`[data-control-reveal-id="${id}"]`)!;
+      expect(document.activeElement).toBe(target.querySelector('select'));
+      expect(target.closest<HTMLElement>('.section-body')?.hidden).toBe(false);
+      if (id === 'cad.drive-channel.motion') expect(target.closest('details')?.open).toBe(true);
+      else expect(preferencesStore.getSnapshot().showDeveloperDetails).toBe(true);
+    },
+  );
+
+  it.each(['mesh-validation-mode', 'solve-verbose'])(
+    'leaves the developer preference off when revealing parametric %s', async (id) => {
+      act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+      await act(async () => {
+        requestParameterReveal({ id, tab: 'simulation', target: 'control', query: id === 'mesh-validation-mode' ? 'Mesh validation policy' : 'Verbose backend logging' });
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      });
+      expect(document.activeElement).toBe(host.querySelector(`#${id}`));
+      expect(preferencesStore.getSnapshot().showDeveloperDetails).toBe(false);
+    },
+  );
+
+  it('keeps CAD disclosure preferences separate from parametric sections', () => {
+    act(() => {
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    act(() => host.querySelector<HTMLButtonElement>('[data-section="Solver"] .section-head')!.click());
+    expect(JSON.parse(localStorage.getItem('wg-param-sections')!)).toMatchObject({ 'cad.solve-options': true });
+    act(() => workspaceModeStore.setMode('parametric'));
+    const solver = host.querySelector('[data-section="Solver"]')!;
+    expect(solver.querySelector('.section-head')?.getAttribute('aria-expanded')).toBe('true');
+    expect(host.querySelector('#mesh-validation-mode')).not.toBeNull();
+    expect(host.querySelector('.cad-mesh-summary')).toBeNull();
+    act(() => solver.querySelector<HTMLButtonElement>('.section-head')!.click());
+    act(() => workspaceModeStore.setMode('cad'));
+    expect(host.querySelector('[data-section="Solver"] .section-head')?.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('puts the explicit frequency list in Sweep without duplicate range inputs', () => {
+    act(() => {
+      setCadReady();
+      useImportedSolveOptionsStore.getState().setFrequencyMode('list');
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    expect(host.querySelector('#cad-solve-frequency-list')?.closest('[data-section]')?.getAttribute('data-section')).toBe('Sweep');
+    expect(host.querySelector('[data-control-reveal-id="cad.frequency.start"]')).toBeNull();
+    expect(host.querySelectorAll('#cad-solve-frequency-mode')).toHaveLength(1);
   });
 
   it('keeps the single FREEFORM importer available for a linked design in CAD mode', () => {
@@ -1382,6 +1476,7 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('shows a publisher failure in the CAD mesh alert without the coordinator mounted', async () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     vi.useFakeTimers();
     const save = vi.fn(async () => { throw new Error('offline'); });
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
@@ -1403,7 +1498,7 @@ describe('ParamPanel inventory UX', () => {
         root.render(withQueryClient(<><CadSetupPublisher/><ParamPanel tab="simulation" /></>));
       });
       expect(cadWorkspace.getSnapshot().error).toBeNull();
-      const alert = () => host.querySelector('[data-section="Mesh detail"] [role="alert"]');
+      const alert = () => host.querySelector('.cad-mesh-developer [role="alert"]');
       expect(alert()).toBeNull();
       act(() => useCadReturnStore.getState().setExteriorOnly(false));
       await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
@@ -1421,6 +1516,7 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('solves a return with FEM regions coupled, and still offers explicit exterior-only selection', () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     act(() => {
       setCadReady();
       useCadReturnStore.setState({
@@ -1449,13 +1545,14 @@ describe('ParamPanel inventory UX', () => {
   };
 
   it('keeps Onshape mesh controls and their palette entries editable in WG', () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     act(() => {
       setCadReady();
       useCadReturnStore.setState({ selectedBundle: { ...cadBundle, bundleOrigin: 'onshape' } });
       workspaceModeStore.setMode('cad');
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
-    expect(host.querySelector('.cad-mesh-summary')).toBeNull();
+    expect(host.querySelector('.cad-mesh-summary')?.textContent).toContain('set in WG');
     const edit = (id: string, value: string) => {
       const input = host.querySelector<HTMLInputElement>(`[data-control-reveal-id="${id}"] input`)!;
       expect(input).not.toBeNull();
@@ -1480,7 +1577,7 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelectorAll<HTMLInputElement>('[data-control-reveal-id="cad.mesh.source-size"] input')[1].disabled).toBe(true);
   });
 
-  it('shows the Fusion mesh card with sources, groups, measured count and memory', () => {
+  it('shows the Fusion mesh as one read-only line at the bottom', () => {
     act(() => {
       setCadReady();
       useCadReturnStore.setState({ ingestRecord: { ...cadRecord, mesh_snapshot: fusionMesh,
@@ -1491,13 +1588,13 @@ describe('ParamPanel inventory UX', () => {
       workspaceModeStore.setMode('cad');
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
-    expect(host.textContent).toContain('Mesh (set in Fusion)');
-    expect(host.textContent).toContain('Walls 25 mm · Grading distance 100 mm · Symmetry Automatic (solved: quarter)');
-    expect(host.textContent).toContain('HF source 6 mm');
-    expect(host.textContent).toContain('MF source 15 mm');
-    expect(host.textContent).toContain('Back — size zone 40 mm · 3 faces');
-    expect(host.textContent).toContain('Triangles 2,140 of 22,000 · memory ≈ 1.1 GB');
-    expect(host.textContent).toContain('To change these, open Waveguide Generator ▸ Sources & Mesh… in Fusion and Send again.');
+    expect(host.querySelector('.cad-mesh-summary')?.textContent).toContain('set in Fusion');
+    expect(host.querySelector('.cad-mesh-summary')?.textContent).toContain('Walls 25 mm');
+    expect(host.querySelector('.cad-mesh-summary')?.children).toHaveLength(0);
+    expect(host.querySelector('.param-panel')?.lastElementChild?.className).toBe('cad-mesh-summary');
+    expect(host.textContent).not.toContain('Rebuild mesh');
+    expect(host.querySelector('.cad-mesh-summary')?.textContent).toContain('2,140 triangles');
+
     expect(host.querySelector('.cad-mesh-summary input')).toBeNull();
     for (const id of ['cad.mesh.rigid-size', 'cad.mesh.transition', 'cad.mesh.source-size']) {
       expect(host.querySelector(`[data-control-reveal-id="${id}"]`)).toBeNull();
@@ -1543,16 +1640,18 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('keeps an Onshape return\'s editable mesh sizes before it is prepared', () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     act(() => {
       useCadReturnStore.setState({ selectedBundle: { ...cadBundle, bundleOrigin: 'onshape' }, ingestRecord: null });
       workspaceModeStore.setMode('cad');
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
-    expect(host.querySelector('[data-section="Mesh detail"]')).not.toBeNull();
+    expect(host.querySelector('.cad-mesh-developer')).not.toBeNull();
     expect(host.querySelector('[data-control-reveal-id="cad.mesh.rigid-size"]')).not.toBeNull();
   });
 
   it.each(['skip-source-hf', 'drift-source-hf'])('keeps a recalled Fusion snapshot after toggling %s while measurements become pending', async (toggleId) => {
+    preferencesStore.update({ showDeveloperDetails: true });
     const retained = { ...archivedRecord, mesh_snapshot: fusionMesh,
       sources: archivedRecord.sources.map(source => ({ ...source, required: false })),
       role_findings: [{ kind: 'source-area-drift', source_id: 'source-hf' }],
@@ -1569,14 +1668,14 @@ describe('ParamPanel inventory UX', () => {
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
     expect(useCadReturnStore.getState().selectedBundle?.meshSnapshot).toBeUndefined();
-    expect(host.textContent).toContain('Mesh (set in Fusion)');
-    expect(host.textContent).toContain('Triangles 2,140 of 22,000 · memory ≈ 1.1 GB');
+    expect(host.querySelector('.cad-mesh-summary')?.textContent).toContain('set in Fusion');
+    expect(host.querySelector('.cad-mesh-summary')?.textContent).toContain('2,140 triangles');
     act(() => host.querySelector<HTMLInputElement>(`#${toggleId}`)!.click());
     expect(useCadReturnStore.getState().needsIngest).toBe(true);
-    expect(host.textContent).toContain('Mesh (set in Fusion)');
-    expect(host.textContent).toContain('Walls 25 mm · Grading distance 100 mm · Symmetry Automatic');
-    expect(host.textContent).toContain('To change these, open Waveguide Generator ▸ Sources & Mesh… in Fusion and Send again.');
-    expect(host.textContent).toContain('Triangles available after preparing the mesh');
+    expect(host.querySelector('.cad-mesh-summary')?.textContent).toContain('set in Fusion');
+    expect(host.querySelector('.cad-mesh-summary')?.textContent).toContain('Walls 25 mm');
+
+    expect(host.querySelector('.cad-mesh-summary')?.textContent).not.toContain('triangles');
     expect(host.textContent).not.toContain('older add-in');
     expect(host.textContent).not.toContain('Triangles 2,140');
     expect(host.textContent).not.toContain('memory ≈');
@@ -1596,9 +1695,7 @@ describe('ParamPanel inventory UX', () => {
       }) as typeof fetch)).toBe(true);
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
-    expect(host.textContent).toContain('Mesh (set in WG by an older add-in)');
-    expect(host.textContent).toContain('Walls 12 mm · Grading distance 70 mm');
-    expect(host.textContent).toContain('HF source 2.5 mm');
+    expect(host.querySelector('.cad-mesh-summary')?.textContent).toContain('Walls 12 mm · set in WG by an older add-in');
     expect(useCadReturnStore.getState().meshSizes).toEqual(request.geometry.mesh);
     expect(host.querySelector('.cad-mesh-summary input')).toBeNull();
     for (const id of ['cad.mesh.rigid-size', 'cad.mesh.transition', 'cad.mesh.source-size']) {
@@ -1609,6 +1706,7 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('renders every moved CAD control in the Simulation rail and submits its visible crossover state', () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     const ingest = vi.spyOn(cadWorkspace.getSnapshot(), 'ingest').mockResolvedValue(undefined);
     act(() => {
       setCadReady();
@@ -1626,9 +1724,7 @@ describe('ParamPanel inventory UX', () => {
     expect([...motion!.options].map((option) => option.textContent)).toEqual(['Normal', 'Axial (pistonic)']);
     expect(host.textContent).toContain('Normal moves each source face along its own normal. Axial moves the source as a rigid piston along its axis.');
     expect(host.textContent).toContain('Walls');
-    expect(host.textContent).toContain('Grading distance');
-    expect(host.textContent).toContain('HF source');
-    expect(host.textContent).toContain('MF source');
+    expect(host.querySelector('.cad-channel-summary')?.textContent).toBe('HF');
     // The voltage input follows driver presence, not a toggle: the fixture's
     // empty form keeps it away, one typed T/S number brings it out.
     expect(host.textContent).not.toContain('Drive voltage');
@@ -1655,8 +1751,8 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('[data-control-reveal-id="cad.mesh.source-size"]')).toBeNull();
 
     const rebuild = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Rebuild mesh')!;
-    act(() => rebuild.click());
-    expect(ingest).toHaveBeenCalledOnce();
+    expect(rebuild).toBeUndefined();
+    expect(ingest).not.toHaveBeenCalled();
   });
 
   it('combines by default, labelled by band, and says which default each field would use', () => {
@@ -2013,7 +2109,7 @@ describe('ParamPanel inventory UX', () => {
     // `drive-hf · source-hf` said the same thing twice; the header names the
     // channel, and leaves the source ids to the channels that combine several.
     const summary = host.querySelector('.cad-channel[data-channel-id="drive-hf"] .cad-channel-summary')!;
-    expect(summary.querySelector('span')!.textContent).toBe('drive-hf');
+    expect(summary.querySelector('span')!.textContent).toBe('HF');
     expect(summary.textContent).not.toContain('source-hf');
     expect(host.querySelector('.cad-channel-row')).toBeNull();
     expect(host.querySelector('[aria-label^="Drive channel for"]')).toBeNull();
@@ -2041,7 +2137,7 @@ describe('ParamPanel inventory UX', () => {
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
     const designStart = useDesignStore.getState().design.simulation.f1;
-    const sweepSection = host.querySelector<HTMLElement>('[data-section="Frequency Sweep"]')!;
+    const sweepSection = host.querySelector<HTMLElement>('[data-section="Sweep"]')!;
     const row = [...sweepSection.querySelectorAll<HTMLElement>('.field-row')]
       .find((item) => item.querySelector('.field-name')?.textContent === 'Sweep start')!;
     const input = row.querySelector<HTMLInputElement>('input')!;
@@ -2073,10 +2169,13 @@ describe('ParamPanel inventory UX', () => {
       return [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
     };
 
-    expect(matchingSections('frequencyStartHz')).toEqual(['Frequency Sweep']);
+    expect(matchingSections('frequencyStartHz')).toEqual(['Sweep']);
+    expect(matchingSections('explicit list')).toEqual(['Sweep']);
+    expect(host.querySelector('#cad-solve-frequency-mode')).not.toBeNull();
     expect(matchingSections('sd_cm2')).toEqual(['Drivers']);
     expect(matchingSections('LR4')).toEqual(['Crossover']);
-    expect(matchingSections('surface sizing')).toEqual(['Mesh detail']);
+    expect(matchingSections('surface sizing')).toEqual([]);
+    expect(host.querySelector('.cad-mesh-summary')).not.toBeNull();
   });
 
   it('omits field-count labels while retaining informative summaries', () => {

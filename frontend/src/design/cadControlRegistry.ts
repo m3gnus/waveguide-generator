@@ -8,12 +8,12 @@ import type { ParameterTab } from './parameterRegistry';
 
 export const CAD_CONTROL_SECTIONS = {
   realizedDimensions: 'Realized dimensions',
-  frequencySweep: 'Frequency Sweep',
-  directivityMap: 'Directivity Map',
+  frequencySweep: 'Sweep',
+  directivityMap: 'Directivity',
   driveChannels: 'Drivers',
   crossover: 'Crossover',
   passiveCardioid: 'Passive cardioid',
-  solveOptions: 'Solve options',
+  solveOptions: 'Solver',
   meshDetail: 'Mesh detail',
 } as const;
 
@@ -32,6 +32,7 @@ export interface CadControlDescriptor {
   /** The panel owns the DOM target. The palette only queues this semantic id,
    * so a dock panel that has not mounted yet can still claim and reveal it. */
   reveal: { id: string; target: 'control'; fallbackId?: string };
+  developerOnly?: boolean;
 }
 
 function control(
@@ -43,7 +44,11 @@ function control(
   availability: CadControlDescriptor['availability'] = 'ingested-return',
   fallbackId?: string,
 ): CadControlDescriptor {
-  return { id, label, section, tab, keywords, availability, reveal: { id, target: 'control', fallbackId } };
+  return {
+    id, label, section, tab, keywords, availability,
+    developerOnly: section === CAD_CONTROL_SECTIONS.meshDetail && id !== 'cad.mesh-detail',
+    reveal: { id, target: 'control', fallbackId: fallbackId ?? (section === CAD_CONTROL_SECTIONS.frequencySweep ? 'cad.frequency' : undefined) },
+  };
 }
 
 /**
@@ -57,8 +62,8 @@ export const CAD_CONTROLS = {
     ['published', 'interface', 'throat diameter', 'mouth width', 'mouth height', 'depth', 'wall thickness', 'enclosure', 'vertical offset'], 'waveguide-linked',
   ),
   frequencySweep: control(
-    'cad.frequency', 'Frequency Sweep', CAD_CONTROL_SECTIONS.frequencySweep, 'simulation',
-    ['CAD sweep', 'imported range', 'Hz'],
+    'cad.frequency', 'Sweep', CAD_CONTROL_SECTIONS.frequencySweep, 'simulation',
+    ['frequency sweep', 'CAD sweep', 'imported range', 'Hz', 'sweep points', 'sweep spacing', 'explicit list'],
   ),
   sweepStart: control(
     'cad.frequency.start', 'Sweep start', CAD_CONTROL_SECTIONS.frequencySweep, 'simulation',
@@ -73,8 +78,8 @@ export const CAD_CONTROLS = {
     ['CAD sweep', 'frequency count', 'points', 'frequencyCount'],
   ),
   directivityMap: control(
-    'cad.directivity', 'Directivity Map', CAD_CONTROL_SECTIONS.directivityMap, 'simulation',
-    ['polar', 'angular step', 'measurement distance', 'normalization angle', 'directivity planes', 'measurement origin', '3D balloon', 'field plane'],
+    'cad.directivity', 'Directivity', CAD_CONTROL_SECTIONS.directivityMap, 'simulation',
+    ['directivity map', 'polar', 'angular step', 'measurement distance', 'normalization angle', 'directivity planes', 'measurement origin', '3D balloon', 'field plane'],
   ),
   driveChannels: control(
     'cad.drive-channels', 'Drivers', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
@@ -180,9 +185,13 @@ export const CAD_CONTROLS = {
     ['derived channel', 'cone excursion', 'passive_cardioid_coupled'], 'ingested-return', 'cad.passive-cardioid',
   ),
   solveOptions: control(
-    'cad.solve-options', 'Solve options', CAD_CONTROL_SECTIONS.solveOptions, 'simulation',
-    ['solver', 'engine', 'Metal', 'BEAT', 'full 3-D', 'cut planes', 'mesh validation', 'sweep points', 'sweep spacing', 'explicit list', 'verbose logging'],
+    'cad.solve-options', 'Solver', CAD_CONTROL_SECTIONS.solveOptions, 'simulation',
+    ['solve options', 'solver', 'engine', 'Metal', 'BEAT', 'full 3-D', 'cut planes', 'mesh validation', 'verbose logging'],
   ),
+  solveAccuracy: control('solve-accuracy', 'Solve accuracy', CAD_CONTROL_SECTIONS.solveOptions, 'simulation', ['fast', 'accurate'], 'ingested-return', 'cad.solve-options'),
+  solveEngine: control('cad-solve-engine', 'Advanced backend', CAD_CONTROL_SECTIONS.solveOptions, 'simulation', ['engine', 'solver'], 'ingested-return', 'cad.solve-options'),
+  meshValidation: { ...control('mesh-validation-mode', 'Mesh validation policy', CAD_CONTROL_SECTIONS.solveOptions, 'simulation', ['warn', 'strict', 'off'], 'ingested-return', 'cad.solve-options'), developerOnly: true },
+  verbose: { ...control('solve-verbose', 'Verbose backend logging', CAD_CONTROL_SECTIONS.solveOptions, 'simulation', ['diagnostics'], 'ingested-return', 'cad.solve-options'), developerOnly: true },
   meshDetail: control(
     'cad.mesh-detail', 'Mesh detail', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
     // A prepared model's mesh; an Onshape return's editable sizes (below)

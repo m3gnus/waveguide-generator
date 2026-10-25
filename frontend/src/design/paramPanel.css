@@ -255,3 +255,13 @@
 
 .point-paste-choices { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 6px 0; padding: 6px; border: 1px solid var(--hair-soft); border-radius: var(--r3); color: var(--fg2); font-size: var(--text-base); }
 .point-paste-choices legend { color: var(--fg3); font-size: var(--text-micro); }
+
+/* Collapsed CAD sections stay mounted for live crossover updates. */
+.param-section > .section-body[hidden] { display: none; }
+.cad-channel-more > summary { color: var(--fg3); cursor: pointer; }
+.param-section[data-control-reveal-id^="cad."] .section-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -1,4 +1,4 @@
-import { useDeveloperDetails } from '../prefs/preferences';
+import { preferencesStore, useDeveloperDetails } from '../prefs/preferences';
 import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, OSSE_SWITCH_NOTICE, type OsseFeatures } from './osseFeatures';
 import { FreeformProfileInspection } from './ProfileInspection';
 import { registerParameterPanel } from './parameterPanelValidity';
@@ -10,18 +10,19 @@ import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, t
 import { useQuery } from '@tanstack/react-query';
 import { convertDesignToFreeform } from '../api/designIo';
 import { previewSocket } from '../api/previewSocket';
-import type { CadRealizedDimensions, CadRealizedParameter } from '../api/cadlink';
+import type { CadRealizedDimensions, CadRealizedParameter, CadReturnIngestRecord } from '../api/cadlink';
 import { importedSubmissionBlocker, importedSubmissionNotices } from '../jobs/importedSubmission';
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
 import { useActiveBackendCapability, useCapabilities, usePlannedBackendCapabilities } from '../jobs/useCapabilities';
-import { displaySymmetry, recordDomainDecision } from '../api/domainDecision';
 import { cadMeshIsEditable, cadMeshSizing } from '../api/cadMesh';
-import { backendLimitation, symmetryDomainLimitation } from './backendSupport';
+import { backendLimitation, engineDisplayName, symmetryDomainLimitation } from './backendSupport';
 import { CadCrossover } from './CrossoverSection';
 import {
   assignableChannelIds,
   channelAcceptsDriver,
   channelDriverPresent,
+  combineChain,
+  combineEnabledEffective,
   hasPassiveCardioidSurface,
   PASSIVE_CARDIOID_CHANNEL_ID,
   passiveCardioidBlocker,
@@ -38,7 +39,7 @@ import { namespaceStorage } from '../stores/durableSettings';
 import type { SymmetryMode } from '../stores/solveOptions';
 import { SolveOptionsStoreProvider, useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { AdaptiveFrequencyControls, FrequencySweepControls, MeshValidationControl, DirectivityMapControls, SolveOptionsControls, ToggleRow } from './SolveOptionsSections';
+import { AdaptiveFrequencyControls, FrequencySweepControls, MeshValidationControl, DirectivityMapControls, SolveOptionsControls, polarSummary, ToggleRow } from './SolveOptionsSections';
 import { ExperimentalBadge } from './ExperimentalBadge';
 import { EditableLookupTable, EditablePointTable, EditableStationTable, FreeformPointImport, FREEFORM_POSITION_NOTE, freeformAngleOverride } from './FreeformEditors';
 import { lambdaSixthHint } from './lambdaLimit';
@@ -92,6 +93,9 @@ interface SectionProps {
   description?: string;
   children: ReactNode;
   forceOpen: boolean;
+  defaultOpen?: boolean;
+  /** CAD disclosures have their own saved layout and keep live crossover effects mounted. */
+  cad?: boolean;
   revealId?: string;
 }
 
@@ -145,9 +149,9 @@ function migrateLegacySectionKeys(): void {
 
 migrateLegacySectionKeys();
 
-function storedSectionState(title: string): boolean {
+function storedSectionState(title: string, defaultOpen?: boolean): boolean {
   const stored = readSectionMap()[title];
-  return stored === undefined ? !['Export', 'Experimental', 'Advanced ICW', 'Import points'].includes(title) : stored;
+  return stored === undefined ? defaultOpen ?? !['Export', 'Experimental', 'Advanced ICW', 'Import points'].includes(title) : stored;
 }
 
 function writeSectionState(title: string, open: boolean): void {
@@ -190,14 +194,15 @@ export function useParameterHelp(): boolean {
   return useSyncExternalStore(parameterHelpStore.subscribe, parameterHelpStore.getSnapshot, parameterHelpStore.getSnapshot);
 }
 
-function Section({ title, summary, description, children, forceOpen, revealId }: SectionProps) {
-  const [open, setOpen] = useState(() => storedSectionState(title));
+function Section({ title, summary, description, children, forceOpen, revealId, defaultOpen, cad = false }: SectionProps) {
+  const storageKey = cad ? revealId ?? `cad.${title}` : title;
+  const [open, setOpen] = useState(() => storedSectionState(storageKey, defaultOpen));
   const helpVisible = useParameterHelp();
   const shownOpen = forceOpen || open;
   const toggle = () => {
     const next = !open;
     setOpen(next);
-    writeSectionState(title, next);
+    writeSectionState(storageKey, next);
   };
   return (
     <section role="group" aria-label={title} className={`param-section${shownOpen ? '' : ' closed'}`} data-section={title} data-control-reveal-id={revealId}>
@@ -213,7 +218,7 @@ function Section({ title, summary, description, children, forceOpen, revealId }:
           {summary && <span className="section-summary">{summary}</span>}
         </button>
       </h3>
-      {shownOpen && <div className="section-body">
+      {(shownOpen || cad) && <div className="section-body" hidden={!shownOpen}>
         {description && helpVisible && <p className="section-description">{description}</p>}
         {children}
       </div>}
@@ -904,12 +909,12 @@ function CadFrequencySweep() {
 /**
  * What a drive-channel header names.
  *
- * A channel and the single source feeding it say the same thing twice --
- * `drive-mf · source-mf` -- so the source ids are named only when they carry
- * something the channel id does not: a channel driven by more than one source.
+ * Prefer the returned source roles. Unroled sources retain their authored
+ * channel identity, with source ids only when several share a channel.
  */
-export function channelHeadingText(channel: Pick<CadDriveChannel, 'id' | 'source_ids'>): string {
-  return channel.source_ids.length > 1 ? `${channel.id} · ${channel.source_ids.join(' + ')}` : channel.id;
+export function channelHeadingText(channel: Pick<CadDriveChannel, 'id' | 'source_ids'>, sources: readonly { id: string; role: string }[] = []): string {
+  const roles = [...new Set(channel.source_ids.map((id) => sources.find((source) => source.id === id)?.role).filter(Boolean))];
+  return roles.length ? roles.join(' + ') : channel.source_ids.length > 1 ? `${channel.id} · ${channel.source_ids.join(' + ')}` : channel.id;
 }
 
 /**
@@ -943,7 +948,9 @@ function CadDriveChannels() {
         const driverForm = state.channelDrivers[channel.id];
         const driverEligible = channelAcceptsDriver(channel);
         return <div className="cad-channel" data-channel-id={channel.id} key={channel.id}>
-          <div className="cad-channel-summary" data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><span>{channelHeadingText(channel)}</span><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} disabled={!!channel.exterior_transducer} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal</option><option value="axial">Axial (pistonic)</option></select></div>
+          <div className="cad-channel-summary"><span>{channelHeadingText(channel, sources)}</span></div>
+          <details className="cad-channel-more"><summary>More</summary>
+          <div data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} disabled={!!channel.exterior_transducer} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal</option><option value="axial">Axial (pistonic)</option></select></div>
           <div className="cad-channel-hint">Normal moves each source face along its own normal. Axial moves the source as a rigid piston along its axis.</div>
           {showsAssignment(channel) && channel.source_ids
             .filter((sourceId) => activeSources.some((source) => source.id === sourceId))
@@ -965,6 +972,7 @@ function CadDriveChannels() {
                 onChange={event => { const motion_axis = [...channel.exterior_transducer!.motion_axis] as [number, number, number]; motion_axis[index] = Number(event.target.value); state.setExteriorTransducer(channel.id, { ...channel.exterior_transducer!, motion_axis }); }}/>
             </label>)}</div>
           </>}
+          </details>
           {driverEligible && <ChannelDriverPicker
             channel={channel}
             form={driverForm}
@@ -1085,26 +1093,13 @@ function CadPassiveCardioid() {
 function CadMeshSummary() {
   const state = useCadReturnStore();
   const record = state.needsIngest ? null : state.ingestRecord;
-  // Provenance survives preparation edits; only measurements become pending.
   const snapshot = state.selectedBundle?.meshSnapshot ?? state.ingestRecord?.mesh_snapshot;
-  const sizes = state.meshSizes;
-  const planes = record ? displaySymmetry(record).solvedPlanes : [];
-  const fraction = recordDomainDecision(record)?.solver_domain.fraction
-    ?? (record ? planes.length >= 2 ? 'quarter' : planes.length === 1 ? 'half' : 'full' : null);
-  const sizing = record ? cadMeshSizing(record) : null;
-  const triangles = record?.mesh?.stats.triangle_count ?? sizing?.n_triangles;
-  const limit = record?.mesh?.stats.artifact_actual_domain_triangle_limit ?? 22_000;
-  const sources = state.selectedBundle?.sources ?? record?.sources ?? [];
-  return <div className="cad-mesh-summary">
-    <h3>{snapshot ? 'Mesh (set in Fusion)' : 'Mesh (set in WG by an older add-in)'}</h3>
-    <p>Walls {snapshot?.wall_size_mm ?? sizes.rigid_size_mm} mm · Grading distance {snapshot?.grading_distance_mm ?? sizes.transition_mm} mm · Symmetry {(snapshot ? snapshot.symmetry === 'off' : state.symmetryMode === 'full') ? 'Off' : 'Automatic'}{fraction ? ` (solved: ${fraction})` : ''}</p>
-    {sources.map(source => <p key={source.id}>{source.role} source {snapshot?.source_size_mm[source.id] ?? sizes.source_size_mm[source.id]} mm</p>)}
-    {(snapshot?.surface_groups ?? sizes.surface_groups ?? []).map(group => <p key={group.group_id}>{group.name} — size zone {group.size_mm} mm · {group.observed.face_count} {group.observed.face_count === 1 ? 'face' : 'faces'}</p>)}
-    <p>{typeof triangles === 'number' ? `Triangles ${triangles.toLocaleString('en-US')} of ${Number(limit).toLocaleString('en-US')}` : 'Triangles available after preparing the mesh'}{typeof sizing?.ram_gb === 'number' ? ` · memory ≈ ${sizing.ram_gb.toFixed(1)} GB` : ''}</p>
-    <p className="section-note">{snapshot
-      ? 'To change these, open Waveguide Generator ▸ Sources & Mesh… in Fusion and Send again.'
-      : 'Sizes saved with this model are kept. To change them, open Sources & Mesh… in Fusion (updated Waveguide Generator add-in) and Send again.'}</p>
-  </div>;
+  const triangles = record?.mesh?.stats.triangle_count ?? (record ? cadMeshSizing(record).n_triangles : undefined);
+  const origin = (state.selectedBundle?.bundleOrigin ?? 'wglink') === 'onshape'
+    ? 'set in WG' : snapshot ? 'set in Fusion' : 'set in WG by an older add-in';
+  return <p className="cad-mesh-summary" data-control-reveal-id={CAD_CONTROLS.meshDetail.reveal.id} tabIndex={-1}>
+    Mesh · {typeof triangles === 'number' ? `${triangles.toLocaleString()} triangles · ` : ''}Walls {snapshot?.wall_size_mm ?? state.meshSizes.rigid_size_mm} mm · {origin}
+  </p>;
 }
 
 function CadMeshDetail() {
@@ -1120,8 +1115,7 @@ function CadMeshDetail() {
     .filter((finding) => String(finding.kind).includes('area-drift'))
     .map((finding) => String(finding.source_id))]);
   return <>
-    {(state.selectedBundle?.bundleOrigin ?? 'wglink') === 'wglink' && <CadMeshSummary/>}
-    <div className="cad-mesh-intro">{editable && <p>Smaller values are finer. Curved CAD faces receive bounded extra refinement automatically.</p>}<button className="primary" disabled={cadWorkspaceView.ingesting || !state.selectedBundle?.readable} onClick={() => void cadWorkspaceView.ingest()}>{cadWorkspaceView.ingesting ? 'Preparing…' : 'Rebuild mesh'}</button></div>
+    <div className="cad-mesh-intro">{editable && <><p>Smaller values are finer. Curved CAD faces receive bounded extra refinement automatically.</p><button className="primary" disabled={cadWorkspaceView.ingesting || !state.selectedBundle?.readable} onClick={() => void cadWorkspaceView.ingest()}>{cadWorkspaceView.ingesting ? 'Preparing…' : 'Rebuild mesh'}</button></>}</div>
     {editable && <>
       <ToggleRow id="cad-force-full-domain" label="Force full domain" help="Disable automatic x=0/y=0 cutting for this preparation. Use this when a symmetry verdict is doubtful; it costs more memory and solve time but cannot remove a geometric half. A return the CAD author already cut is refused instead: the other half is not in the file." checked={state.symmetryMode === 'full'} onChange={(enabled) => {
         state.setSymmetryMode(enabled ? 'full' : 'auto');
@@ -1135,7 +1129,7 @@ function CadMeshDetail() {
       {!source.required && <ToggleRow id={`skip-${source.id}`} label={CAD_CONTROLS.skipSource.label} revealId={CAD_CONTROLS.skipSource.reveal.id} help="Exclude this optional source from preparation and the solve. This creates a blocking finding." checked={state.skippedSourceIds.includes(source.id)} onChange={(checked) => state.setSkipped(source.id, checked)}/>}
       {driftSources.has(source.id) && <ToggleRow id={`drift-${source.id}`} label={CAD_CONTROLS.areaDrift.label} revealId={CAD_CONTROLS.areaDrift.reveal.id} help="Explicitly accept the source-area mismatch and prepare again. The override is recorded as a finding on the prepared model." checked={state.areaDriftOverrides.includes(source.id)} onChange={(checked) => state.setAreaDriftOverride(source.id, checked)}/>}
     </div>)}
-    {state.ingestStaleReason && <div className="field-error" role="status">{state.ingestStaleReason} Rebuild the mesh before solving.</div>}
+    {state.ingestStaleReason && <div className="field-error" role="status">{state.ingestStaleReason}</div>}
     {error && <div className="field-error" role="alert">{error}</div>}
     {cadWorkspaceView.status && <p className="section-note" role="status">{cadWorkspaceView.status}</p>}
   </>;
@@ -1153,6 +1147,34 @@ function CadSimulationEmpty() {
     </div>;
   }
   return <p className="cad-simulation-empty">Settings appear when {model.selected ? model.label : 'a CAD model'} is ready.</p>;
+}
+
+function CadSimulationSections({ searching, matches, ingestRecord, cardioidSurface }: {
+  searching: boolean;
+  matches: (section: CadControlSection) => boolean;
+  ingestRecord: CadReturnIngestRecord;
+  cardioidSurface: boolean;
+}) {
+  const cad = useCadReturnStore();
+  const options = useScopedSolveOptions();
+  const chain = combineChain(cad);
+  const summaries = {
+    crossover: combineEnabledEffective(cad) ? chain.map((pair) => `${pair.hz} Hz`).join(' · ') || 'Combined output' : 'Off',
+    directivity: polarSummary(options.polar),
+    solver: `${options.accuracy === 'accurate' ? 'Accurate' : 'Fast'} · ${options.engine === 'auto' ? 'Automatic' : engineDisplayName(options.engine)}`,
+  };
+  const section = (key: 'frequencySweep' | 'driveChannels' | 'crossover' | 'directivityMap' | 'solveOptions' | 'passiveCardioid', body: ReactNode, defaultOpen = false, summary?: string) => {
+    const control = CAD_CONTROLS[key];
+    return matches(control.section) && <Section cad title={control.section} summary={summary} defaultOpen={defaultOpen} forceOpen={searching} revealId={control.reveal.id}>{body}</Section>;
+  };
+  return <>
+    {section('frequencySweep', <><FrequencySweepControls idPrefix="cad-solve" context="imported"/>{options.frequencyMode === 'range' && <CadFrequencySweep/>}</>, true)}
+    {section('driveChannels', <CadDriveChannels/>, true)}
+    {cad.driveChannels.length >= 2 && section('crossover', <CadCrossover/>, false, summaries.crossover)}
+    {section('directivityMap', <DirectivityMapControls/>, false, summaries.directivity)}
+    {cardioidSurface && section('passiveCardioid', <CadPassiveCardioid/>)}
+    {section('solveOptions', <><SolveOptionsControls mode="cad" ingestRecord={ingestRecord} includeSampling={false}/><AdaptiveFrequencyControls mode="cad"/><MeshValidationControl mode="cad"/></>, false, summaries.solver)}
+  </>;
 }
 
 const osseChoices = [
@@ -1204,6 +1226,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const ingestRecord = useCadReturnStore((state) => state.ingestRecord);
   const selectedBundle = useCadReturnStore((state) => state.selectedBundle);
+  const developer = useDeveloperDetails();
   // The campaign needs a port aperture in the geometry. Offering it to a model
   // that has none can only produce a server refusal, so the section is not
   // shown at all -- and the submission drops the form to match.
@@ -1249,6 +1272,10 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
     const apply = () => {
       const detail = parameterRevealRequest.claim(tab);
       if (!detail) return;
+      if (workspaceModeStore.getSnapshot().mode === 'cad'
+        && CAD_CONTROL_DESCRIPTORS.some((control) => control.id === detail.id && control.developerOnly)) {
+        preferencesStore.update({ showDeveloperDetails: true });
+      }
       setQuery(detail.query);
       requestAnimationFrame(() => requestAnimationFrame(() => {
         const entries = detail.target === 'control'
@@ -1262,6 +1289,11 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
         const entry = detail.target === 'control'
           ? revealIds.map((id) => candidates.find((element) => element.dataset.controlRevealId === id)).find(Boolean)
           : candidates.find((element) => element.dataset.parameterId === detail.id);
+        // Native disclosures keep their children mounted, so reveal can open
+        // every owner before scrolling and focusing the actual control.
+        for (let parent = entry?.parentElement; parent; parent = parent.parentElement) {
+          if (parent instanceof HTMLDetailsElement) parent.open = true;
+        }
         // jsdom has no scrollIntoView, and losing focus matters more than losing
         // the scroll, so never let the nicety take the necessity down with it.
         try { entry?.scrollIntoView({ block: 'center' }); } catch { /* not scrollable here */ }
@@ -1445,14 +1477,10 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
           {definitions.map(renderRegistrySection)}
           {tab === 'geometry' && cadSectionMatches(CAD_CONTROLS.realizedDimensions.section) && <RealizedDimensionsCard forceOpen={searching}/>}
           {!searching && tab === 'simulation' && !ingestRecord && <CadSimulationEmpty/>}
-          {tab === 'simulation' && cadSectionMatches(CAD_CONTROLS.meshDetail.section) && <Section title={CAD_CONTROLS.meshDetail.section} description="Mesh settings from Fusion, optional sources, area drift, and mesh regeneration." forceOpen revealId={CAD_CONTROLS.meshDetail.reveal.id}><CadMeshDetail/></Section>}
-          {tab === 'simulation' && ingestRecord && <>
-            {cadSectionMatches(CAD_CONTROLS.frequencySweep.section) && <Section title={CAD_CONTROLS.frequencySweep.section} description="The explicit range submitted with this imported CAD geometry." forceOpen={searching} revealId={CAD_CONTROLS.frequencySweep.reveal.id}><CadFrequencySweep/></Section>}
-            {cadSectionMatches(CAD_CONTROLS.directivityMap.section) && <Section title={CAD_CONTROLS.directivityMap.section} description="Display-plane and angular sampling controls, including the effective imported-CAD grid." forceOpen={searching} revealId={CAD_CONTROLS.directivityMap.reveal.id}><DirectivityMapControls/></Section>}
-            {cadSectionMatches(CAD_CONTROLS.driveChannels.section) && <Section title={CAD_CONTROLS.driveChannels.section} description="Per-channel driver setup: which sources each channel drives, its motion, voltage drive, and Thiele-Small data. Assign two sources to the same channel to drive them together." forceOpen={searching} revealId={CAD_CONTROLS.driveChannels.reveal.id}><CadDriveChannels/></Section>}
-            {cadSectionMatches(CAD_CONTROLS.crossover.section) && <Section title={CAD_CONTROLS.crossover.section} description="Optional combined output of adjacent drive channels: a filter family and slope per pair, with automatic or manual level, delay and polarity per channel." forceOpen={searching} revealId={CAD_CONTROLS.crossover.reveal.id}><CadCrossover/></Section>}
-            {cardioidSurface && cadSectionMatches(CAD_CONTROLS.passiveCardioid.section) && <Section title={CAD_CONTROLS.passiveCardioid.section} description="Sealed rear chamber vented through a damped port, and the extra radiation-impedance campaign it needs." forceOpen={searching} revealId={CAD_CONTROLS.passiveCardioid.reveal.id}><CadPassiveCardioid/></Section>}
-            {cadSectionMatches(CAD_CONTROLS.solveOptions.section) && <Section title={CAD_CONTROLS.solveOptions.section} description="Imported-CAD validation, frequency selection, and diagnostic controls. Geometry fixes the backend and domain." forceOpen={searching} revealId={CAD_CONTROLS.solveOptions.reveal.id}><SolveOptionsControls mode="cad" ingestRecord={ingestRecord}/></Section>}
+          {tab === 'simulation' && ingestRecord && <CadSimulationSections searching={searching} matches={cadSectionMatches} ingestRecord={ingestRecord} cardioidSurface={cardioidSurface}/>}
+          {tab === 'simulation' && (ingestRecord || cadMeshIsEditable(selectedBundle)) && cadSectionMatches(CAD_CONTROLS.meshDetail.section) && <>
+            <CadMeshSummary/>
+            {developer && <details className="cad-mesh-developer"><summary>Mesh developer details</summary><CadMeshDetail/></details>}
           </>}
         </>}
       {searching && [...fieldsBySection.values()].every((fields) => fields.length === 0) && matchingCadSections.size === 0 && matchingParametricSections.size === 0 && <div className="parameter-empty">No parameter labels or keys match “{query}”.</div>}

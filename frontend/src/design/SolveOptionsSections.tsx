@@ -170,6 +170,7 @@ export function AdaptiveFrequencyControls({ mode = 'parametric' }: { mode?: Work
     : count < 24 ? 'Adaptive sampling requires at least 24 frequencies.'
     : adaptiveEngine && !adaptiveEngine.startsWith('beat-') && adaptiveEngine !== 'beat'
       ? 'Adaptive sampling is BEAT only; choose a BEAT backend or Accurate.' : undefined;
+  if (mode === 'cad' && (adaptiveReason || !adaptiveEngine) && !store.adaptiveFrequencySampling) return null;
   return <>
     <HelpTipRow revealId="adaptive-frequency-sampling" className="toggle-row" text="BEAT exterior sweeps with at least 24 frequencies. Fits unsolved points to a 0.1 dB equivalent disagreement target. Completed native acquisition has gaps no wider than 1/6 octave. Narrow resonances can be missed when narrower than the largest solved-frequency gap; this spacing bound does not guarantee interpolation accuracy."><label htmlFor="adaptive-frequency-sampling">Adaptive frequency sampling (experimental)</label><input id="adaptive-frequency-sampling" type="checkbox" checked={store.adaptiveFrequencySampling} disabled={Boolean(adaptiveReason) && !store.adaptiveFrequencySampling} aria-describedby={adaptiveReason ? 'adaptive-sampling-reason' : undefined} onChange={(event) => store.setAdaptiveFrequencySampling(event.target.checked)} /></HelpTipRow>
     {adaptiveReason && <p id="adaptive-sampling-reason" className="section-note">{adaptiveReason}</p>}
@@ -230,19 +231,19 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
         {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!selectableEngine(engine)}>{engine.label || engine.name}{engine.qualification === 'pending' ? qualificationRefreshNeeded || error ? '' : ' · checking OpenCL…' : engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${!engine.name.startsWith('beat-') && engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
       </select></SelectRow>
     </> : <>
-      {/* The engine is the same choice as the parametric workspace's: the
-          imported submission sends it as it is. The formulation and domain are
-          not choices here, so they stay facts. An engine that cannot solve
-          imported geometry is listed, disabled, with that reason. */}
-      <HelpTipRow className="select-row" text="Advanced engine override for this imported model. AUTO follows Fast or Accurate; an explicit engine takes precedence."><label htmlFor="cad-solve-engine">Advanced backend</label><select id="cad-solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
+      {/* Keep the current override recoverable even if a new model refuses it.
+          Otherwise offer only engines that can solve this model. */}
+      <HelpTipRow revealId="cad-solve-engine" className="select-row" text="Advanced engine override for this imported model. AUTO follows Fast or Accurate; an explicit engine takes precedence."><label htmlFor="cad-solve-engine">Advanced backend</label><select id="cad-solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
         <option value="auto">Automatic — follow accuracy</option>
         {store.engine === 'beat' && <option value="beat">BEAT — legacy family selection</option>}
+        {store.engine !== 'auto' && store.engine !== 'beat' && !backendEngines.some((engine) => engine.name.toLowerCase() === store.engine) && <option value={store.engine} disabled>{engineDisplayName(store.engine)} · unavailable</option>}
         {backendEngines.map((engine) => {
           const verdict = verdicts.get(engine.name.toLowerCase());
           const imported = choosableForImportedGeometry(engine);
           const version = engine.version ? ` · ${engine.version}` : '';
           const refused = verdict ? !verdict.solves && !(verdict.stage === 'availability' && selectableEngine(engine))
             : !selectableEngine(engine) || !imported;
+          if (refused && store.engine !== engine.name.toLowerCase()) return null;
           const unavailable = ` · unavailable${developer && !engine.name.startsWith('beat-') && engine.reason ? `: ${engine.reason}` : ''}`;
           const note = engine.qualification === 'pending' ? qualificationRefreshNeeded || error ? '' : ' · checking OpenCL…' : verdict
             ? verdict.solves ? version
@@ -267,7 +268,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
     {mode === 'parametric' && <GroundPlaneControls />}
     {includeSampling && <FrequencySweepControls idPrefix={mode === 'cad' ? 'cad-solve' : 'design-solve'} context={mode === 'cad' ? 'imported' : 'design'} />}
     {developer && <ToggleRow revealId="solve-verbose" id="solve-verbose" label="Verbose backend logging" help="Records the backend's own per-frequency diagnostics in the job log. Useful when a solve fails or looks wrong; it makes logs much longer." checked={store.verbose} onChange={store.setVerbose} />}
-    {error && <div className="field-error" role="alert">Capabilities unavailable: {error}</div>}
+    {error && developer && <div className="field-error" role="alert">Capabilities unavailable: {error}</div>}
   </>;
 }
 
@@ -499,7 +500,7 @@ export function polarDifferences(run: PolarUiState, current: PolarUiState): stri
   return sameAxes ? differences : [...differences, 'planes'];
 }
 
-function polarSummary(polar: PolarUiState): string {
+export function polarSummary(polar: PolarUiState): string {
   const angle = (value: number) => `${String(Number(value.toFixed(6))).replace('-', '−')}°`;
   const axes = polar.enabledAxes.map((axis) => AXIS_INITIALS[axis]).join(' + ');
   // No norm angle: it is not a property of the run any more. The maps are
