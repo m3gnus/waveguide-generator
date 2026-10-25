@@ -30,7 +30,7 @@ from server.design_io import mount_design_io
 from server.source_editor import mount_source_editor
 from server.drivers import mount_drivers
 from server.exports import mount_exports
-from server.jobs import mount_jobs
+from server.jobs.api import mount_jobs
 from server.integration import mount_integration
 from server.jobs.mesh_preview import mount_solver_mesh
 from server.cadlink.fusion.addin_update import shutdown_addin_refresh, start_addin_refresh
