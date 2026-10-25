@@ -35,13 +35,14 @@ from collections.abc import Callable, Iterable, Mapping
 import json
 import logging
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import threading
 import time
 from typing import TYPE_CHECKING, Any
 
 from server.cadlink.identity import utc_now
 from server.cadlink.intake.ingest import SOLVED_DOMAIN_BY_PLANES
+from server.cadlink.intake.returns_folder import parse_return_manifest
 from server.cadlink.intake.solve_command import (
     ACK_REFUSED,
     ACK_SCHEMA_VERSION,
@@ -73,6 +74,7 @@ from server.jobs.cad_intent import cad_of, intent_of
 from server.jobs.cad_preparation import job_cad_state
 from server.platform.incidents import record_incident
 from server.solver.imported import imported_domain_planes
+from server.workspace.api import _strictly_inside
 
 if TYPE_CHECKING:
     from server.cadlink.store import CadLinkStore
@@ -132,6 +134,36 @@ def _document_name(operation: Mapping[str, Any] | None, cad: Mapping[str, Any] |
             stored = {}
         name = stored.get("document_name") if isinstance(stored, Mapping) else None
     return (str(name).strip() or None) if name else None
+
+
+def bundle_document_name(workspace_root: Path | None, operation: Mapping[str, Any] | None) -> str | None:
+    """The name of the return a request names, for a request WG kept no snapshot of.
+
+    A return whose manifest fails validation (``snapshot_invalid``) leaves no
+    snapshot, so neither side could name the model. Its manifest's own
+    ``document.name`` is read leniently, as the returns listing reads it; a
+    manifest that cannot be read at all leaves the folder's name.
+    """
+
+    try:
+        inputs = json.loads((operation or {}).get("inputs_json") or "{}")
+    except (TypeError, ValueError):
+        return None
+    bundle_path = inputs.get("bundle_path") if isinstance(inputs, Mapping) else None
+    if not isinstance(bundle_path, str) or not bundle_path.strip():
+        return None
+    if workspace_root is not None:
+        try:
+            root = workspace_root.resolve()
+            folder = (root / bundle_path).resolve()
+            _strictly_inside(folder, root, "bundlePath")
+            document = parse_return_manifest(folder / "wgreturn.json").get("document")
+            name = document.get("name") if isinstance(document, Mapping) else None
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+        except (OSError, ValueError):
+            pass
+    return PurePosixPath(bundle_path).name.removesuffix(".wgreturn").strip() or None
 
 
 def _is_bound(job: Mapping[str, Any]) -> bool:
@@ -219,6 +251,7 @@ def project_request_status(
     *,
     ingest: Mapping[str, Any] | None = None,
     previous: Mapping[str, Any] | None = None,
+    bundle_name: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """The status record of one request (without ``seq``/``updatedAt``), and any incident owed.
 
@@ -226,7 +259,8 @@ def project_request_status(
     ``job`` the latest job of its chain (``JobStore.latest_cad_job``) and
     ``cad`` that job's read model (``job_cad_state``); ``ingest`` the record
     of the mesh a solved job used; ``previous`` the status last written, as
-    the validator read it. A Solve whose job is gone was dismissed in WG (or
+    the validator read it; ``bundle_name`` names the model when no snapshot
+    does (:func:`bundle_document_name`). A Solve whose job is gone was dismissed in WG (or
     its run removed): it keeps a finished state it already had, without the
     run it no longer has, and otherwise reads ``cancelled``.
     """
@@ -239,7 +273,7 @@ def project_request_status(
         "operationId": request_id,
         "kind": request_kind(receipt.get("kind"), (operation or {}).get("kind")),
         "manifestSha256": receipt.get("manifestSha256"),
-        "documentName": _document_name(operation, cad),
+        "documentName": _document_name(operation, cad) or bundle_name,
     }
     if receipt.get("outcome") == ACK_REFUSED:
         if (operation or {}).get("state") == CANCELLED:
@@ -320,10 +354,13 @@ class RequestStatusPublisher:
         store: CadLinkStore,
         *,
         clock: Callable[[], float] = time.monotonic,
+        workspace_root: Callable[[], Path | None] = lambda: None,
     ) -> None:
         self.directory = Path(data_dir) / IPC_SUBDIRECTORY / SOLVE_ACKS_DIRECTORY
         self.store = store
         self._clock = clock
+        #: The selected WGLink folder, where the returns a request names live.
+        self._workspace_root = workspace_root
         self._cursor: int | None = None
         self._folder_stamp: int | None = None
         self._last_sweep: float | None = None
@@ -485,8 +522,9 @@ class RequestStatusPublisher:
             self._job_requests[str(job["id"])] = request_id
             self._other_jobs.discard(str(job["id"]))
         previous = self._records.get(request_id)
+        bundle_name = None if _document_name(operation, cad) else bundle_document_name(self._workspace_root(), operation)
         projected, incident = project_request_status(
-            receipt, operation, job, cad, ingest=ingest, previous=previous,
+            receipt, operation, job, cad, ingest=ingest, previous=previous, bundle_name=bundle_name,
         )
         candidate = validate_request_status(
             {**projected, "seq": _next_seq(previous), "updatedAt": utc_now()}, request_id=request_id,

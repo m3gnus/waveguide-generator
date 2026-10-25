@@ -31,7 +31,7 @@ class MeshTooLarge(RuntimeError):
         return (
             message + "In Fusion, open Waveguide Generator ▸ Sources & Mesh…, "
             f"raise Walls (now {wall:g} mm; default {default_wall:g} mm) "
-            "or add a Coarse surface group. Check the model size, or choose Solve anyway."
+            "or add a coarser size zone. Check the model size, or choose Solve anyway."
         )
 
 

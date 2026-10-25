@@ -1096,7 +1096,7 @@ function CadMeshSummary() {
     <h3>{snapshot ? 'Mesh (set in Fusion)' : 'Mesh (set in WG by an older add-in)'}</h3>
     <p>Walls {snapshot?.wall_size_mm ?? sizes.rigid_size_mm} mm · Grading distance {snapshot?.grading_distance_mm ?? sizes.transition_mm} mm · Symmetry {(snapshot ? snapshot.symmetry === 'off' : state.symmetryMode === 'full') ? 'Off' : 'Automatic'}{fraction ? ` (solved: ${fraction})` : ''}</p>
     {sources.map(source => <p key={source.id}>{source.role} source {snapshot?.source_size_mm[source.id] ?? sizes.source_size_mm[source.id]} mm</p>)}
-    {(snapshot?.surface_groups ?? sizes.surface_groups ?? []).map(group => <p key={group.group_id}>{group.name} — surface group {group.size_mm} mm · {group.observed.face_count} {group.observed.face_count === 1 ? 'face' : 'faces'}</p>)}
+    {(snapshot?.surface_groups ?? sizes.surface_groups ?? []).map(group => <p key={group.group_id}>{group.name} — size zone {group.size_mm} mm · {group.observed.face_count} {group.observed.face_count === 1 ? 'face' : 'faces'}</p>)}
     <p>{typeof triangles === 'number' ? `Triangles ${triangles.toLocaleString('en-US')} of ${Number(limit).toLocaleString('en-US')}` : 'Triangles available after preparing the mesh'}{typeof sizing?.ram_gb === 'number' ? ` · memory ≈ ${sizing.ram_gb.toFixed(1)} GB` : ''}</p>
     <p className="section-note">{snapshot
       ? 'To change these, open Waveguide Generator ▸ Sources & Mesh… in Fusion and Send again.'

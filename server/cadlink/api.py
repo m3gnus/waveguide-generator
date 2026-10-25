@@ -2106,7 +2106,10 @@ async def _publish_request_status(state: Any, reported: str | None) -> str | Non
     try:
         publisher = getattr(state, "cad_request_status", None)
         if publisher is None:
-            publisher = RequestStatusPublisher(Path(state.data_dir), state.cadlink_store)
+            publisher = RequestStatusPublisher(
+                Path(state.data_dir), state.cadlink_store,
+                workspace_root=lambda: selected_workspace_root(state),
+            )
             state.cad_request_status = publisher
         job_store = getattr(getattr(state, "jobs_runtime", None), "store", None)
         await asyncio.to_thread(publisher.tick, job_store)

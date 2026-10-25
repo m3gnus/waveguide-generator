@@ -334,7 +334,8 @@ def test_existing_automatic_nowaistbanding_setup_prepares_and_solves_below_ceili
         assert "WG's limit is 22,000" in message
         assert "Waveguide Generator ▸ Sources & Mesh…" in message
         assert "raise Walls (now 4 mm; default 25 mm)" in message
-        assert "Coarse surface group. Check the model size, or choose Solve anyway." in message
+        assert "add a coarser size zone. Check the model size, or choose Solve anyway." in message
+        assert "surface group" not in message
         assert "Preparing the mesh failed" not in message
         assert summary.get("preparationId") is None
         assert not harness.submitted
@@ -377,8 +378,8 @@ def test_mesh_too_large_is_an_actionable_refusal_on_both_ingest_routes() -> None
     response = _ingest_error(error)
     assert response.status_code == 422
     assert response.detail == {"code": "mesh_too_large", "message": error.message(),
-                               "next_step": "Change the mesh resolution in Sources & Mesh… in Fusion, "
-                               "or check the model size.",
+                               "next_step": "In Fusion, open Sources & Mesh… and raise Walls or add a coarser "
+                               "size zone, or check the model size.",
                                "triangle_count": 28_944, "limit": 22_000}
 
 

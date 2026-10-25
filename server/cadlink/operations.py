@@ -351,7 +351,10 @@ def hold_stage_message(code: Any, message: Any = "") -> str:
 
 
 #: The triangle ceiling's next step; each surface adds the choice it offers.
-MESH_CEILING_NEXT_STEP = "Change the mesh resolution in Sources & Mesh… in Fusion, or check the model size."
+#: "Size zone" is Fusion's name for what the stored data calls a surface group.
+MESH_CEILING_NEXT_STEP = (
+    "In Fusion, open Sources & Mesh… and raise Walls or add a coarser size zone, or check the model size."
+)
 
 
 def hold_details(code: str, message: str) -> dict[str, Any]:

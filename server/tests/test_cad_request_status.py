@@ -214,6 +214,74 @@ def test_wgs_own_preparation_failures_could_not_finish_calmly_never_need_you(h, 
     assert incidents == []
 
 
+def _forget_snapshot(h: JobsHarness, job: dict[str, Any]) -> None:
+    """As an invalid manifest leaves it: WG kept no snapshot, so nothing names the model."""
+
+    import sqlite3
+    from contextlib import closing
+
+    metadata = job["task_metadata"]
+    metadata["cad"].pop("snapshot", None)
+    _set(h, job["id"], task_metadata_json=json.dumps(metadata))
+    with closing(sqlite3.connect(h.store.db_path)) as conn:
+        conn.execute("UPDATE cad_operations SET snapshot_json = NULL WHERE operation_id = 'cmd-1'")
+        conn.commit()
+
+
+def test_an_invalid_return_is_still_named_from_its_own_manifest_or_folder(h, incidents) -> None:
+    """``snapshot_invalid`` leaves no snapshot; Fusion must still be able to name the model."""
+
+    _held(h)
+    _forget_snapshot(h, h.latest_job())
+    _refuse(h, h.latest_job(), "snapshot_invalid", "stage 1 bundle validation: $.sources[x]: must equal y")
+    # Without the WGLink folder, the return folder's own name.
+    _publisher(h).tick(h.jobs_store)
+    assert _status(h)["documentName"] == "speaker"
+    # With it, the name the manifest gives, read as the returns listing reads it.
+    (_acks(h) / "cmd-1.status.json").unlink()
+    publisher = RequestStatusPublisher(h.data_dir, h.store, clock=Clock(), workspace_root=lambda: h.workspace)
+    publisher.tick(h.jobs_store)
+    record = _status(h)
+    manifest = json.loads((h.workspace / "wgreturn/speaker.wgreturn/wgreturn.json").read_text(encoding="utf-8"))
+    assert record["state"] == "couldNotFinish" and record["failure"] == {"recorded": True}
+    assert record["documentName"] == manifest["document"]["name"]
+    assert f"could not prepare {manifest['document']['name']}." in _words(record)
+    assert "bundle" not in json.dumps(record) and "$." not in json.dumps(record)
+
+
+def test_bundle_document_name_reads_leniently_and_stays_inside_the_folder(tmp_path) -> None:
+    from server.cadlink.joblane.request_status import bundle_document_name
+
+    folder = tmp_path / "wgreturn" / "Fine horn.wgreturn"
+    folder.mkdir(parents=True)
+    operation = {"inputs_json": json.dumps({"bundle_path": "wgreturn/Fine horn.wgreturn"})}
+    # No manifest, or one that is not JSON: the folder's name.
+    assert bundle_document_name(tmp_path, operation) == "Fine horn"
+    (folder / "wgreturn.json").write_text("{truncated", encoding="utf-8")
+    assert bundle_document_name(tmp_path, operation) == "Fine horn"
+    # A manifest that fails validation still names its document.
+    (folder / "wgreturn.json").write_text(json.dumps({"document": {"name": " Fine horn v3 "}, "sources": "x"}), encoding="utf-8")
+    assert bundle_document_name(tmp_path, operation) == "Fine horn v3"
+    assert bundle_document_name(None, operation) == "Fine horn"
+    # A path outside the folder is never read.
+    outside = {"inputs_json": json.dumps({"bundle_path": "../elsewhere/Other.wgreturn"})}
+    (tmp_path.parent / "elsewhere" / "Other.wgreturn").mkdir(parents=True)
+    (tmp_path.parent / "elsewhere" / "Other.wgreturn" / "wgreturn.json").write_text(
+        json.dumps({"document": {"name": "Not this"}}), encoding="utf-8")
+    assert bundle_document_name(tmp_path, outside) == "Other"
+    assert bundle_document_name(tmp_path, None) is None
+    assert bundle_document_name(tmp_path, {"inputs_json": "not json"}) is None
+
+
+def test_a_snapshot_name_wins_over_the_bundle_name() -> None:
+    receipt = {"commandId": "cmd-1", "kind": "prepare_and_solve", "manifestSha256": MANIFEST, "outcome": "refused"}
+    operation = {"snapshot_json": json.dumps({"document_name": "Kept horn"})}
+    record, _ = project_request_status(receipt, operation, None, None, bundle_name="Folder horn")
+    assert record["documentName"] == "Kept horn"
+    record, _ = project_request_status(receipt, {}, None, None, bundle_name="Folder horn")
+    assert record["documentName"] == "Folder horn"
+
+
 def test_a_failure_the_user_can_act_on_says_what_to_do(h) -> None:
     job = _held(h)
     _refuse(h, job, "snapshot_changed", "raw detail")

@@ -125,7 +125,7 @@ const OPERATION_STAGE_WORDS: Record<string, SolveStageWord> = {
 export const OPERATION_REASON_WORDS: Record<string, string> = {
   preparation_failed: 'preparation failed',
   interrupted: 'interrupted',
-  mesh_too_large: 'above the triangle limit',
+  mesh_too_large: 'larger than WG\'s limit',
   solver_memory_exceeded: 'too large for this machine\'s memory',
   snapshot_invalid: 'preparation failed',
   snapshot_changed: 'changed after Fusion asked',

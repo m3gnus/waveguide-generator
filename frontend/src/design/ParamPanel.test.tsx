@@ -1489,7 +1489,7 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).toContain('Walls 25 mm · Grading distance 100 mm · Symmetry Automatic (solved: quarter)');
     expect(host.textContent).toContain('HF source 6 mm');
     expect(host.textContent).toContain('MF source 15 mm');
-    expect(host.textContent).toContain('Back — surface group 40 mm · 3 faces');
+    expect(host.textContent).toContain('Back — size zone 40 mm · 3 faces');
     expect(host.textContent).toContain('Triangles 2,140 of 22,000 · memory ≈ 1.1 GB');
     expect(host.textContent).toContain('To change these, open Waveguide Generator ▸ Sources & Mesh… in Fusion and Send again.');
     expect(host.querySelector('.cad-mesh-summary input')).toBeNull();

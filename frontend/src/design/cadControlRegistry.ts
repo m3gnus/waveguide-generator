@@ -187,7 +187,7 @@ export const CAD_CONTROLS = {
     'cad.mesh-detail', 'Mesh detail', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
     // A prepared model's mesh; an Onshape return's editable sizes (below)
     // offer the section before that.
-    ['CAD mesh', 'surface sizing', 'Fusion', 'Walls', 'Grading distance', 'Symmetry', 'source size', 'surface group', 'rebuild mesh', 'ingest'],
+    ['CAD mesh', 'surface sizing', 'Fusion', 'Walls', 'Grading distance', 'Symmetry', 'source size', 'surface group', 'size zone', 'rebuild mesh', 'ingest'],
   ),
   rigidSize: control(
     'cad.mesh.rigid-size', 'Walls', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',

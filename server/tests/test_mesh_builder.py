@@ -376,7 +376,7 @@ def test_imported_mesh_refusal_names_count_limit_and_all_sizes() -> None:
     assert str(error.value) == (
         "This model meshes to 28,944 triangles; WG's limit is 22,000 triangles before asking you to continue. "
         "In Fusion, open Waveguide Generator ▸ Sources & Mesh…, raise Walls (now 4 mm; default 25 mm) "
-        "or add a Coarse surface group. Check the model size, or choose Solve anyway."
+        "or add a coarser size zone. Check the model size, or choose Solve anyway."
     )
 
 

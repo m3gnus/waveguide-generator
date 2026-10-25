@@ -4,7 +4,7 @@ import { meshCeilingChoice } from '../stores/meshCeilingChoice';
 import { EmptyState } from './EmptyState';
 import { Notice } from './Notice';
 import { cadMeshSizing } from '../api/cadMesh';
-import { buildCadProjectSetup, useCadFeedbackError } from './cadSetupPublisher';
+import { useCadFeedbackError } from './cadSetupPublisher';
 import { nativeCadLimitation } from '../design/nativeFamilies';
 import { useCadConnectionStore } from '../stores/cadConnection';
 import { ExperimentalBadge } from '../design/ExperimentalBadge';
@@ -902,7 +902,6 @@ export function CadLinkPanel() {
         >{freshnessSummary(record) === 'unlinked' ? `from ${onshape ? 'Onshape' : 'Fusion'}` : freshnessSummary(record)}</span>}
         <time dateTime={record?.created_at || bundle.modifiedAt} title={fullTime(record?.created_at || bundle.modifiedAt)}>{relativeTime(record?.created_at || bundle.modifiedAt)}</time>
       </div>}
-      {bundle && !state.setupLoading && !buildCadProjectSetup(state, undefined, state.projectLineageId ?? 'unclaimed') && <p className="cad-detail" role="status">Fusion solves use the last complete setup.</p>}
       {state.setupLoading && <Notice>Loading model settings…</Notice>}
       {state.ingestStaleReason && <Notice>{state.ingestStaleReason} Prepare the model again before solving.</Notice>}
       {viewportNotice && <Notice>{viewportNotice}</Notice>}
