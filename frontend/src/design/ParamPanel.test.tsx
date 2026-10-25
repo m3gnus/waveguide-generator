@@ -1346,7 +1346,7 @@ describe('ParamPanel inventory UX', () => {
       expect(host.textContent?.includes('Prepared cut planes')).toBe(developer);
       expect(host.querySelector('.cad-mesh-developer')).toBeNull();
       expect(host.querySelector('#cad-exterior-only')).not.toBeNull();
-      expect(host.querySelector('.cad-mesh-summary')?.children).toHaveLength(0);
+      expect(host.querySelector('.cad-mesh-summary')).toBeNull();
       expect(host.textContent).not.toContain('Rebuild mesh');
       if (drivers === 1) expect(host.textContent).not.toContain('Two or more drive channels');
     },
@@ -1596,7 +1596,7 @@ describe('ParamPanel inventory UX', () => {
         root.render(withQueryClient(<><CadSetupPublisher/><ParamPanel tab="simulation" /></>));
       });
       expect(cadWorkspace.getSnapshot().error).toBeNull();
-      const alert = () => host.querySelector('.param-panel > [role="alert"]');
+      const alert = () => host.querySelector('.cad-mesh-controls > [role="alert"]');
       expect(alert()).toBeNull();
       act(() => useCadReturnStore.getState().setExteriorOnly(false));
       await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
@@ -1651,7 +1651,7 @@ describe('ParamPanel inventory UX', () => {
       workspaceModeStore.setMode('cad');
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
-    expect(host.querySelector('.cad-mesh-summary')?.textContent).toContain('set in WG');
+    expect(host.querySelector('.cad-mesh-summary')).toBeNull();
     const edit = (id: string, value: string) => {
       const input = host.querySelector<HTMLInputElement>(`[data-control-reveal-id="${id}"] input`)!;
       expect(input).not.toBeNull();
@@ -1680,7 +1680,8 @@ describe('ParamPanel inventory UX', () => {
     expect(ingest).toHaveBeenCalledOnce();
   });
 
-  it('shows the Fusion mesh as one read-only line at the bottom', () => {
+  it.each([false, true])('leaves the Fusion mesh description to Model details (developer: %s)', (developer) => {
+    preferencesStore.update({ showDeveloperDetails: developer });
     act(() => {
       setCadReady();
       useCadReturnStore.setState({ ingestRecord: { ...cadRecord, mesh_snapshot: fusionMesh,
@@ -1691,14 +1692,14 @@ describe('ParamPanel inventory UX', () => {
       workspaceModeStore.setMode('cad');
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
-    expect(host.querySelector('.cad-mesh-summary')?.textContent).toContain('set in Fusion');
-    expect(host.querySelector('.cad-mesh-summary')?.textContent).toContain('Walls 25 mm');
-    expect(host.querySelector('.cad-mesh-summary')?.children).toHaveLength(0);
-    expect(host.querySelector('.param-panel')?.lastElementChild?.className).toBe('cad-mesh-summary');
+    expect(host.querySelector('.cad-mesh-summary')).toBeNull();
+    expect(host.textContent).not.toContain('Walls 25 mm');
     expect(host.textContent).not.toContain('Rebuild mesh');
-    expect(host.querySelector('.cad-mesh-summary')?.textContent).toContain('2,140 triangles');
+    expect(host.querySelector('.cad-mesh-line')).toBeNull();
+    expect(host.textContent).not.toMatch(/memory [≈<]|Sources & Mesh/);
+    expect(host.textContent).not.toContain('2,140 triangles');
 
-    expect(host.querySelector('.cad-mesh-summary input')).toBeNull();
+    expect(host.querySelector('.cad-mesh-controls input[type=number]')).toBeNull();
     for (const id of ['cad.mesh.rigid-size', 'cad.mesh.transition', 'cad.mesh.source-size']) {
       expect(host.querySelector(`[data-control-reveal-id="${id}"]`)).toBeNull();
       expect(buildParameterPaletteEntries(undefined, { mode: 'cad', cadReturnReady: true }).some(entry => entry.id === `cad-control-${id}`)).toBe(false);
@@ -1752,7 +1753,7 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('[data-control-reveal-id="cad.mesh.rigid-size"]')).not.toBeNull();
   });
 
-  it.each(['skip-source-hf', 'drift-source-hf'])('keeps a recalled Fusion snapshot after toggling %s while measurements become pending', async (toggleId) => {
+  it.each(['skip-source-hf', 'drift-source-hf'])('keeps a recalled Fusion snapshot without repeating its mesh after toggling %s', async (toggleId) => {
     preferencesStore.update({ showDeveloperDetails: true });
     const retained = { ...archivedRecord, mesh_snapshot: fusionMesh,
       sources: archivedRecord.sources.map(source => ({ ...source, required: false })),
@@ -1770,21 +1771,22 @@ describe('ParamPanel inventory UX', () => {
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
     expect(useCadReturnStore.getState().selectedBundle?.meshSnapshot).toBeUndefined();
-    expect(host.querySelector('.cad-mesh-summary')?.textContent).toContain('set in Fusion');
-    expect(host.querySelector('.cad-mesh-summary')?.textContent).toContain('2,140 triangles');
+    expect(host.querySelector('.cad-mesh-summary')).toBeNull();
+    expect(host.textContent).not.toContain('2,140 triangles');
     act(() => host.querySelector<HTMLInputElement>(`#${toggleId}`)!.click());
     expect(useCadReturnStore.getState().needsIngest).toBe(true);
-    expect(host.querySelector('.cad-mesh-summary')?.textContent).toContain('set in Fusion');
-    expect(host.querySelector('.cad-mesh-summary')?.textContent).toContain('Walls 25 mm');
+    expect(useCadReturnStore.getState().ingestRecord?.mesh_snapshot).toEqual(fusionMesh);
+    expect(host.querySelector('.cad-mesh-summary')).toBeNull();
+    expect(host.textContent).not.toContain('Walls 25 mm');
 
-    expect(host.querySelector('.cad-mesh-summary')?.textContent).not.toContain('triangles');
+    expect(host.textContent).not.toContain('triangles');
     expect(host.textContent).not.toContain('older add-in');
     expect(host.textContent).not.toContain('Triangles 2,140');
     expect(host.textContent).not.toContain('memory ≈');
     expect(host.textContent).not.toContain('(solved:');
   });
 
-  it('opens an old run and shows its stored mesh sizes read-only', async () => {
+  it('opens an old run and retains its stored mesh sizes in Model details', async () => {
     const request = archivedRequest();
     request.geometry.mesh = { rigid_size_mm: 12, transition_mm: 70, source_size_mm: { 'source-hf': 2.5 } };
     const retained = { ...archivedRecord, mesh_sizes: request.geometry.mesh };
@@ -1797,9 +1799,10 @@ describe('ParamPanel inventory UX', () => {
       }) as typeof fetch)).toBe(true);
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
-    expect(host.querySelector('.cad-mesh-summary')?.textContent).toContain('Walls 12 mm · set in WG by an older add-in');
+    expect(host.querySelector('.cad-mesh-summary')).toBeNull();
+    expect(useCadReturnStore.getState().ingestRecord?.mesh_sizes).toEqual(request.geometry.mesh);
     expect(useCadReturnStore.getState().meshSizes).toEqual(request.geometry.mesh);
-    expect(host.querySelector('.cad-mesh-summary input')).toBeNull();
+    expect(host.querySelector('.cad-mesh-controls input[type=number]')).toBeNull();
     for (const id of ['cad.mesh.rigid-size', 'cad.mesh.transition', 'cad.mesh.source-size']) {
       expect(host.querySelector(`[data-control-reveal-id="${id}"]`)).toBeNull();
       expect(buildParameterPaletteEntries(undefined, { mode: 'cad', cadReturnReady: true }).some(entry => entry.id === `cad-control-${id}`)).toBe(false);
@@ -1825,7 +1828,7 @@ describe('ParamPanel inventory UX', () => {
     expect(motion).not.toBeNull();
     expect([...motion!.options].map((option) => option.textContent)).toEqual(['Normal', 'Axial (pistonic)']);
     expect(host.textContent).toContain('Normal moves each source face along its own normal. Axial moves the source as a rigid piston along its axis.');
-    expect(host.textContent).toContain('Walls');
+    expect(host.querySelector('.cad-mesh-summary')).toBeNull();
     expect(host.querySelector('.cad-channel-summary')?.textContent).toBe('HF');
     // The voltage input follows driver presence, not a toggle: the fixture's
     // empty form keeps it away, one typed T/S number brings it out.
@@ -2278,7 +2281,7 @@ describe('ParamPanel inventory UX', () => {
     expect(matchingSections('sd_cm2')).toEqual(['Drivers']);
     expect(matchingSections('LR4')).toEqual(['Crossover']);
     expect(matchingSections('surface sizing')).toEqual([]);
-    expect(host.querySelector('.cad-mesh-summary')).not.toBeNull();
+    expect(host.querySelector('[data-control-reveal-id="cad.mesh-detail"]')).not.toBeNull();
   });
 
   it('omits field-count labels while retaining informative summaries', () => {

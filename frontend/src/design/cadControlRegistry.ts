@@ -195,8 +195,8 @@ export const CAD_CONTROLS = {
   verbose: control('solve-verbose', 'Verbose backend logging', CAD_CONTROL_SECTIONS.solveOptions, 'simulation', ['diagnostics'], 'ingested-return', 'cad.solve-options', true),
   meshDetail: control(
     'cad.mesh-detail', 'Mesh detail', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
-    // A prepared model's mesh; an Onshape return's editable sizes (below)
-    // offer the section before that.
+    // Mesh controls and recovery feedback; Model details owns the description.
+    // Onshape's editable sizes (below) offer the section before preparation.
     ['CAD mesh', 'surface sizing', 'Fusion', 'Walls', 'Grading distance', 'Symmetry', 'source size', 'surface group', 'size zone', 'rebuild mesh', 'ingest'],
   ),
   rigidSize: control(

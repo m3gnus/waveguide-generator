@@ -14,7 +14,7 @@ import type { CadRealizedDimensions, CadRealizedParameter, CadReturnIngestRecord
 import { importedSubmissionBlocker, importedSubmissionNotices } from '../jobs/importedSubmission';
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
 import { useActiveBackendCapability, useCapabilities, usePlannedBackendCapabilities } from '../jobs/useCapabilities';
-import { cadMeshIsEditable, cadMeshSizing } from '../api/cadMesh';
+import { cadMeshIsEditable } from '../api/cadMesh';
 import { backendLimitation, symmetryDomainLimitation } from './backendSupport';
 import { CadCrossover, crossoverSummary } from './CrossoverSection';
 import {
@@ -1090,18 +1090,8 @@ function CadPassiveCardioid() {
   </>;
 }
 
-function CadMeshSummary() {
-  const state = useCadReturnStore();
-  const record = state.needsIngest ? null : state.ingestRecord;
-  const snapshot = state.selectedBundle?.meshSnapshot ?? state.ingestRecord?.mesh_snapshot;
-  const triangles = record?.mesh?.stats.triangle_count ?? (record ? cadMeshSizing(record).n_triangles : undefined);
-  const origin = cadMeshIsEditable(state.selectedBundle)
-    ? 'set in WG' : snapshot ? 'set in Fusion' : 'set in WG by an older add-in';
-  return <p className="cad-mesh-summary" data-control-reveal-id={CAD_CONTROLS.meshDetail.reveal.id} tabIndex={-1}>
-    Mesh · {typeof triangles === 'number' ? `${triangles.toLocaleString('en-US')} triangles · ` : ''}Walls {snapshot?.wall_size_mm ?? state.meshSizes.rigid_size_mm} mm · {origin}
-  </p>;
-}
-
+// Model details owns the mesh description. Simulation keeps only controls and
+// feedback the user can act on, including Onshape's editable mesh settings.
 function CadMeshDetail() {
   const state = useCadReturnStore();
   const developer = useDeveloperDetails();
@@ -1115,8 +1105,8 @@ function CadMeshDetail() {
   const driftSources = new Set([...state.areaDriftSourceIds, ...(state.ingestRecord?.role_findings ?? [])
     .filter((finding) => String(finding.kind).includes('area-drift'))
     .map((finding) => String(finding.source_id))]);
-  return <>
-    <div className="cad-mesh-intro">{editable && <><p>Smaller values are finer. Curved CAD faces receive bounded extra refinement automatically.</p><button className="primary" disabled={cadWorkspaceView.ingesting || !state.selectedBundle?.readable} onClick={() => void cadWorkspaceView.ingest()}>{cadWorkspaceView.ingesting ? 'Preparing…' : 'Rebuild mesh'}</button></>}</div>
+  return <div className="cad-mesh-controls" data-control-reveal-id={CAD_CONTROLS.meshDetail.reveal.id} tabIndex={-1}>
+    {editable && <div className="cad-mesh-intro"><p>Smaller values are finer. Curved CAD faces receive bounded extra refinement automatically.</p><button className="primary" disabled={cadWorkspaceView.ingesting || !state.selectedBundle?.readable} onClick={() => void cadWorkspaceView.ingest()}>{cadWorkspaceView.ingesting ? 'Preparing…' : 'Rebuild mesh'}</button></div>}
     {editable && <>
       <ToggleRow id="cad-force-full-domain" label="Force full domain" help="Disable automatic x=0/y=0 cutting for this preparation. Use this when a symmetry verdict is doubtful; it costs more memory and solve time but cannot remove a geometric half. A return the CAD author already cut is refused instead: the other half is not in the file." checked={state.symmetryMode === 'full'} onChange={(enabled) => {
         state.setSymmetryMode(enabled ? 'full' : 'auto');
@@ -1133,7 +1123,7 @@ function CadMeshDetail() {
     {state.ingestStaleReason && <div className="field-error" role="status">{state.ingestStaleReason}</div>}
     {error && <div className="field-error" role="alert">{error}</div>}
     {cadWorkspaceView.status && <p className="section-note" role="status">{cadWorkspaceView.status}</p>}
-  </>;
+  </div>;
 }
 
 /** Before the selected model is prepared, the Simulation tab has nothing to
@@ -1475,10 +1465,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
           {tab === 'geometry' && cadSectionMatches(CAD_CONTROLS.realizedDimensions.section) && <RealizedDimensionsCard forceOpen={searching}/>}
           {!searching && tab === 'simulation' && !ingestRecord && <CadSimulationEmpty/>}
           {tab === 'simulation' && ingestRecord && <CadSimulationSections searching={searching} matches={cadSectionMatches} ingestRecord={ingestRecord} cardioidSurface={cardioidSurface}/>}
-          {tab === 'simulation' && (selectedBundle || ingestRecord) && (!searching || cadSectionMatches(CAD_CONTROLS.meshDetail.section)) && <>
-            <CadMeshDetail/>
-            <CadMeshSummary/>
-          </>}
+          {tab === 'simulation' && (selectedBundle || ingestRecord) && (!searching || cadSectionMatches(CAD_CONTROLS.meshDetail.section)) && <CadMeshDetail/>}
         </>}
       {searching && [...fieldsBySection.values()].every((fields) => fields.length === 0) && matchingCadSections.size === 0 && matchingParametricSections.size === 0 && <div className="parameter-empty">No parameter labels or keys match “{query}”.</div>}
     </div>
