@@ -66,7 +66,7 @@ export interface CadStatusContext {
 }
 
 type CadModelView = Pick<ReturnType<typeof selectCadModelState>,
-  'selected' | 'label' | 'phase' | 'preparation' | 'heldRequest' | 'meshChoice' | 'failureMessage' | 'triangles' | 'canPrepare' | 'record' | 'bundle' | 'application'>
+  'selected' | 'label' | 'phase' | 'preparation' | 'heldRequest' | 'meshChoice' | 'failureMessage' | 'triangles' | 'canPrepare' | 'preparesAutomatically' | 'record' | 'bundle' | 'application'>
   & Partial<Pick<ReturnType<typeof selectCadModelState>, 'failureRetry'>>;
 
 const ACTION_LABEL: Record<Exclude<CadStatusAction, 'none'>, string> = {
@@ -161,7 +161,7 @@ export function cadModelStatusLine(model: CadModelView, request: CadModelRequest
   // Its mesh no longer matches the settings or the return: what was solved
   // or prepared before is not what Solve would use now.
   if (model.preparation === 'stale') {
-    return model.canPrepare ? line(`Preparing ${label}…`, 'preparing…', 'busy')
+    return model.preparesAutomatically ? line(`Preparing ${label}…`, 'preparing…', 'busy')
       : line(`${label} changed since it was prepared.`, 'needs preparing again', 'attention');
   }
   if (requestState === 'solved' && request?.kind === 'solved' && job) {
@@ -191,7 +191,7 @@ export function cadModelStatusLine(model: CadModelView, request: CadModelRequest
     const app = model.application === 'CAD' ? context.application ?? 'Fusion' : model.application;
     return line(`${APP_NAME} cannot read ${label}. Send it again from ${app}.`, 'cannot read it', 'attention');
   }
-  return model.canPrepare ? line(`Preparing ${label}…`, 'preparing…', 'busy')
+  return model.preparesAutomatically ? line(`Preparing ${label}…`, 'preparing…', 'busy')
     : line(`${label} is not prepared yet.`, 'not prepared', 'attention');
 }
 

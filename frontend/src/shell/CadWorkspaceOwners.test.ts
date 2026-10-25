@@ -14,6 +14,8 @@ import { resetImportedModelStore } from '../stores/importedModel';
 import { designForFamily, useDesignStore } from '../stores/design';
 import { resetCadDeliveryHealthStore, useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
 import { cadWorkspace } from '../stores/cadWorkspace';
+import { cadModelSelection } from '../stores/cadModelState';
+import { cadModelStatusLine } from '../stores/cadModelStatusLine';
 import { resetDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
@@ -950,7 +952,7 @@ it('prepares once across the StrictMode setup/cleanup/setup sequence', async () 
   expect(useCadReturnStore.getState().needsIngest).toBe(false);
 });
 
-it('stops after an automatic failure across polls and remounts; Try again prepares once', async () => {
+it.each([false, true])('stops after an automatic failure across polls and remounts; explicit retry prepares once (design edited: %s)', async edited => {
   resetImportedModelStore(); returns = [bundle];
   const base = fetcher.getMockImplementation()!;
   let fail = true;
@@ -964,8 +966,16 @@ it('stops after an automatic failure across polls and remounts; Try again prepar
   stop(); stop = mountCadWorkspaceOwners(); await flush();
   expect(calls('/api/cadlink/ingest')).toHaveLength(1);
   expect(cadWorkspace.getSnapshot().ingestFailure).toMatchObject({ recorded: true, retry: true });
+  if (edited) {
+    useDesignStore.getState().updateField('wall_thickness', 6);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(cadModelStatusLine(cadModelSelection(), null)).toMatchObject({
+      text: 'Speaker is not prepared yet.', tone: 'attention', action: 'none',
+    });
+    expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  }
   fail = false;
-  // The status line's Try again command. Concurrent presses share the attempt.
+  // The explicit preparation command used by Try again. Concurrent presses share the attempt.
   await Promise.all([cadWorkspace.getSnapshot().ingest(), cadWorkspace.getSnapshot().ingest()]); await flush();
   expect(calls('/api/cadlink/ingest')).toHaveLength(2);
   expect(useCadReturnStore.getState().needsIngest).toBe(false);

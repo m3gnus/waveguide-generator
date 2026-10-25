@@ -206,6 +206,8 @@ export interface CadReturnState {
   needsIngest: boolean;
   ingestedBundleIdentity: string | null;
   ingestStaleReason: string | null;
+  /** Last preparation tried, retained across owner remounts to stop retry loops. */
+  attemptedPreparationKey: string | null;
   /** The CAD project whose saved solve settings this workspace is editing. */
   projectLineageId: string | null;
   beginIngestIntent: () => number;
@@ -316,18 +318,28 @@ export function bundleIdentity(bundle: CadReturnBundle): string {
  * identical bundle reappears. */
 export const LISTING_GONE_REASON = 'The prepared return no longer appears in the workspace listing.';
 
-/**
- * Whether WG prepares the selected model by itself (owner decision M1): a
- * readable return from Fusion that has no current mesh. A return
- * the listing has lost for now is left alone -- it heals by itself when the
- * listing has it again -- and so is one WG cannot read, a recalled archived
- * run (no return path) and a WG-native assembly, which nothing here prepares.
- */
-export function preparesAutomatically(state: Pick<CadReturnState, 'selectedBundle' | 'needsIngest'>
-  & Partial<Pick<CadReturnState, 'ingestStaleReason'>>): boolean {
+/** Inputs shared by the preparation owner and the selected-model projection. */
+export type CadPreparationInputs = Pick<CadReturnState, 'selectedBundle'>
+  & Partial<Pick<CadReturnState, 'captureModelChoice' | 'meshSizes' | 'skippedSourceIds' | 'areaDriftOverrides' | 'symmetryMode'>>;
+
+/** Automatic work and explicit retries share this identity for their inputs. */
+export function cadPreparationKey(state: CadPreparationInputs, designId: string | null): string {
+  return JSON.stringify([state.captureModelChoice?.(), state.selectedBundle?.bundleOrigin, state.selectedBundle?.bundlePath,
+    state.selectedBundle?.returnId ?? (state.selectedBundle ? bundleIdentity(state.selectedBundle) : null), state.meshSizes, state.skippedSourceIds,
+    state.areaDriftOverrides, state.symmetryMode, designId]);
+}
+
+/** Whether WG still owes automatic preparation (owner decision M1): a
+ * readable Fusion return with no current mesh, while Fusion is active.
+ * Missing listing entries, archived runs and native/Onshape models stay alone.
+ * A failure or question stops at the attempted key until an edit or retry. */
+export function preparesAutomatically(state: CadPreparationInputs & Pick<CadReturnState, 'needsIngest'>
+  & Partial<Pick<CadReturnState, 'ingestStaleReason' | 'attemptedPreparationKey'>>,
+  designId: string | null = null, application = 'fusion360'): boolean {
   const bundle = state.selectedBundle;
-  return !!bundle && bundle.readable && bundle.bundlePath !== '' && (bundle.bundleOrigin ?? 'wglink') === 'wglink'
-    && state.needsIngest && state.ingestStaleReason !== LISTING_GONE_REASON;
+  return application === 'fusion360' && !!bundle && bundle.readable && bundle.bundlePath !== '' && (bundle.bundleOrigin ?? 'wglink') === 'wglink'
+    && state.needsIngest && state.ingestStaleReason !== LISTING_GONE_REASON
+    && state.attemptedPreparationKey !== cadPreparationKey(state, designId);
 }
 
 /** Whether this bundle is one the workspace listing can speak about.
@@ -558,6 +570,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
   needsIngest: true,
   ingestedBundleIdentity: null,
   ingestStaleReason: null,
+  attemptedPreparationKey: null,
   beginIngestIntent: supersedeIngestIntent,
   captureIngestIntent: () => ingestIntentGeneration,
   beginSelectionIntent: supersedeSelectionIntent,

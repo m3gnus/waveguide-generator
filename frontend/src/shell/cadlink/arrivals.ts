@@ -14,17 +14,12 @@ import {
 } from '../../api/cadlink';
 import { preferencesStore } from '../../prefs/preferences';
 import { useDocumentStore } from '../../stores/document';
-import { bundleIdentity, preparesAutomatically, useCadReturnStore } from '../../stores/cadReturn';
+import { cadPreparationKey, preparesAutomatically, useCadReturnStore } from '../../stores/cadReturn';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { resolvePreparationTarget } from './preparationTarget';
 import { meshCeilingChoice } from '../../stores/meshCeilingChoice';
 import type { CadIngestFailure } from '../../stores/cadWorkspace';
 import { reportCadAutomationError } from './caughtErrors';
-
-// A failed/questioned revision stays tried across owner remounts. A new model
-// choice or changed preparation input has a different key; explicit retries
-// bypass this guard. The server owns reuse across browser restarts.
-let attemptedPreparation: string | null = null;
 
 export interface RefreshOptions {
   background?: boolean;
@@ -357,7 +352,7 @@ export function createCadArrivalActions(
     // This intent covers the ingest record itself. The viewport has a separate
     // token because its follow-up artifact fetch can be superseded independently.
     const attempt = preparationKey();
-    attemptedPreparation = attempt;
+    useCadReturnStore.setState({ attemptedPreparationKey: attempt });
     const ingestGeneration = current.beginIngestIntent();
     const request = ++ingestRequest.current;
     ingestAbortController.current?.abort();
@@ -420,12 +415,12 @@ export function createCadArrivalActions(
       return record;
     } catch (reason) {
       if (reason instanceof SupersededError) {
-        if (attemptedPreparation === attempt) attemptedPreparation = null;
+        if (useCadReturnStore.getState().attemptedPreparationKey === attempt) useCadReturnStore.setState({ attemptedPreparationKey: null });
         throw reason;
       }
       if (!isCurrentDocumentLoad(documentLoad)
         || !useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) {
-        if (attemptedPreparation === attempt) attemptedPreparation = null;
+        if (useCadReturnStore.getState().attemptedPreparationKey === attempt) useCadReturnStore.setState({ attemptedPreparationKey: null });
         const superseded = 'Discarded a preparation response because its selected return or design was superseded. Rebuild the mesh for the current state.';
         if (request === ingestRequest.current && mounted.current) setStatus(superseded);
         throw new SupersededError(superseded);
@@ -472,12 +467,9 @@ export function createCadArrivalActions(
 
   // Automatic work and explicit retries both use ingestSelected above. The
   // model-choice token survives React remounts; input changes make a new key.
-  const preparationKey = () => {
-    const state = useCadReturnStore.getState();
-    return JSON.stringify([state.captureModelChoice(), state.selectedBundle?.bundleOrigin, state.selectedBundle?.bundlePath,
-      state.selectedBundle?.returnId ?? (state.selectedBundle ? bundleIdentity(state.selectedBundle) : null), state.meshSizes, state.skippedSourceIds,
-      state.areaDriftOverrides, state.symmetryMode, useDocumentStore.getState().identity?.designId]);
-  };
+  const preparationKey = () => cadPreparationKey(useCadReturnStore.getState(), useDocumentStore.getState().identity?.designId ?? null);
+  const automaticPreparationPending = () => preparesAutomatically(useCadReturnStore.getState(),
+    useDocumentStore.getState().identity?.designId ?? null, preferencesStore.getSnapshot().cadApplication);
   let inFlight: { key: string; override: boolean; promise: Promise<CadReturnIngestRecord> } | null = null;
   const ingestSelected = (options: CadPreparationOptions = {}): Promise<CadReturnIngestRecord> => {
     const key = preparationKey();
@@ -494,7 +486,7 @@ export function createCadArrivalActions(
   let automaticRunning = false;
   const requestAutomaticPreparation = () => {
     const selected = useCadReturnStore.getState();
-    if (!preparesAutomatically(selected)) return;
+    if (!automaticPreparationPending()) return;
     // A fresh version takes priority over a stale model's edit debounce.
     if (automaticTimer !== null && !selected.ingestRecord) cancelAutomaticPreparation();
     if (automaticQueued || !mounted.current) return;
@@ -502,11 +494,10 @@ export function createCadArrivalActions(
     const evaluate = () => {
       automaticQueued = false;
       automaticTimer = null;
-      const state = useCadReturnStore.getState();
       if (!mounted.current || automaticRunning || ingestAbortController.current || adapter.deferAutomaticPreparation()
-        || !preparesAutomatically(state) || attemptedPreparation === preparationKey()) return;
+        || !automaticPreparationPending()) return;
       automaticRunning = true;
-      attemptedPreparation = preparationKey();
+      useCadReturnStore.setState({ attemptedPreparationKey: preparationKey() });
       void ingestSelected().catch(() => undefined).finally(() => {
         automaticRunning = false;
         requestAutomaticPreparation();

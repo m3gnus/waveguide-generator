@@ -8,6 +8,7 @@ import { cadModelStatusLine, cadRequestState, cadRequestsChipLabel, type CadMode
 import type { MeshCeilingChoice } from './meshCeilingChoice';
 import { cadJobFixture } from '../jobs/cadSolve.fixtures';
 import type { CadOperationSummary } from '../api/cadOperations';
+import { cadPreparationKey, LISTING_GONE_REASON } from './cadReturn';
 
 const MANIFEST = `sha256:${'c'.repeat(64)}`;
 function operation(jobId: string, state: string, overrides: Partial<CadOperationSummary> = {}): CadOperationSummary {
@@ -83,6 +84,35 @@ describe('the CAD model status line', () => {
     expect(line(selected)).toMatchObject({ text: 'Preparing Speaker…', action: 'none' });
     expect(line(pointer)).toMatchObject({ action: 'none' });
     expect(line({ ...onScreen, needsIngest: true })).toMatchObject({ text: 'Preparing Speaker…', action: 'none', actionLabel: null });
+  });
+
+  it.each([false, true])('keeps honest wording when automatic preparation will not run (stale: %s)', stale => {
+    const state = stale ? { ...onScreen, needsIngest: true } : selected;
+    const expected = { text: stale ? 'Speaker changed since it was prepared.' : 'Speaker is not prepared yet.',
+      tone: 'attention', action: 'none', actionLabel: null };
+    for (const stopped of [
+      { ...state, selectedBundle: { ...bundle, bundleOrigin: 'onshape' as const } },
+      { ...state, ingestStaleReason: LISTING_GONE_REASON },
+      { ...state, attemptedPreparationKey: cadPreparationKey(state, null) },
+    ]) {
+      const result = line(stopped);
+      expect(result).toMatchObject(expected);
+      expectNoJargon(result);
+      // Real in-flight work still says Preparing, regardless of eligibility.
+      expect(line(stopped, { ...idle, ingesting: true })).toMatchObject({ text: 'Preparing Speaker…', tone: 'busy' });
+    }
+  });
+
+  it('does not promise automatic preparation while Fusion is inactive', () => {
+    const model = selectCadModelState(selected, idle, null, null, null, 'onshape');
+    expect(cadModelStatusLine(model, null)).toMatchObject({ text: 'Speaker is not prepared yet.', tone: 'attention' });
+  });
+
+  it('does not revive Preparing when a design edit supersedes a stopped failure intent', () => {
+    const state = { ...selected, captureIngestIntent: () => 2 };
+    const attempted = { ...state, attemptedPreparationKey: cadPreparationKey(state, null) };
+    expect(line(attempted, { ...idle, ingestError: 'Older failure', preparationIntent: 1 }))
+      .toMatchObject({ text: 'Speaker is not prepared yet.', tone: 'attention', action: 'none' });
   });
 
   it('says Preparing, never "needs preparation", while the server prepares a stale model', () => {
@@ -179,4 +209,3 @@ describe('the CAD model status line', () => {
     expect(said.text).not.toContain('Solved');
   });
 });
-

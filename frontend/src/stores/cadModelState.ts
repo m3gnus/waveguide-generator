@@ -2,7 +2,8 @@ import { useStore } from 'zustand';
 import { useSyncExternalStore } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useCurrentModelStatus, type currentModelStatus } from '../model/currentModel';
-import { useCadReturnStore, type CadReturnState } from './cadReturn';
+import { preparesAutomatically, useCadReturnStore, type CadReturnState, type CadPreparationInputs } from './cadReturn';
+import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { useDocumentStore } from './document';
 import { cadWorkspace, type CadWorkspaceSnapshot } from './cadWorkspace';
 import { meshCeilingChoice, type MeshCeilingChoice } from './meshCeilingChoice';
@@ -24,13 +25,15 @@ export type CadModelRequest = Pick<ReturnType<typeof currentModelStatus>, 'kind'
  * the model; consumers must not infer model presence from a mesh, document
  * identity, or the parametric design's link classification. */
 export function selectCadModelState(
-  state: Pick<CadReturnState, 'selectedBundle' | 'ingestRecord' | 'needsIngest' | 'projectLineageId'> & Partial<Pick<CadReturnState, 'captureIngestIntent'>>,
+  state: CadPreparationInputs & Pick<CadReturnState, 'ingestRecord' | 'needsIngest' | 'projectLineageId'>
+    & Partial<Pick<CadReturnState, 'captureIngestIntent' | 'ingestStaleReason' | 'attemptedPreparationKey'>>,
   preparation: Pick<CadWorkspaceSnapshot, 'ingesting' | 'ingestError' | 'preparationIntent'> & Partial<Pick<CadWorkspaceSnapshot, 'ingestFailure'>>,
   request: CadModelRequest | null = null,
   /** The open WG design: a bundle naming it is WG's own design, linked. */
   openDesignId: string | null = null,
   /** A triangle-ceiling question asked in this window (`meshCeilingChoice`). */
   ceiling: MeshCeilingChoice | null = null,
+  cadApplication = 'fusion360',
 ) {
   const bundle = state.selectedBundle;
   const record = state.ingestRecord;
@@ -91,6 +94,7 @@ export function selectCadModelState(
       && (!bundle || (!!openDesignId && (bundle.designIds ?? []).includes(openDesignId)))),
     triangles: preparationPhase === 'prepared' ? record?.mesh?.stats.triangle_count ?? null : null,
     canPrepare: !!bundle?.readable && bundle.bundleOrigin !== 'native' && phase !== 'preparing',
+    preparesAutomatically: preparesAutomatically(state, openDesignId, cadApplication),
     // A model waiting for its mesh-size choice can still be prepared again
     // (with other sizes), which answers the question.
     needsPreparation: phase === 'selected-unprepared' || phase === 'prepare-failed' || phase === 'stopped' || phase === 'stale'
@@ -102,7 +106,7 @@ export function selectCadModelState(
  * requests are matched against; presentation uses `useCadModelState`. */
 export function cadModelSelection() {
   return selectCadModelState(useCadReturnStore.getState(), cadWorkspace.getSnapshot(), null,
-    useDocumentStore.getState().identity?.designId ?? null, meshCeilingChoice.getSnapshot());
+    useDocumentStore.getState().identity?.designId ?? null, meshCeilingChoice.getSnapshot(), preferencesStore.getSnapshot().cadApplication);
 }
 
 /** Subscribes to the fields the projection reads only, so a listing poll or a
@@ -111,6 +115,9 @@ export function useCadModelSelection(request: CadModelRequest | null = null) {
   const state = useCadReturnStore(useShallow(s => ({
     selectedBundle: s.selectedBundle, ingestRecord: s.ingestRecord, needsIngest: s.needsIngest,
     projectLineageId: s.projectLineageId, captureIngestIntent: s.captureIngestIntent,
+    ingestStaleReason: s.ingestStaleReason, attemptedPreparationKey: s.attemptedPreparationKey,
+    captureModelChoice: s.captureModelChoice, modelChoice: s.captureModelChoice(),
+    meshSizes: s.meshSizes, skippedSourceIds: s.skippedSourceIds, areaDriftOverrides: s.areaDriftOverrides, symmetryMode: s.symmetryMode,
     // The ingest intent is a counter inside the store's closure; its
     // generation changes with the state the store publishes for it.
     ingestGeneration: s.captureIngestIntent(),
@@ -120,7 +127,8 @@ export function useCadModelSelection(request: CadModelRequest | null = null) {
   })));
   const openDesignId = useDocumentStore(s => s.identity?.designId ?? null);
   const ceiling = useSyncExternalStore(meshCeilingChoice.subscribe, meshCeilingChoice.getSnapshot, meshCeilingChoice.getSnapshot);
-  return selectCadModelState(state, preparation, request, openDesignId, ceiling);
+  const { cadApplication } = usePreferences();
+  return selectCadModelState(state, preparation, request, openDesignId, ceiling, cadApplication);
 }
 
 /** The selected CAD model, including a request held for the user. */
