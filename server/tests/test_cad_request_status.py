@@ -448,7 +448,7 @@ def test_a_solved_record_names_the_solved_mesh_and_the_symmetry_fallback() -> No
     receipt = {"commandId": "cmd-1", "outcome": "accepted", "kind": "prepare_and_solve", "jobId": "job-9"}
     job = {"id": "job-9", "status": "complete", "run_number": 89, "config_json": {"type": "solve"},
            "mesh_stats": {"triangle_count": 19812}, "task_metadata": {"cad": {"operation_id": "cmd-1"}}}
-    ingest = {"symmetry": {"domain_planes": ["XZ", "YZ"]},
+    ingest = {"symmetry": {"domain_planes": ["x0", "y0"]},
               "findings": [{"kind": "symmetry-cut-unverified", "solved_domain": "full"}]}
     record, _ = project_request_status(receipt, None, job, {}, ingest=ingest)
     assert record["result"] == {"jobId": "job-9", "runNumber": 89,
@@ -1102,3 +1102,27 @@ def test_an_abandoned_unfinished_request_is_not_refreshed_until_it_changes(h) ->
     assert _status(h)["state"] == "solving" and "cmd-1" not in publisher._quiet
     clock.now += request_status.REFRESH_INTERVAL_S
     assert publisher.tick(h.jobs_store) == 1  # live again: refreshed
+
+
+@pytest.mark.parametrize('planes,kind,fraction', [([], 'full', 1), (['x0'], 'half', .5),
+                                                (['x0', 'y0'], 'quarter', .25)])
+def test_ceiling_hold_keeps_measured_mesh_without_a_published_ingest(planes, kind, fraction):
+    receipt = {'commandId': 'cmd-1', 'outcome': 'accepted', 'kind': 'prepare_and_solve', 'jobId': 'job-9'}
+    job = {'id': 'job-9', 'status': 'held', 'run_number': None,
+           'task_metadata': {'cad': {'operation_id': 'cmd-1',
+               'refusal': {'code': 'mesh_too_large'},
+               'mesh_limit_mesh': {'triangle_count': 28000, 'domain_planes': planes}}}}
+    record, _ = project_request_status(receipt, None, job, {'held': True, 'options': []})
+    assert record['state'] == 'needsYou'
+    assert record['result']['mesh'] == {'trianglesSolved': 28000, 'solvedFraction': fraction, 'domainKind': kind}
+    assert protocol.validate_request_status({**record, 'seq': 1})['result']['mesh'] == record['result']['mesh']
+
+
+@pytest.mark.parametrize('planes', [None, ['x0', 'x0'], ['XZ'], ['z0']])
+def test_ceiling_hold_without_known_domain_teaches_nothing(planes):
+    receipt = {'commandId': 'cmd-1', 'outcome': 'accepted', 'kind': 'prepare_and_solve', 'jobId': 'job-9'}
+    job = {'id': 'job-9', 'status': 'held', 'task_metadata': {'cad': {
+        'refusal': {'code': 'mesh_too_large'},
+        'mesh_limit_mesh': {'triangle_count': 28000, 'domain_planes': planes}}}}
+    record, _ = project_request_status(receipt, None, job, {'held': True})
+    assert 'result' not in record

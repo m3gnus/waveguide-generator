@@ -1894,7 +1894,12 @@ receipt's bytes and meaning are unchanged, so an add-in that knows only schema 1
 sees the status. WGLink's shared protocol owns the contract -- its fields, validator,
 terminal states and every word a user reads (`request_status_text`) -- and WG vendors it
 as `server/cadlink/wglink_protocol.py`; WGLink's `docs/REQUEST-STATUS.md` is the field
-reference.
+reference. `result.mesh` describes the measured triangle count and solved domain
+on a completed solve or a `needsYou(mesh_too_large)` hold. On the latter, the
+isolated mesher carries the domain with the ceiling refusal, preparation persists
+it on the held job, and the status projector emits it without needing a published
+ingest. Unknown domain evidence is omitted. The advertised `meshLimits` come from
+the mesh builder's solved-triangle limit and full-domain warning constants.
 
 - **One owner.** `server/cadlink/joblane/request_status.py` projects each request from its
   receipt, its operation row and the latest job of its chain (`JobStore.latest_cad_job`,

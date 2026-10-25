@@ -98,6 +98,7 @@ def canonical_json(value: Any, profile: str) -> str:
 MESH_SIZING_FEATURE = 'mesh-sizing-v1'
 MESH_SIZING_CAPABILITY = 'meshSizing'
 MESH_DEFAULTS = {
+    'surface_deviation_mm': 0.15,
     'wall_size_mm': 25.0,
     'grading_distance_mm': 100.0,
     'symmetry': 'auto',

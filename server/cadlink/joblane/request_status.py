@@ -41,6 +41,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
+from server.contracts.geometry import SUPPORTED_CUT_PLANES
 from server.cadlink.identity import utc_now
 from server.cadlink.intake.ingest import SOLVED_DOMAIN_BY_PLANES
 from server.cadlink.intake.returns_folder import parse_return_manifest
@@ -209,7 +210,19 @@ def _solved_mesh(job: Mapping[str, Any], ingest: Mapping[str, Any] | None) -> di
     triangles = stats.get("triangle_count") if isinstance(stats, Mapping) else None
     if ingest is None or isinstance(triangles, bool) or not isinstance(triangles, int) or triangles <= 0:
         return None
-    planes = len(imported_domain_planes(ingest))
+    return _mesh_record(triangles, imported_domain_planes(ingest))
+
+
+def _mesh_record(triangles: object, domain_planes: object) -> dict[str, Any] | None:
+    if not isinstance(triangles, int) or isinstance(triangles, bool) or triangles <= 0:
+        return None
+    if not isinstance(domain_planes, (list, tuple)):
+        return None
+    if any(plane not in SUPPORTED_CUT_PLANES for plane in domain_planes):
+        return None
+    if len(set(domain_planes)) != len(domain_planes):
+        return None
+    planes = len(domain_planes)
     if planes not in SOLVED_DOMAIN_BY_PLANES:
         return None
     return {"trianglesSolved": triangles, "domainKind": SOLVED_DOMAIN_BY_PLANES[planes],
@@ -351,9 +364,17 @@ def project_request_status(
         code = effective_reason_code(refusal.get("code"), refusal.get("message")) or None
         options = [{"id": str(option.get("id")), "label": str(option.get("label"))}
                    for option in cad.get("options") or [] if isinstance(option, Mapping)]
-        return {**record, "state": "needsYou",
+        held = {**record, "state": "needsYou",
                 "prompt": {"code": code, "nextStep": cad.get("next_step"), "options": options,
-                           "answerIn": "wg"}}, None
+                           "answerIn": "wg"}}
+        # A ceiling refusal happens before ingest is published. Its measured
+        # count/domain survive the isolated worker in the held job's metadata.
+        measured = cad_of(job).get("mesh_limit_mesh")
+        if code == "mesh_too_large" and isinstance(measured, Mapping):
+            mesh = _mesh_record(measured.get("triangle_count"), measured.get("domain_planes"))
+            if mesh is not None:
+                held["result"] = {**record["job"], "mesh": mesh}
+        return held, None
     failure, incident = _failure(job, cad)
     phase = "solving" if _is_bound(job) else "preparing"
     return {**record, "state": "couldNotFinish", "phase": phase, "failure": failure}, incident

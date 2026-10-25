@@ -11,7 +11,9 @@ from server.design.defaults import default_cad_wall_size_mm
 class MeshTooLarge(RuntimeError):
     """The generated solver artifact exceeds the triangle limit."""
 
-    def __init__(self, count: int, limit: int, *, mesh_sizes: Mapping[str, Any] | None = None) -> None:
+    def __init__(self, count: int, limit: int, *, mesh_sizes: Mapping[str, Any] | None = None,
+                 domain_planes: list[str] | tuple[str, ...] | None = None) -> None:
+        self.domain_planes = list(domain_planes) if domain_planes is not None else None
         self.count = count
         self.limit = limit
         self.mesh_sizes = dict(mesh_sizes) if mesh_sizes is not None else None

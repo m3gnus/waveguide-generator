@@ -143,6 +143,10 @@ def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:
     """What WG advertises. ``solve_delivery`` False: its request consumer is off,
     so it does not claim to read the inbox at all."""
 
+    from server.mesh.builder import (
+        LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES, MAX_SOLVER_MESH_ARTIFACT_TRIANGLES,
+    )
+
     advertised: dict[str, Any] = {
         "schemaVersion": CAPABILITIES_SCHEMA_VERSION,
         "producer": "waveguide-generator",
@@ -156,6 +160,8 @@ def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:
         "automaticDomain": AUTOMATIC_DOMAIN,
         "meshSizing": 1,
         INSTANCE_FIELD: PROCESS_INSTANCE,
+        "meshLimits": {"solvedTriangles": MAX_SOLVER_MESH_ARTIFACT_TRIANGLES,
+                       "fullDomainWarning": LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES},
     }
     # Protocol support is static and independent of Onshape/capture settings.
     # Job admission separately requires an available official BEAT engine.

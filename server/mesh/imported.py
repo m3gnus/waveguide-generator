@@ -20,7 +20,7 @@ import numpy as np
 
 from server.contracts.canonical import canonical_ascii_strict_json
 
-from server.cadlink.wglink_protocol import source_physical_name
+from server.cadlink.wglink_protocol import MESH_DEFAULTS, source_physical_name
 from server.contracts.geometry import (
     CUT_PLANE_AXIS,
     FIRST_SOURCE_TAG as FIRST_SOURCE_TAG,
@@ -261,7 +261,7 @@ IMPORTED_CURVATURE_REFINEMENT_LIMIT = 2.0
 #   until ``measure_surface_deviation`` below. A sizing rule was asked for a
 #   deviation and never once asked what it delivered, which is how a table
 #   describing a discarded variant survived two commits unchallenged.
-IMPORTED_SURFACE_DEVIATION_MM = 0.15
+IMPORTED_SURFACE_DEVIATION_MM = MESH_DEFAULTS["surface_deviation_mm"]
 IMPORTED_SURFACE_DEVIATION_MIN_MM = 0.1
 IMPORTED_SURFACE_DEVIATION_MAX_MM = 0.35
 _SAGITTA_FLAT_CURVATURE = 1.0e-9
@@ -3987,7 +3987,7 @@ def build_imported_mesh(
         if len(triangles) == 0:
             raise ImportedMeshError("meshing: imported mesh contains no triangles")
         _enforce_artifact_triangle_ceiling(
-            int(len(triangles)), mesh_sizes=normalized_sizes,
+            int(len(triangles)), mesh_sizes=normalized_sizes, domain_planes=domain_planes,
             mesh_limit_override=(options or {}).get("mesh_limit_override") is True,
         )
         imported_symmetry = imported_symmetry_from_cut_planes(domain_planes)

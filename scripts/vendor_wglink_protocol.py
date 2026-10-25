@@ -15,16 +15,13 @@ a local clone before that commit is pushed).
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 from pathlib import Path
-import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from server.platform.json_file import write_json_atomic  # noqa: E402
+from scripts.vendor_source import vendor_source  # noqa: E402
 
 SOURCE_PATH = "fusion-addins/WGLink/wglink_protocol.py"
 VENDORED = ROOT / "server/cadlink/wglink_protocol.py"
@@ -37,17 +34,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--commit", default="HEAD", help="the WGLink revision to vendor (default HEAD)")
     parser.add_argument("--note", help="the manifest's note (default: names the commit)")
     args = parser.parse_args(argv)
-    source = args.source_tree.resolve()
-    commit = subprocess.check_output(
-        ["git", "-C", str(source), "rev-parse", "--verify", f"{args.commit}^{{commit}}"], text=True,
-    ).strip()
-    data = subprocess.check_output(["git", "-C", str(source), "show", f"{commit}:{SOURCE_PATH}"])
-    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    manifest.update(commit=commit, path=SOURCE_PATH, sha256=hashlib.sha256(data).hexdigest())
-    manifest["note"] = args.note or f"Vendored byte for byte from WGLink {commit[:7]}."
-    VENDORED.write_bytes(data)
-    write_json_atomic(MANIFEST, manifest)
-    print(f"Vendored {SOURCE_PATH} at {commit} ({manifest['sha256']}).")
+    manifest = vendor_source(args.source_tree, args.commit, SOURCE_PATH, VENDORED, MANIFEST, note=args.note)
+    print(f"Vendored {SOURCE_PATH} at {manifest['commit']} ({manifest['sha256']}).")
     return 0
 
 

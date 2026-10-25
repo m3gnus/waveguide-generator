@@ -34,6 +34,7 @@ def test_defaults_match_the_shared_solve_defaults():
     cad = solve_defaults()['cad']
     mesh = cad['mesh']
     assert MESH_DEFAULTS == {
+        'surface_deviation_mm': .15,
         'wall_size_mm': mesh['rigid_size_mm'],
         'grading_distance_mm': mesh['transition_mm'],
         'symmetry': cad['preparation_symmetry_mode'],

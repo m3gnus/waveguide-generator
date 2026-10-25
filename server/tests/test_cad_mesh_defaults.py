@@ -329,6 +329,20 @@ def test_existing_automatic_nowaistbanding_setup_prepares_and_solves_below_ceili
     summary = harness.prepare(ingest=ingest_bundle)
     if fine_walls:
         assert summary["reason"] == "mesh_too_large", summary
+        # The isolated mesher's exact count and solved domain reach status,
+        # even though the ceiling stopped ingestion before publication.
+        from server.cadlink.joblane.request_status import project_request_status
+        from server.jobs.cad_preparation import job_cad_state
+
+        job = harness.jobs_store.latest_cad_job("cmd-1")
+        status, _ = project_request_status(
+            {"commandId": "cmd-1", "outcome": "accepted", "kind": "prepare_and_solve"},
+            None, job, job_cad_state(job),
+        )
+        assert status["state"] == "needsYou"
+        assert status["result"]["mesh"]["trianglesSolved"] > 22000
+        assert status["result"]["mesh"]["domainKind"] == "quarter"
+        assert status["result"]["mesh"]["solvedFraction"] == .25
         message = summary["message"]
         assert message.startswith("This model meshes to "), message
         assert "WG's limit is 22,000" in message

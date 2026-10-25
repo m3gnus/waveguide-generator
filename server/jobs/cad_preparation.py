@@ -737,6 +737,8 @@ def prepare_job_sync(
         except StaleAttempt as exc:
             raise _Fenced() from exc
         except MeshTooLarge as exc:
+            if exc.domain_planes is not None:
+                run.cad["mesh_limit_mesh"] = {"triangle_count": exc.count, "domain_planes": exc.domain_planes}
             return run.refuse(MESH_TOO_LARGE_CODE, exc.message())
         except SolverMemoryTooLarge as exc:
             # Also after Solve anyway: only a coarser mesh helps, so this ends

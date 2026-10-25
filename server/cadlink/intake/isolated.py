@@ -83,6 +83,7 @@ def _reraise_typed(exc: ChildRefusal) -> None:
     if exc.error_type == "MeshTooLarge":
         raise MeshTooLarge(
             exc.details["count"], exc.details["limit"], mesh_sizes=exc.details.get("mesh_sizes"),
+            domain_planes=exc.details.get("domain_planes"),
         ) from exc
     if exc.error_type == "SolverMemoryTooLarge":
         raise SolverMemoryTooLarge(exc.detail) from exc
