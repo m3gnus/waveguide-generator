@@ -49,6 +49,7 @@ def test_capabilities_advertise_source_identity_without_changing_delivery(
         "producer": "waveguide-generator",
         "solveCommandDelivery": 4,
         "solveAcknowledgement": 1,
+        "requestStatus": 1,
         "fusionRequestDelivery": 3,
         "sourceIdentity": 1,
         "documentUp": 1,

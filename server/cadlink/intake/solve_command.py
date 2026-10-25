@@ -37,7 +37,6 @@ import os
 from pathlib import Path
 import re
 import stat
-import tempfile
 import threading
 import time
 from typing import TYPE_CHECKING, Any, Callable, Mapping
@@ -55,7 +54,13 @@ from server.cadlink.operations import (
     prepare_and_solve_request,
     request_digest,
 )
-from server.cadlink.wglink_protocol import SOLVE_COMMAND_SCHEMA_VERSION, WG_REQUEST_SCHEMA_VERSION
+from server.cadlink.wglink_protocol import (
+    REQUEST_STATUS_SUFFIX,
+    SOLVE_COMMAND_SCHEMA_VERSION,
+    WG_REQUEST_SCHEMA_VERSION,
+    request_status_terminal,
+)
+from server.platform.json_file import write_json_atomic
 from server.platform.private_paths import ensure_private_directory
 
 if TYPE_CHECKING:
@@ -165,6 +170,10 @@ ACK_REFUSED = "refused"
 # folder never holds more than ACK_MAX_FILES (oldest go first).
 ACK_RETENTION_SECONDS = 24 * 3600
 ACK_MAX_FILES = 500
+# A request's status file (``request_status``) is kept this long after its last
+# write once the request is finished, and never while it is under way; its
+# receipt is kept with it.
+REQUEST_STATUS_RETENTION_SECONDS = 14 * 24 * 3600
 # An acknowledgement that cannot be written keeps its claim for this many passes
 # (about half a minute at the loop's cadence). Then WG gives it up, once and
 # loudly, and consumes the request: the operation was made durable first, and a
@@ -806,57 +815,27 @@ def write_acknowledgement(
         target = directory / f"{command_id}.json"
         if only_if_missing and target.exists():
             return True
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{command_id}.", suffix=".tmp", dir=directory
-        )
-    except OSError as exc:
-        logger.warning("Could not stage the acknowledgement of solve command %s: %s", command_id, exc)
-        return False
-    temporary = Path(temporary_name)
-    replaced = False
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(payload, stream, indent=2, sort_keys=True)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        for attempt in range(_HELD_ATTEMPTS):
-            try:
-                os.replace(temporary, target)
-                replaced = True
-                _sync_directory(directory)
-                return True
-            except PermissionError:
-                if attempt + 1 == _HELD_ATTEMPTS:
-                    raise
-                time.sleep(_HELD_RETRY_SECONDS)
+        # Sorted keys: the receipt's bytes are unchanged since schema 1.
+        publish_record(target, dict(sorted(payload.items())))
     except OSError as exc:
         logger.warning("Could not write the acknowledgement of solve command %s: %s", command_id, exc)
         return False
-    finally:
-        if not replaced:
-            try:
-                temporary.unlink(missing_ok=True)
-            except OSError:
-                logger.debug("Could not remove the staged acknowledgement %s.", temporary.name)
-    return False  # pragma: no cover - the loop always returns or raises
+    return True
 
 
-def _sync_directory(directory: Path) -> None:
-    """Flush a folder's entries to disk (POSIX), so a rename outlives a power cut."""
+def publish_record(target: Path, payload: Mapping[str, Any]) -> None:
+    """Replace one record in the acknowledgement folder: the receipt and its status.
 
-    if os.name == "nt":
-        return
-    try:
-        descriptor = os.open(directory, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(descriptor)
-    except OSError:
-        pass
-    finally:
-        os.close(descriptor)
+    Atomic (``write_json_atomic``), retried briefly while a reader holds the
+    target on Windows, and the folder is flushed after the replace on POSIX.
+    Raises ``OSError`` when the record could not be published.
+    """
+
+    write_json_atomic(
+        target, dict(payload),
+        replace_attempts=_HELD_ATTEMPTS, retry_seconds=_HELD_RETRY_SECONDS,
+        durable_directory=True,
+    )
 
 
 def _ack_written(claim_name: str, written: bool | None) -> bool:
@@ -892,36 +871,70 @@ def prune_acknowledgements(
     now: float | None = None,
     retention_seconds: float = ACK_RETENTION_SECONDS,
     max_files: int = ACK_MAX_FILES,
+    status_retention_seconds: float = REQUEST_STATUS_RETENTION_SECONDS,
 ) -> int:
     """Delete acknowledgements past their retention, then the oldest above the cap.
 
-    Returns how many files were removed. A file that cannot be deleted now
-    (held by a reader on Windows) is left for the next prune.
+    A request's receipt and its status file (``<id>.status.json``) are one
+    entry, kept or deleted together. While the status says the request is not
+    finished (``request_status_terminal``) neither is ever deleted; a finished
+    one is kept ``status_retention_seconds`` from its last write. A receipt
+    without a status, and a stale staging file, keep the receipt rule,
+    ``retention_seconds``. At most ``max_files`` entries remain, the oldest
+    finished ones going first. Returns how many files were removed. A file that
+    cannot be deleted now (held by a reader on Windows) is left for the next prune.
     """
 
     directory = Path(data_dir) / IPC_SUBDIRECTORY / SOLVE_ACKS_DIRECTORY
     now = time.time() if now is None else now
+    entries: dict[str, list[tuple[float, Path]]] = {}
     try:
-        found = []
         for entry in directory.iterdir():
             try:
-                if entry.is_file() and not entry.is_symlink():
-                    found.append((entry.stat().st_mtime, entry))
+                if not entry.is_file() or entry.is_symlink():
+                    continue
+                modified = entry.stat().st_mtime
             except OSError:
                 continue
+            name = entry.name
+            if name.startswith("."):
+                key = name  # a staging file is an entry of its own
+            elif name.endswith(REQUEST_STATUS_SUFFIX):
+                key = name[: -len(REQUEST_STATUS_SUFFIX)]
+            else:
+                key = name.removesuffix(".json")
+            entries.setdefault(key, []).append((modified, entry))
     except OSError:
         return 0
-    found.sort(key=lambda item: item[0])
-    keep_from = max(0, len(found) - max_files)
+    ordered = sorted(entries.values(), key=lambda files: max(item[0] for item in files))
+    excess = max(0, len(ordered) - max_files)
     removed = 0
-    for index, (modified, entry) in enumerate(found):
-        if index < keep_from or now - modified > retention_seconds:
+    for files in ordered:
+        modified = max(item[0] for item in files)
+        status = next((path for _, path in files if path.name.endswith(REQUEST_STATUS_SUFFIX)), None)
+        retention = status_retention_seconds if status is not None else retention_seconds
+        if excess <= 0 and now - modified <= retention:
+            continue
+        if status is not None and not _status_finished(status):
+            continue  # a request still under way keeps its receipt and its status
+        excess -= 1
+        for _, path in files:
             try:
-                entry.unlink()
+                path.unlink()
                 removed += 1
             except OSError as exc:
-                logger.debug("Could not prune the acknowledgement %s: %s", entry.name, exc)
+                logger.debug("Could not prune the acknowledgement %s: %s", path.name, exc)
     return removed
+
+
+def _status_finished(path: Path) -> bool:
+    """Whether a status file says its request is finished; an unreadable one is."""
+
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return True
+    return not isinstance(record, Mapping) or request_status_terminal(record)
 
 
 _last_ack_prune = 0.0

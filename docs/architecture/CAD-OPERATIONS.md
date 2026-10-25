@@ -45,7 +45,8 @@ and exact-id return waiter on reconnect.
   consumes solve requests, and owns stored frame/domain readings and receipt routers.
 - `interpretation/` contains pure frame inference, domain decisions and cut recovery.
   Its functions accept no store or preparation context and import only leaf contracts.
-- `joblane/` owns setup revisions, preparation inputs, job admission and delivery status.
+- `joblane/` owns setup revisions, preparation inputs, job admission, delivery status and
+  the request status files Fusion follows (`request_status.py`).
 - `fusion/` owns the WGLink file channel: delivery, heartbeat status, outcomes,
   return requests, recovery notices and add-in pin reconciliation.
 
@@ -1831,11 +1832,57 @@ before it deletes the request. It changes nothing about what is accepted or refu
   by up to about 30 passes while its snapshot is retained. The add-in must not wait for
   ever: after about two minutes with its request gone and no file, it says that WG took the
   request but has not confirmed it, never "refused" and never "solving".
-- Files are kept for 24 hours and at most 500; the delivery pass prunes the oldest,
-  and stale staging files, at most once a minute.
+- A receipt is kept for 24 hours, or with its request status file (below) when it has
+  one; the folder holds at most 500 requests. The delivery pass prunes the oldest, and
+  stale staging files, at most once a minute.
 - WG advertises `solveAcknowledgement: 1` in `wg-capabilities.json` while its inbox
   consumer runs. An add-in reads the acknowledgement only when it sees that; against a WG
   without it the file never exists, and the add-in may say only that WG took the request.
+
+**Request status file.** The receipt says only that WG took the request. What became of
+it afterwards -- preparing, a question for the user, queued, solving, solved, could not
+finish, cancelled -- is in a second file beside it,
+`.wg-solve-acks/<commandId>.status.json` (contract `wg-request-status`, version 1). The
+receipt's bytes and meaning are unchanged, so an add-in that knows only schema 1 never
+sees the status. WGLink's shared protocol owns the contract -- its fields, validator,
+terminal states and every word a user reads (`request_status_text`) -- and WG vendors it
+as `server/cadlink/wglink_protocol.py`; WGLink's `docs/REQUEST-STATUS.md` is the field
+reference.
+
+- **One owner.** `server/cadlink/joblane/request_status.py` projects each request from its
+  receipt, its operation row and the latest job of its chain (`JobStore.latest_cad_job`,
+  through Solve again) read through `job_cad_state`. Holds, their next step and options
+  come from `operations.hold_details` through that read model, so the status has no
+  vocabulary of its own: `needsYou` is exactly `operations.user_hold`, which reads
+  `held` rows and the `error` rows older releases stored for the same choices. WG's own
+  preparation failures (`INTERNAL_FAILURE_CODES`) and a solve that ends in an error read
+  `couldNotFinish` with `failure.recorded` and no reason text; failures the user can act
+  on carry WG's own sentence and next step. A stopped job reads `cancelled` (`stopped`, or
+  `replaced` when a newer request superseded its hold); a request whose jobs were
+  dismissed reads `cancelled` (`dismissed`), and one already finished keeps its state when
+  its run is removed later.
+- **Written from the delivery loop, by events.** After each delivery pass, in a step of its
+  own (a status failure never holds up a delivery), the publisher follows the jobs event
+  stream (`JobStore.replay_events`) and re-projects only the requests whose jobs changed.
+  It learns new receipts from the folder's names when the folder changes. At WG start, and
+  when its cursor falls out of the retained events, it reconciles every request; every
+  30 seconds it re-projects the requests still under way, for a change no event announces.
+  A file is written only when the record changed (ignoring `seq` and `updatedAt`), with
+  `seq` one higher; progress while solving at most every 2 seconds, a change of state at
+  once. A write that fails is tried again on the next pass.
+- **Atomic, like the receipt.** Both files go through one writer
+  (`solve_command.publish_record` over `server.platform.json_file.write_json_atomic`):
+  staged, flushed, `os.replace`d with the Windows `PermissionError` retry, and the folder
+  flushed on POSIX.
+- **Developers, not users.** When a solve of a Fusion request ends in an error, the first
+  time its status reads `couldNotFinish` the publisher records a `cad-solve-failure`
+  incident (`server.platform.incidents.record_incident`) with the job's own error. Failed
+  preparations were recorded where they were diagnosed and are not recorded again.
+- **Retention.** A receipt and its status are kept and pruned together. While the status is
+  not terminal neither is ever deleted; a finished request is kept 14 days from its last
+  write. A receipt without a status keeps the receipt's 24-hour rule.
+- WG advertises `requestStatus: 1` beside `solveAcknowledgement` and drops it with it when
+  the request consumer is off.
 
 **Crash and power-cut positions.** If WG stops between any two of the steps above, or
 before or during preparation, the next start still gives each request exactly one

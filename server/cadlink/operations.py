@@ -191,8 +191,13 @@ ATTENTION_ACTION = "action"
 ATTENTION_FAILED = "failed"
 
 
-def _effective_code(code: Any, message: Any) -> str:
-    """Legacy rows stored the mesh ceiling as ``preparation_failed``."""
+def effective_reason_code(code: Any, message: Any) -> str:
+    """The reason a stored refusal stands for.
+
+    Preparation stores the triangle ceiling as ``mesh_too_large``; rows from
+    before that stored it as ``preparation_failed`` with the ceiling's message,
+    and this is the one reader that still recognises them (by that message).
+    """
 
     text = str(code or "")
     if text == "preparation_failed" and str(message or "").startswith(_MESH_CEILING_PREFIX):
@@ -203,7 +208,7 @@ def _effective_code(code: Any, message: Any) -> str:
 def is_calm_failure(code: Any, message: Any = "") -> bool:
     """Whether a refusal is a failed preparation rather than a user choice."""
 
-    return _effective_code(code, message) in CALM_FAILURE_CODES
+    return effective_reason_code(code, message) in CALM_FAILURE_CODES
 
 
 def reason_attention(state: Any, code: Any, message: Any = "") -> str | None:
@@ -211,7 +216,7 @@ def reason_attention(state: Any, code: Any, message: Any = "") -> str | None:
 
     if state not in {NEEDS_USER_INPUT, REJECTED} or not code:
         return None
-    effective = _effective_code(code, message)
+    effective = effective_reason_code(code, message)
     if effective == REASON_UPDATE_RESTART_PENDING:
         return None  # Queued again by itself once no restart is pending.
     if effective in INTERNAL_FAILURE_CODES:
@@ -339,7 +344,7 @@ MESH_CEILING_NEXT_STEP = "Change the mesh resolution in Sources & Mesh… in Fus
 def hold_details(code: str, message: str) -> dict[str, Any]:
     """One vocabulary for persisted holds and historical request readers."""
 
-    choice_code = _effective_code(code, message)
+    choice_code = effective_reason_code(code, message)
     action, label, next_step = {
         "mesh_too_large": ("solve_anyway", "Solve anyway", MESH_CEILING_NEXT_STEP + " You can also solve anyway."),
         "setup_required": ("review", "Review settings", "Review this model's solve settings, then solve."),

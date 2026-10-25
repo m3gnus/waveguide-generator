@@ -1489,3 +1489,283 @@ def canonical_domain_planes(planes: Sequence[Any]) -> tuple[str, ...]:
 
 def validate_domain_record(value: object, *, automatic_feature: bool = False) -> tuple[str, ...]:
     return _addin_validate_domain_record(value, automatic_feature=automatic_feature)
+
+
+# -- WG request status (contract "wg-request-status", version 1) --------------
+#
+# WG writes ``<ipc>/.wg-solve-acks/<requestId>.status.json`` next to the
+# schema-1 receipt ``<requestId>.json`` and replaces it atomically as the
+# request moves on. The receipt still means only "delivery accepted or refused";
+# readers that know only the receipt never see this file. WG advertises
+# ``requestStatus: 1`` in ``wg-capabilities.json`` while it writes it. The
+# record carries no reason text, identifier in text or traceback: the words
+# a user reads come from ``request_status_text`` here, the one owner for both
+# sides. See docs/REQUEST-STATUS.md.
+
+REQUEST_STATUS_CONTRACT = "wg-request-status"
+REQUEST_STATUS_SCHEMA_VERSION = 1
+REQUEST_STATUS_CAPABILITY = "requestStatus"
+REQUEST_STATUS_SUFFIX = ".status.json"
+REQUEST_STATUS_STATES = (
+    "accepted", "preparing", "needsYou", "queued", "solving",
+    "solved", "couldNotFinish", "cancelled", "refused",
+)
+#: Nothing more happens to a request in these states unless someone acts
+#: (``accepted`` is the end of a Send). A request in any other state, or in a
+#: state this reader does not know, is still under way.
+REQUEST_STATUS_TERMINAL = frozenset(
+    {"accepted", "solved", "couldNotFinish", "cancelled", "refused"}
+)
+REQUEST_STATUS_PHASES = ("preparing", "solving")
+REQUEST_STATUS_CANCEL_REASONS = ("stopped", "replaced", "dismissed")
+#: ``fullModel``: symmetry could not be used, the whole model was solved;
+#: ``cutModel``: the model was solved as cut in CAD, no further symmetry;
+#: ``healed``: WG repaired the mesh before solving.
+REQUEST_STATUS_NOTICES = ("fullModel", "cutModel", "healed")
+#: The prompt code whose remedy is a Fusion action (Sources & Mesh...).
+MESH_TOO_LARGE_CODE = "mesh_too_large"
+_STATUS_KINDS = ("prepare_and_solve", "receive_snapshot")
+_STATUS_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+_STATUS_TEXT_LIMIT = 1000
+
+
+def _status_int(value: object, *, minimum: int = 0) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        return None
+    return value
+
+
+def _status_text(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()[:_STATUS_TEXT_LIMIT]
+
+
+def _status_choice(value: object, choices: Sequence[str]) -> str | None:
+    return value if isinstance(value, str) and value in choices else None
+
+
+def _status_progress(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    fraction = value.get("fraction")
+    if isinstance(fraction, bool) or not isinstance(fraction, (int, float)):
+        return None
+    if not math.isfinite(fraction) or not 0.0 <= fraction <= 1.0:
+        return None
+    progress: dict[str, Any] = {"fraction": float(fraction)}
+    frequency = value.get("frequency")
+    if isinstance(frequency, Mapping):
+        done = _status_int(frequency.get("done"))
+        total = _status_int(frequency.get("total"), minimum=1)
+        if done is not None and total is not None and done <= total:
+            progress["frequency"] = {"done": done, "total": total}
+            channel = frequency.get("channel")
+            if isinstance(channel, Mapping):
+                index = _status_int(channel.get("index"), minimum=1)
+                count = _status_int(channel.get("count"), minimum=1)
+                if index is not None and count is not None and index <= count:
+                    progress["frequency"]["channel"] = {"index": index, "count": count}
+    return progress
+
+
+def _status_prompt(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    options = []
+    for option in value.get("options") or []:
+        if isinstance(option, Mapping):
+            option_id, label = _status_text(option.get("id")), _status_text(option.get("label"))
+            if option_id and label:
+                options.append({"id": option_id, "label": label})
+    return {
+        "code": _status_text(value.get("code")),
+        "nextStep": _status_text(value.get("nextStep")),
+        "options": options,
+        "answerIn": "wg",
+    }
+
+
+def _status_job(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping) or not _status_text(value.get("jobId")):
+        return None
+    return {"jobId": _status_text(value.get("jobId")),
+            "runNumber": _status_int(value.get("runNumber"), minimum=1)}
+
+
+def _status_mesh(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    triangles = _status_int(value.get("trianglesSolved"), minimum=1)
+    fraction = value.get("solvedFraction")
+    if triangles is None or isinstance(fraction, bool) or not isinstance(fraction, (int, float)):
+        return None
+    if not math.isfinite(fraction) or not 0.0 < fraction <= 1.0:
+        return None
+    return {"trianglesSolved": triangles, "solvedFraction": float(fraction),
+            "domainKind": _status_choice(value.get("domainKind"), _addin_DOMAIN_KINDS)}
+
+
+def _status_failure(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return {"recorded": value.get("recorded") is True,
+            "message": _status_text(value.get("message")),
+            "nextStep": _status_text(value.get("nextStep"))}
+
+
+def validate_request_status(value: object, *, request_id: str | None = None) -> dict[str, Any] | None:
+    """A status record as its reader may use it, or None when it is not one.
+
+    None: not a mapping, another contract or version, an id that is not a
+    plain request id, another request's ids, or no state. Unknown fields are
+    dropped and malformed optional fields read as absent, so a newer WG stays
+    readable. A state this reader does not know is kept as it is:
+    ``request_status_text`` says to open WG for it, and it reads as under way.
+    """
+
+    if not isinstance(value, Mapping) or value.get("contract") != REQUEST_STATUS_CONTRACT:
+        return None
+    if _status_int(value.get("schemaVersion"), minimum=1) != REQUEST_STATUS_SCHEMA_VERSION:
+        return None
+    found = value.get("requestId")
+    if not isinstance(found, str) or not _STATUS_ID.fullmatch(found):
+        return None
+    if request_id is not None and found != request_id:
+        return None
+    if value.get("operationId", found) != found:
+        return None
+    state = _status_text(value.get("state"))
+    seq = _status_int(value.get("seq"))
+    if state is None or seq is None:
+        return None
+    record: dict[str, Any] = {
+        "contract": REQUEST_STATUS_CONTRACT,
+        "schemaVersion": REQUEST_STATUS_SCHEMA_VERSION,
+        "seq": seq,
+        "requestId": found,
+        "operationId": found,
+        "kind": _status_choice(value.get("kind"), _STATUS_KINDS),
+        "manifestSha256": _status_text(value.get("manifestSha256")),
+        "documentName": _status_text(value.get("documentName")),
+        "updatedAt": _status_text(value.get("updatedAt")),
+        "state": state,
+    }
+    optional = {
+        "phase": _status_choice(value.get("phase"), REQUEST_STATUS_PHASES),
+        "progress": _status_progress(value.get("progress")),
+        "prompt": _status_prompt(value.get("prompt")),
+        "cancelReason": _status_choice(value.get("cancelReason"), REQUEST_STATUS_CANCEL_REASONS),
+        "job": _status_job(value.get("job")),
+        "notice": _status_choice(value.get("notice"), REQUEST_STATUS_NOTICES),
+        "failure": _status_failure(value.get("failure")),
+    }
+    result = value.get("result")
+    solved = _status_job(result)
+    if isinstance(result, Mapping) and solved is not None:
+        mesh = _status_mesh(result.get("mesh"))
+        optional["result"] = dict(solved, **({"mesh": mesh} if mesh is not None else {}))
+    record.update({key: item for key, item in optional.items() if item is not None})
+    return record
+
+
+def request_status_terminal(record: Mapping[str, Any]) -> bool:
+    """Whether nothing more happens to the request unless someone acts."""
+
+    return record.get("state") in REQUEST_STATUS_TERMINAL
+
+
+#: Words no user-visible text may contain (matched case-insensitively, as
+#: whole words): transport, storage and pipeline vocabulary, and raw role
+#: constants. Tests in both repositories hold every user string to it.
+USER_TEXT_FORBIDDEN_TERMS = (
+    "bundle", "wgreturn", "cad return", "manifest", "schema", "request id",
+    "return id", "inbox", "ipc", "acknowledgement", "selector", "entity_token",
+    "traceback", "main thread", "gate", "ingest", "operation", "lineage",
+    "finding", "PASSIVE_CARDIOID", "UTF-8", "refused", "failed", "error",
+)
+
+
+def user_text_violations(text: str) -> list[str]:
+    """The forbidden terms (``USER_TEXT_FORBIDDEN_TERMS``) a user string contains."""
+
+    lowered = str(text).lower()
+    return [term for term in USER_TEXT_FORBIDDEN_TERMS
+            if re.search(r"(?<![a-z0-9_])" + re.escape(term.lower()) + r"(?![a-z0-9_])", lowered)]
+
+
+_OPEN_WG = {"id": "openWg", "label": "Open Waveguide Generator"}
+_OPEN_SOURCES_MESH = {"id": "openSourcesMesh", "label": "Open Sources & Mesh…"}
+_SHOW_RESULTS = {"id": "showResults", "label": "Show results in WG"}
+_NOTICE_TEXT = {
+    "fullModel": "Solved the whole model; WG could not use symmetry for this one.",
+    "cutModel": "Solved the model as cut in CAD; WG could not use any further symmetry for this one.",
+    "healed": "Solved after WG repaired the mesh for this model.",
+}
+
+
+def request_status_text(record: Mapping[str, Any]) -> dict[str, Any]:
+    """What a user reads for one status record: ``{headline, detail, options, actions}``.
+
+    ``detail`` is one more line or None. ``options`` are the labels of the
+    choices WG asks about (``needsYou``), answered in WG. ``actions`` are
+    ``{id, label}`` for the buttons beside the text (``openWg``,
+    ``openSourcesMesh``, ``showResults``). No identifier, path, reason code or
+    exception text is ever part of it.
+    """
+
+    document = _status_text(record.get("documentName"))
+    name, inner = document or "This model", document or "this model"
+    state = record.get("state")
+    detail: str | None = None
+    options: list[str] = []
+    actions: list[dict[str, str]] = [dict(_OPEN_WG)]
+    if state == "accepted" and record.get("kind") == "receive_snapshot":
+        headline = f"{name} is open in Waveguide Generator."
+    elif state in {"accepted", "preparing"}:
+        headline = f"{name} · Preparing the simulation…"
+    elif state == "needsYou":
+        prompt = record.get("prompt") if isinstance(record.get("prompt"), Mapping) else {}
+        headline = f"{name} · Waveguide Generator needs you."
+        detail = _status_text(prompt.get("nextStep"))
+        options = [str(option["label"]) for option in prompt.get("options") or []
+                   if isinstance(option, Mapping) and _status_text(option.get("label"))]
+        if prompt.get("code") == MESH_TOO_LARGE_CODE:
+            actions.append(dict(_OPEN_SOURCES_MESH))
+    elif state == "queued":
+        headline = f"{name} · Waiting for the solver to start."
+    elif state == "solving":
+        progress = record.get("progress") if isinstance(record.get("progress"), Mapping) else {}
+        frequency = progress.get("frequency") if isinstance(progress.get("frequency"), Mapping) else None
+        headline = f"{name} · Solving"
+        if frequency is not None:
+            headline += f" · {frequency['done']} of {frequency['total']} frequencies"
+        else:
+            headline += "…"
+    elif state == "solved":
+        result = record.get("result") if isinstance(record.get("result"), Mapping) else {}
+        run = _status_int(result.get("runNumber"), minimum=1)
+        headline = f"{name} · Solved" + (f" (run {run})." if run is not None else ".")
+        detail = _NOTICE_TEXT.get(str(record.get("notice")))
+        actions = [dict(_SHOW_RESULTS)]
+    elif state == "couldNotFinish":
+        failure = record.get("failure") if isinstance(record.get("failure"), Mapping) else {}
+        message = None if failure.get("recorded") else _status_text(failure.get("message"))
+        if message is not None:
+            headline, detail = message, _status_text(failure.get("nextStep"))
+        elif record.get("phase") == "solving":
+            headline = (f"Waveguide Generator could not finish solving {inner}. "
+                        "This has been recorded for the developers.")
+        else:
+            headline = (f"Waveguide Generator could not prepare {inner}. "
+                        "This has been recorded for the developers.")
+    elif state == "cancelled":
+        headline = {
+            "replaced": f"{name} · Replaced by a newer solve.",
+            "dismissed": f"{name} · Dismissed in Waveguide Generator.",
+        }.get(str(record.get("cancelReason")), f"{name} · Stopped in Waveguide Generator.")
+    elif state == "refused":
+        headline = f"Waveguide Generator could not take {inner}."
+    else:
+        headline = f"{name} · Open Waveguide Generator to see this request."
+    return {"headline": headline, "detail": detail, "options": options, "actions": actions}

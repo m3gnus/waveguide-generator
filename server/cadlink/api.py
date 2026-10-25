@@ -105,6 +105,7 @@ from server.cadlink.joblane.preparation import (
     settle_received_snapshots,
     submission_key,
 )
+from server.cadlink.joblane.request_status import RequestStatusPublisher
 from server.cadlink.joblane.job_shims import accept_operation_solve, operation_detail, run_delivery_pass, sweep_pending_solves
 from server.cadlink.joblane.project_setup import SOLVER_SELECTION
 from server.cadlink.joblane.setup import setup_content, setup_digest, validate_setup
@@ -2094,6 +2095,27 @@ def delivery_consumer_enabled(environ: Mapping[str, str] | None = None) -> bool:
     return source.get(CAD_DELIVERY_ENV, "") != "0"
 
 
+async def _publish_request_status(state: Any, reported: str | None) -> str | None:
+    """Bring every Fusion request's status file up to date (``RequestStatusPublisher``).
+
+    Returns the error last reported, so each distinct failure is logged once.
+    """
+
+    try:
+        publisher = getattr(state, "cad_request_status", None)
+        if publisher is None:
+            publisher = RequestStatusPublisher(Path(state.data_dir), state.cadlink_store)
+            state.cad_request_status = publisher
+        job_store = getattr(getattr(state, "jobs_runtime", None), "store", None)
+        await asyncio.to_thread(publisher.tick, job_store)
+    except Exception as exc:  # noqa: BLE001 - the next pass tries again
+        error = f"{type(exc).__name__}: {exc}"
+        if error != reported:
+            logger.warning("Publishing CAD request status failed.", exc_info=True)
+        return error
+    return None
+
+
 def _deliver_solve_commands(application: FastAPI):
     async def start_cad_delivery() -> None:
         # The backend is the one consumer of Fusion's solve commands
@@ -2131,6 +2153,7 @@ def _deliver_solve_commands(application: FastAPI):
             notes: list[str | None] = []
             addin_signature: tuple[str | None, bool] | None = None
             reported_addin_errors: set[str] = set()
+            status_error: str | None = None
             status.started()
             try:
                 while True:
@@ -2207,6 +2230,14 @@ def _deliver_solve_commands(application: FastAPI):
                             # Each distinct failure once, not every second.
                             logger.warning("Delivering CAD solve commands failed.", exc_info=True)
                             reported = error
+                    finally:
+                        pass_active[0] = False
+                    # Its own step: a status that cannot be written never
+                    # holds up a delivery, and a failed pass still reports.
+                    # Counted as the loop's work, like the pass.
+                    pass_active[0] = True
+                    try:
+                        status_error = await _publish_request_status(state, status_error)
                     finally:
                         pass_active[0] = False
                     # Backs off to half a minute while a failure persists.

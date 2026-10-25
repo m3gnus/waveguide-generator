@@ -41,6 +41,8 @@ from server.cadlink.ipc import IPC_SUBDIRECTORY, ipc_folder
 from server.cadlink.build_flags import fem_regions_enabled
 from server.cadlink.wglink_protocol import (
     FUSION_REQUEST_DELIVERY_VERSION,
+    REQUEST_STATUS_CAPABILITY,
+    REQUEST_STATUS_SCHEMA_VERSION,
     WG_REQUEST_SCHEMA_VERSION,
 )
 
@@ -130,6 +132,8 @@ def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:
         "producer": "waveguide-generator",
         "solveCommandDelivery": SOLVE_COMMAND_DELIVERY,
         "solveAcknowledgement": SOLVE_ACKNOWLEDGEMENT,
+        # Each request's status file next to its receipt (request_status.py).
+        REQUEST_STATUS_CAPABILITY: REQUEST_STATUS_SCHEMA_VERSION,
         "fusionRequestDelivery": FUSION_REQUEST_DELIVERY,
         "sourceIdentity": SOURCE_IDENTITY,
         "documentUp": DOCUMENT_UP,
@@ -148,6 +152,8 @@ def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:
     if not solve_delivery:
         del advertised["solveCommandDelivery"]
         del advertised["solveAcknowledgement"]
+        # The delivery loop that writes status files is off too.
+        del advertised[REQUEST_STATUS_CAPABILITY]
     return advertised
 
 
