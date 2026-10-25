@@ -44,7 +44,7 @@ from typing import TYPE_CHECKING, Any
 from server.contracts.geometry import SUPPORTED_CUT_PLANES
 from server.cadlink.identity import utc_now
 from server.cadlink.intake.ingest import SOLVED_DOMAIN_BY_PLANES
-from server.cadlink.intake.returns_folder import parse_return_manifest
+from server.cadlink.intake.returns_folder import return_document_name
 from server.cadlink.intake.solve_command import (
     ACK_REFUSED,
     ACK_SCHEMA_VERSION,
@@ -175,11 +175,8 @@ def bundle_document_name(workspace_root: Path | None, operation: Mapping[str, An
             root = workspace_root.resolve()
             folder = (root / bundle_path).resolve()
             _strictly_inside(folder, root, "bundlePath")
-            document = parse_return_manifest(folder / "wgreturn.json").get("document")
-            name = document.get("name") if isinstance(document, Mapping) else None
-            if isinstance(name, str) and name.strip():
-                return name.strip()
-        except (OSError, ValueError, RecursionError):
+            return return_document_name(folder)
+        except (OSError, ValueError):
             pass
     return parts[1].removesuffix(".wgreturn").strip() or None
 

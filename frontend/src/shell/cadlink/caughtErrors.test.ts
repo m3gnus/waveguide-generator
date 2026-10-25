@@ -13,6 +13,14 @@ describe('reportCadAutomationError', () => {
     expect(report).not.toHaveBeenCalled();
   });
 
+  it('never reports again a failure the server classified and recorded, whatever its status', () => {
+    const report = vi.spyOn(diagnostics, 'reportClientError').mockResolvedValue(true);
+    const recorded = new CadLinkApiError('Waveguide Generator could not prepare X. This has been recorded for the developers.',
+      [], 500, 'preparation_failed', null, null, 'internal', 'worker exited 9', true);
+    expect(reportCadAutomationError('prepare', recorded)).toBe(false);
+    expect(report).not.toHaveBeenCalled();
+  });
+
   it('reports server failures, transport failures and interface throws with the operation', () => {
     const report = vi.spyOn(diagnostics, 'reportClientError').mockResolvedValue(true);
     expect(reportCadAutomationError('prepare', new CadLinkApiError('Internal', [], 500))).toBe(true);

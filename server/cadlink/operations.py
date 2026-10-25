@@ -131,6 +131,11 @@ REASON_CODES: Mapping[str, str] = {
     # No WGLink folder is selected, so the return cannot be read; choosing it
     # and trying again works.
     "wglink_folder_unset": NEEDS_USER_INPUT,
+    # The return was written for a newer Waveguide Generator: updating WG is
+    # the remedy, never sending the same return again.
+    "return_unsupported": REJECTED,
+    # The disk WG writes the mesh to is full: freeing space and trying again works.
+    "disk_full": NEEDS_USER_INPUT,
     "interrupted": NEEDS_USER_INPUT,
     # Held by an approved update restart; re-queued once the latch is down.
     REASON_UPDATE_RESTART_PENDING: NEEDS_USER_INPUT,
@@ -165,6 +170,7 @@ INTERNAL_FAILURE_CODES = frozenset(
 USER_ACTION_CODES = frozenset(
     {"snapshot_changed", "return_unavailable", "wglink_folder_unset",
      "excitation_refused", "solver_memory_exceeded", "reduced_axis_not_allowed",
+     "return_unsupported", "disk_full",
      # WG stopped (quit, crash, restart) while preparing: nothing failed,
      # nothing is recorded, and Solve prepares it again.
      "interrupted"}
@@ -290,6 +296,12 @@ def preparation_failure(
     if code == "return_unavailable":
         return {"code": code, "message": f"WG cannot read the copy of {name} it was sent.",
                 "next_step": send_again, "options": [retry, dismiss]}
+    if code == "return_unsupported":
+        return {"code": code, "message": f"{name} was sent by a newer Waveguide Generator add-in than this {APP_NAME} can read.",
+                "next_step": f"Update {APP_NAME}, then send it again.", "options": [dismiss]}
+    if code == "disk_full":
+        return {"code": code, "message": f"The disk is full, so {APP_NAME} cannot prepare {name}.",
+                "next_step": "Free some disk space, then try again.", "options": [retry, dismiss]}
     if code == "wglink_folder_unset":
         return {"code": code, "message": f"WG cannot read {name}: no WGLink folder is selected.",
                 "next_step": "Choose the WGLink folder in Settings → CAD Link, then try again.",

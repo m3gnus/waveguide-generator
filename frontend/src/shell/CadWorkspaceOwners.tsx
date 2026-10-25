@@ -123,7 +123,7 @@ export function mountCadWorkspaceOwners(): () => void {
     onshapeInstanceId: () => onshapeInstance,
     setIngesting: (ingesting) => publish({ ingesting,
       ...(ingesting ? { preparationIntent: useCadReturnStore.getState().captureIngestIntent() } : {}),
-    }), setIngestError: (ingestError, ingestDiagnostic = null) => publish({ ingestError, ingestDiagnostic }),
+    }), setIngestError: (ingestError, ingestFailure = null) => publish({ ingestError, ingestFailure }),
     setError: reportError, setStatus: reportStatus, setViewportNotice: reportViewportNotice,
     setBundles: (bundles) => publish({ bundles }), reportViewportNotice,
   });
@@ -231,7 +231,9 @@ export function mountCadWorkspaceOwners(): () => void {
       if (error instanceof SupersededError) return 'blocked';
       if (ceilingStopped(error, bundlePath)) return 'blocked';
       reportStatus(null);
-      reportError(error instanceof Error ? error.message : String(error));
+      // Once the return arrived, a failed preparation already reported itself
+      // on the model's status line; only a failed pull is said here.
+      if (!(bundlePath && error instanceof CadLinkApiError)) reportError(error instanceof Error ? error.message : String(error));
       return useCadReturnStore.getState().ingestRecord ? 'blocked' : 'failed';
     }
   };

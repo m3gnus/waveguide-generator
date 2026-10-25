@@ -51,6 +51,7 @@ from server.cadlink.intake.ingest import (
     meshing_semantics_fingerprint,
 )
 from server.cadlink.intake.isolation import ChildRefusal
+from server.cadlink.joblane.failure_codes import preparation_failure_code, return_failure_code
 from server.cadlink.intake.preflight import judged_refusal
 from server.cadlink.operations import (
     PREFLIGHT_BLOCKED,
@@ -74,7 +75,6 @@ from server.cadlink.operations import (
 from server.cadlink.joblane.preparation_inputs import (
     DAMAGED_COPY_MESSAGE,
     SnapshotContext,
-    SnapshotUnavailable,
     _DefaultsUnavailable,
     _copy_is_whole,
     _default_setup,
@@ -109,7 +109,7 @@ from server.cadlink.intake.readings import (
     store_frame_decision,
 )
 from server.cadlink.store import CadLinkStore, StaleAttempt
-from server.cadlink.wgreturn import WgReturnChanged, WgReturnError
+from server.cadlink.wgreturn import WgReturnError
 from server.jobs.cad_intent import (
     BIND_BLOCKED,
     BIND_STOPPED,
@@ -608,20 +608,13 @@ def prepare_job_sync(
             return run.refuse("return_unavailable", DAMAGED_COPY_MESSAGE)
         try:
             retained = _retain_from_return(context, ledger)
-        except SnapshotUnavailable as exc:
-            # No folder selected (choose it, then try again), or the return
-            # left it before WG kept a copy (send it again).
+        except (OSError, ValueError) as exc:
+            # No folder selected (choose it, then try again), the return left
+            # it before WG kept a copy or cannot be read now (send it again),
+            # it changed, it needs a newer WG, the disk is full, or it is not
+            # a valid return: the one classification the browser's Prepare uses.
             return run.refuse(
-                "wglink_folder_unset" if context.workspace_root is None else "return_unavailable",
-                str(exc),
-            )
-        except WgReturnChanged as exc:
-            return run.refuse("snapshot_changed", str(exc))
-        except (WgReturnError, ValueError) as exc:
-            return run.refuse("snapshot_invalid", str(exc))
-        except OSError as exc:
-            return run.refuse(
-                "return_unavailable", f"WG could not read the return Fusion sent: {exc}"
+                return_failure_code(exc, folder_selected=context.workspace_root is not None), str(exc),
             )
         run.advance(cad={"snapshot": _snapshot_record(store, retained)})
 
@@ -763,16 +756,16 @@ def prepare_job_sync(
             # Also after Solve anyway: only a coarser mesh helps, so this ends
             # the request calmly instead of holding it for another choice.
             return run.refuse("solver_memory_exceeded", str(exc), exception=exc)
-        except WgReturnError as exc:
-            return run.refuse("snapshot_invalid", str(exc))
-        except IngestRefusal as exc:
-            if getattr(exc, "corruption", False):
-                return run.refuse("snapshot_invalid", str(exc))
-            return run.refuse("preparation_failed", str(exc), exception=exc)
         except (ChildRefusal, RuntimeError, ValueError, OSError) as exc:
-            # A worker that crashed, ran out of time or memory: the app survives
-            # and the user may solve again.
-            return run.refuse("preparation_failed", f"Preparing the mesh failed: {exc}", exception=exc)
+            # The one classification the browser's Prepare uses: a return
+            # that cannot be read or is not valid, the disk filling up, or WG's
+            # own failure (a worker that crashed, ran out of time or memory;
+            # the app survives and the user may solve again). A refusal in the
+            # user's terms is a failed preparation here too: Fusion's user is
+            # not on the screen that would state it.
+            code = preparation_failure_code(exc) or "preparation_failed"
+            message = str(exc) if isinstance(exc, (IngestRefusal, WgReturnError)) else f"Preparing the mesh failed: {exc}"
+            return run.refuse(code, message, exception=exc)
 
     if setup.origin == DEFAULTS_ORIGIN:
         standing = _remember_default_setup(store, retained_manifest, record, revision_id)

@@ -7,6 +7,7 @@ import {
   type SetupRevisionDetail,
 } from '../api/cadOperations';
 import { cadJobSummary } from '../jobs/cadSolve';
+import { useDeveloperDetails } from '../prefs/preferences';
 import type { JobItem, CadProvenance } from '../api/jobsSocket';
 
 interface LoadState<T> {
@@ -87,6 +88,7 @@ export function CadSolveInputs({
   jobCad: suppliedJobCad,
   className,
 }: CadSolveInputsProps) {
+  const developer = useDeveloperDetails();
   const jobCad = job?.cad_provenance ?? suppliedJobCad;
   const jobOperation = job?.cad_state ? cadJobSummary(job) : null;
   const jobManifest = jobOperation?.snapshot?.manifestSha256 ?? job?.cad_source?.manifest_sha256 ?? null;
@@ -167,13 +169,14 @@ export function CadSolveInputs({
   return <details className={['cad-solve-inputs', className].filter(Boolean).join(' ')}>
     <summary>Solve inputs{engine ? ` · ${engine}` : ''}</summary>
     <dl>
-      <div><dt>Operation</dt><dd><code>{operationId}</code></dd></div>
-      <div><dt>Snapshot</dt><dd>
+      {/* Identifiers are developer detail ("Show developer details"). */}
+      {developer && <div><dt>Operation</dt><dd><code>{operationId}</code></dd></div>}
+      {(developer || documentName) && <div><dt>Snapshot</dt><dd>
         {documentName && <span>{documentName}</span>}
-        {manifest ? <code>{manifest}</code> : loadingOperation ? 'reading…' : 'not recorded'}
-      </dd></div>
-      <div><dt>Preparation</dt><dd><code>{jobCad?.preparation?.preparation_id ?? operation?.preparationId ?? (loadingOperation ? 'reading…' : 'not recorded')}</code></dd></div>
-      <div><dt>Setup revision</dt><dd><code>{setupRevisionId ?? (loadingOperation ? 'reading…' : 'not recorded')}</code></dd></div>
+        {developer && (manifest ? <code>{manifest}</code> : loadingOperation ? 'reading…' : 'not recorded')}
+      </dd></div>}
+      {developer && <div><dt>Preparation</dt><dd><code>{jobCad?.preparation?.preparation_id ?? operation?.preparationId ?? (loadingOperation ? 'reading…' : 'not recorded')}</code></dd></div>}
+      {developer && <div><dt>Setup revision</dt><dd><code>{setupRevisionId ?? (loadingOperation ? 'reading…' : 'not recorded')}</code></dd></div>}
       {jobCad?.frame && !automaticAxis && <div><dt>Frame</dt><dd data-frame-provenance={jobCad.frame.provenance}>
         {jobCad.frame.axis && <code>{jobCad.frame.axis}</code>} {frameProvenanceText(jobCad.frame.provenance)}
       </dd></div>}
@@ -182,9 +185,11 @@ export function CadSolveInputs({
           got there. The card above says it in the user's terms; PLAN A6 keeps
           the codes and the timings here, one disclosure away, so the primary
           path never has to spell out an internal state name. */}
-      <div><dt>State</dt><dd>{operation?.state ?? (loadingOperation ? 'reading…' : 'not recorded')}</dd></div>
-      <div><dt>Stage</dt><dd>{operation ? operation.stage ?? 'not recorded' : loadingOperation ? 'reading…' : 'not recorded'}</dd></div>
-      <div><dt>Reason</dt><dd>{operation ? operation.reason ?? 'none' : loadingOperation ? 'reading…' : 'not recorded'}</dd></div>
+      {developer && <>
+        <div><dt>State</dt><dd>{operation?.state ?? (loadingOperation ? 'reading…' : 'not recorded')}</dd></div>
+        <div><dt>Stage</dt><dd>{operation ? operation.stage ?? 'not recorded' : loadingOperation ? 'reading…' : 'not recorded'}</dd></div>
+        <div><dt>Reason</dt><dd>{operation ? operation.reason ?? 'none' : loadingOperation ? 'reading…' : 'not recorded'}</dd></div>
+      </>}
       <div><dt>Received</dt><dd>{operation?.createdAt ?? (loadingOperation ? 'reading…' : 'not recorded')}</dd></div>
       <div><dt>Last moved</dt><dd>{operation?.updatedAt ?? (loadingOperation ? 'reading…' : 'not recorded')}</dd></div>
     </dl>

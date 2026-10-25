@@ -18,6 +18,7 @@ import { useCadReturnStore } from '../../stores/cadReturn';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { resolvePreparationTarget } from './preparationTarget';
 import { meshCeilingChoice } from '../../stores/meshCeilingChoice';
+import type { CadIngestFailure } from '../../stores/cadWorkspace';
 import { reportCadAutomationError } from './caughtErrors';
 
 export interface RefreshOptions {
@@ -284,8 +285,8 @@ export interface CadArrivalActionsIntegration {
   manualSelectionAt: Ref<number | null>;
   refusedForeignReturn: Ref<boolean>;
   setIngesting(value: boolean): void;
-  /** `diagnostic`: the raw text of WG's own (recorded) failure, for developer details. */
-  setIngestError(value: string | null, diagnostic?: string | null): void;
+  /** `failure`: how the server classified it, when it did. */
+  setIngestError(value: string | null, failure?: CadIngestFailure | null): void;
   setError(value: string | null): void;
   setStatus(value: string | null): void;
   setViewportNotice(value: string | null): void;
@@ -405,10 +406,15 @@ export function createCadArrivalActions(
         });
         throw reason;
       }
-      if (reason instanceof CadLinkApiError && reason.internal) {
-        // WG's own failure, recorded by the server: its calm sentence is the
-        // model's status line; the raw text is for developer details only.
-        if (request === ingestRequest.current && mounted.current) setIngestError(message, reason.diagnostic);
+      if (reason instanceof CadLinkApiError && reason.failure) {
+        // A failure the server classified: WG's sentence for it is the
+        // model's status line (never a red notice); the raw text of WG's own
+        // failure is for developer details only.
+        if (request === ingestRequest.current && mounted.current) {
+          setIngestError([message, reason.nextStep].filter(Boolean).join(' '), {
+            recorded: reason.failure === 'internal', retry: reason.retry ?? true, diagnostic: reason.diagnostic,
+          });
+        }
         throw reason;
       }
       if (request === ingestRequest.current && mounted.current) {

@@ -633,6 +633,7 @@ describe('CadLinkPanel', () => {
   });
 
   it('shows each pending CAD operation with its state, reason, identity and the action it needs', async () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     await renderAndSelect();
     await clickIngest();
     const posted = recordOperationRequests({ setupEngine: 'metal' });
@@ -2219,7 +2220,7 @@ describe('CadLinkPanel', () => {
   });
 
   it('auto-expands degraded scope and combines degradation with pending findings in the summary', async () => {
-    preferencesStore.update({ showDeveloperDetails: true });
+    // What was skipped and why, and a freshness error, are the user's to act on: shown without developer details.
     const degradedRecord: CadReturnIngestRecord = {
       ...record,
       scope: {
@@ -2714,7 +2715,7 @@ describe('CadLinkPanel', () => {
   });
 
   it('renders unknown per-instance freshness copy', async () => {
-    preferencesStore.update({ showDeveloperDetails: true });
+    // What was skipped and why, and a freshness error, are the user's to act on: shown without developer details.
     const freshness = { verdict: 'per-instance', instances: [{ instance_id: 'instance-a', verdict: 'unknown' }] };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);

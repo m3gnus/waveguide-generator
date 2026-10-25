@@ -415,6 +415,12 @@ def test_the_memory_guard_keeps_its_type_across_the_child_boundary() -> None:
     ("wglink_folder_unset", "No WGLink folder is selected, so WG cannot read the return Fusion sent.",
      "WG cannot read {}: no WGLink folder is selected.",
      "Choose the WGLink folder in Settings → CAD Link, then try again.", ["retry", "dismiss"]),
+    ("return_unsupported", "unsupported wgreturn_version '2.0'; reader supports major 1",
+     "{} was sent by a newer Waveguide Generator add-in than this Waveguide Generator can read.",
+     "Update Waveguide Generator, then send it again.", ["dismiss"]),
+    ("disk_full", "[Errno 28] No space left on device",
+     "The disk is full, so Waveguide Generator cannot prepare {}.", "Free some disk space, then try again.",
+     ["retry", "dismiss"]),
     ("excitation_refused", "This model is mirrored on z0, which does not contain the radiation axis; "
      "WG cannot drive it mirrored.", "This model is mirrored on z0, which does not contain the radiation axis; "
      "WG cannot drive it mirrored.", "Change the drive channels in this model's solve settings, "
@@ -470,6 +476,9 @@ EXPECTED_ATTENTION = {
     "excitation_refused": "action",
     "return_unavailable": "action",
     "wglink_folder_unset": "action",
+    # A return for a newer WG (update it), and a full disk (free space, try again).
+    "return_unsupported": "action",
+    "disk_full": "action",
     "solver_memory_exceeded": "action",
     "snapshot_changed": "action",
     "baseline_conflict": "action",

@@ -179,8 +179,12 @@ interface CheckDescriptor {
   verdict: string;
   /** Hover: what this check verifies, spelled out. */
   title: string;
-  /** The full evidence, one chevron away. Absent when the verdict is whole. */
+  /** What the user can act on, one chevron away (what was skipped and why, a
+   * freshness error). Absent when the verdict is whole. */
   detail?: ReactNode;
+  /** The measurements behind the verdict (residuals, sizing keys,
+   * derivations): developer detail, shown only with "Show developer details". */
+  evidence?: ReactNode;
 }
 
 const CHECK_GLYPH: Record<CheckState, string> = { ok: '✓', info: 'i', warn: '!' };
@@ -267,7 +271,7 @@ function recordChecks(record: CadReturnIngestRecord): CheckDescriptor[] {
         ? modelSummary
         : `declared cut ${rejectedDeclared.map(([name]) => planePhrase(name)).join(', ')} does not mirror · solving ${cadDomain}`,
     title: 'Mirror planes WG re-tested on the returned STEP after CAD edits, bodies and source tags were applied. A rejected plane keeps the larger safe domain instead of inheriting the parametric reduction.',
-    detail: <>
+    evidence: <>
       {planes.map(([name, verdict]) => {
         const residual = millimetres(verdict.max_residual_step_units ?? verdict.residuals);
         const offModel = millimetres(verdict.worst_off_model_distance_step_units);
@@ -314,7 +318,7 @@ function recordChecks(record: CadReturnIngestRecord): CheckDescriptor[] {
       ? meshParts.join(' · ') + (feasibility && feasibility !== 'ok' ? ` · ${feasibility}` : '')
       : 'no cost estimate recorded',
     title: 'Estimated solver cost of the prepared mesh at the chosen sizing: symmetry-reduced triangle count, dense-matrix memory, and solve time for the sweep.',
-    detail: <>{Object.entries(sizing).map(([key, value]) => <div className="cad-row" key={key}><b>{key.replaceAll('_', ' ')}</b><span>{compactValue(value)}</span></div>)}</>,
+    evidence: <>{Object.entries(sizing).map(([key, value]) => <div className="cad-row" key={key}><b>{key.replaceAll('_', ' ')}</b><span>{compactValue(value)}</span></div>)}</>,
   });
 
   // Polar grid
@@ -330,7 +334,7 @@ function recordChecks(record: CadReturnIngestRecord): CheckDescriptor[] {
         ? `${widened.map(([axis]) => axis).join(', ')} widened to a full sweep`
         : 'follows the accepted symmetry',
     title: 'The directivity sweep derived from the symmetry verdicts. An axis whose mirror plane was rejected is swept over the full circle; sweeps may widen but never narrow.',
-    detail: <>
+    evidence: <>
       {polarAxes.map(([axis, spec]) => <div className="cad-row" key={axis}><b>{axis}</b><span>{spec.minimum_deg ?? 0}° … {spec.maximum_deg ?? 180}°{spec.symmetry_accepted === false ? ' · widened' : ''}</span></div>)}
       {Object.entries(record.polar_grid_derivation).filter(([key]) => key !== 'axes').map(([key, value]) => <div className="cad-row" key={key}><b>{key.replaceAll('_', ' ')}</b><span>{compactValue(value)}</span></div>)}
     </>,
@@ -345,9 +349,11 @@ function CheckRow({ check }: { check: CheckDescriptor }) {
   // keep re-asserting on every render.
   const [open, setOpen] = useState(check.state === 'warn');
   // The evidence behind a verdict (residuals, sizing keys, derivations) is
-  // developer detail; the verdict says what it means.
+  // developer detail; the verdict says what it means. What the user can act
+  // on stays.
   const developerDetails = useDeveloperDetails();
-  if (!check.detail || !developerDetails) {
+  const evidence = developerDetails ? check.evidence : undefined;
+  if (!check.detail && !evidence) {
     return <div className={`cad-check cad-check-${check.state}`} title={check.title}>
       <span className="cad-check-glyph" aria-hidden="true">{CHECK_GLYPH[check.state]}</span>
       <b>{check.name}</b>
@@ -365,7 +371,7 @@ function CheckRow({ check }: { check: CheckDescriptor }) {
       <span className="cad-check-verdict">{check.verdict}</span>
       <span className="cad-check-chevron" aria-hidden="true">›</span>
     </summary>
-    <div className="cad-check-detail">{check.detail}</div>
+    <div className="cad-check-detail">{check.detail}{evidence}</div>
   </details>;
 }
 
@@ -957,7 +963,7 @@ export function CadLinkPanel() {
       {/* Solves Fusion sent, which the backend prepares from each project's own
           setup; one for the model on screen is shown on its Solve card. */}
       <CadDeliveryHealth/>
-      <CadOperationsSection record={record} solves={!solveCard}/>
+      <CadOperationsSection record={record} solves={!solveCard} lineQuestion={model.heldRequest}/>
       {/* The bookkeeping behind the model and its solves, one disclosure away. */}
       {record && <details className="cad-model-details">
         <summary>Details</summary>

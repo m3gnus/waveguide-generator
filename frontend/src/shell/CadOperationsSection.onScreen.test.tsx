@@ -165,12 +165,17 @@ describe('operation cards for the model on screen', () => {
       snapshot: { manifestSha256: `sha256:${'c'.repeat(64)}`, documentName: 'Fine horn', projectLineageId: null } }),
     { status: 'held', cad_return: { bundle_path: 'wgreturn/fine-2.wgreturn', return_id: 'wgr_other' } });
     other.cad_state = { ...other.cad_state!, held: true };
-    publishCadJobs([job, other]);
+    // An older question about the same return, which the status line does not reach.
+    const older = cadJobFixture({ ...ceiling, operationId: 'op-fine-old', createdAt: '2026-09-21T05:52:34Z' },
+      { status: 'held', cad_return: { bundle_path: 'wgreturn/fine.wgreturn', return_id: 'wgr_fine' } });
+    older.cad_state = { ...older.cad_state!, held: true };
+    publishCadJobs([job, older, other]);
     useCadReturnStore.setState({ selectedBundle: { bundlePath: 'wgreturn/fine.wgreturn', returnId: 'wgr_fine', requestId: null,
       name: 'fine.wgreturn', documentName: 'Fine horn', readable: true, modifiedAt: '2026-10-25T10:00:00Z' } as never, ingestRecord: null });
-    await act(async () => root.render(<CadOperationsSection record={null}/>));
-    // Its question is the status line's (Choose…): no card, and not "Other".
-    expect(cards()).toHaveLength(0);
+    await act(async () => root.render(<CadOperationsSection record={null} lineQuestion={job}/>));
+    // The question the status line asks (Choose…) has no card, and is not
+    // "Other"; the older one it does not reach keeps its card.
+    expect(cards().map((card) => card.dataset.requestId)).toEqual([older.id]);
     const lines = [...earlier()!.querySelectorAll<HTMLElement>('li')];
     expect(lines.map((line) => line.dataset.requestId)).toEqual([other.id]);
     expect([...lines[0].querySelectorAll('button')].map((button) => button.textContent)).toEqual(['Open Fine horn', 'Dismiss']);

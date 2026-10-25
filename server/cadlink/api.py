@@ -101,8 +101,9 @@ from .build_flags import onshape_enabled
 from .onshape.return_leg import RETURN_SUBDIRECTORY as ONSHAPE_RETURN_SUBDIRECTORY
 from .operations import (
     CANCELLED, INTERNAL_FAILURE_CODES, KINDS, MESH_CEILING_NEXT_STEP, MESH_TOO_LARGE_CODE, PREPARE_AND_SOLVE, STATES,
-    TERMINAL_STATES, internal_failure_message,
+    TERMINAL_STATES, preparation_failure,
 )
+from server.cadlink.joblane.failure_codes import preparation_failure_code
 from server.cadlink.joblane.preparation import (
     PreparationContext,
     operation_summary,
@@ -121,7 +122,6 @@ from server.cadlink.intake.returns_folder import return_document_name, return_in
 from .store import CadLinkStore
 from server.cadlink.intake import receipts_api
 from server.cadlink.fusion import recovery_api
-from .wgreturn import WgReturnChanged, WgReturnError
 
 
 logger = logging.getLogger(__name__)
@@ -922,62 +922,24 @@ async def post_solve_command_outcome(
     return {"commandId": payload.command_id, "recorded": False, "cleared": True}
 
 
-#: The stage whose refusal means the return itself is not valid.
-_BUNDLE_VALIDATION_STAGE = "stage 1 bundle validation"
+def _ingest_error(exc: Exception, *, document_name: str | None = None) -> HTTPException:
+    """The answer to a failed browser Prepare.
 
-
-def internal_ingest_code(exc: Exception) -> str | None:
-    """The code of an ingest failure that is WG's own (``INTERNAL_FAILURE_CODES``), or None.
-
-    The same reading as the job lane's (``jobs/cad_preparation``): a return
-    that is not valid is ``snapshot_invalid``; a worker, mesher or
-    environment failure is ``preparation_failed``. A refusal that states
-    something the user can change -- a project or instance gate, a symmetry
-    or FEM rule, an area drift with its override, the model changing, the
-    triangle ceiling, the memory guard -- is not one: it keeps its words.
+    The triangle ceiling and the memory guard are their own choices. Every
+    other failure is classified as a Fusion request's is
+    (``joblane.failure_codes``): a refusal in the user's terms keeps its
+    words; WG's own failure is recorded once and told in the protocol's calm
+    sentence, its raw text only as ``diagnostic`` (shown behind "Show
+    developer details"); a failure the user can act on (the return cannot be
+    read, needs a newer WG, the disk is full) is told in WG's words for it.
+    ``retry`` says whether trying again can work.
     """
 
-    if isinstance(exc, (MeshTooLarge, SolverMemoryTooLarge, WgReturnChanged)):
-        return None
-    if isinstance(exc, IngestRefusal):
-        if exc.area_drift_sources:
-            return None
-        return "snapshot_invalid" if exc.corruption or exc.stage == _BUNDLE_VALIDATION_STAGE else None
-    if isinstance(exc, WgReturnError):
-        return "snapshot_invalid"
-    if isinstance(exc, (ValueError, TypeError)):
-        return None
-    return "preparation_failed"
-
-
-def _ingest_error(exc: Exception, *, document_name: str | None = None) -> HTTPException:
-    internal = internal_ingest_code(exc)
-    if internal is not None:
-        assert internal in INTERNAL_FAILURE_CODES
-        # WG's own failure: recorded once for the developers, told calmly in
-        # the protocol's one sentence. The raw text travels only as
-        # ``diagnostic``, which WG shows behind "Show developer details".
-        record_preparation_diagnostic(
-            "internal-failure", {"code": internal, "detail": str(exc)},
-            phase="cad-ingest", exception=exc, names=[document_name] if document_name else None,
-        )
-        return HTTPException(status_code=422 if internal == "snapshot_invalid" else 500, detail={
-            "code": internal, "failure": "internal",
-            "message": internal_failure_message(document_name), "diagnostic": str(exc),
-        })
-    if isinstance(exc, IngestRefusal):
-        detail: str | dict[str, Any] = str(exc)
-        if exc.area_drift_sources:
-            detail = {
-                "message": str(exc),
-                "area_drift_sources": list(exc.area_drift_sources),
-            }
-        return HTTPException(status_code=409 if exc.corruption else 422, detail=detail)
     if isinstance(exc, MeshTooLarge):
         # A choice for the user (Solve anyway, or a coarser mesh), not a failure.
         return HTTPException(status_code=422, detail={
             "code": MESH_TOO_LARGE_CODE, "message": exc.message(),
-            # The pop-up adds the choice it offers (Prepare or Solve anyway).
+            # The pop-up adds the choice it offers (Solve anyway).
             "next_step": MESH_CEILING_NEXT_STEP,
             "triangle_count": exc.count, "limit": exc.limit,
         })
@@ -992,11 +954,48 @@ def _ingest_error(exc: Exception, *, document_name: str | None = None) -> HTTPEx
             "code": "solver_memory_exceeded", "message": SolverMemoryTooLarge.USER_MESSAGE,
             "next_step": SolverMemoryTooLarge.NEXT_STEP,
         })
-    if isinstance(exc, (WgReturnError, ValueError, TypeError)):
-        return HTTPException(status_code=422, detail=str(exc))
+    code = preparation_failure_code(exc)
+    if code is None:
+        assert isinstance(exc, IngestRefusal)
+        detail: str | dict[str, Any] = str(exc)
+        if exc.area_drift_sources:
+            detail = {
+                "message": str(exc),
+                "area_drift_sources": list(exc.area_drift_sources),
+            }
+        return HTTPException(status_code=422, detail=detail)
+    words = preparation_failure(code, document_name, manual=True)
+    retry = any(option["id"] == "retry" for option in words["options"])
+    if code in INTERNAL_FAILURE_CODES:
+        # WG's own failure: recorded once for the developers, told calmly in
+        # the protocol's one sentence. The raw text travels only as
+        # ``diagnostic``.
+        record_preparation_diagnostic(
+            "internal-failure", {"code": code, "detail": str(exc)},
+            phase="cad-ingest", exception=exc, names=[document_name] if document_name else None,
+        )
+        return HTTPException(status_code=_ingest_status(exc), detail={
+            "code": code, "failure": "internal", "message": words["message"], "retry": retry,
+            "diagnostic": str(exc),
+        })
+    return HTTPException(status_code=_ingest_status(exc), detail={
+        "code": code, "failure": "user_action", "message": words["message"],
+        "next_step": words["next_step"], "retry": retry,
+    })
+
+
+def _ingest_status(exc: Exception) -> int:
+    """The HTTP status of a failed Prepare, unchanged by its classification:
+    a damaged copy conflicts (409), a missing mesher or worker is unavailable
+    (503), a refused return is unprocessable (422), anything else failed (500)."""
+
+    if isinstance(exc, IngestRefusal):
+        return 409 if exc.corruption else 422
+    if isinstance(exc, (ValueError, TypeError)):
+        return 422
     if isinstance(exc, (ImportError, RuntimeError)):
-        return HTTPException(status_code=503, detail=str(exc))
-    return HTTPException(status_code=500, detail=f"CAD-return ingestion failed: {exc}")
+        return 503
+    return 500
 
 
 def _named_ingest_error(exc: Exception, bundle_path: Path) -> HTTPException:

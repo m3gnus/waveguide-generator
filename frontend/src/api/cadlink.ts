@@ -472,15 +472,19 @@ export class CadLinkApiError extends Error {
   readonly nextStep: string | null;
   /** The triangle ceiling's facts (`mesh_too_large`): what the model meshes to, and the limit. */
   readonly meshLimit: CadMeshLimit | null;
-  /** The server classified this as WG's own failure (`failure: "internal"`):
-   * `message` is the protocol's calm sentence and the failure is recorded. */
-  readonly internal: boolean;
+  /** How the server classified a failed preparation: WG's own (`internal`:
+   * `message` is the protocol's calm sentence, and the failure is recorded),
+   * or one the user can act on (`user_action`: `message` and `nextStep` are
+   * WG's words for it); null when it did not. */
+  readonly failure: 'internal' | 'user_action' | null;
+  /** Whether trying again can work, for a classified failure. */
+  readonly retry: boolean | null;
   /** The raw text behind an internal failure, for "Show developer details" only. */
   readonly diagnostic: string | null;
 
   constructor(message: string, areaDriftSources: string[] = [], status: number | null = null,
     code: string | null = null, nextStep: string | null = null, meshLimit: CadMeshLimit | null = null,
-    internal = false, diagnostic: string | null = null) {
+    failure: 'internal' | 'user_action' | null = null, diagnostic: string | null = null, retry: boolean | null = null) {
     super(message);
     this.name = 'CadLinkApiError';
     this.areaDriftSources = areaDriftSources;
@@ -488,8 +492,9 @@ export class CadLinkApiError extends Error {
     this.code = code;
     this.nextStep = nextStep;
     this.meshLimit = meshLimit;
-    this.internal = internal;
+    this.failure = failure;
     this.diagnostic = diagnostic;
+    this.retry = retry;
   }
 }
 
@@ -506,7 +511,7 @@ async function responseError(response: Response): Promise<CadLinkApiError> {
     if (typeof body.detail === 'string') return new CadLinkApiError(body.detail, [], response.status);
     if (body.detail && typeof body.detail === 'object') {
       const detail = body.detail as { message?: unknown; msg?: unknown; area_drift_sources?: unknown; code?: unknown; next_step?: unknown;
-        triangle_count?: unknown; limit?: unknown; failure?: unknown; diagnostic?: unknown };
+        triangle_count?: unknown; limit?: unknown; failure?: unknown; diagnostic?: unknown; retry?: unknown };
       const message = typeof detail.message === 'string'
         ? detail.message
         : typeof detail.msg === 'string' ? detail.msg : null;
@@ -518,7 +523,9 @@ async function responseError(response: Response): Promise<CadLinkApiError> {
         typeof detail.next_step === 'string' ? detail.next_step : null,
         positiveInteger(detail.triangle_count) && positiveInteger(detail.limit)
           ? { triangles: detail.triangle_count, limit: detail.limit } : null,
-        detail.failure === 'internal', typeof detail.diagnostic === 'string' ? detail.diagnostic : null);
+        detail.failure === 'internal' || detail.failure === 'user_action' ? detail.failure : null,
+        typeof detail.diagnostic === 'string' ? detail.diagnostic : null,
+        typeof detail.retry === 'boolean' ? detail.retry : null);
     }
   } catch { /* status remains useful */ }
   return new CadLinkApiError(`Request failed: ${response.status} ${response.statusText}`.trim(), [], response.status);

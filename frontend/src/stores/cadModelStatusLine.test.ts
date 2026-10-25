@@ -4,7 +4,7 @@ import { currentModelStatus, type CurrentModel } from '../model/currentModel';
 import { bundle, record } from '../shell/cadlink/selection.fixtures';
 import states from '../../../server/tests/fixtures/cad_request_states.json';
 import { selectCadModelState, type CadModelRequest } from './cadModelState';
-import { cadModelStatusLine, cadRequestState, type CadModelStatusLine } from './cadModelStatusLine';
+import { cadModelStatusLine, cadRequestState, cadRequestsChipLabel, type CadModelStatusLine } from './cadModelStatusLine';
 import type { MeshCeilingChoice } from './meshCeilingChoice';
 import { cadJobFixture } from '../jobs/cadSolve.fixtures';
 import type { CadOperationSummary } from '../api/cadOperations';
@@ -112,6 +112,27 @@ describe('the CAD model status line', () => {
     expect(failed).toMatchObject({ text: 'Waveguide Generator could not prepare Speaker.', short: 'could not prepare', action: 'try-again' });
     expectPlain(failed);
     expect(line(pointer, { ...idle, ingestError: 'x' })).toMatchObject({ action: 'none' });
+  });
+
+  it('says the server\'s words for a failure the user can act on, with Try again only where it can work', () => {
+    const full = line(selected, { ...idle, ingestError: 'The disk is full, so Waveguide Generator cannot prepare Speaker. Free some disk space, then try again.',
+      ingestFailure: { recorded: false, retry: true, diagnostic: null } });
+    expect(full).toMatchObject({ text: 'The disk is full, so Waveguide Generator cannot prepare Speaker. Free some disk space, then try again.', action: 'try-again' });
+    const newer = line(selected, { ...idle, ingestError: 'Speaker was sent by a newer Waveguide Generator add-in than this Waveguide Generator can read. Update Waveguide Generator, then send it again.',
+      ingestFailure: { recorded: false, retry: false, diagnostic: null } });
+    expect(newer.action).toBe('none');
+    // WG's own failure without raw text is still its recorded sentence.
+    const recorded = line(selected, { ...idle, ingestError: 'Waveguide Generator could not prepare Speaker. This has been recorded for the developers.',
+      ingestFailure: { recorded: true, retry: true, diagnostic: null } });
+    expect(recorded.text).toContain('This has been recorded for the developers.');
+    for (const result of [full, newer, recorded]) expectPlain(result);
+  });
+
+  it('words the top-bar chip for requests about other models', () => {
+    const question = { kind: 'prepare_and_solve', attention: 'question' } as const;
+    expect(cadRequestsChipLabel([question], { otherModels: true })).toBe('Another model needs your choice');
+    expect(cadRequestsChipLabel([question])).toBe('A solve is waiting for you');
+    expect(cadRequestsChipLabel([question, { kind: 'prepare_and_solve', attention: 'action' }])).toBe('2 CAD requests need you');
   });
 
   it('shows results only when Results are not on screen, and waits for the engine without a button', () => {

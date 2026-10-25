@@ -69,8 +69,10 @@ const GENERIC_NEXT_STEP = 'This request needs your choice before WG can solve it
  * automatically, by Prepare, or by a Solve: Solve anyway prepares accepting
  * the ceiling and starts the solve. It applies only to the model it was
  * asked for, while that model is selected. WG has no channel that opens
- * Fusion's Sources & Mesh, so Change in Fusion says where to make the change,
- * then lets the request go. */
+ * Fusion's Sources & Mesh, so Change in Fusion says where to make the change:
+ * for a request from Fusion, its own panel's Sources & Mesh… button (the
+ * request stays waiting, as after Later); for this window's own question,
+ * the Waveguide Generator menu in Fusion. */
 export function HeldCadRequestDialog() {
   const jobs = useCadJobs();
   const pending = useSyncExternalStore(meshCeilingChoice.subscribe, meshCeilingChoice.getSnapshot, meshCeilingChoice.getSnapshot);
@@ -120,7 +122,7 @@ export function HeldCadRequestDialog() {
   // The triangle ceiling states its facts and offers Solve anyway, Change in
   // Fusion (which lets the request go) and Later.
   const ceilingQuestion = !job || state?.reason === 'mesh_too_large'
-    ? meshCeilingQuestion(name || 'This model', meshCeilingFacts(job ?? ceiling), nextStep) : null;
+    ? meshCeilingQuestion(name || 'This model', meshCeilingFacts(job ?? ceiling), nextStep, !!job) : null;
   const serverOptions = job
     ? state?.options?.length ? state.options : [{ id: 'review', label: 'Review request' }, { id: 'dismiss', label: 'Dismiss request' }]
     : [{ id: 'solve_anyway', label: 'Solve anyway' }];
@@ -135,10 +137,10 @@ export function HeldCadRequestDialog() {
     setError(null);
     try {
       if (option === 'change_in_fusion') {
-        // The change is made in Fusion, which sends the model again: this
-        // question (the request, or this window's choice) is let go.
-        if (job) await dismissCadJob(job);
-        else meshCeilingChoice.clear();
+        // The change is made in Fusion. A request from Fusion stays waiting,
+        // so Fusion's panel keeps its Sources & Mesh… button, until the next
+        // Solve from Fusion replaces it; this window's own choice is let go.
+        if (!job) meshCeilingChoice.clear();
       } else if (!job) {
         // The browser path: prepare again accepting the ceiling, and solve,
         // for the model the question was asked about.

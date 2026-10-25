@@ -1,4 +1,5 @@
 import type { CadMeshLimit } from '../api/cadlink';
+import type { CadOperationSummary } from '../api/cadOperations';
 import type { JobItem } from '../api/jobsSocket';
 import type { MeshCeilingChoice } from './meshCeilingChoice';
 import { isFailedCadPreparation, isHeldCadJob } from '../jobs/cadSolve';
@@ -66,7 +67,8 @@ export interface CadStatusContext {
 }
 
 type CadModelView = Pick<ReturnType<typeof selectCadModelState>,
-  'selected' | 'label' | 'phase' | 'preparation' | 'heldRequest' | 'meshChoice' | 'failureMessage' | 'triangles' | 'canPrepare' | 'record' | 'bundle' | 'application'>;
+  'selected' | 'label' | 'phase' | 'preparation' | 'heldRequest' | 'meshChoice' | 'failureMessage' | 'triangles' | 'canPrepare' | 'record' | 'bundle' | 'application'>
+  & Partial<Pick<ReturnType<typeof selectCadModelState>, 'failureRetry'>>;
 
 const ACTION_LABEL: Record<Exclude<CadStatusAction, 'none'>, string> = {
   solve: 'Solve', choose: 'Choose…', 'try-again': 'Try again', 'show-results': 'Show results', prepare: 'Prepare',
@@ -146,7 +148,8 @@ export function cadModelStatusLine(model: CadModelView, request: CadModelRequest
     return line(model.failureMessage || serverWords || couldNotPrepare(label), 'could not prepare', 'attention', retry ? 'try-again' : 'none', job.id);
   }
   if (model.preparation === 'prepare-failed') {
-    return line(model.failureMessage || couldNotPrepare(label), 'could not prepare', 'attention', model.canPrepare ? 'try-again' : 'none');
+    const retry = model.canPrepare && model.failureRetry !== false;
+    return line(model.failureMessage || couldNotPrepare(label), 'could not prepare', 'attention', retry ? 'try-again' : 'none');
   }
   // A refusal: its words. Solve again only where the server would take it
   // (a kept request that names a change WG settles with the settings on
@@ -218,13 +221,38 @@ export function meshCeilingFacts(source: Pick<JobItem, 'cad_state'> | Pick<MeshC
 
 /** The mesh-too-large pop-up's words: the facts, and what each option does.
  * `nextStep` is the server's own next step, for a question without facts. */
-export function meshCeilingQuestion(name: string, facts: CadMeshLimit | null, nextStep: string) {
+export function meshCeilingQuestion(name: string, facts: CadMeshLimit | null, nextStep: string, fusionRequest = false) {
   return {
     title: `${name} is larger than ${APP_NAME}'s limit`,
     body: facts
       ? `It meshes to ${count(facts.triangles)} triangles; ${APP_NAME}'s limit is ${count(facts.limit)}. Solving it anyway is slower and needs more memory.`
       : nextStep,
-    /** "Change in Fusion": nothing in WG opens Fusion's dialog, so it says where. */
-    changeInFusion: `In Fusion, open ${APP_NAME} ▸ Sources & Mesh…, raise Walls or add a coarser size zone, then send ${name} again.`,
+    /** "Change in Fusion": nothing in WG opens Fusion's dialog, so it says
+     * where. A request from Fusion stays waiting, and Fusion's own panel
+     * shows it with its Sources & Mesh… button. */
+    changeInFusion: fusionRequest
+      ? `In Fusion, the ${APP_NAME} panel shows this request with a Sources & Mesh… button. Raise Walls or add a coarser size zone there, then solve ${name} again from Fusion.`
+      : `In Fusion, open ${APP_NAME} ▸ Sources & Mesh…, raise Walls or add a coarser size zone, then send ${name} again.`,
   };
+}
+
+/** The top-bar chip's words for requests waiting outside the model's own
+ * status line. They follow the server's one classification: only a real
+ * question waits for the user; anything else names a change to make, or WG's
+ * own failed preparation. `otherModels`: a CAD model is on screen, so these
+ * are about other models. */
+export function cadRequestsChipLabel(
+  waiting: ReadonlyArray<Pick<CadOperationSummary, 'kind' | 'attention'> | undefined>,
+  { otherModels = false }: { otherModels?: boolean } = {},
+): string {
+  const first = waiting[0];
+  if (waiting.length > 1) {
+    return waiting.every(operation => operation?.kind === 'prepare_and_solve' && operation.attention === 'action')
+      ? `${waiting.length} CAD requests need a change` : `${waiting.length} CAD requests need you`;
+  }
+  if (first?.kind !== 'prepare_and_solve') return 'A CAD update needs recovery';
+  if (first.attention === 'question') return otherModels ? 'Another model needs your choice' : 'A solve is waiting for you';
+  if (first.attention === 'action') return 'A solve needs a change';
+  if (first.attention === 'failed') return 'A solve could not be prepared';
+  return 'A solve is on hold';
 }

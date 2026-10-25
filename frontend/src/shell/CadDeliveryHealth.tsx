@@ -58,9 +58,11 @@ export function CadDeliveryHealthDataSource() {
   return null;
 }
 
-/** The consumer's state and recent refusals, in the CAD Link panel: developer
- * detail ("Show developer details"). Fusion already tells the user why its
- * preflight refused a return, so WG says nothing of it otherwise. */
+/** The consumer's state and recent refusals, in the CAD Link panel. Why
+ * requests from Fusion are not taken (the consumer is off, no WGLink folder is
+ * selected, a pass is stuck) is the user's to act on and always said. The
+ * returns Fusion's preflight refused are developer detail ("Show developer
+ * details"): Fusion already tells the user why. */
 export function CadDeliveryHealth({ now = Date.now }: { now?: () => number }) {
   const shown = useDeveloperDetails();
   const status = useCadDeliveryHealthStore((state) => state.status);
@@ -83,13 +85,14 @@ export function CadDeliveryHealth({ now = Date.now }: { now?: () => number }) {
     ...deliveryHealthLines(status, now()),
     ...(recoveryError ? [{ tone: 'waiting' as const, text: recoveryError }] : []),
   ];
-  if (!shown || (!lines.length && !refusals.length)) return null;
+  const refused = shown ? refusals : [];
+  if (!lines.length && !refused.length) return null;
   return <div className="cad-delivery-health" role="status">
     {lines.map((line) => <p key={line.text} className={`cad-delivery-${line.tone}`}>{line.text}</p>)}
-    {refusals.length > 0 && <details className="cad-delivery-refusals" open={unseen > 0}>
-      <summary>{refusals.length === 1 ? 'A request from Fusion was refused' : `${refusals.length} requests from Fusion were refused`}</summary>
+    {refused.length > 0 && <details className="cad-delivery-refusals" open={unseen > 0}>
+      <summary>{refused.length === 1 ? 'A request from Fusion was refused' : `${refused.length} requests from Fusion were refused`}</summary>
       <ul>
-        {refusals.slice(0, 5).map((refusal) => <li key={`${refusal.at}|${refusal.file}`}>
+        {refused.slice(0, 5).map((refusal) => <li key={`${refusal.at}|${refusal.file}`}>
           <b>{clock(refusal.at)}</b> {refusal.reason}
           {refusal.operationId && <> <code>{refusal.operationId}</code></>}
         </li>)}

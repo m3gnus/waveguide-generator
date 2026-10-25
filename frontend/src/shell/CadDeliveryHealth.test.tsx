@@ -148,13 +148,15 @@ describe('the CAD Link panel section', () => {
     expect(reads).toBe(2);
   });
 
-  it('is developer detail: without "Show developer details" the panel says nothing of the consumer', async () => {
+  it('always says why requests are not taken, and lists refused returns only with developer details', async () => {
     preferencesStore.update({ showDeveloperDetails: false });
-    answer = status({ consumer: 'disabled' });
+    answer = status({ declined: 'No WGLink folder is selected. Choose it in CAD Link settings.' });
     await mount();
-    expect(host.textContent).toBe('');
+    expect(host.textContent).toContain('No WGLink folder is selected');
+    act(() => useCadDeliveryHealthStore.getState().mergeRefusals([{ operationId: null, file: 'x.json', reason: 'preflight refused', at: '2026-09-21T12:00:00Z' }]));
+    expect(host.textContent).not.toContain('refused');
     act(() => preferencesStore.update({ showDeveloperDetails: true }));
-    expect(host.textContent).toContain('WG2_CAD_DELIVERY=0');
+    expect(host.textContent).toContain('A request from Fusion was refused');
   });
 
   it('recovers waiting intake without the coordinator and stops its clock when the request is taken', async () => {

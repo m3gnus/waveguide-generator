@@ -397,41 +397,92 @@ def test_mesh_too_large_is_an_actionable_refusal_on_both_ingest_routes() -> None
                                "triangle_count": 28_944, "limit": 22_000}
 
 
-def test_browser_prepare_tells_wgs_own_failure_calmly_and_records_the_raw_text(monkeypatch, tmp_path) -> None:
+def test_browser_prepare_tells_wgs_own_failure_calmly_and_records_the_raw_text(monkeypatch) -> None:
+    import errno
+
     import server.cadlink.api as api
     from server.cadlink.intake.ingest import IngestRefusal
-    from server.cadlink.intake.returns_folder import return_document_name
-    from server.cadlink.wgreturn import WgReturnChanged
+    from server.cadlink.intake.isolation import ChildRefusal
+    from server.cadlink.wgreturn import WgReturnChanged, WgReturnUnsupported, WgReturnValidationError
 
     recorded = []
     monkeypatch.setattr(api, "record_preparation_diagnostic", lambda *args, **kwargs: recorded.append((args, kwargs)))
+
+    def stage1(cause: BaseException) -> IngestRefusal:
+        try:
+            raise IngestRefusal("stage 1 bundle validation", str(cause)) from cause
+        except IngestRefusal as refusal:
+            return refusal
+
     raw = "$.sources[wgs-1].suggested_resolution_mm: must equal mesh.source_size_mm"
     # A return whose manifest fails validation (the Fine2 case).
-    response = api._ingest_error(IngestRefusal("stage 1 bundle validation", raw), document_name="Fine horn")
+    response = api._ingest_error(stage1(WgReturnValidationError(raw)), document_name="Fine horn")
     assert response.status_code == 422
     assert response.detail == {
-        "code": "snapshot_invalid", "failure": "internal",
+        "code": "snapshot_invalid", "failure": "internal", "retry": False,
         "message": "Waveguide Generator could not prepare Fine horn. This has been recorded for the developers.",
         "diagnostic": f"stage 1 bundle validation: {raw}"}
     (stage, evidence), options = recorded[0]
     assert stage == "internal-failure" and evidence == {"code": "snapshot_invalid", "detail": response.detail["diagnostic"]}
     assert options["phase"] == "cad-ingest" and options["names"] == ["Fine horn"]
-    # A crashed worker or a missing mesher is WG's own failure too.
-    assert api._ingest_error(RuntimeError("worker exited 9")).detail["code"] == "preparation_failed"
-    # What the user can change keeps its words and is not recorded.
+    # WG's own pipeline: a worker, its meshing stage, its normalisation, its own code.
+    for internal in (ChildRefusal("stage 7 meshing", "worker exited 9"), RuntimeError("mesher"), ImportError("old mesher"),
+                     IngestRefusal("stage 7 meshing", "normalisation mismatch: exterior replay recipe is missing."),
+                     IngestRefusal("stage 7 meshing", "deferred viewport inputs are unreadable: x"),
+                     ValueError("bad array"), TypeError("None")):
+        detail = api._ingest_error(internal, document_name="Fine horn").detail
+        assert (detail["code"], detail["failure"], detail["retry"]) == ("preparation_failed", "internal", True), internal
+        assert "recorded for the developers" in detail["message"]
+    # What the user can act on is told in its own words, and never recorded.
     recorded.clear()
+    for cause, code, words in (
+        (FileNotFoundError("gone"), "return_unavailable", "cannot read the copy"),
+        (OSError(errno.EIO, "evicted"), "return_unavailable", "cannot read the copy"),
+        (WgReturnUnsupported("unsupported wgreturn_version '2.0'"), "return_unsupported", "Update Waveguide Generator"),
+        (OSError(errno.ENOSPC, "No space left on device"), "disk_full", "The disk is full"),
+        (WgReturnChanged("sent again"), "snapshot_changed", "changed after"),
+    ):
+        detail = api._ingest_error(stage1(cause), document_name="Fine horn").detail
+        assert (detail["code"], detail["failure"]) == (code, "user_action"), cause
+        assert words in f"{detail['message']} {detail['next_step']}", detail
+        assert "recorded" not in detail["message"] and "diagnostic" not in detail
+    assert api._ingest_error(OSError(errno.ENOSPC, "full"), document_name="Fine horn").detail["code"] == "disk_full"
     gate = IngestRefusal("stage 2 project gate", "the selected CAD return belongs to another CAD-linked project")
     assert api._ingest_error(gate).detail == str(gate)
-    assert api._ingest_error(WgReturnChanged("sent again")).detail == "sent again"
     drift = IngestRefusal("stage 5 sources", "source 'HF' area drift", area_drift_sources=["HF"])
     assert api._ingest_error(drift).detail["area_drift_sources"] == ["HF"]
     assert recorded == []
-    # Its name is read leniently, from a manifest that fails validation, or the folder.
-    folder = tmp_path / "Fine2.wgreturn"
-    folder.mkdir()
+
+
+def test_a_returns_name_is_read_leniently_once_for_both_readers(tmp_path) -> None:
+    from server.cadlink.intake.returns_folder import return_document_name
+    from server.cadlink.joblane.request_status import bundle_document_name
+    from server.cadlink.limits import MAX_WGRETURN_JSON_BYTES
+
+    folder = tmp_path / "wgreturn" / "Fine2.wgreturn"
+    folder.mkdir(parents=True)
     assert return_document_name(folder) == "Fine2"
-    (folder / "wgreturn.json").write_text(json.dumps({"document": {"name": " Fine horn "}, "sources": 3}))
+    manifest = folder / "wgreturn.json"
+    manifest.write_text(json.dumps({"document": {"name": " Fine horn "}, "sources": 3}))
     assert return_document_name(folder) == "Fine horn"
+    operation = {"inputs_json": json.dumps({"bundle_path": "wgreturn/Fine2.wgreturn"})}
+    assert bundle_document_name(tmp_path, operation) == "Fine horn"
+    # A manifest larger than any valid one is not parsed for a name.
+    manifest.write_text(json.dumps({"document": {"name": "Fine horn"}, "pad": "x" * MAX_WGRETURN_JSON_BYTES}))
+    assert return_document_name(folder) == "Fine2"
+    assert bundle_document_name(tmp_path, operation) == "Fine2"
+
+
+def test_a_return_for_a_newer_reader_is_unsupported_not_invalid() -> None:
+    from server.cadlink.wgreturn import WgReturnUnsupported, WgReturnValidationError, validate_manifest
+
+    with pytest.raises(WgReturnUnsupported):
+        validate_manifest({"wgreturn_version": "2.0", "required_features": []})
+    with pytest.raises(WgReturnUnsupported):
+        validate_manifest({"wgreturn_version": "1.1", "required_features": ["teleport-v9"]})
+    with pytest.raises(WgReturnValidationError) as invalid:
+        validate_manifest({"wgreturn_version": "1.1", "required_features": []})
+    assert not isinstance(invalid.value, WgReturnUnsupported)
 
 
 def test_browser_prepare_answers_the_ceiling_with_a_choice_and_carries_solve_anyway(monkeypatch, tmp_path) -> None:

@@ -131,6 +131,12 @@ class WgReturnValidationError(WgReturnError):
     """The manifest structure or a declared value is invalid."""
 
 
+class WgReturnUnsupported(WgReturnValidationError):
+    """A return written for a newer reader: a major version or a required
+    feature this WG does not know. Updating WG is the remedy, never sending
+    the same return again."""
+
+
 class WgReturnIntegrityError(WgReturnError):
     """The on-disk bundle contradicts its checksummed member table."""
 
@@ -299,8 +305,22 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     try:
         protocol.validate_structure(manifest, protocol.WG_INGRESS)
     except protocol.ProtocolValidationError as exc:
-        raise WgReturnValidationError(str(exc)) from exc
+        error = WgReturnUnsupported if _needs_newer_reader(manifest) else WgReturnValidationError
+        raise error(str(exc)) from exc
     return manifest
+
+
+def _needs_newer_reader(manifest: Mapping[str, Any]) -> bool:
+    """Whether a manifest names a major version or a feature this reader lacks."""
+
+    version = manifest.get("wgreturn_version")
+    major = version.split(".", 1)[0] if isinstance(version, str) else None
+    if major is not None and major.isdigit() and int(major) != SUPPORTED_MAJOR:
+        return True
+    features = manifest.get("required_features")
+    return isinstance(features, list) and any(
+        isinstance(feature, str) and feature not in SUPPORTED_FEATURES for feature in features
+    )
 
 
 def read_wgreturn(

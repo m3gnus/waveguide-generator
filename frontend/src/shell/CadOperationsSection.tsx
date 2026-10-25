@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { isActiveJobStatus, jobsSocket } from '../api/jobsSocket';
+import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { getIngest, listReturns, type CadReturnFinding, type CadReturnIngestRecord } from '../api/cadlink';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { listCadProjects } from '../api/cadProjects';
@@ -10,7 +10,7 @@ import { cadWorkspace } from '../stores/cadWorkspace';
 import { openImported } from '../stores/importedModel';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { openCadProject } from './CadProjectPanel';
-import { cadJobSummaries, dismissCadJob, isCadChoiceJob, useCadJobs } from '../jobs/cadSolve';
+import { cadJobSummaries, dismissCadJob, useCadJobs } from '../jobs/cadSolve';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { inFlightWords } from './cadOnScreenSettings';
 import { fullTime, relativeTime } from './cadTime';
@@ -510,7 +510,12 @@ export function CurrentModelRequests({ record }: { record: CadReturnIngestRecord
  * the backend prepares from each project's own setup. Only those about the
  * model on screen get a card -- on the Solve card when there is one
  * (`solves={false}` here) -- and the rest are one quiet line each. */
-export function CadOperationsSection({ record, solves = true }: { record: CadReturnIngestRecord | null; solves?: boolean }) {
+export function CadOperationsSection({ record, solves = true, lineQuestion = null }: {
+  record: CadReturnIngestRecord | null;
+  solves?: boolean;
+  /** The question the model's status line asks (`selectCadModelState().heldRequest`). */
+  lineQuestion?: JobItem | null;
+}) {
   const requestActions = useMemo(makeRequestActions, []);
   const host = useRef<HTMLDivElement>(null);
   const visible = usePanelVisible();
@@ -519,10 +524,13 @@ export function CadOperationsSection({ record, solves = true }: { record: CadRet
   const jobs = useCadJobs();
   const bundle = useCadReturnStore((state) => state.selectedBundle);
   const selected = selectCadRequests({ jobs, notices, record, bundle });
-  // A question the model's status line asks (Choose… opens its pop-up) gets
-  // no card of its own: the mesh-size choice is answered only there.
+  // The mesh-size question the model's status line asks is answered whole in
+  // its pop-up (Choose…), so it gets no card of its own. Any other request
+  // about this model -- an older one, or a question whose answer lives on its
+  // card (approving findings) -- keeps its card.
+  const lineCeiling = lineQuestion?.cad_state?.reason === 'mesh_too_large' ? lineQuestion.id : null;
   const current = selected.current.filter((item) => (solves || item.operation.kind !== 'prepare_and_solve')
-    && !(item.source === 'job' && isCadChoiceJob(item.job) && item.operation.reason === 'mesh_too_large'));
+    && item.id !== lineCeiling);
   const earlier = selected.earlier;
   const firstRequestId = earlier[0]?.id ?? selected.current[0]?.id;
   useEffect(() => {

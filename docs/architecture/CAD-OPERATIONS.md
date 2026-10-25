@@ -204,6 +204,8 @@ A command is accepted only once its identity, digest, target and inputs are comm
 ## Outcomes
 
 `reason` holds a **reason code**, or nothing. A reason that is not a code is refused.
+A failed preparation is classified once, in `server/cadlink/joblane/failure_codes.py`,
+for a Fusion request and for WG's own Prepare (`POST /api/cadlink/ingest`) alike.
 
 | Code | State | Meaning |
 | --- | --- | --- |
@@ -219,6 +221,8 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `reduced_axis_not_allowed` | `needs_user_input` | The model's radiation axis -- the project's choice, or one WG's survey is confident about -- is one its reduced domain (a declared or recovered cut, a reduced model with FEM regions) cannot be solved along. Never solved along another axis instead; the user sends the whole model from Fusion |
 | `return_unavailable` | `needs_user_input` | Neither the return Fusion sent nor WG's own copy of it can be read now (it left the WGLink folder before WG kept a copy, or the copy is damaged); the user sends it again, or tries again once it is back |
 | `wglink_folder_unset` | `needs_user_input` | No WGLink folder is selected, so the return cannot be read; choosing it and trying again works |
+| `return_unsupported` | `rejected` | The return names a major version or a required feature this WG cannot read; the user updates WG, then sends it again |
+| `disk_full` | `needs_user_input` | The disk filled up while WG kept or meshed the return; the user frees space and tries again |
 | `engine_unavailable` | `needs_user_input` | The engine the setup names is not available on this host |
 | `engine_cannot_solve_return` | `needs_user_input` | The engine the setup names is present but cannot solve this record (for example a BEAT accelerator that takes CAD returns only in Accurate); the message names the engines here that can |
 | `submission_refused` | `needs_user_input` | The jobs system refused the request, or submitting it failed without creating a job |
@@ -256,7 +260,7 @@ alone cannot: it covers real questions and failures alike. The summary (and a jo
 - `action`: the user must change or do something and nothing is asked
   (`operations.USER_ACTION_CODES`: `snapshot_changed`, `return_unavailable`,
   `wglink_folder_unset`, `excitation_refused`, `solver_memory_exceeded`,
-  `reduced_axis_not_allowed`; the engine gates `engine_unavailable` and
+  `reduced_axis_not_allowed`, `return_unsupported`, `disk_full`; the engine gates `engine_unavailable` and
   `engine_cannot_solve_return`, whose home is the Results solve progress; a manual
   axis changed elsewhere, `frame_confirmation_required`; every rejection, such as
   `model_cut_unsolvable`; and any reason not listed). A kept hold (`user_hold`) is a

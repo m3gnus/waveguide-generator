@@ -25,7 +25,7 @@ export type CadModelRequest = Pick<ReturnType<typeof currentModelStatus>, 'kind'
  * identity, or the parametric design's link classification. */
 export function selectCadModelState(
   state: Pick<CadReturnState, 'selectedBundle' | 'ingestRecord' | 'needsIngest' | 'projectLineageId'> & Partial<Pick<CadReturnState, 'captureIngestIntent'>>,
-  preparation: Pick<CadWorkspaceSnapshot, 'ingesting' | 'ingestError' | 'preparationIntent'> & Partial<Pick<CadWorkspaceSnapshot, 'ingestDiagnostic'>>,
+  preparation: Pick<CadWorkspaceSnapshot, 'ingesting' | 'ingestError' | 'preparationIntent'> & Partial<Pick<CadWorkspaceSnapshot, 'ingestFailure'>>,
   request: CadModelRequest | null = null,
   /** The open WG design: a bundle naming it is WG's own design, linked. */
   openDesignId: string | null = null,
@@ -51,13 +51,12 @@ export function selectCadModelState(
     : serverFailed ? 'prepare-failed'
     : serverStopped ? 'stopped'
     : 'selected-unprepared';
-  // This window's own preparation failed and the server classified it as
-  // WG's own failure: its calm, recorded sentence (the raw text is only the
-  // developer detail).
-  const localRecorded = selected && currentPreparation && !preparation.ingesting && !!preparation.ingestError
-    && !!preparation.ingestDiagnostic;
+  // This window's own preparation failed, and the server classified it: its
+  // sentence for it (the raw text of WG's own failure is developer detail).
+  const localFailure = selected && currentPreparation && !preparation.ingesting && !!preparation.ingestError
+    ? preparation.ingestFailure ?? null : null;
   const failureMessage = !selected ? null
-    : localRecorded ? preparation.ingestError
+    : localFailure ? preparation.ingestError
     : preparationPhase === 'prepare-failed' && serverFailed
       ? [request?.job?.cad_state?.message, request?.job?.cad_state?.next_step].filter(Boolean).join(' ') || null
     : preparationPhase === 'stopped' ? request?.message || null
@@ -78,7 +77,9 @@ export function selectCadModelState(
   return {
     phase, preparation: preparationPhase, heldRequest, meshChoice, failureMessage, selected, bundle, record, application,
     /** The raw text behind a recorded failure, for "Show developer details" only. */
-    failureDiagnostic: localRecorded ? preparation.ingestDiagnostic ?? null : null,
+    failureDiagnostic: localFailure?.diagnostic ?? null,
+    /** Whether trying again can work, as the server said; null when it did not say. */
+    failureRetry: localFailure ? localFailure.retry : null,
     label: bundle?.documentName?.trim() || record?.project?.document_name?.trim() || bundle?.name || 'CAD model',
     lineageId: record?.project?.lineage_id ?? state.projectLineageId ?? bundle?.projectLineageId ?? null,
     // A selected CAD model is authored in CAD unless its own evidence says WG
@@ -115,7 +116,7 @@ export function useCadModelSelection(request: CadModelRequest | null = null) {
     ingestGeneration: s.captureIngestIntent(),
   })));
   const preparation = useStore(cadWorkspace, useShallow(s => ({
-    ingesting: s.ingesting, ingestError: s.ingestError, ingestDiagnostic: s.ingestDiagnostic, preparationIntent: s.preparationIntent,
+    ingesting: s.ingesting, ingestError: s.ingestError, ingestFailure: s.ingestFailure, preparationIntent: s.preparationIntent,
   })));
   const openDesignId = useDocumentStore(s => s.identity?.designId ?? null);
   const ceiling = useSyncExternalStore(meshCeilingChoice.subscribe, meshCeilingChoice.getSnapshot, meshCeilingChoice.getSnapshot);

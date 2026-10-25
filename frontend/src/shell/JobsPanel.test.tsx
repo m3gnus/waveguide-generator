@@ -272,6 +272,7 @@ describe('jobs panel run list', () => {
   });
 
   it('keeps collapsed CAD runs to one line and only reads operation detail after expansion', async () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     const fromFusion = job(14, 'Speaker', 'cad-import');
     fromFusion.config_summary = { geometry_type: 'imported', ingest_id: 'wgi_example' };
     fromFusion.client_request_id = null;
@@ -304,6 +305,7 @@ describe('jobs panel run list', () => {
   });
 
   it('shows inputs for a retried CAD job without a submission key while the operation endpoint is gone', async () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     const retried = job(17, 'Retried speaker', 'cad-import');
     retried.client_request_id = null;
     retried.parent_job_id = 'old-job';
@@ -326,6 +328,7 @@ describe('jobs panel run list', () => {
   });
 
   it('shows imported geometry inputs when no operation identity was retained', async () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     const imported = job(18, 'Imported', 'cad-import');
     imported.client_request_id = null;
     imported.config_summary = { geometry_type: 'imported', ingest_id: 'ingest' };
@@ -335,6 +338,7 @@ describe('jobs panel run list', () => {
   });
 
   it('names every bound input of a CAD-created solve from its operation and job', async () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     const fromFusion = job(16, 'Bound speaker', 'cad-import');
     fromFusion.config_summary = { geometry_type: 'imported', ingest_id: 'wgi_example' };
     fromFusion.client_request_id = null;
@@ -370,6 +374,7 @@ describe('jobs panel run list', () => {
   });
 
   it('does not infer a historical job engine from its bound setup revision', async () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     const fromFusion = job(17, 'Old speaker', 'cad-import');
     fromFusion.config_summary = { geometry_type: 'imported', ingest_id: 'wgi_example' };
     fromFusion.client_request_id = null;

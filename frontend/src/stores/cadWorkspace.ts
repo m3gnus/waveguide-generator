@@ -15,15 +15,24 @@ export interface ErrorDiagnostics {
   detail: string;
 }
 
+/** A failed preparation the server classified (`failure` on its answer). */
+export interface CadIngestFailure {
+  /** WG's own failure, recorded for the developers. */
+  recorded: boolean;
+  /** Trying again can work. */
+  retry: boolean;
+  /** The raw text behind it, for "Show developer details" only. */
+  diagnostic: string | null;
+}
+
 export interface CadWorkspaceSnapshot {
   bundles: CadReturnBundle[];
   loading: boolean;
   ingesting: boolean;
   ingestError: string | null;
-  /** The raw text behind `ingestError` when the server classified the
-   * failure as WG's own (then `ingestError` is its calm, recorded sentence).
-   * Shown only with "Show developer details". */
-  ingestDiagnostic?: string | null;
+  /** How the server classified `ingestError` (then it is WG's sentence for
+   * it); null for a failure it did not classify, whose words are its own. */
+  ingestFailure?: CadIngestFailure | null;
   /** Preparation feedback belongs to this CAD intent, including after failure. */
   preparationIntent?: number;
   sendingToFusion: boolean;
@@ -68,7 +77,7 @@ export const emptyCadWorkspace: CadWorkspaceSnapshot = {
   loading: true,
   ingesting: false,
   ingestError: null,
-  ingestDiagnostic: null,
+  ingestFailure: null,
   preparationIntent: undefined,
   sendingToFusion: false,
   pullingFromFusion: false,

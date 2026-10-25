@@ -1,3 +1,4 @@
+import { useDeveloperDetails } from '../prefs/preferences';
 import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, OSSE_SWITCH_NOTICE, type OsseFeatures } from './osseFeatures';
 import { FreeformProfileInspection } from './ProfileInspection';
 import { registerParameterPanel } from './parameterPanelValidity';
@@ -832,6 +833,8 @@ export function RealizedDimensionsSection({ snapshot, driftedParameters = [], fo
   driftedParameters?: readonly string[];
   forceOpen?: boolean;
 }) {
+  // The instance and export ids are developer detail.
+  const developer = useDeveloperDetails();
   const drifted = new Set(driftedParameters);
   const interfaceParameters = (snapshot?.parameters ?? [])
     .filter((parameter) => parameter.role === 'interface')
@@ -853,7 +856,7 @@ export function RealizedDimensionsSection({ snapshot, driftedParameters = [], fo
     {valuesAvailable && snapshot.state === 'stale' && <div className="realized-dimensions-warning" role="status"><b>From an older CAD export</b><span>These values were published before the design now on screen changed. They are historical, not current dimensions.</span></div>}
     {valuesAvailable && <>
       <p className="realized-dimensions-intro">These read-only facts are the values WG published to CAD and the cabinet references. Change the formula parameters above, then rebuild in Fusion, to produce new values.</p>
-      <small className="realized-dimensions-meta">Instance <code>{snapshot.instanceId ?? 'unknown'}</code> · export <code>{snapshot.exportId ?? 'unknown'}</code></small>
+      {developer && <small className="realized-dimensions-meta">Instance <code>{snapshot.instanceId ?? 'unknown'}</code> · export <code>{snapshot.exportId ?? 'unknown'}</code></small>}
       {interfaceParameters.length > 0
         ? <dl className={`realized-dimension-list${snapshot.state === 'stale' ? ' stale' : ''}`}>
           {interfaceParameters.map((parameter) => <div

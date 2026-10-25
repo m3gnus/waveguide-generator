@@ -92,13 +92,14 @@ describe('held CAD request dialog owner', () => {
     expect(host.querySelector('[role="dialog"]')).toBeNull();
     act(() => openHeldRequest('one'));
     expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(1);
-    // Change in Fusion says where to make the change, then lets the request go.
+    // Change in Fusion says where: Fusion's own panel, whose Sources & Mesh…
+    // button stays while the request waits -- so it is kept, not dismissed.
     act(() => button('Change in Fusion').click());
-    expect(actions.dismiss).not.toHaveBeenCalled();
-    expect(host.querySelector('[role="dialog"]')?.textContent).toContain('Waveguide Generator ▸ Sources & Mesh…');
+    expect(host.querySelector('[role="dialog"]')?.textContent).toContain('panel shows this request with a Sources & Mesh… button');
     await act(async () => button('OK').click());
-    expect(actions.dismiss).toHaveBeenCalledWith(expect.objectContaining({ id: 'one' }));
+    expect(actions.dismiss).not.toHaveBeenCalled();
     expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(jobsSocket.getSnapshot().jobs.some(item => item.id === 'one')).toBe(true);
   });
   it('retires a superseded popup and ignores genuine errors without a refusal', async () => {
     const job = held();

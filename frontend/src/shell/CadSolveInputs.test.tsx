@@ -1,3 +1,4 @@
+import { preferencesStore } from '../prefs/preferences';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,11 +20,16 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
   status, headers: { 'Content-Type': 'application/json' },
 });
 
+
+afterEach(() => { preferencesStore.update({ showDeveloperDetails: false }); });
+
 describe('CAD solve input identities', () => {
   let host: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
+    // These identities are developer detail; the tests below read them.
+    preferencesStore.update({ showDeveloperDetails: true });
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     host = document.createElement('div');
     document.body.append(host);
@@ -75,6 +81,18 @@ describe('CAD solve input identities', () => {
     expect(host.textContent).toContain('Received2025-01-01T00:00:00Z');
     expect(host.textContent).toContain(kind === 'partial' ? 'Last moved2026-01-02T00:00:00Z' : 'Last moved2025-01-02T00:00:00Z');
     expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it('keeps identities and protocol states behind developer details', async () => {
+    preferencesStore.update({ showDeveloperDetails: false });
+    vi.stubGlobal('fetch', vi.fn(async () => json({ detail: 'gone' }, 404)));
+    const job = cadJobFixture(operation({ jobId: 'child', state: 'needs_user_input', reason: 'frame_confirmation_required', message: 'Confirm the frame.' }), { client_request_id: null, parent_job_id: 'parent' });
+    await act(async () => root.render(<CadSolveInputs operationId="op-1" job={job} jobCad={job.cad_provenance} resolvedEngine="metal" engineSource="job"/>));
+    expect(host.textContent).toContain('SnapshotTritonia');
+    for (const hidden of [manifest, 'Operation', 'Preparation', 'Setup revision', 'needs_user_input', 'frame_confirmation_required']) {
+      expect(host.textContent).not.toContain(hidden);
+    }
+    expect(host.textContent).toContain('Enginemetal');
   });
 
   it('fills a historical job\'s missing setup revision from the operation', async () => {

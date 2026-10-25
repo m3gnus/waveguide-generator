@@ -16,5 +16,8 @@ export function reportCadAutomationError(
   context?: Record<string, string | number | boolean | null>,
 ): boolean {
   if (error instanceof CadLinkApiError && error.status !== null && error.status >= 400 && error.status < 500) return false;
+  // A failure the server classified (WG's own, which it recorded, or one the
+  // user can act on) is never reported twice, whatever its status.
+  if (error instanceof CadLinkApiError && error.failure !== null) return false;
   return reportCaughtError(`cad-${operation}`, error, context);
 }

@@ -13,6 +13,7 @@ from typing import Any, Mapping
 from server.contracts.canonical import canonical_ascii_strict_json
 from server.workspace.api import _strictly_inside
 
+from server.cadlink.limits import MAX_WGRETURN_JSON_BYTES
 from server.cadlink.roles import canonical_source_role
 from server.cadlink.wgreturn import declared_domain_planes
 
@@ -35,11 +36,16 @@ def return_document_name(folder: Path) -> str | None:
 
     For naming a model whose manifest failed validation: its own
     ``document.name`` when the manifest reads at all, else the folder's name
-    without ``.wgreturn``. Never raises.
+    without ``.wgreturn``. A manifest over ``MAX_WGRETURN_JSON_BYTES`` is not
+    read. Never raises.
     """
 
     try:
-        document = parse_return_manifest(folder / "wgreturn.json").get("document")
+        manifest = folder / "wgreturn.json"
+        # A manifest larger than any valid one is never parsed to find a name.
+        if manifest.stat().st_size > MAX_WGRETURN_JSON_BYTES:
+            raise ValueError("manifest too large")
+        document = parse_return_manifest(manifest).get("document")
         name = document.get("name") if isinstance(document, Mapping) else None
         if isinstance(name, str) and name.strip():
             return name.strip()

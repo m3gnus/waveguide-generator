@@ -1199,6 +1199,10 @@ def test_endpoint_error_mapping_and_workspace_guards(monkeypatch, tmp_path: Path
     with pytest.raises(Exception) as conflict:
         asyncio.run(post_ingest(payload, SimpleNamespace(app=app)))
     assert conflict.value.status_code == 409
+    # A damaged copy is WG's own failure: told calmly, its text for developers only.
+    assert conflict.value.detail["code"] == "snapshot_invalid"
+    assert conflict.value.detail["failure"] == "internal"
+    assert conflict.value.detail["diagnostic"] == "stage 3 consistency gate: corrupt"
 
     monkeypatch.setattr(
         "server.cadlink.api.ingest_bundle",
@@ -1227,6 +1231,8 @@ def test_endpoint_error_mapping_and_workspace_guards(monkeypatch, tmp_path: Path
     with pytest.raises(Exception) as unavailable:
         asyncio.run(post_ingest(payload, SimpleNamespace(app=app)))
     assert unavailable.value.status_code == 503
+    assert unavailable.value.detail["code"] == "preparation_failed"
+    assert "missing gmsh" not in unavailable.value.detail["message"]
 
 
 def test_get_ingest_reads_store_off_event_loop(monkeypatch, tmp_path: Path) -> None:
