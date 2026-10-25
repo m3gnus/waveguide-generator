@@ -3862,6 +3862,10 @@ def test_build_package_uses_private_state_even_with_installed_ambient_environmen
 
 def _stage_backend_entry(app: Path) -> None:
     root = Path(__file__).resolve().parents[2]
+    # capabilities() imports the frame codec with this staged app as its root.
+    # Include the same shared rules as a real bundle, even on a cold import.
+    (app / "shared").mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(root / "shared/frame-rules.json", app / "shared/frame-rules.json")
     for name in ("ensure_backend.py", "backend_start.py"):
         target = app / "launchers" / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -3883,6 +3887,8 @@ def _assert_backend_entry(app: Path, launcher: Path, platform: str) -> None:
     assert installed_launcher_argv(environ={"WG2_BUNDLE": "1", "WG2_APP_ROOT": str(app)},
                                    platform_name=platform) == [str(launcher)]
     from server.cadlink.fusion.fusion_delivery import capabilities
+    # Import runtime dependencies on the host before simulating another OS.
+    capabilities()
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("WG2_BUNDLE", "1")
         patch.setenv("WG2_APP_ROOT", str(app))
