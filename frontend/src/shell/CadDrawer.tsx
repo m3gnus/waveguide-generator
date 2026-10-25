@@ -10,6 +10,8 @@ interface CadDrawerProps {
   /** Keeps a closed drawer's body mounted, hidden: its contents keep reading
    * what they show (the solver frame Solve uses, say) while folded away. */
   keepMounted?: boolean;
+  /** Told whenever the drawer opens or folds. */
+  onToggle?: (open: boolean) => void;
   warning?: boolean;
   className?: string;
   children: ReactNode;
@@ -18,10 +20,11 @@ interface CadDrawerProps {
 /** CAD sections use the same heading/button/chevron disclosure pattern as the
  * parameter rail, but keep their own compact card surface and state chip. */
 export function CadDrawer({
-  title, chip, defaultOpen = false, openWhen = false, keepMounted = false, warning = false, className = '', children,
+  title, chip, defaultOpen = false, openWhen = false, keepMounted = false, onToggle, warning = false, className = '', children,
 }: CadDrawerProps) {
   const [open, setOpen] = useState(defaultOpen || openWhen);
   useEffect(() => { if (openWhen) setOpen(true); }, [openWhen]);
+  useEffect(() => { onToggle?.(open); }, [onToggle, open]);
   const bodyId = useId();
   return <section className={`cad-section cad-drawer${open ? '' : ' closed'}${warning ? ' degraded' : ''}${className ? ` ${className}` : ''}`}>
     <h4 className="section-heading">

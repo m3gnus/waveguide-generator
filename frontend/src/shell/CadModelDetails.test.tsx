@@ -21,6 +21,7 @@ import type { CadOperationSummary } from '../api/cadOperations';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { RECOVERED_NEGATIVE_HALF } from '../api/domainDecision.fixtures';
 import { resetCadReturnStore } from '../stores/cadReturn';
+import { resetCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { resetSolveStageClocksForTests } from './solveProgress';
 
@@ -120,6 +121,7 @@ describe('Model details, and the run status Results shows for its model', () => 
 
     resetCadReturnStore();
     resetSolveOptionsStore();
+    resetCadSolverFrameStore();
     vi.useFakeTimers();
     vi.setSystemTime(new Date(NOW));
     resetSolveStageClocksForTests();
@@ -148,8 +150,8 @@ describe('Model details, and the run status Results shows for its model', () => 
     act(() => head().click());
     expect(body().hidden).toBe(false);
     expect(host.querySelector('.cad-solve-summary')?.textContent).toBe('Body79 · 1 source (HF) · full model, WG mirrors it at x = 0 and y = 0');
-    expect(host.querySelector('.cad-mesh-line')?.textContent).toContain('Mesh from Fusion · walls 25 mm · HF 6 mm · 3,035 triangles · about 0.1 GB');
-    expect(host.querySelector('.cad-mesh-line')?.textContent).toContain('Change it in Fusion: Waveguide Generator ▸ Sources & Mesh…');
+    expect(host.querySelector('.cad-mesh-line')?.textContent).toContain('Mesh (set in Fusion) · Walls 25 mm · HF source 6 mm · 3,035 triangles · memory ≈ 0.1 GB');
+    expect(host.querySelector('.cad-mesh-line')?.textContent).toContain('To change these, open Waveguide Generator ▸ Sources & Mesh… in Fusion and Send again.');
     expect(host.querySelector('.cad-solve-settings')).not.toBeNull();
     // Every check passed: one line, not one row per check.
     expect([...host.querySelectorAll('.cad-checks > .cad-check')].map((row) => row.textContent)).toEqual(['✓Checkspassed']);
@@ -173,7 +175,7 @@ describe('Model details, and the run status Results shows for its model', () => 
       scope: { status: 'degraded', degraded_skip_count: 1, included: [], skipped: [{ object_id: 'b', name: 'Body A', severity: 'warning', reason: 'unsupported' }] },
     } as never)}/>));
     expect(head().getAttribute('aria-expanded')).toBe('true');
-    expect(head().querySelector('.cad-state-chip')?.textContent).toBe('1 need attention');
+    expect(head().querySelector('.cad-state-chip')?.textContent).toBe('1 needs attention');
     expect(body().hidden).toBe(false);
     const rows = [...host.querySelectorAll('.cad-checks > .cad-check')];
     expect(rows.map((row) => row.querySelector('b')?.textContent)).toEqual(['Checks', 'Scope']);
@@ -182,10 +184,17 @@ describe('Model details, and the run status Results shows for its model', () => 
     expectPlain(host.textContent);
   });
 
-  it('says the mesh is near its limit beside its size, and leaves the sizing numbers to developer details', async () => {
-    await act(async () => root.render(<Details value={record({ sizing_estimate: { n_triangles: 3035, ram_gb: 0.147, feasibility: 'caution' } } as never)}/>));
-    expect(host.querySelector('.cad-mesh-line')?.className).toContain('cad-mesh-line-caution');
-    expect(host.querySelector('.cad-mesh-line')?.textContent).toContain('about 0.1 GB · caution');
+  it.each([
+    ['caution', 'Solving it needs a fair amount of memory.', false],
+    ['warn', 'Solving it needs a lot of memory and may be slow; a coarser mesh solves faster.', true],
+    ['infeasible', 'It needs more memory than most computers have; make the mesh coarser before solving.', true],
+  ] as const)('says a %s memory band in a calm sentence, and opens only for one that needs the user', async (band, sentence, attention) => {
+    await act(async () => root.render(<Details value={record({ sizing_estimate: { n_triangles: 3035, ram_gb: 30, feasibility: band } } as never)}/>));
+    const line = host.querySelector('.cad-mesh-line')!;
+    expect(line.querySelector('.cad-mesh-memory')?.textContent).toBe(sentence);
+    expect(line.textContent).not.toMatch(/caution|warn\b|infeasible/);
+    expect(head().getAttribute('aria-expanded')).toBe(String(attention));
+    expect(head().querySelector('.cad-state-chip')?.textContent ?? null).toBe(attention ? '1 needs attention' : null);
     expect(host.querySelector('.developer-details')).toBeNull();
   });
 
@@ -195,13 +204,13 @@ describe('Model details, and the run status Results shows for its model', () => 
     } as never)}/>));
     const line = host.querySelector('.cad-mesh-line')!;
     expect(line.getAttribute('data-mesh-origin')).toBe('wg');
-    expect(line.textContent).toContain('Mesh · walls 8 mm · HF 4 mm · 3,035 triangles');
+    expect(line.textContent).toContain('Mesh · Walls 8 mm · HF source 4 mm · 3,035 triangles');
     expect(line.textContent).not.toContain('Fusion');
   });
 
   it('never rounds a small mesh to no memory at all', async () => {
     await act(async () => root.render(<Details value={record({ sizing_estimate: { n_triangles: 738, ram_gb: 0.004 } } as never)}/>));
-    expect(host.querySelector('.cad-mesh-line')?.textContent).toContain('3,035 triangles · under 0.1 GB');
+    expect(host.querySelector('.cad-mesh-line')?.textContent).toContain('3,035 triangles · memory < 0.1 GB');
   });
 
   it('opens by itself when the model cannot be solved along its own axis, and draws no preview before Change', async () => {
@@ -222,6 +231,94 @@ describe('Model details, and the run status Results shows for its model', () => 
     expect(host.querySelector('.cad-frame-views')).toBeNull();
     // The preview needs the model's mesh, which is read only for the chooser.
     expect(vi.mocked(fetcher).mock.calls.some(([url]) => String(url).endsWith('/mesh'))).toBe(false);
+  });
+
+  /** A request for this snapshot that waits for the user, with `approved` of its blocking findings approved. */
+  function heldFor(findingIds: string[], approved: string[], reason = 'findings_need_review'): JobItem {
+    const held = cadJobFixture(operation({ state: 'needs_user_input', stage: 'received', reason, jobId: 'job-run', preparationId: 'wgp_1' }));
+    held.cad_state!.preparation = { ...held.cad_state!.preparation!, blocking_finding_ids: findingIds };
+    held.cad_state!.approvals = approved.map((id) => ({ preparation_id: 'wgp_1', finding_id: id }));
+    return held;
+  }
+
+  it('asks for a blocking finding calmly, and keeps its evidence for developer details', async () => {
+    publishJobs([heldFor(['f-skip'], [])]);
+    await act(async () => root.render(<Details value={record({ findings: [{ id: 'f-skip', kind: 'source-skip', blocking: true, source_id: 'source-hf' }] } as never)}/>));
+    expect(head().getAttribute('aria-expanded')).toBe('true');
+    expect(head().querySelector('.cad-state-chip')?.textContent).toBe('1 needs attention');
+    const row = host.querySelector('.cad-check-findings .cad-check')!;
+    expect(row.textContent).toBe('!source skipRecorded when WG prepared this model. · blocking');
+    expectPlain(host.querySelector('.cad-check-findings')?.textContent);
+    expect(host.textContent).not.toContain('source id');
+  });
+
+  it('says an approved blocking finding is approved, and stops asking for it', async () => {
+    publishJobs([heldFor(['f-skip'], ['f-skip'])]);
+    await act(async () => root.render(<Details value={record({ findings: [{ id: 'f-skip', kind: 'source-skip', blocking: true, source_id: 'source-hf' }] } as never)}/>));
+    expect(head().getAttribute('aria-expanded')).toBe('false');
+    expect(head().querySelector('.cad-state-chip')).toBeNull();
+    expect(host.querySelector('.cad-check-findings-head')?.textContent).toBe('1 finding approved');
+    const row = host.querySelector('.cad-check-findings .cad-check')!;
+    expect(row.className).toContain('cad-check-ok');
+    expect(row.textContent).toContain('· approved');
+    expectPlain(host.querySelector('.cad-check-findings')?.textContent);
+  });
+
+  it('opens on a sweep whose frequency list cannot be read', async () => {
+    useImportedSolveOptionsStore.getState().setFrequencyMode('list');
+    useImportedSolveOptionsStore.getState().setFrequencyListText('not a frequency');
+    await act(async () => root.render(<Details/>));
+    expect(head().getAttribute('aria-expanded')).toBe('true');
+    expect(host.querySelector('.cad-solve-settings')?.textContent).toContain('frequency list to fix');
+  });
+
+  it('still states how a record no longer prepared was read, without a Change', async () => {
+    const interpretation = {
+      contract: 'cad-domain-interpretation-v1', reading: 'reduced', planes: ['x0'], domain_planes: ['x0'],
+      looks_cut: [], ambiguous: [], evidence: { source: null, recovered: true }, reflected_planes: ['x0'], choices: [],
+    };
+    await act(async () => root.render(<Details prepared={false}
+      value={{ ...record(), domain_interpretation: interpretation, domain_decision: RECOVERED_NEGATIVE_HALF } as CadReturnIngestRecord}/>));
+    expect(host.querySelector('.cad-domain-line')?.textContent).toBe('Cut in CAD at x = 0 — recovered by mirroring (the x ≤ 0 side reflected)');
+    expect(host.querySelector('[data-action="change-domain"]')).toBeNull();
+  });
+
+  describe('the solver frame', () => {
+    const FRAME = {
+      linked: false, ingestId: 'wgi_run', contract: 'cad-solver-frame-v2', recordAxis: '+z', recordStatesFrame: true,
+      confirmed: { axis: '+z', confirmedAt: NOW, frame: null }, suggestion: null, preselected: { axis: '+z', source: 'confirmed' },
+      differs: null, notAllowed: null,
+      axes: [{ axis: '+z', allowed: true, reason: null, up: [0, 1, 0], upSource: 'default', solverFromAssembly: [], previewFromRecord: [] }],
+    };
+    const fetcherFor = (frame: object) => vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).includes('/solver-frame') ? frame : { ingestId: 'wgi_run', available: true, pending: null },
+    ), { status: 200 })) as unknown as typeof fetch;
+    const unlinked = () => record({ freshness: { verdict: 'unlinked', instances: [] } } as never);
+    async function show(fetcher: typeof fetch) {
+      await act(async () => root.render(<Details value={unlinked()} fetcher={fetcher}/>));
+      await act(async () => { await vi.waitFor(() => expect(host.querySelector('[data-frame-preview="ready"]')).not.toBeNull()); });
+    }
+
+    it('stops raising a suggestion to switch axes once the user keeps the project\'s frame', async () => {
+      const fetcher = fetcherFor({ ...FRAME, differs: { confirmedAxis: '+z', suggestedAxis: '-y', message: 'This model looks like it faces -y.' } });
+      await show(fetcher);
+      expect(head().getAttribute('aria-expanded')).toBe('true');
+      act(() => host.querySelector<HTMLButtonElement>('[data-action="keep-solver-frame"]')!.click());
+      expect(host.querySelector('.cad-solver-frame-differs')).toBeNull();
+      act(() => head().click());
+      expect(head().getAttribute('aria-expanded')).toBe('false');
+      // Shown again (another tab, say): it stays folded.
+      act(() => root.render(<div/>));
+      await show(fetcher);
+      expect(head().getAttribute('aria-expanded')).toBe('false');
+      expect(host.querySelector('.cad-solver-frame-differs')).toBeNull();
+    });
+
+    it('opens where a request for this model waits at the frame gate, though the axis is unchanged', async () => {
+      publishJobs([heldFor([], [], 'frame_confirmation_required')]);
+      await show(fetcherFor(FRAME));
+      expect(head().getAttribute('aria-expanded')).toBe('true');
+    });
   });
 
   it('shows every check with its evidence, the sizing numbers and the ids only with developer details', async () => {

@@ -4,6 +4,7 @@ import { cadJobSummary, isReadyCadJob } from '../jobs/cadSolve';
 import { messageBlocker } from '../jobs/solveReadiness';
 import { useCurrentModelStatus } from '../model/currentModel';
 import { useCadModelStatusLine } from './CadModelStatusLine';
+import { ENGINE_HOLDS } from '../stores/cadModelStatusLine';
 import { jobsCoordinatorBridge, useOptionalSolveControl } from './JobsCoordinator';
 import { Notice } from './Notice';
 import { clearSolveStageClock, MODEL_STATUS_TITLE, SolveProgressView } from './solveProgress';
@@ -30,7 +31,7 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
   const heldReason = status.kind === 'waiting' && latestJob?.cad_state?.state === 'needs_user_input' ? latestJob.cad_state.reason : null;
   const held = heldReason === 'engine_unavailable';
   // Every engine gate keeps its own readiness view, never "Needs a change".
-  const engineHold = held || heldReason === 'engine_cannot_solve_return';
+  const engineHold = !!heldReason && ENGINE_HOLDS.has(heldReason);
   const engineGate = engineHold || !!readiness?.engine || control?.waitingForEngine;
   const pending = solveStatus && (control?.waitingForEngine || control?.actionError || control?.preparationError
     || (readiness && (engineHold || control?.readinessRequested)));

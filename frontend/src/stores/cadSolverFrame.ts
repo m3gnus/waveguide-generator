@@ -39,6 +39,10 @@ export interface CadFrameView {
 
 interface CadSolverFrameStore {
   frames: Record<string, CadFrameView>;
+  /** Per ingestion, the axis of a "differs" suggestion the user chose not to
+   * switch to (Keep): it is not raised again for this model. */
+  keptDiffers: Record<string, SolverFrameAxis>;
+  keep: (ingestId: string) => void;
   load: (ingestId: string, fetcher?: typeof fetch) => Promise<void>;
   /** The user's pick among the allowed axes (Change), confirmed by Solve. */
   pick: (ingestId: string, axis: SolverFrameAxis) => void;
@@ -85,6 +89,11 @@ const loads = new Map<string, Promise<void>>();
 
 export const useCadSolverFrameStore = create<CadSolverFrameStore>((set, get) => ({
   frames: {},
+  keptDiffers: {},
+  keep: (ingestId) => {
+    const suggested = get().frames[ingestId]?.frame?.differs?.suggestedAxis;
+    if (suggested) set({ keptDiffers: { ...get().keptDiffers, [ingestId]: suggested } });
+  },
   load: (ingestId, fetcher = fetch) => {
     const running = loads.get(ingestId);
     if (running) return running;
@@ -133,6 +142,13 @@ export function frameReadInFlight(ingestId: string | null | undefined): Promise<
   return (ingestId ? loads.get(ingestId) : undefined) ?? null;
 }
 
+/** The "differs" suggestion still open for this ingestion: null once the
+ * user kept the project's frame, or when there is none. */
+export function openDiffers(view: CadFrameView | undefined, kept: SolverFrameAxis | undefined) {
+  const differs = view?.frame?.differs ?? null;
+  return differs && differs.suggestedAxis !== kept ? differs : null;
+}
+
 /** Sources of a preselection that are a person's own choice. */
 const CHOSEN_SOURCES: ReadonlySet<string> = new Set(['confirmed', 'carried']);
 
@@ -155,5 +171,5 @@ export function chosenFrameAxis(view: CadFrameView | undefined): SolverFrameAxis
 /** Tests only. */
 export function resetCadSolverFrameStore(): void {
   loads.clear();
-  useCadSolverFrameStore.setState({ frames: {} });
+  useCadSolverFrameStore.setState({ frames: {}, keptDiffers: {} });
 }

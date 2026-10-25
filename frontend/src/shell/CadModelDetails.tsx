@@ -1,24 +1,25 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import type { CadReturnFinding, CadReturnIngestRecord } from '../api/cadlink';
 import { cadMeshSizing } from '../api/cadMesh';
-import { recordDomainDecision } from '../api/domainDecision';
+import { planeWords, recordDomainDecision } from '../api/domainDecision';
 import type { DomainInterpretation } from '../api/domainInterpretation';
 import { useCapabilities } from '../jobs/useCapabilities';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
-import { cadJobSummary } from '../jobs/cadSolve';
+import { approvedCadFindings, cadJobSummary, useCadJobs } from '../jobs/cadSolve';
 import { isMeshRecoveryFinding } from '../model/cadMeshRecovery';
 import { useCurrentModelStatus } from '../model/currentModel';
 import { useDeveloperDetails } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
-import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
+import { openDiffers, useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { parseFrequencyList } from '../stores/frequencyList';
 import { useImportedSolveOptionsStore } from '../stores/solveOptions';
-import { CadDomainInterpretation, decisionLine } from './CadDomainInterpretation';
+import { CadDomainInterpretation, decisionLine, domainLine } from './CadDomainInterpretation';
 import { CadDrawer } from './CadDrawer';
 import { shortSha256 } from './CadOperationsSection';
 import { CadSolverFrame } from './CadSolverFrameConfirm';
 import { defaultSettingsNote } from './CadSolveInputs';
 import { DeveloperDetails } from './DeveloperDetails';
+import { findingEvidence, findingName, findingSentence } from './cadFindingWords';
 import { pluralized } from './cadTime';
 import { resolveEngineLabel } from './solveProgress';
 import { workspaceNavigation } from './workspaceNavigation';
@@ -61,11 +62,6 @@ function rank(role: string): number {
   return index < 0 ? ROLE_ORDER.length : index;
 }
 
-/** A plane token as a person reads it. */
-function planePhrase(plane: string): string {
-  return plane === 'x0' ? 'x = 0' : plane === 'y0' ? 'y = 0' : plane;
-}
-
 function compactValue(value: unknown): string {
   if (value === null || value === undefined) return '—';
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -100,9 +96,9 @@ export function modelSummary(record: CadReturnIngestRecord): string {
     ? (record.symmetry.domain_planes as unknown[]).map(String)
     : record.symmetry?.cut_planes ?? []).filter((plane) => plane === 'x0' || plane === 'y0');
   const domain = declared.length
-    ? `${declared.length === 1 ? 'half' : 'quarter'} model, cut on ${declared.map(planePhrase).join(' and ')}`
+    ? `${declared.length === 1 ? 'half' : 'quarter'} model, cut on ${declared.map(planeWords).join(' and ')}`
     : applied.length
-      ? `full model, WG mirrors it at ${applied.map(planePhrase).join(' and ')}`
+      ? `full model, WG mirrors it at ${applied.map(planeWords).join(' and ')}`
       : 'full model';
   return [
     bodies.length === 1 ? bodies[0] : bodies.length > 1 ? pluralized(bodies.length, 'body', 'bodies') : null,
@@ -125,21 +121,25 @@ function duration(seconds: number): string | null {
   return `~${Math.floor(minutes / 60)} h ${minutes % 60} min`;
 }
 
-/** The settings Solve uses, in one line: sweep, frequency count, engine and a
- * time estimate. They are edited where they always were, in Simulation. */
-function SettingsLine({ record }: { record: CadReturnIngestRecord }) {
+/** The sweep Solve uses, in words; `broken` when its frequency list cannot be read. */
+function useSweep(): { text: string; count: number; broken: boolean } {
   const start = useCadReturnStore((state) => state.frequencyStartHz);
   const end = useCadReturnStore((state) => state.frequencyEndHz);
   const rangeCount = useCadReturnStore((state) => state.frequencyCount);
   const mode = useImportedSolveOptionsStore((state) => state.frequencyMode);
   const listText = useImportedSolveOptionsStore((state) => state.frequencyListText);
+  if (mode !== 'list') return { text: `${hertz(start)}–${hertz(end)} · ${rangeCount} freq`, count: rangeCount, broken: false };
+  const listed = parseFrequencyList(listText).frequencies;
+  return listed
+    ? { text: pluralized(listed.length, 'listed frequency', 'listed frequencies'), count: listed.length, broken: false }
+    : { text: 'frequency list to fix', count: 0, broken: true };
+}
+
+/** The settings Solve uses, in one line: sweep, frequency count, engine and a
+ * time estimate. They are edited where they always were, in Simulation. */
+function SettingsLine({ record, sweep }: { record: CadReturnIngestRecord; sweep: ReturnType<typeof useSweep> }) {
   const engine = useImportedSolveOptionsStore((state) => state.engine);
   const plan = useImportedSolvePlan(true).plan;
-  const listed = mode === 'list' ? parseFrequencyList(listText).frequencies : null;
-  const count = mode === 'list' ? listed?.length ?? 0 : rangeCount;
-  const sweep = mode === 'list'
-    ? listed ? `${pluralized(listed.length, 'listed frequency', 'listed frequencies')}` : 'frequency list to fix'
-    : `${hertz(start)}–${hertz(end)} · ${count} freq`;
   // The engine chosen in the solver selector; Auto names what it resolves to.
   // A capability verdict's own `label` is preferred when a solve plan is on
   // hand; `resolveEngineLabel` (./solveProgress, shared with the run
@@ -154,9 +154,9 @@ function SettingsLine({ record }: { record: CadReturnIngestRecord }) {
   const perFrequency = measured && typeof measured === 'object'
     ? (measured as Record<string, unknown>).solve_seconds_per_freq
     : undefined;
-  const estimate = typeof perFrequency === 'number' && count > 0 ? duration(perFrequency * count) : null;
-  return <p className="cad-solve-settings" data-solve-settings="">
-    <span>{[sweep, engineWords, estimate].filter(Boolean).join(' · ')}</span>
+  const estimate = typeof perFrequency === 'number' && sweep.count > 0 ? duration(perFrequency * sweep.count) : null;
+  return <p className={`cad-solve-settings${sweep.broken ? ' cad-solve-settings-broken' : ''}`} data-solve-settings="">
+    <span>{[sweep.text, engineWords, estimate].filter(Boolean).join(' · ')}</span>
     {' '}<button
       className="link-button"
       data-action="open-settings"
@@ -166,30 +166,47 @@ function SettingsLine({ record }: { record: CadReturnIngestRecord }) {
   </p>;
 }
 
-/** The mesh this preparation was built with, in one line: the sizes (set in
- * Fusion when the return carries them), its size and memory, and where to
- * change them. The sizing numbers behind it are developer detail. */
-function MeshLine({ record }: { record: CadReturnIngestRecord }) {
+/** How much memory a mesh's solve needs, as the Fusion add-in bands it
+ * (`wglink_mesh_sizing.feasibility_from_ram_gb`): a sentence per band above
+ * "ok", and whether it needs the user. */
+const MEMORY_BAND: Record<string, { sentence: string; attention: boolean }> = {
+  caution: { sentence: 'Solving it needs a fair amount of memory.', attention: false },
+  warn: { sentence: 'Solving it needs a lot of memory and may be slow; a coarser mesh solves faster.', attention: true },
+  infeasible: { sentence: 'It needs more memory than most computers have; make the mesh coarser before solving.', attention: true },
+};
+
+/** The memory band of a record's mesh, when it is above "ok". */
+export function meshMemoryBand(record: CadReturnIngestRecord) {
+  const feasibility = cadMeshSizing(record).feasibility;
+  return typeof feasibility === 'string' ? MEMORY_BAND[feasibility] ?? null : null;
+}
+
+/**
+ * The mesh a preparation was built with, in one line, in the words the
+ * Simulation tab uses: the sizes (set in Fusion when the return carries
+ * them), its triangles and memory, a sentence when the memory is high, and
+ * where to change it. The sizing numbers behind it are developer detail.
+ */
+export function MeshLine({ record }: { record: CadReturnIngestRecord }) {
   const snapshot = record.mesh_snapshot ?? null;
   const sizes = snapshot
     ? { walls: snapshot.wall_size_mm, sources: snapshot.source_size_mm, zones: snapshot.surface_groups ?? [] }
     : { walls: record.mesh_sizes?.rigid_size_mm, sources: record.mesh_sizes?.source_size_mm ?? {}, zones: record.mesh_sizes?.surface_groups ?? [] };
   const sizing = cadMeshSizing(record);
   const triangles = record.mesh?.stats.triangle_count ?? (typeof sizing.n_triangles === 'number' ? sizing.n_triangles : null);
-  const feasibility = typeof sizing.feasibility === 'string' ? sizing.feasibility : null;
-  const caution = feasibility !== null && feasibility !== 'ok';
+  const band = meshMemoryBand(record);
   const parts = [
-    typeof sizes.walls === 'number' ? `walls ${sizes.walls} mm` : null,
+    typeof sizes.walls === 'number' ? `Walls ${sizes.walls} mm` : null,
     ...(record.sources ?? []).map((source) => typeof sizes.sources[source.id] === 'number'
-      ? `${source.role} ${sizes.sources[source.id]} mm` : null),
-    ...sizes.zones.map((zone) => `${zone.name} ${zone.size_mm} mm`),
+      ? `${source.role} source ${sizes.sources[source.id]} mm` : null),
+    ...sizes.zones.map((zone) => `${zone.name} — size zone ${zone.size_mm} mm`),
     typeof triangles === 'number' ? `${triangles.toLocaleString('en-US')} triangles` : null,
-    typeof sizing.ram_gb === 'number' ? sizing.ram_gb < 0.05 ? 'under 0.1 GB' : `about ${sizing.ram_gb.toFixed(1)} GB` : null,
-    caution ? feasibility : null,
+    typeof sizing.ram_gb === 'number' ? sizing.ram_gb < 0.05 ? 'memory < 0.1 GB' : `memory ≈ ${sizing.ram_gb.toFixed(1)} GB` : null,
   ].filter(Boolean);
-  return <div className={`cad-mesh-line${caution ? ' cad-mesh-line-caution' : ''}`} data-mesh-origin={snapshot ? 'fusion' : 'wg'}>
-    <p><b>{snapshot ? 'Mesh from Fusion' : 'Mesh'}</b>{parts.length ? ` · ${parts.join(' · ')}` : ''}</p>
-    {snapshot && <p className="cad-detail">Change it in Fusion: Waveguide Generator ▸ Sources &amp; Mesh…, then Send again.</p>}
+  return <div className={`cad-mesh-line${band?.attention ? ' cad-mesh-line-attention' : ''}`} data-mesh-origin={snapshot ? 'fusion' : 'wg'}>
+    <p><b>{snapshot ? 'Mesh (set in Fusion)' : 'Mesh'}</b>{parts.length ? ` · ${parts.join(' · ')}` : ''}</p>
+    {band && <p className="cad-mesh-memory" role={band.attention ? 'status' : undefined}>{band.sentence}</p>}
+    {snapshot && <p className="cad-detail">To change these, open Waveguide Generator ▸ Sources &amp; Mesh… in Fusion and Send again.</p>}
     <DeveloperDetails summary="Mesh sizing">
       {Object.entries(sizing).map(([key, value]) => <div className="cad-row" key={key}><b>{key.replaceAll('_', ' ')}</b><span>{compactValue(value)}</span></div>)}
     </DeveloperDetails>
@@ -215,15 +232,10 @@ interface CheckDescriptor {
 
 const CHECK_GLYPH: Record<CheckState, string> = { ok: '✓', info: 'i', warn: '!' };
 
+/** A finding's sentence, or a calm one for a finding that carries only
+ * structured evidence (which is developer detail). */
 function findingDetail(finding: CadReturnFinding): string {
-  // `detail` is a written sentence; the field dump below is a fallback for
-  // findings that carry only structured evidence.
-  const preferred = finding.reason ?? finding.verdict ?? finding.detail;
-  if (preferred) return String(preferred).replaceAll('_', ' ');
-  const details = Object.entries(finding)
-    .filter(([key]) => !['id', 'kind', 'blocking', 'evidence_path'].includes(key))
-    .map(([key, value]) => `${key.replaceAll('_', ' ')}: ${compactValue(value)}`);
-  return details.join(' · ') || 'Recorded during CAD model preparation.';
+  return findingSentence(finding) ?? 'Recorded when WG prepared this model.';
 }
 
 /** One row per verification the preparation performed. A check asks for
@@ -293,8 +305,8 @@ function recordChecks(record: CadReturnIngestRecord): CheckDescriptor[] {
     verdict: rejectedDeclared.length === 0
       ? domainPlanes.length === 0
         ? 'Full model'
-        : `${domainPlanes.length >= 2 ? 'Quarter' : 'Half'} model · mirrored at ${domainPlanes.map(planePhrase).join(' and ')}`
-      : `declared cut ${rejectedDeclared.map(([name]) => planePhrase(name)).join(', ')} does not mirror · solving ${cadDomain}`,
+        : `${domainPlanes.length >= 2 ? 'Quarter' : 'Half'} model · mirrored at ${domainPlanes.map(planeWords).join(' and ')}`
+      : `declared cut ${rejectedDeclared.map(([name]) => planeWords(name)).join(', ')} does not mirror · solving ${cadDomain}`,
     title: 'Mirror planes WG re-tested on the returned STEP after CAD edits, bodies and source tags were applied. A rejected plane keeps the larger safe domain instead of inheriting the parametric reduction.',
     evidence: <>
       {planes.map(([name, verdict]) => {
@@ -373,12 +385,6 @@ function CheckRow({ check }: { check: CheckDescriptor }) {
   </details>;
 }
 
-/** What a finding that blocks nothing tells the user, in words. */
-const NOTE_TITLE: Record<string, string> = {
-  fem_termination_with_exterior: 'FEM termination requires an interior-only solve',
-  'stale-detection-unavailable': 'WG cannot tell whether this model is out of date',
-};
-
 /** Non-blocking findings that only record how the domain was read, as asked:
  * the model's summary and domain line already say so. */
 const RECORD_ONLY: ReadonlySet<string> = new Set([
@@ -405,12 +411,16 @@ const FINDING_CHECK: Record<string, string> = {
   freshness: 'freshness',
 };
 
-/** Whether anything in the checks needs the user, and how to say so. */
-function checksVerdict(record: CadReturnIngestRecord, checks: CheckDescriptor[]): { problems: number; notes: number } {
-  const warned = new Set(checks.filter((check) => check.state === 'warn').map((check) => check.key));
+/** Whether anything in the checks needs the user, and how to say so. A
+ * blocking finding the user approved needs nothing more, nor does the check
+ * that reports the same thing. */
+function checksVerdict(record: CadReturnIngestRecord, checks: CheckDescriptor[], approved: ReadonlySet<string>): { problems: number; notes: number } {
+  const settled = new Set(record.findings.filter((finding) => finding.blocking && approved.has(finding.id))
+    .map((finding) => FINDING_CHECK[finding.kind]).filter(Boolean));
+  const warned = new Set(checks.filter((check) => check.state === 'warn' && !settled.has(check.key)).map((check) => check.key));
   // A blocking finding and the failing check that reports the same thing are
   // one problem, not two.
-  const unreported = record.findings.filter((finding) => finding.blocking
+  const unreported = record.findings.filter((finding) => finding.blocking && !approved.has(finding.id)
     && !warned.has(FINDING_CHECK[finding.kind] ?? '')).length;
   return { problems: warned.size + unreported, notes: record.findings.filter(isNote).length };
 }
@@ -418,8 +428,9 @@ function checksVerdict(record: CadReturnIngestRecord, checks: CheckDescriptor[])
 /** "Checks passed", or one line per check that deviates; every row with its
  * evidence under developer details. Then the findings: those to approve, and
  * those that limit confidence in the result, in words and never by id. */
-function Checks({ record, checks }: { record: CadReturnIngestRecord; checks: CheckDescriptor[] }) {
+function Checks({ record, checks, approved }: { record: CadReturnIngestRecord; checks: CheckDescriptor[]; approved: ReadonlySet<string> }) {
   const developerDetails = useDeveloperDetails();
+  const toApprove = record.findings.filter((finding) => finding.blocking && !approved.has(finding.id)).length;
   const shown = developerDetails ? checks : checks.filter((check) => check.state !== 'ok');
   const blocking = record.findings.filter((finding) => finding.blocking);
   const notes = record.findings.filter(isNote);
@@ -431,21 +442,28 @@ function Checks({ record, checks }: { record: CadReturnIngestRecord; checks: Che
     </div>}
     {shown.map((check) => <CheckRow key={check.key} check={check}/>)}
     {blocking.length > 0 && <div className="cad-check-findings">
-      <p className="cad-check-findings-head">{pluralized(blocking.length, 'finding')} to approve</p>
-      {blocking.map((finding) => <div key={finding.id} className="cad-check cad-check-warn">
-        <span className="cad-check-glyph" aria-hidden="true">!</span>
-        <b>{finding.kind.replaceAll('-', ' ')}</b>
-        <span className="cad-check-verdict">{findingDetail(finding)}<small
-          className="cad-blocking-suffix"
-          title="WG asks you to approve this before it solves the model. The approval is recorded with the run."
-        > · blocking</small></span>
-      </div>)}
+      <p className="cad-check-findings-head">{toApprove ? `${pluralized(toApprove, 'finding')} to approve` : `${pluralized(blocking.length, 'finding')} approved`}</p>
+      {blocking.map((finding) => {
+        const done = approved.has(finding.id);
+        return <div key={finding.id} className={`cad-check ${done ? 'cad-check-ok' : 'cad-check-warn'}`} data-finding-approved={done ? '' : undefined}>
+          <span className="cad-check-glyph" aria-hidden="true">{done ? '✓' : '!'}</span>
+          <b>{findingName(finding)}</b>
+          <span className="cad-check-verdict">{findingDetail(finding)}{done
+            ? <small className="cad-blocking-suffix" title="You approved this for this preparation. The approval is recorded with the run."> · approved</small>
+            : <small
+              className="cad-blocking-suffix"
+              title="WG asks you to approve this before it solves the model. The approval is recorded with the run."
+            > · blocking</small>}</span>
+          {!findingSentence(finding) && <DeveloperDetails summary="Evidence"><p className="cad-detail">{findingEvidence(finding)}</p></DeveloperDetails>}
+        </div>;
+      })}
     </div>}
     {notes.length > 0 && <div className="cad-check-notes">
       {notes.map((finding) => <div key={finding.id} className="cad-check cad-check-info">
         <span className="cad-check-glyph" aria-hidden="true">i</span>
-        <b>{NOTE_TITLE[finding.kind] ?? finding.kind.replaceAll('-', ' ')}</b>
+        <b>{findingName(finding)}</b>
         <span className="cad-check-verdict">{findingDetail(finding)}</span>
+        {!findingSentence(finding) && <DeveloperDetails summary="Evidence"><p className="cad-detail">{findingEvidence(finding)}</p></DeveloperDetails>}
       </div>)}
     </div>}
   </div>;
@@ -479,13 +497,20 @@ function OfferedFemRegions({ record }: { record: CadReturnIngestRecord }) {
 }
 
 /** Whether the solver frame shown needs the user: it changed elsewhere, WG
- * suggests another axis, or the model's own axis cannot be solved. */
+ * suggests another axis the user has not kept the frame against, or the
+ * model's own axis cannot be solved. */
 function useFrameNeedsUser(ingestId: string, unlinked: boolean): boolean {
   return useCadSolverFrameStore((state) => {
     const view = state.frames[ingestId];
     if (!unlinked || !view || view.linked) return false;
-    return Boolean(view.changedFrom || view.frame?.differs || (!view.picked && view.frame?.notAllowed));
+    return Boolean(view.changedFrom || openDiffers(view, state.keptDiffers[ingestId])
+      || (!view.picked && view.frame?.notAllowed));
   });
+}
+
+/** The domain a record states, in words, without its Change. */
+function domainWords(interpretation: DomainInterpretation, decision: ReturnType<typeof recordDomainDecision>): string {
+  return (decision ? decisionLine(decision, interpretation) : domainLine(interpretation)).text;
 }
 
 export function CadModelDetails({ record, label, prepared, fetcher }: {
@@ -503,22 +528,36 @@ export function CadModelDetails({ record, label, prepared, fetcher }: {
   const unlinked = record.freshness?.verdict === 'unlinked';
   const interpretation = recordInterpretation(record);
   const decision = recordDomainDecision(record);
+  const jobs = useCadJobs();
+  const approvedIds = approvedCadFindings(jobs, record.manifest_sha256)?.finding_ids;
+  const approvedKey = (approvedIds ?? []).join('|');
+  const approved = useMemo(() => new Set(approvedKey ? approvedKey.split('|') : []), [approvedKey]);
   const checks = useMemo(() => recordChecks(record), [record]);
-  const { problems, notes } = checksVerdict(record, checks);
-  const limitsConfidence = notes > 0;
-  const frameNeedsUser = useFrameNeedsUser(record.ingest_id, prepared && unlinked);
+  const memory = meshMemoryBand(record);
+  const verdict = checksVerdict(record, checks, approved);
+  const problems = verdict.problems + (memory?.attention ? 1 : 0);
+  const notes = verdict.notes;
+  const sweep = useSweep();
+  // The frame gate of a request for this model, which its ladder points here.
+  const frameGate = status.kind === 'waiting' && latestJob?.cad_state?.reason === 'frame_confirmation_required';
+  const frameNeedsUser = useFrameNeedsUser(record.ingest_id, prepared && unlinked) || (prepared && unlinked && frameGate);
   const domainRefused = prepared && !!decision && decisionLine(decision, interpretation).refused;
-  const chip = problems > 0 ? `${problems} need attention` : notes > 0 ? pluralized(notes, 'note') : undefined;
+  const chip = problems > 0 ? `${problems} ${problems === 1 ? 'needs' : 'need'} attention` : notes > 0 ? pluralized(notes, 'note') : undefined;
+  const [shown, setShown] = useState(false);
   return <CadDrawer
     key={record.ingest_id}
     title="Model details"
     chip={chip}
-    openWhen={problems > 0 || limitsConfidence || frameNeedsUser || domainRefused}
+    openWhen={problems > 0 || notes > 0 || frameNeedsUser || domainRefused || (prepared && sweep.broken)}
+    onToggle={setShown}
     keepMounted
     warning={problems > 0}
     className="cad-model-details"
   >
     <p className="cad-solve-summary">{modelSummary(record)}</p>
+    {/* A record no longer prepared still says how it was read, without the
+        Change only a prepared one offers. */}
+    {!prepared && interpretation && <p className="cad-domain-line">{domainWords(interpretation, decision)}</p>}
     {prepared && interpretation && <CadDomainInterpretation
       ingestId={record.ingest_id}
       interpretation={interpretation}
@@ -533,16 +572,17 @@ export function CadModelDetails({ record, label, prepared, fetcher }: {
       manifestSha256={record.manifest_sha256}
       label={label}
       confirmOnDone={solved && !!latest?.frameAxisAutomatic}
+      visible={shown}
       fetcher={fetcher}
     />}
     <MeshLine record={record}/>
-    {prepared && <SettingsLine record={record}/>}
+    {prepared && <SettingsLine record={record} sweep={sweep}/>}
     {/* No settings were recorded for this model, so WG solved it with its
         defaults; the backend's own words say so and where to change them. */}
     {prepared && solved && latest?.setupDefaults && <p className="cad-detail cad-solve-defaults" data-setup-defaults="true">
       {defaultSettingsNote(latest?.message ?? null, latestJob?.status === 'complete')}
     </p>}
-    <Checks record={record} checks={checks}/>
+    <Checks record={record} checks={checks} approved={approved}/>
     <FemRegions record={record}/>
     <DeveloperDetails className="cad-model-provenance">
       <p

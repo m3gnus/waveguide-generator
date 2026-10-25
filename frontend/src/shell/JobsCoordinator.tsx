@@ -25,7 +25,7 @@ import { useSolvePlan } from '../jobs/useSolvePlan';
 import { JobAutomation } from '../jobs/automation';
 import { explainImportedRefusal } from '../jobs/importedRefusals';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
-import { acknowledgeCadSolve, approveCadJob, solveCadAgain, type CadSolvePress, cadSolveClaim, forgetCadSolve, latestCadJobs, rememberCadSolve } from '../jobs/cadSolve';
+import { acknowledgeCadSolve, approvedCadFindings, approveCadJob, solveCadAgain, type CadSolvePress, cadSolveClaim, forgetCadSolve, latestCadJobs, rememberCadSolve } from '../jobs/cadSolve';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
 import { currentRunNameSource } from '../jobs/runNameSource';
@@ -245,15 +245,7 @@ export function cadSolveBlockerNow(): string | null {
 /** The blocking findings already reviewed on the refused solve of this
  * snapshot that a Solve continues, so the press carries them. */
 function reviewedFindings(record: CadReturnIngestRecord): ModelSolvePress['approvals'] {
-  const refused = latestCadJobs(jobsSocket.getSnapshot().jobs).find((job) => job.cad_state?.state === 'needs_user_input'
-    && job.cad_state.snapshot?.manifest_sha256 === record.manifest_sha256);
-  const preparation = refused?.cad_state?.preparation;
-  if (!refused?.cad_state || !preparation) return undefined;
-  const findingIds = refused.cad_state.approvals
-    .filter((approval) => approval.preparation_id === preparation.preparation_id
-      && preparation.blocking_finding_ids.includes(approval.finding_id))
-    .map((approval) => approval.finding_id);
-  return findingIds.length ? { preparation_id: preparation.preparation_id, finding_ids: findingIds } : undefined;
+  return approvedCadFindings(jobsSocket.getSnapshot().jobs, record.manifest_sha256);
 }
 
 /** Refusals of a restored run's own saved inputs: the run cannot be solved again as it was.

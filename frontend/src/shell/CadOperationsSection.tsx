@@ -17,6 +17,9 @@ import { fullTime, relativeTime } from './cadTime';
 import { usePanelVisible } from './panelVisibility';
 import { navigationGeneration, workspaceNavigation } from './workspaceNavigation';
 import { operationReasonWords, operationStageWord } from './solveProgress';
+import { findingName, findingSentence } from './cadFindingWords';
+import { CadSolveInputs } from './CadSolveInputs';
+import { useDeveloperDetails } from '../prefs/preferences';
 
 const RECOVERY_DISMISSED = 'Dismissed this recovery notice. Fusion still needs Undo or repair before you continue modelling.';
 
@@ -136,7 +139,8 @@ function findingCount(count: number): string {
 
 /** A finding in words: what kind it is and what it says, never its id. */
 function findingWords(finding: CadReturnFinding): string {
-  return `${finding.kind.replaceAll('-', ' ')}${finding.detail ? ` — ${finding.detail}` : ''}`;
+  const sentence = findingSentence(finding);
+  return `${findingName(finding)}${sentence ? ` — ${sentence}` : ''}`;
 }
 
 /**
@@ -246,6 +250,7 @@ function guidance(operation: CadOperationSummary): Guidance {
 
 function CadOperationCard({ operation, showStatus = true }: { operation: CadOperationSummary; showStatus?: boolean }) {
   const jobs = useCadJobs();
+  const developer = useDeveloperDetails();
   const owner = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
   const approvalUnavailable = owner.available ? null : 'Solve coordinator is unavailable. Reopen this workspace to approve and solve.';
   const job = jobs.find((item) => item.id === operation.jobId)!;
@@ -335,6 +340,9 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
       {waiting && help.text && <span>{help.text}</span>}
       {showStatus && solve && (operation.state === 'received' || operation.state === 'processing')
         && <span className="cad-operation-in-flight">{inFlightWords(operation)}</span>}
+      {/* What the request holds -- its snapshot, preparation, settings and
+          engine, and the backend's own report -- is developer detail. */}
+      {developer && <CadSolveInputs operationId={operation.operationId} job={job} engineSource="setup-revision"/>}
     </div>
     <div className="cad-confirm-actions">
       {waiting && !active && <button

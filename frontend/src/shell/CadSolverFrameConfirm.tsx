@@ -3,7 +3,7 @@ import { deadlineFetch } from '../api/deadlineFetch';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { confirmSolverFrame, type SolverFrameState } from '../api/solverFrame';
 import { cadJobSummaries, useCadJobs } from '../jobs/cadSolve';
-import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
+import { openDiffers, useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { parseMSH, type ParsedMSH } from '../viewport/mshParser';
 import {
   framePreviewProjection,
@@ -153,7 +153,7 @@ const SOURCE_WORDS: Record<string, string> = {
  * notice offers. The preview applies the server's matrices; nothing here
  * computes a frame.
  */
-export function CadSolverFrame({ ingestId, manifestSha256, label, confirmOnDone = false, fetcher = fetch }: {
+export function CadSolverFrame({ ingestId, manifestSha256, label, confirmOnDone = false, visible = true, fetcher = fetch }: {
   ingestId: string;
   /** The snapshot shown: a solve of it that stops at the frame gate means the
    * frame may have changed, so the card reads it again. */
@@ -163,13 +163,22 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, confirmOnDone 
    * shows this chooser): Done confirms the axis picked for the project, so the
    * next solve, from either side, uses it. */
   confirmOnDone?: boolean;
+  /** Model details is open: folding it away with the chooser open is Done. */
+  visible?: boolean;
   fetcher?: typeof fetch;
 }) {
   const view = useCadSolverFrameStore((state) => state.frames[ingestId]);
   const load = useCadSolverFrameStore((state) => state.load);
   const pick = useCadSolverFrameStore((state) => state.pick);
   const apply = useCadSolverFrameStore((state) => state.apply);
+  const keep = useCadSolverFrameStore((state) => state.keep);
+  const kept = useCadSolverFrameStore((state) => state.keptDiffers[ingestId]);
   const [changing, setChanging] = useState(false);
+  // Whether Done confirms is decided when the chooser opens: a run finishing
+  // meanwhile does not change what Done does.
+  const [confirmPick, setConfirmPick] = useState(false);
+  const openChooser = () => { setConfirmPick(confirmOnDone); setChanging(true); };
+  const doneRef = useRef<() => void>(() => undefined);
   const [switching, setSwitching] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
   // Each time a solve of this snapshot stops at the frame gate -- a frame
@@ -187,6 +196,8 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, confirmOnDone 
   useEffect(() => { void load(ingestId, fetcher); }, [fetcher, frameGate, ingestId, load]);
   // Another model must not inherit a Change opened for this one.
   useEffect(() => { setChanging(false); setSwitchError(null); }, [ingestId]);
+  // Folding Model details away with the chooser open is Done.
+  useEffect(() => { if (!visible && changing) doneRef.current(); }, [visible, changing]);
   const frame = view?.frame ?? null;
   // Only the user's own Change opens the chooser: it is never a question.
   const choosing = changing;
@@ -203,7 +214,7 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, confirmOnDone 
   }
   const axis = view.axis;
   const source = frame.preselected?.source ?? (frame.confirmed ? 'confirmed' : null);
-  const differs = frame.differs ?? null;
+  const differs = openDiffers(view, kept);
   const switchTo = (target: SolverFrameAxis) => {
     setSwitching(true);
     setSwitchError(null);
@@ -215,8 +226,9 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, confirmOnDone 
   const done = () => {
     setChanging(false);
     // Only a pick is a change; Done alone confirms nothing.
-    if (confirmOnDone && view.picked && axis) switchTo(axis);
+    if (confirmPick && view.picked && axis) switchTo(axis);
   };
+  doneRef.current = done;
   const unsupported = frame.axes.find((item) => !item.allowed && item.reason)?.reason ?? null;
   const fallback = !view.picked && source === 'fallback';
   // The model's own axis cannot be used by its reduced domain: said as such,
@@ -235,7 +247,7 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, confirmOnDone 
           className="link-button"
           data-action="change-solver-frame"
           title="Choose another axis. Solve uses the one shown; runs already solved keep their frame."
-          onClick={() => setChanging(true)}
+          onClick={openChooser}
         >Change</button>
       </p>
       {notAllowed && <p className="cad-detail cad-solver-frame-not-allowed" role="status">
@@ -266,23 +278,31 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, confirmOnDone 
       {axis
         ? <>
           <FramePreview frame={frame} axis={axis} mesh={mesh} views="both"/>
-          <p className="cad-detail">Solver frame: model {axis} → solver +Z (blue arrow). Drive sources are shown in orange. {view.picked ? (confirmOnDone ? 'Done keeps it for this project.' : 'Solve keeps it for this project.') : ''}</p>
+          <p className="cad-detail">Solver frame: model {axis} → solver +Z (blue arrow). Drive sources are shown in orange. {view.picked ? (confirmPick ? 'Done keeps it for this project.' : 'Solve keeps it for this project.') : ''}</p>
         </>
         : <p className="cad-detail">Pick the model axis that points out of the mouth; the preview shows it as the solver +Z.</p>}
       <button className="link-button" data-action="done-solver-frame" onClick={done}>Done</button>
     </>}
     {view.changedFrom && axis && <Notice tone="warning" className="cad-solver-frame-changed">
-      This project’s solver frame was changed elsewhere to {axis}; this card showed {view.changedFrom}. Solve now solves along {axis}.
+      This project’s solver frame was changed elsewhere to {axis}; Model details showed {view.changedFrom}. Solve now solves along {axis}.
     </Notice>}
     {axis && frame.recordAxis !== axis && <p className="cad-detail">
       Prepared along {frame.recordAxis}; Solve prepares it again along {axis}.
     </p>}
-    {differs && <Notice className="cad-solver-frame-differs" actions={<button
+    {differs && <Notice className="cad-solver-frame-differs" actions={<>
+      <button
         className="btn"
         data-action="switch-solver-frame"
         disabled={switching}
         onClick={() => switchTo(differs.suggestedAxis)}
-      >Switch to {differs.suggestedAxis}</button>}>
+      >Switch to {differs.suggestedAxis}</button>
+      <button
+        className="btn"
+        data-action="keep-solver-frame"
+        disabled={switching}
+        onClick={() => keep(ingestId)}
+      >Keep {differs.confirmedAxis}</button>
+    </>}>
       {differs.message}
     </Notice>}
     {switchError && <p className="cad-solver-frame-error" role="alert">Could not switch the solver frame: {switchError}</p>}

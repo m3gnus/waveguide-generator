@@ -12,6 +12,7 @@ import { useRef, useState, useSyncExternalStore } from 'react';
 import { useEffect } from 'react';
 import { installCadLinkAddin } from '../api/cadlink';
 import type { CadReturnBundle } from '../api/cadlink';
+import { joinPlanes } from '../api/domainDecision';
 import { OnshapePublicConsentRequired, sendDesignToOnshape, unlinkOnshape } from '../api/onshape';
 import { useDeveloperDetails, usePreferences } from '../prefs/preferences';
 import { DeveloperDetails } from './DeveloperDetails';
@@ -69,8 +70,7 @@ function returnDisplayName(bundle: CadReturnBundle): string {
 export function declaredDomainPhrase(planes: string[] | undefined): string {
   const cut = (planes ?? []).filter((plane) => plane === 'x0' || plane === 'y0');
   if (cut.length === 0) return '';
-  const named = cut.map((plane) => (plane === 'x0' ? 'x = 0' : 'y = 0')).join(' and ');
-  return `${cut.length === 1 ? 'half' : 'quarter'} model, cut on ${named}`;
+  return `${cut.length === 1 ? 'half' : 'quarter'} model, cut on ${joinPlanes(cut)}`;
 }
 
 function bundleInventory(bundle: CadReturnBundle): string {

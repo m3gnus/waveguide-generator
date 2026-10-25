@@ -119,6 +119,21 @@ export function cadJobAboutModel(job: Pick<JobItem, 'id' | 'cad_state' | 'cad_re
     || (model.requestId && job.id === model.requestId));
 }
 
+/** The blocking findings already approved on the request of this snapshot
+ * that waits for the user: its preparation, and those of its blocking
+ * findings an approval names. Undefined when none waits or none is approved. */
+export function approvedCadFindings(jobs: JobItem[], manifestSha256: string): { preparation_id: string; finding_ids: string[] } | undefined {
+  const refused = latestCadJobs(jobs).find((job) => job.cad_state?.state === 'needs_user_input'
+    && job.cad_state.snapshot?.manifest_sha256 === manifestSha256);
+  const preparation = refused?.cad_state?.preparation;
+  if (!refused?.cad_state || !preparation) return undefined;
+  const findingIds = refused.cad_state.approvals
+    .filter((approval) => approval.preparation_id === preparation.preparation_id
+      && preparation.blocking_finding_ids.includes(approval.finding_id as string))
+    .map((approval) => approval.finding_id as string);
+  return findingIds.length ? { preparation_id: preparation.preparation_id, finding_ids: findingIds } : undefined;
+}
+
 /** Retain only the current child of a chain; timestamps order separate presses. */
 export function latestCadJobs(jobs: JobItem[]): JobItem[] {
   const byId = new Map(jobs.map((job) => [job.id, job]));

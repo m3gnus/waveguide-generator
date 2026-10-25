@@ -111,7 +111,8 @@
 .cad-model-details .section-body p { margin: 0; }
 .cad-mesh-line { color: var(--fg2); }
 .cad-mesh-line b { color: var(--fg1); font-weight: 500; }
-.cad-mesh-line-caution b { color: var(--amber); }
+.cad-mesh-line-attention b, .cad-mesh-line-attention .cad-mesh-memory { color: var(--amber); }
+.cad-solve-settings-broken > span { color: var(--amber); }
 .cad-checks { border-top: 1px solid var(--hair-soft); padding-top: 2px; }
 .cad-fem-regions h5 { margin: 4px 0 2px; color: var(--fg1); font-size: var(--text-base); font-weight: 500; }
 .cad-solve-summary { color: var(--fg1); }

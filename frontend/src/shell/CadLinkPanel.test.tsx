@@ -364,7 +364,7 @@ describe('CadLinkPanel', () => {
     expect(host.querySelector('.cad-check-findings')?.textContent).toContain('freshness');
     // A record that needs attention arrives with its Model details open.
     expect(modelDetails().querySelector('.section-head')?.getAttribute('aria-expanded')).toBe('true');
-    expect(modelDetails().querySelector('.cad-state-chip')?.textContent).toContain('need attention');
+    expect(modelDetails().querySelector('.cad-state-chip')?.textContent).toMatch(/needs? attention/);
     for (const moved of ['Mesh detail', 'Crossover', 'Rebuild mesh']) {
       expect(host.textContent).not.toContain(moved);
     }
@@ -681,25 +681,33 @@ describe('CadLinkPanel', () => {
     expect(ready.querySelector('[role="status"] button')).toBeNull();
     expect(ready.textContent).toContain('Fusion asked for a solve');
     expect(ready.textContent).toContain('Prepared, and waiting for you to start the solve.');
-    // Its bound inputs are the run's bookkeeping, in its Jobs card: not on
-    // the request's card, and not repeated in the model card.
-    for (const id of ['op-ready', 'wgs_1', 'wgp_1']) expect(ready.textContent).not.toContain(id);
-    expect(host.querySelector('.cad-model-card .cad-solve-inputs')).toBeNull();
+    // Its bound inputs -- held requests have no run yet -- are developer
+    // detail on its own card, collapsed; never in the request's words.
+    const inputs = ready.querySelector<HTMLDetailsElement>('.cad-solve-inputs')!;
+    expect(inputs.open).toBe(false);
+    for (const id of ['op-ready', 'wgs_1', 'wgp_1']) {
+      expect(inputs.textContent).toContain(id);
+      expect([...ready.querySelectorAll(':scope > div > span')].map((span) => span.textContent).join(' ')).not.toContain(id);
+    }
+    await vi.waitFor(() => expect(inputs.textContent).toContain('Enginemetal'));
+    expect(inputs.textContent).not.toContain('beat-cpu');
     // Solving it is the Solve card's one Solve (M1b); the request's own card
     // offers only what Solve never does. Each action names what it acts on.
     expect(buttonTexts(ready)).toEqual(['Dismiss']);
     expect(buttonLabels(ready)).toEqual(['Dismiss: Speaker']);
     expect(ready.closest('.cad-model-card')).not.toBeNull();
-    // Only current model status owns readiness and remedies, with no copy on
-    // each request.
+    // Older requests keep their reported refusal in their own inputs. Only
+    // current model status owns readiness and remedies, with no copy on each request.
+    expect(engine.querySelector('.cad-solve-inputs-reported')?.textContent).toContain('Engines that can: bempp, beat-cpu.');
     expect(engine.querySelector('.solve-readiness')).toBeNull();
     expect(buttonTexts(engine)).toEqual(['Dismiss']);
     expect(buttonLabels(engine)[0]).toBe('Dismiss: operation op-engine');
     // The model is on screen, so the card's own guidance replaces the backend's
-    // message; the run's Jobs card keeps it, as reported.
+    // message; its collapsed Solve inputs keep it, as reported.
     expect(setup.querySelector(':scope > div > span:not([role])')?.textContent).toContain('This model is on screen');
     expect([...setup.querySelectorAll(':scope > div > span')].map((span) => span.textContent).join(' '))
       .not.toContain('Choose the solve settings for this model in WG');
+    expect(setup.querySelector('.cad-solve-inputs-reported')?.textContent).toContain('Choose the solve settings for this model in WG');
     expect(buttonTexts(setup)).toEqual(['Dismiss']);
     // No Solve in the panel beside them: the model's status line has the one
     // action, and Solve is the top bar's.
@@ -744,7 +752,7 @@ describe('CadLinkPanel', () => {
       applyCadRequest(cadOperation({ operationId: 'op-review', reason: 'findings_need_review', preparationId: 'wgp_7' }));
       retry.click();
     });
-    await vi.waitFor(() => expect(card.querySelector('.cad-operation-findings')?.textContent).toBe('freshness'));
+    await vi.waitFor(() => expect(card.querySelector('.cad-operation-findings')?.textContent).toBe('freshness — design changed'));
     expect(card.textContent).not.toContain('Could not read the findings');
     // In words, never by id.
     expect(card.textContent).not.toContain('finding-a');
@@ -2244,7 +2252,7 @@ describe('CadLinkPanel', () => {
     await clickIngest();
 
     expect(modelDetails().querySelector('.section-head')?.getAttribute('aria-expanded')).toBe('true');
-    expect(modelDetails().querySelector('.cad-state-chip')?.textContent).toContain('need attention');
+    expect(modelDetails().querySelector('.cad-state-chip')?.textContent).toMatch(/needs? attention/);
     const checks = host.querySelector<HTMLElement>('.cad-checks')!;
     const scope = [...checks.querySelectorAll<HTMLDetailsElement>('details.cad-check')]
       .find((row) => row.textContent?.includes('Scope'))!;
@@ -2865,7 +2873,7 @@ describe('CadLinkPanel', () => {
     const row = (name: string) => [...checks.querySelectorAll<HTMLElement>('.cad-check')]
       .find((item) => item.querySelector('b')?.textContent === name);
     // The hidden body and its blocking finding are one problem, not two.
-    expect(modelDetails().querySelector('.cad-state-chip')?.textContent).toBe('1 need attention');
+    expect(modelDetails().querySelector('.cad-state-chip')?.textContent).toBe('1 needs attention');
     expect(row('Symmetry')!.className).toContain('cad-check-ok');
     expect(row('Symmetry')!.textContent).toContain('Half model · mirrored at x = 0');
     expect(row('Symmetry')!.textContent).toContain('max residual 0.0036 mm');
@@ -2877,7 +2885,7 @@ describe('CadLinkPanel', () => {
     // The measured mesh, not the lower-bound estimate, is the mesh line: no
     // Mesh check repeats it, and no time without a sweep.
     expect(row('Mesh')).toBeUndefined();
-    expect(modelDetails().querySelector('.cad-mesh-line > p')?.textContent).toMatch(/· 10,084 triangles · about 1\.6 GB$/);
+    expect(modelDetails().querySelector('.cad-mesh-line > p')?.textContent).toMatch(/· 10,084 triangles · memory ≈ 1\.6 GB$/);
     // Only the finding that blocks is listed, and its hover says what it does.
     const findings = checks.querySelector('.cad-check-findings')!;
     expect(findings.textContent).toContain('scope degradation');

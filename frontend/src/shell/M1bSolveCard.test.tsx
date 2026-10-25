@@ -613,6 +613,27 @@ describe('M1b: one Solve card, to the revealed result', () => {
     expect(puts).toEqual([{ ingestId: 'wgi_first', axis: '-z' }]);
   });
 
+  it('treats folding Model details after a pick as Done, once WG solved along its own axis', async () => {
+    await mount();
+    await jobs([cadJobFixture(operation('op-auto', 'accepted', { jobId: 'job-auto', frameAxisAutomatic: '+x' }), cadJob('job-auto'))]);
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="change-solver-frame"]')!.click(); await flush(); });
+    await act(async () => { host.querySelector<HTMLInputElement>('input[value="-z"]')!.click(); await flush(); });
+    expect(puts).toEqual([]);
+    await act(async () => { host.querySelector<HTMLButtonElement>('.cad-model-details .section-head')!.click(); await flush(); });
+    expect(puts).toEqual([{ ingestId: 'wgi_first', axis: '-z' }]);
+    expect(host.querySelector('input[type="radio"]')).toBeNull();
+  });
+
+  it('decides what Done does when the chooser opens: a run finishing meanwhile does not change it', async () => {
+    await mount();
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="change-solver-frame"]')!.click(); await flush(); });
+    await jobs([cadJobFixture(operation('op-auto', 'accepted', { jobId: 'job-auto', frameAxisAutomatic: '+x' }), cadJob('job-auto'))]);
+    await act(async () => { host.querySelector<HTMLInputElement>('input[value="-z"]')!.click(); await flush(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="done-solver-frame"]')!.click(); await flush(); });
+    // Opened before WG solved it: Solve confirms the pick, not Done.
+    expect(puts).toEqual([]);
+  });
+
   it('draws the frame preview only in the chooser Change opens', async () => {
     await mount();
     expect(host.querySelector('.cad-frame-views')).toBeNull();

@@ -5,15 +5,7 @@ import {
   type DomainInterpretation,
   type DomainReading,
 } from '../api/domainInterpretation';
-import { decisionReading, type DomainDecision } from '../api/domainDecision';
-
-function planeWords(plane: string): string {
-  return `${plane.charAt(0)} = 0`;
-}
-
-function joinPlanes(planes: readonly string[]): string {
-  return planes.map(planeWords).join(' and ');
-}
+import { decisionReading, joinPlanes, type DomainDecision } from '../api/domainDecision';
 
 /** What evidence made WG mirror a model already cut in CAD, in words. */
 function evidenceWords(interpretation: DomainInterpretation): string | null {
