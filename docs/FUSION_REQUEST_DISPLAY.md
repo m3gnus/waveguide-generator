@@ -34,6 +34,12 @@ through receipts/jobs; folder arrivals open by themselves unless the observed
 add-in reports inbox transfer, so an older add-in, or one that has not reported
 (coordination off), keeps opening them.
 
+The display owner retains each observed request's bundle path when binding
+replaces `cad_intent` with the run's solve configuration. A late folder listing
+therefore still belongs to that request, even after its model was displayed;
+it cannot select the export again and clear the retained model. Display claims
+remain per job/run, and a later explicit model selection still wins.
+
 ## 0.3.7 follow-up
 
 Plain Send receipts still belong to `receiptDisplay.ts`; legacy folder returns,

@@ -3,6 +3,7 @@ import { cadCoordinationStore, resetCadCoordinationForTests } from '../api/cadCo
 import { jobsSocket, type CadOperationListener } from '../api/jobsSocket';
 import { publishCadJobs } from '../jobs/cadSolve.fixtures';
 import { compareSelection } from '../api/results';
+import { currentModel, runVerdict } from '../model/currentModel';
 import { cadReceiptsStore, type CadReceipt } from '../stores/cadReceipts';
 import { useCadConnectionStore } from '../stores/cadConnection';
 import { cadRecoveryNoticesStore } from '../stores/cadRecoveryNotices';
@@ -77,6 +78,44 @@ it('opens the prepared model of a Fusion solve first seen as already accepted', 
   expect(calls(`/api/cadlink/ingest/${record.ingest_id}`)).toHaveLength(1);
   expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
   expect(compareSelection.getSnapshot().awaiting).toBe(run.id);
+});
+
+it('keeps the second Fusion run on screen when its export is discovered after binding', async () => {
+  const first = { ...job(), id: 'first', run_number: 1, status: 'complete', has_results: true,
+    client_request_id: 'cad-solve:first', created_at: new Date(Date.now() - 60_000).toISOString(),
+    cad_state: { state: 'accepted', operation_id: 'first' },
+  } as ReturnType<typeof job>;
+  publishCadJobs([first]); stop = mountCadWorkspaceOwners(); await flush();
+  expect(currentModel().ingestId).toBe(record.ingest_id);
+
+  const secondRecord = { ...record, ingest_id: 'wgi_second' };
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((input, init) => {
+    const path = String(input);
+    if (path === '/api/runs/second/workspace') return Promise.resolve(json(workspaceFor(secondRecord.ingest_id)));
+    if (path === `/api/cadlink/ingest/${secondRecord.ingest_id}`) return Promise.resolve(json(secondRecord));
+    return base(input, init);
+  });
+  const second = { ...first, id: 'second', run_number: null, status: 'preparing', has_results: false,
+    client_request_id: 'cad-solve:second', created_at: new Date().toISOString(), cad_source: null,
+    cad_intent: { bundle_path: bundle.bundlePath },
+    cad_state: { ...first.cad_state!, state: 'processing', operation_id: 'second' },
+  } as ReturnType<typeof job>;
+  publishCadJobs([second, first]); await flush();
+  const accepted = { ...second, run_number: 2, status: 'running', cad_intent: null,
+    cad_source: { ...first.cad_source!, ingest_id: secondRecord.ingest_id },
+    cad_state: { ...second.cad_state!, state: 'accepted', operation_id: 'second' },
+  } as ReturnType<typeof job>;
+  publishCadJobs([accepted, first]); await flush();
+  returns = [{ ...bundle, modifiedAt: new Date().toISOString() }];
+  await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true }); await flush();
+  const completed = { ...accepted, status: 'complete' as const, has_results: true };
+  publishCadJobs([completed, first]); await flush();
+  expect(currentModel().ingestId).toBe(secondRecord.ingest_id);
+  expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(secondRecord.ingest_id);
+  expect(runVerdict(completed, currentModel())).toBe('current');
+  expect(compareSelection.getSnapshot().awaiting).toBe(completed.id);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
 });
 
 it('an older startup Send cannot cancel the model load of a newer accepted Fusion solve', async () => {

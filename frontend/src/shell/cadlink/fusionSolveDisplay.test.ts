@@ -12,6 +12,7 @@ import { workspaceModeStore } from '../../stores/workspaceMode';
 import { bindWorkspaceNavigation, noteExplicitNavigation, publishVisiblePanels, resetWorkspaceNavigationForTests } from '../workspaceNavigation';
 import { resetSolveAttentionForTests } from '../solveAttention';
 import { createFusionSolveDisplay } from './fusionSolveDisplay';
+import { createCadReturnArrivalReader } from './arrivals';
 import { bundle, deferred, job, json, record, workspaceFor } from './selection.fixtures';
 
 const NOW = Date.parse('2026-10-15T18:00:00Z');
@@ -91,6 +92,41 @@ it('keeps the preparing geometry visible through acceptance and completion witho
   expect(f.display.showIngestedMesh).toHaveBeenCalledOnce();
   expect(compareSelection.getSnapshot().awaiting).toBe(run.id);
   expect(cadSolveClaim(run)?.modelDisplayAcknowledged).toBe(true);
+});
+
+it('shows a second Fusion run of the same model after the first run was displayed', async () => {
+  const secondRecord = { ...record, ingest_id: 'wgi_second' };
+  const f = fixture(vi.fn(async input => {
+    const path = String(input);
+    if (path.endsWith('/workspace')) return json(workspaceFor(path.includes('/second/') ? secondRecord.ingest_id : record.ingest_id));
+    return json(path.endsWith(secondRecord.ingest_id) ? secondRecord : record);
+  }));
+  const first = { ...external(), status: 'complete' as const, has_results: true, run_number: 1 };
+  await f.observe([first]);
+  expect(currentModel().ingestId).toBe(record.ingest_id);
+  const pending = { ...preparing(null), id: 'second', client_request_id: 'cad-solve:second',
+    created_at: new Date(NOW).toISOString() };
+  await f.observe([pending, first]);
+  const second = { ...external('second', NOW), run_number: 2,
+    cad_intent: null, cad_source: { ...external().cad_source!, ingest_id: secondRecord.ingest_id } };
+  await f.observe([second, first]);
+  // Binding replaces the server's CAD intent with a SolveRequest. A folder
+  // listing can discover that same export after its run was already opened.
+  const prepare = vi.fn();
+  const reader = createCadReturnArrivalReader({ initialChoiceOwed: { current: false },
+    seenReturnRevisions: { current: new Map() },
+    ownsReturn: item => f.ownsReturn(item.bundlePath, [second, first]),
+    ownsSolveReturn: item => f.ownsReturn(item.bundlePath, [second, first], true),
+    autoIngestSelected: prepare,
+  }, (async () => json({ cadFolderConfigured: true, items: [bundle] })) as typeof fetch);
+  await reader.refresh({ background: true, autoOpenNew: true });
+  await f.observe([{ ...second, status: 'complete', has_results: true }, first]);
+  expect(currentModel().ingestId).toBe(secondRecord.ingest_id);
+  expect(runVerdict(second, currentModel())).toBe('current');
+  expect(compareSelection.getSnapshot().awaiting).toBe(second.id);
+  expect(cadSolveClaim(second)?.modelDisplayAcknowledged).toBe(true);
+  expect(prepare).not.toHaveBeenCalled();
+  expect(f.display.reportDiagnostic.mock.calls).toEqual([]);
 });
 
 it('joins repeated progress notifications while one preparing model load is pending', async () => {

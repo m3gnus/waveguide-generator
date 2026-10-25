@@ -37,6 +37,10 @@ const DISPLAY_FAILURE = 'WG could not show the Fusion model. It tries again when
 export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: typeof fetch = fetch, now = Date.now) {
   const since = now() - RECEIPT_FIRST_CONNECTION_MS;
   const observed = new Map<string, Intent>();
+  // Binding replaces cad_intent with the run's SolveRequest. Keep the bundle
+  // owned across that transition so a late folder poll cannot select it again
+  // and clear a model this owner has already displayed.
+  const bundles = new Map<string, string>();
   const handled = new Set<string>();
   const presented = new Set<string>();
   const reported = new Set<string>();
@@ -109,6 +113,9 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
     latestJobs = jobs;
     cancelObsoleteOpen();
     if (disposed) return;
+    for (const item of jobs) {
+      if (typeof item.cad_intent?.bundle_path === 'string') bundles.set(item.id, item.cad_intent.bundle_path);
+    }
     const job = latestCadJobs([...jobs])[0];
     if (!job) { newestId = null; return; }
     const sentAt = Date.parse(job.created_at);
@@ -210,7 +217,7 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
   return {
     latestSentAt: () => newestSentAt, observe, resume,
     ownsReturn: (path: string, jobs: readonly JobItem[], initial = false) => latestCadJobs([...jobs]).some((job) =>
-      job.cad_intent?.bundle_path === path && (!initial || (eligible(job)
+      (job.cad_intent?.bundle_path ?? bundles.get(job.id)) === path && (!initial || (eligible(job)
         && !cadSolveClaim(job)?.sourceIngestId && !cadSolveClaim(job)?.modelDisplayAcknowledged
         && !job.cad_provenance?.manual_waiting))),
     dispose: () => {
