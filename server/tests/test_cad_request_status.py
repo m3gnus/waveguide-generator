@@ -6,6 +6,7 @@ request's latest job by one owner, written atomically and only on change.
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import os
@@ -278,15 +279,54 @@ def test_a_dismissed_hold_reads_dismissed_and_a_removed_solved_run_stays_solved(
     assert protocol.request_status_text({**kept, "seq": 1})["actions"][0]["id"] == "openWg"
 
 
-def test_a_solve_again_child_is_followed_through_the_chain(h) -> None:
+@pytest.mark.parametrize("with_settings", [False, True], ids=["needs-settings", "has-settings"])
+def test_a_solve_again_child_is_followed_through_the_chain(h, monkeypatch, with_settings) -> None:
     job = _held(h)
     _refuse(h, job, "mesh_too_large", "This model meshes to 28,944 triangles.", status="held")
     publisher = _publisher(h)
     publisher.tick(h.jobs_store)
-    child = h._loop.run(h.runtime.solve_cad_again(job["id"], mesh_limit_override=True))
+    assert _status(h)["prompt"]["code"] == "mesh_too_large"
+    revision = _revision(h.store, _setup()) if with_settings else None
+    release, finished = asyncio.Event(), asyncio.Event()
+    real_prepare = h.runtime._run_cad_preparation
+
+    async def prepare(job_id):
+        try:
+            await release.wait()
+            await real_prepare(job_id)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(h.runtime, "_run_cad_preparation", prepare)
+
+    async def finish_preparation():
+        release.set()
+        await finished.wait()
+
+    child = h._loop.run(h.runtime.solve_cad_again(
+        job["id"], mesh_limit_override=True, setup_revision_id=revision,
+    ))
+    # Publish before the lane can run, then after it has finished. Neither
+    # scheduler speed nor a progress interval/sweep decides which state we see.
+    try:
+        publisher.tick(h.jobs_store)
+        record = _status(h)
+        assert record["job"]["jobId"] == child and record["state"] == "preparing"
+    finally:
+        h._loop.run(finish_preparation())
+
+    row = _row(h, child)
+    assert row["status"] == ("queued" if with_settings else "held")
     publisher.tick(h.jobs_store)
     record = _status(h)
-    assert record["job"]["jobId"] == child and record["state"] in {"preparing", "queued"}
+    assert record["job"]["jobId"] == child
+    if with_settings:
+        assert record["state"] == "queued"
+    else:
+        # _held uses an unsized return without settings. Solve anyway does not
+        # supply those settings: the child legitimately asks for them again.
+        assert job_cad_state(row)["reason"] == "setup_required"
+        assert record["state"] == "needsYou" and record["prompt"]["code"] == "setup_required"
 
 
 def test_send_refusal_and_send_acceptance_need_no_job(h) -> None:
