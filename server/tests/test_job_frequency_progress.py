@@ -212,3 +212,17 @@ def test_a_job_without_a_count_keeps_its_metadata_bytes_when_it_stops(tmp_path: 
     before = store._connect().execute(query).fetchone()[0]
     assert store.update_job("bytes", status="complete")
     assert store._connect().execute(query).fetchone()[0] == before
+
+
+@pytest.mark.parametrize("rewrite", [False, True])
+def test_a_null_count_is_no_count_when_a_job_stops(tmp_path: Path, rewrite: bool) -> None:
+    store = JobStore.for_data_dir(tmp_path)
+    store.initialize()
+    store.create_job({**_running("null"), "task_metadata": {"frequency_progress": None, "a": 1}})
+    query = "SELECT task_metadata_json FROM simulation_jobs WHERE id = 'null'"
+    fields: dict[str, Any] = {"status": "complete"}
+    if rewrite:
+        fields["task_metadata_json"] = json.dumps({"frequency_progress": None, "a": 2})
+    before = fields.get("task_metadata_json") or store._connect().execute(query).fetchone()[0]
+    assert store.update_job("null", **fields)
+    assert store._connect().execute(query).fetchone()[0] == before

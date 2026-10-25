@@ -32,6 +32,7 @@ from pathlib import Path
 import re
 import threading
 import time
+import uuid
 from typing import Any, Callable, Literal, Mapping
 
 from server.platform.json_file import json_bytes, write_json_atomic
@@ -55,6 +56,10 @@ CAPABILITIES_SCHEMA_VERSION = 1
 #: ``launcher`` is how the add-in starts WG again, and a reader never sees it
 #: missing or partial, because every write replaces it whole.
 STOPPED_AT = "stoppedAt"
+#: This process's id in the capability file, so a quitting WG marks only the
+#: file it wrote itself. New for every process.
+INSTANCE_FIELD = "wgInstance"
+PROCESS_INSTANCE = uuid.uuid4().hex
 # The one delivery version WG speaks, in both directions. The add-in reports
 # its own in the heartbeat's ``deliveryVersion``; below this, WG refuses it.
 DELIVERY_VERSION = FUSION_REQUEST_DELIVERY_VERSION
@@ -100,6 +105,11 @@ _REQUEST_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 # On Windows a replace fails while a reader holds the target open.
 _WRITE_ATTEMPTS = 10
 _WRITE_RETRY_SECONDS = 0.02
+#: Startup tries the capability file this often before leaving it to the delivery passes.
+_ADVERTISE_ATTEMPTS = 3
+_ADVERTISE_RETRY_SECONDS = 0.1
+#: The advertisement startup could not write yet: ``(data_dir, solve_delivery)``.
+_pending_advertisement: tuple[Path, bool] | None = None
 INSERT_HANDOFF_TTL = timedelta(minutes=30)
 
 logger = logging.getLogger(__name__)
@@ -145,6 +155,7 @@ def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:
         "documentUp": DOCUMENT_UP,
         "automaticDomain": AUTOMATIC_DOMAIN,
         "meshSizing": 1,
+        INSTANCE_FIELD: PROCESS_INSTANCE,
     }
     # Protocol support is static and independent of Onshape/capture settings.
     # Job admission separately requires an available official BEAT engine.
@@ -510,9 +521,13 @@ def advertise_fusion_delivery(data_dir: Path, *, solve_delivery: bool = True) ->
     """Startup: remove an older WG's requests, then write the capability file.
 
     Neither failure stops WG. Without the file the add-in asks for WG to be
-    updated and writes no solve command.
+    updated and writes no solve command. The write is tried a few times, and
+    one that still fails is tried again on every delivery pass
+    (:func:`retry_pending_advertisement`), so an earlier WG's ``stoppedAt``
+    never stays on a WG that runs.
     """
 
+    global _pending_advertisement
     try:
         folder = ipc_folder(data_dir, create=True)
         with _LOCK:
@@ -524,9 +539,18 @@ def advertise_fusion_delivery(data_dir: Path, *, solve_delivery: bool = True) ->
                 len(removed),
                 ", ".join(sorted(removed)),
             )
-        _write_json(folder / CAPABILITIES_FILENAME, capabilities(solve_delivery=solve_delivery))
     except OSError as exc:
-        logger.warning("Could not advertise WG's Fusion delivery version: %s", exc)
+        logger.warning("Could not remove an older WG's Fusion requests: %s", exc)
+    with _LOCK:
+        _pending_advertisement = (Path(data_dir), solve_delivery)
+    for attempt in range(_ADVERTISE_ATTEMPTS):
+        error = _advertise(Path(data_dir), solve_delivery)
+        if error is None:
+            break
+        if attempt + 1 < _ADVERTISE_ATTEMPTS:
+            time.sleep(_ADVERTISE_RETRY_SECONDS)
+    else:
+        logger.warning("Could not advertise WG's Fusion delivery version: %s", error)
 
     # A locked endpoint on Windows must not leave an older capability file in
     # place. The add-in chooses files from capabilities even if this remains.
@@ -536,22 +560,65 @@ def advertise_fusion_delivery(data_dir: Path, *, solve_delivery: bool = True) ->
         logger.warning("Could not remove WG's stale Fusion endpoint: %s", exc)
 
 
-def withdraw_fusion_delivery(data_dir: Path, *, solve_delivery: bool = True) -> None:
+def _advertise(data_dir: Path, solve_delivery: bool) -> Exception | None:
+    """One attempt at this process's capability file; clears the pending one on success."""
+
+    global _pending_advertisement
+    try:
+        folder = ipc_folder(data_dir, create=True)
+        _write_json(folder / CAPABILITIES_FILENAME, capabilities(solve_delivery=solve_delivery))
+    except Exception as exc:  # noqa: BLE001 - said, and tried again
+        return exc
+    with _LOCK:
+        if _pending_advertisement == (data_dir, solve_delivery):
+            _pending_advertisement = None
+    return None
+
+
+def retry_pending_advertisement() -> bool:
+    """A delivery pass: write the capability file startup could not. True when written now."""
+
+    with _LOCK:
+        pending = _pending_advertisement
+    if pending is None:
+        return False
+    if _advertise(*pending) is not None:
+        return False
+    logger.info("Advertised WG's Fusion delivery version after an earlier write failed.")
+    return True
+
+
+def _carries_this_instance(path: Path) -> bool:
+    payload = _read_json(path)
+    return isinstance(payload, Mapping) and payload.get(INSTANCE_FIELD) == PROCESS_INSTANCE
+
+
+def withdraw_fusion_delivery(data_dir: Path) -> None:
     """Clean shutdown: say in the capability file that this WG has stopped.
 
     The advertisement stays as it was, with ``stoppedAt`` added, so the add-in
     can tell WG has gone and can still start it with the advertised launcher.
-    A folder with no capability file is left alone. A failure never stops the
-    shutdown; a WG that ends without this (a crash) leaves the file unmarked.
+    Only a file this process wrote is marked (its ``wgInstance``, checked again
+    just before the replace): an older WG quitting after a newer one started
+    leaves the newer one's file alone. A folder with no capability file is left
+    alone. Nothing here raises; a WG that ends without this (a crash) leaves
+    the file unmarked.
     """
 
+    global _pending_advertisement
     try:
+        with _LOCK:
+            _pending_advertisement = None  # nothing is advertised after this
         path = ipc_folder(data_dir) / CAPABILITIES_FILENAME
-        if not path.is_file():
+        current = _read_json(path)
+        if not isinstance(current, Mapping) or current.get(INSTANCE_FIELD) != PROCESS_INSTANCE:
             return
         stopped_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        _write_json(path, {**capabilities(solve_delivery=solve_delivery), STOPPED_AT: stopped_at})
-    except OSError as exc:
+        _write_json(
+            path, {**current, STOPPED_AT: stopped_at},
+            should_replace=lambda _receipt: _carries_this_instance(path),
+        )
+    except Exception as exc:  # noqa: BLE001 - shutdown goes on
         logger.warning("Could not mark WG's Fusion capabilities as stopped: %s", exc)
 
 
@@ -573,11 +640,14 @@ __all__ = [
     "SOURCE_IDENTITY",
     "DOCUMENT_UP",
     "addin_delivery_version",
+    "INSTANCE_FIELD",
+    "PROCESS_INSTANCE",
     "STOPPED_AT",
     "advertise_fusion_delivery",
     "capabilities",
     "expire_unstarted_insert_handoffs",
     "publish_fusion_request",
     "recover_staged_fusion_requests",
+    "retry_pending_advertisement",
     "withdraw_fusion_delivery",
 ]

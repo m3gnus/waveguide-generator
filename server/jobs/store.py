@@ -3636,16 +3636,19 @@ class JobStore:
         params = [self._db_value(key, value) for key, value in values.items()]
         if values.get("status") is not None and values["status"] not in ACTIVE_STATUSES:
             # A job that stops is no longer solving: its kept frequency count
-            # (server/jobs/progress.py) goes with it. Rows without one keep their bytes.
+            # (server/jobs/progress.py) goes with it. A null count is no count,
+            # in both branches: rows without one keep their bytes.
             if "task_metadata_json" in values:
                 metadata = json.loads(values["task_metadata_json"] or "{}")
-                if isinstance(metadata, dict) and metadata.pop(FREQUENCY_METADATA_KEY, None) is not None:
+                if isinstance(metadata, dict) and metadata.get(FREQUENCY_METADATA_KEY) is not None:
+                    del metadata[FREQUENCY_METADATA_KEY]
                     params[list(values).index("task_metadata_json")] = json.dumps(metadata)
             else:
+                path = f"'$.{FREQUENCY_METADATA_KEY}'"
                 assignments.append(
                     "task_metadata_json = CASE WHEN json_valid(task_metadata_json)"
-                    f" AND json_type(task_metadata_json, '$.{FREQUENCY_METADATA_KEY}') IS NOT NULL"
-                    f" THEN json_remove(task_metadata_json, '$.{FREQUENCY_METADATA_KEY}')"
+                    f" AND COALESCE(json_type(task_metadata_json, {path}), 'null') != 'null'"
+                    f" THEN json_remove(task_metadata_json, {path})"
                     " ELSE task_metadata_json END"
                 )
         cur = conn.execute(

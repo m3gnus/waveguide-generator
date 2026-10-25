@@ -36,6 +36,7 @@ import json
 import logging
 import os
 from pathlib import Path, PurePosixPath
+from datetime import datetime
 import threading
 import time
 from typing import TYPE_CHECKING, Any
@@ -94,6 +95,15 @@ SWEEP_INTERVAL_S = 30.0
 #: so the add-in can tell a long step from a WG that has gone quiet. Checked on
 #: every tick of the delivery loop (once a second).
 REFRESH_INTERVAL_S = 60.0
+#: At most this many refreshes per tick, the longest unwritten first, so the
+#: files that came due together (a restart) are spread over several seconds
+#: instead of written in one burst, and stay spread after.
+REFRESH_BATCH = 20
+#: A request whose job has not changed for this long, or that has no job that
+#: is still preparing, queued, running or held, is not refreshed any more: it
+#: is abandoned, and its silence is the truth. Any change brings it back.
+REFRESH_HORIZON_S = 24 * 3600.0
+_LIVE_JOB_STATUSES = frozenset({"preparing", "queued", "running", "held"})
 #: After this many consecutive failed writes of one request's status, the
 #: failure is recorded for the developers (once; about half a minute).
 WRITE_FAILURE_INCIDENT_AFTER = 30
@@ -349,6 +359,19 @@ def project_request_status(
     return {**record, "state": "couldNotFinish", "phase": phase, "failure": failure}, incident
 
 
+def _live(job: Mapping[str, Any] | None) -> bool:
+    """Whether a request's job is still under way and changed within the refresh horizon."""
+
+    if job is None or job.get("status") not in _LIVE_JOB_STATUSES:
+        return False
+    try:
+        changed = datetime.fromisoformat(str(job.get("updated_at")))
+    except ValueError:
+        return True  # an unreadable time is no evidence of abandonment
+    now = datetime.now(changed.tzinfo) if changed.tzinfo else datetime.now()
+    return (now - changed).total_seconds() < REFRESH_HORIZON_S
+
+
 def _comparable(record: Mapping[str, Any] | None) -> dict[str, Any] | None:
     if record is None:
         return None
@@ -393,6 +416,8 @@ class RequestStatusPublisher:
         self._written_at: dict[str, float] = {}
         self._write_failures: dict[str, int] = {}
         self._deferred: set[str] = set()
+        #: Unfinished requests found abandoned: not refreshed until they change.
+        self._quiet: set[str] = set()
         self._dirty: set[str] = set()
         self._stopped = threading.Event()
         self._busy = threading.Lock()
@@ -462,7 +487,7 @@ class RequestStatusPublisher:
         for table in (self._receipts, self._receipt_stamps, self._records, self._written_at,
                       self._write_failures, self._bundle_names):
             table.pop(request_id, None)
-        for pending in (self._deferred, self._dirty, self._observed_from_start):
+        for pending in (self._deferred, self._dirty, self._observed_from_start, self._quiet):
             pending.discard(request_id)
         for job_id in [job for job, request in self._job_requests.items() if request == request_id]:
             del self._job_requests[job_id]
@@ -572,9 +597,15 @@ class RequestStatusPublisher:
         if candidate is None:  # pragma: no cover - a projection the reader rejects is a bug
             logger.error("The status projected for request %s does not validate; not written.", request_id)
             return False
-        if _comparable(candidate) == _comparable(previous) and not self._refresh_due(request_id, now):
+        if _comparable(candidate) == _comparable(previous):
             self._deferred.discard(request_id)
-            return False
+            if not self._refresh_due(request_id, now):
+                return False
+            if not _live(job):
+                self._quiet.add(request_id)
+                return False
+        else:
+            self._quiet.discard(request_id)
         if (previous is not None and previous.get("state") == candidate["state"] == "solving"
                 and now - self._written_at.get(request_id, float("-inf")) < PROGRESS_INTERVAL_S):
             self._deferred.add(request_id)
@@ -602,7 +633,8 @@ class RequestStatusPublisher:
         """An unfinished request whose file has not been written for a refresh interval."""
 
         record = self._records.get(request_id)
-        return (record is not None and not request_status_terminal(record)
+        return (record is not None and request_id not in self._quiet
+                and not request_status_terminal(record)
                 and now - self._written_at.get(request_id, float("-inf")) >= REFRESH_INTERVAL_S)
 
     def _write_failed(self, request_id: str, exc: OSError) -> None:
@@ -666,7 +698,11 @@ class RequestStatusPublisher:
             )
         due = {request_id for request_id in self._deferred
                if now - self._written_at.get(request_id, float("-inf")) >= PROGRESS_INTERVAL_S}
-        due.update(request_id for request_id in self._records if self._refresh_due(request_id, now))
+        stale = sorted((request_id for request_id in self._records
+                        if request_id not in self._dirty and request_id not in due
+                        and self._refresh_due(request_id, now)),
+                       key=lambda request_id: self._written_at.get(request_id, float("-inf")))
+        due.update(stale[:REFRESH_BATCH])
         pending, self._dirty = self._dirty | due, set()
         written = 0
         for request_id in sorted(pending):

@@ -1055,3 +1055,50 @@ def test_a_restarted_wg_refreshes_an_unfinished_status_an_earlier_wg_wrote_long_
     os.utime(path, (old, old))
     assert _publisher(h).tick(h.jobs_store) == 1
     assert _status(h)["seq"] > seq and _status(h)["state"] == "queued"
+
+
+def test_refreshes_are_capped_per_tick_and_go_to_the_longest_unwritten_first(h, monkeypatch) -> None:
+    clock = Clock()
+    publisher = _publisher(h, clock)
+    ids = [f"req-{index:02d}" for index in range(request_status.REFRESH_BATCH + 5)]
+    for index, request_id in enumerate(ids):
+        publisher._receipts[request_id] = {"commandId": request_id}
+        publisher._records[request_id] = {"state": "queued", "seq": 1}
+        publisher._written_at[request_id] = clock.now - request_status.REFRESH_INTERVAL_S - index
+    published: list[str] = []
+    monkeypatch.setattr(publisher, "_scan", lambda: None)
+    monkeypatch.setattr(publisher, "_folder_changed", lambda: False)
+    monkeypatch.setattr(publisher, "_publish", lambda request_id, _store, now: (
+        published.append(request_id), publisher._written_at.__setitem__(request_id, now))[-1] is None)
+    publisher._last_sweep = clock.now
+    publisher.tick(None)
+    assert len(published) == request_status.REFRESH_BATCH
+    assert set(published) == set(ids[5:])  # the oldest written
+    published.clear()
+    clock.now += 1
+    publisher.tick(None)
+    assert set(published) == set(ids[:5])
+    published.clear()
+    clock.now += 1
+    publisher.tick(None)
+    assert published == []
+
+
+def test_an_abandoned_unfinished_request_is_not_refreshed_until_it_changes(h) -> None:
+    job = _queued(h)
+    clock = Clock()
+    publisher = _publisher(h, clock)
+    publisher.tick(h.jobs_store)
+    seq = _status(h)["seq"]
+    with h.jobs_store._connect() as conn:
+        conn.execute("UPDATE simulation_jobs SET updated_at = '2026-01-01T00:00:00' WHERE id = ?", (job["id"],))
+    for _ in range(3):
+        clock.now += request_status.REFRESH_INTERVAL_S
+        assert publisher.tick(h.jobs_store) == 0
+    assert _status(h)["seq"] == seq and "cmd-1" in publisher._quiet
+    _set(h, job["id"], status="running", progress=0.3)
+    clock.now += 1
+    assert publisher.tick(h.jobs_store) == 1
+    assert _status(h)["state"] == "solving" and "cmd-1" not in publisher._quiet
+    clock.now += request_status.REFRESH_INTERVAL_S
+    assert publisher.tick(h.jobs_store) == 1  # live again: refreshed

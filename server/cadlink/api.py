@@ -74,6 +74,7 @@ from server.cadlink.fusion.fusion_delivery import (
     advertise_fusion_delivery,
     expire_unstarted_insert_handoffs,
     recover_staged_fusion_requests,
+    retry_pending_advertisement,
     withdraw_fusion_delivery,
 )
 from .ipc import ipc_folder
@@ -2098,6 +2099,10 @@ def delivery_consumer_enabled(environ: Mapping[str, str] | None = None) -> bool:
     return source.get(CAD_DELIVERY_ENV, "") != "0"
 
 
+#: How long a clean shutdown waits to mark the capability file stopped.
+_WITHDRAW_TIMEOUT_S = 2.0
+
+
 async def _publish_request_status(state: Any, reported: str | None) -> str | None:
     """Bring every Fusion request's status file up to date (``RequestStatusPublisher``).
 
@@ -2113,6 +2118,8 @@ async def _publish_request_status(state: Any, reported: str | None) -> str | Non
             )
             state.cad_request_status = publisher
         job_store = getattr(getattr(state, "jobs_runtime", None), "store", None)
+        # A capability file startup could not write is tried again here.
+        await asyncio.to_thread(retry_pending_advertisement)
         await asyncio.to_thread(publisher.tick, job_store)
     except Exception as exc:  # noqa: BLE001 - the next pass tries again
         error = f"{type(exc).__name__}: {exc}"
@@ -2372,11 +2379,15 @@ def mount_cadlink(application: FastAPI) -> None:
 
     async def withdraw_fusion_delivery_on_shutdown() -> None:
         # Tells the add-in WG has gone; the next start writes the file afresh.
-        await asyncio.to_thread(
-            withdraw_fusion_delivery,
-            Path(application.state.data_dir),
-            solve_delivery=delivery_consumer_enabled(),
-        )
+        # Bounded and never raising: a held file (the Windows replace retry)
+        # must not hold up or abort the shutdown handlers after this one.
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(withdraw_fusion_delivery, Path(application.state.data_dir)),
+                timeout=_WITHDRAW_TIMEOUT_S,
+            )
+        except Exception as exc:  # noqa: BLE001 - shutdown goes on
+            logger.warning("Marking WG's Fusion capabilities as stopped did not finish: %r", exc)
 
     application.router.add_event_handler("shutdown", withdraw_fusion_delivery_on_shutdown)
 

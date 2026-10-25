@@ -449,6 +449,7 @@ def test_endpoint_cleanup_still_runs_after_capability_write_failure(tmp_path, mo
         raise PermissionError('capabilities is held open')
 
     monkeypatch.setattr(fusion_delivery, '_write_json', fail_write)
+    monkeypatch.setattr(fusion_delivery, '_pending_advertisement', None)  # restored after
     fusion_delivery.advertise_fusion_delivery(tmp_path)
     assert not endpoint.exists()
     assert 'Could not advertise' in caplog.text
@@ -531,3 +532,88 @@ def test_a_stop_marker_that_cannot_be_written_never_stops_the_shutdown(tmp_path,
     assert 'Could not mark' in caplog.text
     assert fusion_delivery.STOPPED_AT not in json.loads(
         (ipc_folder(tmp_path) / 'wg-capabilities.json').read_text())
+
+
+def test_an_older_wg_quitting_after_a_newer_one_started_leaves_its_file_alone(tmp_path, monkeypatch):
+    from server.cadlink.fusion import fusion_delivery
+    from server.cadlink.fusion.fusion_delivery import INSTANCE_FIELD, STOPPED_AT
+
+    fusion_delivery.advertise_fusion_delivery(tmp_path)
+    path = ipc_folder(tmp_path) / 'wg-capabilities.json'
+    newer = {**json.loads(path.read_text()), INSTANCE_FIELD: 'a-newer-wg'}
+    path.write_text(json.dumps(newer))
+    fusion_delivery.withdraw_fusion_delivery(tmp_path)
+    assert json.loads(path.read_text()) == newer
+    # Checked again just before the replace: a newer WG that wrote in between wins.
+    fusion_delivery.advertise_fusion_delivery(tmp_path)
+    monkeypatch.setattr(fusion_delivery, '_carries_this_instance', lambda _path: False)
+    fusion_delivery.withdraw_fusion_delivery(tmp_path)
+    assert STOPPED_AT not in json.loads(path.read_text())
+    assert not list(path.parent.glob('.wg-capabilities.json.*.tmp'))
+
+
+def test_marking_stopped_never_raises_and_the_shutdown_handler_is_bounded(tmp_path, monkeypatch, caplog):
+    import time as time_module
+
+    from server.cadlink import api
+    from server.cadlink.fusion import fusion_delivery
+
+    fusion_delivery.advertise_fusion_delivery(tmp_path)
+
+    def broken(*args, **kwargs):
+        raise ValueError('not a disk error')
+
+    monkeypatch.setattr(fusion_delivery, '_write_json', broken)
+    fusion_delivery.withdraw_fusion_delivery(tmp_path)
+    assert 'Could not mark' in caplog.text
+
+    app = create_app(data_dir=tmp_path)
+    handler = next(h for h in app.router.on_shutdown if h.__name__ == 'withdraw_fusion_delivery_on_shutdown')
+    monkeypatch.setattr(api, '_WITHDRAW_TIMEOUT_S', 0.1)
+    monkeypatch.setattr(api, 'withdraw_fusion_delivery', lambda _data_dir: time_module.sleep(1.0))
+    async def timed() -> float:
+        started = time_module.monotonic()
+        await handler()  # neither waits for the held file nor raises
+        return time_module.monotonic() - started
+
+    assert asyncio.run(timed()) < 0.9
+    assert 'did not finish' in caplog.text
+
+    def failing(_data_dir):
+        raise RuntimeError('boom')
+
+    monkeypatch.setattr(api, 'withdraw_fusion_delivery', failing)
+    asyncio.run(handler())
+
+
+def test_startup_retries_the_advertisement_and_a_pass_writes_one_startup_could_not(tmp_path, monkeypatch, caplog):
+    from server.cadlink.fusion import fusion_delivery
+    from server.cadlink.fusion.fusion_delivery import STOPPED_AT, capabilities
+
+    path = ipc_folder(tmp_path, create=True) / 'wg-capabilities.json'
+    path.write_text(json.dumps({**capabilities(), 'wgInstance': 'an-earlier-wg', STOPPED_AT: '2026-10-25T00:00:00Z'}))
+    real = fusion_delivery._write_json
+    failures = [2]
+
+    def flaky(*args, **kwargs):
+        if failures[0]:
+            failures[0] -= 1
+            raise PermissionError('held for a moment')
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(fusion_delivery, '_write_json', flaky)
+    monkeypatch.setattr(fusion_delivery, '_pending_advertisement', None)  # restored after
+    fusion_delivery.advertise_fusion_delivery(tmp_path)
+    assert json.loads(path.read_text()) == capabilities()
+    assert 'Could not advertise' not in caplog.text
+    assert fusion_delivery.retry_pending_advertisement() is False
+
+    path.write_text(json.dumps({**capabilities(), 'wgInstance': 'an-earlier-wg', STOPPED_AT: '2026-10-25T00:00:00Z'}))
+    failures[0] = 10
+    fusion_delivery.advertise_fusion_delivery(tmp_path)
+    assert 'Could not advertise' in caplog.text
+    assert STOPPED_AT in json.loads(path.read_text())
+    failures[0] = 0
+    assert fusion_delivery.retry_pending_advertisement() is True
+    assert json.loads(path.read_text()) == capabilities()
+    assert fusion_delivery.retry_pending_advertisement() is False

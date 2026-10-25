@@ -24,6 +24,7 @@ from typing import Any, Callable
 
 import pytest
 
+from server.cadlink.fusion.fusion_delivery import PROCESS_INSTANCE
 from server.cadlink.fusion.fusion_return import publish_return_request
 from server.cadlink.intake.solve_command import collect_solve_deliveries
 from server.cadlink.store import CadLinkStore
@@ -235,6 +236,8 @@ def test_wg_advertises_its_delivery_versions_at_startup(
         "meshSizing": 1,
         # FEM regions are on by default (WG2_FEM_REGIONS=0 withdraws them).
         "femRegions": 1,
+        # This process's id: a quitting WG marks only its own file.
+        "wgInstance": PROCESS_INSTANCE,
     }
 
 

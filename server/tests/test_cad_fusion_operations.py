@@ -56,6 +56,7 @@ def test_capabilities_advertise_source_identity_without_changing_delivery(
         "automaticDomain": 1,
         "meshSizing": 1,
         "femRegions": 1,
+        "wgInstance": fusion_delivery.PROCESS_INSTANCE,
     }
     monkeypatch.setenv("WG2_FEM_REGIONS", "0")
     assert "femRegions" not in fusion_delivery.capabilities()
