@@ -41,6 +41,11 @@ INTERRUPTED_MESSAGE = (
 
 
 
+#: The bundle a legacy solve names when its payload could not be migrated:
+#: no return exists behind it, so nothing may read or name one from it.
+UNAVAILABLE_BUNDLE_PATH = "wgreturn/unavailable.wgreturn"
+
+
 def return_identity(value: Any) -> dict[str, Any] | None:
     """Normalize the return identity retained at binding and exposed on jobs."""
     if not isinstance(value, Mapping) or not isinstance(value.get("bundle_path"), str):

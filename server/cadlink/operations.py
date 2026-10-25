@@ -351,7 +351,10 @@ def hold_stage_message(code: Any, message: Any = "") -> str:
 
 
 #: The triangle ceiling's next step; each surface adds the choice it offers.
-#: "Size zone" is Fusion's name for what the stored data calls a surface group.
+#: "Size zone" is the display name for what the stored data calls a surface
+#: group (stored data is unchanged). The add-in's own dialog text, and the
+#: vendored WGLink protocol's wording, are renamed in a later wording sweep
+#: on the WGLink side.
 MESH_CEILING_NEXT_STEP = (
     "In Fusion, open Sources & Mesh… and raise Walls or add a coarser size zone, or check the model size."
 )

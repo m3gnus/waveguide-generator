@@ -1521,6 +1521,21 @@ describe('ParamPanel inventory UX', () => {
       .not.toContain('cad-control-cad.mesh-detail');
   });
 
+  it('points a model whose preparation failed at the Imported mesh tab, in the CAD header\'s words', () => {
+    const before = cadWorkspace.getState();
+    act(() => {
+      cadWorkspace.setState({ ingestError: 'stage 1 bundle validation: $.sources[x]', ingesting: false, preparationIntent: undefined });
+      useCadReturnStore.setState({ selectedBundle: cadBundle, ingestRecord: null });
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    const empty = host.querySelector('.cad-simulation-empty')!;
+    expect(empty.textContent).toBe('Preparation failed. Use Prepare simulation to try again.See the Imported mesh tab.');
+    expect(empty.textContent).not.toContain('$.');
+    expect(host.querySelector('[data-section]')).toBeNull();
+    act(() => cadWorkspace.setState(before, true));
+  });
+
   it('keeps an Onshape return\'s editable mesh sizes before it is prepared', () => {
     act(() => {
       useCadReturnStore.setState({ selectedBundle: { ...cadBundle, bundleOrigin: 'onshape' }, ingestRecord: null });

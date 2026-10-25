@@ -70,7 +70,7 @@ from server.cadlink.wglink_protocol import (
     user_text_violations,
     validate_request_status,
 )
-from server.jobs.cad_intent import cad_of, intent_of
+from server.jobs.cad_intent import UNAVAILABLE_BUNDLE_PATH, cad_of, intent_of
 from server.jobs.cad_preparation import job_cad_state
 from server.platform.incidents import record_incident
 from server.solver.imported import imported_domain_planes
@@ -140,17 +140,22 @@ def bundle_document_name(workspace_root: Path | None, operation: Mapping[str, An
     """The name of the return a request names, for a request WG kept no snapshot of.
 
     A return whose manifest fails validation (``snapshot_invalid``) leaves no
-    snapshot, so neither side could name the model. Its manifest's own
+    snapshot, so neither side could name the model. Only a real return names
+    one -- ``wgreturn/<name>.wgreturn``, never WG's retained ``ingest/<id>``
+    copy or the legacy ``UNAVAILABLE_BUNDLE_PATH`` stand-in. Its manifest's own
     ``document.name`` is read leniently, as the returns listing reads it; a
     manifest that cannot be read at all leaves the folder's name.
     """
 
     try:
         inputs = json.loads((operation or {}).get("inputs_json") or "{}")
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return None
     bundle_path = inputs.get("bundle_path") if isinstance(inputs, Mapping) else None
-    if not isinstance(bundle_path, str) or not bundle_path.strip():
+    if not isinstance(bundle_path, str) or bundle_path == UNAVAILABLE_BUNDLE_PATH:
+        return None
+    parts = PurePosixPath(bundle_path).parts
+    if len(parts) != 2 or parts[0] != "wgreturn" or not parts[1].endswith(".wgreturn"):
         return None
     if workspace_root is not None:
         try:
@@ -161,9 +166,9 @@ def bundle_document_name(workspace_root: Path | None, operation: Mapping[str, An
             name = document.get("name") if isinstance(document, Mapping) else None
             if isinstance(name, str) and name.strip():
                 return name.strip()
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             pass
-    return PurePosixPath(bundle_path).name.removesuffix(".wgreturn").strip() or None
+    return parts[1].removesuffix(".wgreturn").strip() or None
 
 
 def _is_bound(job: Mapping[str, Any]) -> bool:
@@ -361,6 +366,8 @@ class RequestStatusPublisher:
         self._clock = clock
         #: The selected WGLink folder, where the returns a request names live.
         self._workspace_root = workspace_root
+        #: Each request's fallback name (:meth:`_bundle_name`), read once.
+        self._bundle_names: dict[str, str | None] = {}
         self._cursor: int | None = None
         self._folder_stamp: int | None = None
         self._last_sweep: float | None = None
@@ -436,7 +443,7 @@ class RequestStatusPublisher:
 
     def _forget(self, request_id: str) -> None:
         for table in (self._receipts, self._receipt_stamps, self._records, self._written_at,
-                      self._write_failures):
+                      self._write_failures, self._bundle_names):
             table.pop(request_id, None)
         for pending in (self._deferred, self._dirty, self._observed_from_start):
             pending.discard(request_id)
@@ -507,6 +514,22 @@ class RequestStatusPublisher:
             return None
         return record if isinstance(record, dict) else None
 
+    def _bundle_name(self, request_id: str, operation: Mapping[str, Any] | None) -> str | None:
+        """:func:`bundle_document_name`, read once per request while the folder is known."""
+
+        if request_id in self._bundle_names:
+            return self._bundle_names[request_id]
+        try:
+            root = self._workspace_root()
+        except Exception:  # noqa: BLE001 - a name is a nicety; the status still goes out
+            logger.debug("No WGLink folder to name request %s from.", request_id, exc_info=True)
+            root = None
+        name = bundle_document_name(root, operation)
+        if root is not None:
+            # Without the folder only the folder name is known; try again later.
+            self._bundle_names[request_id] = name
+        return name
+
     def _publish(self, request_id: str, job_store: Any, now: float) -> bool:
         receipt = self._receipts[request_id]
         operation = self.store.get_operation(request_id)
@@ -522,7 +545,7 @@ class RequestStatusPublisher:
             self._job_requests[str(job["id"])] = request_id
             self._other_jobs.discard(str(job["id"]))
         previous = self._records.get(request_id)
-        bundle_name = None if _document_name(operation, cad) else bundle_document_name(self._workspace_root(), operation)
+        bundle_name = None if _document_name(operation, cad) else self._bundle_name(request_id, operation)
         projected, incident = project_request_status(
             receipt, operation, job, cad, ingest=ingest, previous=previous, bundle_name=bundle_name,
         )

@@ -59,13 +59,14 @@ cannot alter an existing run.
 ### Mesh settings for Fusion models
 
 In Fusion, open **Waveguide Generator ▸ Sources & Mesh…**. Set the source sizes,
-walls, grading distance, surface groups and symmetry, then save and **Send**
+walls, grading distance, size zones and symmetry, then save and **Send**
 again. The dialog remembers your settings in the Fusion document.
 
-WG shows **Mesh (set in Fusion)** read-only, including the solved fraction,
-triangles and estimated memory. The card appears even if the first mesh fails.
-The limit is 22,000 triangles for the part WG solves. Raise **Walls** or add a
-**Coarse** surface group in Fusion if the mesh is too large.
+Once the model is prepared, WG shows **Mesh (set in Fusion)** read-only on the
+Simulation tab, including the solved fraction, triangles and estimated memory.
+The limit is 22,000 triangles for the part WG solves. If the mesh is too large,
+WG says so on the Imported mesh tab: raise **Walls** or add a coarser size zone
+in Fusion.
 
 Older returns keep their saved sizes under **Mesh (set in WG by an older add-in)**.
 Update the add-in and Send again to change them. Old runs retain their own

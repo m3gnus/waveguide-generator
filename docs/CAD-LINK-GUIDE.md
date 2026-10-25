@@ -66,17 +66,17 @@ copy and tick the checkbox in Fusion.
 ## Mesh settings in Fusion
 
 Open **Waveguide Generator ▸ Sources & Mesh…** in Fusion to set sources,
-wall size, grading distance, surface groups and symmetry. The dialog remembers
+wall size, grading distance, size zones and symmetry. The dialog remembers
 these settings in the Fusion document. Save, then **Send** again. Defaults are
 HF 6 mm, MF 15 mm, LF and passive/port 25 mm, walls 25 mm and grading distance
-100 mm. Surface groups can be finer or coarser than the walls (Fine 15 mm,
+100 mm. Size zones can be finer or coarser than the walls (Fine 15 mm,
 Coarse 40 mm). Smaller sizes give more triangles.
 
 WG’s **Mesh (set in Fusion)** card shows the snapshot’s sizes, source and group
-lines, the solved fraction, triangle count and estimated memory. It is visible
-before the first mesh succeeds. The limit is 22,000 triangles for the part WG
-solves. If it is exceeded, raise **Walls** or add a **Coarse** surface group in
-Fusion, then **Send** again.
+lines, the solved fraction, triangle count and estimated memory, once the model
+is prepared. The limit is 22,000 triangles for the part WG solves. If it is
+exceeded, WG says so on the Imported mesh tab: raise **Walls** or add a coarser
+size zone in Fusion, then **Send** again.
 
 Older returns show **Mesh (set in WG by an older add-in)**. Stored sizes stay
 read-only; update the add-in and Send from **Sources & Mesh…** to change them.

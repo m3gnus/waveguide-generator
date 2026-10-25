@@ -192,10 +192,11 @@ describe('CadLinkPanel', () => {
     expect(fusionAddinNeedsInstall({ ...current, cadConnectionIssue: 'addin_upgrade_required' })).toBe(true);
     expect(fusionAddinNeedsInstall({ ...closedFusion, state: 'addin_offline' })).toBe(true);
     expect(fusionAddinNeedsInstall(closedFusion)).toBe(false);
-    for (const missing of ['absent', 'not-in-use', 'failed', 'unavailable', 'disabled']) {
+    for (const missing of ['absent', 'not-in-use', 'failed']) {
       expect(fusionAddinNeedsInstall({ ...closedFusion, addinRefresh: verdict(missing) })).toBe(true);
     }
-    for (const present of ['current', 'installed', 'updated', 'pending', 'not-detected', 'external', 'developer']) {
+    // Present, being handled, or beyond what Install can fix (no package, or activation off).
+    for (const present of ['current', 'installed', 'updated', 'pending', 'not-detected', 'external', 'developer', 'unavailable', 'disabled']) {
       expect(fusionAddinNeedsInstall({ ...closedFusion, addinRefresh: verdict(present) })).toBe(false);
     }
   });

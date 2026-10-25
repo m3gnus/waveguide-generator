@@ -30,7 +30,7 @@ import {
 } from '../stores/cadReturn';
 import { ExteriorDriverLibraryPicker, ChannelDriverPicker } from './DriverPicker';
 import { useWaveguideDefinitionApplies } from '../stores/waveguideLink';
-import { useCadModelSelection } from '../stores/cadModelState';
+import { cadModelHeaderLine, useCadModelState } from '../stores/cadModelState';
 import { defaultWallThickness, isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
 import { athControlError, lipRadiusWallError, lipUnavailableReason, opusClampNote, opusMountingReason } from './athImportControls';
 import { namespaceStorage } from '../stores/durableSettings';
@@ -1139,9 +1139,16 @@ function CadMeshDetail() {
 }
 
 /** Before the selected model is prepared, the Simulation tab has nothing to
- * set: one line, and the model's status lives on the Imported mesh tab. */
+ * set: one line. A model that stopped or waits for the user says why in the
+ * CAD header's own words (`cadModelHeaderLine`), and where to act. */
 function CadSimulationEmpty() {
-  const model = useCadModelSelection();
+  const model = useCadModelState();
+  if (model.phase === 'prepare-failed' || model.phase === 'stopped' || model.phase === 'waiting') {
+    return <div className="cad-simulation-empty" role="status">
+      <p>{cadModelHeaderLine(model)}</p>
+      <p>See the Imported mesh tab.</p>
+    </div>;
+  }
   return <p className="cad-simulation-empty">Settings appear when {model.selected ? model.label : 'a CAD model'} is ready.</p>;
 }
 

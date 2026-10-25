@@ -268,9 +268,46 @@ def test_bundle_document_name_reads_leniently_and_stays_inside_the_folder(tmp_pa
     (tmp_path.parent / "elsewhere" / "Other.wgreturn").mkdir(parents=True)
     (tmp_path.parent / "elsewhere" / "Other.wgreturn" / "wgreturn.json").write_text(
         json.dumps({"document": {"name": "Not this"}}), encoding="utf-8")
-    assert bundle_document_name(tmp_path, outside) == "Other"
+    assert bundle_document_name(tmp_path, outside) is None
+    # A return folder that links outside the WGLink folder is named, never read.
+    (tmp_path / "wgreturn" / "Link.wgreturn").symlink_to(tmp_path.parent / "elsewhere" / "Other.wgreturn")
+    linked = {"inputs_json": json.dumps({"bundle_path": "wgreturn/Link.wgreturn"})}
+    assert bundle_document_name(tmp_path, linked) == "Link"
     assert bundle_document_name(tmp_path, None) is None
     assert bundle_document_name(tmp_path, {"inputs_json": "not json"}) is None
+    # Only a real return names a model: never WG's retained copy or the legacy stand-in.
+    from server.jobs.cad_intent import UNAVAILABLE_BUNDLE_PATH
+
+    for path in ("ingest/wgi_01ABC", UNAVAILABLE_BUNDLE_PATH, "wgreturn/a/b.wgreturn", "wgreturn/x.json", "elsewhere.wgreturn"):
+        assert bundle_document_name(tmp_path, {"inputs_json": json.dumps({"bundle_path": path})}) is None, path
+    # A manifest nested deeper than the parser allows is unreadable, not a crash.
+    (folder / "wgreturn.json").write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
+    assert bundle_document_name(tmp_path, operation) == "Fine horn"
+
+
+def test_the_fallback_name_is_read_once_per_request_and_a_failing_folder_lookup_is_harmless(h, monkeypatch) -> None:
+    _held(h)
+    _forget_snapshot(h, h.latest_job())
+    _refuse(h, h.latest_job(), "snapshot_invalid", "raw")
+    reads: list[Any] = []
+    real = request_status.bundle_document_name
+    monkeypatch.setattr(request_status, "bundle_document_name", lambda root, op: reads.append(root) or real(root, op))
+    clock = Clock()
+
+    def broken() -> Path:
+        raise RuntimeError("folder setting unreadable")
+
+    publisher = RequestStatusPublisher(h.data_dir, h.store, clock=clock, workspace_root=broken)
+    publisher.tick(h.jobs_store)
+    assert _status(h)["documentName"] == "speaker"  # the folder name; nothing cached
+    publisher._workspace_root = lambda: h.workspace
+    publisher._dirty.add("cmd-1")
+    publisher.tick(h.jobs_store)
+    named = _status(h)["documentName"]
+    publisher._dirty.add("cmd-1")
+    publisher.tick(h.jobs_store)
+    assert reads == [None, h.workspace]  # read once the folder is known, then cached
+    assert _status(h)["documentName"] == named != "speaker"
 
 
 def test_a_snapshot_name_wins_over_the_bundle_name() -> None:

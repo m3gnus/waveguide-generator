@@ -24,7 +24,7 @@ import { designNameSlug, UNTITLED_SLUG } from '../stores/designName';
 import { useCapabilities } from '../jobs/useCapabilities';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { returnBelongsToProject } from './cadlink/arrivals';
-import { fusionAddinNeedsInstall, fusionLinkDisplayName, fusionParameterDriftDetail, fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView } from './cadWorkflowView';
+import { fusionAddinNeedsInstall, fusionAddinTooOldForUpdate, fusionLinkDisplayName, fusionParameterDriftDetail, fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView } from './cadWorkflowView';
 import { Icon } from './icons';
 import { fullTime, pluralized, relativeTime } from './cadTime';
 import { CadProjectHeader, CadProjectHistory } from './CadProjectPanel';
@@ -847,7 +847,7 @@ export function CadLinkPanel() {
         {installingAddin ? 'Installing…' : 'Install add-in'}
       </button>
       {addinNotice && <span role="status">{addinNotice}</span>}
-      {fusionStatus?.running && fusionStatus.immutableBundles !== true && <span role="status">
+      {fusionAddinTooOldForUpdate(fusionStatus) && <span role="status">
         Update the Fusion add-in to let manual Update follow newer exports. Choose Install add-in here, then restart Fusion. Automatic Send still works.
       </span>}
     </div>}

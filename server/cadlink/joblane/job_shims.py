@@ -18,7 +18,7 @@ from contextvars import ContextVar
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from server.jobs.cad_intent import CadSolveIntent, INTERRUPTED_MESSAGE, cad_of
+from server.jobs.cad_intent import CadSolveIntent, INTERRUPTED_MESSAGE, UNAVAILABLE_BUNDLE_PATH, cad_of
 from server.jobs.solve_anyway import Answered, Pressed, carries
 from server.jobs.models import SolveRequest
 from server.cadlink.operations import (
@@ -290,7 +290,7 @@ async def accept_operation_solve_isolated(ctx, operation_id, **kwargs):
                 result = await asyncio.to_thread(ctx.runtime.store.job_for_submission_key, key)
                 row = await asyncio.to_thread(ctx.store.get_operation, operation_id)
                 if result is None and row["state"] not in TERMINAL_STATES:
-                    intent = CadSolveIntent(operation_id=operation_id, bundle_path="wgreturn/unavailable.wgreturn",
+                    intent = CadSolveIntent(operation_id=operation_id, bundle_path=UNAVAILABLE_BUNDLE_PATH,
                                             manifest_sha256="sha256:" + "0" * 64, return_id="unavailable")
                     result = await ctx.runtime.accept_cad_solve(
                         intent, key, prepare=False,
