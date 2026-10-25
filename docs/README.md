@@ -7,9 +7,10 @@ the exception in `validation/`: it is a blank form to copy, not evidence.
 
 | Document | Audience | Status | Authority / last verified |
 |---|---|---|---|
+| [User manual](USER-MANUAL.md) | First-time users | Step-by-step tasks: install, design and solve, Fusion, results, when WG needs you | UI and bundled add-in, 2026-10-25 |
 | [User guide](USER-GUIDE.md) | Users | Current overview | UI and API, 2026-08-13 |
 | [Install guide](INSTALL.md) | Users and maintainers | Every installer, launcher option and update detail; moved from the README | Installers and launchers, 2026-10-06 |
-| [Finish a speaker in Fusion and solve it](CAD-LINK-GUIDE.md) | Users | Current CAD Link and driver workflow | WG CAD Link, frontend and bundled WGLink source, 2026-09-30 |
+| [Finish a speaker in Fusion and solve it](CAD-LINK-GUIDE.md) | Users | Current CAD Link and driver workflow | WG CAD Link, frontend and bundled WGLink source, 2026-10-25 |
 | [Development guide](DEVELOPMENT.md) | Contributors and AI agents | Current orientation | Repository layout and tests, 2026-08-13 |
 | [Release guide](RELEASING.md) | Maintainers | Current release process; moved from the README | `release.yml` and `scripts/bump_version.py`, 2026-10-06 |
 | [Configuration format](reference/CFG-FORMAT.md) | Developers and integrations | Canonical contract | `server/design/`, 2026-08-13 |

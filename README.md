@@ -82,6 +82,8 @@ Add `--data` to any of them to also delete your designs and job history.
 
 ## Learn more
 
+- [User manual](docs/USER-MANUAL.md): a short, step-by-step start, from
+  install to reading results.
 - [User guide](docs/USER-GUIDE.md): the interface, solvers and results.
 - [CAD Link guide](docs/CAD-LINK-GUIDE.md): finishing a speaker in Fusion.
 - [Install guide](docs/INSTALL.md): every install option, launcher flags and

@@ -1,602 +1,408 @@
 # Finish a speaker in Fusion and solve it in WG
 
 Use WG to design the waveguide, add the rest of the speaker in Autodesk Fusion,
-then send the finished geometry back for an acoustic solve. You can also start
+then send the finished geometry to WG for an acoustic solve. You can also start
 with a model drawn entirely in Fusion. WG solves the geometry you send; CAD
 edits do not turn into editable waveguide parameters in WG.
 
-This guide describes the current WG and the bundled Waveguide Generator add-in in Fusion. Fusion runs
-on Windows and macOS. See the [general user guide](USER-GUIDE.md) for launching
-WG and using the results viewer.
+This guide covers the current WG and the Waveguide Generator add-in for Fusion
+that ships with it. Fusion runs on Windows and macOS. For a short step-by-step
+introduction, read the [user manual](USER-MANUAL.md) first. The
+[general user guide](USER-GUIDE.md) covers launching WG and the results
+viewer. The add-in's own guide is in the `wglink` repository
+(`docs/WGLINK-GUIDE.md`).
 
-## 1. Install and enable the Waveguide Generator add-in in Fusion
+The three Fusion commands, and what they mean:
 
-1. Install Fusion and WG on the same computer. Close Fusion during add-in
-   installation or replacement.
-2. On Windows, select the add-in installation task in WG's
-   installer. The task is preselected when Fusion's AddIns folder exists;
-   a silent install must opt in with `/TASKS="wglink"`. Setup reports whether
-   the Waveguide Generator add-in in Fusion was installed, updated, not selected, not detected, preserved or
-   failed, and records the outcome in its setup log.
-   WG installs and updates the add-in at startup only if you chose it in setup,
-   installed it from WG, or have received a model from Fusion through the link.
-   It also keeps updating a copy this installation already owns. Otherwise,
-   use **Install add-in** in the **CAD Link** panel, with Fusion closed. This
-   action also repairs the copy and is available before a folder is selected.
-   Merely opening the panel, opening or uploading a `.wgreturn` by hand,
-   exporting from WG, or having link metadata in a design file does not count.
-   No separate scientific Python installation is needed for the packaged copy.
-   For a source installation, use WG's installer; the add-in packaging details
-   are in the [add-in integration notes](../integrations/wglink/README.md).
-3. Start Fusion. Under **Utilities → Scripts and Add-Ins → Add-Ins**, select
-   **WGLink**, run it if needed, and tick **Run on Startup**. Its commands appear
-   in the **Waveguide Generator** panel under **Utilities**. Keep only one **WGLink**
-   entry in **Scripts and Add-Ins**.
-4. In WG, open **Settings → CAD Link**, then **Choose WG folder…**. The default is
-   `Documents/Waveguide Generator`: its `cadlink/` child is the **WGLink folder**,
-   containing `wglink/` for outgoing bundles and `wgreturn/` for returns. Its
-   `runs/` child is the **Runs folder**, containing run archives and captured CAD
-   documents. Earlier choices appear as “Separate folder from an earlier setup: <path>”.
-   “Use the WG folder instead” asks for confirmation and names where new files
-   will go. No files move. A missing WGLink folder offers “Create it”, or
-   “Use the WG folder instead” for a separate folder. WG and Fusion share the mirrored WGLink folder setting,
-   so you do not set a second path in Fusion.
-5. Keep WG running while using **Send to WG** or **Solve in WG**. These commands
-   hand a request to WG; they do not launch WG for you.
+| Command | Meaning |
+|---|---|
+| **Sources & Mesh…** | Set up sources and mesh, then Send or Solve. |
+| **Send to WG** | Open this model in WG to inspect or set up. Does not solve. |
+| **Solve in WG** | Send and solve now. |
 
-If WG says **“Activation of the Waveguide Generator add-in in Fusion is pending until Fusion closes”**, close Fusion
-and leave WG running, or restart WG with Fusion closed. Then reopen Fusion.
-After a healthy startup, packaged WG installs or updates the Waveguide Generator add-in in Fusion for CAD Link
-users to the exact add-in revision bundled with that WG release, without a
-network connection.
-For those users it replaces a hand-copied add-in that no WG installation manages.
-Without a CAD Link signal it leaves Fusion's AddIns folder untouched. A developer
-copy, a symlink or one owned by another WG installation is preserved; resolve
-that installation choice if WG reports an incompatible copy. A displaced
-WG-managed copy is kept in WG's application data folder for rollback; an
-unmanaged copy is not kept.
+## 1. Install and enable the add-in
 
-WG also checks Fusion's registration list and reports duplicate registrations,
-a copy registered from another folder, or a missing **Run on Startup** setting.
-It does not edit Fusion's list. Keep one registration pointing at the intended
-copy and tick the checkbox in Fusion.
+1. Install Fusion and WG on the same computer. Close Fusion while the add-in
+   is installed or replaced.
+2. On Windows, tick the add-in task in WG's installer. It is preselected when
+   Fusion's AddIns folder exists; a silent install opts in with
+   `/TASKS="wglink"`. Setup reports whether the add-in was installed, updated,
+   not selected, not detected, preserved or failed.
+3. WG installs and updates the add-in at startup only if you chose it in
+   setup, installed it from WG, or have already received a model from Fusion.
+   Otherwise use **Install add-in** on the **CAD Link** panel (it appears when
+   the add-in is missing or out of date), with Fusion closed. It also repairs
+   a damaged copy. No separate Python installation is needed.
+4. Start Fusion. Under **Utilities → Scripts and Add-Ins → Add-Ins**, select
+   **WGLink**, run it, and tick **Run on Startup**. The commands appear in the
+   **Waveguide Generator** panel under **Utilities**. Keep only one **WGLink**
+   entry.
+5. In WG, open **Settings → CAD Link** and check the **WGLink folder**. The
+   default WG folder is `Documents/Waveguide Generator`: its `cadlink/` child
+   is the WGLink folder and its `runs/` child is the Runs folder. A missing
+   WGLink folder offers **Create it**. Fusion reads the same setting, so you
+   never set a path in Fusion.
 
-**[Screenshot placeholder: WG's CAD Link settings and Fusion's Run on Startup checkbox.]**
+If WG says activation of the add-in is pending until Fusion closes, close
+Fusion and leave WG running, then reopen Fusion. WG leaves developer copies,
+symlinked copies and copies owned by another WG installation alone. It also
+reports duplicate registrations, a copy registered from another folder, or a
+missing **Run on Startup**; fix those in Fusion's add-in list.
 
-## Mesh settings in Fusion
+## 2. Send a WG waveguide to Fusion
 
-Open **Waveguide Generator ▸ Sources & Mesh…** in Fusion to set sources,
-wall size, grading distance, size zones and symmetry. The dialog remembers
-these settings in the Fusion document. Save, then **Send** again. Defaults are
-HF 6 mm, MF 15 mm, LF and passive/port 25 mm, walls 25 mm and grading distance
-100 mm. Size zones can be finer or coarser than the walls (Fine 15 mm,
-Coarse 40 mm). Smaller sizes give more triangles.
+1. Finish the basic waveguide in WG. Open the design menu (the design name at
+   the top left) and choose **Export → Send to CAD**. On the **CAD Link**
+   panel, **Open in Fusion 360** does the same. A completed parametric run's
+   export menu also has **Send to CAD**.
+2. WG writes the design and starts or raises Fusion, and the add-in inserts
+   it. If it does not, use **Manage Link… → Insert** in Fusion.
+3. Save and name the Fusion document. That name identifies its runs in WG.
+4. Add the flange, baffle, enclosure, woofer openings and other passages with
+   Fusion's normal tools. Keep every surface the sound meets in the model.
 
-WG’s **Mesh (set in Fusion)** card shows the snapshot’s sizes, source and group
-lines, the solved fraction, triangle count and estimated memory, once the model
-is prepared. The limit is 22,000 triangles for the part WG solves. If it is
-exceeded, WG says so on the Imported mesh tab: raise **Walls** or add a coarser
-size zone in Fusion, then **Send** again.
+The add-in inserts native Fusion features with throat and mouth sketches and
+datums. Build your features from these references where you can, and move or
+joint the whole inserted component, not the bodies inside it. If you change the
+waveguide in WG later, send it again and use **Update** in Fusion, then check
+your own features.
 
-Older returns show **Mesh (set in WG by an older add-in)**. Stored sizes stay
-read-only; update the add-in and Send from **Sources & Mesh…** to change them.
-Saved runs open with their stored sizes and requests. Standalone **File mesh**
-imports keep their own setup controls in WG.
-
-## 2. Send the waveguide to Fusion
-
-1. Finish the basic waveguide in WG. From the design menu, choose
-   **Export → Send to CAD** with Fusion selected as the CAD application.
-   **Open in Fusion 360** in Imported mesh → CAD Link is another entry point.
-   You can also use **Send to CAD** in a completed parametric run's export menu
-   to send that run's saved design. WG writes the bundle and starts or raises
-   Fusion. The CAD Link connection indicator shows when the add-in's heartbeat
-   is online: WG has heard from the running add-in.
-2. Use **Insert** in the **Waveguide Generator** panel in Fusion to choose the exported `.wglink` bundle
-   if it has not been inserted. Automatic insertion and continuous updates are
-   off by default; opening Fusion is not proof that the model was inserted.
-3. Save and name the Fusion document. That name identifies its CAD runs in WG.
-4. Add your flange, baffle, enclosure, woofer openings and multiple-entry horn
-   passages using Fusion's normal modelling tools. Keep the physical surfaces
-   that the sound encounters, including the added baffle and walls, in the
-   exported assembly.
-
-The Waveguide Generator add-in in Fusion inserts native Fusion features, with managed throat/mouth interface
-sketches and datums: reference planes and axes that locate the horn's openings.
-Build added features from these references where possible. Move or joint the
-whole wrapper component created by the Waveguide Generator add-in in Fusion to place the horn; moving its managed body away
-from those references can make **Update** refuse it.
-If you later change the waveguide in WG, send it again and explicitly use
-**Update** in Fusion. Inspect your own downstream features after rebuilding.
-
-Imported CAD is a snapshot. Editing it in Fusion requires another Send or Solve
-to bring those edits into WG; the apps do not continuously synchronize geometry.
+A model in WG is a snapshot. After editing in Fusion, use **Send to WG** or
+**Solve in WG** again; the two apps do not stay in sync on their own.
 
 ## 3. Decide which bodies to send
 
-1. Leave **Assembly scope** empty in Send/Solve for the root assembly, or select
-   one occurrence: a placed copy of a component in Fusion's assembly tree.
-   Its subtree means that copy and all components inside it. Check the dialog's
-   **Pre-flight** list:
-   included bodies, WG links and sources must describe the speaker you intend.
-2. Use solid bodies for ordinary walls and baffles. A visible surface body needs
-   **Declare Body… → Exterior shell — solve this body's outer surface** if it
-   is an acoustic surface. Use **Exclude — leave this body out of the return**
-   for modelling aids, then hide those excluded bodies or their occurrences.
-   Fusion can otherwise include them in a component export, so a visible
-   excluded body is refused. **Declare Body…** is in the **Manage Link…** dropdown in the **Waveguide Generator** panel in Fusion.
-3. Do not include construction air solids as ordinary speaker bodies. An air
-   volume is not a rigid wall. Mesh bodies are not an acoustic replacement for
-   the solid and surface geometry this export expects.
-4. Check that hiding or excluding a body has not removed part of a source.
-   Component exports are checked against what Fusion actually puts in STEP;
-   the Waveguide Generator add-in in Fusion refuses a scope that cannot safely leave its unwanted bodies out.
+1. In the Send or Solve dialog, leave **Assembly scope** empty to send the
+   whole design, or select one occurrence (one placed copy of a component).
+   Check the **Pre-flight** list: the included bodies and the drivers must
+   describe the speaker you mean.
+2. Use solid bodies for walls and baffles. A visible surface body that is part
+   of the speaker needs **Manage Link… → Declare Body… → Exterior shell**.
+   Mark modelling aids **Exclude** and hide them; a visible excluded body
+   stops the Send.
+3. Do not send air volumes as ordinary bodies: air is not a wall. Declare
+   them as FEM regions (below) or hide them.
+4. Check that hiding or excluding a body has not removed part of a driver.
 
-Closed solids are the simplest starting point. Open shells need particular care:
-BEMPP refuses free edges away from mirror planes. A fully enclosed void inside a
-solid can also be refused during STEP healing; re-export it with the cavity
-opened to the outside or as separate boundary shells, as the error advises.
+Closed solids are the simplest start. An open shell has free edges, which some
+solvers cannot take away from a mirror plane. A void sealed inside a solid can
+also fail; open it to the outside or model it as separate shells.
 
-### FEM regions
+## 4. Mark the drivers and set the mesh
 
-FEM regions solve the bounded air inside chambers and ports, with interfaces
-coupled to the exterior BEM field. They are available by default in CAD Link.
-In Fusion, create one closed solid air body per region and use
-**Declare FEM Region…** in the **Waveguide Generator** panel. Set the region mesh size and group its faces
-as moving diaphragms, exterior interfaces, plane-wave terminations or rigid
-walls. Ungrouped faces are rigid. Hide each declared air body before Send/Solve
-so it is exported separately from the speaker assembly. Check Pre-flight.
-Rigid FEM face groups can carry Miki absorbing lining: specify its positive
-thickness in mm and airflow resistivity in Pa·s/m² with the Waveguide Generator add-in in Fusion. Moving groups can
-set relative motion from -120 to 0 dB (0 dB means full motion). WG lists these
-settings beside each prepared group and retains them in the ingest evidence.
-The coupled route also passes positive patch weights of painted sources to the
-engine; today only native-source records carry patch weights, and those do not
-declare FEM regions, so CAD Link returns use the relative level above. An
-enabled lumped rear chamber requires declared driver Sd and uses it alone for
-stiffness. Motion weights enter the geometric Sd cross-check and fallback. A
-channel with any non-unit motion weight keeps its raw generalized load and
-omits normalized acoustic impedance; see the driver Sd rules below.
+Open **Waveguide Generator ▸ Sources & Mesh…** in Fusion.
 
-WG lists the prepared regions and shows retained interior pressure on a slice
-plane after solving; select a frequency and drive channel in the field controls.
-Exterior normal velocity uses a centred pressure difference with step h bounded
-by wavelength/50 and 5% of distance to the skin, to limit wave and near-source
-curvature error. Float32 pressure noise of about 1e-5 requires kh ≥ 1e-3
-(k = 2πf/c), giving roughly 1% precision and a minimum clearance of
-0.0032 wavelengths: about 55 mm at 20 Hz and 55 µm at 20 kHz for c = 343 m/s.
-The coordinate precision floor (32 float32 coordinate ULPs) may require more
-clearance. There is no fixed millimetre floor. Unreliable samples are masked
-with the legend reason “Too close to a surface for a reliable velocity”.
+1. **Drivers.** The table has one fixed row for each role: **HF**, **MF**,
+   **LF** and **Port or passive opening**. Click a row's **Pick faces**, then
+   click its faces in the model. One face picker below the tables fills
+   whichever row you picked. A face picked for a second row moves there, and
+   the dialog says so. **✕** clears a row. Leave unused rows empty. Drivers
+   from a linked WG design are read-only. Pick the face that moves air (a
+   throat or diaphragm), not a magnet or basket.
+2. **Walls** sets the triangle size of every surface that is not a driver and
+   not in a size zone.
+3. **Size zones** make parts of the model finer or coarser than the walls.
+   Click **+ Fine size zone (15 mm)** or **+ Coarse size zone (40 mm)**, name
+   it, adjust its size, and pick its faces or whole bodies.
+4. **Advanced** holds **Grading distance** (how far from each driver the mesh
+   grows to the wall size), **Symmetry** (**Automatic** or **Off**) and
+   **Reset to defaults**.
+5. **Estimate** shows about how many triangles WG will solve, against WG's
+   limit of 22,000. Before WG has seen the model it is a range, from a quarter
+   model to the whole model, because WG decides whether it can use symmetry.
+   After a solve it also shows the last count WG used.
+6. Click **Save**, or **Cancel** to change nothing. Save stores the settings in
+   the Fusion document; reopening the dialog restores them. Then use **Send to
+   WG** or **Solve in WG**.
 
-FEM has been validated against closed-form references (sealed box, open box,
-ported box, plane-wave and closed tubes) on official BEAT CPU float64.
-Declared FEM regions use official BEAT CPU float64 or Metal/CUDA/ROCm float32.
-Auto and interior-only systems use CPU float64. Ideal and electrodynamic drives
-support x0, y0 and x0+y0 symmetry in free space. A reduced driver must move
-within every plane that cuts its moving surface. Ground planes and passive
-cardioid are unsupported. Several moving groups in one region
-can share a drive channel, for example a dome and surround. To share one
-diaphragm across front and rear FEM chambers, give that channel an
-electrodynamic driver in WG. The driver owns every moving FEM and painted BEM
-boundary on its channel and uses one rigid translation coordinate. This also
-supports a meshed rear chamber with a painted exterior front, with or without
-an exterior port. An ideal-source channel spanning FEM regions is refused:
-“give this channel an electrodynamic driver to share a diaphragm between regions”.
+Defaults: HF 6 mm, MF 15 mm, LF and port 25 mm, walls 25 mm, grading distance
+100 mm. Smaller sizes give more triangles.
 
-Two air regions may touch only on faces both declare moving on that same
-channel. Each diaphragm side has an independent mesh; no matching nodes are
-required between chambers. Other touching faces remain refused. Enter Sd in
-the driver options for a lumped rear chamber; declared Sd controls its stiffness.
-Moving geometry supplies only an acoustic-impedance fallback and cross-check.
-Opposite-side areas differing by more than 10 % are ambiguous, so enter Sd to
-get acoustic impedance. Disable the lumped rear chamber when the rear already
-radiates through the moving geometry.
-FEM-only channels can coexist with painted exterior sources. A missing
-compatible engine refuses the job; choose exterior-only explicitly if the
-interior should be excluded.
+The dialog marks each driver with a lasting identity, so later sends refer to
+the same driver and WG keeps its setup. Body and component names do not mark
+drivers. If you split, copy or delete a driver face, reopen Sources & Mesh…,
+pick every face of that driver again and Save; WG then asks for that driver's
+setup once more.
 
-Plane-wave terminations are supported only in interior-only solves. A return
-with a termination and any painted exterior source or interface in any region
-produces a non-blocking ingest warning naming the termination's region and group.
-Coupled job admission and the builders refuse it, including when setup drive
-channels introduce an exterior; exterior-only leaves the regions out and remains
-available. Remove the termination group (make it rigid) to solve the chamber
-coupled, or remove the painted sources and interfaces to solve the region
-interior-only, or choose exterior-only.
+In WG, **Model details** on the **Imported mesh** tab shows the mesh as one
+read-only line: "Mesh (set in Fusion)", the sizes, the triangle count and the
+memory estimate. To change it, use Sources & Mesh… in Fusion and Send again.
 
-Operators can disable FEM regions with `WG2_FEM_REGIONS=0` and restart WG;
-`false`, `no` and `off` also disable it. This removes the capability and FEM UI
-and refuses FEM intake and coupled jobs. Unset the override to enable it again.
+**Side names.** Names such as `MFLeft`, `HF_R` or `woofer_L1` tell WG a driver
+belongs to one side. WG will not mirror a model already cut in CAD if a driver
+belongs to one side, because the mirror would stand in for the other driver.
+Send the whole model when the sides need their own drivers.
 
-## 4. Mark the faces that produce sound
+## 5. Send or Solve
 
-1. Select the throat or diaphragm face that drives the air, rather than a magnet,
-   basket or mounting flange. A waveguide inserted by the Waveguide Generator add-in in Fusion already has its managed
-   throat source; check that it survives your edits.
-2. Open **Waveguide Generator ▸ Sources & Mesh…**. Use **Add Source**, choose
-   **LF**, **MF**, **HF** or **PASSIVE_CARDIOID**, select its faces and set its mesh
-   size. For example, use HF for a compression-driver throat and LF for woofers
-   on the enclosure baffle. Sources from a linked WG design are read-only here.
-3. Press **Save**, then save the Fusion document. Reopening the dialog restores
-   the settings and face selections. Check the role, face count and area in
-   Send/Solve's **Pre-flight** summary before exporting.
-4. Correct accidental markings by editing the source’s face selection, or use
-   **Remove Last Source**, then **Save**. After splitting, copying, deleting or
-   repainting a source face, reopen the dialog and check its selections.
-   Recheck the driver settings in WG after reassignment.
+1. In Fusion, click **Send to WG** to set up first, or **Solve in WG** to
+   solve now.
+2. Check **Assembly scope** and the **Pre-flight** list. If several linked
+   waveguides are included, **Solver anchor instance** chooses the one whose
+   throat and direction define the solve's origin and axis. In WG, pick the
+   same placement under **Managed Fusion link** on the **CAD Link** panel.
+3. Pre-flight sorts what it finds three ways:
+   - **Fix first.** Send and Solve stay disabled until you fix it, for
+     example "This model has no driver yet." A model whose only driver is a
+     FEM region's moving surface needs no driver row.
+   - **Asked when you press OK.** A body that is not a closed solid asks
+     whether to send anyway. A Solve whose smallest possible mesh is still
+     over the limit asks: **Yes** solves anyway, **No** opens Sources & Mesh…
+     to change the mesh. If you solve anyway here, WG does not ask again.
+   - **Noted.** For example, a size zone whose faces are all outside the
+     selected part is left out of that send.
+4. Click **Send** or **Solve**.
 
-The command applies an appearance named exactly after the role and stamps the
-faces with a persistent source identity, so later sends refer to the same source.
-Body and component names alone do not
-mark sources. Hand-painted appearances with the recognized role names are also
-read, but old paint may need adoption or explicit reassignment before export.
-An appearance called `HF drive` or `MF_L` does not create a source in this add-in.
+The add-in's progress panel (titled **Waveguide Generator**, docked right)
+opens on every Send or Solve. It follows the model through preparing, waiting
+for the solver, solving with a frequency count ("Solving · 12 of 36
+frequencies"), and solved, with **Show results in Waveguide Generator**. It
+opens by itself when WG needs you. **Requests…** reopens it and lists recent
+Sends and Solves for **This document** or **All documents**; **Clear
+finished** tidies the list. If WG has not picked the model up yet, the panel
+says so and offers **Send again**.
 
-Each source in the dialog has its own identity. Select several diaphragm faces
-for one source when they should share a drive, or add separate sources and
-assign their channels in WG. Legacy hand-painted faces of the same role are
-still read as one source. Recheck their assignment in the dialog before sending.
+If WG is not running, the add-in starts it in the background where it can. If
+that is not possible, it says why; start WG yourself and try again.
 
-**Side names:** imported source names, IDs and selector labels such as `MFLeft`,
-`HF_R`, `woofer_L1` or `PORT_EXIT_L` identify a particular side to WG's mirror
-safeguard. WG refuses to mirror a model already cut in CAD if a source belongs
-to the left or right side: a mirror would impersonate the other driver. Send
-the whole model when the sides need independent sources. These names are
-recognized by the safeguard, not offered as source roles by **Sources & Mesh…**;
-renaming a Fusion body does not create separate left/right channels.
+## 6. In WG: the Imported mesh tab
 
-**[Screenshot placeholder: selected diaphragm faces in Sources & Mesh, followed by the Send pre-flight source list.]**
+A model from Fusion appears on the **Imported mesh** tab with **CAD Link**
+selected. WG prepares it automatically when it arrives, when you choose it
+under **Model versions**, and when WG reopens it after a restart. There is no
+prepare button.
 
-## 5. Set up the drivers in WG
+Under the model's name is **one status line** with at most one button:
 
-1. Use **Send to WG** first when you want to inspect the model and set its drive
-   before solving. WG imports and prepares the snapshot and shows it in CAD mode.
-   Open the **Simulation** rail's **Drivers** section.
-2. Check each channel and its source IDs. A channel is a group driven together;
-   one source can contain several disconnected diaphragm patches.
-3. Keep **Motion → Normal** for driver-model solves. It moves each face along
-   its own normal. **Axial (pistonic)** describes a rigid piston along its source
-   axis. Metal and BEMPP solve it along each source's own axis with the module
-   versions WG ships; an older installed Metal or BEMPP package that lacks
-   per-source axes refuses it. WG reports any refusal before running; it does
-   not silently use Normal. An axial channel cannot carry a Thiele/Small driver
-   model either. BEAT can use CAD axial motion only when each resolved source
-   axis lies along the radiation axis, in either direction. Tilted axes are
-   refused. A source with no usable outward axis, or motion incompatible with
-   a mirror plane, is also refused on every engine; send the whole model when
-   the mirror is the problem.
-4. Choose a driver from the library or enter its data by hand. Choose the correct
-   impedance variant and check the datasheet values. A started driver needs
-   **Sd, Bl, Re**, one of **Mmd/Mms**, and one of **Cms/Vas/Fs**. If you enter
-   **Le2** or **Re2**, enter both. The app shows missing values and refuses an
-   incomplete driver; clear the driver to return to a unit-drive solve.
-5. Set **Count** to the number of identical drivers sharing the source,
-   **wired in parallel** and moving together. The driver model uses the parallel
-   resistance, Re divided by Count. Series or series-parallel wiring gives
-   incorrect electrical results and voltage sensitivity with this model.
-   Set **Rear volume, total for all drivers** to their one shared sealed chamber
-   volume, in litres. Enter the per-driver T/S data; do not multiply Sd or the
-   chamber volume by Count. Keep the full speaker's Count for a mirrored half
-   or quarter solve. CAD geometry does not fill in these driver numbers.
-6. Set **Drive voltage** in RMS volts. Review **Crossover** when more than one
-   channel is present: it controls their combined filters, levels, polarity and
-   delays. Check the defaults before trusting a combined response.
-
-A driver model requires Normal motion and exactly one source on its channel.
-That source may be the disconnected group of identical drivers above. A channel
-containing several separate source identities cannot carry one driver model.
-Without a driver model, the channel gives a reference response to **unit
-acceleration**: WG drives the source with an acceleration of 1 m/s² at each
-frequency, rather than predicting its motion from a real driver's voltage.
-This is useful for studying response and directivity, but it does not provide
-the driver's voltage sensitivity, electrical impedance, power or excursion.
-
-When **Solve driver in BEAT** is enabled, driver options include **Sd (cm²)**.
-Choosing a library driver replaces its Sd and available bare-driver parameters;
-fields missing from the new library entry are cleared. Check the datasheet and
-enter missing values, especially bare Mmd (Mms includes air load and is not
-substituted). Sd is stored in m² in a v2 transducer spec. Every enabled lumped
-sealed rear chamber requires an entered Sd, at admission and compilation,
-on both exterior-only and coupled FEM routes. The declared value controls
-chamber stiffness ρc²Sd²/V and, for unit motion weights, acoustic impedance Z/(ρcSd).
-Declared Sd is the full physical driver area, including on half and quarter
-models; WG never scales it. Geometry on a reduced mesh is completed to the
-full driver area before the fallback or cross-check. Mirrored complete drivers
-share the channel voltage; their currents and powers add while excursion
-remains per driver. Exterior-only drivers must move within every active
-symmetry plane, including complete mirrored drivers.
-
-Motion weights enter the geometric cross-check and fallback as per-face weights.
-If any moving boundary of a channel has a weight other than 1, results retain
-its raw generalized load and omit normalized acoustic impedance with
-“acoustic impedance is not normalised for weighted motion”.
-
-Moving-face geometry supplies acoustic-impedance normalization when Sd is
-undeclared and geometry is unambiguous. Same-sign mesh net projections are
-summed as one side; opposite sides are averaged only for this normalization.
-More than 10% disagreement makes geometry ambiguous and produces a warning.
-Geometry is also a cross-check when unambiguous: it includes
-everything that moves, including the surround roll, so 10–20% above datasheet
-Sd is normal. Results warn on a geometric cross-check mismatch and record
-the value and its source per channel. Ambiguous geometry without Sd omits
-acoustic impedance with “Sd not determined; enter Sd to get acoustic impedance”.
-An enabled lumped rear chamber refuses `lumped_chamber_double_rear_load` when
-moving mesh nets or disconnected moving patches have opposite signs, or when
-geometry is ambiguous. Same-sign meshes may contribute to one side. The
-meshed rear load and lumped rear stiffness must never be applied together.
-
-## 6. Ports and rear chambers
-
-1. Model the actual passages and openings in Fusion. A hole alone does not tell
-   WG what motor, chamber or port drives it. An ordinary bass-reflex enclosure
-   is not automatically recognized and coupled just because you drew its port.
-2. For the supported passive-cardioid case, mark the diaphragm **MF** and the
-   port aperture **PASSIVE_CARDIOID**. The old appearance name **PORT_EXIT** is
-   still recognized. This is a passive-cardioid port role, not a general-purpose
-   driver or an automatic bass-reflex setup.
-3. In **Simulation → Passive cardioid**, enable the model and enter rear volume,
-   port length, physical port area and foam resistance. Physical port area and
-   the meshed aperture area are different inputs; choose **Same as the BEM
-   aperture** only when they should be equal.
-4. Choose **Metal** for this feature. **Coupled** needs exactly one MF diaphragm
-   source alone on a complete driver channel and all port patches on one other
-   channel. Use the cardioid rear-volume field for this coupled chamber; leave
-   that MF driver's separate rear-volume field empty to avoid counting it twice.
-   A crossover containing the raw MF channel is also refused. Its driver-based
-   scaling belongs to the derived `passive_cardioid` channel; use that channel
-   in the combined response instead of the raw MF reference response.
-
-Passive cardioid is Metal-only. Declared FEM regions use official BEAT CPU
-float64 or Metal/CUDA/ROCm float32; Auto uses CPU float64. Electrodynamic driver
-models support full, half and quarter models. FEM regions
-cannot be combined with passive cardioid in this release.
-**Exterior-only (leave FEM regions out)** excludes the interior air. Legacy declared air volumes also require this explicit exclusion.
-The sealed rear-volume driver model and passive-cardioid model above add chamber
-loads without a FEM region. Structural vibration and cone breakup are not modelled.
-
-## 7. Check the axis and symmetry
-
-1. For a model drawn from scratch, check **Radiates along** in **Model details**
-   (collapsed under the model's status line on the Imported mesh tab).
-   WG never asks which way a model radiates: it works the axis out from the
-   model and records it in the run. When the evidence is weak it uses its
-   documented fallback and says so: “WG chose +Z; change it if the model
-   radiates another way.” Solve never waits on it. To pick another axis, use
-   **Change**, choose +X, −X, +Y, −Y, +Z or −Z and inspect the side/top
-   previews. The outgoing direction becomes solver +Z, shown in blue; sources
-   are orange. **Solve** keeps your choice for the project; once WG has solved
-   the model along its own axis, **Done** keeps it at once. Exporting in a
-   different component's coordinates, or from an unsaved Fusion document, is
-   decided again by WG; save the document for continuity between returns.
-2. Prefer sending the whole speaker. WG checks the finished geometry and each
-   source identity for mirror symmetry. One accepted transverse mirror gives a
-   half solve; two give a quarter; otherwise WG keeps the full domain. Keep
-   flanges, enclosure, ports, driver patches and their drive symmetric across
-   every mirror you intend to use. Matching outer dimensions alone is not enough.
-3. For a model drawn in CAD, place the throat at the origin and centre the
-   speaker on the two planes through its radiation axis if you want WG to
-   detect mirror symmetry. Read the domain line in Model details. For a whole
-   model, **Waveguide Generator ▸ Sources & Mesh…** in Fusion, set **Symmetry**
-   to **Off**, save and **Send** again to disable automatic cutting.
-4. If you cut the model in Fusion, use the YZ or XZ origin plane (x = 0 or y = 0)
-   with radiation along model +Z. Leave the acoustic cut boundary open; a flat
-   cap there would be solved as a wall. Sources must still be identified, with
-   a source meeting each cut plane, no other leaking edges and no side-specific
-   source identity. WG can recover a clean negative-side half by reflection and
-   states that in Model details. Positive-side cuts are the simplest convention.
-5. Use the domain line's **Change** only for the alternative readings WG offers.
-   Solve prepares it again under that choice. An unsafe open half is refused;
-   **Symmetry Off** cannot restore geometry missing from the file.
-
-Front/back cuts, off-origin or oblique cuts, and a CAD-cut model facing an axis
-other than model +Z are not supported for mirror recovery. Send the complete
-model instead. Full/half/quarter describe the acoustic domain, not how much of
-the model you happen to display in the viewport.
-
-Electrodynamic drivers support transverse half and quarter domains. A channel
-represents one driver when its moving patches connect through shared edges after
-coordinate welding, or their footprints projected along the motion axis overlap
-by at least 50% of the smaller patch's projected area. Zero-projection faces still
-carry connectivity. Shared edges join separately tagged dome, surround and cap
-surfaces; overlapping front and rear skins may share a driver in one mesh or
-across FEM chambers and the exterior mesh. Separate diaphragms, including a coax
-or an off-plane mirrored pair, need separate channels even across different meshes.
-Otherwise WG refuses `driver_disconnected_patches`: give each driver its own drive
-channel, or, if these are the two faces of one diaphragm, make them overlap along
-the motion axis / paint the rim as moving.
-
-Full and reduced models use the same rule. Under symmetry it judges the
-representative; orbit images are separate physical drivers by construction,
-each with its own mass and electrical parameters and parallel current contribution.
-For a full-domain comparison, give each mirrored driver its own channel and
-combine their voltage bases.
-
-A moving perimeter edge on a mirror plane is treated as a driver cut, including
-an edge that only touches the plane. The driver's motion axis must lie in each
-cutting plane. If it does not, send complete geometry with **Symmetry Off** in Fusion’s **Sources & Mesh…**.
-
-**[Screenshot placeholder: Model details showing the domain line, Radiates along and Change, the mesh from Fusion and the checks.]**
-
-## 8. Send, choose a solver, and solve
-
-1. In Fusion, choose **Send to WG** to import/display without solving, or
-   **Solve in WG** to export and request a solve of that exact snapshot. Review
-   **Assembly scope** and sources. If several linked placements are included,
-   **Solver anchor instance** chooses the placement whose throat position and
-   direction define the solve's origin and radiation axis. Choose the horn
-   whose direction you want the plots to describe. Before requesting a return,
-   choose its matching instance ID in WG's **Managed Fusion link**; freshness
-   checks, geometry requests and updates use that exact placement. Back in
-   Fusion, choose the same instance as the solver anchor, then press OK.
-   WG does not guess which placement you mean. Preparation refuses
-   a repeated design with no selected instance, or a selected instance that
-   conflicts with the return's solver anchor.
-2. In WG, review **Frequency Sweep**, **Directivity Map**, **Drivers**,
-   **Crossover** and **Mesh detail**. Mesh sizes are read-only here. Set them in
-   Fusion’s **Waveguide Generator ▸ Sources & Mesh…**, save and **Send** again.
-   **Rebuild mesh**, **Skip optional source**, **Accept area drift** and
-   **Exterior only** remain in WG. Review any findings before using
-   **Approve and solve**; approving a warning is not a geometry repair.
-3. Choose the solver in **Simulation → Solve options**. **AUTO** chooses among
-   compatible available engines. An explicit choice stays yours; WG refuses an
-   unsupported combination rather than silently switching engines.
-
-   | Solver | CAD use today |
-   |---|---|
-   | **Metal** | Apple GPU; Normal and axial CAD sources, and passive cardioid. An older installed package without per-source axes refuses CAD axial. |
-   | **BEMPP** | Imported CAD requires OpenCL assembly and no free rim away from mirror planes. CAD axial is solved along each source's axis; an older installed package without per-source axes refuses it. |
-   | **BEAT · CPU** | Requires its provisioned Julia runtime. Can solve imported CAD; passive cardioid is refused. |
-   | **BEAT · Metal / CUDA / ROCm** | Requires the matching available GPU/runtime. CUDA and ROCm, on the official default route, are **not hardware-qualified**. The official engine offers them on Linux and Windows. Choose Accurate for CUDA/ROCm CAD solves; explicit BEAT · Metal also accepts CAD in Fast. Passive cardioid is refused. |
-
-   AUTO in Fast skips BEAT GPU engines for CAD. Read the solver row's reason
-   when it is unavailable: the actual returned domain, source motion and runtime
-   all affect eligibility. Switching from Metal to another engine does not
-   remove these checks.
-4. Press **Solve** in WG after correcting a waiting request's settings. The
-   settings and retained model are kept for retry; ordinary settings corrections
-   do not require re-exporting from Fusion. First-time Fusion solves without a
-   saved setup use WG's shared defaults and say **“Using WG's default settings —
-   change them in WG.”** Review them before making design decisions.
-
-You can also start a return from WG. **Refresh** (the circular-arrow button
-with the tooltip **Refresh the CAD return listing**) lists bundles already in
-the exchange folder; it does not export fresh geometry from Fusion. When the
-link card offers **Bring in & solve**, it asks Fusion for its current model,
-prepares it and starts the solve. The command palette's **Pull from Fusion &
-Solve** does the same. These requests need the Waveguide Generator add-in in Fusion running.
-
-If a request needs your input, the model card shows **Fusion asked for a solve**
-and the reason it is waiting. Correct the settings or review the findings, then
-use **Solve** or **Approve and solve** as offered. **Dismiss** retires the
-request. Completing or dismissing it consumes it, so it cannot start another
-solve later. A temporarily unavailable runtime can leave a request waiting;
-a model or chosen engine that cannot support the solve is refused with a reason.
-
-Imported CAD solves are free-space solves. Infinite-baffle mounting and a rigid
-ground plane are not supported on this route. The imported diagonal observation
-plane supports only the default 45° inclination.
-
-## 9. Read and keep the results
-
-1. Follow progress in WG and open the completed run. The run belongs to the
-   Fusion document and snapshot that was submitted, even if you edit CAD while
-   it runs. Check **Solve inputs**, the recorded axis and domain before comparing
-   designs. Completed runs retain their original settings.
-2. Inspect each channel's response and then the combined output, if enabled.
-   Use the horizontal/vertical directivity maps and polar plots to judge coverage;
-   a normalized map describes pattern, not absolute sensitivity. Driver-based
-   runs also provide impedance, electrical power/current and excursion views.
-3. Read warnings and failed-frequency information. A plot with missing samples
-   is not evidence of a clean full sweep. Compare mesh refinements before relying
-   on a fine ripple or a high-frequency feature.
-4. Export the run's report, FRD/polar files for VituixCAD, CSVs or retained solve
-   mesh from the run export menu. Open the project folder for its saved files.
-   **Settings → CAD Link → Keep the Fusion model: Keep / Don't keep** controls
-   document capture. Keep saves each version once in the model folder's `cad/`.
-   Versions used by runs are never deleted automatically; unused older versions
-   are removed when a new version arrives. Don't keep affects new returns;
-   models already kept remain available.
-
-Returned snapshots appear under **Model versions** in CAD Link; completed
-solves appear in the shared **Runs** view. **View project runs** opens that
-view with the current project's stable identity selected. Filter by source,
-project or retained model; clear filters to see other runs. Model boundaries
-distinguish changed snapshots. Select a run to find its captured **Fusion file**
-in the details, when document capture was enabled. Compare, rerun, remove and
-export use the same controls as parametric and standalone mesh runs.
-
-**Open in Fusion** beside **Fusion file** opens that run's saved `.f3d` on this
-computer. Fusion imports it as a new document; it does not reopen the cloud
-document. If CAD launching is disabled, **Show in Finder** or **Show in Explorer**
-opens the folder holding the saved file instead.
-
-On WG startup, an existing return is selected
-without preparation; choose **Prepare simulation**. Newly arriving returns and
-ones you select from **Model versions** are prepared automatically. If a
-preparation fails, use **Prepare simulation** to retry, or **Prepare again**
-when that snapshot already has a preparation record.
-
-For returns from the same project with compatible sources (the same source
-IDs, roles and required flags), WG keeps channel mapping, drivers,
-combination settings and the frequency sweep. Check them after changing source
-markings; an incompatible source inventory needs its own setup. Retrying the
-same preparation keeps the findings you already approved for it. A different
-preparation — for example, a changed snapshot, settings or frame — needs fresh
-review, even if a warning sounds the same.
-
-The exchange folder is for transfers. The **Workspace** archive keeps runs by
-design, with retained Fusion documents under `runs/<design>/cad/` when capture
-is enabled and each run in its own folder alongside them. Parametric and CAD
-runs for the same design share that folder. See the [run archive](USER-GUIDE.md#the-run-archive)
-for retention and export details.
-
-## 10. Common refusals and remedies
-
-These are exact messages or excerpts. WG shows the messages unless a row says
-**Fusion shows**; those rows come from the bundled Waveguide Generator add-in in Fusion, not WG.
-Variable source names and measurements are omitted from excerpts. The cut-plane
-examples show x = 0; the same checks apply at y = 0.
-
-| Message | What to do |
+| The line says | Button |
 |---|---|
-| **Fusion shows:** “Return export has no drivable source. Paint an included face LF, MF, HF, or PASSIVE_CARDIOID and try again.” | Include the driver face and use **Sources & Mesh…**. Check Pre-flight again. |
-| **Fusion shows:** “source was split or copied:” | Select all intended faces of that source and run **Sources & Mesh…** again. Check its driver setup after sending. |
-| **Fusion shows:** “this export would carry only part of that source” | Include its hidden/excluded members, or clear their source markings if they should no longer belong. |
-| **Fusion shows:** “is declared 'exclude' but is still visible” | Hide the excluded body or its occurrence in Fusion, or clear the declaration to include it. |
-| “a face lies in x = 0 and would solve as a wall across the cut” | Remove the acoustic cap at that cut, or send the whole model. The same rule applies at y = 0. |
-| “no source meets x = 0, so nothing shows it is the speaker's symmetry plane rather than an open side” | Send the whole model or correct the cut and source geometry. Do not invent a source just to pass the check. |
-| “its mirror image would stand in for the other side's own source” | Send the whole model for independently identified sides. Rename only if the name wrongly identifies a shared source as one side's driver. |
-| “Return the whole model from CAD to solve it whole.” | Set **Symmetry** to **Automatic** in Fusion’s **Sources & Mesh…** for a valid CAD-cut model, or send the complete speaker. |
-| “Installed hornlab-metal-bem does not support per-source axial axes.” / “Installed hornlab-bempp-bem does not support per-source axial axes.” | The installed Metal or BEMPP package is older than the version WG ships and cannot solve that CAD axial drive. Update the module, choose Normal only if it represents the intended motion, or use an available compatible BEAT route without a driver model. |
-| “BEAT drives axial sources along its z axis” | That source's axis is tilted relative to the radiation axis. Use Normal only if appropriate; BEAT cannot represent that tilted axial drive. |
-| “Complete the driver, or clear it to solve that channel unit-driven.” | Supply the listed missing T/S values, or clear the driver. |
-| “BEMPP does not solve the passive cardioid; it is solved on Metal only. Select Metal for this return.” | Choose Metal. A CPU/GPU backend change cannot preserve this feature on BEMPP or BEAT. |
-| “BEMPP solves imported CAD geometry on an OpenCL device only.” | Use an available compatible engine, or an OpenCL assembly setup the app accepts. A free-rim refusal additionally requires closing the shell or choosing Metal/BEAT · CPU. |
-| “imported geometry supports free-space solves only; infinite baffle is unavailable” | Use free-space mounting for this CAD solve. |
-| “Turn the ground plane off to solve this return.” | Disable the ground plane; imported CAD cannot be stood above a floor on this route. |
-| **Fusion shows:** “WG took the request but has not confirmed it. Check WG's CAD Link panel before sending this model again.” | Inspect CAD Link first. Sending again creates a new request and may duplicate work. |
+| Preparing <name>… | none |
+| Ready to solve · 3,035 triangles | **Solve** |
+| <name> needs your choice: it meshes to 54,739 triangles (limit 22,000). | **Choose…** |
+| Solving · 13 of 36 frequencies | none (Stop is on the run card) |
+| Solved · run #1 · just now | **Show results** |
+| Waveguide Generator could not prepare <name>. | **Try again**, when it can help |
 
-If Fusion reports that WG has not picked up the request for a minute, open WG,
-check that it is current and collecting requests, and let it handle the waiting
-request. If geometry must change, correct it in Fusion and send again. For an
-export error's full traceback, use **View → Show Text Commands** in Fusion.
+**Solve** is also at the top right of the window. Results shows charts and
+progress; it has no Solve button of its own for a CAD model.
 
-## 11. STEP from another CAD program
+**Model details** (folded; it opens by itself when something needs a look)
+holds:
 
-There is **no standalone STEP import-and-solve command in WG's current UI**.
-**Open…** reads WG/ATH design files. **Import mesh…** independently imports
-ASCII Gmsh 2.2 triangular surface meshes for inspection and full-domain solving;
-select **Imported mesh**, then choose units and source labels under **Geometry →
-Radiating surfaces**. **CAD Link** remains another input in the same workspace. See the
-[mesh workflow](USER-GUIDE.md#import-and-solve-a-mesh) for its first-slice limits.
-This is not standalone STEP import. The CAD solve route still accepts a
-validated return bundle containing geometry and source information.
+- what the model is and which drivers it has;
+- how WG solves it: whole, half or quarter, and why;
+- **Radiates along**, with **Change** (for models drawn in Fusion);
+- the mesh line from Fusion;
+- the sweep and solver in one line, with **Settings…**;
+- the checks, with a plain line for any that need attention;
+- FEM regions, when the model has them.
 
-1. Export STEP from your other CAD program and open it in Fusion.
-2. Inspect the imported bodies, mark the source faces with the Waveguide Generator add-in in Fusion, and save the
-   Fusion document.
-3. Follow Send/Solve above as a model authored in CAD. A plain STEP imported this
-   way has no WG-managed parametric link.
+Below it: **Model versions** lists earlier sends, and **View project runs**
+opens the **Jobs** panel filtered to this model. The connection line at the
+bottom ("Fusion 360 · connected") holds **Settings** and, when needed,
+**Install add-in**.
 
-A completely non-Fusion, plain-STEP user workflow is not supported today.
-Onshape is disabled in release builds, so it is not an end-user substitute for
-that missing import route.
+**Show developer details** (**Settings → Advanced**, off by default) adds
+the technical detail behind these lines: check evidence, identifiers and the
+raw text of a failure. You do not need it for normal work.
 
-### Onshape in development builds
+## 7. Set up the drivers in WG
 
-Onshape is unavailable in release builds. In a development run explicitly
-enabled with `WG2_ENABLE_ONSHAPE=1`, choose Onshape in **Settings → CAD Link**:
+Open the **Simulation** tab. For a CAD model it has:
 
-1. Create a personal key pair in Onshape under **My account → Developer → API keys**.
-2. Save `ONSHAPE_ACCESS_KEY` and `ONSHAPE_SECRET_KEY` in the private credential
-   file shown in WG's settings. Keep it outside the repository and shared
-   folders, and restrict access to your own account. WG reads it locally;
-   it does not ask for the secret in a browser field or return it through its API.
-3. Use **Check connection** and check the account and plan before sending.
-   A free-plan document is public; WG asks for explicit consent before creating it.
+- **Sweep** (open): start, end and number of frequencies.
+- **Drivers** (open): one card per driver.
+- **Crossover** (folded; only with two or more drivers).
+- **Directivity** (folded, with a summary).
+- **Passive cardioid** (only with a port or passive opening).
+- **Solver** (folded, with a summary).
 
-Onshape sends and returns are in the CAD Link panel. It builds an internal
-`.wglink` bundle and uploads directly, using its own transport rather than the
-Fusion exchange folder. The design and parametric-run export menus' **Send to
-CAD** is the Fusion folder transport and appears when Fusion is selected.
+Before the model is ready the tab says "Settings appear when <name> is ready."
+
+For each driver card:
+
+1. Choose a driver from the library or enter its data by hand. Check the
+   impedance variant and the datasheet values. A driver needs **Sd, Bl, Re**,
+   one of **Mmd/Mms**, and one of **Cms/Vas/Fs**. If you enter **Le2** or
+   **Re2**, enter both. Clear the driver to solve with a unit drive.
+2. Set **Count** to the number of identical drivers sharing the source,
+   wired in parallel and moving together, and **Rear volume** to their one
+   shared sealed chamber, in litres. Enter per-driver data; do not multiply Sd
+   or the volume by Count. Keep the full speaker's Count for a half or quarter
+   solve.
+3. **More** holds **Motion** and **Solve driver in BEAT**. Keep **Normal**
+   (each face moves along its own normal) for driver-model solves. **Axial
+   (pistonic)** moves the source as a rigid piston and cannot carry a driver
+   model. BEAT accepts axial motion only along the radiation axis.
+4. Once a driver is chosen, set **Drive voltage** (RMS). The amplifier limit
+   is optional and only caps the maximum output Crossover reports.
+
+Without a driver, a channel gives a reference response to **unit
+acceleration** (1 m/s² at every frequency). That is useful for response and
+directivity, but gives no sensitivity, impedance, power or excursion.
+
+With **Solve driver in BEAT**, enter **Sd (cm²)**: the full physical driver
+area, even on half and quarter models. Every enabled sealed rear chamber needs
+an entered Sd; it sets the chamber's stiffness. Without Sd, WG works out the
+area from the moving faces when it can, and warns when that disagrees with
+the datasheet by more than is normal (10–20 % above datasheet Sd is normal,
+because the moving faces include the surround). Enter bare **Mmd**, not
+datasheet Mms, which includes air load.
+
+**Crossover** sets filters, levels, polarity and delay between drivers.
+Check its defaults before trusting a combined response.
+
+**Solver** chooses the engine. **Auto** picks among the engines that can
+solve this model. An explicit choice stays yours; WG says why an engine cannot
+take the model rather than switching silently.
+
+| Engine | CAD use today |
+|---|---|
+| **Metal** | Apple GPU. Normal and axial sources, and passive cardioid. |
+| **BEMPP** | Needs an OpenCL device, and no free rim away from mirror planes. |
+| **BEAT · CPU** | Needs its prepared runtime. No passive cardioid. |
+| **BEAT · Metal / CUDA / ROCm** | Needs the matching GPU. CUDA and ROCm are not hardware-qualified; use Accurate with them. No passive cardioid. |
+
+CAD solves are free-space solves. Infinite baffle and a ground plane are not
+available for imported models.
+
+## 8. Ports, rear chambers and FEM regions
+
+**Passive cardioid.** Pick the diaphragm as **MF** and the port opening as
+**Port or passive opening**. In **Simulation → Passive cardioid**, enable it
+and enter rear volume, port length, physical port area and foam resistance.
+Use Metal. A hole alone does not tell WG what drives it; an ordinary
+bass-reflex box is not recognised automatically.
+
+**FEM regions** solve the air inside chambers, ports and phase plugs and
+couple it to the outside field. In Fusion:
+
+1. Model each air volume as one closed solid body.
+2. Run **Manage Link… → Declare FEM Region…** on it. Name it, set its mesh
+   size and loss factor.
+3. Add a group for every face set that is not a plain wall: a **Driver
+   diaphragm (moving)** with its role, an **Interface to exterior air** where
+   the chamber meets the outside, a **Plane-wave termination** for an anechoic
+   tube end, or a **Rigid wall (local size)**, optionally with **Absorbing
+   lining**. Ungrouped faces are rigid walls.
+4. Hide the air body before Send or Solve.
+
+In WG the regions are listed in Model details, and after a solve WG can show
+the pressure inside on a slice plane. Rules worth knowing:
+
+- Declared regions solve on BEAT (CPU float64, or Metal/CUDA/ROCm float32).
+- Several moving groups on one role are one physical driver (for example a
+  dome and surround, or the front and rear of one diaphragm). To share one
+  diaphragm across two regions, give that driver a real driver model in WG.
+  Separate drivers need separate roles.
+- A plane-wave termination works only in an interior-only solve.
+- FEM regions cannot be combined with passive cardioid.
+- **Exterior-only (leave FEM regions out)** on the Simulation tab solves
+  without the inside air.
+
+## 9. Axis and symmetry
+
+1. WG works out which way a model drawn in Fusion radiates, and never stops
+   to ask. **Model details** shows **Radiates along**; when the evidence is
+   weak WG says it chose +Z. To pick another axis, click **Change**, choose
+   +X, −X, +Y, −Y, +Z or −Z and check the previews. Your choice is kept for
+   the project. Save the Fusion document so WG can follow it between sends.
+2. Prefer sending the whole speaker. WG checks the geometry and every driver
+   for mirror symmetry: one mirror gives a half solve, two a quarter. Keep
+   flanges, enclosure, ports and drivers symmetric across every mirror you
+   want WG to use.
+3. For a model drawn in Fusion, put the throat at the origin and centre the
+   speaker on the planes through its axis if you want WG to find symmetry. To
+   always solve the whole model, set **Symmetry** to **Off** in Sources &
+   Mesh…, Save, and Send again.
+4. If you cut the model in Fusion, cut on the YZ or XZ origin plane with the
+   model radiating along +Z. Leave the cut open; a flat cap there would be
+   solved as a wall. A driver must meet each cut plane.
+5. The domain line in Model details may offer **Change** between the readings
+   WG found. WG prepares the model again for that choice.
+
+Cuts front to back, off the origin or at an angle are not recovered. Send the
+complete model instead.
+
+A real driver model may be cut by a mirror only if its motion axis lies in
+that plane. Separate diaphragms, such as a coax or a mirrored pair off the
+plane, need separate drivers.
+
+## 10. When WG needs you
+
+**The mesh is too large.** WG's pop-up states the numbers, for example "It
+meshes to 54,739 triangles; Waveguide Generator's limit is 22,000." Choose:
+
+- **Solve anyway**: slower and needs more memory.
+- **Change in Fusion**: WG cannot open Fusion's dialog for you, so it says
+  where to go. For a Solve from Fusion, use **Open Sources & Mesh…** in the
+  add-in's progress panel; otherwise use **Waveguide Generator ▸ Sources &
+  Mesh…**. Raise **Walls** or add a coarser size zone, Save, and solve again
+  from Fusion.
+- **Later**: close the pop-up. The status line keeps **Choose…** to reopen it.
+- **Don't solve**: let the question go.
+
+**WG could not prepare the model.** When the cause is inside WG, the status
+line and Fusion's panel say "Waveguide Generator could not prepare <name>.
+This has been recorded for the developers." Use **Try again** when it is
+offered. When the cause is something you can change, the line says what to
+do, for example send the model again from Fusion.
+
+**A choice about findings.** Some checks need your approval before WG solves.
+The model's request shows them with **Approve and solve** or **Dismiss**.
+Approving a warning does not repair the geometry.
+
+Requests about other models appear in the top bar ("Another model needs your
+choice · Show") and under **Other requests**.
+
+## 11. Read and keep the results
+
+1. Follow progress in WG and open the run. A run belongs to the Fusion
+   document and the snapshot that was sent, even if you edit CAD while it
+   runs.
+2. Look at each driver's response, then **Combined** if you have a
+   crossover. Use the directivity maps and polar plots for coverage. Runs with
+   a driver model also show impedance, power, current and excursion.
+3. Read warnings and failed frequencies. A chart with gaps is not a clean
+   sweep. Compare mesh refinements before trusting fine ripple.
+4. Export a report, FRD and polar files for VituixCAD, CSV files or the solved
+   mesh from the run's **Export** menu.
+
+**Settings → CAD Link → Keep the Fusion model** decides whether WG saves the
+Fusion document (`.f3d`) with each version. Versions used by runs are never
+deleted automatically. A run's details then show the **Fusion file** with
+**Open in Fusion**, which opens a copy as a new document.
+
+Between sends of the same project with the same drivers, WG keeps the driver
+setup, crossover and sweep. Check them after changing drivers in Fusion. See
+the [run archive](USER-GUIDE.md#the-run-archive) for where runs are stored.
+
+## 12. Messages and what to do
+
+| Message (excerpt) | What to do |
+|---|---|
+| **Fusion:** "This model has no driver yet." | In Sources & Mesh…, pick a driver's faces, or declare a FEM region with a moving surface. |
+| **Fusion:** "…source was split or copied…" | Reopen Sources & Mesh…, pick every face of that driver again, and Save. |
+| **Fusion:** "…would carry only part of that source." | Include the hidden or excluded faces, or clear them from the driver. |
+| **Fusion:** "…helper body … is … still visible…" | Hide that body itself in Fusion's browser (hiding its folder does not work), or run **Update**. |
+| "…would solve as a wall across the cut" | Remove the cap on the cut, or send the whole model. |
+| "…no source meets x = 0…" | Send the whole model, or fix the cut and driver geometry. |
+| "…its mirror image would stand in for the other side's own source" | Send the whole model when the sides have their own drivers. |
+| "Complete the driver, or clear it to solve that channel unit-driven." | Fill in the missing driver values, or clear the driver. |
+| "BEAT drives axial sources along its z axis" | That driver's axis is tilted. Use Normal motion, or another engine. |
+| "BEMPP solves imported CAD geometry on an OpenCL device only." | Choose an engine that is available, such as Metal or BEAT · CPU. |
+| "…infinite baffle is unavailable" / "Turn the ground plane off…" | Use free-space mounting for CAD solves. |
+| **Fusion:** "…picked up … but has not confirmed it yet." | Check WG before you send again; sending again starts a new request. |
+
+For the full detail of a Fusion error, open **View → Show Text Commands** in
+Fusion.
+
+## 13. STEP from another CAD program
+
+WG has no direct STEP import. To solve a STEP model, open it in Fusion, pick
+its drivers with Sources & Mesh…, save the document, and Send or Solve as
+above. **Import mesh…** in WG's design menu is a separate route for Gmsh
+surface meshes; see [Import and solve a mesh](USER-GUIDE.md#import-and-solve-a-mesh).
+
+Onshape is disabled in release builds. Developers can find its setup in the
+[development guide](DEVELOPMENT.md).

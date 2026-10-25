@@ -58,20 +58,16 @@ cannot alter an existing run.
 
 ### Mesh settings for Fusion models
 
-In Fusion, open **Waveguide Generator ▸ Sources & Mesh…**. Set the source sizes,
-walls, grading distance, size zones and symmetry, then save and **Send**
-again. The dialog remembers your settings in the Fusion document.
+In Fusion, open **Waveguide Generator ▸ Sources & Mesh…**. Pick the driver
+faces, then set **Walls**, any **size zones**, and under **Advanced** the
+grading distance and symmetry. Click **Save**, then **Send to WG** or **Solve in
+WG**. The dialog remembers your settings in the Fusion document.
 
-Once the model is prepared, WG shows **Mesh (set in Fusion)** read-only on the
-Simulation tab, including the solved fraction, triangles and estimated memory.
-The limit is 22,000 triangles for the part WG solves. If the mesh is too large,
-WG says so on the Imported mesh tab: raise **Walls** or add a coarser size zone
-in Fusion.
-
-Older returns keep their saved sizes under **Mesh (set in WG by an older add-in)**.
-Update the add-in and Send again to change them. Old runs retain their own
-requests and sizes. WG still offers **Skip optional source**, **Accept area drift**,
-**Exterior only** and **Rebuild mesh**. See the [CAD Link guide](CAD-LINK-GUIDE.md).
+WG shows the mesh read-only in **Model details** on the Imported mesh tab: the
+sizes, the triangle count and the memory estimate. The limit is 22,000
+triangles for the part WG solves. When a model is over it, WG asks before
+solving and offers **Solve anyway**, **Change in Fusion** or **Later**. See the
+[CAD Link guide](CAD-LINK-GUIDE.md).
 
 ### Import and solve a mesh
 
@@ -446,13 +442,13 @@ Imported CAD geometry follows the same order with two differences: AUTO does
 not choose a BEAT GPU engine for it in Fast (choose BEAT · Metal yourself, or
 Accurate), and BEMPP offers it only where it assembles on OpenCL. AUTO prefers
 ready BEAT · CPU, then a compatible BEMPP with compute-qualified CPU OpenCL,
-for a CAD return too. BEAT · CPU is available only after its provisioning probe
+for a CAD model too. BEAT · CPU is available only after its provisioning probe
 has succeeded. BEMPP's numba route remains unavailable for imported geometry.
 BEAT · CPU's imported path is qualified against Metal; BEMPP's is not yet.
 Choosing an engine yourself always overrides AUTO: an
 explicit BEMPP stays BEMPP, an explicit BEAT · CPU stays BEAT · CPU, and an
 explicit BEAT · Metal stays BEAT · Metal, in Fast as well as Accurate. BEAT ·
-CUDA and BEAT · ROCm take a CAD return only in Accurate; picking one in Fast is
+CUDA and BEAT · ROCm take a CAD model only in Accurate; picking one in Fast is
 refused, naming the available engines that declare CAD geometry (one of them may
 still refuse this particular return, for example on its cut planes).
 
@@ -654,7 +650,7 @@ unless an earlier folder choice is kept — grouped by design rather than by how
 Documents/Waveguide Generator/
   runs/<design>/
     design.json                 which design this folder belongs to
-    cad/<return-state>.f3d      the Fusion document a CAD return came from
+    cad/<return-state>.f3d      the Fusion document a CAD model came from
     <run>/                      run.json, results, derived sidecars, *_report.html
       exports/                  the formats chosen for automatic export
 ```
@@ -703,43 +699,42 @@ retained in that shared job database and the command prints a retention warning.
 
 ## CAD link
 
-Follow [Finish a speaker in Fusion and solve it in WG](CAD-LINK-GUIDE.md) for
-installation of the Waveguide Generator add-in in Fusion, explicit Send and Solve, source-face marking, driver data,
-ports, full/half/quarter symmetry, solver choice and refusal remedies. It also
-explains the limits of STEP input from another CAD program, startup add-in
-updates and registration checks, exchange folders, multiple placements, waiting
-solve requests, settings continuity and the development-only Onshape setup.
+Start with the [user manual](USER-MANUAL.md) for the basic steps. Follow
+[Finish a speaker in Fusion and solve it in WG](CAD-LINK-GUIDE.md) for
+installing the add-in, Sources & Mesh…, Send and Solve, driver data, ports,
+FEM regions, symmetry, solver choice and the messages you may see.
 
 WG installs and updates the add-in at startup only if you chose it in setup,
-installed it from WG, or have received a model from Fusion through the link.
-WG also keeps updating a copy this installation already owns. Otherwise, use
-**Install add-in** in the **CAD Link** panel; that action also repairs the copy.
-The Windows setup task for the Waveguide Generator add-in in Fusion records your choice even if Fusion is absent or
-the add-in installation fails; leaving it unticked on a later upgrade preserves that choice.
-Opening the panel, opening or uploading a `.wgreturn` by hand, exporting from WG,
-and link metadata in a design file do not enable automatic installation.
-With no signal, WG leaves Fusion's AddIns folder alone, including hand-copied
-add-ins. Developer copies and copies owned by another WG installation are
-preserved. Close Fusion before an installation or update.
+installed it from WG, or have received a model from Fusion. Otherwise use
+**Install add-in** on the **CAD Link** panel; it appears when the add-in is
+missing or out of date, and it also repairs the copy. The Windows setup task
+records your choice even if Fusion is absent; leaving it unticked on a later
+upgrade keeps that choice. With no such signal, WG leaves Fusion's AddIns folder
+alone, including hand-copied, developer and other installations' copies. Close
+Fusion before an installation or update.
 
-CAD edits arrive as retained geometry snapshots; they do not become editable
-parametric waveguide fields. The CAD Link panel appears in CAD mode. Keep WG
-running, and use Fusion's **Send to WG** or **Solve in WG** after modelling;
-continuous geometry transfers are off by default.
+CAD edits arrive as snapshots; they do not become editable parametric
+waveguide fields. Use Fusion's **Send to WG** ("Open this model in WG to
+inspect or set up. Does not solve.") or **Solve in WG** ("Send and solve
+now.") after modelling.
 
-A newly arriving return — and a return you manually select from **Model versions** —
-is prepared automatically. On startup, WG selects the newest existing return
-without preparing it; choose **Prepare simulation**. After a failed preparation,
-retry with **Prepare simulation**, or **Prepare again** when a preparation record
-already exists. Completed solves are listed under **Runs**.
+WG prepares a Fusion model automatically when it arrives, when you choose it
+under **Model versions**, and when WG reopens it after a restart. One status
+line under the model's name says what is happening and offers at most one
+action: **Solve**, **Choose…** when WG needs your choice, **Show results**, or
+**Try again** after a failure. **Model details** (folded) holds the checks,
+which way the model radiates and the mesh. **Solve** is also in the top bar.
+Completed solves are listed in the **Jobs** panel; **View project runs**
+filters it to the model.
 
 ### Starting from a model drawn in Fusion
 
-A model drawn entirely in Fusion uses the same workflow. Mark its sources with
-**Waveguide Generator ▸ Sources & Mesh…**, check the bodies in the Send/Solve pre-flight, and inspect
-**Radiates along** and the domain line in WG. A confident automatic axis can be
-used directly; WG asks when it cannot decide. See the detailed guide before
-cutting a model in CAD or assigning several drivers to one source.
+A model drawn entirely in Fusion uses the same workflow. Pick its drivers in
+**Waveguide Generator ▸ Sources & Mesh…**, check the bodies in the Send/Solve
+**Pre-flight** list, and check **Radiates along** and the domain line in
+**Model details**. WG works the axis out itself and never stops to ask; use
+**Change** there if it is wrong. Read the detailed guide before cutting a model
+in CAD or giving several drivers one row.
 
 ## Updates
 
