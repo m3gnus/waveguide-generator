@@ -89,6 +89,11 @@ PROGRESS_INTERVAL_S = 2.0
 #: stream said: a change no job event announces (an operation row) still lands,
 #: and so does a receipt a folder with a coarse modification time hid.
 SWEEP_INTERVAL_S = 30.0
+#: An unfinished request's status is rewritten at least this often while WG
+#: runs, even when nothing in it changed (only ``seq`` and ``updatedAt`` move),
+#: so the add-in can tell a long step from a WG that has gone quiet. Checked on
+#: every tick of the delivery loop (once a second).
+REFRESH_INTERVAL_S = 60.0
 #: After this many consecutive failed writes of one request's status, the
 #: failure is recorded for the developers (once; about half a minute).
 WRITE_FAILURE_INCIDENT_AFTER = 30
@@ -439,6 +444,13 @@ class RequestStatusPublisher:
                 )
                 if previous is not None:
                     self._records[request_id] = previous
+                    # Its age on disk counts toward the refresh interval: a
+                    # file a previous WG wrote long ago is refreshed at once.
+                    try:
+                        age = max(0.0, time.time() - status_path(self.directory, request_id).stat().st_mtime)
+                    except OSError:
+                        age = REFRESH_INTERVAL_S
+                    self._written_at[request_id] = self._clock() - age
                 if self._scanned_once:
                     self._observed_from_start.add(request_id)
             self._receipts[request_id] = receipt
@@ -560,7 +572,7 @@ class RequestStatusPublisher:
         if candidate is None:  # pragma: no cover - a projection the reader rejects is a bug
             logger.error("The status projected for request %s does not validate; not written.", request_id)
             return False
-        if _comparable(candidate) == _comparable(previous):
+        if _comparable(candidate) == _comparable(previous) and not self._refresh_due(request_id, now):
             self._deferred.discard(request_id)
             return False
         if (previous is not None and previous.get("state") == candidate["state"] == "solving"
@@ -585,6 +597,13 @@ class RequestStatusPublisher:
         if incident is not None and candidate["state"] == "couldNotFinish" and observed:
             self._record_failure(request_id, job, candidate, incident)
         return True
+
+    def _refresh_due(self, request_id: str, now: float) -> bool:
+        """An unfinished request whose file has not been written for a refresh interval."""
+
+        record = self._records.get(request_id)
+        return (record is not None and not request_status_terminal(record)
+                and now - self._written_at.get(request_id, float("-inf")) >= REFRESH_INTERVAL_S)
 
     def _write_failed(self, request_id: str, exc: OSError) -> None:
         """A status that could not be written: said once, recorded if it keeps failing."""
@@ -647,6 +666,7 @@ class RequestStatusPublisher:
             )
         due = {request_id for request_id in self._deferred
                if now - self._written_at.get(request_id, float("-inf")) >= PROGRESS_INTERVAL_S}
+        due.update(request_id for request_id in self._records if self._refresh_due(request_id, now))
         pending, self._dirty = self._dirty | due, set()
         written = 0
         for request_id in sorted(pending):

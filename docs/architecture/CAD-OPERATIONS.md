@@ -1931,7 +1931,11 @@ reference.
   (ignoring `seq` and `updatedAt`); `seq` rises with every write, with the wall clock in
   milliseconds as its floor, so it keeps rising past an unreadable file (at the
   protocol's limit it stays just below it). Progress while
-  solving is written at most every 2 seconds, a change of state at once. A write that
+  solving is written at most every 2 seconds, a change of state at once.
+  WG refreshes an unfinished request's status at least every 60 s while running: a
+  record still under way whose file is 60 seconds old is written again with only `seq`
+  and `updatedAt` new (checked on every pass, so at most about 61 s apart). A status
+  that stops changing for longer than that means WG is not running, not a long step. A write that
   fails is tried again on the next pass, logged once per request, and recorded as a
   `cad-status-write-failure` incident after 30 consecutive failures. It keeps publishing
   while a retiring backend holds deliveries, and shutdown stops it, waiting for a pass
@@ -1956,6 +1960,12 @@ reference.
   a status whose receipt is gone. A staging file is pruned after 24 hours.
 - WG advertises `requestStatus: 1` beside `solveAcknowledgement` and drops it with it when
   the request consumer is off.
+- **When WG quits.** On a clean shutdown WG rewrites `wg-capabilities.json` with the same
+  advertisement plus `stoppedAt` (UTC ISO time); the next WG to start writes it without
+  `stoppedAt`. The file is never deleted -- its `launcher` is how the add-in starts WG
+  again -- and every write replaces it whole, so a reader sees no missing or partial file
+  during a restart. A WG that crashes leaves it unmarked; the stalled status refresh
+  above still shows it.
 
 **Crash and power-cut positions.** If WG stops between any two of the steps above, or
 before or during preparation, the next start still gives each request exactly one

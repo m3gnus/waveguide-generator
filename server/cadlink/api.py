@@ -74,6 +74,7 @@ from server.cadlink.fusion.fusion_delivery import (
     advertise_fusion_delivery,
     expire_unstarted_insert_handoffs,
     recover_staged_fusion_requests,
+    withdraw_fusion_delivery,
 )
 from .ipc import ipc_folder
 from server.cadlink.fusion.fusion_return import publish_return_request
@@ -2368,6 +2369,16 @@ def mount_cadlink(application: FastAPI) -> None:
     application.router.add_event_handler(
         "shutdown", _abandon_preparations_on_shutdown(application)
     )
+
+    async def withdraw_fusion_delivery_on_shutdown() -> None:
+        # Tells the add-in WG has gone; the next start writes the file afresh.
+        await asyncio.to_thread(
+            withdraw_fusion_delivery,
+            Path(application.state.data_dir),
+            solve_delivery=delivery_consumer_enabled(),
+        )
+
+    application.router.add_event_handler("shutdown", withdraw_fusion_delivery_on_shutdown)
 
 
 __all__ = [

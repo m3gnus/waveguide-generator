@@ -492,3 +492,42 @@ def test_returns_retains_constant_off_policy_for_frontend_clients(tmp_path, monk
         assert asyncio.run(list_returns(SimpleNamespace(app=app)))['coordination'] == 'off'
     finally:
         app.state.cadlink_store.close()
+
+
+def test_a_clean_shutdown_marks_the_capabilities_stopped_and_the_next_start_clears_it(tmp_path):
+    from server.cadlink.fusion import fusion_delivery
+    from server.cadlink.fusion.fusion_delivery import STOPPED_AT, capabilities
+
+    app = create_app(data_dir=tmp_path)
+    started = next(h for h in app.router.on_startup if h.__name__ == 'advertise_fusion_delivery_on_startup')
+    stopped = next(h for h in app.router.on_shutdown if h.__name__ == 'withdraw_fusion_delivery_on_shutdown')
+    path = ipc_folder(tmp_path) / 'wg-capabilities.json'
+    asyncio.run(started())
+    advertised = json.loads(path.read_text())
+    assert STOPPED_AT not in advertised
+    asyncio.run(stopped())
+    marked = json.loads(path.read_text())
+    # The same advertisement, launcher included, so the add-in can still start WG.
+    assert {key: value for key, value in marked.items() if key != STOPPED_AT} == advertised
+    assert marked[STOPPED_AT].endswith('Z')
+    asyncio.run(started())
+    assert json.loads(path.read_text()) == advertised == capabilities(
+        solve_delivery='solveCommandDelivery' in advertised)
+    # A folder WG never advertised in is left without a file.
+    fusion_delivery.withdraw_fusion_delivery(tmp_path / 'other')
+    assert not (ipc_folder(tmp_path / 'other') / 'wg-capabilities.json').exists()
+
+
+def test_a_stop_marker_that_cannot_be_written_never_stops_the_shutdown(tmp_path, monkeypatch, caplog):
+    from server.cadlink.fusion import fusion_delivery
+
+    fusion_delivery.advertise_fusion_delivery(tmp_path)
+
+    def fail_write(*args, **kwargs):
+        raise PermissionError('capabilities is held open')
+
+    monkeypatch.setattr(fusion_delivery, '_write_json', fail_write)
+    fusion_delivery.withdraw_fusion_delivery(tmp_path)
+    assert 'Could not mark' in caplog.text
+    assert fusion_delivery.STOPPED_AT not in json.loads(
+        (ipc_folder(tmp_path) / 'wg-capabilities.json').read_text())

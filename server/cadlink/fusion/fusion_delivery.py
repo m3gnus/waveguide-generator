@@ -50,6 +50,11 @@ from server.cadlink.wglink_protocol import (
 
 CAPABILITIES_FILENAME = "wg-capabilities.json"
 CAPABILITIES_SCHEMA_VERSION = 1
+#: Added to the capability file when WG quits cleanly (UTC ISO time); the next
+#: WG to start writes the file without it. The file itself stays: its
+#: ``launcher`` is how the add-in starts WG again, and a reader never sees it
+#: missing or partial, because every write replaces it whole.
+STOPPED_AT = "stoppedAt"
 # The one delivery version WG speaks, in both directions. The add-in reports
 # its own in the heartbeat's ``deliveryVersion``; below this, WG refuses it.
 DELIVERY_VERSION = FUSION_REQUEST_DELIVERY_VERSION
@@ -531,6 +536,25 @@ def advertise_fusion_delivery(data_dir: Path, *, solve_delivery: bool = True) ->
         logger.warning("Could not remove WG's stale Fusion endpoint: %s", exc)
 
 
+def withdraw_fusion_delivery(data_dir: Path, *, solve_delivery: bool = True) -> None:
+    """Clean shutdown: say in the capability file that this WG has stopped.
+
+    The advertisement stays as it was, with ``stoppedAt`` added, so the add-in
+    can tell WG has gone and can still start it with the advertised launcher.
+    A folder with no capability file is left alone. A failure never stops the
+    shutdown; a WG that ends without this (a crash) leaves the file unmarked.
+    """
+
+    try:
+        path = ipc_folder(data_dir) / CAPABILITIES_FILENAME
+        if not path.is_file():
+            return
+        stopped_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        _write_json(path, {**capabilities(solve_delivery=solve_delivery), STOPPED_AT: stopped_at})
+    except OSError as exc:
+        logger.warning("Could not mark WG's Fusion capabilities as stopped: %s", exc)
+
+
 __all__ = [
     "CAPABILITIES_FILENAME",
     "CHANNELS",
@@ -549,9 +573,11 @@ __all__ = [
     "SOURCE_IDENTITY",
     "DOCUMENT_UP",
     "addin_delivery_version",
+    "STOPPED_AT",
     "advertise_fusion_delivery",
     "capabilities",
     "expire_unstarted_insert_handoffs",
     "publish_fusion_request",
     "recover_staged_fusion_requests",
+    "withdraw_fusion_delivery",
 ]
