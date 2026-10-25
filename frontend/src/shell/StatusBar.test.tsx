@@ -91,7 +91,7 @@ describe('StatusBar workspace modes', () => {
     act(() => { useImportedSolveOptionsStore.getState().setEngine('auto'); });
     expect(host.textContent).toContain('BEMPP · 2.0');
     // Grouped in the runner's locale, not en-US — see summary.test.ts.
-    expect(host.textContent).toContain(`CAD model · ${(12_345).toLocaleString()} triangles`);
+    expect(host.textContent).toContain(`CAD model · ready · ${(12_345).toLocaleString()} triangles`);
     expect(host.textContent).toContain('next CAD solve 250 Hz – 18 kHz · 31 f');
     expect(host.textContent).toContain('Speaker Assembly');
     expect(host.textContent).not.toContain('CAD return');

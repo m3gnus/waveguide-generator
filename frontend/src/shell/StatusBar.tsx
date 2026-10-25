@@ -1,4 +1,4 @@
-import { cadModelStatusLabel, useCadModelState } from '../stores/cadModelState';
+import { useCadModelStatusLine } from './CadModelStatusLine';
 import { resolveEngineLabel } from './solveProgress';
 import { useSyncExternalStore } from 'react';
 import { previewSocket } from '../api/previewSocket';
@@ -92,7 +92,7 @@ export function StatusBar() {
   const fileRegistered = useImportedModelStore((state) => state.input === 'file' && state.prepared !== null);
   const fileActive = mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file';
   const cadReturn = useCadReturnStore();
-  const cad = useCadModelState();
+  const { model: cad, line: cadLine } = useCadModelStatusLine();
   const requestedEngine = useScopedSolveOptions(state => state.engine);
   const filename = useDocumentStore((state) => state.filename);
   const frequencyMode = useScopedSolveOptions((state) => state.frequencyMode);
@@ -125,7 +125,7 @@ export function StatusBar() {
         limit slot is gone until something computes it, because a readout that
         can only ever say "not calculated" is worse than no readout. */}
     <div className="status-item status-drop-2">{fileActive ? <>Mesh <b>{file.summary?.triangle_count.toLocaleString() ?? 'not imported'}</b> tri</> : mode === 'cad'
-      ? cadModelStatusLabel(cad)
+      ? `CAD model · ${cadLine.short}`
       : <>preview {meshMetrics ? <><b>{meshMetrics.triangles.toLocaleString()}</b> tri · <b>{meshMetrics.vertices.toLocaleString()}</b> vert</> : <b>no frame</b>}</>}</div>
     {mode === 'parametric' && previewError && <div className="status-item preview-error-status" title={previewError}>{previewError}</div>}
     <span className="spacer"/>

@@ -1,5 +1,7 @@
 /**
- * CAD Link's Solve card reports a solve through the same progress model the
+ * The CAD Solve card says what Solve uses; the model's state and its one
+ * Solve are its status line (`CadModelStatusLine`). A run in progress is
+ * reported in Results (`CurrentModelStatus`) through the same progress model the
  * parametric run list uses (`SolveProgressView`/`operationStageWord`/
  * `solveStageWord`, `./solveProgress`) -- not a CAD-only copy of the
  * stage/percentage text, and not two separate vocabularies either side of
@@ -26,6 +28,10 @@ vi.mock('./CadOperationsSection', () => ({ CurrentModelRequests: () => null }));
 vi.mock('../jobs/useImportedSolvePlan', () => ({ useImportedSolvePlan: () => ({ plan: null }) }));
 
 const { CadSolveCard } = await import('./CadSolveCard');
+const { CurrentModelStatus } = await import('./CurrentModelStatus');
+
+/** The Results status of the model the card shows. */
+const Run = () => <CurrentModelStatus record={record()} solveStatus/>;
 
 const MANIFEST = `sha256:${'c'.repeat(64)}`;
 const NOW = '2026-09-23T00:00:00Z';
@@ -106,10 +112,10 @@ describe('CAD Solve card run status', () => {
     vi.restoreAllMocks();
   });
 
-  it('keeps Solve and the model summary before the first solve, without a never-solved line', async () => {
+  it('keeps the model summary and settings, and leaves Solve to the status line', async () => {
     await act(async () => root.render(<CadSolveCard record={record()} label="Speaker"/>));
     expect(host.querySelector('.cad-solve-card')).not.toBeNull();
-    expect(host.querySelector('[data-action="solve"]')).not.toBeNull();
+    expect(host.querySelector('[data-action="solve"]')).toBeNull();
     expect(host.querySelector('.cad-solve-settings')).not.toBeNull();
     expect(host.querySelector('[data-model-status]')).toBeNull();
     expect(host.textContent).not.toContain('Not solved yet');
@@ -136,7 +142,7 @@ describe('CAD Solve card run status', () => {
       deliver({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
       deliver({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [received] });
       expect(manager.getSnapshot().error).toBeNull();
-      await act(async () => root.render(<CadSolveCard record={record()} label="Speaker1"/>));
+      await act(async () => root.render(<Run/>));
       expect(host.querySelector('.job-stage-word')?.textContent).toBe('Received');
       await act(async () => {
         deliver({ v: 1, kind: 'event', epoch: 1, cursor: 2, jobId: received.id, type: 'stage', payload: { stage: 'preparing-mesh', message: 'Meshing the surface' } });
@@ -155,67 +161,58 @@ describe('CAD Solve card run status', () => {
   it('walks the CAD operation pipeline and the job it hands off to as one monotonic sequence', async () => {
     // received, still validating: "Received".
     publishOperation(operation({ state: 'received', stage: 'validating', jobId: null }));
-    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Received');
+    await act(async () => root.render(<Run/>));
+    expect(host.querySelector('.current-model-status .job-stage-word')?.textContent).toBe('Received');
 
     // preparation.py's "preparing-mesh" stage: "Preparing mesh" -- never back
     // to "Received".
     act(() => publishOperation(operation({ state: 'processing', stage: 'preparing-mesh', jobId: null })));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Preparing mesh');
+    expect(host.querySelector('.current-model-status .job-stage-word')?.textContent).toBe('Preparing mesh');
 
     // ready to submit, still no job: preparation has not stepped back.
     act(() => publishOperation(operation({ state: 'processing', stage: 'ready', jobId: null })));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Preparing mesh');
+    expect(host.querySelector('.current-model-status .job-stage-word')?.textContent).toBe('Preparing mesh');
 
     // Accepted, job not in the list yet yet (within the grace window): says
     // so plainly, not a made-up stage.
     act(() => publishOperation(operation({ state: 'accepted', stage: 'submitted' })));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Preparing mesh');
+    expect(host.querySelector('.current-model-status .job-stage-word')?.textContent).toBe('Preparing mesh');
 
     // The queued window continues mesh preparation.
     act(() => publishJobs([job({ status: 'queued', stage: null, stage_message: null })]));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Preparing mesh');
+    expect(host.querySelector('.current-model-status .job-stage-word')?.textContent).toBe('Preparing mesh');
 
     act(() => publishJobs([job({ status: 'running', stage: 'initializing', stage_message: 'Initializing solver', progress: 0.05 })]));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Preparing mesh');
+    expect(host.querySelector('.current-model-status .job-stage-word')?.textContent).toBe('Preparing mesh');
 
     // The runtime emits mesh after initializing; both stay in mesh preparation.
     act(() => publishJobs([job({ status: 'running', stage: 'mesh', stage_message: 'Building the surface mesh', progress: 0.1 })]));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Preparing mesh');
+    expect(host.querySelector('.current-model-status .job-stage-word')?.textContent).toBe('Preparing mesh');
 
     act(() => publishJobs([job({ stage: 'assemble', stage_message: 'Configuring Metal BEM solve', progress: 0.3 })]));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Starting…');
+    expect(host.querySelector('.current-model-status .job-stage-word')?.textContent).toBe('Starting…');
 
     act(() => publishJobs([job({ stage: 'solve', stage_message: 'Solving frequency 2/8 with Metal BEM', frequency_progress: { done: 2, total: 8 }, progress: 0.3 })]));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Solving');
-    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('frequency 2 of 8');
+    expect(host.querySelector('.current-model-status .job-stage-word')?.textContent).toBe('Solving');
+    expect(host.querySelector('.current-model-status')?.textContent).toContain('frequency 2 of 8');
 
     act(() => publishJobs([job({ stage: 'postprocess', stage_message: 'Packaging BEMPP BEM solver results', progress: 0.95 })]));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Combining');
-  });
-
-  it('shows a clear waiting-for-you state for needs_user_input, not a pipeline stage', async () => {
-    publishOperation(operation({ state: 'needs_user_input', stage: 'validating', reason: 'setup_required', jobId: null }));
-    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Waiting for you');
-    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('needs its solve settings');
-    expect(host.querySelector('.cad-solve-run')?.className).toContain('cad-solve-run-warn');
+    expect(host.querySelector('.current-model-status .job-stage-word')?.textContent).toBe('Combining');
   });
 
   it('never shows a previous run\'s outcome under a new request for the same snapshot', async () => {
     // The first request finished and its job completed.
     publishOperation(operation({ operationId: 'op-old', state: 'accepted', jobId: 'job-old', updatedAt: '2026-09-22T23:00:00Z' }));
     publishJobs([job({ id: 'job-old', status: 'complete', progress: 1, completed_at: '2026-09-22T23:01:00Z' })]);
-    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Done');
+    await act(async () => root.render(<Run/>));
 
     // A second, newer request for the same snapshot starts -- still being
     // validated, no job of its own yet. Only op-old's operation store entry
     // is replaced (a real re-solve creates a new operation id); the old
     // job is still in the jobs list, exactly as it would be after a reload.
     act(() => publishOperation(operation({ operationId: 'op-new', state: 'received', stage: 'validating', jobId: null, createdAt: NOW, updatedAt: NOW })));
-    expect(host.querySelector('.cad-solve-run')?.textContent).not.toContain('Solved');
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Received');
+    expect(host.querySelector('.current-model-status')?.textContent).not.toContain('Solved');
+    expect(host.querySelector('.current-model-status .job-stage-word')?.textContent).toBe('Received');
   });
 
   it('reports a running solve as it stands, whether pressed here or advanced by a waiting request', async () => {
@@ -224,8 +221,8 @@ describe('CAD Solve card run status', () => {
     // reads only the operation's jobId and that job's own state.
     publishOperation(operation({ jobId: 'job-elsewhere' }));
     publishJobs([job({ id: 'job-elsewhere', stage: 'postprocess', stage_message: 'Packaging BEMPP BEM solver results', progress: 0.95 })]);
-    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
-    const text = host.querySelector('.cad-solve-run')?.textContent ?? '';
+    await act(async () => root.render(<Run/>));
+    const text = host.querySelector('.current-model-status')?.textContent ?? '';
     expect(text).toContain('Combining');
     expect(text).toContain('95%');
   });
@@ -235,18 +232,18 @@ describe('CAD Solve card run status', () => {
     publishJobs([job({
       stage: 'solve', stage_message: 'Solving frequency 1/10 with Metal BEM', frequency_progress: { done: 1, total: 10 }, progress: 0.3,
     })]);
-    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
-    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('frequency 1 of 10');
+    await act(async () => root.render(<Run/>));
+    expect(host.querySelector('.current-model-status')?.textContent).toContain('frequency 1 of 10');
     // Elapsed since the job started, at 0 s here.
-    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('0:00');
+    expect(host.querySelector('.current-model-status')?.textContent).toContain('0:00');
     // Engine/sources/domain, the same detail line the full variant shows.
-    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('Metal-BEM · 3 sources · half');
+    expect(host.querySelector('.current-model-status')?.textContent).toContain('Metal-BEM · 3 sources · half');
 
     await act(async () => { vi.advanceTimersByTime(20_000); });
     act(() => publishJobs([job({
       stage: 'solve', stage_message: 'Solving frequency 2/10 with Metal BEM', frequency_progress: { done: 2, total: 10 }, progress: 0.4,
     })]));
-    const text = host.querySelector('.cad-solve-run')?.textContent ?? '';
+    const text = host.querySelector('.current-model-status')?.textContent ?? '';
     expect(text).toContain('frequency 2 of 10');
     expect(text).toContain('ETA 2:40');
   });
@@ -254,22 +251,22 @@ describe('CAD Solve card run status', () => {
   it('ticks elapsed time without a jobs update and measures ETA from a late first frequency', async () => {
     publishOperation(operation());
     publishJobs([job({ stage: 'solve', stage_message: 'Solving frequency 5/10', frequency_progress: { done: 5, total: 10 }, progress: 0.6 })]);
-    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
-    expect(host.querySelector('.cad-solve-run')?.textContent).not.toContain('ETA');
+    await act(async () => root.render(<Run/>));
+    expect(host.querySelector('.current-model-status')?.textContent).not.toContain('ETA');
     await act(async () => { vi.advanceTimersByTime(10_000); });
-    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('0:10');
+    expect(host.querySelector('.current-model-status')?.textContent).toContain('0:10');
     act(() => publishJobs([job({ stage: 'solve', stage_message: 'Solving frequency 6/10', frequency_progress: { done: 6, total: 10 }, progress: 0.65 })]));
-    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('ETA 0:40');
+    expect(host.querySelector('.current-model-status')?.textContent).toContain('ETA 0:40');
   });
 
   it('uses overall work for a rear-facing imported axial drive whose printed count restarts', async () => {
     publishOperation(operation());
     publishJobs([job({ stage: 'solve', stage_message: 'Solving frequency 1/4 of drive channel 2/2 (rear) with BEAT Engine', frequency_progress: { done: 1, total: 4, channel: { index: 2, count: 2 } }, progress: 0.35 + 0.5 * 5 / 16 })]);
-    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
+    await act(async () => root.render(<Run/>));
     await act(async () => { vi.advanceTimersByTime(10_000); });
     act(() => publishJobs([job({ stage: 'solve', stage_message: 'Solving frequency 2/4 of drive channel 2/2 (rear) with BEAT Engine', frequency_progress: { done: 2, total: 4, channel: { index: 2, count: 2 } }, progress: 0.35 + 0.5 * 6 / 16 })]));
-    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('frequency 2 of 4 · channel 2 of 2 · work 38%');
-    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('ETA 1:40');
+    expect(host.querySelector('.current-model-status')?.textContent).toContain('frequency 2 of 4 · channel 2 of 2 · work 38%');
+    expect(host.querySelector('.current-model-status')?.textContent).toContain('ETA 1:40');
   });
 
   it.each([
@@ -297,7 +294,7 @@ describe('CAD Solve card run status', () => {
       lastFrequency: 'frequency 4 of 8 · channel 1 of 3 · work 38%',
       nextFrequency: 'frequency 2 of 8 · channel 2 of 3 · work 42% · ETA 1:33',
     },
-  ])('keeps $name progress through interleaved setup logs in the CAD solve card', async ({
+  ])('keeps $name progress through interleaved setup logs in the CAD run status', async ({
     firstMessage, nextMessage, firstCount, nextCount, firstProgress, setupProgress, nextProgress, lastFrequency, nextFrequency,
   }) => {
     publishOperation(operation());
@@ -306,22 +303,22 @@ describe('CAD Solve card run status', () => {
       solve_options: { engine: 'beat', num_frequencies: 4 } as JobItem['solve_options'],
     });
     publishJobs([running]);
-    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Solving');
+    await act(async () => root.render(<Run/>));
+    expect(host.querySelector('.current-model-status .job-stage-word')?.textContent).toBe('Solving');
 
     await act(async () => { vi.advanceTimersByTime(4_000); });
     act(() => publishJobs([{
       ...running, stage: 'setup', stage_message: 'Setting up BEAT solver context', progress: setupProgress[0],
     }]));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Solving');
-    expect(host.querySelector('.cad-solve-run')?.textContent).toContain(lastFrequency.split(' · work ')[0]);
+    expect(host.querySelector('.current-model-status .job-stage-word')?.textContent).toBe('Solving');
+    expect(host.querySelector('.current-model-status')?.textContent).toContain(lastFrequency.split(' · work ')[0]);
 
     await act(async () => { vi.advanceTimersByTime(6_000); });
     act(() => publishJobs([{
       ...running, stage: 'setup', stage_message: 'Initializing BEAT sweep worker', progress: setupProgress[1],
     }]));
-    const duringSetup = host.querySelector('.cad-solve-run')?.textContent ?? '';
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Solving');
+    const duringSetup = host.querySelector('.current-model-status')?.textContent ?? '';
+    expect(host.querySelector('.current-model-status .job-stage-word')?.textContent).toBe('Solving');
     expect(duringSetup).toContain(lastFrequency.split(' · work ')[0]);
     if (lastFrequency.includes('work')) expect(duringSetup).toContain(lastFrequency);
 
@@ -329,25 +326,18 @@ describe('CAD Solve card run status', () => {
     act(() => publishJobs([{
       ...running, stage: 'solve', stage_message: nextMessage, frequency_progress: nextCount, progress: nextProgress,
     }]));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Solving');
-    expect(host.querySelector('.cad-solve-run')?.textContent).toContain(nextFrequency);
+    expect(host.querySelector('.current-model-status .job-stage-word')?.textContent).toBe('Solving');
+    expect(host.querySelector('.current-model-status')?.textContent).toContain(nextFrequency);
   });
 
   it('drops a finished job clock before a later solve sample with the same id', async () => {
     publishOperation(operation());
     publishJobs([job({ stage: 'solve', stage_message: 'Solving frequency 3/10', frequency_progress: { done: 3, total: 10 }, progress: 0.5 })]);
-    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
+    await act(async () => root.render(<Run/>));
     await act(async () => { vi.advanceTimersByTime(10_000); });
     act(() => publishJobs([job({ status: 'complete', stage: 'postprocess', progress: 1 })]));
     act(() => publishJobs([job({ stage: 'solve', stage_message: 'Solving frequency 5/10', frequency_progress: { done: 5, total: 10 }, progress: 0.6 })]));
-    expect(host.querySelector('.cad-solve-run')?.textContent).not.toContain('ETA');
-  });
-
-  it('says a run is done once its job completes', async () => {
-    publishOperation(operation());
-    publishJobs([job({ status: 'complete', progress: 1, stage: 'postprocess', stage_message: null, completed_at: '2026-09-23T00:01:00Z' })]);
-    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Done');
+    expect(host.querySelector('.current-model-status')?.textContent).not.toContain('ETA');
   });
 
   it('shows the imported instance\'s engine and sweep, not the parametric ones', async () => {
@@ -410,25 +400,6 @@ describe('CAD Solve card run status', () => {
     publishJobs([job({ status: 'complete', progress: 1, stage: 'postprocess', stage_message: null, completed_at: '2026-09-23T00:01:00Z' })]);
     await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
     expect(host.querySelector('.cad-solve-frame-automatic')).toBeNull();
-  });
-
-  it('does not invent a reason for a cancelled job', async () => {
-    publishOperation(operation());
-    publishJobs([job({ status: 'cancelled', stage: 'cancelled', error_message: null })]);
-    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
-    expect(host.querySelector('.cad-solve-run')?.textContent).toBe('Cancelled\n');
-    act(() => publishJobs([job({ status: 'cancelled', stage: 'cancelled', error_message: 'Simulation cancelled by user' })]));
-    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('Cancelled\nSimulation cancelled by user');
-  });
-
-  it('shows a refused continuation child from the job even when the operation row is gone', async () => {
-    const parent = cadJobFixture(operation({ jobId: 'parent' }), { status: 'complete' });
-    const child = cadJobFixture(operation({ state: 'needs_user_input', reason: 'setup_required', jobId: 'child' }), { parent_job_id: 'parent', created_at: NOW });
-    currentOperation = null;
-    publishJobs([parent, child]);
-    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
-    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('needs its solve settings');
-    expect(host.querySelector('.cad-solve-run')?.textContent).not.toContain('Done');
   });
 
   it('states the concluded domain from the record\'s decision on the model card', async () => {

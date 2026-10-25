@@ -371,7 +371,7 @@ describe('results dock view switch', () => {
 
     expect(latestCombine.getSnapshot()).toBeNull();
     expect(host.querySelector('[data-result-primary]')).toBeNull();
-    expect(host.textContent).toContain('Not solved yet');
+    expect(host.textContent).toContain('No CAD model yet');
     expect(host.textContent).toContain("Show that run's model");
   });
 

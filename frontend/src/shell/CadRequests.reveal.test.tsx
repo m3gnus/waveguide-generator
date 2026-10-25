@@ -16,7 +16,7 @@ import { CadOperationsSection, CurrentModelRequests } from './CadOperationsSecti
 import { bindWorkspaceNavigation, publishVisiblePanels, resetWorkspaceNavigationForTests, workspaceNavigation } from './workspaceNavigation';
 
 const coordinator = vi.hoisted(() => ({ reportError: vi.fn(), reportStatus: vi.fn(), fusionStatus: null }));
-vi.mock('../stores/cadWorkspace', () => ({ cadWorkspace: { subscribe: () => () => undefined, getSnapshot: () => coordinator } }));
+vi.mock('../stores/cadWorkspace', () => ({ cadWorkspace: { subscribe: () => () => undefined, getSnapshot: () => coordinator, getState: () => coordinator, getInitialState: () => coordinator } }));
 vi.mock('./CadProjectPanel', () => ({ openCadProject: vi.fn() }));
 // Keep CAD connection controls out of this routing test; use the real request owners.
 vi.mock('../design/ParamPanel', () => ({ ParamPanel: () => null }));

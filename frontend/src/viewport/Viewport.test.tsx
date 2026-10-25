@@ -137,48 +137,12 @@ vi.mock('../api/previewSocket', () => ({
 import { femFieldJob, fieldPlaneUnavailableTooltip, cadViewportEmptyCopy, refitsCamera, Viewport } from './Viewport';
 
 describe('CAD viewport empty-state copy', () => {
-  it('names a selected return that has not been prepared', () => {
-    expect(cadViewportEmptyCopy({ bundleName: 'Speaker CAD', bundleReadable: true,
-      phase: 'selected-unprepared', cadApplication: 'Fusion 360' })).toEqual({
-      title: 'Speaker CAD is not prepared yet', detail: 'Prepare simulation in CAD Link',
-    });
-  });
-  it('reports automatic preparation progress with the selected bundle name', () => {
-    expect(cadViewportEmptyCopy({
-      bundleName: 'Speaker CAD', bundleReadable: true, phase: 'preparing', cadApplication: 'Fusion 360',
-    })).toEqual({
-      title: 'Preparing Speaker CAD…',
-      detail: 'CAD Link is building the viewport and solver mesh.',
-    });
-  });
-
-  it('points a failed preparation to the CAD Link retry', () => {
-    const copy = cadViewportEmptyCopy({
-      bundleName: 'Speaker CAD', bundleReadable: true, phase: 'prepare-failed', cadApplication: 'Fusion 360',
-    });
-    expect(copy.title).toBe('CAD preparation failed');
-    expect(copy.detail).toContain('“Prepare simulation” to retry');
-  });
-
-  it('follows a Fusion request WG prepares itself, before it has a readable bundle or mesh', () => {
-    const pointer = { bundleName: 'Tritonia', bundleReadable: false, cadApplication: 'Fusion 360' };
-    expect(cadViewportEmptyCopy({ ...pointer, phase: 'preparing' }).title).toBe('Preparing Tritonia…');
-    expect(cadViewportEmptyCopy({ ...pointer, phase: 'waiting' }).title).toBe('Tritonia is waiting for you');
-    const failed = cadViewportEmptyCopy({ ...pointer, phase: 'prepare-failed',
-      failureMessage: 'Waveguide Generator could not prepare Tritonia. This has been recorded for the developers.' });
-    expect(failed).toEqual({ title: 'Tritonia is not prepared',
-      detail: 'Waveguide Generator could not prepare Tritonia. This has been recorded for the developers.' });
-    expect(cadViewportEmptyCopy({ ...pointer, phase: 'selected-unprepared' }).title).toBe('No CAD geometry yet');
-  });
-
-  it('says a refused or failed request in its own words, as Results does, never "No CAD geometry yet"', () => {
-    const pointer = { bundleName: 'Tritonia', bundleReadable: false, cadApplication: 'Fusion 360' };
-    expect(cadViewportEmptyCopy({ ...pointer, phase: 'stopped',
-      failureMessage: 'Tritonia arrived cut open, and WG cannot rebuild the whole speaker from that cut.' }))
-      .toEqual({ title: 'Tritonia was not solved',
-        detail: 'Tritonia arrived cut open, and WG cannot rebuild the whole speaker from that cut.' });
-    expect(cadViewportEmptyCopy({ ...pointer, phase: 'waiting', meshChoice: true }).detail)
-      .toBe('Choose how to continue with its mesh size in CAD Link.');
+  it('says the model\'s own status line, and where its action is', () => {
+    expect(cadViewportEmptyCopy({ text: 'Preparing Tritonia…', action: 'none' })).toEqual({ title: 'Preparing Tritonia…', detail: '' });
+    expect(cadViewportEmptyCopy({ text: 'Tritonia needs your choice: it is larger than WG\'s limit.', action: 'choose' }))
+      .toEqual({ title: 'Tritonia needs your choice: it is larger than WG\'s limit.', detail: 'Choose how to continue in the CAD Link panel.' });
+    expect(cadViewportEmptyCopy({ text: 'Waveguide Generator could not prepare Tritonia. This has been recorded for the developers.', action: 'try-again' }).detail)
+      .toBe('Try again from the CAD Link panel.');
   });
 });
 

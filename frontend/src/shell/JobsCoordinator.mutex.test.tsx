@@ -47,6 +47,7 @@ import {
 import { CurrentModelStatus as CurrentReadiness } from './CurrentModelStatus';
 import { SolveActions as ToolbarSolveActions, TopBar } from './TopBar';
 import { CadSolveCard } from './CadSolveCard';
+import { CadModelStatusLine } from './CadModelStatusLine';
 import { SolveOptionsControls } from '../design/SolveOptionsSections';
 import { CadCrossover } from '../design/CrossoverSection';
 import { latestCombine } from '../results/latestCombine';
@@ -442,7 +443,8 @@ describe('solve invocation mutex', () => {
   // CAD-only controls have no parametric/file counterpart. Every surface that
   // exists in each mode is exercised through its real UI, down to HTTP paths.
   const surfaceCases = [
-    ...['top bar', 'palette', 'Cmd+Enter', 'CAD card', 'Results empty', 'Results popover', 'crossover'].map((surface) => ({ mode: 'cad', surface })),
+    // In CAD mode Solve lives in the top bar and the model's status line, never in Results.
+    ...['top bar', 'palette', 'Cmd+Enter', 'CAD card', 'Results popover', 'crossover'].map((surface) => ({ mode: 'cad', surface })),
     ...['top bar', 'palette', 'Cmd+Enter', 'Results empty', 'Results popover'].map((surface) => ({ mode: 'file', surface })),
     ...['top bar', 'palette', 'Cmd+Enter', 'Results popover'].map((surface) => ({ mode: 'parametric', surface })),
   ];
@@ -495,7 +497,7 @@ describe('solve invocation mutex', () => {
     });
     await act(async () => { root.render(<QueryClientProvider client={tableClient}><JobsCoordinator>
       {surface === 'top bar' ? <ToolbarSolveActions/> : surface === 'palette' ? <TopBar onResetLayout={() => undefined}/>
-        : surface === 'CAD card' ? <CadSolveCard record={useCadReturnStore.getState().ingestRecord!} label="Speaker"/>
+        : surface === 'CAD card' ? <><CadModelStatusLine/><CadSolveCard record={useCadReturnStore.getState().ingestRecord!} label="Speaker"/></>
           : surface.startsWith('Results') ? <ResultsPanel/>
             : surface === 'crossover' ? <CadCrossover/> : <span/>}
     </JobsCoordinator></QueryClientProvider>); });
@@ -1027,7 +1029,8 @@ describe('solve invocation mutex', () => {
     </JobsCoordinator>));
     const results = host.querySelector('.results-panel')!;
     expect(results.textContent?.match(/Could not build the surface mesh\./g)).toHaveLength(1);
-    expect(results.textContent?.match(/Solve refused/g)).toHaveLength(1);
+    // The model's status line states it; Results adds no second title.
+    expect(results.textContent).not.toContain('Solve refused');
     expect(host.querySelector('.topbar')?.textContent).not.toMatch(/refused|mesh|failed/i);
     expect(host.querySelectorAll('.solve-readiness')).toHaveLength(0);
   });
@@ -1048,7 +1051,7 @@ describe('solve invocation mutex', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => root.render(<QueryClientProvider client={client}><JobsCoordinator>
       {surface === 'top bar' ? <ToolbarSolveActions/> : surface === 'Results empty' ? <ResultsPanel/>
-        : surface === 'CAD card' ? <CadSolveCard record={record} label="Speaker"/>
+        : surface === 'CAD card' ? <><CadModelStatusLine/><CadSolveCard record={record} label="Speaker"/></>
           : surface === 'crossover' ? <CadCrossover/> : <SolveOptionsControls mode="cad" ingestRecord={record}/>}
     </JobsCoordinator></QueryClientProvider>));
     expect(host.querySelector('.solve-readiness')).toBeNull();
@@ -1134,7 +1137,7 @@ describe('solve invocation mutex', () => {
     });
     const render = () => root.render(<JobsCoordinator><SolveActions/><CurrentReadiness/></JobsCoordinator>);
     await act(async () => render());
-    expect(host.textContent).toContain('Not solved yet');
+    expect(host.textContent).toContain('No results for Speaker yet.');
     expect(host.textContent).not.toContain('getting ready');
     expect(host.querySelector('.solve-readiness')).toBeNull();
     await act(async () => { host.querySelector<HTMLButtonElement>('.solve-button')!.click(); });
@@ -1671,9 +1674,9 @@ describe('solve invocation mutex', () => {
       if (status === 'error') useImportedSolveOptionsStore.getState().updatePolar({ angleStep: 0 });
     });
     await act(async () => root.render(<JobsCoordinator><CurrentReadiness/></JobsCoordinator>));
-    const progress = host.querySelector('.cad-solve-run')!;
+    const progress = host.querySelector('.current-model-status')!;
     expect(progress).not.toBeNull();
-    expect(progress.textContent).toContain(status === 'running' ? 'frequency 2 of 10' : status === 'error' ? 'The solver failed on this run.' : 'Done');
+    expect(progress.textContent).toContain(status === 'running' ? 'frequency 2 of 10' : status === 'error' ? 'could not finish solving' : 'Solved');
     if (status === 'running') expect(host.querySelector('.solve-readiness')).toBeNull();
     expect(host.querySelector('.solve-readiness')?.textContent ?? '').not.toContain(blocker.message);
     expect(host.querySelector('.current-model-status')?.getAttribute('data-model-status')).toBe(status === 'running' ? 'running' : status === 'error' ? 'failed' : 'solved');
@@ -1697,7 +1700,7 @@ describe('solve invocation mutex', () => {
     expect(mocks.postImportedSolvePlan).toHaveBeenCalledTimes(2);
     client.clear();
   });
-  it('regression: Results Solve continues the refused CAD model, never the open parametric design', async () => {
+  it('regression: Solve continues the refused CAD model, never the open parametric design', async () => {
     const actions = await vi.importActual<typeof import('../jobs/actions')>('../jobs/actions');
     mocks.solveModel.mockImplementation(actions.solveModel);
     const fetcher = vi.fn<typeof fetch>(async () => json({ job_id: 'continued-cad' }));
@@ -1707,9 +1710,11 @@ describe('solve invocation mutex', () => {
       jobId: 'refused-cad', reason: 'engine_unavailable', message: 'BEAT Metal needs preparing.',
     }));
     act(() => publishJobs([refused]));
-    await act(async () => root.render(<JobsCoordinator><ResultsPanel/></JobsCoordinator>));
+    await act(async () => root.render(<JobsCoordinator><div className="topbar"><ToolbarSolveActions/></div><ResultsPanel/></JobsCoordinator>));
     expect(host.querySelector('.solve-progress')?.textContent).toContain('BEAT Metal needs preparing.');
-    const solve = host.querySelector<HTMLButtonElement>('.results-panel .btn-primary')!;
+    // Results has no Solve in CAD mode; the top bar's is the same command.
+    expect(host.querySelector('.results-panel .btn-primary')).toBeNull();
+    const solve = host.querySelector<HTMLButtonElement>('.topbar .solve-button')!;
     expect(solve.disabled).toBe(false);
     await act(async () => solve.click());
     expect(mocks.solveModel).toHaveBeenCalledExactlyOnceWith('wgl_test', expect.objectContaining({ prepared_id: 'wgi_refused_results' }));

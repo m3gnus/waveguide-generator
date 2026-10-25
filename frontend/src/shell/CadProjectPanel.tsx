@@ -21,7 +21,7 @@ import {
 } from '../design/openCadProject';
 import { showProjectRuns } from '../jobs/runFilters';
 import { workspaceNavigation } from './workspaceNavigation';
-import { cadModelHeaderLine, useCadModelState } from '../stores/cadModelState';
+import { useCadModelState } from '../stores/cadModelState';
 import { useDocumentStore } from '../stores/document';
 import { discardConfirmation, replacingWouldLose } from '../design/replacementCheck';
 import { fullTime, pluralized, relativeTime } from './cadTime';
@@ -275,9 +275,10 @@ export function CadProjectHeader() {
           onOpened={(name) => setNotice(`Opened ${name}`)}
           onError={setError}
         /></h3>
-        <p className="cad-project-meta">{project
+        {/* The model's state is its card's status line, never repeated here. */}
+        {(project || !model.selected) && <p className="cad-project-meta">{project
           ? (runs.length ? `${pluralized(runs.length, 'run')} in this project` : 'No runs in this project yet')
-          : model.selected ? cadModelHeaderLine(model) : 'Send a design to CAD, or switch to one you already have.'}</p>
+          : 'Send a design to CAD, or switch to one you already have.'}</p>}
       </div>
       <ProjectOverflowMenu project={project} onNotice={setNotice} onError={setError}/>
     </header>

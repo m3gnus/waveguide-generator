@@ -1,6 +1,6 @@
 import { isMeshRecoveryFinding } from '../model/cadMeshRecovery';
-import { meshChoiceLine, preparationFailureLine, useCadModelState } from '../stores/cadModelState';
-import { meshCeilingChoice } from '../stores/meshCeilingChoice';
+import { useCadModelState } from '../stores/cadModelState';
+import { CadModelStatusLine } from './CadModelStatusLine';
 import { EmptyState } from './EmptyState';
 import { Notice } from './Notice';
 import { cadMeshSizing } from '../api/cadMesh';
@@ -903,7 +903,9 @@ export function CadLinkPanel() {
         <time dateTime={record?.created_at || bundle.modifiedAt} title={fullTime(record?.created_at || bundle.modifiedAt)}>{relativeTime(record?.created_at || bundle.modifiedAt)}</time>
       </div>}
       {state.setupLoading && <Notice>Loading model settings…</Notice>}
-      {state.ingestStaleReason && <Notice>{state.ingestStaleReason} Prepare the model again before solving.</Notice>}
+      {/* The one status line of the model on screen, and its one action. */}
+      {(bundle || record) && <CadModelStatusLine application={onshape ? 'Onshape' : 'Fusion'}/>}
+      {state.ingestStaleReason && <Notice>{state.ingestStaleReason}</Notice>}
       {viewportNotice && <Notice>{viewportNotice}</Notice>}
       {/* Beside the button that starts the solve, not only in the rail where
           the drivers are set: this is what the run will and will not produce,
@@ -911,19 +913,6 @@ export function CadLinkPanel() {
       {record && !staleModel && importedSubmissionNotices(state).map((notice) => (
         <Notice key={notice}>{notice}</Notice>
       ))}
-      {/* WG's words for a failed or stopped request; Prepare simulation is
-          advised only where its button is offered (a Fusion request pointer
-          has none). */}
-      {(model.phase === 'prepare-failed' || model.phase === 'stopped') && <Notice>{preparationFailureLine(model)}</Notice>}
-      {model.meshChoice?.deferred && <Notice actions={<button type="button" className="btn" onClick={() => meshCeilingChoice.reopen()}>Choose</button>}>
-        {meshChoiceLine(model.label)}
-      </Notice>}
-      {(model.canPrepare && model.needsPreparation || model.phase === 'preparing') && <button
-        className="primary cad-primary-action"
-        disabled={!model.canPrepare}
-        title="Mesh the returned geometry, verify its evidence, and make it the solve truth."
-        onClick={() => { void cadWorkspaceView.ingest().catch(() => undefined); }}
-      >{model.phase === 'preparing' ? 'Preparing…' : 'Prepare simulation'}</button>}
       {record && <ChecksSection record={record}/>}
       {femRegionsOffered && !!record?.fem_regions?.length && <section className="cad-fem-regions" aria-label="FEM regions">
         <h4>FEM regions</h4>

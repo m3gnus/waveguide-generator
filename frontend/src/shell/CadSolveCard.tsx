@@ -4,14 +4,15 @@ import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { parseFrequencyList } from '../stores/frequencyList';
 import { useImportedSolveOptionsStore } from '../stores/solveOptions';
-import { CurrentModelStatus } from './CurrentModelStatus';
 import { CurrentModelRequests } from './CadOperationsSection';
 import { CadDomainInterpretation } from './CadDomainInterpretation';
 import { CadSolverFrame } from './CadSolverFrameConfirm';
 import type { DomainInterpretation } from '../api/domainInterpretation';
 import { recordDomainDecision } from '../api/domainDecision';
 import { pluralized } from './cadTime';
-import { useOptionalSolveControl } from './JobsCoordinator';
+import { automaticAxisNote, defaultSettingsNote } from './CadSolveInputs';
+import { cadJobSummary } from '../jobs/cadSolve';
+import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { resolveEngineLabel } from './solveProgress';
 import { workspaceNavigation } from './workspaceNavigation';
 
@@ -115,31 +116,22 @@ function SettingsLine({ record }: { record: CadReturnIngestRecord }) {
 
 
 /**
- * The one Solve card of a CAD model (PLAN.md M1b, with M1e's frame line).
- *
- * What Solve will use, on the card: the model in one line, which way it
- * radiates, the settings; then any request for this very snapshot that waits,
- * and one Solve. That press is the same command as the top bar's: it captures
- * the snapshot, settings, frame and domain on screen, confirms the frame shown,
- * remembers the settings for the model's project, and advances one durable
- * job -- continuing a waiting Fusion request for this snapshot rather
- * than starting a second. It never pulls a newer snapshot and never approves
- * a finding: those keep their own actions.
+ * What Solve uses for a CAD model (PLAN.md M1b, with M1e's frame line): the
+ * model in one line, which way it radiates, the settings, and any request for
+ * this very snapshot. The model's state and its one Solve are the status line
+ * above (`CadModelStatusLine`) and the top bar; this card repeats neither.
  */
 export function CadSolveCard({ record, label, fetcher }: {
   record: CadReturnIngestRecord;
   label: string;
   fetcher?: typeof fetch;
 }) {
-  const solve = useOptionalSolveControl();
-  const { status } = useCurrentModelStatus(record);
-  // Before the first solve the card keeps Solve, the frame and the domain; only
-  // the "not solved yet" line is redundant (Results says it), so it is left out.
-  const neverSolved = status.kind === 'never-solved' && !status.job;
+  const { model, status } = useCurrentModelStatus(record);
+  const latestJob = status.job;
+  const latest = latestJob?.cad_state ? cadJobSummary(latestJob) : null;
+  const engineHold = status.kind === 'waiting' && (latestJob?.cad_state?.reason === 'engine_unavailable'
+    || latestJob?.cad_state?.reason === 'engine_cannot_solve_return');
   const unlinked = record.freshness?.verdict === 'unlinked';
-  // Only the CAD command: this card exists only in CAD Link mode.
-  const available = Boolean(solve?.cadMode);
-  const disabled = !available || solve!.disabled;
   const interpretation = recordInterpretation(record);
   return <section className="cad-solve-card" aria-label={`Solve ${label}`}>
     <p className="cad-solve-summary">{modelSummary(record)}</p>
@@ -151,19 +143,24 @@ export function CadSolveCard({ record, label, fetcher }: {
     />}
     {unlinked && <CadSolverFrame ingestId={record.ingest_id} manifestSha256={record.manifest_sha256} label={label} fetcher={fetcher}/>}
     <SettingsLine record={record}/>
-    {neverSolved ? <CurrentModelRequests record={record}/> : <CurrentModelStatus record={record}/>}
-    <div className="cad-solve-actions">
-      <button
-        className="btn-primary cad-primary-action"
-        data-action="solve"
-        disabled={disabled}
-        aria-busy={solve?.submitting ?? false}
-        aria-label={`Solve: ${label}`}
-        title={solve?.title ?? 'Solve is not available here.'}
-        onClick={() => solve?.solve()}
-      >{solve?.submitting ? 'Solving…' : 'Solve'}</button>
-      {/* A disabled button cannot be hovered usefully: the reason is on screen. */}
-
-    </div>
+    {/* Engine gates are described only in Results, with their remedies. */}
+    {!engineHold && <CurrentModelRequests record={record}/>}
+    {/* No settings were recorded for this model, so WG solved it with its
+        defaults; the backend's own words say so and where to change them. */}
+    {latest?.state === 'accepted' && latest.setupDefaults
+      && <p className="cad-detail cad-solve-defaults" data-setup-defaults="true">
+        {defaultSettingsNote(latest.message, latestJob?.status === 'complete')}
+      </p>}
+    {/* WG decided which way the model faces and solved along that axis
+        without asking; Change reopens the frame. */}
+    {latest?.state === 'accepted' && latest.frameAxisAutomatic
+      && <p className="cad-detail cad-solve-frame-automatic" data-frame-axis-automatic={latest.frameAxisAutomatic}>
+        {automaticAxisNote(latest.frameAxisAutomatic, latestJob?.status)}
+        {' \u00b7 '}<button
+          className="btn-link"
+          data-action="change-automatic-frame"
+          onClick={() => { if (model.ingestId) useCadSolverFrameStore.getState().requestChange(model.ingestId); }}
+        >Change</button>
+      </p>}
   </section>;
 }

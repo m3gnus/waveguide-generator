@@ -1521,7 +1521,7 @@ describe('ParamPanel inventory UX', () => {
       .not.toContain('cad-control-cad.mesh-detail');
   });
 
-  it('points a model whose preparation failed at the Imported mesh tab, in the CAD header\'s words', () => {
+  it('points a model whose preparation failed at the Imported mesh tab, in its status line\'s words', () => {
     const before = cadWorkspace.getState();
     act(() => {
       cadWorkspace.setState({ ingestError: 'stage 1 bundle validation: $.sources[x]', ingesting: false, preparationIntent: undefined });
@@ -1530,7 +1530,7 @@ describe('ParamPanel inventory UX', () => {
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
     const empty = host.querySelector('.cad-simulation-empty')!;
-    expect(empty.textContent).toBe('Preparation failed. Use Prepare simulation to try again.See the Imported mesh tab.');
+    expect(empty.textContent).toMatch(/^WG could not prepare .+\.See the Imported mesh tab\.$/);
     expect(empty.textContent).not.toContain('$.');
     expect(host.querySelector('[data-section]')).toBeNull();
     act(() => cadWorkspace.setState(before, true));

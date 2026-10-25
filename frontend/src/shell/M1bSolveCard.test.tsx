@@ -37,6 +37,7 @@ import { JobsCoordinator, jobsCoordinatorBridge, solveControlStore } from './Job
 import { ResultsPanel } from './ResultsPanel';
 import { SolveActions } from './TopBar';
 import { CadSolveCard } from './CadSolveCard';
+import { CadModelStatusLine } from './CadModelStatusLine';
 import { CadOperationsSection } from './CadOperationsSection';
 import { solvedCadModels } from './cadlink/solvedModel';
 import { resetSolveAttentionForTests, solveAttention } from './solveAttention';
@@ -252,6 +253,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     await act(async () => {
       const record = useCadReturnStore.getState().ingestRecord!;
       root.render(<JobsCoordinator now={() => new Date(2026, 8, 22, 12)}>
+        <CadModelStatusLine/>
         <CadSolveCard record={record} label="Speaker"/>
         <CadOperationsSection record={record} solves={false}/>
         <div className="topbar"><SolveActions/></div>
@@ -262,8 +264,10 @@ describe('M1b: one Solve card, to the revealed result', () => {
     await vi.waitFor(() => expect(host.querySelector('[data-frame-preview="ready"]')).not.toBeNull());
   }
 
-  // The CAD Link panel's buttons; the top bar's Solve is the same command, elsewhere.
-  const solveButton = () => host.querySelector<HTMLButtonElement>('button[data-action="solve"]')!;
+  // The model card's status line; the top bar's Solve is the same command, elsewhere.
+  // While the model waits for a choice, its line offers Choose…; the top bar keeps Solve.
+  const solveButton = () => (host.querySelector<HTMLButtonElement>('button[data-action="solve"]')
+    ?? host.querySelector<HTMLButtonElement>('.topbar .solve-button'))!;
 
   async function pressSolve(): Promise<void> {
     expect(solveButton().disabled).toBe(false);
@@ -396,7 +400,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
         await flush(8);
       });
       const record = useCadReturnStore.getState().ingestRecord!;
-      await act(async () => { panelRoot.render(<CadSolveCard record={record} label="Speaker"/>); await flush(8); });
+      await act(async () => { panelRoot.render(<><CadModelStatusLine/><CadSolveCard record={record} label="Speaker"/></>); await flush(8); });
       await vi.waitFor(() => expect(panelHost.querySelector('[data-frame-preview="ready"]')).not.toBeNull());
       const button = panelHost.querySelector<HTMLButtonElement>('button[data-action="solve"]')!;
       await vi.waitFor(() => expect(button.disabled).toBe(false));
@@ -453,7 +457,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     const read = new Promise<void>((resolve) => { release = resolve; });
     const api = vi.fn(async () => { await read; return json(frame); });
     const loading = useCadSolverFrameStore.getState().load('wgi_first', api);
-    await act(async () => { root.render(<JobsCoordinator><CadSolveCard record={useCadReturnStore.getState().ingestRecord!} label="Speaker"/></JobsCoordinator>); });
+    await act(async () => { root.render(<JobsCoordinator><CadModelStatusLine/><CadSolveCard record={useCadReturnStore.getState().ingestRecord!} label="Speaker"/></JobsCoordinator>); });
     expect(solveButton().disabled).toBe(false);
     let solving: Promise<unknown> = Promise.resolve();
     await act(async () => { solving = solveControlStore.getSnapshot()!.solve(); await flush(); });
@@ -479,7 +483,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     const press = pressOf();
     await jobs([cadJobFixture(operation(`manual-solve:${press.client_request_id}`, 'accepted', { jobId: 'job-1' }), cadJob('job-1', 'error'))]);
     expect(activations).not.toContain('results');
-    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('Failed');
+    expect(host.querySelector('.cad-status-line')?.textContent).toContain('could not finish solving');
     await jobs([cadJobFixture(operation(`manual-solve:${press.client_request_id}`, 'accepted', { jobId: 'job-1' }), cadJob('job-1', 'cancelled'))]);
     expect(activations).not.toContain('results');
   });

@@ -29,6 +29,7 @@ import { cadWorkspace } from '../stores/cadWorkspace';
 import { CommandPalette, type PaletteEntry } from './CommandPalette';
 import { HeldCadRequestDialog } from './HeldCadRequestDialog';
 import { isFailedCadPreparation } from '../jobs/cadSolve';
+import { useCadModelState } from '../stores/cadModelState';
 import { ExportDestinationDialog } from './ExportDestinationDialog';
 import { ReportDialog } from './ReportDialog';
 import { commandShortcutLabel } from './platformKeys';
@@ -291,10 +292,14 @@ export function AttentionNotices() {
   const failedAction = useFailedAction();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const requests = selectCadRequests({ jobs, notices, record: null });
+  // The question about the CAD model on screen is its status line's (Choose…);
+  // the chip announces only the others.
+  const onScreenQuestion = useCadModelState().heldRequest?.id ?? null;
   // Engine gates live in solve progress, including automatic warm-up waits,
   // and a failed preparation is not a request waiting for the user. A
   // prepared request is ready, not waiting: Results and its card offer Solve.
-  const waiting = [...requests.earlier, ...requests.current].filter(request => request.operation?.reason !== 'engine_unavailable'
+  const waiting = [...requests.earlier, ...requests.current].filter(request => !(mode === 'cad' && request.id === onScreenQuestion)
+    && request.operation?.reason !== 'engine_unavailable'
     && request.operation?.attention !== 'ready'
     && !(request.source === 'job' && isFailedCadPreparation(request.job)));
   const waitingCount = waiting.length;

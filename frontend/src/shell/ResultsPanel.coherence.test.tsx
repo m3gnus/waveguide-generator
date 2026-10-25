@@ -179,9 +179,10 @@ describe('results run coherence', () => {
       importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_second' } as never);
       await Promise.resolve();
     });
-    expect(host.textContent).toContain('Not solved yet');
+    expect(host.textContent).toContain('No results for CAD model yet.');
     expect(host.querySelector('[data-result-primary]')).toBeNull();
-    expect(toolbarButton(host, 'Solve')).toBeDefined();
+    // In CAD mode Solve is the top bar's and the status line's, never Results'.
+    expect(toolbarButton(host, 'Solve')).toBeUndefined();
 
     await act(async () => {
       useCadReturnStore.setState({ needsIngest: false, ingestRecord: { ingest_id: 'wgi_resent', solve_model_sha256: 'shape-a' } as never });
@@ -206,7 +207,7 @@ describe('results run coherence', () => {
     expect(useCadReturnStore.getState().ingestRecord).toBeNull();
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: null, following: true });
     expect(host.querySelector('[data-result-primary]')).toBeNull();
-    expect(host.textContent).toContain('Not solved yet');
+    expect(host.textContent).toContain('No CAD model yet.');
     await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
     expect(compareSelection.getSnapshot().primary).toBeNull();
   });
@@ -360,7 +361,7 @@ describe('results run coherence', () => {
     });
     expect(host.querySelector('[data-result-primary]')).toBeNull();
     expect(host.querySelector('.result-grid')).toBeNull();
-    expect(host.textContent).toContain('Not solved yet');
+    expect(host.textContent).toContain('No results for CAD model yet.');
   });
 
   it.each([['parametric', false], ['cad', false], ['parametric', true], ['cad', true]] as const)('keeps older %s charts beside the latest failed attempt and Retry (engine gate: %s)', async (kind, engineGate) => {
@@ -386,10 +387,16 @@ describe('results run coherence', () => {
     await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
     expect(host.querySelector('.result-grid')).not.toBeNull();
     expect(host.querySelector('[data-result-primary]')?.getAttribute('data-result-primary')).toBe(solved.id);
-    expect(host.querySelector('[data-model-status="failed"]')?.textContent).toContain('Latest attempt · Solve failed');
-    expect(host.textContent).toContain(failed.error_message);
-    await act(async () => { toolbarButton(host, 'Retry')!.click(); });
-    expect(continueRun).toHaveBeenCalledWith(failed.id);
+    if (!imported) {
+      expect(host.querySelector('[data-model-status="failed"]')?.textContent).toContain('Latest attempt · Solve failed');
+      expect(host.textContent).toContain(failed.error_message);
+      await act(async () => { toolbarButton(host, 'Retry')!.click(); });
+      expect(continueRun).toHaveBeenCalledWith(failed.id);
+      return;
+    }
+    // A CAD model's latest attempt is its status line; Try again is the line's.
+    expect(host.querySelector('[data-model-status="failed"]')?.textContent).toContain('WG could not finish solving');
+    expect(toolbarButton(host, 'Retry')).toBeUndefined();
   });
 
   it.each(['none', 'different', 'hidden matching'] as const)('shows a refused on-screen CAD solve using the server message (other readiness: %s)', async otherReadiness => {
@@ -406,7 +413,6 @@ describe('results run coherence', () => {
     importedMeshStore.setCad({ source: 'cad', ingestId } as never);
     publishJobs([refused]);
     await act(async () => { root.render(<ResultsPanel/>); });
-    expect(host.textContent).toContain('Solve refused');
     expect(host.textContent?.split(refusedCad.cad_state.message)).toHaveLength(2);
     expect(host.querySelector('.result-grid')).toBeNull();
   });

@@ -1,4 +1,5 @@
-import { useCadModelState, type CadModelPhase } from '../stores/cadModelState';
+import { useCadModelStatusLine } from '../shell/CadModelStatusLine';
+import type { CadModelStatusLine } from '../stores/cadModelStatusLine';
 import { designFingerprint } from '../results/runCoherence';
 import { importedModelBlocker, useImportedModelStore } from '../stores/importedModel';
 import { useShallow } from 'zustand/react/shallow';
@@ -330,57 +331,18 @@ export function fieldPlaneUnavailableTooltip(jobs: readonly JobItem[]): string {
   }
 }
 
-export function cadViewportEmptyCopy(options: {
-  bundleName: string;
-  bundleReadable: boolean;
-  phase: CadModelPhase;
-  cadApplication: string;
-  /** WG's own words for a request whose preparation failed on the server. */
-  failureMessage?: string | null;
-  /** The model waits for the triangle-ceiling choice (`meshCeilingChoice`). */
-  meshChoice?: boolean;
-}): { title: string; detail: string } {
-  const { bundleName, bundleReadable, phase, cadApplication, failureMessage, meshChoice } = options;
-  // A Fusion request WG prepares itself has no readable bundle of its own yet;
-  // its server-side state is still this model's state.
-  if (failureMessage && phase === 'prepare-failed') {
-    return { title: `${bundleName} is not prepared`, detail: failureMessage };
-  }
-  // Refused, or solved and failed, before a mesh was on screen: the request's
-  // words, as Results has them, never "No CAD geometry yet".
-  if (phase === 'stopped') {
-    return { title: `${bundleName} was not solved`, detail: failureMessage || 'WG could not solve this model.' };
-  }
-  if (!bundleReadable && phase !== 'preparing' && phase !== 'waiting') {
-    return {
-      title: 'No CAD geometry yet',
-      detail: `Bring a model back from ${cadApplication}; CAD Link will prepare it automatically.`,
-    };
-  }
-  if (phase === 'preparing') {
-    return {
-      title: `Preparing ${bundleName}…`,
-      detail: 'CAD Link is building the viewport and solver mesh.',
-    };
-  }
-  if (phase === 'waiting') {
-    return {
-      title: `${bundleName} is waiting for you`,
-      detail: meshChoice
-        ? 'Choose how to continue with its mesh size in CAD Link.'
-        : 'WG needs your choice before it can continue with this model.',
-    };
-  }
-  if (phase === 'prepare-failed') {
-    return {
-      title: 'CAD preparation failed',
-      detail: 'Preparation failed. Open CAD Link and use “Prepare simulation” to retry.',
-    };
-  }
-  return {
-    title: `${bundleName} is not prepared yet`,
-    detail: 'Prepare simulation in CAD Link',
-  };
+/** Where to act on a CAD model's status line when the viewport has nothing to draw. */
+const CAD_EMPTY_HINT: Partial<Record<CadModelStatusLine['action'], string>> = {
+  choose: 'Choose how to continue in the CAD Link panel.',
+  'try-again': 'Try again from the CAD Link panel.',
+  prepare: 'Prepare it from the CAD Link panel.',
+  'show-results': 'Its results are in Results.',
+};
+
+/** The viewport's words when it has no CAD mesh to draw: the model's own
+ * status line (`cadModelStatusLine`), and where its action is. */
+export function cadViewportEmptyCopy(line: Pick<CadModelStatusLine, 'text' | 'action'>): { title: string; detail: string } {
+  return { title: line.text, detail: CAD_EMPTY_HINT[line.action] ?? '' };
 }
 
 /** Whether replacing one viewport scene with another should re-frame the camera.
@@ -429,23 +391,15 @@ export function Viewport() {
   const solveSymmetry = useSolveOptionsStore((state) => state.symmetry);
   const designName = useDocumentStore((state) => state.designName);
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
-  const cad = useCadModelState();
+  const cadApplication = cadApplicationName(usePreferences().cadApplication);
+  const { model: cad, line: cadLine } = useCadModelStatusLine(cadApplication);
   const cadRecord = cad.record;
-  const cadBundleReadable = cad.bundle?.readable === true;
   const cadName = cad.label;
   const theme = useViewportTheme();
   const preferences = useViewerPreferences();
-  const cadApplication = cadApplicationName(usePreferences().cadApplication);
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const solveRunningOrQueued = jobs.some((job) => isActiveJobStatus(job.status));
-  const cadEmpty = cadViewportEmptyCopy({
-    bundleName: cadName,
-    bundleReadable: cadBundleReadable,
-    phase: cad.phase,
-    cadApplication,
-    failureMessage: cad.failureMessage,
-    meshChoice: !!cad.meshChoice,
-  });
+  const cadEmpty = cadViewportEmptyCopy(cadLine);
   const resultSelection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const coherenceContext = useCurrentModel();
   const provisional = useSyncExternalStore(provisionalResults.subscribe, provisionalResults.getSnapshot, provisionalResults.getSnapshot);
@@ -563,6 +517,10 @@ export function Viewport() {
   const cadSolverViewSelected = workspaceMode === 'cad' && importedMeshState.showing === 'cadSolver';
   const fileInputActive = coherenceContext.kind === 'file';
   const importedMesh = currentModelScene(coherenceContext, importedMeshState);
+  const importedMeshDetail = importedMesh
+    ? `${importedMesh.triangleCount.toLocaleString()} display triangles${importedMesh.triangleCount !== importedMesh.solvedTriangleCount ? ` · ${importedMesh.solvedTriangleCount.toLocaleString()} solved` : ''} · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
+    : null;
+  const cadMeshShown = workspaceMode === 'cad' && coherenceContext.kind === 'cad' && importedMesh?.source !== 'solver';
   const [cadSolverLoading, setCadSolverLoading] = useState(false);
   const [cadSolverError, setCadSolverError] = useState<string | null>(null);
   const [cadSolverRetry, setCadSolverRetry] = useState(0);
@@ -1091,9 +1049,12 @@ export function Viewport() {
         <b>{importedMesh?.source === 'solver'
           ? designName || 'Untitled design'
           : importedMesh?.name ?? (fileInputActive ? 'Imported mesh' : workspaceMode === 'cad' ? cadName : designName || 'Untitled design')}</b>
-        <span>{importedMesh
-          ? `${importedMesh.triangleCount.toLocaleString()} display triangles${importedMesh.triangleCount !== importedMesh.solvedTriangleCount ? ` · ${importedMesh.solvedTriangleCount.toLocaleString()} solved` : ''} · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
-          : fileInputActive ? 'Mesh file · configure in Geometry' : workspaceMode === 'cad' ? (cad.phase === 'preparing' && cadBundleReadable ? `Preparing ${cadName}…` : cad.phase === 'prepare-failed' && cadBundleReadable ? 'CAD preparation failed' : cadEmpty.title) : viewportSubtitle(design, nativeOpening)}</span>
+        {/* A CAD model's subtitle is its solved triangle count; the display
+            mesh's own counts are one hover away. Without a mesh it is the
+            model's status line. */}
+        <span title={importedMeshDetail ?? undefined}>{importedMesh
+          ? cadMeshShown ? `${importedMesh.solvedTriangleCount.toLocaleString()} triangles` : importedMeshDetail
+          : fileInputActive ? 'Mesh file · configure in Geometry' : workspaceMode === 'cad' ? cadEmpty.title : viewportSubtitle(design, nativeOpening)}</span>
       </div>
       <div className="viewport-live">
         {workspaceMode === 'parametric' && <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>}

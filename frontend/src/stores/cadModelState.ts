@@ -119,35 +119,5 @@ export function useCadModelState() {
   return useCadModelSelection(useCurrentModelStatus().status);
 }
 
-export function cadModelStatusLabel(model: ReturnType<typeof selectCadModelState>): string {
-  const detail = model.phase === 'prepared' ? model.triangles === null ? 'prepared' : `${model.triangles.toLocaleString()} triangles`
-    : model.phase === 'preparing' ? 'preparing…'
-    : model.phase === 'waiting' ? 'waiting for you'
-    : model.phase === 'prepare-failed' ? 'preparation failed'
-    : model.phase === 'stopped' ? 'not solved'
-    : model.phase === 'stale' ? 'needs preparation'
-    : model.phase === 'none' ? 'none selected' : 'not prepared';
-  return `CAD model · ${detail}`;
-}
-
-/** The CAD project header's line for a selected model that has no project yet. */
-export function cadModelHeaderLine(model: ReturnType<typeof selectCadModelState>): string {
-  if (model.phase === 'preparing') return `Preparing ${model.label}…`;
-  if (model.phase === 'waiting') return model.meshChoice
-    ? meshChoiceLine(model.label)
-    : 'Waiting for you. WG needs your choice before it can continue.';
-  if (model.phase === 'prepare-failed' || model.phase === 'stopped') return preparationFailureLine(model);
-  return 'Prepare simulation to use this model in WG.';
-}
-
-/** The one sentence for a model waiting on the triangle-ceiling choice. */
-export function meshChoiceLine(label: string): string {
-  return `${label} is waiting for your mesh-size choice.`;
-}
-
-/** A failed or stopped model's line: WG's words when it has them, and Prepare
- * simulation only where that button exists (a Fusion request pointer has none). */
-export function preparationFailureLine(model: Pick<ReturnType<typeof selectCadModelState>, 'failureMessage' | 'canPrepare'>): string {
-  if (model.failureMessage) return model.failureMessage;
-  return model.canPrepare ? 'Preparation failed. Use Prepare simulation to try again.' : 'Preparation failed.';
-}
+// The model's status wording has one owner: `cadModelStatusLine`
+// (./cadModelStatusLine), which every surface reads.

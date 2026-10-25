@@ -33,6 +33,12 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
   let newestCursor = 0;
   let newestReceiptId: string | null = null;
   const inFlight = new Map<string, Promise<boolean>>();
+  // A newer selection kept the screen; when that selection is this very
+  // return (chosen again, or a Fusion solve put it there), nothing was kept
+  // from the user, so the line only says it arrived.
+  const supersededBySelection = (name: string, bundlePath: string | null | undefined) =>
+    bundlePath && useCadReturnStore.getState().selectedBundle?.bundlePath === bundlePath
+      ? `Received ${name}.` : `Received ${name}; your newer selection stays on screen.`;
   const report = (receipt: CadReceipt, outcome: ReceiptFeedback['outcome'], message: string) => {
     store.getState().report(receipt.receipt_id, { outcome, message });
   };
@@ -57,7 +63,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
     // Do not even take an ingest/viewport intent from a newer solve. Rejecting
     // only after listing would cancel that solve's in-flight model load.
     if ((display.automaticSelectionAt?.() ?? 0) > sentAt) {
-      report(receipt, 'superseded', `Received ${name}; your newer selection stays on screen.`);
+      report(receipt, 'superseded', supersededBySelection(name, receipt.bundle_path));
       return true;
     }
     if ((receipt.send_sequence !== null && receipt.send_sequence < newestSequence)
@@ -90,7 +96,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
     const superseded = () => {
       if (display.isActive?.() === false) return false;
       if (store.getState().feedId !== receiptFeed) return true;
-      report(receipt, 'superseded', `Received ${name}; your newer selection stays on screen.`);
+      report(receipt, 'superseded', supersededBySelection(name, receipt.bundle_path));
       return true;
     };
     let transportFailed = false;

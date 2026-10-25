@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { selectCadModelState, cadModelHeaderLine, cadModelStatusLabel } from './cadModelState';
+import { selectCadModelState } from './cadModelState';
+import { cadModelStatusLine } from './cadModelStatusLine';
+
+/** The status line of a model, for the request it was given. */
+const say = (model: ReturnType<typeof selectCadModelState>, request: Parameters<typeof cadModelStatusLine>[1] = null) => cadModelStatusLine(model, request);
 import type { MeshCeilingChoice } from './meshCeilingChoice';
 import { bundle, record } from '../shell/cadlink/selection.fixtures';
 import type { JobItem } from '../api/jobsSocket';
@@ -22,7 +26,7 @@ describe('selected CAD model state', () => {
   it('recognizes a CAD-authored selection without a preparation or document identity', () => {
     const model = selectCadModelState(selected, idle);
     expect(model).toMatchObject({ selected: true, label: 'Speaker', authoredInCad: true, lineageId: null, canPrepare: true });
-    expect(cadModelStatusLabel(model)).toBe('CAD model · not prepared');
+    expect(say(model).short).toBe('not prepared');
     // A bundle naming the open WG design is that design's own return (linked).
     expect(selectCadModelState({ ...selected, selectedBundle: { ...bundle, designIds: ['design-a'] } }, idle, null, 'design-a').authoredInCad).toBe(false);
     // Naming a different WG design, or no open design, never brings parametric Open/Send back.
@@ -44,20 +48,20 @@ describe('selected CAD model state', () => {
     const job = { id: 'job-1', status: 'preparing', cad_state: { state: 'processing', reason: null, message: null } } as unknown as JobItem;
     const preparing = selectCadModelState(pointer, idle, { kind: 'preparing', job });
     expect(preparing.phase).toBe('preparing');
-    expect(cadModelStatusLabel(preparing)).toBe('CAD model · preparing…');
+    expect(say(preparing, { kind: 'preparing', job }).short).toBe('preparing…');
     expect(preparing.canPrepare).toBe(false);
     const failedJob = { ...job, status: 'error', cad_state: { state: 'needs_user_input', reason: 'preparation_failed', prepare_failed: true,
       message: 'Waveguide Generator could not prepare Speaker. This has been recorded for the developers.', next_step: null } } as unknown as JobItem;
     const failed = selectCadModelState(pointer, idle, { kind: 'prepare-failed', job: failedJob });
     expect(failed).toMatchObject({ phase: 'prepare-failed', failureMessage: 'Waveguide Generator could not prepare Speaker. This has been recorded for the developers.' });
-    // The status bar and the CAD project header say the same.
-    expect(cadModelHeaderLine(preparing)).toBe('Preparing Speaker…');
-    expect(cadModelStatusLabel(failed)).toBe('CAD model · preparation failed');
-    expect(cadModelHeaderLine(failed)).toBe('Waveguide Generator could not prepare Speaker. This has been recorded for the developers.');
+    // The status bar and the model card say the same.
+    expect(say(preparing, { kind: 'preparing', job }).text).toBe('Preparing Speaker…');
+    expect(say(failed, { kind: 'prepare-failed', job: failedJob }).short).toBe('could not prepare');
+    expect(say(failed, { kind: 'prepare-failed', job: failedJob }).text).toBe('Waveguide Generator could not prepare Speaker. This has been recorded for the developers.');
     const heldJob = { ...job, status: 'held', cad_state: { state: 'needs_user_input', reason: 'mesh_too_large', held: true, attention: 'question' } } as unknown as JobItem;
     const waiting = selectCadModelState(pointer, idle, { kind: 'waiting', job: heldJob });
-    expect(cadModelStatusLabel(waiting)).toBe('CAD model · waiting for you');
-    expect(cadModelHeaderLine(waiting)).toContain('Waiting for you');
+    expect(say(waiting, { kind: 'waiting', job: heldJob }).short).toBe('needs your choice');
+    expect(say(waiting, { kind: 'waiting', job: heldJob }).text).toContain('needs your choice');
     // A prepared model on screen is its own state; the request's job does not override it.
     expect(selectCadModelState({ ...pointer, ingestRecord: record, needsIngest: false }, idle, { kind: 'preparing', job }).phase).toBe('prepared');
   });
@@ -67,8 +71,7 @@ describe('selected CAD model state', () => {
     const job = { id: 'job-1', status: 'error', cad_state: { state: 'rejected', reason: 'model_cut_unsolvable' } } as unknown as JobItem;
     const refused = selectCadModelState(pointer, idle, { kind: 'refused', job, message: 'Speaker arrived cut open.' });
     expect(refused).toMatchObject({ phase: 'stopped', failureMessage: 'Speaker arrived cut open.', canPrepare: false });
-    expect(cadModelStatusLabel(refused)).toBe('CAD model · not solved');
-    expect(cadModelHeaderLine(refused)).toBe('Speaker arrived cut open.');
+    expect(say(refused, { kind: 'refused', job, message: 'Speaker arrived cut open.' })).toMatchObject({ short: 'not solved', text: 'Speaker arrived cut open.', action: 'none' });
     const failed = selectCadModelState(pointer, idle, { kind: 'failed', job, message: 'The solve failed.' });
     expect(failed.phase).toBe('stopped');
     // A readable bundle can be prepared again; a prepared one is its own state.
@@ -77,19 +80,18 @@ describe('selected CAD model state', () => {
       { kind: 'refused', job, message: 'x' }).phase).toBe('prepared');
   });
 
-  it('advises Prepare simulation only where its button exists', () => {
+  it('offers Try again only where preparing again can work', () => {
     const pointer = { ...selected, selectedBundle: { ...bundle, readable: false } };
     const failing = { ingesting: false, ingestError: 'Role resolution refused.' };
-    expect(cadModelHeaderLine(selectCadModelState(pointer, failing))).toBe('Preparation failed.');
-    expect(cadModelHeaderLine(selectCadModelState(selected, failing)))
-      .toBe('Preparation failed. Use Prepare simulation to try again.');
+    expect(say(selectCadModelState(pointer, failing))).toMatchObject({ text: 'WG could not prepare Speaker.', action: 'none' });
+    expect(say(selectCadModelState(selected, failing))).toMatchObject({ text: 'WG could not prepare Speaker.', action: 'try-again' });
   });
 
   it('waits for a mesh-size choice asked for this model only', () => {
     const ceiling: MeshCeilingChoice = { name: 'Speaker', nextStep: 'x', bundlePath: bundle.bundlePath, then: 'prepare', deferred: true };
     const waiting = selectCadModelState(selected, idle, null, null, ceiling);
     expect(waiting).toMatchObject({ phase: 'waiting', meshChoice: ceiling, heldRequest: null });
-    expect(cadModelHeaderLine(waiting)).toBe('Speaker is waiting for your mesh-size choice.');
+    expect(say(waiting).text).toBe('Speaker needs your choice: it is larger than WG\'s limit.');
     expect(selectCadModelState(selected, idle, null, null, { ...ceiling, bundlePath: 'another' }).phase).toBe('selected-unprepared');
     expect(selectCadModelState({ ...selected, ingestRecord: record, needsIngest: false }, idle, null, null, ceiling).phase).toBe('prepared');
   });
@@ -109,7 +111,7 @@ describe('selected CAD model state', () => {
 
   it('does not present a stale mesh count as prepared geometry', () => {
     const state = { ...selected, ingestRecord: { ...record, mesh: { stats: { triangle_count: 123 } } } as typeof record };
-    expect(cadModelStatusLabel(selectCadModelState({ ...state, needsIngest: false }, idle))).toBe('CAD model · 123 triangles');
+    expect(say(selectCadModelState({ ...state, needsIngest: false }, idle)).short).toBe('ready · 123 triangles');
     expect(selectCadModelState(state, idle).triangles).toBeNull();
   });
 
@@ -118,7 +120,7 @@ describe('selected CAD model state', () => {
     const waiting = { kind: 'waiting' as const, job };
     const model = selectCadModelState(selected, idle, waiting);
     expect(model).toMatchObject({ phase: 'waiting', preparation: 'selected-unprepared', heldRequest: job, needsPreparation: false });
-    expect(cadModelStatusLabel(model)).toBe('CAD model · waiting for you');
+    expect(say(model, waiting).short).toBe('needs your choice');
     const prepared = selectCadModelState({ ...selected, ingestRecord: record, needsIngest: false }, idle, waiting);
     expect(prepared).toMatchObject({ phase: 'waiting', preparation: 'prepared' });
     // The engine gate stays with solve readiness; an active preparation outranks the hold.

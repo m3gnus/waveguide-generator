@@ -7,6 +7,7 @@ import { cadJobSummary } from '../jobs/cadSolve';
 import legacy from '../jobs/cadRefusedJob.fixture.json';
 import { HeldCadRequestDialog, openHeldRequest, resetHeldRequestSessionForTests } from './HeldCadRequestDialog';
 import { CurrentModelStatus } from './CurrentModelStatus';
+import { CadModelStatusLine } from './CadModelStatusLine';
 import { workspaceNavigation } from './workspaceNavigation';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -96,12 +97,14 @@ describe('held CAD request dialog owner', () => {
     const record = { ingest_id: 'mesh', manifest_sha256: job.cad_state!.snapshot!.manifest_sha256 } as never;
     workspaceModeStore.setMode('cad');
     useCadReturnStore.setState({ ingestRecord: record, needsIngest: false });
-    await act(async () => root.render(<><HeldCadRequestDialog/><CurrentModelStatus record={record} solveStatus/></>));
+    await act(async () => root.render(<><HeldCadRequestDialog/><CadModelStatusLine/><CurrentModelStatus record={record} solveStatus/></>));
+    // Results states the model's line; its one action, Choose…, is the line's.
     const status = host.querySelector('[data-model-status="waiting"]');
-    expect(status?.textContent).toContain('Waiting for you');
+    expect(status?.textContent).toContain('needs your choice');
     expect(status?.querySelector('.notice-error')).toBeNull();
+    expect(status?.querySelector('.current-model-status-line button')).toBeNull();
     act(() => button('Later').click());
-    act(() => button('Review request').click());
+    act(() => button('Choose…').click());
     expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(1);
   });
   it('routes a review choice through the existing request view', async () => {
@@ -168,12 +171,14 @@ describe('held CAD request dialog owner', () => {
     const record = { ingest_id: 'mesh', manifest_sha256: failed.cad_state!.snapshot!.manifest_sha256 } as never;
     workspaceModeStore.setMode('cad');
     useCadReturnStore.setState({ ingestRecord: record, needsIngest: false });
-    await act(async () => root.render(<><HeldCadRequestDialog/><CurrentModelStatus record={record} actions solveStatus/></>));
+    await act(async () => root.render(<><HeldCadRequestDialog/><CadModelStatusLine/><CurrentModelStatus record={record} actions solveStatus/></>));
     const status = host.querySelector('[data-model-status="prepare-failed"]')!;
     expect(status.textContent).toContain(calm);
     expect(status.querySelector('.notice-error')).toBeNull();
-    expect(host.textContent).not.toContain('Waiting for you');
+    expect(status.textContent).not.toContain('Try again');
+    expect(host.textContent).not.toContain('needs your choice');
     expect(host.querySelector('[role="dialog"]')).toBeNull();
+    // Try again is the status line's one action.
     await act(async () => button('Try again').click());
     expect(actions.continueRun).toHaveBeenCalledWith('failed');
   });
@@ -190,15 +195,15 @@ describe('held CAD request dialog owner', () => {
     const record = { ingest_id: 'mesh', manifest_sha256: ready.cad_state!.snapshot!.manifest_sha256 } as never;
     workspaceModeStore.setMode('cad');
     useCadReturnStore.setState({ ingestRecord: record, needsIngest: false });
-    await act(async () => root.render(<><HeldCadRequestDialog/><CurrentModelStatus record={record} actions solveStatus/></>));
-    const status = host.querySelector('[data-model-status="ready"]')!;
+    await act(async () => root.render(<><HeldCadRequestDialog/><CadModelStatusLine/><CurrentModelStatus record={record} actions solveStatus/></>));
+    const status = host.querySelector('[data-model-status="waiting"]')!;
     expect(status.textContent).toContain('Ready to solve');
-    expect(status.textContent).toContain('Start the prepared solve when you are ready.');
+    expect(status.querySelector('button')).toBeNull();
     expect(status.querySelector('.notice-error')).toBeNull();
-    expect(host.textContent).not.toContain('Waiting for you');
+    expect(host.textContent).not.toContain('needs your choice');
     expect(host.textContent).not.toContain('refused');
     expect(host.querySelector('[role="dialog"]')).toBeNull();
-    // One Solve, never a second competing one.
+    // One Solve, the status line's, never a second competing one in Results.
     expect([...host.querySelectorAll('button')].filter(node => node.textContent === 'Solve')).toHaveLength(1);
     await act(async () => button('Solve').click());
     // The one Solve owner solves the settings and frame on screen; the server
@@ -231,7 +236,8 @@ describe('held CAD request dialog owner', () => {
       expect([...host.querySelectorAll('button')].filter(node => node.textContent === 'Solve')).toHaveLength(0);
     } else {
       expect(host.querySelector('[role="alert"]')?.textContent).toBe('Solve refused: choose settings.');
-      expect([...host.querySelectorAll('button')].filter(node => node.textContent === 'Solve')).toHaveLength(1);
+      // Solve is the top bar's and the status line's, never Results'.
+      expect([...host.querySelectorAll('button')].filter(node => node.textContent === 'Solve')).toHaveLength(0);
     }
   });
 
@@ -333,14 +339,14 @@ describe('held CAD request dialog owner', () => {
     const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
     useCadReturnStore.setState({ selectedBundle: ceilingBundle('b'), ingestRecord: null });
     workspaceModeStore.setMode('cad');
-    await act(async () => root.render(<><HeldCadRequestDialog/><CurrentModelStatus solveStatus/></>));
+    await act(async () => root.render(<><HeldCadRequestDialog/><CadModelStatusLine/><CurrentModelStatus solveStatus/></>));
     act(() => meshCeilingChoice.ask({ name: 'NoWaistbanding', nextStep: NEXT, bundlePath: 'b' }));
     await act(async () => button('Later').click());
     expect(host.querySelector('[role="dialog"]')).toBeNull();
     expect(meshCeilingChoice.getSnapshot()?.deferred).toBe(true);
-    const status = host.querySelector('[data-model-status="waiting"]')!;
-    expect(status.textContent).toContain('NoWaistbanding is waiting for your mesh-size choice.');
-    await act(async () => button('Choose').click());
+    const status = host.querySelector('[data-model-status="never-solved"]')!;
+    expect(status.textContent).toContain('NoWaistbanding needs your choice: it is larger than WG\'s limit.');
+    await act(async () => button('Choose…').click());
     expect(host.querySelector('[role="dialog"]')?.textContent).toContain('NoWaistbanding');
     act(() => meshCeilingChoice.clear());
     useCadReturnStore.setState({ selectedBundle: null });

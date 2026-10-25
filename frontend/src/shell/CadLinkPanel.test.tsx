@@ -26,6 +26,7 @@ import { buildImportedSubmission, CadLinkPanel, declaredDomainPhrase, fusionWork
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { CadWorkspaceOwners } from './CadWorkspaceOwners';
 import { JobsCoordinator, jobsCoordinatorBridge } from './JobsCoordinator';
+import { SolveActions } from './TopBar';
 import { CurrentModelStatus } from './CurrentModelStatus';
 import { workspaceNavigation } from './workspaceNavigation';
 import { fusionAddinNeedsInstall } from './cadWorkflowView';
@@ -90,7 +91,7 @@ function CadLinkTestSurface() {
 
 function FullCadLinkTestSurface({ results = false }: { results?: boolean }) {
   return <QueryClientProvider client={capabilityClient}>
-    <JobsCoordinator><CadWorkspaceOwners/><CadLinkPanel/>
+    <JobsCoordinator><CadWorkspaceOwners/><div className="topbar"><SolveActions/></div><CadLinkPanel/>
       {results && <section aria-label="Results"><CurrentModelStatus actions solveStatus/></section>}
     </JobsCoordinator>
   </QueryClientProvider>;
@@ -144,9 +145,11 @@ describe('CadLinkPanel', () => {
     expect(connection.textContent).not.toMatch(/Open in Fusion 360|Send to Fusion|Send WG changes|This WG design/);
     expect(host.textContent).toContain('Speaker · from Fusion');
     const results = host.querySelector('[aria-label="Results"]')!;
-    expect(results.textContent).toContain('Not prepared yet');
+    expect(results.textContent).toContain('Speaker is not prepared yet.');
     expect(results.textContent).not.toMatch(/Not solved yet|Ingest|Solve is not available/);
-    const prepare = Array.from(results.querySelectorAll('button')).find(button => button.textContent === 'Prepare simulation')!;
+    // Results states the line without a button; Prepare is the model card's line's.
+    expect(results.querySelector('button')).toBeNull();
+    const prepare = host.querySelector<HTMLButtonElement>('.cad-model-card .cad-status-line button[data-action="prepare"]')!;
     await act(async () => prepare.click());
     expect(ingest).toHaveBeenCalledOnce();
     cadWorkspace.setState(emptyCadWorkspace, true);
@@ -499,7 +502,7 @@ describe('CadLinkPanel', () => {
 
     const card = host.querySelector<HTMLElement>('.cad-operation[data-operation-id="op-restart"]')!;
     expect(card.querySelector('[role="status"]')).toBeNull();
-    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('held for the update restart');
+    expect(host.querySelector('.cad-status-line')?.textContent).toContain('restart');
     expect(card.textContent).toContain('again by itself');
     // Solve now would only be refused until the restart; nothing is needed from the user.
     expect(buttonTexts(card)).toEqual(['Dismiss']);
@@ -665,7 +668,7 @@ describe('CadLinkPanel', () => {
     // The shared run line is the sole status, outside the action card.
     expect(ready.getAttribute('role')).toBeNull();
     expect(ready.querySelector('[role="status"]')).toBeNull();
-    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('Waiting for you');
+    expect(host.querySelector('.cad-status-line')?.textContent).toContain('needs your choice');
     expect(ready.querySelector('[role="status"] button')).toBeNull();
     expect(ready.textContent).toContain('Fusion asked for a solve');
     expect(ready.textContent).toContain('Prepared, and waiting for you to start the solve.');
@@ -699,9 +702,10 @@ describe('CadLinkPanel', () => {
     expect([...details.querySelectorAll('.cad-solve-inputs-reported')].map((item) => item.textContent).join(' '))
       .toContain('Choose the solve settings for this model in WG');
     expect(buttonTexts(setup)).toEqual(['Dismiss']);
-    // One Solve for all of them, on the Solve card.
-    expect([...host.querySelectorAll('button')].filter((button) => /^Solve/.test(button.textContent ?? ''))
-      .map((button) => button.getAttribute('data-action'))).toEqual(['solve']);
+    // No Solve in the panel beside them: the model's status line has the one
+    // action, and Solve is the top bar's.
+    expect([...host.querySelectorAll('.cadlink-panel button')].filter((button) => /^Solve/.test(button.textContent ?? ''))).toEqual([]);
+    expect(host.querySelector('.cad-status-line [data-action]')).not.toBeNull();
 
     await act(async () => { engine.querySelector<HTMLButtonElement>('button')!.click(); });
     await vi.waitFor(() => expect(posted).toHaveLength(1));
@@ -799,7 +803,7 @@ describe('CadLinkPanel', () => {
       return backend(input, init);
     });
     vi.stubGlobal('fetch', submitting);
-    const solve = () => host.querySelector<HTMLButtonElement>('.cad-solve-card button[data-action="solve"]')!;
+    const solve = () => (host.querySelector<HTMLButtonElement>('.cad-status-line button[data-action="solve"]') ?? host.querySelector<HTMLButtonElement>('.topbar .solve-button'))!;
     await vi.waitFor(() => expect(solve().disabled).toBe(false));
     await act(async () => solve().click());
     await vi.waitFor(() => expect(submitting.mock.calls.some(([path]) => String(path).endsWith('/solve'))).toBe(true));
@@ -878,7 +882,7 @@ describe('CadLinkPanel', () => {
     expect(results.querySelector('.solve-readiness')?.textContent).toContain('Choose an available engine, then press Solve.');
     expect(host.querySelector('.cad-solve-card .solve-readiness')).toBeNull();
     expect(operationCard('op-fusion')).toBeNull();
-    expect(buttonIn(host.querySelector('.cad-solve-card')!, 'Solve')?.disabled).toBe(false);
+    expect(host.querySelector<HTMLButtonElement>('.topbar .solve-button')?.disabled).toBe(false);
     expect([...host.querySelectorAll('button')].some(button => button.textContent === 'Solve now')).toBe(false);
     expect(posted).toHaveLength(2);
   });
@@ -1078,7 +1082,7 @@ describe('CadLinkPanel', () => {
         message: 'Choose the solve settings for this model in WG, then press Solve now.',
       }));
     });
-    const solve = () => host.querySelector<HTMLButtonElement>('.cad-solve-card button[data-action="solve"]')!;
+    const solve = () => (host.querySelector<HTMLButtonElement>('.cad-status-line button[data-action="solve"]') ?? host.querySelector<HTMLButtonElement>('.topbar .solve-button'))!;
     await vi.waitFor(() => expect(solve().disabled).toBe(false));
     await act(async () => { solve().click(); });
     await vi.waitFor(() => expect(posted.filter((item) => item.path.endsWith('/solve'))).toHaveLength(1));
@@ -2041,8 +2045,8 @@ describe('CadLinkPanel', () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(listing.items[0].bundlePath);
     expect(host.querySelector('.cad-model-name')?.textContent).toBe('Speaker');
-    expect([...host.querySelectorAll<HTMLButtonElement>('button')]
-      .some((button) => button.textContent === 'Prepare simulation')).toBe(true);
+    // The status line's one action, until preparation is automatic.
+    expect(host.querySelector('.cad-status-line button[data-action="prepare"]')?.textContent).toBe('Prepare');
     expect(host.querySelector('.cad-history .section-head')?.getAttribute('aria-expanded')).toBe('false');
     expect(host.textContent).not.toContain('Mesh detail');
   });
@@ -2090,9 +2094,10 @@ describe('CadLinkPanel', () => {
     }));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
 
-    act(() => host.querySelector<HTMLButtonElement>('.cad-model-card .cad-primary-action')!.click());
-    expect(host.querySelector('.cad-model-card .cad-primary-action')?.textContent).toContain('Preparing…');
-    expect(host.querySelector<HTMLButtonElement>('.cad-model-card .cad-primary-action')?.disabled).toBe(true);
+    act(() => host.querySelector<HTMLButtonElement>('.cad-model-card .cad-status-line button[data-action="prepare"]')!.click());
+    // Preparing has no button: the line says so, once.
+    expect(host.querySelector('.cad-model-card .cad-status-line')?.textContent).toBe('Preparing Speaker…');
+    expect(host.querySelector('.cad-model-card .cad-status-line button')).toBeNull();
     await act(async () => {
       resolveIngest(json(record));
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
@@ -3077,10 +3082,9 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
     expect(useCadReturnStore.getState().areaDriftSourceIds).toContain('source-hf');
-    expect(host.querySelector('.cad-model-card')?.textContent).toContain('Preparation failed');
+    expect(host.querySelector('.cad-model-card .cad-status-line')?.textContent).toContain('WG could not prepare Speaker.');
     expect(host.querySelector('.notice-error[role="alert"]')?.textContent).toContain('Role resolution refused');
-    expect([...host.querySelectorAll<HTMLButtonElement>('button')]
-      .some((button) => button.textContent === 'Prepare simulation')).toBe(true);
+    expect(host.querySelector('.cad-status-line button[data-action="try-again"]')?.textContent).toBe('Try again');
     expect(host.textContent).not.toContain('Allow recorded area drift');
   });
 });

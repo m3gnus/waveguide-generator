@@ -97,6 +97,14 @@
 .cad-model-identity { display: flex; align-items: baseline; gap: 7px; padding: 4px 0 6px; }
 .cad-model-name { min-width: 0; overflow: hidden; color: var(--fg1); font-size: var(--text-title); text-overflow: ellipsis; white-space: nowrap; }
 .cad-model-identity time { margin-left: auto; color: var(--fg3); font: var(--text-micro) var(--mono); white-space: nowrap; }
+/* The model's one status line and its one action (cadModelStatusLine). */
+.cad-status-line { display: flex; align-items: center; gap: 7px; padding: 2px 0 6px; color: var(--fg1); }
+.cad-status-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.cad-status-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--fg3); }
+.cad-status-line-busy .cad-status-dot { background: var(--blue); }
+.cad-status-line-ready .cad-status-dot, .cad-status-line-done .cad-status-dot { background: var(--green); }
+.cad-status-line-attention .cad-status-dot { background: var(--amber); }
+.cad-status-action { flex: none; }
 /* The one Solve card (M1b): what Solve uses, then Solve. */
 .cad-solve-card { display: grid; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--hair-soft); }
 .cad-solve-card > p { margin: 0; }
