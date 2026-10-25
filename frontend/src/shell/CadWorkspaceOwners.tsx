@@ -39,6 +39,7 @@ export function mountCadWorkspaceOwners(): () => void {
   const cadFolderConfigured = { current: null as boolean | null };
   const manualSelectionAt = { current: null as number | null };
   const projectOpenPending = { current: false };
+  const lastModelRestorePending = { current: false };
   const initialChoiceOwed = { current: !useCadReturnStore.getState().selectedBundle };
   const refusedForeignReturn = { current: false };
   const returnListRequest = { current: 0 };
@@ -89,6 +90,7 @@ export function mountCadWorkspaceOwners(): () => void {
     refreshChannelDriverBases, noteCadActivity,
     awaitingReturn: () => waiter.getState().pullingFromFusion,
     awaitingReceiptDisplay,
+    awaitingLastModel: () => lastModelRestorePending.current,
     sendOwnersKnown: () => cadReceiptsStore.getState().loadedAt !== null,
     ownsSolveReturn,
     ownsReturn: (bundle) => Boolean((bundle.requestId && claimedReturns.has(bundle.requestId))
@@ -377,7 +379,9 @@ export function mountCadWorkspaceOwners(): () => void {
     observeCadProjectLoads({ enterCadWorkspace, manualSelectionAt, projectOpenPending, initialChoiceOwed, refusedForeignReturn,
       returnListRequest, seenReturnRevisions, refreshRef: { current: refreshReturns }, selectBundleRef: { current: selectBundle },
       setError: reportError, setStatus: reportStatus }),
-    observeLastModel({ reportStatus, reportError, refusedForeignReturn, selectBundle: (bundle, project) => selectBundle(bundle, project, true), jobLinkPending: () => jobIdFromLink(window.location.search) !== null }),
+    observeLastModel({ reportStatus, reportError, refusedForeignReturn, selectBundle: (bundle, project) => selectBundle(bundle, project, true),
+      jobLinkPending: () => jobIdFromLink(window.location.search) !== null,
+      restorePending: lastModelRestorePending, onSettled: refreshOwedInitialChoice }),
     jobsSocket.subscribe(followFusionSolve), () => fusionSolves.dispose(),
     jobsSocket.subscribe(settleModels), solvedCadModels.subscribe(settleModels),
     useDesignStore.subscribe(contextChanged), useDocumentStore.subscribe(contextChanged),

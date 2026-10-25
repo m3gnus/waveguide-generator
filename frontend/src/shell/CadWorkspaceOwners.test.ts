@@ -345,6 +345,31 @@ it('reopens a prepared but never-solved CAD model using its retained record with
   expect(cadWorkspace.getSnapshot().status).toBe('Reopened the last model.');
 });
 
+it.each(['missing return', 'missing model', 'unavailable model'] as const)(
+  'chooses the newest readable return after restoring the remembered model fails: %s', async failure => {
+  unsolvedProject(); resetDocumentStore();
+  const newest = { ...bundle, bundlePath: 'wgreturn/newest.wgreturn', documentName: 'Newest',
+    modifiedAt: new Date().toISOString() };
+  returns = [{ ...newest, bundlePath: 'wgreturn/unreadable.wgreturn', readable: false }, newest,
+    { ...bundle, documentName: 'Older' }];
+  const model = deferred<Response>(); const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((input, init) => String(input) === '/api/models/remembered'
+    ? model.promise : base(input, init));
+  stop = mountCadWorkspaceOwners(); await flush();
+  expect(calls('/api/cadlink/returns').length).toBeGreaterThan(0);
+  expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+  model.resolve(failure === 'missing return'
+    ? json({ model: { model_id: 'remembered', producer: 'cad', display_name: 'Speaker' },
+      latest_prepared: workspaceFor().prepared, original_available: false })
+    : json({ error: { code: failure === 'missing model' ? 'model_not_found' : 'unavailable', message: failure } },
+      failure === 'missing model' ? 404 : 503));
+  await flush();
+  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(newest.bundlePath);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+  expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+});
+
 it('shows the refusal when the never-solved model\'s newest return belongs to another project', async () => {
   unsolvedProject();
   returns = [{ ...bundle, designIds: ['another-design'] }];

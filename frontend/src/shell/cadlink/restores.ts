@@ -220,6 +220,7 @@ export function observeCadProjectLoads(integration: UseCadRestoresOptions): () =
 export function observeLastModel({
   reportStatus = () => undefined, reportError = () => undefined, fetcher = fetch, selectBundle,
   refusedForeignReturn = { current: false }, jobLinkPending = () => false, settings = durableSettings,
+  restorePending = { current: false }, onSettled = () => undefined,
 }: {
   reportStatus?(message: string): void;
   reportError?(message: string): void;
@@ -230,9 +231,11 @@ export function observeLastModel({
   jobLinkPending?(): boolean;
   /** Where a late-hydrated pointer is announced; the shared instance unless a test brings its own. */
   settings?: Pick<typeof durableSettings, 'subscribe'>;
+  /** Discovery waits for this attempt, then retries an initial choice if still empty. */
+  restorePending?: MutableRefObject<boolean>;
+  onSettled?(): void;
 } = {}): () => void {
   let active = true;
-  let running = false;
   const tried = new Set<string>();
   const blocked = () => !active || refusedForeignReturn.current || jobLinkPending();
   const openUnsolved = async (pointer: LastModel, prepared: PreparedSummary): Promise<boolean> => {
@@ -279,8 +282,8 @@ export function observeLastModel({
     return true;
   };
   const attempt = () => {
-    if (running || blocked() || workspaceModeStore.getSnapshot().mode !== 'cad') return;
-    running = true;
+    if (restorePending.current || blocked() || workspaceModeStore.getSnapshot().mode !== 'cad') return;
+    restorePending.current = true;
     void reopenLastModel(fetcher, {
       shouldTry: (pointer) => {
         const key = `${pointer.input}:${pointer.model_id}`;
@@ -295,7 +298,7 @@ export function observeLastModel({
         reportCadAutomationError('reopen-last-model', error);
         if (active) reportError(error instanceof Error ? error.message : String(error));
       })
-      .finally(() => { running = false; });
+      .finally(() => { restorePending.current = false; if (active) onSettled(); });
   };
   attempt();
   const stops = [

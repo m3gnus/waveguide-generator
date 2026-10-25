@@ -95,6 +95,8 @@ export interface CadReturnArrivalReaderIntegration {
   awaitingReturn(): boolean;
   /** Receipt display chooses the Send before discovery may choose an initial model. */
   awaitingReceiptDisplay(): boolean;
+  /** Only an active restore may defer discovery; a stale durable pointer cannot. */
+  awaitingLastModel(): boolean;
   /** Recheck after the listing await: a push may have invalidated the feed meanwhile. */
   sendOwnersKnown(): boolean;
   ownsReturn(bundle: CadReturnBundle): boolean;
@@ -115,7 +117,7 @@ export async function refreshCadReturnArrivals(
   const {
     autoIngestSelected, cadFolderConfigured, enterCadWorkspace, manualSelectionAt, noteCadActivity,
     projectOpenPending, refreshChannelDriverBases, refusedForeignReturn, returnListRequest,
-    seenReturnRevisions, initialChoiceOwed, deferredArrivalRevisions, awaitingReturn, awaitingReceiptDisplay, sendOwnersKnown, ownsReturn, ownsSolveReturn,
+    seenReturnRevisions, initialChoiceOwed, deferredArrivalRevisions, awaitingReturn, awaitingReceiptDisplay, awaitingLastModel, sendOwnersKnown, ownsReturn, ownsSolveReturn,
     setError, setStatus, setBundles, setLoading,
   } = integration;
   const background = options.background === true;
@@ -143,6 +145,7 @@ export async function refreshCadReturnArrivals(
     // The durable choice owns startup. This first listing is a baseline, not
     // an arrival that may overtake its asynchronous retained-model read.
     const remembered = !projectOpenPending.current && readLastModel('cad');
+    const restoring = !projectOpenPending.current && awaitingLastModel();
     const discoveryPrevious = previous ?? (remembered ? next : null);
     const wasConfigured = cadFolderConfigured.current;
     cadFolderConfigured.current = response.cadFolderConfigured;
@@ -170,7 +173,7 @@ export async function refreshCadReturnArrivals(
     }
     // An owed initial choice must let queued Sends finish first, even when a
     // background poll also notices a new revision in the folder.
-    const arrived = options.autoOpenNew && !deferNewArrivals && !awaitingReturn()
+    const arrived = options.autoOpenNew && !restoring && !deferNewArrivals && !awaitingReturn()
       && !(initialChoiceOwed.current && awaitingReceiptDisplay())
       ? newestReturnArrival(response.items.filter((item) => !ownsReturn(item)
         // Discovering the return already in the viewport is not a new model
@@ -179,7 +182,7 @@ export async function refreshCadReturnArrivals(
     seenReturnRevisions.current = next;
     const currentDesignId = useDocumentStore.getState().identity?.designId;
     if (useCadReturnStore.getState().selectedBundle) initialChoiceOwed.current = false;
-    const canChooseInitial = initialChoiceOwed.current && !remembered && !awaitingReturn() && !awaitingReceiptDisplay()
+    const canChooseInitial = initialChoiceOwed.current && !restoring && !awaitingReturn() && !awaitingReceiptDisplay()
       && !useCadReturnStore.getState().selectedBundle;
     const initial = canChooseInitial
       ? response.items.find((item) => (
@@ -647,7 +650,8 @@ export function createCadReturnArrivalReader(
     projectOpenPending: { current: false }, refreshChannelDriverBases: async () => undefined,
     refusedForeignReturn: { current: false }, returnListRequest: { current: 0 },
     seenReturnRevisions: { current: null }, initialChoiceOwed: { current: true }, deferredArrivalRevisions: { current: new Map() },
-    awaitingReturn: () => false, awaitingReceiptDisplay: () => false, sendOwnersKnown: () => true, ownsReturn: () => false,
+    awaitingReturn: () => false, awaitingReceiptDisplay: () => false, awaitingLastModel: () => false,
+    sendOwnersKnown: () => true, ownsReturn: () => false,
     setError: noop, setStatus: noop, setBundles: noop, setLoading: noop,
     ...overrides,
   };
