@@ -202,7 +202,7 @@ def test_a_blocked_solve_is_refused_at_admission_never_prepared(h: JobsHarness):
     assert (row["state"], row["reason"]) == ("rejected", PREFLIGHT_BLOCKED)
     ack = _ack(h.data_dir, "cmd-1")
     assert ack["outcome"] == "refused"
-    assert ack["reason"] == _expected_refusal() == "2 sources share the role HF. Use one source per role."
+    assert ack["reason"] == _expected_refusal() == "2 drivers are HF – high-frequency driver. Keep one per role."
     assert h.jobs_store.latest_cad_job("cmd-1") is None
 
 

@@ -35,6 +35,24 @@ WG_REQUEST_SCHEMA_VERSION = 4
 SOURCE_ROLES = ("LF", "MF", "HF", "PASSIVE_CARDIOID")
 LEGACY_SOURCE_ROLE_ALIASES = {"PORT_EXIT": "PASSIVE_CARDIOID"}
 RECOGNISED_SOURCE_ROLES = SOURCE_ROLES + tuple(LEGACY_SOURCE_ROLE_ALIASES)
+#: What a person reads for each role, in the order Sources & Mesh lists its
+#: driver rows (highest frequency first). The role ids never change.
+DRIVER_LABELS = (
+    ("HF", "HF – high-frequency driver"),
+    ("MF", "MF – mid-frequency driver"),
+    ("LF", "LF – low-frequency driver"),
+    ("PASSIVE_CARDIOID", "Port or passive opening"),
+)
+
+
+def canonical_source_role(role: object) -> str:
+    """A role id with its legacy spelling resolved (``PORT_EXIT``)."""
+    return LEGACY_SOURCE_ROLE_ALIASES.get(str(role), str(role))
+
+
+def driver_label(role: object) -> str:
+    """The display label of a role id; never the raw id for a known role."""
+    return dict(DRIVER_LABELS).get(canonical_source_role(role), str(role))
 EXTERIOR_ROLES = frozenset({"waveguide", "enclosure"})
 #: The name user text gives the application, everywhere.
 APP_NAME = "Waveguide Generator"
@@ -113,7 +131,7 @@ MESH_SIZING_UNAVAILABLE_MESSAGE = (
 
 def default_source_size_mm(role: str) -> float:
     """Resolve legacy role spellings against the one source defaults table."""
-    return MESH_DEFAULTS['source_size_mm'][LEGACY_SOURCE_ROLE_ALIASES.get(role, role)]
+    return MESH_DEFAULTS['source_size_mm'][canonical_source_role(role)]
 
 
 def default_mesh(sources: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -162,11 +180,11 @@ ACKNOWLEDGED_FIELD = 'acknowledged'
 #: ``ask`` finding -> the WG hold its "anyway" answer settles.
 ACKNOWLEDGES = {'mesh_ceiling': 'mesh_too_large'}
 ACKNOWLEDGEABLE_HOLDS = frozenset(ACKNOWLEDGES.values())
-_REVIEW_SOURCES = 'Review the sources in Sources & Mesh….'
+_REVIEW_SOURCES = 'Review the drivers in Sources & Mesh….'
 _REVIEW_MESH = 'Review the mesh settings in Sources & Mesh…, then save.'
 #: code -> (severity, remedy). A remedy of None: the message says what to do.
 PREFLIGHT_RULES = {
-    'no_drive': (PREFLIGHT_BLOCK, 'In Sources & Mesh…, add a source on the driver face (LF, MF, HF or a port), '
+    'no_drive': (PREFLIGHT_BLOCK, 'In Sources & Mesh…, pick the faces of a driver (HF, MF, LF or a port), '
                                   'or declare a FEM region with a moving surface.'),
     'source_unresolved': (PREFLIGHT_BLOCK, None),
     'source_without_faces': (PREFLIGHT_BLOCK, None),
@@ -185,7 +203,7 @@ PREFLIGHT_RULES = {
     'open_body': (PREFLIGHT_ASK, 'If it is an open shell on purpose, send anyway.'),
     'mesh_ceiling': (PREFLIGHT_ASK, 'Change the mesh resolution in Sources & Mesh…, or check the model size.'),
 }
-NO_DRIVE_MESSAGE = 'This model has no source to drive it.'
+NO_DRIVE_MESSAGE = 'This model has no driver yet.'
 #: The one line shown when the add-in could not survey the model at all.
 PREFLIGHT_UNAVAILABLE_MESSAGE = (
     f'{APP_NAME} could not check this model. Try again; if it keeps '
@@ -272,11 +290,11 @@ def preflight_findings(draft: Mapping[str, Any], *, limits: Mapping[str, Any] | 
             roles[role] = roles.get(role, 0) + 1
         if source.get('face_count') == 0:
             findings.append(preflight_finding(
-                'source_without_faces', f'The {role} source has no faces. {_REVIEW_SOURCES}'))
+                'source_without_faces', f'{driver_label(role)} has no faces. {_REVIEW_SOURCES}'))
     for role, count in roles.items():
         if count > 1:
             findings.append(preflight_finding(
-                'source_role_duplicate', f'{count} sources share the role {role}. Use one source per role.'))
+                'source_role_duplicate', f'{count} drivers are {driver_label(role)}. Keep one per role.'))
     mesh_error = _text(draft.get('mesh_error'))
     if mesh_error:
         findings.append(preflight_finding('mesh_settings_invalid', mesh_error))
@@ -285,16 +303,16 @@ def preflight_findings(draft: Mapping[str, Any], *, limits: Mapping[str, Any] | 
         name = _text(group.get('name'))
         if not name:
             findings.append(preflight_finding(
-                'group_unnamed', f'A surface group has no name. {_REVIEW_MESH}'))
+                'group_unnamed', f'A size zone has no name. {_REVIEW_MESH}'))
             continue
         if name.casefold() in names:
             findings.append(preflight_finding(
-                'group_name_duplicate', f'Two surface groups are named {name!r}. Use unique group names.'))
+                'group_name_duplicate', f'Two size zones are named {name!r}. Give each its own name.'))
         names[name.casefold()] = name
     out_of_scope = [str(name) for name in draft.get('groups_out_of_scope') or ()]
     if out_of_scope:
         findings.append(preflight_finding('group_out_of_scope', (
-            f'{_plural(len(out_of_scope), "Surface group", "Surface groups")} {_quoted(out_of_scope)} '
+            f'{_plural(len(out_of_scope), "Size zone", "Size zones")} {_quoted(out_of_scope)} '
             f'{_plural(len(out_of_scope), "has", "have")} no faces in this selection and '
             f'{_plural(len(out_of_scope), "is", "are")} left out of this export.')))
     # A body the user declared is meant as it is; only an undeclared one asks.
@@ -373,11 +391,13 @@ def mesh_authoring_findings(rows: Sequence[Mapping[str, Any]], mesh: Mapping[str
                             fem_driven: bool = False, source_error: str | None = None) -> list[dict[str, Any]]:
     """The Sources & Mesh dialog's rules, over plain rows, in display order.
 
-    ``rows``: ``kind`` (``'source'`` or ``'group'``), ``label``, ``role``,
-    ``name``, ``linked``, ``size_mm``, ``face_keys`` (hashable face
+    ``rows``: ``kind`` (``'source'`` for a driver row, ``'group'`` for a size
+    zone), ``label``, ``name``, ``size_mm``, ``face_keys`` (hashable face
     identities) and ``missing_saved_faces`` (saved faces the dialog could not
     select again). ``mesh``: ``wall_size_mm`` and ``grading_distance_mm``.
-    Every finding blocks Save.
+    The dialog has one row per driver role and moves a face picked for a
+    second row, so a repeated role or a face in two rows cannot arise there
+    (Send still checks both, in ``preflight_findings``). Every finding blocks Save.
     """
     findings = [preflight_finding('source_unresolved', source_error)] if _text(source_error) else []
     sources = [row for row in rows if row.get('kind') == 'source']
@@ -391,49 +411,28 @@ def mesh_authoring_findings(rows: Sequence[Mapping[str, Any]], mesh: Mapping[str
 
     size('Walls', mesh.get('wall_size_mm'))
     size('Grading distance', mesh.get('grading_distance_mm'))
-    source_keys: dict[Any, str] = {}
-    group_keys: dict[Any, str] = {}
-    roles: dict[str, str] = {}
     names: dict[str, str] = {}
     for kind in ('source', 'group'):
         for row in (row for row in rows if row.get('kind') == kind):
             label = str(row['label'])
             size(label, row.get('size_mm'))
-            selected = set(row.get('face_keys') or ())
-            if not selected:
-                findings.append(preflight_finding(
-                    'source_without_faces' if kind == 'source' else 'group_without_faces',
-                    f'{label}: select at least one face.'))
             missing = int(row.get('missing_saved_faces') or 0)
             if missing:
                 findings.append(preflight_finding('saved_faces_unselected', (
-                    f'{label}: {missing} saved faces could not be selected (hidden or changed). Reselect them.')))
-            if kind == 'source':
-                if not row.get('linked'):
-                    role = str(row.get('role'))
-                    if role in roles:
-                        findings.append(preflight_finding(
-                            'source_role_duplicate', f'{label}: same role as {roles[role]}. Use one source per role.'))
-                    roles[role] = label
-                other = source_keys
-            else:
+                    f'{label}: {missing} saved {_plural(missing, "face is", "faces are")} hidden or changed. '
+                    'Show the body and reopen Sources & Mesh…, or clear this row.')))
+            elif not row.get('face_keys'):
+                findings.append(preflight_finding(
+                    'source_without_faces' if kind == 'source' else 'group_without_faces',
+                    f'{label}: pick at least one face.'))
+            if kind == 'group':
                 name = _text(row.get('name'))
                 if not name:
-                    findings.append(preflight_finding('group_unnamed', f'{label}: give this surface group a name.'))
-                if name.casefold() in names:
+                    findings.append(preflight_finding('group_unnamed', f'{label}: give this size zone a name.'))
+                elif name.casefold() in names:
                     findings.append(preflight_finding('group_name_duplicate', (
-                        f'{label}: duplicate group name with {names[name.casefold()]}. Use unique group names.')))
-                names[name.casefold()] = label
-                for key in selected & source_keys.keys():
-                    findings.append(preflight_finding('face_in_two_rows', (
-                        f'{label}: a face is also in {source_keys[key]}. '
-                        'A face cannot be in both a source and a surface group.')))
-                other = group_keys
-            for key in selected & other.keys():
-                plural = 'sources' if kind == 'source' else 'surface groups'
-                findings.append(preflight_finding('face_in_two_rows', (
-                    f'{label}: a face is also in {other[key]}. A face cannot be in two {plural}.')))
-            other.update({key: label for key in selected})
+                        f'{label}: the same name as {names[name.casefold()]}. Give each size zone its own name.')))
+                names.setdefault(name.casefold(), label)
     unique: dict[str, dict[str, Any]] = {}
     for finding in findings:
         unique.setdefault(finding['message'], finding)
