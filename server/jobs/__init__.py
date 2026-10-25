@@ -5,8 +5,9 @@ models or storage must not load the API/runtime assembly, which itself depends
 on solver consumers of those models and storage.
 """
 
-from importlib import import_module
 from typing import TYPE_CHECKING
+
+from server._lazy_exports import lazy_exports
 
 
 if TYPE_CHECKING:
@@ -22,17 +23,7 @@ _EXPORTS = {
 }
 
 
-def __getattr__(name: str) -> object:
-    module_name = _EXPORTS.get(name)
-    if module_name is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(import_module(module_name, __name__), name)
-    globals()[name] = value
-    return value
-
-
-def __dir__() -> list[str]:
-    return sorted({*globals(), *_EXPORTS})
+__getattr__, __dir__ = lazy_exports(globals(), _EXPORTS)
 
 
 __all__ = ["JobRuntime", "JobStore", "mount_jobs"]

@@ -28,6 +28,8 @@ layers =
     charts | drivers | settings | workspace | protocol
     platform
     contracts
+    # Stdlib-only helper for lazy package exports; imports no server module.
+    _lazy_exports
 exhaustive = true
 exhaustive_ignores =
     # Test modules are clients of production packages, not runtime layers.

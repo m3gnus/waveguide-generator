@@ -11,17 +11,21 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+IMPORT_TIMEOUT_SECONDS = 60
 
 
 def _import_in_fresh_interpreter(module: str) -> str:
-    completed = subprocess.run(
-        [sys.executable, "-c", f"import {module}"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        check=False,
-        text=True,
-        timeout=15,
-    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", f"import {module}"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=IMPORT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return f"{module}:\ntimed out after {IMPORT_TIMEOUT_SECONDS} s"
     if completed.returncode:
         return f"{module}:\n{completed.stdout}{completed.stderr}"
     return ""

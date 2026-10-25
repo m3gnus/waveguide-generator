@@ -13,6 +13,8 @@ import build_solver_mesh`` working and defers the cost to the first use.
 
 from typing import TYPE_CHECKING
 
+from server._lazy_exports import lazy_exports
+
 
 if TYPE_CHECKING:  # pragma: no cover - import-time typing only
     from .builder import build_solver_mesh, clear_solver_mesh_cache, solver_mesh_cache_info
@@ -31,19 +33,7 @@ _EXPORTS = {
 }
 
 
-def __getattr__(name: str) -> object:
-    module_name = _EXPORTS.get(name)
-    if module_name is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    from importlib import import_module
-
-    value = getattr(import_module(module_name, __name__), name)
-    globals()[name] = value
-    return value
-
-
-def __dir__() -> list[str]:
-    return sorted({*globals(), *_EXPORTS})
+__getattr__, __dir__ = lazy_exports(globals(), _EXPORTS)
 
 
 __all__ = [
