@@ -15,6 +15,7 @@ import {
 import { preferencesStore } from '../../prefs/preferences';
 import { useDocumentStore } from '../../stores/document';
 import { cadPreparationKey, preparesAutomatically, useCadReturnStore } from '../../stores/cadReturn';
+import { readLastModel } from '../../stores/lastModel';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { resolvePreparationTarget } from './preparationTarget';
 import { meshCeilingChoice } from '../../stores/meshCeilingChoice';
@@ -139,6 +140,10 @@ export async function refreshCadReturnArrivals(
     setBundles(response.items);
     const previous = seenReturnRevisions.current;
     const next = new Map(response.items.map((item) => [item.bundlePath, returnRevision(item)]));
+    // The durable choice owns startup. This first listing is a baseline, not
+    // an arrival that may overtake its asynchronous retained-model read.
+    const remembered = !projectOpenPending.current && readLastModel('cad');
+    const discoveryPrevious = previous ?? (remembered ? next : null);
     const wasConfigured = cadFolderConfigured.current;
     cadFolderConfigured.current = response.cadFolderConfigured;
     cadCoordinationStore.set(response.coordination === 'on' ? 'on' : 'off');
@@ -146,17 +151,17 @@ export async function refreshCadReturnArrivals(
       || previous.size !== next.size
       || [...next].some(([path, modifiedAt]) => previous.get(path) !== modifiedAt);
     if (listingChanged || response.cadFolderConfigured !== wasConfigured) noteCadActivity();
-    let arrivalPrevious = previous;
+    let arrivalPrevious = discoveryPrevious;
     const deferNewArrivals = options.deferNewArrivals || !sendOwnersKnown();
     if (deferNewArrivals) {
       deferredArrivalRevisions.current.forEach((_, path) => {
         if (!next.has(path)) deferredArrivalRevisions.current.delete(path);
       });
       response.items.forEach((item) => {
-        if (newestReturnArrival([item], previous)) deferredArrivalRevisions.current.set(item.bundlePath, returnRevision(item));
+        if (newestReturnArrival([item], discoveryPrevious)) deferredArrivalRevisions.current.set(item.bundlePath, returnRevision(item));
       });
     } else if (deferredArrivalRevisions.current.size) {
-      const deferredPrevious = new Map(previous);
+      const deferredPrevious = new Map(discoveryPrevious);
       deferredArrivalRevisions.current.forEach((revision, path) => {
         if (next.get(path) === revision) deferredPrevious.delete(path);
       });
@@ -174,7 +179,7 @@ export async function refreshCadReturnArrivals(
     seenReturnRevisions.current = next;
     const currentDesignId = useDocumentStore.getState().identity?.designId;
     if (useCadReturnStore.getState().selectedBundle) initialChoiceOwed.current = false;
-    const canChooseInitial = initialChoiceOwed.current && !awaitingReturn() && !awaitingReceiptDisplay()
+    const canChooseInitial = initialChoiceOwed.current && !remembered && !awaitingReturn() && !awaitingReceiptDisplay()
       && !useCadReturnStore.getState().selectedBundle;
     const initial = canChooseInitial
       ? response.items.find((item) => (

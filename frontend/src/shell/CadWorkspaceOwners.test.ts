@@ -1041,3 +1041,35 @@ it('Send from Fusion opens the shared mesh-ceiling choice once and stops receipt
   expect(cadWorkspace.getSnapshot().ingestError).toBeNull();
   meshCeilingChoice.clear();
 });
+
+it.each([['reload', 300_000], ['reload', 1_000], ['restart', 300_000]] as const)(
+  'keeps the chosen prepared model across %s with newer folder copies aged %s ms', async (restart, age) => {
+  resetImportedModelStore(); resetDocumentStore(); workspaceModeStore.setMode('cad');
+  const chosenRecord = { ...record, ingest_id: 'wgi_chosen', return_id: 'wgr_chosen', model_id: 'wgl_chosen' };
+  rememberLastModel({ model_id: 'wgl_chosen', input: 'cad' });
+  returns = [{ ...bundle, bundlePath: 'wgreturn/newest-copy.wgreturn', returnId: 'wgr_copy',
+    modifiedAt: new Date(Date.now() - age).toISOString() },
+    { ...bundle, bundlePath: 'wgreturn/chosen.wgreturn', returnId: 'wgr_chosen' }];
+  const saved = workspaceFor(chosenRecord.ingest_id, undefined, { modelId: 'wgl_chosen' });
+  const model = deferred<Response>(); const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((input, init) => {
+    const path = String(input);
+    if (path.startsWith('/api/models/wgl_chosen/setup')) return Promise.resolve(json({ setup: saved.setup.content, revision_id: 'wgs_chosen' }));
+    if (path.startsWith('/api/models/wgl_chosen')) return model.promise.then(() => json({ model: saved.model,
+      latest_prepared: saved.prepared, prepared: saved.prepared, original_available: false }));
+    if (path === '/api/cadlink/ingest/wgi_chosen') return Promise.resolve(json(chosenRecord));
+    return base(input, init);
+  });
+  if (restart === 'restart') publishCadJobs([{ ...job(), id: 'old-solved', run_number: 1, status: 'complete', has_results: true,
+    client_request_id: 'cad-solve:old-solved', created_at: new Date(Date.now() - 240_000).toISOString(),
+    completed_at: new Date(Date.now() - 230_000).toISOString(), cad_state: { state: 'accepted', operation_id: 'old-solved' },
+  } as ReturnType<typeof job>]);
+  stop = mountCadWorkspaceOwners(); await flush();
+  model.resolve(json({})); await flush();
+  await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true }); await flush();
+  expect(useCadReturnStore.getState()).toMatchObject({ needsIngest: false, ingestRecord: { ingest_id: chosenRecord.ingest_id } });
+  expect(currentModel().ingestId).toBe(chosenRecord.ingest_id);
+  expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(chosenRecord.ingest_id);
+  expect(readLastModel('cad')?.model_id).toBe('wgl_chosen');
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+});

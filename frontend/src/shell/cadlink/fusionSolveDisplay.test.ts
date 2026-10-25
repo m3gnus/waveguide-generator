@@ -1,3 +1,4 @@
+import { rememberLastModel } from '../../stores/lastModel';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { compareSelection } from '../../api/results';
 import { acknowledgeCadSolve, cadSolveClaim, rememberCadSolve } from '../../jobs/cadSolve';
@@ -669,4 +670,28 @@ it('keeps the shown preparation ready if tab navigation cancels the same run set
   expect(useImportedModelStore.getState().phase).toBe('ready');
   expect(currentModel().viewportShowing).toBe(true);
   expect(f.display.reportStatus.mock.calls.at(-1)?.[0]).not.toContain('Loading');
+});
+
+
+it('leaves a saved model selected at restart but still allows Show of a recent finished request', async () => {
+  rememberLastModel({ model_id: 'wgl_chosen', input: 'cad' });
+  const f = fixture();
+  const old = { ...external(), status: 'complete' as const, has_results: true,
+    completed_at: new Date(NOW - 60_000).toISOString() };
+  await f.observe([old]);
+  expect(f.fetcher).not.toHaveBeenCalled();
+  expect(f.ownsReturn(bundle, [old])).toBe(false);
+  await f.showRequest({ operationId: old.id, jobId: old.id });
+  expect(currentModel().ingestId).toBe(record.ingest_id);
+  expect(f.display.showIngestedMesh).toHaveBeenCalledOnce();
+});
+
+it.each(['active', 'newly completed'] as const)('lets a %s Fusion solve own display despite a remembered model', async state => {
+  rememberLastModel({ model_id: 'wgl_chosen', input: 'cad' });
+  const f = fixture();
+  const run = state === 'active' ? external()
+    : { ...external(), status: 'complete' as const, has_results: true, completed_at: new Date(NOW + 1000).toISOString() };
+  await f.observe([run]);
+  expect(currentModel().ingestId).toBe(record.ingest_id);
+  expect(f.display.showIngestedMesh).toHaveBeenCalledOnce();
 });

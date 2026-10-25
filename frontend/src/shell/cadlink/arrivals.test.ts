@@ -1,3 +1,4 @@
+import { rememberLastModel } from '../../stores/lastModel';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { preferencesStore } from '../../prefs/preferences';
 import { resetCadReturnStore, useCadReturnStore } from '../../stores/cadReturn';
@@ -307,4 +308,19 @@ it('leaves initial selection and later discovery of a Fusion Solve bundle to its
   await reader.refresh({ autoOpenNew: true });
   expect(useCadReturnStore.getState().selectedBundle).toBeNull();
   expect(autoIngest).not.toHaveBeenCalled();
+});
+
+
+it('lets an explicit project open replace the remembered startup model', async () => {
+  rememberLastModel({ model_id: 'wgl_previous', input: 'cad' });
+  useDocumentStore.getState().setCadLink({ designId: 'wgd_open', lineageId: 'wgl_open', baseEditVersion: 1 }, 'current');
+  const projectOpenPending = { current: true };
+  const matching = { ...bundle, designIds: ['wgd_open'] };
+  const prepare = vi.fn();
+  const reader = createCadReturnArrivalReader({ projectOpenPending, autoIngestSelected: prepare },
+    (async () => json({ cadFolderConfigured: true, items: [matching] })) as typeof fetch);
+  await reader.refresh();
+  expect(useCadReturnStore.getState().selectedBundle).toEqual(matching);
+  expect(projectOpenPending.current).toBe(false);
+  expect(prepare).toHaveBeenCalledOnce();
 });

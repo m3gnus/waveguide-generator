@@ -6,6 +6,7 @@ import { reportClientError } from '../../api/diagnostics';
 import { compareSelection } from '../../api/results';
 import { acknowledgeCadSolve, cadSolveClaim, latestCadJobs, rememberCadSolve } from '../../jobs/cadSolve';
 import { RECEIPT_FIRST_CONNECTION_MS } from '../../stores/cadReceipts';
+import { readLastModel } from '../../stores/lastModel';
 import { useCadReturnStore } from '../../stores/cadReturn';
 import { currentDocumentLoad, isCurrentDocumentLoad, subscribeRevision } from '../../stores/design';
 import { subscribeSolveSettingsEdits } from '../../stores/solveSettingsEdits';
@@ -39,7 +40,8 @@ const DISPLAY_FAILURE = 'WG could not show the Fusion model. It tries again when
  * by an explicit return to CAD/Results, never by another jobs progress message.
  */
 export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: typeof fetch = fetch, now = Date.now) {
-  const since = now() - RECEIPT_FIRST_CONNECTION_MS;
+  const startedAt = now();
+  const since = startedAt - RECEIPT_FIRST_CONNECTION_MS;
   const observed = new Map<string, Intent>();
   const handled = new Set<string>();
   const presented = new Set<string>();
@@ -72,6 +74,11 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
     && (isActiveJobStatus(job.status) || changedAt(job) >= since);
   const canFollow = (job: JobItem, jobs: readonly JobItem[]) => {
     if (!eligible(job)) return false;
+    // A finished request from before launch is history when a durable model
+    // choice exists. Active requests and changes during this session still
+    // own display; explicit Show bypasses this automatic-follow decision.
+    if (!observed.has(job.id) && !isActiveJobStatus(job.status)
+      && changedAt(job) < startedAt && readLastModel('cad')) return false;
     const claim = cadSolveClaim(job);
     let parentId = job.parent_job_id;
     const visited = new Set<string>([job.id]);
