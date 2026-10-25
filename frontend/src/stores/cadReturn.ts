@@ -1,3 +1,4 @@
+import { roleChannelLabel } from '../results/channelLabel';
 import { cadMeshIsEditable, snapshotMeshSettings } from '../api/cadMesh';
 import { prefillExteriorDriver, type ExteriorTransducerForm } from './exteriorTransducer';
 import { create } from 'zustand';
@@ -1325,6 +1326,21 @@ export function combineChannelRole(
   channelId: string,
 ): string | undefined {
   return memberRole(state.driveChannels, bundleSources(state), channelId);
+}
+
+/** The same role and shared-role rule as result channel headings. */
+export function cadChannelLabel(state: Pick<CadReturnState, 'driveChannels' | 'selectedBundle'>, channelId: string): string {
+  return roleChannelLabel(channelId, state.driveChannels.map(({ id }) => ({ id, role: combineChannelRole(state, id) })));
+}
+
+/** Port apertures are outputs, rather than additional drivers. This only gates
+ * the editor: retained combined-output specs and submission defaults stay intact. */
+export function crossoverDriverChannels(state: Pick<CadReturnState, 'driveChannels' | 'selectedBundle'>): CadDriveChannel[] {
+  const sources = bundleSources(state);
+  return state.driveChannels.filter((channel) => channel.source_ids.some((id) => {
+    const source = sources.find((source) => source.id === id);
+    return !source || !hasPassiveCardioidSurface([source]);
+  }));
 }
 
 /** Whether the combined output is on: the user's explicit choice, or on by

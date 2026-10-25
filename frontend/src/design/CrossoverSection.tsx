@@ -35,6 +35,7 @@ import {
 import { driverValues } from '../stores/cadReturn';
 import {
   combineChain,
+  crossoverDriverChannels,
   combineEnabledEffective,
   combineSpecEffective,
   useCadReturnStore,
@@ -50,10 +51,20 @@ export function combinePairLabel(pair: CombinePair): string {
     : `${pair.lower} → ${pair.upper}`;
 }
 
+/** Share pair wording between Basic fields and the collapsed header. */
+export function crossoverSummary(state: Parameters<typeof combineChain>[0] & Pick<ReturnType<typeof useCadReturnStore.getState>, 'combineEnabled'>): string {
+  if (!combineEnabledEffective(state)) return 'Off';
+  const spec = combineSpecEffective(state);
+  return combineChain(state).map((pair) => {
+    const corners = spec && pairsOf(spec).find(({ key }) => key === pair.key);
+    return `${combinePairLabel(pair)} · ${corners && !corners.linked ? unlinkedPairNote(corners) : `${pair.hz} Hz`}`;
+  }).join(' · ') || 'Combined output';
+}
+
 /** What an untouched field would hold and why, stated per pair rather than as
  * one note for the whole section: the pairs no longer share a rule. */
 export function combinePairHint(pair: CombinePair): string {
-  if (pair.defaultHz === undefined) return 'Default follows the current Frequency Sweep.';
+  if (pair.defaultHz === undefined) return 'Default follows the current Sweep.';
   return pair.outsideSweep
     ? `${pair.defaultHz} Hz default is outside the sweep; using ${pair.hz} Hz.`
     : `${pair.defaultHz} Hz default.`;
@@ -320,8 +331,8 @@ export function CadCrossover() {
   const shown = useSyncExternalStore(latestCombine.subscribe, latestCombine.getSnapshot, latestCombine.getSnapshot);
   const enabled = combineEnabledEffective(state);
   const spec = combineSpecEffective(state);
-  const liveState = useLiveRecombine(spec, enabled && state.driveChannels.length >= 2, shown);
-  if (state.driveChannels.length < 2) return <p className="section-note">Two or more drive channels are required for a combined output.</p>;
+  const liveState = useLiveRecombine(spec, enabled && crossoverDriverChannels(state).length >= 2, shown);
+  if (crossoverDriverChannels(state).length < 2) return <p className="section-note">Two or more drive channels are required for a combined output.</p>;
   const apply = (next: CrossoverSpec) => state.setCombineSpec(next);
   const resolved = resolvedChannels(shown?.combine);
   const maxOutput = shown?.combine.max_output ?? null;

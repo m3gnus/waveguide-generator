@@ -1,4 +1,4 @@
-import type { EngineCapability, ImportedSolvePlan } from '../jobs/actions';
+import type { EngineCapability, ImportedEngineVerdict, ImportedSolvePlan } from '../jobs/actions';
 import { SelectRow } from './SelectRow';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
 import { useEffect, useState, useSyncExternalStore } from 'react';
@@ -39,6 +39,20 @@ import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode'
 function selectableEngine(engine: EngineCapability): boolean {
   return engine.available || !!engine.runtime_preparable || engine.runtime_state === 'preparing'
     || engine.qualification === 'pending';
+}
+
+/** One verdict path for both listed and missing current overrides. */
+function importedEngineChoice(engine: EngineCapability, verdict: ImportedEngineVerdict | undefined, checking: boolean, showRepair = true) {
+  const imported = choosableForImportedGeometry(engine);
+  const refused = verdict ? !verdict.solves && !(verdict.stage === 'availability' && selectableEngine(engine))
+    : !selectableEngine(engine) || !imported;
+  const reason = verdict && !verdict.solves
+    ? verdict.stage === 'availability' && !showRepair ? null : verdict.reason ?? 'cannot solve this return'
+    : !imported ? 'does not solve imported CAD geometry'
+    : !engine.available && showRepair && !engine.name.startsWith('beat-') ? engine.reason : null;
+  const note = engine.qualification === 'pending' ? checking ? ' · checking OpenCL…' : ''
+    : reason ? ` · ${reason}` : !engine.available ? ' · unavailable' : engine.version ? ` · ${engine.version}` : '';
+  return { refused, note };
 }
 
 const ACCURATE_HELP = 'Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions.';
@@ -170,7 +184,6 @@ export function AdaptiveFrequencyControls({ mode = 'parametric' }: { mode?: Work
     : count < 24 ? 'Adaptive sampling requires at least 24 frequencies.'
     : adaptiveEngine && !adaptiveEngine.startsWith('beat-') && adaptiveEngine !== 'beat'
       ? 'Adaptive sampling is BEAT only; choose a BEAT backend or Accurate.' : undefined;
-  if (mode === 'cad' && (adaptiveReason || !adaptiveEngine) && !store.adaptiveFrequencySampling) return null;
   return <>
     <HelpTipRow revealId="adaptive-frequency-sampling" className="toggle-row" text="BEAT exterior sweeps with at least 24 frequencies. Fits unsolved points to a 0.1 dB equivalent disagreement target. Completed native acquisition has gaps no wider than 1/6 octave. Narrow resonances can be missed when narrower than the largest solved-frequency gap; this spacing bound does not guarantee interpolation accuracy."><label htmlFor="adaptive-frequency-sampling">Adaptive frequency sampling (experimental)</label><input id="adaptive-frequency-sampling" type="checkbox" checked={store.adaptiveFrequencySampling} disabled={Boolean(adaptiveReason) && !store.adaptiveFrequencySampling} aria-describedby={adaptiveReason ? 'adaptive-sampling-reason' : undefined} onChange={(event) => store.setAdaptiveFrequencySampling(event.target.checked)} /></HelpTipRow>
     {adaptiveReason && <p id="adaptive-sampling-reason" className="section-note">{adaptiveReason}</p>}
@@ -188,6 +201,13 @@ export function MeshValidationControl({ mode = 'parametric' }: { mode?: Workspac
   </>;
 }
 
+/** The header follows the same precedence as Solve options. */
+export function solveOptionsSummary(options: { engine: string; accuracy: string }): string {
+  return options.engine === 'auto'
+    ? `${options.accuracy === 'accurate' ? 'Accurate' : 'Fast'} · Automatic`
+    : `${engineDisplayName(options.engine)} override`;
+}
+
 export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null, showOpenclGuidance = true, includeSampling = true }: {
   includeSampling?: boolean;
   mode?: WorkspaceMode;
@@ -196,12 +216,18 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
   showOpenclGuidance?: boolean;
 } = {}) {
   const store = useScopedSolveOptions();
-  // In CAD mode WG's diagnostic controls and engines' repair text are
-  // developer detail; Results' readiness view says how to repair an engine.
+  // Only diagnostic controls are developer detail; repair reasons remain visible.
+  const importedInput = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot).importedInput;
+  const cadModel = mode === 'cad' && importedInput !== 'file';
   const developer = useDeveloperDetails() || mode !== 'cad';
   const { engines, hostPlatform, error, isLoading: capabilitiesLoading,
     qualificationRefreshNeeded, refreshCapabilities } = useCapabilities();
   const backendEngines = engines;
+  const importedEngines = cadModel && store.engine !== 'auto' && store.engine !== 'beat'
+    && !engines.some((engine) => engine.name.toLowerCase() === store.engine)
+    ? [...engines, { name: store.engine, label: engineDisplayName(store.engine), available: false,
+      reason: null, version: null, fast_paths: [], geometry_sources: ['imported'] }]
+    : engines;
   const controlBackend = useSolveControlBackend(mode);
   // For imported geometry the server says, per engine, whether it can take
   // this return, and where the user's choice resolves. Before a return is
@@ -236,22 +262,9 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
       <HelpTipRow revealId="cad-solve-engine" className="select-row" text="Advanced engine override for this imported model. AUTO follows Fast or Accurate; an explicit engine takes precedence."><label htmlFor="cad-solve-engine">Advanced backend</label><select id="cad-solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
         <option value="auto">Automatic — follow accuracy</option>
         {store.engine === 'beat' && <option value="beat">BEAT — legacy family selection</option>}
-        {store.engine !== 'auto' && store.engine !== 'beat' && !backendEngines.some((engine) => engine.name.toLowerCase() === store.engine) && <option value={store.engine} disabled>{engineDisplayName(store.engine)} · unavailable</option>}
-        {backendEngines.map((engine) => {
-          const verdict = verdicts.get(engine.name.toLowerCase());
-          const imported = choosableForImportedGeometry(engine);
-          const version = engine.version ? ` · ${engine.version}` : '';
-          const refused = verdict ? !verdict.solves && !(verdict.stage === 'availability' && selectableEngine(engine))
-            : !selectableEngine(engine) || !imported;
-          if (refused && store.engine !== engine.name.toLowerCase()) return null;
-          const unavailable = ` · unavailable${developer && !engine.name.startsWith('beat-') && engine.reason ? `: ${engine.reason}` : ''}`;
-          const note = engine.qualification === 'pending' ? qualificationRefreshNeeded || error ? '' : ' · checking OpenCL…' : verdict
-            ? verdict.solves ? version
-              // An engine that is not ready says so; its repair is Results'.
-              : verdict.stage === 'availability' && !developer ? ' · unavailable' : ` · ${verdict.reason ?? 'cannot solve this return'}`
-            : !imported
-              ? ' · does not solve imported CAD geometry'
-              : engine.available ? version : unavailable;
+        {importedEngines.map((engine) => {
+          const { refused, note } = importedEngineChoice(engine, verdicts.get(engine.name.toLowerCase()), !qualificationRefreshNeeded && !error, cadModel || developer);
+          if (cadModel && refused && store.engine !== engine.name.toLowerCase()) return null;
           return <option key={engine.name} value={engine.name.toLowerCase()} disabled={refused}>{engine.label || engine.name}{note}</option>;
         })}
       </select></HelpTipRow>
@@ -268,7 +281,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
     {mode === 'parametric' && <GroundPlaneControls />}
     {includeSampling && <FrequencySweepControls idPrefix={mode === 'cad' ? 'cad-solve' : 'design-solve'} context={mode === 'cad' ? 'imported' : 'design'} />}
     {developer && <ToggleRow revealId="solve-verbose" id="solve-verbose" label="Verbose backend logging" help="Records the backend's own per-frequency diagnostics in the job log. Useful when a solve fails or looks wrong; it makes logs much longer." checked={store.verbose} onChange={store.setVerbose} />}
-    {error && developer && <div className="field-error" role="alert">Capabilities unavailable: {error}</div>}
+    {error && <div className="field-error" role="alert">Capabilities unavailable: {error}</div>}
   </>;
 }
 
@@ -505,7 +518,7 @@ export function polarSummary(polar: PolarUiState): string {
   const axes = polar.enabledAxes.map((axis) => AXIS_INITIALS[axis]).join(' + ');
   // No norm angle: it is not a property of the run any more. The maps are
   // referenced to the field above, whichever run they are drawn from.
-  return `${polar.distance} m from ${polar.observationOrigin} · ${angle(polar.angleStart)} … ${angle(polar.angleEnd)}, ${angle(polar.angleStep)} step · ${axes}`;
+  return `${polar.distance} m from ${polar.observationOrigin} · ${angle(polar.angleStart)} … ${angle(polar.angleEnd)}, ${angle(polar.angleStep)} step${axes ? ` · ${axes}` : ''}`;
 }
 
 /**

@@ -28,10 +28,7 @@ export function channelRole(result: ResultPayload, channelId: string): string | 
 export function channelLabel(result: ResultPayload, channelId: string): string {
   if (channelId === combinedChannelId(result)) return 'Combined';
   if (channelId === PASSIVE_CARDIOID_CHANNEL_ID) return 'Cardioid';
-  const role = channelRole(result, channelId);
-  if (!role) return channelId;
-  const sharing = resultChannels(result).filter(({ id }) => channelRole(result, id) === role);
-  return sharing.length === 1 ? role : channelId;
+  return roleChannelLabel(channelId, resultChannels(result).map(({ id }) => ({ id, role: channelRole(result, id) })));
 }
 
 /**
@@ -50,4 +47,10 @@ export function channelTitle(result: ResultPayload, channelId: string): string {
     return label && label !== id ? `${label} (${id})` : id;
   });
   return sources.length ? `${channelId} · sources: ${sources.join(', ')}` : channelId;
+}
+
+/** A unique role names a channel; a shared role needs the authored id. */
+export function roleChannelLabel(channelId: string, channels: readonly { id: string; role: string | null | undefined }[]): string {
+  const role = channels.find(({ id }) => id === channelId)?.role;
+  return role && channels.filter((channel) => channel.role === role).length === 1 ? role : channelId;
 }

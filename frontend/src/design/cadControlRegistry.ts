@@ -28,7 +28,7 @@ export interface CadControlDescriptor {
   keywords: readonly string[];
   /** `waveguide-linked`: only while WG's own waveguide definition applies
    * (`waveguideDefinitionApplies`), never for a model authored in CAD. */
-  availability: 'cad-mode' | 'ingested-return' | 'onshape-return' | 'waveguide-linked';
+  availability: 'cad-mode' | 'bundle-return' | 'ingested-return' | 'onshape-return' | 'waveguide-linked';
   /** The panel owns the DOM target. The palette only queues this semantic id,
    * so a dock panel that has not mounted yet can still claim and reveal it. */
   reveal: { id: string; target: 'control'; fallbackId?: string };
@@ -43,10 +43,11 @@ function control(
   keywords: readonly string[],
   availability: CadControlDescriptor['availability'] = 'ingested-return',
   fallbackId?: string,
+  developerOnly = false,
 ): CadControlDescriptor {
   return {
     id, label, section, tab, keywords, availability,
-    developerOnly: section === CAD_CONTROL_SECTIONS.meshDetail && id !== 'cad.mesh-detail',
+    developerOnly,
     reveal: { id, target: 'control', fallbackId: fallbackId ?? (section === CAD_CONTROL_SECTIONS.frequencySweep ? 'cad.frequency' : undefined) },
   };
 }
@@ -190,8 +191,8 @@ export const CAD_CONTROLS = {
   ),
   solveAccuracy: control('solve-accuracy', 'Solve accuracy', CAD_CONTROL_SECTIONS.solveOptions, 'simulation', ['fast', 'accurate'], 'ingested-return', 'cad.solve-options'),
   solveEngine: control('cad-solve-engine', 'Advanced backend', CAD_CONTROL_SECTIONS.solveOptions, 'simulation', ['engine', 'solver'], 'ingested-return', 'cad.solve-options'),
-  meshValidation: { ...control('mesh-validation-mode', 'Mesh validation policy', CAD_CONTROL_SECTIONS.solveOptions, 'simulation', ['warn', 'strict', 'off'], 'ingested-return', 'cad.solve-options'), developerOnly: true },
-  verbose: { ...control('solve-verbose', 'Verbose backend logging', CAD_CONTROL_SECTIONS.solveOptions, 'simulation', ['diagnostics'], 'ingested-return', 'cad.solve-options'), developerOnly: true },
+  meshValidation: control('mesh-validation-mode', 'Mesh validation policy', CAD_CONTROL_SECTIONS.solveOptions, 'simulation', ['warn', 'strict', 'off'], 'ingested-return', 'cad.solve-options', true),
+  verbose: control('solve-verbose', 'Verbose backend logging', CAD_CONTROL_SECTIONS.solveOptions, 'simulation', ['diagnostics'], 'ingested-return', 'cad.solve-options', true),
   meshDetail: control(
     'cad.mesh-detail', 'Mesh detail', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
     // A prepared model's mesh; an Onshape return's editable sizes (below)
@@ -216,11 +217,11 @@ export const CAD_CONTROLS = {
   ),
   skipSource: control(
     'cad.mesh.skip-source', 'Skip optional source', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
-    ['exclude source', 'skippedSourceIds'], 'ingested-return', 'cad.mesh-detail',
+    ['exclude source', 'skippedSourceIds'], 'bundle-return', 'cad.mesh-detail',
   ),
   areaDrift: control(
     'cad.mesh.area-drift', 'Accept area drift', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
-    ['source area mismatch', 'override', 'areaDriftOverrides'], 'ingested-return', 'cad.mesh-detail',
+    ['source area mismatch', 'override', 'areaDriftOverrides'], 'bundle-return', 'cad.mesh-detail',
   ),
 } as const satisfies Record<string, CadControlDescriptor>;
 
@@ -390,7 +391,8 @@ export const CAD_CONTROL_DESCRIPTORS: readonly CadControlDescriptor[] = [
   ...CAD_CARDIOID_FIELD_CONTROLS,
 ];
 
-export function cadControlIsAvailable(descriptor: CadControlDescriptor, cadReturnReady: boolean, editableMesh = false, waveguideLinked = true): boolean {
+export function cadControlIsAvailable(descriptor: CadControlDescriptor, cadReturnReady: boolean, editableMesh = false, waveguideLinked = true, bundleAvailable = false): boolean {
+  if (descriptor.availability === 'bundle-return') return bundleAvailable || cadReturnReady;
   if (descriptor.availability === 'onshape-return') return editableMesh;
   if (descriptor.availability === 'waveguide-linked') return waveguideLinked;
   return descriptor.availability === 'cad-mode' || cadReturnReady;

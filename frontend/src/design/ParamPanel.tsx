@@ -1,4 +1,4 @@
-import { preferencesStore, useDeveloperDetails } from '../prefs/preferences';
+import { useDeveloperDetails } from '../prefs/preferences';
 import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, OSSE_SWITCH_NOTICE, type OsseFeatures } from './osseFeatures';
 import { FreeformProfileInspection } from './ProfileInspection';
 import { registerParameterPanel } from './parameterPanelValidity';
@@ -15,19 +15,18 @@ import { importedSubmissionBlocker, importedSubmissionNotices } from '../jobs/im
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
 import { useActiveBackendCapability, useCapabilities, usePlannedBackendCapabilities } from '../jobs/useCapabilities';
 import { cadMeshIsEditable, cadMeshSizing } from '../api/cadMesh';
-import { backendLimitation, engineDisplayName, symmetryDomainLimitation } from './backendSupport';
-import { CadCrossover } from './CrossoverSection';
+import { backendLimitation, symmetryDomainLimitation } from './backendSupport';
+import { CadCrossover, crossoverSummary } from './CrossoverSection';
 import {
   assignableChannelIds,
   channelAcceptsDriver,
   channelDriverPresent,
-  combineChain,
-  combineEnabledEffective,
+  cadChannelLabel,
+  crossoverDriverChannels,
   hasPassiveCardioidSurface,
   PASSIVE_CARDIOID_CHANNEL_ID,
   passiveCardioidBlocker,
   useCadReturnStore,
-  type CadDriveChannel,
   type PortAreaSource,
 } from '../stores/cadReturn';
 import { ExteriorDriverLibraryPicker, ChannelDriverPicker } from './DriverPicker';
@@ -39,7 +38,7 @@ import { namespaceStorage } from '../stores/durableSettings';
 import type { SymmetryMode } from '../stores/solveOptions';
 import { SolveOptionsStoreProvider, useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { AdaptiveFrequencyControls, FrequencySweepControls, MeshValidationControl, DirectivityMapControls, SolveOptionsControls, polarSummary, ToggleRow } from './SolveOptionsSections';
+import { AdaptiveFrequencyControls, FrequencySweepControls, MeshValidationControl, DirectivityMapControls, SolveOptionsControls, solveOptionsSummary, polarSummary, ToggleRow } from './SolveOptionsSections';
 import { ExperimentalBadge } from './ExperimentalBadge';
 import { EditableLookupTable, EditablePointTable, EditableStationTable, FreeformPointImport, FREEFORM_POSITION_NOTE, freeformAngleOverride } from './FreeformEditors';
 import { lambdaSixthHint } from './lambdaLimit';
@@ -197,6 +196,17 @@ export function useParameterHelp(): boolean {
 function Section({ title, summary, description, children, forceOpen, revealId, defaultOpen, cad = false }: SectionProps) {
   const storageKey = cad ? revealId ?? `cad.${title}` : title;
   const [open, setOpen] = useState(() => storedSectionState(storageKey, defaultOpen));
+  const sectionRef = useRef<HTMLElement>(null);
+  const [invalid, setInvalid] = useState(false);
+  useEffect(() => {
+    if (!cad || !sectionRef.current) return;
+    const section = sectionRef.current;
+    const update = () => setInvalid(Boolean(section.querySelector('[aria-invalid="true"], .section-body [role="alert"]')));
+    const observer = new MutationObserver(update);
+    observer.observe(section, { subtree: true, childList: true, attributes: true, attributeFilter: ['aria-invalid'] });
+    update();
+    return () => observer.disconnect();
+  }, [cad]);
   const helpVisible = useParameterHelp();
   const shownOpen = forceOpen || open;
   const toggle = () => {
@@ -205,7 +215,7 @@ function Section({ title, summary, description, children, forceOpen, revealId, d
     writeSectionState(storageKey, next);
   };
   return (
-    <section role="group" aria-label={title} className={`param-section${shownOpen ? '' : ' closed'}`} data-section={title} data-control-reveal-id={revealId}>
+    <section ref={sectionRef} role="group" aria-label={title} className={`param-section${shownOpen ? '' : ' closed'}`} data-section={title} data-control-reveal-id={revealId}>
       {/* A real heading wrapping the disclosure button. The rail is the primary
           way into ~119 parameters and had no headings at all, so a screen
           reader offered no structure to navigate by and the only way to reach a
@@ -215,6 +225,7 @@ function Section({ title, summary, description, children, forceOpen, revealId, d
       <h3 className="section-heading">
         <button className="section-head" onClick={toggle} aria-expanded={shownOpen}>
           <span className="chevron" aria-hidden="true">⌄</span><span className="section-name">{title}</span><span className="spacer" />
+          {!shownOpen && invalid && <span className="field-error" aria-label="Contains invalid fields">!</span>}
           {summary && <span className="section-summary">{summary}</span>}
         </button>
       </h3>
@@ -907,17 +918,6 @@ function CadFrequencySweep() {
 }
 
 /**
- * What a drive-channel header names.
- *
- * Prefer the returned source roles. Unroled sources retain their authored
- * channel identity, with source ids only when several share a channel.
- */
-export function channelHeadingText(channel: Pick<CadDriveChannel, 'id' | 'source_ids'>, sources: readonly { id: string; role: string }[] = []): string {
-  const roles = [...new Set(channel.source_ids.map((id) => sources.find((source) => source.id === id)?.role).filter(Boolean))];
-  return roles.length ? roles.join(' + ') : channel.source_ids.length > 1 ? `${channel.id} · ${channel.source_ids.join(' + ')}` : channel.id;
-}
-
-/**
  * Per-channel driver setup.
  *
  * One card per drive channel, each carrying its motion and its driver picker.
@@ -948,13 +948,13 @@ function CadDriveChannels() {
         const driverForm = state.channelDrivers[channel.id];
         const driverEligible = channelAcceptsDriver(channel);
         return <div className="cad-channel" data-channel-id={channel.id} key={channel.id}>
-          <div className="cad-channel-summary"><span>{channelHeadingText(channel, sources)}</span></div>
-          <details className="cad-channel-more"><summary>More</summary>
-          <div data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} disabled={!!channel.exterior_transducer} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal</option><option value="axial">Axial (pistonic)</option></select></div>
-          <div className="cad-channel-hint">Normal moves each source face along its own normal. Axial moves the source as a rigid piston along its axis.</div>
+          <div className="cad-channel-summary"><span>{cadChannelLabel(state, channel.id)}</span></div>
           {showsAssignment(channel) && channel.source_ids
             .filter((sourceId) => activeSources.some((source) => source.id === sourceId))
             .map((sourceId) => <div className="cad-channel-row" key={sourceId}><b>{sourceId}</b><select aria-label={`Drive channel for ${sourceId}`} disabled={!!channel.exterior_transducer} value={channel.id} onChange={(event) => state.setSourceChannel(sourceId, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>)}
+          <details className="cad-channel-more" open={channel.exterior_transducer ? true : undefined}><summary>More</summary>
+          <div data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} disabled={!!channel.exterior_transducer} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal</option><option value="axial">Axial (pistonic)</option></select></div>
+          <div className="cad-channel-hint">Normal moves each source face along its own normal. Axial moves the source as a rigid piston along its axis.</div>
           <label className="cad-driver-hint"><input type="checkbox" aria-label={`Solve driver in BEAT for ${channel.id}`} checked={!!channel.exterior_transducer}
             onChange={(event) => state.setExteriorTransducer(channel.id, event.target.checked ? { version: 1, motion_axis: [0, 0, 1] } : undefined)}/>
             Solve driver in BEAT</label>
@@ -1095,15 +1095,16 @@ function CadMeshSummary() {
   const record = state.needsIngest ? null : state.ingestRecord;
   const snapshot = state.selectedBundle?.meshSnapshot ?? state.ingestRecord?.mesh_snapshot;
   const triangles = record?.mesh?.stats.triangle_count ?? (record ? cadMeshSizing(record).n_triangles : undefined);
-  const origin = (state.selectedBundle?.bundleOrigin ?? 'wglink') === 'onshape'
+  const origin = cadMeshIsEditable(state.selectedBundle)
     ? 'set in WG' : snapshot ? 'set in Fusion' : 'set in WG by an older add-in';
   return <p className="cad-mesh-summary" data-control-reveal-id={CAD_CONTROLS.meshDetail.reveal.id} tabIndex={-1}>
-    Mesh · {typeof triangles === 'number' ? `${triangles.toLocaleString()} triangles · ` : ''}Walls {snapshot?.wall_size_mm ?? state.meshSizes.rigid_size_mm} mm · {origin}
+    Mesh · {typeof triangles === 'number' ? `${triangles.toLocaleString('en-US')} triangles · ` : ''}Walls {snapshot?.wall_size_mm ?? state.meshSizes.rigid_size_mm} mm · {origin}
   </p>;
 }
 
 function CadMeshDetail() {
   const state = useCadReturnStore();
+  const developer = useDeveloperDetails();
   const cadWorkspaceView = useSyncExternalStore(
     cadWorkspace.subscribe,
     cadWorkspace.getSnapshot,
@@ -1125,7 +1126,7 @@ function CadMeshDetail() {
     </>}
     {((state.ingestRecord?.evidence?.fem_air_volumes?.length ?? 0) > 0 || (state.ingestRecord?.evidence?.fem_regions?.length ?? 0) > 0) && <ToggleRow id="cad-exterior-only" label={CAD_CONTROLS.exteriorOnly.label} revealId={CAD_CONTROLS.exteriorOnly.reveal.id} help="Explicitly exclude the returned FEM air volumes and FEM regions. This solves only the exterior free-space problem." checked={state.exteriorOnly} onChange={state.setExteriorOnly}/>}
     {(state.selectedBundle?.sources ?? []).filter(source => editable || !source.required || driftSources.has(source.id)).map((source) => <div className={`cad-source ${state.skippedSourceIds.includes(source.id) ? 'skipped' : ''}`} key={source.id}>
-      {editable ? <NumberField label={`${source.role} source`} revealId={CAD_CONTROLS.sourceSize.reveal.id} unit="mm" value={state.meshSizes.source_size_mm[source.id] ?? source.suggestedResolutionMm} min={0.01} step={0.25} precision={2} description={`${source.id} · suggested ${source.suggestedResolutionMm} mm`} disabled={state.skippedSourceIds.includes(source.id)} onCommit={(value) => state.setSourceSize(source.id, value)}/> : <b>{source.role} source</b>}
+      {editable ? <NumberField label={`${source.role} source`} revealId={CAD_CONTROLS.sourceSize.reveal.id} unit="mm" value={state.meshSizes.source_size_mm[source.id] ?? source.suggestedResolutionMm} min={0.01} step={0.25} precision={2} description={`${developer ? `${source.id} · ` : ''}suggested ${source.suggestedResolutionMm} mm`} disabled={state.skippedSourceIds.includes(source.id)} onCommit={(value) => state.setSourceSize(source.id, value)}/> : <b>{source.role} source</b>}
       {!source.required && <ToggleRow id={`skip-${source.id}`} label={CAD_CONTROLS.skipSource.label} revealId={CAD_CONTROLS.skipSource.reveal.id} help="Exclude this optional source from preparation and the solve. This creates a blocking finding." checked={state.skippedSourceIds.includes(source.id)} onChange={(checked) => state.setSkipped(source.id, checked)}/>}
       {driftSources.has(source.id) && <ToggleRow id={`drift-${source.id}`} label={CAD_CONTROLS.areaDrift.label} revealId={CAD_CONTROLS.areaDrift.reveal.id} help="Explicitly accept the source-area mismatch and prepare again. The override is recorded as a finding on the prepared model." checked={state.areaDriftOverrides.includes(source.id)} onChange={(checked) => state.setAreaDriftOverride(source.id, checked)}/>}
     </div>)}
@@ -1157,11 +1158,10 @@ function CadSimulationSections({ searching, matches, ingestRecord, cardioidSurfa
 }) {
   const cad = useCadReturnStore();
   const options = useScopedSolveOptions();
-  const chain = combineChain(cad);
   const summaries = {
-    crossover: combineEnabledEffective(cad) ? chain.map((pair) => `${pair.hz} Hz`).join(' · ') || 'Combined output' : 'Off',
+    crossover: crossoverSummary(cad),
     directivity: polarSummary(options.polar),
-    solver: `${options.accuracy === 'accurate' ? 'Accurate' : 'Fast'} · ${options.engine === 'auto' ? 'Automatic' : engineDisplayName(options.engine)}`,
+    solver: solveOptionsSummary(options),
   };
   const section = (key: 'frequencySweep' | 'driveChannels' | 'crossover' | 'directivityMap' | 'solveOptions' | 'passiveCardioid', body: ReactNode, defaultOpen = false, summary?: string) => {
     const control = CAD_CONTROLS[key];
@@ -1170,9 +1170,9 @@ function CadSimulationSections({ searching, matches, ingestRecord, cardioidSurfa
   return <>
     {section('frequencySweep', <><FrequencySweepControls idPrefix="cad-solve" context="imported"/>{options.frequencyMode === 'range' && <CadFrequencySweep/>}</>, true)}
     {section('driveChannels', <CadDriveChannels/>, true)}
-    {cad.driveChannels.length >= 2 && section('crossover', <CadCrossover/>, false, summaries.crossover)}
+    {crossoverDriverChannels(cad).length >= 2 && section('crossover', <CadCrossover/>, false, summaries.crossover)}
     {section('directivityMap', <DirectivityMapControls/>, false, summaries.directivity)}
-    {cardioidSurface && section('passiveCardioid', <CadPassiveCardioid/>)}
+    {cardioidSurface && section('passiveCardioid', <CadPassiveCardioid/>, true)}
     {section('solveOptions', <><SolveOptionsControls mode="cad" ingestRecord={ingestRecord} includeSampling={false}/><AdaptiveFrequencyControls mode="cad"/><MeshValidationControl mode="cad"/></>, false, summaries.solver)}
   </>;
 }
@@ -1258,9 +1258,10 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
   })), [definitions, design, query, workspaceMode]);
   const matchingCadSections = useMemo(() => new Set(CAD_CONTROL_DESCRIPTORS
     .filter((descriptor) => workspaceMode === 'cad' && descriptor.tab === tab)
-    .filter((descriptor) => cadControlIsAvailable(descriptor, Boolean(ingestRecord), cadMeshIsEditable(selectedBundle), waveguideLinked))
+    .filter((descriptor) => cadControlIsAvailable(descriptor, Boolean(ingestRecord), cadMeshIsEditable(selectedBundle), waveguideLinked, Boolean(selectedBundle)))
+    .filter((descriptor) => !descriptor.developerOnly || developer)
     .filter((descriptor) => cadControlMatchesQuery(descriptor, query))
-    .map((descriptor) => descriptor.section)), [ingestRecord, selectedBundle, query, tab, waveguideLinked, workspaceMode]);
+    .map((descriptor) => descriptor.section)), [developer, ingestRecord, selectedBundle, query, tab, waveguideLinked, workspaceMode]);
   const cadSectionMatches = (section: CadControlSection) => matchingCadSections.has(section);
   const matchingParametricSections = useMemo(() => new Set(PARAMETRIC_CONTROL_DESCRIPTORS
     .filter((descriptor) => workspaceMode === 'parametric' && descriptor.tab === tab)
@@ -1272,10 +1273,6 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
     const apply = () => {
       const detail = parameterRevealRequest.claim(tab);
       if (!detail) return;
-      if (workspaceModeStore.getSnapshot().mode === 'cad'
-        && CAD_CONTROL_DESCRIPTORS.some((control) => control.id === detail.id && control.developerOnly)) {
-        preferencesStore.update({ showDeveloperDetails: true });
-      }
       setQuery(detail.query);
       requestAnimationFrame(() => requestAnimationFrame(() => {
         const entries = detail.target === 'control'
@@ -1292,7 +1289,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
         // Native disclosures keep their children mounted, so reveal can open
         // every owner before scrolling and focusing the actual control.
         for (let parent = entry?.parentElement; parent; parent = parent.parentElement) {
-          if (parent instanceof HTMLDetailsElement) parent.open = true;
+          if (workspaceModeStore.getSnapshot().mode === 'cad' && parent instanceof HTMLDetailsElement) parent.open = true;
         }
         // jsdom has no scrollIntoView, and losing focus matters more than losing
         // the scroll, so never let the nicety take the necessity down with it.
@@ -1478,9 +1475,9 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
           {tab === 'geometry' && cadSectionMatches(CAD_CONTROLS.realizedDimensions.section) && <RealizedDimensionsCard forceOpen={searching}/>}
           {!searching && tab === 'simulation' && !ingestRecord && <CadSimulationEmpty/>}
           {tab === 'simulation' && ingestRecord && <CadSimulationSections searching={searching} matches={cadSectionMatches} ingestRecord={ingestRecord} cardioidSurface={cardioidSurface}/>}
-          {tab === 'simulation' && (ingestRecord || cadMeshIsEditable(selectedBundle)) && cadSectionMatches(CAD_CONTROLS.meshDetail.section) && <>
+          {tab === 'simulation' && (selectedBundle || ingestRecord) && (!searching || cadSectionMatches(CAD_CONTROLS.meshDetail.section)) && <>
+            <CadMeshDetail/>
             <CadMeshSummary/>
-            {developer && <details className="cad-mesh-developer"><summary>Mesh developer details</summary><CadMeshDetail/></details>}
           </>}
         </>}
       {searching && [...fieldsBySection.values()].every((fields) => fields.length === 0) && matchingCadSections.size === 0 && matchingParametricSections.size === 0 && <div className="parameter-empty">No parameter labels or keys match “{query}”.</div>}

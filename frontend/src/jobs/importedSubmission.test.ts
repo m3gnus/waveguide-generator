@@ -73,11 +73,11 @@ describe('imported solve submission wire', () => {
       combineSpec: expandLegacy(['drive-mf', 'drive-hf'], [199]),
       frequencyStartHz: 200, frequencyEndHz: 20_000,
     });
-    expect(importedSubmissionBlocker()).toBe('The 199 Hz crossover is below the 200 Hz sweep start. In Frequency Sweep, set Sweep start to 199 Hz or lower, or raise the crossover.');
+    expect(importedSubmissionBlocker()).toBe('The 199 Hz crossover is below the 200 Hz sweep start. In Sweep, set Sweep start to 199 Hz or lower, or raise the crossover.');
     useCadReturnStore.getState().setCombineSpec(withChannel(combineSpecEffective(useCadReturnStore.getState())!, 'drive-mf', {
       lp: { family: 'lr', order: 4, fcHz: 200 },
     }));
-    expect(importedSubmissionBlocker()).toBe('The 199 Hz crossover is below the 200 Hz sweep start. In Frequency Sweep, set Sweep start to 199 Hz or lower, or raise the crossover.');
+    expect(importedSubmissionBlocker()).toBe('The 199 Hz crossover is below the 200 Hz sweep start. In Sweep, set Sweep start to 199 Hz or lower, or raise the crossover.');
     useCadReturnStore.getState().setCombineSpec(withChannel(combineSpecEffective(useCadReturnStore.getState())!, 'drive-hf', {
       hp: { family: 'lr', order: 4, fcHz: 800 },
     }));

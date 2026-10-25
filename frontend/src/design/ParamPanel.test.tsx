@@ -11,13 +11,13 @@ import type { CadRealizedDimensions, CadReturnBundle, CadReturnIngestRecord } fr
 import { toSolveDesign } from '../jobs/actions';
 import { capabilityFingerprint } from '../jobs/capabilityFingerprint';
 import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
-import { sharedDelayMode, withPair } from '../results/crossoverSpec';
+import { sharedDelayMode, withChannel, withPair } from '../results/crossoverSpec';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { CadSetupPublisher, useCadSetupPublisherStore } from '../shell/cadSetupPublisher';
 import { buildParameterPaletteEntries } from '../shell/TopBar';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
-import { combineSpecEffective, channelDriverPresent, channelDriverWire, driverEditedKeys, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { cadChannelLabel, combineWire, combineSpecEffective, channelDriverPresent, channelDriverWire, driverEditedKeys, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { useDocumentStore } from '../stores/document';
 import { resetDriverLibraryStore, useDriverLibraryStore } from '../stores/driverLibrary';
 import { hydrateDesignDocument } from '../api/designIo';
@@ -25,7 +25,7 @@ import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, type OsseFeatures } f
 import { NATIVE_FAMILIES, designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { defaultPolarUi, polarConfigFromUi, resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { ParamPanel, RealizedDimensionsSection, channelHeadingText, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
+import { ParamPanel, RealizedDimensionsSection, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
 
 /**
  * The panel reads capabilities and symmetry through React Query, exactly as
@@ -1225,6 +1225,102 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).toContain('Effective grid −180° … 180°');
   });
 
+  it.each([false, true])('keeps refusal recovery available without an ingest record (developer: %s)', (developer) => {
+    preferencesStore.update({ showDeveloperDetails: developer });
+    const ingest = vi.fn(async () => {});
+    const error = 'Source area differs; accept area drift and prepare again.';
+    vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({ ...cadWorkspace.getSnapshot(), error, status: 'Preparation refused.', ingest });
+    act(() => {
+      useCadReturnStore.setState({ selectedBundle: cadBundle, ingestRecord: null,
+        areaDriftSourceIds: ['source-mf'], ingestStaleReason: 'Source settings changed.' });
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    for (const id of ['skip-source-mf', 'drift-source-mf']) {
+      const input = host.querySelector<HTMLInputElement>(`#${id}`)!;
+      expect(input).not.toBeNull();
+      expect(input.closest('details, [hidden]')).toBeNull();
+      act(() => input.click());
+    }
+    expect(useCadReturnStore.getState().skippedSourceIds).toContain('source-mf');
+    expect(useCadReturnStore.getState().areaDriftOverrides).toContain('source-mf');
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(error);
+    expect(host.textContent).toContain('Preparation refused.');
+    expect(host.textContent).toContain('Source settings changed.');
+    const entries = buildParameterPaletteEntries(undefined, { mode: 'cad', cadReturnReady: false });
+    expect(entries.some(({ id }) => id === 'cad-control-cad.mesh.area-drift')).toBe(true);
+    expect(entries.some(({ id }) => id === 'cad-control-cad.mesh.skip-source')).toBe(true);
+  });
+
+  it.each([false, true])('lists only enabled developer entries and preserves preference on reveal (%s)', async (developer) => {
+    act(() => {
+      preferencesStore.update({ showDeveloperDetails: developer });
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    const entries = buildParameterPaletteEntries(undefined, { mode: 'cad' });
+    for (const id of ['mesh-validation-mode', 'solve-verbose']) {
+      expect(entries.some((entry) => entry.id === `cad-control-${id}`)).toBe(developer);
+    }
+    // A queued request from before the preference changed cannot enable it.
+    await act(async () => {
+      requestParameterReveal({ id: 'mesh-validation-mode', tab: 'simulation', query: 'Mesh validation policy', target: 'control', fallbackId: 'cad.solve-options' });
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    });
+    expect(preferencesStore.getSnapshot().showDeveloperDetails).toBe(developer);
+  });
+
+  it.each([false, true])('opens incomplete exterior driver fields and marks invalid collapsed sections (%s)', async (developer) => {
+    act(() => {
+      preferencesStore.update({ showDeveloperDetails: developer });
+      setCadReady();
+      useCadReturnStore.setState({ driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'axial',
+        exterior_transducer: { version: 1, motion_axis: [0, 0, 1] } }], combineEnabled: false });
+      useImportedSolveOptionsStore.getState().setEngine('beat-cpu');
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    expect(importedSubmissionBlocker()).toContain('Enter resistance');
+    expect(host.querySelector<HTMLDetailsElement>('.cad-channel-more')!.open).toBe(true);
+    expect(host.querySelector('[aria-label="Bare moving mass (Mmd) for drive-hf"]')?.closest('[hidden]')).toBeNull();
+    await act(async () => useImportedSolveOptionsStore.getState().updatePolar({ angleStart: 90, angleEnd: -90 }));
+    const directivity = host.querySelector('[data-section="Directivity"]')!;
+    expect(directivity.querySelector('.section-head')?.getAttribute('aria-expanded')).toBe('false');
+    expect(directivity.querySelector('.section-head [aria-label="Contains invalid fields"]')).not.toBeNull();
+  });
+
+  it.each([false, true])('keeps a one-driver cardioid open without changing retained combined output (%s)', (developer) => {
+    act(() => {
+      preferencesStore.update({ showDeveloperDetails: developer });
+      setCadReady({ cardioidPort: true });
+      useCadReturnStore.setState({ driveChannels: useCadReturnStore.getState().driveChannels.filter(({ id }) => id !== 'drive-hf') });
+      workspaceModeStore.setMode('cad');
+    });
+    const before = combineWire(useCadReturnStore.getState());
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    expect(host.querySelector('[data-section="Crossover"]')).toBeNull();
+    expect(host.querySelector('[data-section="Passive cardioid"] .section-head')?.getAttribute('aria-expanded')).toBe('true');
+    expect(combineWire(useCadReturnStore.getState())).toEqual(before);
+    expect(before).toBeDefined();
+  });
+
+  it('shows both unequal crossover corners and the engine override in collapsed summaries', () => {
+    act(() => {
+      setCadReady();
+      const state = useCadReturnStore.getState();
+      const spec = combineSpecEffective(state)!;
+      state.setCombineSpec(withChannel(withChannel(spec, 'drive-mf', { lp: { family: 'lr', order: 4, fcHz: 1300 } }), 'drive-hf', { hp: { family: 'lr', order: 4, fcHz: 1700 } }));
+      useImportedSolveOptionsStore.getState().setEngine('beat-cpu');
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    const summary = host.querySelector('[data-section="Crossover"] .section-summary')!.textContent;
+    expect(summary).toContain('1.7 kHz');
+    expect(summary).toContain('1.3 kHz');
+    expect(host.querySelector('[data-section="Solver"] .section-summary')?.textContent).toBe('BEAT CPU override');
+  });
+
   it.each([1, 2].flatMap((drivers) => [false, true].map((developer) => ({ drivers, developer }))))(
     'starts CAD Simulation with $drivers drivers and developer details $developer', ({ drivers, developer }) => {
       act(() => {
@@ -1248,7 +1344,8 @@ describe('ParamPanel inventory UX', () => {
       expect(Boolean(host.querySelector('#mesh-validation-mode'))).toBe(developer);
       expect(Boolean(host.querySelector('#solve-verbose'))).toBe(developer);
       expect(host.textContent?.includes('Prepared cut planes')).toBe(developer);
-      expect(Boolean(host.querySelector('.cad-mesh-developer'))).toBe(developer);
+      expect(host.querySelector('.cad-mesh-developer')).toBeNull();
+      expect(host.querySelector('#cad-exterior-only')).not.toBeNull();
       expect(host.querySelector('.cad-mesh-summary')?.children).toHaveLength(0);
       expect(host.textContent).not.toContain('Rebuild mesh');
       if (drivers === 1) expect(host.textContent).not.toContain('Two or more drive channels');
@@ -1258,6 +1355,7 @@ describe('ParamPanel inventory UX', () => {
   it.each(['cad.drive-channel.motion', 'mesh-validation-mode'])(
     'reveals the owning disclosure from the palette for %s', async (id) => {
       act(() => {
+        preferencesStore.update({ showDeveloperDetails: id === 'mesh-validation-mode' });
         setCadReady();
         workspaceModeStore.setMode('cad');
         root.render(withQueryClient(<ParamPanel tab="simulation" />));
@@ -1273,7 +1371,7 @@ describe('ParamPanel inventory UX', () => {
       expect(document.activeElement).toBe(target.querySelector('select'));
       expect(target.closest<HTMLElement>('.section-body')?.hidden).toBe(false);
       if (id === 'cad.drive-channel.motion') expect(target.closest('details')?.open).toBe(true);
-      else expect(preferencesStore.getSnapshot().showDeveloperDetails).toBe(true);
+      expect(preferencesStore.getSnapshot().showDeveloperDetails).toBe(id === 'mesh-validation-mode');
     },
   );
 
@@ -1475,8 +1573,8 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).toContain('190mm');
   });
 
-  it('shows a publisher failure in the CAD mesh alert without the coordinator mounted', async () => {
-    preferencesStore.update({ showDeveloperDetails: true });
+  it.each([false, true])('shows publisher and action failures (developer: %s)', async (developer) => {
+    preferencesStore.update({ showDeveloperDetails: developer });
     vi.useFakeTimers();
     const save = vi.fn(async () => { throw new Error('offline'); });
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
@@ -1498,7 +1596,7 @@ describe('ParamPanel inventory UX', () => {
         root.render(withQueryClient(<><CadSetupPublisher/><ParamPanel tab="simulation" /></>));
       });
       expect(cadWorkspace.getSnapshot().error).toBeNull();
-      const alert = () => host.querySelector('.cad-mesh-developer [role="alert"]');
+      const alert = () => host.querySelector('.param-panel > [role="alert"]');
       expect(alert()).toBeNull();
       act(() => useCadReturnStore.getState().setExteriorOnly(false));
       await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
@@ -1515,8 +1613,8 @@ describe('ParamPanel inventory UX', () => {
     }
   });
 
-  it('solves a return with FEM regions coupled, and still offers explicit exterior-only selection', () => {
-    preferencesStore.update({ showDeveloperDetails: true });
+  it.each([false, true])('solves a return with FEM regions coupled, and still offers explicit exterior-only selection (developer: %s)', (developer) => {
+    preferencesStore.update({ showDeveloperDetails: developer });
     act(() => {
       setCadReady();
       useCadReturnStore.setState({
@@ -1544,8 +1642,9 @@ describe('ParamPanel inventory UX', () => {
     surface_groups: [{ group_id: 'back', name: 'Back', size_mm: 40, observed: { face_count: 3 } }],
   };
 
-  it('keeps Onshape mesh controls and their palette entries editable in WG', () => {
-    preferencesStore.update({ showDeveloperDetails: true });
+  it.each([false, true])('keeps Onshape mesh controls and their palette entries editable in WG (developer: %s)', (developer) => {
+    preferencesStore.update({ showDeveloperDetails: developer });
+    const ingest = vi.spyOn(cadWorkspace.getSnapshot(), 'ingest').mockResolvedValue(undefined);
     act(() => {
       setCadReady();
       useCadReturnStore.setState({ selectedBundle: { ...cadBundle, bundleOrigin: 'onshape' } });
@@ -1575,6 +1674,10 @@ describe('ParamPanel inventory UX', () => {
     }
     act(() => host.querySelector<HTMLInputElement>('#skip-source-mf')!.click());
     expect(host.querySelectorAll<HTMLInputElement>('[data-control-reveal-id="cad.mesh.source-size"] input')[1].disabled).toBe(true);
+    const rebuild = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Rebuild mesh')!;
+    expect(rebuild.closest('details, [hidden]')).toBeNull();
+    act(() => rebuild.click());
+    expect(ingest).toHaveBeenCalledOnce();
   });
 
   it('shows the Fusion mesh as one read-only line at the bottom', () => {
@@ -1603,9 +1706,7 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('#cad-force-full-domain')).toBeNull();
   });
 
-  it.each([false, true])('shows one line and no mesh detail before a Fusion return is prepared (snapshot: %s)', (fusion) => {
-    // A mesh-size refusal is the Imported mesh tab's to show (CadLinkPanel's
-    // notice); the Simulation tab has nothing to set until the model is ready.
+  it.each([false, true])('shows user-actionable mesh feedback before a Fusion return is prepared (snapshot: %s)', (fusion) => {
     const refusal = "This model meshes to 28,944 triangles; WG's limit is 22,000 for the part it solves.";
     vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({ ...cadWorkspace.getSnapshot(), error: refusal });
     act(() => {
@@ -1619,7 +1720,8 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('.cad-simulation-empty')?.textContent).toBe('Settings appear when Speaker is ready.');
     expect(host.querySelector('[data-section]')).toBeNull();
     expect(host.textContent).not.toMatch(/Mesh \(set in|Rebuild mesh|Open CAD Link setup/);
-    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(refusal);
+    expect(host.querySelector('#skip-source-mf')).not.toBeNull();
     expect(buildParameterPaletteEntries(undefined, { mode: 'cad', cadReturnReady: false }).map((entry) => entry.id))
       .not.toContain('cad-control-cad.mesh-detail');
   });
@@ -1639,14 +1741,14 @@ describe('ParamPanel inventory UX', () => {
     act(() => cadWorkspace.setState(before, true));
   });
 
-  it('keeps an Onshape return\'s editable mesh sizes before it is prepared', () => {
-    preferencesStore.update({ showDeveloperDetails: true });
+  it.each([false, true])('keeps Onshape mesh sizes before preparation (developer: %s)', (developer) => {
+    preferencesStore.update({ showDeveloperDetails: developer });
     act(() => {
       useCadReturnStore.setState({ selectedBundle: { ...cadBundle, bundleOrigin: 'onshape' }, ingestRecord: null });
       workspaceModeStore.setMode('cad');
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
-    expect(host.querySelector('.cad-mesh-developer')).not.toBeNull();
+    expect(host.querySelector('.cad-mesh-developer')).toBeNull();
     expect(host.querySelector('[data-control-reveal-id="cad.mesh.rigid-size"]')).not.toBeNull();
   });
 
@@ -1705,8 +1807,8 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('#cad-force-full-domain')).toBeNull();
   });
 
-  it('renders every moved CAD control in the Simulation rail and submits its visible crossover state', () => {
-    preferencesStore.update({ showDeveloperDetails: true });
+  it.each([false, true])('renders every moved CAD control in the Simulation rail and submits its visible crossover state (developer: %s)', (developer) => {
+    preferencesStore.update({ showDeveloperDetails: developer });
     const ingest = vi.spyOn(cadWorkspace.getSnapshot(), 'ingest').mockResolvedValue(undefined);
     act(() => {
       setCadReady();
@@ -2068,6 +2170,7 @@ describe('ParamPanel inventory UX', () => {
       modelPortAreaM2: 0.05, bemPortAreaM2: 0.0094, foamResistancePaSM3: 10_000,
     }));
     expect(options()).toEqual(['drive-port']);
+    expect(host.querySelector('[aria-label="Drive channel for source-mf"]')!.closest('details')).toBeNull();
     // The channel that already claims the id predates the choice, so the
     // prevention is backed by a refusal the user can act on -- and the control
     // it asks for survives the list shrinking to one, or the blocker would be
@@ -2703,13 +2806,19 @@ function stubDriverApi(
   return fetchMock;
 }
 
-describe('channelHeadingText', () => {
-  it('names the channel alone, and its sources only when it combines several', () => {
-    expect(channelHeadingText({ id: 'drive-mf', source_ids: ['source-mf'] })).toBe('drive-mf');
-    // Two sources on one channel is the case the ids actually carry something
-    // the channel name does not, so they stay.
-    expect(channelHeadingText({ id: 'drive-mf', source_ids: ['source-mf', 'source-mf2'] }))
-      .toBe('drive-mf · source-mf + source-mf2');
+describe('CAD channel headings', () => {
+  it('uses the result label rule and the chain role owner for shared and absent roles', () => {
+    const channels = [
+      { id: 'a', source_ids: ['x'], motion: 'normal' as const },
+      { id: 'b', source_ids: ['y'], motion: 'normal' as const },
+    ];
+    const state = { driveChannels: channels, selectedBundle: { ...cadBundle,
+      sources: [{ ...cadBundle.sources[0], id: 'x', role: 'MF' }, { ...cadBundle.sources[0], id: 'y', role: 'MF' }],
+    } };
+    expect(cadChannelLabel(state, 'a')).toBe('a');
+    expect(cadChannelLabel(state, 'b')).toBe('b');
+    expect(cadChannelLabel({ ...state, driveChannels: [channels[0]] }, 'a')).toBe('MF');
+    expect(cadChannelLabel({ driveChannels: channels, selectedBundle: null }, 'a')).toBe('a');
   });
 });
 

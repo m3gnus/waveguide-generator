@@ -114,13 +114,13 @@ export function importedSubmissionBlocker(
           return `The ${frequencyText(corner)} crossover is below the ${frequencyText(start)} sweep start. `
             + (solveStore.frequencyMode === 'list'
               ? `Add ${frequencyText(corner)} or a lower frequency at the start of the frequency list, or raise the crossover.`
-              : `In Frequency Sweep, set Sweep start to ${frequencyText(corner)} or lower, or raise the crossover.`);
+              : `In Sweep, set Sweep start to ${frequencyText(corner)} or lower, or raise the crossover.`);
         }
         if (corner > end) {
           return `The ${frequencyText(corner)} crossover is above the ${frequencyText(end)} sweep end. `
             + (solveStore.frequencyMode === 'list'
               ? `Add ${frequencyText(corner)} or a higher frequency at the end of the frequency list, or lower the crossover.`
-              : `In Frequency Sweep, set Sweep end to ${frequencyText(corner)} or higher, or lower the crossover.`);
+              : `In Sweep, set Sweep end to ${frequencyText(corner)} or higher, or lower the crossover.`);
         }
       }
     }

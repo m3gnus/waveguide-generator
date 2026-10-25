@@ -14,7 +14,7 @@ import type { ImportedSolvePlan } from '../jobs/actions';
 import type { ImportedSolvePlanSnapshot } from '../jobs/useImportedSolvePlan';
 import { defaultPolarUi, polarConfigFromUi, resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { useDesignStore } from '../stores/design';
-import { accuracyExplainer, AdaptiveFrequencyControls, MeshValidationControl, DirectivityMapControls, effectiveGridView, FrequencySweepControls, runPolarFromJob, SolveOptionsControls } from './SolveOptionsSections';
+import { accuracyExplainer, AdaptiveFrequencyControls, MeshValidationControl, DirectivityMapControls, effectiveGridView, FrequencySweepControls, runPolarFromJob, polarSummary, solveOptionsSummary, SolveOptionsControls } from './SolveOptionsSections';
 
 const parametricPlan = vi.hoisted(() => ({
   current: { plan: null, error: null, isPending: false } as SolvePlanSnapshot,
@@ -232,11 +232,27 @@ describe('solve and directivity control help', () => {
     expect(host.querySelector('#field-plane-support-reason')).toBeNull();
   });
 
+  it.each([false, true])('keeps capability errors actionable with developer details %s', async (developer) => {
+    preferencesStore.update({ showDeveloperDetails: developer });
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('Backend offline'); }));
+    render(<SolveOptionsControls mode="cad" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Capabilities unavailable: Backend offline');
+    expect(host.textContent).toContain('Refresh');
+  });
+
+  it('does not leave a separator when no directivity planes are selected', () => {
+    expect(polarSummary({ ...defaultPolarUi, enabledAxes: [] })).not.toMatch(/ · $/);
+    expect(solveOptionsSummary({ accuracy: 'accurate', engine: 'beat-cpu' })).toBe('BEAT CPU override');
+    expect(solveOptionsSummary({ accuracy: 'accurate', engine: 'auto' })).toBe('Accurate · Automatic');
+  });
+
   it('uses the CAD plan and CAD frequency count for adaptive sampling', () => {
     importedPlan.current.plan = { ingest_id: 'wgi_test', requested: 'auto', engine: 'beat-cpu', engines: [], reason: 'Ready' };
     act(() => useCadReturnStore.setState({ frequencyCount: 23 }));
     render(<SolveOptionsControls mode="cad" />);
-    expect(host.querySelector('#adaptive-frequency-sampling')).toBeNull();
+    expect(host.querySelector<HTMLInputElement>('#adaptive-frequency-sampling')!.disabled).toBe(true);
+    expect(host.textContent).toContain('Adaptive sampling requires at least 24 frequencies.');
     act(() => useCadReturnStore.setState({ frequencyCount: 24 }));
     render(<SolveOptionsControls mode="cad" />);
     expect(host.querySelector<HTMLInputElement>('#adaptive-frequency-sampling')!.disabled).toBe(false);
@@ -604,7 +620,7 @@ describe('solve and directivity control help', () => {
     expect(host.textContent).toContain('Metal — Apple GPU · full 3-D · free space');
   });
 
-  it('says an engine that is not ready is unavailable, and keeps its repair text for developer details', () => {
+  it('says an engine that is not ready is unavailable, and keeps its repair text visible with developer details off and on', () => {
     const imported = ['parametric', 'imported'];
     queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
       engines: [
@@ -627,7 +643,7 @@ describe('solve and directivity control help', () => {
     act(() => useSolveOptionsStore.getState().setEngine('beat-metal'));
     render(<SolveOptionsControls mode="cad" ingestRecord={null} />);
     const option = () => host.querySelector<HTMLOptionElement>('#cad-solve-engine option[value="beat-metal"]')!;
-    expect(option().textContent).toBe('BEAT · Metal — Apple GPU · unavailable');
+    expect(option().textContent).toContain(repair);
     preferencesStore.update({ showDeveloperDetails: true });
     render(<SolveOptionsControls mode="cad" ingestRecord={null} />);
     expect(option().textContent).toContain(repair);

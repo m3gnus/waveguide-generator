@@ -82,6 +82,7 @@ export interface ParameterPaletteContext {
   design?: DesignDocument;
   cadReturnReady?: boolean;
   editableCadMesh?: boolean;
+  cadBundleAvailable?: boolean;
   waveguideLinked?: boolean;
 }
 
@@ -106,6 +107,7 @@ export function buildParameterPaletteEntries(family?: DesignFamily, context: Par
   const design = context.design ?? useDesignStore.getState().design;
   const cadReturnReady = context.cadReturnReady ?? Boolean(useCadReturnStore.getState().ingestRecord);
   const editableCadMesh = context.editableCadMesh ?? cadMeshIsEditable(useCadReturnStore.getState().selectedBundle);
+  const cadBundleAvailable = context.cadBundleAvailable ?? Boolean(useCadReturnStore.getState().selectedBundle);
   const waveguideLinked = context.waveguideLinked ?? waveguideDefinitionAppliesNow();
   const sectionDefinitions = mode === 'cad' ? CAD_PARAMETER_SECTION_DEFINITIONS : PARAMETER_SECTION_DEFINITIONS;
   const sectionByTitle = new Map(sectionDefinitions.map((section) => [section.title, section]));
@@ -151,7 +153,8 @@ export function buildParameterPaletteEntries(family?: DesignFamily, context: Par
   }
 
   const cadEntries: PaletteEntry[] = CAD_CONTROL_DESCRIPTORS
-    .filter((descriptor) => cadControlIsAvailable(descriptor, cadReturnReady, editableCadMesh, waveguideLinked))
+    .filter((descriptor) => cadControlIsAvailable(descriptor, cadReturnReady, editableCadMesh, waveguideLinked, cadBundleAvailable))
+    .filter((descriptor) => !descriptor.developerOnly || preferencesStore.getSnapshot().showDeveloperDetails)
     .map((descriptor) => ({
       id: `cad-control-${descriptor.id}`,
       kind: 'Parameters',
@@ -385,6 +388,7 @@ export function workspaceModePaletteEntries(): PaletteEntry[] {
 }
 
 export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
+  const developerDetails = useDeveloperDetails();
   const solve = useSolveControl();
   const model = useCurrentModel();
   useSyncExternalStore(useDesignStore.temporal.subscribe, useDesignStore.temporal.getState, useDesignStore.temporal.getState);
@@ -394,6 +398,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   const design = useDesignStore((state) => state.design);
   const family = design.formula;
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
+  const cadBundleAvailable = useCadReturnStore(state => Boolean(state.selectedBundle));
   const cadReturnReady = useCadReturnStore((state) => Boolean(state.ingestRecord));
   const editableCadMesh = useCadReturnStore(state => cadMeshIsEditable(state.selectedBundle));
   const cadWorkspaceView = useSyncExternalStore(
@@ -440,7 +445,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
     requestAnimationFrame(() => fileAction('Export a copy'));
   };
   const paletteEntries = useMemo<PaletteEntry[]>(() => {
-    const parameters = buildParameterPaletteEntries(family, { mode: workspaceMode, design, cadReturnReady, editableCadMesh });
+    const parameters = buildParameterPaletteEntries(family, { mode: workspaceMode, design, cadReturnReady, editableCadMesh, cadBundleAvailable });
     const jobEntries: PaletteEntry[] = jobs.map((job) => ({
       id: `job-${job.id}`,
       kind: 'Jobs',
@@ -484,7 +489,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       ...RESULT_PANEL_COUNTS.map((count) => ({ id: `results-${count}`, kind: 'Commands' as const, label: `Results: ${count} chart${count === 1 ? '' : 's'}`, keywords: `panel count layout`, run: () => preferencesStore.setChartCount(count) })),
     ];
     return [...parameters, ...jobEntries, ...commands];
-  }, [cadWorkspaceView.fusionStatus?.running, cadReturnReady, editableCadMesh, canRedo, canUndo, copyReason, undoReason, redoReason, design, family, jobs, onResetLayout, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version, workspaceMode]);
+  }, [cadWorkspaceView.fusionStatus?.running, developerDetails, cadBundleAvailable, cadReturnReady, editableCadMesh, canRedo, canUndo, copyReason, undoReason, redoReason, design, family, jobs, onResetLayout, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version, workspaceMode]);
 
   return <header className="topbar">
     <WindowControls side="leading"/>

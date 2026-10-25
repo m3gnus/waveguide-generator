@@ -8,6 +8,8 @@ import { useMeshImportStore } from '../stores/meshImport';
 import { resetImportedModelStore, useImportedModelStore } from '../stores/importedModel';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
+import { preferencesStore } from '../prefs/preferences';
 import { MeshImportPanel } from './MeshImportPanel';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -169,4 +171,17 @@ it('shows the solve controls in the file rail and writes edits to the imported o
   expect(host.querySelector('[aria-label="Mesh sweep start"]')).toBeNull();
   type(host.querySelector<HTMLTextAreaElement>('#cad-solve-frequency-list')!, '300 700 1500');
   expect(useImportedSolveOptionsStore.getState().frequencyListText).toBe('300 700 1500');
+});
+
+it.each([false, true])('retains the file mesh engine list and adaptive hint (developer: %s)', (developer) => {
+  preferencesStore.update({ showDeveloperDetails: developer });
+  queryClient.setQueryData(CAPABILITIES_QUERY_KEY, { engines: [
+    { name: 'dry-run', label: 'Dry run', available: true, reason: null, version: null, fast_paths: [], geometry_sources: ['parametric'] },
+  ] });
+  useImportedSolveOptionsStore.getState().setSweep({ count: 10 });
+  act(() => root.render(panel()));
+  expect(host.querySelector<HTMLOptionElement>('#cad-solve-engine option[value="dry-run"]')?.disabled).toBe(true);
+  expect(host.querySelector('#adaptive-frequency-sampling')).not.toBeNull();
+  expect(host.textContent).toContain('Adaptive sampling requires at least 24 frequencies.');
+  preferencesStore.update({ showDeveloperDetails: false });
 });
