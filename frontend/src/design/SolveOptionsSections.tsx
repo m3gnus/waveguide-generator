@@ -31,7 +31,7 @@ import {
   type PolarUiState,
 } from '../stores/solveOptions';
 import { useScopedSolveOptions } from '../stores/solveOptionsContext';
-import { runDisplayName } from '../prefs/preferences';
+import { runDisplayName, useDeveloperDetails } from '../prefs/preferences';
 import { useDesignStore } from '../stores/design';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
 
@@ -176,8 +176,12 @@ export function AdaptiveFrequencyControls({ mode = 'parametric' }: { mode?: Work
   </>;
 }
 
-export function MeshValidationControl() {
+export function MeshValidationControl({ mode = 'parametric' }: { mode?: WorkspaceMode } = {}) {
   const store = useScopedSolveOptions();
+  const developer = useDeveloperDetails();
+  // For a CAD model the mesh is Fusion's and WG's own check decides: the
+  // policy is a developer control.
+  if (mode === 'cad' && !developer) return null;
   return <>
     <SelectRow revealId="mesh-validation-mode" text="What happens when the solver mesh fails its topology check. Warn solves anyway and reports the problem; Strict refuses to solve a mesh that is not watertight; Off hides the warning entirely. Results from an invalid mesh cannot be trusted, so leave this on Warn unless you know why."><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></SelectRow>
   </>;
@@ -191,6 +195,9 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
   showOpenclGuidance?: boolean;
 } = {}) {
   const store = useScopedSolveOptions();
+  // In CAD mode WG's diagnostic controls and engines' repair text are
+  // developer detail; Results' readiness view says how to repair an engine.
+  const developer = useDeveloperDetails() || mode !== 'cad';
   const { engines, hostPlatform, error, isLoading: capabilitiesLoading,
     qualificationRefreshNeeded, refreshCapabilities } = useCapabilities();
   const backendEngines = engines;
@@ -236,16 +243,19 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
           const version = engine.version ? ` · ${engine.version}` : '';
           const refused = verdict ? !verdict.solves && !(verdict.stage === 'availability' && selectableEngine(engine))
             : !selectableEngine(engine) || !imported;
+          const unavailable = ` · unavailable${developer && !engine.name.startsWith('beat-') && engine.reason ? `: ${engine.reason}` : ''}`;
           const note = engine.qualification === 'pending' ? qualificationRefreshNeeded || error ? '' : ' · checking OpenCL…' : verdict
-            ? verdict.solves ? version : ` · ${verdict.reason ?? 'cannot solve this return'}`
+            ? verdict.solves ? version
+              // An engine that is not ready says so; its repair is Results'.
+              : verdict.stage === 'availability' && !developer ? ' · unavailable' : ` · ${verdict.reason ?? 'cannot solve this return'}`
             : !imported
               ? ' · does not solve imported CAD geometry'
-              : engine.available ? version : ` · unavailable${!engine.name.startsWith('beat-') && engine.reason ? `: ${engine.reason}` : ''}`;
+              : engine.available ? version : unavailable;
           return <option key={engine.name} value={engine.name.toLowerCase()} disabled={refused}>{engine.label || engine.name}{note}</option>;
         })}
       </select></HelpTipRow>
       <p className="cad-solve-fact"><b>Runs on</b><span>{importedEngine ? `${importedEngine} · full 3-D · free space` : 'See solve readiness in Results.'}</span></p>
-      <p className="cad-solve-fact"><b>Prepared cut planes</b><span>{ingestRecord?.symmetry.cut_planes?.length ? ingestRecord.symmetry.cut_planes.join(', ') : 'none · full domain'}</span></p>
+      {developer && <p className="cad-solve-fact"><b>Prepared cut planes</b><span>{ingestRecord?.symmetry.cut_planes?.length ? ingestRecord.symmetry.cut_planes.join(', ') : 'none · full domain'}</span></p>}
     </>}
     {error ? <span className="section-note" role="status">Capability refresh failed. Check the backend connection. <button type="button" onClick={refreshCapabilities}>Refresh</button></span> : qualificationRefreshNeeded
       ? <span className="section-note" role="status">BEMPP · <button type="button" onClick={refreshCapabilities}>Refresh</button></span>
@@ -253,10 +263,10 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
       && <span className="section-note" role="status">BEMPP · checking OpenCL…</span>}
     {showOpenclGuidance && <OpenclUnavailableHook platform={hostPlatform}
       engine={engines.find((engine) => engine.name === 'bempp')} />}
-    {includeSampling && <MeshValidationControl />}
+    {includeSampling && <MeshValidationControl mode={mode} />}
     {mode === 'parametric' && <GroundPlaneControls />}
     {includeSampling && <FrequencySweepControls idPrefix={mode === 'cad' ? 'cad-solve' : 'design-solve'} context={mode === 'cad' ? 'imported' : 'design'} />}
-    <ToggleRow revealId="solve-verbose" id="solve-verbose" label="Verbose backend logging" help="Records the backend's own per-frequency diagnostics in the job log. Useful when a solve fails or looks wrong; it makes logs much longer." checked={store.verbose} onChange={store.setVerbose} />
+    {developer && <ToggleRow revealId="solve-verbose" id="solve-verbose" label="Verbose backend logging" help="Records the backend's own per-frequency diagnostics in the job log. Useful when a solve fails or looks wrong; it makes logs much longer." checked={store.verbose} onChange={store.setVerbose} />}
     {error && <div className="field-error" role="alert">Capabilities unavailable: {error}</div>}
   </>;
 }

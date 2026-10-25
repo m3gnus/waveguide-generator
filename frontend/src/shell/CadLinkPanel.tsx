@@ -1,5 +1,5 @@
 import { isMeshRecoveryFinding } from '../model/cadMeshRecovery';
-import { useCadModelState } from '../stores/cadModelState';
+import { useCadModelSelection, useCadModelState } from '../stores/cadModelState';
 import { CadModelStatusLine } from './CadModelStatusLine';
 import { EmptyState } from './EmptyState';
 import { Notice } from './Notice';
@@ -13,7 +13,8 @@ import { useEffect } from 'react';
 import { installCadLinkAddin } from '../api/cadlink';
 import type { CadReturnBundle, CadReturnFinding, CadReturnIngestRecord } from '../api/cadlink';
 import { OnshapePublicConsentRequired, sendDesignToOnshape, unlinkOnshape } from '../api/onshape';
-import { usePreferences } from '../prefs/preferences';
+import { useDeveloperDetails, usePreferences } from '../prefs/preferences';
+import { DeveloperDetails } from './DeveloperDetails';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { cadJobSummaries, useCadJobs } from '../jobs/cadSolve';
 import { currentDocumentLoad, isCurrentDocumentLoad, recordCommittedAthPolars, useDesignStore } from '../stores/design';
@@ -343,7 +344,10 @@ function CheckRow({ check }: { check: CheckDescriptor }) {
   // element is stateful rather than a hard-wired `open` attribute React would
   // keep re-asserting on every render.
   const [open, setOpen] = useState(check.state === 'warn');
-  if (!check.detail) {
+  // The evidence behind a verdict (residuals, sizing keys, derivations) is
+  // developer detail; the verdict says what it means.
+  const developerDetails = useDeveloperDetails();
+  if (!check.detail || !developerDetails) {
     return <div className={`cad-check cad-check-${check.state}`} title={check.title}>
       <span className="cad-check-glyph" aria-hidden="true">{CHECK_GLYPH[check.state]}</span>
       <b>{check.name}</b>
@@ -365,12 +369,25 @@ function CheckRow({ check }: { check: CheckDescriptor }) {
   </details>;
 }
 
+/** The developer detail behind the model's status line: the raw text of WG's
+ * own failed preparation, and why the mesh on screen no longer matches. */
+function CadModelDeveloperDetails({ staleReason }: { staleReason: string | null | undefined }) {
+  const model = useCadModelSelection();
+  const lines = [model.failureDiagnostic, staleReason].filter((line): line is string => !!line);
+  if (!lines.length) return null;
+  return <DeveloperDetails className="cad-model-developer-details">
+    {lines.map((line) => <p key={line} className="cad-detail">{line}</p>)}
+  </DeveloperDetails>;
+}
+
 /** Explain the file transport's idle observation policy. */
 export function CadCoordinationNote() {
   const state = useSyncExternalStore(cadCoordinationStore.subscribe, cadCoordinationStore.getSnapshot, cadCoordinationStore.getSnapshot);
   const coordinator = useSyncExternalStore(cadWorkspace.subscribe, cadWorkspace.getSnapshot, cadWorkspace.getSnapshot);
+  // How the transport polls is developer detail.
+  const developerDetails = useDeveloperDetails();
   // Wait until the returns listing has reported its compatibility policy.
-  if (state === 'unknown' || state === 'on') return null;
+  if (!developerDetails || state === 'unknown' || state === 'on') return null;
   const inbox = coordinator.fusionStatus?.addinInboxTransfer === true;
   return <p className="cad-detail cad-coordination-state" data-coordination={state}>
     {inbox
@@ -551,6 +568,7 @@ export function CadLinkPanel() {
     workspaceNavigation.claimReveal('cad-link');
   }, [navigation, visible]);
   const state = useCadReturnStore();
+  const developerDetails = useDeveloperDetails();
   const preferences = usePreferences();
   const design = useDesignStore((current) => current.design);
   const cadLimitation = nativeCadLimitation(design.formula);
@@ -863,10 +881,9 @@ export function CadLinkPanel() {
           ids and the internal invariants. It belongs to this exact message,
           so a later unrelated error leaves it behind rather than carrying a
           stale explanation under a new headline. */}
-      {errorDiagnostics?.message === error && <details className="cad-alert-diagnostics">
-        <summary>Diagnostics</summary>
+      {errorDiagnostics?.message === error && <DeveloperDetails summary="Diagnostics" className="cad-alert-diagnostics">
         <p className="cad-detail">{errorDiagnostics.detail}</p>
-      </details>}
+      </DeveloperDetails>}
     </Notice>}
     {status && <div className="cad-status-strip" role="status">{status}</div>}
 
@@ -905,8 +922,9 @@ export function CadLinkPanel() {
       {state.setupLoading && <Notice>Loading model settings…</Notice>}
       {/* The one status line of the model on screen, and its one action. */}
       {(bundle || record) && <CadModelStatusLine/>}
-      {/* TODO(U6): the stale reason (state.ingestStaleReason) belongs behind the
-          "Show developer details" setting; the line above is the one statement. */}
+      {/* What lies behind the line, for developers: the raw text of WG's own
+          failure, and why the mesh on screen no longer matches. */}
+      {(bundle || record) && <CadModelDeveloperDetails staleReason={state.ingestStaleReason}/>}
       {viewportNotice && <Notice>{viewportNotice}</Notice>}
       {/* Beside the button that starts the solve, not only in the rail where
           the drivers are set: this is what the run will and will not produce,
@@ -943,10 +961,10 @@ export function CadLinkPanel() {
       {/* The bookkeeping behind the model and its solves, one disclosure away. */}
       {record && <details className="cad-model-details">
         <summary>Details</summary>
-        <p
+        {developerDetails && <p
           className="cad-detail cad-model-provenance"
           title="The snapshot is the returned model, named by its manifest hash. The preparation holds the mesh on screen that would be solved."
-        >Snapshot <code>{shortSha256(record.manifest_sha256)}</code> · Preparation <code>{record.ingest_id}</code></p>
+        >Snapshot <code>{shortSha256(record.manifest_sha256)}</code> · Preparation <code>{record.ingest_id}</code></p>}
         {solvesOnScreen.map((operation) => <CadSolveInputs
           key={operation.jobId ?? operation.operationId}
           operationId={operation.operationId}

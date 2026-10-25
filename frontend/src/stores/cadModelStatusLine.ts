@@ -146,7 +146,7 @@ export function cadModelStatusLine(model: CadModelView, request: CadModelRequest
     return line(model.failureMessage || serverWords || couldNotPrepare(label), 'could not prepare', 'attention', retry ? 'try-again' : 'none', job.id);
   }
   if (model.preparation === 'prepare-failed') {
-    return line(couldNotPrepare(label), 'could not prepare', 'attention', model.canPrepare ? 'try-again' : 'none');
+    return line(model.failureMessage || couldNotPrepare(label), 'could not prepare', 'attention', model.canPrepare ? 'try-again' : 'none');
   }
   // A refusal: its words. Solve again only where the server would take it
   // (a kept request that names a change WG settles with the settings on
@@ -191,10 +191,10 @@ export function cadModelStatusLine(model: CadModelView, request: CadModelRequest
   return line(`${label} is not prepared yet.`, 'not prepared', 'attention', model.canPrepare ? 'prepare' : 'none');
 }
 
-/** The browser's own failed preparation has no server sentence yet: the
+/** The browser's own failed preparation that the server did not classify as
+ * WG's own (a refusal whose words the card's error notice says): the
  * protocol's could-not-prepare sentence without its "recorded" claim, which
- * only the server can make. TODO(U6): classify it with the server's codes and
- * show the server's words; the raw text stays in the card's error notice. */
+ * only the server makes (`failure: "internal"`, then `failureMessage`). */
 function couldNotPrepare(label: string): string {
   return `${APP_NAME} could not prepare ${label}.`;
 }

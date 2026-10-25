@@ -1,3 +1,4 @@
+import { preferencesStore } from '../prefs/preferences';
 import { archivedRequest, record as archivedRecord, mesh as archivedMesh, job as archivedJob, workspaceFor, json } from '../shell/cadlink/selection.fixtures';
 import { openImported, resetImportedModelStore } from '../stores/importedModel';
 import { PARAMETER_REGISTRY, PARAMETER_SECTION_DEFINITIONS, fieldIsVisible } from './parameterRegistry';
@@ -99,6 +100,10 @@ function crossoverView(host: HTMLElement, label: 'Basic' | 'Advanced'): void {
   act(() => [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Crossover view"] button')]
     .find((button) => button.textContent === label)!.click());
 }
+
+
+// A test that shows developer details turns them on for itself only.
+afterEach(() => { preferencesStore.update({ showDeveloperDetails: false }); });
 
 describe('outer-body precedence', () => {
   it('matches all four server resolution branches', () => {
@@ -1193,6 +1198,7 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('renders only the CAD workspace section set and trims forced solve options', () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     act(() => {
       useDesignStore.getState().setFamily('OSSE');
       setCadReady({ cardioidPort: true });

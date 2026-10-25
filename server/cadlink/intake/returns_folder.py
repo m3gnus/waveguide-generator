@@ -30,6 +30,24 @@ def parse_return_manifest(path: Path) -> Mapping[str, Any]:
     return parsed
 
 
+def return_document_name(folder: Path) -> str | None:
+    """A return's document name, read leniently as the returns listing reads it.
+
+    For naming a model whose manifest failed validation: its own
+    ``document.name`` when the manifest reads at all, else the folder's name
+    without ``.wgreturn``. Never raises.
+    """
+
+    try:
+        document = parse_return_manifest(folder / "wgreturn.json").get("document")
+        name = document.get("name") if isinstance(document, Mapping) else None
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    except (OSError, ValueError, RecursionError):
+        pass
+    return folder.name.removesuffix(".wgreturn").strip() or None
+
+
 
 def return_inventory(
     workspace_root: Path,

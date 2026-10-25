@@ -1,3 +1,4 @@
+import { preferencesStore } from '../prefs/preferences';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -36,6 +37,9 @@ const status = (overrides: Partial<CadDeliveryStatus> = {}): CadDeliveryStatus =
   recentRefusals: [], variable: 'WG2_CAD_DELIVERY',
   ...overrides,
 });
+
+
+afterEach(() => { preferencesStore.update({ showDeveloperDetails: false }); });
 
 describe('why a request from Fusion is not moving', () => {
   it('says nothing about an idle consumer that runs (the control for every line below)', () => {
@@ -88,6 +92,8 @@ describe('the CAD Link panel section', () => {
 
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    // The consumer's health and Fusion's refused returns are developer detail (M5).
+    preferencesStore.update({ showDeveloperDetails: true });
     vi.useFakeTimers();
     resetCadDeliveryHealthStore();
     cadReceiptsStore.setState({ receipts: {}, intakeRefusals: [], feedback: {}, displayRetries: {}, fronted: [], cursor: 0, feedId: null });
@@ -140,6 +146,15 @@ describe('the CAD Link panel section', () => {
     });
     expect(host.textContent).toContain('Restart is approved.');
     expect(reads).toBe(2);
+  });
+
+  it('is developer detail: without "Show developer details" the panel says nothing of the consumer', async () => {
+    preferencesStore.update({ showDeveloperDetails: false });
+    answer = status({ consumer: 'disabled' });
+    await mount();
+    expect(host.textContent).toBe('');
+    act(() => preferencesStore.update({ showDeveloperDetails: true }));
+    expect(host.textContent).toContain('WG2_CAD_DELIVERY=0');
   });
 
   it('recovers waiting intake without the coordinator and stops its clock when the request is taken', async () => {
@@ -280,6 +295,8 @@ describe('a refused request reaches the user in either mode', () => {
 
   beforeEach(async () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    // The consumer's health and Fusion's refused returns are developer detail (M5).
+    preferencesStore.update({ showDeveloperDetails: true });
 
     resetWorkspaceNavigationForTests();
     activations = [];
@@ -305,6 +322,15 @@ describe('a refused request reaches the user in either mode', () => {
     act(() => notice.click());
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
     expect(activations.at(-1)).toBe('geometry');
+  });
+
+  it('says nothing of a refused return without developer details: Fusion already said why', () => {
+    act(() => preferencesStore.update({ showDeveloperDetails: false }));
+    act(() => useCadDeliveryHealthStore.getState().mergeRefusals([{ operationId: null, file: 'x.json', reason: 'r', at: '2026-09-21T12:00:00Z' }]));
+    expect(host.querySelector('.attention-refused')).toBeNull();
+    // The count waits: turning the details on shows what was refused.
+    act(() => preferencesStore.update({ showDeveloperDetails: true }));
+    expect(host.querySelector('.attention-refused')?.textContent).toContain('A CAD request was refused');
   });
 });
 
@@ -372,6 +398,7 @@ describe('the CAD Link panel says why the listing still runs (review F5)', () =>
     const { cadWorkspace } = await import('../stores/cadWorkspace');
     const { resetCadCoordinationForTests } = await import('../api/cadCoordination');
     resetCadCoordinationForTests('off');
+    preferencesStore.update({ showDeveloperDetails: true });
     vi.spyOn(cadWorkspace, 'getSnapshot').mockReturnValue({
       ...cadWorkspace.getSnapshot(),
       fusionStatus: { running: true, state: 'current', addinInboxTransfer: declares } as unknown as FusionCadStatus,

@@ -284,7 +284,8 @@ export interface CadArrivalActionsIntegration {
   manualSelectionAt: Ref<number | null>;
   refusedForeignReturn: Ref<boolean>;
   setIngesting(value: boolean): void;
-  setIngestError(value: string | null): void;
+  /** `diagnostic`: the raw text of WG's own (recorded) failure, for developer details. */
+  setIngestError(value: string | null, diagnostic?: string | null): void;
   setError(value: string | null): void;
   setStatus(value: string | null): void;
   setViewportNotice(value: string | null): void;
@@ -402,6 +403,12 @@ export function createCadArrivalActions(
           meshLimit: reason.meshLimit,
           bundlePath: current.selectedBundle.bundlePath,
         });
+        throw reason;
+      }
+      if (reason instanceof CadLinkApiError && reason.internal) {
+        // WG's own failure, recorded by the server: its calm sentence is the
+        // model's status line; the raw text is for developer details only.
+        if (request === ingestRequest.current && mounted.current) setIngestError(message, reason.diagnostic);
         throw reason;
       }
       if (request === ingestRequest.current && mounted.current) {

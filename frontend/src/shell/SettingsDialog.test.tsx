@@ -49,6 +49,16 @@ describe('SettingsDialog', () => {
     expect(document.activeElement).toBe(opener);
   });
 
+  it('keeps developer details off by default, and Advanced turns them on', () => {
+    act(() => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+    const advanced = host.querySelector<HTMLElement>('#settings-advanced')!;
+    const toggle = [...advanced.querySelectorAll('label')].find(label => label.textContent === 'Show developer details')!.querySelector('input')!;
+    expect(preferencesStore.getSnapshot().showDeveloperDetails).toBe(false);
+    expect(toggle.checked).toBe(false);
+    act(() => toggle.click());
+    expect(preferencesStore.getSnapshot().showDeveloperDetails).toBe(true);
+  });
+
   it('shows the WG folder and exposes open and select actions', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);

@@ -123,7 +123,7 @@ export function mountCadWorkspaceOwners(): () => void {
     onshapeInstanceId: () => onshapeInstance,
     setIngesting: (ingesting) => publish({ ingesting,
       ...(ingesting ? { preparationIntent: useCadReturnStore.getState().captureIngestIntent() } : {}),
-    }), setIngestError: (ingestError) => publish({ ingestError }),
+    }), setIngestError: (ingestError, ingestDiagnostic = null) => publish({ ingestError, ingestDiagnostic }),
     setError: reportError, setStatus: reportStatus, setViewportNotice: reportViewportNotice,
     setBundles: (bundles) => publish({ bundles }), reportViewportNotice,
   });

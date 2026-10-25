@@ -68,6 +68,8 @@ export const PREFERENCE_EFFECTS: Record<keyof Preferences, PreferenceEffect> = {
   // Ordering and filtering of the run list: a redraw, never a resolve.
   jobSort: 'render-refreshing',
   minRating: 'render-refreshing',
+  // Which detail the panels show beside what WG says; no solve or chart changes.
+  showDeveloperDetails: 'render-refreshing',
 };
 
 /**

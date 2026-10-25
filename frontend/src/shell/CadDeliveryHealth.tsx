@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { CadDeliveryStatus } from '../api/cadOperations';
 import { connectCadDeliveryHealth, refreshCadDeliveryHealth, useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
+import { useDeveloperDetails } from '../prefs/preferences';
 import { usePanelVisible } from './panelVisibility';
 
 export { WAITING_READ_MS } from '../stores/cadDeliveryHealth';
@@ -57,8 +58,11 @@ export function CadDeliveryHealthDataSource() {
   return null;
 }
 
-/** The consumer's state and recent refusals, in the CAD Link panel. */
+/** The consumer's state and recent refusals, in the CAD Link panel: developer
+ * detail ("Show developer details"). Fusion already tells the user why its
+ * preflight refused a return, so WG says nothing of it otherwise. */
 export function CadDeliveryHealth({ now = Date.now }: { now?: () => number }) {
+  const shown = useDeveloperDetails();
   const status = useCadDeliveryHealthStore((state) => state.status);
   const refusals = useCadDeliveryHealthStore((state) => state.refusals);
   const unseen = useCadDeliveryHealthStore((state) => state.unseenRefusals);
@@ -71,15 +75,15 @@ export function CadDeliveryHealth({ now = Date.now }: { now?: () => number }) {
 
   // Seeing the list is what acknowledges it.
   useEffect(() => {
-    if (visible && unseen) useCadDeliveryHealthStore.getState().acknowledgeRefusals();
-  }, [unseen, visible]);
+    if (shown && visible && unseen) useCadDeliveryHealthStore.getState().acknowledgeRefusals();
+  }, [shown, unseen, visible]);
 
   const recoveryError = useCadDeliveryHealthStore((state) => state.recoveryError);
   const lines = [
     ...deliveryHealthLines(status, now()),
     ...(recoveryError ? [{ tone: 'waiting' as const, text: recoveryError }] : []),
   ];
-  if (!lines.length && !refusals.length) return null;
+  if (!shown || (!lines.length && !refusals.length)) return null;
   return <div className="cad-delivery-health" role="status">
     {lines.map((line) => <p key={line.text} className={`cad-delivery-${line.tone}`}>{line.text}</p>)}
     {refusals.length > 0 && <details className="cad-delivery-refusals" open={unseen > 0}>

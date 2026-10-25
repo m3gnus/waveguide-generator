@@ -1126,6 +1126,7 @@ describe('CadLinkPanel', () => {
   });
 
   it('names the snapshot and the preparation of the model on screen', async () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     await renderAndSelect();
     await clickIngest();
     const provenance = host.querySelector('.cad-model-provenance')!;
@@ -2218,6 +2219,7 @@ describe('CadLinkPanel', () => {
   });
 
   it('auto-expands degraded scope and combines degradation with pending findings in the summary', async () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     const degradedRecord: CadReturnIngestRecord = {
       ...record,
       scope: {
@@ -2249,6 +2251,7 @@ describe('CadLinkPanel', () => {
   });
 
   it('shows symmetry residuals in millimetres to two significant figures, and a rejected candidate as information', async () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     const stepUnitRecord = {
       ...record,
       symmetry: {
@@ -2478,6 +2481,7 @@ describe('CadLinkPanel', () => {
   });
 
   it('puts a Fusion refusal on the primary path and its report behind a disclosure', async () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     useDocumentStore.setState({
       identity: { designId: 'wgd_a', lineageId: 'wgl_a', baseEditVersion: 2 },
     });
@@ -2710,6 +2714,7 @@ describe('CadLinkPanel', () => {
   });
 
   it('renders unknown per-instance freshness copy', async () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     const freshness = { verdict: 'per-instance', instances: [{ instance_id: 'instance-a', verdict: 'unknown' }] };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -2801,6 +2806,7 @@ describe('CadLinkPanel', () => {
   });
 
   it('mentions background coordination only when it is off', async () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     const { CadCoordinationNote } = await import('./CadLinkPanel');
     const { resetCadCoordinationForTests } = await import('../api/cadCoordination');
     resetCadCoordinationForTests('on');
@@ -2814,6 +2820,7 @@ describe('CadLinkPanel', () => {
   });
 
   it('flags only mistakes in the checks: a declared cut that fails, never a candidate plane, hidden skips of construction, or double counts', async () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     const reviewed = {
       ...record,
       freshness: { verdict: 'unlinked' as const, instances: [], finding_id: 'unlinked-mode' },
@@ -3069,6 +3076,30 @@ describe('CadLinkPanel', () => {
 
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('already used by another design');
     expect(host.querySelector('.cad-history')).toBeTruthy();
+  });
+
+  it('tells an invalid return calmly, with Try again, and keeps the validator text for developer details', async () => {
+    const raw = 'stage 1 bundle validation: $.sources[wgs-RR978M188Q009HS6NWNZ].suggested_resolution_mm: must equal mesh.source_size_mm';
+    const calm = 'Waveguide Generator could not prepare Speaker. This has been recorded for the developers.';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/returns')) return json(listing);
+      if (String(input).endsWith('/fusion-status')) return json(closedFusion);
+      if (!String(input).endsWith('/api/cadlink/ingest')) return json({ feed_id: 'panel', receipts: [], cursor: 0, has_more: false, notices: [] });
+      return json({ detail: { code: 'snapshot_invalid', failure: 'internal', message: calm, diagnostic: raw } }, 422);
+    }));
+    await renderAndSelect();
+    await clickIngest();
+    const card = host.querySelector('.cad-model-card')!;
+    expect(card.querySelector('.cad-status-line')?.textContent).toContain(calm);
+    expect(card.querySelector('.cad-status-line button[data-action="try-again"]')?.textContent).toBe('Try again');
+    // Never red, never a path or a code.
+    expect(host.querySelector('.notice-error')).toBeNull();
+    for (const word of ['$.', 'bundle', 'validation', 'snapshot_invalid', 'suggested_resolution']) expect(host.textContent).not.toContain(word);
+    // One switch away for developers.
+    act(() => preferencesStore.update({ showDeveloperDetails: true }));
+    const details = card.querySelector('.cad-model-developer-details')!;
+    expect(details.querySelector('summary')?.textContent).toBe('Developer details');
+    expect(details.textContent).toContain(raw);
   });
 
   it('discovers area-drift overrides from structured refusal data', async () => {

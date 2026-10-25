@@ -1,3 +1,4 @@
+import { preferencesStore } from '../prefs/preferences';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -35,6 +36,10 @@ vi.mock('../jobs/useImportedSolvePlan', () => ({
  * "every parameter is documented" gate cannot see them. This covers the same
  * ground for them: every labelled control here answers a hover.
  */
+
+// A test that shows developer details turns them on for itself only.
+afterEach(() => { preferencesStore.update({ showDeveloperDetails: false }); });
+
 describe('solve and directivity control help', () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -528,6 +533,7 @@ describe('solve and directivity control help', () => {
   });
 
   it('replaces forced imported backend and domain controls with ingest facts', () => {
+    preferencesStore.update({ showDeveloperDetails: true });
     const ingestRecord = { symmetry: { cut_planes: ['x0', 'y0'] } } as CadReturnIngestRecord;
     render(<SolveOptionsControls mode="cad" ingestRecord={ingestRecord}/>);
     expect(host.querySelector('#solve-engine')).toBeNull();
@@ -540,6 +546,21 @@ describe('solve and directivity control help', () => {
     expect(host.textContent).toContain('x0, y0');
     expect(host.querySelector('#mesh-validation-mode')).not.toBeNull();
     expect(host.querySelector('#cad-solve-frequency-mode')).not.toBeNull();
+    expect(host.querySelector('#solve-verbose')).not.toBeNull();
+  });
+
+  it('keeps the solver\'s diagnostic controls for a CAD model behind developer details', () => {
+    const ingestRecord = { symmetry: { cut_planes: ['x0', 'y0'] } } as CadReturnIngestRecord;
+    render(<SolveOptionsControls mode="cad" ingestRecord={ingestRecord}/>);
+    for (const id of ['#mesh-validation-mode', '#solve-verbose']) expect(host.querySelector(id)).toBeNull();
+    expect(host.textContent).not.toContain('Prepared cut planes');
+    // What the user decides stays: accuracy, the engine and the sweep.
+    expect(host.querySelector('#solve-accuracy')).not.toBeNull();
+    expect(host.querySelector('#cad-solve-engine')).not.toBeNull();
+    expect(host.querySelector('#cad-solve-frequency-mode')).not.toBeNull();
+    // A design keeps its own diagnostic controls.
+    render(<SolveOptionsControls/>);
+    expect(host.querySelector('#mesh-validation-mode')).not.toBeNull();
     expect(host.querySelector('#solve-verbose')).not.toBeNull();
   });
 
@@ -580,6 +601,34 @@ describe('solve and directivity control help', () => {
     expect(options.get('metal')!.disabled).toBe(false);
     expect(options.get('beat-cpu')!.disabled).toBe(false);
     expect(host.textContent).toContain('Metal — Apple GPU · full 3-D · free space');
+  });
+
+  it('says an engine that is not ready is unavailable, and keeps its repair text for developer details', () => {
+    const imported = ['parametric', 'imported'];
+    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
+      engines: [
+        { name: 'metal', label: 'Metal — Apple GPU', available: true, reason: null, version: 'test', fast_paths: [], geometry_sources: imported },
+        { name: 'beat-metal', label: 'BEAT · Metal — Apple GPU', available: false, reason: 'needs preparing', version: 'test', fast_paths: [], geometry_sources: imported },
+      ],
+    });
+    const repair = 'BEAT metal: This runtime needs preparing again, for example after a WG update (a few minutes).';
+    importedPlan.current = {
+      plan: {
+        ingest_id: 'wgi_test', requested: 'auto', engine: 'metal', code: null, reason: 'AUTO', domain: 'full',
+        engines: [
+          { name: 'metal', label: 'Metal — Apple GPU', solves: true },
+          { name: 'beat-metal', label: 'BEAT · Metal — Apple GPU', solves: false, stage: 'availability', code: 'engine_unavailable', reason: repair },
+        ],
+      },
+      error: null,
+      isPending: false,
+    };
+    render(<SolveOptionsControls mode="cad" ingestRecord={null} />);
+    const option = () => host.querySelector<HTMLOptionElement>('#cad-solve-engine option[value="beat-metal"]')!;
+    expect(option().textContent).toBe('BEAT · Metal — Apple GPU · unavailable');
+    preferencesStore.update({ showDeveloperDetails: true });
+    render(<SolveOptionsControls mode="cad" ingestRecord={null} />);
+    expect(option().textContent).toContain(repair);
   });
 
   it('lets BEAT · Metal be chosen in CAD mode before a return is prepared', () => {

@@ -217,3 +217,8 @@ details.cad-check[open] > summary .cad-check-chevron { transform: rotate(90deg);
 .cad-domain[data-domain-superseded] .cad-domain-line > span { opacity: 0.6; }
 .cad-model-details { margin-top: 8px; color: var(--fg3); font-size: var(--text-base); }
 .cad-model-details summary { cursor: pointer; }
+/* Developer detail ("Show developer details"): one quiet disclosure. */
+.developer-details { margin-top: 5px; }
+.developer-details > summary { cursor: pointer; color: var(--fg3); font-size: var(--text-micro); }
+.developer-details > summary:focus-visible { outline: 1px solid var(--focus-ring); outline-offset: 2px; }
+.developer-details > p { margin: 4px 0 0; overflow-wrap: anywhere; }

@@ -209,6 +209,14 @@ export interface Preferences {
   runSequenceNext: number;
   jobSort: JobSort;
   minRating: number;
+  /**
+   * Show the technical detail behind what WG says (Settings ▸ Advanced): raw
+   * preparation errors, check evidence, snapshot and preparation ids, the
+   * request consumer's health and refusals, and the solver's diagnostic
+   * controls. Off by default; an absent key reads as off, so this needs no
+   * `STORAGE_VERSION` bump.
+   */
+  showDeveloperDetails: boolean;
 }
 
 /**
@@ -264,6 +272,7 @@ const defaults: Preferences = {
   runSequenceNext: 1,
   jobSort: 'completed_desc',
   minRating: 0,
+  showDeveloperDetails: false,
 };
 
 const chartIds = new Set(CHART_TYPES.map(({ id }) => id));
@@ -348,6 +357,7 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     runSequenceNext: clampInteger(raw.runSequenceNext, RUN_SEQUENCE_RANGE, defaults.runSequenceNext),
     jobSort: jobSortIds.has(raw.jobSort as JobSort) ? raw.jobSort as JobSort : defaults.jobSort,
     minRating: clampInteger(raw.minRating, MIN_RATING_RANGE, defaults.minRating),
+    showDeveloperDetails: raw.showDeveloperDetails === true,
   };
 }
 
@@ -659,6 +669,12 @@ export const preferencesStore = new PreferenceStore();
 durableSettings.subscribe('preferences', (raw) => preferencesStore.adoptDurable(raw));
 export function usePreferences(): Preferences {
   return useSyncExternalStore(preferencesStore.subscribe, preferencesStore.getSnapshot, preferencesStore.getSnapshot);
+}
+
+/** Whether WG shows its technical detail: the one owner is the
+ * `showDeveloperDetails` preference (Settings ▸ Advanced). */
+export function useDeveloperDetails(): boolean {
+  return usePreferences().showDeveloperDetails;
 }
 
 export type RunDisplayVariant = 'full' | 'short';

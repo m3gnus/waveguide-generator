@@ -397,6 +397,43 @@ def test_mesh_too_large_is_an_actionable_refusal_on_both_ingest_routes() -> None
                                "triangle_count": 28_944, "limit": 22_000}
 
 
+def test_browser_prepare_tells_wgs_own_failure_calmly_and_records_the_raw_text(monkeypatch, tmp_path) -> None:
+    import server.cadlink.api as api
+    from server.cadlink.intake.ingest import IngestRefusal
+    from server.cadlink.intake.returns_folder import return_document_name
+    from server.cadlink.wgreturn import WgReturnChanged
+
+    recorded = []
+    monkeypatch.setattr(api, "record_preparation_diagnostic", lambda *args, **kwargs: recorded.append((args, kwargs)))
+    raw = "$.sources[wgs-1].suggested_resolution_mm: must equal mesh.source_size_mm"
+    # A return whose manifest fails validation (the Fine2 case).
+    response = api._ingest_error(IngestRefusal("stage 1 bundle validation", raw), document_name="Fine horn")
+    assert response.status_code == 422
+    assert response.detail == {
+        "code": "snapshot_invalid", "failure": "internal",
+        "message": "Waveguide Generator could not prepare Fine horn. This has been recorded for the developers.",
+        "diagnostic": f"stage 1 bundle validation: {raw}"}
+    (stage, evidence), options = recorded[0]
+    assert stage == "internal-failure" and evidence == {"code": "snapshot_invalid", "detail": response.detail["diagnostic"]}
+    assert options["phase"] == "cad-ingest" and options["names"] == ["Fine horn"]
+    # A crashed worker or a missing mesher is WG's own failure too.
+    assert api._ingest_error(RuntimeError("worker exited 9")).detail["code"] == "preparation_failed"
+    # What the user can change keeps its words and is not recorded.
+    recorded.clear()
+    gate = IngestRefusal("stage 2 project gate", "the selected CAD return belongs to another CAD-linked project")
+    assert api._ingest_error(gate).detail == str(gate)
+    assert api._ingest_error(WgReturnChanged("sent again")).detail == "sent again"
+    drift = IngestRefusal("stage 5 sources", "source 'HF' area drift", area_drift_sources=["HF"])
+    assert api._ingest_error(drift).detail["area_drift_sources"] == ["HF"]
+    assert recorded == []
+    # Its name is read leniently, from a manifest that fails validation, or the folder.
+    folder = tmp_path / "Fine2.wgreturn"
+    folder.mkdir()
+    assert return_document_name(folder) == "Fine2"
+    (folder / "wgreturn.json").write_text(json.dumps({"document": {"name": " Fine horn "}, "sources": 3}))
+    assert return_document_name(folder) == "Fine horn"
+
+
 def test_browser_prepare_answers_the_ceiling_with_a_choice_and_carries_solve_anyway(monkeypatch, tmp_path) -> None:
     import asyncio
     from types import SimpleNamespace

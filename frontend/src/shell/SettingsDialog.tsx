@@ -305,6 +305,17 @@ function CadSettings() {
   </section>;
 }
 
+/** Technical detail for developers and support, hidden from everyday use. */
+function AdvancedSettings() {
+  const preferences = usePreferences();
+  return <section id="settings-advanced" className="settings-theme advanced-settings" aria-labelledby="settings-advanced-title" tabIndex={-1}>
+    <h3 id="settings-advanced-title">Advanced</h3>
+    <label className="ui-check"><input type="checkbox" checked={preferences.showDeveloperDetails}
+      onChange={(event) => preferencesStore.update({ showDeveloperDetails: event.target.checked })}/>Show developer details</label>
+    <p className="cad-settings-note">Shows the technical detail behind what WG says: why a preparation failed, the checks&rsquo; evidence, model and preparation identifiers, the CAD Link request consumer, and the solver&rsquo;s diagnostic options. Failures are recorded for the developers either way.</p>
+  </section>;
+}
+
 export function SettingsDialog({ open, theme, focusSection, onThemeChange, onClose }: {
   open: boolean;
   theme: Theme;
@@ -338,6 +349,7 @@ export function SettingsDialog({ open, theme, focusSection, onThemeChange, onClo
         <UpdateChannelPointer/>
         <ResultsPreferencesSurface expanded showFolders={false}/>
         <JobsPreferencesSurface expanded/>
+        <AdvancedSettings/>
         <p className="viewer-preferences-note">Viewer preferences remain available in the Viewport panel.</p>
       </div>
     </div>

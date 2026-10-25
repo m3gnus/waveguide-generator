@@ -100,7 +100,8 @@ from server.cadlink.joblane.manual_solve import create_manual_solve, recover_man
 from .build_flags import onshape_enabled
 from .onshape.return_leg import RETURN_SUBDIRECTORY as ONSHAPE_RETURN_SUBDIRECTORY
 from .operations import (
-    CANCELLED, KINDS, MESH_CEILING_NEXT_STEP, MESH_TOO_LARGE_CODE, PREPARE_AND_SOLVE, STATES, TERMINAL_STATES,
+    CANCELLED, INTERNAL_FAILURE_CODES, KINDS, MESH_CEILING_NEXT_STEP, MESH_TOO_LARGE_CODE, PREPARE_AND_SOLVE, STATES,
+    TERMINAL_STATES, internal_failure_message,
 )
 from server.cadlink.joblane.preparation import (
     PreparationContext,
@@ -116,11 +117,11 @@ from server.cadlink.joblane.setup import setup_content, setup_digest, validate_s
 from server.cadlink.interpretation.solver_frame import record_is_unlinked
 from server.cadlink.intake.readings import ensure_frame_suggestion, record_preparation_diagnostic
 from server.cadlink.intake.readings import snapshot_project
-from server.cadlink.intake.returns_folder import return_inventory, selected_workspace_root
+from server.cadlink.intake.returns_folder import return_document_name, return_inventory, selected_workspace_root
 from .store import CadLinkStore
 from server.cadlink.intake import receipts_api
 from server.cadlink.fusion import recovery_api
-from .wgreturn import WgReturnError
+from .wgreturn import WgReturnChanged, WgReturnError
 
 
 logger = logging.getLogger(__name__)
@@ -921,7 +922,49 @@ async def post_solve_command_outcome(
     return {"commandId": payload.command_id, "recorded": False, "cleared": True}
 
 
-def _ingest_error(exc: Exception) -> HTTPException:
+#: The stage whose refusal means the return itself is not valid.
+_BUNDLE_VALIDATION_STAGE = "stage 1 bundle validation"
+
+
+def internal_ingest_code(exc: Exception) -> str | None:
+    """The code of an ingest failure that is WG's own (``INTERNAL_FAILURE_CODES``), or None.
+
+    The same reading as the job lane's (``jobs/cad_preparation``): a return
+    that is not valid is ``snapshot_invalid``; a worker, mesher or
+    environment failure is ``preparation_failed``. A refusal that states
+    something the user can change -- a project or instance gate, a symmetry
+    or FEM rule, an area drift with its override, the model changing, the
+    triangle ceiling, the memory guard -- is not one: it keeps its words.
+    """
+
+    if isinstance(exc, (MeshTooLarge, SolverMemoryTooLarge, WgReturnChanged)):
+        return None
+    if isinstance(exc, IngestRefusal):
+        if exc.area_drift_sources:
+            return None
+        return "snapshot_invalid" if exc.corruption or exc.stage == _BUNDLE_VALIDATION_STAGE else None
+    if isinstance(exc, WgReturnError):
+        return "snapshot_invalid"
+    if isinstance(exc, (ValueError, TypeError)):
+        return None
+    return "preparation_failed"
+
+
+def _ingest_error(exc: Exception, *, document_name: str | None = None) -> HTTPException:
+    internal = internal_ingest_code(exc)
+    if internal is not None:
+        assert internal in INTERNAL_FAILURE_CODES
+        # WG's own failure: recorded once for the developers, told calmly in
+        # the protocol's one sentence. The raw text travels only as
+        # ``diagnostic``, which WG shows behind "Show developer details".
+        record_preparation_diagnostic(
+            "internal-failure", {"code": internal, "detail": str(exc)},
+            phase="cad-ingest", exception=exc, names=[document_name] if document_name else None,
+        )
+        return HTTPException(status_code=422 if internal == "snapshot_invalid" else 500, detail={
+            "code": internal, "failure": "internal",
+            "message": internal_failure_message(document_name), "diagnostic": str(exc),
+        })
     if isinstance(exc, IngestRefusal):
         detail: str | dict[str, Any] = str(exc)
         if exc.area_drift_sources:
@@ -954,6 +997,12 @@ def _ingest_error(exc: Exception) -> HTTPException:
     if isinstance(exc, (ImportError, RuntimeError)):
         return HTTPException(status_code=503, detail=str(exc))
     return HTTPException(status_code=500, detail=f"CAD-return ingestion failed: {exc}")
+
+
+def _named_ingest_error(exc: Exception, bundle_path: Path) -> HTTPException:
+    """``_ingest_error`` naming the return it failed on, as it names itself."""
+
+    return _ingest_error(exc, document_name=return_document_name(bundle_path))
 
 
 def _onshape_return_root(request: Request) -> Path:
@@ -1081,8 +1130,9 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
     except HTTPException:
         raise
     except Exception as exc:
-        # Off the event loop: classifying may record an incident.
-        raise await asyncio.to_thread(_ingest_error, exc) from exc
+        # Off the event loop: classifying may record an incident and read the
+        # return's name.
+        raise await asyncio.to_thread(_named_ingest_error, exc, bundle_path) from exc
     runtime = getattr(request.app.state, "jobs_runtime", None)
     _schedule_deferred_viewport(record, data_dir, getattr(runtime, "events", None))
     _schedule_frame_suggestion(store, record)

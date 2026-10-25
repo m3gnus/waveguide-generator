@@ -102,6 +102,15 @@ describe('client preferences', () => {
     expect(loadPreferences(localStorage.getItem('waveguide-v2-g3-preferences')).showContourNames).toBe(true);
     expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { showContourNames: 'true' } })).showContourNames).toBe(false);
   });
+  it('keeps developer details off unless explicitly turned on, persisted without a storage bump', () => {
+    expect(loadPreferences(null).showDeveloperDetails).toBe(false);
+    const older = readPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { archiveRunsOnComplete: false } }));
+    expect(older.value.showDeveloperDetails).toBe(false);
+    expect(older.migrated).toBe(false);
+    expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { showDeveloperDetails: 'true' } })).showDeveloperDetails).toBe(false);
+    preferencesStore.update({ showDeveloperDetails: true });
+    expect(loadPreferences(localStorage.getItem('waveguide-v2-g3-preferences')).showDeveloperDetails).toBe(true);
+  });
   it('keeps automatic result cleanup off unless explicitly turned on, without a storage bump', () => {
     // A user lost reference runs to the cleanup that used to run regardless.
     expect(loadPreferences(null).autoCleanupResults).toBe(false);

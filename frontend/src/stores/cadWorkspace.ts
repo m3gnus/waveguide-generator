@@ -20,6 +20,10 @@ export interface CadWorkspaceSnapshot {
   loading: boolean;
   ingesting: boolean;
   ingestError: string | null;
+  /** The raw text behind `ingestError` when the server classified the
+   * failure as WG's own (then `ingestError` is its calm, recorded sentence).
+   * Shown only with "Show developer details". */
+  ingestDiagnostic?: string | null;
   /** Preparation feedback belongs to this CAD intent, including after failure. */
   preparationIntent?: number;
   sendingToFusion: boolean;
@@ -64,6 +68,7 @@ export const emptyCadWorkspace: CadWorkspaceSnapshot = {
   loading: true,
   ingesting: false,
   ingestError: null,
+  ingestDiagnostic: null,
   preparationIntent: undefined,
   sendingToFusion: false,
   pullingFromFusion: false,

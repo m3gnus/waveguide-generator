@@ -472,9 +472,15 @@ export class CadLinkApiError extends Error {
   readonly nextStep: string | null;
   /** The triangle ceiling's facts (`mesh_too_large`): what the model meshes to, and the limit. */
   readonly meshLimit: CadMeshLimit | null;
+  /** The server classified this as WG's own failure (`failure: "internal"`):
+   * `message` is the protocol's calm sentence and the failure is recorded. */
+  readonly internal: boolean;
+  /** The raw text behind an internal failure, for "Show developer details" only. */
+  readonly diagnostic: string | null;
 
   constructor(message: string, areaDriftSources: string[] = [], status: number | null = null,
-    code: string | null = null, nextStep: string | null = null, meshLimit: CadMeshLimit | null = null) {
+    code: string | null = null, nextStep: string | null = null, meshLimit: CadMeshLimit | null = null,
+    internal = false, diagnostic: string | null = null) {
     super(message);
     this.name = 'CadLinkApiError';
     this.areaDriftSources = areaDriftSources;
@@ -482,6 +488,8 @@ export class CadLinkApiError extends Error {
     this.code = code;
     this.nextStep = nextStep;
     this.meshLimit = meshLimit;
+    this.internal = internal;
+    this.diagnostic = diagnostic;
   }
 }
 
@@ -498,7 +506,7 @@ async function responseError(response: Response): Promise<CadLinkApiError> {
     if (typeof body.detail === 'string') return new CadLinkApiError(body.detail, [], response.status);
     if (body.detail && typeof body.detail === 'object') {
       const detail = body.detail as { message?: unknown; msg?: unknown; area_drift_sources?: unknown; code?: unknown; next_step?: unknown;
-        triangle_count?: unknown; limit?: unknown };
+        triangle_count?: unknown; limit?: unknown; failure?: unknown; diagnostic?: unknown };
       const message = typeof detail.message === 'string'
         ? detail.message
         : typeof detail.msg === 'string' ? detail.msg : null;
@@ -509,7 +517,8 @@ async function responseError(response: Response): Promise<CadLinkApiError> {
         typeof detail.code === 'string' ? detail.code : null,
         typeof detail.next_step === 'string' ? detail.next_step : null,
         positiveInteger(detail.triangle_count) && positiveInteger(detail.limit)
-          ? { triangles: detail.triangle_count, limit: detail.limit } : null);
+          ? { triangles: detail.triangle_count, limit: detail.limit } : null,
+        detail.failure === 'internal', typeof detail.diagnostic === 'string' ? detail.diagnostic : null);
     }
   } catch { /* status remains useful */ }
   return new CadLinkApiError(`Request failed: ${response.status} ${response.statusText}`.trim(), [], response.status);

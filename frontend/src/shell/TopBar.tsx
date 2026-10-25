@@ -12,7 +12,7 @@ import { PARAMETRIC_CONTROL_DESCRIPTORS, parametricControlIsAvailable, parametri
 import { parameterExportReason } from '../results/exportContext';
 import { documentHistory } from '../model/documentCommands';
 import { currentModel, useCurrentModel, restoreParametricWorkingDesign } from '../model/currentModel';
-import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
+import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, useDeveloperDetails, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { waveguideDefinitionAppliesNow } from '../stores/waveguideLink';
 import { selectCadRequests, useCadRecoveryNotices } from '../stores/cadRecoveryNotices';
@@ -288,6 +288,7 @@ export function AttentionNotices() {
   const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const notices = useCadRecoveryNotices((state) => state.notices);
   const unseenRefusals = useCadDeliveryHealthStore((state) => state.unseenRefusals);
+  const developerDetails = useDeveloperDetails();
   const readyRun = useReadyRun();
   const failedAction = useFailedAction();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
@@ -310,8 +311,9 @@ export function AttentionNotices() {
   const showReady = readyRun !== null && !workspaceNavigation.isVisible('results');
   // A Solve the user asked for failed after they moved on: its error is in Results.
   const showFailed = failedAction !== null && !workspaceNavigation.isVisible('results');
-  // A request WG took and refused has no row to wait in; this is its route.
-  const showRefused = unseenRefusals > 0 && !(mode === 'cad' && workspaceNavigation.isVisible('geometry'));
+  // A request WG took and refused has no row to wait in; this is its route --
+  // for developers only: Fusion tells the user why it was refused.
+  const showRefused = developerDetails && unseenRefusals > 0 && !(mode === 'cad' && workspaceNavigation.isVisible('geometry'));
   const readyJob = readyRun ? jobs.find((job) => job.id === readyRun) ?? null : null;
   const first = waiting[0]?.operation;
   const waitingLabel = !first && !Object.keys(notices).length
