@@ -1,3 +1,4 @@
+import { expectNoJargon } from '../testing/expectNoJargon';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -146,6 +147,7 @@ describe('CadLinkPanel', () => {
     expect(host.textContent).toContain('Speaker · from Fusion');
     const results = host.querySelector('[aria-label="Results"]')!;
     expect(results.textContent).toContain('Preparing Speaker…');
+    expectNoJargon(host);
     expect(results.textContent).not.toMatch(/Not solved yet|Ingest|Solve is not available/);
     // Automatic preparation offers no action on either surface.
     expect(results.querySelector('button')).toBeNull();
@@ -700,7 +702,7 @@ describe('CadLinkPanel', () => {
     expect(engine.querySelector('.cad-solve-inputs-reported')?.textContent).toContain('Engines that can: bempp, beat-cpu.');
     expect(engine.querySelector('.solve-readiness')).toBeNull();
     expect(buttonTexts(engine)).toEqual(['Dismiss']);
-    expect(buttonLabels(engine)[0]).toBe('Dismiss: operation op-engine');
+    expect(buttonLabels(engine)[0]).toBe('Dismiss: this model');
     // The model is on screen, so the card's own guidance replaces the backend's
     // message; its collapsed Solve inputs keep it, as reported.
     expect(setup.querySelector(':scope > div > span:not([role])')?.textContent).toContain('This model is on screen');
@@ -1775,7 +1777,7 @@ describe('CadLinkPanel', () => {
 
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);
     expect(useCadReturnStore.getState().selectedBundle?.documentName).toBe('Tritonia');
-    expect(host.querySelector('.cad-status-strip')?.textContent).toContain('Returned and prepared Tritonia');
+    expect(host.querySelector('.cad-status-strip')?.textContent).toContain('Received and prepared Tritonia');
     expect(host.querySelector('.cad-check-findings')?.textContent).toContain('freshness');
   });
 
@@ -2141,7 +2143,7 @@ describe('CadLinkPanel', () => {
 
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     const identity = host.querySelector('.cad-model-identity')!;
-    expect(identity.querySelector('.cad-model-name')?.textContent).toMatch(/^Return · \d{2}:\d{2}$/);
+    expect(identity.querySelector('.cad-model-name')?.textContent).toMatch(/^Model · \d{2}:\d{2}$/);
     expect(identity.querySelector('time')?.textContent).toBe('2 min ago');
     expect(identity.querySelector('time')?.title).toBeTruthy();
     const disclosure = host.querySelector<HTMLButtonElement>('.cad-history .section-head')!;
@@ -2157,6 +2159,7 @@ describe('CadLinkPanel', () => {
     expect(options[0].textContent).toContain('1 source');
     expect(options[0].textContent).not.toContain('linked instance');
     expect(options[1].textContent).toContain('2 sources · 2 linked instances');
+    expectNoJargon(host);
 
     act(() => options[1].click());
     expect(options[0].getAttribute('aria-selected')).toBe('false');
@@ -2185,7 +2188,7 @@ describe('CadLinkPanel', () => {
 
     openHistory();
     expect(host.querySelector('.cad-history')?.textContent)
-      .toContain('1 return from other CAD-linked projects is not listed');
+      .toContain('1 model from other CAD-linked projects is not listed');
     const history = host.querySelector('.cad-bundle-list')!;
     expect(history.textContent).toContain('Current project');
     expect(history.textContent).not.toContain('Other project');
@@ -2532,7 +2535,8 @@ describe('CadLinkPanel', () => {
 
     // Primary path: what happened and what to do, with no opaque identity.
     const primary = alert.textContent!.replace(disclosure.textContent!, '');
-    expect(primary).toContain('refused');
+    expect(primary).toContain('could not');
+    expectNoJargon(alert);
     expect(primary).not.toContain('393aaad4');
     expect(primary).not.toContain('defaulted to identity');
 
@@ -2697,14 +2701,14 @@ describe('CadLinkPanel', () => {
     await clickIngest();
     act(() => useCadReturnStore.setState(s => ({ meshSizes: { ...s.meshSizes, source_size_mm: { ...s.meshSizes.source_size_mm, ['source-hf']: 2.5 } } })));
     listingChanged = true;
-    const refresh = host.querySelector<HTMLButtonElement>('button[aria-label="Refresh CAD returns"]')!;
+    const refresh = host.querySelector<HTMLButtonElement>('button[aria-label="Refresh CAD models"]')!;
     await act(async () => { refresh.click(); await Promise.resolve(); await Promise.resolve(); });
 
     // The model's line says it once; the technical reason is for developer details (U6).
     expect(host.querySelector('.cad-status-line')?.textContent).toContain('Preparing Speaker…');
-    expect(host.textContent).not.toContain('source inventory or source sizing suggestions changed');
+    expect(host.textContent).not.toContain('sources or suggested source sizes changed');
     expect(useCadReturnStore.getState().meshSizes.source_size_mm['source-hf']).toBe(2.5);
-    expect(importedSubmissionBlocker()).toContain('source inventory or source sizing suggestions changed');
+    expect(importedSubmissionBlocker()).toContain('sources or suggested source sizes changed');
     expect(host.textContent).not.toContain('Rebuild mesh');
   });
 
@@ -2822,7 +2826,7 @@ describe('CadLinkPanel', () => {
     expect(host.textContent).toBe('');
     resetCadCoordinationForTests('off');
     await act(async () => { root.render(<CadCoordinationNote/>); });
-    expect(host.textContent).toContain('Background coordination: off');
+    expect(host.textContent).toContain('Background checks are off');
     expect(host.textContent).not.toContain('WG2_CAD_COORDINATION');
     resetCadCoordinationForTests();
   });
@@ -2898,7 +2902,7 @@ describe('CadLinkPanel', () => {
       findings: [
         {
           id: 'finding-stale-7c1e', kind: 'stale-detection-unavailable', blocking: false,
-          reason: 'stale detection unavailable: this returned bundle predates wgreturn 1.1 and carries no document signature',
+          reason: 'WG cannot tell whether this model is out of date. Send it again from Fusion.',
         },
         { id: 'unlinked-mode', kind: 'freshness', blocking: false, verdict: 'unlinked' },
       ],
@@ -2923,7 +2927,7 @@ describe('CadLinkPanel', () => {
     expect(notes).not.toBeNull();
     // WG cannot tell whether this model is stale: said in words, never by id.
     expect(notes!.textContent).toContain('WG cannot tell whether this model is out of date');
-    expect(notes!.textContent).toContain('carries no document signature');
+    expect(notes!.textContent).toContain('Send it again from Fusion.');
     expect(checks.textContent).not.toContain('finding-stale-7c1e');
     // Not a blocker: nothing to approve, and it is not counted as one.
     expect(checks.querySelector('.cad-check-findings')).toBeNull();

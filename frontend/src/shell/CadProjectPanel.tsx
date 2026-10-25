@@ -96,7 +96,7 @@ async function openCadOnlyProject(project: CadProject, ticket: DesignOpenTicket)
   const response = await listReturns();
   const bundle = newestReturnForProject(response.items, project);
   if (!bundle) {
-    throw new Error(`No return from ${projectName(project)} is available to open. Send the document from Fusion again.`);
+    throw new Error(`No model from ${projectName(project)} is available to open. Send the document from Fusion again.`);
   }
   // After the last await, immediately before the switch: a design opened, or
   // a newer open asked for, while the list was read is the one that stays.

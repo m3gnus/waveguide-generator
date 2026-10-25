@@ -1,3 +1,4 @@
+import { expectNoJargon } from '../testing/expectNoJargon';
 import legacyHold from '../jobs/cadRefusedJob.fixture.json';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { archivedRequest, workspaceFor } from './cadlink/selection.fixtures';
@@ -130,6 +131,7 @@ describe('jobs panel run list', () => {
     expect(host.querySelector('.job-label')?.textContent).toBe(title);
     expect(host.querySelector('.job-title')?.getAttribute('title')).toBe(`#123456 · ${title}`);
     expect(host.querySelector('.job-source')?.textContent).toContain('Old Fusion document');
+    expectNoJargon(host);
     const input = host.querySelector<HTMLInputElement>('[aria-label="Filter runs"]')!;
     act(() => enter(input, 'old fusion'));
     expect(host.querySelectorAll('.job-card')).toHaveLength(1);

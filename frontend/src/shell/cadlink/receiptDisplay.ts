@@ -60,7 +60,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
     const name = receipt.document_name ?? 'the model Fusion sent';
     if (receipt.outcome === 'refused') {
       display.refuseAutomaticRestore?.();
-      report(receipt, 'refused', `Fusion sent ${name}, but WG could not take it: ${receipt.message ?? receipt.reason ?? 'refused'}`);
+      report(receipt, 'refused', `Fusion sent ${name}, but WG could not take it: ${receipt.message ?? receipt.reason ?? 'please send it again from Fusion'}`);
       display.enterCadWorkspace();
       return true;
     }
@@ -82,7 +82,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
     newestCursor = receipt.cursor;
     newestReceiptId = receipt.receipt_id;
     if (workspaceModeStore.getSnapshot().importedInput === 'file') {
-      report(receipt, 'superseded', `Received ${name}; your mesh file stays selected. Select CAD Link to use a CAD return.`);
+      report(receipt, 'superseded', `Received ${name}; your mesh file stays selected. Select CAD Link to use a CAD model.`);
       return true;
     }
     const inputRevision = workspaceModeStore.getSnapshot().inputRevision;

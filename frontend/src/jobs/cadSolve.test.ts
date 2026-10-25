@@ -91,7 +91,7 @@ describe('CAD job commands and window identities', () => {
     const fetcher = vi.fn(async () => json({}));
     vi.stubGlobal('fetch', fetcher);
     vi.spyOn(jobsSocket, 'refresh').mockResolvedValue();
-    await expect(dismissCadJob({ ...job(), status })).rejects.toThrow('Only a refused solve can be dismissed');
+    await expect(dismissCadJob({ ...job(), status })).rejects.toThrow('This solve cannot be dismissed yet');
     expect(stopped).not.toHaveBeenCalled();
     expect(fetcher).not.toHaveBeenCalled();
   });
@@ -125,7 +125,7 @@ it('does not stop a refused row that became active after the render', async () =
   publishCadJobs([{ ...refused, status: 'running' }]);
   const stopped = vi.spyOn(jobsSocket, 'stopJob').mockResolvedValue();
   const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
-  await expect(dismissCadJob(refused)).rejects.toThrow('Only a refused solve can be dismissed');
+  await expect(dismissCadJob(refused)).rejects.toThrow('This solve cannot be dismissed yet');
   expect(stopped).not.toHaveBeenCalled();
   expect(fetcher).not.toHaveBeenCalled();
   vi.restoreAllMocks(); vi.unstubAllGlobals(); publishCadJobs([]);

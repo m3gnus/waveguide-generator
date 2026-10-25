@@ -1,3 +1,4 @@
+import { expectNoJargon } from '../testing/expectNoJargon';
 import legacyHold from '../jobs/cadRefusedJob.fixture.json';
 import { cadJobFixture, publishCadJobs } from '../jobs/cadSolve.fixtures';
 import { cadJobSummary } from '../jobs/cadSolve';
@@ -44,10 +45,12 @@ describe('workspace mode switch', () => {
   });
 
   afterEach(() => {
+    const wording = host.cloneNode(true) as Element;
     act(() => root.unmount());
     workspaceModeStore.setMode('parametric');
     vi.restoreAllMocks();
     host.remove();
+    expectNoJargon(wording);
   });
 
   it('counts only live held requests in the toolbar chip', async () => {

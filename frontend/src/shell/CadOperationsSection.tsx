@@ -92,7 +92,7 @@ function useFindingReview(operation: CadOperationSummary): FindingReview & { ret
       const detail = job?.cad_state;
       const preparation = detail?.preparation;
       if (!current) return;
-      if (!preparation) throw new Error('the backend has not recorded its preparation yet');
+      if (!preparation) throw new Error('WG has not prepared this model yet');
       // The ids are the review; the ingestion record only puts words to them.
       const findings = await getIngest(String(preparation.ingest_id ?? ''))
         .then((record) => record.findings.filter((finding) => preparation.blocking_finding_ids.includes(finding.id)))
@@ -272,7 +272,7 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
   // A received operation is the backend's own loop to prepare.
   const waiting = solve && operation.state === 'needs_user_input';
   const active = isActiveJobStatus(job.status);
-  const label = documentName ?? `operation ${operation.operationId}`;
+  const label = documentName ?? 'this model';
   // Only the preparation the operation names: an approval never carries to another.
   const reviewedPreparation = review.findingIds.length > 0
     && review.preparationId === operation.preparationId ? review.preparationId : null;
@@ -313,7 +313,7 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
   const ladder = engineReason ? [] : solveGateLadder(operation, review.error ? null : review);
   const header = solve
     ? manual ? waiting ? operation.attention === 'ready' ? 'Your solve is ready' : 'Your solve is waiting' : 'Your solve is in progress' : 'Fusion asked for a solve'
-    : `CAD operation · ${operation.kind}`;
+    : `CAD request`;
   return <div className="cad-direction-alert cad-operation" data-operation-id={operation.operationId} data-request-id={job.id} tabIndex={-1}>
     <div>
       <b>{header}{documentName ? ` · ${documentName}` : ''}</b>

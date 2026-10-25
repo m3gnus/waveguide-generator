@@ -1,3 +1,4 @@
+import { expectNoJargon } from '../testing/expectNoJargon';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -63,9 +64,11 @@ describe('StatusBar workspace modes', () => {
   });
 
   afterEach(() => {
+    const wording = host.cloneNode(true) as Element;
     act(() => root.unmount());
     workspaceModeStore.setMode('parametric');
     host.remove();
+    expectNoJargon(wording);
   });
 
   it('replaces every parametric next-solve fact in CAD mode', () => {

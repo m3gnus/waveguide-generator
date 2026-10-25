@@ -503,7 +503,7 @@ it.each(['reload', 'project open'])('fronted Send remains eligible for initial s
   }
   expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
   expect(calls('/api/cadlink/ingest')).toHaveLength(0);
-  if (scenario === 'project open') expect(cadWorkspace.getSnapshot().status).toContain('Selected the latest matching return');
+  if (scenario === 'project open') expect(cadWorkspace.getSnapshot().status).toContain('Selected the latest matching model');
 });
 
 it.each(['pending', 'in flight'])('discovery waits for a %s receipt display before choosing an initial model (rows 1, 5)', async (phase) => {
@@ -790,7 +790,7 @@ it.each(['project open', 'application switch'])('R3X defers initial selection th
   expect(Object.keys(cadReceiptsStore.getState().receipts)).toHaveLength(0);
   expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
   expect(calls('/api/cadlink/ingest')).toHaveLength(0);
-  if (entry === 'project open') expect(cadWorkspace.getSnapshot().status).toContain('Selected the latest matching return');
+  if (entry === 'project open') expect(cadWorkspace.getSnapshot().status).toContain('Selected the latest matching model');
 });
 
 it('R3Y auto-open polls read fresh receipts before a late Send push', async () => {
@@ -880,7 +880,7 @@ it('project open resolves its initial choice when receipt transport retries are 
   expect(failedReads).toBe(3);
   expect(cadReceiptsStore.getState().feedback['receipt-1'].outcome).toBe('display_failed');
   expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
-  expect(cadWorkspace.getSnapshot().status).toContain('Selected the latest matching return');
+  expect(cadWorkspace.getSnapshot().status).toContain('Selected the latest matching model');
   expect(calls('/api/cadlink/ingest')).toHaveLength(0);
 });
 

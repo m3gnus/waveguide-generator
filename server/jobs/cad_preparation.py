@@ -133,7 +133,7 @@ _PROGRESS = {
 }
 _STAGE_WORDS = {
     STAGE_RECEIVED: "Waiting to prepare this solve",
-    STAGE_VALIDATING: "Checking the return",
+    STAGE_VALIDATING: "Checking the model",
     STAGE_PREPARING_MESH: "Preparing the mesh",
     STAGE_READY: "Prepared",
 }

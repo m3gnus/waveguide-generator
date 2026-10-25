@@ -46,7 +46,7 @@ export const REFUSAL_COPY: readonly RefusalCopy[] = [
     // placement to identity would solve the geometry at the wrong position,
     // which nothing downstream could detect, so the refusal is correct.
     invariant: 'has no resolvable wrapper occurrence',
-    summary: 'Fusion refused to export this waveguide: it could not find the component '
+    summary: 'Fusion could not export this waveguide: it could not find the component '
       + 'the waveguide was placed as, so it does not know where the geometry sits in the '
       + 'assembly. Nothing was exported and nothing was solved at a guessed position.',
     // No cause is named. `_matching_occurrences` scans occurrences under a

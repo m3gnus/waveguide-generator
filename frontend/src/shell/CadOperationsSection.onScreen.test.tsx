@@ -1,3 +1,4 @@
+import { expectNoJargon } from '../testing/expectNoJargon';
 /**
  * "Errors only when the user makes a mistake": a waiting request gets a card
  * only when it is about what is in front of the user -- the model on screen,
@@ -110,6 +111,7 @@ describe('operation cards for the model on screen', () => {
   async function show(operations: CadOperationSummary[]) {
     setRequests({ operations: Object.fromEntries(operations.map((item) => [item.operationId, item])) });
     await act(async () => root.render(<CadOperationsSection record={record}/>));
+    expectNoJargon(host);
   }
 
   const cards = () => [...host.querySelectorAll<HTMLElement>('.cad-operation')];
@@ -212,9 +214,7 @@ describe('operation cards for the model on screen', () => {
     const [card] = cards();
     expect(card.dataset.operationId).toBe(RECOVERY_ID);
     expect(card.textContent).toContain('Update interrupted — recovery required · 250728solana');
-    for (const jargon of ['Journal phase', 'durable operation notice', RECOVERY_ID]) {
-      expect(card.textContent).not.toContain(jargon);
-    }
+    expectNoJargon(card, { forbidden: ['Journal phase', RECOVERY_ID] });
     expect(earlier()).toBeNull();
   });
 
@@ -238,7 +238,7 @@ describe('operation cards for the model on screen', () => {
   it('names an engine that cannot solve the return by what it is, not as unavailable', async () => {
     await show([solve({ reason: 'engine_cannot_solve_return', message: 'BEAT · CUDA solves CAD returns only in Accurate. Choose Accurate, or Metal / AUTO.' })]);
     const text = cards()[0].textContent ?? '';
-    expect(text).not.toContain('the selected engine cannot solve this return');
+    expect(text).not.toContain('the selected engine cannot solve this model');
     expect(cards()[0].querySelector('.solve-readiness')).toBeNull(); // Engine remedies belong to Results solve progress.
     expect(text).not.toContain('Choose Accurate, or Metal / AUTO.');
   });

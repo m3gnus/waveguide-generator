@@ -1,3 +1,4 @@
+import { sourceRoleLabel } from '../model/cadLabels';
 import { useMemo, useState, type ReactNode } from 'react';
 import type { CadReturnFinding, CadReturnIngestRecord } from '../api/cadlink';
 import { cadMeshSizing } from '../api/cadMesh';
@@ -36,7 +37,7 @@ import { workspaceNavigation } from './workspaceNavigation';
 export const FRESHNESS_COPY: Record<string, string> = {
   current: 'Current — unchanged fingerprint and the saved design still agree with this generator.',
   body_modified: 'CAD body changed after linking. This returned geometry remains the solve truth.',
-  missing_design: 'The linked design is not in this workspace registry; this is normal for a return from another machine.',
+  missing_design: 'The linked design is not in this workspace registry; this is normal for a model from another machine.',
   design_changed: 'The linked Waveguide Generator design has changed since this geometry was exported.',
   generator_changed: 'The same saved design would export differently with the current generator.',
   unknown: 'Freshness could not be established from the available evidence.',
@@ -102,7 +103,7 @@ export function modelSummary(record: CadReturnIngestRecord): string {
       : 'full model';
   return [
     bodies.length === 1 ? bodies[0] : bodies.length > 1 ? pluralized(bodies.length, 'body', 'bodies') : null,
-    `${pluralized(sourceCount, 'source')}${roles.length ? ` (${roles.join(', ')})` : ''}`,
+    `${pluralized(sourceCount, 'source')}${roles.length ? ` (${roles.map(sourceRoleLabel).join(', ')})` : ''}`,
     recordInterpretation(record) ? null : domain,
   ].filter(Boolean).join(' · ');
 }
@@ -198,7 +199,7 @@ export function MeshLine({ record }: { record: CadReturnIngestRecord }) {
   const parts = [
     typeof sizes.walls === 'number' ? `Walls ${sizes.walls} mm` : null,
     ...(record.sources ?? []).map((source) => typeof sizes.sources[source.id] === 'number'
-      ? `${source.role} source ${sizes.sources[source.id]} mm` : null),
+      ? `${sourceRoleLabel(source.role)} source ${sizes.sources[source.id]} mm` : null),
     ...sizes.zones.map((zone) => `${zone.name} — size zone ${zone.size_mm} mm`),
     typeof triangles === 'number' ? `${triangles.toLocaleString('en-US')} triangles` : null,
     typeof sizing.ram_gb === 'number' ? sizing.ram_gb < 0.05 ? 'memory < 0.1 GB' : `memory ≈ ${sizing.ram_gb.toFixed(1)} GB` : null,

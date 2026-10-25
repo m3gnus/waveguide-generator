@@ -1,10 +1,11 @@
+import { expectNoJargon } from '../testing/expectNoJargon';
 import { describe, expect, it } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
 import { currentModelStatus, type CurrentModel } from '../model/currentModel';
 import { bundle, record } from '../shell/cadlink/selection.fixtures';
 import states from '../../../server/tests/fixtures/cad_request_states.json';
 import { selectCadModelState, type CadModelRequest } from './cadModelState';
-import { cadModelStatusLine, cadRequestState, cadRequestsChipLabel, type CadModelStatusLine } from './cadModelStatusLine';
+import { cadModelStatusLine, cadRequestState, cadRequestsChipLabel } from './cadModelStatusLine';
 import type { MeshCeilingChoice } from './meshCeilingChoice';
 import { cadJobFixture } from '../jobs/cadSolve.fixtures';
 import type { CadOperationSummary } from '../api/cadOperations';
@@ -34,9 +35,6 @@ function requestFor(job: JobItem): CadModelRequest {
 /** Words a user never reads (server/cadlink/wglink_protocol.py checks the same sentences). */
 const JARGON = ['$.', 'bundle', 'validation', 'wgi_', 'sha256', 'ingest', 'manifest', 'snapshot', 'BEM', 'cut plane',
   'physical group', 'Prepare simulation', 'CAD Link setup', 'needs preparation', 'Not prepared yet', 'No CAD geometry'];
-function expectNoJargon(line: CadModelStatusLine) {
-  for (const word of JARGON) expect(`${line.text} ${line.short}`).not.toContain(word);
-}
 
 interface Row {
   name: string;
@@ -56,7 +54,7 @@ describe('the CAD request states shared with Fusion', () => {
     const line = cadModelStatusLine(model, request);
     expect(line.action).toBe(row.wg.action);
     expect(line.text).toBe(row.wg.text);
-    expectNoJargon(line);
+    expectNoJargon(`${line.text} ${line.short}`, { forbidden: JARGON });
   });
 });
 
@@ -75,12 +73,13 @@ describe('the CAD model status line', () => {
     expect(line(selected, { ...idle, ingesting: true })).toMatchObject({ text: 'Preparing Speaker…', action: 'none', tone: 'busy' });
     const ready = line(onScreen);
     expect(ready).toMatchObject({ text: 'Ready to solve · 3,035 triangles', short: 'ready · 3,035 triangles', action: 'solve', actionLabel: 'Solve' });
-    expectNoJargon(ready);
+    expectNoJargon(`${ready.text} ${ready.short}`, { forbidden: JARGON });
   });
 
   it('prepares selected and changed models automatically without a Prepare action', () => {
-    expectNoJargon(line(selected));
-    expectNoJargon(line({ ...onScreen, needsIngest: true }));
+    for (const current of [line(selected), line({ ...onScreen, needsIngest: true })]) {
+      expectNoJargon(`${current.text} ${current.short}`, { forbidden: JARGON });
+    }
     expect(line(selected)).toMatchObject({ text: 'Preparing Speaker…', action: 'none' });
     expect(line(pointer)).toMatchObject({ action: 'none' });
     expect(line({ ...onScreen, needsIngest: true })).toMatchObject({ text: 'Preparing Speaker…', action: 'none', actionLabel: null });
@@ -97,7 +96,7 @@ describe('the CAD model status line', () => {
     ]) {
       const result = line(stopped);
       expect(result).toMatchObject(expected);
-      expectNoJargon(result);
+      expectNoJargon(`${result.text} ${result.short}`, { forbidden: JARGON });
       // Real in-flight work still says Preparing, regardless of eligibility.
       expect(line(stopped, { ...idle, ingesting: true })).toMatchObject({ text: 'Preparing Speaker…', tone: 'busy' });
     }
@@ -133,7 +132,7 @@ describe('the CAD model status line', () => {
       message: 'This model meshes to 1 triangles', mesh_limit: { triangles: 54_739, limit: 22_000 } } } as unknown as JobItem;
     const held = line(selected, idle, { kind: 'waiting', job });
     expect(held).toMatchObject({ text: 'Speaker needs your choice: it meshes to 54,739 triangles (limit 22,000).', action: 'choose' });
-    expectNoJargon(held);
+    expectNoJargon(`${held.text} ${held.short}`, { forbidden: JARGON });
     const ceiling: MeshCeilingChoice = { name: 'Speaker', nextStep: 'x', bundlePath: bundle.bundlePath, deferred: true,
       meshLimit: { triangles: 30_001, limit: 22_000 } };
     expect(line(selected, idle, null, ceiling).text).toBe('Speaker needs your choice: it meshes to 30,001 triangles (limit 22,000).');
@@ -142,7 +141,7 @@ describe('the CAD model status line', () => {
   it('fails calmly, with Try again only where it can work, and never also says not prepared', () => {
     const failed = line(selected, { ...idle, ingestError: 'stage 1 bundle validation: $.sources[x]' });
     expect(failed).toMatchObject({ text: 'Waveguide Generator could not prepare Speaker.', short: 'could not prepare', action: 'try-again' });
-    expectNoJargon(failed);
+    expectNoJargon(`${failed.text} ${failed.short}`, { forbidden: JARGON });
     expect(line(pointer, { ...idle, ingestError: 'x' })).toMatchObject({ action: 'none' });
   });
 
@@ -157,7 +156,7 @@ describe('the CAD model status line', () => {
     const recorded = line(selected, { ...idle, ingestError: 'Waveguide Generator could not prepare Speaker. This has been recorded for the developers.',
       ingestFailure: { recorded: true, retry: true, diagnostic: null } });
     expect(recorded.text).toContain('This has been recorded for the developers.');
-    for (const result of [full, newer, recorded]) expectNoJargon(result);
+    for (const result of [full, newer, recorded]) expectNoJargon(`${result.text} ${result.short}`, { forbidden: JARGON });
   });
 
   it('words the top-bar chip for requests about other models', () => {

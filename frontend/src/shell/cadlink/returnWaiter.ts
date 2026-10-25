@@ -1,3 +1,4 @@
+import { cadModelLabel } from '../../model/cadLabels';
 import { createStore } from 'zustand/vanilla';
 import { getFusionCadStatus, jsonRequest, listReturns, requestFusionReturn,
   type CadReturnBundle } from '../../api/cadlink';
@@ -91,7 +92,7 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
         if (!returned) return;
         reconciled.add(id);
         if (returnBelongsToAnotherProject(returned, useDocumentStore.getState().identity?.designId)) {
-          operation.finish(null, new Error(`Received ${returned.documentName ?? returned.name}, but it belongs to another CAD-linked project. Open that project from File → CAD-linked designs.`));
+          operation.finish(null, new Error(`Received ${cadModelLabel(returned)}, but it belongs to another CAD-linked project. Open that project from File → CAD-linked designs.`));
         } else operation.finish(returned);
       }).catch(() => undefined);
       const answer = readOutcome(id, controller.signal).then(async (outcome) => {
@@ -102,7 +103,7 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
         if (outcome.requestId === id && ['rejected', 'cancelled', 'failed'].includes(outcome.state)) {
           const presented = presentCadRefusal(outcome.message);
           const sentence = presented ? refusalSentence(presented)
-            : `Fusion ${outcome.state === 'cancelled' ? 'did not carry out' : 'refused'} the request for this model’s geometry, and reported no detail.`;
+            : `Fusion ${outcome.state === 'cancelled' ? 'did not carry out' : 'could not carry out'} the request for this model’s geometry, and reported no detail.`;
           if (presented) store.setState({ errorDiagnostics: { message: sentence, detail: presented.diagnostics } });
           operation.finish(null, new Error(sentence));
         }
@@ -128,7 +129,7 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
   // before the POST answers with its correlation id.
   const pullFromFusion = (): Promise<CadReturnBundle> => {
     if (pending) return pending.promise;
-    if (!active) return Promise.reject(new SupersededError('The geometry return waiter was stopped.'));
+    if (!active) return Promise.reject(new SupersededError('Stopped waiting for the CAD model.'));
     const load = currentDocumentLoad();
     const choice = useCadReturnStore.getState().captureModelChoice();
     const identity = useDocumentStore.getState().identity;
@@ -163,14 +164,14 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
         clearTimers(); stops.forEach((stop) => stop());
         store.setState({ pullingFromFusion: false, requestId: null });
         if (returned) {
-          store.setState({ status: `Received ${returned.documentName ?? returned.name} from Fusion 360.` });
+          store.setState({ status: `Received ${cadModelLabel(returned)} from Fusion 360.` });
           try {
             if (options.onArrival) options.onArrival(returned);
             else {
               const continuity = useCadReturnStore.getState().selectArrivedBundle(returned);
               importedMeshStore.beginIntent();
               workspaceModeStore.setMode('cad'); workspaceNavigation.activate('geometry');
-              store.setState({ status: `Received ${returned.documentName ?? returned.name} from Fusion 360.${
+              store.setState({ status: `Received ${cadModelLabel(returned)} from Fusion 360.${
                 continuity === 'carried' ? ' Kept your mesh, channel, and solve settings.' : ''}` });
             }
             resolve(returned);
@@ -192,7 +193,7 @@ export function createCadReturnWaiter(options: CadReturnWaiterOptions = {}) {
     stops.push(useCadReturnStore.subscribe(changed), useDesignStore.subscribe(changed),
       useDocumentStore.subscribe(changed), connection.subscribe(changed), subscribeRevision(changed));
     deadline = setTimeout(() => operation.finish(null, new Error(
-      'Fusion did not return the requested model within 60 seconds. Check Fusion for a message from the Waveguide Generator add-in in Fusion, then retry.',
+      'Fusion did not send the requested model within 60 seconds. Check Fusion for a message from the Waveguide Generator add-in in Fusion, then retry.',
     )), FUSION_RETURN_TIMEOUT_MS);
     options.noteCadActivity?.();
     void (async () => {

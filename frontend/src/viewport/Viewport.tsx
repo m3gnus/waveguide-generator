@@ -1,3 +1,4 @@
+import { SOURCE_ROLE_LABELS } from '../model/cadLabels';
 import { useCadModelStatusLine } from '../shell/CadModelStatusLine';
 import type { CadModelStatusLine } from '../stores/cadModelStatusLine';
 import { designFingerprint } from '../results/runCoherence';
@@ -72,10 +73,6 @@ import { canRenderWebGL, resetWebGLProbe, type CameraRequest, type ZoomRequest, 
 import { cadMeshRecoveryNotice } from '../model/cadMeshRecovery';
 import './viewport.css';
 
-/** The role names as the CAD document says them, not as the mesh spells them. */
-const SOURCE_ROLE_LABELS: Record<SourceRole, string> = {
-  HF: 'HF', MF: 'MF', LF: 'LF', PORT_EXIT: 'Port exit',
-};
 
 const modes: Array<{ mode: DisplayMode; title: string; icon?: 'clay' | 'wire' | 'xray' | 'zebra' | 'curve' | 'section'; glyph?: string }> = [
   { mode: 'clay', title: 'Clay', icon: 'clay' },
@@ -763,7 +760,7 @@ export function Viewport() {
       ? cadRecord && cadHasSeparateViewportMesh
         ? [
           { key: 'cad', label: 'Geometry', title: 'Show the tessellated CAD display model', select: () => importedMeshStore.showCad() },
-          { key: 'cadSolver', label: 'Mesh', title: 'Show the exact triangles this CAD return will be solved on', select: () => importedMeshStore.showCadSolver() },
+          { key: 'cadSolver', label: 'Mesh', title: 'Show the exact triangles this CAD model will be solved on', select: () => importedMeshStore.showCadSolver() },
         ]
         : []
       : [

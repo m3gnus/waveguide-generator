@@ -186,7 +186,7 @@ export function DriverFields({ channel, form, onField }: {
       />
     </label>)}
     {missing && <p className="cad-driver-hint">Required: {missing}. {channelDriverPresent(form)
-      ? 'The solve is refused while a started driver is missing them.'
+      ? 'WG cannot solve the model while a started driver is missing them.'
       : 'With nothing entered the channel solves as a unit-drive basis.'}</p>}
   </div>;
 }

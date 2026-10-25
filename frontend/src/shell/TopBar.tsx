@@ -339,7 +339,7 @@ export function AttentionNotices() {
         if (mode !== 'cad') activateWorkspaceMode('cad');
         workspaceNavigation.navigate('geometry');
       }}
-    ><i/>{unseenRefusals === 1 ? 'A CAD request was refused' : `${unseenRefusals} CAD requests were refused`} · Show</button>}
+    ><i/>{unseenRefusals === 1 ? 'WG could not accept a CAD request' : `WG could not accept ${unseenRefusals} CAD requests`} · Show</button>}
     {showReady && <button
       type="button"
       className="attention-notice attention-ready"

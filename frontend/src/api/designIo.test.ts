@@ -513,7 +513,7 @@ describe('Send to CAD requests', () => {
 
     await expect(sendDesignToCad(
       hydrateDesignDocument({ formula: 'OSSE' }), 1, 'horn', null, fetcher, 'attempt-1',
-    )).rejects.toThrow('bundle was exported, but WG could not notify Fusion');
+    )).rejects.toThrow('model was saved, but WG could not notify Fusion');
   });
 
   it('routes an unconfigured Fusion connection to Settings instead of opening a surprise picker', async () => {

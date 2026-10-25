@@ -434,8 +434,8 @@ def test_hashless_return_reports_document_staleness_as_undetectable(tmp_path: Pa
     assert status["documentChanged"] is False
     assert status["documentChangeDetectable"] is False
     assert status["staleDetectionExplanation"] == (
-        "stale detection unavailable: this returned bundle predates wgreturn 1.1 "
-        "and carries no document signature"
+        "WG cannot tell whether this model is out of date. "
+        "Send it again from Fusion."
     )
 
 

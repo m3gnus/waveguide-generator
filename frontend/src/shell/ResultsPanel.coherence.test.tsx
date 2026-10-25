@@ -273,8 +273,8 @@ describe('results run coherence', () => {
 
     await act(async () => { root.render(<ResultsPanel/>); });
     const marker = host.querySelector<HTMLButtonElement>('button.result-context-marker.stale')!;
-    expect(marker.textContent).toBe('Different CAD return');
-    expect(marker.getAttribute('title')).toContain("This run's CAD return differs from the one in the viewport.");
+    expect(marker.textContent).toBe('Different CAD model');
+    expect(marker.getAttribute('title')).toContain("This run's CAD model differs from the one in the viewport.");
 
     await act(async () => { marker.click(); });
     await act(async () => { toolbarButton(document.body, 'Show this model')!.click(); });
@@ -313,7 +313,7 @@ describe('results run coherence', () => {
       await Promise.resolve();
     });
     const cadOptions = [...host.querySelectorAll<HTMLOptionElement>('.result-compare-add option')].map((option) => option.textContent);
-    expect(cadOptions).toContain('#11 · imported-option · Different CAD return');
+    expect(cadOptions).toContain('#11 · imported-option · Different CAD model');
     expect(cadOptions).toContain('#7 · current · Parametric');
   });
 

@@ -1,6 +1,8 @@
+import { expectNoJargon } from '../testing/expectNoJargon';
 import * as coordinator from './JobsCoordinator';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { OPERATION_REASON_WORDS, MODEL_STATUS_TITLE } from './solveProgress';
 import type { JobItem } from '../api/jobsSocket';
 import {
   etaSeconds,
@@ -61,6 +63,9 @@ function op(overrides: Partial<OperationProgressLike> = {}): OperationProgressLi
 }
 
 describe('operationStageWord', () => {
+  it('keeps rejected model requests calm', () => {
+    expect(operationStageWord(op({ state: 'rejected', reason: 'model_needs_change' }))).toBe('Not prepared');
+  });
   it('reads server/cadlink/joblane/preparation.py stages onto the same words a job uses, monotonically', () => {
     expect(operationStageWord(op({ state: 'received', stage: null }))).toBe('Received');
     expect(operationStageWord(op({ state: 'received', stage: 'validating' }))).toBe('Received');
@@ -80,14 +85,14 @@ describe('operationStageWord', () => {
     expect(operationWaitingReason(op({ state: 'needs_user_input', reason: 'preparation_failed' }))).toBe('preparation failed');
     expect(operationWaitingReason(op({ state: 'needs_user_input', reason: 'interrupted' }))).toBe('interrupted');
     expect(operationWaitingReason(op({ state: 'needs_user_input', reason: 'engine_cannot_solve_return' })))
-      .toBe('the selected engine cannot solve this return');
+      .toBe('the selected engine cannot solve this model');
   });
 
   it('is "Waiting for you" only for a real question, never for a failure', () => {
     expect(operationStageWord(op({ state: 'needs_user_input', reason: 'mesh_too_large', attention: 'question' }))).toBe('Waiting for you');
     expect(operationStageWord(op({ state: 'needs_user_input', reason: 'preparation_failed', attention: 'failed' }))).toBe('Not prepared');
     expect(operationStageWord(op({ state: 'needs_user_input', reason: 'return_unavailable', attention: 'action' }))).toBe('Not prepared');
-    expect(operationWaitingReason(op({ state: 'needs_user_input', reason: 'return_unavailable' }))).toBe('its return cannot be read');
+    expect(operationWaitingReason(op({ state: 'needs_user_input', reason: 'return_unavailable' }))).toBe('its model cannot be read');
   });
 
   it('says a prepared request is ready to solve, never waiting for you', () => {
@@ -98,7 +103,7 @@ describe('operationStageWord', () => {
 
   it('names cancellation and terminal outcomes', () => {
     expect(operationStageWord(op({ state: 'cancel_requested' }))).toBe('Cancelling…');
-    expect(operationStageWord(op({ state: 'rejected' }))).toBe('Failed');
+    expect(operationStageWord(op({ state: 'rejected' }))).toBe('Not prepared');
     expect(operationStageWord(op({ state: 'cancelled' }))).toBe('Cancelled');
     expect(operationStageWord(op({ state: 'recovery_required' }))).toBe('Needs recovery');
   });
@@ -274,4 +279,11 @@ describe('SolveProgressView (component)', () => {
     const done = renderToStaticMarkup(<SolveProgressView job={solving({ status: 'complete', frequency_progress: { done: 12, total: 12 } })} now={now}/>);
     expect(done).not.toContain('frequency 12 of 12');
   });
+});
+
+// Internal failures can still say what failed; all reasons must keep transport
+// terms and raw ids out of their short user-facing phrases.
+it('keeps CAD status and reason words free of internal jargon', () => {
+  Object.values(OPERATION_REASON_WORDS).forEach(words => expectNoJargon(words));
+  Object.values(MODEL_STATUS_TITLE).forEach(words => expectNoJargon(words));
 });

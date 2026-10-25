@@ -63,8 +63,8 @@ def test_worked_example_shape_and_real_member_table_validate(tmp_path: Path) -> 
     assert result.manifest["instances"][0]["config"]["dimensions"]["length"]["raw"] == "130"
     assert result.artifact_sha256.startswith("sha256:")
     assert result.degradations == (
-        "stale detection unavailable: this returned bundle predates wgreturn 1.1 "
-        "and carries no document signature",
+        "WG cannot tell whether this model is out of date. "
+        "Send it again from Fusion.",
     )
 
 

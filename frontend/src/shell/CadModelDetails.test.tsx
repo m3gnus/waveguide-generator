@@ -1,3 +1,4 @@
+import { expectNoJargon } from '../testing/expectNoJargon';
 /**
  * Model details (PLAN.md U4) says what the model is and what Solve uses; the
  * model's state and its one Solve are its status line (`CadModelStatusLine`). A run in progress is
@@ -138,6 +139,17 @@ describe('Model details, and the run status Results shows for its model', () => 
     currentOperation = null;
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it('names port exits and passive radiators without raw role constants', async () => {
+    const value = record({
+      sources: [{ id: 'port', role: 'PORT_EXIT' }, { id: 'passive', role: 'PASSIVE_CARDIOID' }],
+      mesh_snapshot: { ...record().mesh_snapshot!, source_size_mm: { port: 6, passive: 8 } },
+    } as never);
+    await act(async () => root.render(<Details value={value}/>));
+    expect(host.querySelector('.cad-solve-summary')?.textContent).toContain('Port exit, Passive radiator');
+    expect(host.querySelector('.cad-mesh-line')?.textContent).toContain('Passive radiator source 8 mm');
+    expectNoJargon(host);
   });
 
   it('folds the model into one collapsed Model details, in plain words, and leaves Solve to the status line', async () => {
@@ -448,6 +460,7 @@ describe('Model details, and the run status Results shows for its model', () => 
     expect(host.querySelector('.current-model-status')?.textContent).toContain('0:00');
     // Engine/sources/domain, the same detail line the full variant shows.
     expect(host.querySelector('.current-model-status')?.textContent).toContain('Metal-BEM · 3 sources · half');
+    expectNoJargon(host.querySelector('.current-model-status')!);
 
     await act(async () => { vi.advanceTimersByTime(20_000); });
     act(() => publishJobs([job({

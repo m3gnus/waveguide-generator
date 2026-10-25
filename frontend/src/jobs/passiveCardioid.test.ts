@@ -1,3 +1,4 @@
+import { expectNoJargon } from '../testing/expectNoJargon';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import {
@@ -273,9 +274,13 @@ describe('passive cardioid wire helper', () => {
 
 describe('imported topology refusals', () => {
   it('explains every passive_cardioid_topology condition in terms of a fix', () => {
-    const explain = (message: string) => explainImportedRefusal(`passive_cardioid_topology: ${message}`);
+    const explain = (message: string) => {
+      const advice = explainImportedRefusal(`passive_cardioid_topology: ${message}`);
+      expectNoJargon(advice);
+      return advice;
+    };
     expect(explain('passive cardioid requires an ingestion source tag map')).toContain('Rebuild the mesh');
-    expect(explain('passive cardioid requires PORT_EXIT aperture sources')).toContain('PORT_EXIT source');
+    expect(explain('passive cardioid requires PORT_EXIT aperture sources')).toContain('Port exit source');
     expect(explain('passive cardioid requires exactly one MF diaphragm source')).toContain('single source with the MF role');
     expect(explain(
       "coupled passive cardioid requires the MF diaphragm's drive channel to carry one driver model",

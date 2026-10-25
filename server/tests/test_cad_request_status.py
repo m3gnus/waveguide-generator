@@ -759,15 +759,35 @@ def test_every_state_wg_can_write_reads_without_jargon(h) -> None:
         full = {"contract": "wg-request-status", "schemaVersion": 1, "seq": 1, "requestId": "cmd-1", **record}
         assert protocol.user_text_violations(_words(full)) == [], record
     # The next steps WG's holds and failed preparations put in a record pass too.
-    from server.cadlink.operations import QUESTION_CODES, hold_details, preparation_failure, USER_WORDED_FAILURE_CODES
+    from server.cadlink.operations import (
+        REASON_CODES, PREPARATION_STOPPED_MESSAGE, hold_details, hold_stage_message, preparation_failure,
+    )
+    from server.jobs.cad_preparation import _STAGE_WORDS
+    from server.mesh.errors import MeshTooLarge, SolverMemoryTooLarge
+    from server.cadlink.wgreturn import _LEGACY_SIGNATURE_DEGRADATION
+    from server.cadlink.fusion.fusion_status import _LEGACY_SIGNATURE_EXPLANATION
 
-    for code in QUESTION_CODES:
+    stages = [*_STAGE_WORDS.values(), PREPARATION_STOPPED_MESSAGE, hold_stage_message(None),
+              _LEGACY_SIGNATURE_DEGRADATION, _LEGACY_SIGNATURE_EXPLANATION]
+    for code in REASON_CODES:
+        stages.append(hold_stage_message(code))
+    for message in stages:
+        assert protocol.user_text_violations(message) == [], message
+    for sizes in (None, {"rigid_size_mm": 4}):
+        message = MeshTooLarge(28_944, 22_000, mesh_sizes=sizes).message()
+        assert protocol.user_text_violations(message) == []
+    assert protocol.user_text_violations(SolverMemoryTooLarge.USER_MESSAGE) == []
+
+    for code in REASON_CODES:
         hold = hold_details(code, "")
         assert protocol.user_text_violations(" ".join(
             [hold["next_step"], *(option["label"] for option in hold["options"])])) == [], code
-    for code in USER_WORDED_FAILURE_CODES:
-        failure = preparation_failure(code, "Tritonia speaker")
-        assert protocol.user_text_violations(f"{failure['message']} {failure['next_step'] or ''}") == [], code
+    for code in REASON_CODES:
+        for manual in (False, True):
+            failure = preparation_failure(code, "Tritonia speaker", manual=manual)
+            words = " ".join([failure["message"], failure["next_step"] or "",
+                              *(option["label"] for option in failure["options"])])
+            assert protocol.user_text_violations(words) == [], code
 
 
 def test_the_delivery_loop_step_publishes_and_reports_each_failure_once(h, caplog) -> None:

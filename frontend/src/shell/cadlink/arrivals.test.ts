@@ -288,10 +288,10 @@ it.each(['matching', 'no match'])('holds project-open feedback until the deferre
   if (result === 'matching') {
     expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(matching.bundlePath);
     expect(initialChoiceOwed.current).toBe(false);
-    expect(status).toHaveBeenCalledWith(expect.stringContaining('Selected the latest matching return'));
+    expect(status).toHaveBeenCalledWith(expect.stringContaining('Selected the latest matching model'));
   } else {
     expect(useCadReturnStore.getState().selectedBundle).toBeNull();
-    expect(status).toHaveBeenCalledWith(expect.stringContaining('No matching CAD return'));
+    expect(status).toHaveBeenCalledWith(expect.stringContaining('No matching CAD model'));
   }
   // Opening a project prepares its return, as before; only a launch restore never meshes.
   expect(ingest).toHaveBeenCalledTimes(result === 'matching' ? 1 : 0);

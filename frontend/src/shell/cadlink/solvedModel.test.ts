@@ -91,7 +91,7 @@ describe('the model a CAD solve prepared', () => {
     onScreen(received);
     const solved = run('job-solved', prepared);
     // The defect: a solve of the model on screen, called another model.
-    expect(runContextMarker(solved, currentModel())).toBe('Different CAD return');
+    expect(runContextMarker(solved, currentModel())).toBe('Different CAD model');
 
     await expect(adoptSolvedCadModel(solved, { manifestSha256: MANIFEST, sourceIngestId: received.ingest_id }, display, serving(prepared)))
       .resolves.toBe('adopted');
@@ -139,7 +139,7 @@ describe('the model a CAD solve prepared', () => {
       .resolves.toBe('declined');
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(received.ingest_id);
     expect(useCadReturnStore.getState().areaDriftOverrides).toContain('source-hf');
-    expect(runContextMarker(solved, currentModel())).toBe('Different CAD return');
+    expect(runContextMarker(solved, currentModel())).toBe('Different CAD model');
   });
 
   it('yields to an ingest the user started while the prepared record was read', async () => {

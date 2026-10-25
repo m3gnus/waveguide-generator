@@ -60,10 +60,10 @@ export { fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView };
 function returnDisplayName(bundle: CadReturnBundle): string {
   if (bundle.documentName) return bundle.documentName;
   const date = new Date(bundle.modifiedAt);
-  if (Number.isNaN(date.getTime())) return 'Return';
+  if (Number.isNaN(date.getTime())) return 'Model';
   const hours = String(date.getHours()).padStart(2, '0');
   const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `Return · ${hours}:${minutes}`;
+  return `Model · ${hours}:${minutes}`;
 }
 
 /** How a declared pre-cut domain reads in one phrase, or '' for a full model. */
@@ -74,7 +74,7 @@ export function declaredDomainPhrase(planes: string[] | undefined): string {
 }
 
 function bundleInventory(bundle: CadReturnBundle): string {
-  if (!bundle.readable) return bundle.reason ?? 'Manifest is unreadable';
+  if (!bundle.readable) return bundle.reason ?? 'WG cannot read this model. Send it again from CAD.';
   const sources = pluralized(bundle.sourceCount ?? bundle.sources.length, 'source');
   const domain = declaredDomainPhrase(bundle.declaredCutPlanes);
   const parts = [sources];
@@ -108,8 +108,8 @@ export function CadCoordinationNote() {
   const inbox = coordinator.fusionStatus?.addinInboxTransfer === true;
   return <p className="cad-detail cad-coordination-state" data-coordination={state}>
     {inbox
-      ? 'Background coordination: off. WG checks CAD Link returns and Fusion status only while CAD work is in flight, and when you act.'
-      : 'Background coordination: off, but this build of the Waveguide Generator add-in in Fusion needs the listing to pick up Send: it does not send through WG\u2019s request inbox, so WG keeps checking the WGLink folder on a timer.'}
+      ? 'Background checks are off. WG checks models from CAD and Fusion status while CAD work is in progress, and when you act.'
+      : 'Background checks are off. This older Fusion add-in needs WG to keep checking the WGLink folder for models you send.'}
   </p>;
 }
 
@@ -137,11 +137,11 @@ function ModelVersions({ projectBundles, unlinkedReturns, otherProjectReturns, s
         role="tab"
         aria-selected={filter === 'unlinked'}
         className={filter === 'unlinked' ? 'on' : ''}
-        title="Returns that name no CAD-linked project. Never selected as this project's geometry automatically."
+        title="Models with no CAD-linked project. Never selected as this project's geometry automatically."
         onClick={() => setFilter('unlinked')}
       >Unlinked · {unlinkedReturns.length}</button>
     </div>}
-    <div className="cad-bundle-list" role="listbox" aria-label="CAD return history">
+    <div className="cad-bundle-list" role="listbox" aria-label="CAD model history">
       {shown.map((bundle) => <button
         type="button"
         key={bundle.bundlePath}
@@ -149,10 +149,10 @@ function ModelVersions({ projectBundles, unlinkedReturns, otherProjectReturns, s
         aria-selected={selectedPath === bundle.bundlePath}
         disabled={!bundle.readable}
         onClick={() => select(bundle)}
-        title={!bundle.readable ? bundle.reason ?? 'Manifest is unreadable' : `${bundleInventory(bundle)} · ${fullTime(bundle.modifiedAt)}`}
+        title={!bundle.readable ? bundle.reason ?? 'WG cannot read this model. Send it again from CAD.' : `${bundleInventory(bundle)} · ${fullTime(bundle.modifiedAt)}`}
       ><b>{returnDisplayName(bundle)}</b><span>{bundleInventory(bundle)}</span><time dateTime={bundle.modifiedAt} title={fullTime(bundle.modifiedAt)}>{relativeTime(bundle.modifiedAt)}</time></button>)}
     </div>
-    {otherProjectReturns > 0 && <p className="cad-detail">{pluralized(otherProjectReturns, 'return')} from other CAD-linked projects {otherProjectReturns === 1 ? 'is' : 'are'} not listed. Open that project from File → CAD-linked designs to use {otherProjectReturns === 1 ? 'it' : 'them'}.</p>}
+    {otherProjectReturns > 0 && <p className="cad-detail">{pluralized(otherProjectReturns, 'model')} from other CAD-linked projects {otherProjectReturns === 1 ? 'is' : 'are'} not listed. Open that project from File → CAD-linked designs to use {otherProjectReturns === 1 ? 'it' : 'them'}.</p>}
   </CadDrawer>;
 }
 
@@ -435,7 +435,7 @@ export function CadLinkPanel() {
               {link.documentName} · {link.instanceId}
             </option>)}
           </select>
-          <small>Updates and returns use this exact managed Part Studio link. WG does not guess from the newest document.</small>
+          <small>Updates and received models use this exact linked Part Studio. WG does not guess from the newest document.</small>
         </label>}
         {/* Fusion: the actions that resolve the out-of-sync state, and only those. */}
         {!onshape && workflow.state === 'not-configured' && fusionStatus?.cadFolderMissingPath && <RootFolderControls cadlinkOnly showPath={false}/>}
@@ -451,7 +451,7 @@ export function CadLinkPanel() {
         </div>}
         {/* Onshape: the same card carries its send/return pair. */}
         {onshape && workflow.state !== 'not-configured' && !confirmPublicDocument && workflow.action && <button className="primary cad-primary-action" disabled={sendingToOnshape} onClick={() => void sendToOnshape()}>{sendingToOnshape ? (workflow.action === 'update' ? 'Updating…' : 'Creating…') : onshapeActionLabel}</button>}
-        {onshape && linkedDocument && workflow.state !== 'not-configured' && <button className="cad-secondary-action" disabled={ingesting} onClick={() => { void cadWorkspaceView.returnFromOnshape().catch(() => undefined); }}>{ingesting ? 'Returning & preparing…' : 'Bring Onshape geometry into WG'}</button>}
+        {onshape && linkedDocument && workflow.state !== 'not-configured' && <button className="cad-secondary-action" disabled={ingesting} onClick={() => { void cadWorkspaceView.returnFromOnshape().catch(() => undefined); }}>{ingesting ? 'Receiving & preparing…' : 'Bring Onshape geometry into WG'}</button>}
         {onshape && linkedDocument?.documentUrl && <a className="link-button cad-onshape-open" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open {linkedDocument.documentName} in Onshape</a>}
         {onshape && linkedDocument && workflow.state !== 'not-configured' && unlinkButton}
       </>}
@@ -520,8 +520,8 @@ export function CadLinkPanel() {
         <button
           className="cad-icon-button"
           disabled={loading || ingesting}
-          title="Refresh the CAD return listing"
-          aria-label="Refresh CAD returns"
+          title="Refresh the CAD model list"
+          aria-label="Refresh CAD models"
           onClick={() => void cadWorkspaceView.refresh()}
         ><Icon name="reset"/></button>
       </header>
@@ -529,7 +529,7 @@ export function CadLinkPanel() {
           ? 'Send this design to Onshape, then bring its geometry back here.'
           : 'Send a design from Fusion 360 and it will appear here.'}/>}
       {bundle && <div className="cad-model-identity">
-        <b className="cad-model-name" title={bundle.documentName ?? bundle.name}>{returnDisplayName(bundle)}</b>
+        <b className="cad-model-name" title={returnDisplayName(bundle)}>{returnDisplayName(bundle)}</b>
         {bundle.bundleOrigin === 'native' && <ExperimentalBadge/>}
         {record && <span
           className={`cad-state-chip${['current', 'unlinked'].includes(freshnessSummary(record)) ? '' : ' warn'}`}

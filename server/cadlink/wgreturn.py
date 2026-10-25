@@ -118,8 +118,8 @@ FORBIDDEN_VERDICT_KEYS = protocol._wg_FORBIDDEN_VERDICT_KEYS
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 _WINDOWS_DRIVE = protocol._wg__WINDOWS_DRIVE
 _LEGACY_SIGNATURE_DEGRADATION = (
-    "stale detection unavailable: this returned bundle predates wgreturn 1.1 "
-    "and carries no document signature"
+    "WG cannot tell whether this model is out of date. "
+    "Send it again from Fusion."
 )
 
 

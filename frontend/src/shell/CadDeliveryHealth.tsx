@@ -32,11 +32,11 @@ export function deliveryHealthLines(status: CadDeliveryStatus | null, now: numbe
   if (status.consumer === 'disabled') {
     return [{
       tone: 'blocked',
-      text: 'WG is not collecting CAD Link requests. A Send or Solve from Fusion is refused there, and nothing here runs one.',
+      text: 'WG cannot receive models from Fusion while CAD Link is turned off. Turn on CAD Link, then send the model again.',
     }];
   }
   if (status.consumer !== 'running') {
-    return [{ tone: 'blocked', text: 'WG’s CAD Link request consumer is not running, so nothing sent from Fusion is taken.' }];
+    return [{ tone: 'blocked', text: 'WG cannot receive models from Fusion right now. Restart WG, then send the model again.' }];
   }
   const lines: DeliveryHealthLine[] = [];
   if (status.declined) lines.push({ tone: 'waiting', text: `Requests from Fusion are waiting: ${status.declined}` });
@@ -46,7 +46,7 @@ export function deliveryHealthLines(status: CadDeliveryStatus | null, now: numbe
   if (status.passHung || (unfinished && now - started > HUNG_PASS_MS)) {
     lines.push({
       tone: 'blocked',
-      text: `WG’s request consumer has not finished a pass since ${clock(status.passStartedAt!)}; requests sent since then have not been taken.`,
+      text: `WG has not finished checking models from Fusion since ${clock(status.passStartedAt!)}. Restart WG, then send the model again.`,
     });
   }
   return lines;
@@ -91,7 +91,7 @@ export function CadDeliveryHealth({ now = Date.now }: { now?: () => number }) {
     {lines.map((line) => <p key={line.text} className={`cad-delivery-${line.tone}`}>{line.text}</p>)}
     {shown && status?.consumer === 'disabled' && <p className="cad-detail">Turned off by {status.variable ?? 'WG2_CAD_DELIVERY'}=0.</p>}
     {refused.length > 0 && <details className="cad-delivery-refusals" open={unseen > 0}>
-      <summary>{refused.length === 1 ? 'A request from Fusion was refused' : `${refused.length} requests from Fusion were refused`}</summary>
+      <summary>{refused.length === 1 ? 'WG could not accept a model from Fusion' : `WG could not accept ${refused.length} models from Fusion`}</summary>
       <ul>
         {refused.slice(0, 5).map((refusal) => <li key={`${refusal.at}|${refusal.file}`}>
           <b>{clock(refusal.at)}</b> {refusal.reason}

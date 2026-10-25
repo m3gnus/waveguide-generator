@@ -360,7 +360,7 @@ export function CadCrossover() {
       return text === null ? [] : [{ member: shortLabel(member), text }];
     });
   return <>
-    <ToggleRow id="cad-combine" label={CAD_CONTROLS.combinedOutput.label} revealId={CAD_CONTROLS.combinedOutput.reveal.id} help="Append a filtered, time-aligned crossover sum of the drive channels as one more result channel. On by default for a return with two or more drive channels; the chain runs lowest band first, ordered by the sources' return roles (LF → MF → HF)." checked={enabled} onChange={state.setCombineEnabled}/>
+    <ToggleRow id="cad-combine" label={CAD_CONTROLS.combinedOutput.label} revealId={CAD_CONTROLS.combinedOutput.reveal.id} help="Append a filtered, time-aligned crossover sum of the drive channels as one more result channel. On by default for a model with two or more drive channels; the chain runs lowest band first, ordered by the sources' roles (LF → MF → HF)." checked={enabled} onChange={state.setCombineEnabled}/>
     {enabled && spec && <>
       <div className="crossover-view-row" data-control-reveal-id={CAD_CONTROLS.crossoverAdvanced.reveal.id}>
         <div className="crossover-segment" role="group" aria-label="Crossover view">

@@ -50,7 +50,7 @@ describe('why a request from Fusion is not moving', () => {
   it('says a consumer is off in plain words; the variable that turned it off is developer detail', () => {
     const [line] = deliveryHealthLines(status({ consumer: 'disabled' }), NOW);
     expect(line.tone).toBe('blocked');
-    expect(line.text).toContain('not collecting CAD Link requests');
+    expect(line.text).toContain('cannot receive models from Fusion while CAD Link is turned off');
     expect(line.text).not.toContain('WG2_CAD_DELIVERY');
   });
 
@@ -64,19 +64,19 @@ describe('why a request from Fusion is not moving', () => {
       lastPassCompletedAt: new Date(NOW - HUNG_PASS_MS - 60_000).toISOString(),
       passStartedAt: new Date(NOW - HUNG_PASS_MS - 1_000).toISOString(),
     }), NOW);
-    expect(lines.map((line) => line.text).join(' ')).toContain('has not finished a pass since');
+    expect(lines.map((line) => line.text).join(' ')).toContain('has not finished checking models from Fusion since');
   });
 
   it('believes the server when it says a pass is stuck', () => {
     const lines = deliveryHealthLines(status({ passHung: true }), NOW);
-    expect(lines.map((line) => line.text).join(' ')).toContain('has not finished a pass since');
+    expect(lines.map((line) => line.text).join(' ')).toContain('has not finished checking models from Fusion since');
   });
 
   it('tells a stuck pass from an idle one', () => {
     const started = new Date(NOW - HUNG_PASS_MS - 1_000).toISOString();
     const stuck = deliveryHealthLines(status({ passStartedAt: started, lastPassCompletedAt: null }), NOW);
     expect(stuck).toHaveLength(1);
-    expect(stuck[0].text).toContain('has not finished a pass since');
+    expect(stuck[0].text).toContain('has not finished checking models from Fusion since');
     // A pass under way for a moment is just a pass.
     const busy = deliveryHealthLines(status({ passStartedAt: new Date(NOW - 1_000).toISOString(), lastPassCompletedAt: '2026-09-21T11:59:00Z' }), NOW);
     expect(busy).toEqual([]);
@@ -130,7 +130,7 @@ describe('the CAD Link panel section', () => {
   it.each([
     ['disabled', status({ consumer: 'disabled' }), 'WG2_CAD_DELIVERY=0'],
     ['declining', status({ declined: 'No WGLink folder is selected.' }), 'No WGLink folder is selected.'],
-    ['hung', status({ passHung: true }), 'has not finished a pass since'],
+    ['hung', status({ passHung: true }), 'has not finished checking models from Fusion since'],
     ['healthy idle', status(), ''],
   ])('the shell owns %s delivery health without the coordinator or operation store', async (_name, projection, text) => {
     resetCadDeliveryHealthStore();
@@ -157,7 +157,7 @@ describe('the CAD Link panel section', () => {
     act(() => useCadDeliveryHealthStore.getState().mergeRefusals([{ operationId: null, file: 'x.json', reason: 'preflight refused', at: '2026-09-21T12:00:00Z' }]));
     expect(host.textContent).not.toContain('refused');
     act(() => preferencesStore.update({ showDeveloperDetails: true }));
-    expect(host.textContent).toContain('A request from Fusion was refused');
+    expect(host.textContent).toContain('WG could not accept a model from Fusion');
   });
 
   it('recovers waiting intake without the coordinator and stops its clock when the request is taken', async () => {
@@ -213,7 +213,7 @@ describe('the CAD Link panel section', () => {
       }));
       await vi.advanceTimersByTimeAsync(10);
     });
-    expect(host.textContent).toContain('has not finished a pass since');
+    expect(host.textContent).toContain('has not finished checking models from Fusion since');
     // The push was enough: no clock was needed to learn it.
     expect(reads).toBe(2);
   });
@@ -268,7 +268,7 @@ describe('the CAD Link panel section', () => {
       expect(useCadDeliveryHealthStore.getState().refusals).toEqual([refusal]);
       expect(useCadDeliveryHealthStore.getState().unseenRefusals).toBe(1);
       expect(host.querySelectorAll('.attention-refused')).toHaveLength(1);
-      expect(host.querySelector('.attention-refused')?.textContent).toBe('A CAD request was refused · Show');
+      expect(host.querySelector('.attention-refused')?.textContent).toBe('WG could not accept a CAD request · Show');
       await act(async () => {
         // Reconnection can replay both the push and the server's retained list.
         message({ v: 1, kind: 'cadInboxRefusal', refusal });
@@ -286,7 +286,7 @@ describe('the CAD Link panel section', () => {
     answer = status({ recentRefusals: [{ operationId: 'e5f7', file: 'e5f7.json', reason: 'It does not name its kind.', at: '2026-09-21T11:59:00Z' }] });
     await mount();
     await act(async () => { await vi.advanceTimersByTimeAsync(10); });
-    expect(host.textContent).toContain('A request from Fusion was refused');
+    expect(host.textContent).toContain('WG could not accept a model from Fusion');
     expect(host.textContent).toContain('It does not name its kind.');
   });
 });
@@ -321,7 +321,7 @@ describe('a refused request reaches the user in either mode', () => {
     expect(host.querySelector('.attention-refused')).toBeNull();
     act(() => useCadDeliveryHealthStore.getState().mergeRefusals([{ operationId: null, file: 'x.json', reason: 'r', at: '2026-09-21T12:00:00Z' }]));
     const notice = host.querySelector<HTMLButtonElement>('.attention-refused')!;
-    expect(notice.textContent).toContain('A CAD request was refused');
+    expect(notice.textContent).toContain('WG could not accept a CAD request');
     act(() => notice.click());
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
     expect(activations.at(-1)).toBe('geometry');
@@ -333,7 +333,7 @@ describe('a refused request reaches the user in either mode', () => {
     expect(host.querySelector('.attention-refused')).toBeNull();
     // The count waits: turning the details on shows what was refused.
     act(() => preferencesStore.update({ showDeveloperDetails: true }));
-    expect(host.querySelector('.attention-refused')?.textContent).toContain('A CAD request was refused');
+    expect(host.querySelector('.attention-refused')?.textContent).toContain('WG could not accept a CAD request');
   });
 });
 
@@ -410,7 +410,7 @@ describe('the CAD Link panel says why the listing still runs (review F5)', () =>
     document.body.append(host);
     const root = createRoot(host);
     await act(async () => { root.render(<CadCoordinationNote/>); });
-    expect(host.textContent?.includes('needs the listing to pick up Send')).toBe(needed);
+    expect(host.textContent?.includes('older Fusion add-in needs WG to keep checking')).toBe(needed);
     act(() => root.unmount());
     host.remove();
     resetCadCoordinationForTests();

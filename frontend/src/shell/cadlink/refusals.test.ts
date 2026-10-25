@@ -18,7 +18,7 @@ describe('presentCadRefusal', () => {
     // A modeller has to learn that Fusion refused and that nothing was solved
     // at a guessed position; both belong in the sentence they are shown.
     expect(presented!.summary.toLowerCase()).toContain('fusion');
-    expect(presented!.summary.toLowerCase()).toContain('refused');
+    expect(presented!.summary.toLowerCase()).toContain('could not');
   });
 
   it('offers a remedy the modeller can carry out', () => {
@@ -52,7 +52,7 @@ describe('presentCadRefusal', () => {
    */
   const APPROVED_SENTENCES: Readonly<Record<string, string>> = {
     'has no resolvable wrapper occurrence':
-      'Fusion refused to export this waveguide: it could not find the component '
+      'Fusion could not export this waveguide: it could not find the component '
       + 'the waveguide was placed as, so it does not know where the geometry sits in the '
       + 'assembly. Nothing was exported and nothing was solved at a guessed position. '
       + 'Open the linked document in Fusion and check that the WG waveguide’s own '

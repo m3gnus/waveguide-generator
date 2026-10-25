@@ -47,7 +47,7 @@ function importedEngineChoice(engine: EngineCapability, verdict: ImportedEngineV
   const refused = verdict ? !verdict.solves && !(verdict.stage === 'availability' && selectableEngine(engine))
     : !selectableEngine(engine) || !imported;
   const reason = verdict && !verdict.solves
-    ? verdict.stage === 'availability' && !showRepair ? null : verdict.reason ?? 'cannot solve this return'
+    ? verdict.stage === 'availability' && !showRepair ? null : verdict.reason ?? 'cannot solve this model'
     : !imported ? 'does not solve imported CAD geometry'
     : !engine.available && showRepair && !engine.name.startsWith('beat-') ? engine.reason : null;
   const note = engine.qualification === 'pending' ? checking ? ' · checking OpenCL…' : ''

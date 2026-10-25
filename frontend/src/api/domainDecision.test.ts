@@ -72,16 +72,16 @@ describe('the concluded reading, in plain words', () => {
   it('names each refusal in a few words, with the message the engines refuse with', () => {
     const oblique = decisionReading(REFUSED_OBLIQUE);
     expect(oblique).toMatchObject({
-      text: 'Refused: cut on an oblique plane — send the uncut model',
+      text: 'WG could not solve the model cut on an oblique plane — send the uncut model',
       refused: true,
       refusal: REFUSED_OBLIQUE.refusal!.message,
     });
-    expect(decisionReading(REFUSED_OFF_CENTRE).text).toBe('Refused: cut off-centre at x = 12.5 mm — send the uncut model');
+    expect(decisionReading(REFUSED_OFF_CENTRE).text).toBe('WG could not solve the model cut off-centre at x = 12.5 mm — send the uncut model');
     const cut = decisionReading(REFUSED_CUT);
-    expect(cut.text).toBe('Refused: cut in CAD at x = 0 cannot be recovered — send the uncut model');
+    expect(cut.text).toBe('WG could not rebuild the model cut in CAD at x = 0 — send the uncut model');
     expect(cut.failed).toEqual(['the left and right sources are separate identities']);
     expect(decisionReading(decisionFixture({ refusal: { code: 'imported_frame_improper', message: 'm' } })).text)
-      .toBe('Refused: the solver frame is not a proper rotation — send the model again');
+      .toBe('WG could not orient this model for solving — send the model again');
   });
 
   it('names the cut the refusal message names, in the server\'s order', () => {
@@ -92,7 +92,7 @@ describe('the concluded reading, in plain words', () => {
       oblique_cuts: [{ rim_edges: 40 }],
       off_centre_cuts: [{ plane_axis: 'y', offset_mm: 3, rim_edges: 12 }],
     });
-    expect(decisionReading(both).text).toBe('Refused: cut in CAD at x = 0 cannot be recovered — send the uncut model');
+    expect(decisionReading(both).text).toBe('WG could not rebuild the model cut in CAD at x = 0 — send the uncut model');
     expect(both.refusal!.message).toContain('open along x = 0');
     // Two refused rims: the one the message names.
     const two = decisionFixture({
@@ -100,10 +100,10 @@ describe('the concluded reading, in plain words', () => {
       cad_cuts: [{ ...REFUSED_CUT.cad_cuts[0] }, { ...REFUSED_CUT.cad_cuts[0], plane: 'y0', solver_plane: 'y0' }],
       refusal: { code: 'imported_open_half_shell', message: 'The model is open along y = 0 (80 rim edges).' },
     });
-    expect(decisionReading(two).text).toBe('Refused: cut in CAD at y = 0 cannot be recovered — send the uncut model');
+    expect(decisionReading(two).text).toBe('WG could not rebuild the model cut in CAD at y = 0 — send the uncut model');
     // Oblique before off-centre.
     expect(decisionReading(decisionFixture({ ...REFUSED_OBLIQUE, off_centre_cuts: [{ plane_axis: 'x', offset_mm: 5 }] })).text)
-      .toBe('Refused: cut on an oblique plane — send the uncut model');
+      .toBe('WG could not solve the model cut on an oblique plane — send the uncut model');
   });
 });
 

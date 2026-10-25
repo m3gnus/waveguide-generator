@@ -53,7 +53,7 @@ export function onshapeWorkflowView(status: OnshapeStatus | null): CadWorkflowVi
   if (status.state === 'instance_selection_required') return {
     state: 'instance-selection',
     headline: 'Choose an Onshape link',
-    detail: 'This design lineage has more than one managed Onshape Part Studio link. Choose the exact link before WG updates, returns, or unlinks it.',
+    detail: 'This design has more than one linked Onshape Part Studio. Choose the exact link before WG updates, receives geometry, or unlinks it.',
     action: null,
   };
   const documentName = status.link?.documentName ?? 'the linked document';
@@ -204,7 +204,7 @@ function notObservedView(view: CadWorkflowView, status: FusionCadStatus): CadWor
   return {
     ...view,
     headline: `Fusion 360 · last reported${when}`,
-    detail: `The Waveguide Generator add-in in Fusion reports only when it runs a command (its automatic coordination is off), so WG has not observed Fusion since${when ? ` then` : ''}. Send, Solve and Refresh still work: each checks Fusion when it runs. As of that report: ${view.detail}`,
+    detail: `The Waveguide Generator add-in in Fusion reports only when it runs a command (its background checks are off), so WG has not observed Fusion since${when ? ` then` : ''}. Send, Solve and Refresh still work: each checks Fusion when it runs. As of that report: ${view.detail}`,
   };
 }
 

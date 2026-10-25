@@ -355,6 +355,9 @@ def user_hold(status: str, cad: Mapping[str, Any]) -> bool:
     }
 
 
+PREPARATION_STOPPED_MESSAGE = "Not prepared"
+
+
 def hold_stage_message(code: Any, message: Any = "") -> str:
     """The stage message of a kept request (:func:`user_hold`), from :func:`reason_attention`.
 

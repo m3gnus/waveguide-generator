@@ -236,7 +236,7 @@ describe('job and last-model restores without the coordinator', () => {
     } finally { stop(); }
   });
 
-  it('says why when a never-solved CAD project has no return to show', async () => {
+  it('says why when a never-solved CAD project has no model to show', async () => {
     rememberLastModel({ model_id: 'wgl_project', input: 'cad' }); workspaceModeStore.setMode('cad');
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -246,7 +246,7 @@ describe('job and last-model restores without the coordinator', () => {
       return json({ items: path.endsWith('/designs') ? [{ lineageId: 'wgl_project', documentName: 'Speaker' }] : [], cadFolderConfigured: true });
     }) as unknown as typeof fetch;
     const status = vi.fn(); const select = vi.fn(); const stop = observeLastModel({ fetcher, reportStatus: status, selectBundle: select });
-    try { await vi.waitFor(() => expect(status).toHaveBeenCalledWith(expect.stringContaining('no return to show')));
+    try { await vi.waitFor(() => expect(status).toHaveBeenCalledWith(expect.stringContaining('no model to show')));
       expect(select).not.toHaveBeenCalled(); } finally { stop(); }
   });
 

@@ -1,3 +1,4 @@
+import { expectNoJargon } from '../testing/expectNoJargon';
 import '../shell/cadlink/restores';
 import { openImported, type ImportedDisplay } from '../stores/importedModel';
 import { deferred, job as archivedJob, json, mesh as archivedMesh, record as archivedRecord, workspaceFor } from '../shell/cadlink/selection.fixtures';
@@ -169,6 +170,7 @@ describe('Viewport preview errors', () => {
   });
 
   afterEach(() => {
+    const wording = [...host.querySelectorAll('.viewport-empty')].map(element => element.cloneNode(true) as Element);
     act(() => root.unmount());
     vi.restoreAllMocks();
     useDocumentStore.setState({ filename: 'tritonia_mk2.cfg' });
@@ -178,6 +180,7 @@ describe('Viewport preview errors', () => {
     importedMeshStore.clear();
     workspaceModeStore.setMode('parametric');
     host.remove();
+    wording.forEach(element => expectNoJargon(element));
   });
 
   it('shows a dismissible alert while a retained scene is present', () => {
@@ -1040,12 +1043,14 @@ describe('Viewport geometry warnings', () => {
   });
 
   afterEach(() => {
+    const wording = [...host.querySelectorAll('.viewport-empty')].map(element => element.cloneNode(true) as Element);
     act(() => root.unmount());
     host.remove();
     previewSnapshot.error = savedError;
     frame.header.previewMetadata = undefined;
     importedMeshStore.clear();
     workspaceModeStore.setMode('parametric');
+    wording.forEach(element => expectNoJargon(element));
   });
 
   // The mesher reports a guiding curve its coverage solver could not reach.
@@ -1191,11 +1196,13 @@ describe('BEMPP wall plan-adjustment note', () => {
   });
 
   afterEach(() => {
+    const wording = [...host.querySelectorAll('.viewport-empty')].map(element => element.cloneNode(true) as Element);
     act(() => root.unmount());
     host.remove();
     importedMeshStore.clear();
     workspaceModeStore.setMode('parametric');
     vi.restoreAllMocks();
+    wording.forEach(element => expectNoJargon(element));
   });
 
   async function renderWithAdjustments(adjustments: NonNullable<SolvePlan['adjustments']>) {
@@ -1284,11 +1291,13 @@ describe('solver-mesh refresh inputs and document loads', () => {
   });
 
   afterEach(() => {
+    const wording = [...host.querySelectorAll('.viewport-empty')].map(element => element.cloneNode(true) as Element);
     act(() => root.unmount());
     host.remove();
     importedMeshStore.clear();
     workspaceModeStore.setMode('parametric');
     vi.restoreAllMocks();
+    wording.forEach(element => expectNoJargon(element));
   });
 
   it.each(['same preview error', 'different preview error', 'dismissed preview error', 'reconnecting', 'stalled'] as const)(

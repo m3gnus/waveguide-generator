@@ -297,15 +297,15 @@ describe('Automatic + Change, from the domain decision', () => {
 
   it('states a refusal, the message every engine refuses with, and the conditions it failed', async () => {
     await render(REFUSED_OBLIQUE);
-    expect(line()).toBe('Refused: cut on an oblique plane — send the uncut model');
+    expect(line()).toBe('WG could not solve the model cut on an oblique plane — send the uncut model');
     expect(host.querySelector('[data-domain-refused]')).not.toBeNull();
     expect(host.querySelector('.cad-domain-refusal')!.textContent).toBe(REFUSED_OBLIQUE.refusal!.message);
 
     await render(REFUSED_OFF_CENTRE);
-    expect(line()).toBe('Refused: cut off-centre at x = 12.5 mm — send the uncut model');
+    expect(line()).toBe('WG could not solve the model cut off-centre at x = 12.5 mm — send the uncut model');
 
     await render(REFUSED_CUT);
-    expect(line()).toBe('Refused: cut in CAD at x = 0 cannot be recovered — send the uncut model');
+    expect(line()).toBe('WG could not rebuild the model cut in CAD at x = 0 — send the uncut model');
     expect([...host.querySelectorAll('.cad-domain-failed li')].map((item) => item.textContent))
       .toEqual(['the left and right sources are separate identities']);
   });

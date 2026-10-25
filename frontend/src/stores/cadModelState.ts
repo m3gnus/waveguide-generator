@@ -1,3 +1,4 @@
+import { cadModelLabel } from '../model/cadLabels';
 import { useStore } from 'zustand';
 import { useSyncExternalStore } from 'react';
 import { useShallow } from 'zustand/react/shallow';
@@ -83,7 +84,7 @@ export function selectCadModelState(
     failureDiagnostic: localFailure?.diagnostic ?? null,
     /** Whether trying again can work, as the server said; null when it did not say. */
     failureRetry: localFailure ? localFailure.retry : null,
-    label: bundle?.documentName?.trim() || record?.project?.document_name?.trim() || bundle?.name || 'CAD model',
+    label: bundle?.documentName?.trim() || record?.project?.document_name?.trim() || (bundle ? cadModelLabel(bundle) : 'CAD model'),
     lineageId: record?.project?.lineage_id ?? state.projectLineageId ?? bundle?.projectLineageId ?? null,
     // A selected CAD model is authored in CAD unless its own evidence says WG
     // made it: a linked freshness verdict, or a bundle naming the open design.

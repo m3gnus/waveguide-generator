@@ -195,7 +195,7 @@ export async function approveCadJob(jobId: string, approvals: NonNullable<CadSol
 export async function dismissCadJob(job: JobItem): Promise<void> {
   const current = jobsSocket.getSnapshot().jobs.find((item) => item.id === job.id) ?? job;
   if (!(isHeldCadJob(current) || isFailedCadPreparation(current)) || !current.cad_state || !operationNeedsUser(cadJobSummary(current))) {
-    throw new Error('Only a refused solve can be dismissed. Use Stop for an active solve.');
+    throw new Error('This solve cannot be dismissed yet. Use Stop for an active solve.');
   }
   // The backend deletes the refused chain in one transaction, so a reconnect
   // can never revive a parent this snapshot did not know about.

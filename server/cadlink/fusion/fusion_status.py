@@ -33,8 +33,8 @@ FUSION_STATUS_FILENAME = ".fusion-status.json"
 FUSION_STATUS_TTL = timedelta(seconds=20)
 _MAX_STATUS_BYTES = 256 * 1024
 _LEGACY_SIGNATURE_EXPLANATION = (
-    "stale detection unavailable: this returned bundle predates wgreturn 1.1 "
-    "and carries no document signature"
+    "WG cannot tell whether this model is out of date. "
+    "Send it again from Fusion."
 )
 ADDIN_OUTDATED_MESSAGE = (
     "The Waveguide Generator add-in in Fusion is older than this WG installation. Restart "

@@ -73,7 +73,7 @@ export function importedSubmissionBlocker(
   if (directivityError) return directivityError;
   if (state.setupLoading) return 'Wait for the model settings to finish loading.';
   if (!state.ingestRecord) return 'Prepare this model before solving.';
-  if (state.ingestRecord.evidence_unverified) return 'The retained return manifest cannot be verified; prepare this model again before solving.';
+  if (state.ingestRecord.evidence_unverified) return 'WG cannot verify its saved copy of this model; prepare it again before solving.';
   if (state.needsIngest) return state.ingestStaleReason ?? 'Sizing or source selection changed. Prepare the model again before solving.';
   if (requiredFem && femRegions.length === 0 && !state.exteriorOnly) {
     const declared = 'required FEM air volumes';
@@ -328,7 +328,7 @@ export function buildImportedSubmission(
   const opening = importedModelBlocker('cad');
   if (opening) throw new Error(opening);
   if (!record) throw new Error('Prepare this model before solving.');
-  if (record.evidence_unverified) throw new Error('The retained return manifest cannot be verified; prepare this model again before solving.');
+  if (record.evidence_unverified) throw new Error('WG cannot verify its saved copy of this model; prepare it again before solving.');
   const setup = effectiveImportedSetup('cad', record.ingest_id, () => resolveCadImportedSetup(state));
   if (record.native_source) setup.geometry.required_features = [...record.native_source.required_features];
   // Plans and model solves carry authored intent. The server projects coverage

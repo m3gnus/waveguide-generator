@@ -1,3 +1,4 @@
+import { expectNoJargon } from '../testing/expectNoJargon';
 import { act, isValidElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -90,6 +91,7 @@ describe('CAD project history', () => {
   const reportError = vi.fn();
   const render = async (node: React.ReactNode) => {
     await act(async () => { root.render(node); });
+    host.querySelectorAll('.cad-project, .cad-project-history').forEach(element => expectNoJargon(element));
     if (isValidElement(node) && node.type === CadProjectHistory) {
       const link = host.querySelector<HTMLButtonElement>('.cad-project-history button');
       if (link) {

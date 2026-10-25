@@ -87,7 +87,7 @@ export function solveStageWord(job: Pick<JobItem, 'status' | 'stage'> & Partial<
 }
 
 export const MODEL_STATUS_TITLE = {
-  solved: 'Solved', running: 'Solving', preparing: 'Preparing', waiting: 'Waiting for you', ready: 'Ready to solve', change: 'Needs a change', refused: 'Solve refused',
+  solved: 'Solved', running: 'Solving', preparing: 'Preparing', waiting: 'Waiting for you', ready: 'Ready to solve', change: 'Needs a change', refused: 'Solve did not start',
   failed: 'Solve failed', 'prepare-failed': 'Not prepared', 'never-solved': 'Not solved yet',
 };
 
@@ -129,7 +129,7 @@ export const OPERATION_REASON_WORDS: Record<string, string> = {
   solver_memory_exceeded: 'too large for this machine\'s memory',
   snapshot_invalid: 'preparation failed',
   snapshot_changed: 'changed after Fusion asked',
-  return_unavailable: 'its return cannot be read',
+  return_unavailable: 'its model cannot be read',
   wglink_folder_unset: 'no WGLink folder selected',
   excitation_refused: 'its drive cannot be solved as set',
   model_cut_unsolvable: 'arrived cut open',
@@ -140,13 +140,13 @@ export const OPERATION_REASON_WORDS: Record<string, string> = {
   update_restart_pending: 'held for the update restart',
   ready_to_solve: 'ready to solve',
   engine_unavailable: 'the selected engine cannot solve it',
-  engine_cannot_solve_return: 'the selected engine cannot solve this return',
-  submission_refused: 'the jobs system refused it',
+  engine_cannot_solve_return: 'the selected engine cannot solve this model',
+  submission_refused: 'WG could not start it',
   return_unsupported: 'needs a newer Waveguide Generator',
   disk_full: 'the disk is full',
   model_needs_change: 'needs a change in Fusion',
-  snapshot_unavailable: 'its return could not be read',
-  preflight_blocked: 'Fusion refused it',
+  snapshot_unavailable: 'its model could not be read',
+  preflight_blocked: 'needs a change in Fusion',
   request_payload_invalid: 'the request could not be read',
   baseline_conflict: 'the Fusion document changed',
   target_not_exact: 'the linked instance is ambiguous',
@@ -154,7 +154,7 @@ export const OPERATION_REASON_WORDS: Record<string, string> = {
   expired: 'expired',
   session_changed: 'Fusion restarted',
   publication_failed: 'could not be published',
-  adapter_refused: 'Fusion refused it',
+  adapter_refused: 'Fusion could not apply it',
   adapter_failed: 'Fusion could not apply it',
   adapter_not_started: 'Fusion never started it',
 };
@@ -170,7 +170,7 @@ export function operationReasonWords(reason: string | null | undefined): string 
  * its submitted stage only until its job appears. */
 export function operationStageWord(operation: OperationProgressLike): SolveStageWord {
   switch (operation.state) {
-    case 'rejected': return 'Failed';
+    case 'rejected': return 'Not prepared';
     case 'cancelled': return 'Cancelled';
     case 'cancel_requested': return 'Cancelling…';
     case 'needs_user_input':

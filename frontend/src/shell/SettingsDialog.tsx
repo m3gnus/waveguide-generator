@@ -142,7 +142,7 @@ const CAPTURE_CHOICES: Array<{ mode: CadCaptureMode; label: string; detail: stri
   {
     mode: 'off',
     label: "Don't keep",
-    detail: 'New returns carry no Fusion model. Models already kept remain available.',
+    detail: 'New models sent from Fusion include no Fusion file. Models already kept remain available.',
   },
 ];
 
@@ -300,7 +300,7 @@ function CadSettings() {
     </ol> : <ol className="cad-setup-steps" aria-label="Set up Autodesk Fusion 360">
       <li><b>Install and start the Waveguide Generator add-in in Fusion</b><span>Install the Waveguide Generator add-in in Fusion once, restart Fusion, then confirm <b>Utilities → Scripts and Add-Ins → WGLink</b> is set to run on startup. <a href="https://github.com/m3gnus/wglink/tree/main/fusion-addins/WGLink#install" target="_blank" rel="noreferrer noopener">Add-in install guide</a></span></li>
       <li><b>WGLink folder</b><span>WG and Fusion use this WGLink folder.</span><CadFolderSettings/></li>
-      <li><b>Open a design in Fusion</b><span>Close Settings, open <b>CAD Link</b>, and choose <b>Open in Fusion 360</b>. WG writes the bundle, starts Fusion, and the connection card confirms when the Waveguide Generator add-in in Fusion is online.</span></li>
+      <li><b>Open a design in Fusion</b><span>Close Settings, open <b>CAD Link</b>, and choose <b>Open in Fusion 360</b>. WG saves the model, starts Fusion, and the connection card confirms when the Waveguide Generator add-in in Fusion is online.</span></li>
     </ol>}
   </section>;
 }

@@ -23,7 +23,7 @@ from typing import Any, Callable, Iterator, Mapping, Sequence
 from server.workspace.archive_identity import record_run_segment
 from server.cadlink.operations import (
     REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED,
-    hold_details, hold_stage_message, user_hold,
+    hold_details, hold_stage_message, user_hold, PREPARATION_STOPPED_MESSAGE,
 )
 from server.jobs.cad_intent import return_identity
 from server.jobs.progress import METADATA_KEY as FREQUENCY_METADATA_KEY, checked_frequency_progress
@@ -1431,7 +1431,7 @@ class JobStore:
             held = user_hold("error", metadata["cad"])
             if held:
                 metadata["cad"]["hold"] = hold_details(code, message)
-            stage_message = hold_stage_message(code, message) if held else "Not solved"
+            stage_message = hold_stage_message(code, message) if held else PREPARATION_STOPPED_MESSAGE
             conn.execute(
                 """UPDATE simulation_jobs
                    SET status = ?, stage = ?, stage_message = ?,

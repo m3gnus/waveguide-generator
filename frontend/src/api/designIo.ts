@@ -224,7 +224,7 @@ export async function sendDesignToCad(
   const result = await response.json() as WgLinkExportResponse;
   if (result.cadHandoffRequestId) bindAttention(result.cadHandoffRequestId);
   if (result.cadHandoff === 'failed') {
-    throw new Error(`The CAD bundle was exported, but WG could not notify Fusion. Open it from ${result.bundlePath}.`);
+    throw new Error(`The model was saved, but WG could not notify Fusion. Open the model in Fusion.`);
   }
   return result;
 }

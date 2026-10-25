@@ -35,12 +35,12 @@ export interface CurrentModel {
 export type RunVerdict = 'current' | 'earlier-version' | 'other-model' | 'model-not-shown';
 export const RUN_VERDICT_MARKER = {
   'earlier-version': 'edited since',
-  'other-model': 'Different CAD return',
+  'other-model': 'Different CAD model',
   'model-not-shown': 'Run model not loaded',
 };
 export const RUN_VERDICT_SENTENCE = {
   'earlier-version': 'The design has been edited since this run was solved.',
-  'other-model': "This run's CAD return differs from the one in the viewport.",
+  'other-model': "This run's CAD model differs from the one in the viewport.",
   'model-not-shown': "This run's model is not loaded in the viewport.",
 };
 
@@ -222,7 +222,7 @@ export function currentModelStatus(model: CurrentModel, jobs: readonly JobItem[]
     message: [state?.message, state?.next_step].filter(Boolean).join(' ') || job.error_message || '',
   };
   if (state?.state === 'rejected' || state?.state === 'needs_user_input') return {
-    kind: 'refused' as const, job, message: state.message || state.reason || job?.error_message || 'Solve refused.',
+    kind: 'refused' as const, job, message: state.message || state.reason || job?.error_message || 'WG could not start this solve. Check the model settings.',
   };
   if (job?.status === 'preparing') return { kind: 'preparing' as const, job, message: job.stage_message || 'Preparing this model…' };
   if (job && isActiveJobStatus(job.status)) return { kind: 'running' as const, job, message: job.stage_message || 'Solving this model…' };

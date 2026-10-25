@@ -355,7 +355,7 @@ export const CAD_CARDIOID_FIELD_CONTROLS: readonly CadCardioidFieldDescriptor[] 
   ),
   cardioidField(
     'bemPortAreaM2', 'BEM port area', 'cm²', 1, 1e4, { value: 0, exclusive: true },
-    'Geometric area of the PORT_EXIT faces in the mesh, which the radiation-impedance matrix is solved over. The solve refuses if it disagrees with the matrix it actually computed.',
+    'Geometric area of the port exit faces in the mesh, which the radiation-impedance matrix is solved over. WG cannot solve the model if this area disagrees with the matrix it computed.',
     ['BEM port area', 'aperture area', 'bem_port_area_m2'],
   ),
   cardioidField(

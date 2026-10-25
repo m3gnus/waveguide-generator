@@ -369,7 +369,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       completeCadSolve(job);
       if (job.cad_state?.state === 'rejected') {
         if (!acknowledgeCadSolve(job, 'refusal')) continue;
-        setActionError(`The solve of ${job.cad_state.snapshot?.document_name ?? 'the model'} was refused: ${job.cad_state.message ?? job.cad_state.reason ?? 'no reason given'}`);
+        setActionError(`WG could not solve ${job.cad_state.snapshot?.document_name ?? 'the model'}: ${job.cad_state.message ?? job.cad_state.reason ?? 'no reason given'}`);
       }
     }
   }, [jobs, completeCadSolve]);

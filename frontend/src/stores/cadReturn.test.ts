@@ -326,7 +326,7 @@ describe('CAD return store', () => {
     });
     const state = useCadReturnStore.getState();
     expect(state.needsIngest).toBe(true);
-    expect(state.ingestStaleReason).toContain('source inventory or source sizing suggestions changed');
+    expect(state.ingestStaleReason).toContain('sources or suggested source sizes changed');
     expect(state.meshSizes.source_size_mm['source-hf']).toBe(2.25);
   });
 });

@@ -1,3 +1,4 @@
+import { cadModelLabel } from '../../model/cadLabels';
 import { CadLinkApiError, getIngest, type CadReturnIngestRecord } from '../../api/cadlink';
 import type { JobItem } from '../../api/jobsSocket';
 import { useCadReturnStore } from '../../stores/cadReturn';
@@ -122,7 +123,7 @@ export async function adoptSolvedCadModel(
   const viewportGeneration = importedMeshStore.beginIntent();
   if (!state.applyIngest(prepared, state.beginIngestIntent())) return 'declined';
   const bundle = state.selectedBundle;
-  const name = bundle?.documentName || bundle?.name || job.cad_source?.document_name || job.label || 'CAD model';
+  const name = (bundle ? cadModelLabel(bundle) : null) || job.cad_source?.document_name || job.label || 'CAD model';
   await display.showIngestedMesh(prepared, name, display.reportViewportNotice, fetcher, viewportGeneration);
   return 'adopted';
 }

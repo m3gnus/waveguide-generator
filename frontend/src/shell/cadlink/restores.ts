@@ -113,7 +113,7 @@ export const cadImportedView: ImportedView = {
         const name = job ? displayName : record.project?.document_name || opened.model?.display_name || displayName;
         const bundle: CadReturnBundle = {
           name: `${name}.wgreturn`, bundlePath: '', modifiedAt: record.created_at,
-          readable: false, reason: 'Recalled from an archived run; the original return bundle is not active.',
+          readable: false, reason: 'Recalled from an archived run; the original CAD model is not active.',
           documentName: name, requestId: null, sourceCount: record.sources.length, instanceCount: null,
           sources: record.sources.map(item => ({ id: item.id, role: item.role, required: item.required,
             suggestedResolutionMm: item.suggested_resolution_mm, defaultDriveChannelId: item.default_drive_channel_id })),
@@ -194,7 +194,7 @@ export function observeCadProjectLoads(integration: UseCadRestoresOptions): () =
       importedMeshStore.beginIntent();
       importedMeshStore.clear('cad');
       setError(null);
-      setStatus('Project design loaded. Looking for its latest CAD return…');
+      setStatus('Project design loaded. Looking for its latest CAD model…');
       workspaceModeStore.setImportedInput('cad');
       enterCadWorkspace();
       queueMicrotask(() => { void refreshRef.current(); });
@@ -203,7 +203,7 @@ export function observeCadProjectLoads(integration: UseCadRestoresOptions): () =
     projectOpenPending.current = false;
     workspaceModeStore.setMode('parametric');
     useCadReturnStore.getState().markIngestStale(
-      'The design was replaced after this CAD return was prepared. Prepare it again before solving.',
+      'The design was replaced after this CAD model was prepared. Prepare it again before solving.',
     );
   });
 }
@@ -252,7 +252,7 @@ export function observeLastModel({
     const project = projects.find((item) => item.lineageId === pointer.model_id);
     const bundle = project ? newestReturnForProject(returns.items, project) : null;
     if (!project || !bundle) {
-      reportStatus('The last CAD project has no return to show yet. Pull one from CAD.');
+      reportStatus('The last CAD project has no model to show yet. Bring its geometry from CAD.');
       return false;
     }
     if (returnBelongsToAnotherProject(bundle, useDocumentStore.getState().identity?.designId)) {

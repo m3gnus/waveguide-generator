@@ -32,8 +32,8 @@ describe('imported solve submission wire', () => {
       ingestRecord: { ...record, evidence_unverified: true },
       driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
     });
-    expect(importedSubmissionBlocker()).toContain('prepare this model again');
-    expect(() => buildImportedSubmission()).toThrow('prepare this model again');
+    expect(importedSubmissionBlocker()).toContain('prepare it again');
+    expect(() => buildImportedSubmission()).toThrow('prepare it again');
     useCadReturnStore.setState({ ingestRecord: { ...record, evidence_unverified: false } });
     expect(importedSubmissionBlocker()).toBeNull();
   });

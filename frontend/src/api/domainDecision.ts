@@ -186,18 +186,18 @@ function refusalHeadline(decision: DomainDecisionCore & Partial<DomainDecisionEx
   if (refused.length) {
     // The message names the rim it refuses ("open along x = 0"): that one.
     const named = refused.find((plane) => refusal.message.includes(`open along ${planeWords(plane)}`)) ?? refused[0];
-    return `Refused: cut in CAD at ${planeWords(named)} cannot be recovered — send the uncut model`;
+    return `WG could not rebuild the model cut in CAD at ${planeWords(named)} — send the uncut model`;
   }
-  if ((decision.oblique_cuts ?? []).length) return 'Refused: cut on an oblique plane — send the uncut model';
+  if ((decision.oblique_cuts ?? []).length) return 'WG could not solve the model cut on an oblique plane — send the uncut model';
   const offCentre = (decision.off_centre_cuts ?? [])[0];
   if (offCentre) {
     const offset = typeof offCentre.offset_mm === 'number' ? `${Number(offCentre.offset_mm.toPrecision(6))} mm` : 'off the origin';
-    return `Refused: cut off-centre at ${offCentre.plane_axis ?? '?'} = ${offset} — send the uncut model`;
+    return `WG could not solve the model cut off-centre at ${offCentre.plane_axis ?? '?'} = ${offset} — send the uncut model`;
   }
   if (refusal.code === 'imported_frame_improper') {
-    return 'Refused: the solver frame is not a proper rotation — send the model again';
+    return 'WG could not orient this model for solving — send the model again';
   }
-  return 'Refused: this model cannot be solved as it stands';
+  return 'WG could not solve this model as it stands';
 }
 
 export interface DecisionReading {
@@ -217,7 +217,7 @@ export interface DecisionReading {
  * The concluded reading of a decision in plain words, e.g.
  * "Full model — solved as a half (x = 0)",
  * "Cut in CAD at x = 0 — recovered by mirroring",
- * "Refused: cut on an oblique plane — send the uncut model".
+ * "WG could not solve the model cut on an oblique plane — send the uncut model".
  * Reads a full decision or the summary a job recorded.
  */
 export function decisionReading(

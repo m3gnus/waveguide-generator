@@ -1,3 +1,4 @@
+import { cadModelLabel } from '../../model/cadLabels';
 import { waitForCadProjectSettings } from '../../stores/cadProjectSettings';
 import { currentDocumentLoad, isCurrentDocumentLoad } from '../../stores/design';
 import { returnOnshapeToWg } from '../../api/onshape';
@@ -127,7 +128,7 @@ export async function refreshCadReturnArrivals(
   if (preferencesStore.getSnapshot().cadApplication === 'onshape') {
     if (projectOpenPending.current) {
       projectOpenPending.current = false;
-      setStatus('Project design loaded. Return it from Onshape to prepare Simulation geometry.');
+      setStatus('Project design loaded. Bring its geometry from Onshape to prepare it for simulation.');
     }
     setLoading(false);
     return;
@@ -226,8 +227,8 @@ export async function refreshCadReturnArrivals(
     if (projectOpenPending.current && canChooseInitial) {
       projectOpenPending.current = false;
       setStatus(initial
-        ? `Project design loaded. Selected the latest matching return from ${initial.documentName ?? initial.name}; preparing Simulation geometry.`
-        : 'Project design loaded. No matching CAD return is available yet; return the project from Fusion or Onshape to prepare Simulation geometry.');
+        ? `Project design loaded. Selected the latest matching model from ${cadModelLabel(initial)}; preparing Simulation geometry.`
+        : 'Project design loaded. No matching CAD model is available yet; send the project from Fusion or Onshape to prepare Simulation geometry.');
     } else if (projectOpenPending.current && useCadReturnStore.getState().selectedBundle) {
       // A receipt or another selection owner resolved the project choice.
       projectOpenPending.current = false;
@@ -235,15 +236,15 @@ export async function refreshCadReturnArrivals(
     if (arrived) {
       if (projectMismatch) {
         refusedForeignReturn.current = true;
-        const reason = `Received ${arrived.documentName ?? arrived.name}, but it belongs to another CAD-linked project. Open that project from File → CAD-linked designs.`;
+        const reason = `Received ${cadModelLabel(arrived)}, but it belongs to another CAD-linked project. Open that project from File → CAD-linked designs.`;
         setError(reason);
         enterCadWorkspace();
         return;
       }
-      const arrivedName = arrived.documentName ?? arrived.name;
-      const keptName = selected ? selected.documentName ?? selected.name : null;
+      const arrivedName = cadModelLabel(arrived);
+      const keptName = selected ? cadModelLabel(selected) : null;
       setStatus(heldForManualPick
-        ? `Received ${arrivedName} from Fusion 360. You selected ${keptName} after it was sent, so ${keptName} stays selected; select ${arrivedName} from the return list to use it.`
+        ? `Received ${arrivedName} from Fusion 360. You selected ${keptName} after it was sent, so ${keptName} stays selected; select ${arrivedName} from the model list to use it.`
         : `Received ${arrivedName} from Fusion 360.${
           continuity === 'carried' ? ' Kept your mesh, channel, and solve settings.' : ''
         }`);
@@ -271,7 +272,7 @@ export async function refreshCadReturnArrivals(
       && isCurrentDocumentLoad(documentLoad) && !background) {
       if (projectOpenPending.current) {
         projectOpenPending.current = false;
-        setStatus('Project design loaded, but its CAD returns could not be read. Refresh CAD Link to try again.');
+        setStatus('Project design loaded, but its CAD models could not be read. Refresh CAD Link to try again.');
       }
       setError(reason instanceof Error ? reason.message : String(reason));
     }
@@ -355,7 +356,7 @@ export function createCadArrivalActions(
       throw new Error(message);
     }
     const current = useCadReturnStore.getState();
-    if (!current.selectedBundle) throw new Error('Select a CAD return before preparing a simulation.');
+    if (!current.selectedBundle) throw new Error('Select a CAD model before preparing a simulation.');
     if (current.selectedBundle.bundleOrigin === 'native') throw new Error('Edit the native source assembly and prepare it again.');
     // This intent covers the ingest record itself. The viewport has a separate
     // token because its follow-up artifact fetch can be superseded independently.
@@ -397,14 +398,14 @@ export function createCadArrivalActions(
       options.validate?.(record);
       if (!isCurrentDocumentLoad(documentLoad)
         || !useCadReturnStore.getState().applyIngest(record, ingestGeneration)) {
-        const superseded = 'Discarded a completed preparation because its selected return or design was superseded. Rebuild the mesh for the current state.';
+        const superseded = 'The model or design changed while its mesh was being prepared. Rebuild the mesh for the current model.';
         if (request === ingestRequest.current && mounted.current) setStatus(superseded);
         throw new SupersededError(superseded);
       }
       options.onPrepared?.();
       if (request === ingestRequest.current && mounted.current) {
         const origin = current.selectedBundle.bundleOrigin === 'onshape' ? 'Onshape' : 'Fusion';
-        setStatus(`Received ${current.selectedBundle.documentName || current.selectedBundle.name} from ${origin}.`);
+        setStatus(`Received ${cadModelLabel(current.selectedBundle)} from ${origin}.`);
         // Before the display, so the viewport adopts the CAD slot rather than
         // loading it invisibly behind the parametric design.
         activateWorkspace();
@@ -414,7 +415,7 @@ export function createCadArrivalActions(
         // the first with a viewport-mismatch the user could not act on.
         await showIngestedMesh(
           record,
-          current.selectedBundle.documentName || current.selectedBundle.name,
+          cadModelLabel(current.selectedBundle),
           reportViewportNotice,
           options.fetcher ?? fetcher,
           viewportGeneration,
@@ -429,7 +430,7 @@ export function createCadArrivalActions(
       if (!isCurrentDocumentLoad(documentLoad)
         || !useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) {
         if (useCadReturnStore.getState().attemptedPreparationKey === attempt) useCadReturnStore.setState({ attemptedPreparationKey: null });
-        const superseded = 'Discarded a preparation response because its selected return or design was superseded. Rebuild the mesh for the current state.';
+        const superseded = 'The model or design changed while its mesh was being prepared. Rebuild the mesh for the current model.';
         if (request === ingestRequest.current && mounted.current) setStatus(superseded);
         throw new SupersededError(superseded);
       }
@@ -438,7 +439,7 @@ export function createCadArrivalActions(
       if (reason instanceof CadLinkApiError && reason.code === 'mesh_too_large' && request === ingestRequest.current) {
         // A choice, not a failure: the same pop-up as a held Fusion request.
         meshCeilingChoice.ask({
-          name: current.selectedBundle.documentName || current.selectedBundle.name,
+          name: cadModelLabel(current.selectedBundle),
           nextStep: reason.nextStep ?? message,
           meshLimit: reason.meshLimit,
           bundlePath: current.selectedBundle.bundlePath,
@@ -534,7 +535,7 @@ export function createCadArrivalActions(
   ) => {
     if (returnBelongsToAnotherProject(bundle, useDocumentStore.getState().identity?.designId)) {
       refusedForeignReturn.current = true;
-      setError(`That return belongs to another CAD-linked project. Open it from File → CAD-linked designs first.`);
+      setError(`That model belongs to another CAD-linked project. Open it from File → CAD-linked designs first.`);
       activateWorkspace();
       return;
     }
@@ -605,17 +606,17 @@ export function createCadArrivalActions(
       state.selectArrivedBundle(bundle, result.ingest.project?.lineage_id, fetcher);
       ingestGeneration = state.beginIngestIntent();
       if (!useCadReturnStore.getState().applyIngest(result.ingest, ingestGeneration)) {
-        setStatus('Discarded the Onshape return because the selected design changed.');
+        setStatus('Kept the selected design because it changed while Onshape was sending the model.');
         return;
       }
       setBundles([bundle]);
-      setStatus(`Returned and prepared ${result.bundle.documentName ?? result.bundle.name} from Onshape.`);
+      setStatus(`Received and prepared ${cadModelLabel(result.bundle)} from Onshape.`);
       // The CAD Link panel only exists inside the CAD workspace, and the
       // ingested return is now the solve truth — enter the mode that owns it.
       activateWorkspace();
       await showIngestedMesh(
         result.ingest,
-        result.bundle.documentName ?? result.bundle.name,
+        cadModelLabel(result.bundle),
         reportViewportNotice,
         fetcher,
         viewportGeneration,

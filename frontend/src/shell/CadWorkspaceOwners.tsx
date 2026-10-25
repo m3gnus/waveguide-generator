@@ -250,7 +250,7 @@ export function mountCadWorkspaceOwners(): () => void {
     const attention = solveAttention.armSolve();
     const bundlePath = useCadReturnStore.getState().selectedBundle?.bundlePath;
     try {
-      if (!bundlePath) throw new Error('Select a CAD return before preparing a simulation.');
+      if (!bundlePath) throw new Error('Select a CAD model before preparing a simulation.');
       const choice = useCadReturnStore.getState().captureModelChoice();
       const prepared = await actions.ingestSelected(options);
       return await solvePrepared(prepared, bundlePath, choice, attention);

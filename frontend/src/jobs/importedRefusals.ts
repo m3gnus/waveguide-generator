@@ -26,17 +26,17 @@ const CARDIOID_EXPLANATIONS: readonly RefusalExplanation[] = [
   {
     match: 'ingestion source tag map',
     advice: 'This prepared model carries no source tag map, so WG cannot tell which mesh faces are the port. '
-      + 'Rebuild the mesh from the CAD return before enabling the passive-cardioid campaign.',
+      + 'Rebuild the mesh from the CAD model before enabling the passive-cardioid campaign.',
   },
   {
     match: 'PORT_EXIT aperture sources',
-    advice: 'The return has no port-exit aperture. Mark the face the port vents through as a PORT_EXIT source '
-      + '(or PORT_EXIT_L and PORT_EXIT_R for a split port) in CAD, then bring the geometry back and prepare it again.',
+    advice: 'The model has no port-exit aperture. Mark the face the port vents through as a Port exit source '
+      + '(or Left port exit and Right port exit for a split port) in CAD, then bring the geometry back and prepare it again.',
   },
   {
     match: 'exactly one MF diaphragm source',
     advice: 'The passive cardioid needs exactly one MF diaphragm to load the rear chamber. '
-      + 'Give the return a single source with the MF role — remove, re-role, or merge the others — and prepare it again.',
+      + 'Give the model a single source with the MF role — remove, re-role, or merge the others — and prepare it again.',
   },
   {
     match: "MF diaphragm's drive channel",
@@ -47,7 +47,7 @@ const CARDIOID_EXPLANATIONS: readonly RefusalExplanation[] = [
   {
     match: 'PORT_EXIT patches in one drive channel',
     advice: 'The port exit is split across drive channels, so the coupled solve cannot treat it as one port. '
-      + 'Assign every PORT_EXIT patch to the same drive channel under Drivers, or turn Coupled off.',
+      + 'Assign every port exit patch to the same drive channel under Drivers, or turn Coupled off.',
   },
 ];
 
