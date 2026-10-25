@@ -25,9 +25,12 @@ from server.cadlink.operations import (
     RECEIVE_SNAPSHOT,
     RECEIVED,
     REJECTED,
+    PREFLIGHT_BLOCKED,
     TERMINAL_STATES,
     reason_attention,
 )
+from server.cadlink.intake.preflight import admission_refusal
+from server.platform.incidents import record_incident
 from server.cadlink.intake.solve_command import (
     CAD_SOLVE_SUBMISSION_PREFIX,
     RETAIN_INVALID,
@@ -45,6 +48,7 @@ from server.cadlink.joblane.preparation_inputs import (
     exchange_bundle_path,
     _snapshot_record,
     _retained,
+    _retained_manifest,
 )
 
 logger = logging.getLogger(__name__)
@@ -257,15 +261,17 @@ def retain_operation_snapshot(
             or row["state"] in TERMINAL_STATES
         ):
             return RETAINED
-        if _retained(data_dir, row) is not None:
-            return RETAINED
-        inputs = _inputs(row)
-        retained = retain_snapshot(
-            exchange_bundle_path(workspace_root, str(inputs.get("bundle_path") or "")),
-            data_dir,
-            expected_manifest_sha256=str(inputs.get("manifest_sha256") or "") or None,
-        )
-        store.record_snapshot(operation_id, _snapshot_record(store, retained))
+        if _retained(data_dir, row) is None:
+            inputs = _inputs(row)
+            retained = retain_snapshot(
+                exchange_bundle_path(workspace_root, str(inputs.get("bundle_path") or "")),
+                data_dir,
+                expected_manifest_sha256=str(inputs.get("manifest_sha256") or "") or None,
+            )
+            store.record_snapshot(operation_id, _snapshot_record(store, retained))
+            row = store.get_operation(operation_id) or row
+        if _refuse_blocked_return(store, data_dir, row):
+            return RETAIN_INVALID
     except (OSError, sqlite3.Error) as exc:
         # SnapshotUnavailable is an OSError: cannot proceed now, not never.
         logger.debug("Could not retain the snapshot of CAD operation %s yet: %s", operation_id, exc)
@@ -278,6 +284,46 @@ def retain_operation_snapshot(
         logger.warning("Could not retain the snapshot of CAD operation %s: %s", operation_id, exc)
         return RETAIN_INVALID
     return RETAINED
+
+
+def _refuse_blocked_return(store: CadLinkStore, data_dir: Path, row: Mapping[str, Any]) -> bool:
+    """Refuse, at admission, a received return the shared preflight rules block.
+
+    Only a request nothing has claimed yet (``received``): admission is the
+    one boundary, so a preparation under way is never re-judged. The rules'
+    words are the outcome message, which the receipt carries back to Fusion.
+    True once the refusal is recorded. A failure of the rules themselves is
+    WG's own: recorded for the developers, and the return is admitted.
+    """
+
+    if row["state"] != RECEIVED or str(_inputs(row).get("bundle_path") or "").startswith("ingest/"):
+        # A solve started in WG of a model it already holds is no delivery.
+        return False
+    retained = _retained(data_dir, row)
+    manifest = _retained_manifest(retained) if retained is not None else None
+    if manifest is None:
+        return False
+    try:
+        refusal = admission_refusal(manifest)
+    except Exception as exc:  # noqa: BLE001 - a rule failure never refuses a model
+        record_incident("preflight-rules-failed", "cad-admission",
+                        ids={"operation_id": str(row["operation_id"])}, exception=exc)
+        logger.warning("The preflight rules failed on CAD operation %s; admitted.", row["operation_id"],
+                       exc_info=True)
+        return False
+    if refusal is None:
+        return False
+    generation = store.claim(str(row["operation_id"]), int(row["attempt_generation"]))
+    if generation is None:
+        return False
+    recorded = store.record_outcome(
+        str(row["operation_id"]), generation, REJECTED, reason=PREFLIGHT_BLOCKED,
+        outcome={"message": refusal},
+    )
+    if recorded is None:
+        return False
+    logger.info("Refused CAD operation %s at admission: %s", row["operation_id"], refusal)
+    return True
 
 
 _RETAINED_KINDS = frozenset({PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT})

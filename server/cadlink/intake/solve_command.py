@@ -55,9 +55,12 @@ from server.cadlink.operations import (
     request_digest,
 )
 from server.cadlink.wglink_protocol import (
+    ACKNOWLEDGED_FIELD,
     REQUEST_STATUS_SUFFIX,
     SOLVE_COMMAND_SCHEMA_VERSION,
     WG_REQUEST_SCHEMA_VERSION,
+    ProtocolValidationError,
+    request_acknowledged,
     request_status_known,
     request_status_terminal,
     validate_request_status,
@@ -218,9 +221,12 @@ class PendingSolveCommand:
     requested_at: str
     #: ``prepare_and_solve`` for every schema before 4; schema 4 names it.
     kind: str = PREPARE_AND_SOLVE
+    #: The holds the user answered in Fusion before this Solve (schema 4, a
+    #: Solve only; canonical, ``wglink_protocol.request_acknowledged``).
+    acknowledged: tuple[str, ...] = ()
 
     def payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "kind": self.kind,
             "commandId": self.command_id,
             "returnId": self.return_id,
@@ -228,6 +234,9 @@ class PendingSolveCommand:
             "manifestSha256": self.manifest_sha256,
             "requestedAt": self.requested_at,
         }
+        if self.acknowledged:
+            payload[ACKNOWLEDGED_FIELD] = list(self.acknowledged)
+        return payload
 
 
 @dataclass(frozen=True)
@@ -243,6 +252,8 @@ class DeliveredItem:
     manifest_sha256: str
     #: Solve deliveries only.
     return_id: str | None = None
+    #: Solve deliveries only: part of the request's identity (its digest).
+    acknowledged: tuple[str, ...] = ()
 
     @classmethod
     def from_command(cls, command: PendingSolveCommand) -> DeliveredItem:
@@ -252,6 +263,7 @@ class DeliveredItem:
             bundle_path=command.bundle_path,
             manifest_sha256=command.manifest_sha256,
             return_id=command.return_id if command.kind == PREPARE_AND_SOLVE else None,
+            acknowledged=command.acknowledged if command.kind == PREPARE_AND_SOLVE else (),
         )
 
     def request(self) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -260,6 +272,7 @@ class DeliveredItem:
                 return_id=self.return_id or "",
                 bundle_path=self.bundle_path,
                 manifest_sha256=self.manifest_sha256,
+                acknowledged=self.acknowledged,
             )
         if self.kind == RECEIVE_SNAPSHOT:
             return normalize_request(
@@ -414,6 +427,14 @@ def _command_from_payload(
             return_id = str(payload["returnId"])
         elif "returnId" in payload:
             raise InvalidRequest("A snapshot request names no returnId.")
+    acknowledged: tuple[str, ...] = ()
+    if ACKNOWLEDGED_FIELD in payload:
+        if schema != KINDED_SCHEMA_VERSION or kind != PREPARE_AND_SOLVE:
+            raise InvalidRequest("Only a schema-4 solve request answers WG's questions.")
+        try:
+            acknowledged = request_acknowledged(payload[ACKNOWLEDGED_FIELD])
+        except ProtocolValidationError as exc:
+            raise InvalidRequest(f"Its {ACKNOWLEDGED_FIELD} is not a list of answered questions.") from exc
     return PendingSolveCommand(
         marker_path=path,
         command_id=str(command_id),
@@ -422,6 +443,7 @@ def _command_from_payload(
         manifest_sha256=str(manifest_sha256),
         requested_at=str(payload.get("requestedAt") or ""),
         kind=str(kind),
+        acknowledged=acknowledged,
     )
 
 
@@ -1012,6 +1034,7 @@ def solve_command_request(command: PendingSolveCommand) -> tuple[dict[str, Any],
         return_id=command.return_id,
         bundle_path=command.bundle_path,
         manifest_sha256=command.manifest_sha256,
+        acknowledged=command.acknowledged,
     )
 
 

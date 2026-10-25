@@ -76,6 +76,9 @@ class CadSolveIntent:
     parent_job_id: str | None = None
     submission_key: str | None = None
     mesh_limit_override: bool = False
+    #: The holds the user answered in Fusion before sending (the delivery's
+    #: ``acknowledged``): part of the delivery's identity, so its digest.
+    acknowledged: tuple[str, ...] = ()
 
     def to_config(self) -> dict[str, Any]:
         """The ``config_json`` of a preparing job."""
@@ -100,6 +103,8 @@ class CadSolveIntent:
             config["submit"] = False
         if self.mesh_limit_override:
             config["mesh_limit_override"] = True
+        if self.acknowledged:
+            config["acknowledged"] = list(self.acknowledged)
         return config
 
     @classmethod
@@ -124,6 +129,9 @@ class CadSolveIntent:
             parent_job_id=_optional_text(config.get("parent_job_id")),
             submission_key=_optional_text(config.get("submission_key")),
             mesh_limit_override=config.get("mesh_limit_override") is True,
+            acknowledged=tuple(
+                str(name) for name in config.get("acknowledged") or () if isinstance(name, str)
+            ),
         )
 
     def delivery_digest(self) -> str:
@@ -137,6 +145,7 @@ class CadSolveIntent:
             return_id=self.return_id,
             bundle_path=self.bundle_path,
             manifest_sha256=self.manifest_sha256,
+            acknowledged=self.acknowledged,
         )
         return request_digest(PREPARE_AND_SOLVE, target, inputs)
 

@@ -71,7 +71,7 @@ def test_vendor_bytes_and_shared_fixtures(addin: Path):
     assert set(manifest) == {p.relative_to(SHARED).as_posix() for p in SHARED.rglob("*") if p.is_file() and p.name != "MANIFEST.sha256"}
     for name, digest in manifest.items():
         assert hashlib.sha256((SHARED / name).read_bytes()).hexdigest() == digest
-        fixture = name if name.startswith("mesh-sizing-v1/") else "wgreturn-endpoint-oracle/" + name
+        fixture = name if name.startswith(("mesh-sizing-v1/", "preflight-v1/")) else "wgreturn-endpoint-oracle/" + name
         assert (SHARED / name).read_bytes() == (addin.parents[1] / "tests/fixtures" / fixture).read_bytes()
 
 

@@ -84,6 +84,8 @@ RECORDABLE_STATES = STATES - {RECEIVED, PROCESSING, CANCEL_REQUESTED}
 # (docs/architecture/CAD-OPERATIONS.md, "Preparation"). The same string as the
 # jobs system's refusal code, ``server.updates.restart.UPDATE_RESTART_PENDING``.
 REASON_UPDATE_RESTART_PENDING = "update_restart_pending"
+# A return the shared preflight rules refuse (``server/cadlink/intake/preflight.py``).
+PREFLIGHT_BLOCKED = "preflight_blocked"
 
 # Reason code -> the only state it may accompany. Both are rejections because a
 # refreshed baseline or target is a new operation, never a retry of this one.
@@ -139,6 +141,10 @@ REASON_CODES: Mapping[str, str] = {
     "expired": CANCELLED,
     "session_changed": CANCELLED,
     "publication_failed": CANCELLED,
+    # A delivered return the shared preflight rules block (wglink_protocol
+    # ``preflight_findings``): refused at admission in the rule's own words.
+    # The add-in never sends one; an older or another writer can.
+    PREFLIGHT_BLOCKED: REJECTED,
     "adapter_refused": REJECTED,
     # The adapter reported that the request failed before it changed anything.
     "adapter_failed": REJECTED,
@@ -382,6 +388,12 @@ _SHAPES: Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 }
 # A legacy single-slot solve marker may omit its return id.
 _MAY_BE_EMPTY = frozenset({(PREPARE_AND_SOLVE, "return_id")})
+# Optional inputs: absent from a request that does not carry them, so every
+# digest made before they existed is unchanged. ``acknowledged`` names the WG
+# holds the user already answered in Fusion before a Solve (the shared
+# protocol's ``ACKNOWLEDGES``, e.g. Solve anyway over the triangle ceiling): a
+# sorted, non-empty list of hold codes, part of the request's identity.
+_OPTIONAL_INPUTS: Mapping[str, tuple[str, ...]] = {PREPARE_AND_SOLVE: ("acknowledged",)}
 
 
 def require_kind(kind: object) -> str:
@@ -423,13 +435,13 @@ def _destination(kind: str, value: object) -> dict[str, str]:
 
 
 def _fields(
-    kind: str, part: str, value: object, required: tuple[str, ...]
+    kind: str, part: str, value: object, required: tuple[str, ...], optional: tuple[str, ...] = ()
 ) -> dict[str, Any]:
     if value is None:
         value = {}
     if not isinstance(value, Mapping):
         raise ValueError(f"{kind} {part} must be an object")
-    unexpected = sorted(str(field) for field in set(value) - set(required))
+    unexpected = sorted(str(field) for field in set(value) - set(required) - set(optional))
     if unexpected:
         raise ValueError(f"{kind} {part} has unexpected field(s): {', '.join(unexpected)}")
     normalized: dict[str, Any] = {}
@@ -448,6 +460,17 @@ def _fields(
         if not item and (kind, field) not in _MAY_BE_EMPTY:
             raise ValueError(f"{kind} {part} field '{field}' must not be empty")
         normalized[field] = item
+    for field in optional:
+        if field not in value:
+            continue
+        item = value[field]
+        if (
+            not isinstance(item, list) or not item
+            or not all(isinstance(entry, str) and entry for entry in item)
+            or item != sorted(set(item))
+        ):
+            raise ValueError(f"{kind} {part} field '{field}' must be a sorted list of distinct names")
+        normalized[field] = list(item)
     return normalized
 
 
@@ -460,7 +483,7 @@ def normalize_request(
     target_fields, input_fields = _SHAPES[kind]
     return (
         _fields(kind, "target", target, target_fields),
-        _fields(kind, "inputs", inputs, input_fields),
+        _fields(kind, "inputs", inputs, input_fields, _OPTIONAL_INPUTS.get(kind, ())),
     )
 
 
@@ -480,15 +503,21 @@ def request_digest(
 
 
 def prepare_and_solve_request(
-    *, return_id: str, bundle_path: str, manifest_sha256: str
+    *, return_id: str, bundle_path: str, manifest_sha256: str, acknowledged: tuple[str, ...] = (),
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Target and inputs of a solve command. A solve addresses nothing in CAD."""
+    """Target and inputs of a solve command. A solve addresses nothing in CAD.
 
-    return normalize_request(
-        PREPARE_AND_SOLVE,
-        {},
-        {"return_id": return_id, "bundle_path": bundle_path, "manifest_sha256": manifest_sha256},
-    )
+    ``acknowledged``: the holds the user answered before sending (canonical,
+    ``wglink_protocol.request_acknowledged``); only a request that has any
+    names them.
+    """
+
+    inputs: dict[str, Any] = {
+        "return_id": return_id, "bundle_path": bundle_path, "manifest_sha256": manifest_sha256,
+    }
+    if acknowledged:
+        inputs["acknowledged"] = list(acknowledged)
+    return normalize_request(PREPARE_AND_SOLVE, {}, inputs)
 
 
 def validate_outcome(
@@ -626,6 +655,7 @@ def fusion_mutation_precheck(
 
 __all__ = [
     "REASON_UPDATE_RESTART_PENDING",
+    "PREFLIGHT_BLOCKED",
     "ACCEPTED",
     "ATTENTION_ACTION",
     "ATTENTION_READY",

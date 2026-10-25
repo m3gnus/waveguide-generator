@@ -230,6 +230,7 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `expired` | `cancelled` | An insert remained unclaimed for 30 minutes |
 | `session_changed` | `cancelled` | A return request named a Fusion session that is no longer current |
 | `publication_failed` | `cancelled` | The operation was stored but its request file could not be published |
+| `preflight_blocked` | `rejected` | The delivered return breaks a shared preflight rule (see "Preflight rules"): refused at admission, before preparation, in the rule's own words. The add-in never sends one |
 | `adapter_refused` | `rejected` | Fusion explicitly refused this exact request and no document evidence says it applied |
 | `adapter_not_started` | `cancelled` | Fusion discarded a leftover claim with neither evidence nor an applying mark |
 | `adapter_failed` | `rejected` | Fusion reported in its file heartbeat that the request failed before it changed the document (a mutation that failed while executing is `recovery_required` instead) |
@@ -1720,9 +1721,14 @@ requests and the heartbeat use delivery version 3. WG advertises
 - **Fields.** `target: "waveguide-generator"`, `schemaVersion`, `kind` for schema 4,
   `commandId`, `operationId` (equal to `commandId`), `bundlePath`, `manifestSha256` and
   `requestedAt`. A Solve also has `returnId`, which is present even when empty; Send
-  omits it. Schema 3 is interpreted as `prepare_and_solve`.
+  omits it. Schema 3 is interpreted as `prepare_and_solve`. A schema-4 Solve may carry
+  `acknowledged`: the WG holds the user answered in Fusion before sending (see
+  "Preflight rules"). WG keeps the names it knows, sorted, and drops the rest; anything
+  but a list of strings, or the field on a Send, is an invalid request.
 - **Digest.** The `prepare_and_solve` digest above, over `return_id`, `bundle_path` and
-  `manifest_sha256`. `requestedAt` and the file's name and folder are transport.
+  `manifest_sha256`, and `acknowledged` when the request has any. A request without it
+  has the digest it always had. `requestedAt` and the file's name and folder are
+  transport.
 - **Writing a file.** A producer stages it under a name that starts with `.` or does not
   end in `.json`, then renames it into place. WG reads only `*.json` names that do not
   start with `.`.
@@ -1742,6 +1748,24 @@ requests and the heartbeat use delivery version 3. WG advertises
   a command and refuses it with the remedy as its reason. It is never run. A command
   under an ID the store already holds is instead a repeat delivery, and is recovered or
   refused as the delivery table says.
+
+**Preflight rules.** Fusion's Send/Solve dialog, its Sources & Mesh dialog and WG's
+admission use one rule set, `preflight_findings` in the vendored `wglink_protocol.py`;
+`server/cadlink/intake/preflight.py` only applies it. A finding blocks, asks or notes:
+
+- **block**: Fusion keeps Send and Solve disabled with the remedy. WG meets one only from
+  an older or another writer: at retention, before anything claims the operation, the
+  return's manifest (`manifest_draft`) is checked and a blocked return is `rejected`
+  with `preflight_blocked` and the rules' words as its message, which its
+  acknowledgement carries back. It is never prepared. A failure of the rules
+  themselves is WG's own: recorded as a developer incident, and the return is admitted.
+- **ask**: asked once in Fusion's pop-up on OK. The answer that settles a WG hold travels
+  as `acknowledged` (`ACKNOWLEDGES`: `mesh_ceiling` answers `mesh_too_large`, Solve
+  anyway). Admission makes it the job's `mesh_limit_override`, recorded with
+  `source: "fusion"`, so WG does not ask again for that preparation; a Solve again that
+  prepares another mesh asks, as Solve anyway in WG does. Without the field WG holds
+  and asks as before.
+- **note**: said in the dialog and sent.
 
 If a Send or Solve write's outcome is unknown, the add-in retries the same ID and fields
 a bounded number of times. Only an exact reread of the complete request is reported as

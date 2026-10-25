@@ -475,6 +475,8 @@ EXPECTED_ATTENTION = {
     "request_payload_invalid": "action",
     "snapshot_unavailable": "action",
     "model_cut_unsolvable": "action",
+    # A return the shared preflight rules block: the user changes the model.
+    "preflight_blocked": "action",
     "adapter_refused": "action",
     "adapter_failed": "action",
     # WG's own failures.

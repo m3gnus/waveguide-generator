@@ -1,0 +1,191 @@
+{
+  "description": "Preflight rules over manifests (preflight-v1). Each case edits the base manifest (dotted paths; a list index equal to the length appends) and names the findings wglink_protocol.preflight_findings(manifest_draft(manifest)) returns, in order. WG's ingress refuses a return with any block finding, at admission, in the same words; ask and note findings never stop WG.",
+  "base": "mesh-sizing-v1/f1-single-source.wgreturn/wgreturn.json",
+  "cases": [
+    {
+      "name": "clean",
+      "edits": {},
+      "expected": []
+    },
+    {
+      "name": "surface body asks",
+      "edits": {
+        "scope.included.0.body_kind": "surface"
+      },
+      "expected": [
+        [
+          "open_body",
+          "ask"
+        ]
+      ]
+    },
+    {
+      "name": "blank group name",
+      "edits": {
+        "mesh.surface_groups.0.name": "   "
+      },
+      "expected": [
+        [
+          "group_unnamed",
+          "block"
+        ]
+      ]
+    },
+    {
+      "name": "group names differing only in case",
+      "edits": {
+        "mesh.surface_groups.1": {
+          "group_id": "back-2",
+          "name": "back",
+          "observed": {
+            "bodies": [
+              "Synthetic enclosure"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              10.0
+            ],
+            "total_area_mm2": 10.0
+          },
+          "selectors": {
+            "appearance_labels": [
+              "WGMESH_back-2"
+            ]
+          },
+          "size_mm": 15.0
+        }
+      },
+      "expected": [
+        [
+          "group_name_duplicate",
+          "block"
+        ]
+      ]
+    },
+    {
+      "name": "source with no faces",
+      "edits": {
+        "sources.0.observed.face_count": 0
+      },
+      "expected": [
+        [
+          "source_without_faces",
+          "block"
+        ]
+      ]
+    },
+    {
+      "name": "two painted sources share a role",
+      "edits": {
+        "sources.1": {
+          "default_drive_channel_id": "drive-hf-2",
+          "expected_connected_components": 1,
+          "id": "f1-hf-2",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "Synthetic enclosure"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              10.0
+            ],
+            "total_area_mm2": 10.0
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "WGSRC_hf2"
+            ]
+          },
+          "suggested_resolution_mm": 6.0
+        }
+      },
+      "expected": [
+        [
+          "source_role_duplicate",
+          "block"
+        ]
+      ]
+    },
+    {
+      "name": "linked throats may share a role",
+      "edits": {
+        "sources.0.instance_id": "wgi_a",
+        "sources.1": {
+          "default_drive_channel_id": "drive-hf-2",
+          "expected_connected_components": 1,
+          "id": "f1-hf-2",
+          "instance_id": "wgi_b",
+          "observed": {
+            "bodies": [
+              "Synthetic enclosure"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              10.0
+            ],
+            "total_area_mm2": 10.0
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "WGSRC_hf2"
+            ]
+          },
+          "suggested_resolution_mm": 6.0
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "no source",
+      "edits": {
+        "sources": []
+      },
+      "expected": [
+        [
+          "no_drive",
+          "block"
+        ]
+      ]
+    },
+    {
+      "name": "no source but a FEM driver",
+      "edits": {
+        "sources": [],
+        "scope.fem_regions": [
+          {
+            "surface_groups": [
+              {
+                "kind": "moving"
+              }
+            ]
+          }
+        ]
+      },
+      "expected": []
+    },
+    {
+      "name": "blocks come before asks",
+      "edits": {
+        "scope.included.0.body_kind": "surface",
+        "sources": []
+      },
+      "expected": [
+        [
+          "no_drive",
+          "block"
+        ],
+        [
+          "open_body",
+          "ask"
+        ]
+      ]
+    }
+  ]
+}

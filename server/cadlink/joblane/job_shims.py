@@ -174,6 +174,9 @@ async def _admit_operation_solve(ctx, operation_id, press, *, manual, schedule, 
             record["manual_waiting"] = True
         inputs = _solve_inputs(row)
         press = press or PreparationInput(submit=not manual)
+        # What the user answered in Fusion before sending: Solve anyway over
+        # the triangle ceiling is the same answer as in WG, so WG does not ask.
+        acknowledged = tuple(inputs.get("acknowledged") or ())
         try:
             intent = CadSolveIntent(
                 operation_id=operation_id, bundle_path=inputs["bundle_path"],
@@ -182,6 +185,8 @@ async def _admit_operation_solve(ctx, operation_id, press, *, manual, schedule, 
                 frame_axis=press.expected_frame_axis or row.get("frame_axis"), submit=press.submit,
                 approvals=(dict(preparation_id=press.approve_preparation_id, finding_ids=list(press.approve_finding_ids))
                            if press.approve_preparation_id else None),
+                acknowledged=acknowledged,
+                mesh_limit_override="mesh_too_large" in acknowledged,
             )
         except ValueError as exc:
             raise BadSolvePayload(str(exc)) from exc

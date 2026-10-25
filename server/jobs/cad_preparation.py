@@ -654,7 +654,11 @@ def prepare_job_sync(
     run.advance(cad={"setup": _setup_record(store, revision_id)})
     manifest_sha256 = str(retained["manifest_sha256"])
     if run.intent.mesh_limit_override:
-        run.advance(cad={"mesh_limit_override": {"accepted": True, "source": "solve_anyway"}})
+        # Answered in Fusion before sending (the delivery's ``acknowledged``)
+        # or by Solve anyway in WG: the same answer, never asked twice.
+        fusion = "mesh_too_large" in run.intent.acknowledged and run.intent.parent_job_id is None
+        source = "fusion" if fusion else "solve_anyway"
+        run.advance(cad={"mesh_limit_override": {"accepted": True, "source": source}})
     semantics = meshing_semantics_fingerprint()
     retained_manifest = _retained_manifest(retained)
     if retained_manifest is None:

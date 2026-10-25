@@ -130,6 +130,289 @@ def default_mesh(sources: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+# Preflight rules (one rule set). Fusion's Send/Solve dialog, its Sources &
+# Mesh dialog and WG's ingress all call these pure functions; no copy of a rule
+# or of its words lives anywhere else. A rule reads plain data: a draft the
+# add-in gathers on Fusion's main thread (``wglink_send.preflight_scope``), the
+# dialog's rows (``mesh_authoring_findings``), or a manifest WG received
+# (``manifest_draft``). A rule whose data a caller does not have finds nothing,
+# so rules that need Fusion stay in Fusion. Rules that need the meshed geometry
+# are not here: they stay in WG and end in a hold or a fallback, never a
+# failed run.
+#
+# A finding is ``{code, severity, message, remedy}``. Severity:
+# - ``block``: the model cannot be sent as it is. Send and Solve stay disabled
+#   with the remedy shown; WG refuses such a return at admission, in the same
+#   words, when an older or third-party writer sends one.
+# - ``ask``: a real choice, asked once in a pop-up before sending. A solve
+#   request carries the answer (``acknowledged``) so WG does not ask again.
+# - ``note``: said, and sent.
+PREFLIGHT_BLOCK = 'block'
+PREFLIGHT_ASK = 'ask'
+PREFLIGHT_NOTE = 'note'
+#: The solved-triangle ceiling when WG does not advertise its own.
+DEFAULT_SOLVED_TRIANGLE_LIMIT = 22000
+#: The solve-request field naming the WG holds the user already answered.
+ACKNOWLEDGED_FIELD = 'acknowledged'
+#: ``ask`` finding -> the WG hold its "anyway" answer settles.
+ACKNOWLEDGES = {'mesh_ceiling': 'mesh_too_large'}
+ACKNOWLEDGEABLE_HOLDS = frozenset(ACKNOWLEDGES.values())
+_REVIEW_SOURCES = 'Review the sources in Sources & Mesh….'
+_REVIEW_MESH = 'Review the mesh settings in Sources & Mesh…, then save.'
+#: code -> (severity, remedy). A remedy of None: the message says what to do.
+PREFLIGHT_RULES = {
+    'no_drive': (PREFLIGHT_BLOCK, 'In Sources & Mesh…, add a source on the driver face (LF, MF, HF or a port), '
+                                  'or declare a FEM region with a moving surface.'),
+    'source_unresolved': (PREFLIGHT_BLOCK, None),
+    'source_without_faces': (PREFLIGHT_BLOCK, None),
+    'group_without_faces': (PREFLIGHT_BLOCK, None),
+    'saved_faces_unselected': (PREFLIGHT_BLOCK, None),
+    'source_role_duplicate': (PREFLIGHT_BLOCK, None),
+    'face_in_two_rows': (PREFLIGHT_BLOCK, None),
+    'group_unnamed': (PREFLIGHT_BLOCK, None),
+    'group_name_duplicate': (PREFLIGHT_BLOCK, None),
+    'mesh_settings_invalid': (PREFLIGHT_BLOCK, None),
+    'group_out_of_scope': (PREFLIGHT_NOTE, None),
+    'scope_unclassified_surface': (PREFLIGHT_BLOCK, None),
+    'scope_invalid': (PREFLIGHT_BLOCK, None),
+    'domain_inconsistent': (PREFLIGHT_BLOCK, None),
+    'fem_invalid': (PREFLIGHT_BLOCK, None),
+    'open_body': (PREFLIGHT_ASK, 'If it is an open shell on purpose, send anyway.'),
+    'mesh_ceiling': (PREFLIGHT_ASK, 'Change the mesh resolution in Sources & Mesh…, or check the model size.'),
+}
+NO_DRIVE_MESSAGE = 'This model has no source to drive it.'
+#: The one line shown when the add-in could not survey the model at all.
+PREFLIGHT_UNAVAILABLE_MESSAGE = (
+    'Waveguide Generator could not check this model. Try again; if it keeps '
+    'happening, it has been recorded.'
+)
+
+
+def preflight_finding(code: str, message: str) -> dict[str, Any]:
+    """One finding of a known rule, with the rule's severity and remedy."""
+    severity, remedy = PREFLIGHT_RULES[code]
+    return {'code': code, 'severity': severity, 'message': message, 'remedy': remedy}
+
+
+def finding_text(finding: Mapping[str, Any]) -> str:
+    """The finding as one line: what is wrong, then what to do."""
+    return ' '.join(str(part) for part in (finding.get('message'), finding.get('remedy')) if part)
+
+
+def blocking(findings: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    return [finding for finding in findings if finding.get('severity') == PREFLIGHT_BLOCK]
+
+
+def _plural(count: int, singular: str, plural: str) -> str:
+    return singular if count == 1 else plural
+
+
+def _quoted(names: Sequence[str]) -> str:
+    return ', '.join(repr(str(name)) for name in names)
+
+
+def _mapping_rows(value: object) -> list[Mapping[str, Any]]:
+    return [row for row in value if isinstance(row, Mapping)] if isinstance(value, (list, tuple)) else []
+
+
+def _text(value: object) -> str:
+    return str(value or '').strip()
+
+
+def preflight_findings(draft: Mapping[str, Any], *, limits: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Every finding about what a Send or Solve would carry; block findings first.
+
+    ``draft`` keys, each optional: ``kind`` (``'solve'`` or ``'send'``),
+    ``scope_error`` with ``has_unclassified_visible_surface_refusal`` and
+    ``manage_dropdown_name``,
+    ``source_error``, ``sources`` (``role``, ``face_count``, ``instance_id``),
+    ``fem_driven``, ``fem_region_error``, ``domain_error``, ``mesh_error``,
+    ``surface_groups`` (``name``), ``groups_out_of_scope`` (names),
+    ``open_bodies`` (names) and ``triangles_least`` -- the fewest triangles
+    WG could plausibly solve (the most reduced domain). ``limits`` is WG's
+    advertised ``{'solvedTriangles': n}``.
+    """
+    scope_error = _text(draft.get('scope_error'))
+    if scope_error:
+        # Nothing else is known about a scope that cannot be exported.
+        unclassified = draft.get('has_unclassified_visible_surface_refusal') is True
+        hint = _text(draft.get('manage_dropdown_name'))
+        message = f'Export is blocked: {scope_error}'
+        if unclassified and hint and hint not in scope_error:
+            message += f' Declare Body… is under {hint}.'
+        return [preflight_finding('scope_unclassified_surface' if unclassified else 'scope_invalid', message)]
+    findings: list[dict[str, Any]] = []
+    domain_error = _text(draft.get('domain_error'))
+    if domain_error:
+        findings.append(preflight_finding('domain_inconsistent', f'Model domain: {domain_error}'))
+    fem_error = _text(draft.get('fem_region_error'))
+    if fem_error:
+        findings.append(preflight_finding('fem_invalid', f'FEM regions: {fem_error}'))
+    sources = _mapping_rows(draft.get('sources'))
+    source_error = _text(draft.get('source_error'))
+    if source_error:
+        findings.append(preflight_finding('source_unresolved', source_error))
+    elif not sources and draft.get('fem_driven') is not True:
+        findings.append(preflight_finding('no_drive', NO_DRIVE_MESSAGE))
+    roles: dict[str, int] = {}
+    for source in sources:
+        role = _text(source.get('role'))
+        if not source.get('instance_id'):
+            # A linked throat's role comes from its WG design; only painted
+            # sources can repeat one.
+            roles[role] = roles.get(role, 0) + 1
+        if source.get('face_count') == 0:
+            findings.append(preflight_finding(
+                'source_without_faces', f'The {role} source has no faces. {_REVIEW_SOURCES}'))
+    for role, count in roles.items():
+        if count > 1:
+            findings.append(preflight_finding(
+                'source_role_duplicate', f'{count} sources share the role {role}. Use one source per role.'))
+    mesh_error = _text(draft.get('mesh_error'))
+    if mesh_error:
+        findings.append(preflight_finding('mesh_settings_invalid', mesh_error))
+    names: dict[str, str] = {}
+    for group in _mapping_rows(draft.get('surface_groups')):
+        name = _text(group.get('name'))
+        if not name:
+            findings.append(preflight_finding(
+                'group_unnamed', f'A surface group has no name. {_REVIEW_MESH}'))
+            continue
+        if name.casefold() in names:
+            findings.append(preflight_finding(
+                'group_name_duplicate', f'Two surface groups are named {name!r}. Use unique group names.'))
+        names[name.casefold()] = name
+    out_of_scope = [str(name) for name in draft.get('groups_out_of_scope') or ()]
+    if out_of_scope:
+        findings.append(preflight_finding('group_out_of_scope', (
+            f'{_plural(len(out_of_scope), "Surface group", "Surface groups")} {_quoted(out_of_scope)} '
+            f'{_plural(len(out_of_scope), "has", "have")} no faces in this selection and '
+            f'{_plural(len(out_of_scope), "is", "are")} left out of this export.')))
+    open_bodies = [str(name) for name in draft.get('open_bodies') or ()]
+    if open_bodies:
+        findings.append(preflight_finding('open_body', (
+            f'{_quoted(open_bodies)} {_plural(len(open_bodies), "is not a closed solid", "are not closed solids")}; '
+            'WG may not be able to prepare '
+            f'{_plural(len(open_bodies), "it", "them")}.')))
+    least = draft.get('triangles_least')
+    limit = (limits or {}).get('solvedTriangles', DEFAULT_SOLVED_TRIANGLE_LIMIT)
+    if (draft.get('kind') == 'solve' and isinstance(least, int) and not isinstance(least, bool)
+            and isinstance(limit, int) and least > limit):
+        findings.append(preflight_finding('mesh_ceiling', (
+            f'Even if WG can use symmetry, this model meshes to about {least:,} triangles, '
+            f'above the {limit:,} limit.')))
+    order = {PREFLIGHT_BLOCK: 0, PREFLIGHT_ASK: 1, PREFLIGHT_NOTE: 2}
+    return sorted(findings, key=lambda finding: order[finding['severity']])
+
+
+def manifest_draft(manifest: Mapping[str, Any], *, kind: str | None = None) -> dict[str, Any]:
+    """The preflight draft a structurally valid manifest states (WG's ingress)."""
+    scope = manifest.get('scope') if isinstance(manifest.get('scope'), Mapping) else {}
+    mesh = manifest.get('mesh') if isinstance(manifest.get('mesh'), Mapping) else {}
+    sources = []
+    for source in _mapping_rows(manifest.get('sources')):
+        observed = source.get('observed') if isinstance(source.get('observed'), Mapping) else {}
+        sources.append({'role': source.get('role'), 'instance_id': source.get('instance_id'),
+                        'face_count': observed.get('face_count')})
+    fem_driven = any(
+        group.get('kind') == 'moving'
+        for region in _mapping_rows(scope.get('fem_regions'))
+        for group in _mapping_rows(region.get('surface_groups'))
+    )
+    return {
+        'kind': kind,
+        'sources': sources,
+        'fem_driven': fem_driven,
+        'surface_groups': [{'name': group.get('name')} for group in _mapping_rows(mesh.get('surface_groups'))],
+        'open_bodies': [str(item.get('name') or item.get('object_id') or 'body')
+                        for item in _mapping_rows(scope.get('included')) if item.get('body_kind') == 'surface'],
+    }
+
+
+def mesh_authoring_findings(rows: Sequence[Mapping[str, Any]], mesh: Mapping[str, Any], *,
+                            fem_driven: bool = False, source_error: str | None = None) -> list[dict[str, Any]]:
+    """The Sources & Mesh dialog's rules, over plain rows, in display order.
+
+    ``rows``: ``kind`` (``'source'`` or ``'group'``), ``label``, ``role``,
+    ``name``, ``linked``, ``size_mm``, ``face_keys`` (hashable face
+    identities) and ``missing_saved_faces`` (saved faces the dialog could not
+    select again). ``mesh``: ``wall_size_mm`` and ``grading_distance_mm``.
+    Every finding blocks Save.
+    """
+    findings = [preflight_finding('source_unresolved', source_error)] if _text(source_error) else []
+    sources = [row for row in rows if row.get('kind') == 'source']
+    if not sources and not fem_driven:
+        findings.append(preflight_finding('no_drive', NO_DRIVE_MESSAGE))
+
+    def size(label: str, value: object) -> None:
+        if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                or not math.isfinite(value) or value <= 0):
+            findings.append(preflight_finding('mesh_settings_invalid', f'{label}: size must be greater than 0.'))
+
+    size('Walls', mesh.get('wall_size_mm'))
+    size('Grading distance', mesh.get('grading_distance_mm'))
+    source_keys: dict[Any, str] = {}
+    group_keys: dict[Any, str] = {}
+    roles: dict[str, str] = {}
+    names: dict[str, str] = {}
+    for kind in ('source', 'group'):
+        for row in (row for row in rows if row.get('kind') == kind):
+            label = str(row['label'])
+            size(label, row.get('size_mm'))
+            selected = set(row.get('face_keys') or ())
+            if not selected:
+                findings.append(preflight_finding(
+                    'source_without_faces' if kind == 'source' else 'group_without_faces',
+                    f'{label}: select at least one face.'))
+            missing = int(row.get('missing_saved_faces') or 0)
+            if missing:
+                findings.append(preflight_finding('saved_faces_unselected', (
+                    f'{label}: {missing} saved faces could not be selected (hidden or changed). Reselect them.')))
+            if kind == 'source':
+                if not row.get('linked'):
+                    role = str(row.get('role'))
+                    if role in roles:
+                        findings.append(preflight_finding(
+                            'source_role_duplicate', f'{label}: same role as {roles[role]}. Use one source per role.'))
+                    roles[role] = label
+                other = source_keys
+            else:
+                name = _text(row.get('name'))
+                if not name:
+                    findings.append(preflight_finding('group_unnamed', f'{label}: give this surface group a name.'))
+                if name.casefold() in names:
+                    findings.append(preflight_finding('group_name_duplicate', (
+                        f'{label}: duplicate group name with {names[name.casefold()]}. Use unique group names.')))
+                names[name.casefold()] = label
+                for key in selected & source_keys.keys():
+                    findings.append(preflight_finding('face_in_two_rows', (
+                        f'{label}: a face is also in {source_keys[key]}. '
+                        'A face cannot be in both a source and a surface group.')))
+                other = group_keys
+            for key in selected & other.keys():
+                plural = 'sources' if kind == 'source' else 'surface groups'
+                findings.append(preflight_finding('face_in_two_rows', (
+                    f'{label}: a face is also in {other[key]}. A face cannot be in two {plural}.')))
+            other.update({key: label for key in selected})
+    unique: dict[str, dict[str, Any]] = {}
+    for finding in findings:
+        unique.setdefault(finding['message'], finding)
+    return list(unique.values())
+
+
+def request_acknowledged(value: object) -> tuple[str, ...]:
+    """A solve request's ``acknowledged`` holds, canonical: sorted, unique, known.
+
+    Unknown names are dropped, so a newer add-in's answer to a question this
+    WG does not ask is not a refusal. Anything but a list of strings is.
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ProtocolValidationError(f'{ACKNOWLEDGED_FIELD} must be a list of hold names')
+    return tuple(sorted(set(value) & ACKNOWLEDGEABLE_HOLDS))
+
+
 # Add-in writer structural profile.
 _addin_SUPPORTED_RETURN_FEATURES = frozenset({'checksummed-files-v1', 'assembly-frame-v1', 'instance-records-v1', 'fem-air-volume-v1', 'reduced-domain-v1', 'source-identity-v1', 'document-up-v1', 'domain-automatic-v1', 'fem-regions-v1', MESH_SIZING_FEATURE})
 _addin_SOURCE_IDENTITY_FEATURE = 'source-identity-v1'
