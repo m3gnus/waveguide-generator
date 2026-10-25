@@ -1329,3 +1329,25 @@ it('keeps a pending pointer when the first display listener unmounts before repl
   expect(next).toHaveBeenCalledOnce();
   stop(); manager.stop();
 });
+
+
+it('deduplicates a show pointer across reconnect while a second window can show it', () => {
+  const sockets: MockSocket[] = [];
+  const manager = new JobsSocketManager(() => { const socket = new MockSocket(); sockets.push(socket); return socket; });
+  const show = vi.fn(); const stop = manager.subscribeCadShowRequest(show);
+  const message = { v: 1, kind: 'cadShowRequest', operationId: 'request', at: new Date().toISOString() };
+  manager.start(); sockets[0].message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+  sockets[0].message({ ...message, epoch: 1 });
+  manager.stop(); manager.start();
+  sockets[1].message({ v: 1, kind: 'hello', epoch: 2, heartbeatSec: 15 });
+  sockets[1].message({ ...message, epoch: 2 });
+  expect(show).toHaveBeenCalledOnce();
+  const secondSocket = new MockSocket(); const second = new JobsSocketManager(() => secondSocket);
+  const showSecond = vi.fn(); const stopSecond = second.subscribeCadShowRequest(showSecond);
+  second.start(); secondSocket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+  secondSocket.message({ ...message, epoch: 1 });
+  expect(showSecond).toHaveBeenCalledOnce();
+  sockets[1].message({ ...message, epoch: 2, at: new Date(Date.now() + 1).toISOString() });
+  expect(show).toHaveBeenCalledTimes(2);
+  stop(); stopSecond(); manager.stop(); second.stop();
+});

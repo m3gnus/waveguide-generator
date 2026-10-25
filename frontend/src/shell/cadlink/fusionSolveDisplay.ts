@@ -50,12 +50,14 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
   let latestJobs: readonly JobItem[] = [];
   let disposed = false;
   let explicitId: string | null = null;
+  let explicitAt = 0;
+  let explicitOperationId: string | null = null;
   let showGeneration = 0;
   let unavailableGeneration = -1;
   const reportUnavailable = () => {
     if (unavailableGeneration === showGeneration) return;
     unavailableGeneration = showGeneration;
-    display.reportStatus?.(historyText.unavailable);
+    display.reportStatus?.(display.isActive() ? historyText.unavailable : historyText.outsideFusion);
   };
   let explicitJob: JobItem | null = null;
   let explicitIntent: Intent | null = null;
@@ -142,10 +144,24 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
     latestJobs = jobs;
     cancelObsoleteOpen();
     if (disposed) return;
-    // Only a person moving on ends an explicit selection. Socket pages and
-    // automatically arriving jobs cannot replace the selected history item.
-    if (explicitIntent && !explicitCurrent()) {
+    // A newly pressed Solve releases history; paging, old jobs and the
+    // selected request's own retries do not. Use creation, never completion.
+    const newerSolve = explicitIntent && latestCadJobs([...jobs]).some((job) => {
+      if (Date.parse(job.created_at) <= explicitAt || job.id === explicitId) return false;
+      if (job.cad_state?.operation_id === explicitOperationId
+        || job.client_request_id === `cad-solve:${explicitOperationId}`) return false;
+      let parentId = job.parent_job_id;
+      const visited = new Set<string>();
+      while (parentId && !visited.has(parentId)) {
+        if (parentId === explicitId) return false;
+        visited.add(parentId);
+        parentId = jobs.find((item) => item.id === parentId)?.parent_job_id ?? null;
+      }
+      return true;
+    });
+    if (explicitIntent && (!explicitCurrent() || newerSolve)) {
       explicitId = null; explicitJob = null; explicitIntent = null;
+      showGeneration++; cancelObsoleteOpen();
     }
     if (explicitIntent && !explicitId) return; // an explicit Send owns its return too
     if (explicitId) explicitJob = jobs.find((item) => item.id === explicitId) ?? explicitJob;
@@ -259,6 +275,7 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
   }
   async function showRequest(request: CadShowRequest): Promise<void> {
     const generation = ++showGeneration;
+    explicitAt = now(); explicitOperationId = request.operationId;
     cancelObsoleteOpen();
     if (!display.isActive()) { reportUnavailable(); return; }
     const intent: Intent = { sendAt: display.newestSendAt(), navigation: navigationGeneration(), edits,
@@ -310,9 +327,10 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
   const stopShowRequest = jobsSocket.subscribeCadShowRequest((request) => { void showRequest(request); });
   return {
     latestSentAt: () => newestSentAt, observe, resume, showRequest,
-    // The explicit choice owns automatic discovery too, including new bundles
-    // and jobs omitted by a paged snapshot, until the person moves on.
-    ownsReturn: (bundle: CadReturnBundle, jobs: readonly JobItem[]) => explicitCurrent() || latestCadJobs([...jobs]).some((job) =>
+    // Hold only returns that predate the show. A new Send must stay eligible
+    // even when its receipt arrives before discovery sees the return.
+    ownsReturn: (bundle: CadReturnBundle, jobs: readonly JobItem[]) =>
+      (explicitCurrent() && Date.parse(bundle.modifiedAt) <= explicitAt) || latestCadJobs([...jobs]).some((job) =>
       job.cad_return?.bundle_path === bundle.bundlePath
       && (bundle.returnId && job.cad_return.return_id ? job.cad_return.return_id === bundle.returnId
         : Date.parse(bundle.modifiedAt) <= Date.parse(job.created_at))

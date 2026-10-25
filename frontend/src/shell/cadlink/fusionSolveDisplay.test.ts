@@ -503,14 +503,14 @@ it('captures user intent before fetching an explicit job outside the current pag
   expect(f.display.showIngestedMesh).not.toHaveBeenCalled();
 });
 
-it('keeps explicit history selected when automatic Fusion requests arrive', async () => {
+it('releases explicit history for a newly pressed Fusion Solve', async () => {
   const f = fixture(); const old = preparing();
   await f.observe([old]);
   await f.showRequest({ operationId: old.id, jobId: old.id });
-  const newer = { ...preparing(null), id: 'new-press', created_at: new Date(NOW + 1000).toISOString() };
+  const newer = { ...preparing(null), id: 'new-press', client_request_id: 'cad-solve:new-press',
+    cad_state: { ...preparing(null).cad_state!, operation_id: 'new-press' }, created_at: new Date(NOW + 1000).toISOString() };
   await f.observe([newer, old]);
-  expect(currentModel().ingestId).toBe(record.ingest_id);
-  expect(f.display.reportDiagnostic).not.toHaveBeenCalledWith('new-press', expect.anything());
+  expect(useCadReturnStore.getState().selectedBundle?.requestId).toBe('new-press');
 });
 
 it.each([false, true])('opens a Send through existing CAD selection and respects intervening navigation (%s)', async (navigate) => {
@@ -566,7 +566,7 @@ it('keeps an explicit fetched job through an empty socket page while its model l
   await opening; await snapshot;
   expect(f.display.showIngestedMesh).toHaveBeenCalledOnce();
   expect(compareSelection.getSnapshot().primary).toBe(old.id);
-  await f.observe([external('automatic', NOW + 1000)]);
+  await f.observe([external('automatic', NOW - 1000)]);
   expect(compareSelection.getSnapshot().primary).toBe(old.id);
 });
 
@@ -575,7 +575,8 @@ it('allows automatic following again after the person moves on from explicit his
   await f.observe([old]);
   await f.showRequest({ operationId: old.id, jobId: old.id });
   noteExplicitNavigation();
-  const newer = { ...preparing(null), id: 'new-press', created_at: new Date(NOW + 1000).toISOString() };
+  const newer = { ...preparing(null), id: 'new-press', client_request_id: 'cad-solve:new-press',
+    cad_state: { ...preparing(null).cad_state!, operation_id: 'new-press' }, created_at: new Date(NOW + 1000).toISOString() };
   await f.observe([newer, old]);
   expect(useCadReturnStore.getState().selectedBundle?.requestId).toBe('new-press');
 });
@@ -584,16 +585,17 @@ it.each(['missing-job', 'missing-operation', 'refused-before-job', 'inactive'] a
   const f = fixture(vi.fn(async () => scenario === 'refused-before-job' ? json({ kind: 'prepare_and_solve' }) : new Response('', { status: 404 })));
   if (scenario === 'inactive') f.setActive(false);
   await f.showRequest({ operationId: 'gone', ...(scenario === 'missing-job' ? { jobId: 'gone' } : {}) });
-  expect(f.display.reportStatus).toHaveBeenCalledExactlyOnceWith('This request is no longer in Waveguide Generator.');
+  expect(f.display.reportStatus).toHaveBeenCalledExactlyOnceWith(scenario === 'inactive'
+    ? 'Switch to Fusion mode to show this request.' : 'This request is no longer in Waveguide Generator.');
 });
 
 
-it('keeps automatic return discovery from overriding an explicit history selection', async () => {
+it('keeps older automatic returns from overriding an explicit history selection', async () => {
   const f = fixture(); const old = preparing();
   await f.observe([old]);
   await f.showRequest({ operationId: old.id, jobId: old.id });
   const prepare = vi.fn(async () => ({ ok: true as const }));
-  const later = { ...bundle, bundlePath: 'wgreturn/later.wgreturn', returnId: 'later', modifiedAt: new Date(NOW + 1000).toISOString() };
+  const later = { ...bundle, bundlePath: 'wgreturn/later.wgreturn', returnId: 'later', modifiedAt: new Date(NOW - 1000).toISOString() };
   const reader = createCadReturnArrivalReader({ initialChoiceOwed: { current: false },
     seenReturnRevisions: { current: new Map() },
     ownsReturn: item => f.ownsReturn(item, []), ownsSolveReturn: item => f.ownsReturn(item, []),
@@ -613,4 +615,43 @@ it('reports one calm line when an explicit run has lost its retained model', asy
   const messages = f.display.reportStatus.mock.calls.map(([message]) => message);
   expect(messages.filter(message => message === 'This request is no longer in Waveguide Generator.')).toHaveLength(1);
   expect(messages.some(message => message.includes('No run with id') || message.includes('could not show the Fusion model'))).toBe(false);
+});
+
+
+it('keeps explicit history through snapshots, older jobs and its own newer retry', async () => {
+  const f = fixture(); const old = preparing();
+  await f.observe([old]);
+  await f.showRequest({ operationId: old.id, jobId: old.id });
+  await f.observe([]);
+  const retry = { ...preparing(null), id: 'retry', parent_job_id: old.id,
+    created_at: new Date(NOW + 1000).toISOString() };
+  await f.observe([retry]);
+  await f.observe([external('older', NOW - 1000)]);
+  expect(f.latestSentAt()).toBe(Date.parse(old.created_at));
+  expect(currentModel().ingestId).toBe(record.ingest_id);
+});
+
+it('discovers a new Send after its receipt arrives while history is explicitly selected', async () => {
+  const f = fixture(); const old = preparing();
+  await f.observe([old]);
+  await f.showRequest({ operationId: old.id, jobId: old.id });
+  const later = { ...bundle, bundlePath: 'wgreturn/new-send.wgreturn', returnId: 'new-send',
+    modifiedAt: new Date(NOW + 1000).toISOString() };
+  // Receipt ownership is known before the return listing changes; the explicit
+  // Solve owner must not eat the return's revision during that listing.
+  const prepare = vi.fn(async () => ({ ok: true as const }));
+  const seen = { current: new Map<string, string>() };
+  const reader = createCadReturnArrivalReader({ initialChoiceOwed: { current: false },
+    seenReturnRevisions: seen, sendOwnersKnown: () => true,
+    ownsReturn: item => f.ownsReturn(item, []), autoIngestSelected: prepare,
+  }, (async () => json({ cadFolderConfigured: true, items: [later] })) as typeof fetch);
+  await reader.refresh({ background: true, autoOpenNew: true });
+  expect(useCadReturnStore.getState().selectedBundle?.returnId).toBe('new-send');
+  expect(prepare).toHaveBeenCalledOnce();
+});
+
+it('does not claim an unseen newer Send while an explicit selection still holds', async () => {
+  const f = fixture(); const old = preparing();
+  await f.observe([old]); await f.showRequest({ operationId: old.id, jobId: old.id });
+  expect(f.ownsReturn({ ...bundle, returnId: 'new-send', modifiedAt: new Date(NOW + 1000).toISOString() }, [])).toBe(false);
 });

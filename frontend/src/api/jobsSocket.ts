@@ -839,6 +839,7 @@ export class JobsSocketManager {
   private readonly listeners = new Set<() => void>();
   private readonly cadOperationListeners = new Set<CadOperationListener>();
   private pendingCadShowRequest: CadShowRequest | null = null;
+  private readonly seenCadShowRequests = new Map<string, number>();
   private readonly cadShowRequestListeners = new Set<(request: CadShowRequest) => void>();
   private readonly cadViewportReadyListeners = new Set<(ingestId: string) => void>();
   private snapshot: JobsSnapshot = {
@@ -1146,6 +1147,14 @@ export class JobsSocketManager {
         at: typeof decoded.at === 'string' ? decoded.at : new Date().toISOString(),
         ...(decoded.jobId ? { jobId: decoded.jobId as string } : {}) };
       if (!Number.isFinite(Date.parse(request.at!)) || Date.now() - Date.parse(request.at!) > 120_000) return;
+      const key = JSON.stringify([request.operationId, request.at]);
+      for (const [seen, at] of this.seenCadShowRequests) {
+        if (Date.now() - at > 120_000) this.seenCadShowRequests.delete(seen);
+      }
+      if (this.seenCadShowRequests.has(key)) return;
+      // Per-window memory survives reconnect; another window still receives
+      // the server replay. Keep pending delivery when the owner is unmounted.
+      this.seenCadShowRequests.set(key, Date.parse(request.at!));
       if (!this.cadShowRequestListeners.size) this.pendingCadShowRequest = request;
       else {
         this.pendingCadShowRequest = null;

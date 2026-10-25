@@ -2247,6 +2247,9 @@ REQUEST_HISTORY_TEXT = {
     "solve": "Solve", "send": "Send", "unnamedDocument": "This document",
     "rowTitle": "{document} · {kind} · {time}",
     "unavailable": f"This request is no longer in {APP_NAME}.",
+    "outsideFusion": "Switch to Fusion mode to show this request.",
+    "historyCorrupt": "Earlier request history was damaged. It has been set aside; new requests are recorded here.",
+    "historyCheck": "Open Waveguide Generator to check earlier requests. Their history has been kept.",
     "historyUnavailable": "Earlier request history cannot be read by this version. It has been kept unchanged.",
 }
 

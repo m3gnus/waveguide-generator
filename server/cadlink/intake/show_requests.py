@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import shutil
+import stat
 import time
 from datetime import datetime
 from pathlib import Path
@@ -23,15 +26,22 @@ logger = logging.getLogger(__name__)
 
 def _discard(path: Path) -> None:
     try:
-        path.unlink(missing_ok=True)
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink(missing_ok=True)
     except Exception:
         logger.debug("Could not discard Fusion show request %s", path.name, exc_info=True)
 
 
 def _read_pointer(path: Path) -> dict[str, Any] | None:
-    if path.stat().st_size > 65536:
-        raise ValueError("oversize pointer")
-    with path.open(encoding="utf-8") as stream:
+    # Open non-blocking before checking the descriptor: a file can be
+    # replaced with a FIFO between directory inspection and open.
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(fd, encoding="utf-8") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 65536:
+            raise ValueError("invalid pointer file")
         raw = stream.read(65537)
     if len(raw.encode("utf-8")) > 65536:
         raise ValueError("oversize pointer")
@@ -53,9 +63,12 @@ def read_show_requests(data_dir: Path) -> list[tuple[Path, dict[str, Any]]]:
             # Never open devices, directories, symlinks or FIFOs. A crashed
             # atomic writer leaves <requestId>.json.<random>, never a pointer.
             if path.is_symlink() or not path.is_file():
+                _discard(path)
                 continue
             if path.suffix != ".json":
-                if ".json." in path.name and now - path.stat().st_mtime > SHOW_REQUEST_MAX_AGE_SECONDS:
+                # A live atomic writer still needs its temporary source for
+                # os.replace. Other junk is removed on the first encounter.
+                if ".json." not in path.name or now - path.stat().st_mtime > SHOW_REQUEST_MAX_AGE_SECONDS:
                     _discard(path)
                 continue
             record = _read_pointer(path)

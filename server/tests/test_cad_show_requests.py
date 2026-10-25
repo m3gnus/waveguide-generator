@@ -108,14 +108,20 @@ def test_fifo_and_directory_are_never_read_and_stale_crash_files_are_cleaned(tmp
     path, _ = pointer(tmp_path)
     fifo = path.with_name("fifo.json")
     os.mkfifo(fifo)
-    path.with_name("directory.json").mkdir()
+    directory = path.with_name("directory.json")
+    directory.mkdir()
+    (directory / "junk.txt").write_text("junk")
     stale = path.with_name("request-1.json.crashed")
     stale.write_text("partial")
     os.utime(stale, (time.time() - 180, time.time() - 180))
     fresh = path.with_name("request-1.json.writing")
     fresh.write_text("partial")
+    junk = path.with_name("junk.txt")
+    junk.write_text("junk")
     assert [p for p, _ in read_show_requests(tmp_path)] == [path]
-    assert fifo.exists() and fresh.exists() and not stale.exists()
+    assert not fifo.exists() and fresh.exists() and not stale.exists()
+    assert not path.with_name("directory.json").exists() and not junk.exists()
+    assert [p for p, _ in read_show_requests(tmp_path)] == [path]
 
 
 @pytest.mark.parametrize("age", [121, 3600, -60])
@@ -191,4 +197,18 @@ def test_replacement_pointer_is_also_size_bounded_during_removal(tmp_path):
     path.write_text("[" * 65537)
     remove_show_request(path, record)
     assert not read_show_requests(tmp_path)
+    assert not path.exists()
+
+
+def test_file_replaced_by_fifo_between_inspection_and_open_never_blocks(tmp_path, monkeypatch):
+    import os
+    from server.cadlink.intake import show_requests
+    path, _ = pointer(tmp_path)
+    original = show_requests._read_pointer
+    def replace_then_read(target):
+        target.unlink()
+        os.mkfifo(target)
+        return original(target)
+    monkeypatch.setattr(show_requests, "_read_pointer", replace_then_read)
+    assert read_show_requests(tmp_path) == []
     assert not path.exists()
