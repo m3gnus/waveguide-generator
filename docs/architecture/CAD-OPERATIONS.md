@@ -1937,6 +1937,8 @@ the mesh builder's solved-triangle limit and full-domain warning constants.
   milliseconds as its floor, so it keeps rising past an unreadable file (at the
   protocol's limit it stays just below it). Progress while
   solving is written at most every 2 seconds, a change of state at once.
+  The shared protocol owns `REQUEST_STATUS_REFRESH_SECONDS` and `CAPABILITY_STOPPED_AT`;
+  WG and the add-in import these same refresh and shutdown-marker definitions.
   WG refreshes an unfinished request's status at least every 60 s while running: a
   record still under way whose file is 60 seconds old is written again with only `seq`
   and `updatedAt` new (checked on every pass, so at most about 61 s apart). A status

@@ -42,6 +42,7 @@ from server.platform.private_paths import ensure_private_directory
 from server.cadlink.ipc import IPC_SUBDIRECTORY, ipc_folder
 from server.cadlink.build_flags import fem_regions_enabled
 from server.cadlink.wglink_protocol import (
+    CAPABILITY_STOPPED_AT as STOPPED_AT,
     FUSION_REQUEST_DELIVERY_VERSION,
     REQUEST_STATUS_CAPABILITY,
     REQUEST_STATUS_SCHEMA_VERSION,
@@ -51,11 +52,6 @@ from server.cadlink.wglink_protocol import (
 
 CAPABILITIES_FILENAME = "wg-capabilities.json"
 CAPABILITIES_SCHEMA_VERSION = 1
-#: Added to the capability file when WG quits cleanly (UTC ISO time); the next
-#: WG to start writes the file without it. The file itself stays: its
-#: ``launcher`` is how the add-in starts WG again, and a reader never sees it
-#: missing or partial, because every write replaces it whole.
-STOPPED_AT = "stoppedAt"
 #: This process's id in the capability file, so a quitting WG marks only the
 #: file it wrote itself. New for every process.
 INSTANCE_FIELD = "wgInstance"

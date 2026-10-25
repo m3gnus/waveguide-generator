@@ -65,6 +65,7 @@ from server.cadlink.operations import (
 )
 from server.cadlink.wglink_protocol import (
     REQUEST_STATUS_CONTRACT,
+    REQUEST_STATUS_REFRESH_SECONDS as REFRESH_INTERVAL_S,
     REQUEST_STATUS_SCHEMA_VERSION,
     REQUEST_STATUS_SEQ_LIMIT,
     REQUEST_STATUS_SUFFIX,
@@ -91,11 +92,6 @@ PROGRESS_INTERVAL_S = 2.0
 #: stream said: a change no job event announces (an operation row) still lands,
 #: and so does a receipt a folder with a coarse modification time hid.
 SWEEP_INTERVAL_S = 30.0
-#: An unfinished request's status is rewritten at least this often while WG
-#: runs, even when nothing in it changed (only ``seq`` and ``updatedAt`` move),
-#: so the add-in can tell a long step from a WG that has gone quiet. Checked on
-#: every tick of the delivery loop (once a second).
-REFRESH_INTERVAL_S = 60.0
 #: At most this many refreshes per tick, the longest unwritten first, so the
 #: files that came due together (a restart) are spread over several seconds
 #: instead of written in one burst, and stay spread after.
