@@ -99,6 +99,7 @@ it('keeps the second Fusion run on screen when its export is discovered after bi
   const second = { ...first, id: 'second', run_number: null, status: 'preparing', has_results: false,
     client_request_id: 'cad-solve:second', created_at: new Date().toISOString(), cad_source: null,
     cad_intent: { bundle_path: bundle.bundlePath },
+    cad_return: { bundle_path: bundle.bundlePath, return_id: bundle.returnId },
     cad_state: { ...first.cad_state!, state: 'processing', operation_id: 'second' },
   } as ReturnType<typeof job>;
   publishCadJobs([second, first]); await flush();
@@ -842,6 +843,7 @@ it('restores initial selection of a bundle whose old completed Fusion request is
   publishCadJobs([{ ...job(), id: 'old-fusion', created_at: new Date(Date.now() - 900_000).toISOString(),
     status: 'complete', has_results: true, cad_state: { ...job().cad_state!, state: 'accepted', operation_id: 'old-fusion' },
     cad_intent: { bundle_path: bundle.bundlePath },
+    cad_return: { bundle_path: bundle.bundlePath, return_id: bundle.returnId },
   } as ReturnType<typeof job>]);
   stop = mountCadWorkspaceOwners(); await flush();
   expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
@@ -856,6 +858,7 @@ it('keeps a preparing Fusion request selected across folder refresh without a se
         artifact_sha256: record.artifact_sha256, project_lineage_id: null } },
   } as ReturnType<typeof job>;
   request.cad_intent = { bundle_path: bundle.bundlePath };
+  request.cad_return = { bundle_path: bundle.bundlePath, return_id: bundle.returnId! };
   publishCadJobs([request]); stop = mountCadWorkspaceOwners(); await flush();
   returns = [bundle];
   await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true }); await flush();
@@ -866,5 +869,28 @@ it('keeps a preparing Fusion request selected across folder refresh without a se
     blocking_finding_ids: [], report_sha256: record.report_sha256 } } }]);
   await flush();
   expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+});
+
+
+it.each(['running', 'complete'] as const)('recovers an already-bound %s Fusion snapshot without a folder poll taking display', async status => {
+  const response = deferred<Response>();
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((input, init) => String(input).endsWith('/workspace') ? response.promise : base(input, init));
+  const run = { ...job(), id: 'already-bound', status, run_number: 2, has_results: status === 'complete',
+    client_request_id: 'cad-solve:already-bound', created_at: new Date().toISOString(), cad_intent: null,
+    cad_return: { bundle_path: bundle.bundlePath, return_id: bundle.returnId },
+    cad_state: { state: 'accepted', operation_id: 'already-bound' },
+  } as ReturnType<typeof job>;
+  publishCadJobs([run]); stop = mountCadWorkspaceOwners(); await flush();
+  returns = [bundle];
+  await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true }); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+  response.resolve(json(workspaceFor())); await flush();
+  expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
+  expect(compareSelection.getSnapshot().awaiting).toBe(run.id);
+  await cadWorkspace.getSnapshot().refresh({ background: true, autoOpenNew: true }); await flush();
+  expect(currentModel().ingestId).toBe(record.ingest_id);
+  expect(currentModel().viewportShowing).toBe(true);
   expect(calls('/api/cadlink/ingest')).toHaveLength(0);
 });

@@ -879,6 +879,33 @@
         "title": "CadOperationSummary",
         "type": "object"
       },
+      "CadReturnIdentity": {
+        "additionalProperties": false,
+        "description": "The immutable return accepted by this request, before and after binding.",
+        "properties": {
+          "bundle_path": {
+            "title": "Bundle Path",
+            "type": "string"
+          },
+          "return_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Return Id"
+          }
+        },
+        "required": [
+          "bundle_path",
+          "return_id"
+        ],
+        "title": "CadReturnIdentity",
+        "type": "object"
+      },
       "CadReturnIngestRequest": {
         "additionalProperties": false,
         "properties": {
@@ -6509,6 +6536,16 @@
             ],
             "title": "Cad Provenance"
           },
+          "cad_return": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CadReturnIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "cad_setup": {
             "anyOf": [
               {
@@ -7246,6 +7283,16 @@
               }
             ],
             "title": "Cad Provenance"
+          },
+          "cad_return": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CadReturnIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "cad_setup": {
             "anyOf": [

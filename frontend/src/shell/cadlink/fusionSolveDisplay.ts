@@ -1,3 +1,4 @@
+import type { CadReturnBundle } from '../../api/cadlink';
 import { isActiveJobStatus, type JobItem } from '../../api/jobsSocket';
 import { reportClientError } from '../../api/diagnostics';
 import { compareSelection } from '../../api/results';
@@ -37,10 +38,6 @@ const DISPLAY_FAILURE = 'WG could not show the Fusion model. It tries again when
 export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: typeof fetch = fetch, now = Date.now) {
   const since = now() - RECEIPT_FIRST_CONNECTION_MS;
   const observed = new Map<string, Intent>();
-  // Binding replaces cad_intent with the run's SolveRequest. Keep the bundle
-  // owned across that transition so a late folder poll cannot select it again
-  // and clear a model this owner has already displayed.
-  const bundles = new Map<string, string>();
   const handled = new Set<string>();
   const presented = new Set<string>();
   const reported = new Set<string>();
@@ -58,6 +55,20 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
   // through the request list, never by taking over at start.
   const eligible = (job: JobItem) => Number.isFinite(Date.parse(job.created_at))
     && (isActiveJobStatus(job.status) || changedAt(job) >= since);
+  const canFollow = (job: JobItem, jobs: readonly JobItem[]) => {
+    if (!eligible(job)) return false;
+    const claim = cadSolveClaim(job);
+    let parentId = job.parent_job_id;
+    const visited = new Set<string>([job.id]);
+    while (parentId && !visited.has(parentId)) {
+      visited.add(parentId);
+      const parent = jobs.find((item) => item.id === parentId);
+      if (cadSolveClaim(parent ?? { id: parentId, client_request_id: null })?.sourceIngestId) return false;
+      parentId = parent?.parent_job_id ?? null;
+    }
+    if (claim?.sourceIngestId || claim?.modelDisplayAcknowledged || job.cad_provenance?.manual_waiting) return false;
+    return true;
+  };
   const diagnostic = (jobId: string, reason: string, error?: unknown) => {
     const key = `${jobId}:${reason === 'open-failed' ? 'failure' : 'skip'}`;
     if (reported.has(key)) return;
@@ -113,24 +124,11 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
     latestJobs = jobs;
     cancelObsoleteOpen();
     if (disposed) return;
-    for (const item of jobs) {
-      if (typeof item.cad_intent?.bundle_path === 'string') bundles.set(item.id, item.cad_intent.bundle_path);
-    }
     const job = latestCadJobs([...jobs])[0];
     if (!job) { newestId = null; return; }
     const sentAt = Date.parse(job.created_at);
-    if (!eligible(job)) return;
+    if (!canFollow(job, jobs)) return;
     if (jobs.some((other) => Date.parse(other.created_at) > sentAt)) return;
-    const claim = cadSolveClaim(job);
-    let parentId = job.parent_job_id;
-    const visited = new Set<string>([job.id]);
-    while (parentId && !visited.has(parentId)) {
-      visited.add(parentId);
-      const parent = jobs.find((item) => item.id === parentId);
-      if (cadSolveClaim(parent ?? { id: parentId, client_request_id: null })?.sourceIngestId) return;
-      parentId = parent?.parent_job_id ?? null;
-    }
-    if (claim?.sourceIngestId || claim?.modelDisplayAcknowledged || job.cad_provenance?.manual_waiting) return;
     const first = !observed.has(job.id);
     if (first) {
       observed.set(job.id, { navigation: navigationGeneration(), edits,
@@ -156,11 +154,11 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
       // Select the request immediately so Results owns its Preparing progress,
       // even before the server can name a displayable preparation. This is a
       // request pointer, never a second browser-driven mesh preparation.
-      if (typeof job.cad_intent?.bundle_path === 'string') {
+      if (typeof job.cad_return?.bundle_path === 'string') {
         workspaceModeStore.setImportedInput('cad');
         const name = job.cad_state?.snapshot?.document_name || 'Fusion model';
         useCadReturnStore.getState().selectBundle({ name, documentName: name,
-          bundlePath: job.cad_intent.bundle_path, modifiedAt: job.created_at, requestId: job.id,
+          bundlePath: job.cad_return.bundle_path, returnId: job.cad_return.return_id, modifiedAt: job.created_at, requestId: job.id,
           readable: false, sourceCount: null, instanceCount: null, sources: [],
         }, job.cad_state?.snapshot?.project_lineage_id, true, fetcher);
       }
@@ -216,10 +214,11 @@ export function createFusionSolveDisplay(display: FusionSolveDisplay, fetcher: t
   }
   return {
     latestSentAt: () => newestSentAt, observe, resume,
-    ownsReturn: (path: string, jobs: readonly JobItem[], initial = false) => latestCadJobs([...jobs]).some((job) =>
-      (job.cad_intent?.bundle_path ?? bundles.get(job.id)) === path && (!initial || (eligible(job)
-        && !cadSolveClaim(job)?.sourceIngestId && !cadSolveClaim(job)?.modelDisplayAcknowledged
-        && !job.cad_provenance?.manual_waiting))),
+    ownsReturn: (bundle: CadReturnBundle, jobs: readonly JobItem[]) => latestCadJobs([...jobs]).some((job) =>
+      job.cad_return?.bundle_path === bundle.bundlePath
+      && (bundle.returnId && job.cad_return.return_id ? job.cad_return.return_id === bundle.returnId
+        : Date.parse(bundle.modifiedAt) <= Date.parse(job.created_at))
+      && canFollow(job, jobs)),
     dispose: () => {
       disposed = true; cancelObsoleteOpen(); stopSettings(); stopDesign(); stopChoice(); stopWorkspace(); stopNavigation();
     },

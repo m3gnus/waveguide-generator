@@ -55,6 +55,12 @@ export function returnBelongsToProject(
   return Boolean(designId && (bundle.designIds ?? []).includes(designId));
 }
 
+// The directory timestamp can stay unchanged when an export replaces files
+// inside it. The immutable manifest id distinguishes those return revisions.
+function returnRevision(item: CadReturnBundle): string {
+  return item.returnId ? `${item.modifiedAt}:${item.returnId}` : item.modifiedAt;
+}
+
 export function newestReturnArrival(
   items: CadReturnBundle[],
   previous: Map<string, string> | null,
@@ -63,7 +69,7 @@ export function newestReturnArrival(
   const recentThreshold = nowMs - 60_000;
   return items.find((item) => item.readable && (
     previous
-      ? previous.get(item.bundlePath) !== item.modifiedAt
+      ? previous.get(item.bundlePath) !== returnRevision(item)
       : Date.parse(item.modifiedAt) >= recentThreshold
   )) ?? null;
 }
@@ -131,7 +137,7 @@ export async function refreshCadReturnArrivals(
       || !isCurrentDocumentLoad(documentLoad)) return;
     setBundles(response.items);
     const previous = seenReturnRevisions.current;
-    const next = new Map(response.items.map((item) => [item.bundlePath, item.modifiedAt]));
+    const next = new Map(response.items.map((item) => [item.bundlePath, returnRevision(item)]));
     const wasConfigured = cadFolderConfigured.current;
     cadFolderConfigured.current = response.cadFolderConfigured;
     cadCoordinationStore.set(response.coordination === 'on' ? 'on' : 'off');
@@ -146,7 +152,7 @@ export async function refreshCadReturnArrivals(
         if (!next.has(path)) deferredArrivalRevisions.current.delete(path);
       });
       response.items.forEach((item) => {
-        if (newestReturnArrival([item], previous)) deferredArrivalRevisions.current.set(item.bundlePath, item.modifiedAt);
+        if (newestReturnArrival([item], previous)) deferredArrivalRevisions.current.set(item.bundlePath, returnRevision(item));
       });
     } else if (deferredArrivalRevisions.current.size) {
       const deferredPrevious = new Map(previous);
@@ -160,7 +166,10 @@ export async function refreshCadReturnArrivals(
     // background poll also notices a new revision in the folder.
     const arrived = options.autoOpenNew && !deferNewArrivals && !awaitingReturn()
       && !(initialChoiceOwed.current && awaitingReceiptDisplay())
-      ? newestReturnArrival(response.items.filter((item) => !ownsReturn(item)), arrivalPrevious) : null;
+      ? newestReturnArrival(response.items.filter((item) => !ownsReturn(item)
+        // Discovering the return already in the viewport is not a new model
+        // choice. A re-export has a new return id, even at the same path.
+        && !(item.returnId && item.returnId === useCadReturnStore.getState().ingestRecord?.return_id)), arrivalPrevious) : null;
     seenReturnRevisions.current = next;
     const currentDesignId = useDocumentStore.getState().identity?.designId;
     if (useCadReturnStore.getState().selectedBundle) initialChoiceOwed.current = false;

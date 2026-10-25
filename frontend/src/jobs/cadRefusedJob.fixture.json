@@ -36,5 +36,9 @@
     "frame_axis_automatic": null,
     "received_at": "2026-10-06T20:07:45.542246",
     "updated_at": "2026-10-06T20:07:45.551188"
+  },
+  "cad_return": {
+    "bundle_path": "ingest/wgi_01M496CVRH53EZG6M97SGR8XYH",
+    "return_id": "wgr_manual"
   }
 }

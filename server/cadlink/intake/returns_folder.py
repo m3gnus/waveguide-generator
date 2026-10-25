@@ -60,6 +60,7 @@ def return_inventory(
             "documentNativeId": None,
             "declaredCutPlanes": [],
             "requestId": None,
+            "returnId": None,
             "sourceCount": None,
             "instanceCount": None,
             "designIds": [],
@@ -97,6 +98,8 @@ def return_inventory(
                 or not isinstance(instances, list)
             ):
                 raise ValueError("manifest inventory has the wrong shape")
+            returned = manifest.get("return")
+            returned = returned if isinstance(returned, dict) else {}
             coordinates = coordinates if isinstance(coordinates, dict) else {}
             scope = scope if isinstance(scope, dict) else {}
             included = scope.get("included")
@@ -195,6 +198,7 @@ def return_inventory(
             item.update(
                 {
                     "readable": True,
+                    "returnId": str(returned.get("id") or "") or None,
                     "documentName": str(document.get("name") or candidate.stem),
                     # The CAD document this is a return of, when the adapter
                     # recorded it: a newer return of the same document is the

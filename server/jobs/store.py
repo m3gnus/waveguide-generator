@@ -1567,7 +1567,7 @@ class JobStore:
             # Binding replaces preparation metadata with the run's provenance.
             # The press identity belongs to acceptance and must survive it.
             row = conn.execute(
-                "SELECT task_metadata_json FROM simulation_jobs WHERE id = ?", (job_id,),
+                "SELECT task_metadata_json, config_json FROM simulation_jobs WHERE id = ?", (job_id,),
             ).fetchone()
             metadata = dict(task_metadata)
             previous_cad = json.loads(row["task_metadata_json"] or "{}").get("cad", {}) if row else {}
@@ -1576,6 +1576,14 @@ class JobStore:
                     if previous_cad.get(key)}
             if kept:
                 metadata["cad"] = {**(metadata.get("cad") or {}), **kept}
+            # Keep the accepted return in the same transaction that replaces
+            # its intent. A reconnect must not need a client-side memory of it.
+            intent = json.loads(row["config_json"] or "{}") if row else {}
+            if intent.get("type") == "cad_intent" and isinstance(intent.get("bundle_path"), str):
+                metadata["cad"] = {**(metadata.get("cad") or {}), "return_identity": {
+                    "bundle_path": intent["bundle_path"],
+                    "return_id": intent.get("return_id") or None,
+                }}
             changed = conn.execute(
                 """UPDATE simulation_jobs
                    SET status = 'queued', queued_at = ?, updated_at = ?, started_at = NULL,

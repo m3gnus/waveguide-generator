@@ -182,7 +182,7 @@ describe('one model display table', () => {
 });
 
 it('associates a Fusion-file refusal with the source manifest rather than its bundle filename', () => {
-  const job = { ...oldRuns[3], ...refused, cad_source: null, cad_intent: { ...refused.cad_intent, bundle_path: 'wgreturn/speaker.wgreturn' }, status: 'preparing', has_results: false } as JobItem;
+  const job = { ...oldRuns[3], ...refused, cad_source: null, cad_return: { ...refused.cad_return, bundle_path: 'wgreturn/speaker.wgreturn' }, status: 'preparing', has_results: false } as JobItem;
   const model = { ...modelForRun(oldRuns[3]), manifestSha256: refused.cad_state.snapshot.manifest_sha256 };
   expect(modelForRun(job).ingestId).toBe(refused.cad_state.preparation.ingest_id);
   expect(currentModelStatus(model, [job])).toMatchObject({ kind: 'refused', message: refused.cad_state.message });
@@ -219,4 +219,11 @@ it('reads held and historical error-state CAD requests as waiting', () => {
   expect(currentModelStatus(model, [{ ...job, status: 'error' }])).toMatchObject({ kind: 'waiting' });
   const error = { ...job, status: 'error', cad_state: { ...job.cad_state!, held: false, reason: null }, error_message: 'Preparation failed' } as JobItem;
   expect(currentModelStatus(model, [error]).kind).not.toBe('waiting');
+});
+
+
+it('uses the server return identity for an unprepared ingest request without a client intent', () => {
+  const job = { ...oldRuns[3], cad_source: null, cad_intent: null, cad_state: null,
+    cad_return: { bundle_path: 'ingest/wgi_retained', return_id: 'wgr_retained' } } as JobItem;
+  expect(modelForRun(job).ingestId).toBe('wgi_retained');
 });

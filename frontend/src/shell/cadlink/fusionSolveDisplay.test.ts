@@ -18,6 +18,7 @@ import { bundle, deferred, job, json, record, workspaceFor } from './selection.f
 const NOW = Date.parse('2026-10-15T18:00:00Z');
 function external(id = 'fusion', created = NOW - 120_000) {
   return { ...job(), id, client_request_id: `cad-solve:${id}`, created_at: new Date(created).toISOString(),
+    cad_return: { bundle_path: bundle.bundlePath, return_id: bundle.returnId },
     status: 'running', cad_state: { state: 'accepted', operation_id: id },
     cad_source: { ...job().cad_source, manifest_sha256: record.manifest_sha256 },
   } as ReturnType<typeof job>;
@@ -115,8 +116,8 @@ it('shows a second Fusion run of the same model after the first run was displaye
   const prepare = vi.fn();
   const reader = createCadReturnArrivalReader({ initialChoiceOwed: { current: false },
     seenReturnRevisions: { current: new Map() },
-    ownsReturn: item => f.ownsReturn(item.bundlePath, [second, first]),
-    ownsSolveReturn: item => f.ownsReturn(item.bundlePath, [second, first], true),
+    ownsReturn: item => f.ownsReturn(item, [second, first]),
+    ownsSolveReturn: item => f.ownsReturn(item, [second, first]),
     autoIngestSelected: prepare,
   }, (async () => json({ cadFolderConfigured: true, items: [bundle] })) as typeof fetch);
   await reader.refresh({ background: true, autoOpenNew: true });
@@ -365,4 +366,94 @@ it('fences navigation during artifact fetching itself', async () => {
   noteExplicitNavigation(); artifact.resolve(); await pending;
   expect(currentModel().viewportShowing).toBe(false);
   expect(cadSolveClaim(external())?.modelDisplayAcknowledged).not.toBe(true);
+});
+
+
+it.each(['running', 'complete'] as const)('owns the first already-bound %s snapshot after reload or reconnect', async status => {
+  const response = deferred<Response>();
+  const f = fixture(vi.fn(async input => String(input).endsWith('/workspace') ? response.promise : json(record)));
+  const run = { ...external('second', NOW), run_number: 2, status, cad_intent: null, has_results: status === 'complete' };
+  expect(f.ownsReturn(bundle, [run])).toBe(true);
+  const opening = f.observe([run]);
+  const prepare = vi.fn();
+  const reader = createCadReturnArrivalReader({ initialChoiceOwed: { current: true },
+    ownsReturn: item => f.ownsReturn(item, [run]), ownsSolveReturn: item => f.ownsReturn(item, [run]),
+    autoIngestSelected: prepare,
+  }, (async () => json({ cadFolderConfigured: true, items: [bundle] })) as typeof fetch);
+  await reader.refresh({ background: true, autoOpenNew: true });
+  expect(prepare).not.toHaveBeenCalled();
+  response.resolve(json(workspaceFor())); await opening;
+  expect(currentModel().ingestId).toBe(record.ingest_id);
+  expect(currentModel().viewportShowing).toBe(true);
+  expect(cadSolveClaim(run)?.modelDisplayAcknowledged).toBe(true);
+  expect(f.ownsReturn(bundle, [run])).toBe(false);
+});
+
+it('keeps a user model pick made after binding when run #2 completes', async () => {
+  const response = deferred<Response>();
+  const f = fixture(vi.fn(() => response.promise));
+  const first = { ...external('first'), status: 'complete' as const, run_number: 1 };
+  const second = { ...external('second', NOW), cad_intent: null, run_number: 2 };
+  const opening = f.observe([second, first]);
+  const picked = { ...bundle, bundlePath: 'wgreturn/picked.wgreturn', returnId: 'wgr_picked' };
+  useCadReturnStore.getState().selectBundle(picked);
+  response.resolve(json(workspaceFor())); await opening;
+  await f.observe([{ ...second, status: 'complete', has_results: true }, first]);
+  expect(useCadReturnStore.getState().selectedBundle).toBe(picked);
+  expect(f.display.showIngestedMesh).not.toHaveBeenCalled();
+  expect(compareSelection.getSnapshot().awaiting).toBeNull();
+});
+
+it.each([false, true])('opens a newer same-path return with unchanged folder time (prior displayed: %s)', async displayed => {
+  const f = fixture(); const run = external();
+  if (displayed) await f.observe([run]);
+  const newer = { ...bundle, returnId: 'wgr_new' };
+  const prepare = vi.fn();
+  let listed = bundle;
+  const reader = createCadReturnArrivalReader({ initialChoiceOwed: { current: false },
+    ownsReturn: item => f.ownsReturn(item, [run]), ownsSolveReturn: item => f.ownsReturn(item, [run]),
+    autoIngestSelected: prepare,
+  }, (async () => json({ cadFolderConfigured: true, items: [listed] })) as typeof fetch);
+  await reader.refresh({ background: true, autoOpenNew: true });
+  expect(prepare).not.toHaveBeenCalled();
+  listed = newer;
+  expect(f.ownsReturn(newer, [run])).toBe(false);
+  await reader.refresh({ background: true, autoOpenNew: true });
+  expect(useCadReturnStore.getState().selectedBundle?.returnId).toBe(newer.returnId);
+  expect(prepare).toHaveBeenCalledOnce();
+});
+
+it('does not retain ownership for displayed, old, WG-owned, manual, or superseded runs', () => {
+  const f = fixture(); const run = external();
+  expect(f.ownsReturn(bundle, [run])).toBe(true);
+  rememberCadSolve(run.id, ''); acknowledgeCadSolve(run, 'display');
+  expect(f.ownsReturn(bundle, [run])).toBe(false);
+  expect(f.ownsReturn(bundle, [{ ...external('old', NOW - 600_001), status: 'complete' }])).toBe(false);
+  const owned = external('owned'); rememberCadSolve(owned.id, '', 'wg-ingest');
+  expect(f.ownsReturn(bundle, [owned])).toBe(false);
+  expect(f.ownsReturn(bundle, [{ ...external('manual'), cad_provenance: { manual_waiting: true } }])).toBe(false);
+  const parent = external('parent');
+  const child = { ...external('child', NOW), parent_job_id: parent.id,
+    cad_return: { bundle_path: 'wgreturn/child.wgreturn', return_id: 'wgr_child' } };
+  expect(f.ownsReturn(bundle, [parent, child])).toBe(false);
+});
+
+
+it('owns an older delivery without a return id while rejecting a later same-path export', async () => {
+  const response = deferred<Response>();
+  const f = fixture(vi.fn(async input => String(input).endsWith('/workspace') ? response.promise : json(record)));
+  const run = { ...external(), cad_return: { bundle_path: bundle.bundlePath, return_id: null } };
+  expect(f.ownsReturn(bundle, [run])).toBe(true);
+  expect(f.ownsReturn({ ...bundle, returnId: 'wgr_later', modifiedAt: new Date(NOW).toISOString() }, [run])).toBe(false);
+  const opening = f.observe([run]);
+  const prepare = vi.fn();
+  const reader = createCadReturnArrivalReader({ initialChoiceOwed: { current: false },
+    seenReturnRevisions: { current: new Map() },
+    ownsReturn: item => f.ownsReturn(item, [run]), ownsSolveReturn: item => f.ownsReturn(item, [run]),
+    autoIngestSelected: prepare,
+  }, (async () => json({ cadFolderConfigured: true, items: [bundle] })) as typeof fetch);
+  await reader.refresh({ background: true, autoOpenNew: true });
+  response.resolve(json(workspaceFor())); await opening;
+  expect(prepare).not.toHaveBeenCalled();
+  expect(currentModel().viewportShowing).toBe(true);
 });

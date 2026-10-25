@@ -121,6 +121,8 @@ export interface JobItem extends JobNullableFields {
   cad_state?: components['schemas']['CadState'] | null;
   /** What a `preparing` job holds instead of a request (`type: 'cad_intent'`). Null for every job with a request. */
   cad_intent?: Record<string, unknown> | null;
+  /** Accepted return identity retained across binding. */
+  cad_return?: components['schemas']['CadReturnIdentity'] | null;
 }
 
 /** Whether a run's frame was confirmed by a person, and how it came to be. */

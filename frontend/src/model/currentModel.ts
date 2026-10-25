@@ -51,9 +51,9 @@ export function showUnreadableRun(job: JobItem): void {
 }
 
 /** Stored provenance wins over the anchor design retained by imported runs. */
-export function modelKindForRun(job: Partial<Pick<JobItem, 'config_summary' | 'cad_state' | 'cad_intent' | 'design_availability'>>): CurrentModel['kind'] {
+export function modelKindForRun(job: Partial<Pick<JobItem, 'config_summary' | 'cad_state' | 'cad_intent' | 'cad_return' | 'design_availability'>>): CurrentModel['kind'] {
   const imported = job.config_summary?.geometry_type === 'imported' || job.config_summary?.formula_type === 'cad-import' || job.config_summary?.import_origin === 'mesh-file'
-    || job.design_availability?.source === 'cad-import' || !!job.cad_state || !!job.cad_intent;
+    || job.design_availability?.source === 'cad-import' || !!job.cad_state || !!job.cad_intent || !!job.cad_return;
   return imported ? job.config_summary?.import_origin === 'mesh-file' ? 'file' : 'cad' : 'parametric';
 }
 
@@ -61,7 +61,7 @@ export function modelKindForRun(job: Partial<Pick<JobItem, 'config_summary' | 'c
 export function modelForRun(job: JobItem): CurrentModel {
   const kind = modelKindForRun(job);
   const imported = kind !== 'parametric';
-  const ingestId = job.cad_source?.ingest_id ?? (typeof job.cad_intent?.bundle_path === 'string' && job.cad_intent.bundle_path.startsWith('ingest/') ? job.cad_intent.bundle_path.slice('ingest/'.length) : null) ?? job.cad_state?.preparation?.ingest_id ?? null;
+  const ingestId = job.cad_source?.ingest_id ?? (typeof job.cad_return?.bundle_path === 'string' && job.cad_return.bundle_path.startsWith('ingest/') ? job.cad_return.bundle_path.slice('ingest/'.length) : null) ?? job.cad_state?.preparation?.ingest_id ?? null;
   const modelId = job.cad_source?.model_id && job.cad_source.model_id !== 'unfiled' ? job.cad_source.model_id : null;
   const key = imported ? job.cad_source?.solve_model_sha256 || ingestId : jobDesignFingerprint(job);
   return {

@@ -718,6 +718,7 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(
                     "native_id": "fusion:doc-a",
                     "request_id": "request-a",
                 },
+                "return": {"id": "wgr_listing"},
                 "instances": [{"instance_id": "instance-a", "design_id": "wgd_speaker"}],
                 "sources": [
                     {
@@ -760,6 +761,7 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(
         "documentNativeId": "fusion:doc-a",
         "projectLineageId": None,
         "requestId": "request-a",
+        "returnId": "wgr_listing",
         "sourceCount": 1,
         "instanceCount": 1,
         # A bundle written before the declaration existed is a full model, and
@@ -2534,3 +2536,18 @@ def test_valid_mesh_recoveries_are_advisory_and_record_one_diagnostic(
         assert diagnostics[0]["solved_planes"] == []
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("returned", [None, "invalid", ["invalid"], {"id": "wgr_inventory"}])
+def test_return_inventory_tolerates_missing_or_malformed_return_identity(tmp_path: Path, returned) -> None:
+    from server.cadlink.intake.returns_folder import return_inventory
+
+    bundle = tmp_path / "wgreturn" / "speaker.wgreturn"
+    bundle.mkdir(parents=True)
+    manifest = {"document": {"name": "Speaker"}, "instances": [], "sources": []}
+    if returned is not None:
+        manifest["return"] = returned
+    (bundle / "wgreturn.json").write_text(json.dumps(manifest), encoding="utf-8")
+    item, _manifest, _path = return_inventory(tmp_path)[0]
+    assert item["readable"] is True
+    assert item["returnId"] == (returned["id"] if isinstance(returned, dict) else None)

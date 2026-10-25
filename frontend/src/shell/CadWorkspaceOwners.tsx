@@ -79,7 +79,7 @@ export function mountCadWorkspaceOwners(): () => void {
     }
   };
   const autoIngestSelected = () => { void actions.ingestSelected().catch(() => undefined); };
-  const ownsSolveReturn = (bundle: CadReturnBundle) => fusionSolves.ownsReturn(bundle.bundlePath, jobsSocket.getSnapshot().jobs, true);
+  const ownsSolveReturn = (bundle: CadReturnBundle) => fusionSolves.ownsReturn(bundle, jobsSocket.getSnapshot().jobs);
   const rereadDrivers = () => { void refreshChannelDriverBases().then((channels) => {
     if (channels.length) reportStatus(`Re-read ${channels.length} driver${channels.length === 1 ? '' : 's'} from the driver library.`);
   }).catch(() => undefined); };
@@ -92,7 +92,7 @@ export function mountCadWorkspaceOwners(): () => void {
     sendOwnersKnown: () => cadReceiptsStore.getState().loadedAt !== null,
     ownsSolveReturn,
     ownsReturn: (bundle) => Boolean((bundle.requestId && claimedReturns.has(bundle.requestId))
-      || fusionSolves.ownsReturn(bundle.bundlePath, jobsSocket.getSnapshot().jobs)
+      || fusionSolves.ownsReturn(bundle, jobsSocket.getSnapshot().jobs)
       || Object.values(cadReceiptsStore.getState().receipts).some((receipt) => receipt.bundle_path === bundle.bundlePath)
       || cadReceiptsStore.getState().frontedBundles.some((entry) => entry.path === bundle.bundlePath)),
     setError: reportError, setStatus: reportStatus,

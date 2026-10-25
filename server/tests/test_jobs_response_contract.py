@@ -112,6 +112,7 @@ def test_typed_execution_and_client_authored_exports_survive_rest_validation():
         "solve_execution": execution,
         "channel_solve_executions": {"hf": dict(execution)},
         "auto_export_formats": {"step": {"file": "a.step", "status": "done"}},
+        "cad": {"return_identity": {"bundle_path": "wgreturn/speaker.wgreturn", "return_id": "wgr_saved"}},
     }
     row = _row(metadata=metadata)
 
@@ -136,6 +137,7 @@ def test_typed_execution_and_client_authored_exports_survive_rest_validation():
             assert status == 200
             body = json.loads(raw)
             item = body["items"][0] if path == "/api/jobs" else body
+            assert item["cad_return"] == metadata["cad"]["return_identity"]
             assert item["solve_execution"] == execution
             assert item["channel_solve_executions"] == {"hf": execution}
             assert item["auto_export_formats"] == metadata["auto_export_formats"]
@@ -184,3 +186,18 @@ def test_schema_uses_response_option_requirements_without_changing_requests():
     request = SolveRequest.model_json_schema()
     assert not request["$defs"]["SolveOptions"].get("required")
     assert schema["properties"]["auto_export_formats"]["additionalProperties"] is True
+
+
+@pytest.mark.parametrize("detailed", [False, True])
+@pytest.mark.parametrize("identity", [None, {}, {"bundle_path": "ingest/old"},
+                                      {"bundle_path": "wgreturn/speaker.wgreturn", "return_id": "wgr_saved"}])
+def test_return_identity_reads_from_retained_metadata_and_tolerates_old_rows(detailed, identity):
+    metadata = {"cad": {"operation_id": "cmd-1"}}
+    if identity is not None:
+        metadata["cad"]["return_identity"] = identity
+    wire = JobRuntime._serialize_job(_row({"geometry": {"type": "imported"}}, metadata), detailed=detailed)
+    expected = ({"bundle_path": identity["bundle_path"], "return_id": identity.get("return_id")}
+                if identity and identity.get("bundle_path") else None)
+    assert wire["cad_return"] == expected
+    response = JobStatusResponse if detailed else JobItem
+    assert response.model_validate(wire).model_dump(mode="json")["cad_return"] == expected

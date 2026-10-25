@@ -1488,6 +1488,13 @@ class CadIdentityProvenance(JobModel):
     drive_channels: list[CadDriveChannelIdentity]
 
 
+class CadReturnIdentity(JobModel):
+    """The immutable return accepted by this request, before and after binding."""
+
+    bundle_path: str
+    return_id: str | None
+
+
 class CadSource(JobModel):
     """Where an imported run came from, kept for the run archive.
 
@@ -1624,6 +1631,10 @@ class JobItem(JobArchiveIdentity, JobDesignIdentity):
     #: ``cad_intent``, with the operation, return and setup it was accepted
     #: with). Null for every job that has a request.
     cad_intent: dict[str, Any] | None = None
+    #: Accepted return identity, from the intent before binding and
+    #: ``task_metadata.cad.return_identity`` afterward. Null for older bound
+    #: rows that did not retain it; bundle paths alone never identify a revision.
+    cad_return: CadReturnIdentity | None = None
 
 
 class JobStatusResponse(JobItem):

@@ -118,6 +118,7 @@ describe('result exporters', () => {
     { config_summary: { import_origin: 'mesh-file' } },
     { design_availability: { source: 'cad-import' } },
     { cad_intent: { bundle_path: 'ingest/legacy' } },
+    { cad_return: { bundle_path: 'ingest/legacy', return_id: null } },
   ])('does not expose a legacy imported anchor as an exportable design: %j', provenance => {
     expect(resultExportSnapshot({
       ...provenance,

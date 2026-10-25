@@ -11,8 +11,8 @@ No browser ingest or second solve is submitted for this display.
 Before an ingestion exists the server provides no displayable geometry. Showing
 the original model during STEP meshing would require an earlier server preview
 artifact and its identity; this slice does not introduce a second preparation.
-The current preparing-model id already exists in the job read model, so no server
-or OpenAPI change is needed here.
+The preparing-model id is already part of the job read model. The accepted
+return identity is also exposed as `cad_return` before and after binding.
 
 Explicit selection, document replacement and edits win over automatic display.
 A skipped/failed open stays pending, with one developer diagnostic per request
@@ -27,18 +27,26 @@ request.
 
 `JobsCoordinator` adopts prepared models only for WG-initiated solves. Folder
 arrival discovery defers to Fusion Solve for job-owned bundles and cannot
-re-ingest those bundles after completion. Historical bundles remain eligible for
+re-ingest the exact return already displayed. Historical bundles remain eligible for
 initial selection, which is never meshed again in the background: it stays
 selected and not prepared until the user prepares it. Inbox-capable add-ins send
 through receipts/jobs; folder arrivals open by themselves unless the observed
 add-in reports inbox transfer, so an older add-in, or one that has not reported
 (coordination off), keeps opening them.
 
-The display owner retains each observed request's bundle path when binding
-replaces `cad_intent` with the run's solve configuration. A late folder listing
-therefore still belongs to that request, even after its model was displayed;
-it cannot select the export again and clear the retained model. Display claims
-remain per job/run, and a later explicit model selection still wins.
+Binding retains the accepted bundle path and return id atomically in
+`task_metadata.cad.return_identity`. The job read model projects that identity as
+`cad_return`; both the display owner and current-model reader consume it, including
+when the first snapshot is already bound. Older bound rows without this identity
+remain readable and expose null.
+
+Only the current run of an eligible request that has not been acknowledged as
+displayed owns its return. Folder inventory supplies `returnId`: a new id at the
+same path is a new arrival even if its directory timestamp is unchanged. Legacy
+deliveries with no id fall back to the path and an export timestamp no later than
+the request. Discovering the exact return already shown is idempotent; it does
+not re-ingest the model or grant an old run permanent ownership of the path.
+Display claims remain per job/run, and a later explicit model selection still wins.
 
 ## 0.3.7 follow-up
 

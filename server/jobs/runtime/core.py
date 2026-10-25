@@ -4793,6 +4793,14 @@ class JobRuntime:
             and stored_config.get("type") == "cad_intent"
             else None
         )
+        cad = metadata.get("cad") if isinstance(metadata.get("cad"), Mapping) else {}
+        returned = cad_intent if cad_intent is not None else cad.get("return_identity")
+        cad_return = (
+            {"bundle_path": returned["bundle_path"],
+             "return_id": returned.get("return_id") or None}
+            if isinstance(returned, Mapping) and isinstance(returned.get("bundle_path"), str)
+            else None
+        )
         geometry = stored_config.get("geometry")
         imported = isinstance(geometry, Mapping) and geometry.get("type") == "imported"
         design = resolve_job_design(row.get("script_snapshot"))
@@ -5046,6 +5054,7 @@ class JobRuntime:
             "cad_source": cad_source,
             "cad_setup": dict(geometry) if imported else None,
             "cad_intent": cad_intent,
+            "cad_return": cad_return,
         }
         state = item["cad_state"]
         if state and state.get("prepare_failed"):

@@ -1179,6 +1179,17 @@ switched production intake and operation shims to that lane.
   `cad_intent` and the job has no design to reopen. `retry`, the effective and execution
   request, and every other reader that needs a `SolveRequest` refuse a job that holds an
   intent (HTTP 409); only a bound (`queued` or later) job has a request.
+- **Return identity.** The job read model exposes
+  `cad_return: {bundle_path, return_id}`: the accepted return's immutable
+  identity, projected from this intent until binding and then from
+  `task_metadata.cad.return_identity`, retained atomically by the binding
+  transaction. Older bound jobs that recorded none expose null. `return_id` may
+  be null for older deliveries. Folder inventory exposes the manifest's
+  `returnId`, so reusing a bundle path for a new return never grants an older
+  run ownership of it. The display owner and model identity reader both consume
+  `cad_return`; no browser cache reconstructs it. A current request owns display
+  only while eligible and not acknowledged as displayed; discovery of the exact
+  return already on screen is idempotent.
 - **Active.** `preparing` is active with `queued` and `running`: the jobs panel shows it
   as a running card labelled "Preparing mesh" with Stop, it cannot be deleted or
   cleared until it is stopped, and it is exempt from retention.

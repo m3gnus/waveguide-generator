@@ -73,6 +73,8 @@ export interface CadReturnBundle {
    * `document.native_id`), or null when the adapter did not record one. */
   documentNativeId?: string | null;
   requestId: string | null;
+  /** Immutable manifest return identity, distinct from its reusable folder path. */
+  returnId?: string | null;
   sourceCount: number | null;
   instanceCount: number | null;
   /**

@@ -112,7 +112,15 @@ def test_binding_queues_the_job_with_its_request_run_number_and_mesh(tmp_path: P
             # The request the jobs system stores, exactly as ``submit`` would have.
             assert row["config_json"]["geometry"]["ingest_id"] == ingest_id
             assert "type" not in row["config_json"]
-            assert row["task_metadata"]["cad"] == _provenance()
+            identity = {"bundle_path": _intent().bundle_path, "return_id": _intent().return_id}
+            assert row["task_metadata"]["cad"] == {**_provenance(), "return_identity": identity}
+            assert runtime._serialize_job(before)["cad_return"] == identity
+            # Reading only persisted data (as after restart) retains the same
+            # identity once the intent has been replaced by the SolveRequest.
+            for detailed in (False, True):
+                item = runtime._serialize_job(row, detailed=detailed)
+                assert item["cad_intent"] is None
+                assert item["cad_return"] == identity
             assert row["task_metadata"]["imported_geometry"]["ingest_id"] == ingest_id
             assert row["has_mesh_artifact"] is True
             assert runtime.store.get_mesh_artifact(job_id).startswith("$MeshFormat")

@@ -2857,6 +2857,16 @@ export interface components {
             /** Updatedat */
             updatedAt: string | null;
         };
+        /**
+         * CadReturnIdentity
+         * @description The immutable return accepted by this request, before and after binding.
+         */
+        CadReturnIdentity: {
+            /** Bundle Path */
+            bundle_path: string;
+            /** Return Id */
+            return_id: string | null;
+        };
         /** CadReturnIngestRequest */
         CadReturnIngestRequest: {
             /** Areadriftoverrides */
@@ -4649,6 +4659,7 @@ export interface components {
             cad_provenance?: {
                 [key: string]: unknown;
             } | null;
+            cad_return?: components["schemas"]["CadReturnIdentity"] | null;
             /** Cad Setup */
             cad_setup?: {
                 [key: string]: unknown;
@@ -4865,6 +4876,7 @@ export interface components {
             cad_provenance?: {
                 [key: string]: unknown;
             } | null;
+            cad_return?: components["schemas"]["CadReturnIdentity"] | null;
             /** Cad Setup */
             cad_setup?: {
                 [key: string]: unknown;

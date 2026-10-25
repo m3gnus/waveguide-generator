@@ -3,14 +3,14 @@ import type { JobItem } from '../../api/jobsSocket';
 
 export const bundle: CadReturnBundle = {
   name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn',
-  modifiedAt: '2026-08-11T00:00:00Z', readable: true, documentName: 'Speaker', requestId: null,
+  modifiedAt: '2026-08-11T00:00:00Z', readable: true, documentName: 'Speaker', requestId: null, returnId: 'wgr_fixture',
   sourceCount: 1, instanceCount: 1, designIds: [],
   sources: [{ id: 'source-hf', role: 'HF', required: true, suggestedResolutionMm: 4,
     defaultDriveChannelId: 'drive-hf' }],
 };
 
 export const record: CadReturnIngestRecord = {
-  ingest_id: 'wgi_fixture', created_at: '', return_id: '',
+  ingest_id: 'wgi_fixture', created_at: '', return_id: 'wgr_fixture',
   manifest_sha256: `sha256:${'1'.repeat(64)}`, artifact_sha256: `sha256:${'2'.repeat(64)}`,
   report_sha256: `sha256:${'3'.repeat(64)}`, acoustic_domain: 'free-space',
   scope: { status: 'clean', degraded_skip_count: 0 },
