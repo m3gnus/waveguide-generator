@@ -105,8 +105,9 @@ def test_quit_during_work_retires_engine_and_closes_default(runtime_factory, mon
     thread.start()
     try:
         wait_until(lambda: any(e["type"] == "reading" for e in events(key)), timeout=5)
+        quit_hook = _beat_quit_hook(create_app(data_dir=tmp_path / "data"))
         started = time.monotonic()
-        asyncio.run(_beat_quit_hook(create_app(data_dir=tmp_path / "data"))())
+        asyncio.run(quit_hook())
         assert time.monotonic() - started < 2
         thread.join(3)
         assert not thread.is_alive()
@@ -179,8 +180,9 @@ def test_quit_cancels_cold_start_before_ensure_started_completes(runtime_factory
     try:
         wait_until(marker.exists, timeout=5)
         assert not any(e["type"] == "started" for e in events(key))
+        quit_hook = _beat_quit_hook(create_app(data_dir=tmp_path / "data"))
         started = time.monotonic()
-        asyncio.run(_beat_quit_hook(create_app(data_dir=tmp_path / "data"))())
+        asyncio.run(quit_hook())
         thread.join(1)
         assert time.monotonic() - started < 2
         assert not thread.is_alive() and errors
