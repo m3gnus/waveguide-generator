@@ -147,8 +147,8 @@ describe('Model details, and the run status Results shows for its model', () => 
       mesh_snapshot: { ...record().mesh_snapshot!, source_size_mm: { port: 6, passive: 8 } },
     } as never);
     await act(async () => root.render(<Details value={value}/>));
-    expect(host.querySelector('.cad-solve-summary')?.textContent).toContain('Port exit, Passive radiator');
-    expect(host.querySelector('.cad-mesh-line')?.textContent).toContain('Passive radiator source 8 mm');
+    expect(host.querySelector('.cad-solve-summary')?.textContent).toContain('Port exit, Port or passive opening');
+    expect(host.querySelector('.cad-mesh-line')?.textContent).toContain('Port or passive opening source 8 mm');
     expectNoJargon(host);
   });
 
