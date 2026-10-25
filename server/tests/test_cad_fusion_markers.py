@@ -234,6 +234,7 @@ def test_wg_advertises_its_delivery_versions_at_startup(
         "documentUp": 1,
         "automaticDomain": 1,
         "meshSizing": 1,
+        "meshLimits": {"solvedTriangles": 22000, "fullDomainWarning": 18000},
         # FEM regions are on by default (WG2_FEM_REGIONS=0 withdraws them).
         "femRegions": 1,
         # This process's id: a quitting WG marks only its own file.

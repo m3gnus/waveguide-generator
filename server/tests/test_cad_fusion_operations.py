@@ -55,6 +55,7 @@ def test_capabilities_advertise_source_identity_without_changing_delivery(
         "documentUp": 1,
         "automaticDomain": 1,
         "meshSizing": 1,
+        "meshLimits": {"solvedTriangles": 22000, "fullDomainWarning": 18000},
         "femRegions": 1,
         "wgInstance": fusion_delivery.PROCESS_INSTANCE,
     }
