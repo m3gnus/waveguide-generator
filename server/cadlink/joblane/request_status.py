@@ -54,6 +54,7 @@ from server.cadlink.ipc import IPC_SUBDIRECTORY
 from server.cadlink.operations import (
     CANCELLED,
     INTERNAL_FAILURE_CODES,
+    PREFLIGHT_BLOCKED,
     PREPARE_AND_SOLVE,
     RECEIVE_SNAPSHOT,
     USER_WORDED_FAILURE_CODES,
@@ -244,7 +245,18 @@ def project_request_status(
         if (operation or {}).get("state") == CANCELLED:
             # Cancelled before admission: the receipt says refused, the user stopped it.
             return {**record, "state": "cancelled", "cancelReason": "stopped"}, None
-        return {**record, "state": "refused"}, None
+        refused = {**record, "state": "refused"}
+        if (operation or {}).get("reason") == PREFLIGHT_BLOCKED:
+            # Blocked by the shared preflight rules: their words say what to
+            # change, unless they read as internal detail.
+            try:
+                words = (json.loads(operation.get("outcome_json") or "{}") or {}).get("message")
+            except (TypeError, ValueError, AttributeError):
+                words = None
+            if isinstance(words, str) and words and not user_text_violations(
+                    words, names=[record["documentName"]]):
+                refused["failure"] = {"recorded": False, "message": words}
+        return refused, None
     if record["kind"] == RECEIVE_SNAPSHOT:
         return {**record, "state": "accepted"}, None
     if job is None:

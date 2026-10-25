@@ -36,6 +36,8 @@ SOURCE_ROLES = ("LF", "MF", "HF", "PASSIVE_CARDIOID")
 LEGACY_SOURCE_ROLE_ALIASES = {"PORT_EXIT": "PASSIVE_CARDIOID"}
 RECOGNISED_SOURCE_ROLES = SOURCE_ROLES + tuple(LEGACY_SOURCE_ROLE_ALIASES)
 EXTERIOR_ROLES = frozenset({"waveguide", "enclosure"})
+#: The name user text gives the application, everywhere.
+APP_NAME = "Waveguide Generator"
 
 # With source-identity-v1, each sources[].id is a CAD-authored identity that WG
 # bounds: trimmed, at most 25 UTF-8 bytes, and a complete gmsh physical name
@@ -185,7 +187,7 @@ PREFLIGHT_RULES = {
 NO_DRIVE_MESSAGE = 'This model has no source to drive it.'
 #: The one line shown when the add-in could not survey the model at all.
 PREFLIGHT_UNAVAILABLE_MESSAGE = (
-    'Waveguide Generator could not check this model. Try again; if it keeps '
+    f'{APP_NAME} could not check this model. Try again; if it keeps '
     'happening, it has been recorded.'
 )
 
@@ -300,7 +302,7 @@ def preflight_findings(draft: Mapping[str, Any], *, limits: Mapping[str, Any] | 
     if open_bodies:
         findings.append(preflight_finding('open_body', (
             f'{_quoted(open_bodies)} {_plural(len(open_bodies), "is not a closed solid", "are not closed solids")}; '
-            'WG may not be able to prepare '
+            f'{APP_NAME} may not be able to prepare '
             f'{_plural(len(open_bodies), "it", "them")}.')))
     ceiling = ceiling_finding(draft.get('triangles_least'), limits=limits,
                               symmetry=str(draft.get('symmetry') or 'auto'))
@@ -333,7 +335,7 @@ def ceiling_finding(least: object, *, limits: Mapping[str, Any] | None = None,
     limit = solved_triangle_limit(limits)
     if not isinstance(least, int) or isinstance(least, bool) or least <= limit:
         return None
-    prefix = 'This model' if symmetry == 'off' else 'Even if WG can use symmetry, this model'
+    prefix = 'This model' if symmetry == 'off' else f'Even if {APP_NAME} can use symmetry, this model'
     finding = preflight_finding('mesh_ceiling', (
         f'{prefix} meshes to about {least:,} triangles, above the {limit:,} limit.'))
     if in_sources_and_mesh:
@@ -1845,8 +1847,6 @@ REQUEST_STATUS_NOTICES = ("fullModel", "cutModel", "healed")
 #: The reason code of the triangle ceiling: WG stores it, and a prompt carrying
 #: it also offers Sources & Mesh... in Fusion. The one spelling of it.
 MESH_TOO_LARGE_CODE = "mesh_too_large"
-#: The name user text gives the application, everywhere.
-APP_NAME = "Waveguide Generator"
 _STATUS_KINDS = ("prepare_and_solve", "receive_snapshot")
 _STATUS_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _STATUS_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
@@ -2175,6 +2175,11 @@ def _request_status_text(record: Mapping[str, Any]) -> dict[str, Any]:
         }.get(str(record.get("cancelReason")), f"{name} · Stopped in {APP_NAME}.")
     elif state == "refused":
         headline = f"{APP_NAME} could not take {inner}."
+        # A return the shared preflight rules block: WG says what to change,
+        # in the rules' words (never a recorded failure).
+        failure = record.get("failure") if isinstance(record.get("failure"), Mapping) else {}
+        if failure.get("recorded") is False:
+            detail = _user_words(failure.get("message"), document)
     else:
         headline = f"{name} · Open {APP_NAME} to see this request."
     return {"headline": headline, "detail": detail, "options": options, "actions": actions}

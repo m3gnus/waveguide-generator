@@ -171,7 +171,7 @@ USER_ACTION_CODES = frozenset(
 )
 #: The failures whose words a user reads, in Fusion too: WG's own sentence and
 #: next step for each. Every other failure reads as WG's recorded failure.
-USER_WORDED_FAILURE_CODES = USER_ACTION_CODES | {"model_cut_unsolvable"}
+USER_WORDED_FAILURE_CODES = USER_ACTION_CODES | {"model_cut_unsolvable", PREFLIGHT_BLOCKED}
 QUESTION_CODES = frozenset({MESH_TOO_LARGE_CODE, "setup_required", "findings_need_review"})
 #: Prepared and kept, waiting only for the user to press Solve: never a
 #: question, never a failure. Clear failed keeps it; Solve continues it with

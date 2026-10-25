@@ -474,3 +474,53 @@ def test_a_fusion_answer_does_not_carry_to_an_admission_press_naming_another_set
         job_id = h._loop.run(accept_operation_solve(h.context(), command, press, schedule=False,
                                                     delivery_released=True))
         assert intent_of(h.jobs_store.get_job_row(job_id)).mesh_limit_override is expected, command
+
+
+# -- what Fusion's progress panel reads (the request-status contract) ------------------
+
+def test_a_return_refused_at_admission_reads_the_rules_words_in_its_status(h: JobsHarness, monkeypatch):
+    from test_cad_request_status import _publisher, _status
+
+    from server.cadlink.joblane import request_status
+
+    recorded = []
+    monkeypatch.setattr(request_status, "record_incident", lambda *a, **k: recorded.append(a))
+    _delivered_blocked_solve(h)
+    h.delivery_pass()
+    assert _ack(h.data_dir, "cmd-1")["reason"] == _expected_refusal()
+    _publisher(h).tick(h.jobs_store)
+    record = _status(h)
+    assert record["state"] == "refused"
+    assert record["failure"]["recorded"] is False and record["failure"]["message"] == _expected_refusal()
+    text = wglink_protocol.request_status_text(wglink_protocol.validate_request_status(record, request_id="cmd-1"))
+    assert text["detail"] == _expected_refusal()
+    assert wglink_protocol.user_text_violations(" ".join([text["headline"], text["detail"]])) == []
+    assert recorded == []  # A user matter: nothing for the developers.
+
+
+def test_a_return_refused_at_its_first_preparation_says_what_to_change_not_recorded(
+    h: JobsHarness, monkeypatch,
+):
+    import server.cadlink.joblane.job_shims as job_shims
+    import server.cadlink.joblane.preparation as preparation
+    from test_cad_request_status import _publisher, _receipt, _status
+
+    from server.cadlink.joblane import request_status
+
+    _accepted_blocked_solve(h)
+    monkeypatch.setattr(preparation, "refuse_blocked_return", lambda *a, **k: False)
+    monkeypatch.setattr(job_shims, "refuse_blocked_return", lambda *a, **k: False)
+    h._loop.run(job_shims.accept_operation_solve(h.context(), "cmd-1", schedule=False, delivery_released=True))
+    monkeypatch.undo()
+    recorded = []
+    monkeypatch.setattr(request_status, "record_incident", lambda *a, **k: recorded.append(a))
+    h.prepare(setup_revision_id=_revision(h.store, _setup()))
+    _receipt(h)
+    _publisher(h).tick(h.jobs_store)
+    record = _status(h)
+    assert record["state"] == "couldNotFinish" and record["phase"] == "preparing"
+    assert record["failure"]["recorded"] is False
+    assert record["failure"]["message"] == _expected_refusal()
+    text = wglink_protocol.request_status_text(wglink_protocol.validate_request_status(record, request_id="cmd-1"))
+    assert text["headline"] == _expected_refusal()
+    assert recorded == []
