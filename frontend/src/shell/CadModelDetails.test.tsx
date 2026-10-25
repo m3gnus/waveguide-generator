@@ -1,6 +1,6 @@
 /**
- * The CAD Solve card says what Solve uses; the model's state and its one
- * Solve are its status line (`CadModelStatusLine`). A run in progress is
+ * Model details (PLAN.md U4) says what the model is and what Solve uses; the
+ * model's state and its one Solve are its status line (`CadModelStatusLine`). A run in progress is
  * reported in Results (`CurrentModelStatus`) through the same progress model the
  * parametric run list uses (`SolveProgressView`/`operationStageWord`/
  * `solveStageWord`, `./solveProgress`) -- not a CAD-only copy of the
@@ -11,7 +11,7 @@
  * reached any given point by any path -- including one a waiting Fusion
  * request advanced -- renders identically.
  */
-import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
+import { preferencesStore } from '../prefs/preferences';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -24,10 +24,9 @@ import { resetCadReturnStore } from '../stores/cadReturn';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { resetSolveStageClocksForTests } from './solveProgress';
 
-vi.mock('./CadOperationsSection', () => ({ CurrentModelRequests: () => null }));
 vi.mock('../jobs/useImportedSolvePlan', () => ({ useImportedSolvePlan: () => ({ plan: null }) }));
 
-const { CadSolveCard } = await import('./CadSolveCard');
+const { CadModelDetails } = await import('./CadModelDetails');
 const { CurrentModelStatus } = await import('./CurrentModelStatus');
 
 /** The Results status of the model the card shows. */
@@ -36,12 +35,38 @@ const Run = () => <CurrentModelStatus record={record()} solveStatus/>;
 const MANIFEST = `sha256:${'c'.repeat(64)}`;
 const NOW = '2026-09-23T00:00:00Z';
 
-function record(): CadReturnIngestRecord {
+function record(overrides: Partial<CadReturnIngestRecord> = {}): CadReturnIngestRecord {
   return {
     ingest_id: 'wgi_run', manifest_sha256: MANIFEST, artifact_sha256: 'artifact', report_sha256: 'report',
-    findings: [], evidence: { fem_air_volumes: [] }, polar_grid_derivation: {},
-    scope: { included: [] }, sources: [],
+    findings: [], evidence: { fem_air_volumes: [] },
+    polar_grid_derivation: { axes: { horizontal: { symmetry_accepted: true } } },
+    scope: { status: 'clean', included: [{ object_id: 'body-1', name: 'Body79' }] },
+    sources: [{ id: 'source-hf', role: 'HF' }],
+    freshness: { verdict: 'per-instance', instances: [{ instance_id: 'instance-a', verdict: 'current' }] },
+    symmetry: { cut_planes: ['x0', 'y0'], planes: { x0: { accepted: true, max_residual_step_units: 0.0028 }, y0: { accepted: true } } },
+    healing: { performed: false },
+    mesh_snapshot: {
+      wall_size_mm: 25, grading_distance_mm: 100, symmetry: 'auto', source_size_mm: { 'source-hf': 6 },
+      surface_groups: [], settings_origin: 'user',
+    },
+    mesh: { stats: { triangle_count: 3035 } },
+    sizing_estimate: { n_triangles: 3035, ram_gb: 0.147, ram_bytes: 147379600, solve_seconds_cubic_upper_per_freq: 0.026, feasibility: 'ok' },
+    ...overrides,
   } as unknown as CadReturnIngestRecord;
+}
+
+/** The details as the Imported mesh tab shows them, for a prepared model unless said. */
+const Details = ({ value = record(), prepared = true, fetcher }: { value?: CadReturnIngestRecord; prepared?: boolean; fetcher?: typeof fetch }) =>
+  <CadModelDetails record={value} label="PartyMEH" prepared={prepared} fetcher={fetcher}/>;
+
+const head = () => document.querySelector<HTMLButtonElement>('.cad-model-details .section-head')!;
+const body = () => document.querySelector<HTMLElement>('.cad-model-details .section-body')!;
+
+/** Words a user never reads in Model details without developer details. */
+const JARGON = ['$.', 'bundle', 'validation', 'wgi_', 'sha256', 'ingest', 'manifest', 'snapshot', 'Snapshot', 'Preparation',
+  'cut plane', 'residual', 'ram bytes', 'cubic', 'instance-a', 'physical group', 'automatic axis', 'Prepare simulation'];
+function expectPlain(text: string | null | undefined) {
+  for (const word of JARGON) expect(text ?? '').not.toContain(word);
 }
 
 function operation(overrides: Partial<CadOperationSummary> = {}): CadOperationSummary {
@@ -84,7 +109,7 @@ function publishOperation(op: CadOperationSummary): void {
   publishJobs([item]);
 }
 
-describe('CAD Solve card run status', () => {
+describe('Model details, and the run status Results shows for its model', () => {
   let host: HTMLDivElement;
   let root: Root;
 
@@ -105,6 +130,7 @@ describe('CAD Solve card run status', () => {
 
   afterEach(() => {
     act(() => root.unmount());
+    preferencesStore.resetForTests();
     host.remove();
     publishJobs([]);
     currentOperation = null;
@@ -112,13 +138,95 @@ describe('CAD Solve card run status', () => {
     vi.restoreAllMocks();
   });
 
-  it('keeps the model summary and settings, and leaves Solve to the status line', async () => {
-    await act(async () => root.render(<CadSolveCard record={record()} label="Speaker"/>));
-    expect(host.querySelector('.cad-solve-card')).not.toBeNull();
-    expect(host.querySelector('[data-action="solve"]')).toBeNull();
+  it('folds the model into one collapsed Model details, in plain words, and leaves Solve to the status line', async () => {
+    await act(async () => root.render(<Details/>));
+    expect(head().textContent).toContain('Model details');
+    expect(head().getAttribute('aria-expanded')).toBe('false');
+    // Nothing needs the user: no chip, and the body is folded away.
+    expect(head().querySelector('.cad-state-chip')).toBeNull();
+    expect(body().hidden).toBe(true);
+    act(() => head().click());
+    expect(body().hidden).toBe(false);
+    expect(host.querySelector('.cad-solve-summary')?.textContent).toBe('Body79 · 1 source (HF) · full model, WG mirrors it at x = 0 and y = 0');
+    expect(host.querySelector('.cad-mesh-line')?.textContent).toContain('Mesh from Fusion · walls 25 mm · HF 6 mm · 3,035 triangles · about 0.1 GB');
+    expect(host.querySelector('.cad-mesh-line')?.textContent).toContain('Change it in Fusion: Waveguide Generator ▸ Sources & Mesh…');
     expect(host.querySelector('.cad-solve-settings')).not.toBeNull();
+    // Every check passed: one line, not one row per check.
+    expect([...host.querySelectorAll('.cad-checks > .cad-check')].map((row) => row.textContent)).toEqual(['✓Checkspassed']);
+    expect(host.querySelector('[data-action="solve"]')).toBeNull();
     expect(host.querySelector('[data-model-status]')).toBeNull();
     expect(host.textContent).not.toContain('Not solved yet');
+    expectPlain(host.textContent);
+  });
+
+  it('keeps what the model is, and drops what Solve would use, for a model no longer prepared', async () => {
+    await act(async () => root.render(<Details prepared={false}/>));
+    expect(host.querySelector('.cad-solve-summary')).not.toBeNull();
+    expect(host.querySelector('.cad-mesh-line')).not.toBeNull();
+    expect(host.querySelector('.cad-checks')).not.toBeNull();
+    expect(host.querySelector('.cad-solve-settings')).toBeNull();
+    expect(host.querySelector('.cad-solver-frame')).toBeNull();
+  });
+
+  it('opens by itself on a check that needs the user, with only the checks that deviate', async () => {
+    await act(async () => root.render(<Details value={record({
+      scope: { status: 'degraded', degraded_skip_count: 1, included: [], skipped: [{ object_id: 'b', name: 'Body A', severity: 'warning', reason: 'unsupported' }] },
+    } as never)}/>));
+    expect(head().getAttribute('aria-expanded')).toBe('true');
+    expect(head().querySelector('.cad-state-chip')?.textContent).toBe('1 need attention');
+    expect(body().hidden).toBe(false);
+    const rows = [...host.querySelectorAll('.cad-checks > .cad-check')];
+    expect(rows.map((row) => row.querySelector('b')?.textContent)).toEqual(['Checks', 'Scope']);
+    expect(rows[0].textContent).toContain('the others passed');
+    expect(rows[1].textContent).toContain('Skipped · Body A');
+    expectPlain(host.textContent);
+  });
+
+  it('says the mesh is near its limit beside its size, and leaves the sizing numbers to developer details', async () => {
+    await act(async () => root.render(<Details value={record({ sizing_estimate: { n_triangles: 3035, ram_gb: 0.147, feasibility: 'caution' } } as never)}/>));
+    expect(host.querySelector('.cad-mesh-line')?.className).toContain('cad-mesh-line-caution');
+    expect(host.querySelector('.cad-mesh-line')?.textContent).toContain('about 0.1 GB · caution');
+    expect(host.querySelector('.developer-details')).toBeNull();
+  });
+
+  it('names a mesh WG set without sending the user to Fusion', async () => {
+    await act(async () => root.render(<Details value={record({
+      mesh_snapshot: undefined, mesh_sizes: { rigid_size_mm: 8, transition_mm: 20, source_size_mm: { 'source-hf': 4 } },
+    } as never)}/>));
+    const line = host.querySelector('.cad-mesh-line')!;
+    expect(line.getAttribute('data-mesh-origin')).toBe('wg');
+    expect(line.textContent).toContain('Mesh · walls 8 mm · HF 4 mm · 3,035 triangles');
+    expect(line.textContent).not.toContain('Fusion');
+  });
+
+  it('opens by itself when the model cannot be solved along its own axis, and draws no preview before Change', async () => {
+    const frame = {
+      linked: false, ingestId: 'wgi_run', contract: 'cad-solver-frame-v2', recordAxis: '+z', recordStatesFrame: true,
+      confirmed: null, suggestion: null, preselected: null, differs: null,
+      axes: [{ axis: '+z', allowed: true, reason: null, up: [0, 1, 0], upSource: 'default', solverFromAssembly: [], previewFromRecord: [] }],
+      notAllowed: { axis: '+y', message: 'This model arrived cut in a way that cannot be solved along its radiation axis (+y).', nextStep: 'Send the whole model from Fusion.' },
+    };
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).includes('/solver-frame') ? frame : { ingestId: 'wgi_run', available: true, pending: null },
+    ), { status: 200 })) as unknown as typeof fetch;
+    await act(async () => root.render(<Details value={record({ freshness: { verdict: 'unlinked', instances: [] } } as never)} fetcher={fetcher}/>));
+    await act(async () => { await vi.waitFor(() => expect(host.querySelector('[data-frame-preview="ready"]')).not.toBeNull()); });
+    expect(head().getAttribute('aria-expanded')).toBe('true');
+    expect(host.querySelector('.cad-solver-frame-line')?.textContent).toBe('Radiates along +y · Change');
+    expect(host.querySelectorAll('[data-action="change-solver-frame"]')).toHaveLength(1);
+    expect(host.querySelector('.cad-frame-views')).toBeNull();
+    // The preview needs the model's mesh, which is read only for the chooser.
+    expect(vi.mocked(fetcher).mock.calls.some(([url]) => String(url).endsWith('/mesh'))).toBe(false);
+  });
+
+  it('shows every check with its evidence, the sizing numbers and the ids only with developer details', async () => {
+    preferencesStore.update({ showDeveloperDetails: true });
+    await act(async () => root.render(<Details/>));
+    const names = [...host.querySelectorAll('.cad-checks > .cad-check')].map((row) => row.querySelector('b')?.textContent);
+    expect(names).toEqual(['Scope', 'Freshness', 'Symmetry', 'Healing', 'Polar grid']);
+    expect(host.textContent).toContain('max residual 0.0028 mm');
+    expect(host.textContent).toContain('ram bytes147379600');
+    expect(host.querySelector('.cad-model-provenance')?.textContent).toContain('Preparation wgi_run');
   });
 
   it('shows meshing and an update restart hold from real stage events', async () => {
@@ -344,7 +452,7 @@ describe('CAD Solve card run status', () => {
     useSolveOptionsStore.getState().setEngine('bempp');
     useImportedSolveOptionsStore.getState().setFrequencyMode('list');
     useImportedSolveOptionsStore.getState().setFrequencyListText('300 700 1500');
-    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
+    await act(async () => root.render(<Details/>));
     const line = host.querySelector('.cad-solve-settings')?.textContent ?? '';
     expect(line).toContain('3 listed frequencies');
     expect(line).toContain('Auto');
@@ -355,7 +463,7 @@ describe('CAD Solve card run status', () => {
     const note = "Solved with WG's default settings \u2014 change them in WG.";
     publishOperation(operation({ message: note, setupDefaults: true }));
     publishJobs([job({ status: 'complete', progress: 1, stage: 'postprocess', stage_message: null, completed_at: '2026-09-23T00:01:00Z' })]);
-    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
+    await act(async () => root.render(<Details/>));
     expect(host.querySelector('.cad-solve-defaults')?.textContent).toBe(note);
   });
 
@@ -363,7 +471,7 @@ describe('CAD Solve card run status', () => {
     const note = "Solved with WG's default settings \u2014 change them in WG.";
     publishOperation(operation({ message: note, setupDefaults: true }));
     publishJobs([job()]);
-    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
+    await act(async () => root.render(<Details/>));
     expect(host.querySelector('.cad-solve-defaults')?.textContent)
       .toBe("Using WG's default settings \u2014 change them in WG.");
     act(() => publishJobs([job({ status: 'error', error_message: 'solver crashed' })]));
@@ -374,43 +482,26 @@ describe('CAD Solve card run status', () => {
   it('says nothing about defaults for a run solved with settings someone chose', async () => {
     publishOperation(operation({ setupDefaults: false }));
     publishJobs([job({ status: 'complete', progress: 1, stage: 'postprocess', stage_message: null, completed_at: '2026-09-23T00:01:00Z' })]);
-    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
+    await act(async () => root.render(<Details/>));
     expect(host.querySelector('.cad-solve-defaults')).toBeNull();
   });
 
-  it('says which axis WG chose itself, and Change opens the frame chooser', async () => {
+  it('names no axis outside its one line in Model details: no run line with its own Change', async () => {
     publishOperation(operation({ frameAxisAutomatic: '+x' }));
     publishJobs([job({ status: 'complete', progress: 1, stage: 'postprocess', stage_message: null, completed_at: '2026-09-23T00:01:00Z' })]);
-    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
-    const line = host.querySelector('.cad-solve-frame-automatic');
-    expect(line?.textContent).toBe('Solved along the automatic axis +x \u00b7 Change');
-    const before = useCadSolverFrameStore.getState().changeRequests[record().ingest_id] ?? 0;
-    act(() => { (line?.querySelector('button') as HTMLButtonElement).click(); });
-    expect(useCadSolverFrameStore.getState().changeRequests[record().ingest_id]).toBe(before + 1);
-    // Before the run is done, it does not claim a solve.
-    act(() => publishJobs([job()]));
-    expect(host.querySelector('.cad-solve-frame-automatic')?.textContent).toContain('Solving along the automatic axis +x');
-    act(() => publishJobs([job({ status: 'error', error_message: 'solver crashed' })]));
-    expect(host.querySelector('.cad-solve-frame-automatic')?.textContent).toContain('Along the automatic axis +x');
-    expect(host.querySelector('.cad-solve-frame-automatic')?.textContent).not.toContain('Solv');
+    await act(async () => root.render(<Details/>));
+    expect(host.textContent).not.toContain('automatic axis');
+    expect(host.querySelectorAll('[data-action="change-automatic-frame"]')).toHaveLength(0);
   });
 
-  it('says nothing about an axis for a run whose axis was confirmed', async () => {
-    publishOperation(operation({ frameAxisAutomatic: null }));
-    publishJobs([job({ status: 'complete', progress: 1, stage: 'postprocess', stage_message: null, completed_at: '2026-09-23T00:01:00Z' })]);
-    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
-    expect(host.querySelector('.cad-solve-frame-automatic')).toBeNull();
-  });
-
-  it('states the concluded domain from the record\'s decision on the model card', async () => {
+  it('states the concluded domain from the record\'s decision in Model details', async () => {
     const interpretation = {
       contract: 'cad-domain-interpretation-v1', reading: 'reduced', planes: ['x0'], domain_planes: ['x0'],
       looks_cut: [], ambiguous: [], evidence: { source: null, recovered: true }, reflected_planes: ['x0'], choices: [],
     };
     const fetcher = (async () => new Response(JSON.stringify({ ingestId: 'wgi_run', available: true, pending: null }), { status: 200 })) as typeof fetch;
-    await act(async () => root.render(<CadSolveCard
-      record={{ ...record(), domain_interpretation: interpretation, domain_decision: RECOVERED_NEGATIVE_HALF }}
-      label="PartyMEH"
+    await act(async () => root.render(<Details
+      value={{ ...record(), domain_interpretation: interpretation, domain_decision: RECOVERED_NEGATIVE_HALF } as CadReturnIngestRecord}
       fetcher={fetcher}
     />));
     expect(host.querySelector('.cad-domain-line')?.textContent)

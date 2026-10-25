@@ -7,7 +7,7 @@ import {
 import type { SolverFrameAxis } from '../viewport/solverFrame';
 
 /**
- * The solver frame of the CAD model on screen, as the Solve card shows it
+ * The solver frame of the CAD model on screen, as its Model details show it
  * (PLAN.md M1b/M1e, docs/architecture/CAD-OPERATIONS.md "Unlinked solver frame").
  *
  * One answer per ingestion: what the server says about the frame, and the axis
@@ -39,12 +39,6 @@ export interface CadFrameView {
 
 interface CadSolverFrameStore {
   frames: Record<string, CadFrameView>;
-  /** Bumped when something else on the card (the run line's "Change") asks the
-   * frame card to open its axis chooser; the card reads it, never the reverse. */
-  changeRequests: Record<string, number>;
-  requestChange: (ingestId: string) => void;
-  /** The card took the request (opened its chooser); it is not asked again on a remount. */
-  consumeChange: (ingestId: string) => void;
   load: (ingestId: string, fetcher?: typeof fetch) => Promise<void>;
   /** The user's pick among the allowed axes (Change), confirmed by Solve. */
   pick: (ingestId: string, axis: SolverFrameAxis) => void;
@@ -91,14 +85,6 @@ const loads = new Map<string, Promise<void>>();
 
 export const useCadSolverFrameStore = create<CadSolverFrameStore>((set, get) => ({
   frames: {},
-  changeRequests: {},
-  consumeChange: (ingestId) => {
-    if (!get().changeRequests[ingestId]) return;
-    set({ changeRequests: { ...get().changeRequests, [ingestId]: 0 } });
-  },
-  requestChange: (ingestId) => set({
-    changeRequests: { ...get().changeRequests, [ingestId]: (get().changeRequests[ingestId] ?? 0) + 1 },
-  }),
   load: (ingestId, fetcher = fetch) => {
     const running = loads.get(ingestId);
     if (running) return running;
@@ -169,5 +155,5 @@ export function chosenFrameAxis(view: CadFrameView | undefined): SolverFrameAxis
 /** Tests only. */
 export function resetCadSolverFrameStore(): void {
   loads.clear();
-  useCadSolverFrameStore.setState({ frames: {}, changeRequests: {} });
+  useCadSolverFrameStore.setState({ frames: {} });
 }

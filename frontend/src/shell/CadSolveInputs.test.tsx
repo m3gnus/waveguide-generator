@@ -322,15 +322,26 @@ describe('CAD solve input identities', () => {
     />));
 
     await render('automatic', false);
-    // One line, with its Change: never the Frame row as well.
-    expect(host.querySelector('[data-frame-axis-automatic="+y"]')?.textContent)
-      .toContain('automatic axis +y');
-    expect(host.querySelector('[data-frame-axis-automatic]')?.textContent).toContain('Change it');
-    expect(host.querySelector('[data-frame-provenance]')).toBeNull();
+    // A run record, one row like any other frame: the model's axis and its
+    // one Change are in its Model details, not repeated here.
+    expect(host.querySelector('[data-frame-provenance="automatic"]')?.textContent).toBe("+y WG's automatic axis");
+    expect(host.textContent).not.toContain('Change');
     await render('suggested', true);
     expect(host.querySelector('[data-frame-provenance="suggested"]')?.textContent).toContain('confirmed by you');
     await render('chosen', true);
     expect(host.querySelector('[data-frame-provenance="chosen"]')?.textContent).toContain('chosen by you');
+  });
+
+  it('names an automatic axis the operation reports, as a Frame row, when the job has no frame record', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+    await act(async () => root.render(<CadSolveInputs
+      operationId="op-1"
+      operation={operation({ setupRevisionId: null, frameAxisAutomatic: '+x' })}
+      resolvedEngine="metal"
+      engineSource="job"
+      jobStatus="complete"
+    />));
+    expect(host.querySelector('[data-frame-provenance="automatic"]')?.textContent).toBe("+x WG's automatic axis");
   });
 
   it('prefers the job record over the operation when they disagree', async () => {

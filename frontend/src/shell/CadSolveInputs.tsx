@@ -29,15 +29,6 @@ export function defaultSettingsNote(message: string | null, solved: boolean): st
   return solved && message ? message : USING_DEFAULT_SETTINGS;
 }
 
-/** What a run whose axis WG chose itself says about it: one sentence for the
- * card and the run details. "Solved" only once the run completed. */
-export function automaticAxisNote(axis: string, jobStatus: string | undefined): string {
-  if (jobStatus === 'complete') return `Solved along the automatic axis ${axis}`;
-  // A run that failed or was cancelled solved nothing: say only which axis it used.
-  if (jobStatus === 'error' || jobStatus === 'cancelled') return `Along the automatic axis ${axis}`;
-  return `Solving along the automatic axis ${axis}`;
-}
-
 export const USING_DEFAULT_SETTINGS = "Using WG's default settings \u2014 change them in WG.";
 
 /** How a run's frame came to be, in words. */
@@ -158,13 +149,11 @@ export function CadSolveInputs({
     && setupRevisionId && !engine && !setupError);
   const manifest = jobManifest ?? operation?.snapshot?.manifestSha256 ?? null;
   const documentName = jobDocument ?? operation?.snapshot?.documentName ?? null;
-  // The frame is said once: the job's own record answers first, and only a
-  // job without one falls back to what the operation says. An automatic axis
-  // is the sentence with its Change; any other provenance is the Frame row.
-  const jobFrame = jobCad?.frame ?? null;
-  const automaticAxis = jobFrame
-    ? (jobFrame.provenance === 'automatic' ? jobFrame.axis : null)
-    : operation?.frameAxisAutomatic ?? null;
+  // The frame the run used, as one row: the job's own record answers first,
+  // and only a job without one falls back to what the operation says. The
+  // model's axis, and its Change, are in its Model details.
+  const frame = jobCad?.frame
+    ?? (operation?.frameAxisAutomatic ? { axis: operation.frameAxisAutomatic, provenance: 'automatic' } : null);
 
   return <details className={['cad-solve-inputs', className].filter(Boolean).join(' ')}>
     <summary>Solve inputs{engine ? ` · ${engine}` : ''}</summary>
@@ -177,8 +166,8 @@ export function CadSolveInputs({
       </dd></div>}
       {developer && <div><dt>Preparation</dt><dd><code>{jobCad?.preparation?.preparation_id ?? operation?.preparationId ?? (loadingOperation ? 'reading…' : 'not recorded')}</code></dd></div>}
       {developer && <div><dt>Setup revision</dt><dd><code>{setupRevisionId ?? (loadingOperation ? 'reading…' : 'not recorded')}</code></dd></div>}
-      {jobCad?.frame && !automaticAxis && <div><dt>Frame</dt><dd data-frame-provenance={jobCad.frame.provenance}>
-        {jobCad.frame.axis && <code>{jobCad.frame.axis}</code>} {frameProvenanceText(jobCad.frame.provenance)}
+      {frame && <div><dt>Frame</dt><dd data-frame-provenance={frame.provenance}>
+        {frame.axis && <code>{frame.axis}</code>} {frameProvenanceText(frame.provenance)}
       </dd></div>}
       <div><dt>Engine</dt><dd><code>{engine ?? (loadingOperation || loadingEngine ? 'reading…' : 'not recorded')}</code></dd></div>
       {/* The protocol's own words for where this operation stands, and when it
@@ -197,10 +186,6 @@ export function CadSolveInputs({
     {setupDefaults
       && <p className="cad-solve-inputs-defaults" data-setup-defaults="true">
         {defaultSettingsNote(operation?.message ?? null, jobStatus === 'complete')}
-      </p>}
-    {automaticAxis
-      && <p className="cad-solve-inputs-frame" data-frame-axis-automatic={automaticAxis}>
-        {automaticAxisNote(automaticAxis, jobStatus)}. Change it in the CAD Link panel.
       </p>}
     {/* Verbatim, because it is evidence: whatever the adapter or the
         preparation reported is what a second report has to be compared with. */}

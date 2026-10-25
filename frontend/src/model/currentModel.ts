@@ -231,7 +231,7 @@ export function currentModelStatus(model: CurrentModel, jobs: readonly JobItem[]
   return { kind: 'never-solved' as const, job, message: readiness || 'This version of the model has not been solved.' };
 }
 
-/** The same request/run status for Results and the CAD Solve card. */
+/** The same request/run status for Results and the CAD model card. */
 export function useCurrentModelStatus(record?: CadReturnIngestRecord) {
   const current = useCurrentModel();
   const model = record ? { ...current, kind: 'cad' as const, key: record.solve_model_sha256 || record.ingest_id,

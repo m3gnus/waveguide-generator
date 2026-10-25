@@ -1,38 +1,36 @@
-import { isMeshRecoveryFinding } from '../model/cadMeshRecovery';
 import { useCadModelSelection, useCadModelState } from '../stores/cadModelState';
+import { ENGINE_HOLDS } from '../stores/cadModelStatusLine';
+import { useCurrentModelStatus } from '../model/currentModel';
 import { CadModelStatusLine } from './CadModelStatusLine';
 import { EmptyState } from './EmptyState';
 import { Notice } from './Notice';
-import { cadMeshSizing } from '../api/cadMesh';
 import { useCadFeedbackError } from './cadSetupPublisher';
 import { nativeCadLimitation } from '../design/nativeFamilies';
 import { useCadConnectionStore } from '../stores/cadConnection';
 import { ExperimentalBadge } from '../design/ExperimentalBadge';
-import { useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useRef, useState, useSyncExternalStore } from 'react';
 import { useEffect } from 'react';
 import { installCadLinkAddin } from '../api/cadlink';
-import type { CadReturnBundle, CadReturnFinding, CadReturnIngestRecord } from '../api/cadlink';
+import type { CadReturnBundle } from '../api/cadlink';
 import { OnshapePublicConsentRequired, sendDesignToOnshape, unlinkOnshape } from '../api/onshape';
 import { useDeveloperDetails, usePreferences } from '../prefs/preferences';
 import { DeveloperDetails } from './DeveloperDetails';
 import { useCadReturnStore } from '../stores/cadReturn';
-import { cadJobSummaries, useCadJobs } from '../jobs/cadSolve';
 import { currentDocumentLoad, isCurrentDocumentLoad, recordCommittedAthPolars, useDesignStore } from '../stores/design';
 import { keptContentKeyOf, rememberSentCopy } from '../design/replacementCheck';
 import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
 import { useDocumentStore } from '../stores/document';
 import { designNameSlug, UNTITLED_SLUG } from '../stores/designName';
-import { useCapabilities } from '../jobs/useCapabilities';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { returnBelongsToProject } from './cadlink/arrivals';
 import { fusionAddinNeedsInstall, fusionAddinTooOldForUpdate, fusionLinkDisplayName, fusionParameterDriftDetail, fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView } from './cadWorkflowView';
 import { Icon } from './icons';
 import { fullTime, pluralized, relativeTime } from './cadTime';
 import { CadProjectHeader, CadProjectHistory } from './CadProjectPanel';
-import { CadOperationsSection, onScreenSolves, shortSha256 } from './CadOperationsSection';
-import { CadSolveInputs } from './CadSolveInputs';
+import { CadOperationsSection, CurrentModelRequests } from './CadOperationsSection';
 import { CadDeliveryHealth } from './CadDeliveryHealth';
-import { CadSolveCard } from './CadSolveCard';
+import { CadModelDetails, FRESHNESS_COPY, freshnessSummary } from './CadModelDetails';
+import { CadDrawer } from './CadDrawer';
 import { RootFolderControls } from './RootFolderControls';
 import { requestSettings } from './settingsNavigation';
 import { workspaceNavigation } from './workspaceNavigation';
@@ -47,17 +45,6 @@ export { buildImportedSubmission } from '../jobs/importedSubmission';
 export { newestReturnArrival } from './cadlink/arrivals';
 export { showIngestedMeshInViewport } from './cadlink/artifactLoader';
 
-const FRESHNESS_COPY: Record<string, string> = {
-  current: 'Current — unchanged fingerprint and the saved design still agree with this generator.',
-  body_modified: 'CAD body changed after linking. This returned geometry remains the solve truth.',
-  missing_design: 'The linked design is not in this workspace registry; this is normal for a return from another machine.',
-  design_changed: 'The linked Waveguide Generator design has changed since this geometry was exported.',
-  generator_changed: 'The same saved design would export differently with the current generator.',
-  unknown: 'Freshness could not be established from the available evidence.',
-  unlinked: 'Authored in CAD, not linked to a Waveguide Generator design. WG works out which way the model radiates and shows it on the Solve card; Solve confirms it for the project.',
-  mixed: 'The linked instances disagree about freshness; each instance carries its own verdict.',
-};
-
 /** The Fusion link states that describe the active document against the
  * parametric WG design: meaningless while a model authored in Fusion is on
  * screen. The connection problems (offline, outdated, recovery) are not here. */
@@ -68,35 +55,6 @@ const DOCUMENT_LINK_STATES: ReadonlySet<string> = new Set([
 // The workflow views moved beside the coordinator's unified send path; the
 // re-export keeps this module the panel-facing home for existing callers.
 export { fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView };
-
-function compactValue(value: unknown): string {
-  if (value === null || value === undefined) return '—';
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
-  return JSON.stringify(value);
-}
-
-/** A length the symmetry verifier reports in STEP units (millimetres), to two
- * significant figures; null for anything that is not a number. */
-function millimetres(value: unknown): string | null {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  return `${Number(value.toPrecision(2))} mm`;
-}
-
-/** A plane token as a person reads it. */
-function planePhrase(plane: string): string {
-  return plane === 'x0' ? 'x = 0' : plane === 'y0' ? 'y = 0' : plane;
-}
-
-function findingDetail(finding: CadReturnFinding): string {
-  // `detail` is a written sentence; the field dump below is a fallback for
-  // findings that carry only structured evidence.
-  const preferred = finding.reason ?? finding.verdict ?? finding.detail;
-  if (preferred) return String(preferred).replaceAll('_', ' ');
-  const details = Object.entries(finding)
-    .filter(([key]) => !['id', 'kind', 'blocking', 'evidence_path'].includes(key))
-    .map(([key, value]) => `${key.replaceAll('_', ' ')}: ${compactValue(value)}`);
-  return details.join(' · ') || 'Recorded during CAD model preparation.';
-}
 
 function returnDisplayName(bundle: CadReturnBundle): string {
   if (bundle.documentName) return bundle.documentName;
@@ -128,256 +86,6 @@ function bundleInventory(bundle: CadReturnBundle): string {
   return parts.join(' · ');
 }
 
-function formatCount(value: unknown): string {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return compactValue(value);
-  if (value < 1_000) return String(Math.round(value));
-  const thousands = value / 1_000;
-  return `${thousands >= 100 ? Math.round(thousands) : thousands.toFixed(1)} k`;
-}
-
-function formatDuration(seconds: unknown): string | null {
-  if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return null;
-  if (seconds < 60) return '<1 min';
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `~${minutes} min`;
-  return `~${Math.floor(minutes / 60)} h ${minutes % 60} min`;
-}
-
-interface CadDrawerProps {
-  title: string;
-  chip?: string;
-  defaultOpen?: boolean;
-  warning?: boolean;
-  className?: string;
-  children: ReactNode;
-}
-
-/** CAD sections use the same heading/button/chevron disclosure pattern as the
- * parameter rail, but keep their own compact card surface and state chip. */
-function CadDrawer({ title, chip, defaultOpen = false, warning = false, className = '', children }: CadDrawerProps) {
-  const [open, setOpen] = useState(defaultOpen);
-  const bodyId = useId();
-  return <section className={`cad-section cad-drawer${open ? '' : ' closed'}${warning ? ' degraded' : ''}${className ? ` ${className}` : ''}`}>
-    <h4 className="section-heading">
-      <button type="button" className="section-head" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen((value) => !value)}>
-        <span className="chevron" aria-hidden="true">⌄</span>
-        <span className="section-name">{title}</span>
-        <span className="spacer"/>
-        {chip && <span className={`cad-state-chip${warning ? ' warn' : ''}`}>{chip}</span>}
-      </button>
-    </h4>
-    {open && <div id={bodyId} className="section-body">{children}</div>}
-  </section>;
-}
-
-type CheckState = 'ok' | 'info' | 'warn';
-
-interface CheckDescriptor {
-  key: string;
-  name: string;
-  state: CheckState;
-  verdict: string;
-  /** Hover: what this check verifies, spelled out. */
-  title: string;
-  /** What the user can act on, one chevron away (what was skipped and why, a
-   * freshness error). Absent when the verdict is whole. */
-  detail?: ReactNode;
-  /** The measurements behind the verdict (residuals, sizing keys,
-   * derivations): developer detail, shown only with "Show developer details". */
-  evidence?: ReactNode;
-}
-
-const CHECK_GLYPH: Record<CheckState, string> = { ok: '✓', info: 'i', warn: '!' };
-
-function freshnessSummary(record: CadReturnIngestRecord): string {
-  if (record.freshness.verdict === 'unlinked') return 'unlinked';
-  const instances = record.freshness.instances;
-  if (instances.length === 0) return 'unknown';
-  if (instances.every((instance) => instance.verdict === 'current')) return 'current';
-  if (instances.every((instance) => instance.verdict === instances[0]?.verdict)) {
-    return instances[0].verdict.replaceAll('_', ' ');
-  }
-  return 'mixed';
-}
-
-/** One row per verification the ingest performed. The six drawers this list
- * replaced each carried a chip that read "clean" on virtually every return;
- * a check only asks for attention when it deviates, and holds its evidence
- * behind its own chevron. */
-function recordChecks(record: CadReturnIngestRecord): CheckDescriptor[] {
-  const checks: CheckDescriptor[] = [];
-
-  // Scope
-  const scopeClean = record.scope.status === 'clean';
-  const included = record.scope.included ?? [];
-  // Sketches and planes are never part of a STEP body: not news.
-  const skipped = (record.scope.skipped ?? []).filter((item) => item.kind !== 'construction');
-  const scopeFindings = record.findings.filter((finding) => finding.kind === 'scope-degradation');
-  checks.push({
-    key: 'scope',
-    name: 'Scope',
-    state: scopeClean ? 'ok' : 'warn',
-    verdict: scopeClean
-      ? included.length
-        ? `${pluralized(included.length, 'body', 'bodies')} exported, nothing skipped`
-        : 'the exported exterior was complete'
-      : `${pluralized(record.scope.degraded_skip_count, 'object')} skipped — solve is degraded`,
-    title: 'Everything the CAD document exported for the acoustic exterior, and anything it had to skip.',
-    detail: (included.length || skipped.length || scopeFindings.length) ? <>
-      {included.map((item, index) => <p key={`${String(item.object_id)}-${index}`} className="cad-detail"><b>Included · {String(item.name ?? item.object_id ?? 'Unnamed object')}</b>{item.body_kind ? ` — ${item.body_kind}` : ''}</p>)}
-      {skipped.map((item, index) => <p key={`${String(item.object_id)}-${index}`} className={`cad-detail scope-skip-${item.severity ?? 'info'}`}><b>Skipped · {String(item.name ?? item.object_id ?? item.kind ?? 'Unnamed object')}</b> — {String(item.reason ?? item.kind ?? 'not included')} · {String(item.severity ?? 'info')}</p>)}
-      {skipped.length === 0 && scopeFindings.map((finding) => <p key={finding.id} className="cad-detail"><b>{String(finding.object_id ?? 'Unnamed object')}</b> — {findingDetail(finding)}</p>)}
-    </> : undefined,
-  });
-
-  // Freshness. A model authored in CAD has no WG design to be fresh against,
-  // so there is nothing to check.
-  const freshness = freshnessSummary(record);
-  if (freshness !== 'unlinked') checks.push({
-    key: 'freshness',
-    name: 'Freshness',
-    state: freshness === 'current' ? 'ok' : freshness === 'unlinked' ? 'info' : 'warn',
-    verdict: freshness,
-    title: FRESHNESS_COPY[freshness.replaceAll(' ', '_')] ?? 'Whether this returned geometry still matches the linked WG design and generator.',
-    // Each linked instance's verdict, and an error to act on; which instance
-    // (its id) is developer detail.
-    detail: record.freshness.instances.length ? <>{record.freshness.instances.map((instance, index) => <div className={`cad-verdict ${instance.verdict === 'current' ? 'ok' : 'warn'}`} key={instance.instance_id}>
-          <b>{record.freshness.instances.length > 1 ? `Linked instance ${index + 1}` : 'Linked instance'}</b><span>{FRESHNESS_COPY[instance.verdict] ?? instance.verdict}</span>
-          {instance.error && <small>{instance.error}</small>}
-        </div>)}</> : undefined,
-    evidence: record.freshness.instances.length ? <p className="cad-detail">Instances: {record.freshness.instances.map((instance) => instance.instance_id).join(', ')}</p> : undefined,
-  });
-
-  // Symmetry
-  const planes = Object.entries(record.symmetry.planes ?? {});
-  const declared = new Set(Array.isArray(record.symmetry.declared_cut_planes)
-    ? (record.symmetry.declared_cut_planes as unknown[]).map(String)
-    : []);
-  // Only a plane the CAD author declared is a promise; a candidate WG tried and
-  // rejected is simply a plane the design is not symmetric about.
-  const rejectedDeclared = planes.filter(([name, verdict]) => !verdict.accepted && declared.has(name));
-  const appliedCuts = record.symmetry.cut_planes ?? [];
-  const domainPlanes = Array.isArray(record.symmetry.domain_planes)
-    ? (record.symmetry.domain_planes as unknown[]).map(String)
-    : appliedCuts;
-  const cadDomain = appliedCuts.length >= 2 ? 'quarter domain' : appliedCuts.length === 1 ? 'half domain' : 'full domain';
-  const modelSummary = domainPlanes.length === 0
-    ? 'Full model'
-    : `${domainPlanes.length >= 2 ? 'Quarter' : 'Half'} model · mirrored at ${domainPlanes.map(planePhrase).join(' and ')}`;
-  checks.push({
-    key: 'symmetry',
-    name: 'Symmetry',
-    state: planes.length === 0 ? 'info' : rejectedDeclared.length === 0 ? 'ok' : 'warn',
-    verdict: planes.length === 0
-      ? modelSummary
-      : rejectedDeclared.length === 0
-        ? modelSummary
-        : `declared cut ${rejectedDeclared.map(([name]) => planePhrase(name)).join(', ')} does not mirror · solving ${cadDomain}`,
-    title: 'Mirror planes WG re-tested on the returned STEP after CAD edits, bodies and source tags were applied. A rejected plane keeps the larger safe domain instead of inheriting the parametric reduction.',
-    evidence: <>
-      {planes.map(([name, verdict]) => {
-        const residual = millimetres(verdict.max_residual_step_units ?? verdict.residuals);
-        const offModel = millimetres(verdict.worst_off_model_distance_step_units);
-        const details = [
-          verdict.reason ? String(verdict.reason) : null,
-          residual ? `max residual ${residual}` : null,
-          offModel ? `worst off-model ${offModel}` : null,
-        ].filter(Boolean).join(' · ');
-        return <div className="cad-row" key={name}><b>{name}</b><span className={verdict.accepted ? 'ok-text' : 'warn-text'}>{verdict.accepted ? 'accepted' : 'rejected'}</span><small>{details}</small></div>;
-      })}
-      {planes.length === 0 && <p>No coordinate plane verdicts were recorded.</p>}
-      {appliedCuts.length > 0 && <p className="cad-detail">Applied cuts: {appliedCuts.join(', ')}</p>}
-    </>,
-  });
-
-  // Healing
-  const healed = Boolean(record.healing.performed);
-  checks.push({
-    key: 'healing',
-    name: 'Healing',
-    state: healed ? 'info' : 'ok',
-    verdict: healed ? 'mesh repaired' : 'not needed',
-    title: 'WG repairs the mesh when needed and checks the result before solving.',
-
-  });
-
-  // Mesh sizing & cost
-  // The measured mesh when the record carries it: the area estimate beside it
-  // is a lower bound, several times short on a curved CAD model.
-  const sizing = cadMeshSizing(record);
-  const feasibility = typeof sizing.feasibility === 'string' ? sizing.feasibility : null;
-  // A time is only a forecast for a known sweep; preparation estimates one frequency.
-  const sweepKnown = typeof sizing.freq_count === 'number' && sizing.freq_count > 1;
-  const meshParts = [
-    typeof sizing.n_triangles === 'number' ? `${formatCount(sizing.n_triangles)} triangles` : null,
-    typeof sizing.ram_gb === 'number' ? `~${(sizing.ram_gb as number).toFixed(1)} GB` : null,
-    sweepKnown ? formatDuration(sizing.solve_seconds_total) : null,
-  ].filter(Boolean);
-  checks.push({
-    key: 'mesh',
-    name: 'Mesh',
-    state: feasibility === null || feasibility === 'ok' ? 'ok' : feasibility === 'caution' ? 'info' : 'warn',
-    verdict: meshParts.length
-      ? meshParts.join(' · ') + (feasibility && feasibility !== 'ok' ? ` · ${feasibility}` : '')
-      : 'no cost estimate recorded',
-    title: 'Estimated solver cost of the prepared mesh at the chosen sizing: symmetry-reduced triangle count, dense-matrix memory, and solve time for the sweep.',
-    evidence: <>{Object.entries(sizing).map(([key, value]) => <div className="cad-row" key={key}><b>{key.replaceAll('_', ' ')}</b><span>{compactValue(value)}</span></div>)}</>,
-  });
-
-  // Polar grid
-  const polarAxes = Object.entries((record.polar_grid_derivation.axes ?? {}) as Record<string, { symmetry_accepted?: boolean; minimum_deg?: number; maximum_deg?: number; plane?: string }>);
-  const widened = polarAxes.filter(([, axis]) => axis.symmetry_accepted === false);
-  checks.push({
-    key: 'polar',
-    name: 'Polar grid',
-    state: widened.length ? 'info' : 'ok',
-    verdict: polarAxes.length === 0
-      ? 'no derivation recorded'
-      : widened.length
-        ? `${widened.map(([axis]) => axis).join(', ')} widened to a full sweep`
-        : 'follows the accepted symmetry',
-    title: 'The directivity sweep derived from the symmetry verdicts. An axis whose mirror plane was rejected is swept over the full circle; sweeps may widen but never narrow.',
-    evidence: <>
-      {polarAxes.map(([axis, spec]) => <div className="cad-row" key={axis}><b>{axis}</b><span>{spec.minimum_deg ?? 0}° … {spec.maximum_deg ?? 180}°{spec.symmetry_accepted === false ? ' · widened' : ''}</span></div>)}
-      {Object.entries(record.polar_grid_derivation).filter(([key]) => key !== 'axes').map(([key, value]) => <div className="cad-row" key={key}><b>{key.replaceAll('_', ' ')}</b><span>{compactValue(value)}</span></div>)}
-    </>,
-  });
-
-  return checks;
-}
-
-function CheckRow({ check }: { check: CheckDescriptor }) {
-  // A failing check arrives open; the user can still fold it away, so the
-  // element is stateful rather than a hard-wired `open` attribute React would
-  // keep re-asserting on every render.
-  const [open, setOpen] = useState(check.state === 'warn');
-  // The evidence behind a verdict (residuals, sizing keys, derivations) is
-  // developer detail; the verdict says what it means. What the user can act
-  // on stays.
-  const developerDetails = useDeveloperDetails();
-  const evidence = developerDetails ? check.evidence : undefined;
-  if (!check.detail && !evidence) {
-    return <div className={`cad-check cad-check-${check.state}`} title={check.title}>
-      <span className="cad-check-glyph" aria-hidden="true">{CHECK_GLYPH[check.state]}</span>
-      <b>{check.name}</b>
-      <span className="cad-check-verdict">{check.verdict}</span>
-    </div>;
-  }
-  return <details
-    className={`cad-check cad-check-${check.state}`}
-    open={open}
-    onToggle={(event) => setOpen((event.target as HTMLDetailsElement).open)}
-  >
-    <summary title={check.title}>
-      <span className="cad-check-glyph" aria-hidden="true">{CHECK_GLYPH[check.state]}</span>
-      <b>{check.name}</b>
-      <span className="cad-check-verdict">{check.verdict}</span>
-      <span className="cad-check-chevron" aria-hidden="true">›</span>
-    </summary>
-    <div className="cad-check-detail">{check.detail}{evidence}</div>
-  </details>;
-}
-
 /** The developer detail behind the model's status line: the raw text of WG's
  * own failed preparation, and why the mesh on screen no longer matches. */
 function CadModelDeveloperDetails({ staleReason }: { staleReason: string | null | undefined }) {
@@ -403,105 +111,6 @@ export function CadCoordinationNote() {
       ? 'Background coordination: off. WG checks CAD Link returns and Fusion status only while CAD work is in flight, and when you act.'
       : 'Background coordination: off, but this build of the Waveguide Generator add-in in Fusion needs the listing to pick up Send: it does not send through WG\u2019s request inbox, so WG keeps checking the WGLink folder on a timer.'}
   </p>;
-}
-
-/** The blocking findings: WG asks for each to be approved before it solves
- * the model, and a waiting solve's card lists them only at that gate, so they
- * stay listed here. A finding that blocks nothing is not news. */
-function FindingRows({ record }: { record: CadReturnIngestRecord }) {
-  const blocking = record.findings.filter((finding) => finding.blocking);
-  if (blocking.length === 0) return null;
-  return <div className="cad-check-findings">
-    <p className="cad-check-findings-head">{pluralized(blocking.length, 'finding')} to approve</p>
-    {blocking.map((finding) => <div key={finding.id} className="cad-check cad-check-warn">
-      <span className="cad-check-glyph" aria-hidden="true">!</span>
-      <b>{finding.kind.replaceAll('-', ' ')}</b>
-      <span className="cad-check-verdict">{findingDetail(finding)}<small
-        className="cad-blocking-suffix"
-        title="WG asks you to approve this before it solves the model. The approval is recorded with the run."
-      > · blocking</small></span>
-    </div>)}
-  </div>;
-}
-
-/** What a finding that blocks nothing tells the user, in words. */
-const NOTE_TITLE: Record<string, string> = {
-  fem_termination_with_exterior: 'FEM termination requires an interior-only solve',
-  'stale-detection-unavailable': 'WG cannot tell whether this model is out of date',
-  'declared-reduced-domain': 'Solved as the reduced model the CAD author declared',
-  'interpreted-reduced-domain': 'Solved mirrored, as a model already cut in CAD (from recorded evidence)',
-  'recovered-reduced-domain': 'Solved mirrored, as a model already cut in CAD (recognised from its geometry)',
-  'domain-solved-as-shown': 'Solved as shown, unmirrored',
-};
-
-/** Non-blocking findings that only record what was done, as asked. Any other
- * non-blocking finding limits confidence in the result, so the checks open
- * on it rather than leave it one click away. */
-const RECORD_ONLY: ReadonlySet<string> = new Set([
-  'declared-reduced-domain',
-  // The model card states the domain reading and offers Change (M1c-auto).
-  'interpreted-reduced-domain',
-  'recovered-reduced-domain',
-  'domain-solved-as-shown',
-]);
-
-/** Whether a finding that blocks nothing is still worth a line: every one is,
- * because it can limit confidence in the result (WG cannot say whether the
- * model is stale, say). The one exception is the unlinked freshness line of a
- * Fusion-first model: no WG design exists to be stale against, which is what
- * such a model is, not news about it. */
-function isNote(finding: CadReturnFinding): boolean {
-  if (finding.blocking || isMeshRecoveryFinding(finding)) return false;
-  return !(finding.kind === 'freshness' && finding.verdict === 'unlinked');
-}
-
-/** The findings that block nothing: what limits confidence in the result, in
- * words and never by id, under the checks. Blocking findings are listed where
- * they are approved. */
-function NoteRows({ record }: { record: CadReturnIngestRecord }) {
-  const notes = record.findings.filter(isNote);
-  if (notes.length === 0) return null;
-  return <div className="cad-check-notes">
-    {notes.map((finding) => <div key={finding.id} className="cad-check cad-check-info">
-      <span className="cad-check-glyph" aria-hidden="true">i</span>
-      <b>{NOTE_TITLE[finding.kind] ?? finding.kind.replaceAll('-', ' ')}</b>
-      <span className="cad-check-verdict">{findingDetail(finding)}</span>
-    </div>)}
-  </div>;
-}
-
-/** The check row that reports the same problem as a finding of this kind. */
-const FINDING_CHECK: Record<string, string> = {
-  'scope-degradation': 'scope',
-  freshness: 'freshness',
-};
-
-function ChecksSection({ record }: { record: CadReturnIngestRecord }) {
-  const checks = useMemo(() => recordChecks(record), [record]);
-  const warned = new Set(checks.filter((check) => check.state === 'warn').map((check) => check.key));
-  // A blocking finding and the failing check that reports the same thing are
-  // one problem, not two.
-  const unreported = record.findings.filter((finding) => finding.blocking
-    && !warned.has(FINDING_CHECK[finding.kind] ?? '')).length;
-  const problems = warned.size + unreported;
-  const needsAttention = problems > 0;
-  const notes = record.findings.filter(isNote);
-  const limitsConfidence = notes.some((finding) => !RECORD_ONLY.has(finding.kind));
-  const chip = needsAttention
-    ? `${problems} need attention`
-    : notes.length > 0 ? `passed · ${pluralized(notes.length, 'note')}` : 'all passed';
-  return <CadDrawer
-    key={record.ingest_id}
-    title={`Checks (${checks.length})`}
-    chip={chip}
-    defaultOpen={needsAttention || limitsConfidence}
-    warning={needsAttention}
-    className="cad-checks"
-  >
-    {checks.map((check) => <CheckRow key={check.key} check={check}/>)}
-    <FindingRows record={record}/>
-    <NoteRows record={record}/>
-  </CadDrawer>;
 }
 
 interface ModelVersionsProps {
@@ -577,7 +186,6 @@ export function CadLinkPanel() {
     workspaceNavigation.claimReveal('cad-link');
   }, [navigation, visible]);
   const state = useCadReturnStore();
-  const developerDetails = useDeveloperDetails();
   const preferences = usePreferences();
   const design = useDesignStore((current) => current.design);
   const cadLimitation = nativeCadLimitation(design.formula);
@@ -606,7 +214,6 @@ export function CadLinkPanel() {
     setAddinReply({ detail, under: cadWorkspace.getSnapshot().fusionStatus });
     setInstallingAddin(false);
   }
-  const jobs = useCadJobs();
   const onshapeSendGeneration = useRef(0);
   const onshape = preferences.cadApplication === 'onshape';
   const {
@@ -728,7 +335,6 @@ export function CadLinkPanel() {
   };
 
   const workflow = onshape ? onshapeWorkflowView(onshapeStatus) : fusionWorkflowView(fusionStatus);
-  const { femRegionsOffered } = useCapabilities();
   const designName = designNameSlug(documentName);
   const shownName = designName === UNTITLED_SLUG ? 'this design' : designName;
   const canRequestFusionReturn = Boolean(
@@ -743,6 +349,10 @@ export function CadLinkPanel() {
   const matchingFusionLinks = fusionStatus?.matchingLinks ?? [];
   const model = useCadModelState();
   const { record, bundle } = model;
+  // An engine gate on this model's latest request is described only in
+  // Results, with its remedies: its requests get no card here meanwhile.
+  const { status: requestStatus } = useCurrentModelStatus(record ?? undefined);
+  const engineHold = requestStatus.kind === 'waiting' && ENGINE_HOLDS.has(requestStatus.job?.cad_state?.reason ?? '');
   // A model authored in Fusion is on screen. The link states compare the
   // Fusion document with the parametric WG design, which is not this model,
   // and their Open and Send actions would insert that design into the user's
@@ -754,7 +364,6 @@ export function CadLinkPanel() {
   const addinVersion = !onshape && fusionStatus?.running && fusionStatus.adapterVersion
     ? `The Waveguide Generator add-in in Fusion ${fusionStatus.adapterVersion}`
     : undefined;
-  const solvesOnScreen = onScreenSolves(cadJobSummaries(jobs), record);
   const fusionBothChanged = Boolean(fusionStatus?.wgChangesAvailable && fusionStatus.fusionChangesAvailable);
   const staleModel = model.preparation === 'stale';
   const solveCard = model.preparation === 'prepared';
@@ -941,46 +550,14 @@ export function CadLinkPanel() {
       {record && !staleModel && importedSubmissionNotices(state).map((notice) => (
         <Notice key={notice}>{notice}</Notice>
       ))}
-      {record && <ChecksSection record={record}/>}
-      {femRegionsOffered && !!record?.fem_regions?.length && <section className="cad-fem-regions" aria-label="FEM regions">
-        <h4>FEM regions</h4>
-        {record.fem_regions.map((region) => <div key={region.region_id}>
-          <b>{region.name}</b>
-          <p className="cad-detail">{region.stats.tetrahedra.toLocaleString()} tetrahedra · {region.stats.nodes.toLocaleString()} nodes · {region.mesh_size_mm} mm region size</p>
-          {Object.entries(region.stats.surface_groups).map(([groupId, stats]) => {
-            const group = region.surface_groups.find((candidate) => candidate.group_id === groupId);
-            return <div className="cad-row" key={groupId}>
-              <b>{group?.name ?? (groupId === '_walls' ? 'Unclaimed walls' : groupId)}</b>
-              <span>{stats.kind.replaceAll('-', ' ')} · {stats.triangle_count.toLocaleString()} triangles · {stats.area_mm2.toLocaleString(undefined, { maximumFractionDigits: 2 })} mm²
-                {group?.kind === 'moving' && <> · {group.relative_level_db ?? 0} dB relative motion</>}
-                {group?.lining && <> · Miki lining: {group.lining.thickness_mm} mm · {group.lining.flow_resistivity_pa_s_per_m2} Pa·s/m²</>}
-              </span>
-            </div>;
-          })}
-        </div>)}
-      </section>}
-      {/* The one Solve card: what Solve uses -- the model, which way it
-          radiates, the settings -- any request for this snapshot that waits,
-          and Solve itself (PLAN.md M1b). */}
-      {solveCard && <CadSolveCard record={record!} label={record!.project?.document_name ?? bundle?.documentName ?? 'this model'}/>}
-      {/* Solves Fusion sent, which the backend prepares from each project's own
-          setup; one for the model on screen is shown on its Solve card. */}
+      {/* The requests for this model that wait, with only the actions Solve
+          never takes; the rest are one quiet line each below. */}
+      {solveCard && !engineHold && <CurrentModelRequests record={record}/>}
+      {/* What the model is, how it is solved and which way it radiates, its
+          mesh, settings and checks: one disclosure, collapsed. */}
+      {record && <CadModelDetails record={record} prepared={solveCard} label={record.project?.document_name ?? bundle?.documentName ?? 'this model'}/>}
       <CadDeliveryHealth/>
       <CadOperationsSection record={record} solves={!solveCard} lineQuestion={model.heldRequest}/>
-      {/* The bookkeeping behind the model and its solves, one disclosure away. */}
-      {record && <details className="cad-model-details">
-        <summary>Details</summary>
-        {developerDetails && <p
-          className="cad-detail cad-model-provenance"
-          title="The snapshot is the returned model, named by its manifest hash. The preparation holds the mesh on screen that would be solved."
-        >Snapshot <code>{shortSha256(record.manifest_sha256)}</code> · Preparation <code>{record.ingest_id}</code></p>}
-        {solvesOnScreen.map((operation) => <CadSolveInputs
-          key={operation.jobId ?? operation.operationId}
-          operationId={operation.operationId}
-          job={jobs.find((job) => job.id === operation.jobId)}
-          engineSource="setup-revision"
-        />)}
-      </details>}
       <ModelVersions
         projectBundles={projectBundles}
         unlinkedReturns={unlinkedReturns}

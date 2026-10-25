@@ -97,10 +97,12 @@ function FrameView({ projection, index, label }: { projection: FramePreviewProje
   </figure>;
 }
 
-/** The model's mesh for the frame preview, once per preparation. */
-function useFrameMesh(ingestId: string, fetcher: typeof fetch): { mesh: ParsedMSH | null; error: string | null } {
+/** The model's mesh for the frame preview, once per preparation, read only
+ * while the chooser that draws it is open (null `ingestId`). */
+function useFrameMesh(ingestId: string | null, fetcher: typeof fetch): { mesh: ParsedMSH | null; error: string | null } {
   const [state, setState] = useState<{ ingestId: string; mesh: ParsedMSH | null; error: string | null } | null>(null);
   useEffect(() => {
+    if (!ingestId || state?.ingestId === ingestId) return undefined;
     let current = true;
     void loadModel(ingestId, fetcher)
       .then((mesh) => { if (current) setState({ ingestId, mesh, error: null }); })
@@ -108,8 +110,8 @@ function useFrameMesh(ingestId: string, fetcher: typeof fetch): { mesh: ParsedMS
         if (current) setState({ ingestId, mesh: null, error: reason instanceof Error ? reason.message : String(reason) });
       });
     return () => { current = false; };
-  }, [fetcher, ingestId]);
-  return state?.ingestId === ingestId ? state : { mesh: null, error: null };
+  }, [fetcher, ingestId, state?.ingestId]);
+  return ingestId && state?.ingestId === ingestId ? state : { mesh: null, error: null };
 }
 
 /** The model in the solver frame an axis names: the exact matrix the backend
@@ -139,23 +141,28 @@ const SOURCE_WORDS: Record<string, string> = {
 };
 
 /**
- * Which way a model authored in CAD radiates, on its Solve card (PLAN.md
- * M1b/M1e): "Radiates along +x · Change", as information. WG never asks: the
- * axis shown is the project's frame or WG's own decision (confident, or the
- * documented fallback, which says so in one calm line), and Solve never
- * waits on it. Change opens the axis chooser; a pick is the user's choice,
- * which Solve confirms for the project (`chosenFrameAxis`).
+ * Which way a model authored in CAD radiates, in its Model details (PLAN.md
+ * M1b/M1e, U4): "Radiates along +x · Change", as information, and the only
+ * place WG says it. WG never asks: the axis shown is the project's frame or
+ * WG's own decision (confident, or the documented fallback, which says so in
+ * one calm line), and Solve never waits on it. Change opens the axis chooser
+ * with its preview; a pick is the user's choice, which Solve confirms for the
+ * project (`chosenFrameAxis`) -- or Done does, with `confirmOnDone`.
  *
  * Nothing else here confirms a frame except the one-click switch a "differs"
  * notice offers. The preview applies the server's matrices; nothing here
  * computes a frame.
  */
-export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetch }: {
+export function CadSolverFrame({ ingestId, manifestSha256, label, confirmOnDone = false, fetcher = fetch }: {
   ingestId: string;
   /** The snapshot shown: a solve of it that stops at the frame gate means the
    * frame may have changed, so the card reads it again. */
   manifestSha256?: string;
   label: string;
+  /** WG already solved this model along its own axis (a Fusion Solve never
+   * shows this chooser): Done confirms the axis picked for the project, so the
+   * next solve, from either side, uses it. */
+  confirmOnDone?: boolean;
   fetcher?: typeof fetch;
 }) {
   const view = useCadSolverFrameStore((state) => state.frames[ingestId]);
@@ -178,24 +185,12 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
     .sort()
     .join('|');
   useEffect(() => { void load(ingestId, fetcher); }, [fetcher, frameGate, ingestId, load]);
-  // The run line's "Change" (an automatic axis) opens this same chooser.
-  // Opened this way, the chooser confirms the axis picked (a Fusion Solve
-  // never shows it, so nothing else would): the request is consumed, so a
-  // remount never opens it again by itself.
-  const changeRequested = useCadSolverFrameStore((state) => state.changeRequests[ingestId] ?? 0);
-  const consumeChange = useCadSolverFrameStore((state) => state.consumeChange);
-  const [confirmOnDone, setConfirmOnDone] = useState(false);
   // Another model must not inherit a Change opened for this one.
-  useEffect(() => { setChanging(false); setSwitchError(null); setConfirmOnDone(false); }, [ingestId]);
-  useEffect(() => {
-    if (changeRequested > 0) {
-      setChanging(true);
-      setConfirmOnDone(true);
-      consumeChange(ingestId);
-    }
-  }, [changeRequested, consumeChange, ingestId]);
+  useEffect(() => { setChanging(false); setSwitchError(null); }, [ingestId]);
   const frame = view?.frame ?? null;
-  const { mesh } = useFrameMesh(ingestId, fetcher);
+  // Only the user's own Change opens the chooser: it is never a question.
+  const choosing = changing;
+  const { mesh } = useFrameMesh(choosing ? ingestId : null, fetcher);
 
   if (!view || (view.status === 'loading' && !frame)) {
     return <p className="cad-solver-frame cad-detail" data-frame-preview="loading" role="status">Reading which way {label} radiates…</p>;
@@ -208,8 +203,6 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
   }
   const axis = view.axis;
   const source = frame.preselected?.source ?? (frame.confirmed ? 'confirmed' : null);
-  // Only the user's own Change opens the chooser: it is never a question.
-  const choosing = changing;
   const differs = frame.differs ?? null;
   const switchTo = (target: SolverFrameAxis) => {
     setSwitching(true);
@@ -223,7 +216,6 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
     setChanging(false);
     // Only a pick is a change; Done alone confirms nothing.
     if (confirmOnDone && view.picked && axis) switchTo(axis);
-    setConfirmOnDone(false);
   };
   const unsupported = frame.axes.find((item) => !item.allowed && item.reason)?.reason ?? null;
   const fallback = !view.picked && source === 'fallback';
@@ -253,7 +245,6 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
         WG chose {axis}; change it if the model radiates another way.
       </p>}
       {!fallback && (view.picked || (source && SOURCE_WORDS[source])) && <small className="cad-detail cad-solver-frame-source">{view.picked ? 'your choice' : SOURCE_WORDS[source!]}</small>}
-      {axis && <FramePreview frame={frame} axis={axis} mesh={mesh} views="side"/>}
     </div>}
     {choosing && <>
       <p className="cad-solver-frame-chooser">Which way does the mouth face? (CAD axes)</p>

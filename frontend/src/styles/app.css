@@ -682,9 +682,9 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .job-stage-word { flex: none; font-weight: 600; color: var(--acc); }
 .job-frequency,
 .job-detail { margin: 4px 0 0; overflow: hidden; color: var(--fg3); font: var(--text-micro) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
-/* The CAD Solve card's one-line status (`CadSolveCard.tsx`'s `RunLine`) --
-   the same stage word, wrapping onto its own line rather than clipping when
-   the card is narrow. */
+/* The CAD model's one-line run status (`CurrentModelStatus.tsx`) -- the
+   same stage word, wrapping onto its own line rather than clipping when the
+   panel is narrow. */
 .solve-progress-compact { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
 .solve-progress-meta { color: var(--fg3); }
 .job-card footer { display: flex; gap: 4px; margin-top: 7px; }

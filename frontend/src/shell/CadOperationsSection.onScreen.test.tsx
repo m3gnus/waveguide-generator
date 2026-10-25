@@ -249,7 +249,7 @@ describe('operation cards for the model on screen', () => {
     const [card] = cards();
     const ladder = () => [...card.querySelectorAll('.cad-operation-ladder li')].map((item) => item.textContent);
     await vi.waitFor(() => expect(ladder()).toEqual([
-      'Now: its solver frame was changed meanwhile; press Solve to solve along the one shown above.',
+      'Now: its solver frame was changed meanwhile; press Solve to solve along the one in Model details.',
       'Then: approve 1 finding.',
     ]));
     expect(card.textContent).not.toContain(FINDING);

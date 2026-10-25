@@ -221,9 +221,9 @@ describe('Change', () => {
   });
 });
 
-describe('the Solve card summary', () => {
+describe('the Model details summary', () => {
   it('leaves the domain to its own line once the record states an interpretation', async () => {
-    const { modelSummary } = await import('./CadSolveCard');
+    const { modelSummary } = await import('./CadModelDetails');
     const record = {
       scope: { included: [{ name: 'Body1' }] },
       sources: [{ id: 'hf', role: 'HF' }],

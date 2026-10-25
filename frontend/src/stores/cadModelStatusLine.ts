@@ -74,7 +74,8 @@ const ACTION_LABEL: Record<Exclude<CadStatusAction, 'none'>, string> = {
   solve: 'Solve', choose: 'Choose…', 'try-again': 'Try again', 'show-results': 'Show results', prepare: 'Prepare',
 };
 
-const ENGINE_HOLDS = new Set(['engine_unavailable', 'engine_cannot_solve_return']);
+/** The holds that wait for a solve engine: Results describes them, with their remedies. */
+export const ENGINE_HOLDS: ReadonlySet<string> = new Set(['engine_unavailable', 'engine_cannot_solve_return']);
 
 function line(text: string, short: string, tone: CadStatusTone, action: CadStatusAction = 'none', jobId: string | null = null,
   actionLabel: string | null = action === 'none' ? null : ACTION_LABEL[action]): CadModelStatusLine {

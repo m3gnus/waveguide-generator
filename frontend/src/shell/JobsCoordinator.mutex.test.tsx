@@ -46,7 +46,7 @@ import {
 } from './JobsCoordinator';
 import { CurrentModelStatus as CurrentReadiness } from './CurrentModelStatus';
 import { SolveActions as ToolbarSolveActions, TopBar } from './TopBar';
-import { CadSolveCard } from './CadSolveCard';
+import { CadModelDetails } from './CadModelDetails';
 import { CadModelStatusLine } from './CadModelStatusLine';
 import { SolveOptionsControls } from '../design/SolveOptionsSections';
 import { CadCrossover } from '../design/CrossoverSection';
@@ -242,6 +242,8 @@ function readyCad(ingestId: string): CadReturnIngestRecord {
     artifact_sha256: `sha256:${'2'.repeat(64)}`,
     report_sha256: `sha256:${'3'.repeat(64)}`,
     findings: [], evidence: { fem_air_volumes: [] }, polar_grid_derivation: {},
+    scope: { status: 'clean', included: [] }, freshness: { verdict: 'per-instance', instances: [] },
+    symmetry: { cut_planes: [] }, healing: { performed: false }, sizing_estimate: {},
   } as unknown as CadReturnIngestRecord;
   useCadReturnStore.setState({
     selectedBundle: {
@@ -497,7 +499,7 @@ describe('solve invocation mutex', () => {
     });
     await act(async () => { root.render(<QueryClientProvider client={tableClient}><JobsCoordinator>
       {surface === 'top bar' ? <ToolbarSolveActions/> : surface === 'palette' ? <TopBar onResetLayout={() => undefined}/>
-        : surface === 'CAD card' ? <><CadModelStatusLine/><CadSolveCard record={useCadReturnStore.getState().ingestRecord!} label="Speaker"/></>
+        : surface === 'CAD card' ? <><CadModelStatusLine/><CadModelDetails record={useCadReturnStore.getState().ingestRecord!} label="Speaker" prepared/></>
           : surface.startsWith('Results') ? <ResultsPanel/>
             : surface === 'crossover' ? <CadCrossover/> : <span/>}
     </JobsCoordinator></QueryClientProvider>); });
@@ -977,7 +979,7 @@ describe('solve invocation mutex', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => root.render(<QueryClientProvider client={client}><JobsCoordinator>
       <div className="topbar"><ToolbarSolveActions/></div>
-      <ResultsPanel/><CadSolveCard record={record} label="Speaker"/>
+      <ResultsPanel/><CadModelDetails record={record} label="Speaker" prepared/>
       <div data-settings><SolveOptionsControls mode="cad" ingestRecord={record}/></div>
       <CadCrossover/><JobsPanel/>
     </JobsCoordinator></QueryClientProvider>));
@@ -992,7 +994,7 @@ describe('solve invocation mutex', () => {
     expect(host.querySelector('.topbar .current-model-status')).toBeNull();
     expect(host.querySelector('[data-settings] .current-model-status')).toBeNull();
     expect(host.querySelector('.section-note .current-model-status')).toBeNull();
-    expect(host.querySelector('.cad-solve-card .solve-readiness')).toBeNull();
+    expect(host.querySelector('.cad-model-details .solve-readiness')).toBeNull();
     client.clear();
   });
 
@@ -1051,7 +1053,7 @@ describe('solve invocation mutex', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => root.render(<QueryClientProvider client={client}><JobsCoordinator>
       {surface === 'top bar' ? <ToolbarSolveActions/> : surface === 'Results empty' ? <ResultsPanel/>
-        : surface === 'CAD card' ? <><CadModelStatusLine/><CadSolveCard record={record} label="Speaker"/></>
+        : surface === 'CAD card' ? <><CadModelStatusLine/><CadModelDetails record={record} label="Speaker" prepared/></>
           : surface === 'crossover' ? <CadCrossover/> : <SolveOptionsControls mode="cad" ingestRecord={record}/>}
     </JobsCoordinator></QueryClientProvider>));
     expect(host.querySelector('.solve-readiness')).toBeNull();

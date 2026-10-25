@@ -36,9 +36,9 @@ import { SOLVER_FRAME_AXES, type SolverFrameAxis } from '../viewport/solverFrame
 import { JobsCoordinator, jobsCoordinatorBridge, solveControlStore } from './JobsCoordinator';
 import { ResultsPanel } from './ResultsPanel';
 import { SolveActions } from './TopBar';
-import { CadSolveCard } from './CadSolveCard';
+import { CadModelDetails } from './CadModelDetails';
 import { CadModelStatusLine } from './CadModelStatusLine';
-import { CadOperationsSection } from './CadOperationsSection';
+import { CadOperationsSection, CurrentModelRequests } from './CadOperationsSection';
 import { solvedCadModels } from './cadlink/solvedModel';
 import { resetSolveAttentionForTests, solveAttention } from './solveAttention';
 import {
@@ -191,6 +191,7 @@ function readyCad(): CadReturnIngestRecord {
     sources: [{ id: 'source-hf', role: 'HF', required: true, instance_id: null, default_drive_channel_id: 'drive-hf', suggested_resolution_mm: 4 }],
     symmetry: { planes: {}, cut_planes: ['x0'], domain_planes: ['x0'] },
     sizing_estimate: { measured: { solve_seconds_per_freq: 7.5 } },
+    healing: { performed: false },
     findings: [], evidence: { fem_air_volumes: [] }, polar_grid_derivation: {},
   } as unknown as CadReturnIngestRecord;
   useCadReturnStore.setState({
@@ -254,7 +255,8 @@ describe('M1b: one Solve card, to the revealed result', () => {
       const record = useCadReturnStore.getState().ingestRecord!;
       root.render(<JobsCoordinator now={() => new Date(2026, 8, 22, 12)}>
         <CadModelStatusLine/>
-        <CadSolveCard record={record} label="Speaker"/>
+        <CurrentModelRequests record={record}/>
+        <CadModelDetails record={record} label="Speaker" prepared/>
         <CadOperationsSection record={record} solves={false}/>
         <div className="topbar"><SolveActions/></div>
         <ResultsPanel/>
@@ -262,6 +264,9 @@ describe('M1b: one Solve card, to the revealed result', () => {
       await flush(8);
     });
     await vi.waitFor(() => expect(host.querySelector('[data-frame-preview="ready"]')).not.toBeNull());
+    // The axis and its Change live in Model details, collapsed until opened.
+    const details = host.querySelector<HTMLButtonElement>('.cad-model-details .section-head');
+    if (details?.getAttribute('aria-expanded') === 'false') act(() => details.click());
   }
 
   // The model card's status line; the top bar's Solve is the same command, elsewhere.
@@ -400,7 +405,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
         await flush(8);
       });
       const record = useCadReturnStore.getState().ingestRecord!;
-      await act(async () => { panelRoot.render(<><CadModelStatusLine/><CadSolveCard record={record} label="Speaker"/></>); await flush(8); });
+      await act(async () => { panelRoot.render(<><CadModelStatusLine/><CadModelDetails record={record} label="Speaker" prepared/></>); await flush(8); });
       await vi.waitFor(() => expect(panelHost.querySelector('[data-frame-preview="ready"]')).not.toBeNull());
       const button = panelHost.querySelector<HTMLButtonElement>('button[data-action="solve"]')!;
       await vi.waitFor(() => expect(button.disabled).toBe(false));
@@ -457,7 +462,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     const read = new Promise<void>((resolve) => { release = resolve; });
     const api = vi.fn(async () => { await read; return json(frame); });
     const loading = useCadSolverFrameStore.getState().load('wgi_first', api);
-    await act(async () => { root.render(<JobsCoordinator><CadModelStatusLine/><CadSolveCard record={useCadReturnStore.getState().ingestRecord!} label="Speaker"/></JobsCoordinator>); });
+    await act(async () => { root.render(<JobsCoordinator><CadModelStatusLine/><CadModelDetails record={useCadReturnStore.getState().ingestRecord!} label="Speaker" prepared/></JobsCoordinator>); });
     expect(solveButton().disabled).toBe(false);
     let solving: Promise<unknown> = Promise.resolve();
     await act(async () => { solving = solveControlStore.getSnapshot()!.solve(); await flush(); });
@@ -516,13 +521,13 @@ describe('M1b: one Solve card, to the revealed result', () => {
     for (const hz of [8, 80, 199]) {
       await act(async () => useCadReturnStore.getState().setCombineSpec(withPair(combineSpecEffective(useCadReturnStore.getState())!, 'drive-mf→drive-hf', { hz })));
       expect(solveButton().disabled).toBe(true);
-      expect(host.querySelector('.cad-solve-card .solve-readiness')).toBeNull();
+      expect(host.querySelector('.cad-model-details .solve-readiness')).toBeNull();
       expect(solveButton().title).toContain(`The ${hz} Hz crossover is below the 200 Hz sweep start`);
     }
     for (const hz of [200, 800]) {
       await act(async () => useCadReturnStore.getState().setCombineSpec(withPair(combineSpecEffective(useCadReturnStore.getState())!, 'drive-mf→drive-hf', { hz })));
       expect(solveButton().disabled).toBe(false);
-      expect(host.querySelector('.cad-solve-card .solve-readiness')).toBeNull();
+      expect(host.querySelector('.cad-model-details .solve-readiness')).toBeNull();
     }
   });
 
@@ -591,24 +596,28 @@ describe('M1b: one Solve card, to the revealed result', () => {
     expect(pressOf().frame_axis).toBe('-z');
   });
 
-  it('opens the axis chooser when the run line asks to change an automatic axis', async () => {
+  it('confirms the axis picked with the one Change once WG solved the model along its own axis', async () => {
     await mount();
-    expect(host.querySelector('input[type="radio"]')).toBeNull();
-    await act(async () => { useCadSolverFrameStore.getState().requestChange('wgi_first'); await flush(); });
-    expect(host.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.value).toBe('+x');
-    // Nothing is confirmed by asking to change it, or by Done without a pick.
-    expect(puts).toEqual([]);
+    await jobs([cadJobFixture(operation('op-auto', 'accepted', { jobId: 'job-auto', frameAxisAutomatic: '+x' }), cadJob('job-auto'))]);
+    // No second line names the automatic axis, and no second Change exists.
+    expect(host.textContent).not.toContain('automatic axis');
+    expect(host.querySelectorAll('[data-action="change-solver-frame"]')).toHaveLength(1);
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="change-solver-frame"]')!.click(); await flush(); });
+    // Nothing is confirmed by opening the chooser, or by Done without a pick.
     await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="done-solver-frame"]')!.click(); await flush(); });
     expect(puts).toEqual([]);
-  });
-
-  it('confirms the axis picked after Change from an automatic run, so the next solve uses it', async () => {
-    await mount();
-    await act(async () => { useCadSolverFrameStore.getState().requestChange('wgi_first'); await flush(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="change-solver-frame"]')!.click(); await flush(); });
     await act(async () => { host.querySelector<HTMLInputElement>('input[value="-z"]')!.click(); await flush(); });
     expect(puts).toEqual([]);
     await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="done-solver-frame"]')!.click(); await flush(); });
     expect(puts).toEqual([{ ingestId: 'wgi_first', axis: '-z' }]);
+  });
+
+  it('draws the frame preview only in the chooser Change opens', async () => {
+    await mount();
+    expect(host.querySelector('.cad-frame-views')).toBeNull();
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="change-solver-frame"]')!.click(); await flush(8); });
+    await vi.waitFor(() => expect(host.querySelector('.cad-frame-views')).not.toBeNull());
   });
 
   function selectSecond(): void {
@@ -620,9 +629,9 @@ describe('M1b: one Solve card, to the revealed result', () => {
     importedMeshStore.setCad({ name: 'Speaker B', source: 'cad', ingestId: 'wgi_second' } as ImportedMeshScene);
   }
 
-  it('does not carry a Change from one model to the next: Done there waits for Solve', async () => {
+  it('does not carry a Change from one model to the next', async () => {
     await mount();
-    await act(async () => { useCadSolverFrameStore.getState().requestChange('wgi_first'); await flush(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="change-solver-frame"]')!.click(); await flush(); });
     expect(host.querySelector('input[type="radio"]')).not.toBeNull();
     const base = vi.mocked(fetch).getMockImplementation()!;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -635,19 +644,11 @@ describe('M1b: one Solve card, to the revealed result', () => {
     await mount();
     await vi.waitFor(() => expect(host.querySelector('.cad-solver-frame')?.getAttribute('data-solver-frame')).not.toBeNull());
     await vi.waitFor(() => expect(host.querySelector('button[data-action="change-solver-frame"]')).not.toBeNull());
+    expect(host.querySelector('input[type="radio"]')).toBeNull();
     await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="change-solver-frame"]')!.click(); await flush(); });
     await act(async () => { host.querySelector<HTMLInputElement>('input[value="-z"]')!.click(); await flush(); });
     await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="done-solver-frame"]')!.click(); await flush(); });
     expect(puts).toEqual([]);
-  });
-
-  it('does not reopen the chooser on a later remount', async () => {
-    await mount();
-    await act(async () => { useCadSolverFrameStore.getState().requestChange('wgi_first'); await flush(); });
-    expect(useCadSolverFrameStore.getState().changeRequests.wgi_first).toBe(0);
-    await act(async () => { root.render(<div/>); await flush(); });
-    await mount();
-    expect(host.querySelector('input[type="radio"]')).toBeNull();
   });
 
   it('keeps a confirmation made under frame contract v1: preselected, not asked again, and confirmed by Solve', async () => {

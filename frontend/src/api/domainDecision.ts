@@ -58,7 +58,7 @@ export interface DomainDecisionCore {
   refusal?: { code: string; message: string } | null;
 }
 
-/** The fields a job records and the Solve card's plan carries (`decision_summary`). */
+/** The fields a job records and the imported solve plan carries (`decision_summary`). */
 export interface DomainDecisionSummary extends DomainDecisionCore {
   sources?: Record<string, { tag?: number; retained_fraction?: number | null }>;
 }

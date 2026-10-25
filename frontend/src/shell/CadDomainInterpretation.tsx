@@ -102,7 +102,7 @@ export function decisionLine(decision: DomainDecision, interpretation?: DomainIn
 }
 
 /**
- * The domain line on a CAD model's Solve card, with Change. Nothing here asks
+ * The domain line in a CAD model's Model details, with Change. Nothing here asks
  * and nothing here prepares: a Change is remembered for the model's project,
  * and Solve prepares the model again under it -- a new preparation and a new
  * decision; the one shown stops being used (the server refuses to reuse a

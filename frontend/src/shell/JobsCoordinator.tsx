@@ -190,9 +190,9 @@ function publishSolveControl(control: SolveControl | null): void {
   solveControlListeners.forEach((listener) => listener());
 }
 
-/** The Solve command where one exists: the CAD Link panel's Solve card is the
+/** The Solve command where one exists: the CAD model's status line is the
  * same command as the top bar's, and is rendered on its own in some tests.
- * The card lives in a dock panel, outside the coordinator's React tree, so it
+ * The line lives in a dock panel, outside the coordinator's React tree, so it
  * reads the published command when the context is absent. */
 export function useOptionalSolveControl(): SolveControl | null {
   const context = useContext(SolveContext);
@@ -341,7 +341,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const [submitting, setSubmitting] = useState(false);
   const submissionInFlight = useRef(false);
   const recoveryNotices = useCadRecoveryNotices((state) => state.notices);
-  // The frame the Solve card shows for the model on screen: part of what Solve
+  // The frame Model details shows for the model on screen: part of what Solve
   // confirms, so part of whether it can.
   useCadSolverFrameStore((state) => state.frames);
 

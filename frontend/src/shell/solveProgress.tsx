@@ -28,7 +28,7 @@ export function useSolveClock(active = true): number {
 
 /**
  * One place that names a solve's stage for the user, shared by every surface
- * that shows a run in flight -- the Jobs rail card and the CAD Solve card's
+ * that shows a run in flight -- the Jobs rail card and Results' CAD
  * one-line status alike, so CAD and parametric solves are described the same
  * way (Magnus, 2026-09-23: "same component/design" for both modes; the
  * pre-job CAD operation pipeline joins the same vocabulary too, so the
@@ -95,7 +95,7 @@ export function runStatusWord(job: Pick<JobItem, 'status' | 'stage'> & Partial<P
   return solveStageWord(job);
 }
 
-/** The fields `RunLine` (CadSolveCard.tsx) needs from a `CadOperationSummary`
+/** The fields the compact CAD status (`CurrentModelStatus.tsx`) needs from a `CadOperationSummary`
  * before its job exists -- deliberately narrow, so this module never has to
  * import the CAD operations API just to read three strings off it. */
 export interface OperationProgressLike {
@@ -300,7 +300,7 @@ export function formatClock(seconds: number): string {
 }
 
 /** Display names for the engine slugs `solve_options.engine` carries.
- * `CadSolveCard.tsx`'s settings line prefers a capability verdict's own
+ * Model details' settings line (`CadModelDetails.tsx`) prefers a capability verdict's own
  * `label` when a solve plan is on hand (CAD Link mode, before a job exists);
  * this is what both that line and this module fall back to otherwise --
  * one name per engine, never a bare `.toUpperCase()` of the slug. */
@@ -440,7 +440,7 @@ function useReadinessProgress(enabled: boolean, readiness?: SolveReadinessState 
  * back too. CAD Link mode and parametric mode submit through the same jobs
  * system and get the same `JobItem` back, so this is the one place solve
  * progress renders, never a CAD copy and a parametric copy of the same bar:
- * `JobsPanel`'s run card uses `variant="full"`, and the CAD Solve card's
+ * `JobsPanel`'s run card uses `variant="full"`, and Results' CAD
  * one-line status uses `variant="compact"`, before and after its operation's
  * job exists alike. Both job views share the same per-job stage observer and
  * the server's own frequency count (`job.frequency_progress`), so a noisy

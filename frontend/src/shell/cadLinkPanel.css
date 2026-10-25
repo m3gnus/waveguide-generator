@@ -105,14 +105,19 @@
 .cad-status-line-ready .cad-status-dot, .cad-status-line-done .cad-status-dot { background: var(--green); }
 .cad-status-line-attention .cad-status-dot { background: var(--amber); }
 .cad-status-action { flex: none; }
-/* The one Solve card (M1b): what Solve uses, then Solve. */
-.cad-solve-card { display: grid; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--hair-soft); }
-.cad-solve-card > p { margin: 0; }
+/* Model details (U4): what the model is, how it is solved, its mesh,
+   settings and checks, in one collapsed drawer. */
+.cad-model-details .section-body:not([hidden]) { display: grid; gap: 6px; padding-top: 4px; }
+.cad-model-details .section-body p { margin: 0; }
+.cad-mesh-line { color: var(--fg2); }
+.cad-mesh-line b { color: var(--fg1); font-weight: 500; }
+.cad-mesh-line-caution b { color: var(--amber); }
+.cad-checks { border-top: 1px solid var(--hair-soft); padding-top: 2px; }
+.cad-fem-regions h5 { margin: 4px 0 2px; color: var(--fg1); font-size: var(--text-base); font-weight: 500; }
 .cad-solve-summary { color: var(--fg1); }
 .cad-solve-settings { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 7px; color: var(--fg2); }
 .cad-solve-settings .link-button { margin-left: auto; }
 .cad-solver-frame-summary { display: grid; gap: 2px; }
-.cad-solver-frame-summary .cad-frame-view figcaption { display: none; }
 .cad-solver-frame-chooser { margin: 0; color: var(--fg1); font-weight: 600; }
 .cad-solve-actions { display: grid; gap: 4px; }
 .cad-solve-run-warn { color: var(--amber); }
@@ -150,6 +155,7 @@ details.cad-check[open] > summary .cad-check-chevron { transform: rotate(90deg);
 .cad-drawer .section-head { height: 30px; padding: 0 7px 0 6px; }
 .cad-drawer.closed .chevron { transform: rotate(-90deg); }
 .cad-drawer .section-body { padding: 1px 7px 7px; }
+.cad-drawer .section-body[hidden] { display: none; }
 .cad-detail { color: var(--fg3); font-size: var(--text-micro); }
 .cad-verdict { display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 3px 8px; margin: 4px 0; padding: 5px; border-left: 2px solid var(--amber); background: var(--ov1); }
 .cad-verdict.ok { border-color: var(--green); }
@@ -215,8 +221,6 @@ details.cad-check[open] > summary .cad-check-chevron { transform: rotate(90deg);
 .cad-domain-failed { margin: 2px 0 0 12px; padding-left: 12px; }
 .cad-domain-frame { margin: 2px 0 0; }
 .cad-domain[data-domain-superseded] .cad-domain-line > span { opacity: 0.6; }
-.cad-model-details { margin-top: 8px; color: var(--fg3); font-size: var(--text-base); }
-.cad-model-details summary { cursor: pointer; }
 /* Developer detail ("Show developer details"): one quiet disclosure. */
 .developer-details { margin-top: 5px; }
 .developer-details > summary { cursor: pointer; color: var(--fg3); font-size: var(--text-micro); }

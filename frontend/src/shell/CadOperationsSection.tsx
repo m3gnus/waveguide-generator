@@ -164,7 +164,7 @@ export function solveGateLadder(
         // the frame shown above.
         {
           gate: 'frame', current: true,
-          text: 'Now: its solver frame was changed meanwhile; press Solve to solve along the one shown above.',
+          text: 'Now: its solver frame was changed meanwhile; press Solve to solve along the one in Model details.',
         },
         // Solving again approves nothing: a finding still unapproved is the
         // next stop, and only then is it named.
@@ -275,7 +275,7 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
   // An approval is a continuation: it sends no settings, so the backend
   // reuses the setup revision the operation holds and the approvals given on
   // its preparation still apply. Everything else this request waits for is
-  // the Solve card's one Solve, which continues this very request.
+  // the status line's one Solve, which continues this very request.
   const ask = (action: OperationAction, request: () => Promise<unknown>) => {
     const held = askedRef.current;
     if (held?.action === action && held.jobId === job.id && held.preparationId === operation.preparationId && held.state === operation.state) return;
@@ -494,9 +494,9 @@ export function onScreenSolves(
     .filter((operation) => operation.kind === 'prepare_and_solve' && aboutWhatIsOnScreen(operation, record, null));
 }
 
-/** The waiting or running solves of the model on screen, as the Solve card
- * shows them: what each still needs, in words, with only the actions Solve
- * does not take -- approving a finding, dismissing the request. */
+/** The waiting or running solves of the model on screen, under its status
+ * line: what each still needs, in words, with only the actions Solve does not
+ * take -- approving a finding, dismissing the request. */
 export function CurrentModelRequests({ record }: { record: CadReturnIngestRecord | null }) {
   const jobs = useCadJobs();
   const solves = onScreenSolves(cadJobSummaries(jobs), record);
@@ -508,7 +508,7 @@ export function CurrentModelRequests({ record }: { record: CadReturnIngestRecord
 
 /** The CAD operations still waiting or running: the solves Fusion sent, which
  * the backend prepares from each project's own setup. Only those about the
- * model on screen get a card -- on the Solve card when there is one
+ * model on screen get a card -- under its status line when it is prepared
  * (`solves={false}` here) -- and the rest are one quiet line each. */
 export function CadOperationsSection({ record, solves = true, lineQuestion = null }: {
   record: CadReturnIngestRecord | null;
@@ -535,7 +535,7 @@ export function CadOperationsSection({ record, solves = true, lineQuestion = nul
   const firstRequestId = earlier[0]?.id ?? selected.current[0]?.id;
   useEffect(() => {
     if (!visible || workspaceNavigation.getRevealTarget() !== 'cad-requests' || !firstRequestId || !host.current) return;
-    // The Solve card can own the current request. Earlier rows stay here.
+    // The model card can own the current request. Earlier rows stay here.
     const scope = host.current.closest('.cadlink-panel') ?? host.current;
     const target = [...scope.querySelectorAll<HTMLElement>('[data-request-id]')]
       .find((element) => element.dataset.requestId === firstRequestId);

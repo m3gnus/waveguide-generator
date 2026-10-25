@@ -278,7 +278,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
           engine itself says, then the percentage -- or, once a frequency
           count can be read from that message, "frequency i of N" and an ETA
           instead of a bare number that says nothing about how much is left.
-          Shared with the CAD Solve card's compact status: one progress
+          Shared with Results' compact CAD status: one progress
           component, fed only by `job`, for both modes. */}
       <SolveProgressView job={job} now={now}/>
       {/* The stage message names the campaign; this says why the run has
