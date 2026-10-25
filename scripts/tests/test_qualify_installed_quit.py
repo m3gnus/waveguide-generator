@@ -840,3 +840,24 @@ def test_a_start_that_never_reserves_a_port_fails_with_the_server_log_tail(tmp_p
     message = str(failure.value)
     assert "reserve a port" in message
     assert "server log tail" in message and "still waiting on a lock" in message
+
+
+def test_a_start_that_never_reserves_a_port_fails_with_its_thread_stacks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gate = _gate()
+    app = tmp_path / "app"
+    (app / "launch").mkdir(parents=True)
+    (app / "launch" / "serve.py").write_text(
+        "import threading\n\n\n"
+        "def hang_here_at_startup():\n"
+        "    threading.Event().wait()\n\n\n"
+        "hang_here_at_startup()\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(gate, "START_TIMEOUT_S", 1.0)
+    with pytest.raises(gate.QualificationError, match="timed out after 1s waiting for the server to reserve") as raised:
+        gate.Run.start(Path(sys.executable), app, dict(os.environ), tmp_path / "data", tmp_path / "run")
+    message = str(raised.value)
+    assert "--- server thread stacks ---" in message
+    assert ("hang_here_at_startup" if os.name == "posix" else "no stack dump") in message

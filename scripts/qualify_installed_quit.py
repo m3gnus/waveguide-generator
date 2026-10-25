@@ -63,12 +63,14 @@ from qualify_installed_cpu import (  # noqa: E402 - a sibling script, not a pack
     DESIGN,
     QualificationError,
     await_cpu_row,
+    dump_server_stacks,
     http,
     isolated_environment,
     isolated_user_directories,
     resolve_payload,
     stop_our_workers,
     wait_for,
+    with_stack_dumps,
 )
 
 
@@ -491,7 +493,7 @@ class Run:
                     str(control_dir / "stop"),
                 ],
                 cwd=str(app),
-                env=environment,
+                env=with_stack_dumps(environment),
                 stdin=subprocess.DEVNULL,
                 stdout=sink,
                 stderr=subprocess.STDOUT,
@@ -522,7 +524,9 @@ class Run:
         except QualificationError as exc:
             # A server that neither answers nor exits must still leave evidence.
             tail = output.read_text(encoding="utf-8", errors="replace")[-4000:] if output.exists() else ""
-            raise QualificationError(f"{exc}\n--- server log tail ---\n{tail}") from exc
+            stacks = dump_server_stacks(process, output)
+            stacks = f"\n--- server thread stacks ---\n{stacks}" if stacks else ""
+            raise QualificationError(f"{exc}\n--- server log tail ---\n{tail}{stacks}") from exc
         run.server_pid = server_pid(data_dir)
         return run
 

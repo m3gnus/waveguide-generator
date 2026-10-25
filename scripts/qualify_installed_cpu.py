@@ -569,6 +569,58 @@ def wait_for(
     raise QualificationError(f"timed out after {seconds:.0f}s waiting for {what} ({last})")
 
 
+#: How long a hung server gets to write its stacks after it was asked.
+STACK_DUMP_SETTLE_S = 5.0
+#: At most this much of a stack dump goes into an error; the log keeps it all.
+STACK_DUMP_LIMIT = 16000
+
+
+def with_stack_dumps(environment: Mapping[str, str]) -> dict[str, str]:
+    """The server environment with ``faulthandler`` armed for :func:`dump_server_stacks`.
+
+    ``PYTHONFAULTHANDLER`` changes nothing until a fatal signal arrives; the
+    gate sends one only to a server it has already given up on.
+    """
+
+    return {**environment, "PYTHONFAULTHANDLER": "1"}
+
+
+def dump_server_stacks(process: subprocess.Popen[Any], log_path: Path) -> str:
+    """Make a hung server write every thread's stack to its log; return that text.
+
+    For a start that timed out: the verdict is already a failure, so ending the
+    process to get its stacks changes nothing but the evidence. On POSIX,
+    ``SIGABRT`` makes the ``faulthandler`` that :func:`with_stack_dumps` armed
+    dump all threads before the process exits. Windows has no such signal to
+    send from outside, so there the log tail is the evidence.
+    """
+
+    if process.poll() is not None:
+        return ""
+    if os.name != "posix":
+        return "(no stack dump: a hung server's threads can only be asked for on POSIX)"
+    try:
+        offset = log_path.stat().st_size
+    except OSError:
+        offset = 0
+    try:
+        os.kill(process.pid, signal.SIGABRT)
+        process.wait(timeout=STACK_DUMP_SETTLE_S)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"(no stack dump: {type(exc).__name__}: {exc})"
+    try:
+        with log_path.open("rb") as log:
+            log.seek(offset)
+            dump = log.read().decode("utf-8", errors="replace")
+    except OSError as exc:
+        return f"(no stack dump: could not read {log_path}: {exc})"
+    if not dump.strip():
+        return "(no stack dump: the server wrote nothing when asked)"
+    if len(dump) > STACK_DUMP_LIMIT:
+        dump = dump[:STACK_DUMP_LIMIT] + f"\n... (truncated; the rest is in {log_path})"
+    return dump
+
+
 def check_ensure_backend(
     app: Path, data_dir: Path, environment: dict[str, str], base: str, *, cwd: Path
 ) -> dict[str, Any]:
@@ -818,7 +870,7 @@ class Server:
                 str(control),
             ],
             cwd=str(app),
-            env=environment,
+            env=with_stack_dumps(environment),
             stdin=subprocess.DEVNULL,
             stdout=self._log,
             stderr=subprocess.STDOUT,
@@ -832,7 +884,11 @@ class Server:
                 f"the packaged server to answer /health (log: {self.log_path.name})",
                 budgeted=True,
             )
-        except QualificationError:
+        except QualificationError as exc:
+            self._log.flush()
+            stacks = dump_server_stacks(self._process, self.log_path)
+            if stacks:
+                exc.add_note(f"--- server thread stacks ---\n{stacks}")
             self.stop(force=True)
             raise
         return self

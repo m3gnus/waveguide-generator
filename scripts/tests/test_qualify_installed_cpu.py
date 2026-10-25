@@ -3454,3 +3454,49 @@ def test_installed_backend_check_requires_one_json_line_and_same_owner(tmp_path,
     assert calls[0][0] == [str(launcher), "--ensure-backend", "--data-dir", str(data)]
     assert calls[0][1]["cwd"] == tmp_path
     assert calls[0][1]["env"] == {"ISOLATED": "1"}
+
+
+HUNG_SERVE = """\
+import threading
+
+
+def hang_here_at_startup():
+    threading.Event().wait()
+
+
+threading.Thread(target=hang_here_at_startup, name="fake-startup", daemon=True).start()
+print("fake server starting", flush=True)
+hang_here_at_startup()
+"""
+
+
+def test_a_hung_start_fails_with_the_servers_thread_stacks(tmp_path, monkeypatch) -> None:
+    """A start that never answers still fails; the failure now carries the stacks."""
+
+    app = tmp_path / "app"
+    (app / "launch").mkdir(parents=True)
+    (app / "launch" / "serve.py").write_text(HUNG_SERVE, encoding="utf-8")
+    monkeypatch.setattr(gate, "STARTUP_TIMEOUT_S", 1.0)
+    monkeypatch.setattr(gate, "POLL_INTERVAL_S", 0.1)
+    server = gate.Server(
+        Path(sys.executable), app, dict(os.environ), None, tmp_path / "stop", tmp_path / "server.log"
+    )
+    with pytest.raises(gate.QualificationError, match="timed out") as raised:
+        server.__enter__()
+    notes = "\n".join(getattr(raised.value, "__notes__", []))
+    assert "--- server thread stacks ---" in notes
+    if os.name == "posix":
+        assert "hang_here_at_startup" in notes
+        assert "fake server starting" not in notes, "only what was written after the request"
+    else:
+        assert "no stack dump" in notes
+    assert server._process.poll() is not None
+
+
+def test_a_server_that_already_exited_has_no_stacks_to_ask_for(tmp_path) -> None:
+    log = tmp_path / "server.log"
+    log.write_text("", encoding="utf-8")
+    process = subprocess.Popen([sys.executable, "-c", "pass"])
+    process.wait(timeout=30)
+    assert gate.dump_server_stacks(process, log) == ""
+    assert gate.with_stack_dumps({"A": "1"}) == {"A": "1", "PYTHONFAULTHANDLER": "1"}
