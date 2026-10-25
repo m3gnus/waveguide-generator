@@ -97,23 +97,25 @@ def _from_package(folder: Path, filename: str):
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     assert name not in sys.modules
-    protocol = None
-    protocol_path = folder / "wglink_protocol.py"
-    existing = sys.modules.get("wglink_protocol")
-    if existing is not None:
-        # Only an enclosing load of the same folder may have put it there; a
-        # leaked or foreign module would silently stand in for this folder's.
-        assert protocol_path.exists() and Path(existing.__file__).resolve() == protocol_path.resolve(), (
-            f"a foreign wglink_protocol is already imported from {existing.__file__}"
-        )
+    dependencies = {}
     try:
-        if filename != "wglink_protocol.py" and protocol_path.exists() and existing is None:
-            protocol_spec = importlib.util.spec_from_file_location("wglink_protocol", protocol_path)
-            assert protocol_spec and protocol_spec.loader
-            protocol = importlib.util.module_from_spec(protocol_spec)
-            sys.modules["wglink_protocol"] = protocol
-            protocol_spec.loader.exec_module(protocol)
-            assert Path(protocol.__file__).resolve() == protocol_path.resolve()
+        for dependency in ("wglink_protocol", "wglink_bundle", "wglink_text"):
+            dependency_path = folder / f"{dependency}.py"
+            existing = sys.modules.get(dependency)
+            if existing is not None:
+                # An enclosing load may share only this package's own modules.
+                assert dependency_path.exists() and Path(existing.__file__).resolve() == dependency_path.resolve(), (
+                    f"a foreign {dependency} is already imported from {existing.__file__}"
+                )
+            if filename == dependency_path.name or not dependency_path.exists() or existing is not None:
+                continue
+            dependency_spec = importlib.util.spec_from_file_location(dependency, dependency_path)
+            assert dependency_spec and dependency_spec.loader
+            loaded = importlib.util.module_from_spec(dependency_spec)
+            dependencies[dependency] = loaded
+            sys.modules[dependency] = loaded
+            dependency_spec.loader.exec_module(loaded)
+            assert Path(loaded.__file__).resolve() == dependency_path.resolve()
         sys.modules[name] = module  # dataclasses needs the module while it executes
         spec.loader.exec_module(module)
         assert Path(module.__file__).resolve() == path.resolve()
@@ -123,10 +125,10 @@ def _from_package(folder: Path, filename: str):
         if name in sys.modules:
             assert sys.modules.pop(name) is module
         assert name not in sys.modules
-        if protocol is not None:
-            if "wglink_protocol" in sys.modules:
-                assert sys.modules.pop("wglink_protocol") is protocol
-            assert "wglink_protocol" not in sys.modules
+        for dependency, loaded in reversed(list(dependencies.items())):
+            if dependency in sys.modules:
+                assert sys.modules.pop(dependency) is loaded
+            assert dependency not in sys.modules
 
 
 @requires_symlinks

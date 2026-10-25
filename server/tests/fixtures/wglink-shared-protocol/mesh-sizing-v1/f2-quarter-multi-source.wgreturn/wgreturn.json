@@ -58,7 +58,7 @@
   },
   "generator": {
     "adapter": "synthetic-fixture",
-    "adapter_version": "0.3.2",
+    "adapter_version": "0.3.3",
     "cad_app": "fusion360",
     "cad_version": "synthetic"
   },

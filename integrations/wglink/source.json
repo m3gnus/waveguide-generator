@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "repository": "https://github.com/m3gnus/wglink.git",
-  "commit": "44aecee1d7804ab35853de3988dd3acfddae8959",
+  "commit": "a4ce2f475e9f2dbae8642b888c1dcbef9daee0f8",
   "license": "AGPL-3.0-or-later",
-  "addinVersion": "0.3.2",
-  "note": "WGLink 0.3.2 (tag v0.3.2): Sources & Mesh dialog and mesh-sizing-v1 settings from Fusion."
+  "addinVersion": "0.3.3",
+  "note": "WGLink 0.3.3 (tag v0.3.3): Sources & Mesh driver rows and size zones, request progress and shared preflight checks."
 }

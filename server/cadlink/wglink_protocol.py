@@ -201,7 +201,7 @@ PREFLIGHT_RULES = {
     'domain_inconsistent': (PREFLIGHT_BLOCK, None),
     'fem_invalid': (PREFLIGHT_BLOCK, None),
     'open_body': (PREFLIGHT_ASK, 'If it is an open shell on purpose, send anyway.'),
-    'mesh_ceiling': (PREFLIGHT_ASK, 'Change the mesh resolution in Sources & Mesh…, or check the model size.'),
+    'mesh_ceiling': (PREFLIGHT_ASK, 'In Fusion, open Sources & Mesh… and raise Walls or add a coarser size zone, or check the model size.'),
 }
 NO_DRIVE_MESSAGE = 'This model has no driver yet.'
 #: The one line shown when the add-in could not survey the model at all.
@@ -1886,7 +1886,8 @@ USER_TEXT_FORBIDDEN_TERMS = (
     "return id", "inbox", "ipc", "acknowledgement", "selector", "entity_token",
     "traceback", "exception", "main thread", "gate", "ingest", "operation",
     "lineage", "finding", "PASSIVE_CARDIOID", "UTF-8", "refused", "failed",
-    "error",
+    "error", "return", "uuid", "main-thread", "event", "Text Commands",
+    "options", "byte", "bytes", "determinant", "orthonormal", "chirality",
 )
 
 

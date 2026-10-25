@@ -335,7 +335,7 @@ def test_two_admissions_racing_record_one_refusal_and_no_job(h: JobsHarness):
 def test_the_pinned_writers_bundle_is_admitted(packaged, h: JobsHarness):  # noqa: F811
     """The frozen packaged writer (``integrations/wglink/source.json``) passes the rules."""
 
-    assert PIN["addinVersion"] == "0.3.2"
+    assert PIN["addinVersion"] == "0.3.3"
     with _from_package(packaged, "wglink_return.py") as writer:
         fixture = CORPUS / "automatic-full.wgreturn"
         fields = deepcopy(json.loads((fixture / "wgreturn.json").read_text()))

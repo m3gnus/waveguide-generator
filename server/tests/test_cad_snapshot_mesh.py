@@ -96,10 +96,13 @@ def _mesh_gate(folder, advertised):
     """Run the exact packaged add-in gate without importing Fusion's host API."""
     tree = ast.parse((folder / 'WGLink.py').read_text())
     function = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == '_required_manifest_features')
-    with _from_package(folder, 'wglink_inbox.py') as inbox, _from_package(folder, 'wglink_protocol.py') as protocol:
+    with (_from_package(folder, 'wglink_inbox.py') as inbox,
+          _from_package(folder, 'wglink_protocol.py') as protocol,
+          _from_package(folder, 'wglink_text.py') as text):
         namespace = {
             '_manifest_feature_enabled': lambda name: inbox.wg_manifest_feature(advertised, name),
             'wglink_inbox': inbox,
+            'wglink_text': text,
             'wglink_core': SimpleNamespace(WgLinkError=ValueError),
             'wglink_send': SimpleNamespace(wglink_protocol=protocol),
         }
