@@ -556,6 +556,9 @@ def test_port_reservation_retries_bind_failures_without_real_sockets(
             if address[1] < 3102:
                 raise OSError("taken")
 
+        def listen(self) -> None:
+            pass
+
         def close(self) -> None:
             pass
 
@@ -564,6 +567,46 @@ def test_port_reservation_retries_bind_failures_without_real_sockets(
     assert isinstance(listener, FakeSocket)
     assert port == 3102
     assert attempts == [3100, 3101, 3102]
+
+
+def test_reserved_ports_are_listening_so_concurrent_starts_never_share_one() -> None:
+    # Linux lets a second SO_REUSEADDR socket bind an address that is bound
+    # but not listening; a reservation that only binds is then shared by two
+    # servers starting at once, and the slower one never answers for its
+    # folder. A listening reservation is exclusive on every platform.
+    first, first_port = instance.reserve_port(3100)
+    try:
+        second, second_port = instance.reserve_port(first_port)
+        try:
+            assert second_port != first_port
+        finally:
+            second.close()
+    finally:
+        first.close()
+
+
+def test_a_port_lost_at_listen_falls_back_to_the_next(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts: list[int] = []
+
+    class FakeSocket:
+        def setsockopt(self, *_args: Any) -> None:
+            pass
+
+        def bind(self, address: tuple[str, int]) -> None:
+            attempts.append(address[1])
+            self.port = address[1]
+
+        def listen(self) -> None:
+            if self.port == 3100:
+                raise OSError("Address already in use")
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(instance.socket, "socket", lambda *_args: FakeSocket())
+    _listener, port = instance.reserve_port(3100)
+    assert port == 3101
+    assert attempts == [3100, 3101]
 
 
 def test_windows_port_checks_require_exclusive_address_use(
@@ -588,6 +631,9 @@ def test_windows_port_checks_require_exclusive_address_use(
             self.options.append((level, option, value))
 
         def bind(self, _address: tuple[str, int]) -> None:
+            pass
+
+        def listen(self) -> None:
             pass
 
         def close(self) -> None:

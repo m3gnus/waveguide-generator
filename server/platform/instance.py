@@ -786,7 +786,15 @@ def reserve_port(
     host: str = "127.0.0.1",
     scan_count: int = PORT_SCAN_COUNT,
 ) -> tuple[socket.socket, int]:
-    """Bind and retain a local socket, retrying the configured fallback range."""
+    """Bind, listen on and retain a local socket, retrying the fallback range.
+
+    Listening here, not when Uvicorn starts serving, is what makes the port
+    ours. On Linux ``SO_REUSEADDR`` lets a second socket bind an address that
+    is bound but not yet listening, so two servers starting at once could both
+    "reserve" one port; the slower one would only find out at its first
+    ``listen``, after its whole start-up, and never answer for its folder.
+    A connection that arrives before serving starts waits in the backlog.
+    """
 
     last = min(65535, preferred + scan_count)
     for candidate in range(preferred, last + 1):
@@ -794,6 +802,7 @@ def reserve_port(
         try:
             _configure_port_bind(listener)
             listener.bind((host, candidate))
+            listener.listen()
         except OSError:
             listener.close()
             continue
