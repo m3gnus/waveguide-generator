@@ -47,8 +47,13 @@ UNAVAILABLE_BUNDLE_PATH = "wgreturn/unavailable.wgreturn"
 
 
 def return_identity(value: Any) -> dict[str, Any] | None:
-    """Normalize the return identity retained at binding and exposed on jobs."""
+    """Normalize the return identity retained at binding and exposed on jobs.
+
+    A migrated legacy solve names ``UNAVAILABLE_BUNDLE_PATH``: no return, so none.
+    """
     if not isinstance(value, Mapping) or not isinstance(value.get("bundle_path"), str):
+        return None
+    if value["bundle_path"] == UNAVAILABLE_BUNDLE_PATH:
         return None
     return {"bundle_path": value["bundle_path"], "return_id": value.get("return_id") or None}
 

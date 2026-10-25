@@ -9,6 +9,7 @@ from pydantic import ValidationError
 import pytest
 
 from server.jobs.api import create_jobs_router
+from server.jobs.cad_intent import UNAVAILABLE_BUNDLE_PATH
 from server.jobs.models import JobItem, JobStatusResponse, SolveOptions, SolveRequest
 from server.jobs.runtime import JobRuntime
 from server.tests.test_jobs_api import _request
@@ -190,14 +191,17 @@ def test_schema_uses_response_option_requirements_without_changing_requests():
 
 @pytest.mark.parametrize("detailed", [False, True])
 @pytest.mark.parametrize("identity", [None, {}, {"bundle_path": "ingest/old"},
-                                      {"bundle_path": "wgreturn/speaker.wgreturn", "return_id": "wgr_saved"}])
+                                      {"bundle_path": "wgreturn/speaker.wgreturn", "return_id": "wgr_saved"},
+                                      {"bundle_path": UNAVAILABLE_BUNDLE_PATH, "return_id": "unavailable"}])
 def test_return_identity_reads_from_retained_metadata_and_tolerates_old_rows(detailed, identity):
     metadata = {"cad": {"operation_id": "cmd-1"}}
     if identity is not None:
         metadata["cad"]["return_identity"] = identity
     wire = JobRuntime._serialize_job(_row({"geometry": {"type": "imported"}}, metadata), detailed=detailed)
+    # A migrated legacy solve's stand-in names no return.
     expected = ({"bundle_path": identity["bundle_path"], "return_id": identity.get("return_id")}
-                if identity and identity.get("bundle_path") else None)
+                if identity and identity.get("bundle_path")
+                and identity["bundle_path"] != UNAVAILABLE_BUNDLE_PATH else None)
     assert wire["cad_return"] == expected
     response = JobStatusResponse if detailed else JobItem
     assert response.model_validate(wire).model_dump(mode="json")["cad_return"] == expected
