@@ -1222,7 +1222,7 @@ solve scheduler, prepares it (`server/jobs/cad_preparation.py`):
   Failures the user can act on (`operations.USER_ACTION_CODES`) end the same way but in
   their own words, with one next step and Try again only where it can work: WG closed
   while preparing (`interrupted`: "Preparing <name> stopped when Waveguide Generator
-  closed.", "Press Solve to prepare it again."; nothing failed and nothing is recorded), the return
+  closed.", "Solve it again."; nothing failed and nothing is recorded), the return
   changed (send it again from Fusion) or cannot be read (send it again; Try again), no WGLink folder (choose it, then
   Try again), an excitation the design cannot drive (change the drive channels or solve
   the whole model), and `solver_memory_exceeded` (the dense memory guard, also after Solve
@@ -1861,10 +1861,12 @@ reference.
   failures the user can act on (`operations.USER_WORDED_FAILURE_CODES`, among them
   `interrupted`: WG closed while preparing, which is never called WG's failure) carry
   WG's own sentence and next step, and only while those pass the protocol's
-  `user_text_violations`. Every other failure reads `couldNotFinish` with
-  `failure.recorded` and no reason text, and `recorded` is set only when a developer
-  record exists: WG's own preparation failures (`INTERNAL_FAILURE_CODES`) were recorded
-  where they were diagnosed, and the publisher records the rest (below). The sentence
+  `user_text_violations` (which leaves the document's own name out). Every other failure reads `couldNotFinish` with
+  `failure.recorded` and no reason text. WG sets `recorded` only for failures it records
+  for the developers: its own preparation failures (`INTERNAL_FAILURE_CODES`) where they
+  were diagnosed, and the rest when the publisher sees the request change into them
+  (below). A failure from before the publisher watched the request (the first start after
+  an upgrade, a lost status file) still reads `recorded` without a record of its own. The sentence
   for WG's own preparation failure is the protocol's `could_not_prepare_text`, which
   WG's UI uses too (`operations.internal_failure_message`). A stopped job reads `cancelled` (`stopped`, or
   `replaced` when a newer request superseded its hold); a request whose jobs were
@@ -1879,7 +1881,8 @@ reference.
   It reads its previous records through the protocol's validator and writes exactly the
   validator's reading of each new one. A file is written only when the record changed
   (ignoring `seq` and `updatedAt`); `seq` rises with every write, with the wall clock in
-  milliseconds as its floor, so it keeps rising past an unreadable file. Progress while
+  milliseconds as its floor, so it keeps rising past an unreadable file (at the
+  protocol's limit it stays just below it). Progress while
   solving is written at most every 2 seconds, a change of state at once. A write that
   fails is tried again on the next pass, logged once per request, and recorded as a
   `cad-status-write-failure` incident after 30 consecutive failures. It keeps publishing

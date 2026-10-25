@@ -798,7 +798,7 @@ def write_acknowledgement(
     kind uses the legacy solve convention.
     """
 
-    if outcome == ACK_ACCEPTED and (kind or PREPARE_AND_SOLVE) == PREPARE_AND_SOLVE and not job_id:
+    if outcome == ACK_ACCEPTED and request_kind(kind) == PREPARE_AND_SOLVE and not job_id:
         return None
     if not _OPERATION_ID.fullmatch(command_id):
         # Nothing to publish under: not a failure, and never a reason to keep
@@ -827,6 +827,19 @@ def write_acknowledgement(
         logger.warning("Could not write the acknowledgement of solve command %s: %s", command_id, exc)
         return False
     return True
+
+
+def request_kind(*kinds: object) -> str:
+    """The one rule for a missing kind: the first kind given, else a solve.
+
+    A request, receipt or operation without a kind follows the legacy solve
+    convention (schema-3 requests are solves); a kind that is given is kept.
+    """
+
+    for kind in kinds:
+        if isinstance(kind, str) and kind:
+            return kind
+    return PREPARE_AND_SOLVE
 
 
 def publish_record(target: Path, payload: Mapping[str, Any]) -> None:

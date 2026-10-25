@@ -48,6 +48,7 @@ from server.cadlink.intake.solve_command import (
     SOLVE_ACKS_DIRECTORY,
     _OPERATION_ID,
     publish_record,
+    request_kind,
 )
 from server.cadlink.ipc import IPC_SUBDIRECTORY
 from server.cadlink.operations import (
@@ -61,6 +62,7 @@ from server.cadlink.operations import (
 from server.cadlink.wglink_protocol import (
     REQUEST_STATUS_CONTRACT,
     REQUEST_STATUS_SCHEMA_VERSION,
+    REQUEST_STATUS_SEQ_LIMIT,
     REQUEST_STATUS_SUFFIX,
     request_status_terminal,
     user_text_violations,
@@ -100,25 +102,23 @@ def _wall_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _next_seq(previous: Mapping[str, Any] | None) -> int:
+    """The next write's ``seq``: above the last, never below the clock; never stuck.
+
+    At the protocol's limit it stays just below it, which a reader never takes
+    for an older write (it ignores only a lower ``seq``).
+    """
+
+    seq = max(((previous or {}).get("seq") or 0) + 1, _wall_ms())
+    return min(seq, REQUEST_STATUS_SEQ_LIMIT - 1)
+
+
 def _read_json(path: Path) -> dict[str, Any] | None:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     return value if isinstance(value, dict) else None
-
-
-def request_kind(receipt: Mapping[str, Any], operation: Mapping[str, Any] | None) -> str:
-    """The one rule for a request's kind: the receipt's, its operation's, else a solve.
-
-    A receipt without a kind follows the legacy solve convention, as
-    ``write_acknowledgement`` does.
-    """
-
-    for kind in (receipt.get("kind"), (operation or {}).get("kind")):
-        if kind in (PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT):
-            return str(kind)
-    return PREPARE_AND_SOLVE
 
 
 def _document_name(operation: Mapping[str, Any] | None, cad: Mapping[str, Any] | None) -> str | None:
@@ -203,7 +203,9 @@ def _failure(job: Mapping[str, Any], cad: Mapping[str, Any]) -> tuple[dict[str, 
     if code in USER_WORDED_FAILURE_CODES:
         message, next_step = cad.get("message"), cad.get("next_step")
         words = " ".join(str(part) for part in (message, next_step) if part)
-        if message and not user_text_violations(words):
+        # The document's own name ("Gate horn") is never internal detail.
+        name = (cad.get("snapshot") or {}).get("document_name") if isinstance(cad.get("snapshot"), Mapping) else None
+        if message and not user_text_violations(words, names=[name]):
             return {"recorded": False, "message": message, "nextStep": next_step}, None
     return {"recorded": True}, {"kind": "cad-unclassified-failure", "code": code}
 
@@ -234,7 +236,7 @@ def project_request_status(
         "schemaVersion": REQUEST_STATUS_SCHEMA_VERSION,
         "requestId": request_id,
         "operationId": request_id,
-        "kind": request_kind(receipt, operation),
+        "kind": request_kind(receipt.get("kind"), (operation or {}).get("kind")),
         "manifestSha256": receipt.get("manifestSha256"),
         "documentName": _document_name(operation, cad),
     }
@@ -459,7 +461,7 @@ class RequestStatusPublisher:
     def _publish(self, request_id: str, job_store: Any, now: float) -> bool:
         receipt = self._receipts[request_id]
         operation = self.store.get_operation(request_id)
-        solve = request_kind(receipt, operation) == PREPARE_AND_SOLVE and receipt.get("outcome") != ACK_REFUSED
+        solve = request_kind(receipt.get("kind"), (operation or {}).get("kind")) == PREPARE_AND_SOLVE and receipt.get("outcome") != ACK_REFUSED
         if solve and job_store is None:
             return False  # nothing to say about a Solve before the jobs runtime is up
         job = job_store.latest_cad_job(
@@ -474,10 +476,8 @@ class RequestStatusPublisher:
         projected, incident = project_request_status(
             receipt, operation, job, cad, ingest=ingest, previous=previous,
         )
-        previous_seq = (previous or {}).get("seq", 0)
         candidate = validate_request_status(
-            {**projected, "seq": max(previous_seq + 1, _wall_ms()), "updatedAt": utc_now()},
-            request_id=request_id,
+            {**projected, "seq": _next_seq(previous), "updatedAt": utc_now()}, request_id=request_id,
         )
         if candidate is None:  # pragma: no cover - a projection the reader rejects is a bug
             logger.error("The status projected for request %s does not validate; not written.", request_id)
@@ -498,8 +498,12 @@ class RequestStatusPublisher:
         self._deferred.discard(request_id)
         self._records[request_id] = candidate
         self._written_at[request_id] = now
-        observed = (previous is not None and previous.get("state") != "couldNotFinish") or (
-            previous is None and request_id in self._observed_from_start)
+        observed = (
+            (previous is not None and (
+                previous.get("state") != "couldNotFinish"
+                # Try again: a new job of the chain failed too, before a tick saw it run.
+                or (previous.get("job") or {}).get("jobId") != (candidate.get("job") or {}).get("jobId")))
+            or (previous is None and request_id in self._observed_from_start))
         if incident is not None and candidate["state"] == "couldNotFinish" and observed:
             self._record_failure(request_id, job, candidate, incident)
         return True

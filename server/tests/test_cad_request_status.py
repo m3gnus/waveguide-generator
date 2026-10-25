@@ -663,7 +663,7 @@ def test_an_interrupted_preparation_says_so_without_claiming_a_record(h, inciden
     assert record["state"] == "couldNotFinish"
     assert record["failure"] == {"recorded": False,
                                  "message": "Preparing Tritonia speaker stopped when Waveguide Generator closed.",
-                                 "nextStep": "Press Solve to prepare it again."}
+                                 "nextStep": "Solve it again."}
     assert "recorded" not in _words(record) and incidents == []
 
 
@@ -799,3 +799,59 @@ def test_one_request_whose_record_cannot_be_judged_never_stops_the_others(h) -> 
     publisher._receipts["cmd-1"] = {"schemaVersion": 1, "commandId": "cmd-1", "outcome": "accepted"}
     publisher.tick(h.jobs_store)
     assert _status(h, "cmd-2")["state"] == "accepted"
+
+
+# -- verification round --------------------------------------------------------------
+
+
+def _rename(h: JobsHarness, name: str) -> None:
+    row = h.latest_job()
+    metadata = row["task_metadata"]
+    metadata["cad"]["snapshot"]["document_name"] = name
+    _set(h, row["id"], task_metadata_json=json.dumps(metadata))
+
+
+@pytest.mark.parametrize("name", ["Gate horn", "Error test", "Operation 7", "Bundle B"])
+def test_a_document_name_never_makes_a_users_failure_read_as_wgs(h, incidents, name) -> None:
+    _held(h)
+    publisher = _publisher(h)
+    publisher.tick(h.jobs_store)
+    _rename(h, name)
+    _refuse(h, h.latest_job(), "snapshot_changed", "raw")
+    publisher.tick(h.jobs_store)
+    record = _status(h)
+    assert record["failure"] == {"recorded": False,
+                                 "message": f"{name} changed after Fusion asked WG to solve it.",
+                                 "nextStep": "Send it again from Fusion."}
+    assert incidents == [] and _words(record).startswith(name)
+
+
+def test_try_again_whose_job_fails_before_a_tick_is_recorded_too(h, incidents) -> None:
+    job = _held(h)
+    publisher = _publisher(h)
+    publisher.tick(h.jobs_store)
+    _refuse(h, job, "weird_new_code", "KeyError: 'x'")
+    publisher.tick(h.jobs_store)
+    assert len(incidents) == 1
+    child = h._loop.run(h.runtime.solve_cad_again(job["id"]))
+    _refuse(h, h.jobs_store.get_job_row(child), "weird_new_code", "KeyError: 'y'")
+    publisher.tick(h.jobs_store)
+    record = _status(h)
+    assert record["state"] == "couldNotFinish" and record["job"]["jobId"] == child
+    assert [item["ids"]["job_id"] for item in incidents] == [job["id"], child]
+    publisher.tick(h.jobs_store)
+    assert len(incidents) == 2
+
+
+def test_seq_at_the_protocols_limit_never_stalls(h) -> None:
+    job = _queued(h)
+    _publisher(h).tick(h.jobs_store)
+    record = _status(h)
+    record["seq"] = protocol.REQUEST_STATUS_SEQ_LIMIT - 1
+    (_acks(h) / "cmd-1.status.json").write_text(json.dumps(record), encoding="utf-8")
+    publisher = _publisher(h)
+    for status in ("running", "queued", "running"):
+        _set(h, job["id"], status=status, progress=0.2)
+        publisher.tick(h.jobs_store)
+        assert _status(h)["state"] == ("solving" if status == "running" else "queued")
+        assert _status(h)["seq"] == protocol.REQUEST_STATUS_SEQ_LIMIT - 1

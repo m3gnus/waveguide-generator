@@ -277,7 +277,7 @@ def preparation_failure(
                 "next_step": SolverMemoryTooLarge.NEXT_STEP, "options": [dismiss]}
     if code == "interrupted":
         return {"code": code, "message": f"Preparing {name} stopped when {APP_NAME} closed.",
-                "next_step": "Press Solve to prepare it again.", "options": [retry, dismiss]}
+                "next_step": "Solve it again.", "options": [retry, dismiss]}
     if code == "snapshot_changed":
         return {"code": code, "message": f"{name} changed after Fusion asked WG to solve it.",
                 "next_step": "Send it again from Fusion.", "options": [dismiss]}

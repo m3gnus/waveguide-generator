@@ -211,10 +211,11 @@ export function currentModelStatus(model: CurrentModel, jobs: readonly JobItem[]
   if (job && isHeldCadJob(job)) return {
     kind: 'waiting' as const, job, message: state?.next_step || state?.message || 'Waiting for you',
   };
-  // A failed preparation is told calmly, in the server's words, never as a refusal.
+  // A failed preparation is told calmly, in the server's words (one owner:
+  // operations.preparation_failure), never as a refusal.
   if (job && isFailedCadPreparation(job)) return {
     kind: 'prepare-failed' as const, job,
-    message: [state?.message, state?.next_step].filter(Boolean).join(' ') || 'Waveguide Generator could not prepare this model.',
+    message: [state?.message, state?.next_step].filter(Boolean).join(' ') || job.error_message || '',
   };
   if (state?.state === 'rejected' || state?.state === 'needs_user_input') return {
     kind: 'refused' as const, job, message: state.message || state.reason || job?.error_message || 'Solve refused.',

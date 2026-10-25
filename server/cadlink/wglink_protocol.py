@@ -1531,7 +1531,11 @@ _STATUS_KINDS = ("prepare_and_solve", "receive_snapshot")
 _STATUS_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _STATUS_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _STATUS_TEXT_LIMIT = 500
-_STATUS_INT_LIMIT = 2 ** 63
+#: Integers in a record are below this; a writer whose next ``seq`` would
+#: reach it writes ``REQUEST_STATUS_SEQ_LIMIT - 1``, which a reader never takes
+#: for an older write (it ignores only a lower ``seq``).
+REQUEST_STATUS_SEQ_LIMIT = 2 ** 63
+_STATUS_INT_LIMIT = REQUEST_STATUS_SEQ_LIMIT
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]+")
 
 #: Words no user-visible text may contain (matched case-insensitively, as
@@ -1547,10 +1551,18 @@ USER_TEXT_FORBIDDEN_TERMS = (
 )
 
 
-def user_text_violations(text: str) -> list[str]:
-    """The forbidden terms (``USER_TEXT_FORBIDDEN_TERMS``) a user string contains."""
+def user_text_violations(text: str, *, names: Sequence[object] = ()) -> list[str]:
+    """The forbidden terms (``USER_TEXT_FORBIDDEN_TERMS``) a user string contains.
+
+    ``names`` are the user's own names in the text (a document called "Gate
+    horn"): they are left out before the terms are looked for, so a name never
+    makes WG's words read as internal detail.
+    """
 
     lowered = str(text).lower()
+    for name in names:
+        if isinstance(name, str) and name.strip():
+            lowered = lowered.replace(name.strip().lower(), " ")
     return [term for term in USER_TEXT_FORBIDDEN_TERMS
             if re.search(r"(?<![a-z0-9_])" + re.escape(term.lower()) + r"(?![a-z0-9_])", lowered)]
 
@@ -1591,11 +1603,14 @@ def _status_text(value: object) -> str | None:
     return cleaned[:_STATUS_TEXT_LIMIT] or None
 
 
-def _user_words(value: object) -> str | None:
-    """A WG sentence a user may read, or None when it has none or trips the guard."""
+def _user_words(value: object, name: object = None) -> str | None:
+    """A WG sentence a user may read, or None when it has none or trips the guard.
+
+    ``name`` is the document's name, which the guard leaves out.
+    """
 
     text = _status_text(value)
-    return None if text is None or user_text_violations(text) else text
+    return None if text is None or user_text_violations(text, names=(name,)) else text
 
 
 def _status_choice(value: object, choices: Sequence[str]) -> str | None:
@@ -1624,20 +1639,20 @@ def _status_progress(value: object) -> dict[str, Any] | None:
     return progress
 
 
-def _status_prompt(value: object) -> dict[str, Any] | None:
+def _status_prompt(value: object, name: object = None) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
     options = []
     found = value.get("options")
     for option in found if isinstance(found, list) else []:
         if isinstance(option, Mapping):
-            option_id, label = _status_text(option.get("id")), _user_words(option.get("label"))
+            option_id, label = _status_text(option.get("id")), _user_words(option.get("label"), name)
             if option_id and label:
                 options.append({"id": option_id, "label": label})
     code = value.get("code")
     return {
         "code": code if isinstance(code, str) and _STATUS_CODE.fullmatch(code) else None,
-        "nextStep": _user_words(value.get("nextStep")),
+        "nextStep": _user_words(value.get("nextStep"), name),
         "options": options,
         "answerIn": "wg",
     }
@@ -1663,15 +1678,15 @@ def _status_mesh(value: object) -> dict[str, Any] | None:
             "domainKind": _status_choice(value.get("domainKind"), _addin_DOMAIN_KINDS)}
 
 
-def _status_failure(value: object) -> dict[str, Any] | None:
+def _status_failure(value: object, name: object = None) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
     failure: dict[str, Any] = {"recorded": value.get("recorded") is True}
     if not failure["recorded"]:
         # WG's own words for what the user can do; never shown beside a
         # failure WG recorded, and dropped when they read as internal detail.
-        failure.update(message=_user_words(value.get("message")),
-                       nextStep=_user_words(value.get("nextStep")))
+        failure.update(message=_user_words(value.get("message"), name),
+                       nextStep=_user_words(value.get("nextStep"), name))
     return failure
 
 
@@ -1707,11 +1722,11 @@ def _validate_request_status(value: object, request_id: str | None) -> dict[str,
     optional = {
         "phase": _status_choice(value.get("phase"), REQUEST_STATUS_PHASES),
         "progress": _status_progress(value.get("progress")),
-        "prompt": _status_prompt(value.get("prompt")),
+        "prompt": _status_prompt(value.get("prompt"), record["documentName"]),
         "cancelReason": _status_choice(value.get("cancelReason"), REQUEST_STATUS_CANCEL_REASONS),
         "job": _status_job(value.get("job")),
         "notice": _status_choice(value.get("notice"), REQUEST_STATUS_NOTICES),
-        "failure": _status_failure(value.get("failure")),
+        "failure": _status_failure(value.get("failure"), record["documentName"]),
     }
     result = value.get("result")
     solved = _status_job(result)
@@ -1797,10 +1812,10 @@ def _request_status_text(record: Mapping[str, Any]) -> dict[str, Any]:
     elif state == "needsYou":
         prompt = record.get("prompt") if isinstance(record.get("prompt"), Mapping) else {}
         headline = f"{name} · {APP_NAME} needs you."
-        detail = _user_words(prompt.get("nextStep"))
+        detail = _user_words(prompt.get("nextStep"), document)
         found = prompt.get("options")
         options = [label for label in (
-            _user_words(option.get("label")) for option in (found if isinstance(found, list) else [])
+            _user_words(option.get("label"), document) for option in (found if isinstance(found, list) else [])
             if isinstance(option, Mapping)) if label]
         if prompt.get("code") == MESH_TOO_LARGE_CODE:
             actions.append(dict(_OPEN_SOURCES_MESH))
@@ -1829,9 +1844,9 @@ def _request_status_text(record: Mapping[str, Any]) -> dict[str, Any]:
             else:
                 headline = could_not_prepare_text(document)
         else:
-            message = _user_words(failure.get("message"))
+            message = _user_words(failure.get("message"), document)
             headline = message or f"{APP_NAME} could not finish {inner}."
-            detail = _user_words(failure.get("nextStep")) or (
+            detail = _user_words(failure.get("nextStep"), document) or (
                 None if message else f"Open {APP_NAME} to see what to do.")
     elif state == "cancelled":
         headline = {

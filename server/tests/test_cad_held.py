@@ -324,7 +324,7 @@ def test_an_interrupted_preparation_says_wg_stopped_and_claims_no_record(h: Jobs
     state = job_cad_state(_row(h, job["id"]))
     assert state["held"] is False and state["prepare_failed"] is True and state["attention"] == "action"
     assert state["message"] == "Preparing Tritonia speaker stopped when Waveguide Generator closed."
-    assert state["next_step"] == "Press Solve to prepare it again."
+    assert state["next_step"] == "Solve it again."
     assert "recorded" not in state["message"]
     assert [option["id"] for option in state["options"]] == ["retry", "dismiss"]
 
