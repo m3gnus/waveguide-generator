@@ -1916,6 +1916,10 @@ reference.
   `replaced` when a newer request superseded its hold); a request whose jobs were
   dismissed reads `cancelled` (`dismissed`), and one already finished keeps its state when
   its run is removed later.
+- **Solving progress.** `progress.fraction` is the job's `progress`; `progress.frequency`
+  is the job's own `frequency_progress` (`server/jobs/progress.py`, the one reader of the
+  engines' "Solving frequency i/N" messages, which the jobs API and WG's progress display
+  use too). It is absent when the engine reports no count.
 - **Written from the delivery loop, by events.** After each delivery pass, in a step of its
   own (a status failure never holds up a delivery), the publisher follows the jobs event
   stream (`JobStore.replay_events`) and re-projects only the requests whose jobs changed.

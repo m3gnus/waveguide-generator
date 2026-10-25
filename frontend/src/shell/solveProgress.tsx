@@ -2,7 +2,7 @@ import { useOptionalSolveControl } from './JobsCoordinator';
 import type { SolveReadinessState } from '../jobs/solveReadiness';
 import { workspaceNavigation } from './workspaceNavigation';
 import { useCallback, useSyncExternalStore } from 'react';
-import { isActiveJobStatus, type JobItem } from '../api/jobsSocket';
+import { isActiveJobStatus, type FrequencyProgress, type JobItem } from '../api/jobsSocket';
 
 let clockNow = Date.now();
 let clockTimer: ReturnType<typeof setInterval> | null = null;
@@ -169,83 +169,13 @@ export function operationWaitingReason(operation: OperationProgressLike): string
   return OPERATION_REASON_WORDS[operation.reason] ?? operation.reason;
 }
 
-export interface FrequencyChannel {
-  /** 1-based: the drive channel this frequency count is within. */
-  index: number;
-  count: number;
-}
-
-export interface FrequencyProgress {
-  /** How many of `total` frequencies are solved in the printed sweep.
-   * Imported axial tag groups can restart this count. */
-  completed: number;
-  total: number;
-  /** Present only for an imported multi-channel solve (BEAT/BEMPP imported
-   * adapters), whose message also names which drive channel is in flight. */
-  channel?: FrequencyChannel;
-}
-
-/** `server/solver/beat_imported.py` and `bempp_imported.py` report one
- * channel's frequency count at a time: "Solving frequency i/N of drive
- * channel c/C (id) with …". */
-const CHANNEL_PATTERN = /(\d+)\s*\/\s*(\d+)\s*of\s*drive\s*channel\s*(\d+)\s*\/\s*(\d+)/i;
-const PLAIN_PATTERN = /(\d+)\s*\/\s*(\d+)/;
-
-/**
- * Every full-3D engine (`server/solver/beat.py`, `metal.py`, `bempp.py`,
- * `bempp_imported.py`, `beat_imported.py`, `official_beat.py`) reports its
- * own per-frequency stage message as "Solving frequency i/N …" or "Solved
- * frequency i/N …". Reading that text back out is deliberate: it is the one
- * place the frequency count and index already exist together, so adding a
- * parallel numeric field to every engine adapter would duplicate data the
- * message already carries.
- *
- * The printed number IS the completed count, for every engine, not one
- * behind it: each adapter's `progress`/`stage_callback` wrapper is invoked
- * after a completed frequency. Metal and BEMPP report from their sweep
- * callbacks; official BEAT reports completion as "Solved i/N". A message this cannot
- * parse (a batched engine, or a stage other than the main solve) yields no
- * frequency progress, which is the signal to fall back to an indeterminate
- * bar.
- */
-export function parseFrequencyProgress(stageMessage: string | null): FrequencyProgress | null {
-  if (!stageMessage) return null;
-  const channelMatch = CHANNEL_PATTERN.exec(stageMessage);
-  if (channelMatch) {
-    const freqDone = Number(channelMatch[1]);
-    const freqTotal = Number(channelMatch[2]);
-    const channelIndex = Number(channelMatch[3]);
-    const channelCount = Number(channelMatch[4]);
-    if (
-      ![freqDone, freqTotal, channelIndex, channelCount].every(Number.isFinite)
-      || freqTotal <= 0 || channelCount <= 0
-    ) return null;
-    return {
-      completed: Math.max(0, Math.min(freqTotal, freqDone)), total: freqTotal,
-      channel: { index: channelIndex, count: channelCount },
-    };
-  }
-  const match = PLAIN_PATTERN.exec(stageMessage);
-  if (!match) return null;
-  const printed = Number(match[1]);
-  const total = Number(match[2]);
-  if (!Number.isFinite(printed) || !Number.isFinite(total) || total <= 0) return null;
-  return { completed: Math.max(0, Math.min(total, printed)), total };
-}
-
-/** Only the main solve stage carries per-frequency detail; every other
- * running stage (mesh, assemble, radiation impedance, combining) has a
- * single scalar `progress` and nothing to parse a frequency count from. */
-export function isFrequencyStage(job: Pick<JobItem, 'stage'>): boolean {
-  return job.stage === 'solve';
-}
-
-/** No frequency could be read from a solve-stage message: a batched engine
- * that reports one lump-sum progress fraction rather than a running count.
- * The bar for that case is indeterminate rather than a percentage that
- * cannot be trusted frequency by frequency. */
-export function isIndeterminate(job: Pick<JobItem, 'status' | 'stage' | 'stage_message'>): boolean {
-  return job.status === 'running' && isFrequencyStage(job) && parseFrequencyProgress(job.stage_message) === null;
+/** A running solve's frequency count, as the server reads it from the
+ * engine (`server/jobs/progress.py`, the one owner): `done` of `total`, and
+ * for an imported multi-channel solve the channel the count is within. The
+ * server keeps it through a solve's setup chatter; null means the engine
+ * reports no count, which shows as an indeterminate bar. */
+function frequencyOf(job: Pick<JobItem, 'status'> & Partial<Pick<JobItem, 'frequency_progress'>>): FrequencyProgress | null {
+  return job.status === 'running' ? job.frequency_progress ?? null : null;
 }
 
 /**
@@ -256,12 +186,7 @@ export function isIndeterminate(job: Pick<JobItem, 'status' | 'stage' | 'stage_m
  * An ETA needs a later frequency checkpoint to establish a rate.
  */
 const stageClocks = new Map<string, { startedAt: number; completedAtStart: number }>();
-interface ObservedJobProgress {
-  stageWord: SolveStageWord;
-  /** Most recent parseable sweep checkpoint, held across BEAT setup chatter. */
-  frequency: FrequencyProgress | null;
-}
-const observedJobProgress = new Map<string, ObservedJobProgress>();
+const observedStageWords = new Map<string, SolveStageWord>();
 
 const STAGE_WORD_RANK: Partial<Record<SolveStageWord, number>> = {
   'Received': -1,
@@ -274,43 +199,34 @@ const STAGE_WORD_RANK: Partial<Record<SolveStageWord, number>> = {
 
 /**
  * Worker logs can report `setup` between BEAT sweep checkpoints. Keep the
- * highest user-facing stage and the last parsed frequency for this job so a
- * transient setup line cannot rewind the shared CAD/parametric display.
- * Imported runs still derive overall work from `job.progress` at render time;
- * the retained frequency is only the last channel-local checkpoint.
+ * highest user-facing stage for this job so a transient setup line cannot
+ * rewind the shared CAD/parametric display. (The server keeps the frequency
+ * count through the same chatter.)
  */
-function progressObservedForJob(job: JobProgressLike): ObservedJobProgress {
+function stageWordObservedForJob(job: JobProgressLike): SolveStageWord {
   const stageWord = solveStageWord(job);
   if (job.status === 'complete' || job.status === 'error' || job.status === 'cancelled' || job.status === 'held') {
     stageClocks.delete(job.id);
-    observedJobProgress.delete(job.id);
-    return { stageWord, frequency: null };
+    observedStageWords.delete(job.id);
+    return stageWord;
   }
-
-  const previous = observedJobProgress.get(job.id);
-  const previousRank = previous ? STAGE_WORD_RANK[previous.stageWord] ?? -Infinity : -Infinity;
+  const previous = observedStageWords.get(job.id);
+  const previousRank = previous ? STAGE_WORD_RANK[previous] ?? -Infinity : -Infinity;
   const currentRank = STAGE_WORD_RANK[stageWord] ?? -Infinity;
-  const forwardStageWord = currentRank < previousRank ? previous!.stageWord : stageWord;
-  const parsedFrequency = job.status === 'running' && job.stage === 'solve'
-    ? parseFrequencyProgress(job.stage_message)
-    : null;
-  const progress = {
-    stageWord: forwardStageWord,
-    frequency: parsedFrequency ?? previous?.frequency ?? null,
-  };
-  observedJobProgress.set(job.id, progress);
-  return progress;
+  const forward = currentRank < previousRank ? previous! : stageWord;
+  observedStageWords.set(job.id, forward);
+  return forward;
 }
 
 export function resetSolveStageClocksForTests(): void {
   stageClocks.clear();
-  observedJobProgress.clear();
+  observedStageWords.clear();
   clockNow = Date.now();
 }
 
 export function clearSolveStageClock(jobId: string): void {
   stageClocks.delete(jobId);
-  observedJobProgress.delete(jobId);
+  observedStageWords.delete(jobId);
 }
 
 function stageSample(job: JobProgressLike, stageWord: SolveStageWord, frequency: FrequencyProgress | null, now: number): { elapsed: number; gained: number } {
@@ -331,7 +247,7 @@ function stageSample(job: JobProgressLike, stageWord: SolveStageWord, frequency:
   // value counts every axial tag group, even when the printed i/N restarts.
   const completed = frequency.channel && Number.isFinite(job.progress)
     ? Math.max(0, Math.min(1, (job.progress - 0.35) / 0.5))
-    : frequency.completed;
+    : frequency.done;
   const clock = stageClocks.get(jobId);
   if (!clock) {
     stageClocks.set(jobId, { startedAt: now, completedAtStart: completed });
@@ -344,9 +260,9 @@ function stageSample(job: JobProgressLike, stageWord: SolveStageWord, frequency:
  * Estimated remaining time from work completed since this browser first saw
  * the solve stage. One later checkpoint establishes an initial rate.
  */
-export function etaSeconds(elapsedSinceStageStarted: number, frequency: FrequencyProgress | null, gained = frequency?.completed ?? 0): number | null {
+export function etaSeconds(elapsedSinceStageStarted: number, frequency: Pick<FrequencyProgress, 'done' | 'total'> | null, gained = frequency?.done ?? 0): number | null {
   if (!frequency || gained <= 0) return null;
-  const remaining = frequency.total - frequency.completed;
+  const remaining = frequency.total - frequency.done;
   if (remaining <= 0) return 0;
   const perFrequency = elapsedSinceStageStarted / gained;
   return perFrequency * remaining;
@@ -437,13 +353,13 @@ export function solveDetailLine(job: Pick<JobItem, 'config_summary' | 'solve_opt
 type JobProgressLike = Pick<
   JobItem,
   'id' | 'status' | 'stage' | 'stage_message' | 'progress' | 'started_at' | 'queued_at' | 'config_summary' | 'solve_options' | 'error_message'
->;
+> & Partial<Pick<JobItem, 'frequency_progress'>>;
 
 /** One "frequency i of N[, channel c of C][, ETA m:ss]" line, built from the
- * same parsed `FrequencyProgress` and elapsed-in-stage clock both variants
+ * same server-read `FrequencyProgress` and elapsed-in-stage clock both variants
  * of `SolveProgressView` use, so the wording never drifts between them. */
 function frequencyLine(frequency: FrequencyProgress, eta: number | null, overall: number | null): string {
-  const parts = [`frequency ${frequency.completed} of ${frequency.total}`];
+  const parts = [`frequency ${frequency.done} of ${frequency.total}`];
   if (frequency.channel) parts.push(`channel ${frequency.channel.index} of ${frequency.channel.count}`);
   if (overall !== null) parts.push(`work ${Math.round(overall * 100)}%`);
   if (eta !== null) parts.push(`ETA ${formatClock(eta)}`);
@@ -505,9 +421,10 @@ function useReadinessProgress(enabled: boolean, readiness?: SolveReadinessState 
  * progress renders, never a CAD copy and a parametric copy of the same bar:
  * `JobsPanel`'s run card uses `variant="full"`, and the CAD Solve card's
  * one-line status uses `variant="compact"`, before and after its operation's
- * job exists alike. Both job views share the same per-job stage/frequency
- * observer, so a noisy worker callback cannot rewind one surface or reset its
- * ETA. A page reload starts from the job snapshot the socket resends.
+ * job exists alike. Both job views share the same per-job stage observer and
+ * the server's own frequency count (`job.frequency_progress`), so a noisy
+ * worker callback cannot rewind one surface or reset its ETA. A page reload
+ * starts from the job snapshot the socket resends.
  */
 export function SolveProgressView({
   job,
@@ -543,15 +460,14 @@ export function SolveProgressView({
     </span>;
   }
 
-  const observed = progressObservedForJob(job);
-  const stageWord = observed.stageWord;
-  const frequency = stageWord === 'Solving' ? observed.frequency : null;
+  const stageWord = stageWordObservedForJob(job);
+  const frequency = stageWord === 'Solving' ? frequencyOf(job) : null;
   const indeterminate = job.status === 'running' && stageWord === 'Solving' && frequency === null;
   const elapsedSeconds = Math.max(0, (time - Date.parse(job.started_at ?? job.queued_at ?? '')) / 1000);
   const sample = stageSample(job, stageWord, frequency, time);
   const normalized = frequency?.channel && Number.isFinite(job.progress)
     ? Math.max(0, Math.min(1, (job.progress - 0.35) / 0.5)) : null;
-  const eta = frequency ? etaSeconds(sample.elapsed, normalized === null ? frequency : { completed: normalized, total: 1 }, sample.gained) : null;
+  const eta = frequency ? etaSeconds(sample.elapsed, normalized === null ? frequency : { done: normalized, total: 1 }, sample.gained) : null;
   const percent = Math.round((job.progress ?? 0) * 100);
 
   if (variant === 'compact') {

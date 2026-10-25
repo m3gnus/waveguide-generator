@@ -26,6 +26,7 @@ from server.cadlink.operations import (
     hold_details, hold_stage_message, user_hold,
 )
 from server.jobs.cad_intent import return_identity
+from server.jobs.progress import METADATA_KEY as FREQUENCY_METADATA_KEY
 from server.jobs.result_contracts import RESULT_ENVELOPE_ADAPTER
 from server.platform.incidents import retain_job_logs
 from server.platform.paths import DATA_DIR_ENV, app_root, data_paths
@@ -1808,6 +1809,10 @@ class JobStore:
         Log event ``lines`` is the authoritative line-preserving delta. The
         single-line ``chunk`` remains for older clients and names the newest
         line, never a newline-joined pseudo-line.
+
+        A stage payload's ``frequency_progress`` (``server/jobs/progress.py``)
+        is stored in ``task_metadata`` with it, so the job row and its event
+        say the same; a log-only flush leaves the stored count alone.
         """
 
         values = dict(fields)
@@ -1842,6 +1847,7 @@ class JobStore:
                 stage_payload = None
 
             event_lines: list[str] = []
+            metadata: dict[str, Any] | None = None
             if full_lines:
                 path = self._job_log_path(job_id)
                 self._ensure_job_logs_dir()
@@ -1934,6 +1940,14 @@ class JobStore:
                     remaining -= len(line)
                 event_lines = list(reversed(reversed_lines))
 
+            if stage_payload is not None:
+                if metadata is None:
+                    metadata = json.loads(row["task_metadata_json"] or "{}")
+                found = stage_payload.get(FREQUENCY_METADATA_KEY)
+                frequency = dict(found) if isinstance(found, Mapping) else None
+                if metadata.get(FREQUENCY_METADATA_KEY) != frequency or "task_metadata_json" in values:
+                    metadata[FREQUENCY_METADATA_KEY] = frequency
+                    values["task_metadata_json"] = json.dumps(metadata)
             if not values:
                 return False, []
             changed = self._update_job(conn, job_id, values)

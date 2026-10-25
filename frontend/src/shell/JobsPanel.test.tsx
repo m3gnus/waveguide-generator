@@ -592,7 +592,7 @@ describe('jobs panel run list', () => {
     act(() => publishJobs([{ ...running, stage: 'assemble', stage_message: 'Configuring Metal BEM solve', progress: 0.3 }]));
     expect(host.querySelector('.job-stage-word')?.textContent).toBe('Starting…');
 
-    act(() => publishJobs([{ ...running, stage: 'solve', stage_message: 'Solving frequency 1/8 with Metal BEM', progress: 0.4 }]));
+    act(() => publishJobs([{ ...running, stage: 'solve', stage_message: 'Solving frequency 1/8 with Metal BEM', frequency_progress: { done: 1, total: 8 }, progress: 0.4 }]));
     expect(host.querySelector('.job-stage-word')?.textContent).toBe('Solving');
     expect(host.querySelector('.job-frequency')?.textContent).toBe('frequency 1 of 8');
 
@@ -608,7 +608,7 @@ describe('jobs panel run list', () => {
       const running: JobItem = {
         ...job(11, 'ETA'), status: 'running', completed_at: null,
         started_at: '2026-08-08T00:00:00Z', queued_at: '2026-08-08T00:00:00Z',
-        stage: 'solve', stage_message: 'Solving frequency 1/10 with BEAT Engine', progress: 0.1,
+        stage: 'solve', stage_message: 'Solving frequency 1/10 with BEAT Engine', frequency_progress: { done: 1, total: 10 }, progress: 0.1,
       };
       publishJobs([running]);
       await act(async () => root.render(<JobsPanel/>));
@@ -622,7 +622,7 @@ describe('jobs panel run list', () => {
       // entered the solve stage, not from its overall started_at, so a
       // meshing/warm-up interval before this stage began never inflates it.
       await act(async () => { vi.advanceTimersByTime(20_000); });
-      act(() => publishJobs([{ ...running, stage_message: 'Solving frequency 2/10 with BEAT Engine', progress: 0.2 }]));
+      act(() => publishJobs([{ ...running, stage_message: 'Solving frequency 2/10 with BEAT Engine', frequency_progress: { done: 2, total: 10 }, progress: 0.2 }]));
       expect(host.querySelector('.job-frequency')?.textContent).toBe('frequency 2 of 10 · ETA 2:40');
     } finally {
       vi.useRealTimers();
@@ -633,7 +633,9 @@ describe('jobs panel run list', () => {
     {
       name: 'plain BEAT sweep',
       firstMessage: 'Solving frequency 1/4 with BEAT Engine',
+      firstCount: { done: 1, total: 4 },
       nextMessage: 'Solving frequency 2/4 with BEAT Engine',
+      nextCount: { done: 2, total: 4 },
       firstProgress: 0.4,
       setupProgress: [0.42, 0.44],
       nextProgress: 0.48,
@@ -643,7 +645,9 @@ describe('jobs panel run list', () => {
     {
       name: 'imported multi-channel BEAT sweep',
       firstMessage: 'Solving frequency 4/8 of drive channel 1/3 (hf) with BEAT Engine',
+      firstCount: { done: 4, total: 8, channel: { index: 1, count: 3 } },
       nextMessage: 'Solving frequency 2/8 of drive channel 2/3 (mf) with BEAT Engine',
+      nextCount: { done: 2, total: 8, channel: { index: 2, count: 3 } },
       firstProgress: 0.35 + 0.5 * 7 / 24,
       setupProgress: [0.35 + 0.5 * 8 / 24, 0.35 + 0.5 * 9 / 24],
       nextProgress: 0.35 + 0.5 * 10 / 24,
@@ -651,7 +655,7 @@ describe('jobs panel run list', () => {
       nextLine: 'frequency 2 of 8 · channel 2 of 3 · work 42% · ETA 1:33',
     },
   ])('keeps $name progress through interleaved setup logs in the parametric run list', async ({
-    firstMessage, nextMessage, firstProgress, setupProgress, nextProgress, setupLine, nextLine,
+    firstMessage, nextMessage, firstCount, nextCount, firstProgress, setupProgress, nextProgress, setupLine, nextLine,
   }) => {
     resetSolveStageClocksForTests();
     vi.useFakeTimers();
@@ -661,7 +665,7 @@ describe('jobs panel run list', () => {
       const running: JobItem = {
         ...job(24, 'BEAT setup chatter'), status: 'running', completed_at: null,
         started_at: start, queued_at: start, progress: firstProgress,
-        stage: 'solve', stage_message: firstMessage,
+        stage: 'solve', stage_message: firstMessage, frequency_progress: firstCount,
         config_summary: { drive_channel_ids: ['hf', 'mf', 'lf'] },
         solve_options: { engine: 'beat', num_frequencies: 4 } as JobItem['solve_options'],
       };
@@ -690,7 +694,7 @@ describe('jobs panel run list', () => {
 
       await act(async () => { vi.advanceTimersByTime(10_000); });
       act(() => publishJobs([{
-        ...running, stage: 'solve', stage_message: nextMessage, progress: nextProgress,
+        ...running, stage: 'solve', stage_message: nextMessage, frequency_progress: nextCount, progress: nextProgress,
       }]));
       expect(host.querySelector('.job-stage-word')?.textContent).toBe('Solving');
       expect(host.querySelector('.job-frequency')?.textContent).toContain(nextLine);
@@ -727,7 +731,7 @@ describe('jobs panel run list', () => {
       const base: JobItem = {
         ...job(14, 'Imported multi-channel'), status: 'running', completed_at: null,
         started_at: '2026-08-08T00:00:00Z', queued_at: '2026-08-08T00:00:00Z',
-        stage: 'solve', stage_message: 'Solving frequency 1/8 of drive channel 1/3 (hf) with BEAT Engine', progress: 0.35 + 0.5 / 24,
+        stage: 'solve', stage_message: 'Solving frequency 1/8 of drive channel 1/3 (hf) with BEAT Engine', frequency_progress: { done: 1, total: 8, channel: { index: 1, count: 3 } }, progress: 0.35 + 0.5 / 24,
       };
       publishJobs([base]);
       await act(async () => root.render(<JobsPanel/>));
@@ -737,7 +741,7 @@ describe('jobs panel run list', () => {
       // overall completed = 8 + 3 = 11 of 24.
       await act(async () => { vi.advanceTimersByTime(16_000); });
       act(() => publishJobs([{
-        ...base, stage_message: 'Solving frequency 3/8 of drive channel 2/3 (mf) with BEMPP BEM', progress: 0.35 + 0.5 * 11 / 24,
+        ...base, stage_message: 'Solving frequency 3/8 of drive channel 2/3 (mf) with BEMPP BEM', frequency_progress: { done: 3, total: 8, channel: { index: 2, count: 3 } }, progress: 0.35 + 0.5 * 11 / 24,
       }]));
       // 10 new units in 16 s -> 13 remaining -> ~21 s -> 0:21.
       expect(host.querySelector('.job-frequency')?.textContent).toBe('frequency 3 of 8 · channel 2 of 3 · work 46% · ETA 0:21');
@@ -752,7 +756,7 @@ describe('jobs panel run list', () => {
     // had been open the whole time would.
     const running: JobItem = {
       ...job(13, 'Reloaded'), status: 'running', completed_at: null,
-      stage: 'solve', stage_message: 'Solving frequency 5/9 with Metal BEM', progress: 0.5,
+      stage: 'solve', stage_message: 'Solving frequency 5/9 with Metal BEM', frequency_progress: { done: 5, total: 9 }, progress: 0.5,
     };
     publishJobs([running]);
     await act(async () => root.render(<JobsPanel/>));

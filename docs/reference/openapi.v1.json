@@ -5247,6 +5247,59 @@
         "title": "FreeformProfile",
         "type": "object"
       },
+      "FrequencyChannel": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "minimum": 1.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "index": {
+            "minimum": 1.0,
+            "title": "Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index",
+          "count"
+        ],
+        "title": "FrequencyChannel",
+        "type": "object"
+      },
+      "FrequencyProgress": {
+        "additionalProperties": false,
+        "description": "How many of a running solve's frequencies are done (``server/jobs/progress.py``).",
+        "properties": {
+          "channel": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FrequencyChannel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "done": {
+            "minimum": 0.0,
+            "title": "Done",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 1.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "done",
+          "total"
+        ],
+        "title": "FrequencyProgress",
+        "type": "object"
+      },
       "FusionReturnRequest": {
         "additionalProperties": false,
         "properties": {
@@ -6689,6 +6742,16 @@
             ],
             "title": "Field Trace Bytes"
           },
+          "frequency_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FrequencyProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "has_fem_field_artifact": {
             "default": false,
             "title": "Has Fem Field Artifact",
@@ -7436,6 +7499,16 @@
               }
             ],
             "title": "Field Trace Bytes"
+          },
+          "frequency_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FrequencyProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "has_fem_field_artifact": {
             "default": false,

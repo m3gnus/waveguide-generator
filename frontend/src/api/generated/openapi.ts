@@ -4300,6 +4300,24 @@ export interface components {
             points: components["schemas"]["FreeformPoint"][];
             throat_angle_deg?: components["schemas"]["Expr"] | null;
         };
+        /** FrequencyChannel */
+        FrequencyChannel: {
+            /** Count */
+            count: number;
+            /** Index */
+            index: number;
+        };
+        /**
+         * FrequencyProgress
+         * @description How many of a running solve's frequencies are done (``server/jobs/progress.py``).
+         */
+        FrequencyProgress: {
+            channel?: components["schemas"]["FrequencyChannel"] | null;
+            /** Done */
+            done: number;
+            /** Total */
+            total: number;
+        };
         /** FusionReturnRequest */
         FusionReturnRequest: {
             /** Designid */
@@ -4704,6 +4722,7 @@ export interface components {
             field_plane_available?: boolean;
             /** Field Trace Bytes */
             field_trace_bytes?: number | null;
+            frequency_progress?: components["schemas"]["FrequencyProgress"] | null;
             /**
              * Has Fem Field Artifact
              * @default false
@@ -4921,6 +4940,7 @@ export interface components {
             field_plane_available?: boolean;
             /** Field Trace Bytes */
             field_trace_bytes?: number | null;
+            frequency_progress?: components["schemas"]["FrequencyProgress"] | null;
             /**
              * Has Fem Field Artifact
              * @default false

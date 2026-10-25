@@ -65,6 +65,7 @@ Design principle (review R2-P1.1): **WS is the fast path; HTTP remains the corre
 | `resume` | `cursor` | Optional on reconnect: server replays events after `cursor` if still retained, else replies with a fresh `snapshot`. |
 
 - `log` events carry bounded tail chunks (server truncates; full log via HTTP).
+- A running solve's `stage` events carry `frequency_progress` (`{done, total, channel?}` or null), the same value as the job's `frequency_progress` field (`server/jobs/progress.py`). A `stage` event without it means the job has no count; clients never read one out of `message`.
 - Client reconciliation rule: on reconnect or any cursor gap → refetch snapshot over HTTP/WS; never trust an event stream with a hole.
 - `partialResult.revision` starts at 1 and increments per completed frequency. A revision gap triggers `GET /api/partial-results/{id}` and replaces the local accumulator with that full snapshot. A server restart may remove this process-local snapshot; the client then keeps the previous completed result until the canonical completed result is available.
 - The provisional mapper uses the same SPL, phase, impedance, DI, and polar normalization contract as the final mapper. BEMPP's serial callback currently omits complex observation pressure, so its live view can update normalized directivity while absolute SPL/phase remain empty until completion. An explicitly configured multi-worker BEMPP sweep does not stream because that native path has no callback seam.

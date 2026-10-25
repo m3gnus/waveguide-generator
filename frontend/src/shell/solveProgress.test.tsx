@@ -5,10 +5,8 @@ import type { JobItem } from '../api/jobsSocket';
 import {
   etaSeconds,
   formatClock,
-  isIndeterminate,
   operationStageWord,
   operationWaitingReason,
-  parseFrequencyProgress,
   resetSolveStageClocksForTests,
   resolveEngineLabel,
   solveDetailLine,
@@ -106,73 +104,26 @@ describe('operationStageWord', () => {
   });
 });
 
-describe('parseFrequencyProgress', () => {
-  it('reads the printed number as the completed count -- every engine\'s callback fires after that frequency finishes', () => {
-    // Metal and BEMPP callbacks report completed frequencies; official BEAT
-    // reports "Solved i/N" after completion. The printed count is already done.
-    expect(parseFrequencyProgress('Solving frequency 3/12 with Metal BEM')).toEqual({ completed: 3, total: 12 });
-    expect(parseFrequencyProgress('Solving frequency 1/12 with BEAT Engine')).toEqual({ completed: 1, total: 12 });
-    expect(parseFrequencyProgress('Solving frequency 12/12 with BEMPP BEM')).toEqual({ completed: 12, total: 12 });
-  });
-
-  it('reads official BEAT\'s own "Solved i/N" wording the same way', () => {
-    expect(parseFrequencyProgress('Solved frequency 3/12')).toEqual({ completed: 3, total: 12 });
-  });
-
-  it('returns null for a message with no frequency count', () => {
-    expect(parseFrequencyProgress('Configuring BEMPP BEM solve (cpu)')).toBeNull();
-    expect(parseFrequencyProgress(null)).toBeNull();
-  });
-
-  it('does not mistake an unrelated count for a frequency count', () => {
-    // The passive-cardioid radiation-impedance campaign has its own i/N in
-    // its message; callers gate this on job.stage === 'solve' themselves, but
-    // the parser itself is honest about whatever i/N it is handed.
-    expect(parseFrequencyProgress('Solving passive-cardioid radiation impedance 32/160 at 400 Hz'))
-      .toEqual({ completed: 32, total: 160 });
-  });
-
-  it('keeps an imported message as a channel count, never a false overall count', () => {
-    // A rear-facing axial channel can solve two tag groups, each restarting
-    // i/N. Overall work comes from the job progress field.
-    expect(parseFrequencyProgress('Solving frequency 2/8 of drive channel 1/3 (hf) with BEAT Engine'))
-      .toEqual({ completed: 2, total: 8, channel: { index: 1, count: 3 } });
-    expect(parseFrequencyProgress('Solving frequency 3/8 of drive channel 2/3 (mf) with BEMPP BEM'))
-      .toEqual({ completed: 3, total: 8, channel: { index: 2, count: 3 } });
-    expect(parseFrequencyProgress('Solving frequency 8/8 of drive channel 3/3 (lf) with BEAT Engine'))
-      .toEqual({ completed: 8, total: 8, channel: { index: 3, count: 3 } });
-  });
-});
-
-describe('isIndeterminate', () => {
-  it('is indeterminate only on the solve stage with no frequency count in the message', () => {
-    expect(isIndeterminate({ status: 'running', stage: 'solve', stage_message: 'Configuring the sweep' })).toBe(true);
-    expect(isIndeterminate({ status: 'running', stage: 'solve', stage_message: 'Solving frequency 1/6' })).toBe(false);
-    expect(isIndeterminate({ status: 'running', stage: 'mesh', stage_message: null })).toBe(false);
-    expect(isIndeterminate({ status: 'complete', stage: 'solve', stage_message: null })).toBe(false);
-  });
-});
-
 describe('etaSeconds', () => {
   it('is hidden until frequency work advances after the clock starts', () => {
     expect(etaSeconds(30, null)).toBeNull();
-    expect(etaSeconds(30, { completed: 0, total: 10 })).toBeNull();
-    expect(etaSeconds(30, { completed: 1, total: 10 }, 0)).toBeNull();
+    expect(etaSeconds(30, { done: 0, total: 10 })).toBeNull();
+    expect(etaSeconds(30, { done: 1, total: 10 }, 0)).toBeNull();
   });
 
   it('projects the remaining time from the average time per frequency so far', () => {
     // 2 done in 20 s -> 10 s/freq -> 8 remaining -> 80 s.
-    expect(etaSeconds(20, { completed: 2, total: 10 })).toBeCloseTo(80);
+    expect(etaSeconds(20, { done: 2, total: 10 })).toBeCloseTo(80);
   });
 
   it('uses only work completed after a late mount as its rate', () => {
-    expect(etaSeconds(20, { completed: 7, total: 10 }, 2)).toBe(30);
-    expect(etaSeconds(20, { completed: 7, total: 10 }, 0)).toBeNull();
-    expect(etaSeconds(10, { completed: 2, total: 10 }, 1)).toBe(80);
+    expect(etaSeconds(20, { done: 7, total: 10 }, 2)).toBe(30);
+    expect(etaSeconds(20, { done: 7, total: 10 }, 0)).toBeNull();
+    expect(etaSeconds(10, { done: 2, total: 10 }, 1)).toBe(80);
   });
 
   it('is zero once every frequency is accounted for', () => {
-    expect(etaSeconds(100, { completed: 10, total: 10 })).toBe(0);
+    expect(etaSeconds(100, { done: 10, total: 10 })).toBe(0);
   });
 
   it('matches a worked example: 20 s of meshing/warm-up, then 1 s/frequency x 100', () => {
@@ -180,7 +131,7 @@ describe('etaSeconds', () => {
     // 23 s since the job itself started. 3 done in 3 s -> 1 s/freq -> 97
     // remaining -> 97 s = 1:37, not the ~18:47 that job-started_at gave when
     // meshing/warm-up was folded into the rate.
-    const seconds = etaSeconds(3, { completed: 3, total: 100 });
+    const seconds = etaSeconds(3, { done: 3, total: 100 });
     expect(seconds).not.toBeNull();
     expect(formatClock(seconds!)).toBe('1:37');
   });
@@ -286,5 +237,41 @@ describe('SolveProgressView (component)', () => {
 
   it('renders nothing for neither a job nor an operation', () => {
     expect(renderToStaticMarkup(<SolveProgressView variant="compact"/>)).toBe('');
+  });
+
+  const solving = (overrides: Partial<JobItem> = {}) => ({
+    id: 'freq', status: 'running', stage: 'solve', stage_message: 'Solving frequency 3/12 with Metal BEM',
+    progress: 0.5, started_at: '2026-10-25T10:00:00Z', queued_at: '2026-10-25T10:00:00Z',
+    config_summary: {}, solve_options: { engine: 'metal' } as JobItem['solve_options'], error_message: null,
+    ...overrides,
+  }) as JobItem;
+
+  it('renders the frequency count the server reports, never one read from the message', () => {
+    const now = Date.parse('2026-10-25T10:00:30Z');
+    const full = renderToStaticMarkup(<SolveProgressView job={solving({ frequency_progress: { done: 3, total: 12 } })} now={now}/>);
+    expect(full).toContain('frequency 3 of 12');
+    expect(full).not.toContain('indeterminate');
+    resetSolveStageClocksForTests();
+    // The message alone says 3/12, but without the server's count there is none.
+    const unread = renderToStaticMarkup(<SolveProgressView job={solving({ frequency_progress: null })} now={now}/>);
+    expect(unread).not.toContain('frequency 3 of 12');
+    expect(unread).toContain('progress indeterminate');
+  });
+
+  it('names the channel of an imported multi-channel count', () => {
+    const compact = renderToStaticMarkup(<SolveProgressView variant="compact" now={Date.parse('2026-10-25T10:00:30Z')}
+      job={solving({ frequency_progress: { done: 2, total: 8, channel: { index: 1, count: 3 } } })}/>);
+    expect(compact).toContain('frequency 2 of 8 · channel 1 of 3');
+  });
+
+  it('is indeterminate for an engine that reports no count, and shows none once the job is not running', () => {
+    const now = Date.parse('2026-10-25T10:00:30Z');
+    const batched = renderToStaticMarkup(<SolveProgressView job={solving({ stage_message: 'Configuring the sweep' })} now={now}/>);
+    expect(batched).toContain('progress indeterminate');
+    resetSolveStageClocksForTests();
+    const meshing = renderToStaticMarkup(<SolveProgressView job={solving({ stage: 'mesh', frequency_progress: null })} now={now}/>);
+    expect(meshing).not.toContain('indeterminate');
+    const done = renderToStaticMarkup(<SolveProgressView job={solving({ status: 'complete', frequency_progress: { done: 12, total: 12 } })} now={now}/>);
+    expect(done).not.toContain('frequency 12 of 12');
   });
 });

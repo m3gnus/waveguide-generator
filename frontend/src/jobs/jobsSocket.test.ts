@@ -264,6 +264,29 @@ describe('jobs websocket state machine', () => {
     manager.stop();
   });
 
+  it('takes the frequency count from each stage event, and none from a stage without one', async () => {
+    const socket = new MockSocket();
+    const fetcher = vi.fn(async () => json({ items: [job()] }));
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 10,
+      jobs: [job({ status: 'running', stage: 'solve', frequency_progress: { done: 1, total: 8 } })] });
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: 11, jobId: 'job-1', type: 'stage',
+      payload: { stage: 'solve', message: 'Solving frequency 2/8 of drive channel 1/2 (hf)', progress: .4,
+        frequency_progress: { done: 2, total: 8, channel: { index: 1, count: 2 } } } });
+    expect(manager.getSnapshot().jobs[0].frequency_progress).toEqual({ done: 2, total: 8, channel: { index: 1, count: 2 } });
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: 12, jobId: 'job-1', type: 'stage',
+      payload: { stage: 'postprocess', message: 'Packaging results', progress: .9 } });
+    expect(manager.getSnapshot().jobs[0].frequency_progress).toBeNull();
+    // A count the server could never send is refused with its event, not shown.
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: 13, jobId: 'job-1', type: 'stage',
+      payload: { stage: 'solve', message: 'Solving', frequency_progress: { done: 9, total: 8 } } });
+    expect(manager.getSnapshot().jobs[0].frequency_progress).toBeNull();
+    expect(manager.getSnapshot().jobs[0].stage).toBe('postprocess');
+    manager.stop();
+  });
+
   it('returns the faithful retry child before the coordinator refreshes the run list', async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) =>
       String(input).includes('/retry')

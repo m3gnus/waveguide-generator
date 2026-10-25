@@ -72,6 +72,7 @@ from server.cadlink.wglink_protocol import (
 )
 from server.jobs.cad_intent import UNAVAILABLE_BUNDLE_PATH, cad_of, intent_of
 from server.jobs.cad_preparation import job_cad_state
+from server.jobs.progress import job_frequency_progress
 from server.platform.incidents import record_incident
 from server.solver.imported import imported_domain_planes
 from server.workspace.api import _strictly_inside
@@ -314,7 +315,11 @@ def project_request_status(
     if status == "running":
         progress = job.get("progress")
         fraction = float(progress) if isinstance(progress, (int, float)) and not isinstance(progress, bool) else 0.0
-        return {**record, "state": "solving", "progress": {"fraction": min(max(fraction, 0.0), 1.0)}}, None
+        solving: dict[str, Any] = {"fraction": min(max(fraction, 0.0), 1.0)}
+        frequency = job_frequency_progress(job)
+        if frequency is not None:
+            solving["frequency"] = frequency
+        return {**record, "state": "solving", "progress": solving}, None
     if status == "complete":
         result: dict[str, Any] = dict(record["job"])
         mesh = _solved_mesh(job, ingest)

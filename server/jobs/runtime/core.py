@@ -77,6 +77,7 @@ from server.jobs.models import (
     SolveOptions,
     SolveRequest,
 )
+from server.jobs.progress import advance_frequency_progress, job_frequency_progress
 from server.jobs.store import ACTIVE_STATUSES, ALLOWED_STATUSES, JobStore
 from server.integration.provenance import canonical_json_sha256, enrich_result_contract
 from server.platform.instance import LOCK_OPEN_FLAGS, lock_exclusive, unlock
@@ -1305,6 +1306,8 @@ class _PendingRuntimeUpdate:
     stage: str | None = None
     progress: float | None = None
     message: str | None = None
+    #: The frequency count kept through setup chatter (``server/jobs/progress.py``).
+    frequency: dict[str, Any] | None = None
     log_lines: list[str] = field(default_factory=list)
     timer_task: asyncio.Task[Any] | None = None
     expected_log_size: int | None = None
@@ -4410,7 +4413,11 @@ class JobRuntime:
         while not state.closed and state.pending:
             fields: dict[str, Any] = {}
             stage_payload: dict[str, Any] | None = None
+            frequency: dict[str, Any] | None = None
             if state.stage is not None:
+                frequency = advance_frequency_progress(
+                    state.frequency, state.stage, state.message
+                )
                 fields = {
                     "stage": state.stage,
                     "stage_message": state.message or "",
@@ -4424,6 +4431,7 @@ class JobRuntime:
                     "progress": (
                         state.progress if state.progress is not None else 0.0
                     ),
+                    "frequency_progress": frequency,
                 }
 
             if state.log_lines and state.pinned_log_lines is None:
@@ -4451,6 +4459,7 @@ class JobRuntime:
             if changed:
                 if state.stage is not None:
                     state.persisted_stage = state.stage
+                    state.frequency = frequency
                 for event in events:
                     self.events.publish(event)
 
@@ -4977,6 +4986,12 @@ class JobRuntime:
             "progress": float(row.get("progress", 0.0)),
             "stage": row.get("stage"),
             "stage_message": row.get("stage_message"),
+            # Absent unless solving, so every other job's response is unchanged.
+            **(
+                {"frequency_progress": frequency}
+                if (frequency := job_frequency_progress(row)) is not None
+                else {}
+            ),
             "created_at": row.get("created_at"),
             "queued_at": row.get("queued_at"),
             "started_at": row.get("started_at"),

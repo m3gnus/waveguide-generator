@@ -1661,7 +1661,7 @@ describe('solve invocation mutex', () => {
   it.each(['running', 'error', 'complete'] as const)('keeps the CAD run’s %s status beside blocked readiness for the next solve', async status => {
     const run = cadJobFixture(operation('run-status', 'accepted'), {
       cad_source: { ingest_id: 'wgi_readiness', model_id: 'wgl_readiness' } as JobItem['cad_source'],
-      status, progress: 0.4, stage: 'solve', stage_message: 'Solving frequency 2/10 with Metal BEM',
+      status, progress: 0.4, stage: 'solve', stage_message: 'Solving frequency 2/10 with Metal BEM', frequency_progress: { done: 2, total: 10 },
       error_message: status === 'error' ? 'The solver failed on this run.' : null,
       has_results: status === 'complete',
     });

@@ -1550,6 +1550,21 @@ class JobArchiveIdentity(JobModel):
     archived_path: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
+class FrequencyChannel(JobModel):
+    #: 1-based: the drive channel the frequency count is within.
+    index: int = Field(ge=1)
+    count: int = Field(ge=1)
+
+
+class FrequencyProgress(JobModel):
+    """How many of a running solve's frequencies are done (``server/jobs/progress.py``)."""
+
+    done: int = Field(ge=0)
+    total: int = Field(ge=1)
+    #: Only for an imported multi-channel solve, whose count is channel-local.
+    channel: FrequencyChannel | None = Field(default=None, exclude_if=lambda value: value is None)
+
+
 class JobItem(JobArchiveIdentity, JobDesignIdentity):
     id: str
     client_request_id: str | None = None
@@ -1562,6 +1577,12 @@ class JobItem(JobArchiveIdentity, JobDesignIdentity):
     progress: float
     stage: str | None
     stage_message: str | None
+    #: The frequency count of a running solve, kept through its setup chatter.
+    #: Absent when the engine reports none (an indeterminate display) and for
+    #: every job that is not solving, so other jobs' response bytes are unchanged.
+    frequency_progress: FrequencyProgress | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     created_at: str
     queued_at: str
     started_at: str | None
@@ -1720,6 +1741,8 @@ __all__ = [
     "FieldPlaneSpec",
     "ImportedGeometrySource",
     "ImportedMeshSizes",
+    "FrequencyChannel",
+    "FrequencyProgress",
     "JobItem",
     "JobListResponse",
     "JobMetadataPatch",

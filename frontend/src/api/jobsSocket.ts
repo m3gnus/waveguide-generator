@@ -27,6 +27,8 @@ export const JOB_STATUSES: readonly JobStatus[] = ['preparing', 'held', 'queued'
 export function isActiveJobStatus(status: JobStatus): boolean {
   return status === 'preparing' || status === 'queued' || status === 'running';
 }
+export type FrequencyProgress = components['schemas']['FrequencyProgress'];
+
 export type JobsConnection = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 export interface AutoExportFormatStatus {
   status: 'complete' | 'failed' | 'blocked';
@@ -64,6 +66,9 @@ export interface JobItem extends JobNullableFields {
   parent_job_id: string | null;
   status: JobStatus;
   progress: number;
+  /** How many frequencies a running solve has done (`server/jobs/progress.py`);
+   * null when the engine reports no count, and for every job not solving. */
+  frequency_progress?: FrequencyProgress | null;
   created_at: string;
   queued_at: string;
   config_summary: Record<string, unknown>;
@@ -298,6 +303,17 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+/** A job's `frequency_progress`: done ≤ total, and a 1-based channel within its count. */
+function isNullableFrequencyProgress(value: unknown): value is FrequencyProgress | null {
+  if (value === null) return true;
+  if (!isRecord(value) || !isNonNegativeInteger(value.done) || !isNonNegativeInteger(value.total)) return false;
+  if (value.total < 1 || value.done > value.total) return false;
+  if (!hasOwn(value, 'channel') || value.channel === null) return true;
+  const channel = value.channel;
+  return isRecord(channel) && isNonNegativeInteger(channel.index) && isNonNegativeInteger(channel.count)
+    && channel.index >= 1 && channel.index <= channel.count;
+}
+
 function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) >= 0;
 }
@@ -407,6 +423,7 @@ function isJobItem(value: unknown): value is JobItem {
   if (!(JOB_STATUSES as readonly string[]).includes(String(value.status))) return false;
   if (!isFiniteNumber(value.progress) || value.progress < 0 || value.progress > 1) return false;
   if (!isNullableString(value.stage) || !isNullableString(value.stage_message)) return false;
+  if (hasOwn(value, 'frequency_progress') && !isNullableFrequencyProgress(value.frequency_progress)) return false;
   if (!isTimestamp(value.created_at) || !isTimestamp(value.queued_at)) return false;
   if (!isNullableTimestamp(value.started_at) || !isNullableTimestamp(value.completed_at)) return false;
   if (!isRecord(value.config_summary) || !isRecord(value.solve_options)) return false;
@@ -684,6 +701,10 @@ function parseEvent(message: JsonRecord): EventMessage | { unknownType: string; 
     if (hasOwn(source, 'progress')) {
       if (!isFiniteNumber(source.progress) || source.progress < 0 || source.progress > 1) return null;
       payload.progress = source.progress;
+    }
+    if (hasOwn(source, 'frequency_progress')) {
+      if (!isNullableFrequencyProgress(source.frequency_progress)) return null;
+      payload.frequency_progress = source.frequency_progress;
     }
   }
   if (message.type === 'log') {
@@ -1231,6 +1252,8 @@ export class JobsSocketManager {
     if (message.type === 'stage') Object.assign(patch, {
       stage: typeof payload.stage === 'string' ? payload.stage : null,
       stage_message: typeof payload.message === 'string' ? payload.message : null,
+      // The server keeps the count through setup chatter; a stage without one has none.
+      frequency_progress: isRecord(payload.frequency_progress) ? payload.frequency_progress as FrequencyProgress : null,
       ...(typeof payload.progress === 'number' ? { progress: payload.progress } : {}),
     });
     if (message.type === 'log') {

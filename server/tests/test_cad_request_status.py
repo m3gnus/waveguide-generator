@@ -497,6 +497,25 @@ def test_progress_is_coalesced_but_a_change_of_state_is_written_at_once(h) -> No
     assert _status(h)["state"] == "solved"
 
 
+def test_solving_carries_the_job_s_own_frequency_count(h) -> None:
+    job = _queued(h)
+    clock = Clock()
+    publisher = _publisher(h, clock)
+    metadata = {**job["task_metadata"], "frequency_progress": {"done": 3, "total": 12}}
+    _set(h, job["id"], status="running", stage="solve", progress=0.5,
+         stage_message="Solving frequency 3/12 with Metal BEM", task_metadata_json=json.dumps(metadata))
+    publisher.tick(h.jobs_store)
+    record = _status(h)
+    assert record["progress"] == {"fraction": 0.5, "frequency": {"done": 3, "total": 12}}
+    assert "Tritonia speaker · Solving · 3 of 12 frequencies" in _words(record)
+    # An engine that reports no count: the fraction alone, never a count read from text.
+    metadata["frequency_progress"] = None
+    _set(h, job["id"], stage_message="Solving frequency 4/12 with Metal BEM", task_metadata_json=json.dumps(metadata))
+    clock.now += PROGRESS_INTERVAL_S
+    publisher.tick(h.jobs_store)
+    assert _status(h)["progress"] == {"fraction": 0.5}
+
+
 def test_a_lost_event_cursor_reconciles_every_request(h, monkeypatch) -> None:
     job = _queued(h)
     publisher = _publisher(h)
