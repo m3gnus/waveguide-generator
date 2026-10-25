@@ -94,7 +94,9 @@ def write_json_atomic(
     else:
         prefix = temporary_prefix if temporary_prefix is not None else f".{path.name}."
         temporary_name = path.parent / f"{prefix}{uuid.uuid4().hex}{temporary_suffix}"
-        descriptor = os.open(temporary_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, creation_mode)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        flags |= getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(temporary_name, flags, creation_mode)
     temporary = Path(temporary_name)
     replaced = False
     keep_for_recovery = False

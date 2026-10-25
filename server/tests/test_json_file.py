@@ -249,6 +249,28 @@ def test_native_newlines_are_explicit_and_checksum_default_stays_lf(monkeypatch)
     assert b"\r" not in json_file.json_bytes(PAYLOAD)
 
 
+def test_nonprivate_stage_uses_binary_and_nofollow_flags(tmp_path, monkeypatch):
+    # Exercise the Windows CRT flag even on POSIX, where O_BINARY is absent.
+    binary = getattr(os, "O_BINARY", 0x8000)
+    real_open = os.open
+    seen = []
+    monkeypatch.setattr(os, "O_BINARY", binary, raising=False)
+
+    def open_stage(path, flags, mode=0o777, *args, **kwargs):
+        seen.append(flags)
+        # Strip the synthetic flag only on hosts without a Windows CRT.
+        return real_open(path, flags if os.name == "nt" else flags & ~binary, mode, *args, **kwargs)
+
+    monkeypatch.setattr(json_file.os, "open", open_stage)
+    path = tmp_path / "record.json"
+    raw = b'{"label": "r\\u00e4v"}\r\n'
+    json_file.write_json_atomic(path, raw, encode=lambda value: value, creation_mode=0o666)
+    assert len(seen) == 1
+    assert seen[0] & binary
+    assert seen[0] & getattr(os, "O_NOFOLLOW", 0) == getattr(os, "O_NOFOLLOW", 0)
+    assert path.read_bytes() == raw
+
+
 def test_release_cache_bytes_and_failed_replace(tmp_path, monkeypatch):
     from server.updates.installer_client import InstallerClient
 
