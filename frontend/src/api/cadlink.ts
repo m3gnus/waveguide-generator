@@ -1,3 +1,4 @@
+import type { components } from './generated/openapi';
 import { deadlineFetch } from './deadlineFetch';
 import { serializeDesign, type DesignDocument } from '../stores/design';
 import { currentDesignWire } from '../stores/designWire';
@@ -469,16 +470,26 @@ export class CadLinkApiError extends Error {
   readonly code: string | null;
   /** The server's user-facing next step, when the refusal is a choice. */
   readonly nextStep: string | null;
+  /** The triangle ceiling's facts (`mesh_too_large`): what the model meshes to, and the limit. */
+  readonly meshLimit: CadMeshLimit | null;
 
   constructor(message: string, areaDriftSources: string[] = [], status: number | null = null,
-    code: string | null = null, nextStep: string | null = null) {
+    code: string | null = null, nextStep: string | null = null, meshLimit: CadMeshLimit | null = null) {
     super(message);
     this.name = 'CadLinkApiError';
     this.areaDriftSources = areaDriftSources;
     this.status = status;
     this.code = code;
     this.nextStep = nextStep;
+    this.meshLimit = meshLimit;
   }
+}
+
+/** What a model meshes to against WG's triangle limit, as the server measured it. */
+export type CadMeshLimit = components['schemas']['CadMeshLimit'];
+
+function positiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
 }
 
 async function responseError(response: Response): Promise<CadLinkApiError> {
@@ -486,7 +497,8 @@ async function responseError(response: Response): Promise<CadLinkApiError> {
     const body = await response.json() as { detail?: unknown };
     if (typeof body.detail === 'string') return new CadLinkApiError(body.detail, [], response.status);
     if (body.detail && typeof body.detail === 'object') {
-      const detail = body.detail as { message?: unknown; msg?: unknown; area_drift_sources?: unknown; code?: unknown; next_step?: unknown };
+      const detail = body.detail as { message?: unknown; msg?: unknown; area_drift_sources?: unknown; code?: unknown; next_step?: unknown;
+        triangle_count?: unknown; limit?: unknown };
       const message = typeof detail.message === 'string'
         ? detail.message
         : typeof detail.msg === 'string' ? detail.msg : null;
@@ -495,7 +507,9 @@ async function responseError(response: Response): Promise<CadLinkApiError> {
         : [];
       if (message) return new CadLinkApiError(message, sources, response.status,
         typeof detail.code === 'string' ? detail.code : null,
-        typeof detail.next_step === 'string' ? detail.next_step : null);
+        typeof detail.next_step === 'string' ? detail.next_step : null,
+        positiveInteger(detail.triangle_count) && positiveInteger(detail.limit)
+          ? { triangles: detail.triangle_count, limit: detail.limit } : null);
     }
   } catch { /* status remains useful */ }
   return new CadLinkApiError(`Request failed: ${response.status} ${response.statusText}`.trim(), [], response.status);

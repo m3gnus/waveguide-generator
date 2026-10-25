@@ -61,6 +61,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -125,6 +126,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -189,6 +191,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -252,6 +255,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -319,6 +323,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -386,6 +391,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -449,6 +455,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -461,6 +468,95 @@
     },
     {
       "name": "mesh too large, held without a mesh on screen",
+      "model": "pointer",
+      "job": {
+        "id": "job-1",
+        "status": "held",
+        "progress": 0.0,
+        "run_number": null,
+        "has_results": false,
+        "stage": null,
+        "stage_message": null,
+        "error_message": null,
+        "started_at": "2026-10-25T10:00:00+00:00",
+        "created_at": "2026-10-25T10:00:00+00:00",
+        "updated_at": "2026-10-25T10:00:00+00:00",
+        "completed_at": null,
+        "config_json": {
+          "type": "cad_intent",
+          "operation_id": "req-1"
+        },
+        "task_metadata": {
+          "cad": {
+            "operation_id": "req-1",
+            "snapshot": {
+              "document_name": "Speaker",
+              "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "artifact_sha256": null,
+              "project_lineage_id": null
+            },
+            "refusal": {
+              "code": "mesh_too_large",
+              "message": "This model meshes to 54,739 triangles; WG's limit is 22,000."
+            },
+            "mesh_limit_mesh": {
+              "triangle_count": 54739,
+              "limit": 22000,
+              "domain_planes": [
+                "x0",
+                "y0"
+              ]
+            }
+          }
+        },
+        "cad_state": {
+          "operation_id": "req-1",
+          "state": "needs_user_input",
+          "stage": null,
+          "reason": "mesh_too_large",
+          "message": "This model meshes to 54,739 triangles; WG's limit is 22,000.",
+          "blocker": null,
+          "held": true,
+          "prepare_failed": false,
+          "attention": "question",
+          "next_step": "In Fusion, open Sources & Mesh… and raise Walls or add a coarser size zone, or check the model size. You can also solve anyway.",
+          "options": [
+            {
+              "id": "solve_anyway",
+              "label": "Solve anyway"
+            },
+            {
+              "id": "dismiss",
+              "label": "Dismiss request"
+            }
+          ],
+          "job_id": null,
+          "snapshot": {
+            "document_name": "Speaker",
+            "manifest_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifact_sha256": null,
+            "project_lineage_id": null
+          },
+          "preparation": null,
+          "approvals": [],
+          "setup_defaults": false,
+          "frame_axis_automatic": null,
+          "mesh_limit": {
+            "triangles": 54739,
+            "limit": 22000
+          },
+          "received_at": "2026-10-25T10:00:00+00:00",
+          "updated_at": "2026-10-25T10:00:00+00:00"
+        }
+      },
+      "request_status": "needsYou",
+      "wg": {
+        "action": "choose",
+        "text": "Speaker needs your choice: it meshes to 54,739 triangles (limit 22,000)."
+      }
+    },
+    {
+      "name": "mesh too large, held by a build that kept no counts",
       "model": "pointer",
       "job": {
         "id": "job-1",
@@ -526,6 +622,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -603,6 +700,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -680,6 +778,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -757,6 +856,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -834,6 +934,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -911,6 +1012,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -988,6 +1090,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -1061,6 +1164,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -1129,6 +1233,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -1197,6 +1302,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -1270,6 +1376,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -1333,6 +1440,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }
@@ -1396,6 +1504,7 @@
           "approvals": [],
           "setup_defaults": false,
           "frame_axis_automatic": null,
+          "mesh_limit": null,
           "received_at": "2026-10-25T10:00:00+00:00",
           "updated_at": "2026-10-25T10:00:00+00:00"
         }

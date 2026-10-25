@@ -2802,6 +2802,16 @@ export interface components {
             /** Solver Anchor Instance Id */
             solver_anchor_instance_id?: string | null;
         };
+        /**
+         * CadMeshLimit
+         * @description A triangle-ceiling hold's facts: what the model meshes to, and WG's limit.
+         */
+        CadMeshLimit: {
+            /** Limit */
+            limit: number;
+            /** Triangles */
+            triangles: number;
+        };
         /** CadOperationSnapshotSummary */
         CadOperationSnapshotSummary: {
             /** Bundlepath */
@@ -3002,6 +3012,7 @@ export interface components {
             held?: boolean;
             /** Job Id */
             job_id: string | null;
+            mesh_limit?: components["schemas"]["CadMeshLimit"] | null;
             /** Message */
             message: string | null;
             /** Next Step */

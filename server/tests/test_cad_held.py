@@ -207,6 +207,8 @@ def test_solve_anyway_continues_and_records_explicit_override(h: JobsHarness) ->
     state = job_cad_state(parent)
     assert state["options"][0] == {"id": "solve_anyway", "label": "Solve anyway"}
     assert "Sources & Mesh…" in state["next_step"] and "model size" in state["next_step"]
+    # The facts WG's pop-up states, as fields: never parsed from the message.
+    assert state["mesh_limit"] == {"triangles": 28_944, "limit": 22_000}
     h._ingest_override = mesh
     child = h._loop.run(h.runtime.solve_cad_again(parent["id"], **CadSolveAgainRequest(mesh_limit_override=True).press()))
     _settle(h)

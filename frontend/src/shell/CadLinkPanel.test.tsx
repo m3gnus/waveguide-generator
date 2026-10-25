@@ -962,7 +962,7 @@ describe('CadLinkPanel', () => {
         snapshot: { manifestSha256: `sha256:${'b'.repeat(64)}`, documentName: 'Tritonia', projectLineageId: 'wgl_other' },
       }));
     });
-    // Not the model on screen: one quiet line under Earlier requests, which
+    // Not the model on screen: one quiet line under Other requests, which
     // can still open its project.
     const card = operationCard('op-other');
     expect(card.closest('.cad-earlier-requests')).not.toBeNull();
@@ -1029,7 +1029,7 @@ describe('CadLinkPanel', () => {
     expect(operationCard('op-v2').closest('.cad-solve-card')).not.toBeNull();
     expect(buttonTexts(operationCard('op-v2'))).toEqual(['Dismiss']);
     expect(posted).toEqual([]);
-    // v1's return is not on screen: one quiet line under Earlier requests.
+    // v1's return is not on screen: one quiet line under Other requests.
     expect(operationCard('op-v1').closest('.cad-earlier-requests')).not.toBeNull();
     expect(buttonTexts(operationCard('op-v1'))).toEqual(['Open Tritonia v1', 'Dismiss']);
   });

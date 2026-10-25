@@ -11,7 +11,6 @@ import { cadRecoveryNoticesStore, connectCadRecoveryNotices } from '../stores/ca
 import { frameReadInFlight } from '../stores/cadSolverFrame';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { cadWorkspace, emptyCadWorkspace } from '../stores/cadWorkspace';
-import { meshCeilingChoice } from '../stores/meshCeilingChoice';
 import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
 import { subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
@@ -215,7 +214,6 @@ export function mountCadWorkspaceOwners(): () => void {
    * Solve anyway prepares and solves; it is not a failure. */
   const ceilingStopped = (error: unknown, bundlePath: string | undefined): boolean => {
     if (!(error instanceof CadLinkApiError) || error.code !== 'mesh_too_large' || !bundlePath) return false;
-    meshCeilingChoice.solveAfter(bundlePath);
     reportStatus(null);
     return true;
   };

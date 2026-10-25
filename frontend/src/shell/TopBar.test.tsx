@@ -63,6 +63,25 @@ describe('workspace mode switch', () => {
     expect(host.querySelector('.attention-waiting')).toBeNull();
   });
 
+  it('in CAD mode counts only requests about models not on screen', async () => {
+    const state = cadJobSummary(legacyHold as unknown as JobItem);
+    const here = cadJobFixture({ ...state, reason: 'mesh_too_large', attention: 'question', jobId: 'here' },
+      { status: 'held', cad_return: { bundle_path: 'wgreturn/fine.wgreturn', return_id: 'wgr_fine' } });
+    here.cad_state = { ...here.cad_state!, held: true };
+    const elsewhere = cadJobFixture({ ...state, reason: 'setup_required', jobId: 'elsewhere',
+      snapshot: { manifestSha256: `sha256:${'e'.repeat(64)}`, documentName: 'Other horn', projectLineageId: null } },
+    { status: 'held', cad_return: { bundle_path: 'wgreturn/other.wgreturn', return_id: 'wgr_other' } });
+    act(() => publishCadJobs([here, elsewhere]));
+    useCadReturnStore.setState({ selectedBundle: { bundlePath: 'wgreturn/fine.wgreturn', returnId: 'wgr_fine', requestId: null,
+      name: 'fine.wgreturn', documentName: 'Fine horn', readable: true, modifiedAt: '2026-10-25T10:00:00Z' } as never });
+    workspaceModeStore.setMode('cad');
+    await act(async () => root.render(<AttentionNotices/>));
+    expect(host.querySelector('.attention-waiting')?.textContent).toBe('Another model needs your choice · Show');
+    // In Parametric mode no CAD model is on screen: both are announced.
+    act(() => workspaceModeStore.setMode('parametric'));
+    expect(host.querySelector('.attention-waiting')?.textContent).toContain('2 CAD requests need you');
+  });
+
   it('indicates a Solve that failed after the user moved on, and Show opens Results', async () => {
     const { solveAttention, resetSolveAttentionForTests } = await import('./solveAttention');
     resetSolveAttentionForTests();

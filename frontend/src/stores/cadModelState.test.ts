@@ -88,7 +88,7 @@ describe('selected CAD model state', () => {
   });
 
   it('waits for a mesh-size choice asked for this model only', () => {
-    const ceiling: MeshCeilingChoice = { name: 'Speaker', nextStep: 'x', bundlePath: bundle.bundlePath, then: 'prepare', deferred: true };
+    const ceiling: MeshCeilingChoice = { name: 'Speaker', nextStep: 'x', bundlePath: bundle.bundlePath, deferred: true };
     const waiting = selectCadModelState(selected, idle, null, null, ceiling);
     expect(waiting).toMatchObject({ phase: 'waiting', meshChoice: ceiling, heldRequest: null });
     expect(say(waiting).text).toBe('Speaker needs your choice: it is larger than WG\'s limit.');

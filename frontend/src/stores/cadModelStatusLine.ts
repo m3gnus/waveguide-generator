@@ -1,4 +1,6 @@
+import type { CadMeshLimit } from '../api/cadlink';
 import type { JobItem } from '../api/jobsSocket';
+import type { MeshCeilingChoice } from './meshCeilingChoice';
 import { isFailedCadPreparation, isHeldCadJob } from '../jobs/cadSolve';
 import { relativeTime } from '../shell/cadTime';
 import { OPERATION_REASON_WORDS } from '../shell/solveProgress';
@@ -112,7 +114,10 @@ export function cadModelStatusLine(model: CadModelView, request: CadModelRequest
   // choice asked in this window. Choose… opens it, unless it is open.
   if (model.phase === 'waiting') {
     const reason = model.heldRequest?.cad_state?.reason ?? (model.meshChoice ? 'mesh_too_large' : null);
-    const why = reason === 'mesh_too_large' ? `: it is ${OPERATION_REASON_WORDS.mesh_too_large}.` : ' before it can be solved.';
+    const facts = meshCeilingFacts(model.heldRequest ?? model.meshChoice);
+    const why = reason !== 'mesh_too_large' ? ' before it can be solved.'
+      : facts ? `: it meshes to ${count(facts.triangles)} triangles (limit ${count(facts.limit)}).`
+      : `: it is ${OPERATION_REASON_WORDS.mesh_too_large}.`;
     const open = context.choiceOpen || (!!model.meshChoice && !model.heldRequest && !model.meshChoice.deferred);
     return line(`${label} needs your choice${why}`, 'needs your choice', 'attention', open ? 'none' : 'choose', model.heldRequest?.id ?? null);
   }
@@ -197,4 +202,29 @@ function couldNotPrepare(label: string): string {
 function ready(model: CadModelView): CadModelStatusLine {
   const triangles = model.triangles === null ? '' : ` · ${model.triangles.toLocaleString()} triangles`;
   return line(`Ready to solve${triangles}`, `ready${triangles}`, 'ready', 'solve');
+}
+
+const count = (value: number) => value.toLocaleString();
+
+/** The triangle ceiling's facts for a question about it: a held request's
+ * (`cad_state.mesh_limit`) or the browser's own preparation's
+ * (`meshCeilingChoice`). Never parsed from a message; null when the server did
+ * not state them (a request held by an older build). */
+export function meshCeilingFacts(source: Pick<JobItem, 'cad_state'> | Pick<MeshCeilingChoice, 'meshLimit'> | null | undefined): CadMeshLimit | null {
+  if (!source) return null;
+  const facts = 'meshLimit' in source ? source.meshLimit : (source as Pick<JobItem, 'cad_state'>).cad_state?.mesh_limit;
+  return facts && facts.triangles > 0 && facts.limit > 0 ? facts : null;
+}
+
+/** The mesh-too-large pop-up's words: the facts, and what each option does.
+ * `nextStep` is the server's own next step, for a question without facts. */
+export function meshCeilingQuestion(name: string, facts: CadMeshLimit | null, nextStep: string) {
+  return {
+    title: `${name} is larger than ${APP_NAME}'s limit`,
+    body: facts
+      ? `It meshes to ${count(facts.triangles)} triangles; ${APP_NAME}'s limit is ${count(facts.limit)}. Solving it anyway is slower and needs more memory.`
+      : nextStep,
+    /** "Change in Fusion": nothing in WG opens Fusion's dialog, so it says where. */
+    changeInFusion: `In Fusion, open ${APP_NAME} ▸ Sources & Mesh…, raise Walls or add a coarser size zone, then send ${name} again.`,
+  };
 }

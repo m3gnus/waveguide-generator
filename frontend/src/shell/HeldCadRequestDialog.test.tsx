@@ -69,6 +69,20 @@ describe('held CAD request dialog owner', () => {
     expect(actions.continueRun).toHaveBeenCalledWith('held-request', { mesh_limit_override: true });
     expect(host.querySelector('[role="dialog"]')).toBeNull();
   });
+  it('states the ceiling\'s facts from the job, with Solve anyway, Change in Fusion and Later, and no axis question', async () => {
+    const job = held();
+    job.cad_state = { ...job.cad_state!, mesh_limit: { triangles: 54_739, limit: 22_000 } };
+    publishCadJobs([job]);
+    await act(async () => root.render(<HeldCadRequestDialog/>));
+    const dialog = host.querySelector('[role="dialog"]')!;
+    const name = job.cad_state!.snapshot!.document_name!;
+    expect(dialog.querySelector('h2')?.textContent).toBe(`${name} is larger than Waveguide Generator's limit`);
+    expect(dialog.textContent).toContain('It meshes to 54,739 triangles; Waveguide Generator\'s limit is 22,000. Solving it anyway is slower and needs more memory.');
+    expect([...dialog.querySelectorAll('button')].map(node => node.textContent)).toEqual(['Later', 'Change in Fusion', 'Solve anyway']);
+    expect(dialog.textContent).not.toMatch(/axis|radiat/i);
+    expect(dialog.textContent).not.toContain('Dismiss');
+  });
+
   it('shows one request at a time and Later keeps it available for the toolbar', async () => {
     publishCadJobs([held('one'), held('two')]);
     await act(async () => root.render(<HeldCadRequestDialog/>));
@@ -78,8 +92,13 @@ describe('held CAD request dialog owner', () => {
     expect(host.querySelector('[role="dialog"]')).toBeNull();
     act(() => openHeldRequest('one'));
     expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(1);
-    await act(async () => button('Dismiss request').click());
+    // Change in Fusion says where to make the change, then lets the request go.
+    act(() => button('Change in Fusion').click());
+    expect(actions.dismiss).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="dialog"]')?.textContent).toContain('Waveguide Generator ▸ Sources & Mesh…');
+    await act(async () => button('OK').click());
     expect(actions.dismiss).toHaveBeenCalledWith(expect.objectContaining({ id: 'one' }));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
   });
   it('retires a superseded popup and ignores genuine errors without a refusal', async () => {
     const job = held();
@@ -152,7 +171,7 @@ describe('held CAD request dialog owner', () => {
     expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(1);
     act(() => button('Later').click());
     act(() => publishCadJobs([held('old', yesterday), held('new')]));
-    expect(host.querySelector('[role="dialog"] p')?.textContent).toContain(held().cad_state!.snapshot!.document_name!);
+    expect(host.querySelector('[role="dialog"] h2')?.textContent).toContain(held().cad_state!.snapshot!.document_name!);
     act(() => button('Later').click());
     expect(host.querySelector('[role="dialog"]')).toBeNull();
     // A new window remembers Later for that request.
@@ -275,7 +294,7 @@ describe('held CAD request dialog owner', () => {
     readable: true, modifiedAt: '2026-10-24T10:00:00Z' }) as unknown as NonNullable<ReturnType<typeof useCadReturnStore.getState>['selectedBundle']>;
   const NEXT = 'Change the mesh resolution in Sources & Mesh… in Fusion, or check the model size.';
 
-  it('asks Prepare anyway after Prepare simulation, and the prepared mesh carries the choice', async () => {
+  it('asks Solve anyway, however the preparation started, and prepares and solves in one press', async () => {
     const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
     const { cadWorkspace } = await import('../stores/cadWorkspace');
     const ingest = vi.fn().mockResolvedValue(undefined);
@@ -285,34 +304,43 @@ describe('held CAD request dialog owner', () => {
     useCadReturnStore.setState({ selectedBundle: ceilingBundle('b') });
     await act(async () => root.render(<HeldCadRequestDialog/>));
     act(() => meshCeilingChoice.ask({ name: 'NoWaistbanding', nextStep: NEXT, bundlePath: 'b' }));
-    const dialog = host.querySelector('[role="dialog"]');
-    expect(dialog?.textContent).toContain('NoWaistbanding');
-    expect(dialog?.textContent).toContain('You can also prepare it anyway.');
-    expect(button('Solve anyway')).toBeUndefined();
-    await act(async () => button('Prepare anyway').click());
-    expect(ingest).toHaveBeenCalledWith({ meshLimitOverride: true });
-    expect(prepareAndSolve).not.toHaveBeenCalled();
-    expect(host.querySelector('[role="dialog"]')).toBeNull();
-    cadWorkspace.setState(previous, true);
-    useCadReturnStore.setState({ selectedBundle: null });
-  });
-
-  it('asks Solve anyway after a Solve, and prepares and solves in one press', async () => {
-    const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
-    const { cadWorkspace } = await import('../stores/cadWorkspace');
-    const ingest = vi.fn().mockResolvedValue(undefined);
-    const prepareAndSolve = vi.fn().mockResolvedValue('solving');
-    const previous = cadWorkspace.getState();
-    cadWorkspace.setState({ ...previous, ingest, prepareAndSolve });
-    useCadReturnStore.setState({ selectedBundle: ceilingBundle('b') });
-    await act(async () => root.render(<HeldCadRequestDialog/>));
-    act(() => { meshCeilingChoice.ask({ name: 'NoWaistbanding', nextStep: NEXT, bundlePath: 'b' }); meshCeilingChoice.solveAfter('b'); });
     expect(host.querySelector('[role="dialog"]')?.textContent).toContain('You can also solve it anyway.');
     await act(async () => button('Solve anyway').click());
     expect(prepareAndSolve).toHaveBeenCalledWith({ meshLimitOverride: true });
     expect(ingest).not.toHaveBeenCalled();
     expect(meshCeilingChoice.getSnapshot()).toBeNull();
     cadWorkspace.setState(previous, true);
+    useCadReturnStore.setState({ selectedBundle: null });
+  });
+
+  it('states the browser preparation\'s ceiling facts, and Change in Fusion lets the choice go', async () => {
+    const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
+    useCadReturnStore.setState({ selectedBundle: ceilingBundle('b'), ingestRecord: null });
+    workspaceModeStore.setMode('cad');
+    await act(async () => root.render(<><HeldCadRequestDialog/><CadModelStatusLine/></>));
+    act(() => meshCeilingChoice.ask({ name: 'NoWaistbanding', nextStep: NEXT, bundlePath: 'b', meshLimit: { triangles: 54_739, limit: 22_000 } }));
+    expect(host.querySelector('[role="dialog"]')?.textContent).toContain('It meshes to 54,739 triangles; Waveguide Generator\'s limit is 22,000.');
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('NoWaistbanding needs your choice: it meshes to 54,739 triangles (limit 22,000).');
+    act(() => button('Change in Fusion').click());
+    expect(host.querySelector('[role="dialog"]')?.textContent).toContain('In Fusion, open Waveguide Generator ▸ Sources & Mesh…');
+    act(() => button('Back').click());
+    expect(button('Solve anyway')).toBeDefined();
+    act(() => button('Change in Fusion').click());
+    await act(async () => button('OK').click());
+    expect(meshCeilingChoice.getSnapshot()).toBeNull();
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    useCadReturnStore.setState({ selectedBundle: null });
+  });
+
+  it('says the held request\'s facts on the model\'s status line before WG has a mesh of it', async () => {
+    const job = { ...held(), cad_return: { bundle_path: 'wgreturn/b.wgreturn', return_id: 'wgr_b' } } as JobItem;
+    job.cad_state = { ...job.cad_state!, mesh_limit: { triangles: 54_739, limit: 22_000 } };
+    publishCadJobs([job]);
+    useCadReturnStore.setState({ selectedBundle: { ...ceilingBundle('wgreturn/b.wgreturn'), returnId: 'wgr_b', requestId: null }, ingestRecord: null });
+    workspaceModeStore.setMode('cad');
+    await act(async () => root.render(<CadModelStatusLine/>));
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('NoWaistbanding needs your choice: it meshes to 54,739 triangles (limit 22,000).');
+    expect(button('Choose…')).toBeDefined();
     useCadReturnStore.setState({ selectedBundle: null });
   });
 

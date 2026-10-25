@@ -2,7 +2,7 @@
  * "Errors only when the user makes a mistake": a waiting request gets a card
  * only when it is about what is in front of the user -- the model on screen,
  * or the interrupted update the active Fusion document reports. Everything
- * else is one quiet line under "Earlier requests", and no card prints the
+ * else is one quiet line under "Other requests", and no card prints the
  * backend's bookkeeping (stages, finding ids, operation ids).
  */
 import { act } from 'react';
@@ -134,7 +134,7 @@ describe('operation cards for the model on screen', () => {
     // Positive control: the model on screen keeps its card.
     expect(cards().map((card) => card.dataset.operationId)).toEqual(['op-screen']);
     const disclosure = earlier()!;
-    expect(disclosure.querySelector('summary')?.textContent).toBe('Earlier requests (2)');
+    expect(disclosure.querySelector('summary')?.textContent).toBe('Other requests (2)');
     expect(disclosure.open).toBe(false);
     const lines = [...disclosure.querySelectorAll<HTMLElement>('li')];
     expect(lines.map((line) => line.dataset.operationId)).toEqual([RECOVERY_ID, 'manual-solve:old']);
@@ -155,7 +155,29 @@ describe('operation cards for the model on screen', () => {
     expect(dismissed).toEqual([]);
   });
 
-  it('shows no Earlier requests at all when every request is about the model on screen', async () => {
+  it('counts a held request for the selected return as on screen before WG has a mesh of it', async () => {
+    const { useCadReturnStore } = await import('../stores/cadReturn');
+    const ceiling = solve({ operationId: 'op-fine', reason: 'mesh_too_large', attention: 'question',
+      snapshot: { manifestSha256: ELSEWHERE, documentName: 'Fine horn', projectLineageId: null } });
+    const job = cadJobFixture(ceiling, { status: 'held', cad_return: { bundle_path: 'wgreturn/fine.wgreturn', return_id: 'wgr_fine' } });
+    job.cad_state = { ...job.cad_state!, held: true, mesh_limit: { triangles: 54_739, limit: 22_000 } };
+    const other = cadJobFixture(solve({ operationId: 'op-other', reason: 'mesh_too_large', attention: 'question',
+      snapshot: { manifestSha256: `sha256:${'c'.repeat(64)}`, documentName: 'Fine horn', projectLineageId: null } }),
+    { status: 'held', cad_return: { bundle_path: 'wgreturn/fine-2.wgreturn', return_id: 'wgr_other' } });
+    other.cad_state = { ...other.cad_state!, held: true };
+    publishCadJobs([job, other]);
+    useCadReturnStore.setState({ selectedBundle: { bundlePath: 'wgreturn/fine.wgreturn', returnId: 'wgr_fine', requestId: null,
+      name: 'fine.wgreturn', documentName: 'Fine horn', readable: true, modifiedAt: '2026-10-25T10:00:00Z' } as never, ingestRecord: null });
+    await act(async () => root.render(<CadOperationsSection record={null}/>));
+    // Its question is the status line's (Choose…): no card, and not "Other".
+    expect(cards()).toHaveLength(0);
+    const lines = [...earlier()!.querySelectorAll<HTMLElement>('li')];
+    expect(lines.map((line) => line.dataset.requestId)).toEqual([other.id]);
+    expect([...lines[0].querySelectorAll('button')].map((button) => button.textContent)).toEqual(['Open Fine horn', 'Dismiss']);
+    useCadReturnStore.setState({ selectedBundle: null });
+  });
+
+  it('shows no Other requests at all when every request is about the model on screen', async () => {
     await show([solve()]);
     expect(cards()).toHaveLength(1);
     expect(earlier()).toBeNull();

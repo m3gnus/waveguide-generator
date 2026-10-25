@@ -92,8 +92,19 @@ describe('the CAD model status line', () => {
   it('asks for a choice held without a mesh on screen, and the mesh-size choice of this window', () => {
     const job = { id: 'held-1', status: 'held', cad_state: { state: 'needs_user_input', reason: 'mesh_too_large', held: true, attention: 'question' } } as unknown as JobItem;
     expect(line(selected, idle, { kind: 'waiting', job })).toMatchObject({ action: 'choose', jobId: 'held-1', actionLabel: 'Choose…' });
-    const ceiling: MeshCeilingChoice = { name: 'Speaker', nextStep: 'x', bundlePath: bundle.bundlePath, then: 'prepare', deferred: true };
+    const ceiling: MeshCeilingChoice = { name: 'Speaker', nextStep: 'x', bundlePath: bundle.bundlePath, deferred: true };
     expect(line(selected, idle, null, ceiling)).toMatchObject({ text: 'Speaker needs your choice: it is larger than WG\'s limit.', action: 'choose', jobId: null });
+  });
+
+  it('states the ceiling\'s numbers from structured fields, never from the message', () => {
+    const job = { id: 'held-1', status: 'held', cad_state: { state: 'needs_user_input', reason: 'mesh_too_large', held: true, attention: 'question',
+      message: 'This model meshes to 1 triangles', mesh_limit: { triangles: 54_739, limit: 22_000 } } } as unknown as JobItem;
+    const held = line(selected, idle, { kind: 'waiting', job });
+    expect(held).toMatchObject({ text: 'Speaker needs your choice: it meshes to 54,739 triangles (limit 22,000).', action: 'choose' });
+    expectPlain(held);
+    const ceiling: MeshCeilingChoice = { name: 'Speaker', nextStep: 'x', bundlePath: bundle.bundlePath, deferred: true,
+      meshLimit: { triangles: 30_001, limit: 22_000 } };
+    expect(line(selected, idle, null, ceiling).text).toBe('Speaker needs your choice: it meshes to 30,001 triangles (limit 22,000).');
   });
 
   it('fails calmly, with Try again only where it can work, and never also says not prepared', () => {
@@ -129,7 +140,7 @@ describe('the CAD model status line', () => {
   it('does not offer Choose… for the question already on screen', () => {
     const job = { id: 'held-1', status: 'held', cad_state: { state: 'needs_user_input', reason: 'setup_required', held: true, attention: 'question' } } as unknown as JobItem;
     expect(line(selected, idle, { kind: 'waiting', job }, null, { choiceOpen: true })).toMatchObject({ action: 'none', short: 'needs your choice' });
-    const asked: MeshCeilingChoice = { name: 'Speaker', nextStep: 'x', bundlePath: bundle.bundlePath, then: 'prepare', deferred: false };
+    const asked: MeshCeilingChoice = { name: 'Speaker', nextStep: 'x', bundlePath: bundle.bundlePath, deferred: false };
     expect(line(selected, idle, null, asked).action).toBe('none');
   });
 

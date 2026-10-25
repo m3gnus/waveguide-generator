@@ -598,6 +598,26 @@
         "title": "CadIdentityProvenance",
         "type": "object"
       },
+      "CadMeshLimit": {
+        "additionalProperties": false,
+        "description": "A triangle-ceiling hold's facts: what the model meshes to, and WG's limit.",
+        "properties": {
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "triangles": {
+            "title": "Triangles",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "triangles",
+          "limit"
+        ],
+        "title": "CadMeshLimit",
+        "type": "object"
+      },
       "CadOperationSnapshotSummary": {
         "additionalProperties": false,
         "properties": {
@@ -1331,6 +1351,16 @@
               }
             ],
             "title": "Job Id"
+          },
+          "mesh_limit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CadMeshLimit"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "message": {
             "anyOf": [

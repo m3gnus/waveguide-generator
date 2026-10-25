@@ -366,6 +366,8 @@ function isCadState(value: unknown): value is components['schemas']['CadState'] 
     isRecord(option) && typeof option.id === 'string' && typeof option.label === 'string'
   )))) return false;
   if (!isNullableTimestamp(value.received_at) || !isNullableTimestamp(value.updated_at)) return false;
+  if (hasOwn(value, 'mesh_limit') && !(value.mesh_limit === null || (isRecord(value.mesh_limit)
+    && isFiniteNumber(value.mesh_limit.triangles) && isFiniteNumber(value.mesh_limit.limit)))) return false;
   const snapshot = value.snapshot;
   if (!(snapshot === null || (isRecord(snapshot)
     && ['document_name', 'manifest_sha256', 'artifact_sha256', 'project_lineage_id']

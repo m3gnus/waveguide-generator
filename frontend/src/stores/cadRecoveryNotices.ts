@@ -3,9 +3,9 @@ import { useStore } from 'zustand';
 import type { components } from '../api/generated/openapi';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { isPendingCadOperation, operationNeedsUser } from '../api/cadOperations';
-import { jsonRequest, type CadReturnIngestRecord } from '../api/cadlink';
+import { jsonRequest, type CadReturnBundle, type CadReturnIngestRecord } from '../api/cadlink';
 import { isActiveJobStatus, jobsSocket, type JobItem, type JobsSocketManager } from '../api/jobsSocket';
-import { cadJobSummary, latestCadJobs, dismissCadJob, isFailedCadPreparation, isHeldCadJob } from '../jobs/cadSolve';
+import { cadJobAboutModel, cadJobSummary, cadModelOnScreen, latestCadJobs, dismissCadJob, isFailedCadPreparation, isHeldCadJob } from '../jobs/cadSolve';
 import { useCadDeliveryHealthStore } from './cadDeliveryHealth';
 import { useCadConnectionStore, type CadConnectionStore } from './cadConnection';
 
@@ -137,16 +137,19 @@ function recoverySummary(notice: CadRecoveryNotice): CadOperationSummary {
 }
 
 /** One request view joins jobs and authoritative recovery notices. */
-export function selectCadRequests({ jobs, notices, record }: {
+export function selectCadRequests({ jobs, notices, record, bundle = null }: {
   jobs: JobItem[];
   notices: Record<string, CadRecoveryNotice>;
   record: CadReturnIngestRecord | null;
+  /** The selected return: before it is prepared, a request for it is still on screen. */
+  bundle?: Pick<CadReturnBundle, 'returnId' | 'requestId'> | null;
 }): { current: CadRequest[]; earlier: CadRequest[]; active: CadRequest[] } {
+  const onScreen = cadModelOnScreen(record, bundle);
   const requests: CadRequest[] = latestCadJobs(jobs).flatMap((job) => {
     const operation = cadJobSummary(job);
     if (!isPendingCadOperation(operation)) return [];
     return [{ id: job.id, source: 'job' as const, job, operation,
-      onScreen: Boolean(record && operation.snapshot?.manifestSha256 && record.manifest_sha256 === operation.snapshot.manifestSha256),
+      onScreen: cadJobAboutModel(job, onScreen),
       openable: operation.state === 'needs_user_input' && Boolean(job.cad_state?.preparation?.ingest_id
         || job.cad_intent?.bundle_path || operation.snapshot?.projectLineageId) }];
   });

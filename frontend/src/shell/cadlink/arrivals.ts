@@ -399,6 +399,7 @@ export function createCadArrivalActions(
         meshCeilingChoice.ask({
           name: current.selectedBundle.documentName || current.selectedBundle.name,
           nextStep: reason.nextStep ?? message,
+          meshLimit: reason.meshLimit,
           bundlePath: current.selectedBundle.bundlePath,
         });
         throw reason;

@@ -1414,6 +1414,13 @@ class CadHoldOption(JobModel):
     label: str
 
 
+class CadMeshLimit(JobModel):
+    """A triangle-ceiling hold's facts: what the model meshes to, and WG's limit."""
+
+    triangles: int
+    limit: int
+
+
 class CadState(JobModel):
     """The CAD solve's state, derived entirely from this job's record."""
 
@@ -1439,6 +1446,8 @@ class CadState(JobModel):
     approvals: list[CadStateApproval]
     setup_defaults: bool
     frame_axis_automatic: str | None
+    #: Set only for a request the triangle ceiling holds (``mesh_too_large``).
+    mesh_limit: CadMeshLimit | None = None
     received_at: str | None
     updated_at: str | None
 

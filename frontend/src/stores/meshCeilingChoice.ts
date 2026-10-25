@@ -1,3 +1,5 @@
+import type { CadMeshLimit } from '../api/cadlink';
+
 /** A Prepare simulation the server held at the triangle ceiling: the browser
  * path's counterpart of a held Fusion request (`mesh_too_large`). The held
  * request pop-up presents it with the same words. */
@@ -6,11 +8,10 @@ export interface MeshCeilingChoice {
   name: string;
   /** The server's next step for the ceiling (change the mesh resolution, or check the model size). */
   nextStep: string;
+  /** What the model meshes to against WG's limit, as the server measured it; null when it did not say. */
+  meshLimit?: CadMeshLimit | null;
   /** The selected return this choice answers; it never applies to another one. */
   bundlePath: string;
-  /** What the user pressed: Prepare simulation ("Prepare anyway", which the
-   * later Solve carries), or a Solve ("Solve anyway" prepares and solves). */
-  then: 'prepare' | 'solve';
   /** "Later": the pop-up is closed, and the model waits for the choice. */
   deferred: boolean;
 }
@@ -25,14 +26,8 @@ export const meshCeilingChoice = {
     return () => { listeners.delete(listener); };
   },
   getSnapshot(): MeshCeilingChoice | null { return choice; },
-  ask(next: Omit<MeshCeilingChoice, 'then' | 'deferred'> & Partial<Pick<MeshCeilingChoice, 'then'>>): void {
-    choice = { then: 'prepare', ...next, deferred: false };
-    emit();
-  },
-  /** A Solve was waiting on this preparation: its choice is Solve anyway. */
-  solveAfter(bundlePath: string): void {
-    if (!choice || choice.bundlePath !== bundlePath || choice.then === 'solve') return;
-    choice = { ...choice, then: 'solve' };
+  ask(next: Omit<MeshCeilingChoice, 'deferred'>): void {
+    choice = { ...next, deferred: false };
     emit();
   },
   /** Later: keep the question for this model, without the pop-up. */

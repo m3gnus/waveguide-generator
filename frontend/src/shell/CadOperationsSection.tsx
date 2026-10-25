@@ -5,11 +5,12 @@ import type { CadOperationSummary } from '../api/cadOperations';
 import { listCadProjects } from '../api/cadProjects';
 import { isPendingCadOperation, reconcileCadOperation } from '../api/cadOperations';
 import { createCadRequestActions, selectCadRequests, useCadRecoveryNotices, type CadRequest } from '../stores/cadRecoveryNotices';
+import { useCadReturnStore } from '../stores/cadReturn';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { openImported } from '../stores/importedModel';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { openCadProject } from './CadProjectPanel';
-import { cadJobSummaries, dismissCadJob, useCadJobs } from '../jobs/cadSolve';
+import { cadJobSummaries, dismissCadJob, isCadChoiceJob, useCadJobs } from '../jobs/cadSolve';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { inFlightWords } from './cadOnScreenSettings';
 import { fullTime, relativeTime } from './cadTime';
@@ -419,7 +420,7 @@ function RecoveryOperationCard({ request, requestActions }: { request: CadReques
   </div>;
 }
 
-/** What an earlier request was, in a few quiet words. */
+/** What a request about another model was, in a few quiet words. */
 function earlierRequestLabel(operation: CadOperationSummary): string {
   const name = operation.snapshot?.documentName ?? null;
   if (operation.kind === 'prepare_and_solve') return `Solve request · ${name ?? 'a model not on screen'}`;
@@ -431,7 +432,7 @@ function EarlierRequests({ requests, requestActions }: { requests: CadRequest[];
   const coordinator = useSyncExternalStore(cadWorkspace.subscribe, cadWorkspace.getSnapshot, cadWorkspace.getSnapshot);
   const { busy, error, ask } = useRequestAction();
   return <details className="cad-earlier-requests">
-    <summary>Earlier requests ({requests.length})</summary>
+    <summary>Other requests ({requests.length})</summary>
     {error && <p role="alert">{error}</p>}
     <ul>
       {requests.map((request) => {
@@ -516,8 +517,12 @@ export function CadOperationsSection({ record, solves = true }: { record: CadRet
   const navigation = useSyncExternalStore(workspaceNavigation.subscribe, workspaceNavigation.getSnapshot, workspaceNavigation.getSnapshot);
   const notices = useCadRecoveryNotices((state) => state.notices);
   const jobs = useCadJobs();
-  const selected = selectCadRequests({ jobs, notices, record });
-  const current = selected.current.filter((item) => solves || item.operation.kind !== 'prepare_and_solve');
+  const bundle = useCadReturnStore((state) => state.selectedBundle);
+  const selected = selectCadRequests({ jobs, notices, record, bundle });
+  // A question the model's status line asks (Choose… opens its pop-up) gets
+  // no card of its own: the mesh-size choice is answered only there.
+  const current = selected.current.filter((item) => (solves || item.operation.kind !== 'prepare_and_solve')
+    && !(item.source === 'job' && isCadChoiceJob(item.job) && item.operation.reason === 'mesh_too_large'));
   const earlier = selected.earlier;
   const firstRequestId = earlier[0]?.id ?? selected.current[0]?.id;
   useEffect(() => {

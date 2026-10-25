@@ -1,5 +1,5 @@
 import type { CadReturnIngestRecord } from '../api/cadlink';
-import { latestCadJobs, isFailedCadPreparation, isHeldCadJob } from '../jobs/cadSolve';
+import { cadJobAboutModel, latestCadJobs, isFailedCadPreparation, isHeldCadJob } from '../jobs/cadSolve';
 import { previewSocket } from '../api/previewSocket';
 import { useSyncExternalStore } from 'react';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
@@ -27,6 +27,8 @@ export interface CurrentModel {
   manifestSha256?: string | null;
   /** An arrived Fusion request selected before it has a prepared mesh. */
   requestId?: string | null;
+  /** The selected return's immutable id, before it has a prepared mesh. */
+  returnId?: string | null;
   /** An explicitly selected legacy run whose snapshot cannot be read. */
   unloadedRunId?: string;
 }
@@ -123,6 +125,7 @@ export function currentModel(): CurrentModel {
   const model: CurrentModel = { kind: file ? 'file' : 'cad', key: sha || ingestId, lineage: modelId || ingestId,
     label: file ? 'Mesh file' : cad.label, modelId, ingestId, unloadedRunId,
     requestId: file ? null : cad.bundle?.requestId,
+    returnId: file ? null : cad.bundle?.returnId,
     manifestSha256: record?.manifest_sha256,
     viewportShowing: false };
   return { ...model, viewportShowing: !!ingestId && currentModelScene(model, viewport) !== null };
@@ -204,9 +207,10 @@ export function currentModelStatus(model: CurrentModel, jobs: readonly JobItem[]
   const job = candidates.filter(job => job.cad_state?.reason !== 'superseded').find(job => runVerdict(job, { ...model, viewportShowing: true }) === 'current'
     || (model.kind === 'cad' && !model.key && model.requestId === job.id)
     // An unbound Fusion intent has no run identity yet; its captured return
-    // manifest ties preparation/refusal to this source, never charts.
-    || (model.kind === 'cad' && !job.cad_source && !job.has_results && !!model.manifestSha256
-      && job.cad_state?.snapshot?.manifest_sha256 === model.manifestSha256));
+    // (its manifest, or before a mesh the return itself) ties
+    // preparation/refusal to this source, never charts.
+    || (model.kind === 'cad' && !job.cad_source && !job.has_results && cadJobAboutModel(job,
+      model.key ? { manifestSha256: model.manifestSha256 } : { manifestSha256: model.manifestSha256, returnId: model.returnId })));
   const state = job?.cad_state;
   if (job && isHeldCadJob(job)) return {
     kind: 'waiting' as const, job, message: state?.next_step || state?.message || 'Waiting for you',

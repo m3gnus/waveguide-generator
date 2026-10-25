@@ -87,6 +87,38 @@ export function isReadyCadJob(job: JobItem): boolean {
   return isHeldCadJob(job) && job.cad_state?.attention === 'ready';
 }
 
+/** The CAD model on screen, as a request is matched against it: its prepared
+ * mesh's snapshot, or -- before it has one -- the return it is. */
+export interface CadModelOnScreen {
+  /** The prepared record's manifest (`record.manifest_sha256`). */
+  manifestSha256?: string | null;
+  /** The selected return's immutable id (`bundle.returnId`), before it is prepared. */
+  returnId?: string | null;
+  /** The Fusion request a selected return arrived with (`bundle.requestId`), before it is prepared. */
+  requestId?: string | null;
+}
+
+/** The model on screen from its prepared record, else its selected return. */
+export function cadModelOnScreen(
+  record: { manifest_sha256: string } | null | undefined,
+  bundle: { returnId?: string | null; requestId?: string | null } | null | undefined,
+): CadModelOnScreen {
+  if (record) return { manifestSha256: record.manifest_sha256 };
+  return bundle ? { returnId: bundle.returnId ?? null, requestId: bundle.requestId ?? null } : {};
+}
+
+/** Whether a CAD request is about the model on screen: the same snapshot, or,
+ * for a model WG has no mesh of yet, the same return (its immutable return id,
+ * or the request it arrived with). A return match ties a preparation, a hold or
+ * a refusal to the model, never a solved run's charts. */
+export function cadJobAboutModel(job: Pick<JobItem, 'id' | 'cad_state' | 'cad_return' | 'has_results'>, model: CadModelOnScreen): boolean {
+  const manifest = job.cad_state?.snapshot?.manifest_sha256;
+  if (model.manifestSha256 && manifest && manifest === model.manifestSha256) return true;
+  if (model.manifestSha256 || job.has_results) return false;
+  return Boolean((model.returnId && job.cad_return?.return_id === model.returnId)
+    || (model.requestId && job.id === model.requestId));
+}
+
 /** Retain only the current child of a chain; timestamps order separate presses. */
 export function latestCadJobs(jobs: JobItem[]): JobItem[] {
   const byId = new Map(jobs.map((job) => [job.id, job]));

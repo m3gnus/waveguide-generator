@@ -291,14 +291,16 @@ export function AttentionNotices() {
   const readyRun = useReadyRun();
   const failedAction = useFailedAction();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
-  const requests = selectCadRequests({ jobs, notices, record: null });
-  // The question about the CAD model on screen is its status line's (Choose…);
-  // the chip announces only the others.
-  const onScreenQuestion = useCadModelState().heldRequest?.id ?? null;
+  const model = useCadModelState();
+  // In CAD mode the model on screen says its own state (its status line and
+  // Choose…): the chip announces only requests about other models.
+  const onScreen = mode === 'cad' && model.selected;
+  const requests = selectCadRequests({ jobs, notices, record: onScreen ? model.record : null, bundle: onScreen ? model.bundle : null });
+  const onScreenQuestion = model.heldRequest?.id ?? null;
   // Engine gates live in solve progress, including automatic warm-up waits,
   // and a failed preparation is not a request waiting for the user. A
   // prepared request is ready, not waiting: Results and its card offer Solve.
-  const waiting = [...requests.earlier, ...requests.current].filter(request => !(mode === 'cad' && request.id === onScreenQuestion)
+  const waiting = [...requests.earlier, ...requests.current.filter(request => request.source !== 'job')].filter(request => !(mode === 'cad' && request.id === onScreenQuestion)
     && request.operation?.reason !== 'engine_unavailable'
     && request.operation?.attention !== 'ready'
     && !(request.source === 'job' && isFailedCadPreparation(request.job)));
@@ -323,7 +325,7 @@ export function AttentionNotices() {
       // The words follow the server's one classification: only a real
       // question waits for the user; anything else names a change to make,
       // or WG's own failed preparation.
-      : first.attention === 'question' ? 'A solve is waiting for you'
+      : first.attention === 'question' ? onScreen ? 'Another model needs your choice' : 'A solve is waiting for you'
       : first.attention === 'action' ? 'A solve needs a change'
       : first.attention === 'failed' ? 'A solve could not be prepared' : 'A solve is on hold';
   return <>

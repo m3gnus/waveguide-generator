@@ -180,7 +180,8 @@ it('a Bring in and solve stopped at the triangle ceiling asks Solve anyway, whic
     bodies.push(body);
     return Promise.resolve(body.meshLimitOverride ? json({ ...record, mesh_limit_override: true })
       : json({ detail: { code: 'mesh_too_large', message: 'This model meshes to 28,944 triangles.',
-        next_step: 'Change the mesh resolution in Sources & Mesh… in Fusion, or check the model size.' } }, 422));
+        next_step: 'Change the mesh resolution in Sources & Mesh… in Fusion, or check the model size.',
+        triangle_count: 28_944, limit: 22_000 } }, 422));
   });
   stop = mountCadWorkspaceOwners(); await flush();
   const action = cadWorkspace.getSnapshot().pullAndSolve(); await flush();
@@ -189,7 +190,9 @@ it('a Bring in and solve stopped at the triangle ceiling asks Solve anyway, whic
   // A choice, not a failure: the Solve waits for the pop-up's answer.
   expect(await action).toBe('blocked');
   expect(cadWorkspace.getSnapshot().error).toBeNull();
-  expect(meshCeilingChoice.getSnapshot()).toMatchObject({ bundlePath: bundle.bundlePath, then: 'solve' });
+  // The server's measured facts travel as fields, for the pop-up to state.
+  expect(meshCeilingChoice.getSnapshot()).toMatchObject({ bundlePath: bundle.bundlePath,
+    meshLimit: { triangles: 28_944, limit: 22_000 } });
   expect(solve).not.toHaveBeenCalled();
   // Solve anyway: one preparation with the override, then the same public Solve.
   expect(await cadWorkspace.getSnapshot().prepareAndSolve({ meshLimitOverride: true })).toBe('solving');
