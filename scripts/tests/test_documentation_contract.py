@@ -137,22 +137,21 @@ def test_wall_clearance_report_limits_claims_to_committed_evidence() -> None:
     assert "unresolved and uninterpretable" in combined
     assert "do not independently validate" in combined
 
-def test_user_guide_distinguishes_startup_returns_from_new_arrivals() -> None:
+def test_user_guide_says_fusion_models_prepare_automatically() -> None:
     guide = _read("docs/USER-GUIDE.md")
     workflow = _between(
         guide,
-        "A newly arriving return",
+        "WG prepares a Fusion model automatically",
         "### Starting from a model drawn in Fusion",
     )
     normalized = " ".join(workflow.split())
 
-    assert "manually select from **Model versions**" in normalized
-    assert "prepared automatically" in normalized
-    assert "On startup" in normalized
-    assert "without preparing it; choose **Prepare simulation**" in normalized
-    assert "Ready to prepare" not in normalized
-    assert "Prepare simulation" in normalized
-    assert "appears only as the retry" not in normalized
+    assert "when it arrives" in normalized
+    assert "under **Model versions**" in normalized
+    assert "after a restart" in normalized
+    assert "**Try again** after a failure" in normalized
+    assert "Prepare simulation" not in guide
+    assert "Rebuild mesh" not in normalized
 
 
 def test_the_three_gatekeeper_texts_say_the_same_thing() -> None:
