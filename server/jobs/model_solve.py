@@ -61,6 +61,7 @@ from server.cadlink.roles import inventory_sha256
 from server.cadlink.store import UNFILED_MODEL_ID
 from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json
+from server.jobs.solve_anyway import Answered, Pressed, carries
 from server.jobs.cad_intent import CAD_INTENT, cad_of
 from server.jobs.cad_preparation import preparation_options
 from server.jobs.imported_setup import (
@@ -672,6 +673,9 @@ def _solve_anyway_carries(
 ) -> bool:
     """Whether the press's preparation remakes the mesh Solve anyway was chosen for.
 
+    The evidence-gathering half of ``solve_anyway.carries`` (its mesh form),
+    which decides.
+
     Solve anyway answers the triangle ceiling for the prepared mesh on screen
     (its record says ``mesh_limit_override``) and for nothing else, as
     ``solve_again_intent`` keeps it to one preparation. The press's
@@ -686,14 +690,14 @@ def _solve_anyway_carries(
 
     if record.get("mesh_limit_override") is not True or target is None or target.manifest is None:
         return False
-    # The stored key leaves an evidenced domain plan out, so a press reading
-    # the domain another way (planes [x] for [x, y]) would otherwise carry to
-    # a mesh of another size.
-    if target.domain != record_identity(record)[1]:
-        return False
     recorded = record.get("mesh_lookup_key")
-    if not isinstance(recorded, str) or not recorded:
-        return False
+    # The stored key leaves an evidenced domain plan out, so the domain plan
+    # is compared too: a press reading the domain another way (planes [x]
+    # for [x, y]) would otherwise carry to a mesh of another size.
+    answered = Answered(mesh_known=True, mesh_lookup_key=recorded if isinstance(recorded, str) else None,
+                        domain=record_identity(record)[1])
+    if not answered.mesh_lookup_key or target.domain != answered.domain:
+        return False  # Decided without working out the press's mesh.
     frame_axis = target.frame.get("axis") if isinstance(target.frame, Mapping) else None
     try:
         bundle = read_snapshot(
@@ -711,7 +715,7 @@ def _solve_anyway_carries(
     except (OSError, ValueError, KeyError, TypeError):
         # Preparation owns the refusal of a press it cannot make.
         return False
-    return pressed.lookup_key == recorded
+    return carries(answered, Pressed(mesh_lookup_key=pressed.lookup_key, domain=target.domain))
 
 
 def _press(

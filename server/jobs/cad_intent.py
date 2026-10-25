@@ -14,6 +14,7 @@ import copy
 from dataclasses import dataclass, replace
 from typing import Any
 
+from server.jobs.solve_anyway import Answered, Pressed, carries
 from server.cadlink.operations import (
     PREPARE_AND_SOLVE,
     prepare_and_solve_request,
@@ -170,24 +171,6 @@ def intent_of(row: Mapping[str, Any]) -> CadSolveIntent | None:
 CARRIED = ("snapshot", "return_state_hash", "setup", "frame", "preparation", "mesh_limit_override")
 
 
-def same_preparation(
-    held_setup_revision_id: str | None, held_frame_axis: str | None,
-    setup_revision_id: str | None, frame_axis: str | None, *, recorded: str | None = None,
-) -> bool:
-    """Whether a press keeps the preparation an answer was given for.
-
-    Solve anyway -- in WG, or answered in Fusion before sending
-    (``acknowledged``) -- settles the ceiling for one preparation: it carries
-    only while the press keeps the setup (the one held, or the one its record
-    says it prepared with, ``recorded``) and the axis. Others make another
-    mesh, which the ceiling asks about again.
-    """
-
-    return (setup_revision_id is None or setup_revision_id in {held_setup_revision_id, recorded}) and (
-        frame_axis is None or frame_axis == held_frame_axis
-    )
-
-
 def solve_again_intent(
     parent: Mapping[str, Any],
     *,
@@ -217,8 +200,10 @@ def solve_again_intent(
     # while the press keeps the setup and the axis that preparation was made
     # from. Others make another mesh, which the ceiling asks about again.
     recorded = (cad_of(parent).get("setup") or {}).get("revision_id")
-    same = same_preparation(intent.setup_revision_id, intent.frame_axis, setup_revision_id, frame_axis,
-                            recorded=recorded)
+    same = carries(
+        Answered(intent.setup_revision_id, intent.frame_axis, recorded_setup_revision_id=recorded),
+        Pressed(setup_revision_id, frame_axis),
+    )
     return replace(
         intent,
         setup_revision_id=setup_revision_id,

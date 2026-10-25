@@ -48,6 +48,7 @@ from server.engines.registry import (
     create_engine as get_engine,
     full3d_engine_order,
 )
+from server.jobs.solve_anyway import Answered, Pressed, carries
 from server.jobs.cad_intent import (
     BIND_BLOCKED,
     BIND_STOPPED,
@@ -59,7 +60,6 @@ from server.jobs.cad_intent import (
     cad_of,
     carried_record,
     intent_of,
-    same_preparation,
     solve_again_intent,
 )
 from server.platform.feature_flags import fem_regions_enabled
@@ -2401,10 +2401,10 @@ class JobRuntime:
                     # Solve anyway, chosen when the mesh on screen was prepared, or
                     # answered in Fusion: only while this press keeps that preparation.
                     mesh_limit_override=press.get("mesh_limit_override") is True or (
-                        intent.mesh_limit_override and same_preparation(
-                            intent.setup_revision_id, intent.frame_axis,
-                            press.get("setup_revision_id"), press.get("frame_axis"),
-                            recorded=(cad_of(row).get("setup") or {}).get("revision_id"),
+                        intent.mesh_limit_override and carries(
+                            Answered(intent.setup_revision_id, intent.frame_axis,
+                                     recorded_setup_revision_id=(cad_of(row).get("setup") or {}).get("revision_id")),
+                            Pressed(press.get("setup_revision_id"), press.get("frame_axis")),
                         )
                     ),
                 )

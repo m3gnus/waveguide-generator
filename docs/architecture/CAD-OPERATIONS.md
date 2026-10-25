@@ -1770,7 +1770,7 @@ admission use one rule set, `preflight_findings` in the vendored `wglink_protoco
   as `acknowledged` (`ACKNOWLEDGES`: `mesh_ceiling` answers `mesh_too_large`, Solve
   anyway). Admission makes it the job's `mesh_limit_override`, recorded with
   `source: "fusion"`, so WG does not ask again for that preparation. It holds only while
-  a press keeps the delivery's setup revision and axis (`cad_intent.same_preparation`,
+  a press keeps the delivery's setup revision and axis (`server/jobs/solve_anyway.py` `carries`,
   the rule Solve anyway in WG follows): a first press in WG or a Solve again that names
   another makes another mesh, and WG asks. Without the field WG holds and asks as
   before.

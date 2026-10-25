@@ -519,7 +519,7 @@ def preparation_options(
 
     ``setup`` is the snapshot's effective setup (``snapshot_setup``). The one
     owner, so a Solve anyway press can ask whether it names this preparation
-    (``model_solve._solve_anyway_carries``).
+    (``model_solve._solve_anyway_carries``, for ``solve_anyway.carries``).
     """
 
     return {

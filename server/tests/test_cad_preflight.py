@@ -370,12 +370,6 @@ def test_a_fusion_answer_holds_only_for_the_preparation_it_was_given_for(h: Jobs
     job = h.latest_job()
     assert intent_of(job).mesh_limit_override is True
     other = _revision(h.store, _setup(rigid=12.0))
-    from server.jobs.cad_intent import same_preparation
-
-    assert same_preparation(None, None, None, None)
-    assert not same_preparation(None, None, other, None)
-    assert not same_preparation("rev-a", "+z", None, "-z")
-    assert same_preparation("rev-a", "+z", "rev-b", None, recorded="rev-b")
     # A manual-waiting delivery (Prepare in WG first) carries the answer only
     # through a press that keeps the delivery's preparation.
     bundle_path, manifest = _write_return(h.workspace, "second.wgreturn")
@@ -463,3 +457,20 @@ def test_an_invalid_refusal_is_not_retried_forever(h: JobsHarness, monkeypatch):
 
     monkeypatch.setattr(h.store, "reject_received", invalid)
     assert retain_operation_snapshot(h.store, h.data_dir, h.workspace.resolve(), "cmd-1") == RETAIN_INVALID
+
+
+def test_a_fusion_answer_does_not_carry_to_an_admission_press_naming_another_setup(h: JobsHarness):
+    from server.cadlink.joblane.job_shims import accept_operation_solve
+    from server.cadlink.joblane.preparation import PreparationInput
+
+    other = _revision(h.store, _setup(rigid=12.0))
+    for command, press, expected in (("cmd-1", None, True),
+                                     ("cmd-2", PreparationInput(setup_revision_id=other), False)):
+        bundle_path, manifest = _write_return(h.workspace, f"{command}.wgreturn")
+        target, inputs = prepare_and_solve_request(return_id="wgr_1", bundle_path=bundle_path,
+                                                   manifest_sha256=manifest, acknowledged=("mesh_too_large",))
+        h.store.accept_operation(command, PREPARE_AND_SOLVE, request_digest(PREPARE_AND_SOLVE, target, inputs),
+                                 target, inputs)
+        job_id = h._loop.run(accept_operation_solve(h.context(), command, press, schedule=False,
+                                                    delivery_released=True))
+        assert intent_of(h.jobs_store.get_job_row(job_id)).mesh_limit_override is expected, command

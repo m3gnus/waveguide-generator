@@ -18,7 +18,8 @@ from contextvars import ContextVar
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from server.jobs.cad_intent import CadSolveIntent, INTERRUPTED_MESSAGE, cad_of, same_preparation
+from server.jobs.cad_intent import CadSolveIntent, INTERRUPTED_MESSAGE, cad_of
+from server.jobs.solve_anyway import Answered, Pressed, carries
 from server.jobs.models import SolveRequest
 from server.cadlink.operations import (
     CANCEL_REQUESTED,
@@ -187,9 +188,10 @@ async def _admit_operation_solve(ctx, operation_id, press, *, manual, schedule, 
         # Only for the preparation Fusion asked for: a press naming another
         # setup or axis makes another mesh, which WG asks about again.
         acknowledged = tuple(inputs.get("acknowledged") or ())
-        fusion_override = "mesh_too_large" in acknowledged and same_preparation(
-            row.get("setup_revision_id"), row.get("frame_axis"),
-            press.setup_revision_id, press.expected_frame_axis,
+        fusion_override = carries(
+            Answered(row.get("setup_revision_id"), row.get("frame_axis"))
+            if "mesh_too_large" in acknowledged else None,
+            Pressed(press.setup_revision_id, press.expected_frame_axis),
         )
         try:
             intent = CadSolveIntent(
