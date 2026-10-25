@@ -631,6 +631,69 @@ def test_foreign_live_directory_is_preserved_and_real_backup_reported(native: Pa
     assert (root / ".upgrade-in-progress").exists()
 
 
+@pytest.fixture(scope="module")
+def contended_journal_native(native: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Only this private compile holds a real reader across journal replacement."""
+    folder = tmp_path_factory.mktemp("journal-contention")
+    repo = folder / "source"
+    source = repo / build_bundle.WINDOWS_NATIVE_SOURCE
+    source.parent.mkdir(parents=True)
+    code = _native_failure_trace((ROOT / build_bundle.WINDOWS_NATIVE_SOURCE).read_text())
+    anchor = "    BOOL result = MoveFileExW(from, to, flags); DWORD error = GetLastError();"
+    injection = r'''
+    static unsigned attempts;
+    static HANDLE reader = INVALID_HANDLE_VALUE;
+    wchar_t mode[32];
+    if ((flags & MOVEFILE_REPLACE_EXISTING) && wcsstr(to, L".upgrade-in-progress") &&
+        GetEnvironmentVariableW(L"WG_TEST_JOURNAL_CONTENTION", mode, 32)) {
+        ++attempts;
+        if (!wcscmp(mode, L"access-denied") && attempts <= 3) {
+            fprintf(stderr, "injected journal access denial\n"); fflush(stderr);
+            SetLastError(ERROR_ACCESS_DENIED); return FALSE;
+        }
+        if (!wcscmp(mode, L"reader")) {
+            if (attempts == 1) {
+                reader = CreateFileW(to, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                     NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+                if (reader == INVALID_HANDLE_VALUE) abort();
+                fprintf(stderr, "held journal reader without delete sharing\n"); fflush(stderr);
+            }
+            if (attempts == 4) { CloseHandle(reader); reader = INVALID_HANDLE_VALUE; }
+        }
+    }
+'''
+    source.write_text(_inject(code, anchor, injection))
+    (repo / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE).write_bytes(
+        (ROOT / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE).read_bytes())
+    executable = folder / "helper.exe"
+    build_bundle.write_windows_launcher(executable, repo_root=repo)
+    _wait_for_fixture_files([executable], write=False)
+    return executable
+
+
+@pytest.mark.parametrize("contention", ["access-denied", "reader"])
+def test_journal_contention_finishes_prepare_and_retains_recovery(
+        contended_journal_native: Path, tmp_path: Path, monkeypatch, contention: str) -> None:
+    root, record = _old_root(tmp_path, contended_journal_native)
+    monkeypatch.setenv("WG_TEST_JOURNAL_CONTENTION", contention)
+    owner = _prepare(contended_journal_native, root, record, dead_owner=True)
+    try:
+        transcript = "\n".join(p.read_text() for p in tmp_path.glob("*.owner-log"))
+        expected = ("injected journal access denial" if contention == "access-denied"
+                    else "held journal reader without delete sharing")
+        assert expected in transcript  # Contention actually occurred before readiness.
+        assert (root / ".upgrade-in-progress").exists()
+        (root / "runtime" / "partial.dll").write_bytes(b"partial")
+    finally:
+        _kill_owner(owner)
+    subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"],
+                   check=False, timeout=NATIVE_TIMEOUT)
+    assert (root / "runtime" / "old.txt").read_text() == "runtime"
+    assert not (root / "runtime" / "partial.dll").exists()
+    assert json.loads(record.read_text())["previousKept"] is True
+    assert not (root / ".upgrade-in-progress").exists()
+
+
 def test_successful_commit_replaces_entire_layers_and_exact_boot_files(native: Path, tmp_path: Path) -> None:
     root, record = _old_root(tmp_path, native)
     _prepare(native, root, record, dead_owner=False)

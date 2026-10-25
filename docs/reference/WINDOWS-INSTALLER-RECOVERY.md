@@ -79,6 +79,14 @@ journal contents cannot nominate arbitrary deletion paths. The journal and
 reserved directories are persisted before the first rename. New layers start
 in preidentified empty directories; root boot files are copied to staging.
 
+The durable writer uses a two-second publication retry window for journal,
+outcome and startup compatibility metadata when Windows reports access denied,
+a sharing violation or a lock violation.
+It retries only the rename of the same flushed temporary bytes, retaining the
+original replace/no-replace flags. Other errors fail immediately; persistent
+contention fails closed and retains the last publication error. No whole
+installer operation or recovery verdict is retried.
+
 Commit validates these identities, flushes every copied file, records the
 complete staged boot identities, moves boot files into place, then atomically
 persists the committed journal. Old backups are removed only after that durable

@@ -101,6 +101,22 @@ static uint32_t checksum(const Journal *j) {
     }
     return ~c;
 }
+static int publish_file(const wchar_t *temporary, const wchar_t *target, DWORD flags) {
+    ULONGLONG until = GetTickCount64() + 2000;
+    for (;;) {
+        DWORD error;
+        if (MoveFileExW(temporary, target, flags)) return 1;
+        error = GetLastError();
+        /* A reader/scanner can briefly deny replacement of a closed journal.
+         * Retry only publication, with the same flushed bytes and move flags.
+         * A permanent refusal still fails closed within two seconds. */
+        if ((error != ERROR_ACCESS_DENIED && error != ERROR_SHARING_VIOLATION &&
+             error != ERROR_LOCK_VIOLATION) || GetTickCount64() >= until) {
+            SetLastError(error); return 0;
+        }
+        Sleep(25);
+    }
+}
 static int durable_write(const wchar_t *target, const void *data, DWORD count, int replace) {
     wchar_t tmp[CAP]; HANDLE h; DWORD done; int ok;
     if (swprintf_s(tmp, CAP, L"%s.%lu.tmp", target, GetCurrentProcessId()) <= 0) return 0;
@@ -108,8 +124,8 @@ static int durable_write(const wchar_t *target, const void *data, DWORD count, i
     if (h == INVALID_HANDLE_VALUE) return 0;
     ok = WriteFile(h, data, count, &done, NULL) && done == count && FlushFileBuffers(h);
     if (!CloseHandle(h)) ok = 0;
-    if (ok) ok = MoveFileExW(tmp, target, MOVEFILE_WRITE_THROUGH | (replace ? MOVEFILE_REPLACE_EXISTING : 0));
-    if (!ok) DeleteFileW(tmp);
+    if (ok) ok = publish_file(tmp, target, MOVEFILE_WRITE_THROUGH | (replace ? MOVEFILE_REPLACE_EXISTING : 0));
+    if (!ok) { DWORD error = GetLastError(); DeleteFileW(tmp); SetLastError(error); }
     return ok;
 }
 static int save(Journal *j, int replace) {
