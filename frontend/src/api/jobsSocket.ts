@@ -838,6 +838,7 @@ export class JobsSocketManager {
   }>();
   private readonly listeners = new Set<() => void>();
   private readonly cadOperationListeners = new Set<CadOperationListener>();
+  private readonly cadShowRequestListeners = new Set<(request: CadShowRequest) => void>();
   private readonly cadViewportReadyListeners = new Set<(ingestId: string) => void>();
   private snapshot: JobsSnapshot = {
     connection: 'idle', epoch: null, cursor: null, jobs: [], error: null,
@@ -859,6 +860,11 @@ export class JobsSocketManager {
   subscribeCadOperations = (listener: CadOperationListener): (() => void) => {
     this.cadOperationListeners.add(listener);
     return () => this.cadOperationListeners.delete(listener);
+  };
+
+  subscribeCadShowRequest = (listener: (request: CadShowRequest) => void): (() => void) => {
+    this.cadShowRequestListeners.add(listener);
+    return () => this.cadShowRequestListeners.delete(listener);
   };
 
   subscribeCadViewportReady = (listener: (ingestId: string) => void): (() => void) => {
@@ -1117,6 +1123,17 @@ export class JobsSocketManager {
     if (decoded.kind === 'cadAddinStatusChanged') {
       this.armHeartbeat();
       this.cadOperationListeners.forEach((listener) => listener.addinStatusChanged?.());
+      return;
+    }
+    if (decoded.kind === 'cadShowRequest') {
+      this.armHeartbeat();
+      if (typeof decoded.operationId !== 'string' || !decoded.operationId
+        || (decoded.jobId !== undefined && (typeof decoded.jobId !== 'string' || !decoded.jobId))) {
+        this.update({ error: 'Invalid jobs cadShowRequest message' });
+        return;
+      }
+      this.cadShowRequestListeners.forEach((listener) => listener({ operationId: decoded.operationId as string,
+        ...(decoded.jobId ? { jobId: decoded.jobId as string } : {}) }));
       return;
     }
     if (decoded.kind === 'cadViewportReady') {
@@ -1531,5 +1548,7 @@ export class JobsSocketManager {
     this.listeners.forEach((listener) => listener());
   }
 }
+
+export interface CadShowRequest { operationId: string; jobId?: string }
 
 export const jobsSocket = new JobsSocketManager();

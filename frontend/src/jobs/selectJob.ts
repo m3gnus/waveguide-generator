@@ -15,7 +15,8 @@ import { showJobModel } from './showJobModel';
  * CAD Link mode brings the parametric workspace back with it. An imported run
  * enters imported mode while keeping the current panel visible.
  */
-export function selectJob(job: JobItem, onError?: (message: string) => void): void {
+export function selectJob(job: JobItem, onError?: (message: string) => void,
+  showModel: typeof showJobModel = showJobModel): void {
   // A finished run whose results were cleaned up is still the selected run: the
   // dock says so instead of leaving the previous run's charts under its card.
   if (job.config_summary.geometry_type !== 'imported' && !canOpenJobModel(job)) showUnreadableRun(job);
@@ -24,5 +25,5 @@ export function selectJob(job: JobItem, onError?: (message: string) => void): vo
   if (job.status === 'complete' && !job.has_results && !canOpenJobModel(job)) return;
   // Undoable: browsing runs must not be able to discard the working design.
   if (job.config_summary.geometry_type !== 'imported' && !canOpenJobModel(job)) return;
-  void showJobModel(job, onError);
+  void showModel(job, onError);
 }

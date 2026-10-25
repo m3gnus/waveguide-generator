@@ -2227,3 +2227,39 @@ def _request_status_text(record: Mapping[str, Any]) -> dict[str, Any]:
     else:
         headline = f"{name} · Open {APP_NAME} to see this request."
     return {"headline": headline, "detail": detail, "options": options, "actions": actions}
+
+
+# Fusion's explicit request-history navigation, consumed by WG's delivery loop.
+SHOW_REQUESTS_DIRECTORY = ".wg-show-requests"
+SHOW_REQUEST_SCHEMA_VERSION = 1
+SHOW_REQUEST_CAPABILITY = "showRequest"
+SHOW_REQUEST_EVENT = "cadShowRequest"
+REQUEST_HISTORY_FILENAME = ".fusion-request-history.json"
+REQUEST_HISTORY_SCHEMA_VERSION = 1
+REQUEST_HISTORY_LIMIT = 50
+REQUEST_HISTORY_DAYS = 30
+REQUEST_HISTORY_TEXT = {
+    "thisDocument": "This document", "allDocuments": "All documents",
+    "clearFinished": "Clear finished", "empty": "No Send or Solve yet.",
+    "check": "Check in WG", "missing": f"Open {APP_NAME} to check this request.",
+    "switch": f"Switch to {APP_NAME}",
+}
+
+
+def validate_show_request(value: object) -> dict[str, Any] | None:
+    """Read only an explicit navigation pointer, never a command or a path."""
+    if not isinstance(value, Mapping) or type(value.get("schemaVersion")) is not int:
+        return None
+    if value["schemaVersion"] != SHOW_REQUEST_SCHEMA_VERSION:
+        return None
+    request_id = value.get("requestId")
+    if not isinstance(request_id, str) or not _STATUS_ID.fullmatch(request_id):
+        return None
+    job_id = value.get("jobId")
+    if job_id is not None and (not isinstance(job_id, str) or not _STATUS_ID.fullmatch(job_id)):
+        return None
+    at = _status_text(value.get("at"))
+    if at is None:
+        return None
+    return {"schemaVersion": SHOW_REQUEST_SCHEMA_VERSION, "requestId": request_id,
+            "at": at, **({"jobId": job_id} if job_id else {})}

@@ -48,6 +48,7 @@ from server.cadlink.joblane.preparation import (
 )
 from server.cadlink.joblane.preparation_inputs import _submission_refusal_reason
 from server.cadlink.intake.solve_command import collect_solve_deliveries, waiting_claim_operation_ids
+from server.cadlink.intake.show_requests import read_show_requests, publish_show_request, remove_show_request
 from server.cadlink.intake.readings import frame_provenance, record_solved_frame_provenance
 
 
@@ -351,9 +352,20 @@ async def run_delivery_pass(
     """
 
     blocked = _restart_pending(ctx)
-    if blocked or ctx.workspace_root is None:
+    if blocked:
         if note:
-            note(blocked or NO_WORKSPACE_REASON)
+            note(blocked)
+        return []
+    events = getattr(ctx.runtime, "events", None)
+    if events is not None and events.has_subscribers:
+        for path, record in await asyncio.to_thread(read_show_requests, ctx.data_dir):
+            # Database lookup can touch disk too; publish itself stays on this loop.
+            job = await asyncio.to_thread(ctx.job_store.latest_cad_job, record["requestId"]) if ctx.job_store else None
+            publish_show_request(record, job, events.publish)
+            await asyncio.to_thread(remove_show_request, path, record)
+    if ctx.workspace_root is None:
+        if note:
+            note(NO_WORKSPACE_REASON)
         return []
     await asyncio.to_thread(settle_received_snapshots, ctx)
     accepted: list[str] = []

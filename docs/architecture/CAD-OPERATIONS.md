@@ -2367,3 +2367,33 @@ request with no remaining file activity is bounded as described above.
 **What can be lost.** A request withdrawn as superseded never runs, by design. A power
 loss keeps a later write but not an earlier one, because WG does not flush the folders
 themselves to disk.
+
+### Open a request from Fusion history
+
+The add-in's `RequestTracker` keeps `.fusion-request-history.json` (schema 1)
+in the local IPC folder, replacing its earlier single restart record. The
+add-in imports that record once, then deletes it after a durable history write.
+It owns the list and polls the same status files after a restart; no history
+recovery resubmits a Send or Solve. History holds the newest 50 entries, expires
+finished entries after 30 days, and offers a calm check-in-WG action for old
+unfinished entries. Document activation resets its default document filter.
+The counterpart is WGLink `docs/REQUEST-STATUS.md`, “Fusion request history and
+opening a request”.
+
+`wglink_protocol.py` owns `showRequest: 1`, `.wg-show-requests`, schema version
+1 and `cadShowRequest`. The capability is advertised only while the delivery
+consumer runs. A press writes `<requestId>.json` with `schemaVersion`,
+`requestId`, optional `jobId`, and `at`. The delivery pass validates the pointer,
+resolves the request's latest job (ignoring an obsolete supplied job id),
+publishes one jobs-channel event (`operationId`, optional `jobId`), then removes
+the file. It preserves a newer press and defers consumption while no jobs-channel
+subscriber exists, so starting a desktop window after a headless backend cannot
+lose the choice. This is navigation, never job admission or solve preparation.
+
+`fusionSolveDisplay.ts` is the event's display owner. An explicit choice may
+reopen an old or previously acknowledged run; completed runs go through the
+existing `?job=` selection helper with the owner's guarded model opener. A
+Send selects its existing return through CAD's selection path. Later user
+navigation, model choices, edits or document changes cancel pending display,
+and a newer arriving Fusion request can take over normally. No API route or
+OpenAPI schema changes are needed for this additive jobs-channel event.

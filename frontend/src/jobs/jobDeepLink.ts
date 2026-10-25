@@ -20,13 +20,14 @@ export function openLinkedJob(
   id: string,
   jobs: readonly JobItem[],
   report: (message: string) => void,
+  showModel?: Parameters<typeof selectJob>[2],
 ): void {
   const job = jobs.find((candidate) => candidate.id === id);
   if (!job) {
     report(`No run with id ${id} in this WG data folder.`);
     return;
   }
-  selectJob(job, report);
+  selectJob(job, report, showModel);
   if (isActiveJobStatus(job.status)) compareSelection.awaitRun(job.id);
 }
 

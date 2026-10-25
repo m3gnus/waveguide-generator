@@ -457,3 +457,97 @@ it('owns an older delivery without a return id while rejecting a later same-path
   expect(prepare).not.toHaveBeenCalled();
   expect(currentModel().viewportShowing).toBe(true);
 });
+
+it.each(['preparing', 'held', 'complete'] as const)('shows an older explicit %s request through the existing owner', async (status) => {
+  const activate = vi.fn(() => true); disposers.push(bindWorkspaceNavigation(activate));
+  const f = fixture();
+  const old = status === 'complete'
+    ? { ...external('older', NOW - 40 * 86400_000), status, has_results: true }
+    : { ...preparing(), id: 'older', status, created_at: new Date(NOW - 40 * 86400_000).toISOString() };
+  acknowledgeCadSolve(old, 'display');
+  const newer = external('newer');
+  await f.observe([newer, old]);
+  vi.mocked(f.fetcher).mockClear();
+  await f.showRequest({ operationId: 'older', jobId: 'older' });
+  expect(activate).toHaveBeenLastCalledWith('results');
+  expect(f.fetcher).toHaveBeenCalled();
+  if (status === 'complete') expect(compareSelection.getSnapshot().primary).toBe('older');
+  else expect(currentModel().ingestId).toBe(record.ingest_id);
+});
+
+it.each(['navigation', 'edit', 'choice', 'dispose'] as const)('keeps a later %s while an explicit result is loading', async (change) => {
+  const reply = deferred<Response>();
+  const f = fixture(vi.fn(() => reply.promise));
+  const run = { ...external('old', NOW - 86400_000), status: 'complete' as const, has_results: true };
+  await f.observe([run]);
+  const pending = f.showRequest({ operationId: 'old', jobId: 'old' });
+  if (change === 'navigation') noteExplicitNavigation();
+  if (change === 'edit') useSolveOptionsStore.getState().setVerbose(true);
+  if (change === 'choice') useCadReturnStore.getState().selectBundle({ ...bundle, bundlePath: 'wgreturn/other.wgreturn' });
+  if (change === 'dispose') f.dispose();
+  compareSelection.setPrimary('person-choice');
+  reply.resolve(json(workspaceFor()));
+  await pending;
+  expect(f.display.showIngestedMesh).not.toHaveBeenCalled();
+  expect(compareSelection.getSnapshot().primary).toBe('person-choice');
+});
+
+it('captures user intent before fetching an explicit job outside the current page', async () => {
+  const response = deferred<Response>();
+  const f = fixture(vi.fn(() => response.promise));
+  const pending = f.showRequest({ operationId: 'older', jobId: 'older' });
+  noteExplicitNavigation();
+  response.resolve(json(external('older')));
+  await pending;
+  expect(f.display.onIntent).not.toHaveBeenCalled();
+  expect(f.display.showIngestedMesh).not.toHaveBeenCalled();
+});
+
+it('allows a new arriving Fusion request after showing history', async () => {
+  const f = fixture(); const old = preparing();
+  await f.observe([old]);
+  await f.showRequest({ operationId: old.id, jobId: old.id });
+  const newer = { ...preparing(null), id: 'new-press', created_at: new Date(NOW + 1000).toISOString() };
+  await f.observe([newer, old]);
+  expect(useCadReturnStore.getState().selectedBundle?.requestId).toBe('new-press');
+});
+
+it.each([false, true])('opens a Send through existing CAD selection and respects intervening navigation (%s)', async (navigate) => {
+  const listing = deferred<Response>();
+  const fetcher = vi.fn(async input => String(input).endsWith('/returns') ? listing.promise
+    : json({ operationId: 'send-request', kind: 'receive_snapshot', snapshot: { bundlePath: bundle.bundlePath } }));
+  const f = fixture(fetcher);
+  const pending = f.showRequest({ operationId: 'send-request' });
+  await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  if (navigate) noteExplicitNavigation();
+  listing.resolve(json({ items: [bundle] }));
+  await pending;
+  if (navigate) expect(f.display.onIntent).not.toHaveBeenCalled();
+  else expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
+  expect(fetcher.mock.calls.every((call) => !String(call[0]).includes('/ingest'))).toBe(true);
+});
+
+it('uses the server-named retry job even when its parent remains in the current page', async () => {
+  const parent = { ...external('parent', NOW - 86400_000), cad_state: { ...external().cad_state!, operation_id: 'request' } };
+  const child = { ...external('child', NOW - 86400_000), cad_state: { ...external().cad_state!, operation_id: 'request' } };
+  const fetcher = vi.fn(async input => String(input).startsWith('/api/status/') ? json(child)
+    : json(String(input).endsWith('/workspace') ? workspaceFor() : record));
+  const f = fixture(fetcher);
+  acknowledgeCadSolve(parent, 'display');
+  await f.observe([parent]);
+  await f.showRequest({ operationId: 'request', jobId: 'child' });
+  expect(fetcher).toHaveBeenCalledWith('/api/status/child');
+  expect(fetcher).toHaveBeenCalledWith('/api/runs/child/workspace');
+});
+
+it('keeps a newer Send while an explicit history model is loading', async () => {
+  const reply = deferred<Response>();
+  const f = fixture(vi.fn(() => reply.promise));
+  const run = { ...external('old', NOW - 86400_000), status: 'complete' as const, has_results: true };
+  await f.observe([run]);
+  const pending = f.showRequest({ operationId: 'old', jobId: 'old' });
+  f.send(NOW + 1);
+  reply.resolve(json(workspaceFor()));
+  await pending;
+  expect(f.display.showIngestedMesh).not.toHaveBeenCalled();
+});

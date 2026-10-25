@@ -1270,3 +1270,19 @@ it('ignores a malformed intake refusal instead of inventing a notice (row 15)', 
     expect(manager.getSnapshot().error).toBe('Invalid jobs cadInboxRefusal message');
   } finally { manager.stop(); }
 });
+
+it('delivers an explicit Fusion history pointer once and unsubscribes it', () => {
+  const socket = new MockSocket();
+  const manager = new JobsSocketManager(() => socket);
+  const show = vi.fn(); const stop = manager.subscribeCadShowRequest(show);
+  manager.start();
+  socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+  socket.message({ v: 1, kind: 'cadShowRequest', epoch: 1, operationId: 'request', jobId: 'run' });
+  expect(show).toHaveBeenCalledExactlyOnceWith({ operationId: 'request', jobId: 'run' });
+  socket.message({ v: 1, kind: 'cadShowRequest', epoch: 1, operationId: '', jobId: 'run' });
+  expect(show).toHaveBeenCalledTimes(1);
+  stop();
+  socket.message({ v: 1, kind: 'cadShowRequest', epoch: 1, operationId: 'request' });
+  expect(show).toHaveBeenCalledTimes(1);
+  manager.stop();
+});

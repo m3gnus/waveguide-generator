@@ -13,6 +13,11 @@ class EventBroker:
         self.queue_size = max(1, queue_size)
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
 
+    @property
+    def has_subscribers(self) -> bool:
+        """A display can hear ephemeral navigation; keep its pointer until then."""
+        return bool(self._subscribers)
+
     def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=self.queue_size)
         self._subscribers.add(queue)
