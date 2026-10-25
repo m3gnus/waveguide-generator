@@ -228,7 +228,8 @@ def preflight_findings(draft: Mapping[str, Any], *, limits: Mapping[str, Any] | 
     ``source_error``, ``sources`` (``role``, ``face_count``, ``instance_id``),
     ``fem_driven``, ``fem_region_error``, ``domain_error``, ``mesh_error``,
     ``surface_groups`` (``name``), ``groups_out_of_scope`` (names),
-    ``open_bodies`` (names) and ``triangles_least`` -- the fewest triangles
+    ``open_bodies`` (``name``, ``declared``: the user classified the body
+    with Declare Body…, so an open shell is meant) and ``triangles_least`` -- the fewest triangles
     WG could plausibly solve (the most reduced domain). ``limits`` is WG's
     advertised ``{'solvedTriangles': n}``.
     """
@@ -288,7 +289,9 @@ def preflight_findings(draft: Mapping[str, Any], *, limits: Mapping[str, Any] | 
             f'{_plural(len(out_of_scope), "Surface group", "Surface groups")} {_quoted(out_of_scope)} '
             f'{_plural(len(out_of_scope), "has", "have")} no faces in this selection and '
             f'{_plural(len(out_of_scope), "is", "are")} left out of this export.')))
-    open_bodies = [str(name) for name in draft.get('open_bodies') or ()]
+    # A body the user declared is meant as it is; only an undeclared one asks.
+    open_bodies = [str(body.get('name') or 'body') for body in _mapping_rows(draft.get('open_bodies'))
+                   if body.get('declared') is not True]
     if open_bodies:
         findings.append(preflight_finding('open_body', (
             f'{_quoted(open_bodies)} {_plural(len(open_bodies), "is not a closed solid", "are not closed solids")}; '
@@ -324,7 +327,8 @@ def manifest_draft(manifest: Mapping[str, Any], *, kind: str | None = None) -> d
         'sources': sources,
         'fem_driven': fem_driven,
         'surface_groups': [{'name': group.get('name')} for group in _mapping_rows(mesh.get('surface_groups'))],
-        'open_bodies': [str(item.get('name') or item.get('object_id') or 'body')
+        # A manifest does not say which bodies were declared: unknown, not declared.
+        'open_bodies': [{'name': str(item.get('name') or item.get('object_id') or 'body'), 'declared': None}
                         for item in _mapping_rows(scope.get('included')) if item.get('body_kind') == 'surface'],
     }
 

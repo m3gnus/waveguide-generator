@@ -85,6 +85,20 @@ def test_wg_ingress_gives_the_addins_codes(case):
         assert refusal is None
 
 
+@pytest.mark.parametrize("case", CASES["draft_cases"], ids=lambda case: case["name"])
+def test_wg_reads_the_addins_draft_cases_alike(case):
+    findings = wglink_protocol.preflight_findings(case["draft"])
+    assert [[finding["code"], finding["severity"]] for finding in findings] == case["expected"]
+
+
+def test_a_manifest_never_claims_a_body_was_declared():
+    """Declarations stay in Fusion: WG reads every surface body as undeclared, and only asks never stop it."""
+    base = json.loads((SHARED / CASES["base"]).read_text("utf-8"))
+    manifest = _edited(base, {"scope.included.0.body_kind": "surface"})
+    assert wglink_protocol.manifest_draft(manifest)["open_bodies"] == [{"name": "Synthetic enclosure", "declared": None}]
+    assert admission_refusal(manifest) is None
+
+
 def test_wg_owns_the_ceiling_the_addin_falls_back_to():
     assert wglink_protocol.DEFAULT_SOLVED_TRIANGLE_LIMIT == MAX_SOLVER_MESH_ARTIFACT_TRIANGLES
     assert wglink_protocol.ACKNOWLEDGES["mesh_ceiling"] == "mesh_too_large"

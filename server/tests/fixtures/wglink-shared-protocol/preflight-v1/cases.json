@@ -1,5 +1,5 @@
 {
-  "description": "Preflight rules over manifests (preflight-v1). Each case edits the base manifest (dotted paths; a list index equal to the length appends) and names the findings wglink_protocol.preflight_findings(manifest_draft(manifest)) returns, in order. WG's ingress refuses a return with any block finding, at admission, in the same words; ask and note findings never stop WG.",
+  "description": "Preflight rules over manifests (preflight-v1). Each case edits the base manifest (dotted paths; a list index equal to the length appends) and names the findings wglink_protocol.preflight_findings(manifest_draft(manifest)) returns, in order. WG's ingress refuses a return with any block finding, at admission, in the same words; ask and note findings never stop WG. draft_cases run plain drafts (what Fusion's survey gathers, which a manifest cannot state, such as whether a body was declared) through preflight_findings directly.",
   "base": "mesh-sizing-v1/f1-single-source.wgreturn/wgreturn.json",
   "cases": [
     {
@@ -185,6 +185,82 @@
           "open_body",
           "ask"
         ]
+      ]
+    }
+  ],
+  "draft_cases": [
+    {
+      "name": "undeclared open body asks",
+      "draft": {
+        "sources": [
+          {
+            "role": "HF",
+            "face_count": 1
+          }
+        ],
+        "open_bodies": [
+          {
+            "name": "Shell",
+            "declared": false
+          }
+        ]
+      },
+      "expected": [
+        [
+          "open_body",
+          "ask"
+        ]
+      ]
+    },
+    {
+      "name": "declared open shell is meant",
+      "draft": {
+        "sources": [
+          {
+            "role": "HF",
+            "face_count": 1
+          }
+        ],
+        "open_bodies": [
+          {
+            "name": "Shell",
+            "declared": true
+          }
+        ]
+      },
+      "expected": []
+    },
+    {
+      "name": "only the undeclared body is named",
+      "draft": {
+        "sources": [
+          {
+            "role": "HF",
+            "face_count": 1
+          }
+        ],
+        "open_bodies": [
+          {
+            "name": "Shell",
+            "declared": true
+          },
+          {
+            "name": "Lid",
+            "declared": false
+          }
+        ]
+      },
+      "expected": [
+        [
+          "open_body",
+          "ask"
+        ]
+      ],
+      "message_names": [
+        "Lid"
+      ],
+      "message_omits": [
+        "Shell"
       ]
     }
   ]
