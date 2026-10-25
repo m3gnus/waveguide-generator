@@ -380,6 +380,38 @@ describe('jobs websocket state machine', () => {
     manager.stop();
   });
 
+  it.each([
+    'return', [], {}, { bundle_path: 42, return_id: null },
+    { bundle_path: 'ingest/model' }, { bundle_path: 'ingest/model', return_id: 42 },
+  ])('rejects malformed CAD return identity in snapshots and event refreshes: %j', async (cadReturn) => {
+    const socket = new MockSocket();
+    const malformed = { ...job(), cad_return: cadReturn };
+    const fetcher = vi.fn(async () => json(malformed));
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 1, jobs: [malformed] });
+    expect(manager.getSnapshot()).toMatchObject({ jobs: [], error: 'Invalid jobs snapshot message' });
+
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 2, jobs: [job()] });
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: 3, jobId: 'job-1', type: 'queued', payload: {} });
+    await vi.waitFor(() => expect(manager.getSnapshot().error).toBe('Invalid job status response'));
+    expect(manager.getSnapshot().jobs).toEqual([job()]);
+    manager.stop();
+  });
+
+  it.each([null, { bundle_path: 'ingest/model', return_id: null },
+    { bundle_path: 'ingest/model', return_id: 'wgr_new' }])('accepts CAD return identity: %j', (cadReturn) => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 1, jobs: [job({ cad_return: cadReturn })] });
+    expect(manager.getSnapshot()).toMatchObject({ cursor: 1, error: null });
+    expect(manager.getSnapshot().jobs[0].cad_return).toEqual(cadReturn);
+    manager.stop();
+  });
+
   it('carries the domain decision a CAD run recorded, and refuses a malformed one', () => {
     const socket = new MockSocket();
     const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');

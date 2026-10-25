@@ -25,6 +25,7 @@ from server.cadlink.operations import (
     REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED,
     hold_details, hold_stage_message, user_hold,
 )
+from server.jobs.cad_intent import return_identity
 from server.jobs.result_contracts import RESULT_ENVELOPE_ADAPTER
 from server.platform.incidents import retain_job_logs
 from server.platform.paths import DATA_DIR_ENV, app_root, data_paths
@@ -1579,11 +1580,9 @@ class JobStore:
             # Keep the accepted return in the same transaction that replaces
             # its intent. A reconnect must not need a client-side memory of it.
             intent = json.loads(row["config_json"] or "{}") if row else {}
-            if intent.get("type") == "cad_intent" and isinstance(intent.get("bundle_path"), str):
-                metadata["cad"] = {**(metadata.get("cad") or {}), "return_identity": {
-                    "bundle_path": intent["bundle_path"],
-                    "return_id": intent.get("return_id") or None,
-                }}
+            identity = return_identity(intent) if intent.get("type") == "cad_intent" else None
+            if identity is not None:
+                metadata["cad"] = {**(metadata.get("cad") or {}), "return_identity": identity}
             changed = conn.execute(
                 """UPDATE simulation_jobs
                    SET status = 'queued', queued_at = ?, updated_at = ?, started_at = NULL,

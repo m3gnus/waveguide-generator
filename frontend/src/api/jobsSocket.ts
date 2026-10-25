@@ -452,6 +452,10 @@ function isJobItem(value: unknown): value is JobItem {
     value.solve_wall_time_seconds === null
     || (isFiniteNumber(value.solve_wall_time_seconds) && value.solve_wall_time_seconds >= 0)
   )) return false;
+  if (hasOwn(value, 'cad_return') && !(value.cad_return === null || (
+    isRecord(value.cad_return) && typeof value.cad_return.bundle_path === 'string'
+    && isNullableString(value.cad_return.return_id)
+  ))) return false;
   if (hasOwn(value, 'cad_source') && !(value.cad_source === null || isCadSource(value.cad_source))) return false;
   if (hasOwn(value, 'cad_setup') && !(value.cad_setup === null || isCadSetup(value.cad_setup))) return false;
   if (hasOwn(value, 'cad_provenance') && !(value.cad_provenance === null || isRecord(value.cad_provenance))) return false;

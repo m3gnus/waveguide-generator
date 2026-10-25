@@ -41,6 +41,13 @@ INTERRUPTED_MESSAGE = (
 
 
 
+def return_identity(value: Any) -> dict[str, Any] | None:
+    """Normalize the return identity retained at binding and exposed on jobs."""
+    if not isinstance(value, Mapping) or not isinstance(value.get("bundle_path"), str):
+        return None
+    return {"bundle_path": value["bundle_path"], "return_id": value.get("return_id") or None}
+
+
 @dataclass(frozen=True)
 class CadSolveIntent:
     """What WG accepted: the solve of one return, before it has a request.

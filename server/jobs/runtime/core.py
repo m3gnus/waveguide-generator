@@ -60,6 +60,7 @@ from server.jobs.cad_intent import (
     cad_of,
     carried_record,
     intent_of,
+    return_identity,
     solve_again_intent,
 )
 from server.platform.feature_flags import fem_regions_enabled
@@ -4795,12 +4796,7 @@ class JobRuntime:
         )
         cad = metadata.get("cad") if isinstance(metadata.get("cad"), Mapping) else {}
         returned = cad_intent if cad_intent is not None else cad.get("return_identity")
-        cad_return = (
-            {"bundle_path": returned["bundle_path"],
-             "return_id": returned.get("return_id") or None}
-            if isinstance(returned, Mapping) and isinstance(returned.get("bundle_path"), str)
-            else None
-        )
+        cad_return = return_identity(returned)
         geometry = stored_config.get("geometry")
         imported = isinstance(geometry, Mapping) and geometry.get("type") == "imported"
         design = resolve_job_design(row.get("script_snapshot"))
