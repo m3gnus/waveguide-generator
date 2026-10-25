@@ -49,9 +49,20 @@ class ScrubRules:
 
     def __init__(self, replacements: Iterable[tuple[str, str]], *, ignore_case: bool) -> None:
         flags = re.IGNORECASE if ignore_case else 0
+        replacements = list(dict.fromkeys(replacements))
+        # A root never starts right after a placeholder: ``<tmp>/tmp/x`` and
+        # ``~/tmp`` name folders *inside* a scrubbed root, not the root
+        # ``/tmp``. Without this, applying the rules twice -- or a short root
+        # after a longer one -- rewrites text that is already scrubbed.
+        after_placeholder = "".join(
+            f"(?<!{re.escape(placeholder)})"
+            for placeholder in sorted({replacement for _root, replacement in replacements if replacement})
+        )
         compiled = []
         for root, replacement in sorted(replacements, key=lambda item: -len(item[0])):
             pattern = _path_pattern(root)
+            if pattern:
+                pattern = after_placeholder + pattern
             # An empty pattern matches at every position, so a root that
             # reduced to nothing -- ``/``, ``C:\``, or an unset variable read
             # back as ``Path("")`` -- would rewrite the entire report into
@@ -91,8 +102,12 @@ def _path_pattern(root: str) -> str:
     # ``/opt/home/ada``, which is a different directory belonging to nobody in
     # particular. The lookbehind requires the root to start where a path
     # starts: at the beginning of the text, or after a space, a quote, a
-    # bracket -- anything that is not itself part of a path.
-    return r"(?<![A-Za-z0-9_.\\/])" + leading + body
+    # bracket -- anything that is not itself part of a path. It also has to
+    # end where a path component ends: ``/tmp`` is not the start of
+    # ``/tmpk3j9x``, a different directory, and ``/Users/ada`` is not the start
+    # of ``/Users/adam``. Matching there would cut a name in half and leave a
+    # placeholder glued to the rest of it (``<tmp>k3j9x``).
+    return r"(?<![A-Za-z0-9_.\\/])" + leading + body + r"(?!\w)"
 
 
 #: Absolute by syntax, not by ``Path.is_absolute``.

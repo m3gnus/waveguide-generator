@@ -52,6 +52,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import platform
 import re
 import tempfile
 import threading
@@ -259,12 +260,14 @@ def _parse(value: Any) -> datetime | None:
 def redaction_rules(
     *, data_dir: Path | str | None, app_root: Path | str | None, home: Path | str | None = None,
     temp_dir: Path | str | None = None, environ: Mapping[str, str] | None = None,
+    system: str | None = None,
 ) -> ScrubRules:
     """The report scrubber's roots (home, location variables), plus ``<wg>``, ``<data>``, ``<tmp>``.
 
     One set of roots with the problem report's :func:`~server.platform.scrub.scrub_rules`,
     so a folder reads the same in a record and in the report around it. The
-    longest root wins.
+    longest root wins. ``system`` (``platform.system()`` by default) decides
+    the case rule, so the suite can build Windows rules on any host.
     """
 
     roots = list(location_roots(home=home, environ=environ))
@@ -280,7 +283,8 @@ def redaction_rules(
             usable = usable_root(spelling)
             if usable:
                 roots.append((usable, placeholder))
-    return ScrubRules(roots, ignore_case=os.name == "nt")
+    os_name = platform.system() if system is None else system
+    return ScrubRules(roots, ignore_case=os_name == "Windows")
 
 
 def account_name() -> str | None:
@@ -420,9 +424,13 @@ def read_log_tail(path: Path, *, limit: int = MAX_JOB_LOG_TAIL_BYTES) -> tuple[s
     except (OSError, ValueError):
         return None
     if start > 0:
-        newline = raw.find(b"\n")
-        raw = raw[newline + 1:] if newline >= 0 else b""
-    return raw.decode("utf-8", errors="replace"), start > 0
+        newline = re.search(rb"\r\n|\r|\n", raw)
+        raw = raw[newline.end():] if newline is not None else b""
+    # Universal newlines, as the run's own log view reads it
+    # (``JobStore.get_job_log``): a log written with ``\r\n`` -- by a Windows
+    # text-mode writer, or copied there -- reads the same in a record.
+    text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+    return text, start > 0
 
 
 def incidents_dir(data_dir: Path | str) -> Path:

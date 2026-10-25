@@ -6,8 +6,10 @@ from datetime import datetime, timedelta, timezone
 import io
 import json
 from pathlib import Path
+import re
 import zipfile
 
+import pytest
 
 from server.platform import incidents
 from server.platform.incidents import (
@@ -217,6 +219,21 @@ def test_job_log_tails_survive_clear_failed(tmp_path: Path) -> None:
         jobs.close()
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"], ids=["lf", "crlf", "cr"])
+def test_log_tails_read_the_same_whatever_line_endings_the_log_has(tmp_path: Path, newline: str) -> None:
+    """A Windows text-mode log keeps ``\\n`` lines in a record, as the run's log view shows it."""
+
+    log = tmp_path / "job.log"
+    log.write_bytes(newline.join(["early line"] * 4000 + ["the failing stage", ""]).encode("utf-8"))
+    whole = incidents.read_log_tail(log, limit=10**7)
+    assert whole == ("early line\n" * 4000 + "the failing stage\n", False)
+    text, truncated = incidents.read_log_tail(log)
+    assert truncated is True
+    assert "\r" not in text
+    assert text.endswith("early line\nthe failing stage\n")
+    assert text.startswith("early line\n")  # a whole line, never part of one
+
+
 def test_recording_never_raises(tmp_path: Path, monkeypatch) -> None:
     configure_incidents(tmp_path / "data")
 
@@ -352,7 +369,84 @@ def test_repeats_in_different_temporary_folders_are_one_incident(tmp_path: Path)
             scratch.rmdir()
     [incident] = incidents_seen
     assert store.get(incident)["count"] == 2
-    assert "<tmp>/" in store.get(incident)["latest"]["evidence"]["detail"]
+    detail = store.get(incident)["latest"]["evidence"]["detail"]
+    # The folder's own separator (``\\`` on Windows), then the random name.
+    assert re.fullmatch(r"gmsh wrote nothing in <tmp>[\\/]tmp\w+/mesh", detail), detail
+
+
+#: Each host's real temporary folder, home and the paths WG writes under them.
+#: The store redacts a record when it is recorded and again when it is written,
+#: so every case is redacted twice: the rules must be idempotent.
+_PLATFORM_TEMP_CASES = {
+    "linux": dict(
+        system="Linux", temp="/tmp", home="/home/runner", environ={"HOME": "/home/runner"},
+        texts={
+            "gmsh wrote nothing in /tmp/tmp4m_wb_tw/mesh": "gmsh wrote nothing in <tmp>/tmp4m_wb_tw/mesh",
+            "/tmp/tmp/x and /home/runner/tmp/y": "<tmp>/tmp/x and ~/tmp/y",
+            "a sibling /tmpdata/x is not the temporary folder": "a sibling /tmpdata/x is not the temporary folder",
+            "/home/runnerup/x is not the home folder": "/home/runnerup/x is not the home folder",
+        },
+    ),
+    "macos": dict(
+        system="Darwin", temp="/var/folders/ab/cd12_ef/T", home="/Users/runner",
+        environ={"HOME": "/Users/runner"},
+        texts={
+            "gmsh wrote nothing in /var/folders/ab/cd12_ef/T/tmpk3j9x/mesh":
+                "gmsh wrote nothing in <tmp>/tmpk3j9x/mesh",
+            "/Users/runner/Documents/horn.step": "~/Documents/horn.step",
+        },
+    ),
+    "windows": dict(
+        system="Windows", temp=r"C:\Users\runner\AppData\Local\Temp", home=r"C:\Users\runner",
+        environ={"USERPROFILE": r"C:\Users\runner", "APPDATA": r"C:\Users\runner\AppData\Roaming"},
+        texts={
+            r"gmsh wrote nothing in C:\Users\runner\AppData\Local\Temp\tmp25q1jgz4/mesh":
+                r"gmsh wrote nothing in <tmp>\tmp25q1jgz4/mesh",
+            r"c:/users/RUNNER/appdata/local/temp/tmpab12/mesh": "<tmp>/tmpab12/mesh",
+            r'{"path": "C:\\Users\\runner\\AppData\\Local\\Temp\\tmpq9\\x"}': r'{"path": "<tmp>\\tmpq9\\x"}',
+            r"C:\Users\runner\Documents\tmp\x": r"~\Documents\tmp\x",
+        },
+    ),
+    "windows-short-temp": dict(
+        system="Windows", temp=r"C:\Users\RUNNER~1\AppData\Local\Temp", home=r"C:\Users\runner",
+        environ={"USERPROFILE": r"C:\Users\runner"},
+        texts={r"C:\Users\RUNNER~1\AppData\Local\Temp\tmpzz1\part.msh": r"<tmp>\tmpzz1\part.msh"},
+    ),
+}
+
+
+@pytest.mark.parametrize("platform_name", sorted(_PLATFORM_TEMP_CASES))
+def test_every_hosts_temporary_folder_is_redacted_once_and_idempotently(platform_name: str) -> None:
+    case = _PLATFORM_TEMP_CASES[platform_name]
+    rules = incidents.redaction_rules(
+        data_dir=None, app_root=None, home=case["home"], temp_dir=case["temp"],
+        environ=case["environ"], system=case["system"],
+    )
+    redactor = incidents.Redactor(rules, user="runner")
+    for text, expected in case["texts"].items():
+        once = redactor.text(text)
+        assert once == expected, (platform_name, text)
+        assert redactor.text(once) == once, (platform_name, text)
+
+
+@pytest.mark.parametrize("platform_name", sorted(_PLATFORM_TEMP_CASES))
+def test_every_hosts_repeats_in_different_temporary_folders_share_a_fingerprint(platform_name: str) -> None:
+    case = _PLATFORM_TEMP_CASES[platform_name]
+    redactor = incidents.Redactor(incidents.redaction_rules(
+        data_dir=None, app_root=None, home=case["home"], temp_dir=case["temp"],
+        environ=case["environ"], system=case["system"],
+    ), user="runner")
+    separator = "\\" if case["system"] == "Windows" else "/"
+    digests = {
+        incidents.fingerprint(
+            "internal-failure", "cad-preparation", exception=None,
+            evidence=redactor.value(
+                redactor.value({"detail": f"gmsh wrote nothing in {case['temp']}{separator}{scratch}/mesh"})
+            ),
+        )
+        for scratch in ("tmp4m_wb_tw", "tmpq81kz0az")
+    }
+    assert len(digests) == 1
 
 
 def test_paths_are_redacted_before_a_field_is_cut(tmp_path: Path) -> None:
