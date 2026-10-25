@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
@@ -94,7 +95,10 @@ def test_delivery_defers_until_a_window_can_hear_then_consumes_without_resubmiss
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("content", ["[" * 2000, "bad-json", "x" * 65537, "\xff", "null"])
+# Explicit ids: pytest otherwise uses the content as the id, and Windows refuses
+# the 65 KB PYTEST_CURRENT_TEST that results (32767-character variable limit).
+@pytest.mark.parametrize("content", ["[" * 2000, "bad-json", "x" * 65537, "\xff", "null"],
+                         ids=["deep-nesting", "bad-json", "oversize", "not-utf8", "null"])
 def test_hostile_files_are_discarded_and_other_pointers_survive(tmp_path, content):
     path, _ = pointer(tmp_path)
     bad = path.with_name("hostile.json")
@@ -103,11 +107,15 @@ def test_hostile_files_are_discarded_and_other_pointers_survive(tmp_path, conten
     assert not bad.exists()
 
 
-def test_fifo_and_directory_are_never_read_and_stale_crash_files_are_cleaned(tmp_path):
-    import os
+needs_fifo = pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs in a Windows directory")
+
+
+@pytest.mark.parametrize("with_fifo", [pytest.param(True, marks=needs_fifo), False])
+def test_fifo_and_directory_are_never_read_and_stale_crash_files_are_cleaned(tmp_path, with_fifo):
     path, _ = pointer(tmp_path)
     fifo = path.with_name("fifo.json")
-    os.mkfifo(fifo)
+    if with_fifo:
+        os.mkfifo(fifo)
     directory = path.with_name("directory.json")
     directory.mkdir()
     (directory / "junk.txt").write_text("junk")
@@ -200,8 +208,8 @@ def test_replacement_pointer_is_also_size_bounded_during_removal(tmp_path):
     assert not path.exists()
 
 
+@needs_fifo
 def test_file_replaced_by_fifo_between_inspection_and_open_never_blocks(tmp_path, monkeypatch):
-    import os
     from server.cadlink.intake import show_requests
     path, _ = pointer(tmp_path)
     original = show_requests._read_pointer
