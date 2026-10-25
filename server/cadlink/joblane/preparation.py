@@ -270,7 +270,11 @@ def retain_operation_snapshot(
             )
             store.record_snapshot(operation_id, _snapshot_record(store, retained))
             row = store.get_operation(operation_id) or row
-        if _refuse_blocked_return(store, data_dir, row):
+        try:
+            refused = refuse_blocked_return(store, data_dir, row)
+        except Exception:  # noqa: BLE001 - recorded there; retried on the next pass
+            return RETAIN_TRANSIENT
+        if refused:
             return RETAIN_INVALID
     except (OSError, sqlite3.Error) as exc:
         # SnapshotUnavailable is an OSError: cannot proceed now, not never.
@@ -286,19 +290,34 @@ def retain_operation_snapshot(
     return RETAINED
 
 
-def _refuse_blocked_return(store: CadLinkStore, data_dir: Path, row: Mapping[str, Any]) -> bool:
-    """Refuse, at admission, a received return the shared preflight rules block.
+def refuse_blocked_return(store: CadLinkStore, data_dir: Path, row: Mapping[str, Any]) -> bool:
+    """Refuse, at admission, a delivered return the shared preflight rules block.
 
-    Only a request nothing has claimed yet (``received``): admission is the
-    one boundary, so a preparation under way is never re-judged. The rules'
-    words are the outcome message, which the receipt carries back to Fusion.
-    True once the refusal is recorded. A failure of the rules themselves is
-    WG's own: recorded for the developers, and the return is admitted.
+    True when the operation is refused by the rules -- now, or already. Only a
+    delivery nothing has claimed and no job holds (``received``) is judged:
+    admission is the one boundary, so a preparation under way is never
+    re-judged, and a solve started in WG is no delivery. The refusal is one
+    store transaction (``reject_received``): there is no claimed row without
+    its outcome, and of two callers racing, one records it and the other finds
+    it. Retention and the fenced admission (``job_shims``) both call this, so a
+    job is never created for a refused return.
+
+    A failure of the rules themselves is WG's own: recorded for the developers,
+    and the return is admitted. A store failure recording the refusal is
+    recorded too and raised, so the caller retries rather than admits.
     """
 
-    if row["state"] != RECEIVED or str(_inputs(row).get("bundle_path") or "").startswith("ingest/"):
-        # A solve started in WG of a model it already holds is no delivery.
+    if row["state"] == REJECTED and row.get("reason") == PREFLIGHT_BLOCKED:
+        return True
+    if row["state"] != RECEIVED or row.get("job_id"):
         return False
+    try:
+        inputs = _inputs(row)
+    except (TypeError, ValueError):
+        return False  # A malformed request is refused as such by admission.
+    if not isinstance(inputs, Mapping) or str(inputs.get("bundle_path") or "").startswith("ingest/"):
+        return False
+    operation_id = str(row["operation_id"])
     retained = _retained(data_dir, row)
     manifest = _retained_manifest(retained) if retained is not None else None
     if manifest is None:
@@ -307,22 +326,22 @@ def _refuse_blocked_return(store: CadLinkStore, data_dir: Path, row: Mapping[str
         refusal = admission_refusal(manifest)
     except Exception as exc:  # noqa: BLE001 - a rule failure never refuses a model
         record_incident("preflight-rules-failed", "cad-admission",
-                        ids={"operation_id": str(row["operation_id"])}, exception=exc)
-        logger.warning("The preflight rules failed on CAD operation %s; admitted.", row["operation_id"],
+                        ids={"operation_id": operation_id}, exception=exc)
+        logger.warning("The preflight rules failed on CAD operation %s; admitted.", operation_id,
                        exc_info=True)
         return False
     if refusal is None:
         return False
-    generation = store.claim(str(row["operation_id"]), int(row["attempt_generation"]))
-    if generation is None:
-        return False
-    recorded = store.record_outcome(
-        str(row["operation_id"]), generation, REJECTED, reason=PREFLIGHT_BLOCKED,
-        outcome={"message": refusal},
-    )
+    try:
+        recorded = store.reject_received(operation_id, PREFLIGHT_BLOCKED, {"message": refusal})
+    except Exception as exc:
+        record_incident("preflight-refusal-not-recorded", "cad-admission",
+                        ids={"operation_id": operation_id}, exception=exc)
+        raise
     if recorded is None:
-        return False
-    logger.info("Refused CAD operation %s at admission: %s", row["operation_id"], refusal)
+        current = store.get_operation(operation_id)
+        return bool(current and current["state"] == REJECTED and current.get("reason") == PREFLIGHT_BLOCKED)
+    logger.info("Refused CAD operation %s at admission: %s", operation_id, refusal)
     return True
 
 

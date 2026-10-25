@@ -150,8 +150,10 @@ def default_mesh(sources: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 PREFLIGHT_BLOCK = 'block'
 PREFLIGHT_ASK = 'ask'
 PREFLIGHT_NOTE = 'note'
-#: The solved-triangle ceiling when WG does not advertise its own.
+#: The solved-triangle ceiling when WG does not advertise its own, and the
+#: count above which an estimate is shown amber (WG's full-domain warning).
 DEFAULT_SOLVED_TRIANGLE_LIMIT = 22000
+DEFAULT_TRIANGLE_WARNING = 18000
 #: The solve-request field naming the WG holds the user already answered.
 ACKNOWLEDGED_FIELD = 'acknowledged'
 #: ``ask`` finding -> the WG hold its "anyway" answer settles.
@@ -228,8 +230,10 @@ def preflight_findings(draft: Mapping[str, Any], *, limits: Mapping[str, Any] | 
     ``source_error``, ``sources`` (``role``, ``face_count``, ``instance_id``),
     ``fem_driven``, ``fem_region_error``, ``domain_error``, ``mesh_error``,
     ``surface_groups`` (``name``), ``groups_out_of_scope`` (names),
-    ``open_bodies`` (``name``, ``declared``: the user classified the body
-    with Declare Body…, so an open shell is meant) and ``triangles_least`` -- the fewest triangles
+    ``open_bodies`` (``name``, ``declared``: the scope classifier included
+    it as a meant open shell -- declared with Declare Body… or made by WG --
+    rather than taking the only visible body as the shell) and
+    ``triangles_least`` -- the fewest triangles
     WG could plausibly solve (the most reduced domain). ``limits`` is WG's
     advertised ``{'solvedTriangles': n}``.
     """
@@ -297,15 +301,31 @@ def preflight_findings(draft: Mapping[str, Any], *, limits: Mapping[str, Any] | 
             f'{_quoted(open_bodies)} {_plural(len(open_bodies), "is not a closed solid", "are not closed solids")}; '
             'WG may not be able to prepare '
             f'{_plural(len(open_bodies), "it", "them")}.')))
-    least = draft.get('triangles_least')
-    limit = (limits or {}).get('solvedTriangles', DEFAULT_SOLVED_TRIANGLE_LIMIT)
-    if (draft.get('kind') == 'solve' and isinstance(least, int) and not isinstance(least, bool)
-            and isinstance(limit, int) and least > limit):
-        findings.append(preflight_finding('mesh_ceiling', (
-            f'Even if WG can use symmetry, this model meshes to about {least:,} triangles, '
-            f'above the {limit:,} limit.')))
+    ceiling = ceiling_finding(draft.get('triangles_least'), limits=limits)
+    if draft.get('kind') == 'solve' and ceiling is not None:
+        findings.append(ceiling)
     order = {PREFLIGHT_BLOCK: 0, PREFLIGHT_ASK: 1, PREFLIGHT_NOTE: 2}
     return sorted(findings, key=lambda finding: order[finding['severity']])
+
+
+def solved_triangle_limit(limits: Mapping[str, Any] | None = None) -> int:
+    """The solved-triangle ceiling: WG's advertised one, else the fallback."""
+    limit = (limits or {}).get('solvedTriangles')
+    return limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 \
+        else DEFAULT_SOLVED_TRIANGLE_LIMIT
+
+
+def ceiling_finding(least: object, *, limits: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
+    """The ``mesh_ceiling`` finding for the fewest triangles WG could solve, or None.
+
+    Sources & Mesh shows it as a warning; Solve asks it on OK.
+    """
+    limit = solved_triangle_limit(limits)
+    if not isinstance(least, int) or isinstance(least, bool) or least <= limit:
+        return None
+    return preflight_finding('mesh_ceiling', (
+        f'Even if WG can use symmetry, this model meshes to about {least:,} triangles, '
+        f'above the {limit:,} limit.'))
 
 
 def manifest_draft(manifest: Mapping[str, Any], *, kind: str | None = None) -> dict[str, Any]:

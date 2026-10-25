@@ -1063,6 +1063,37 @@ class CadLinkStore:
             )
         return generation + 1 if cursor.rowcount == 1 else None
 
+    def reject_received(
+        self, operation_id: str, reason: str, outcome: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Reject an operation nothing has claimed, in one transaction.
+
+        For a refusal at admission (``PREFLIGHT_BLOCKED``): conditional on the
+        row being ``received`` with no job, it moves the generation on and
+        records ``rejected`` together, so there is never a claimed row without
+        its outcome, and a concurrent claim or admission either happened first
+        (and this changes nothing) or finds the row terminal. Returns the row,
+        or None when the condition no longer held.
+        """
+
+        outcome_json = validate_outcome(operation_id, REJECTED, reason=reason, outcome=outcome)
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE cad_operations SET attempt_generation = attempt_generation + 1, "
+                "state = ?, reason = ?, outcome_json = ?, updated_at = ? "
+                "WHERE operation_id = ? AND state = ? AND job_id IS NULL",
+                (REJECTED, reason, outcome_json, utc_now(), operation_id, RECEIVED),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = conn.execute(
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            receipts.record_operation(conn, dict(row))
+        return self._row(row)
+
     def record_outcome(
         self,
         operation_id: str,

@@ -18,7 +18,7 @@ from contextvars import ContextVar
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from server.jobs.cad_intent import CadSolveIntent, INTERRUPTED_MESSAGE, cad_of
+from server.jobs.cad_intent import CadSolveIntent, INTERRUPTED_MESSAGE, cad_of, same_preparation
 from server.jobs.models import SolveRequest
 from server.cadlink.operations import (
     CANCEL_REQUESTED,
@@ -39,6 +39,7 @@ from server.cadlink.joblane.preparation import (
     logger as _delivery_logger,
     operation_summary,
     record_job_acceptance,
+    refuse_blocked_return,
     retain_operation_snapshot,
     settle_received_snapshots,
     settle_snapshot_operation,
@@ -160,6 +161,13 @@ async def _admit_operation_solve(ctx, operation_id, press, *, manual, schedule, 
     if row is None or (job_id is None and row["state"] in TERMINAL_STATES):
         return row.get("job_id") if row else None
     cancelled = row["state"] in {"cancel_requested", "cancelled"}
+    if job_id is None and not cancelled and await asyncio.to_thread(
+        refuse_blocked_return, store, ctx.data_dir, row
+    ):
+        # Judged again under the fence: a return the shared preflight rules
+        # block never gets a job, whichever pass reaches it first.
+        _publish(ctx, await asyncio.to_thread(store.get_operation, operation_id))
+        return None
     if retention == RETAIN_TRANSIENT and not cancelled and not delivery_released:
         waiting = await asyncio.to_thread(waiting_claim_operation_ids, ctx.data_dir)
         if operation_id in waiting:
@@ -176,7 +184,13 @@ async def _admit_operation_solve(ctx, operation_id, press, *, manual, schedule, 
         press = press or PreparationInput(submit=not manual)
         # What the user answered in Fusion before sending: Solve anyway over
         # the triangle ceiling is the same answer as in WG, so WG does not ask.
+        # Only for the preparation Fusion asked for: a press naming another
+        # setup or axis makes another mesh, which WG asks about again.
         acknowledged = tuple(inputs.get("acknowledged") or ())
+        fusion_override = "mesh_too_large" in acknowledged and same_preparation(
+            row.get("setup_revision_id"), row.get("frame_axis"),
+            press.setup_revision_id, press.expected_frame_axis,
+        )
         try:
             intent = CadSolveIntent(
                 operation_id=operation_id, bundle_path=inputs["bundle_path"],
@@ -186,7 +200,7 @@ async def _admit_operation_solve(ctx, operation_id, press, *, manual, schedule, 
                 approvals=(dict(preparation_id=press.approve_preparation_id, finding_ids=list(press.approve_finding_ids))
                            if press.approve_preparation_id else None),
                 acknowledged=acknowledged,
-                mesh_limit_override="mesh_too_large" in acknowledged,
+                mesh_limit_override=fusion_override,
             )
         except ValueError as exc:
             raise BadSolvePayload(str(exc)) from exc

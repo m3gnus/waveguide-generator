@@ -18,23 +18,27 @@ from server.cadlink import wglink_protocol
 from server.cadlink.intake import solve_command
 from server.cadlink.intake.preflight import admission_refusal, blocking_findings
 from server.cadlink.intake.solve_command import InvalidRequest, _command_from_payload, collect_solve_deliveries
-from server.cadlink.joblane.preparation import retain_operation_snapshot, settle_snapshot_operation
+from server.cadlink.joblane.preparation import settle_snapshot_operation
 from server.cadlink.operations import (
     PREFLIGHT_BLOCKED,
     PREPARE_AND_SOLVE,
     REASON_CODES,
     REJECTED,
-    TERMINAL_STATES,
     prepare_and_solve_request,
     request_digest,
 )
 from server.jobs.cad_intent import intent_of
-from server.mesh.builder import MAX_SOLVER_MESH_ARTIFACT_TRIANGLES, _enforce_artifact_triangle_ceiling
+from server.mesh.builder import (
+    LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES,
+    MAX_SOLVER_MESH_ARTIFACT_TRIANGLES,
+    _enforce_artifact_triangle_ceiling,
+)
 
 from cad_backends import JobsHarness
 from test_cad_preparation import _collect, _manifest, _revision, _setup, _write_return
 from test_cad_request_acknowledgement import _ack
 from test_cad_solve_delivery import _file, _payload
+from test_wglink_packaged_pair import CORPUS, PIN, _from_package, packaged  # noqa: F401 - fixture
 
 SHARED = Path(__file__).resolve().parent / "fixtures/wglink-shared-protocol"
 CASES = json.loads((SHARED / "preflight-v1/cases.json").read_text("utf-8"))
@@ -101,6 +105,7 @@ def test_a_manifest_never_claims_a_body_was_declared():
 
 def test_wg_owns_the_ceiling_the_addin_falls_back_to():
     assert wglink_protocol.DEFAULT_SOLVED_TRIANGLE_LIMIT == MAX_SOLVER_MESH_ARTIFACT_TRIANGLES
+    assert wglink_protocol.DEFAULT_TRIANGLE_WARNING == LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES
     assert wglink_protocol.ACKNOWLEDGES["mesh_ceiling"] == "mesh_too_large"
     assert REASON_CODES["mesh_too_large"] != REJECTED  # The hold the answer settles.
 
@@ -192,16 +197,7 @@ def h(tmp_path: Path):
 def test_a_blocked_solve_is_refused_at_admission_never_prepared(h: JobsHarness):
     bundle_path, manifest = _blocked_return(h.workspace)
     _file(h.data_dir, "cmd-1", bundle_path, manifest, schema=4, kind="prepare_and_solve")
-    admitted = []
-
-    def admit(operation_id):
-        admitted.append(operation_id)
-        return h.store.get_operation(operation_id)["state"] in TERMINAL_STATES
-
-    collect_solve_deliveries(
-        h.data_dir, h.store, accept_solve=admit,
-        retain=lambda op: retain_operation_snapshot(h.store, h.data_dir, h.workspace.resolve(), op),
-    )
+    h.delivery_pass()  # Production retention and admission.
     row = h.store.get_operation("cmd-1")
     assert (row["state"], row["reason"]) == ("rejected", PREFLIGHT_BLOCKED)
     ack = _ack(h.data_dir, "cmd-1")
@@ -274,3 +270,123 @@ def test_solve_anyway_from_fusion_is_not_asked_again(h: JobsHarness, answered: b
         assert row["task_metadata"]["cad"]["mesh_limit_override"] == {"accepted": True, "source": "fusion"}
     else:
         assert summary["reason"] == "mesh_too_large"
+
+
+# -- the refusal is one transaction, whoever reaches it ----------------------------
+
+def _delivered_blocked_solve(h: JobsHarness) -> None:
+    bundle_path, manifest = _blocked_return(h.workspace)
+    _file(h.data_dir, "cmd-1", bundle_path, manifest, schema=4, kind="prepare_and_solve")
+
+
+def test_a_refusal_that_cannot_be_recorded_is_retried_never_admitted(h: JobsHarness, monkeypatch, tmp_path: Path):
+    from server.platform.incidents import configure_incidents
+
+    incidents = configure_incidents(tmp_path / "wg-data", app_root=tmp_path / "app")
+    _delivered_blocked_solve(h)
+    real = h.store.reject_received
+    failures = []
+
+    def fails_once(*args, **kwargs):
+        if not failures:
+            failures.append(1)
+            raise RuntimeError("store write lost")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(h.store, "reject_received", fails_once)
+    # The production delivery pass and admission (run_delivery_pass, accept_operation_solve).
+    h.delivery_pass()
+    assert h.store.get_operation("cmd-1")["state"] == "received"  # Kept, not admitted.
+    h.delivery_pass()
+    row = h.store.get_operation("cmd-1")
+    assert (row["state"], row["reason"]) == ("rejected", PREFLIGHT_BLOCKED)
+    assert h.jobs_store.latest_cad_job("cmd-1") is None
+    assert _ack(h.data_dir, "cmd-1")["outcome"] == "refused"
+    [record] = incidents.list(kind="preflight-refusal-not-recorded")
+    assert record["latest"]["ids"]["operation_id"] == "cmd-1"
+
+
+def test_two_admissions_racing_record_one_refusal_and_no_job(h: JobsHarness):
+    import asyncio
+
+    from server.cadlink.joblane.job_shims import accept_operation_solve
+
+    bundle_path, manifest = _blocked_return(h.workspace)
+    target, inputs = prepare_and_solve_request(return_id="wgr_1", bundle_path=bundle_path, manifest_sha256=manifest)
+    h.store.accept_operation("cmd-1", PREPARE_AND_SOLVE, request_digest(PREPARE_AND_SOLVE, target, inputs),
+                             target, inputs)
+    recorded = []
+    real = h.store.reject_received
+    h.store.reject_received = lambda *a, **k: (recorded.append(real(*a, **k)), recorded[-1])[1]
+
+    async def both():
+        return await asyncio.gather(*(
+            accept_operation_solve(h.context(), "cmd-1", schedule=False, delivery_released=True)
+            for _ in range(2)
+        ))
+
+    assert h._loop.run(both()) == [None, None]
+    assert len([row for row in recorded if row is not None]) == 1
+    row = h.store.get_operation("cmd-1")
+    assert (row["state"], row["reason"]) == ("rejected", PREFLIGHT_BLOCKED)
+    assert h.jobs_store.latest_cad_job("cmd-1") is None
+
+
+def test_the_pinned_writers_bundle_is_admitted(packaged, h: JobsHarness):  # noqa: F811
+    """The frozen packaged writer (``integrations/wglink/source.json``) passes the rules."""
+
+    assert PIN["addinVersion"] == "0.3.2"
+    with _from_package(packaged, "wglink_return.py") as writer:
+        fixture = CORPUS / "automatic-full.wgreturn"
+        fields = deepcopy(json.loads((fixture / "wgreturn.json").read_text()))
+        fields["return_record"] = fields.pop("return")
+        fields.pop("acoustics")
+        fields["wgreturn_version"] = "1.1"
+        fields["required_features"].remove("domain-automatic-v1")
+        fields["assembly"].pop("domain")
+        fields["assembly"]["signature_hash"] = "sha256:" + "4" * 64
+        fields["scope"]["included"][0].update(component="Body1", external_reference="none")
+        manifest = writer.build_return_manifest(**fields)
+        body = writer.dumps_return_manifest(manifest).encode("utf-8")
+    assert admission_refusal(json.loads(body)) is None
+    bundle = h.workspace / "wgreturn/pinned.wgreturn"
+    bundle.mkdir(parents=True)
+    (bundle / "assembly.step").write_bytes((fixture / "assembly.step").read_bytes())
+    (bundle / "wgreturn.json").write_bytes(body)
+    _file(h.data_dir, "cmd-1", "wgreturn/pinned.wgreturn", "sha256:" + hashlib.sha256(body).hexdigest(),
+          schema=4, kind="prepare_and_solve", returnId=manifest["return"]["id"])
+    _collect(h)
+    assert h.store.get_operation("cmd-1")["state"] != "rejected"
+    assert h.jobs_store.latest_cad_job("cmd-1") is not None
+
+
+def test_a_fusion_answer_holds_only_for_the_preparation_it_was_given_for(h: JobsHarness):
+    from server.cadlink.joblane.job_shims import accept_operation_solve
+
+    bundle_path, manifest = _write_return(h.workspace)
+    _file(h.data_dir, "cmd-1", bundle_path, manifest, schema=4, kind="prepare_and_solve",
+          acknowledged=["mesh_too_large"])
+    _collect(h)
+    job = h.latest_job()
+    assert intent_of(job).mesh_limit_override is True
+    other = _revision(h.store, _setup(rigid=12.0))
+    from server.jobs.cad_intent import same_preparation
+
+    assert same_preparation(None, None, None, None)
+    assert not same_preparation(None, None, other, None)
+    assert not same_preparation("rev-a", "+z", None, "-z")
+    assert same_preparation("rev-a", "+z", "rev-b", None, recorded="rev-b")
+    # A manual-waiting delivery (Prepare in WG first) carries the answer only
+    # through a press that keeps the delivery's preparation.
+    bundle_path, manifest = _write_return(h.workspace, "second.wgreturn")
+    target, inputs = prepare_and_solve_request(return_id="wgr_1", bundle_path=bundle_path, manifest_sha256=manifest,
+                                               acknowledged=("mesh_too_large",))
+    h.store.accept_operation("cmd-2", PREPARE_AND_SOLVE, request_digest(PREPARE_AND_SOLVE, target, inputs),
+                             target, inputs)
+    job_id = h._loop.run(accept_operation_solve(h.context(), "cmd-2", manual=True, schedule=False,
+                                                delivery_released=True))
+    row = h.jobs_store.get_job_row(job_id)
+    assert row["task_metadata"]["cad"].get("manual_waiting") is True
+    assert intent_of(row).mesh_limit_override is True
+    h._loop.run(h.runtime.prepare_cad_solve(job_id, setup_revision_id=other))
+    assert intent_of(h.jobs_store.get_job_row(job_id)).mesh_limit_override is False

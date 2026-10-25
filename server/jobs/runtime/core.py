@@ -59,6 +59,7 @@ from server.jobs.cad_intent import (
     cad_of,
     carried_record,
     intent_of,
+    same_preparation,
     solve_again_intent,
 )
 from server.platform.feature_flags import fem_regions_enabled
@@ -2397,8 +2398,15 @@ class JobRuntime:
                          "finding_ids": list(press.get("approve_finding_ids") or ())}
                         if press.get("approve_preparation_id") else None
                     ),
-                    # Solve anyway, chosen when the mesh on screen was prepared.
-                    mesh_limit_override=press.get("mesh_limit_override") is True or intent.mesh_limit_override,
+                    # Solve anyway, chosen when the mesh on screen was prepared, or
+                    # answered in Fusion: only while this press keeps that preparation.
+                    mesh_limit_override=press.get("mesh_limit_override") is True or (
+                        intent.mesh_limit_override and same_preparation(
+                            intent.setup_revision_id, intent.frame_axis,
+                            press.get("setup_revision_id"), press.get("frame_axis"),
+                            recorded=(cad_of(row).get("setup") or {}).get("revision_id"),
+                        )
+                    ),
                 )
                 press_sha256 = self._cad_solve_press_sha256(job_id, **{
                     key: press[key] for key in (

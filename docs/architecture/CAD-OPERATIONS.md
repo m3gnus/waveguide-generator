@@ -1754,17 +1754,23 @@ admission use one rule set, `preflight_findings` in the vendored `wglink_protoco
 `server/cadlink/intake/preflight.py` only applies it. A finding blocks, asks or notes:
 
 - **block**: Fusion keeps Send and Solve disabled with the remedy. WG meets one only from
-  an older or another writer: at retention, before anything claims the operation, the
-  return's manifest (`manifest_draft`) is checked and a blocked return is `rejected`
-  with `preflight_blocked` and the rules' words as its message, which its
-  acknowledgement carries back. It is never prepared. A failure of the rules
-  themselves is WG's own: recorded as a developer incident, and the return is admitted.
+  an older or another writer: at retention, and again inside the operation fence before
+  admission creates a job, a delivered return nothing has claimed is checked
+  (`manifest_draft`) and a blocked one is `rejected` with `preflight_blocked` and the
+  rules' words as its message, which its acknowledgement carries back. The rejection
+  is one store transaction (`reject_received`: conditional on `received` with no job),
+  so no claimed row is left without its outcome and of two passes racing one records
+  it. It is never prepared. A store failure recording it is a developer incident and
+  the delivery is retried, never admitted; a failure of the rules themselves is an
+  incident too, and the return is admitted.
 - **ask**: asked once in Fusion's pop-up on OK. The answer that settles a WG hold travels
   as `acknowledged` (`ACKNOWLEDGES`: `mesh_ceiling` answers `mesh_too_large`, Solve
   anyway). Admission makes it the job's `mesh_limit_override`, recorded with
-  `source: "fusion"`, so WG does not ask again for that preparation; a Solve again that
-  prepares another mesh asks, as Solve anyway in WG does. Without the field WG holds
-  and asks as before.
+  `source: "fusion"`, so WG does not ask again for that preparation. It holds only while
+  a press keeps the delivery's setup revision and axis (`cad_intent.same_preparation`,
+  the rule Solve anyway in WG follows): a first press in WG or a Solve again that names
+  another makes another mesh, and WG asks. Without the field WG holds and asks as
+  before.
 - **note**: said in the dialog and sent.
 
 If a Send or Solve write's outcome is unknown, the add-in retries the same ID and fields
