@@ -357,14 +357,16 @@ loads without a FEM region. Structural vibration and cone breakup are not modell
 
 ## 7. Check the axis and symmetry
 
-1. For a model drawn from scratch, check **Radiates along** on the Solve card.
+1. For a model drawn from scratch, check **Radiates along** in **Model details**
+   (collapsed under the model's status line on the Imported mesh tab).
    WG never asks which way a model radiates: it works the axis out from the
    model and records it in the run. When the evidence is weak it uses its
    documented fallback and says so: “WG chose +Z; change it if the model
    radiates another way.” Solve never waits on it. To pick another axis, use
    **Change**, choose +X, −X, +Y, −Y, +Z or −Z and inspect the side/top
    previews. The outgoing direction becomes solver +Z, shown in blue; sources
-   are orange. **Solve** keeps your choice for the project. Exporting in a
+   are orange. **Solve** keeps your choice for the project; once WG has solved
+   the model along its own axis, **Done** keeps it at once. Exporting in a
    different component's coordinates, or from an unsaved Fusion document, is
    decided again by WG; save the document for continuity between returns.
 2. Prefer sending the whole speaker. WG checks the finished geometry and each
@@ -374,7 +376,7 @@ loads without a FEM region. Structural vibration and cone breakup are not modell
    every mirror you intend to use. Matching outer dimensions alone is not enough.
 3. For a model drawn in CAD, place the throat at the origin and centre the
    speaker on the two planes through its radiation axis if you want WG to
-   detect mirror symmetry. Read the domain line on the Solve card. For a whole
+   detect mirror symmetry. Read the domain line in Model details. For a whole
    model, **Waveguide Generator ▸ Sources & Mesh…** in Fusion, set **Symmetry**
    to **Off**, save and **Send** again to disable automatic cutting.
 4. If you cut the model in Fusion, use the YZ or XZ origin plane (x = 0 or y = 0)
@@ -382,7 +384,7 @@ loads without a FEM region. Structural vibration and cone breakup are not modell
    cap there would be solved as a wall. Sources must still be identified, with
    a source meeting each cut plane, no other leaking edges and no side-specific
    source identity. WG can recover a clean negative-side half by reflection and
-   states that on the card. Positive-side cuts are the simplest convention.
+   states that in Model details. Positive-side cuts are the simplest convention.
 5. Use the domain line's **Change** only for the alternative readings WG offers.
    Solve prepares it again under that choice. An unsafe open half is refused;
    **Symmetry Off** cannot restore geometry missing from the file.
@@ -414,7 +416,7 @@ A moving perimeter edge on a mirror plane is treated as a driver cut, including
 an edge that only touches the plane. The driver's motion axis must lie in each
 cutting plane. If it does not, send complete geometry with **Symmetry Off** in Fusion’s **Sources & Mesh…**.
 
-**[Screenshot placeholder: Solve card showing Radiates along, the domain line and Change, with a quarter-model preview.]**
+**[Screenshot placeholder: Model details showing the domain line, Radiates along and Change, the mesh from Fusion and the checks.]**
 
 ## 8. Send, choose a solver, and solve
 
@@ -464,7 +466,7 @@ link card offers **Bring in & solve**, it asks Fusion for its current model,
 prepares it and starts the solve. The command palette's **Pull from Fusion &
 Solve** does the same. These requests need the Waveguide Generator add-in in Fusion running.
 
-If a request needs your input, the Solve card shows **Fusion asked for a solve**
+If a request needs your input, the model card shows **Fusion asked for a solve**
 and the reason it is waiting. Correct the settings or review the findings, then
 use **Solve** or **Approve and solve** as offered. **Dismiss** retires the
 request. Completing or dismissing it consumes it, so it cannot start another

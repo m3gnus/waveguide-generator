@@ -184,7 +184,7 @@ function MeshLine({ record }: { record: CadReturnIngestRecord }) {
       ? `${source.role} ${sizes.sources[source.id]} mm` : null),
     ...sizes.zones.map((zone) => `${zone.name} ${zone.size_mm} mm`),
     typeof triangles === 'number' ? `${triangles.toLocaleString('en-US')} triangles` : null,
-    typeof sizing.ram_gb === 'number' ? `about ${sizing.ram_gb.toFixed(1)} GB` : null,
+    typeof sizing.ram_gb === 'number' ? sizing.ram_gb < 0.05 ? 'under 0.1 GB' : `about ${sizing.ram_gb.toFixed(1)} GB` : null,
     caution ? feasibility : null,
   ].filter(Boolean);
   return <div className={`cad-mesh-line${caution ? ' cad-mesh-line-caution' : ''}`} data-mesh-origin={snapshot ? 'fusion' : 'wg'}>

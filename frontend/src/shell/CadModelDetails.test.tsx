@@ -199,6 +199,11 @@ describe('Model details, and the run status Results shows for its model', () => 
     expect(line.textContent).not.toContain('Fusion');
   });
 
+  it('never rounds a small mesh to no memory at all', async () => {
+    await act(async () => root.render(<Details value={record({ sizing_estimate: { n_triangles: 738, ram_gb: 0.004 } } as never)}/>));
+    expect(host.querySelector('.cad-mesh-line')?.textContent).toContain('3,035 triangles · under 0.1 GB');
+  });
+
   it('opens by itself when the model cannot be solved along its own axis, and draws no preview before Change', async () => {
     const frame = {
       linked: false, ingestId: 'wgi_run', contract: 'cad-solver-frame-v2', recordAxis: '+z', recordStatesFrame: true,

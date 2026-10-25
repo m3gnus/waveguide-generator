@@ -491,8 +491,8 @@ frame, so WG infers which way it radiates. WG never asks: every solve nobody cho
 an axis for -- a Fusion request, a Solve in WG's own panel, a manually imported or CAD
 Link prepared model, a restored run, a re-solve -- uses its confident inference, or
 else a documented fallback ranking, records a fallback as such for developers, and
-stores the decision on the record it prepared. The Solve card shows the chosen axis as
-information with **Change** (a fallback adds one calm line, "WG chose +Z; change it if
+stores the decision on the record it prepared. The model's Model details shows the chosen axis as
+information with its one **Change** (a fallback adds one calm line, "WG chose +Z; change it if
 the model radiates another way."), never a confirmation Solve waits on. Saved manual
 choices take precedence (see "Automatic axis" below).
 `server/cadlink/interpretation/solver_frame.py` is the executable half of this section, and
@@ -860,7 +860,7 @@ New work during an approved update restart uses the jobs API's
 by OpenAPI.
 
 WG's Solve controls make one `POST /api/models/{id}/solve` per press and read
-the jobs channel. Solve cards, waiting notices and completion claims read the
+the jobs channel. Status lines, waiting notices and completion claims read the
 latest job of each continuation chain, independently of operation events. The
 server owns the press identity: no session cache holds a press across a lost
 response or reload, since a repeated press of the same settings is the job
@@ -1036,7 +1036,7 @@ under `frontend/src/` unless they start with `server/`.
 | 25 | "Bring in geometry" joins repeated pulls, waits for the correlated return, reports refusal or timeout; late returns after timeout remain discoverable | none (a correlation id, not a job) | `shell/cadlink/returnWaiter.ts`, exact file outcome reader/router `server/cadlink/fusion/fusion_return.py`; the waiter alone selects a pending correlated pull; Bring in and solve reports preparation/submission and clears stale status on failure | `returnWaiter.test.ts` correlation, joining, refusal, deadline, stalled batches and command cancellation; `CadWorkspaceOwners.test.ts` plain-pull and pull-and-solve ingestion, phase/error feedback and late-after-timeout discovery; `test_fusion_return.py :: test_production_cadlink_mount_exposes_exact_file_return_outcome` |
 | 26 | Onshape returns stay ingestible with their own origin, without Fusion-folder polling | none | `shell/cadlink/arrivals.ts` origin-aware Onshape actions/readers, UI capability gate; `shell/CadWorkspaceOwners.tsx` gates Fusion receipt display and fences every deferred boundary | `arrivals.test.ts` Onshape origin/identity/instance fences; `CadWorkspaceOwners.test.ts` Onshape mount and deferred display isolation; `CadLinkPanel.test.tsx` Onshape choices and return display |
 | 27 | Retries and reloads keep one solve identity; a waiting solve for the snapshot is continued, not duplicated | *job* | `jobs/cadSolve.ts`, `shell/JobsCoordinator.tsx` client request id and `/solve-again` | `M1bSolveCard.test.tsx`; `JobsCoordinator.mutex.test.tsx` continuation and press-mutex tests |
-| 28 | The solve card shows the latest request for its snapshot, never a previous run's outcome | *job* (`cad_state`) | `shell/CadSolveCard.tsx`, `shell/CadOperationsSection.tsx` job selector | `CadSolveCard.test.tsx :: never shows a previous run's outcome under a new request for the same snapshot` |
+| 28 | The model's run status shows the latest request for its snapshot, never a previous run's outcome | *job* (`cad_state`) | `shell/CurrentModelStatus.tsx`, `shell/CadOperationsSection.tsx` job selector | `CadModelDetails.test.tsx :: never shows a previous run's outcome under a new request for the same snapshot` |
 | 29 | Solve again continues a refused solve with its inputs and approvals; repeated presses share one child | *job* | `server/jobs/runtime/`, `jobs/cadSolve.ts` `/solve-again` | `server/tests/test_job_cad_lane.py :: test_two_solve_again_presses_share_one_continuation` |
 | 30 | A newly actionable request fronts CAD Link only while the user has not navigated away | partial (solve gates: jobs; recovery: row 16) | `shell/solveAttention.ts :: useJobAttention` and `useRecoveryNoticeAttention`; only command submission arms mutation attention | `solveAttention.recovery.test.tsx` submission/navigation/active-document fences; `solveAttention.test.tsx` job attention |
 
