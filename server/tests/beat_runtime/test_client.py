@@ -11,6 +11,7 @@ import pytest
 
 from server.solver.beat_runtime import client, ipc, registry as r, spawn
 from server.tests.beat_runtime.fake_host_worker import events, wait_until
+from server.tests.beat_runtime.host_serving import serving
 from server.tests.beat_runtime.test_host import authenticated
 
 
@@ -357,19 +358,12 @@ def test_connect_client_configures_stream_before_hello(launch, monkeypatch, tran
         monkeypatch.setattr(ipc.Endpoint, "_address", lambda self: self.path.name if self.kind == "unix" else address(self))
     owner = host.WorkerHost(key, directory, engine_factory=EngineWorker)
     record = owner.bind()
-    thread = threading.Thread(target=owner.serve)
-    thread.start()
     original = client.configure_stream_socket
     monkeypatch.setattr(client, "configure_stream_socket", lambda peer, **kw: (requested.append(kw), original(peer, **kw))[1])
-    try:
+    with serving(owner):
         with client.connect_client(record, directory) as peer:
             assert peer.fileno() >= 0
         assert requested == [{"tcp": transport == "tcp"}]
-    finally:
-        owner._stopping.set()
-        thread.join(timeout=2)
-        assert not thread.is_alive()
-        owner.close()
 
 
 @pytest.mark.parametrize("error_type", [ValueError, RuntimeError, r.RecordRefused, ipc.FrameError])

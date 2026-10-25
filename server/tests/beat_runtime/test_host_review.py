@@ -11,6 +11,7 @@ import pytest
 
 from server.solver.beat_runtime import host, ipc, registry as r, spawn
 from server.tests.beat_runtime.fake_host_worker import EngineWorker, events, wait_until
+from server.tests.beat_runtime.host_serving import serving
 from server.tests.beat_runtime.test_host import authenticated
 
 
@@ -120,9 +121,7 @@ def test_authenticated_capacity_is_enforced_at_admission(launch, monkeypatch):
     owner = host.WorkerHost(key, directory, engine_factory=EngineWorker)
     owner.bind()
     monkeypatch.setattr(host, 'MAX_CLIENTS', 1)
-    serving = threading.Thread(target=owner.serve)
-    serving.start()
-    try:
+    with serving(owner):
         with authenticated(owner.record):
             with owner.record.endpoint.connect(1) as connection:
                 ipc.send_frame(connection, r.hello_message(owner.record))
@@ -133,10 +132,6 @@ def test_authenticated_capacity_is_enforced_at_admission(launch, monkeypatch):
                 refused = ipc.receive_frame(connection)
                 assert refused['type'] == 'hello_refused'
                 assert 'capacity' in refused['reason']
-    finally:
-        owner.close()
-        serving.join(timeout=1)
-    assert not serving.is_alive()
 
 
 @pytest.mark.parametrize('persistent,idle_polls', [(False, False), (True, False), (True, True)])
@@ -170,12 +165,9 @@ def test_accept_oserror_retries_with_bounded_error_budget(launch, persistent, id
 
     faulty = FaultyListener()
     owner._server = faulty
-    serving = threading.Thread(target=owner.serve)
-    serving.start()
-    try:
+    with serving(owner) as thread:
         if persistent:
-            serving.join(timeout=1)
-            assert not serving.is_alive()
+            thread.join()  # Exits on its own when the error budget is spent.
             expected_calls = host.ACCEPT_ERROR_BUDGET
             if idle_polls:
                 expected_calls += host.ACCEPT_ERROR_BUDGET - 1
@@ -184,9 +176,6 @@ def test_accept_oserror_retries_with_bounded_error_budget(launch, persistent, id
             with authenticated(owner.record) as client:
                 ipc.send_frame(client, {'op': 'ping'})
                 assert ipc.receive_frame(client)['type'] == 'pong'
-    finally:
-        owner.close()
-        serving.join(timeout=1)
     assert 'accept failed' in r.log_path(owner.identifier, directory).read_text()
 
 
@@ -214,16 +203,10 @@ def test_accept_error_followed_by_healthy_idle_poll_preserves_idle_exit(launch):
 
     recovering = RecoveringListener()
     owner._server = recovering
-    serving = threading.Thread(target=owner.serve)
-    serving.start()
-    try:
-        serving.join(timeout=1)
-        assert not serving.is_alive()
+    with serving(owner) as thread:
+        thread.join()  # Idle expiry ends serve() without close().
         assert recovering.calls == 2
         assert 'idle exit' in r.log_path(owner.identifier, directory).read_text()
-    finally:
-        owner.close()
-        serving.join(timeout=1)
 
 
 def test_start_truncates_log_and_records_serving_idle_exit_and_failures(launch):
