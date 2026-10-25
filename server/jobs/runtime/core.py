@@ -4367,6 +4367,11 @@ class JobRuntime:
                 state.stage = str(stage)
                 state.progress = float(progress if progress is not None else 0.0)
                 state.message = str(message or "")
+                # Every update moves the kept count, so a count-less line
+                # coalesced after a count never leaves it one behind.
+                state.frequency = advance_frequency_progress(
+                    state.frequency, state.stage, state.message
+                )
             if log_message is not None:
                 state.log_lines.append(str(log_message))
 
@@ -4413,11 +4418,7 @@ class JobRuntime:
         while not state.closed and state.pending:
             fields: dict[str, Any] = {}
             stage_payload: dict[str, Any] | None = None
-            frequency: dict[str, Any] | None = None
             if state.stage is not None:
-                frequency = advance_frequency_progress(
-                    state.frequency, state.stage, state.message
-                )
                 fields = {
                     "stage": state.stage,
                     "stage_message": state.message or "",
@@ -4431,7 +4432,7 @@ class JobRuntime:
                     "progress": (
                         state.progress if state.progress is not None else 0.0
                     ),
-                    "frequency_progress": frequency,
+                    "frequency_progress": state.frequency,
                 }
 
             if state.log_lines and state.pinned_log_lines is None:
@@ -4459,7 +4460,6 @@ class JobRuntime:
             if changed:
                 if state.stage is not None:
                     state.persisted_stage = state.stage
-                    state.frequency = frequency
                 for event in events:
                     self.events.publish(event)
 

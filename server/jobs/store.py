@@ -26,7 +26,7 @@ from server.cadlink.operations import (
     hold_details, hold_stage_message, user_hold,
 )
 from server.jobs.cad_intent import return_identity
-from server.jobs.progress import METADATA_KEY as FREQUENCY_METADATA_KEY
+from server.jobs.progress import METADATA_KEY as FREQUENCY_METADATA_KEY, checked_frequency_progress
 from server.jobs.result_contracts import RESULT_ENVELOPE_ADAPTER
 from server.platform.incidents import retain_job_logs
 from server.platform.paths import DATA_DIR_ENV, app_root, data_paths
@@ -1943,8 +1943,7 @@ class JobStore:
             if stage_payload is not None:
                 if metadata is None:
                     metadata = json.loads(row["task_metadata_json"] or "{}")
-                found = stage_payload.get(FREQUENCY_METADATA_KEY)
-                frequency = dict(found) if isinstance(found, Mapping) else None
+                frequency = checked_frequency_progress(stage_payload.get(FREQUENCY_METADATA_KEY))
                 if metadata.get(FREQUENCY_METADATA_KEY) != frequency or "task_metadata_json" in values:
                     metadata[FREQUENCY_METADATA_KEY] = frequency
                     values["task_metadata_json"] = json.dumps(metadata)
@@ -3635,6 +3634,20 @@ class JobStore:
         values["updated_at"] = _now_iso()
         assignments = [f"{key} = ?" for key in values]
         params = [self._db_value(key, value) for key, value in values.items()]
+        if values.get("status") is not None and values["status"] not in ACTIVE_STATUSES:
+            # A job that stops is no longer solving: its kept frequency count
+            # (server/jobs/progress.py) goes with it. Rows without one keep their bytes.
+            if "task_metadata_json" in values:
+                metadata = json.loads(values["task_metadata_json"] or "{}")
+                if isinstance(metadata, dict) and metadata.pop(FREQUENCY_METADATA_KEY, None) is not None:
+                    params[list(values).index("task_metadata_json")] = json.dumps(metadata)
+            else:
+                assignments.append(
+                    "task_metadata_json = CASE WHEN json_valid(task_metadata_json)"
+                    f" AND json_type(task_metadata_json, '$.{FREQUENCY_METADATA_KEY}') IS NOT NULL"
+                    f" THEN json_remove(task_metadata_json, '$.{FREQUENCY_METADATA_KEY}')"
+                    " ELSE task_metadata_json END"
+                )
         cur = conn.execute(
             f"UPDATE simulation_jobs SET {', '.join(assignments)} WHERE id = ?",
             [*params, job_id],

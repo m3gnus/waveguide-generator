@@ -9,6 +9,7 @@ that one value.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ import pytest
 from server.jobs.models import JobItem
 from server.jobs.progress import (
     advance_frequency_progress,
+    checked_frequency_progress,
     frequency_progress,
     job_frequency_progress,
 )
@@ -33,8 +35,8 @@ from server.jobs.store import JobStore
     ("Solving frequency 3/12 with Metal BEM", {"done": 3, "total": 12}),
     ("Solving frequency 1/12 with BEAT Engine", {"done": 1, "total": 12}),
     ("Solving frequency 12/12 with BEMPP BEM", {"done": 12, "total": 12}),
-    # Official BEAT's own wording, and the transducer adapter's.
-    ("Solved frequency 3/12", {"done": 3, "total": 12}),
+    # The BEAT FEM path, and the transducer adapter's own wording.
+    ("Solving frequency 4/30 with FEM (400 Hz)", {"done": 4, "total": 30}),
     ("Solved 5 of 40 frequencies", {"done": 5, "total": 40}),
     # An imported message is a channel count, never a false overall count.
     ("Solving frequency 2/8 of drive channel 1/3 (hf) with BEAT Engine",
@@ -51,7 +53,9 @@ def test_a_stage_message_with_a_count_reads_as_done_of_total(message: str, expec
 
 
 @pytest.mark.parametrize("message", [
-    "Configuring BEMPP BEM solve (cpu)", "Solving FEM at 400 Hz", "", None, "Solving frequency 0/0",
+    "Configuring BEMPP BEM solve (cpu)", "Configuring FEM (cpu, float64)", "", None, "Solving frequency 0/0",
+    # A channel past its count is not a count.
+    "Solving frequency 2/8 of drive channel 4/3 (hf)",
 ])
 def test_a_message_with_no_count_has_none(message: str | None) -> None:
     assert frequency_progress(message) is None
@@ -83,6 +87,18 @@ def test_the_read_model_shows_a_stored_count_only_while_solving() -> None:
     assert job_frequency_progress({"status": "running", "stage": "solve", "task_metadata": {}}) is None
     bad = {"status": "running", "stage": "solve", "task_metadata": {"frequency_progress": {"done": 9, "total": 8}}}
     assert job_frequency_progress(bad) is None
+
+
+def test_one_check_serves_the_parsed_value_and_the_stored_one() -> None:
+    assert checked_frequency_progress({"done": 2, "total": 8, "channel": {"index": 1, "count": 3}}) == {
+        "done": 2, "total": 8, "channel": {"index": 1, "count": 3}}
+    for bad in ({"done": 9, "total": 8}, {"done": 1, "total": 0}, {"done": True, "total": 2},
+                {"done": 1, "total": 2, "channel": {"index": 3, "count": 2}},
+                {"done": 1, "total": 2, "channel": "hf"}, None, "2/8"):
+        assert checked_frequency_progress(bad) is None
+    stored = {"status": "running", "stage": "solve",
+              "task_metadata": {"frequency_progress": {"done": 1, "total": 2, "channel": {"index": 3, "count": 2}}}}
+    assert job_frequency_progress(stored) is None
 
 
 # -- the runtime stores it and sends it ----------------------------------------------
@@ -149,3 +165,50 @@ def test_a_log_only_flush_leaves_the_stored_count_alone(tmp_path: Path) -> None:
         await runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_a_count_less_line_coalesced_after_a_count_keeps_the_newer_count(tmp_path: Path) -> None:
+    async def scenario() -> dict[str, Any] | None:
+        store = JobStore.for_data_dir(tmp_path)
+        store.initialize()
+        store.create_job(_running("coalesced"))
+        runtime = JobRuntime(store, persistence_interval_seconds=60.0)
+        runtime._started = True
+        await runtime._report_real_stage("coalesced", "frequency_solve", 0.25, "Solving frequency 1/4 with BEAT Engine")
+        await runtime._report_real_stage("coalesced", "frequency_solve", 0.5, "Solving frequency 2/4 with BEAT Engine")
+        await runtime._report_real_stage("coalesced", "frequency_solve", 0.5, "Refining acquisition")
+        await runtime._flush_runtime_update("coalesced")
+        found = job_frequency_progress(store.get_job_row("coalesced"))
+        await runtime.shutdown()
+        return found
+
+    assert asyncio.run(scenario()) == {"done": 2, "total": 4}
+
+
+@pytest.mark.parametrize("status", ["complete", "error", "cancelled"])
+def test_a_job_that_stops_drops_its_stored_count(tmp_path: Path, status: str) -> None:
+    store = JobStore.for_data_dir(tmp_path)
+    store.initialize()
+    store.create_job({**_running("stops"), "task_metadata": {"frequency_progress": {"done": 3, "total": 4}, "kept": 1}})
+    assert store.update_job("stops", status=status)
+    metadata = store.get_job_row("stops")["task_metadata"]
+    assert "frequency_progress" not in metadata and metadata["kept"] == 1
+
+
+def test_a_stop_that_rewrites_metadata_drops_the_count_too(tmp_path: Path) -> None:
+    store = JobStore.for_data_dir(tmp_path)
+    store.initialize()
+    store.create_job({**_running("rewrite"), "task_metadata": {"frequency_progress": {"done": 3, "total": 4}}})
+    assert store.update_job("rewrite", status="complete",
+                            task_metadata_json=json.dumps({"frequency_progress": {"done": 4, "total": 4}, "x": 2}))
+    assert store.get_job_row("rewrite")["task_metadata"] == {"x": 2}
+
+
+def test_a_job_without_a_count_keeps_its_metadata_bytes_when_it_stops(tmp_path: Path) -> None:
+    store = JobStore.for_data_dir(tmp_path)
+    store.initialize()
+    store.create_job({**_running("bytes"), "task_metadata": {"a": 1}})
+    query = "SELECT task_metadata_json FROM simulation_jobs WHERE id = 'bytes'"
+    before = store._connect().execute(query).fetchone()[0]
+    assert store.update_job("bytes", status="complete")
+    assert store._connect().execute(query).fetchone()[0] == before

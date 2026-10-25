@@ -627,7 +627,7 @@ class BeatEngine:
             on_frequency_result=partial_result if result_cb is not None else None,
             status_callback=lambda message: stage_cb("solve", .45, message),
             progress_callback=lambda i, total, freq: stage_cb(
-                "solve", .45 + .4 * (i + 1) / total, f"Solving FEM at {freq:g} Hz"))
+                "solve", .45 + .4 * (i + 1) / total, f"Solving frequency {i + 1}/{total} with FEM ({freq:g} Hz)"))
         cancel_cb()
         results = coupled_envelope(sweep, compiled, context=context, geometry=request.geometry,
                                    record=record, config=config, started=started)
