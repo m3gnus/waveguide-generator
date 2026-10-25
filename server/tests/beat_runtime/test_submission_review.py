@@ -16,20 +16,66 @@ from server.tests.beat_runtime.test_host import authenticated
 from server.tests.beat_runtime.test_host_submissions import submit, until
 
 
+class StopCountingListener:
+    """The host's listener, counting accept() calls begun once it is stopping.
+
+    serve() checks _stopping before every accept and polls accept with a short
+    timeout, so at most one call (the one it was about to make when the stop
+    came) may begin after stopping, however late the thread is scheduled. With
+    ``closing_wakes_accept=False``, close() leaves the socket open until serve()
+    has returned: closing a listener from another thread need not interrupt a
+    pending accept, on Windows in particular, so serve() must not rely on it.
+    """
+
+    def __init__(self, owner, *, closing_wakes_accept=True):
+        self.owner, self.listener = owner, owner._server
+        self.closing_wakes_accept = closing_wakes_accept
+        self.after_stop = 0
+
+    def settimeout(self, value):
+        self.listener.settimeout(value)
+
+    def accept(self):
+        if self.owner._stopping.is_set():
+            self.after_stop += 1
+        return self.listener.accept()
+
+    def close(self):
+        if self.closing_wakes_accept:
+            self.listener.close()
+
+
 @contextmanager
-def running_host(key, directory, *, worker=EngineWorker, owner_type=host.WorkerHost):
+def running_host(key, directory, *, worker=EngineWorker, owner_type=host.WorkerHost,
+                 closing_wakes_accept=True):
     owner = owner_type(key, directory, engine_factory=worker)
     with r.SpawnLock(r.spawn_lock_path(owner.identifier, directory)):
         record = owner.bind()
         r.write_record(record, directory)
+    listener = owner._server = StopCountingListener(owner, closing_wakes_accept=closing_wakes_accept)
     serving = threading.Thread(target=owner.serve)
     serving.start()
     try:
         yield owner
     finally:
-        owner.close()
-        serving.join(timeout=2)
-        assert not serving.is_alive()
+        try:
+            owner.close()
+            # Assert that serve() stops at its next poll, not how soon the
+            # runner schedules it: a hosted Windows runner stalled every
+            # worker for over two seconds and failed a 2 s join here. A real
+            # hang is caught by pytest.ini's faulthandler_timeout.
+            serving.join()
+            assert listener.after_stop <= 1
+        finally:
+            listener.listener.close()
+
+
+def test_close_stops_serve_even_when_closing_the_listener_does_not_wake_accept(launch):
+    key, directory, _ = launch
+    with running_host(key, directory, closing_wakes_accept=False) as owner:
+        with authenticated(owner.record) as active:
+            ipc.send_frame(active, {'op': 'ping'})
+            assert ipc.receive_frame(active)['type'] == 'pong'
 
 
 def test_transient_probe_timeout_adopts_slow_healthy_host_without_shutdown(launch, tmp_path, monkeypatch):
