@@ -80,6 +80,10 @@ def posix_process_group(process: subprocess.Popen[bytes]) -> int | None:
 
 
 def _process_group_alive(group: int) -> bool:
+    if os.name != "posix":
+        # No process groups to poll: a Windows tree is a job object, and
+        # ``os.killpg`` does not exist there.
+        return False
     try:
         os.killpg(group, 0)
     except ProcessLookupError:

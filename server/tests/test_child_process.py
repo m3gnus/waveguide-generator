@@ -390,6 +390,14 @@ def test_worker_tree_waits_for_the_killed_group_to_be_gone(monkeypatch, survives
     assert checks and set(checks) == {42}
 
 
+def test_group_liveness_never_calls_killpg_off_posix(monkeypatch):
+    """Windows has no ``os.killpg``; a group there is never polled, only reported gone."""
+
+    monkeypatch.setattr(child_process.os, "name", "nt")
+    monkeypatch.delattr(child_process.os, "killpg", raising=False)
+    assert child_process._process_group_alive(42) is False
+
+
 def test_an_unconfirmed_stop_is_a_developer_incident_not_user_text(monkeypatch):
     recorded = []
     monkeypatch.setattr(

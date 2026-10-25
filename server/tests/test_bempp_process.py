@@ -792,6 +792,13 @@ class _BufferedConnection:
         return None
 
 
+#: Only a POSIX worker claims and announces a process group; a Windows worker
+#: announces ``None`` and its tree is a job object (``adopt_process_group``).
+_POSIX_GROUP = pytest.mark.skipif(
+    os.name != "posix", reason="process groups exist only on POSIX"
+)
+
+
 def _host_over_a_dying_worker(monkeypatch, buffered: list, *, dead_at_start: bool):
     slot: list = [None]
     parents: list = []
@@ -810,6 +817,9 @@ def _host_over_a_dying_worker(monkeypatch, buffered: list, *, dead_at_start: boo
     killed: list[int | None] = []
     monkeypatch.setattr(bempp_process, "confine_to_windows_job", lambda _pid: None)
     monkeypatch.setattr(bempp_process, "kill_process_group", killed.append)
+    # The announced group is a fake pid: report it gone once it was killed
+    # instead of polling whatever real group that pid may name on this host.
+    monkeypatch.setattr(child_process, "_process_group_alive", lambda group: group not in killed)
 
     async def exercise() -> str:
         host = BemppProcessHost(process_context=Context())
@@ -821,6 +831,7 @@ def _host_over_a_dying_worker(monkeypatch, buffered: list, *, dead_at_start: boo
     return asyncio.run(exercise()), slot[0], parents[0], killed
 
 
+@_POSIX_GROUP
 def test_a_crashed_workers_announced_group_is_killed_after_it_is_reaped(
     monkeypatch,
 ) -> None:
@@ -835,6 +846,7 @@ def test_a_crashed_workers_announced_group_is_killed_after_it_is_reaped(
     assert killed == [424242], "the sweep's group was killed, not skipped"
 
 
+@_POSIX_GROUP
 def test_a_worker_dead_before_the_first_poll_still_has_its_group_killed(
     monkeypatch,
 ) -> None:
@@ -884,6 +896,7 @@ def test_a_worker_that_never_announces_is_not_read_as_having_no_group(
     assert parent.received == [("warm", _WARMUP_JOB_ID, {"warmed": True})]
 
 
+@_POSIX_GROUP
 def test_an_announcement_read_by_a_cancelled_await_is_not_lost(monkeypatch) -> None:
     """Cancel the job while the pipe thread is mid-read of the announcement.
 
@@ -934,6 +947,7 @@ def test_an_announcement_read_by_a_cancelled_await_is_not_lost(monkeypatch) -> N
     killed: list = []
     monkeypatch.setattr(bempp_process, "confine_to_windows_job", lambda _pid: None)
     monkeypatch.setattr(bempp_process, "kill_process_group", killed.append)
+    monkeypatch.setattr(child_process, "_process_group_alive", lambda group: group not in killed)
 
     async def exercise() -> None:
         host = BemppProcessHost(process_context=Context())
