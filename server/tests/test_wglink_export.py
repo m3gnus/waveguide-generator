@@ -95,6 +95,36 @@ def _install_fake_write(monkeypatch) -> list[object]:
     return writes
 
 
+@pytest.mark.parametrize("width,height,refused", [(300, 400, True), (300.5, 400.5, False)])
+def test_wglink_refuses_flush_but_keeps_previously_valid_zero_margin(
+    monkeypatch, tmp_path: Path, width: float, height: float, refused: bool,
+) -> None:
+    design = DesignConfig.model_validate({
+        "formula": "OSSE", "L": 120, "a": 45,
+        "morph": {"target_shape": 1, "target_width": width, "target_height": height},
+        "enclosure": {"depth": 280, "space_l": 0, "space_r": 0,
+                      "space_t": 0, "space_b": 0},
+    })
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _saved(store, design)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    writes = _install_fake_write(monkeypatch)
+
+    if refused:
+        with pytest.raises(HTTPException) as error:
+            api._export_wglink_sync(_request(saved, design), store, workspace, "flush")
+        assert error.value.status_code == 422
+        assert "Flush enclosures cannot be sent to Fusion" in error.value.detail
+        assert not writes
+        assert not (workspace / "wglink").exists()
+        assert store.find_export_by_idempotency_key("flush") is None
+    else:
+        result = api._export_wglink_sync(_request(saved, design), store, workspace, "fractional")
+        assert Path(result["bundlePath"]).is_dir()
+        assert len(writes) == 1
+
+
 def test_the_cad_bundle_is_built_without_the_export_sizing_planners(
     monkeypatch, tmp_path: Path,
 ) -> None:

@@ -397,6 +397,15 @@ def _export_wglink_sync(
 
     try:
         _refuse_ath_step(request.design)
+        from hornlab_mesher.config_builder import resolve_enclosure_bounds
+
+        config = design_to_mesher_config(request.design)
+        enclosure = resolve_enclosure_bounds(config) if config.get("mode") == "enclosure" else None
+        if enclosure is not None and enclosure.get("flush_mount"):
+            raise ValueError(
+                "Flush enclosures cannot be sent to Fusion or exported as a "
+                "WGLink bundle yet. Add an enclosure margin or export STEP."
+            )
     except ValueError as exc:
         raise _export_error(exc, request.design) from exc
     workspace_root = workspace_root.resolve()
