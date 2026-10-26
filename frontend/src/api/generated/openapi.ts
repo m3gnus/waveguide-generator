@@ -6065,6 +6065,25 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** RetainedMeshInspection */
+        RetainedMeshInspection: {
+            /**
+             * Forward
+             * @default +z
+             * @enum {string}
+             */
+            forward?: "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
+            /** Model Id */
+            model_id: string;
+            /** Units */
+            units?: ("mm" | "cm" | "m" | "in") | null;
+            /**
+             * Up
+             * @default +y
+             * @enum {string}
+             */
+            up?: "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
+        };
         /**
          * RunWorkspace
          * @description Everything the frontend opens an imported run with.
@@ -9501,7 +9520,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["MeshInspection"];
+                "application/json": components["schemas"]["MeshInspection"] | components["schemas"]["RetainedMeshInspection"];
             };
         };
         responses: {

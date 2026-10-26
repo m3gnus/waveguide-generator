@@ -1,3 +1,4 @@
+import { planeWords } from '../api/domainDecision';
 import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { editMeshImport, prepareMeshFile, saveMeshSetup, setMeshMotion, useMeshImportStore, meshImportChoice } from '../stores/meshImport';
@@ -93,10 +94,17 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
               aria-label="Change symmetry" aria-expanded={symmetryOpen} onClick={() => setSymmetryOpen(!symmetryOpen)}>Change</button></p>
           {symmetryOpen && <fieldset disabled={!editable}>
             <label className="field-row">Symmetry<select aria-label="Mesh symmetry" value={planes.join(',')}
-              onChange={e => void editMeshImport({ domainPlanes: e.target.value ? e.target.value.split(',') : [], reflectPlanes: null })}>
+              onChange={e => void editMeshImport({ domainPlanes: e.target.value ? e.target.value.split(',') : [], reflectPlanes: null,
+                removeLidPlanes: (draft.removeLidPlanes ?? []).filter(plane => e.target.value.split(',').includes(plane)) })}>
               <option value="">Full model</option><option value="x0">Half x = 0</option><option value="y0">Half y = 0</option><option value="x0,y0">Quarter</option>
             </select></label>
             <p className="section-note">Symmetry planes must be x = 0 or y = 0 after axes are applied.</p>
+            {planes.filter(plane => summary?.lids?.[plane]?.candidate || draft.removeLidPlanes?.includes(plane)).map(plane => <label className="field-row" key={plane}>
+              <input type="checkbox" checked={draft.removeLidPlanes?.includes(plane) ?? false}
+                onChange={e => void editMeshImport({ removeLidPlanes: e.target.checked
+                  ? [...(draft.removeLidPlanes ?? []), plane] : (draft.removeLidPlanes ?? []).filter(item => item !== plane) })}/>
+              Remove the closed face on {planeWords(plane)}
+            </label>)}
             {negativePlanes.length > 0 && <label className="field-row"><input type="checkbox" aria-label="Mirror from the negative side" checked={mirrored}
               onChange={e => void editMeshImport({ reflectPlanes: e.target.checked ? null : [] })}/>Mirror from the negative side</label>}
           </fieldset>}

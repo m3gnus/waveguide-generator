@@ -272,3 +272,34 @@ it.each([false, true])('retains the file mesh engine list and adaptive hint (dev
   expect(host.textContent).toContain('Adaptive sampling requires at least 24 frequencies.');
   preferencesStore.update({ showDeveloperDetails: false });
 });
+
+it('offers closed-face removal in the existing symmetry menu and prepares the choice', async () => {
+  const prepare = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ detail: 'Close the opening in the meshing tool.' }), { status: 422 }));
+  vi.stubGlobal('fetch', prepare);
+  geometry();
+  act(() => useMeshImportStore.setState({ summary: { ...fileSummary, lids: {
+    x0: { candidate: true, triangle_count: 2, groups: [{ tag: 0, triangle_count: 2 }] },
+    y0: { candidate: false, triangle_count: 2, groups: [{ tag: 0, triangle_count: 2 }] },
+  } } }));
+  act(() => button('Change symmetry').click());
+  const removal = [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+    .find(input => input.parentElement?.textContent?.includes('Remove the closed face on x = 0'))!;
+  expect(removal).toBeDefined();
+  expect(host.textContent).not.toContain('Remove the closed face on y = 0');
+  expectNoJargon(host);
+  await act(async () => removal.click());
+  expect(JSON.parse(prepare.mock.calls[0][1]?.body as string).remove_lid_planes).toEqual(['x0']);
+  await act(async () => choose(host.querySelector<HTMLSelectElement>('[aria-label="Mesh symmetry"]')!, ''));
+  expect(JSON.parse(prepare.mock.calls[1][1]?.body as string).remove_lid_planes).toEqual([]);
+});
+
+it('shows removed closed faces in Model details', () => {
+  geometry({ prepared: true });
+  act(() => useImportedModelStore.setState(state => ({ prepared: {
+    ...(state.prepared as RegisteredMesh), source_file: { ...(state.prepared as RegisteredMesh).source_file,
+      transform: { units: 'm', forward: '+z', up: '+y', removed_lids: { x0: { triangle_count: 2, groups: [{ tag: 0, triangle_count: 2 }] } } },
+    },
+  } as RegisteredMesh })));
+  expect(host.textContent).toContain('Removed the closed face on x = 0 · 2 triangles');
+  expectNoJargon(host);
+});

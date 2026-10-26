@@ -66,6 +66,13 @@ class MeshInspection(MeshFile):
     up: Axis = "+y"
 
 
+class RetainedMeshInspection(JobModel):
+    model_id: str = Field(min_length=1)
+    units: Literal["mm", "cm", "m", "in"] | None = None
+    forward: Axis = "+z"
+    up: Axis = "+y"
+
+
 class FilePreparation(JobModel):
     """How a file is turned into a solver mesh: its units, frame and sources."""
 
@@ -531,11 +538,12 @@ def mount_models_api(application: FastAPI) -> None:
             return _refusal(500, "record_unreadable", f"A retained model record is unreadable: {exc}")
 
     @router.post("/files/inspect", responses={422: refused[422]})
-    async def inspect(body: MeshInspection) -> Any:
+    async def inspect(body: MeshInspection | RetainedMeshInspection) -> Any:
         """Read a file's groups and size, without retaining anything."""
 
         def summary() -> dict[str, Any]:
-            return inspect_file_mesh(parse_file_mesh(body.msh_text), body.units, body.forward, body.up)
+            text = read_original(store, body.model_id)[1] if isinstance(body, RetainedMeshInspection) else body.msh_text
+            return inspect_file_mesh(parse_file_mesh(text), body.units, body.forward, body.up)
 
         return await answer(summary)
 

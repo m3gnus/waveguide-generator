@@ -605,6 +605,8 @@ export function FileModelDetails({ record, summary, axes, setup }: {
     {record && <CheckRow check={{ key: 'file-checks', name: 'Checks', state: 'ok', verdict: 'passed', title: 'The mesh checks passed.' }}/>}
     <p className="cad-detail">Roles: {origins.has('file') && origins.has('name') ? 'from the file / guessed from names'
       : origins.has('file') ? 'from the file' : origins.has('name') ? 'guessed from names' : 'chosen in Surfaces'}</p>
+    {Object.entries(record?.source_file?.transform?.removed_lids ?? {}).map(([plane, lid]) =>
+      <p className="cad-detail" key={plane}>Removed the closed face on {planeWords(plane)} · {lid.triangle_count.toLocaleString()} triangles</p>)}
     {summary && <p className="cad-detail">{summary.triangle_count.toLocaleString()} triangles · {summary.node_count.toLocaleString()} points</p>}
     <DeveloperDetails>
       <pre>{JSON.stringify({ groups: summary?.groups, checks: record?.mesh?.integrity, preparation: record?.ingest_id, setup }, null, 2)}</pre>

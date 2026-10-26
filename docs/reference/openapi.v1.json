@@ -11346,6 +11346,64 @@
         "title": "ResultProvenance",
         "type": "object"
       },
+      "RetainedMeshInspection": {
+        "additionalProperties": false,
+        "properties": {
+          "forward": {
+            "default": "+z",
+            "enum": [
+              "+x",
+              "-x",
+              "+y",
+              "-y",
+              "+z",
+              "-z"
+            ],
+            "title": "Forward",
+            "type": "string"
+          },
+          "model_id": {
+            "minLength": 1,
+            "title": "Model Id",
+            "type": "string"
+          },
+          "units": {
+            "anyOf": [
+              {
+                "enum": [
+                  "mm",
+                  "cm",
+                  "m",
+                  "in"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Units"
+          },
+          "up": {
+            "default": "+y",
+            "enum": [
+              "+x",
+              "-x",
+              "+y",
+              "-y",
+              "+z",
+              "-z"
+            ],
+            "title": "Up",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_id"
+        ],
+        "title": "RetainedMeshInspection",
+        "type": "object"
+      },
       "RunWorkspace": {
         "description": "Everything the frontend opens an imported run with.",
         "properties": {
@@ -16951,7 +17009,15 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MeshInspection"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/MeshInspection"
+                  },
+                  {
+                    "$ref": "#/components/schemas/RetainedMeshInspection"
+                  }
+                ],
+                "title": "Body"
               }
             }
           },

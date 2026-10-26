@@ -498,3 +498,31 @@ def test_setup_write_ordering_evicts_the_oldest_writer(tmp_path, monkeypatch):
             store.close()
 
     asyncio.run(scenario())
+
+
+def test_inspection_reads_retained_original_with_the_chosen_axes(tmp_path):
+    from server.mesh.file_import import mesh_text
+    from test_file_mesh_roles_symmetry import box_mesh
+
+    async def scenario():
+        store = CadLinkStore.for_data_dir(tmp_path)
+        app, runtime = app_for(tmp_path, store)
+        try:
+            original = mesh_text(box_mesh())
+            registered = await call(app, "POST", "/api/models/files", {
+                "filename": "box.msh", "msh_text": original, "units": "m",
+                "forward": "+z", "up": "+y", "roles": {101: "HF", 102: "MF"},
+            })
+            frame = {"units": "m", "forward": "+z", "up": "+x"}
+            uploaded = await call(app, "POST", "/api/models/files/inspect", {
+                "filename": "box.msh", "msh_text": original, **frame,
+            })
+            retained = await call(app, "POST", "/api/models/files/inspect", {
+                "model_id": registered["model"]["model_id"], **frame,
+            })
+            assert retained == uploaded
+            assert retained["lids"]["y0"]["candidate"] is True
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())

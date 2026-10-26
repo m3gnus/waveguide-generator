@@ -385,7 +385,7 @@ describe('a reopened file run', () => {
     const fetcher = vi.fn<typeof fetch>(async () => prepared(again));
     await prepareMeshFile(fetcher);
     expect(fetcher.mock.calls[0][0]).toBe(`/api/models/${encodeURIComponent(record.model_id)}/prepare`);
-    expect(JSON.parse(fetcher.mock.calls[0][1]?.body as string)).toEqual({ units: 'cm', forward: '+z', up: '+y', roles: { 2: 'HF' }, domain_planes: [], reflect_planes: null });
+    expect(JSON.parse(fetcher.mock.calls[0][1]?.body as string)).toEqual({ units: 'cm', forward: '+z', up: '+y', roles: { 2: 'HF' }, domain_planes: [], reflect_planes: null, remove_lid_planes: [] });
     expect(useImportedModelStore.getState()).toMatchObject({ prepared: again, modelId: record.model_id });
     expect(fileMeshSubmission().geometry.ingest_id).toBe('wgi_again');
   });
@@ -591,4 +591,18 @@ describe('portable mesh replay', () => {
     await expect(loadMeshReplay('{}', vi.fn(async () => response({ record: { ...record, ingest_id: 'other' }, request })))).rejects.toThrow('does not match');
     expect(importedMeshStore.getSnapshot().file?.ingestId).toBe(record.ingest_id);
   });
+});
+
+it('inspects the retained original when symmetry is changed after reopening', async () => {
+  await openImported({ kind: 'model', modelId: record.model_id }, vi.fn(async url =>
+    String(url).includes('/setup?') ? response({ setup: null }) : prepared(record)));
+  const lids = { x0: { candidate: true, triangle_count: 2, groups: [{ tag: 1, triangle_count: 2 }] } };
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect')
+    ? response({ ...summary, lids }) : response({ detail: 'Remove the closed face in the symmetry settings.' }, 422));
+  await editMeshImport({ domainPlanes: ['x0'] }, fetcher);
+  expect(JSON.parse(fetcher.mock.calls[0][1]?.body as string)).toEqual({ model_id: record.model_id, units: 'mm', forward: '+z', up: '+y' });
+  expect(useMeshImportStore.getState().summary?.lids).toEqual(lids);
+  expect(useImportedModelStore.getState().fileDraft.domainPlanes).toEqual(['x0']);
+  await editMeshImport({ removeLidPlanes: ['x0'] }, fetcher);
+  expect(JSON.parse(fetcher.mock.calls[2][1]?.body as string).remove_lid_planes).toEqual(['x0']);
 });

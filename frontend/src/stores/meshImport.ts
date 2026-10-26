@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import {
-  inspectMesh, prepareMeshModel, registerMesh, type MeshSummary, type RegisteredMesh,
+  inspectMesh, inspectMeshModel, prepareMeshModel, registerMesh, type MeshSummary, type RegisteredMesh,
 } from '../api/meshImport';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -138,19 +138,21 @@ export async function prepareMeshFile(fetcher: typeof fetch = fetch, inspectFram
   useMeshImportStore.setState({ busy: true, error: null, request });
   try {
     // Detection follows the chosen axes; registration still owns all verification.
-    if (inspectFrame && state.original) {
-      const summary = await inspectMesh(state.filename, state.original, fetcher,
-        { units: draft.units, forward: draft.forward, up: draft.up });
+    if (inspectFrame || (!state.original && draft.domainPlanes?.length && !state.summary?.lids)) {
+      const frame = { units: draft.units, forward: draft.forward, up: draft.up };
+      const summary = state.original ? await inspectMesh(state.filename, state.original, fetcher, frame)
+        : await inspectMeshModel(modelId!, frame, fetcher);
       if (!importedMeshStore.isCurrentGeneration(generation)
         || JSON.stringify(useImportedModelStore.getState().fileDraft) !== JSON.stringify(draft)) return;
       useMeshImportStore.setState({ summary });
-      editFileDraft({ domainPlanes: summary.detected_planes ?? [], reflectPlanes: null });
+      if (inspectFrame) editFileDraft({ domainPlanes: summary.detected_planes ?? [], reflectPlanes: null, removeLidPlanes: [] });
       draft = useImportedModelStore.getState().fileDraft;
     }
     const preparation = { units: draft.units, forward: draft.forward, up: draft.up,
       roles: Object.fromEntries(Object.entries(draft.roles ?? Object.fromEntries(draft.selected.map(tag => [tag, 'HF'])))
         .map(([tag, role]) => [tag, role ?? 'RIGID'])),
-      domain_planes: draft.domainPlanes ?? [], reflect_planes: draft.reflectPlanes ?? null };
+      domain_planes: draft.domainPlanes ?? [], reflect_planes: draft.reflectPlanes ?? null,
+      remove_lid_planes: draft.removeLidPlanes ?? [] };
 
     // The same file prepared the same way is the same retained mesh. Without
     // the original in hand (a restored file), the server prepares its own copy.
