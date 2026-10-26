@@ -507,7 +507,7 @@ def test_file_mesh_limit_requires_choice_for_model_and_direct_solve(tmp_path, mo
     _file_scenario(tmp_path, scenario)
 
 
-def test_file_mesh_memory_refusal_is_plain_before_solve(tmp_path, monkeypatch) -> None:
+def test_file_mesh_memory_refusal_is_plain_before_solve(tmp_path, monkeypatch, caplog) -> None:
     from dataclasses import replace
     from server.mesh import builder
     from server.mesh.errors import SolverMemoryTooLarge
@@ -523,6 +523,8 @@ def test_file_mesh_memory_refusal_is_plain_before_solve(tmp_path, monkeypatch) -
         assert runtime.store.list_jobs()[1] == 0
 
     _file_scenario(tmp_path, scenario)
+    assert "Solver mesh uses" in caplog.text
+    assert "dense-solver memory estimate" in caplog.text
 
 
 def test_a_file_solve_with_unreviewed_findings_is_refused(tmp_path) -> None:

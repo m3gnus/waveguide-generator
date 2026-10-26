@@ -15,6 +15,7 @@ from collections import OrderedDict
 from copy import deepcopy
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -52,6 +53,8 @@ from server.mesh.imported import polar_grid_from_symmetry
 from server.mesh.prepared_gc import prepared_mesh_use
 from server.platform.staging import publish_staging_directory
 from server.workspace.archive_identity import claim_project_folder
+
+logger = logging.getLogger(__name__)
 
 MAX_ACCEPTED_SETUP_WRITES = 512
 
@@ -634,7 +637,8 @@ def mount_models_api(application: FastAPI) -> None:
             return await asyncio.to_thread(call, *args)
         except ModelRefusal as exc:
             return _refusal(exc.status, exc.code, str(exc))
-        except SolverMemoryTooLarge:
+        except SolverMemoryTooLarge as exc:
+            logger.warning("Solver memory admission refused a mesh: %s", exc)
             return _refusal(422, "solver_memory_exceeded", SolverMemoryTooLarge.USER_MESSAGE)
         except ValueError as exc:
             return _refusal(422, "mesh_refused", str(exc))
