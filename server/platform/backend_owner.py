@@ -465,6 +465,16 @@ def _start_and_wait(
                 )
             if time.monotonic() >= deadline:
                 cleanup = _terminate_child(process)
+                # Older WG releases reported the data folder and version but
+                # not the pid. This is a diagnosis, never proof of ownership.
+                if (code == EXIT_ALREADY_RUNNING and info is not None and health is not None
+                        and "pid" not in health and isinstance(health.get("version"), str)
+                        and health["version"] and _same_path(health.get("data_dir"), root)
+                        and pid_is_running(info.pid)):
+                    raise BackendStartTimeout(
+                        "An older Waveguide Generator is running; quit it, then try again. "
+                        f"{_owner_description(root)} See {log_path}.{cleanup}"
+                    )
                 # A same-pid backend serving another folder should be impossible for
                 # the supported backend. Refuse only now: preferred-port conflicts
                 # and metadata updates are normal during a legitimate startup.

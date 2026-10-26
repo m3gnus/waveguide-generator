@@ -25,7 +25,7 @@ from server.platform.backend_owner import (
     discover_backend,
     ensure_backend,
 )
-from server.platform.instance import LOCK_FILENAME, InstanceLock, pid_is_running, read_lock_info
+from server.platform.instance import LOCK_FILENAME, InstanceInfo, InstanceLock, pid_is_running, read_lock_info
 from server.tests.backend_breakaway import WINDOWS_BREAKAWAY_REFUSAL, require_backend_breakaway
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -318,6 +318,25 @@ def test_pid_mismatch_is_unconfirmed(data_dir: Path, monkeypatch) -> None:
         assert discover_backend(data_dir) is None
     finally:
         lock.release()
+
+
+@pytest.mark.parametrize("older", [True, False])
+def test_health_without_pid_diagnoses_older_wg_but_never_adopts(data_dir, monkeypatch, older):
+    info = InstanceInfo(pid=123, port=3199)
+    health = {"data_dir": str(data_dir)}
+    if older:
+        health["version"] = "0.3.5"
+    child = SimpleNamespace(pid=456, poll=lambda: backend_owner.EXIT_ALREADY_RUNNING)
+    monkeypatch.setattr(backend_owner, "_owner_info", lambda root: info)
+    monkeypatch.setattr(backend_owner, "_observe", lambda root: (info, health))
+    monkeypatch.setattr(backend_owner, "_discover", lambda root: None)
+    monkeypatch.setattr(backend_owner, "_spawn", lambda *args: (child, data_dir / "start.log"))
+    monkeypatch.setattr(backend_owner, "_terminate_child", lambda process: "")
+    monkeypatch.setattr(backend_owner, "pid_is_running", lambda pid: True)
+    assert backend_owner.backend_from_health(data_dir, info.port, health) is None
+    with pytest.raises(BackendStartTimeout) as error:
+        backend_owner._start_and_wait(data_dir, ["backend"], time.monotonic() - 1)
+    assert ("older Waveguide Generator" in str(error.value)) is older
 
 
 def test_ensure_returns_running_backend_without_spawning(data_dir: Path, fake) -> None:
