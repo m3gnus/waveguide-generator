@@ -392,12 +392,13 @@ so a missing driver or an uninstalled runtime says so instead of vanishing.
 **BEAT · CPU needs a runtime, and says so until it has one.** It runs on a
 private Julia runtime that has to be downloaded, instantiated, and then proved
 by actually solving a 1 kHz test frequency; only after that does the engine
-report itself available. Source installations prepare it during setup; the
-packaged application prepares it in the background on its first launch on
-Windows, Linux and macOS, including GPU hosts when readiness is recorded per
-backend. The engine becomes selectable when preparation finishes, without
-restarting. On CPU-only computers, while preparation is pending or has failed,
-AUTO uses BEMPP if it is ready. The BEAT row keeps its progress or failure reason.
+report itself available. Source installations prepare it during setup. The
+packaged application prepares only the solver you have selected: choose
+**BEAT · CPU** in the solver picker and WG prepares it in the background, on
+Windows, Linux and macOS, without restarting. A solve started meanwhile waits
+("… is warming up. The solve starts when it is ready.") and then runs. **Auto**
+uses engines that are already ready and downloads nothing; on CPU-only
+computers it uses BEMPP if it is ready. The BEAT row keeps its progress or failure reason.
 `WG2_SKIP_BEAT_CPU_PROVISION=1` switches preparation off.
 
 On Apple Silicon, AUTO prefers Metal. AUTO walks the same order on every
