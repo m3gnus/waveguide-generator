@@ -93,13 +93,6 @@ export function meshImportChoice(draft: FileDraft): string | null {
   return null;
 }
 
-/** A source's motion edits its retained channel without replacing the other physics. */
-export function setMeshMotion(sourceId: string, motion: 'normal' | 'axial'): void {
-  const simulation = fileSimulationSetup.get();
-  const channel = simulation.driveChannels.find(channel => channel.source_ids.includes(sourceId));
-  if (channel) simulation.setChannelMotion(channel.id, motion);
-}
-
 export async function loadMeshFile(filename: string, text: string, fetcher: typeof fetch = fetch, generation = importedMeshStore.beginIntent()): Promise<void> {
   if (!importedMeshStore.isCurrentGeneration(generation)) return;
   beginMeshFileImport(filename);

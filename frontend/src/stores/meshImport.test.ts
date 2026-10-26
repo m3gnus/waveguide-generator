@@ -7,9 +7,9 @@ import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from './workspaceMode';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
 import { editMeshImport, fileMeshSubmission, loadMeshFile, prepareMeshFile, loadMeshReplay, registeredMesh,
-  fileMeshSetup, setMeshMotion, useMeshImportStore } from './meshImport';
+  fileMeshSetup, useMeshImportStore } from './meshImport';
 import { openImported, reopenLastModel, resetImportedModelStore, unchangedSetup, useImportedModelStore, editFileDraft } from './importedModel';
-import { importedSimulationSetup } from './importedSimulationSetup';
+import { fileSimulationSetup, importedSimulationSetup } from './importedSimulationSetup';
 import { readLastModel } from './lastModel';
 import type { RegisteredMesh, MeshSummary } from '../api/meshImport';
 import type { ImportedSetup } from '../jobs/importedSetup';
@@ -56,6 +56,12 @@ function showPrepared(mesh = record) {
   workspaceModeStore.setImportedInput('file');
   void openImported({ kind: 'file', prepared: mesh });
   importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(MSH), 'file', mesh.ingest_id));
+}
+
+function editSourceMotion(sourceId: string, motion: 'normal' | 'axial') {
+  const simulation = fileSimulationSetup.get();
+  const channel = simulation.driveChannels.find(item => item.source_ids.includes(sourceId));
+  if (channel) simulation.setChannelMotion(channel.id, motion);
 }
 
 beforeEach(() => {
@@ -139,7 +145,7 @@ describe('standalone imported mesh', () => {
 
   it('saves a prepared setup before any Solve and reopens its model with it', async () => {
     showPrepared();
-    setMeshMotion('group_2', 'axial');
+    editSourceMotion('group_2', 'axial');
     useImportedSolveOptionsStore.getState().setSweep({ startHz: 250, endHz: 8000, count: 17 });
     const expected = fileMeshSubmission();
     const save = vi.fn<typeof fetch>(async () => response({ revision_id: 'wgs_saved' }));
@@ -393,7 +399,7 @@ describe('a reopened file run', () => {
     // Late hydration and automatic transitions are not edits either.
     useImportedSolveOptionsStore.setState({ engine: 'bempp' });
     expect(unchangedSetup('file', record.ingest_id)).not.toBeNull();
-    setMeshMotion('group_2', 'axial');
+    editSourceMotion('group_2', 'axial');
     expect(unchangedSetup('file', record.ingest_id)).toBeNull();
   });
 
@@ -450,7 +456,7 @@ describe('server-valid file setup edit contract', () => {
   it.each(editContract.edits)('$name', async ({ base, edit, expected }) => {
     const setup = editContract.setups[base];
     await openImported({ kind: 'run', job: fileJob() }, workspaceFetcher(setup, meshFor(setup)));
-    for (const motion of edit.motions ?? []) setMeshMotion(edit.source_id!, motion);
+    for (const motion of edit.motions ?? []) editSourceMotion(edit.source_id!, motion);
     if (edit.selected !== undefined) {
       editFileDraft({ selected: edit.selected });
       const next: RegisteredMesh = { ...record, ingest_id: 'wgi_reprepared',
@@ -528,7 +534,7 @@ describe('portable mesh replay', () => {
     const expected = structuredClone(request);
     expected.options.polar_config.distance = 9;
     expect(fileMeshSubmission()).toEqual(expected);
-    setMeshMotion('group_2', 'axial');
+    editSourceMotion('group_2', 'axial');
     expected.geometry.drive_channels[0].motion = 'axial';
     delete expected.geometry.drive_channels[0].driver;
     expect(fileMeshSubmission()).toEqual(expected);

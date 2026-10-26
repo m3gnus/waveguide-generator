@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { startCadSetupPublisher } from './cadSetupPublisher';
 import { openImported, resetImportedModelStore } from '../stores/importedModel';
-import { editMeshImport, fileMeshSetup, loadMeshFile, setMeshMotion, useMeshImportStore } from '../stores/meshImport';
+import { editMeshImport, fileMeshSetup, loadMeshFile, useMeshImportStore } from '../stores/meshImport';
+import { fileSimulationSetup } from '../stores/importedSimulationSetup';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -39,7 +40,7 @@ afterEach(() => {
 it('automatically saves motion and solver edits through the shared publisher', async () => {
   const fetcher = vi.fn<typeof fetch>(async () => response({ revision_id: 'wgs_saved' }));
   stop = startCadSetupPublisher({ fetcher, debounceMs: 100 });
-  setMeshMotion('group_2', 'axial');
+  fileSimulationSetup.get().setChannelMotion('group_2', 'axial');
   useImportedSolveOptionsStore.getState().setSweep({ count: 17 });
   await vi.advanceTimersByTimeAsync(101);
   expect(fetcher).toHaveBeenCalledOnce();
@@ -57,7 +58,7 @@ it('saves geometry edits with the new preparation and retains the latest edit on
   await editMeshImport({ units: 'cm' }, vi.fn(async () => response({ prepared: next })));
   await vi.advanceTimersByTimeAsync(101);
   expect(JSON.parse(fetcher.mock.calls[0][1]?.body as string).prepared_id).toBe('wgi_resized');
-  setMeshMotion('group_2', 'axial');
+  fileSimulationSetup.get().setChannelMotion('group_2', 'axial');
   window.dispatchEvent(new Event('pagehide'));
   await Promise.resolve();
   expect(fetcher).toHaveBeenCalledTimes(2);
@@ -73,7 +74,7 @@ it('orders in-flight writes so a later edit is the final saved setup', async () 
   const fetcher = vi.fn<typeof fetch>().mockImplementationOnce(() => pending)
     .mockImplementation(async () => response({ revision_id: 'wgs_saved' }));
   stop = startCadSetupPublisher({ fetcher, debounceMs: 100 });
-  setMeshMotion('group_2', 'axial');
+  fileSimulationSetup.get().setChannelMotion('group_2', 'axial');
   await vi.advanceTimersByTimeAsync(101);
   useImportedSolveOptionsStore.getState().setSweep({ count: 19 });
   await vi.advanceTimersByTimeAsync(101);
@@ -89,7 +90,7 @@ it('flushes the last edit and waits for it before inspecting the same file again
   const saving = new Promise<Response>(resolve => { finishSave = resolve; });
   const writer = vi.fn<typeof fetch>(() => saving);
   stop = startCadSetupPublisher({ fetcher: writer, debounceMs: 750 });
-  setMeshMotion('group_2', 'axial');
+  fileSimulationSetup.get().setChannelMotion('group_2', 'axial');
   const setup = fileMeshSetup();
   const reader = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect')
     ? response({ ...record.summary, known_model: { model_id: record.model_id, latest_prepared_id: record.ingest_id } })
@@ -125,7 +126,7 @@ it('attributes a late file save failure to the model that issued it', async () =
   const onSaveState = vi.fn();
   const fetcher = vi.fn<typeof fetch>(async url => String(url).startsWith('/api/models/') ? pending : response({}));
   stop = startCadSetupPublisher({ fetcher, debounceMs: 100, retryDelaysMs: [], onSaveState });
-  setMeshMotion('group_2', 'axial');
+  fileSimulationSetup.get().setChannelMotion('group_2', 'axial');
   await vi.advanceTimersByTimeAsync(101);
   workspaceModeStore.setImportedInput('cad');
   finish(new Response(JSON.stringify({ detail: 'Could not save settings.' }), { status: 500 }));
