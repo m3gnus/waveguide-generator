@@ -54,6 +54,23 @@ export function lipUnavailableReason(design: DesignDocument): string | undefined
   return undefined;
 }
 
+/** R-OSSE terms that change a meridian's depth when they vary with p. */
+const ROSSE_DEPTH_TERMS = ['R', 'a', 'a0', 'r0', 'k', 'r', 'b', 'm', 'tmax'];
+
+/**
+ * Where an imported R-OSSE morph is not ATH's: ATH V2026-09a builds a
+ * Rectangle unmorphed when the depth varies around the mouth, and has no
+ * Superellipse morph on R-OSSE. The mesher then uses WG's own R-OSSE morph
+ * (Magnus, 2026-10-26), so say once that the shape differs from ATH's.
+ */
+export function rosseMorphNote(design: DesignDocument): string | undefined {
+  if (!isAthV2(design) || design.formula !== 'R-OSSE') return undefined;
+  if (design.morph.target_shape === 3) return 'ATH builds no Superellipse morph on R-OSSE; Waveguide Generator uses its own R-OSSE morph.';
+  if (design.morph.target_shape !== 1) return undefined;
+  const varies = ROSSE_DEPTH_TERMS.some((path) => /\bp\b/.test(design._expressions?.[path]?.raw ?? ''));
+  return varies ? 'ATH builds no morph on this horn because its depth changes around the mouth; Waveguide Generator uses its own R-OSSE morph.' : undefined;
+}
+
 /**
  * Mesher rule: a lip over a full (RearShape 1) free-standing wall needs
  * Radius > WallThickness. Pass the candidate radius and/or wall to test an edit.

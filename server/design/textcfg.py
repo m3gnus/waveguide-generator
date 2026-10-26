@@ -1288,9 +1288,6 @@ def _build_payload(
         if v2 and formula == "R-OSSE":
             for key, value in {"R": 200, "a": 40, "a0": 0, "r": .25, "m": .9, "b": .4, "q": 3.5}.items():
                 payload.setdefault(key, value)
-            target = payload.get("morph", {}).get("target_shape")
-            if target is not None and _ath_number(str(target)) != 0:
-                raise TextConfigError("R-OSSE Morph.TargetShape is unsupported: ATH changes the radial profile")
 
     if dialect == "ath" and formula != "FREEFORM":
         # ATH's Length is the nominal axial depth of the whole device, so

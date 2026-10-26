@@ -34,7 +34,7 @@ import { ExteriorDriverLibraryPicker, ChannelDriverPicker } from './DriverPicker
 import { useWaveguideDefinitionApplies } from '../stores/waveguideLink';
 import { useCadModelStatusLine } from '../shell/CadModelStatusLine';
 import { defaultWallThickness, isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
-import { athControlError, lipRadiusWallError, lipUnavailableReason, opusClampNote, opusMountingReason } from './athImportControls';
+import { athControlError, lipRadiusWallError, lipUnavailableReason, opusClampNote, opusMountingReason, rosseMorphNote } from './athImportControls';
 import { namespaceStorage } from '../stores/durableSettings';
 import type { SymmetryMode } from '../stores/solveOptions';
 import { SolveOptionsStoreProvider, useScopedSolveOptions } from '../stores/solveOptionsContext';
@@ -572,6 +572,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
         ? <p key={`unavailable-${String(option.value)}`} className="section-note" role="status">{option.unavailableReason}</p>
         : <div key={`unavailable-${String(option.value)}`} className="field-warning" role="status">{option.label}: {option.unavailableReason}</div>)}
       {field.id === 'mesh.ath_rear_shape' && opusClampNote(design) && <p className="section-note" role="status">{opusClampNote(design)}</p>}
+      {field.id === 'morph.target_shape' && rosseMorphNote(design) && <p className="section-note" role="status">{rosseMorphNote(design)}</p>}
       {/* The value survived the filter only because the design already holds
           it, so say plainly what will happen rather than leaving a control
           that looks ordinary and then fails a minute into the solve. */}

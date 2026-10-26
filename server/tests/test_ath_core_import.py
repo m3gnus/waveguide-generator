@@ -190,13 +190,19 @@ def test_lip_compositions_keep_mesher_named_refusals(extra, key):
         parse(BASE + 'Mesh.Roundover = {\nRadius=10\n}\n' + extra)
 
 
-def test_r_osse_morph_and_nonliteral_osse_radius_are_refused_only_for_v2():
-    for source, name in [(BASE.replace('r0=8','r0=6+2'), 'OSSE.r0'),
-            ('R-OSSE = {\nR=80\n}\nMorph.TargetShape=1\n', 'R-OSSE')]:
-        with pytest.raises(TextConfigError, match=name):
-            parse(source)
-        old = parse('; Waveguide Generator geometry-interpretation: ath-2026-08c-v1\n'+source).design
-        assert design_to_mesher_config(old)['_textImportVersion'] == 'ath-2026-08c-v1'
+def test_nonliteral_osse_radius_is_refused_only_for_v2():
+    source = BASE.replace('r0=8','r0=6+2')
+    with pytest.raises(TextConfigError, match='OSSE.r0'):
+        parse(source)
+    old = parse('; Waveguide Generator geometry-interpretation: ath-2026-08c-v1\n'+source).design
+    assert design_to_mesher_config(old)['_textImportVersion'] == 'ath-2026-08c-v1'
+
+
+def test_r_osse_morph_imports_for_the_mesher():
+    design = parse('R-OSSE = {\nR=80\n}\nMorph.TargetShape=1\n').design
+    config = design_to_mesher_config(design)
+    assert config['_textImportVersion'] == 'ath-2026-09a-v2'
+    assert float(config['morph']['morphTarget']) == 1
 
 
 def test_nac_dictionary_presence_and_v1_optional_transport_do_not_upgrade_geometry():

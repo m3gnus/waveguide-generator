@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { hydrateDesignDocument } from '../api/designIo';
 import { resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
-import { athControlError, lipRadiusWallError, lipUnavailableReason } from './athImportControls';
+import { athControlError, lipRadiusWallError, lipUnavailableReason, rosseMorphNote } from './athImportControls';
 
 describe('ATH import wall default and controls', () => {
   it('keeps ATH\'s 5 mm wall for an unset wall through lip/rear edits without saving it', () => {
@@ -52,5 +52,20 @@ describe('ATH lip availability and radius/wall rule', () => {
     expect(lipRadiusWallError(load({ mesh: { ...lip, ath_rear_shape: 3 } }), { wall: 10 })).toBeUndefined();
     expect(lipRadiusWallError(load({ mesh: { ...lip, wall_thickness: 0 } }), { radius: 1 })).toBeUndefined();
     expect(lipRadiusWallError(load({ mesh: lip, simulation: { sim_type: 'infinite-baffle' } }), { wall: 10 })).toBeUndefined();
+  });
+});
+
+describe('R-OSSE morph where ATH builds none', () => {
+  const load = (wire: Record<string, unknown>) => hydrateDesignDocument({ formula: 'R-OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null, ...wire });
+
+  it('notes a Rectangle on a length-varying horn and any Superellipse, and nothing else', () => {
+    expect(rosseMorphNote(load({ morph: { target_shape: 1 } }))).toBeUndefined();
+    expect(rosseMorphNote(load({ morph: { target_shape: 1 }, R: { value: 150, raw: '150 - 20*cos(p)^2', dialect: 'ath' } }))).toContain('its own R-OSSE morph');
+    expect(rosseMorphNote(load({ morph: { target_shape: 1 }, k: { value: 2, raw: '4 * abs(cos(p))', dialect: 'ath' } }))).toContain('depth changes');
+    expect(rosseMorphNote(load({ morph: { target_shape: 1 }, a0: { value: 10, raw: '10 + 5*cos(p)^2', dialect: 'ath' } }))).toContain('depth changes');
+    expect(rosseMorphNote(load({ morph: { target_shape: 1 }, q: { value: 3, raw: '3 + cos(p)^2', dialect: 'ath' } }))).toBeUndefined();
+    expect(rosseMorphNote(load({ morph: { target_shape: 3 } }))).toContain('Superellipse');
+    expect(rosseMorphNote(load({ morph: { target_shape: 2 }, R: { value: 150, raw: '150 - 20*cos(p)^2', dialect: 'ath' } }))).toBeUndefined();
+    expect(rosseMorphNote(hydrateDesignDocument({ formula: 'R-OSSE', morph: { target_shape: 3 } }))).toBeUndefined();
   });
 });
