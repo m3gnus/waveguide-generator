@@ -10,7 +10,8 @@ from server.solver.metal import _metal_fingerprints
 
 def test_native_results_keep_distinct_executed_helpers_and_unknown_sources():
     source = {"version": "0.3.0.dev0", "repository_revision": "a" * 40, "source_sha256": "b" * 64}
-    first = SimpleNamespace(native_runtime={"source": source, "helper": {"sha256": "c" * 64}})
+    first = SimpleNamespace(native_runtime={"source": source, "helper": {"sha256": "c" * 64},
+                                           "metal_library": {"source": "metallib", "sha256": "e" * 64}})
     other = SimpleNamespace(native_runtime={"source": source, "helper": {"sha256": "d" * 64}})
     missing = SimpleNamespace(native_runtime={})
     fingerprints = _metal_fingerprints([first, first, other, missing])
@@ -18,6 +19,8 @@ def test_native_results_keep_distinct_executed_helpers_and_unknown_sources():
     assert fingerprints[0]["commit"] == "a" * 40
     assert fingerprints[0]["source_sha256"] == "b" * 64
     assert fingerprints[0]["build_sha256"] == "c" * 64
+    assert fingerprints[0]["metal_library_source"] == "metallib"
+    assert fingerprints[0]["metal_library_sha256"] == "e" * 64
     assert fingerprints[1]["build_sha256"] == "d" * 64
     assert fingerprints[2]["commit"] is None
     assert fingerprints[2]["version"] is None

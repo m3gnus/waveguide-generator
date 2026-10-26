@@ -170,6 +170,12 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
       if (value) row(source, label, value.slice(0, 12), value);
       else if (key === 'commit' || key === 'source_sha256' || key === 'build_sha256') row(source, label, 'Unknown');
     }
+    const librarySource = string(fingerprint.metal_library_source);
+    if (librarySource) row(source, 'Metal shaders', librarySource === 'source' ? 'Compiled at runtime' : 'Precompiled library');
+    if (librarySource === 'metallib') {
+      const shaderHash = string(fingerprint.metal_library_sha256);
+      row(source, 'Shader library hash', shaderHash?.slice(0, 12) ?? 'Unknown', shaderHash);
+    }
     group(groups, fingerprints.length > 1 ? `Solver source ${index + 1}` : 'Solver source', source);
   });
 

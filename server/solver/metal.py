@@ -156,6 +156,8 @@ def _metal_fingerprints(results: Sequence[Any]) -> list[dict[str, str | None]]:
         helper = helper if isinstance(helper, Mapping) else {}
         swift = runtime.get("swift")
         swift = swift if isinstance(swift, Mapping) else {}
+        library = runtime.get("metal_library")
+        library = library if isinstance(library, Mapping) else {}
 
         def text(value: Any) -> str | None:
             return value if isinstance(value, str) and value and value != "0+unknown" else None
@@ -168,6 +170,8 @@ def _metal_fingerprints(results: Sequence[Any]) -> list[dict[str, str | None]]:
             "build_sha256": None if script else text(helper.get("sha256")),
             "script_sha256": text(helper.get("sha256")) if script else None,
             "interpreter_sha256": text(swift.get("sha256")) if script else None,
+            "metal_library_source": text(library.get("source")),
+            "metal_library_sha256": text(library.get("sha256")),
             "backend": "metal",
         }
         if fingerprint not in fingerprints:

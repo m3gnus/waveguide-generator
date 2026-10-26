@@ -127,7 +127,8 @@ def test_worker_keeps_live_results_power_traces_and_source_identity(monkeypatch)
                 record = worker_record(request, frequency)
                 record["diagnostics"]["engine_provenance"] = {
                     "engine": {"version": "1", "source_sha256": "a" * 64},
-                    "runtime": {"helper": {"sha256": "b" * 64}},
+                    "runtime": {"helper": {"sha256": "b" * 64},
+                                "metal_library": {"source": "metallib", "sha256": "c" * 64}},
                     "execution": {"backend": "metal"},
                 }
                 yield {"type": "result", "result": record}
@@ -165,6 +166,7 @@ def test_worker_keeps_live_results_power_traces_and_source_identity(monkeypatch)
     assert result.radiated_power_sphere_coverage_sr == pytest.approx(4 * np.pi)
     assert result.native_runtime["source"]["source_sha256"] == "a" * 64
     assert result.native_runtime["helper"]["sha256"] == "b" * 64
+    assert result.native_runtime["metal_library"]["sha256"] == "c" * 64
     assert all(row["native_diagnostics"]["mesh_resolution_suspect"] for row in result.solver_log)
     assert all(row["lapack_info"] == 0 for row in result.solver_log)
 

@@ -6488,6 +6488,10 @@ export interface components {
             commit?: string | null;
             /** Interpreter Sha256 */
             interpreter_sha256?: string | null;
+            /** Metal Library Sha256 */
+            metal_library_sha256?: string | null;
+            /** Metal Library Source */
+            metal_library_source?: string | null;
             /** Package */
             package?: string | null;
             /** Script Sha256 */

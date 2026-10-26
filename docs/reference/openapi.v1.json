@@ -12553,6 +12553,28 @@
             ],
             "title": "Interpreter Sha256"
           },
+          "metal_library_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metal Library Sha256"
+          },
+          "metal_library_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metal Library Source"
+          },
           "package": {
             "anyOf": [
               {

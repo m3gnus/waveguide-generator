@@ -42,9 +42,11 @@ describe('simulation summary groups', () => {
     const commit = 'a'.repeat(40);
     const source = 'b'.repeat(64);
     const build = 'c'.repeat(64);
+    const shader = 'd'.repeat(64);
     const wrapper: ResultPayload = { frequencies: [], provenance: { solver_fingerprints: [{
       package: 'hornlab-metal-bem', version: '0.3.0.dev0', commit,
       source_sha256: source, build_sha256: build, backend: 'metal',
+      metal_library_source: 'metallib', metal_library_sha256: shader,
     }] } };
     const groups = summaryGroups({ result: { frequencies: [500] }, wrapper });
     expect(row(groups, 'Solver source', 'Package')?.value).toBe('hornlab-metal-bem');
@@ -52,6 +54,8 @@ describe('simulation summary groups', () => {
     expect(row(groups, 'Solver source', 'Commit')).toEqual({ label: 'Commit', value: commit.slice(0, 12), title: commit });
     expect(row(groups, 'Solver source', 'Source hash')?.title).toBe(source);
     expect(row(groups, 'Solver source', 'Build hash')?.title).toBe(build);
+    expect(row(groups, 'Solver source', 'Metal shaders')?.value).toBe('Precompiled library');
+    expect(row(groups, 'Solver source', 'Shader library hash')?.title).toBe(shader);
     expect(row(groups, 'Solver source', 'Backend')?.value).toBe('metal');
   });
 

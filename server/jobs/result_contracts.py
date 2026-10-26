@@ -23,6 +23,8 @@ class SolverFingerprint(BaseModel):
     build_sha256: str | None = None
     script_sha256: str | None = None
     interpreter_sha256: str | None = None
+    metal_library_source: str | None = None
+    metal_library_sha256: str | None = None
     backend: str | None = None
 
 
