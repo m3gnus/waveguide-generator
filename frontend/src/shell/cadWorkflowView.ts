@@ -97,7 +97,7 @@ export function agedFusionStatus(status: FusionCadStatus): FusionCadStatus {
     ...(measured ? {
       observationFreshness: 'stale' as const,
       documentChangeDetectable: false,
-      staleDetectionExplanation: 'stale detection unavailable: WG has not observed Fusion since this report',
+      staleDetectionExplanation: 'WG has not heard from Fusion since this report. Send the model from Fusion to use its latest version.',
     } : {}),
     state: status.state === 'current' ? 'stale' : status.state,
   };

@@ -63,8 +63,10 @@ function op(overrides: Partial<OperationProgressLike> = {}): OperationProgressLi
 }
 
 describe('operationStageWord', () => {
-  it('keeps rejected model requests calm', () => {
-    expect(operationStageWord(op({ state: 'rejected', reason: 'model_needs_change' }))).toBe('Not prepared');
+  it('says when a rejected model could not be prepared', () => {
+    const word = operationStageWord(op({ state: 'rejected', reason: 'model_needs_change' }));
+    expect(word).toBe('Could not prepare');
+    expectNoJargon(word);
   });
   it('reads server/cadlink/joblane/preparation.py stages onto the same words a job uses, monotonically', () => {
     expect(operationStageWord(op({ state: 'received', stage: null }))).toBe('Received');
@@ -103,7 +105,7 @@ describe('operationStageWord', () => {
 
   it('names cancellation and terminal outcomes', () => {
     expect(operationStageWord(op({ state: 'cancel_requested' }))).toBe('Cancelling…');
-    expect(operationStageWord(op({ state: 'rejected' }))).toBe('Not prepared');
+    expect(operationStageWord(op({ state: 'rejected' }))).toBe('Could not prepare');
     expect(operationStageWord(op({ state: 'cancelled' }))).toBe('Cancelled');
     expect(operationStageWord(op({ state: 'recovery_required' }))).toBe('Needs recovery');
   });
@@ -242,6 +244,12 @@ describe('SolveProgressView (component)', () => {
 
   it('renders nothing for neither a job nor an operation', () => {
     expect(renderToStaticMarkup(<SolveProgressView variant="compact"/>)).toBe('');
+  });
+
+  it('renders a rejected preparation as a terminal outcome', () => {
+    const markup = renderToStaticMarkup(<SolveProgressView operation={op({ state: 'rejected' })} variant="compact"/>);
+    expect(markup).toContain('Could not prepare');
+    expectNoJargon(markup);
   });
 
   const solving = (overrides: Partial<JobItem> = {}) => ({

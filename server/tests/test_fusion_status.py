@@ -31,6 +31,7 @@ from server.cadlink.fusion.fusion_status import (
     read_fusion_status,
 )
 from server.cadlink.store import CadLinkStore
+from server.cadlink.wglink_protocol import user_text_violations
 from server.design.schema import DesignConfig
 
 
@@ -1044,6 +1045,8 @@ def test_a_document_that_moved_since_its_measurement_is_not_reported_current(
     assert moved["documentChangeDetectable"] is False
     assert moved["staleDetectionExplanation"] is not None
     assert "measured" in moved["staleDetectionExplanation"]
+    assert "stale detection unavailable:" not in moved["staleDetectionExplanation"]
+    assert not user_text_violations(moved["staleDetectionExplanation"])
     assert current["observationFreshness"] == "current"
     assert moved["observationFreshness"] == "stale"
 
@@ -1099,6 +1102,8 @@ def test_no_measurement_at_all_is_distinct_from_an_earlier_one(tmp_path: Path) -
     # undetectable comparison with no explanation at all.
     assert status["staleDetectionExplanation"] is not None
     assert "not measured" in status["staleDetectionExplanation"]
+    assert "stale detection unavailable:" not in status["staleDetectionExplanation"]
+    assert not user_text_violations(status["staleDetectionExplanation"])
     assert status["observationFreshness"] == "none"
 
 
@@ -1255,7 +1260,8 @@ def test_an_unreadable_signature_with_a_measured_body_is_an_earlier_observation(
     assert status["state"] != "current"
     assert status["documentChangeDetectable"] is False
     assert status["staleDetectionExplanation"] is not None
-    assert "has moved since" in status["staleDetectionExplanation"]
+    assert "cannot tell whether" in status["staleDetectionExplanation"]
+    assert "stale detection unavailable:" not in status["staleDetectionExplanation"]
 
 
 def test_non_string_revision_tokens_are_never_compared_as_equal(tmp_path: Path) -> None:

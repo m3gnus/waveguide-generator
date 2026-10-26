@@ -13,6 +13,7 @@ import pytest
 
 from server.cadlink.fusion.fusion_status import FUSION_STATUS_FILENAME, read_fusion_status
 from server.cadlink.limits import MAX_STEP_INPUT_BYTES
+from server.cadlink.wglink_protocol import user_text_violations
 from server.cadlink.wgreturn import (
     WgReturnError,
     read_wgreturn,
@@ -540,9 +541,10 @@ def test_subtree_return_disables_root_document_stale_comparisons(tmp_path: Path)
     # A scoped return is not a legacy one; saying so would send the user
     # looking for a wgreturn version problem they do not have.
     assert result["staleDetectionExplanation"] == (
-        "stale detection unavailable: this return covers a selected assembly "
-        "subtree, and Fusion reports its document signature for the whole root"
+        "WG cannot tell whether the selected part of this Fusion model has changed because "
+        "Fusion reports on the whole document. Send the model again from Fusion to use the latest version."
     )
+    assert not user_text_violations(result["staleDetectionExplanation"])
 
 
 @requires_symlinks

@@ -53,6 +53,7 @@ export type SolveStageWord =
   | 'Ready to solve'
   | 'Needs a change'
   | 'Not prepared'
+  | 'Could not prepare'
   | 'Needs recovery'
   | 'Done'
   | 'Failed'
@@ -170,7 +171,7 @@ export function operationReasonWords(reason: string | null | undefined): string 
  * its submitted stage only until its job appears. */
 export function operationStageWord(operation: OperationProgressLike): SolveStageWord {
   switch (operation.state) {
-    case 'rejected': return 'Not prepared';
+    case 'rejected': return 'Could not prepare';
     case 'cancelled': return 'Cancelled';
     case 'cancel_requested': return 'Cancelling…';
     case 'needs_user_input':

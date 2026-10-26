@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadOperationListener, JobItem, JobsSnapshot } from '../api/jobsSocket';
 import { createCadConnectionStore, type CadConnectionStatus } from '../stores/cadConnection';
+import { expectNoJargon } from '../testing/expectNoJargon';
 import { connectCadObservation, type CadObservationActivity } from './cadObservation';
-import { fusionWorkflowView } from './cadWorkflowView';
+import { agedFusionStatus, fusionWorkflowView } from './cadWorkflowView';
 
 function status(overrides: Partial<CadConnectionStatus> = {}): CadConnectionStatus {
   return {
@@ -16,6 +17,17 @@ function status(overrides: Partial<CadConnectionStatus> = {}): CadConnectionStat
     ...overrides,
   };
 }
+
+it('explains an expired Fusion report in plain language', () => {
+  const aged = agedFusionStatus(status());
+  expect(aged.staleDetectionExplanation).toBe(
+    'WG has not heard from Fusion since this report. Send the model from Fusion to use its latest version.',
+  );
+  const detail = fusionWorkflowView(aged).detail;
+  expect(detail).toContain(aged.staleDetectionExplanation);
+  expectNoJargon(detail);
+});
+
 // No coordinator, operation store, React root, or actual server is mounted.
 describe('CAD observation scheduler without the coordinator', () => {
   let activity: CadObservationActivity;

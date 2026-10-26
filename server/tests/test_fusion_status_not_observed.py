@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from server.cadlink.fusion.fusion_status import FUSION_STATUS_TTL, addin_declares_inbox_transfer
+from server.cadlink.wglink_protocol import user_text_violations
 from server.tests.test_fusion_status import NOW, _link, _read, _write_status
 
 QUIET = NOW - FUSION_STATUS_TTL - timedelta(minutes=5)
@@ -50,7 +51,10 @@ def test_a_quiet_command_driven_add_in_is_reported_as_not_observed(tmp_path: Pat
     assert status["state"] != "current"
     assert status["observationFreshness"] == "stale"
     assert status["documentChangeDetectable"] is False
-    assert "automatic coordination is off" in status["staleDetectionExplanation"]
+    explanation = status["staleDetectionExplanation"]
+    assert "Automatic coordination is off" in explanation
+    assert "stale detection unavailable:" not in explanation
+    assert not user_text_violations(explanation)
 
 
 def test_the_same_report_while_fresh_is_an_ordinary_current_status(tmp_path: Path) -> None:

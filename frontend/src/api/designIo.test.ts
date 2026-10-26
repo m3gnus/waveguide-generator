@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { chooseDesignFile, convertDesignToFreeform, exportGeometryToOutputFolder, freeformFromProfileCsv, hydrateDesignDocument, sendDesignToCad, serializeDesignDocument } from './designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
+import { expectNoJargon } from '../testing/expectNoJargon';
 
 describe('design hydration', () => {
   it.each(['R-OSSE', 'OSSE', 'ICW', 'FREEFORM'] as const)(
@@ -501,19 +502,22 @@ describe('Send to CAD requests', () => {
     expect(result.identity).toEqual({ ...identity, baseEditVersion: 1 });
   });
 
-  it('reports a failed Fusion handoff instead of claiming the bundle is opening', async () => {
+  it.each(['/cad/wglink/horn.wglink', 'C:\\CAD Files\\horn.wglink'])('reports where the model is after a failed Fusion handoff: %s', async (savedPath) => {
     const fetcher = (async (url: string) => {
       if (url === '/api/cad-workspace/path') return new Response(JSON.stringify({ selected: true, path: '/cad' }));
       return new Response(JSON.stringify({
-        bundlePath: '/cad/wglink/horn.wglink', bundleId: 'wgb_1', exportId: 'wge_1', sequence: 1,
+        bundlePath: savedPath, bundleId: 'wgb_1', exportId: 'wge_1', sequence: 1,
         designHash: 'sha256:design', geometryHash: 'sha256:geometry', artifactSha256: 'sha256:step',
         cadHandoff: 'failed', cadLaunch: false,
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }) as typeof fetch;
 
-    await expect(sendDesignToCad(
+    const send = sendDesignToCad(
       hydrateDesignDocument({ formula: 'OSSE' }), 1, 'horn', null, fetcher, 'attempt-1',
-    )).rejects.toThrow('model was saved, but WG could not notify Fusion');
+    );
+    await expect(send).rejects.toThrow(`WG saved the model in ${savedPath}, but could not notify Fusion. Open waveguide.step from that folder in Fusion.`);
+    const error = await send.catch((reason: Error) => reason);
+    expectNoJargon((error as Error).message, { names: [savedPath] });
   });
 
   it('routes an unconfigured Fusion connection to Settings instead of opening a surprise picker', async () => {

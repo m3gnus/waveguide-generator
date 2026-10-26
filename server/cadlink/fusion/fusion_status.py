@@ -41,25 +41,24 @@ ADDIN_OUTDATED_MESSAGE = (
     "Fusion so it loads the add-in that WG installed, then try again."
 )
 _SCOPED_SELECTION_EXPLANATION = (
-    "stale detection unavailable: this return covers a selected assembly "
-    "subtree, and Fusion reports its document signature for the whole root"
+    "WG cannot tell whether the selected part of this Fusion model has changed because "
+    "Fusion reports on the whole document. Send the model again from Fusion to use the latest version."
 )
 _EARLIER_OBSERVATION_EXPLANATION = (
-    "stale detection unavailable: the Fusion model has moved since the Waveguide Generator add-in in Fusion last "
-    "measured it, so WG holds an observation of an earlier revision"
+    "WG cannot tell whether this Fusion model has changed since the Waveguide Generator "
+    "add-in in Fusion last measured it. Send it again from Fusion to use the latest model."
 )
 #: WGLink with its automatic coordination off publishes status only when it runs
 #: a command (at start-up, after each command, removed at shutdown), so between
 #: commands its heartbeat ages past ``FUSION_STATUS_TTL`` while Fusion and the
 #: add-in are both fine. That is not an offline add-in, and not a closed Fusion.
 _NOT_OBSERVED_EXPLANATION = (
-    "stale detection unavailable: the Waveguide Generator add-in in Fusion reports status only when it runs a "
-    "command (its automatic coordination is off), so WG has not observed Fusion "
-    "since the last one"
+    "Automatic coordination is off, so WG has not heard from Fusion since the Waveguide "
+    "Generator add-in in Fusion last ran a command. Send the model again from Fusion to use the latest version."
 )
 _NO_OBSERVATION_EXPLANATION = (
-    "stale detection unavailable: the Waveguide Generator add-in in Fusion has not measured this Fusion "
-    "document's geometry yet"
+    "The Waveguide Generator add-in in Fusion has not measured this model's geometry yet. "
+    "Send it from Fusion to use the latest version."
 )
 
 #: Which revision the measured half of a heartbeat link describes.
