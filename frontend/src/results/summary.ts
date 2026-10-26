@@ -125,6 +125,10 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
     const providerName = provider === 'official' ? 'Official BEAT' : provider === 'hbb' ? 'Legacy HBB' : provider;
     row(solve, 'BEAT engine', `${providerName}${version ? ` · ${version}` : ''}`);
   }
+  const metal = object(metadata('metal'));
+  const metalInterface = firstString(metal?.interface, solverEngine?.interface);
+  if (metalInterface === 'beat-compatible' || metalInterface === 'native') row(solve, 'Solver interface', metalInterface === 'beat-compatible' ? 'BEAT-compatible' : 'Native',
+    firstString(metal?.interface_reason, solverEngine?.interface_reason));
 
   const requested = firstString(plan?.requested, substitution?.requested, job?.solve_options?.engine);
   if (requested && (!engine || engineDisplayName(requested) !== engineDisplayName(engine))) row(solve, 'Requested engine', requested === 'auto' ? 'Automatic' : engineDisplayName(requested));

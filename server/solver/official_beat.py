@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from copy import copy
 from dataclasses import replace
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import version
 import importlib
 import logging
 from types import SimpleNamespace
@@ -15,7 +15,7 @@ import numpy as np
 
 from .beat_adapter.request import CompiledRequest
 from .beat_adapter.preflight import validate_exterior_physics
-from .beat_adapter.results import ResultContractError, SweepResult, map_sweep
+from .beat_adapter.results import ResultContractError, SweepResult, engine_version as _engine_version, map_sweep
 from .beat_runtime import assets, discovery, paths, readiness, registry, warm_cache
 from .beat_runtime.client import HostError
 from .beat_runtime.manager import UnsupportedBackend, WorkerManager, get_manager
@@ -37,11 +37,8 @@ OfficialBeatProtocolError = ResultContractError
 
 
 def engine_version() -> str | None:
-    """Read installed distribution metadata without importing either engine."""
-    try:
-        return version("beat-engine")
-    except PackageNotFoundError:
-        return None
+    """Read the installed BEAT version through the shared metadata lookup."""
+    return _engine_version(version)
 
 
 def batch_request(request: CompiledRequest, frequencies: Sequence[float]) -> CompiledRequest:

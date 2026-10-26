@@ -710,6 +710,21 @@ def solve_metal_from_msh_text(
         kwargs["source_motion"] = context.source_motion
     config = _native_config_or_unavailable(kwargs)
 
+    # Only the qualified exterior, normal-motion subset uses the compatible
+    # worker. Other Metal features keep the same engine and native path.
+    worker_request = None
+    worker_reason = "This Metal solve requires the native interface"
+    if (ladder_bands is None and aperture_tag is None and context.sim_type == 2
+            and context.source_motion == "normal" and context.quadrants in {1, 14, 1234}):
+        from .beat_adapter.request import build_parametric_request
+        from .metal_worker import select_worker_request
+
+        worker_request, worker_reason = select_worker_request(lambda: build_parametric_request(
+            msh_text, context, frequencies_hz=(live_execution_frequencies(context)
+                                               if result_callback is not None else canonical_frequencies(context)),
+            engine_id="beat-metal", backend="metal", surface_traces=retain_traces,
+        ), msh_text=msh_text, merge_tol=float(getattr(config, "mesh_merge_tol", 1e-9)))
+
     ladder_dropped_fields: tuple[str, ...] = ()
     ladder_solve_refusals: dict[int, str] = {}
     ladder_seam_checks: dict[int, dict[str, Any]] = {}
@@ -802,6 +817,14 @@ def solve_metal_from_msh_text(
         merged = merge_band_results(band_results)
         result = merged.result
         ladder_dropped_fields = merged.dropped_fields
+    elif worker_request is not None:
+        from .metal_worker import solve_worker
+
+        result = solve_worker(
+            worker_request, channel_id="source", context=context, config=config,
+            progress=progress, cancel=cancellation_callback, publish=result_callback,
+        )
+        sort_native_result_frequencies(result)
     else:
         path: Path | None = None
         try:
@@ -851,6 +874,8 @@ def solve_metal_from_msh_text(
             "native_timings": json_safe_native_value(dict(getattr(result, "timings", {}) or {})),
         },
         "metal": {
+            "interface": "beat-compatible" if worker_request is not None else "native",
+            "interface_reason": worker_reason,
             "solver_mode": "full_3d",
             "native_symmetry_plane": getattr(config, "native_symmetry_plane", kwargs["native_symmetry_plane"]),
             "native_check_open_edges": getattr(config, "native_check_open_edges", kwargs["native_check_open_edges"]),
@@ -1587,6 +1612,30 @@ def solve_imported_metal_from_msh_text(
                 f"Solving frequency {index + 1}/{total} for imported drive bases",
             )
 
+    def publish_imported(index: int, frequency_hz: float, provisional_channels: dict[str, Any]) -> None:
+        assert result_callback is not None
+        result_callback(
+            index,
+            {
+                "result_kind": "multi_channel",
+                "result_contract_version": 2,
+                "frequencies": [float(frequency_hz)],
+                "channels": provisional_channels,
+                "channel_order": channel_order,
+                "metadata": {
+                    "geometry_type": "imported",
+                    "provisional": {
+                        "completed_frequency_count": int(index) + 1,
+                        "expected_frequency_count": (
+                            len(context.frequencies_hz)
+                            if context.frequencies_hz is not None
+                            else int(context.num_frequencies)
+                        ),
+                    },
+                },
+            },
+        )
+
     def on_frequency_result(
         index: int, frequency_hz: float, entry: dict[str, Any]
     ) -> bool:
@@ -1628,27 +1677,7 @@ def solve_imported_metal_from_msh_text(
                 channel_response.pop("impedance", None)
             channel_response["metadata"].update(channel_identity[channel.id])
             provisional_channels[channel.id] = channel_response
-        result_callback(
-            index,
-            {
-                "result_kind": "multi_channel",
-                "result_contract_version": 2,
-                "frequencies": [float(frequency_hz)],
-                "channels": provisional_channels,
-                "channel_order": channel_order,
-                "metadata": {
-                    "geometry_type": "imported",
-                    "provisional": {
-                        "completed_frequency_count": int(index) + 1,
-                        "expected_frequency_count": (
-                            len(context.frequencies_hz)
-                            if context.frequencies_hz is not None
-                            else int(context.num_frequencies)
-                        ),
-                    },
-                },
-            },
-        )
+        publish_imported(index, frequency_hz, provisional_channels)
         return True
 
     observation = _observation(context, msh_text)
@@ -1691,6 +1720,8 @@ def solve_imported_metal_from_msh_text(
     coupled_native_result: Any | None = None
     coupled_payload: dict[str, Any] | None = None
     coupled_mf_channel: Any | None = None
+    worker_request = None
+    worker_reason = "This Metal solve requires the native interface"
     try:
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".msh", delete=False, encoding="utf-8",
@@ -1706,12 +1737,44 @@ def solve_imported_metal_from_msh_text(
             if context.frequencies_hz is not None
             else None
         )
-        results = native_solve_multi_source(
-            str(path),
-            source_specs,
-            config,
-            frequencies_hz=execution_frequencies,
-        )
+        if (len(geometry.drive_channels) == 1 and len(geometry.drive_channels[0].source_ids) == 1
+                and geometry.drive_channels[0].motion == "normal"
+                and geometry.drive_channels[0].patch_weights is None
+                and not geometry.passive_cardioid_enabled and quadrants in {1, 14, 1234}):
+            from .beat_adapter.request import build_imported_request, validate_imported_request
+            from .metal_worker import select_worker_request
+
+            def build_candidate():
+                candidate = build_imported_request(
+                    msh_text, context, record, geometry.drive_channels,
+                    frequencies_hz=(execution_frequencies if execution_frequencies is not None
+                                    else canonical_frequencies(context)),
+                    engine_id="beat-metal", backend="metal", surface_traces=retain_traces,
+                )
+                validate_imported_request(candidate, imported_symmetry.native_plane)
+                return candidate
+
+            worker_request, worker_reason = select_worker_request(
+                build_candidate, msh_text=msh_text, merge_tol=float(getattr(config, "mesh_merge_tol", 1e-9)),
+            )
+        if worker_request is not None:
+            from .metal_worker import solve_worker
+
+            channel = geometry.drive_channels[0]
+
+            def publish_worker(index: int, response: dict[str, Any]) -> None:
+                response["metadata"].update(channel_identity[channel.id])
+                publish_imported(index, response["frequencies"][0], {channel.id: response})
+
+            results = [solve_worker(
+                worker_request, channel_id=channel.id, context=context, config=config,
+                progress=progress, cancel=cancellation_callback,
+                publish=publish_worker if result_callback is not None else None,
+            )]
+        else:
+            results = native_solve_multi_source(
+                str(path), source_specs, config, frequencies_hz=execution_frequencies,
+            )
         if len(results) != len(geometry.drive_channels):
             raise ValueError(
                 "multi-source Metal solver returned a different number of bases than requested"
@@ -2032,6 +2095,8 @@ def solve_imported_metal_from_msh_text(
             "package": "hornlab-metal-bem",
             "package_version": status.get("version"),
             "device": "metal",
+            "interface": "beat-compatible" if worker_request is not None else "native",
+            "interface_reason": worker_reason,
             "formulation": kwargs["formulation"],
             "complex_k_shift": kwargs["complex_k_shift"],
         },

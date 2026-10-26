@@ -6,6 +6,7 @@ import base64
 import binascii
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from importlib.metadata import PackageNotFoundError, version
 import math
 from typing import Mapping, TYPE_CHECKING, Any
 
@@ -27,6 +28,14 @@ class ResultFrequencyMismatch(ResultContractError):
     """A result omits or differs from the frequency expected at its sweep index."""
 
     reason_code = "result_frequency_mismatch"
+
+
+def engine_version(distribution_version: Callable[[str], str] = version) -> str | None:
+    """Read installed distribution metadata without importing an engine."""
+    try:
+        return distribution_version("beat-engine")
+    except PackageNotFoundError:
+        return None
 
 
 def match_result_frequency(echoed: Any, requested: float, *, precision: str) -> float:
@@ -668,8 +677,6 @@ def coupled_envelope(sweep, request, *, context, geometry, record, config, start
     from server.solver.imported_channels import channel_source_identity
     from server.solver.combine import combine_drive_channels
     from server.solver.coupled_system import solve_kind
-    from server.solver.official_beat import engine_version
-
     if geometry.combine is not None and geometry.combine.id in request.channel_ports:
         raise ValueError(f"Combine id {geometry.combine.id!r} collides with a compiled drive channel id")
     channels = {}

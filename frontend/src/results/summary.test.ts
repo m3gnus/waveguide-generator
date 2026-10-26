@@ -33,6 +33,11 @@ function row(groups: SummaryGroup[], groupTitle: string, label: string) {
 }
 
 describe('simulation summary groups', () => {
+  it('shows which Metal interface produced the result', () => {
+    const result: ResultPayload = { frequencies: [500], metadata: { metal: { interface: 'beat-compatible' } } };
+    expect(row(summaryGroups({ result }), 'Solve', 'Solver interface')?.value).toBe('BEAT-compatible');
+  });
+
   it('shows the recorded source and build identities from the result wrapper', () => {
     const commit = 'a'.repeat(40);
     const source = 'b'.repeat(64);
