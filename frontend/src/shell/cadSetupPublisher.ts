@@ -20,7 +20,9 @@ import { useCadReceiptsStore } from '../stores/cadReceipts';
 import { polarValidationError, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { subscribeSolveSettingsEdits } from '../stores/solveSettingsEdits';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { effectiveImportedSetup, registerImportedSetupControls, useImportedModelStore } from '../stores/importedModel';
+import { effectiveImportedSetup, registerImportedSetupControls, registerImportedSetupFlush, useImportedModelStore } from '../stores/importedModel';
+import { fileMeshSetup, useMeshImportStore } from '../stores/meshImport';
+import { saveImportedSetup } from '../api/importedModels';
 import type { ImportedSetup } from '../jobs/importedSetup';
 
 /**
@@ -34,6 +36,8 @@ export interface CadProjectSetup {
   inventory: CadSourceInventoryEntry[];
   setup: CadSolveSetup;
 }
+
+type PublishedSetup = CadProjectSetup | { modelId: string; preparedId: string; setup: ImportedSetup };
 
 type CadReturnSnapshot = ReturnType<typeof useCadReturnStore.getState>;
 type SolveOptionsSnapshot = ReturnType<typeof useImportedSolveOptionsStore.getState>;
@@ -138,7 +142,7 @@ function selectionKey(state: CadReturnSnapshot): string | null {
  * Record the open project's setup when the user changes its settings, and the
  * solver selection whenever it changes.
  *
- * Only an edit the user makes in the CAD workspace is recorded. A selection,
+ * CAD records explicit edits; a file records edits and each new preparation. A selection,
  * an ingestion or a recalled run changes the same stores without anyone
  * choosing anything -- a first-time model's defaults, or one project's
  * settings carried into the next -- and a solve option edited for the
@@ -161,7 +165,7 @@ export function startCadSetupPublisher(
   const onSaveState = options.onSaveState ?? (() => undefined);
   let selection = selectionKey(useCadReturnStore.getState());
   let published: string | null = null;
-  type PendingSetup = { project: CadProjectSetup; draft: ReturnType<typeof retainCadDraft> };
+  type PendingSetup = { project: PublishedSetup; draft: ReturnType<typeof retainCadDraft> };
   let pending: PendingSetup | null = null;
   const journals = new Map<string, NonNullable<ReturnType<typeof retainCadDraft>>>();
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -180,24 +184,36 @@ export function startCadSetupPublisher(
   let solverInFlight = false;
   let solverRetry: ReturnType<typeof setTimeout> | null = null;
   // The recording that failed and waits for its next attempt.
-  let retrying: { next: CadProjectSetup; key: string; attempt: number; timer: ReturnType<typeof setTimeout> } | null = null;
+  let retrying: { next: PublishedSetup; key: string; attempt: number; timer: ReturnType<typeof setTimeout> } | null = null;
   let stopped = false;
 
+  let fileDirty = false;
+  let filePrepared: string | null = null;
   let writeInFlight = false;
   let writeSequence = 0;
+  const settled = new Set<() => void>();
+  const settle = () => {
+    if (writeInFlight || writes.length || retrying || pending) return;
+    settled.forEach(resolve => resolve()); settled.clear();
+  };
   const acknowledgedWrites = new Map<string, number>();
-  const writes: Array<{ run: () => void; next: CadProjectSetup; key: string; attempt: number }> = [];
-  const send = (next: CadProjectSetup, key: string, attempt: number, keepalive: boolean) => {
+  const writes: Array<{ run: () => void; next: PublishedSetup; key: string; attempt: number }> = [];
+  const send = (next: PublishedSetup, key: string, attempt: number, keepalive: boolean) => {
     retrying = null;
     const journal = journals.get(key);
     const sequence = ++writeSequence;
     const run = () => {
       if (!keepalive) writeInFlight = true;
-      void putProjectSetup(next, fetcher, { keepalive }).then(saved => {
+      const saving = 'modelId' in next
+        ? saveImportedSetup(next.modelId, next.preparedId, next.setup, fetcher, { keepalive })
+          .then(saved => ({ revisionId: saved.revision_id }))
+        : putProjectSetup(next, fetcher, { keepalive });
+      void saving.then(saved => {
         if (journal && sequence > (acknowledgedWrites.get(journal.key) ?? 0)) {
           acknowledgedWrites.set(journal.key, sequence);
           clearCadDraft(journal.key, journal.raw, saved.revisionId ?? null); journals.delete(key);
         }
+        if ('modelId' in next && published === key) fileDirty = false;
         if (failed && published === key) { failed = false; reportSaveState(); }
       }, () => {
         // A newer edit has taken over: it is what needs recording now.
@@ -214,6 +230,7 @@ export function startCadSetupPublisher(
           writeInFlight = false;
           writes.shift()?.run();
         }
+        settle();
       });
     };
     if (writeInFlight && !keepalive) writes.push({ run, next, key, attempt });
@@ -249,10 +266,34 @@ export function startCadSetupPublisher(
   };
   const onVisibility = () => { if (document.visibilityState === 'hidden') leave(); };
 
-  const schedule = (next: CadProjectSetup, draft: ReturnType<typeof retainCadDraft>) => {
+  const schedule = (next: PublishedSetup, draft: ReturnType<typeof retainCadDraft>) => {
     pending = { project: next, draft };
     if (timer !== null) clearTimeout(timer);
     timer = setTimeout(() => flush(), debounceMs);
+  };
+
+  let fileSelection: string | null = null;
+  const onFileChange = () => {
+    const model = useImportedModelStore.getState();
+    const key = model.input === 'file' ? model.modelId : null;
+    if (key !== fileSelection) { flush(); fileSelection = key; fileDirty = false; }
+    const prepared = model.input === 'file' ? model.prepared?.ingest_id ?? null : null;
+    if (prepared && prepared !== filePrepared && useMeshImportStore.getState().original) fileDirty = true;
+    filePrepared = prepared;
+    if (workspaceModeStore.getSnapshot().importedInput !== 'file' || model.input !== 'file') return;
+    if (!fileDirty) return;
+    try {
+      const setup = fileMeshSetup();
+      const next = { modelId: model.modelId!, preparedId: model.prepared!.ingest_id, setup };
+      const key = JSON.stringify(next);
+      if (key !== published && key !== JSON.stringify(pending?.project)) schedule(next, null);
+    } catch {
+      // A preparation in flight will schedule its new setup when it becomes ready.
+      if (pending && 'modelId' in pending.project) {
+        if (timer !== null) clearTimeout(timer);
+        timer = null; pending = null;
+      }
+    }
   };
 
   const onEdit = () => {
@@ -330,15 +371,38 @@ export function startCadSetupPublisher(
   };
 
   const unsubscribers = [
-    subscribeSolveSettingsEdits(edit => { if (edit?.source !== 'solveOptions' && edit?.source !== 'meshImport') onEdit(); }),
+    subscribeSolveSettingsEdits(edit => {
+      if (edit?.source === 'solveOptions') return;
+      if (workspaceModeStore.getSnapshot().importedInput === 'file') {
+        if (edit?.source === 'meshImport' || edit?.source === 'importedSolveOptions') fileDirty = true;
+        onFileChange();
+      }
+      else if (edit?.source !== 'meshImport') onEdit();
+    }),
+    useMeshImportStore.subscribe(onFileChange),
+    useImportedModelStore.subscribe((state, previous) => {
+      if (state.input === 'file' && state.modelId === previous.modelId && previous.phase !== 'loading'
+        && !state.prepared && state.fileDraft !== previous.fileDraft) fileDirty = true;
+      onFileChange();
+    }),
     subscribeCadDraftRestores(onEdit),
     useCadReturnStore.subscribe(onSelection),
     useImportedSolveOptionsStore.subscribe(observeSolverSelection),
   ];
   if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility);
   if (typeof window !== 'undefined') window.addEventListener('pagehide', leave);
+  const unregisterFlush = registerImportedSetupFlush(async () => {
+    flush();
+    if (retrying) {
+      const { next, key, attempt, timer: wait } = retrying;
+      clearTimeout(wait);
+      send(next, key, attempt, false);
+    }
+    if (writeInFlight || writes.length || retrying) await new Promise<void>(resolve => settled.add(resolve));
+  });
   observeSolverSelection();
   return () => {
+    unregisterFlush();
     unsubscribers.forEach((unsubscribe) => unsubscribe());
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility);
     if (typeof window !== 'undefined') window.removeEventListener('pagehide', leave);
@@ -349,10 +413,11 @@ export function startCadSetupPublisher(
     solverSelection = null;
     if (retrying) clearTimeout(retrying.timer);
     retrying = null;
+    settle();
   };
 }
 
-/** Save feedback remains available when the CAD workspace owners are absent. */
+/** Shared imported-setup save feedback remains available outside CAD workspace owners. */
 export const useCadSetupPublisherStore = create<{ error: string | null }>(() => ({ error: null }));
 
 /** All CAD feedback surfaces give action errors precedence over setup-save failures. */

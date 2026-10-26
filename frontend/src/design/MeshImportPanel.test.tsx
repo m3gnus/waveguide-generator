@@ -288,9 +288,10 @@ it('offers closed-face removal in the existing symmetry menu and prepares the ch
   expect(host.textContent).not.toContain('Remove the closed face on y = 0');
   expectNoJargon(host);
   await act(async () => removal.click());
-  expect(JSON.parse(prepare.mock.calls[0][1]?.body as string).remove_lid_planes).toEqual(['x0']);
+  const registrations = () => prepare.mock.calls.filter(([url]) => String(url) === '/api/models/files');
+  expect(JSON.parse(registrations()[0][1]?.body as string).remove_lid_planes).toEqual(['x0']);
   await act(async () => choose(host.querySelector<HTMLSelectElement>('[aria-label="Mesh symmetry"]')!, ''));
-  expect(JSON.parse(prepare.mock.calls[1][1]?.body as string).remove_lid_planes).toEqual([]);
+  expect(JSON.parse(registrations()[1][1]?.body as string).remove_lid_planes).toEqual([]);
 });
 
 it('shows removed closed faces in Model details', () => {
@@ -301,5 +302,49 @@ it('shows removed closed faces in Model details', () => {
     },
   } as RegisteredMesh })));
   expect(host.textContent).toContain('Removed the closed face on x = 0 · 2 triangles');
+  expectNoJargon(host);
+});
+
+it('shows remembered settings once in the status line and has no Save setup button', () => {
+  geometry({ prepared: true });
+  act(() => useMeshImportStore.setState({ notice: 'Ready to solve · settings from your last import' }));
+  expect(host.querySelector('.cad-status-line')?.textContent).toBe('Ready to solve · settings from your last importSolve');
+  expect(host.textContent).not.toContain('Save setup');
+  expectNoJargon(host);
+  act(() => useMeshImportStore.setState({ notice: 'Using the settings from speaker.msh (09:31)' }));
+  expect(host.querySelector('.cad-status-line')?.textContent).toBe('Using the settings from speaker.msh (09:31)Solve');
+  expectNoJargon(host);
+});
+
+it('shows the server triangle refusal unchanged with no Try again or preparation request', async () => {
+  const message = 'This mesh has 20,001 triangles; Waveguide Generator accepts up to 20,000. Export a coarser mesh, or export only the half or quarter of a symmetric model.';
+  const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ error: { code: 'mesh_too_large', message } }), { status: 422 }));
+  await act(async () => { await loadMeshFile('large.msh', 'mesh', fetcher).catch(() => undefined); });
+  act(() => root.render(<MeshImportPanel tab="geometry"/>));
+  expect(host.querySelector('.cad-status-line')?.textContent).toBe(message);
+  expect(host.querySelector('.cad-status-line button')).toBeNull();
+  expect(fetcher).toHaveBeenCalledOnce();
+  expectNoJargon(host);
+});
+
+it('shows a shared setup-save failure in the file status line', async () => {
+  const { useCadSetupPublisherStore } = await import('../shell/cadSetupPublisher');
+  geometry({ prepared: true });
+  act(() => useCadSetupPublisherStore.setState({ error: 'Settings not saved. Edit a setting to retry.' }));
+  expect(host.querySelector('.cad-status-line')?.textContent).toBe('Settings not saved. Edit a setting to retry.');
+  expect(host.querySelector('.cad-status-line button')).toBeNull();
+  expectNoJargon(host);
+  act(() => useCadSetupPublisherStore.setState({ error: null }));
+});
+
+it('does not offer Try again when inspecting an edited retained model exceeds the server limit', async () => {
+  const message = 'This mesh has 20,001 triangles; Waveguide Generator accepts up to 20,000. Export a coarser mesh, or export only the half or quarter of a symmetric model.';
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: { code: 'mesh_too_large', message } }), { status: 422 })));
+  geometry({ original: false, prepared: true });
+  act(() => useImportedModelStore.setState({ originalAvailable: true }));
+  act(() => button('Change axes').click());
+  await act(async () => choose(host.querySelector<HTMLSelectElement>('[aria-label="Mesh up axis"]')!, '+x'));
+  expect(host.querySelector('.cad-status-line')?.textContent).toBe(message);
+  expect(host.querySelector('.cad-status-line button')).toBeNull();
   expectNoJargon(host);
 });

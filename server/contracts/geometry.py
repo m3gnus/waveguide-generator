@@ -10,6 +10,9 @@ from dataclasses import dataclass
 import re
 from typing import Any, Iterable
 
+# File-mesh admission stops before symmetry inspection or preparation.
+MAX_FILE_MESH_TRIANGLES = 20_000
+
 
 FULL_DOMAIN_QUADRANTS = 1234
 _LEADING_INT_RE = re.compile(r"^[+-]?\d+")

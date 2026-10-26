@@ -141,6 +141,16 @@ export interface ImportedView {
   begin(context: { generation: number; source: ImportedSource; display: ImportedDisplay; fetcher: typeof fetch }): ImportedViewOpen;
 }
 
+let setupFlush: (() => Promise<void>) | null = null;
+/** The shared publisher owns pending writes; an import waits before reading them back. */
+export function registerImportedSetupFlush(flush: () => Promise<void>): () => void {
+  setupFlush = flush;
+  return () => { if (setupFlush === flush) setupFlush = null; };
+}
+export function flushImportedSetupWrites(): Promise<void> {
+  return setupFlush?.() ?? Promise.resolve();
+}
+
 const views: Partial<Record<ImportedInput, ImportedView>> = {};
 
 /** A rail registers itself as the view of its input (stores/meshImport.ts, shell/cadlink/restores.ts). */

@@ -14,25 +14,26 @@ export class ImportedModelApiError extends Error {
 export const isModelGone = (error: unknown): boolean =>
   error instanceof ImportedModelApiError && (error.status === 404 || error.code === 'model_not_found' || error.code === 'prepared_unavailable');
 
-/** A model's setup, for the sources of one of its prepared meshes (the server reads them). */
-async function request(modelId: string, preparedId: string, setup?: ImportedSetup, fetcher: typeof fetch = fetch) {
-  const path = `/api/models/${encodeURIComponent(modelId)}/setup`;
-  const response = await fetcher(setup ? path : `${path}?prepared_id=${encodeURIComponent(preparedId)}`, setup ? {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prepared_id: preparedId, setup: { schema_version: 1, ...setup } }),
-  } : undefined);
-  if (!response.ok) {
-    const error = await response.json().catch(() => null);
-    throw new ImportedModelApiError(error?.error?.message ?? formatApiDetail(error?.detail) ?? `Setup unavailable (${response.status}).`,
-      response.status, typeof error?.error?.code === 'string' ? error.error.code : null);
-  }
-  return response.json();
+const setupWriter = globalThis.crypto?.randomUUID?.() ?? `w${Date.now()}${Math.random()}`;
+let setupSequence = 0;
+/** One ordered setup write for both imported inputs, including a page's final edit. */
+export async function writeImportedSetup(modelId: string,
+  body: { setup: unknown; prepared_id?: string; inventory?: CadSourceInventoryEntry[] },
+  fetcher: typeof fetch = fetch, options: { keepalive?: boolean } = {},
+): Promise<{ revision_id: string; content_sha256: string; inventory_sha256: string }> {
+  return read(`/api/models/${encodeURIComponent(modelId)}/setup`, fetcher, 'Setup', {
+    method: 'PUT', ...(options.keepalive ? { keepalive: true } : {}),
+    headers: { 'Content-Type': 'application/json', 'X-WG-Setup-Writer': setupWriter, 'X-WG-Setup-Seq': String(++setupSequence) },
+    body: JSON.stringify(body),
+  });
 }
 
-export const saveImportedSetup = (modelId: string, preparedId: string, setup: ImportedSetup, fetcher?: typeof fetch):
-  Promise<{ revision_id: string; content_sha256: string }> => request(modelId, preparedId, setup, fetcher);
-export const readImportedSetup = (modelId: string, preparedId: string, fetcher?: typeof fetch):
-  Promise<{ setup: ImportedSetup | null; revision_id?: string | null }> => request(modelId, preparedId, undefined, fetcher);
+export const saveImportedSetup = (modelId: string, preparedId: string, setup: ImportedSetup, fetcher?: typeof fetch,
+  options?: { keepalive?: boolean }): Promise<{ revision_id: string; content_sha256: string }> =>
+  writeImportedSetup(modelId, { prepared_id: preparedId, setup: { schema_version: 1, ...setup } }, fetcher, options);
+export const readImportedSetup = (modelId: string, preparedId: string, fetcher: typeof fetch = fetch):
+  Promise<{ setup: ImportedSetup | null; revision_id?: string | null }> =>
+  read(`/api/models/${encodeURIComponent(modelId)}/setup?prepared_id=${encodeURIComponent(preparedId)}`, fetcher, 'Setup');
 
 /** An imported model as the server keeps it (`server/jobs/models_api.py`). */
 export interface ImportedModelSummary {
@@ -66,8 +67,8 @@ export interface RunWorkspace {
   refusal?: { code: string; message: string } | null;
 }
 
-async function read<T>(path: string, fetcher: typeof fetch, what: string): Promise<T> {
-  const response = await fetcher(path);
+async function read<T>(path: string, fetcher: typeof fetch, what: string, init?: RequestInit): Promise<T> {
+  const response = await fetcher(path, init);
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: { message?: unknown; code?: unknown }; detail?: unknown } | null;
     const message = typeof body?.error?.message === 'string' ? body.error.message : formatApiDetail(body?.detail);

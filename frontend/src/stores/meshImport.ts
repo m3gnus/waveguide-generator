@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import {
-  inspectMesh, inspectMeshModel, prepareMeshModel, registerMesh, type MeshSummary, type RegisteredMesh,
+  MeshImportApiError, inspectMesh, inspectMeshModel, prepareMeshModel, registerMesh, type MeshSummary, type RegisteredMesh,
 } from '../api/meshImport';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -14,10 +14,10 @@ import type { ImportedSolveSubmission } from '../jobs/actions';
 import { beforeSolveSettingsEdit, noteSolveSettingsEdit, subscribeSolveSettingsEdits } from './solveSettingsEdits';
 import { openMeshReplay } from '../api/meshReplay';
 import { bindImportedSetup, importedSetupOf, type ImportedSetup } from '../jobs/importedSetup';
-import { saveImportedSetup } from '../api/importedModels';
+import { ImportedModelApiError, saveImportedSetup } from '../api/importedModels';
 import { withChannelMotion } from './cadReturn';
 import {
-  editFileDraft, effectiveImportedSetup, importedModelBlocker, isCurrentOpen, openImported,
+  editFileDraft, effectiveImportedSetup, flushImportedSetupWrites, importedModelBlocker, isCurrentOpen, openImported,
   registerImportedSetupControls, registerImportedView, useImportedModelStore,
   type ImportedView, type FileDraft,
 } from './importedModel';
@@ -38,11 +38,12 @@ interface MeshImportState {
   motions: Record<string, 'normal' | 'axial'>;
   busy: boolean;
   error: string | null;
+  failureRetry: boolean;
   notice: string | null;
   request: number;
 }
 const initial: MeshImportState = {
-  filename: '', original: null, summary: null, motions: {}, busy: false, error: null, notice: null, request: 0,
+  filename: '', original: null, summary: null, motions: {}, busy: false, error: null, failureRetry: true, notice: null, request: 0,
 };
 let requestNumber = 0;
 export const useMeshImportStore = create<MeshImportState>(() => ({ ...initial }));
@@ -61,6 +62,8 @@ export function registeredMesh(): RegisteredMesh | null {
 /** Establish file ownership before reading bytes, including failed replacements. */
 export function beginMeshFileImport(filename: string): number {
   const request = ++requestNumber;
+  // Flush the leaving model before the reading state replaces its rail.
+  void flushImportedSetupWrites().catch(() => undefined);
   useMeshImportStore.setState({ ...initial, filename, busy: true, request });
   // Switch to file input first: leaving CAD parks its model and options before
   // the file's are seeded over the shared instance.
@@ -108,13 +111,53 @@ export async function loadMeshFile(filename: string, text: string, fetcher: type
   const request = ++requestNumber;
   useMeshImportStore.setState({ ...initial, filename, original: text, busy: true, request });
   try {
-    const summary = await inspectMesh(filename, text, fetcher);
+    await flushImportedSetupWrites();
     if (!importedMeshStore.isCurrentGeneration(generation)) return;
-    const roles = Object.fromEntries(summary.groups.map(group => [group.tag, group.needs_role_choice ? null : group.suggested_role ?? 'RIGID']));
+    let summary = await inspectMesh(filename, text, fetcher);
+    if (!importedMeshStore.isCurrentGeneration(generation)) return;
+    if (summary.known_model) {
+      const known = summary.known_model;
+      try {
+        if (await openImported({ kind: 'model', modelId: known.model_id, preparedId: known.latest_prepared_id }, fetcher)) {
+          useMeshImportStore.setState({ notice: 'Ready to solve · settings from your last import' });
+        }
+        return;
+      } catch (error) {
+        // The user already supplied the remedy for missing retained artifacts:
+        // rebuild from these bytes through the normal registration below.
+        if (!(error instanceof ImportedModelApiError) || error.code !== 'prepared_unavailable') throw error;
+        generation = importedMeshStore.beginIntent();
+        beginMeshFileImport(filename);
+        useMeshImportStore.setState({ original: text, summary, busy: false });
+      }
+    }
+    const previous = summary.previous_setup;
+    if (previous && (previous.preparation.forward !== '+z' || previous.preparation.up !== '+y')) {
+      const { units, forward, up } = previous.preparation;
+      summary = await inspectMesh(filename, text, fetcher, { units, forward, up });
+      if (!importedMeshStore.isCurrentGeneration(generation)) return;
+    }
+    const roles = Object.fromEntries(summary.groups.map(group => [group.tag,
+      previous?.preparation.roles?.[group.tag] ?? summary.previous_roles?.[group.tag]
+      ?? (group.needs_role_choice ? null : group.suggested_role ?? 'RIGID')]));
     const scene = createImportedMeshScene(filename, parseMSH(text), 'file', null, [], { rolesByTag: roles });
     if (!importedMeshStore.setFile(scene, generation)) return;
     useMeshImportStore.setState({ summary, busy: false });
-    editFileDraft({ roles, units: summary.suggested_units ?? '', domainPlanes: summary.detected_planes ?? [], reflectPlanes: null });
+    const preparation = previous?.preparation;
+    editFileDraft({ roles, units: preparation?.units ?? summary.suggested_units ?? '',
+      forward: preparation?.forward ?? '+z', up: preparation?.up ?? '+y',
+      domainPlanes: preparation?.domain_planes ?? summary.detected_planes ?? [],
+      reflectPlanes: preparation?.reflect_planes ?? null, removeLidPlanes: preparation?.remove_lid_planes ?? [] });
+    if (previous?.setup) {
+      applyWireOptionsToImportedSolveOptions(previous.setup.options as Partial<SolveOptions>);
+      useImportedModelStore.setState({ setup: structuredClone(previous.setup) });
+      useMeshImportStore.setState({ motions: Object.fromEntries(previous.setup.geometry.drive_channels.flatMap(channel =>
+        channel.source_ids.map(id => [id, channel.motion ?? 'normal']))) });
+    }
+    if (previous) {
+      const time = new Date(previous.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      useMeshImportStore.setState({ notice: `Using the settings from ${previous.filename} (${time})` });
+    }
     await prepareMeshFile(fetcher);
   } catch (error) {
     if (importedMeshStore.isCurrentGeneration(generation)) {
@@ -135,7 +178,7 @@ export async function prepareMeshFile(fetcher: typeof fetch = fetch, inspectFram
   if (model.input !== 'file' || meshImportChoice(draft) || (!state.original && !(modelId && model.originalAvailable))) return;
   const generation = importedMeshStore.beginIntent();
   const request = ++requestNumber;
-  useMeshImportStore.setState({ busy: true, error: null, request });
+  useMeshImportStore.setState({ busy: true, error: null, failureRetry: true, request });
   try {
     // Detection follows the chosen axes; registration still owns all verification.
     if (inspectFrame || (!state.original && draft.domainPlanes?.length && !state.summary?.lids)) {
@@ -173,7 +216,8 @@ export async function prepareMeshFile(fetcher: typeof fetch = fetch, inspectFram
   } catch (error) {
     if (importedMeshStore.isCurrentGeneration(generation)
       && JSON.stringify(useImportedModelStore.getState().fileDraft) === JSON.stringify(draft)) {
-      useMeshImportStore.setState({ error: error instanceof Error ? error.message : String(error) });
+      useMeshImportStore.setState({ error: error instanceof Error ? error.message : String(error),
+        failureRetry: !(error instanceof MeshImportApiError && error.code === 'mesh_too_large') });
     }
   } finally {
     if (useMeshImportStore.getState().request === request) useMeshImportStore.setState({ busy: false });
@@ -348,7 +392,7 @@ export async function loadMeshReplay(text: string, fetcher: typeof fetch = fetch
     }
     if (!fillFileRail(opened.record, setup, generation)) return false;
     await openImported({ kind: 'file', prepared: opened.record, setup });
-    useMeshImportStore.setState({ notice: 'Mesh replay opened. Save and Solve keep its settings. Edits keep the other settings.' });
+    useMeshImportStore.setState({ notice: 'Mesh replay opened. Solve keeps its settings. Edits keep the other settings.' });
     return true;
   } catch (error) {
     if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ error: error instanceof Error ? error.message : String(error) });
@@ -358,16 +402,9 @@ export async function loadMeshReplay(text: string, fetcher: typeof fetch = fetch
   }
 }
 
-/** Explicitly save before Solve. CAD project edits use this same setup schema. */
+/** Save the same effective setup Solve submits, through the imported-model owner. */
 export async function saveMeshSetup(fetcher: typeof fetch = fetch): Promise<void> {
   const setup = fileMeshSetup();
-  const ingest_id = registeredMesh()!.ingest_id;
-  const modelId = registeredMesh()!.model_id;
-  await saveImportedSetup(modelId, ingest_id, setup, fetcher);
-  if (registeredMesh()?.ingest_id !== ingest_id) return;
-  let unchanged = false;
-  try { unchanged = JSON.stringify(fileMeshSetup()) === JSON.stringify(setup); } catch { unchanged = false; }
-  useMeshImportStore.setState({ notice: unchanged
-    ? 'Mesh setup saved with this model. Reopening the model, or importing the same file again, restores it.'
-    : 'Earlier mesh settings were saved. Your current edits are not saved.' });
+  const record = registeredMesh()!;
+  await saveImportedSetup(record.model_id, record.ingest_id, setup, fetcher);
 }

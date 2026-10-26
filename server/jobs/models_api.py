@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
+from copy import deepcopy
 import hashlib
 import json
 import os
@@ -29,7 +30,7 @@ from server.cadlink.operations import REASON_UPDATE_RESTART_PENDING
 from server.cadlink.roles import inventory_sha256, prepared_inventory_sha256
 from server.cadlink.store import FILE_MODEL_PREFIX, UNFILED_MODEL_ID, file_model_id
 from server.cadlink.wglink_protocol import SOURCE_ROLES, canonical_source_role
-from server.contracts.geometry import SYMMETRY_PLANE_AXIS
+from server.contracts.geometry import MAX_FILE_MESH_TRIANGLES, SYMMETRY_PLANE_AXIS
 from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json
 from server.integration.contracts import ErrorEnvelope, error_envelope
@@ -486,6 +487,103 @@ def read_setup(
     }
 
 
+def _remap_file_setup(setup: dict[str, Any] | None, sources: dict[str, str]) -> dict[str, Any] | None:
+    """Carry retained physics by group name even when a re-export changes numeric tags."""
+
+    if setup is None:
+        return None
+    result = deepcopy(setup)
+    geometry = result["geometry"]
+    channels = geometry["drive_channels"]
+    for channel in channels:
+        channel["source_ids"] = [sources[source] for source in channel["source_ids"]]
+        if channel.get("patch_weights"):
+            channel["patch_weights"] = {sources[source]: weight for source, weight in channel["patch_weights"].items()}
+    geometry["skipped_source_ids"] = [sources[source] for source in geometry.get("skipped_source_ids", [])]
+    if geometry.get("mesh"):
+        geometry["mesh"]["source_size_mm"] = {
+            sources[source]: size for source, size in geometry["mesh"]["source_size_mm"].items()
+        }
+    return result
+
+
+def _latest_file_preparation(store: Any, model_id: str) -> dict[str, Any]:
+    # Reusing an older preparation touches its existing row rather than creating
+    # a duplicate. That last use is newer than the model's creation-time pointer.
+    return max(store.list_model_ingests(model_id),
+               key=lambda row: (row.get("last_used_at") or row["created_at"], row["created_at"], row["ingest_id"]))
+
+
+def _file_import_memory(store: Any, filename: str, text: str, groups: list[dict[str, Any]]) -> dict[str, Any]:
+    """Use the retained model and setup owners; no filename or digest index of our own."""
+
+    model_id = file_model_id(_sha256(text.encode("utf-8")))
+    known = store.get_model(model_id)
+    answer: dict[str, Any] = {}
+    candidates = []
+    if known and known["latest_ingest_id"]:
+        latest = _latest_file_preparation(store, model_id)
+        answer["known_model"] = {"model_id": model_id, "latest_prepared_id": latest["ingest_id"]}
+        candidates.append(latest)
+    else:
+        stem = Path(filename.replace("\\", "/").rsplit("/", 1)[-1]).stem
+        seen = set()
+        for raw in store.ingest_records():
+            record = json.loads(raw)
+            if record.get("producer") != "mesh-file" or Path(record["source_file"]["filename"]).stem != stem:
+                continue
+            previous_id = file_model_id(record["artifact_sha256"])
+            if previous_id in seen or store.get_model(previous_id) is None:
+                continue
+            seen.add(previous_id)
+            candidates.append(_latest_file_preparation(store, previous_id))
+        candidates.sort(key=lambda row: (row.get("last_used_at") or row["created_at"], row["ingest_id"]), reverse=True)
+    current_names = {group["name"]: group["tag"] for group in groups}
+    for row in candidates:
+        record = json.loads(row["record_json"])
+        previous_id = file_model_id(record["artifact_sha256"])
+        try:
+            original = text if previous_id == model_id else read_original(store, previous_id)[1]
+        except ModelRefusal:
+            continue
+        previous_groups = parse_file_mesh(original).summary()["groups"]
+        previous_names = {group["name"]: group["tag"] for group in previous_groups}
+        # Ambiguous names cannot identify a source safely. Keep the inspect guesses.
+        if len(previous_names) != len(previous_groups) or len(current_names) != len(groups):
+            continue
+        file = record["source_file"]
+        roles = file.get("roles") or {
+            str(group["tag"]): next((source["role"] for source in record["sources"]
+                                      if source["id"] == f"group_{group['tag']}"), "RIGID")
+            for group in previous_groups
+        }
+        matching_roles = {
+            str(tag): ("HF" if roles.get(str(previous_names[name])) == "SOURCE" else canonical_source_role(roles.get(str(previous_names[name]), "RIGID")))
+            for name, tag in current_names.items() if name in previous_names
+        }
+        if "previous_roles" not in answer:
+            answer["previous_roles"] = matching_roles
+        if set(current_names) != set(previous_names):
+            continue
+        transform = file["transform"]
+        preparation = {
+            "units": transform["units"], "forward": transform["forward"], "up": transform["up"],
+            "roles": matching_roles,
+            "domain_planes": file.get("domain_planes", record.get("symmetry", {}).get("domain_planes", [])),
+            "reflect_planes": file.get("reflect_planes"),
+            "remove_lid_planes": file.get("remove_lid_planes", list(transform.get("removed_lids", {}))),
+        }
+        saved = read_setup(store, previous_id, record["ingest_id"])
+        sources = {f"group_{old_tag}": f"group_{current_names[name]}" for name, old_tag in previous_names.items()}
+        setup_row = store.get_model_setup(previous_id, prepared_inventory_sha256(record))
+        answer["previous_setup"] = {
+            "filename": file["filename"], "updated_at": (setup_row or {}).get("updated_at", record["created_at"]),
+            "preparation": preparation, "setup": _remap_file_setup(saved["setup"], sources),
+        }
+        return answer
+    return answer
+
+
 def mount_models_api(application: FastAPI) -> None:
     router = APIRouter(prefix="/api/models", tags=["Imported models"])
     store = application.state.cadlink_store
@@ -543,7 +641,16 @@ def mount_models_api(application: FastAPI) -> None:
 
         def summary() -> dict[str, Any]:
             text = read_original(store, body.model_id)[1] if isinstance(body, RetainedMeshInspection) else body.msh_text
-            return inspect_file_mesh(parse_file_mesh(text), body.units, body.forward, body.up)
+            mesh = parse_file_mesh(text)
+            count = len(mesh.triangles)
+            if count > MAX_FILE_MESH_TRIANGLES:
+                raise ModelRefusal(422, "mesh_too_large",
+                    f"This mesh has {count:,} triangles; Waveguide Generator accepts up to {MAX_FILE_MESH_TRIANGLES:,}. "
+                    "Export a coarser mesh, or export only the half or quarter of a symmetric model.")
+            inspected = inspect_file_mesh(mesh, body.units, body.forward, body.up)
+            if isinstance(body, MeshInspection):
+                inspected.update(_file_import_memory(store, body.filename, text, inspected["groups"]))
+            return inspected
 
         return await answer(summary)
 

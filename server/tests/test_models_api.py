@@ -520,8 +520,231 @@ def test_inspection_reads_retained_original_with_the_chosen_axes(tmp_path):
             retained = await call(app, "POST", "/api/models/files/inspect", {
                 "model_id": registered["model"]["model_id"], **frame,
             })
+            assert uploaded.pop("known_model")["model_id"] == registered["model"]["model_id"]
+            uploaded.pop("previous_setup")
+            uploaded.pop("previous_roles")
             assert retained == uploaded
             assert retained["lids"]["y0"]["candidate"] is True
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())
+
+
+def test_inspect_recognises_identical_bytes_and_the_latest_preparation(tmp_path):
+    from server.mesh.file_import import mesh_text
+    from test_file_mesh_roles_symmetry import box_mesh
+
+    async def scenario():
+        store = CadLinkStore.for_data_dir(tmp_path)
+        app, runtime = app_for(tmp_path, store)
+        try:
+            body = {"filename": "speaker.msh", "msh_text": mesh_text(box_mesh()), "units": "m",
+                    "forward": "+z", "up": "+y", "roles": {101: "LF", 102: "MF"}}
+            first = await call(app, "POST", "/api/models/files", body)
+            latest = await call(app, "POST", "/api/models/files", {**body, "units": "cm"})
+            inspected = await call(app, "POST", "/api/models/files/inspect", {
+                "filename": "renamed.msh", "msh_text": body["msh_text"],
+            })
+            assert inspected["known_model"] == {
+                "model_id": first["model"]["model_id"], "latest_prepared_id": latest["prepared"]["ingest_id"],
+            }
+            assert inspected["previous_setup"]["preparation"]["units"] == "cm"
+            assert len(store.list_model_ingests(first["model"]["model_id"])) == 2
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())
+
+
+def test_changed_file_restores_settings_by_group_name_and_partial_roles(tmp_path):
+    from dataclasses import replace
+    import numpy as np
+    from server.mesh.file_import import mesh_text
+    from test_file_mesh_roles_symmetry import box_mesh
+
+    async def scenario():
+        store = CadLinkStore.for_data_dir(tmp_path)
+        app, runtime = app_for(tmp_path, store)
+        try:
+            mesh = box_mesh(descriptors=False)
+            body = {"filename": "speaker.msh", "msh_text": mesh_text(mesh), "units": "cm",
+                    "forward": "+z", "up": "+y", "roles": {101: "LF", 102: "MF"}}
+            registered = await call(app, "POST", "/api/models/files", body)
+            record = registered["prepared"]
+            setup = setup_for(record)
+            setup["geometry"]["drive_channels"] = [
+                {"id": source["id"], "source_ids": [source["id"]], "motion": "axial"}
+                for source in record["sources"]
+            ]
+            model_id = registered["model"]["model_id"]
+            await call(app, "PUT", f"/api/models/{model_id}/setup", {"prepared_id": record["ingest_id"], "setup": setup})
+            changed = replace(mesh, points=mesh.points * 1.01,
+                              tags=np.where(mesh.tags == 101, 201, mesh.tags),
+                              names={1: "Walls", 201: "Tweeter", 102: "Mid"})
+            original = {"filename": "speaker.msh", "msh_text": mesh_text(changed)}
+            inspected = await call(app, "POST", "/api/models/files/inspect", original)
+            previous = inspected["previous_setup"]
+            assert "known_model" not in inspected
+            assert previous["filename"] == "speaker.msh"
+            assert previous["updated_at"]
+            assert previous["preparation"] == {
+                "units": "cm", "forward": "+z", "up": "+y", "roles": {"1": "RIGID", "201": "LF", "102": "MF"},
+                "domain_planes": [], "reflect_planes": None, "remove_lid_planes": [],
+            }
+            assert previous["setup"]["geometry"]["drive_channels"][0]["source_ids"] == ["group_201"]
+            assert previous["setup"]["geometry"]["drive_channels"][0]["motion"] == "axial"
+            remeshed = await call(app, "POST", "/api/models/files", {**original, **previous["preparation"]})
+            await call(app, "PUT", f"/api/models/{remeshed['model']['model_id']}/setup", {
+                "prepared_id": remeshed["prepared"]["ingest_id"], "setup": previous["setup"],
+            })
+            changed.names[102] = "New mid"
+            partial = await call(app, "POST", "/api/models/files/inspect", {
+                "filename": "speaker.msh", "msh_text": mesh_text(changed),
+            })
+            assert "previous_setup" not in partial
+            assert partial["previous_roles"] == {"1": "RIGID", "201": "LF"}
+            unrelated = await call(app, "POST", "/api/models/files/inspect", {
+                "filename": "another.msh", "msh_text": mesh_text(changed),
+            })
+            assert "previous_roles" not in unrelated
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())
+
+
+def test_previous_preparation_keeps_symmetry_lids_axes_and_the_most_recent_choices(tmp_path):
+    from server.mesh.file_import import mesh_text
+    from test_file_mesh_roles_symmetry import box_mesh
+
+    async def scenario():
+        store = CadLinkStore.for_data_dir(tmp_path)
+        app, runtime = app_for(tmp_path, store)
+        try:
+            text = mesh_text(box_mesh(planes=("x0", "y0"), capped=("x0",), negative=("y0",), descriptors=False))
+            original = {"filename": "speaker.msh", "msh_text": text}
+            settings = {"units": "m", "forward": "+z", "up": "+y", "roles": {101: "HF", 102: "MF"},
+                        "domain_planes": ["x0", "y0"], "remove_lid_planes": ["x0"], "reflect_planes": None}
+            await call(app, "POST", "/api/models/files", {**original, **settings})
+            latest = {**settings, "units": "cm", "roles": {101: "LF", 102: "MF"}}
+            await call(app, "POST", "/api/models/files", {**original, "msh_text": text + "\n", **latest})
+            inspected = await call(app, "POST", "/api/models/files/inspect", {**original, "msh_text": text + "\n\n"})
+            assert inspected["previous_setup"]["preparation"] == {
+                **latest, "roles": {"1": "RIGID", "101": "LF", "102": "MF"},
+            }
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("count", [20_000, 20_001])
+def test_inspect_refuses_large_mesh_before_symmetry_work(tmp_path, monkeypatch, count):
+    from dataclasses import replace
+    import numpy as np
+    from server.mesh.file_import import mesh_text
+    from test_file_mesh_roles_symmetry import box_mesh
+
+    async def scenario():
+        store = CadLinkStore.for_data_dir(tmp_path)
+        app, runtime = app_for(tmp_path, store)
+        try:
+            mesh = box_mesh()
+            large = replace(mesh, triangles=np.resize(mesh.triangles, (count, 3)), tags=np.resize(mesh.tags, count))
+            def inspected(*args):
+                assert count == 20_000, "oversized files must stop before symmetry inspection"
+                return mesh.summary()
+            monkeypatch.setattr("server.jobs.models_api.inspect_file_mesh", inspected)
+            answer = await call(app, "POST", "/api/models/files/inspect", {
+                "filename": "large.msh", "msh_text": mesh_text(large),
+            }, expected=200 if count == 20_000 else 422)
+            if count > 20_000:
+                assert answer["error"]["code"] == "mesh_too_large"
+                assert answer["error"]["message"] == (
+                    "This mesh has 20,001 triangles; Waveguide Generator accepts up to 20,000. "
+                    "Export a coarser mesh, or export only the half or quarter of a symmetric model."
+                )
+            assert store.ingest_records() == []
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())
+
+
+def test_identical_reimport_uses_a_reused_preparation_instead_of_newest_creation(tmp_path, monkeypatch):
+    from server.mesh.file_import import mesh_text
+    from test_file_mesh_roles_symmetry import box_mesh
+
+    async def scenario():
+        store = CadLinkStore.for_data_dir(tmp_path)
+        app, runtime = app_for(tmp_path, store)
+        try:
+            body = {"filename": "speaker.msh", "msh_text": mesh_text(box_mesh()), "units": "m",
+                    "forward": "+z", "up": "+y", "roles": {101: "HF", 102: "MF"}}
+            first = await call(app, "POST", "/api/models/files", body)
+            await call(app, "POST", "/api/models/files", {**body, "units": "cm"})
+            monkeypatch.setattr("server.cadlink.store.utc_now", lambda: "2099-01-01T00:00:00Z")
+            reused = await call(app, "POST", "/api/models/files", body)
+            assert reused["prepared"]["ingest_id"] == first["prepared"]["ingest_id"]
+            inspected = await call(app, "POST", "/api/models/files/inspect", {
+                "filename": "speaker.msh", "msh_text": body["msh_text"],
+            })
+            assert inspected["known_model"]["latest_prepared_id"] == first["prepared"]["ingest_id"]
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())
+
+
+def test_group_name_remap_keeps_channel_identity_and_driver_physics():
+    from server.jobs.models_api import _remap_file_setup
+
+    setup = {
+        "geometry": {
+            "drive_channels": [{"id": "group_101", "source_ids": ["group_101", "group_102"],
+                                "patch_weights": {"group_101": 0.4, "group_102": 0.6},
+                                "driver": {"driver_id": "retained-driver", "parameters": {"Re": 6.2}}, "motion": "axial"}],
+            "skipped_source_ids": ["group_103"], "mesh": {"source_size_mm": {"group_101": 2, "group_102": 3}},
+            "combine": {"members": ["group_101"]}, "drive_voltage_v": 4.2,
+        },
+        "options": {"frequencies_hz": [137, 211, 3987], "crossover": {"kept": True}},
+        "driver_references": {"group_101": {"driver_id": "retained-driver"}},
+    }
+    mapped = _remap_file_setup(setup, {"group_101": "group_201", "group_102": "group_202", "group_103": "group_203"})
+    expected = json.loads(json.dumps(setup))
+    expected["geometry"]["drive_channels"][0].update({"source_ids": ["group_201", "group_202"],
+                                                       "patch_weights": {"group_201": 0.4, "group_202": 0.6}})
+    expected["geometry"]["skipped_source_ids"] = ["group_203"]
+    expected["geometry"]["mesh"]["source_size_mm"] = {"group_201": 2, "group_202": 3}
+    assert mapped == expected
+    assert setup["geometry"]["drive_channels"][0]["source_ids"] == ["group_101", "group_102"]
+
+
+def test_inspection_keeps_settings_available_to_repair_a_missing_prepared_mesh(tmp_path):
+    async def scenario():
+        store = CadLinkStore.for_data_dir(tmp_path)
+        app, runtime = app_for(tmp_path, store)
+        try:
+            body = registration().model_dump()
+            record = register_mesh(store, tmp_path, registration())
+            setup = setup_for(record)
+            model_id = "mesh-file:" + record["artifact_sha256"]
+            await call(app, "PUT", f"/api/models/{model_id}/setup", {"prepared_id": record["ingest_id"], "setup": setup})
+            Path(record["mesh_store_path"]).unlink()
+            inspected = await call(app, "POST", "/api/models/files/inspect", {
+                "filename": body["filename"], "msh_text": body["msh_text"],
+            })
+            assert inspected["known_model"]["model_id"] == model_id
+            read = await call(app, "GET", f"/api/models/{model_id}?prepared_id={record['ingest_id']}", expected=409)
+            assert read["error"]["code"] == "prepared_unavailable"
+            memory = inspected["previous_setup"]
+            assert memory["setup"] == json.loads(setup_content(validate_setup(setup)))
+            repaired = await call(app, "POST", "/api/models/files", {
+                "filename": body["filename"], "msh_text": body["msh_text"], **memory["preparation"],
+            })
+            assert repaired["prepared"]["ingest_id"] != record["ingest_id"]
+            assert repaired["prepared"]["model_id"] == model_id
         finally:
             await runtime.shutdown()
             store.close()

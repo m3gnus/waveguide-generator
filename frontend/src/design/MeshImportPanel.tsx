@@ -1,8 +1,9 @@
 import { planeWords } from '../api/domainDecision';
 import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { editMeshImport, prepareMeshFile, saveMeshSetup, setMeshMotion, useMeshImportStore, meshImportChoice } from '../stores/meshImport';
+import { editMeshImport, prepareMeshFile, setMeshMotion, useMeshImportStore, meshImportChoice } from '../stores/meshImport';
 import { FILE_SURFACE_ROLES, fileSymmetryLabel, sourceRoleLabel } from '../model/cadLabels';
+import { useCadSetupPublisherStore } from '../shell/cadSetupPublisher';
 import { CadModelStatusLine } from '../shell/CadModelStatusLine';
 import { FileModelDetails } from '../shell/CadModelDetails';
 import { useImportedModelStore } from '../stores/importedModel';
@@ -21,6 +22,7 @@ const AXES = ['+x', '-x', '+y', '-y', '+z', '-z'];
 /** The ready-mesh workflow does not expose CAD generation or connection controls. */
 export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | 'simulation'; embedded?: boolean }) {
   const state = useMeshImportStore();
+  const saveError = useCadSetupPublisherStore(state => state.error);
   const model = useImportedModelStore();
   const draft = model.fileDraft;
   const registered = model.input === 'file' ? model.prepared as RegisteredMesh | null : null;
@@ -33,7 +35,6 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
   const [symmetryOpen, setSymmetryOpen] = useState(false);
   const [sizeOpen, setSizeOpen] = useState(false);
   const [axesOpen, setAxesOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
   const planes = draft.domainPlanes ?? [];
   const summary = state.summary ?? registered?.summary ?? null;
   const scale = ({ mm: 1, cm: 10, m: 1000, in: 25.4 } as Record<string, number>)[draft.units];
@@ -68,9 +69,9 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
       <header className="cad-model-identity"><b className="cad-model-name">{state.filename || 'Mesh file'}</b></header>
       <CadModelStatusLine file={{ input: 'file', label: state.filename,
         reading: state.busy && !summary, preparing: state.busy && !!summary,
-        choice: summary ? meshImportChoice(draft) : null, failureMessage: state.error,
-        canPrepare: editable && !!summary, prepared: !!registered, triangles: summary?.triangle_count ?? null,
-        symmetryLabel: fileSymmetryLabel(planes, false),
+        choice: summary ? meshImportChoice(draft) : null, failureMessage: state.error ?? saveError,
+        canPrepare: editable && !!summary && !saveError && state.failureRetry, prepared: !!registered, triangles: summary?.triangle_count ?? null,
+        symmetryLabel: fileSymmetryLabel(planes, false), notice: state.notice,
       }} onRetry={() => prepareMeshFile()}/>
       {summary && <>
         <fieldset className="mesh-surfaces" disabled={!editable}>
@@ -160,14 +161,8 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
       <legend>Directivity map</legend>
       <DirectivityMapControls />
     </fieldset>
-    <button disabled={!registered || state.busy || saving} onClick={() => {
-      setSaving(true);
-      void saveMeshSetup().catch(error => useMeshImportStore.setState({ error: String(error) }))
-        .finally(() => setSaving(false));
-    }}>{saving ? 'Saving…' : 'Save setup'}</button>
     </>}
     {tab === 'simulation' && state.error && <p className="field-error" role="alert">{state.error}</p>}
-    {tab === 'simulation' && state.notice && <p role="status">{state.notice}</p>}
     {tab === 'geometry' && <button onClick={() => {
       noteExplicitNavigation(); restoreParametricWorkingDesign(); workspaceModeStore.setMode('parametric');
     }}>Back to parametric design</button>}

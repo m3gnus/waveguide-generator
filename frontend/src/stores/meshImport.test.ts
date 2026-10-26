@@ -162,30 +162,6 @@ describe('standalone imported mesh', () => {
     expect(unchangedSetup('file', record.ingest_id)).toEqual({ setup_revision_id: 'wgs_saved' });
   });
 
-  it('does not mark settings edited during or after saving as saved', async () => {
-    showPrepared();
-    const wait = deferred<Response>();
-    const saving = saveMeshSetup(vi.fn(() => wait.promise));
-    useImportedSolveOptionsStore.getState().setSweep({ count: 17 });
-    wait.resolve(response({ revision_id: 'wgs_old' }));
-    await saving;
-    expect(useMeshImportStore.getState().notice).toContain('current edits are not saved');
-    await saveMeshSetup(vi.fn(async () => response({ revision_id: 'wgs_new' })));
-    expect(useMeshImportStore.getState().notice).toContain('Mesh setup saved with this model.');
-    useImportedSolveOptionsStore.getState().setSweep({ count: 19 });
-    expect(useMeshImportStore.getState().notice).toBeNull();
-  });
-
-  it('tracks borrowed engine changes during Save', async () => {
-    showPrepared();
-    const wait = deferred<Response>();
-    const saving = saveMeshSetup(vi.fn(() => wait.promise));
-    useImportedSolveOptionsStore.getState().setEngine('bempp');
-    wait.resolve(response({ revision_id: 'wgs_old' }));
-    await saving;
-    expect(useMeshImportStore.getState().notice).toContain('current edits are not saved');
-  });
-
   it('inspects original bytes on the backend, then prepares explicit units and groups', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => response(summary));
     await loadMeshFile('speaker.msh', MSH, fetcher);
@@ -605,4 +581,84 @@ it('inspects the retained original when symmetry is changed after reopening', as
   expect(useImportedModelStore.getState().fileDraft.domainPlanes).toEqual(['x0']);
   await editMeshImport({ removeLidPlanes: ['x0'] }, fetcher);
   expect(JSON.parse(fetcher.mock.calls[2][1]?.body as string).remove_lid_planes).toEqual(['x0']);
+});
+
+it('reopens identical bytes through the model path without registering another mesh', async () => {
+  const setup = setupOf({ frequencies_hz: [137, 211, 3987], engine: 'metal' }, 'axial');
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect')
+    ? response({ ...summary, known_model: { model_id: record.model_id, latest_prepared_id: record.ingest_id } })
+    : String(url).includes('/setup?') ? response({ setup, revision_id: 'wgs_last' }) : prepared(record));
+  await loadMeshFile('renamed.msh', MSH, fetcher);
+  expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+    '/api/models/files/inspect', `/api/models/${encodeURIComponent(record.model_id)}?prepared_id=${record.ingest_id}`,
+    `/api/models/${encodeURIComponent(record.model_id)}/setup?prepared_id=${record.ingest_id}`,
+  ]);
+  expect(unchangedSetup('file', record.ingest_id)).toEqual({ setup_revision_id: 'wgs_last' });
+  expect(fileMeshSubmission()).toEqual(bindImportedSetup(record, setup));
+  expect(useMeshImportStore.getState().notice).toBe('Ready to solve · settings from your last import');
+});
+
+it('reuses the previous preparation and exact physics for a changed file with the same groups', async () => {
+  const setup = setupOf({ frequencies_hz: [137, 211, 3987], engine: 'metal' }, 'axial');
+  const previous = { filename: 'speaker.msh', updated_at: '2026-10-26T08:31:00Z',
+    preparation: { units: 'cm', forward: '+z', up: '+y', roles: { 1: 'RIGID', 2: 'MF' },
+      domain_planes: ['x0'], reflect_planes: [], remove_lid_planes: ['x0'] }, setup };
+  const mesh = { ...record, ingest_id: 'wgi_changed', source_file: { ...record.source_file,
+    ...previous.preparation, transform: { units: 'cm', forward: '+z', up: '+y' } } };
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect')
+    ? response({ ...summary, previous_setup: previous }) : prepared(mesh));
+  await loadMeshFile('speaker.msh', MSH, fetcher);
+  expect(JSON.parse(fetcher.mock.calls[1][1]?.body as string)).toMatchObject(previous.preparation);
+  expect(fileMeshSubmission()).toEqual(bindImportedSetup(mesh, setup));
+  expect(useMeshImportStore.getState().notice).toMatch(/^Using the settings from speaker.msh \(.+\)$/);
+  useImportedSolveOptionsStore.getState().setSweep({ count: 21 });
+  expect(useMeshImportStore.getState().notice).toBeNull();
+});
+
+it('keeps only matching roles when the re-export changes its group names', async () => {
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect')
+    ? response({ ...summary, suggested_units: 'mm', previous_roles: { 1: 'RIGID', 2: 'LF' } }) : prepared(record));
+  await loadMeshFile('speaker.msh', MSH, fetcher);
+  expect(JSON.parse(fetcher.mock.calls[1][1]?.body as string)).toMatchObject({ roles: { 1: 'RIGID', 2: 'LF' }, units: 'mm' });
+  expect(useMeshImportStore.getState().notice).toBeNull();
+});
+
+it('inspects remembered axes without replacing declared symmetry or sending setup fields to inspect', async () => {
+  const preparation = { units: 'mm', forward: '+z', up: '+x', roles: { 1: 'RIGID', 2: 'HF' },
+    domain_planes: ['x0'], reflect_planes: [], remove_lid_planes: ['x0'] };
+  const mesh = { ...record, source_file: { ...record.source_file, ...preparation,
+    transform: { units: 'mm', forward: '+z', up: '+x' } } };
+  const fetcher = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(response({ ...summary, previous_setup: {
+      filename: 'speaker.msh', updated_at: '2026-10-26T08:31:00Z', preparation, setup: null,
+    } }))
+    .mockResolvedValueOnce(response({ ...summary, detected_planes: [], lids: { x0: { candidate: true, triangle_count: 2, groups: [] } } }))
+    .mockResolvedValueOnce(prepared(mesh));
+  await loadMeshFile('speaker.msh', MSH, fetcher);
+  expect(JSON.parse(fetcher.mock.calls[1][1]?.body as string)).toEqual({ filename: 'speaker.msh', msh_text: MSH, units: 'mm', forward: '+z', up: '+x' });
+  expect(JSON.parse(fetcher.mock.calls[2][1]?.body as string)).toMatchObject(preparation);
+  expect(useMeshImportStore.getState().summary?.lids?.x0.candidate).toBe(true);
+});
+
+it('rebuilds missing retained artifacts through normal registration using the remembered settings', async () => {
+  const setup = setupOf({ frequencies_hz: [137, 211], engine: 'metal' }, 'axial');
+  const previous = { filename: 'speaker.msh', updated_at: '2026-10-26T08:31:00Z',
+    preparation: { units: 'mm', forward: '+z', up: '+y', roles: { 1: 'RIGID', 2: 'MF' } }, setup };
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect')
+    ? response({ ...summary, known_model: { model_id: record.model_id, latest_prepared_id: record.ingest_id }, previous_setup: previous })
+    : String(url) === '/api/models/files' ? prepared(record)
+    : response({ error: { code: 'prepared_unavailable', message: 'Retained mesh unavailable. Import it again.' } }, 409));
+  await loadMeshFile('speaker.msh', MSH, fetcher);
+  expect(JSON.parse(fetcher.mock.calls[2][1]?.body as string)).toMatchObject({ ...previous.preparation, msh_text: MSH });
+  expect(fileMeshSubmission()).toEqual(bindImportedSetup(record, setup));
+  expect(useMeshImportStore.getState().error).toBeNull();
+});
+
+it('does not rebuild on a network error while reopening identical bytes', async () => {
+  const fetcher = vi.fn<typeof fetch>(async url => {
+    if (String(url).endsWith('/inspect')) return response({ ...summary, known_model: { model_id: record.model_id, latest_prepared_id: record.ingest_id } });
+    throw new TypeError('offline');
+  });
+  await expect(loadMeshFile('speaker.msh', MSH, fetcher)).rejects.toThrow('offline');
+  expect(fetcher).toHaveBeenCalledTimes(2);
 });
