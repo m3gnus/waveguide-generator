@@ -12,6 +12,7 @@ The Geometry panel supports these constructions from the pinned mesher:
 | OSSE-ROUNDOVER | Circular mouth lip radius and normal wall thickness in finished mm |
 | OSSE-AXIAL | Absolute axial scale, with the ordinary scale controlling X and Y |
 | OSSE-ARC | Retained-body fraction and absolute end tangent angle for a curvature-matched circular suffix |
+| OSSE-NATIVE | Authored adapter and arc or roundover, optionally with axial scale; or arc or roundover with axial scale |
 | SOURCE-DISK | Source radius, exterior body radius, depth and uniform mesh size in finished mm |
 
 Native horn body dimensions and adapter controls are intrinsic millimetres. Uniform
@@ -41,6 +42,8 @@ manual CAD import; acoustic source tags must be assigned in the receiving CAD wo
 
 BEMPP requires a closed body: native bare horns are refused during solve planning.
 OSSE-ROUNDOVER and SOURCE-DISK retain their closed geometry without a wall adjustment.
+An OSSE-NATIVE construction with a roundover is also closed; an arc without a
+roundover remains a bare horn.
 A saved half/quarter solve domain must be changed to Auto or Full before solving a
 native formula. SOURCE-DISK uses a single mesh; horn-resolution mesh ladders are skipped.
 Switching between native horns preserves shared body dimensions and mesh resolutions;

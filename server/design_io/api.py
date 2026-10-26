@@ -159,7 +159,7 @@ async def serialize_design(payload: dict[str, Any]) -> dict[str, Any]:
         design = DesignConfig.model_validate(design_payload)
         design_uid = validate_design_uid(payload.get("designUid") if "design" in payload else None)
     except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
+        raise HTTPException(status_code=422, detail=exc.errors(include_url=False, include_context=False)) from exc
     suggested_filename = _design_filename(filename, design)
     json_copy = design.formula == "LOOKUP" and filename and Path(str(filename)).suffix.lower() == ".json"
     if json_copy:

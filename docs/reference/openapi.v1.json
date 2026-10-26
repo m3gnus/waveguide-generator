@@ -3068,6 +3068,7 @@
             "OSSE-ADAPTER-CONTROLS": "#/components/schemas/NativeOSSEConfig",
             "OSSE-ARC": "#/components/schemas/NativeOSSEConfig",
             "OSSE-AXIAL": "#/components/schemas/NativeOSSEConfig",
+            "OSSE-NATIVE": "#/components/schemas/NativeOSSEConfig",
             "OSSE-ROUNDOVER": "#/components/schemas/NativeOSSEConfig",
             "R-OSSE": "#/components/schemas/ROSSEConfig",
             "SOURCE-DISK": "#/components/schemas/SourceDiskConfig"
@@ -9847,7 +9848,8 @@
               "OSSE-ADAPTER-AXIAL",
               "OSSE-ROUNDOVER",
               "OSSE-AXIAL",
-              "OSSE-ARC"
+              "OSSE-ARC",
+              "OSSE-NATIVE"
             ],
             "title": "Formula",
             "type": "string"
@@ -10541,6 +10543,7 @@
                 "OSSE-ROUNDOVER",
                 "OSSE-AXIAL",
                 "OSSE-ARC",
+                "OSSE-NATIVE",
                 "SOURCE-DISK"
               ],
               "type": "string"
@@ -10637,6 +10640,7 @@
                 "OSSE-ROUNDOVER",
                 "OSSE-AXIAL",
                 "OSSE-ARC",
+                "OSSE-NATIVE",
                 "SOURCE-DISK"
               ],
               "type": "string"

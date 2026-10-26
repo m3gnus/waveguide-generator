@@ -6,8 +6,15 @@ from typing import Any
 
 NATIVE_FORMULAS = frozenset({
     "OSSE-ADAPTER", "OSSE-ADAPTER-CONTROLS", "OSSE-ADAPTER-AXIAL",
-    "OSSE-ROUNDOVER", "OSSE-AXIAL", "OSSE-ARC", "SOURCE-DISK",
+    "OSSE-ROUNDOVER", "OSSE-AXIAL", "OSSE-ARC", "OSSE-NATIVE", "SOURCE-DISK",
 })
+
+
+def has_native_roundover(root: Any) -> bool:
+    """Whether the native construction owns a closed mouth roundover."""
+    return root.formula == "OSSE-ROUNDOVER" or (
+        root.formula == "OSSE-NATIVE" and root.mesh.mouth_roundover_radius_mm is not None
+    )
 
 
 def _number(value: Any, name: str, default: float) -> float:
@@ -88,13 +95,14 @@ def native_mesher_config(root: Any) -> dict[str, Any]:
 
     if mesh.size_mm is not None:
         raise ValueError("mesh.size_mm is only supported by SOURCE-DISK")
+    roundover = has_native_roundover(root)
     config.update({
-        "mode": "freestanding" if root.formula == "OSSE-ROUNDOVER" else "bare",
+        "mode": "freestanding" if roundover else "bare",
         "scale": number(root.scale, "scale", 1),
         "profile": {"L_mm": root.L, "r0_mm": root.r0, "a_deg": root.a, "a0_deg": root.a0, "k": root.k, "s": root.s},
         "source": {"source_shape": 0},
     })
-    config["mesh"]["wall_thickness_mm"] = number(mesh.wall_thickness, "mesh.wall_thickness", 5 if root.formula == "OSSE-ROUNDOVER" else 0)
+    config["mesh"]["wall_thickness_mm"] = number(mesh.wall_thickness, "mesh.wall_thickness", 5 if roundover else 0)
     for field, key in (("throat_resolution", "throat_res_mm"), ("mouth_resolution", "mouth_res_mm"), ("rear_resolution", "rear_res_mm")):
         if (value := getattr(mesh, field)) is not None:
             config["mesh"][key] = number(value, f"mesh.{field}")
@@ -104,21 +112,24 @@ def native_mesher_config(root: Any) -> dict[str, Any]:
             if not n.is_integer() or not 0 < n <= 10000000:
                 raise ValueError(f"mesh.{field} must be a positive integer up to 10000000")
             config["mesh"][field] = int(n)
+    # Legacy markers have fixed slots; the mesher's native boundary owns the
+    # supported composite combinations and canonical marker rules.
+    composite = root.formula == "OSSE-NATIVE"
     required_adapter = root.formula in {"OSSE-ADAPTER", "OSSE-ADAPTER-CONTROLS", "OSSE-ADAPTER-AXIAL"}
-    if required_adapter != (root.throat_adapter is not None):
+    if not composite and required_adapter != (root.throat_adapter is not None):
         raise ValueError(f"{root.formula} {'requires' if required_adapter else 'does not support'} throat_adapter")
     if root.throat_adapter is not None:
         expected = "controls" if root.formula == "OSSE-ADAPTER-CONTROLS" else "authored"
-        if root.throat_adapter.mode != expected:
+        if not composite and root.throat_adapter.mode != expected:
             raise ValueError(f"{root.formula} requires throat_adapter.mode = {expected}")
         config["throat_adapter"] = root.throat_adapter.model_dump(mode="json")
     for field, required in (("axial_scale", root.formula in {"OSSE-AXIAL", "OSSE-ADAPTER-AXIAL"}), ("terminating_arc", root.formula == "OSSE-ARC")):
         value = getattr(root, field)
-        if required != (value is not None):
+        if not composite and required != (value is not None):
             raise ValueError(f"{root.formula} {'requires' if required else 'does not support'} {field}")
         if value is not None:
             config[field] = value.model_dump() if hasattr(value, "model_dump") else value
-    if root.formula == "OSSE-ROUNDOVER":
+    if roundover:
         if mesh.mouth_roundover_radius_mm is None:
             raise ValueError("OSSE-ROUNDOVER requires mesh.mouth_roundover_radius_mm")
         config["mesh"]["mouth_roundover_radius_mm"] = mesh.mouth_roundover_radius_mm

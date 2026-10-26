@@ -5684,7 +5684,7 @@ export interface components {
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            formula: "OSSE-ADAPTER" | "OSSE-ADAPTER-AXIAL" | "OSSE-ADAPTER-CONTROLS" | "OSSE-ARC" | "OSSE-AXIAL" | "OSSE-ROUNDOVER";
+            formula: "OSSE-ADAPTER" | "OSSE-ADAPTER-AXIAL" | "OSSE-ADAPTER-CONTROLS" | "OSSE-ARC" | "OSSE-AXIAL" | "OSSE-NATIVE" | "OSSE-ROUNDOVER";
             /**
              * K
              * @default 1
@@ -5835,7 +5835,7 @@ export interface components {
              */
             catalog_version: 1;
             /** Design Families */
-            design_families: ("R-OSSE" | "OSSE" | "ICW" | "FREEFORM" | "LOOKUP" | "OSSE-ADAPTER" | "OSSE-ADAPTER-CONTROLS" | "OSSE-ADAPTER-AXIAL" | "OSSE-ROUNDOVER" | "OSSE-AXIAL" | "OSSE-ARC" | "SOURCE-DISK")[];
+            design_families: ("R-OSSE" | "OSSE" | "ICW" | "FREEFORM" | "LOOKUP" | "OSSE-ADAPTER" | "OSSE-ADAPTER-CONTROLS" | "OSSE-ADAPTER-AXIAL" | "OSSE-ROUNDOVER" | "OSSE-AXIAL" | "OSSE-ARC" | "OSSE-NATIVE" | "SOURCE-DISK")[];
             /** Parameters */
             parameters: components["schemas"]["ParameterDescriptor"][];
             /**
@@ -5860,7 +5860,7 @@ export interface components {
             disabled_when?: components["schemas"]["CatalogCondition"] | null;
             editor_bounds: components["schemas"]["CatalogEditorBounds"] | null;
             /** Families */
-            families: ("R-OSSE" | "OSSE" | "ICW" | "FREEFORM" | "LOOKUP" | "OSSE-ADAPTER" | "OSSE-ADAPTER-CONTROLS" | "OSSE-ADAPTER-AXIAL" | "OSSE-ROUNDOVER" | "OSSE-AXIAL" | "OSSE-ARC" | "SOURCE-DISK")[];
+            families: ("R-OSSE" | "OSSE" | "ICW" | "FREEFORM" | "LOOKUP" | "OSSE-ADAPTER" | "OSSE-ADAPTER-CONTROLS" | "OSSE-ADAPTER-AXIAL" | "OSSE-ROUNDOVER" | "OSSE-AXIAL" | "OSSE-ARC" | "OSSE-NATIVE" | "SOURCE-DISK")[];
             /** Id */
             id: string;
             /**

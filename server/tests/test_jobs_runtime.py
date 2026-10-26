@@ -2095,11 +2095,11 @@ def test_native_bempp_submission_keeps_closed_bodies_and_refuses_bare_horns(form
     from server.tests.test_native_formulas import design_payload
 
     payload = design_payload(formula)
-    if formula == "OSSE-ROUNDOVER":
+    if formula in {"OSSE-ROUNDOVER", "OSSE-NATIVE"}:
         payload["mesh"].pop("wall_thickness")
     request = SolveRequest.model_validate({"design": payload, "options": {"engine": engine}})
     before = request.model_dump(mode="json")
-    if formula in {"OSSE-ROUNDOVER", "SOURCE-DISK"}:
+    if formula in {"OSSE-ROUNDOVER", "OSSE-NATIVE", "SOURCE-DISK"}:
         resolution = asyncio.run(resolve_submission(request, _bempp_registry()))
         assert resolution.request.design == request.design
         assert resolution.request.design_snapshot == request.design_snapshot

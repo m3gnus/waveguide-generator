@@ -20,7 +20,7 @@ def test_parameter_catalog_is_versioned_unique_and_declarative() -> None:
     assert catalog["catalog_version"] == 1
     assert catalog["design_families"] == ["R-OSSE", "OSSE", "ICW", "FREEFORM", "LOOKUP",
         "OSSE-ADAPTER", "OSSE-ADAPTER-CONTROLS", "OSSE-ADAPTER-AXIAL", "OSSE-ROUNDOVER",
-        "OSSE-AXIAL", "OSSE-ARC", "SOURCE-DISK"]
+        "OSSE-AXIAL", "OSSE-ARC", "OSSE-NATIVE", "SOURCE-DISK"]
     ids = [field["id"] for field in catalog["parameters"]]
     assert len(ids) == len(set(ids))
     assert len(ids) >= 100

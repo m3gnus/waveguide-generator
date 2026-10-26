@@ -212,10 +212,10 @@ def _apply_bempp_wall_default(
     ):
         return request, None
     root = request.design.root
-    from server.design.native import NATIVE_FORMULAS
+    from server.design.native import NATIVE_FORMULAS, has_native_roundover
 
     if root.formula in NATIVE_FORMULAS:
-        if root.formula not in {"OSSE-ROUNDOVER", "SOURCE-DISK"}:
+        if root.formula != "SOURCE-DISK" and not has_native_roundover(root):
             raise SymmetryValidationError(
                 f"BEMPP requires a closed body, but {root.formula} only supports "
                 "a bare horn with zero wall thickness. Choose another engine "

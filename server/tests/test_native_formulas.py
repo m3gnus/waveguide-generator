@@ -62,6 +62,10 @@ RECIPES = {
         "mesh": {"wall_thickness_mm": 5, "mouth_roundover_radius_mm": 25,
                  "mouth_res_mm": 8, "allow_large_mesh": True},
     },
+    "OSSE-NATIVE": {
+        "profile": BODY, "mode": "freestanding", "axial_scale": 1.2,
+        "mesh": {"wall_thickness_mm": 5, "mouth_roundover_radius_mm": 25},
+    },
     "OSSE-AXIAL": {
         "profile": {**BODY, "r0_mm": 18, "a0_deg": 8}, "scale": 2, "axial_scale": 1.2,
         "mesh": {"vertical_offset_mm": 7, "throat_res_mm": 4, "mouth_res_mm": 12},
@@ -123,7 +127,7 @@ def small_design(formula: str) -> DesignConfig:
         if formula == "OSSE-ARC":
             payload["scale"] = .08
             payload["L"] = 30
-        if formula == "OSSE-ROUNDOVER":
+        if formula in {"OSSE-ROUNDOVER", "OSSE-NATIVE"}:
             payload["L"] = 20
             payload["mesh"].update(mouth_roundover_radius_mm=.5, wall_thickness=.1)
     return DesignConfig.model_validate(payload)
@@ -178,7 +182,7 @@ def test_native_preview_full_domain_and_solve_safety(formula: str) -> None:
     assert guarded["mesh"]["max_triangles"] == MAX_SOLVER_MESH_ARTIFACT_TRIANGLES
     assert guarded["mesh"]["allow_large_mesh"] is False
     assert "maxTriangles" not in guarded["mesh"]
-    assert has_closed_outer_body(design.root) == (formula in {"OSSE-ROUNDOVER", "SOURCE-DISK"})
+    assert has_closed_outer_body(design.root) == (formula in {"OSSE-ROUNDOVER", "OSSE-NATIVE", "SOURCE-DISK"})
 
 
 @pytest.mark.parametrize("formula", FAMILIES)

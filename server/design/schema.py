@@ -1209,7 +1209,7 @@ class NativeDesignCommon(DesignCommon):
 
 
 class NativeOSSEConfig(NativeDesignCommon):
-    formula: Literal["OSSE-ADAPTER", "OSSE-ADAPTER-CONTROLS", "OSSE-ADAPTER-AXIAL", "OSSE-ROUNDOVER", "OSSE-AXIAL", "OSSE-ARC"]
+    formula: Literal["OSSE-ADAPTER", "OSSE-ADAPTER-CONTROLS", "OSSE-ADAPTER-AXIAL", "OSSE-ROUNDOVER", "OSSE-AXIAL", "OSSE-ARC", "OSSE-NATIVE"]
     L: NativeNumber = Field(default=120, gt=0, le=10000, description="Intrinsic OSSE body length in mm")
     r0: NativeNumber = Field(default=12.7, gt=0, le=10000, description="Intrinsic body throat radius in mm")
     a: NativeNumber = Field(default=40, ge=1, lt=80, description="Body coverage half-angle in degrees")

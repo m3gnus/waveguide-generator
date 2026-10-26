@@ -53,14 +53,14 @@ def effective_wall_thickness(root: Any) -> float:
     ``design_to_mesher_config`` applies the waveguide ``scale`` for saved v1
     designs, and current v2 imports keep the wall in unscaled millimetres,
     matching ATH output. Native formulas return finished millimetres:
-    OSSE-ROUNDOVER defaults to 5 mm, other native horns to zero, and
+    Native roundovers default to 5 mm, other native horns to zero, and
     SOURCE-DISK is closed independently of a wall.
     """
 
-    from server.design.native import NATIVE_FORMULAS
+    from server.design.native import NATIVE_FORMULAS, has_native_roundover
 
     if root.formula in NATIVE_FORMULAS:
-        return _structural_number(root.mesh.wall_thickness, "mesh.wall_thickness", 5 if root.formula == "OSSE-ROUNDOVER" else 0)
+        return _structural_number(root.mesh.wall_thickness, "mesh.wall_thickness", 5 if has_native_roundover(root) else 0)
     default = 0.0 if root.simulation.sim_type == "infinite-baffle" else 5.0
     return _structural_number(root.mesh.wall_thickness, "mesh.wall_thickness", default)
 

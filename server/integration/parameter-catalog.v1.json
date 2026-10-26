@@ -13,6 +13,7 @@
     "OSSE-ROUNDOVER",
     "OSSE-AXIAL",
     "OSSE-ARC",
+    "OSSE-NATIVE",
     "SOURCE-DISK"
   ],
   "validation_authority": {
@@ -306,7 +307,8 @@
         "OSSE-ADAPTER-AXIAL",
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
-        "OSSE-ARC"
+        "OSSE-ARC",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -316,7 +318,8 @@
         "OSSE-ADAPTER-AXIAL": 120,
         "OSSE-ROUNDOVER": 120,
         "OSSE-AXIAL": 120,
-        "OSSE-ARC": 120
+        "OSSE-ARC": 120,
+        "OSSE-NATIVE": 120
       },
       "editor_bounds": {
         "minimum": 0.01,
@@ -343,7 +346,8 @@
         "OSSE-ADAPTER-AXIAL",
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
-        "OSSE-ARC"
+        "OSSE-ARC",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -353,7 +357,8 @@
         "OSSE-ADAPTER-AXIAL": 12.7,
         "OSSE-ROUNDOVER": 12.7,
         "OSSE-AXIAL": 12.7,
-        "OSSE-ARC": 12.7
+        "OSSE-ARC": 12.7,
+        "OSSE-NATIVE": 12.7
       },
       "editor_bounds": {
         "minimum": 0.01,
@@ -380,7 +385,8 @@
         "OSSE-ADAPTER-AXIAL",
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
-        "OSSE-ARC"
+        "OSSE-ARC",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -390,7 +396,8 @@
         "OSSE-ADAPTER-AXIAL": 40,
         "OSSE-ROUNDOVER": 40,
         "OSSE-AXIAL": 40,
-        "OSSE-ARC": 40
+        "OSSE-ARC": 40,
+        "OSSE-NATIVE": 40
       },
       "editor_bounds": {
         "minimum": 1,
@@ -417,7 +424,8 @@
         "OSSE-ADAPTER-AXIAL",
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
-        "OSSE-ARC"
+        "OSSE-ARC",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -427,7 +435,8 @@
         "OSSE-ADAPTER-AXIAL": 15.5,
         "OSSE-ROUNDOVER": 15.5,
         "OSSE-AXIAL": 15.5,
-        "OSSE-ARC": 15.5
+        "OSSE-ARC": 15.5,
+        "OSSE-NATIVE": 15.5
       },
       "editor_bounds": {
         "minimum": 0,
@@ -454,7 +463,8 @@
         "OSSE-ADAPTER-AXIAL",
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
-        "OSSE-ARC"
+        "OSSE-ARC",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -464,7 +474,8 @@
         "OSSE-ADAPTER-AXIAL": 1,
         "OSSE-ROUNDOVER": 1,
         "OSSE-AXIAL": 1,
-        "OSSE-ARC": 1
+        "OSSE-ARC": 1,
+        "OSSE-NATIVE": 1
       },
       "editor_bounds": {
         "minimum": 0.01,
@@ -491,7 +502,8 @@
         "OSSE-ADAPTER-AXIAL",
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
-        "OSSE-ARC"
+        "OSSE-ARC",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -501,7 +513,8 @@
         "OSSE-ADAPTER-AXIAL": 1,
         "OSSE-ROUNDOVER": 1,
         "OSSE-AXIAL": 1,
-        "OSSE-ARC": 1
+        "OSSE-ARC": 1,
+        "OSSE-NATIVE": 1
       },
       "editor_bounds": {
         "minimum": 0.001,
@@ -524,13 +537,15 @@
       "unit": null,
       "families": [
         "OSSE-AXIAL",
-        "OSSE-ADAPTER-AXIAL"
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
       "default_by_family": {
         "OSSE-AXIAL": 1,
-        "OSSE-ADAPTER-AXIAL": 1
+        "OSSE-ADAPTER-AXIAL": 1,
+        "OSSE-NATIVE": 1.2
       },
       "editor_bounds": {
         "minimum": 0.01,
@@ -539,7 +554,36 @@
       "step": 0.001,
       "precision": 3,
       "options": [],
-      "description": "Absolute Z factor, replacing uniform scale on Z. Axial/transverse ratio must be 0.1 through 10."
+      "description": "Absolute Z factor, replacing uniform scale on Z. Axial/transverse ratio must be 0.1 through 10.",
+      "visible_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "not_equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "axial_scale",
+            "operator": "present"
+          }
+        ]
+      },
+      "disabled_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "axial_scale",
+            "operator": "absent"
+          }
+        ]
+      },
+      "disabled_reason": "Select this feature in OSSE features before editing."
     },
     {
       "id": "native.adapter.driver_exit_diameter_mm",
@@ -553,7 +597,8 @@
       "unit": "mm",
       "families": [
         "OSSE-ADAPTER",
-        "OSSE-ADAPTER-AXIAL"
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -568,7 +613,36 @@
       "step": 0.001,
       "precision": 6,
       "options": [],
-      "description": "Intrinsic driver opening diameter. The adapter joins this opening to the retained OSSE body."
+      "description": "Intrinsic driver opening diameter. The adapter joins this opening to the retained OSSE body.",
+      "visible_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "not_equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "throat_adapter",
+            "operator": "present"
+          }
+        ]
+      },
+      "disabled_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "throat_adapter",
+            "operator": "absent"
+          }
+        ]
+      },
+      "disabled_reason": "Select this feature in OSSE features before editing."
     },
     {
       "id": "native.adapter.exit_half_angle_deg",
@@ -582,7 +656,8 @@
       "unit": "°",
       "families": [
         "OSSE-ADAPTER",
-        "OSSE-ADAPTER-AXIAL"
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -597,7 +672,36 @@
       "step": 0.001,
       "precision": 6,
       "options": [],
-      "description": "Signed authored driver tangent angle; anisotropic scaling changes the finished angle."
+      "description": "Signed authored driver tangent angle; anisotropic scaling changes the finished angle.",
+      "visible_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "not_equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "throat_adapter",
+            "operator": "present"
+          }
+        ]
+      },
+      "disabled_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "throat_adapter",
+            "operator": "absent"
+          }
+        ]
+      },
+      "disabled_reason": "Select this feature in OSSE features before editing."
     },
     {
       "id": "native.adapter.length_mm",
@@ -611,7 +715,8 @@
       "unit": "mm",
       "families": [
         "OSSE-ADAPTER",
-        "OSSE-ADAPTER-AXIAL"
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -626,7 +731,36 @@
       "step": 0.001,
       "precision": 6,
       "options": [],
-      "description": "Intrinsic axial distance from driver plane to body join."
+      "description": "Intrinsic axial distance from driver plane to body join.",
+      "visible_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "not_equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "throat_adapter",
+            "operator": "present"
+          }
+        ]
+      },
+      "disabled_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "throat_adapter",
+            "operator": "absent"
+          }
+        ]
+      },
+      "disabled_reason": "Select this feature in OSSE features before editing."
     },
     {
       "id": "native.adapter.join_t",
@@ -640,7 +774,8 @@
       "unit": "fraction",
       "families": [
         "OSSE-ADAPTER",
-        "OSSE-ADAPTER-AXIAL"
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -655,7 +790,36 @@
       "step": 0.001,
       "precision": 6,
       "options": [],
-      "description": "Fraction along the original OSSE body where the adapter joins it. The remaining body keeps its shape."
+      "description": "Fraction along the original OSSE body where the adapter joins it. The remaining body keeps its shape.",
+      "visible_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "not_equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "throat_adapter",
+            "operator": "present"
+          }
+        ]
+      },
+      "disabled_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "throat_adapter",
+            "operator": "absent"
+          }
+        ]
+      },
+      "disabled_reason": "Select this feature in OSSE features before editing."
     },
     {
       "id": "native.adapter.driver_handle_mm",
@@ -669,7 +833,8 @@
       "unit": "mm",
       "families": [
         "OSSE-ADAPTER",
-        "OSSE-ADAPTER-AXIAL"
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -684,7 +849,36 @@
       "step": 0.001,
       "precision": 6,
       "options": [],
-      "description": "Cubic handle distance along the driver tangent. Invalid or backward cubic controls are refused."
+      "description": "Cubic handle distance along the driver tangent. Invalid or backward cubic controls are refused.",
+      "visible_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "not_equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "throat_adapter",
+            "operator": "present"
+          }
+        ]
+      },
+      "disabled_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "throat_adapter",
+            "operator": "absent"
+          }
+        ]
+      },
+      "disabled_reason": "Select this feature in OSSE features before editing."
     },
     {
       "id": "native.adapter.body_handle_mm",
@@ -698,7 +892,8 @@
       "unit": "mm",
       "families": [
         "OSSE-ADAPTER",
-        "OSSE-ADAPTER-AXIAL"
+        "OSSE-ADAPTER-AXIAL",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -713,7 +908,36 @@
       "step": 0.001,
       "precision": 6,
       "options": [],
-      "description": "Cubic handle distance along the body tangent, giving a smooth oriented join."
+      "description": "Cubic handle distance along the body tangent, giving a smooth oriented join.",
+      "visible_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "not_equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "throat_adapter",
+            "operator": "present"
+          }
+        ]
+      },
+      "disabled_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "throat_adapter",
+            "operator": "absent"
+          }
+        ]
+      },
+      "disabled_reason": "Select this feature in OSSE features before editing."
     },
     {
       "id": "native.controls.0.0",
@@ -888,7 +1112,8 @@
       "kind": "number",
       "unit": "fraction",
       "families": [
-        "OSSE-ARC"
+        "OSSE-ARC",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -902,7 +1127,36 @@
       "step": 0.001,
       "precision": 6,
       "options": [],
-      "description": "Fraction of original body retained before the exact tangent- and curvature-matched circular suffix."
+      "description": "Fraction of original body retained before the exact tangent- and curvature-matched circular suffix.",
+      "visible_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "not_equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "terminating_arc",
+            "operator": "present"
+          }
+        ]
+      },
+      "disabled_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "terminating_arc",
+            "operator": "absent"
+          }
+        ]
+      },
+      "disabled_reason": "Select this feature in OSSE features before editing."
     },
     {
       "id": "native.arc.end_tangent_deg",
@@ -915,7 +1169,8 @@
       "kind": "number",
       "unit": "°",
       "families": [
-        "OSSE-ARC"
+        "OSSE-ARC",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -929,7 +1184,36 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Absolute oriented tangent from forward Z toward increasing radius. Must exceed the join tangent; above 90 degrees turns backward. Source-plane clearance is required."
+      "description": "Absolute oriented tangent from forward Z toward increasing radius. Must exceed the join tangent; above 90 degrees turns backward. Source-plane clearance is required.",
+      "visible_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "not_equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "terminating_arc",
+            "operator": "present"
+          }
+        ]
+      },
+      "disabled_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "terminating_arc",
+            "operator": "absent"
+          }
+        ]
+      },
+      "disabled_reason": "Select this feature in OSSE features before editing."
     },
     {
       "id": "native.lip.radius",
@@ -942,12 +1226,14 @@
       "kind": "number",
       "unit": "mm",
       "families": [
-        "OSSE-ROUNDOVER"
+        "OSSE-ROUNDOVER",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
       "default_by_family": {
-        "OSSE-ROUNDOVER": 25
+        "OSSE-ROUNDOVER": 25,
+        "OSSE-NATIVE": 25
       },
       "editor_bounds": {
         "minimum": 0.2,
@@ -956,7 +1242,36 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Finished circular lip radius, at least 0.1 mm larger than wall thickness. The full lip must clear the rear and its outer offset must not fold."
+      "description": "Finished circular lip radius, at least 0.1 mm larger than wall thickness. The full lip must clear the rear and its outer offset must not fold.",
+      "visible_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "not_equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "mesh.mouth_roundover_radius_mm",
+            "operator": "present"
+          }
+        ]
+      },
+      "disabled_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "mesh.mouth_roundover_radius_mm",
+            "operator": "absent"
+          }
+        ]
+      },
+      "disabled_reason": "Select this feature in OSSE features before editing."
     },
     {
       "id": "native.lip.wall",
@@ -969,12 +1284,14 @@
       "kind": "number",
       "unit": "mm",
       "families": [
-        "OSSE-ROUNDOVER"
+        "OSSE-ROUNDOVER",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
       "default_by_family": {
-        "OSSE-ROUNDOVER": 5
+        "OSSE-ROUNDOVER": 5,
+        "OSSE-NATIVE": 5
       },
       "editor_bounds": {
         "minimum": 0.1,
@@ -983,7 +1300,36 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Finished normal wall thickness. Must remain at least 0.1 mm below the lip radius and satisfy the curvature clearance guard."
+      "description": "Finished normal wall thickness. Must remain at least 0.1 mm below the lip radius and satisfy the curvature clearance guard.",
+      "visible_when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "not_equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "mesh.mouth_roundover_radius_mm",
+            "operator": "present"
+          }
+        ]
+      },
+      "disabled_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "equals",
+            "value": "OSSE-NATIVE"
+          },
+          {
+            "path": "mesh.mouth_roundover_radius_mm",
+            "operator": "absent"
+          }
+        ]
+      },
+      "disabled_reason": "Select this feature in OSSE features before editing."
     },
     {
       "id": "native.source.radius_mm",
@@ -1109,7 +1455,8 @@
         "OSSE-ADAPTER-AXIAL",
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
-        "OSSE-ARC"
+        "OSSE-ARC",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -1119,7 +1466,8 @@
         "OSSE-ADAPTER-AXIAL": 6,
         "OSSE-ROUNDOVER": 6,
         "OSSE-AXIAL": 6,
-        "OSSE-ARC": 6
+        "OSSE-ARC": 6,
+        "OSSE-NATIVE": 6
       },
       "editor_bounds": {
         "minimum": 0.01,
@@ -1146,7 +1494,8 @@
         "OSSE-ADAPTER-AXIAL",
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
-        "OSSE-ARC"
+        "OSSE-ARC",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -1156,7 +1505,8 @@
         "OSSE-ADAPTER-AXIAL": 15,
         "OSSE-ROUNDOVER": 15,
         "OSSE-AXIAL": 15,
-        "OSSE-ARC": 15
+        "OSSE-ARC": 15,
+        "OSSE-NATIVE": 15
       },
       "editor_bounds": {
         "minimum": 0.01,
@@ -1183,7 +1533,8 @@
         "OSSE-ADAPTER-AXIAL",
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
-        "OSSE-ARC"
+        "OSSE-ARC",
+        "OSSE-NATIVE"
       ],
       "accepts_expression": false,
       "writable": true,
@@ -1193,7 +1544,8 @@
         "OSSE-ADAPTER-AXIAL": 40,
         "OSSE-ROUNDOVER": 40,
         "OSSE-AXIAL": 40,
-        "OSSE-ARC": 40
+        "OSSE-ARC": 40,
+        "OSSE-NATIVE": 40
       },
       "editor_bounds": {
         "minimum": 0.01,
@@ -1221,6 +1573,7 @@
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
         "OSSE-ARC",
+        "OSSE-NATIVE",
         "SOURCE-DISK"
       ],
       "accepts_expression": false,
@@ -1232,6 +1585,7 @@
         "OSSE-ROUNDOVER": 50000,
         "OSSE-AXIAL": 50000,
         "OSSE-ARC": 50000,
+        "OSSE-NATIVE": 50000,
         "SOURCE-DISK": 50000
       },
       "editor_bounds": {
@@ -1260,6 +1614,7 @@
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
         "OSSE-ARC",
+        "OSSE-NATIVE",
         "SOURCE-DISK"
       ],
       "accepts_expression": false,
@@ -1271,6 +1626,7 @@
         "OSSE-ROUNDOVER": 0,
         "OSSE-AXIAL": 0,
         "OSSE-ARC": 0,
+        "OSSE-NATIVE": 0,
         "SOURCE-DISK": 0
       },
       "editor_bounds": null,
@@ -1313,6 +1669,7 @@
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
         "OSSE-ARC",
+        "OSSE-NATIVE",
         "SOURCE-DISK"
       ],
       "accepts_expression": false,
@@ -1324,6 +1681,7 @@
         "OSSE-ROUNDOVER": 0,
         "OSSE-AXIAL": 0,
         "OSSE-ARC": 0,
+        "OSSE-NATIVE": 0,
         "SOURCE-DISK": 0
       },
       "editor_bounds": {
@@ -5861,6 +6219,7 @@
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
         "OSSE-ARC",
+        "OSSE-NATIVE",
         "SOURCE-DISK"
       ],
       "accepts_expression": false,
@@ -5877,6 +6236,7 @@
         "OSSE-ROUNDOVER": 50,
         "OSSE-AXIAL": 50,
         "OSSE-ARC": 50,
+        "OSSE-NATIVE": 50,
         "SOURCE-DISK": 50
       },
       "editor_bounds": {
@@ -5910,6 +6270,7 @@
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
         "OSSE-ARC",
+        "OSSE-NATIVE",
         "SOURCE-DISK"
       ],
       "accepts_expression": false,
@@ -5926,6 +6287,7 @@
         "OSSE-ROUNDOVER": 16000,
         "OSSE-AXIAL": 16000,
         "OSSE-ARC": 16000,
+        "OSSE-NATIVE": 16000,
         "SOURCE-DISK": 16000
       },
       "editor_bounds": {
@@ -5959,6 +6321,7 @@
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
         "OSSE-ARC",
+        "OSSE-NATIVE",
         "SOURCE-DISK"
       ],
       "accepts_expression": false,
@@ -5975,6 +6338,7 @@
         "OSSE-ROUNDOVER": 32,
         "OSSE-AXIAL": 32,
         "OSSE-ARC": 32,
+        "OSSE-NATIVE": 32,
         "SOURCE-DISK": 32
       },
       "editor_bounds": {
@@ -6057,6 +6421,7 @@
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
         "OSSE-ARC",
+        "OSSE-NATIVE",
         "SOURCE-DISK"
       ],
       "accepts_expression": false,
@@ -6073,6 +6438,7 @@
         "OSSE-ROUNDOVER": 1234,
         "OSSE-AXIAL": 1234,
         "OSSE-ARC": 1234,
+        "OSSE-NATIVE": 1234,
         "SOURCE-DISK": 1234
       },
       "editor_bounds": null,
@@ -6271,6 +6637,7 @@
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
         "OSSE-ARC",
+        "OSSE-NATIVE",
         "SOURCE-DISK"
       ],
       "accepts_expression": false,
@@ -6304,6 +6671,7 @@
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
         "OSSE-ARC",
+        "OSSE-NATIVE",
         "SOURCE-DISK"
       ],
       "accepts_expression": false,
@@ -6337,6 +6705,7 @@
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
         "OSSE-ARC",
+        "OSSE-NATIVE",
         "SOURCE-DISK"
       ],
       "accepts_expression": false,
@@ -6370,6 +6739,7 @@
         "OSSE-ROUNDOVER",
         "OSSE-AXIAL",
         "OSSE-ARC",
+        "OSSE-NATIVE",
         "SOURCE-DISK"
       ],
       "accepts_expression": false,
