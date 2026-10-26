@@ -29,6 +29,7 @@ from server.cadlink.operations import REASON_UPDATE_RESTART_PENDING
 from server.cadlink.roles import inventory_sha256, prepared_inventory_sha256
 from server.cadlink.store import FILE_MODEL_PREFIX, UNFILED_MODEL_ID, file_model_id
 from server.cadlink.wglink_protocol import SOURCE_ROLES, canonical_source_role
+from server.contracts.geometry import SYMMETRY_PLANE_AXIS
 from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json
 from server.integration.contracts import ErrorEnvelope, error_envelope
@@ -43,7 +44,8 @@ from server.jobs.model_solve import ModelSolveRefusal, ModelSolveRequest, solve_
 from server.jobs.models import SolveAccepted
 from server.jobs.runtime import ImportedSolveRefusal
 from server.mesh.artifact import read_verified_import_mesh
-from server.mesh.file_import import MAX_MESH_BYTES, mesh_text, parse_file_mesh, prepare_file_mesh, solve_group_tags
+from server.mesh.file_import import MAX_MESH_BYTES, inspect_file_mesh, mesh_text, parse_file_mesh, prepare_file_mesh, solve_group_tags
+from server.mesh.imported import polar_grid_from_symmetry
 from server.mesh.integrity import mesh_integrity_report
 from server.mesh.prepared_gc import prepared_mesh_use
 from server.platform.staging import publish_staging_directory
@@ -59,6 +61,12 @@ class MeshFile(JobModel):
     msh_text: str = Field(min_length=1, max_length=MAX_MESH_BYTES)
 
 
+class MeshInspection(MeshFile):
+    units: Literal["mm", "cm", "m", "in"] | None = None
+    forward: Axis = "+z"
+    up: Axis = "+y"
+
+
 class FilePreparation(JobModel):
     """How a file is turned into a solver mesh: its units, frame and sources."""
 
@@ -67,6 +75,8 @@ class FilePreparation(JobModel):
     up: Axis
     source_tags: list[int] = Field(default_factory=list, max_length=128)
     roles: dict[int, str] | None = Field(default=None, max_length=256)
+    domain_planes: list[str] = Field(default_factory=list, max_length=2)
+    reflect_planes: list[str] | None = Field(default=None, max_length=2)
 
     @model_validator(mode="after")
     def surface_roles(self) -> FilePreparation:
@@ -76,6 +86,13 @@ class FilePreparation(JobModel):
             self.roles = {tag: canonical_source_role(role) for tag, role in self.roles.items()}
             if any(role not in (*SOURCE_ROLES, "RIGID") for role in self.roles.values()):
                 raise ValueError("Choose a driver, Port or passive opening, or Rigid wall for each surface.")
+        if len(set(self.domain_planes)) != len(self.domain_planes) or set(self.domain_planes) - set(SYMMETRY_PLANE_AXIS):
+            raise ValueError("Symmetry planes must be x = 0 or y = 0 after axes are applied.")
+        self.domain_planes = [plane for plane in SYMMETRY_PLANE_AXIS if plane in self.domain_planes]
+        if self.reflect_planes is not None:
+            if len(set(self.reflect_planes)) != len(self.reflect_planes) or set(self.reflect_planes) - set(self.domain_planes):
+                raise ValueError("Mirror only across a declared symmetry plane, once per plane.")
+            self.reflect_planes = [plane for plane in self.domain_planes if plane in self.reflect_planes]
         return self
 
 
@@ -177,7 +194,8 @@ def _register_mesh(
     validate_record: Any = None,
 ) -> dict[str, Any]:
     original = parse_file_mesh(body.msh_text)
-    mesh, transform = prepare_file_mesh(original, body.units, body.forward, body.up)
+    mesh, transform = prepare_file_mesh(original, body.units, body.forward, body.up,
+                                      domain_planes=body.domain_planes, reflect_planes=body.reflect_planes)
     if len(set(body.source_tags)) != len(body.source_tags) or set(body.source_tags) - set(
         mesh.tags.tolist()
     ):
@@ -202,6 +220,10 @@ def _register_mesh(
     }
     if body.roles is not None:
         spec["roles"] = {str(tag): role for tag, role in sorted(body.roles.items())}
+    if body.domain_planes:
+        spec["domain_planes"] = body.domain_planes
+        # Retain the choice, including an explicit opt-out, for faithful replay.
+        spec["reflect_planes"] = body.reflect_planes
     spec_digest = _sha256(canonical_utf8_strict_json(spec).encode())
     model_id = file_model_id(original_digest)
 
@@ -259,17 +281,16 @@ def _register_mesh(
         "skipped_source_ids": [],
         "acoustic_domain": "free-space",
         "normalisation": {"assembly_frame_is_solver_frame": True},
-        "symmetry": {"domain_planes": [], "cut_planes": []},
-        "polar_grid_derivation": {
-            "axes": {
-                axis: {"minimum_deg": -180, "maximum_deg": 180}
-                for axis in ("horizontal", "vertical", "diagonal")
-            }
-        },
+        "symmetry": {"domain_planes": body.domain_planes, "cut_planes": [],
+                     "reflected_planes": transform.get("reflected_planes", [])},
+        "polar_grid_derivation": polar_grid_from_symmetry({
+            "domain_planes": body.domain_planes,
+            "planes": {plane: {"accepted": plane in body.domain_planes} for plane in SYMMETRY_PLANE_AXIS},
+        }),
         "evidence": {"fem_regions": [], "fem_air_volumes": []},
         "mesh": {
             "stats": {"triangle_count": len(mesh.triangles), "node_count": len(mesh.points)},
-            "integrity": mesh_integrity_report(mesh.points, mesh.triangles),
+            "integrity": mesh_integrity_report(mesh.points, mesh.triangles, symmetry_plane_axes=tuple(SYMMETRY_PLANE_AXIS[plane] for plane in body.domain_planes)),
             "metadata": {},
         },
         "summary": {
@@ -355,6 +376,7 @@ def public_record(record: dict[str, Any], model_id: str | None) -> dict[str, Any
     keys = (
         "ingest_id", "producer", "created_at", "manifest_sha256", "artifact_sha256",
         "source_file", "source_tags", "sources", "summary",
+        "symmetry", "polar_grid_derivation",
     )
     return {
         **{key: record[key] for key in keys if key in record},
@@ -500,11 +522,11 @@ def mount_models_api(application: FastAPI) -> None:
             return _refusal(500, "record_unreadable", f"A retained model record is unreadable: {exc}")
 
     @router.post("/files/inspect", responses={422: refused[422]})
-    async def inspect(body: MeshFile) -> Any:
+    async def inspect(body: MeshInspection) -> Any:
         """Read a file's groups and size, without retaining anything."""
 
         def summary() -> dict[str, Any]:
-            return parse_file_mesh(body.msh_text).summary()
+            return inspect_file_mesh(parse_file_mesh(body.msh_text), body.units, body.forward, body.up)
 
         return await answer(summary)
 

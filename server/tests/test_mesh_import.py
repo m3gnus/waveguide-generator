@@ -110,15 +110,15 @@ def test_unsupported_or_corrupt_mesh_is_refused(old, new):
 
 
 @pytest.mark.parametrize(
-    "mutate",
+    "mutate,message",
     [
-        lambda text: text.replace("1 3 2", "1 2 3"),
-        lambda text: text.replace("$Elements\n4", "$Elements\n3").replace("4 2 2 1 1 2 3 4\n", ""),
-        lambda text: text.replace("1 3 2", "1 1 2"),
+        (lambda text: text.replace("1 3 2", "1 2 3"), "outward"),
+        (lambda text: text.replace("$Elements\n4", "$Elements\n3").replace("4 2 2 1 1 2 3 4\n", ""), "opening|open on"),
+        (lambda text: text.replace("1 3 2", "1 1 2"), "degenerate"),
     ],
 )
-def test_bad_topology_is_refused_without_repair(mutate):
-    with pytest.raises(ValueError, match="closed|outward"):
+def test_bad_topology_is_refused_without_repair(mutate, message):
+    with pytest.raises(ValueError, match=message):
         prepare_file_mesh(parse_file_mesh(mutate(MESH)), "mm", "+z", "+y")
 
 

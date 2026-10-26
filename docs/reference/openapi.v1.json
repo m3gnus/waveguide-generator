@@ -4907,6 +4907,14 @@
         "additionalProperties": false,
         "description": "How a file is turned into a solver mesh: its units, frame and sources.",
         "properties": {
+          "domain_planes": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 2,
+            "title": "Domain Planes",
+            "type": "array"
+          },
           "forward": {
             "enum": [
               "+x",
@@ -4918,6 +4926,21 @@
             ],
             "title": "Forward",
             "type": "string"
+          },
+          "reflect_planes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 2,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reflect Planes"
           },
           "roles": {
             "anyOf": [
@@ -8445,7 +8468,7 @@
         "title": "MeshConfig",
         "type": "object"
       },
-      "MeshFile": {
+      "MeshInspection": {
         "additionalProperties": false,
         "properties": {
           "filename": {
@@ -8454,10 +8477,53 @@
             "title": "Filename",
             "type": "string"
           },
+          "forward": {
+            "default": "+z",
+            "enum": [
+              "+x",
+              "-x",
+              "+y",
+              "-y",
+              "+z",
+              "-z"
+            ],
+            "title": "Forward",
+            "type": "string"
+          },
           "msh_text": {
             "maxLength": 16777216,
             "minLength": 1,
             "title": "Msh Text",
+            "type": "string"
+          },
+          "units": {
+            "anyOf": [
+              {
+                "enum": [
+                  "mm",
+                  "cm",
+                  "m",
+                  "in"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Units"
+          },
+          "up": {
+            "default": "+y",
+            "enum": [
+              "+x",
+              "-x",
+              "+y",
+              "-y",
+              "+z",
+              "-z"
+            ],
+            "title": "Up",
             "type": "string"
           }
         },
@@ -8465,12 +8531,20 @@
           "filename",
           "msh_text"
         ],
-        "title": "MeshFile",
+        "title": "MeshInspection",
         "type": "object"
       },
       "MeshRegistration": {
         "additionalProperties": false,
         "properties": {
+          "domain_planes": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 2,
+            "title": "Domain Planes",
+            "type": "array"
+          },
           "filename": {
             "maxLength": 240,
             "minLength": 1,
@@ -8494,6 +8568,21 @@
             "minLength": 1,
             "title": "Msh Text",
             "type": "string"
+          },
+          "reflect_planes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 2,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reflect Planes"
           },
           "roles": {
             "anyOf": [
@@ -16844,7 +16933,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MeshFile"
+                "$ref": "#/components/schemas/MeshInspection"
               }
             }
           },

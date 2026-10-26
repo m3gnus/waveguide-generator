@@ -22,6 +22,7 @@ from server.jobs.models_api import MeshRegistration, public_record, register_mes
 from server.cadlink.store import file_model_id
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.jobs.runtime.core import _solved_under_legacy_axial
+from server.jobs.runtime.cad_lane import _imported_symmetry_metadata
 from server.mesh.artifact import read_verified_import_mesh
 from server.mesh.file_import import MAX_MESH_BYTES, mesh_text, parse_file_mesh, prepare_file_mesh
 from server.mesh.prepared_gc import prepared_mesh_use
@@ -59,10 +60,13 @@ def _inputs(package: MeshReplayInputs) -> dict[str, Any]:
     # New optional preparation fields must not alter historical package checksums.
     if payload["registration"]["roles"] is None:
         payload["registration"].pop("roles")
+    for field, default in (("domain_planes", []), ("reflect_planes", None)):
+        if payload["registration"][field] == default:
+            payload["registration"].pop(field)
     return payload
 
 
-def _validate_file_request(request: SolveRequest) -> None:
+def _validate_file_request(request: SolveRequest, record: dict[str, Any] | None = None) -> None:
     geometry = request.geometry
     if not isinstance(geometry, ImportedGeometrySource):
         raise ValueError("Mesh replay requires an imported file mesh.")
@@ -71,9 +75,10 @@ def _validate_file_request(request: SolveRequest) -> None:
     if request.options.engine in {"auto", "beat"}:
         raise ValueError("Mesh replay requires the run's resolved engine, not Auto.")
     if (request.options.solver_mode not in {"auto", "full_3d"}
-            or request.options.symmetry not in {"auto", "full"}
             or request.options.mesh_ladder != "off"):
-        raise ValueError("Mesh replay v1 supports full-domain surface meshes without a mesh ladder.")
+        raise ValueError("Mesh replay supports surface meshes without a mesh ladder.")
+    if record is not None:
+        _imported_symmetry_metadata(record, requested=request.options.symmetry)
 
 
 def build_mesh_replay(runtime: Any, store: Any, job_id: str) -> dict[str, Any]:
@@ -88,6 +93,7 @@ def build_mesh_replay(runtime: Any, store: Any, job_id: str) -> dict[str, Any]:
     record = get_prepared_mesh(store, request.geometry.ingest_id)
     if record is None or record.get("producer") != "mesh-file":
         raise ValueError("Replay v1 supports standalone mesh files. CAD models need their retained CAD inputs.")
+    _validate_file_request(request, record)
     if (request.geometry.manifest_sha256 != record["manifest_sha256"]
             or request.geometry.artifact_sha256 != record["artifact_sha256"]):
         raise ValueError("The retained import does not match this run's admitted hashes.")
@@ -108,7 +114,8 @@ def build_mesh_replay(runtime: Any, store: Any, job_id: str) -> dict[str, Any]:
     if _digest(original_text) != source["original_sha256"]:
         raise ValueError("The retained original mesh changed. Reimport and solve it before exporting replay.")
     mesh, _ = prepare_file_mesh(parse_file_mesh(original_text), source["transform"]["units"],
-                                source["transform"]["forward"], source["transform"]["up"])
+                                source["transform"]["forward"], source["transform"]["up"],
+                                domain_planes=source.get("domain_planes", []), reflect_planes=source.get("reflect_planes"))
     if mesh_text(mesh) != solver_text:
         raise ValueError("The original mesh no longer reconstructs the run's solver mesh.")
     # Remove local job ancestry and a spent submission key, keeping the entire
@@ -124,6 +131,7 @@ def build_mesh_replay(runtime: Any, store: Any, job_id: str) -> dict[str, Any]:
             units=source["transform"]["units"], forward=source["transform"]["forward"],
             up=source["transform"]["up"], source_tags=source["source_tags"],
             roles=source.get("roles"),
+            domain_planes=source.get("domain_planes", []), reflect_planes=source.get("reflect_planes"),
         ),
         original_sha256=_digest(original_text), solver_msh_text=solver_text,
         solver_sha256=_digest(solver_text), request=request,
@@ -150,7 +158,8 @@ def restore_mesh_replay(
     body = package.registration
     if _digest(body.msh_text) != package.original_sha256:
         raise ValueError("The original mesh checksum does not match the replay package.")
-    mesh, _ = prepare_file_mesh(parse_file_mesh(body.msh_text), body.units, body.forward, body.up)
+    mesh, _ = prepare_file_mesh(parse_file_mesh(body.msh_text), body.units, body.forward, body.up,
+                                domain_planes=body.domain_planes, reflect_planes=body.reflect_planes)
     # Reconstruct, do not trust a packaged solver mesh or a transform matrix.
     reconstructed = mesh_text(mesh)
     if (_digest(package.solver_msh_text) != package.solver_sha256
@@ -158,6 +167,7 @@ def restore_mesh_replay(
         raise ValueError("The solver mesh does not match the original mesh and declared transform.")
 
     def validate_record(candidate: dict[str, Any]) -> None:
+        _validate_file_request(package.request, candidate)
         runtime._validate_imported_model_setup(package.request.geometry, candidate)
         # The admitted hashes must describe the packaged original and transform.
         if (package.request.geometry.manifest_sha256 != candidate["manifest_sha256"]

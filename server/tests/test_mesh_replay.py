@@ -4,6 +4,7 @@ import asyncio
 from copy import deepcopy
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 import pytest
@@ -11,12 +12,23 @@ import pytest
 from server.cadlink.store import CadLinkStore
 from server.contracts.canonical import canonical_utf8_strict_json
 from server.jobs.api import create_jobs_router
-from server.jobs.mesh_replay import _digest, mount_mesh_replay
+from server.jobs.mesh_replay import _digest, build_mesh_replay, mount_mesh_replay
 from server.jobs.runtime import JobRuntime
 from server.jobs.store import JobStore
 from test_imported_jobs import _AlwaysRegistry
 from test_jobs_api import _request
+from test_jobs_api import _solve_body
 from test_mesh_import import RecordingEngine, register_mesh, registration, request
+from test_file_mesh_roles_symmetry import box_mesh
+from server.mesh.file_import import mesh_text
+
+
+def test_parametric_replay_export_checks_geometry_before_reading_file_fields():
+    runtime = SimpleNamespace(store=SimpleNamespace(get_archive_snapshot=lambda _id: {
+        "job": {"status": "complete", "config_json": _solve_body(0)},
+    }))
+    with pytest.raises(ValueError, match="requires an imported file mesh"):
+        build_mesh_replay(runtime, None, "parametric-run")
 
 
 def app_for(data_dir):
@@ -232,6 +244,48 @@ def test_explicit_file_roles_survive_replay_into_a_fresh_store(tmp_path):
             restored = await call(app, "POST", "/api/mesh-replay", package)
             assert restored["record"]["sources"][0]["role"] == "MF"
             assert restored["record"]["manifest_sha256"] == record["manifest_sha256"]
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("symmetry", ["auto", "quarter"])
+def test_reflected_role_mesh_replays_its_reduced_domain_in_a_fresh_store(tmp_path, symmetry):
+    async def scenario():
+        app, store, runtime, engine = app_for(tmp_path / "origin")
+        try:
+            original = box_mesh(planes=("x0", "y0"), negative=("x0",))
+            record = register_mesh(store, app.state.data_dir, registration(
+                msh_text=mesh_text(original), units="m", source_tags=[],
+                roles={101: "HF", 102: "MF"}, domain_planes=["x0", "y0"],
+            ))
+            body = request(record)
+            body.geometry.drive_channels[0].id = "hf"
+            body.geometry.drive_channels[0].source_ids = ["group_101"]
+            body.geometry.drive_channels.append(body.geometry.drive_channels[0].model_copy(update={"id": "mf", "source_ids": ["group_102"]}))
+            body.options.symmetry = symmetry
+            job_id = await runtime.submit(body)
+            await runtime.wait_idle()
+            assert runtime.store.get_job_row(job_id)["status"] == "complete"
+            package = await call(app, "GET", f"/api/jobs/{job_id}/mesh-replay")
+            assert package["registration"]["roles"] == {"101": "HF", "102": "MF"}
+            assert package["registration"]["domain_planes"] == ["x0", "y0"]
+            first_mesh = engine.calls[0][1]
+        finally:
+            await runtime.shutdown()
+            store.close()
+        app, store, runtime, _ = app_for(tmp_path / "fresh")
+        try:
+            opened = await call(app, "POST", "/api/mesh-replay", package)
+            assert opened["record"]["msh_text"] == first_mesh
+            assert opened["record"]["symmetry"]["domain_planes"] == ["x0", "y0"]
+            assert opened["record"]["symmetry"]["reflected_planes"] == ["x0"]
+            assert [source["role"] for source in opened["record"]["sources"]] == ["HF", "MF"]
+            corrupt = deepcopy(package)
+            corrupt["request"]["options"]["symmetry"] = "full"
+            rehash(corrupt)
+            await call(app, "POST", "/api/mesh-replay", corrupt, expected=422)
         finally:
             await runtime.shutdown()
             store.close()

@@ -6,8 +6,10 @@ import pytest
 from server.cadlink.store import CadLinkStore
 from server.cadlink.wglink_protocol import source_physical_name
 from server.mesh.imported import parse_source_physical_name
+from server.jobs.runtime.cad_lane import _imported_symmetry_metadata
+from server.solver.bempp_imported import imported_bempp_preflight
 from server.solver.imported_channels import channel_source_identity
-from server.mesh.file_import import FileMesh, group_role_guess, mesh_text, parse_file_mesh
+from server.mesh.file_import import FileMesh, group_role_guess, inspect_file_mesh, mesh_text, parse_file_mesh, prepare_file_mesh
 from test_mesh_import import registration, register_mesh, request
 
 
@@ -158,3 +160,81 @@ def test_legacy_preparation_keeps_its_pinned_digest_and_id(tmp_path):
         assert register_mesh(store, tmp_path, registration())["ingest_id"] == record["ingest_id"]
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("planes,mode", [(["x0"], "half_yz"), (["y0"], "half_xz"), (["x0", "y0"], "quarter")])
+def test_declared_domain_uses_shared_verification_and_solver_metadata(tmp_path, planes, mode):
+    original = box_mesh(planes=planes)
+    summary = inspect_file_mesh(original, None, "+z", "+y")
+    assert summary["suggested_units"] == "m"
+    assert summary["detected_planes"] == planes
+    assert all(summary["kept_sides"][plane] == "positive" for plane in planes)
+    store = CadLinkStore.for_data_dir(tmp_path)
+    try:
+        record = register_mesh(store, tmp_path, registration(msh_text=mesh_text(original), units="m", source_tags=[],
+                               roles={101: "HF", 102: "MF"}, domain_planes=planes))
+        assert record["symmetry"] == {"domain_planes": planes, "cut_planes": [], "reflected_planes": []}
+        assert [s["role"] for s in record["sources"]] == ["HF", "MF"]
+        resolved = _imported_symmetry_metadata(record, requested="auto")
+        assert resolved["resolved"] == mode
+        assert imported_bempp_preflight(record, planes) is None
+        assert not record["mesh"]["integrity"]["is_watertight"]
+        assert record["mesh"]["integrity"]["off_plane_open_edge_count"] == 0
+        polars = record["polar_grid_derivation"]["axes"]
+        assert polars["horizontal"]["minimum_deg"] == (0 if "x0" in planes else -180)
+        assert polars["vertical"]["minimum_deg"] == (0 if "y0" in planes else -180)
+        assert polars["diagonal"]["minimum_deg"] == (0 if len(planes) == 2 else -180)
+        with pytest.raises(ValueError, match="open on"):
+            prepare_file_mesh(original, "m", "+z", "+y")
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("negative", [("x0",), ("y0",), ("x0", "y0")])
+def test_negative_quarter_auto_reflects_and_explicit_override_is_checked(negative):
+    original = box_mesh(planes=("x0", "y0"), negative=negative)
+    mesh, transform = prepare_file_mesh(original, "m", "+z", "+y", domain_planes=["x0", "y0"])
+    np.testing.assert_array_equal(mesh.points, box_mesh(planes=("x0", "y0")).points)
+    assert transform["reflected_planes"] == list(negative)
+    explicit, _ = prepare_file_mesh(original, "m", "+z", "+y", domain_planes=["x0", "y0"], reflect_planes=list(negative))
+    np.testing.assert_array_equal(mesh.triangles, explicit.triangles)
+    with pytest.raises(ValueError, match="negative side.*Enable mirroring"):
+        prepare_file_mesh(original, "m", "+z", "+y", domain_planes=["x0", "y0"], reflect_planes=[])
+
+
+def test_inspection_reports_negative_kept_sides():
+    original = box_mesh(planes=("x0", "y0"), negative=("x0", "y0"))
+    inspected = inspect_file_mesh(original, "m", "+z", "+y")
+    assert inspected["kept_sides"] == {"x0": "negative", "y0": "negative"}
+
+
+def test_inspection_applies_units_and_axes_before_detection():
+    original = box_mesh(planes=("x0",))
+    original.points *= 1000
+    # With forward +z and up +x, original x0 becomes solver y0.
+    summary = inspect_file_mesh(original, "mm", "+z", "+x")
+    assert summary["detected_planes"] == ["y0"]
+    assert summary["kept_sides"]["y0"] == "positive"
+    prepared, _ = prepare_file_mesh(original, "mm", "+z", "+x", domain_planes=["y0"])
+    assert np.ptp(prepared.points, axis=0) == pytest.approx([.2, .2, .3])
+
+
+@pytest.mark.parametrize("mutation,message", [("hole", "opening that is not on x = 0 or y = 0.*near.*mm"),
+                                             ("capped", "closed face on x = 0"),
+                                             ("straddling", "crosses x = 0"),
+                                             ("inward", "face outward")])
+def test_bad_reduced_meshes_have_actionable_refusals(mutation, message):
+    mesh = box_mesh(planes=("x0", "y0"), hole=mutation == "hole", capped=("x0",) if mutation == "capped" else ())
+    if mutation == "straddling":
+        mesh.points[:, 0] -= .1
+    if mutation == "inward":
+        mesh.triangles = mesh.triangles[:, [0, 2, 1]]
+    with pytest.raises(ValueError, match=message):
+        prepare_file_mesh(mesh, "m", "+z", "+y", domain_planes=["x0", "y0"])
+
+
+@pytest.mark.parametrize("changes", [{"domain_planes": ["z0"]}, {"domain_planes": ["x0", "x0"]},
+                                     {"reflect_planes": ["x0"]}, {"domain_planes": ["x0"], "reflect_planes": ["y0"]}])
+def test_only_supported_declared_mirrors_are_accepted(changes):
+    with pytest.raises(ValueError):
+        registration(**changes)

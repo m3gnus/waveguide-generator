@@ -21,6 +21,40 @@ from test_jobs_api import _request
 from test_mesh_import import register_mesh, registration, request
 
 
+def test_file_inspection_and_repreparation_share_axes_roles_and_declared_domain(tmp_path):
+    from server.mesh.file_import import mesh_text
+    from test_file_mesh_roles_symmetry import box_mesh
+
+    async def scenario():
+        store = CadLinkStore.for_data_dir(tmp_path)
+        app, runtime = app_for(tmp_path, store)
+        try:
+            original = {"filename": "case-00101.msh", "msh_text": mesh_text(box_mesh(planes=("x0", "y0")))}
+            summary = await call(app, "POST", "/api/models/files/inspect", original)
+            assert summary["suggested_units"] == "m"
+            assert summary["detected_planes"] == ["x0", "y0"]
+            assert summary["kept_sides"] == {"x0": "positive", "y0": "positive"}
+            assert {g["tag"]: g["suggested_role"] for g in summary["groups"]} == {1: "RIGID", 101: "HF", 102: "MF"}
+            settings = {"units": "m", "forward": "+z", "up": "+y", "roles": {101: "HF", 102: "MF"},
+                        "domain_planes": ["x0", "y0"]}
+            registered = await call(app, "POST", "/api/models/files", {**original, **settings})
+            record = registered["prepared"]
+            assert record["symmetry"]["domain_planes"] == ["x0", "y0"]
+            assert record["polar_grid_derivation"]["axes"]["diagonal"]["minimum_deg"] == 0
+            model_id = registered["model"]["model_id"]
+            rebuilt = await call(app, "POST", f"/api/models/{model_id}/prepare", settings)
+            assert rebuilt["prepared"]["ingest_id"] == record["ingest_id"]
+            transformed = await call(app, "POST", "/api/models/files/inspect", {
+                "filename": "half.msh", "msh_text": mesh_text(box_mesh(planes=("x0",))),
+                "units": "m", "forward": "+z", "up": "+x",
+            })
+            assert transformed["detected_planes"] == ["y0"]
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())
+
+
 def app_for(tmp_path, store):
     runtime = JobRuntime(
         JobStore.for_data_dir(tmp_path),

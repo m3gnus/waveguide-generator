@@ -4217,11 +4217,15 @@ export interface components {
          * @description How a file is turned into a solver mesh: its units, frame and sources.
          */
         FilePreparation: {
+            /** Domain Planes */
+            domain_planes?: string[];
             /**
              * Forward
              * @enum {string}
              */
             forward: "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
+            /** Reflect Planes */
+            reflect_planes?: string[] | null;
             /** Roles */
             roles?: {
                 [key: string]: string;
@@ -5173,15 +5177,31 @@ export interface components {
             /** Z Map Points */
             z_map_points?: string | null;
         };
-        /** MeshFile */
-        MeshFile: {
+        /** MeshInspection */
+        MeshInspection: {
             /** Filename */
             filename: string;
+            /**
+             * Forward
+             * @default +z
+             * @enum {string}
+             */
+            forward?: "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
             /** Msh Text */
             msh_text: string;
+            /** Units */
+            units?: ("mm" | "cm" | "m" | "in") | null;
+            /**
+             * Up
+             * @default +y
+             * @enum {string}
+             */
+            up?: "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
         };
         /** MeshRegistration */
         MeshRegistration: {
+            /** Domain Planes */
+            domain_planes?: string[];
             /** Filename */
             filename: string;
             /**
@@ -5191,6 +5211,8 @@ export interface components {
             forward: "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
             /** Msh Text */
             msh_text: string;
+            /** Reflect Planes */
+            reflect_planes?: string[] | null;
             /** Roles */
             roles?: {
                 [key: string]: string;
@@ -9469,7 +9491,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["MeshFile"];
+                "application/json": components["schemas"]["MeshInspection"];
             };
         };
         responses: {

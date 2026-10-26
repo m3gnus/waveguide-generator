@@ -8,7 +8,14 @@ from typing import Any
 
 import numpy as np
 
-from server.mesh.imported import parse_source_physical_name
+from server.contracts.geometry import SYMMETRY_PLANE_AXIS
+from server.mesh.imported import (
+    _edge_connected_components,
+    parse_source_physical_name,
+    reflect_triangle_mesh,
+    verify_reduced_orientation,
+    verify_symmetry_cut,
+)
 from server.mesh.integrity import mesh_integrity_report, mesh_self_intersection_report
 
 MAX_MESH_BYTES = 16 * 1024 * 1024
@@ -184,9 +191,10 @@ def parse_file_mesh(text: str) -> FileMesh:
     return FileMesh(coordinates, np.asarray(triangles, dtype=np.int64), np.asarray(tags), names)
 
 
-def prepare_file_mesh(
+def transform_file_mesh(
     mesh: FileMesh, units: str, forward: str, up: str
 ) -> tuple[FileMesh, dict[str, Any]]:
+    """Apply the same SI/axis frame at inspection and preparation."""
     facing, vertical = np.asarray(AXES[forward]), np.asarray(AXES[up])
     if np.dot(facing, vertical):
         raise ValueError("Forward and up must be perpendicular axes.")
@@ -194,11 +202,97 @@ def prepare_file_mesh(
     points = (mesh.points * UNIT_TO_METRES[units]) @ rotation.T
     if not np.isfinite(points).all():
         raise ValueError("Scaled mesh coordinates must be finite.")
-    report = mesh_integrity_report(points, mesh.triangles)
-    if not report["valid"] or not report["is_watertight"] or not report["orientation_valid"]:
+    return FileMesh(points, mesh.triangles, mesh.tags, mesh.names), {
+        "units": units, "forward": forward, "up": up, "rotation": rotation.tolist(),
+    }
+
+
+def _symmetry_evidence(mesh: FileMesh, planes: tuple[str, ...]) -> tuple[dict[str, Any], dict[str, Any]]:
+    report = mesh_integrity_report(
+        mesh.points, mesh.triangles,
+        symmetry_plane_axes=tuple(SYMMETRY_PLANE_AXIS[plane] for plane in planes),
+    )
+    samples = report["off_plane_open_edges_sample"]
+    topology = {
+        "free_edges": report["open_edge_count"],
+        "unexpected_free_edges": report["off_plane_open_edge_count"],
+        "unexpected_free_edge_midpoint_samples": [
+            (mesh.points[edge].mean(axis=0) * 1000).tolist() for edge in samples
+        ],
+    }
+    return report, verify_symmetry_cut(
+        mesh.points * 1000, mesh.triangles, cut_planes=planes, topology=topology,
+    )
+
+
+def inspect_file_mesh(mesh: FileMesh, units: str | None, forward: str, up: str) -> dict[str, Any]:
+    summary = mesh.summary()
+    transformed, _ = transform_file_mesh(mesh, units or summary["suggested_units"] or "m", forward, up)
+    _, verification = _symmetry_evidence(transformed, ())
+    sides = verification["detection"]["plane_vertex_side_counts"]
+    return {
+        **summary,
+        "detected_planes": [plane for plane in verification["detected_planes"] if plane in SYMMETRY_PLANE_AXIS],
+        "kept_sides": {
+            plane: "both" if side["negative"] and side["positive"] else "negative" if side["negative"] else "positive" if side["positive"] else "on_plane"
+            for plane, side in sides.items() if plane in SYMMETRY_PLANE_AXIS
+        },
+    }
+
+
+def _opening_message(verification: dict[str, Any]) -> str:
+    samples = verification["off_plane_free_edge_samples"]
+    near = " (near " + ", ".join(f"{value:.4g}" for value in samples[0]) + " mm)" if samples else ""
+    return f"The mesh has an opening that is not on x = 0 or y = 0{near}. Close it in the meshing tool, or declare its symmetry plane in the settings."
+
+
+def _plane_labels(names: list[str]) -> str:
+    return " and ".join("x = 0" if plane == "x0" else "y = 0" for plane in names)
+
+
+def prepare_file_mesh(
+    mesh: FileMesh, units: str, forward: str, up: str, *,
+    domain_planes: tuple[str, ...] | list[str] = (),
+    reflect_planes: tuple[str, ...] | list[str] | None = None,
+) -> tuple[FileMesh, dict[str, Any]]:
+    if len(set(domain_planes)) != len(domain_planes) or set(domain_planes) - set(SYMMETRY_PLANE_AXIS):
+        raise ValueError("Symmetry planes must be x = 0 or y = 0 after axes are applied.")
+    planes = tuple(plane for plane in SYMMETRY_PLANE_AXIS if plane in domain_planes)
+    if reflect_planes is not None and (len(set(reflect_planes)) != len(reflect_planes) or set(reflect_planes) - set(planes)):
+        raise ValueError("Mirror only across a declared symmetry plane, once per plane.")
+    mesh, transform = transform_file_mesh(mesh, units, forward, up)
+    report, verification = _symmetry_evidence(mesh, planes)
+    sides = verification["detection"]["plane_vertex_side_counts"]
+    reflections = list(reflect_planes) if reflect_planes is not None else [
+        plane for plane in planes if sides[plane]["negative"] and not sides[plane]["positive"]
+    ]
+    if reflections:
+        points, triangles, _ = reflect_triangle_mesh(mesh.points, mesh.triangles, reflections, tags=mesh.tags)
+        mesh = FileMesh(points, triangles, mesh.tags, mesh.names)
+        report, verification = _symmetry_evidence(mesh, planes)
+    if not report["valid"] or not report["orientation_valid"]:
         raise ValueError(
             "Solving requires a closed, consistently outward-oriented surface without degenerate, duplicate or nonmanifold triangles. Fix the mesh in its authoring tool; no repair was applied."
         )
+    if planes:
+        if not verification["verified"]:
+            if verification["straddling_planes"]:
+                raise ValueError(f"The mesh crosses {_plane_labels(verification['straddling_planes'])}. Choose the correct symmetry or change the mesh so it stays on one side.")
+            if verification["wrong_side_planes"]:
+                raise ValueError(f"The mesh is on the negative side of {_plane_labels(verification['wrong_side_planes'])}. Enable mirroring in the symmetry settings.")
+            if verification["capped_planes"]:
+                raise ValueError(f"The mesh has a closed face on {_plane_labels(verification['capped_planes'])}. The symmetry plane must be open; remove that face in the meshing tool.")
+            raise ValueError(_opening_message(verification))
+        orientation = verify_reduced_orientation(mesh.points * 1000, mesh.triangles, cut_planes=planes)
+        if orientation["inverted_component_count"] or orientation["unresolved_component_count"]:
+            raise ValueError("Each mirrored mesh shell must face outward. Reverse inward normals or repair the mesh in the meshing tool.")
+        transform.update(domain_planes=list(planes), reflected_planes=[plane for plane in planes if plane in reflections])
+    elif report["open_edge_count"]:
+        detected = [plane for plane in verification["detected_planes"] if plane in SYMMETRY_PLANE_AXIS]
+        if detected:
+            raise ValueError(f"The mesh is open on {_plane_labels(detected)}. Choose half or quarter symmetry in the settings, or close the mesh in the meshing tool.")
+        raise ValueError(_opening_message(verification))
+    points = mesh.points
     intersections = mesh_self_intersection_report(points, mesh.triangles)
     if not intersections["checked"] or intersections["intersecting_triangle_count"]:
         raise ValueError(
@@ -206,21 +300,8 @@ def prepare_file_mesh(
         )
     # Check each disconnected shell, not just the sum of its volumes: a small
     # inward shell can hide behind a larger outward one in the aggregate report.
-    from scipy.sparse import coo_matrix
-    from scipy.sparse.csgraph import connected_components
-
-    edges = np.concatenate(
-        (mesh.triangles[:, [0, 1]], mesh.triangles[:, [1, 2]], mesh.triangles[:, [2, 0]])
-    )
-    _edges, inverse = np.unique(np.sort(edges, axis=1), axis=0, return_inverse=True)
-    owners = np.tile(np.arange(len(mesh.triangles)), 3)[np.argsort(inverse.reshape(-1))].reshape(
-        -1, 2
-    )
-    graph = coo_matrix(
-        (np.ones(len(owners)), (owners[:, 0], owners[:, 1])),
-        shape=(len(mesh.triangles), len(mesh.triangles)),
-    )
-    count, labels = connected_components(graph, directed=False)
+    labels = _edge_connected_components(mesh.triangles)
+    count = int(labels.max()) + 1
     # Edge-connected shells may not pinch together at one vertex.
     vertex_shells = np.unique(
         np.column_stack((mesh.triangles.reshape(-1), np.repeat(labels, 3))), axis=0
@@ -238,16 +319,11 @@ def prepare_file_mesh(
         face_labels,
         weights=np.einsum("ij,ij->i", corners[:, 0], np.cross(corners[:, 1], corners[:, 2])) / 6,
     )
-    if not np.isfinite(volumes[components]).all() or np.any(volumes[components] <= 0):
+    if not planes and (not np.isfinite(volumes[components]).all() or np.any(volumes[components] <= 0)):
         raise ValueError(
             "Each closed mesh shell must face outward. Reverse inward normals in the authoring tool."
         )
-    return FileMesh(points, mesh.triangles, mesh.tags, mesh.names), {
-        "units": units,
-        "forward": forward,
-        "up": up,
-        "rotation": rotation.tolist(),
-    }
+    return mesh, transform
 
 
 def solve_group_tags(mesh: FileMesh) -> dict[int, int]:
