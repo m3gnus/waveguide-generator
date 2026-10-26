@@ -1,29 +1,33 @@
 # Imported mesh workspace
 
-Required before 0.3.6. The user-facing modes are **Parametric** and **Imported mesh**.
+The user-facing modes are **Parametric** and **Imported mesh**.
 Imported mesh covers both a standalone mesh file and geometry prepared through CAD Link.
 CAD Link remains the name of the optional CAD connection tool inside that workspace.
 
-## Intended workflow
+## Current workflow
 
 1. Select Imported mesh. A visible **Import mesh** action opens a file chooser without
    needing the design file menu, a CAD connection, or a generated parametric design.
-2. Import a supported ASCII Gmsh 2.2 triangular surface mesh. Keep existing format,
-   size, units, orientation and full-domain admission checks; do not add new formats.
-3. In **Radiating surfaces**, list every mesh surface label with its tag and triangle
-   count. Check the labels to use as sources. Unchecked labels are rigid. Untagged
-   triangles remain inspection-only and cannot silently become sources. State clearly
-   when no source is selected. Each selected group remains an independent source.
-4. Choose units/orientation, prepare the mesh and solve through the existing shared
-   import workflow. Changing assignments invalidates the prepared mesh until prepared
-   again. Preparation or import failures must not solve an older/different model.
+2. Import a supported ASCII Gmsh 2.2 triangular surface mesh. Full models and declared
+   half and quarter models are accepted. The mesh must pass the checks for its chosen
+   symmetry, size and orientation.
+3. In **Surfaces**, check the role for each group: **HF driver**, **MF driver**,
+   **LF driver**, **Port or passive opening** or **Rigid wall**. WG reads its own
+   `role=` group names and guesses from other names. Untagged triangles appear in a
+   separate row, initially set to **Rigid wall**. Roles can be changed in WG; the
+   group names themselves still come from the file.
+4. Check **Size**, **Symmetry** and the axes in **Model details**. WG detects open
+   symmetry planes, mirrors a negative-side model by default and offers removal of a
+   closed face on a declared plane. It prepares automatically after import or an edit;
+   a problem or missing choice appears in the status line.
 5. CAD Link remains available in Imported mesh as another geometry input. A file mesh
-   must use its own source assignments and solve plan even when a CAD return is retained.
+   uses its own surface roles and solve settings even when a CAD model is retained.
    Switching modes must preserve the parametric design and restore the selected imported
    input without a stale asynchronous CAD or file load replacing the user's selection.
-6. Saved setups, run restoration and replay packages open in Imported mesh. Exact replay
-   settings and generation guards stay intact. Retained meshes without original source
-   data show their assignments and clearly explain any reimport requirement for editing.
+6. The shared **Simulation** tab provides drivers for file meshes. Same-role surfaces
+   can share driver settings or be driven separately. Setup edits save automatically;
+   the same file reopens its settings, and a changed file with the same name and group
+   names can reuse them. Runs and replay packages retain their exact settings.
 
 ## Compatibility and limits
 
@@ -31,16 +35,21 @@ Keep existing internal mode identifiers and dock/storage keys where possible, so
 visible rename does not require a data migration. Preserve CAD-specific tools and controls
 for CAD inputs. Parametric mode contains generated geometry, not standalone file setup.
 Do not change solver numerics, mesh formats, electrical models or release version numbers.
-There is no new face painting or mesh-label renaming: source selection uses existing labels.
+The earlier restriction to selecting existing labels as sources has been lifted: each
+group can be assigned a different role. WG does not paint faces or rename the file's
+group names.
+
+Automatic cutting of a full symmetric file mesh to a half or quarter is still in
+progress. The initial target is about 5,000 triangles, with the exact cutting limit
+to be set from measurements; this is not a limit on importing a mesh. Exporting a
+half or quarter is available now. Crossover and Passive cardioid controls for file
+meshes remain open work; the port role is already available.
 
 ## Review and verification
 
-Astra reviews this plan against the user's goals before implementation. Record its feedback
-and resulting decisions here. After implementation, obtain a scoped independent review of
-the actual diff and address concrete findings. Verify visible import, arbitrary label
-selection, disabled untagged groups, reprepare after edits, correct file/CAD solve routing,
-mode switching, restored setup/replay ownership, and asynchronous intent protection using
-focused frontend tests. Run TypeScript/build checks and inspect the resulting UI.
+The earlier workspace implementation was reviewed and verified as recorded below.
+Current focused tests also cover role choices, the untagged wall, automatic preparation,
+declared symmetry, closed-face removal, driver sharing and re-import memory.
 
 ## Review decisions
 

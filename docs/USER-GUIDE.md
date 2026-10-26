@@ -72,32 +72,63 @@ solving and offers **Solve anyway**, **Change in Fusion** or **Later**. See the
 ### Import and solve a mesh
 
 Select **Imported mesh**, then press **Import mesh…** in the top bar. The design
-file menu also offers import and replay. No CAD
-application, add-in or WGLink folder is needed. The first importer accepts
-ASCII Gmsh 2.2 linear triangular surface meshes, up to 16 MiB.
+file menu also offers import and replay. No CAD application, add-in or WGLink
+folder is needed. WG accepts ASCII Gmsh 2.2 linear triangular surface meshes
+up to 16 MiB; STL, OBJ, binary and volume meshes are not supported.
 
-In **Geometry**, choose the file's units and forward/up axes. Under **Radiating
-surfaces**, check each mesh label to use as a source; names, tags and triangle
-counts identify the groups. Unchecked labels are rigid. At least one source is
-required, and untagged triangles cannot be selected. Changing a source selection
-requires preparation again. Press **Prepare mesh**, check its dimensions,
-then choose the frequency range, engine and source motion and press **Solve**.
-Use **Save setup** to keep these settings before solving; the last saved mesh
-setup resumes on startup unless a newer model choice or pending solve takes
-precedence. Later edits require another Save. Runs always retains its own
-resolved settings independently of this editable setup.
-The mesh must be a closed outward-facing surface, with physical groups on
-every triangle, and must pass topology/intersection checks. No automatic
-repair or remeshing occurs. Untagged meshes can still be inspected.
+WG prepares the mesh automatically after import and after you change its
+settings. If it needs a choice or finds a problem, the status line tells you what
+to do. **Try again** appears after a preparation failure when retrying is possible.
+When the mesh is ready, press **Solve** in the status line or the top bar.
 
-This first slice solves full-domain, free-space meshes with one unit-acceleration
-source (1 m/s²) per selected group. It uses a logarithmic sweep and full 5°
-horizontal, vertical and diagonal polars at 2 m from the mesh origin; the origin
-is not moved automatically. Electrical driver models, crossover controls,
-reduced domains, STL/OBJ/binary meshes and volume-mesh import are outside this
-first slice. Choose **CAD Link** in the Imported mesh input selector to use the existing CAD
-simulation capabilities. **File mesh** returns to the mesh-file setup; **Parametric**
-keeps the generated design separate.
+In **Geometry**, check **Surfaces**. Each row shows a group from the file and
+its triangle count. WG recognizes its own exact group-name format and reads
+its `role=` value; it guesses roles from other names. Check the guesses and
+choose a role for each surface:
+
+- **HF driver**, **MF driver** or **LF driver** for a driver surface.
+- **Port or passive opening** for a port or passive opening.
+- **Rigid wall** for a wall.
+
+Untagged triangles appear in their own **Untagged surface** row, initially set
+to **Rigid wall**. At least one surface must have a different role. If WG
+cannot decide a role, choose it in the row before continuing.
+
+Check **Size** and the guessed file unit; use **Change** to choose millimetres,
+centimetres, metres or inches. If WG cannot guess the unit, choose it before
+continuing. Under **Model details**, check the forward and up axes and change
+them if needed.
+
+**Symmetry** shows a full, half or quarter model. WG detects a half or quarter
+from open edges on x = 0 or y = 0, after applying the axes. Use **Change** to
+choose the model and plane. If the mesh lies on the negative side, WG mirrors
+it automatically; **Change** also lets you change that choice. A mesh left on
+the negative side must be mirrored before it can solve. When a declared plane
+has a closed face that WG recognizes, the same settings offer **Remove the
+closed face** on that plane. WG checks the remaining mesh before solving and
+will not remove a driver or port surface as part of that face.
+
+A full model must be closed and face outward. A half or quarter may be open on
+its declared symmetry planes; close other openings in the meshing tool. WG
+checks the mesh for other problems but does not repair or remesh it. It cannot
+yet cut a full symmetric file mesh to a half or quarter automatically. Export
+the half or quarter from the meshing tool to solve faster.
+
+Use the **Simulation** tab shared with CAD models to set the sweep, drivers,
+directivity and solver. For surfaces with the same role, choose **Share one
+driver** or **Drive separately**. Sharing uses identical driver settings: each
+surface gets its own identical driver, wired to one amplifier channel. The
+**Port or passive opening** role marks an opening, but **Passive cardioid** is
+not yet available for file meshes. Choose **CAD Link** for a CAD model,
+**File mesh** for the file setup, or **Parametric** for the separate generated
+design.
+
+WG saves setup edits with the model automatically. Importing the same file
+again reopens its last preparation and settings. If a changed file has the
+same name before the extension and the same unique group names, WG reuses the
+previous settings and shows a one-time note. If some names differ, WG keeps
+the roles of matching groups and guesses the others. The status line reports
+if settings could not be saved.
 
 Runs retains the exact mesh and resolved settings. Select a run to restore its
 setup, or **Rerun** to replay its stored request. A prepared mesh that no run,
@@ -116,7 +147,8 @@ file menu restores its retained mesh and exact solve settings, including explici
 frequency lists and directivity settings, without the original job database or
 mesh file. Packages up to 64 MiB are accepted. Press **Solve** for a new run using
 those settings. The panel shows the actual frequencies, polars, engine and
-accuracy, with the complete resolved setup available under **Full resolved setup**.
+accuracy. With developer details enabled, **Full resolved setup** shows the
+complete settings.
 Automatic settings restoration and parametric solve options do not change replay. Editing a mesh setup
 control or one of the mesh's solve options ends exact replay and starts a new setup from what the controls show; the exact-replay summary then disappears.
 Run archives also include the replay package when its inputs remain available.

@@ -28,6 +28,25 @@ Use the Fusion commands consistently:
 | Send to WG | Open this model in WG to inspect or set up. Does not solve. |
 | Solve in WG | Send and solve now. |
 
+## File mesh terms
+
+Use the same words as the Imported mesh screen:
+
+| Words | Meaning |
+| --- | --- |
+| Surfaces | The groups read from the mesh file. |
+| HF driver, MF driver, LF driver | The driver roles for a surface. |
+| Port or passive opening | The role for a port or passive opening. |
+| Rigid wall | A surface that does not move. |
+| Untagged surface | Triangles with no group, initially a rigid wall. |
+| Symmetry | Full model, Half x = 0, Half y = 0 or Quarter. |
+| Remove the closed face | Remove the face on the chosen symmetry plane. |
+| Mirror from the negative side | Mirror the model across its symmetry plane. |
+| Size | The model dimensions and file units. |
+| Share one driver | Use identical driver settings for same-role surfaces. |
+| Drive separately | Set the drivers for those surfaces separately. |
+| Try again | Retry preparation after a failure. |
+
 ## Guards and ownership
 
 `frontend/src/testing/expectNoJargon.ts` is the shared vitest assertion for
