@@ -793,7 +793,7 @@ def combine_drive_channels(
     # crossover, alignment and level-matching calculations. Physical bases
     # remain separately stored, so this same path also serves recombination.
     partial_group_balloon = False
-    if member_channels:
+    if member_channels is not None:
         branches: dict[str, Any] = {}
         for member in members:
             ids = member_channels.get(member, [member])
@@ -836,7 +836,7 @@ def combine_drive_channels(
 
     warnings: list[str] = []
     display = {name: name for name in members}
-    if member_channels:
+    if member_channels is not None:
         names = {name: (member_labels or {}).get(name) or (member_roles or {}).get(name) or "Driver" for name in members}
         for name in members:
             peers = [other for other in members if names[other] == names[name]]
@@ -1243,8 +1243,9 @@ def combine_drive_channels(
         ),
         "warnings": warnings,
     }
-    if member_channels:
+    if member_channels is not None:
         payload["member_channels"] = {member: list(member_channels.get(member, [member])) for member in members}
+        payload["member_labels"] = [(member_labels or {}).get(member) for member in members]
     max_output = _max_output_payload(
         freqs,
         list(members),

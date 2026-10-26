@@ -606,6 +606,18 @@ def test_area_warning_is_channel_specific_in_mixed_results():
     assert response['channels']['other']['metadata']['warnings'] == []
     assert response['channels']['combined']['metadata']['warnings'] == []
     assert 'sealed rear chamber' not in request.warnings[0]
+    # The coupled envelope resolves the same group labels and physical bases
+    # as the exterior combined-channel packaging path.
+    from server.jobs.models import DriverGroup
+    geometry.driver_groups = [DriverGroup(id='fem-band', label='Coupled driver', channel_ids=['fem'])]
+    geometry.combine = ChannelCombineSpec(id='combined', members=['fem-band', 'other'],
+        crossovers_hz=[500.], level_match=False, align=False)
+    grouped = coupled_envelope(map_coupled_sweep(events(request), request), request, context=context,
+        geometry=geometry, record={}, config=official_beat.response_config(request, context), started=time.time())
+    combined = grouped['channels']['combined']['metadata']
+    assert combined['derived_from_channels'] == ['fem', 'other']
+    assert combined['combine']['member_channels'] == {'fem-band': ['fem'], 'other': ['other']}
+    assert combined['combine']['member_labels'] == ['Coupled driver', None]
 
 
 @pytest.mark.parametrize('baffle,planes,transducer,weights,passive', [

@@ -38,7 +38,10 @@ def recombine_stored_results(
         raise RecombineError("recombination applies to imported multi-channel jobs")
     bundle = deserialize_channel_bases(bases_npz)
     channel_ids = bundle["channel_ids"]
-    physical_members = geometry.physical_members(spec.members)
+    try:
+        physical_members = geometry.physical_members(spec.members)
+    except ValueError as exc:
+        raise RecombineError(str(exc)) from exc
     unknown = [name for name in physical_members if name not in channel_ids]
     if unknown:
         raise RecombineError(f"combine members name unknown drive channels: {unknown}")

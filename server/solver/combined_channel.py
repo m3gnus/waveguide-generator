@@ -64,9 +64,7 @@ def package_combined_channel(
     """
 
     channels_by_id = {channel.id: channel for channel in drive_channels}
-    groups = {group.id: list(group.channel_ids) for group in (request.geometry.driver_groups or [])}
-    physical = {member: groups.get(member, [member]) for member in spec.members}
-    has_groups = bool(groups) and any(member in groups for member in spec.members)
+    physical, labels = request.geometry.crossover_branches(spec.members)
     member_validity_hz: dict[str, float] = {}
     for member in spec.members:
         limits = [
@@ -89,20 +87,21 @@ def package_combined_channel(
         if len(physical[member]) == 1 and limits:
             member_limits[member] = limits[0]
         elif len(limits) == len(physical[member]):
-            # The first physical driver to reach any ceiling limits the shared
-            # gain. Normalizing each rating to one keeps those ratios exact.
-            excursion = [limit.excursion_mm / limit.xmax_mm for limit in limits
-                         if limit.excursion_mm is not None and limit.xmax_mm is not None]
-            power = [limit.power_w / limit.rated_power_w for limit in limits
-                     if limit.power_w is not None and limit.rated_power_w is not None]
-            voltage = [limit.drive_voltage_v / limit.max_voltage_v for limit in limits
-                       if limit.drive_voltage_v is not None and limit.max_voltage_v is not None]
+            # Shared drivers have the same ratings. Preserve their real units
+            # while the most stressed physical driver sets each group ceiling.
+            first = limits[0]
+            ratings = (first.xmax_mm, first.rated_power_w, first.drive_voltage_v, first.max_voltage_v)
+            if any((limit.xmax_mm, limit.rated_power_w, limit.drive_voltage_v, limit.max_voltage_v) != ratings
+                   for limit in limits[1:]):
+                raise ValueError("Driver group results have inconsistent driver ratings.")
+            excursion = [limit.excursion_mm for limit in limits if limit.excursion_mm is not None]
+            power = [limit.power_w for limit in limits if limit.power_w is not None]
             member_limits[member] = MemberLimits(
                 excursion_mm=np.maximum.reduce(excursion) if excursion else None,
                 power_w=np.maximum.reduce(power) if power else None,
-                xmax_mm=1.0 if excursion else None, rated_power_w=1.0 if power else None,
-                drive_voltage_v=max(voltage) if voltage else None,
-                max_voltage_v=1.0 if voltage else None,
+                xmax_mm=first.xmax_mm, rated_power_w=first.rated_power_w,
+                drive_voltage_v=first.drive_voltage_v, max_voltage_v=first.max_voltage_v,
+                label=first.label,
             )
 
     resolved = spec.resolved()
@@ -114,12 +113,9 @@ def package_combined_channel(
         member_validity_hz=member_validity_hz,
         member_roles={member: member_roles.get(physical[member][0]) for member in spec.members},
         member_limits=member_limits,
-        member_channels=physical if has_groups else None,
-        member_labels={group.id: group.label for group in request.geometry.driver_groups or []} if has_groups else None,
+        member_channels=physical if labels else None,
+        member_labels=labels if labels else None,
     )
-    if has_groups:
-        labels = {group.id: group.label for group in request.geometry.driver_groups or []}
-        combine_payload["member_labels"] = [labels.get(member) for member in spec.members]
 
     metadata: dict[str, Any] = {
         "solver_mode": "full_3d",

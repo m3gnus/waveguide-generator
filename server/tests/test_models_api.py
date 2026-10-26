@@ -175,6 +175,34 @@ def test_file_setup_saves_driver_groups_under_the_same_inventory(tmp_path):
     asyncio.run(scenario())
 
 
+def test_file_setup_refuses_invalid_shared_driver_combinations(tmp_path):
+    async def scenario():
+        store = CadLinkStore.for_data_dir(tmp_path)
+        record = register_mesh(store, tmp_path, registration(source_tags=[1, 2]))
+        app, runtime = app_for(tmp_path, store)
+        model_id = "mesh-file:" + record["artifact_sha256"]
+        setup = setup_for(record)
+        setup["geometry"].update({
+            "drive_channels": [{"id": "a", "source_ids": ["group_1"]},
+                               {"id": "b", "source_ids": ["group_2"]}],
+            "driver_groups": [{"id": "shared", "channel_ids": ["a", "b"]}],
+            "rg_ohm": 0.5,
+        })
+        try:
+            refused = await call(app, "PUT", f"/api/models/{model_id}/setup",
+                                 {"prepared_id": record["ingest_id"], "setup": setup}, expected=422)
+            assert "generator resistance to 0 ohms" in str(refused)
+            setup["geometry"]["rg_ohm"] = 0.
+            setup["geometry"]["combine"] = {"members": ["a", "b"], "crossovers_hz": [500.]}
+            refused = await call(app, "PUT", f"/api/models/{model_id}/setup",
+                                 {"prepared_id": record["ingest_id"], "setup": setup}, expected=422)
+            assert "whole driver group" in str(refused)
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())
+
+
 def test_reimporting_or_repreparing_a_file_finds_its_saved_setup(tmp_path):
     async def scenario():
         store = CadLinkStore.for_data_dir(tmp_path)

@@ -1037,10 +1037,24 @@ class ImportedGeometrySource(JobModel):
             wire.pop("driver_groups", None)
         return wire
 
+    def crossover_branches(self, members: list[str]) -> tuple[dict[str, list[str]], dict[str, str | None]]:
+        """Resolve branches and labels, refusing a partial shared driver group."""
+        groups = {group.id: group for group in self.driver_groups or []}
+        for group in groups.values():
+            if len(group.channel_ids) > 1 and set(group.channel_ids).intersection(members):
+                raise ValueError(
+                    "A crossover must use the whole driver group; select the group "
+                    "instead of an individual channel."
+                )
+        return (
+            {member: list(groups[member].channel_ids) if member in groups else [member] for member in members},
+            {member: groups[member].label for member in members if member in groups},
+        )
+
     def physical_members(self, members: list[str]) -> list[str]:
         """Resolve crossover branches to the physical channels they contain."""
-        groups = {group.id: group.channel_ids for group in self.driver_groups or []}
-        return [channel for member in members for channel in groups.get(member, [member])]
+        branches, _labels = self.crossover_branches(members)
+        return [channel for member in members for channel in branches[member]]
 
     @field_validator("ingest_id")
     @classmethod
@@ -1123,6 +1137,11 @@ class ImportedGeometrySource(JobModel):
                 raise ValueError("driver group id collides with a drive channel id")
             channels = [by_id[channel_id] for channel_id in group.channel_ids]
             first = channels[0]
+            if len(channels) > 1 and self.rg_ohm != 0:
+                raise ValueError(
+                    "Set generator resistance to 0 ohms or drive the surfaces separately "
+                    "when a driver group contains multiple channels."
+                )
             if len(channels) > 1 and any(channel.patch_weights is not None for channel in channels):
                 raise ValueError("driver groups cannot combine weighted patch channels")
             if any((channel.motion, channel.driver, channel.exterior_transducer) !=

@@ -11,6 +11,7 @@ from server.jobs.imported_setup import solve_request_for, validate_setup
 from server.jobs.models import ChannelCombineSpec, ImportedGeometrySource
 from server.solver.combine import combine_drive_channels, expand_legacy_channels, serialize_channel_bases
 from server.solver.field_plane import FieldPlaneService
+from server.solver.errors import RecombineError
 from server.solver.recombine import recombine_stored_results
 
 
@@ -48,6 +49,8 @@ def test_setup_roundtrip_and_legacy_serialization():
                                 manifest_sha256=wire["manifest_sha256"], artifact_sha256=wire["artifact_sha256"],
                                 acknowledged_findings=[])
     assert request.geometry.physical_members(["bass", "c"]) == ["a", "b", "c"]
+    assert request.geometry.crossover_branches(["bass", "c"]) == (
+        {"bass": ["a", "b"], "c": ["c"]}, {"bass": "Bass"})
     assert request.geometry.driver_groups[0].label == "Bass"
     legacy = deepcopy(wire)
     del legacy["driver_groups"]
@@ -61,13 +64,46 @@ def test_setup_roundtrip_and_legacy_serialization():
     (lambda g: g["driver_groups"].append({"id": "other", "channel_ids": ["a"]}), "only one driver group"),
     (lambda g: g["driver_groups"][0].update(id="a"), "collides"),
     (lambda g: g["drive_channels"][1].update(motion="axial"), "identical motion and drivers"),
-    (lambda g: g["combine"].update(members=["bass", "a"]), "overlap"),
+    (lambda g: g["combine"].update(members=["bass", "a"]), "whole driver group"),
+    (lambda g: g["combine"].update(members=["a", "c"]), "whole driver group"),
+    (lambda g: g.update(rg_ohm=0.5), "generator resistance to 0 ohms"),
 ])
 def test_invalid_groups_refused(mutation, message):
     value = geometry()
     mutation(value)
     with pytest.raises(ValidationError, match=message):
         ImportedGeometrySource.model_validate(value)
+
+
+def test_generator_resistance_remains_available_for_ungrouped_and_single_channels():
+    value = geometry()
+    value["rg_ohm"] = 0.5
+    value["driver_groups"][0]["channel_ids"] = ["a"]
+    assert ImportedGeometrySource.model_validate(value).rg_ohm == 0.5
+    del value["driver_groups"]
+    value["combine"]["members"] = ["a", "c"]
+    assert ImportedGeometrySource.model_validate(value).rg_ohm == 0.5
+
+
+def test_generator_resistance_is_refused_for_a_shared_group_without_crossover():
+    value = geometry()
+    value.pop("combine")
+    value["rg_ohm"] = 0.5
+    with pytest.raises(ValidationError, match="generator resistance to 0 ohms"):
+        ImportedGeometrySource.model_validate(value)
+
+
+def test_partial_group_is_refused_when_recombining():
+    setup = geometry()
+    request = solve_request_for(validate_setup({"geometry": {k: v for k, v in setup.items()
+                                if k not in {"type", "ingest_id", "manifest_sha256", "artifact_sha256"}},
+                                "options": {"frequencies_hz": [100., 500., 1000.]}}),
+                                ingest_id=setup["ingest_id"], manifest_sha256=setup["manifest_sha256"],
+                                artifact_sha256=setup["artifact_sha256"], acknowledged_findings=[])
+    bases = serialize_channel_bases({"a": native(1), "b": native(2), "c": native(3)})
+    with pytest.raises(RecombineError, match="whole driver group"):
+        recombine_stored_results({"channels": {}}, bases,
+            ChannelCombineSpec(members=["a", "c"], crossovers_hz=[500.]), request)
 
 
 def test_group_sum_and_singleton_match_existing_combiner():
@@ -83,6 +119,7 @@ def test_group_sum_and_singleton_match_existing_combiner():
     np.testing.assert_allclose(grouped.pressure_complex, expected.pressure_complex)
     np.testing.assert_allclose(grouped.sphere_pressure_complex, expected.sphere_pressure_complex)
     assert metadata["member_channels"] == {"bass": ["a", "b"], "c": ["c"]}
+    assert metadata["member_labels"] == [None, None]
     single, _ = combine_drive_channels(results, members=["a", "c"], crossovers_hz=[500.],
                                        member_channels={"a": ["a"], "c": ["c"]})
     old, _ = combine_drive_channels(results, members=["a", "c"], crossovers_hz=[500.])
@@ -129,15 +166,33 @@ def test_group_gain_ceiling_is_the_first_physical_driver_limit():
                                 ingest_id=setup["ingest_id"], manifest_sha256=setup["manifest_sha256"],
                                 artifact_sha256=setup["artifact_sha256"], acknowledged_findings=[])
     bases = serialize_channel_bases({"a": native(1), "b": native(2), "c": native(3)})
-    def driver(excursion):
-        return {"metadata": {"driver": {"spec": {"xmax_mm": 4.},
-                "cone_excursion_mm": {"frequencies": [100., 500., 1000.], "values": [excursion] * 3}}}}
-    results = {"channels": {"a": driver(1.), "b": driver(2.), "c": {}}, "channel_order": ["a", "b", "c"]}
-    grouped = recombine_stored_results(results, bases, ChannelCombineSpec(members=["bass", "c"], crossovers_hz=[500.]), request)
-    single = recombine_stored_results(results, bases, ChannelCombineSpec(members=["b", "c"], crossovers_hz=[500.]), request)
-    group_limit = grouped["channels"]["combined"]["metadata"]["combine"]["channels"]["bass"]["gain_max_db"]
-    single_limit = single["channels"]["combined"]["metadata"]["combine"]["channels"]["b"]["gain_max_db"]
+    request.geometry.max_drive_voltage_v = 24.
+    def driver(excursion, resistance):
+        return {"metadata": {"driver": {"label": "Woofer", "drive_voltage_v": 4.,
+                "spec": {"xmax_mm": 4., "power_w": 60.},
+                "cone_excursion_mm": {"frequencies": [100., 500., 1000.], "values": [excursion] * 3}}},
+                "impedance": {"frequencies": [100., 500., 1000.], "real": [resistance] * 3, "imaginary": [0.] * 3}}
+    results = {"channels": {"a": driver(1., 8.), "b": driver(2., 4.), "c": {}}, "channel_order": ["a", "b", "c"]}
+    grouped = recombine_stored_results(results, bases, ChannelCombineSpec(members=["bass", "c"], crossovers_hz=[500.], level_match=False), request)
+    ungrouped = request.model_copy(deep=True)
+    ungrouped.geometry.driver_groups = None
+    single = recombine_stored_results(results, bases, ChannelCombineSpec(members=["b", "c"], crossovers_hz=[500.], level_match=False), ungrouped)
+    group_combine = grouped["channels"]["combined"]["metadata"]["combine"]
+    single_combine = single["channels"]["combined"]["metadata"]["combine"]
+    group_limit = group_combine["channels"]["bass"]["gain_max_db"]
+    single_limit = single_combine["channels"]["b"]["gain_max_db"]
     assert group_limit == pytest.approx(single_limit)
+    group_usage = group_combine["max_output"]["members"]["bass"]
+    single_usage = single_combine["max_output"]["members"]["b"]
+    assert group_usage["xmax_mm"] == 4.
+    assert group_usage["rated_power_w"] == 60.
+    assert group_usage["max_voltage_v"] == 24.
+    assert group_usage["excursion_fraction"] == pytest.approx(single_usage["excursion_fraction"])
+    assert group_usage["power_fraction"] == pytest.approx(single_usage["power_fraction"])
+    results["channels"]["b"]["metadata"]["driver"]["spec"]["xmax_mm"] = 5.
+    with pytest.raises(ValueError, match="inconsistent driver ratings"):
+        recombine_stored_results(results, bases,
+            ChannelCombineSpec(members=["bass", "c"], crossovers_hz=[500.]), request)
 
 
 def test_field_plane_synthesizes_group_traces_with_one_branch_weight(monkeypatch):
