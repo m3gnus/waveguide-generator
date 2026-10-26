@@ -290,7 +290,7 @@ export function fileSetupControls(): ImportedSetup {
   const model = useImportedModelStore.getState();
   const retained = model.setup ?? model.setupEditBase?.retained;
   // Motion edits of older file setups preserve their voltage fields.
-  const { drivers, effects } = simulationGeometry(simulation, simulation.sources, retained?.geometry);
+  const { drivers, effects } = simulationGeometry(simulation, simulation.sources, simulation.passiveTopology, retained?.geometry);
   return {
     geometry: { skipped_source_ids: [], ...drivers, ...effects },
     ...(Object.keys(driver_references).length ? { driver_references } : {}),

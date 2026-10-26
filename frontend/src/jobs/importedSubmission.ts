@@ -4,6 +4,7 @@ import type { ImportedSolvePlan, ImportedSolveSubmission } from './actions';
 import { bindImportedSetup, type ImportedSetup } from './importedSetup';
 import {
   blockingFindingWire,
+  cadPassiveCardioidTopology,
   channelAcceptsDriver,
   channelDriverPresent,
   channelDriverWire,
@@ -16,7 +17,7 @@ import {
   passiveCardioidWire,
   useCadReturnStore,
 } from '../stores/cadReturn';
-import type { SimulationData, CadDriveChannel, RoleSource } from '../stores/cadReturn';
+import type { SimulationData, CadDriveChannel, PassiveCardioidTopology, RoleSource } from '../stores/cadReturn';
 import { parseFrequencyList, polarValidationError, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { frequencyText } from '../results/crossoverSpec';
 
@@ -144,7 +145,7 @@ export function importedSubmissionBlocker(
   // on a model without one is dropped, not turned into a blocker for a section
   // the rail no longer shows.
   if (cardioidSurfacePresent(state)) {
-    const cardioid = passiveCardioidBlocker(state);
+    const cardioid = passiveCardioidBlocker(state, cadPassiveCardioidTopology(state));
     if (cardioid) return cardioid;
   }
   return null;
@@ -307,10 +308,11 @@ export function simulationDriverReferences(state: Pick<SimulationData, 'driveCha
 export function simulationGeometry(
   state: Parameters<typeof combineWire>[0] & Pick<SimulationData, 'passiveCardioid' | 'driveVoltageV' | 'maxDriveVoltageV'>,
   sources: readonly RoleSource[],
+  topology: PassiveCardioidTopology | null,
   retained?: ImportedSetup['geometry'],
 ): { drivers: ReturnType<typeof simulationDriverGeometry>; effects: Partial<ImportedSetup['geometry']> } {
   const present = hasPassiveCardioidSurface(sources);
-  const blocker = present ? passiveCardioidBlocker(state) : null;
+  const blocker = present ? passiveCardioidBlocker(state, topology) : null;
   if (blocker) throw new Error(blocker);
   const combine = combineWire(state);
   const cardioid = present ? passiveCardioidWire(state.passiveCardioid) : null;
@@ -322,7 +324,7 @@ export function resolveCadImportedSetup(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
   solveStore: SolveOptionsSnapshot = useImportedSolveOptionsStore.getState(),
 ): ImportedSetup {
-  const { drivers, effects } = simulationGeometry(state, state.selectedBundle?.sources ?? []);
+  const { drivers, effects } = simulationGeometry(state, state.selectedBundle?.sources ?? [], cadPassiveCardioidTopology(state));
   const nativeError = exteriorModeBlocker(state, solveStore);
   if (nativeError) throw new Error(nativeError);
   const options = solveStore.options() as ImportedSolveSubmission['options'];

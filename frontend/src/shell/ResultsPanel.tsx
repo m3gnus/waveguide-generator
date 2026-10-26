@@ -2423,6 +2423,7 @@ export function ResultsPanel() {
         displayLabels.split('\u0000')[index],
         display.results[id],
         view,
+        jobs.find(job => job.id === id)?.config_summary.import_origin,
       );
       return index === 0 ? channels.map((entry) => ({ ...entry, primary: true })) : channels;
     }) ?? NO_NAMED_RESULTS,
@@ -2564,7 +2565,7 @@ export function ResultsPanel() {
     ? powerAgreementHealth(shown, shownRaw ?? shown)
     : null;
   const powerFlags = shown ? powerQualificationOf(shown, shownRaw ?? shown) : null;
-  const powerChannelName = useCallback((id: string) => shownRaw ? channelLabel(shownRaw, id) : id, [shownRaw]);
+  const powerChannelName = useCallback((id: string) => shownRaw ? channelLabel(shownRaw, id, selectedJob?.config_summary.import_origin) : id, [shownRaw, selectedJob]);
   const solve = useOptionalSolveControl();
   // Everything above keeps following the solve while this panel is covered --
   // results are still fetched, combined and labelled, so the panel is never
@@ -2633,7 +2634,7 @@ export function ResultsPanel() {
           ><i/>{RUN_VERDICT_MARKER[primaryVerdict]}</button>
         </span>;
       })}
-      {primaryRaw && cadResultMatchesViewport && <ResultViewSwitch result={primaryRaw} view={view} onSelect={(next) => resultViewStore.setView(next)}/>}
+      {primaryRaw && cadResultMatchesViewport && <ResultViewSwitch result={primaryRaw} view={view} importOrigin={selectedJob?.config_summary.import_origin} onSelect={(next) => resultViewStore.setView(next)}/>}
       {/* How much of the dock is actually comparing. Five of the six default
           charts describe one run by nature, so a comparison that silently
           applies to one card looked identical to one that applied to all six.

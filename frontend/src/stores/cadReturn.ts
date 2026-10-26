@@ -1179,9 +1179,23 @@ export function passiveCardioidWire(form: PassiveCardioidForm): PassiveCardioidW
   };
 }
 
+export interface PassiveCardioidTopology {
+  sources: readonly RoleSource[];
+  sourceTags: Readonly<Record<string, number>> | null;
+  skippedSourceIds: readonly string[];
+}
+
+/** A CAD setup may be edited before preparation has made a source-tag map. */
+export function cadPassiveCardioidTopology(state: Pick<CadReturnState, 'ingestRecord' | 'skippedSourceIds'>): PassiveCardioidTopology | null {
+  if (!state.ingestRecord) return null;
+  return { sources: state.ingestRecord.sources ?? [],
+    sourceTags: state.ingestRecord.source_tags ?? null, skippedSourceIds: state.skippedSourceIds };
+}
+
 /** Why the cardioid section cannot be submitted yet, in the user's words. */
 export function passiveCardioidBlocker(
-  state: Pick<CadReturnState, 'passiveCardioid' | 'driveChannels'>,
+  state: Pick<CadReturnState, 'passiveCardioid' | 'driveChannels'> & Partial<Pick<CadReturnState, 'channelDrivers'>>,
+  topology: PassiveCardioidTopology | null = null,
 ): string | null {
   const form = state.passiveCardioid;
   if (!form.enabled) return null;
@@ -1193,6 +1207,38 @@ export function passiveCardioidBlocker(
   if (form.coupled && state.driveChannels.some((channel) => channel.id === PASSIVE_CARDIOID_CHANNEL_ID)) {
     return `A drive channel is already named "${PASSIVE_CARDIOID_CHANNEL_ID}", which the coupled solve reserves `
       + 'for its derived output. Reassign that source to a different channel, or turn Coupled off.';
+  }
+  if (!topology) return null;
+  if (!topology.sourceTags) return 'The prepared model has no source information. Prepare the model again.';
+  const skipped = new Set(topology.skippedSourceIds);
+  const tags = Object.entries(topology.sourceTags).filter(([id]) => !skipped.has(id));
+  const byId = new Map(tags);
+  const byName = new Map(tags.map(([id]) => [id.trim().toUpperCase(), id]));
+  const activeSources = topology.sources.filter(source => byId.has(source.id) && !skipped.has(source.id));
+  const role = (value: string) => value.trim().toUpperCase();
+  let ports = activeSources.filter(source => ['PASSIVE_CARDIOID', 'PORT_EXIT'].includes(role(source.role))).map(source => source.id);
+  if (!ports.length) {
+    const names = [['PASSIVE_CARDIOID'], ['PASSIVE_CARDIOID_L', 'PASSIVE_CARDIOID_R'],
+      ['PORT_EXIT'], ['PORT_EXIT_L', 'PORT_EXIT_R'], ['MID_PORT_EXIT_LEFT', 'MID_PORT_EXIT_RIGHT']];
+    ports = names.map(group => group.flatMap(name => byName.has(name) ? [byName.get(name)!] : []))
+      .find(group => group.length > 0) ?? [];
+  }
+  if (!ports.length) return 'Add a port or passive opening to the model, then prepare it again.';
+  let mids = activeSources.filter(source => role(source.role) === 'MF').map(source => source.id);
+  if (!mids.length && byName.has('MF')) mids = [byName.get('MF')!];
+  if (mids.length !== 1) return 'Passive cardioid needs exactly one mid-frequency source. Change the source roles and prepare the model again.';
+  const portTags = ports.map(id => byId.get(id));
+  if (new Set(portTags).size !== portTags.length || portTags.includes(byId.get(mids[0]))) {
+    return 'The port and mid-frequency source need separate surfaces. Change the source assignments and prepare the model again.';
+  }
+  if (form.coupled) {
+    const midChannels = state.driveChannels.filter(channel => channel.source_ids.includes(mids[0]));
+    if (midChannels.length !== 1 || !channelAcceptsDriver(midChannels[0])
+      || !channelDriverWire(state.channelDrivers?.[midChannels[0].id])) {
+      return 'Add a complete driver to the mid-frequency source, or turn Coupled off.';
+    }
+    const portChannels = state.driveChannels.filter(channel => ports.every(id => channel.source_ids.includes(id)));
+    if (portChannels.length !== 1) return 'Put all port openings in one drive channel, or turn Coupled off.';
   }
   return null;
 }

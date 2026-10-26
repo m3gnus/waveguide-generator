@@ -5,8 +5,8 @@ import type { ImportedSetup } from '../jobs/importedSetup';
 import { fromResult, parseWire } from '../results/crossoverSpec';
 import { savedChannelDrivers, savedPassiveCardioid } from './cadSetupRestore';
 import {
-  PASSIVE_CARDIOID_DEFAULTS, channelAcceptsDriver, channelDriverPresent, retainedChannelDrivers, simulationActions, useCadReturnStore,
-  type CadDriveChannel, type CadReturnState, type RoleSource, type SimulationActions, type SimulationData,
+  PASSIVE_CARDIOID_DEFAULTS, cadPassiveCardioidTopology, channelAcceptsDriver, channelDriverPresent, retainedChannelDrivers, simulationActions, useCadReturnStore,
+  type CadDriveChannel, type CadReturnState, type PassiveCardioidTopology, type RoleSource, type SimulationActions, type SimulationData,
 } from './cadReturn';
 import { useImportedModelStore } from './importedModel';
 import { useImportedSolveOptionsStore } from './solveOptions';
@@ -22,6 +22,7 @@ export interface ImportedSimulationSetup extends SimulationData, SimulationActio
   /** One amplifier/band branch, with one physical driver channel per surface. */
   driverGroups: ImportedDriverGroup[];
   skippedSourceIds: string[];
+  passiveTopology: PassiveCardioidTopology | null;
   setSourceChannel?: CadReturnState['setSourceChannel'];
   setRoleSharing?: (role: string, share: boolean) => void;
   setCombineEnabled: CadReturnState['setCombineEnabled'];
@@ -209,6 +210,7 @@ export function createImportedSimulationSetup(config: {
   write: (update: SimulationUpdate) => void;
   sources: () => ImportedSimulationSetup['sources'];
   skippedSourceIds: () => string[];
+  passiveTopology?: () => PassiveCardioidTopology | null;
   setSweep: SimulationActions['setSweep'];
   /** CAD already owns its edit signals and source assignment. */
   cadActions?: () => CadReturnState;
@@ -282,12 +284,13 @@ export function createImportedSimulationSetup(config: {
       if (config.cadActions) {
         const cad = config.cadActions();
         return { ...data, ...cad, input: config.input, sources, skippedSourceIds: config.skippedSourceIds(),
+          passiveTopology: config.passiveTopology?.() ?? null,
           driverGroups: data.driveChannels.map(channel => ({ id: channel.id, channelIds: [channel.id] })),
           setSweep: config.setSweep };
       }
       return { ...data, ...actions, input: config.input, sources,
         driverGroups: fileDriverGroups(sources, data.driveChannels, data.channelDrivers),
-        skippedSourceIds: config.skippedSourceIds() };
+        skippedSourceIds: config.skippedSourceIds(), passiveTopology: config.passiveTopology?.() ?? null };
     },
   };
 }
@@ -297,6 +300,7 @@ const cadSimulationSetup = createImportedSimulationSetup({
   write: update => useCadReturnStore.setState(update),
   sources: () => useCadReturnStore.getState().selectedBundle?.sources ?? [],
   skippedSourceIds: () => useCadReturnStore.getState().skippedSourceIds,
+  passiveTopology: () => cadPassiveCardioidTopology(useCadReturnStore.getState()),
   setSweep: update => useCadReturnStore.getState().setSweep(update),
   cadActions: () => useCadReturnStore.getState(),
 });
@@ -316,6 +320,13 @@ export const fileSimulationSetup = createImportedSimulationSetup({
   skippedSourceIds: () => {
     const model = useImportedModelStore.getState();
     return (model.setup ?? model.setupEditBase?.retained)?.geometry.skipped_source_ids ?? [];
+  },
+  passiveTopology: () => {
+    const model = useImportedModelStore.getState();
+    const record = model.prepared as RegisteredMesh | null;
+    if (!record) return null;
+    return { sources: fileSources(record), sourceTags: record.source_tags ?? null,
+      skippedSourceIds: (model.setup ?? model.setupEditBase?.retained)?.geometry.skipped_source_ids ?? [] };
   },
   setSweep: update => useImportedSolveOptionsStore.getState().setSweep({
     ...(update.frequencyStartHz !== undefined ? { startHz: update.frequencyStartHz } : {}),

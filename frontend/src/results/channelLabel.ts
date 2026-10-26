@@ -20,14 +20,15 @@ export function channelRole(result: ResultPayload, channelId: string): string | 
 /**
  * What this channel is called in the dock.
  *
- * Number channels that share a band so each physical driver remains distinct.
- * Older unroled results retain their authored channel names.
+ * CAD keeps its authored names when roles are shared. File imports number
+ * same-band channels because their IDs are implementation details.
  */
-export function channelLabel(result: ResultPayload, channelId: string): string {
+export function channelLabel(result: ResultPayload, channelId: string, importOrigin?: unknown): string {
   if (channelId === combinedChannelId(result)) return 'Combined';
   if (channelId === PASSIVE_CARDIOID_CHANNEL_ID) return 'Cardioid';
+  const file = (importOrigin ?? result.metadata?.import_origin) === 'mesh-file';
   return roleChannelLabel(channelId, resultChannels(result).map(({ id }) => ({ id, role: channelRole(result, id) })),
-    channelRole(result, channelId) ? 'number' : 'id');
+    file ? 'number' : 'id');
 }
 
 /**

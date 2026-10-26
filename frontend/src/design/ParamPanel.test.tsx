@@ -72,7 +72,8 @@ function setCadReady({ cardioidPort = false, linked = true }: { cardioidPort?: b
   const bundle = { ...cadBundle, designIds: linked ? ['wgd_open'] : [] };
   useCadReturnStore.setState({
     selectedBundle: cardioidPort ? { ...bundle, sources: [...bundle.sources, portSource] } : bundle,
-    ingestRecord: cadRecord,
+    ingestRecord: cardioidPort ? { ...cadRecord, sources: [...bundle.sources, portSource],
+      source_tags: { 'source-hf': 1, 'source-mf': 2, 'source-port': 3 } } as unknown as CadReturnIngestRecord : cadRecord,
     needsIngest: false,
     meshSizes: { ...useCadReturnStore.getState().meshSizes, source_size_mm: { 'source-hf': 2, 'source-mf': 4, ...(cardioidPort ? { 'source-port': 4 } : {}) }, rigid_size_mm: 5, transition_mm: 4 },
 

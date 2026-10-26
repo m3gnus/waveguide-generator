@@ -368,11 +368,13 @@ describe('chart data mappers', () => {
       .toEqual([{ id: 'job-13', label: 'Run 13', result: result() }]);
   });
 
-  it('names separate channels in the same band without exposing their ids', () => {
+  it('keeps CAD names and numbers file channels in the same band', () => {
     const payload: ResultData = { frequencies: [], channel_order: ['opaque-a', 'opaque-b'],
       channels: { 'opaque-a': roled(result(1), 'MF'), 'opaque-b': roled(result(2), 'MF') } };
-    expect(selectResultChannels('job', 'Run', payload, 'opaque-a')[0].label).toBe('Run · MF 1');
-    expect(selectResultChannels('job', 'Run', payload, 'opaque-b')[0].label).toBe('Run · MF 2');
+    expect(selectResultChannels('job', 'Run', payload, 'opaque-a')[0].label).toBe('Run · opaque-a');
+    expect(selectResultChannels('job', 'Run', payload, 'opaque-b')[0].label).toBe('Run · opaque-b');
+    expect(selectResultChannels('job', 'Run', payload, 'opaque-a', 'mesh-file')[0].label).toBe('Run · MF 1');
+    expect(selectResultChannels('job', 'Run', payload, 'opaque-b', 'mesh-file')[0].label).toBe('Run · MF 2');
   });
 
   it('appends the members of a combined sum as secondary entries', () => {

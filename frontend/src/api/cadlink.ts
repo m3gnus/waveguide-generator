@@ -408,6 +408,8 @@ export interface CadReturnIngestRecord {
     }>;
   };
   sources: CadReturnSource[];
+  /** Active source IDs and their physical mesh tags, as recorded by preparation. */
+  source_tags?: Record<string, number>;
   mesh_sizes: CadMeshSizes;
   mesh_snapshot?: CadMeshSnapshot;
   mesh?: {

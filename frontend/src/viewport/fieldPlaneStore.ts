@@ -9,6 +9,7 @@ import {
   type FieldPlaneSpec,
 } from '../api/fieldPlane';
 import { fetchJobResults, type ResultData } from '../api/results';
+import { jobsSocket } from '../api/jobsSocket';
 import { channelLabel } from '../results/channelLabel';
 import { combinedChannelId, combineMetadataOf, type ResultPayload } from '../results/types';
 import { viewerPreferences, type ViewerPreferences } from '../viewerprefs/viewerPreferences';
@@ -292,14 +293,14 @@ export function nearestFieldPlaneFrequencyIndex(frequenciesHz: readonly number[]
  * so a run without a combined channel — a single-channel solve above all —
  * has no member views and the selector stays hidden.
  */
-export function fieldPlaneMemberResponses(results: ResultData): FieldPlaneMemberResponse[] {
+export function fieldPlaneMemberResponses(results: ResultData, importOrigin?: unknown): FieldPlaneMemberResponse[] {
   const payload = results as ResultPayload;
   const combinedId = combinedChannelId(payload);
   if (combinedId === null) return [];
   const combine = combineMetadataOf(payload.channels?.[combinedId] as ResultPayload | undefined);
   const members = combine?.members ?? [];
   if (members.length < 2) return [];
-  return members.map((id) => ({ id, label: channelLabel(payload, id) }));
+  return members.map((id) => ({ id, label: channelLabel(payload, id, importOrigin) }));
 }
 
 function validResponseId(
@@ -613,7 +614,8 @@ export function createFieldPlaneStore(
           const frequencyIndex = saved?.frequencyIndex === null || saved?.frequencyIndex === undefined
             ? nearestFieldPlaneFrequencyIndex(frequenciesHz)
             : Math.max(0, Math.min(frequenciesHz.length - 1, saved.frequencyIndex));
-          const memberResponses = fieldPlaneMemberResponses(results);
+          const origin = jobsSocket.getSnapshot().jobs.find(job => job.id === jobId)?.config_summary.import_origin;
+          const memberResponses = fieldPlaneMemberResponses(results, origin);
           const responseId = validResponseId(saved?.responseId ?? 'system', memberResponses);
           remember(jobId, plane, frequencyIndex, responseId);
           set({ frequenciesHz, frequencyStatus: results.frequency_status ?? null, frequencyIndex, memberResponses, responseId });

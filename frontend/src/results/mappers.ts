@@ -43,13 +43,13 @@ export interface NamedResult {
  * because the sum itself has no impedance, no drive and no cone for the cards
  * that measure those.
  */
-export function selectResultChannels(id: string, label: string, result: ResultData, view: ResultView): NamedResult[] {
+export function selectResultChannels(id: string, label: string, result: ResultData, view: ResultView, importOrigin?: unknown): NamedResult[] {
   const payload = result as ResultPayload;
   const active = resolveResultView(payload, view);
   if (!active || !payload.channels) return [{ id, label, result }];
   const entry = (channel: string, secondary: boolean): NamedResult => ({
     id: `${id}#${channel}`,
-    label: `${label} · ${channelLabel(payload, channel)}`,
+    label: `${label} · ${channelLabel(payload, channel, importOrigin)}`,
     result: payload.channels![channel],
     wrapper: result,
     channelId: channel,

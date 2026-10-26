@@ -23,13 +23,14 @@ const bundle = {
   documentName: 'Cardioid', requestId: null, sourceCount: 2, instanceCount: 1,
   sources: [
     { id: 'MF', role: 'MF', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-mf' },
-    { id: 'PORT_EXIT', role: 'MF', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-port' },
+    { id: 'PORT_EXIT', role: 'PORT_EXIT', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-port' },
   ],
 } satisfies CadReturnBundle;
 
 const record = {
   ingest_id: 'wgi_cardioid', manifest_sha256: 'sha256:manifest', artifact_sha256: 'sha256:artifact', report_sha256: 'sha256:report',
   findings: [], evidence: { fem_air_volumes: [] }, skipped_source_ids: [],
+  sources: bundle.sources, source_tags: { MF: 1, PORT_EXIT: 2 },
   mesh_sizes: { rigid_size_mm: 5, transition_mm: 3, source_size_mm: { MF: 4, PORT_EXIT: 4 } },
   symmetry: { cut_planes: [], planes: {} }, polar_grid_derivation: {}, role_findings: [],
 } as unknown as CadReturnIngestRecord;
@@ -139,17 +140,22 @@ describe('passive cardioid opt-in boundary', () => {
     expect(Object.keys(geometry).filter((key) => key.includes('cardioid') || key.includes('port_area'))).toEqual([]);
   });
 
-  it('recognises every spelling the solver accepts for the port aperture, on the role or the id', () => {
+  it('matches the server roles and exact legacy aperture IDs', () => {
     const source = (id: string, role: string) => ({ id, role });
+    for (const role of ['PASSIVE_CARDIOID', 'PORT_EXIT', ' passive_cardioid ', 'port_exit']) {
+      expect(hasPassiveCardioidSurface([source('source-a', role)]), `role ${role}`).toBe(true);
+    }
     for (const name of [
       'PORT_EXIT', 'PORT_EXIT_L', 'PORT_EXIT_R', 'MID_PORT_EXIT_LEFT', 'MID_PORT_EXIT_RIGHT',
-      'PASSIVE_CARDIOID', 'PASSIVE_CARDIOID_L', 'PASSIVE_CARDIOID_R',
-      // Authored lower-case, hyphenated or padded: the server upper-cases and
-      // trims the names it matches, so the rail must not be stricter.
-      'port_exit', ' mid-port-exit-left ', 'Passive Cardioid',
+      'PASSIVE_CARDIOID', 'PASSIVE_CARDIOID_L', 'PASSIVE_CARDIOID_R', 'port_exit', ' mid_port_exit_left ',
     ]) {
-      expect(hasPassiveCardioidSurface([source('source-a', name)]), `role ${name}`).toBe(true);
       expect(hasPassiveCardioidSurface([source(name, 'MF')]), `id ${name}`).toBe(true);
+    }
+    for (const name of ['PORT_EXIT_L', 'PASSIVE_CARDIOID_R', 'mid-port-exit-left', 'Passive Cardioid']) {
+      expect(hasPassiveCardioidSurface([source('source-a', name)]), `role ${name}`).toBe(false);
+    }
+    for (const name of ['not_port_exit', 'mid-port-exit-left', 'Passive Cardioid']) {
+      expect(hasPassiveCardioidSurface([source(name, 'MF')]), `id ${name}`).toBe(false);
     }
     expect(hasPassiveCardioidSurface([])).toBe(false);
     expect(hasPassiveCardioidSurface([source('source-mf', 'MF'), source('source-hf', 'HF')])).toBe(false);

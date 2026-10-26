@@ -1047,7 +1047,7 @@ function CadDriveChannels() {
 function CadPassiveCardioid() {
   const state = useImportedSimulationSetup();
   const form = state.passiveCardioid;
-  const blocker = passiveCardioidBlocker(state);
+  const blocker = passiveCardioidBlocker(state, state.passiveTopology);
   const bemDriven = form.portAreaSource === 'bem_aperture';
   return <>
     <ToggleRow

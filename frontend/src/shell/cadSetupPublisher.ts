@@ -12,6 +12,7 @@ import {
 } from '../api/cadOperations';
 import {
   hasPassiveCardioidSurface,
+  cadPassiveCardioidTopology,
   incompleteDriverChannels,
   passiveCardioidBlocker,
   useCadReturnStore,
@@ -99,7 +100,7 @@ function cadProjectSetupControls(
   if (!bundle || !bundle.sources.length || !lineageId) return null;
   if (incompleteDriverChannels(state).length || exteriorModeBlocker(state, solveStore)) return null;
   const cardioidPresent = hasPassiveCardioidSurface(bundle.sources);
-  if (cardioidPresent && passiveCardioidBlocker(state)) return null;
+  if (cardioidPresent && passiveCardioidBlocker(state, cadPassiveCardioidTopology(state))) return null;
   if (polarValidationError(solveStore.polar)) return null;
   let resolved: ReturnType<typeof resolveCadImportedSetup>;
   try { resolved = resolveCadImportedSetup(state, solveStore); }

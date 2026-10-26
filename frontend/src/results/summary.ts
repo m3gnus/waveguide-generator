@@ -299,6 +299,7 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
   group(groups, 'Conventions', conventions);
 
   const importRows: SummaryRow[] = [];
+  const importOrigin = job?.config_summary.import_origin ?? wrapperMetadata.import_origin;
   if (string(wrapperMetadata.geometry_type) === 'imported') {
     row(importRows, 'Geometry', 'imported');
     const channels = channelIds(wrapper);
@@ -306,8 +307,8 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
       // The band, with the authored id beside it when the two differ: the card
       // is where a curve is traced back to a physical driver, so the name the
       // user gave it in CAD cannot be dropped in favour of a label.
-      const label = channelLabel(wrapper, context.channelId);
-      const named = label === context.channelId ? label : `${label} (${context.channelId})`;
+      const label = channelLabel(wrapper, context.channelId, importOrigin);
+      const named = importOrigin === 'mesh-file' || label === context.channelId ? label : `${label} (${context.channelId})`;
       row(importRows, 'Channel', `${named} · ${channels.length.toLocaleString()} channels`);
     }
     const ingestId = string(wrapperMetadata.ingest_id);
@@ -324,7 +325,9 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
   if (combine) {
     const combineRows: SummaryRow[] = [];
     const memberName = (index: number): string =>
-      string(combine.member_roles?.[index]) ?? channelLabel(wrapper, combine.members[index]);
+      importOrigin === 'mesh-file'
+        ? channelLabel(wrapper, combine.members[index], 'mesh-file')
+        : string(combine.member_roles?.[index]) ?? channelLabel(wrapper, combine.members[index]);
     const channelOf = (member: string) => combine.channels?.[member];
     const sectionText = (section: CombineFilterSection | null | undefined): string | undefined => {
       if (!section || !isFilterFamily(section.family) || !isFiniteNumber(section.fc_hz)) return undefined;

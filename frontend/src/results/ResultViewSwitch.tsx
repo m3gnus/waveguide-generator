@@ -21,7 +21,7 @@ const PASSIVE_CARDIOID_CHANNEL_ID = 'passive_cardioid';
  * order rather than being guessed at, and the coupled cardioid channel goes
  * last: it is a port pair, not a driver in the chain.
  */
-export function resultViewEntries(result: ResultPayload): ResultViewEntry[] {
+export function resultViewEntries(result: ResultPayload, importOrigin?: unknown): ResultViewEntry[] {
   const combined = combinedChannelId(result);
   const rank = (channelId: string, index: number): number => {
     if (channelId === combined) return -1;
@@ -36,8 +36,9 @@ export function resultViewEntries(result: ResultPayload): ResultViewEntry[] {
     .map(({ id }) => ({
       view: id === combined ? COMBINED_VIEW : id,
       channelId: id,
-      label: channelLabel(result, id),
-      title: channelTitle(result, id),
+      label: channelLabel(result, id, importOrigin),
+      title: (importOrigin ?? result.metadata?.import_origin) === 'mesh-file'
+        ? channelLabel(result, id, importOrigin) : channelTitle(result, id),
     }));
 }
 
@@ -46,12 +47,13 @@ export function resultViewEntries(result: ResultPayload): ResultViewEntry[] {
  * the summary and the export describe. A run with one channel has no choice to
  * offer and renders nothing, exactly as the old per-channel chips did.
  */
-export function ResultViewSwitch({ result, view, onSelect }: {
+export function ResultViewSwitch({ result, view, onSelect, importOrigin }: {
   result: ResultPayload;
   view: ResultView;
   onSelect: (view: ResultView) => void;
+  importOrigin?: unknown;
 }) {
-  const entries = resultViewEntries(result);
+  const entries = resultViewEntries(result, importOrigin);
   if (entries.length < 2) return null;
   const active = resolveResultView(result, view);
   return <span className="result-view-switch" role="radiogroup" aria-label="Result view">

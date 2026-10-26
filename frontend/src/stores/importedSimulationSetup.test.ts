@@ -66,12 +66,13 @@ it('matches the server aperture roles and exact legacy source names', () => {
 });
 
 it('saves, restores and submits file cardioid physics selected by source role', () => {
-  const record = { ...mesh, source_tags: { ...mesh.source_tags, opening: 4 },
-    sources: [...mesh.sources, { id: 'opening', role: 'PASSIVE_CARDIOID' }] };
+  const record = { ...mesh, source_tags: { left: 1, high: 3, opening: 4 },
+    sources: [mesh.sources[0], mesh.sources[2], { id: 'opening', role: 'PASSIVE_CARDIOID' }] };
   void openImported({ kind: 'file', prepared: record, setup: null });
   importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(msh), 'file', record.ingest_id));
   importedSimulationSetup().setPassiveCardioid({ enabled: true });
   expect(() => fileMeshSetup()).toThrow('Passive cardioid needs');
+  importedSimulationSetup().setChannelDriverPreset('drive-mf', preset);
   importedSimulationSetup().setPassiveCardioid({ rearVolumeL: 6, portLengthMm: 25,
     modelPortAreaM2: 0.05, bemPortAreaM2: 0.0094, foamResistancePaSM3: 10_000, coupled: true });
   const saved = fileMeshSetup();
