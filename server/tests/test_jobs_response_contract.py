@@ -81,13 +81,15 @@ def test_stored_solve_options_preserve_nondefault_values(detailed):
 
 def test_historical_options_with_retired_precision_still_serialize():
     options = {"engine": "beat-cpu", "accuracy": "accurate", "beat_precision": "float64"}
+    exports = {"radiation_package": {"status": "complete", "file": "old.zip"}}
     wire = JobRuntime._serialize_job(_row({
         "geometry": {"type": "imported"}, "options": options,
-    }))
+    }, {"auto_export_formats": exports}))
     parsed = JobItem.model_validate(wire)
     assert parsed.solve_options.engine == "beat-cpu"
     assert parsed.solve_options.accuracy == "accurate"
     assert "beat_precision" not in wire["solve_options"]
+    assert parsed.auto_export_formats == exports
 
 
 @pytest.mark.parametrize("field", NULLABLE_FIELDS)
