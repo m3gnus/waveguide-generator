@@ -156,6 +156,11 @@ def test_qualify_breakaway_decision_keeps_server_start_adoption_and_report(
     monkeypatch.setattr(gate, "check_ensure_backend", adopt)
     monkeypatch.setattr(gate, "await_cpu_row", stop_after_adoption)
     monkeypatch.setattr(gate, "stop_our_workers", lambda *args: {"contained": True})
+    selections = []
+    def select(base, path, payload, **kwargs):
+        selections.append((base, path, payload))
+        return {"engine": payload["engine"], "accepted": True}
+    monkeypatch.setattr(gate, "api", select)
     argv = ["--payload", str(app.parent), "--work", str(work), "--output", str(output)]
     if via_main:
         assert gate.main(argv) == 1
@@ -171,6 +176,8 @@ def test_qualify_breakaway_decision_keeps_server_start_adoption_and_report(
     assert starts == [(interpreter, app, environment, work / "data", work / "status/stop-1", output / "server.log")]
     assert adoptions == [((app, work / "data", environment, Server.base), {"cwd": output})]
     assert report["ensure_backend"] == {"same_owner": True}
+    assert selections == [(Server.base, "/api/runtimes/beat/prewarm", {"engine": gate.CPU_ENGINE})]
+    assert report["cpu_selection"]["engine"] == gate.CPU_ENGINE
     assert report["ensure_backend_cold_start"] == ({"exercised": True, **cold_result} if permitted else NOT_EXERCISED)
     assert cold_starts == ([((interpreter, app, work, output), {})] if permitted else [])
     lines = capsys.readouterr().err.splitlines()
