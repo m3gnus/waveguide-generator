@@ -264,7 +264,7 @@ export function fileMeshSetup(): ImportedSetup {
   return effectiveImportedSetup('file', record.ingest_id, fileSetupControls);
 }
 
-function fileSetupControls(): ImportedSetup {
+export function fileSetupControls(): ImportedSetup {
   // Every option, the sweep range and count included, is the imported
   // instance's; this view only adds the mesh's geometry and source motions.
   const selected = useImportedSolveOptionsStore.getState();

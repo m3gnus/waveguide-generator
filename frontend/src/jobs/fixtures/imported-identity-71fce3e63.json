@@ -1,0 +1,387 @@
+{
+  "source_commit": "71fce3e63",
+  "cad": {
+    "resolved": {
+      "geometry": {
+        "drive_channels": [
+          {
+            "id": "archive-hf",
+            "source_ids": [
+              "source-hf"
+            ],
+            "motion": "normal"
+          }
+        ],
+        "mesh": {
+          "rigid_size_mm": 4,
+          "transition_mm": 4,
+          "source_size_mm": {
+            "source-hf": 4
+          }
+        },
+        "skipped_source_ids": [],
+        "exterior_only": true
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "accurate",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "mesh_validation_mode": "strict",
+        "verbose": false,
+        "frequency_spacing": "log",
+        "polar_config": {
+          "angle_range": [
+            -180,
+            180,
+            73
+          ],
+          "angle_step": 5,
+          "distance": 2,
+          "norm_angle": 5,
+          "inclination": 45,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": true
+        },
+        "frequency_range": [
+          125,
+          8000
+        ],
+        "num_frequencies": 29
+      }
+    },
+    "project": {
+      "schema_version": 1,
+      "geometry": {
+        "drive_voltage_v": 8,
+        "max_drive_voltage_v": 20,
+        "drive_channels": [
+          {
+            "id": "archive-hf",
+            "source_ids": [
+              "source-hf"
+            ],
+            "motion": "normal"
+          }
+        ],
+        "exterior_only": true,
+        "skipped_source_ids": [],
+        "mesh": {
+          "rigid_size_mm": 4,
+          "transition_mm": 4,
+          "source_size_mm": {
+            "source-hf": 4
+          }
+        }
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "accurate",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "mesh_validation_mode": "strict",
+        "verbose": false,
+        "frequency_spacing": "log",
+        "polar_config": {
+          "angle_range": [
+            -180,
+            180,
+            73
+          ],
+          "angle_step": 5,
+          "distance": 2,
+          "norm_angle": 5,
+          "inclination": 45,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": true
+        },
+        "frequency_range": [
+          125,
+          8000
+        ],
+        "num_frequencies": 29
+      }
+    },
+    "submission": {
+      "geometry": {
+        "type": "imported",
+        "ingest_id": "wgi_fixture",
+        "manifest_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "artifact_sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "drive_voltage_v": 8,
+        "max_drive_voltage_v": 20,
+        "drive_channels": [
+          {
+            "id": "archive-hf",
+            "source_ids": [
+              "source-hf"
+            ],
+            "motion": "normal"
+          }
+        ],
+        "exterior_only": true,
+        "acknowledged_findings": [],
+        "skipped_source_ids": [],
+        "mesh": {
+          "rigid_size_mm": 4,
+          "transition_mm": 4,
+          "source_size_mm": {
+            "source-hf": 4
+          }
+        }
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "accurate",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "mesh_validation_mode": "strict",
+        "verbose": false,
+        "frequency_spacing": "log",
+        "polar_config": {
+          "angle_range": [
+            -180,
+            180,
+            73
+          ],
+          "angle_step": 5,
+          "distance": 2,
+          "norm_angle": 5,
+          "inclination": 45,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": true
+        },
+        "frequency_range": [
+          125,
+          8000
+        ],
+        "num_frequencies": 29
+      }
+    },
+    "hasOpenedSetup": false,
+    "sweep": [
+      125,
+      8000,
+      29
+    ]
+  },
+  "file": {
+    "controls": {
+      "geometry": {
+        "skipped_source_ids": [],
+        "drive_channels": [
+          {
+            "id": "group_2",
+            "source_ids": [
+              "group_2"
+            ],
+            "motion": "normal"
+          }
+        ]
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "accurate",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "mesh_validation_mode": "strict",
+        "verbose": false,
+        "frequency_spacing": "log",
+        "polar_config": {
+          "angle_range": [
+            -180,
+            180,
+            73
+          ],
+          "angle_step": 5,
+          "distance": 2,
+          "norm_angle": 5,
+          "inclination": 45,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": true
+        },
+        "frequencies_hz": [
+          100,
+          500,
+          1000
+        ]
+      }
+    },
+    "setup": {
+      "geometry": {
+        "skipped_source_ids": [],
+        "drive_channels": [
+          {
+            "id": "group_2",
+            "source_ids": [
+              "group_2"
+            ],
+            "motion": "normal"
+          }
+        ]
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "accurate",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "mesh_validation_mode": "strict",
+        "verbose": false,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100,
+          500,
+          1000
+        ],
+        "polar_config": {
+          "angle_range": [
+            -180,
+            180,
+            73
+          ],
+          "angle_step": 5,
+          "distance": 2,
+          "norm_angle": 5,
+          "inclination": 45,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": true
+        }
+      }
+    },
+    "submission": {
+      "geometry": {
+        "type": "imported",
+        "ingest_id": "wgi_file",
+        "manifest_sha256": "sha256:manifest",
+        "artifact_sha256": "sha256:artifact",
+        "acknowledged_findings": [],
+        "skipped_source_ids": [],
+        "drive_channels": [
+          {
+            "id": "group_2",
+            "source_ids": [
+              "group_2"
+            ],
+            "motion": "normal"
+          }
+        ]
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "accurate",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "mesh_validation_mode": "strict",
+        "verbose": false,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100,
+          500,
+          1000
+        ],
+        "polar_config": {
+          "angle_range": [
+            -180,
+            180,
+            73
+          ],
+          "angle_step": 5,
+          "distance": 2,
+          "norm_angle": 5,
+          "inclination": 45,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": true
+        }
+      }
+    },
+    "original": {
+      "geometry": {
+        "type": "imported",
+        "ingest_id": "wgi_file",
+        "manifest_sha256": "sha256:manifest",
+        "artifact_sha256": "sha256:artifact",
+        "acknowledged_findings": [],
+        "skipped_source_ids": [],
+        "drive_channels": [
+          {
+            "id": "group_2",
+            "source_ids": [
+              "group_2"
+            ],
+            "motion": "axial"
+          }
+        ]
+      },
+      "options": {
+        "engine": "beat-cpu",
+        "accuracy": "accurate",
+        "solver_mode": "full_3d",
+        "symmetry": "auto",
+        "mesh_validation_mode": "strict",
+        "verbose": false,
+        "frequency_spacing": "log",
+        "frequencies_hz": [
+          100,
+          500,
+          1000
+        ],
+        "polar_config": {
+          "angle_range": [
+            -180,
+            180,
+            73
+          ],
+          "angle_step": 5,
+          "distance": 2,
+          "norm_angle": 5,
+          "inclination": 45,
+          "enabled_axes": [
+            "horizontal",
+            "vertical",
+            "diagonal"
+          ],
+          "observation_origin": "mouth",
+          "spherical_sampling": false,
+          "field_plane": true
+        }
+      }
+    },
+    "hasOpenedSetup": false
+  }
+}
