@@ -352,6 +352,7 @@ export function createCadArrivalActions(
     }
     if (!settingsReady) {
       const message = 'Waveguide Generator could not load this model’s settings. Try again.';
+      useCadReturnStore.setState({ attemptedPreparationKey: preparationKey() });
       if (mounted.current) setIngestError(message);
       throw new Error(message);
     }
@@ -479,29 +480,97 @@ export function createCadArrivalActions(
   const preparationKey = () => cadPreparationKey(useCadReturnStore.getState(), useDocumentStore.getState().identity?.designId ?? null);
   const automaticPreparationPending = () => preparesAutomatically(useCadReturnStore.getState(),
     useDocumentStore.getState().identity?.designId ?? null, preferencesStore.getSnapshot().cadApplication);
-  let inFlight: { key: string; override: boolean; promise: Promise<CadReturnIngestRecord> } | null = null;
+  let observedPreparationKey = preparationKey();
+  type PreparationAttempt = {
+    key: string;
+    override: boolean;
+    selection: number;
+    callers: CadPreparationOptions[];
+    started: { intent: number; viewport: number } | null;
+    validated: boolean;
+    prepared: boolean;
+    promise: Promise<CadReturnIngestRecord>;
+  };
+  let inFlight: PreparationAttempt | null = null;
   const ingestSelected = (options: CadPreparationOptions = {}): Promise<CadReturnIngestRecord> => {
     const key = preparationKey();
     const override = options.meshLimitOverride === true;
-    if (inFlight?.key === key && inFlight.override === override) return inFlight.promise;
-    const promise = performIngest(options);
-    const entry = { key, override, promise };
+    observedPreparationKey = key;
+    const existing = inFlight;
+    if (existing?.key === key && existing.override === override
+      && useCadReturnStore.getState().isCurrentSelectionIntent(existing.selection)
+      && (!existing.started || (useCadReturnStore.getState().isCurrentIngestIntent(existing.started.intent)
+        && importedMeshStore.isCurrentGeneration(existing.started.viewport)))
+      && !(existing.validated && options.validate)) {
+      existing.callers.push(options);
+      if (existing.started) options.onStarted?.(existing.started.intent, existing.started.viewport);
+      if (existing.prepared) options.onPrepared?.();
+      return existing.promise.then(record => {
+        if (options.isCurrent?.() === false) throw new SupersededError('A newer model selection superseded preparation.');
+        return record;
+      });
+    }
+    let resolveAttempt!: (record: CadReturnIngestRecord) => void;
+    let rejectAttempt!: (error: unknown) => void;
+    const promise = new Promise<CadReturnIngestRecord>((resolve, reject) => { resolveAttempt = resolve; rejectAttempt = reject; });
+    const entry: PreparationAttempt = { key, override, selection: useCadReturnStore.getState().captureSelectionIntent(),
+      callers: [options], started: null, validated: false, prepared: false, promise };
     inFlight = entry;
-    void promise.finally(() => { if (inFlight === entry) inFlight = null; }).catch(() => undefined);
-    return promise;
+    const currentCallers = () => entry.callers.filter(caller => caller.isCurrent?.() !== false);
+    void performIngest({
+      meshLimitOverride: override, fetcher: options.fetcher,
+      isCurrent: () => currentCallers().length > 0,
+      onStarted: (intent, viewport) => {
+        entry.started = { intent, viewport };
+        currentCallers().forEach(caller => caller.onStarted?.(intent, viewport));
+      },
+      validate: (record) => {
+        entry.validated = true;
+        currentCallers().forEach(caller => caller.validate?.(record));
+      },
+      onPrepared: () => {
+        entry.prepared = true;
+        currentCallers().forEach(caller => caller.onPrepared?.());
+      },
+    }).then(resolveAttempt, rejectAttempt);
+    void entry.promise.finally(() => {
+      if (inFlight === entry) inFlight = null;
+      requestAutomaticPreparation();
+    }).catch(() => undefined);
+    return entry.promise.then(record => {
+      if (options.isCurrent?.() === false) throw new SupersededError('A newer model selection superseded preparation.');
+      return record;
+    });
   };
   let automaticTimer: ReturnType<typeof setTimeout> | null = null;
   let automaticQueued = false;
+  let automaticQueuedKey: string | null = null;
+  let automaticQueueGeneration = 0;
   let automaticRunning = false;
   const requestAutomaticPreparation = () => {
     const selected = useCadReturnStore.getState();
+    const key = preparationKey();
+    const inputsChanged = key !== observedPreparationKey;
+    observedPreparationKey = key;
+    if (automaticQueued && automaticQueuedKey !== key) {
+      cancelAutomaticPreparation();
+    }
+    // An intervening edit invalidated the old attempt even if its final
+    // value returns to the same key after a debounce or another owner's wait.
+    if (inputsChanged && selected.needsIngest && selected.attemptedPreparationKey === key) {
+      useCadReturnStore.setState({ attemptedPreparationKey: null });
+    }
     if (!automaticPreparationPending()) return;
     // A fresh version takes priority over a stale model's edit debounce.
     if (automaticTimer !== null && !selected.ingestRecord) cancelAutomaticPreparation();
     if (automaticQueued || !mounted.current) return;
     automaticQueued = true;
+    automaticQueuedKey = key;
+    const queueGeneration = ++automaticQueueGeneration;
     const evaluate = () => {
+      if (queueGeneration !== automaticQueueGeneration) return;
       automaticQueued = false;
+      automaticQueuedKey = null;
       automaticTimer = null;
       if (!mounted.current || automaticRunning || ingestAbortController.current || adapter.deferAutomaticPreparation()
         || !automaticPreparationPending()) return;
@@ -519,6 +588,14 @@ export function createCadArrivalActions(
     if (automaticTimer !== null) clearTimeout(automaticTimer);
     automaticTimer = null;
     automaticQueued = false;
+    automaticQueuedKey = null;
+    automaticQueueGeneration += 1;
+    // A remount must retry an attempt that never got past the settings read.
+    // Completed failures retain their key and still wait for Try again.
+    if (!mounted.current && automaticRunning && inFlight && !inFlight.started
+      && useCadReturnStore.getState().attemptedPreparationKey === inFlight.key) {
+      useCadReturnStore.setState({ attemptedPreparationKey: null });
+    }
   };
   const supersedePreparation = () => {
     useCadReturnStore.getState().beginIngestIntent();

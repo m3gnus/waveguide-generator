@@ -16,7 +16,115 @@ beforeEach(() => {
   importedMeshStore.clear(); workspaceModeStore.setMode('parametric');
   preferencesStore.resetForTests();
 });
-afterEach(() => { importedMeshStore.clear(); vi.restoreAllMocks(); });
+afterEach(() => { importedMeshStore.clear(); vi.restoreAllMocks(); vi.useRealTimers(); });
+
+it('preserves every receipt hook when joining the same in-flight preparation', async () => {
+  vi.useFakeTimers();
+  const pending = deferred<Response>();
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/ingest')
+    ? pending.promise : new Response(mesh));
+  const actions = createCadArrivalActions({}, fetcher);
+  actions.selectBundleAs(bundle);
+  const first = actions.ingestSelected();
+  const onStarted = vi.fn(); const validate = vi.fn(); const onPrepared = vi.fn();
+  const second = actions.ingestSelected({ onStarted, validate, onPrepared, isCurrent: () => true });
+  expect(onStarted).toHaveBeenCalledOnce();
+  pending.resolve(json(record));
+  await Promise.all([first, second]);
+  expect(validate).toHaveBeenCalledOnce();
+  expect(validate).toHaveBeenCalledWith(record);
+  expect(onPrepared).toHaveBeenCalledOnce();
+  expect(fetcher.mock.calls.filter(([input]) => String(input).endsWith('/ingest'))).toHaveLength(1);
+});
+
+it('validates a joining receipt before applying or displaying the shared result', async () => {
+  vi.useFakeTimers();
+  const pending = deferred<Response>();
+  const show = vi.fn();
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/ingest')
+    ? pending.promise : new Response(mesh));
+  const actions = createCadArrivalActions({ showIngestedMesh: show }, fetcher);
+  actions.selectBundleAs(bundle);
+  const first = actions.ingestSelected().catch(error => error);
+  const joined = actions.ingestSelected({ validate: () => { throw new Error('The Send changed.'); } }).catch(error => error);
+  pending.resolve(json(record));
+  expect((await first).message).toBe('The Send changed.');
+  expect((await joined).message).toBe('The Send changed.');
+  expect(useCadReturnStore.getState().ingestRecord).toBeNull();
+  expect(show).not.toHaveBeenCalled();
+  expect(fetcher.mock.calls.filter(([input]) => String(input).endsWith('/ingest'))).toHaveLength(1);
+});
+
+it('does not let a superseded joining caller cancel an otherwise current preparation', async () => {
+  vi.useFakeTimers();
+  const pending = deferred<Response>();
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/ingest')
+    ? pending.promise : new Response(mesh));
+  const actions = createCadArrivalActions({}, fetcher);
+  actions.selectBundleAs(bundle);
+  const first = actions.ingestSelected();
+  const validate = vi.fn();
+  const joined = actions.ingestSelected({ isCurrent: () => false, validate }).catch(error => error);
+  pending.resolve(json(record));
+  expect((await first).ingest_id).toBe(record.ingest_id);
+  expect(await joined).toBeInstanceOf(SupersededError);
+  expect(validate).not.toHaveBeenCalled();
+});
+
+it('requeues a changed setting after an explicit preparation is superseded', async () => {
+  vi.useFakeTimers();
+  const pending = deferred<Response>(); let ingests = 0;
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).endsWith('/ingest')) return ++ingests === 2 ? pending.promise : json(record);
+    return new Response(mesh);
+  });
+  const actions = createCadArrivalActions({}, fetcher);
+  actions.selectBundleAs(bundle);
+  await actions.ingestSelected();
+  const explicit = actions.ingestSelected().catch(error => error);
+  useCadReturnStore.getState().setAreaDriftOverride('source-hf', true);
+  actions.requestAutomaticPreparation();
+  await vi.advanceTimersByTimeAsync(400);
+  expect(ingests).toBe(2);
+  pending.resolve(json(record));
+  expect(await explicit).toBeInstanceOf(SupersededError);
+  await vi.advanceTimersByTimeAsync(400);
+  expect(ingests).toBe(3);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+});
+
+it('prepares a reverted setting even when another owner outlasted the debounce', async () => {
+  vi.useFakeTimers();
+  let deferredByOwner = false; let ingests = 0;
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).endsWith('/ingest')) { ingests += 1; return json(record); }
+    return new Response(mesh);
+  });
+  const actions = createCadArrivalActions({ deferAutomaticPreparation: () => deferredByOwner }, fetcher);
+  actions.selectBundleAs(bundle);
+  await actions.ingestSelected();
+  await actions.ingestSelected(); // The fixture's returned mesh sizes now match the attempted key.
+  deferredByOwner = true;
+  useCadReturnStore.getState().setAreaDriftOverride('source-hf', true);
+  actions.requestAutomaticPreparation(); await vi.advanceTimersByTimeAsync(400);
+  useCadReturnStore.getState().setAreaDriftOverride('source-hf', false);
+  actions.requestAutomaticPreparation();
+  deferredByOwner = false;
+  actions.requestAutomaticPreparation(); await vi.advanceTimersByTimeAsync(400);
+  expect(ingests).toBe(3);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+});
+
+it('reports an explicit settings-load failure once without an automatic retry', async () => {
+  vi.useFakeTimers();
+  const errors = vi.fn();
+  const fetcher = vi.fn(async () => { throw new Error('settings unavailable'); });
+  const actions = createCadArrivalActions({ setIngestError: errors }, fetcher);
+  actions.selectBundleAs(bundle, 'wgl_project');
+  await expect(actions.ingestSelected()).rejects.toThrow('could not load');
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(errors.mock.calls.filter(([message]) => message !== null)).toHaveLength(1);
+});
 
 describe('selection actions without the coordinator', () => {
   it('restores a CAD selection at launch without meshing it again', async () => {

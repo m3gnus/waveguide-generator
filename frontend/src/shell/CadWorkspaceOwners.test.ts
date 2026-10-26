@@ -8,7 +8,7 @@ import { cadReceiptsStore, type CadReceipt } from '../stores/cadReceipts';
 import { useCadConnectionStore } from '../stores/cadConnection';
 import { cadRecoveryNoticesStore } from '../stores/cadRecoveryNotices';
 import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
-import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { cadPreparationKey, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { readLastModel, rememberLastModel } from '../stores/lastModel';
 import { resetImportedModelStore } from '../stores/importedModel';
 import { designForFamily, useDesignStore } from '../stores/design';
@@ -23,6 +23,7 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { preferencesStore } from '../prefs/preferences';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { mountCadWorkspaceOwners } from './CadWorkspaceOwners';
+import { SupersededError } from './cadlink/arrivals';
 import { solveControlStore } from './JobsCoordinator';
 import { identity, status, exported } from './cadlink/outbound.fixtures';
 import { bundle, deferred, json, mesh, record, job, workspaceFor } from './cadlink/selection.fixtures';
@@ -977,7 +978,21 @@ it('prepares once across the StrictMode setup/cleanup/setup sequence', async () 
   expect(useCadReturnStore.getState().needsIngest).toBe(false);
 });
 
-it.each([false, true])('stops after an automatic failure across polls and remounts; explicit retry prepares once (design edited: %s)', async edited => {
+it('resumes automatic preparation after an owner remount while settings are loading', async () => {
+  resetImportedModelStore(); returns = [bundle];
+  const pending = deferred<Response>(); const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((input, init) => String(input).includes('/setup?inventory=') ? pending.promise : base(input, init));
+  stop = mountCadWorkspaceOwners(); await flush();
+  cadWorkspace.getSnapshot().selectBundle(bundle, 'wgl_project'); await flush();
+  expect(useCadReturnStore.getState().attemptedPreparationKey).not.toBeNull();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+  stop(); stop = mountCadWorkspaceOwners(); await flush();
+  pending.resolve(json({ setup: null, revision_id: null })); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+});
+
+it('stops after an automatic failure across polls and remounts; explicit retry prepares once', async () => {
   resetImportedModelStore(); returns = [bundle];
   const base = fetcher.getMockImplementation()!;
   let fail = true;
@@ -991,17 +1006,127 @@ it.each([false, true])('stops after an automatic failure across polls and remoun
   stop(); stop = mountCadWorkspaceOwners(); await flush();
   expect(calls('/api/cadlink/ingest')).toHaveLength(1);
   expect(cadWorkspace.getSnapshot().ingestFailure).toMatchObject({ recorded: true, retry: true });
-  if (edited) {
-    useDesignStore.getState().updateField('wall_thickness', 6);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(cadModelStatusLine(cadModelSelection(), null)).toMatchObject({
-      text: 'Speaker is not prepared yet.', tone: 'attention', action: 'none',
-    });
-    expect(calls('/api/cadlink/ingest')).toHaveLength(1);
-  }
   fail = false;
   // The explicit preparation command used by Try again. Concurrent presses share the attempt.
   await Promise.all([cadWorkspace.getSnapshot().ingest(), cadWorkspace.getSnapshot().ingest()]); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(2);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+});
+
+it('retries after a design edit supersedes a failed automatic preparation and shows a second failure', async () => {
+  resetImportedModelStore(); returns = [bundle];
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((input, init) => String(input) === '/api/cadlink/ingest'
+    ? Promise.resolve(json({ detail: { code: 'preparation_failed', failure: 'internal', retry: true,
+      message: 'Waveguide Generator could not prepare Speaker.' } }, 422)) : base(input, init));
+  stop = mountCadWorkspaceOwners(); await flush();
+  cadWorkspace.getSnapshot().selectBundle(bundle); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  useDesignStore.getState().updateField('wall_thickness', 6);
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(2);
+  expect(cadModelStatusLine(cadModelSelection(), null)).toMatchObject({ tone: 'attention', action: 'try-again' });
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(2);
+});
+
+it('prepares after an edit is reverted inside the debounce window', async () => {
+  resetImportedModelStore(); returns = [bundle];
+  stop = mountCadWorkspaceOwners(); await flush();
+  cadWorkspace.getSnapshot().selectBundle(bundle); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  // The fixture's first returned sizes differ from its initial request; align
+  // the attempted key with the held record before exercising the reversion.
+  await cadWorkspace.getSnapshot().ingestSelected(); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(2);
+  expect(useCadReturnStore.getState().attemptedPreparationKey).toBe(cadPreparationKey(useCadReturnStore.getState(), useDocumentStore.getState().identity?.designId ?? null));
+  useCadReturnStore.getState().setAreaDriftOverride('source-hf', true);
+  await vi.advanceTimersByTimeAsync(200);
+  useCadReturnStore.getState().setAreaDriftOverride('source-hf', false);
+  await vi.advanceTimersByTimeAsync(400);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(3);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+});
+
+it('requeues changed settings after a superseded explicit preparation settles', async () => {
+  resetImportedModelStore(); returns = [bundle];
+  stop = mountCadWorkspaceOwners(); await flush();
+  cadWorkspace.getSnapshot().selectBundle(bundle); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  const pending = deferred<Response>(); const base = fetcher.getMockImplementation()!;
+  let first = true;
+  fetcher.mockImplementation((input, init) => String(input) === '/api/cadlink/ingest' && first
+    ? (first = false, pending.promise) : base(input, init));
+  const explicit = cadWorkspace.getSnapshot().ingestSelected().catch(error => error);
+  useCadReturnStore.getState().setAreaDriftOverride('source-hf', true);
+  await vi.advanceTimersByTimeAsync(400);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(2);
+  pending.resolve(json(record));
+  expect(await explicit).toBeInstanceOf(SupersededError);
+  await vi.advanceTimersByTimeAsync(400);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(3);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+});
+
+it('prepares an existing selection while a persisted receipt is waiting to retry', async () => {
+  resetImportedModelStore(); resetDocumentStore(); workspaceModeStore.setMode('cad'); returns = [bundle];
+  useCadReturnStore.getState().selectBundle(bundle);
+  const receipt = sendReceipt();
+  cadReceiptsStore.setState({ feedId: 'cutover', cursor: 1, receipts: { [receipt.receipt_id]: receipt },
+    displayRetries: { [receipt.receipt_id]: { attempt: 1, nextAt: Date.now() + 600_000 } } });
+  stop = mountCadWorkspaceOwners(); await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+});
+
+it('releases preparation if an active receipt display never finishes', async () => {
+  resetImportedModelStore(); resetDocumentStore(); workspaceModeStore.setMode('cad'); returns = [bundle];
+  useCadReturnStore.getState().selectBundle(bundle);
+  const receipt = sendReceipt(); receipts = [receipt];
+  cadReceiptsStore.setState({ feedId: 'cutover', cursor: 1, receipts: { [receipt.receipt_id]: receipt } });
+  const pending = deferred<Response>(); const base = fetcher.getMockImplementation()!;
+  let firstListing = true;
+  fetcher.mockImplementation((input, init) => String(input) === '/api/cadlink/returns' && firstListing
+    ? (firstListing = false, pending.promise) : base(input, init));
+  stop = mountCadWorkspaceOwners(); await flush();
+  await vi.advanceTimersByTimeAsync(9_999);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+  stop(); stop = undefined; pending.resolve(json({ items: [bundle], cadFolderConfigured: true }));
+});
+
+it('wakes preparation when a project-open listing clears its pending flag', async () => {
+  resetImportedModelStore(); returns = [bundle];
+  stop = mountCadWorkspaceOwners(); await flush();
+  const listing = deferred<Response>(); const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((input, init) => String(input) === '/api/cadlink/returns' ? listing.promise : base(input, init));
+  useDesignStore.getState().replaceDocument(designForFamily('OSSE'), { loadSource: 'cad-project-switch' });
+  useCadReturnStore.getState().selectBundle(bundle);
+  await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+  listing.resolve(json({ items: [bundle], cadFolderConfigured: true, coordination: 'on' }));
+  await flush();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  expect(useCadReturnStore.getState().needsIngest).toBe(false);
+});
+
+it('wakes changed settings when a Fusion pull ends without a model', async () => {
+  resetImportedModelStore(); returns = [bundle];
+  stop = mountCadWorkspaceOwners(); await flush();
+  cadWorkspace.getSnapshot().selectBundle(bundle); await flush();
+  const base = fetcher.getMockImplementation()!; let refused = false;
+  fetcher.mockImplementation((input, init) => String(input) === '/api/cadlink/return-requests/pull-1' && refused
+    ? Promise.resolve(json({ requestId: 'pull-1', state: 'failed', reason: null, message: null })) : base(input, init));
+  const pull = cadWorkspace.getSnapshot().pullFromFusion().catch(error => error); await flush();
+  useCadReturnStore.getState().setAreaDriftOverride('source-hf', true);
+  await vi.advanceTimersByTimeAsync(400);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  refused = true;
+  await cadWorkspace.getSnapshot().refresh();
+  expect(await pull).toBeInstanceOf(Error);
+  await vi.advanceTimersByTimeAsync(400);
   expect(calls('/api/cadlink/ingest')).toHaveLength(2);
   expect(useCadReturnStore.getState().needsIngest).toBe(false);
 });

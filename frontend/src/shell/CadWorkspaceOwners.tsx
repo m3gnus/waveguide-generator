@@ -53,9 +53,17 @@ export function mountCadWorkspaceOwners(): () => void {
   let connectionRequested = false;
   const claimedReturns = new Set<string>();
   let receiptDisplaysInFlight = 0;
+  let receiptDisplayStartedAt = 0;
+  let receiptFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+  const receiptDeferralMs = 10_000;
   const fusionActive = () => mounted.current && preferencesStore.getSnapshot().cadApplication === 'fusion360';
   const awaitingReceiptDisplay = () => receiptDisplaysInFlight > 0
     || Object.keys(cadReceiptsStore.getState().receipts).length > 0;
+  const receiptBlocksPreparation = () => {
+    if (receiptDisplaysInFlight) return Date.now() - receiptDisplayStartedAt < receiptDeferralMs;
+    const { receipts, displayRetries } = cadReceiptsStore.getState();
+    return Object.keys(receipts).some(id => !displayRetries[id] || displayRetries[id].nextAt <= Date.now());
+  };
   let activityRevision = 0;
   const activityListeners = new Set<() => void>();
   const changed = () => activityListeners.forEach((listener) => listener());
@@ -118,14 +126,16 @@ export function mountCadWorkspaceOwners(): () => void {
         : options?.background && !options.autoOpenNew && fresh ? null : state.load();
       firstReturnRead = false; await read;
     } catch { sendOwnersKnown = false; }
-    if (fusionActive()) await arrivals.refresh(sendOwnersKnown ? options
-      : { ...options, autoOpenNew: false, deferNewArrivals: true });
+    try {
+      if (fusionActive()) await arrivals.refresh(sendOwnersKnown ? options
+        : { ...options, autoOpenNew: false, deferNewArrivals: true });
+    } finally { autoIngestSelected(); }
   };
   const actions = createCadArrivalActions({
     mounted, ingestRequest, ingestAbortController, manualSelectionAt, refusedForeignReturn,
     autoIngestSelected, enterCadWorkspace, rereadDrivers,
     deferAutomaticPreparation: () => !fusionActive() || refusedForeignReturn.current || startupReceiptsPending
-      || projectOpenPending.current || waiter.getState().pullingFromFusion || awaitingReceiptDisplay()
+      || projectOpenPending.current || waiter.getState().pullingFromFusion || receiptBlocksPreparation()
       || useImportedModelStore.getState().phase === 'loading'
       || workspaceModeStore.getSnapshot().mode !== 'cad' || workspaceModeStore.getSnapshot().importedInput !== 'cad'
       || !!(useCadReturnStore.getState().selectedBundle && ownsSolveReturn(useCadReturnStore.getState().selectedBundle!)),
@@ -314,9 +324,19 @@ export function mountCadWorkspaceOwners(): () => void {
     });
   };
   const displayReceipt: typeof display = async (receipt) => {
+    if (receiptDisplaysInFlight === 0) {
+      receiptDisplayStartedAt = Date.now();
+      receiptFallbackTimer = setTimeout(() => { receiptFallbackTimer = null; autoIngestSelected(); }, receiptDeferralMs);
+    }
     receiptDisplaysInFlight += 1;
     try { return await display(receipt); }
-    finally { receiptDisplaysInFlight -= 1; refreshOwedInitialChoice(); autoIngestSelected(); }
+    finally {
+      receiptDisplaysInFlight -= 1;
+      if (!receiptDisplaysInFlight && receiptFallbackTimer !== null) {
+        clearTimeout(receiptFallbackTimer); receiptFallbackTimer = null;
+      }
+      refreshOwedInitialChoice(); autoIngestSelected();
+    }
   };
   let stopDisplay = connectCadReceiptDisplay(displayReceipt, cadReceiptsStore, fusionActive);
   let application = preferencesStore.getSnapshot().cadApplication;
@@ -363,10 +383,12 @@ export function mountCadWorkspaceOwners(): () => void {
       publish({ pullingFromFusion: state.pullingFromFusion, errorDiagnostics: state.errorDiagnostics,
         ...(state.error !== previous.error ? { error: state.error } : {}),
         ...(state.status !== previous.status ? { status: state.status } : {}) }); changed();
+      if (previous.pullingFromFusion && !state.pullingFromFusion) autoIngestSelected();
     }),
     useCadConnectionStore.subscribe((state) => publish({ fusionStatus: state.fusionStatus })),
     cadReceiptsStore.subscribe((state, previous) => {
       if (Object.keys(previous.receipts).length > 0 && Object.keys(state.receipts).length === 0) refreshOwedInitialChoice();
+      if (state.receipts !== previous.receipts || state.displayRetries !== previous.displayRetries) autoIngestSelected();
       if (state.feedback === previous.feedback) return;
       const feedback = Object.values(state.feedback).at(-1);
       if (feedback) publish(feedback.outcome === 'accepted' || feedback.outcome === 'superseded'
@@ -390,12 +412,20 @@ export function mountCadWorkspaceOwners(): () => void {
     workspaceModeStore.subscribe(() => { changed(); autoIngestSelected(); }), preferencesStore.subscribe(subscribeContext),
     useImportedModelStore.subscribe(autoIngestSelected),
     cadCoordinationStore.subscribe(changed), cadWorkspaceSelection.subscribe(() => observation.refresh()),
-    subscribeRevision((event) => { if (event.reason !== 'load') actions.supersedePreparation(); }),
+    subscribeRevision((event) => {
+      if (event.reason === 'load') return;
+      const feedback = cadWorkspace.getSnapshot();
+      const failed = !!feedback.ingestError && feedback.preparationIntent === useCadReturnStore.getState().captureIngestIntent();
+      actions.supersedePreparation();
+      if (failed) useCadReturnStore.setState({ attemptedPreparationKey: null });
+      autoIngestSelected();
+    }),
   ];
   Object.values(useCadDeliveryHealthStore.getState().outboundOperations).forEach(outbound.observeOperation);
   contextChanged(); followFusionSolve(); settleModels(); void refreshOnshapeStatus();
   return () => {
     mounted.current = false;
+    if (receiptFallbackTimer !== null) clearTimeout(receiptFallbackTimer);
     actions.cancelAutomaticPreparation();
     stops.forEach((stop) => stop()); observation(); arrivals.cancel();
     waiter.dispose(); outbound.dispose();
