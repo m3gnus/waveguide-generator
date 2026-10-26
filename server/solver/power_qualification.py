@@ -360,6 +360,12 @@ def qualify_channel(
 def _combine_members(metadata: Mapping[str, Any]) -> list[str] | None:
     combine = _mapping(metadata.get("combine"))
     members = combine.get("members")
+    grouped = combine.get("member_channels")
+    if isinstance(members, list) and isinstance(grouped, Mapping) and all(
+        isinstance(grouped.get(str(member), [member]), list) for member in members
+    ):
+        return [str(channel) for member in members
+                for channel in grouped.get(str(member), [member])]
     if not isinstance(members, list):
         members = metadata.get("derived_from_channels")
     if not isinstance(members, list):

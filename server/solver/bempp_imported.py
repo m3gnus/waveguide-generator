@@ -216,11 +216,9 @@ def _combined_channel_response(
         results_by_id=sorted_results,
         member_channels=member_channels,
         per_source_validity=per_source_validity,
-        member_roles={
-            member: channel_identity.get(member, {}).get("role") for member in spec.members
-        },
+        member_roles={member: identity.get("role") for member, identity in channel_identity.items()},
         max_drive_voltage_v=geometry.max_drive_voltage_v,
-        frequencies_hz=sorted_results[spec.members[0]].frequencies_hz,
+        frequencies_hz=sorted_results[geometry.physical_members(spec.members)[0]].frequencies_hz,
         request=request,
         quadrants=quadrants,
         config_motion=config_motion,

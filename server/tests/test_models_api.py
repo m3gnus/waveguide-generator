@@ -150,6 +150,31 @@ def test_saved_file_setup_survives_restart_without_a_job(tmp_path, findings):
     asyncio.run(scenario())
 
 
+def test_file_setup_saves_driver_groups_under_the_same_inventory(tmp_path):
+    async def scenario():
+        store = CadLinkStore.for_data_dir(tmp_path)
+        record = register_mesh(store, tmp_path, registration())
+        app, runtime = app_for(tmp_path, store)
+        model_id = "mesh-file:" + record["artifact_sha256"]
+        setup = setup_for(record)
+        channel_id = setup["geometry"]["drive_channels"][0]["id"]
+        setup["geometry"]["driver_groups"] = [{"id": "main", "label": "Main", "channel_ids": [channel_id]}]
+        path = f"/api/models/{model_id}/setup"
+        try:
+            saved = await call(app, "PUT", path, {"prepared_id": record["ingest_id"], "setup": setup})
+            assert saved["inventory_sha256"] == prepared_inventory_sha256(record)
+            restored = await call(app, "GET", f"{path}?prepared_id={record['ingest_id']}")
+            assert restored["setup"]["geometry"]["driver_groups"] == setup["geometry"]["driver_groups"]
+            invalid = {**setup, "geometry": {**setup["geometry"],
+                       "driver_groups": [{"id": "bad", "channel_ids": ["missing"]}]}}
+            await call(app, "PUT", path, {"prepared_id": record["ingest_id"], "setup": invalid}, expected=422)
+            assert await call(app, "GET", f"{path}?prepared_id={record['ingest_id']}") == restored
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())
+
+
 def test_reimporting_or_repreparing_a_file_finds_its_saved_setup(tmp_path):
     async def scenario():
         store = CadLinkStore.for_data_dir(tmp_path)

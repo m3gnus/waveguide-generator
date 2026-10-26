@@ -771,6 +771,8 @@ def combine_drive_channels(
     channels: Mapping[str, Any] | None = None,
     reference: str | None = None,
     member_limits: Mapping[str, MemberLimits] | None = None,
+    member_channels: Mapping[str, list[str]] | None = None,
+    member_labels: Mapping[str, str | None] | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Sum member channel results into one synthetic native-shaped result.
 
@@ -787,7 +789,58 @@ def combine_drive_channels(
     not a user error.
     """
 
+    # Resolve a group into a single acoustic branch before the ordinary
+    # crossover, alignment and level-matching calculations. Physical bases
+    # remain separately stored, so this same path also serves recombination.
+    partial_group_balloon = False
+    if member_channels:
+        branches: dict[str, Any] = {}
+        for member in members:
+            ids = member_channels.get(member, [member])
+            base = results_by_id[ids[0]]
+            if len(ids) == 1:
+                branches[member] = base
+                continue
+            results = [results_by_id[channel_id] for channel_id in ids]
+            frequencies = np.asarray(base.frequencies_hz)
+            angles = np.asarray(base.observation_angles_deg)
+            fields = [np.asarray(result.pressure_complex, dtype=np.complex128) for result in results]
+            if any(not np.array_equal(np.asarray(result.frequencies_hz), frequencies)
+                   or not np.array_equal(np.asarray(result.observation_angles_deg), angles)
+                   or list(result.observation_planes) != list(base.observation_planes)
+                   or field.shape != fields[0].shape
+                   for result, field in zip(results, fields, strict=True)):
+                raise ValueError("combine members do not share one observation grid")
+            spheres = [getattr(result, "sphere_pressure_complex", None) for result in results]
+            partial_group_balloon |= any(value is not None for value in spheres) and not all(value is not None for value in spheres)
+            sphere = sum((np.asarray(value, dtype=np.complex128) for value in spheres),
+                         np.zeros_like(np.asarray(spheres[0], dtype=np.complex128))) if all(
+                             value is not None for value in spheres) else None
+            branch = SimpleNamespace(
+                frequencies_hz=base.frequencies_hz, observation_angles_deg=base.observation_angles_deg,
+                observation_planes=base.observation_planes, observation_points=getattr(base, "observation_points", None),
+                pressure_complex=sum(fields, np.zeros_like(fields[0])),
+                sphere_pressure_complex=sphere, sphere_points=getattr(base, "sphere_points", None),
+                sphere_theta_deg=getattr(base, "sphere_theta_deg", None),
+                sphere_phi_deg=getattr(base, "sphere_phi_deg", None),
+                solver_log=getattr(base, "solver_log", []),
+            )
+            if any(getattr(result, "frequency_status", None) is not None for result in results):
+                branch.frequency_status = [
+                    "solved" if all(getattr(result, "frequency_status", None) is None
+                                    or result.frequency_status[index] == "solved" for result in results) else "interpolated"
+                    for index in range(len(frequencies))
+                ]
+            branches[member] = branch
+        results_by_id = branches
+
     warnings: list[str] = []
+    display = {name: name for name in members}
+    if member_channels:
+        names = {name: (member_labels or {}).get(name) or (member_roles or {}).get(name) or "Driver" for name in members}
+        for name in members:
+            peers = [other for other in members if names[other] == names[name]]
+            display[name] = names[name] if len(peers) == 1 else f"{names[name]} {peers.index(name) + 1}"
     settings = _resolve_channels(
         list(members),
         channels,
@@ -851,6 +904,7 @@ def combine_drive_channels(
     pair_names = [
         f"{members[index]}-{members[index + 1]}" for index in range(len(members) - 1)
     ]
+    pair_display_names = [f"{display[members[index]]}-{display[members[index + 1]]}" for index in range(len(members) - 1)]
     linked_hz: list[float | None] = []
     eval_hz: list[float] = []
     for index in range(len(members) - 1):
@@ -860,7 +914,7 @@ def combine_drive_channels(
         if evaluated is None:
             evaluated = float(np.sqrt(solved_band[0] * solved_band[1]))
             warnings.append(
-                f"pair {pair_names[index]} has no crossover section; its "
+                f"pair {pair_display_names[index]} has no crossover section; its "
                 f"alignment is evaluated at {evaluated:g} Hz, the geometric "
                 "centre of the solved band"
             )
@@ -874,7 +928,7 @@ def combine_drive_channels(
                 if limit is not None and float(evaluated) > float(limit):
                     warnings.append(
                         f"crossover {float(evaluated):g} Hz is above channel "
-                        f"{name!r} source validity limit {float(limit):g} Hz"
+                        f"{display[name]!r} source validity limit {float(limit):g} Hz"
                     )
 
     # Engineering-domain on-axis pressures drive every weight decision.
@@ -911,7 +965,7 @@ def combine_drive_channels(
     for name in members:
         if settings[name].gain_mode == "max" and max_gains_db[name] is None:
             warnings.append(
-                f"channel {name!r} is set to maximum gain but carries no driver "
+                f"channel {display[name]!r} is set to maximum gain but carries no driver "
                 "limit the solve can read (no driver model, or no Xmax, rated "
                 "power or amplifier ceiling); it is left at 0 dB"
             )
@@ -961,10 +1015,10 @@ def combine_drive_channels(
         fit, notes = _pair_alignment(freqs, ratio, weight, overlap, eval_hz[index])
         pair_fits.append(fit)
         for note in notes:
-            warnings.append(f"pair {pair_names[index]}: {note}")
+            warnings.append(f"pair {pair_display_names[index]}: {note}")
         if fit.residual_deg is not None and fit.residual_deg > _RESIDUAL_WARN_DEG:
             warnings.append(
-                f"pair {pair_names[index]}: the alignment phase fit leaves a "
+                f"pair {pair_display_names[index]}: the alignment phase fit leaves a "
                 f"{fit.residual_deg:.1f} degree RMS residual; the delay it "
                 "reports is an estimate, not a measurement"
             )
@@ -1007,14 +1061,14 @@ def combine_drive_channels(
         if raw_flips[index]:
             if applied_flip != ideal_flips[index]:
                 warnings.append(
-                    f"pair {pair_names[index]}: the raw drivers sit "
+                    f"pair {pair_display_names[index]}: the raw drivers sit "
                     f"{pair_fits[index].intercept_deg:.0f} degrees apart; "
-                    f"{upper!r} is inverted relative to {lower!r} so the pair "
+                    f"{display[upper]!r} is inverted relative to {display[lower]!r} so the pair "
                     "sums in phase on its true delay"
                 )
             else:
                 warnings.append(
-                    f"pair {pair_names[index]}: the raw drivers sit "
+                    f"pair {pair_display_names[index]}: the raw drivers sit "
                     f"{pair_fits[index].intercept_deg:.0f} degrees apart but "
                     "neither channel is inverted, so they are aligned with a "
                     "half-period delay that only holds near the crossover; "
@@ -1107,7 +1161,7 @@ def combine_drive_channels(
                 weights_raw[name][:, None]
                 * np.asarray(member_sphere, dtype=np.complex128)
             )
-    elif any(value is not None for value in member_spheres):
+    elif any(value is not None for value in member_spheres) or partial_group_balloon:
         warnings.append(
             "balloon sampling is missing from at least one member; the combined "
             "channel has no balloon"
@@ -1189,6 +1243,8 @@ def combine_drive_channels(
         ),
         "warnings": warnings,
     }
+    if member_channels:
+        payload["member_channels"] = {member: list(member_channels.get(member, [member])) for member in members}
     max_output = _max_output_payload(
         freqs,
         list(members),
@@ -1201,7 +1257,7 @@ def combine_drive_channels(
     if max_output is not None:
         payload["max_output"] = max_output
         if max_output["unlimited_members"]:
-            named = ", ".join(repr(name) for name in max_output["unlimited_members"])
+            named = ", ".join(repr(display[name]) for name in max_output["unlimited_members"])
             warnings.append(
                 f"maximum output is unknown wherever {named} sets the level: "
                 "no Xmax, rated power or amplifier ceiling is known for it"

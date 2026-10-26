@@ -3033,6 +3033,32 @@ def test_combined_channel_is_appended_with_contract_metadata(
     assert "combine" not in response["channels"]["left"]["metadata"]
 
 
+def test_live_imported_combine_uses_group_physical_bases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+    monkeypatch.setattr(metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(metal, "native_config", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(metal, "native_solve_multi_source", lambda _mesh, sources, _config, frequencies_hz=None:
+                        [_native_result_3f() for _ in sources])
+    request = _request("wgi_" + "0" * 26,
+        drive_channels=[{"id": "a", "source_ids": ["source-a"]}, {"id": "b", "source_ids": ["source-b"]},
+                        {"id": "c", "source_ids": ["source-c"]}],
+        driver_groups=[{"id": "mid", "channel_ids": ["a", "b"], "label": "Mid pair"}],
+        combine={"members": ["mid", "c"], "crossovers_hz": [500.], "level_match": False, "align": False})
+    mesh_path = tmp_path / "imported.msh"
+    mesh_path.write_text("msh", encoding="utf-8")
+    record = _roled_record(mesh_path)
+    record["sources"][0]["role"] = record["sources"][1]["role"] = "MF"
+    record["sources"][2]["role"] = "HF"
+    response = metal.solve_imported_metal_from_msh_text("msh", request, record)
+    assert response["channel_order"] == ["a", "b", "c", "combined"]
+    metadata = response["channels"]["combined"]["metadata"]
+    assert metadata["derived_from_channels"] == ["a", "b", "c"]
+    assert metadata["source_ids"] == ["source-a", "source-b", "source-c"]
+    assert metadata["combine"]["member_channels"] == {"mid": ["a", "b"], "c": ["c"]}
+    assert metadata["combine"]["member_roles"] == ["MF", "HF"]
+    assert metadata["combine"]["member_labels"] == ["Mid pair", None]
+
+
 def test_combine_wire_validation_refuses_structural_defects() -> None:
     with pytest.raises(ValidationError, match="unknown drive channels"):
         _request(

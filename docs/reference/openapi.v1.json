@@ -3298,6 +3298,43 @@
         "title": "DriverDisplay",
         "type": "object"
       },
+      "DriverGroup": {
+        "additionalProperties": false,
+        "description": "Physical channels sharing one driver setting and crossover branch.",
+        "properties": {
+          "channel_ids": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Channel Ids",
+            "type": "array"
+          },
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          }
+        },
+        "required": [
+          "id",
+          "channel_ids"
+        ],
+        "title": "DriverGroup",
+        "type": "object"
+      },
       "DriverHit": {
         "properties": {
           "brand": {
@@ -6253,6 +6290,20 @@
             "exclusiveMinimum": 0.0,
             "title": "Drive Voltage V",
             "type": "number"
+          },
+          "driver_groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DriverGroup"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Driver Groups"
           },
           "exterior_only": {
             "default": false,

@@ -361,6 +361,19 @@ def test_combined_result_inherits_and_names_an_unqualified_member() -> None:
     }
 
 
+def test_grouped_combination_inherits_each_physical_members_flags() -> None:
+    combined = _combined(["bass", "high"])
+    combined["metadata"]["combine"]["member_channels"] = {"bass": ["left", "right"], "high": ["high"]}
+    combined["metadata"]["derived_from_channels"] = ["left", "right", "high"]
+    results = _multi({"left": _member("left", [0.1, 0.1, 0.1]),
+                      "right": _member("right", [0.1, -1.0, 0.1]),
+                      "high": _member("high", [0.1, 0.1, 0.1]), "combined": combined})
+    flags = annotate_results(results)["channels"]["combined"]["metadata"]["power_qualification"]
+    assert flags["status"] == "unqualified"
+    assert flags["unqualified_channels"] == ["right"]
+    assert flags["members"] == {"left": "qualified", "right": "unqualified", "high": "qualified"}
+
+
 def test_combined_member_flags_outside_its_validity_do_not_propagate() -> None:
     results = _multi(
         {

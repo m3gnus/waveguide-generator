@@ -3623,6 +3623,18 @@ export interface components {
             /** Xmax Mm */
             xmax_mm?: number | null;
         };
+        /**
+         * DriverGroup
+         * @description Physical channels sharing one driver setting and crossover branch.
+         */
+        DriverGroup: {
+            /** Channel Ids */
+            channel_ids: string[];
+            /** Id */
+            id: string;
+            /** Label */
+            label?: string | null;
+        };
         /** DriverHit */
         DriverHit: {
             /** Brand */
@@ -4558,6 +4570,8 @@ export interface components {
              * @default 2.83
              */
             drive_voltage_v?: number;
+            /** Driver Groups */
+            driver_groups?: components["schemas"]["DriverGroup"][] | null;
             /**
              * Exterior Only
              * @default false

@@ -38,10 +38,13 @@ def recombine_stored_results(
         raise RecombineError("recombination applies to imported multi-channel jobs")
     bundle = deserialize_channel_bases(bases_npz)
     channel_ids = bundle["channel_ids"]
-    unknown = [name for name in spec.members if name not in channel_ids]
+    physical_members = geometry.physical_members(spec.members)
+    unknown = [name for name in physical_members if name not in channel_ids]
     if unknown:
         raise RecombineError(f"combine members name unknown drive channels: {unknown}")
-    if spec.id in channel_ids:
+    if len(set(physical_members)) != len(physical_members):
+        raise RecombineError("combine branches must not overlap physical drive channels")
+    if spec.id in channel_ids or spec.id in {group.id for group in geometry.driver_groups or []}:
         raise RecombineError(
             f"combine id {spec.id!r} collides with a solved drive channel id"
         )
@@ -59,7 +62,7 @@ def recombine_stored_results(
         )
 
     channels = dict(results.get("channels") or {})
-    member_channel = channels.get(spec.members[0])
+    member_channel = channels.get(physical_members[0])
     member_metadata: Mapping[str, Any] = (
         member_channel.get("metadata") if isinstance(member_channel, Mapping) else None
     ) or {}
@@ -68,7 +71,7 @@ def recombine_stored_results(
     envelope_metadata = envelope_metadata if isinstance(envelope_metadata, Mapping) else {}
     validity = envelope_metadata.get("per_source_frequency_validity")
     member_roles: dict[str, str | None] = {}
-    for member in spec.members:
+    for member in physical_members:
         stored = channels.get(member)
         stored_metadata = stored.get("metadata") if isinstance(stored, Mapping) else None
         member_roles[member] = (

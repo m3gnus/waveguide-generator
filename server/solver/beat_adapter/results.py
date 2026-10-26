@@ -715,14 +715,22 @@ def coupled_envelope(sweep, request, *, context, geometry, record, config, start
     if geometry.combine is not None and not sweep.cancelled:
         spec = geometry.combine
         resolved = spec.resolved()
+        groups = {group.id: list(group.channel_ids) for group in geometry.driver_groups or []}
+        branches = {name: groups.get(name, [name]) for name in spec.members}
+        physical = [channel for name in spec.members for channel in branches[name]]
         combined, payload = combine_drive_channels(
             sweep.channels, members=list(spec.members), channels=resolved["channels"],
             reference=resolved["reference"],
-            member_roles={name: identity.get(name, {}).get("role") for name in spec.members})
+            member_roles={name: identity.get(branches[name][0], {}).get("role") for name in spec.members},
+            member_channels=branches if any(name in groups for name in spec.members) else None,
+            member_labels={group.id: group.label for group in geometry.driver_groups or []})
+        if any(name in groups for name in spec.members):
+            labels = {group.id: group.label for group in geometry.driver_groups or []}
+            payload["member_labels"] = [labels.get(name) for name in spec.members]
         response = build_solver_response(
             result=combined, config=config, context=context, start_time=started,
-            metadata={"drive_channel_id": spec.id, "derived_from_channels": list(spec.members),
-                      "source_ids": [source for name in spec.members for source in specs[name].source_ids],
+            metadata={"drive_channel_id": spec.id, "derived_from_channels": physical,
+                      "source_ids": [source for name in physical for source in specs[name].source_ids],
                       "combine": payload, "solver_engine": solver_engine, "fem": fem_metadata,
                       "warnings": list(channel_warnings.get(spec.id, ())),
                       "phase_time_convention": PHASE_TIME_CONVENTION}, sound_speed_m_per_s=speed)

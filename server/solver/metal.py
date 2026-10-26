@@ -1172,7 +1172,7 @@ def _pressure_directivity_db(pressure: np.ndarray) -> np.ndarray:
 
 
 def _cardioid_combine_refusal(
-    coupled_mf_channel: Any | None, combine: Any | None
+    coupled_mf_channel: Any | None, combine: Any | None, physical_members: list[str] | None = None
 ) -> str | None:
     """Refuse a crossover that would sum the coupled MF channel's raw basis.
 
@@ -1191,7 +1191,7 @@ def _cardioid_combine_refusal(
 
     if coupled_mf_channel is None or combine is None:
         return None
-    if coupled_mf_channel.id not in combine.members:
+    if coupled_mf_channel.id not in (physical_members if physical_members is not None else combine.members):
         return None
     return (
         f"combine members include {coupled_mf_channel.id!r}, whose driver scaling "
@@ -1434,11 +1434,9 @@ def _combined_channel_response(
         results_by_id=sorted_results,
         member_channels=member_channels,
         per_source_validity=per_source_validity,
-        member_roles={
-            member: channel_identity.get(member, {}).get("role") for member in spec.members
-        },
+        member_roles={member: identity.get("role") for member, identity in channel_identity.items()},
         max_drive_voltage_v=geometry.max_drive_voltage_v,
-        frequencies_hz=sorted_results[spec.members[0]].frequencies_hz,
+        frequencies_hz=sorted_results[geometry.physical_members(spec.members)[0]].frequencies_hz,
         request=request,
         quadrants=quadrants,
         config_motion=config_motion,
@@ -1736,7 +1734,8 @@ def solve_imported_metal_from_msh_text(
                     "reason": str(exc),
                 }
 
-        refusal = _cardioid_combine_refusal(coupled_mf_channel, geometry.combine)
+        refusal = _cardioid_combine_refusal(coupled_mf_channel, geometry.combine,
+            geometry.physical_members(geometry.combine.members) if geometry.combine else None)
         if refusal is None:
             refusal = _cardioid_rear_volume_refusal(coupled_mf_channel)
         if refusal is not None:

@@ -64,14 +64,15 @@ def package_combined_channel(
     """
 
     channels_by_id = {channel.id: channel for channel in drive_channels}
+    groups = {group.id: list(group.channel_ids) for group in (request.geometry.driver_groups or [])}
+    physical = {member: groups.get(member, [member]) for member in spec.members}
+    has_groups = bool(groups) and any(member in groups for member in spec.members)
     member_validity_hz: dict[str, float] = {}
     for member in spec.members:
-        channel = channels_by_id.get(member)
-        if channel is None:
-            continue
         limits = [
             float(item["effective_max_valid_frequency_hz"])
-            for source_id in channel.source_ids
+            for channel_id in physical[member]
+            for source_id in channels_by_id[channel_id].source_ids
             if isinstance(item := per_source_validity.get(source_id), Mapping)
             and item.get("effective_max_valid_frequency_hz") is not None
         ]
@@ -81,13 +82,28 @@ def package_combined_channel(
     frequencies = np.asarray(frequencies_hz, dtype=np.float64).reshape(-1)
     member_limits: dict[str, MemberLimits] = {}
     for member in spec.members:
-        limits = member_limits_from_channel(
-            member_channels.get(member),
-            frequencies_hz=frequencies,
-            max_voltage_v=max_drive_voltage_v,
-        )
-        if limits is not None:
-            member_limits[member] = limits
+        limits = [member_limits_from_channel(member_channels.get(channel_id),
+                    frequencies_hz=frequencies, max_voltage_v=max_drive_voltage_v)
+                  for channel_id in physical[member]]
+        limits = [limit for limit in limits if limit is not None]
+        if len(physical[member]) == 1 and limits:
+            member_limits[member] = limits[0]
+        elif len(limits) == len(physical[member]):
+            # The first physical driver to reach any ceiling limits the shared
+            # gain. Normalizing each rating to one keeps those ratios exact.
+            excursion = [limit.excursion_mm / limit.xmax_mm for limit in limits
+                         if limit.excursion_mm is not None and limit.xmax_mm is not None]
+            power = [limit.power_w / limit.rated_power_w for limit in limits
+                     if limit.power_w is not None and limit.rated_power_w is not None]
+            voltage = [limit.drive_voltage_v / limit.max_voltage_v for limit in limits
+                       if limit.drive_voltage_v is not None and limit.max_voltage_v is not None]
+            member_limits[member] = MemberLimits(
+                excursion_mm=np.maximum.reduce(excursion) if excursion else None,
+                power_w=np.maximum.reduce(power) if power else None,
+                xmax_mm=1.0 if excursion else None, rated_power_w=1.0 if power else None,
+                drive_voltage_v=max(voltage) if voltage else None,
+                max_voltage_v=1.0 if voltage else None,
+            )
 
     resolved = spec.resolved()
     combined_result, combine_payload = combine_drive_channels(
@@ -96,21 +112,25 @@ def package_combined_channel(
         channels=resolved["channels"],
         reference=resolved["reference"],
         member_validity_hz=member_validity_hz,
-        member_roles={member: member_roles.get(member) for member in spec.members},
+        member_roles={member: member_roles.get(physical[member][0]) for member in spec.members},
         member_limits=member_limits,
+        member_channels=physical if has_groups else None,
+        member_labels={group.id: group.label for group in request.geometry.driver_groups or []} if has_groups else None,
     )
+    if has_groups:
+        labels = {group.id: group.label for group in request.geometry.driver_groups or []}
+        combine_payload["member_labels"] = [labels.get(member) for member in spec.members]
 
     metadata: dict[str, Any] = {
         "solver_mode": "full_3d",
         "geometry_type": "imported",
         "drive_channel_id": spec.id,
-        "derived_from_channels": list(spec.members),
+        "derived_from_channels": [channel_id for member in spec.members for channel_id in physical[member]],
         "source_ids": [
             source_id
             for member in spec.members
-            for source_id in (
-                channels_by_id[member].source_ids if member in channels_by_id else ()
-            )
+            for channel_id in physical[member]
+            for source_id in channels_by_id[channel_id].source_ids
         ],
         "phase_time_convention": PHASE_TIME_CONVENTION,
         "combine": combine_payload,

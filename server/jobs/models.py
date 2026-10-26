@@ -965,6 +965,28 @@ def passive_cardioid_apertures(
     return aperture_tags, [name for name, _tag in port_entries], mf_source_id
 
 
+class DriverGroup(JobModel):
+    """Physical channels sharing one driver setting and crossover branch."""
+
+    id: str = Field(min_length=1)
+    channel_ids: list[str] = Field(min_length=1)
+    label: str | None = Field(default=None, min_length=1)
+
+    @field_validator("id", "label")
+    @classmethod
+    def nonblank_name(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("driver group names must not be blank")
+        return value.strip() if value is not None else None
+
+    @field_validator("channel_ids")
+    @classmethod
+    def unique_channels(cls, value: list[str]) -> list[str]:
+        if any(not item.strip() for item in value) or len(set(value)) != len(value):
+            raise ValueError("driver group channel ids must be distinct and nonempty")
+        return value
+
+
 class ImportedGeometrySource(JobModel):
     type: Literal["imported"]
     required_features: list[Literal["native-source-contour-v1", "native-front-baffle-woofer-v1", "native-shared-horn-woofer-v1", "native-phase-plug-passages-v1", "native-general-horn-attachment-v1"]] = Field(default_factory=list)
@@ -972,6 +994,7 @@ class ImportedGeometrySource(JobModel):
     manifest_sha256: str
     artifact_sha256: str
     drive_channels: list[DriveChannel]
+    driver_groups: list[DriverGroup] | None = None
     combine: ChannelCombineSpec | None = None
     drive_voltage_v: float = Field(default=2.83, gt=0, allow_inf_nan=False)
     rg_ohm: float = Field(default=0.0, ge=0, allow_inf_nan=False)
@@ -1010,7 +1033,14 @@ class ImportedGeometrySource(JobModel):
         wire = handler(self)
         if not self.required_features:
             wire.pop("required_features", None)
+        if self.driver_groups is None:
+            wire.pop("driver_groups", None)
         return wire
+
+    def physical_members(self, members: list[str]) -> list[str]:
+        """Resolve crossover branches to the physical channels they contain."""
+        groups = {group.id: group.channel_ids for group in self.driver_groups or []}
+        return [channel for member in members for channel in groups.get(member, [member])]
 
     @field_validator("ingest_id")
     @classmethod
@@ -1075,14 +1105,40 @@ class ImportedGeometrySource(JobModel):
                 "mesh.source_size_mm must cover exactly every non-skipped driven source: "
                 + "; ".join(details)
             )
+        known = set(channel_ids)
+        groups = self.driver_groups or []
+        group_ids = [group.id for group in groups]
+        if len(set(group_ids)) != len(group_ids):
+            raise ValueError("driver group ids must be unique")
+        grouped: set[str] = set()
+        by_id = {channel.id: channel for channel in self.drive_channels}
+        for group in groups:
+            unknown = set(group.channel_ids) - known
+            if unknown:
+                raise ValueError(f"driver group names unknown drive channels: {sorted(unknown)}")
+            if grouped.intersection(group.channel_ids):
+                raise ValueError("drive channels may belong to only one driver group")
+            grouped.update(group.channel_ids)
+            if group.id in known and group.channel_ids != [group.id]:
+                raise ValueError("driver group id collides with a drive channel id")
+            channels = [by_id[channel_id] for channel_id in group.channel_ids]
+            first = channels[0]
+            if len(channels) > 1 and any(channel.patch_weights is not None for channel in channels):
+                raise ValueError("driver groups cannot combine weighted patch channels")
+            if any((channel.motion, channel.driver, channel.exterior_transducer) !=
+                   (first.motion, first.driver, first.exterior_transducer) for channel in channels[1:]):
+                raise ValueError("driver group channels must have identical motion and drivers")
         if self.combine is not None:
-            known = set(channel_ids)
-            unknown = [name for name in self.combine.members if name not in known]
+            known_branches = known | set(group_ids)
+            unknown = [name for name in self.combine.members if name not in known_branches]
             if unknown:
                 raise ValueError(
-                    f"combine members name unknown drive channels: {unknown}"
+                    f"combine members name unknown drive channels or groups: {unknown}"
                 )
-            if self.combine.id in known:
+            physical = self.physical_members(self.combine.members)
+            if len(physical) != len(set(physical)):
+                raise ValueError("combine branches must not overlap physical drive channels")
+            if self.combine.id in known_branches:
                 raise ValueError(
                     f"combine id {self.combine.id!r} collides with a drive channel id"
                 )
