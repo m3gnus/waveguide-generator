@@ -529,6 +529,13 @@ def _compute_value_error_fields(request: _Request, error: ValueError) -> dict[st
     message = str(error)
     if request.design is not None:
         message = mesher_error_message(lambda: design_to_mesher_config(request.design), message)
+    if request.kind == "preview":
+        # The shared mesher validates coverage before building any grid. Attach
+        # its actionable refusal to the authored expression without evaluating
+        # it again here or changing the message used by solve and export.
+        for prefix, field in (("Mouth coverage angle (a)", "a"), ("Throat angle (a0)", "a0")):
+            if message.startswith((prefix + " reaches ", prefix + ":")):
+                return {field: message}
     if request.kind == "preview" and message.startswith(
         "FREEFORM morph to the rectangle target produces a non-convex outline"
     ):

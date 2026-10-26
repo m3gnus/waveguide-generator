@@ -93,6 +93,21 @@ describe('ParamPanel preview field errors', () => {
     expect(select.hasAttribute('aria-invalid')).toBe(false);
   });
 
+  it.each([['OSSE', 'a'], ['OSSE', 'a0'], ['R-OSSE', 'a'], ['R-OSSE', 'a0']] as const)('shows a coverage refusal beside %s %s and clears it after correction', (family, field) => {
+    useDesignStore.getState().setFamily(family);
+    render();
+    const message = field === 'a'
+      ? 'Mouth coverage angle (a) reaches 94.8° near p = 54°; change the expression so it stays below 90°.'
+      : 'Throat angle (a0) reaches 90°; change the expression so it stays below 90°.';
+    publish({ [field]: message });
+    const row = host.querySelector<HTMLElement>(`[data-parameter-id="${family === 'OSSE' ? 'osse' : 'rosse'}.${field}"]`)!;
+    expect(row.textContent).toContain(message);
+    expect(row.querySelector('input')?.getAttribute('aria-invalid')).toBe('true');
+    act(() => useDesignStore.getState().updateValue(field, 40));
+    expect(row.textContent).not.toContain(message);
+    expect(row.querySelector('input')?.getAttribute('aria-invalid')).not.toBe('true');
+  });
+
   it('matches schema-qualified paths without attaching unknown keys to a row', () => {
     render();
     publish({ 'design.root.morph.corner_radius': 'Qualified detail', future_field: 'Global detail' });
