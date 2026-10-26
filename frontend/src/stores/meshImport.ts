@@ -1,4 +1,4 @@
-import { fileSimulationSetup, reconcileFileChannels } from './importedSimulationSetup';
+import { fileSimulationSetup, importedDriverLabel, reconcileFileChannels } from './importedSimulationSetup';
 import { savedChannelDrivers } from './cadSetupRestore';
 import type { CadSetup } from '../api/jobsSocket';
 import type { SimulationData } from './cadReturn';
@@ -281,9 +281,10 @@ function fileSetupControls(): ImportedSetup {
   delete options.ground_plane;
   options.symmetry = 'auto';
   options.solver_mode = 'full_3d';
-  const exteriorError = exteriorModeBlocker({ ...simulation, ingestRecord: null, exteriorOnly: true }, selected);
+  const label = (id: string) => importedDriverLabel(simulation, id);
+  const exteriorError = exteriorModeBlocker({ ...simulation, ingestRecord: null, exteriorOnly: true }, selected, label);
   if (exteriorError) throw new Error(exteriorError);
-  const driverError = incompleteDriverBlocker(simulation);
+  const driverError = incompleteDriverBlocker(simulation, label);
   if (driverError) throw new Error(driverError);
   const driver_references = simulationDriverReferences(simulation);
   const model = useImportedModelStore.getState();

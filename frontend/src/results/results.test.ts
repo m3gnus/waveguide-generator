@@ -368,6 +368,13 @@ describe('chart data mappers', () => {
       .toEqual([{ id: 'job-13', label: 'Run 13', result: result() }]);
   });
 
+  it('names separate channels in the same band without exposing their ids', () => {
+    const payload: ResultData = { frequencies: [], channel_order: ['opaque-a', 'opaque-b'],
+      channels: { 'opaque-a': roled(result(1), 'MF'), 'opaque-b': roled(result(2), 'MF') } };
+    expect(selectResultChannels('job', 'Run', payload, 'opaque-a')[0].label).toBe('Run · MF 1');
+    expect(selectResultChannels('job', 'Run', payload, 'opaque-b')[0].label).toBe('Run · MF 2');
+  });
+
   it('appends the members of a combined sum as secondary entries', () => {
     const payload: ResultData = {
       frequencies: [],

@@ -13,6 +13,8 @@ import { useImportedSolveOptionsStore } from './solveOptions';
 import { DEFAULT_DRIVE_VOLTAGE_V } from './solveDefaults';
 import { withEditSignals } from './solveSettingsEdits';
 import { workspaceModeStore } from './workspaceMode';
+import { sourceRoleLabel } from '../model/cadLabels';
+import { roleChannelLabel } from '../results/channelLabel';
 
 export interface ImportedSimulationSetup extends SimulationData, SimulationActions {
   input: 'cad' | 'file' | 'assembly';
@@ -30,6 +32,18 @@ export interface ImportedDriverGroup {
   /** Persisted in the existing channel ids; F5b uses this as the band branch. */
   id: string;
   channelIds: string[];
+}
+
+/** A file's card or blocker names the source role, even when its ID is opaque. */
+export function importedDriverLabel(state: Pick<ImportedSimulationSetup, 'sources' | 'driveChannels' | 'driverGroups'>,
+  channelId: string): string {
+  const groups = state.driverGroups.map(group => {
+    const channel = state.driveChannels.find(item => group.channelIds.includes(item.id));
+    const role = state.sources.find(source => channel?.source_ids.includes(source.id))?.role;
+    return { id: group.id, role: role ? sourceRoleLabel(role, { driver: true }) : null };
+  });
+  const group = state.driverGroups.find(item => item.channelIds.includes(channelId));
+  return roleChannelLabel(group?.id ?? channelId, groups, 'number');
 }
 
 const roleGroupId = (role: string) => `drive-${role.toLowerCase()}`;

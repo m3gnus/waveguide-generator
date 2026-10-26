@@ -150,7 +150,8 @@ export function importedSubmissionBlocker(
   return null;
 }
 
-export function exteriorModeBlocker(state: Parameters<typeof combineWire>[0] & Pick<CadReturnSnapshot, 'ingestRecord' | 'exteriorOnly' | 'passiveCardioid' | 'maxDriveVoltageV'>, solveStore: SolveOptionsSnapshot): string | null {
+export function exteriorModeBlocker(state: Parameters<typeof combineWire>[0] & Pick<CadReturnSnapshot, 'ingestRecord' | 'exteriorOnly' | 'passiveCardioid' | 'maxDriveVoltageV'>, solveStore: SolveOptionsSnapshot,
+  label: (id: string) => string = id => id): string | null {
   if (!state.driveChannels.some(channel => channel.exterior_transducer)) return null;
   const fem = !state.exteriorOnly && (state.ingestRecord?.evidence?.fem_regions?.length ?? 0) > 0;
   const engines = fem ? ['auto', 'beat-cpu', 'beat-metal', 'beat-cuda', 'beat-rocm'] : ['beat-cpu', 'beat-metal'];
@@ -161,8 +162,8 @@ export function exteriorModeBlocker(state: Parameters<typeof combineWire>[0] & P
   for (const channel of state.driveChannels) {
     if (!channel.exterior_transducer) continue;
     const error = exteriorTransducerError(channel.exterior_transducer);
-    if (error) return `${channel.id}: ${error}`;
-    if (channel.motion !== 'axial') return `${channel.id}: coupled exterior drivers require axial motion.`;
+    if (error) return `${label(channel.id)}: ${error}`;
+    if (channel.motion !== 'axial') return `${label(channel.id)}: coupled exterior drivers require axial motion.`;
   }
   if (combineWire(state)) return 'Turn off the crossover combination for coupled exterior drivers.';
   if (state.passiveCardioid.enabled || state.maxDriveVoltageV !== null || solveStore.adaptiveFrequencySampling || solveStore.groundPlane.enabled) {
@@ -209,6 +210,7 @@ function list(items: string[]): string {
  */
 export function importedSubmissionNotices(
   state: Parameters<typeof combineSpecEffective>[0] & Pick<CadReturnSnapshot, 'combineEnabled'> = useCadReturnStore.getState(),
+  label: (id: string) => string = id => id,
 ): string[] {
   const undriven = undrivenChannels(state);
   // Counted from the submittable wire, not as "everything else": a channel
@@ -225,9 +227,10 @@ export function importedSubmissionNotices(
   // the run where it matters.
   if (!undriven.length || !driven) return [];
   const notices: string[] = [];
+  const undrivenLabels = [...new Set(undriven.map(label))];
   notices.push(
-    `${list(undriven)} ${undriven.length === 1 ? 'solves' : 'solve'} unit-driven: `
-    + `no driver model, so ${undriven.length === 1 ? 'it has' : 'they have'} no power, current or excursion to report.`,
+    `${list(undrivenLabels)} ${undrivenLabels.length === 1 ? 'solves' : 'solve'} unit-driven: `
+    + `no driver model, so ${undrivenLabels.length === 1 ? 'it has' : 'they have'} no power, current or excursion to report.`,
   );
   // The mixed case is the one worth spelling out. A driven channel's field is
   // scaled to the cone acceleration its voltage produces; an undriven one is
@@ -236,9 +239,10 @@ export function importedSubmissionNotices(
   if (combining) {
     const mixedMembers = undriven.filter((id) => members.has(id));
     if (mixedMembers.length) {
+      const mixedLabels = [...new Set(mixedMembers.map(label))];
       notices.push(
         `The combined output mixes driver-coupled and unit-driven channels. `
-        + `${list(mixedMembers)} ${mixedMembers.length === 1 ? 'is' : 'are'} level-matched into the sum, `
+        + `${list(mixedLabels)} ${mixedLabels.length === 1 ? 'is' : 'are'} level-matched into the sum, `
         + 'so the combined shape is meaningful but its absolute SPL is not the voltage-referenced level '
         + 'the driven channels report on their own.',
       );
@@ -264,10 +268,11 @@ function submittedDriver(
 }
 
 /** Incomplete drivers must never silently become unit-driven submissions. */
-export function incompleteDriverBlocker(state: Pick<SimulationData, 'driveChannels' | 'channelDrivers'>): string | null {
+export function incompleteDriverBlocker(state: Pick<SimulationData, 'driveChannels' | 'channelDrivers'>,
+  label: (id: string) => string = id => id): string | null {
   const incomplete = incompleteDriverChannels(state);
   return incomplete.length
-    ? `${incomplete.map(({ channelId, missing }) => `${channelId} still needs ${missing}`).join('; ')}. Complete the driver, or clear it to solve that channel unit-driven.`
+    ? `${[...new Set(incomplete.map(({ channelId, missing }) => `${label(channelId)} still needs ${missing}`))].join('; ')}. Complete the driver, or clear it to solve that channel unit-driven.`
     : null;
 }
 

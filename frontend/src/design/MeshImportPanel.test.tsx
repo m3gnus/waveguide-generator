@@ -393,6 +393,8 @@ it('renders one shared Drivers section and edits file drivers through the shared
   act(() => root.render(panel()));
   expect(host.querySelectorAll('[data-section="Drivers"]')).toHaveLength(1);
   expect(host.querySelectorAll('.cad-channel')).toHaveLength(2);
+  const cardNames = () => [...host.querySelectorAll('.cad-channel-summary span')].map(item => item.textContent);
+  expect(cardNames()).toEqual(['MF driver', 'HF driver']);
   expect(host.textContent).toContain('2 surfaces · identical drivers');
   expect(host.querySelector<HTMLInputElement>('[aria-label="Solve driver in BEAT for drive-mf::left"]')?.disabled).toBe(true);
   expect(host.textContent).toContain('Drive the surfaces separately to model each driver in BEAT.');
@@ -404,6 +406,7 @@ it('renders one shared Drivers section and edits file drivers through the shared
   expect([...sharing.options].map(option => option.textContent)).toEqual(['Share one driver', 'Drive separately']);
   choose(sharing, 'separate');
   expect(host.querySelectorAll('.cad-channel')).toHaveLength(3);
+  expect(cardNames()).toEqual(['MF driver 1', 'MF driver 2', 'HF driver']);
   expect(host.querySelector<HTMLInputElement>('[aria-label="Solve driver in BEAT for left"]')?.disabled).toBe(false);
   expect(host.querySelector<HTMLInputElement>('[aria-label="Solve driver in BEAT for right"]')?.disabled).toBe(false);
   type(host.querySelector<HTMLInputElement>('[aria-label="Sd for drive-hf"]')!, '75');

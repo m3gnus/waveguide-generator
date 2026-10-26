@@ -20,15 +20,14 @@ export function channelRole(result: ResultPayload, channelId: string): string | 
 /**
  * What this channel is called in the dock.
  *
- * The band, when the run has exactly one channel in it. A role shared by two
- * channels names neither of them, and an id authored in CAD (`drive-hf`) is
- * still a true name even when it is an ugly one, so both of those fall back to
- * the id rather than to a label that cannot be told apart from its neighbour.
+ * Number channels that share a band so each physical driver remains distinct.
+ * Older unroled results retain their authored channel names.
  */
 export function channelLabel(result: ResultPayload, channelId: string): string {
   if (channelId === combinedChannelId(result)) return 'Combined';
   if (channelId === PASSIVE_CARDIOID_CHANNEL_ID) return 'Cardioid';
-  return roleChannelLabel(channelId, resultChannels(result).map(({ id }) => ({ id, role: channelRole(result, id) })));
+  return roleChannelLabel(channelId, resultChannels(result).map(({ id }) => ({ id, role: channelRole(result, id) })),
+    channelRole(result, channelId) ? 'number' : 'id');
 }
 
 /**
@@ -50,7 +49,11 @@ export function channelTitle(result: ResultPayload, channelId: string): string {
 }
 
 /** A unique role names a channel; a shared role needs the authored id. */
-export function roleChannelLabel(channelId: string, channels: readonly { id: string; role: string | null | undefined }[]): string {
+export function roleChannelLabel(channelId: string, channels: readonly { id: string; role: string | null | undefined }[],
+  fallback: 'id' | 'number' = 'id'): string {
   const role = channels.find(({ id }) => id === channelId)?.role;
-  return role && channels.filter((channel) => channel.role === role).length === 1 ? role : channelId;
+  const peers = channels.filter(channel => channel.role === role);
+  if (role && peers.length === 1) return role;
+  if (fallback === 'id') return channelId;
+  return `${role || 'Driver'} ${Math.max(0, peers.findIndex(channel => channel.id === channelId)) + 1}`;
 }

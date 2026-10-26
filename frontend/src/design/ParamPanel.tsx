@@ -1,4 +1,4 @@
-import { useImportedSimulationSetup } from '../stores/importedSimulationSetup';
+import { importedDriverLabel, useImportedSimulationSetup } from '../stores/importedSimulationSetup';
 import { sourceRoleLabel } from '../model/cadLabels';
 import { useDeveloperDetails } from '../prefs/preferences';
 import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, OSSE_SWITCH_NOTICE, type OsseFeatures } from './osseFeatures';
@@ -970,7 +970,8 @@ function CadDriveChannels() {
         const driverForm = state.channelDrivers[channel.id];
         const driverEligible = channelAcceptsDriver(channel);
         return <div className="cad-channel" data-channel-id={channel.id} data-driver-group-id={group.id} key={group.id}>
-          <div className="cad-channel-summary"><span>{group.channelIds.length > 1 ? sourceRoleLabel(activeSources.find(source => source.id === channel.source_ids[0])?.role ?? '', { driver: true }) : cadChannelLabel(state, channel.id)}</span></div>
+          <div className="cad-channel-summary"><span>{state.input === 'file' ? importedDriverLabel(state, channel.id)
+            : group.channelIds.length > 1 ? sourceRoleLabel(activeSources.find(source => source.id === channel.source_ids[0])?.role ?? '', { driver: true }) : cadChannelLabel(state, channel.id)}</span></div>
           {group.channelIds.length > 1 && <p className="cad-driver-hint">{group.channelIds.length} surfaces · identical drivers. Each surface gets its own driver, wired to one amplifier channel.</p>}
           {showsAssignment(channel) && channel.source_ids
             .filter((sourceId) => activeSources.some((source) => source.id === sourceId))
@@ -1028,7 +1029,7 @@ function CadDriveChannels() {
     {/* Said here, beside the drivers, and before the solve rather than after
         it: a channel with no driver is a good solve with consequences that are
         otherwise invisible until a chart has nothing to draw. */}
-    {importedSubmissionNotices(state).map((notice) => (
+    {importedSubmissionNotices(state, state.input === 'file' ? id => importedDriverLabel(state, id) : undefined).map((notice) => (
       <p className="cad-driver-hint" role="status" key={notice}>{notice}</p>
     ))}
   </>;

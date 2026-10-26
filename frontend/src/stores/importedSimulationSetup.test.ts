@@ -162,7 +162,7 @@ it('restores a frozen file driver for editing and preserves the other retained p
 
 it('blocks incomplete file drivers instead of silently solving unit-driven', () => {
   importedSimulationSetup().setChannelDriverPreset('drive-hf', { ...preset, base: {} });
-  expect(() => fileMeshSetup()).toThrow('drive-hf still needs');
+  expect(() => fileMeshSetup()).toThrow('HF driver still needs');
 });
 
 it('opens old motion-only per-source setups and solves their exact request before and after unrelated edits', () => {
