@@ -1,4 +1,5 @@
 import { useDriverLibraryStore } from '../stores/driverLibrary';
+import { readFileSync } from 'node:fs';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -6,9 +7,12 @@ import type { ImportedSolveSubmission } from '../jobs/actions';
 import type { RegisteredMesh } from '../api/meshImport';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { expectNoJargon } from '../testing/expectNoJargon';
-import { loadMeshFile, useMeshImportStore } from '../stores/meshImport';
-import { resetImportedModelStore, useImportedModelStore } from '../stores/importedModel';
+import { editMeshImport, loadMeshFile, useMeshImportStore } from '../stores/meshImport';
+import { openImported, resetImportedModelStore, useImportedModelStore } from '../stores/importedModel';
 import { workspaceModeStore } from '../stores/workspaceMode';
+import { createImportedMeshScene } from '../viewport/importedMesh';
+import { importedMeshStore } from '../viewport/importedMeshStore';
+import { parseMSH } from '../viewport/mshParser';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
 import { preferencesStore } from '../prefs/preferences';
@@ -368,6 +372,8 @@ it('renders one shared Drivers section and edits file drivers through the shared
   expect(host.querySelectorAll('[data-section="Drivers"]')).toHaveLength(1);
   expect(host.querySelectorAll('.cad-channel')).toHaveLength(2);
   expect(host.textContent).toContain('2 surfaces · identical drivers');
+  expect(host.querySelector<HTMLInputElement>('[aria-label="Solve driver in BEAT for drive-mf::left"]')?.disabled).toBe(true);
+  expect(host.textContent).toContain('Drive the surfaces separately to model each driver in BEAT.');
   type(host.querySelector<HTMLInputElement>('[aria-label="Sd for drive-mf::left"]')!, '90');
   expect(useImportedModelStore.getState().fileSimulation?.channelDrivers['drive-mf::right'].fields.sd_cm2).toBe(90);
   const sharing = host.querySelector<HTMLSelectElement>('[aria-label^="Driver sharing for"]')!;
@@ -376,6 +382,8 @@ it('renders one shared Drivers section and edits file drivers through the shared
   expect([...sharing.options].map(option => option.textContent)).toEqual(['Share one driver', 'Drive separately']);
   choose(sharing, 'separate');
   expect(host.querySelectorAll('.cad-channel')).toHaveLength(3);
+  expect(host.querySelector<HTMLInputElement>('[aria-label="Solve driver in BEAT for left"]')?.disabled).toBe(false);
+  expect(host.querySelector<HTMLInputElement>('[aria-label="Solve driver in BEAT for right"]')?.disabled).toBe(false);
   type(host.querySelector<HTMLInputElement>('[aria-label="Sd for drive-hf"]')!, '75');
   expect(useImportedModelStore.getState().fileSimulation?.channelDrivers['drive-hf'].fields.sd_cm2).toBe(75);
   expect(host.textContent).not.toContain('Each selected group is a separate');
@@ -388,4 +396,32 @@ it('disables the shared Simulation controls while no prepared file is available'
   opened({ prepared: null });
   act(() => root.render(panel()));
   expect(host.querySelector<HTMLFieldSetElement>('[aria-label="Imported mesh simulation"] fieldset')?.disabled).toBe(true);
+});
+
+it.each(['share', 'separate'] as const)('shows the %s choice after adding a surface to its role', async (choice) => {
+  const msh = new TextDecoder().decode(readFileSync('../server/tests/fixtures/mesh_import/tetra.msh'));
+  const mesh: RegisteredMesh = { ingest_id: 'wgi_roles', model_id: 'mesh-file:sha256:roles', producer: 'mesh-file',
+    manifest_sha256: 'sha256:manifest', artifact_sha256: 'sha256:artifact', msh_text: msh, summary: fileSummary,
+    source_file: { filename: 'speaker.msh', transform: { units: 'mm', forward: '+z', up: '+y' },
+      source_tags: [1, 2], roles: { 1: 'MF', 2: 'MF', 3: 'RIGID' } },
+    source_tags: { group_1: 1, group_2: 2 }, sources: [{ id: 'group_1', role: 'MF' }, { id: 'group_2', role: 'MF' }] };
+  const next: RegisteredMesh = { ...mesh, ingest_id: 'wgi_added', source_tags: { ...mesh.source_tags, group_3: 3 },
+    sources: [...mesh.sources!, { id: 'group_3', role: 'MF' }],
+    source_file: { ...mesh.source_file, source_tags: [1, 2, 3], roles: { 1: 'MF', 2: 'MF', 3: 'MF' } } };
+  await act(async () => {
+    await openImported({ kind: 'file', prepared: mesh });
+    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(msh), 'file', mesh.ingest_id));
+    root.render(panel());
+  });
+  choose(host.querySelector<HTMLSelectElement>('[aria-label^="Driver sharing for"]')!, choice);
+  const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+    model: { model_id: mesh.model_id, producer: 'mesh-file', display_name: 'speaker.msh' },
+    prepared: next, latest_prepared: next, original_available: true,
+  }), { headers: { 'Content-Type': 'application/json' } }));
+  await act(async () => { await editMeshImport({ roles: next.source_file.roles }, fetcher); });
+  expect(useMeshImportStore.getState().error).toBeNull();
+  expect(host.querySelector<HTMLSelectElement>('[aria-label^="Driver sharing for"]')?.value).toBe(choice);
+  expect(host.querySelectorAll('.cad-channel')).toHaveLength(choice === 'share' ? 1 : 3);
+  if (choice === 'share') expect(host.textContent).toContain('3 surfaces · identical drivers');
+  importedMeshStore.clear();
 });

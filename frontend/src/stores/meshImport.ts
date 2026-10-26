@@ -1,4 +1,7 @@
-import { importedSimulationSetup } from './importedSimulationSetup';
+import { importedSimulationSetup, reconcileFileChannels } from './importedSimulationSetup';
+import { savedChannelDrivers } from './cadSetupRestore';
+import type { CadSetup } from '../api/jobsSocket';
+import type { SimulationData } from './cadReturn';
 import { exteriorModeBlocker, incompleteDriverBlocker, simulationDriverGeometry, simulationDriverReferences } from '../jobs/importedSubmission';
 import { create } from 'zustand';
 import {
@@ -201,7 +204,7 @@ export async function prepareMeshFile(fetcher: typeof fetch = fetch, inspectFram
       useMeshImportStore.setState({ summary: useMeshImportStore.getState().summary ?? record.summary });
       const latest = useImportedModelStore.getState();
       const retained = latest.setup ?? latest.setupEditBase?.retained;
-      await openImported({ kind: 'file', prepared: record, setup: retained ? setupForPreparedFile(retained, record) : null });
+      await openImported({ kind: 'file', prepared: record, setup: retained ? setupForPreparedFile(retained, record, latest.fileSimulation) : null });
     }
   } catch (error) {
     if (importedMeshStore.isCurrentGeneration(generation)
@@ -214,20 +217,14 @@ export async function prepareMeshFile(fetcher: typeof fetch = fetch, inspectFram
 }
 
 /** Preparation edits only the source assignments that no longer exist. */
-function setupForPreparedFile(retained: ImportedSetup, record: RegisteredMesh): ImportedSetup {
+function setupForPreparedFile(retained: ImportedSetup, record: RegisteredMesh, previous: SimulationData | null): ImportedSetup {
   const setup = structuredClone(retained);
   const available = new Set(Object.keys(record.source_tags));
-  setup.geometry.drive_channels = setup.geometry.drive_channels.flatMap(channel => {
-    const source_ids = channel.source_ids.filter(id => available.has(id));
-    return source_ids.length ? [{ ...channel, source_ids,
-      ...(channel.patch_weights ? { patch_weights: Object.fromEntries(source_ids.map(id => [id, channel.patch_weights![id]])) } : {}),
-    }] : [];
-  });
-  const assigned = new Set(setup.geometry.drive_channels.flatMap(channel => channel.source_ids));
   setup.geometry.skipped_source_ids = setup.geometry.skipped_source_ids.filter(id => available.has(id));
-  for (const id of available) if (!assigned.has(id) && !setup.geometry.skipped_source_ids.includes(id)) {
-    setup.geometry.drive_channels.push({ id, source_ids: [id], motion: 'normal' });
-  }
+  const forms = { ...savedChannelDrivers(setup.geometry as unknown as CadSetup, setup.geometry.drive_channels, setup.driver_references),
+    ...previous?.channelDrivers };
+  const extended = reconcileFileChannels(record, setup.geometry.drive_channels, forms, setup.geometry.skipped_source_ids);
+  setup.geometry.drive_channels = extended.channels;
   const driven = new Set(setup.geometry.drive_channels.flatMap(channel => channel.source_ids));
   if (setup.geometry.mesh) {
     setup.geometry.mesh.source_size_mm = Object.fromEntries(Object.entries(setup.geometry.mesh.source_size_mm)
@@ -236,8 +233,18 @@ function setupForPreparedFile(retained: ImportedSetup, record: RegisteredMesh): 
     if ([...driven].some(id => setup.geometry.mesh!.source_size_mm[id] === undefined)) delete setup.geometry.mesh;
   }
   if (setup.driver_references) {
-    setup.driver_references = Object.fromEntries(Object.entries(setup.driver_references)
-      .filter(([id]) => setup.geometry.drive_channels.some(channel => channel.id === id)));
+    const references = setup.driver_references;
+    setup.driver_references = Object.fromEntries(setup.geometry.drive_channels.flatMap(channel => {
+      const reference = references[extended.from[channel.id] ?? channel.id];
+      return reference ? [[channel.id, reference]] : [];
+    }));
+  }
+  if (setup.geometry.combine && Object.keys(extended.renamed).length) {
+    const combine = setup.geometry.combine;
+    combine.members = combine.members.map(id => extended.renamed[id] ?? id);
+    if (combine.reference) combine.reference = extended.renamed[combine.reference] ?? combine.reference;
+    if (combine.channels) combine.channels = Object.fromEntries(Object.entries(combine.channels)
+      .map(([id, value]) => [extended.renamed[id] ?? id, value]));
   }
   if (setup.geometry.combine?.members.some(id => !setup.geometry.drive_channels.some(channel => channel.id === id))) {
     delete setup.geometry.combine;

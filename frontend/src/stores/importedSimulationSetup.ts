@@ -5,7 +5,7 @@ import type { ImportedSetup } from '../jobs/importedSetup';
 import { fromResult, parseWire } from '../results/crossoverSpec';
 import { savedChannelDrivers, savedPassiveCardioid } from './cadSetupRestore';
 import {
-  PASSIVE_CARDIOID_DEFAULTS, channelAcceptsDriver, retainedChannelDrivers, simulationActions, useCadReturnStore,
+  PASSIVE_CARDIOID_DEFAULTS, channelAcceptsDriver, channelDriverPresent, retainedChannelDrivers, simulationActions, useCadReturnStore,
   type CadDriveChannel, type CadReturnState, type RoleSource, type SimulationActions, type SimulationData,
 } from './cadReturn';
 import { useImportedModelStore } from './importedModel';
@@ -63,11 +63,75 @@ export function fileDriverGroups(sources: readonly RoleSource[], channels: reado
     // under a card claiming identical drivers. Explicit Share reunifies them.
     const settings = group.channelIds.map(id => {
       const channel = channels.find(channel => channel.id === id)!;
-      return JSON.stringify({ motion: channel.motion, exterior: channel.exterior_transducer, driver: drivers[id] });
+      const driver = drivers[id];
+      // A labelled saved driver without a library reference receives a synthetic
+      // per-channel id on restore; it is still the same shared driver.
+      const comparable = driver?.frozen && driver.preset?.source === 'manual' && driver.preset.id === `manual:${id}`
+        ? { ...driver, preset: { ...driver.preset, id: 'manual' } } : driver;
+      return JSON.stringify({ motion: channel.motion, exterior: channel.exterior_transducer, driver: comparable });
     });
-    return settings.every(value => value === settings[0]) ? [group]
+    return !(group.channelIds.length > 1 && group.channelIds.some(id => channels.find(channel => channel.id === id)?.exterior_transducer))
+      && settings.every(value => value === settings[0]) ? [group]
       : group.channelIds.map(id => ({ id: `channel:${id}`, channelIds: [id] }));
   });
+}
+
+/** Reconcile prepared surfaces using the existing role's sharing choice. */
+export function reconcileFileChannels<T extends CadDriveChannel>(record: RegisteredMesh, original: T[],
+  drivers: SimulationData['channelDrivers'], skipped: readonly string[]): {
+    channels: T[]; from: Record<string, string>; renamed: Record<string, string>;
+  } {
+  const from: Record<string, string> = {};
+  const renamed: Record<string, string> = {};
+  const sources = fileSources(record);
+  const available = new Set(sources.map(source => source.id));
+  const channels = original.flatMap(channel => {
+    const source_ids = channel.source_ids.filter(id => available.has(id));
+    return source_ids.length ? [{ ...channel, source_ids,
+      ...(channel.patch_weights ? { patch_weights: Object.fromEntries(source_ids.map(id => [id, channel.patch_weights![id]])) } : {}),
+    }] : [];
+  });
+  const assigned = new Set(channels.flatMap(channel => channel.source_ids));
+  const existing = sources.filter(source => assigned.has(source.id));
+  const groups = fileDriverGroups(existing, channels, drivers);
+  const used = new Set(channels.map(channel => channel.id));
+  const unique = (wanted: string) => {
+    let id = wanted;
+    for (let suffix = 2; used.has(id); suffix += 1) id = `${wanted}-${suffix}`;
+    used.add(id);
+    return id;
+  };
+  const added = sources.filter(source => !assigned.has(source.id) && !skipped.includes(source.id));
+  for (const role of new Set(added.map(source => source.role))) {
+    const newSources = added.filter(source => source.role === role);
+    const oldSources = existing.filter(source => source.role === role);
+    const oldChannels = channels.filter(channel => channel.source_ids.some(id => oldSources.some(source => source.id === id)));
+    const group = groups.find(candidate => candidate.id === roleGroupId(role)
+      && candidate.channelIds.length === oldSources.length
+      && oldChannels.every(channel => candidate.channelIds.includes(channel.id) && channel.source_ids.length === 1));
+    const template = group && channels.find(channel => channel.id === group.channelIds[0]);
+    let share = !!record.sources?.length && (!oldSources.length || !!template)
+      && !oldChannels.some(channel => channel.exterior_transducer || channel.physical_source_id !== undefined || channel.patch_weights !== undefined);
+    const bare = share && oldChannels.find(channel => channel.id === roleGroupId(role));
+    const desired = [...newSources.map(source => sharedChannelId(role, source.id)),
+      ...(bare ? [sharedChannelId(role, bare.source_ids[0])] : [])];
+    if (desired.some(id => used.has(id))) share = false;
+    if (share && bare) {
+      const id = sharedChannelId(role, bare.source_ids[0]);
+      used.delete(bare.id);
+      used.add(id);
+      renamed[bare.id] = id;
+      from[id] = bare.id;
+      channels[channels.indexOf(bare)] = { ...bare, id };
+    }
+    for (const source of newSources) {
+      const id = unique(share ? !oldSources.length && newSources.length === 1 ? roleGroupId(role) : sharedChannelId(role, source.id) : source.id);
+      if (share && template) from[id] = template.id;
+      channels.push({ id, source_ids: [source.id], motion: share && template ? template.motion : 'normal',
+        ...(share && template && 'driver' in template ? { driver: structuredClone(template.driver) } : {}) } as T);
+    }
+  }
+  return { channels, from, renamed };
 }
 
 /** New files share a driver card per role, with a channel per source patch. */
@@ -85,17 +149,22 @@ export function seedFileSimulation(record: RegisteredMesh | null, setup: Importe
         : source.id,
       source_ids: [source.id], motion: 'normal' as const,
     }));
-  // An unfinished driver has no wire setup yet. Keep its form and channel
-  // choices through preparation when the same source inventory survives.
-  if (previous && !setup) {
-    const assigned = previous.driveChannels.flatMap(channel => channel.source_ids);
-    if (assigned.length === sources.length && assigned.every(id => sources.some(source => source.id === id))) {
-      driveChannels = structuredClone(previous.driveChannels);
+  // Keep live forms and channel choices through preparation, including an
+  // unfinished driver which has no wire setup yet.
+  let previousDrivers = previous?.channelDrivers;
+  if (previous && record) {
+    const extended = reconcileFileChannels(record, previous.driveChannels, previous.channelDrivers, setup?.geometry.skipped_source_ids ?? []);
+    previousDrivers = { ...retainedChannelDrivers(previous, extended.channels) };
+    for (const [id, source] of Object.entries(extended.from)) {
+      if (previous.channelDrivers[source]) previousDrivers[id] = structuredClone(previous.channelDrivers[source]);
     }
+    if (!setup) driveChannels = extended.channels;
   }
   const geometry = setup?.geometry as unknown as CadSetup | undefined;
   return {
-    driveChannels, channelDrivers: previous ? retainedChannelDrivers(previous, driveChannels) : savedChannelDrivers(geometry, driveChannels, setup?.driver_references),
+    driveChannels, channelDrivers: previous && previousDrivers
+      ? retainedChannelDrivers({ driveChannels, channelDrivers: previousDrivers }, driveChannels)
+      : savedChannelDrivers(geometry, driveChannels, setup?.driver_references),
     passiveCardioid: geometry ? savedPassiveCardioid(geometry) : { ...PASSIVE_CARDIOID_DEFAULTS },
     driveVoltageV: previous?.driveVoltageV ?? setup?.geometry.drive_voltage_v ?? DEFAULT_DRIVE_VOLTAGE_V,
     maxDriveVoltageV: previous?.maxDriveVoltageV ?? setup?.geometry.max_drive_voltage_v ?? null,
@@ -119,7 +188,7 @@ function updateFile(update: Partial<SimulationData> | ((state: SimulationData) =
   if (patch !== current) useImportedModelStore.setState({ fileSimulation: { ...current, ...patch } });
 }
 const singleFileActions = simulationActions(updateFile);
-const groupedActionNames = ['setChannelMotion', 'setExteriorTransducer', 'setChannelDriverField',
+const groupedActionNames = ['setChannelMotion', 'setChannelDriverField',
   'setChannelDriverPreset', 'clearChannelDriverOverrides'] as const;
 /** Fan out one card edit through the existing CAD mutations, under one edit signal. */
 function groupedAction<K extends typeof groupedActionNames[number]>(name: K): SimulationActions[K] {
@@ -149,6 +218,7 @@ const rawFileActions = {
       const affected = state.driveChannels.filter(channel => channel.source_ids.some(id => ids.has(id)));
       const template = affected[0];
       if (!template || affected.some(channel => channel.exterior_transducer)) return state;
+      const driverTemplate = affected.find(channel => channelDriverPresent(state.channelDrivers[channel.id])) ?? template;
       // A retained channel can span roles after a Geometry edit. Only detach
       // the selected role, preserving every other surface and its coordinate.
       const remaining = state.driveChannels.flatMap(channel => {
@@ -168,14 +238,14 @@ const rawFileActions = {
       const replacements = sources.map(source => {
         const previous = affected.find(channel => channel.source_ids.includes(source.id))!;
         return { id: unique(share ? sharedChannelId(role, source.id) : source.id),
-          motion: share ? template.motion : previous.motion, source_ids: [source.id] };
+          motion: share ? driverTemplate.motion : previous.motion, source_ids: [source.id] };
       });
       const first = state.driveChannels.indexOf(template);
       const before = remaining.filter(channel => state.driveChannels.findIndex(old => old.id === channel.id) <= first);
       const driveChannels = [...before, ...replacements, ...remaining.filter(channel => !before.includes(channel))];
       const channelDrivers = { ...retainedChannelDrivers(state, remaining) };
       for (const channel of replacements) {
-        const previous = share ? template : affected.find(old => old.source_ids.includes(channel.source_ids[0]))!;
+        const previous = share ? driverTemplate : affected.find(old => old.source_ids.includes(channel.source_ids[0]))!;
         const form = state.channelDrivers[previous.id];
         if (form && channelAcceptsDriver(channel)) channelDrivers[channel.id] = structuredClone(form);
       }

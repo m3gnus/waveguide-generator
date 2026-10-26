@@ -644,6 +644,116 @@ it('restores and edits shared drivers after a changed file reuses remembered set
   expect(edited.driver_references).toEqual(setup.driver_references);
 });
 
+it.each([
+  { existing: 1, share: true },
+  { existing: 2, share: true },
+  { existing: 2, share: false },
+])('adds a same-role surface to the current sharing choice ($existing existing, share: $share)', async ({ existing, share }) => {
+  const ids = Array.from({ length: existing }, (_, index) => `group_${index + 1}`);
+  const mesh: RegisteredMesh = { ...record,
+    source_tags: Object.fromEntries(ids.map((id, index) => [id, index + 1])),
+    sources: ids.map(id => ({ id, role: 'MF' })),
+    source_file: { ...record.source_file, source_tags: ids.map((_, index) => index + 1),
+      roles: Object.fromEntries(ids.map((_, index) => [index + 1, 'MF'])) } };
+  showPrepared(mesh);
+  if (!share) importedSimulationSetup().setRoleSharing!('MF', false);
+  const firstId = importedSimulationSetup().driveChannels[0].id;
+  importedSimulationSetup().setChannelDriverPreset(firstId, { id: 'catalog:woofer', label: 'Woofer', source: 'database', kind: 'lf', z_ohm: 8,
+    xo_min_hz: null, base: { sd_cm2: 100, bl_t_m: 10, re_ohm: 6, mms_g: 20, fs_hz: 50 } });
+  const newId = `group_${existing + 1}`;
+  const next: RegisteredMesh = { ...mesh, ingest_id: 'wgi_added',
+    source_tags: { ...mesh.source_tags, [newId]: existing + 1 },
+    sources: [...mesh.sources!, { id: newId, role: 'MF' }],
+    source_file: { ...mesh.source_file, source_tags: [...mesh.source_file.source_tags, existing + 1],
+      roles: { ...mesh.source_file.roles, [existing + 1]: 'MF' } } };
+  await editMeshImport({ roles: next.source_file.roles }, vi.fn(async () => prepared(next)));
+  expect(useMeshImportStore.getState().error).toBeNull();
+  const simulation = importedSimulationSetup();
+  const setup = fileMeshSetup();
+  const added = setup.geometry.drive_channels.find(channel => channel.source_ids.includes(newId))!;
+  if (share) {
+    expect(simulation.driverGroups).toHaveLength(1);
+    expect(simulation.driverGroups[0].channelIds).toHaveLength(existing + 1);
+    expect(setup.geometry.drive_channels.every(channel => channel.driver?.re_ohm === 6)).toBe(true);
+    expect(setup.driver_references?.[added.id]).toEqual({ driver_id: 'catalog:woofer', source: 'database' });
+    expect(simulation.channelDrivers[added.id]).toEqual(simulation.channelDrivers[simulation.driverGroups[0].channelIds[0]]);
+    await openImported({ kind: 'file', prepared: next, setup });
+    expect(importedSimulationSetup().driverGroups[0].channelIds).toHaveLength(existing + 1);
+    importedSimulationSetup().setChannelDriverField(added.id, 're_ohm', 7);
+    expect(fileMeshSetup().geometry.drive_channels.map(channel => channel.driver?.re_ohm)).toEqual(Array(existing + 1).fill(7));
+  } else {
+    expect(simulation.driverGroups).toHaveLength(existing + 1);
+    expect(added.id).toBe(newId);
+    expect(added.driver).toBeUndefined();
+    expect(setup.geometry.drive_channels.find(channel => channel.id === ids[0])?.driver?.re_ohm).toBe(6);
+  }
+});
+
+it('keeps an existing BEAT driver separate from a newly added same-role surface', async () => {
+  const mesh: RegisteredMesh = { ...record, sources: [{ id: 'group_2', role: 'MF' }],
+    source_file: { ...record.source_file, roles: { 1: 'RIGID', 2: 'MF' } } };
+  showPrepared(mesh);
+  importedSimulationSetup().setExteriorTransducer('drive-mf', { version: 1, motion_axis: [1, 0, 0] });
+  const next: RegisteredMesh = { ...mesh, ingest_id: 'wgi_added', source_tags: { group_2: 2, group_1: 1 },
+    sources: [{ id: 'group_2', role: 'MF' }, { id: 'group_1', role: 'MF' }],
+    source_file: { ...mesh.source_file, source_tags: [2, 1], roles: { 1: 'MF', 2: 'MF' } } };
+  await editMeshImport({ roles: next.source_file.roles }, vi.fn(async () => prepared(next)));
+  const simulation = importedSimulationSetup();
+  expect(simulation.driverGroups).toHaveLength(2);
+  expect(simulation.driveChannels.find(channel => channel.source_ids.includes('group_2'))?.exterior_transducer?.motion_axis).toEqual([1, 0, 0]);
+  expect(simulation.driveChannels.find(channel => channel.source_ids.includes('group_1'))?.exterior_transducer).toBeUndefined();
+});
+
+it('retains an incomplete shared driver when a same-role surface is added', async () => {
+  const mesh: RegisteredMesh = { ...record, sources: [{ id: 'group_2', role: 'MF' }],
+    source_file: { ...record.source_file, roles: { 1: 'RIGID', 2: 'MF' } } };
+  showPrepared(mesh);
+  importedSimulationSetup().setChannelDriverPreset('drive-mf', { id: 'unfinished', label: 'Unfinished', source: 'database', kind: 'lf',
+    z_ohm: 8, xo_min_hz: null, base: {} });
+  const next: RegisteredMesh = { ...mesh, ingest_id: 'wgi_added', source_tags: { group_2: 2, group_1: 1 },
+    sources: [{ id: 'group_2', role: 'MF' }, { id: 'group_1', role: 'MF' }],
+    source_file: { ...mesh.source_file, source_tags: [2, 1], roles: { 1: 'MF', 2: 'MF' } } };
+  await editMeshImport({ roles: next.source_file.roles }, vi.fn(async () => prepared(next)));
+  expect(importedSimulationSetup().driverGroups[0].channelIds).toEqual(['drive-mf::group_2', 'drive-mf::group_1']);
+  expect(importedSimulationSetup().channelDrivers['drive-mf::group_1']?.preset?.id).toBe('unfinished');
+  expect(() => fileMeshSetup()).toThrow('still needs');
+});
+
+it('reopens a labelled shared driver without library references after adding a surface', async () => {
+  const mesh: RegisteredMesh = { ...record, ingest_id: 'wgi_added', source_tags: { group_2: 2, group_1: 1 },
+    sources: [{ id: 'group_2', role: 'MF' }, { id: 'group_1', role: 'MF' }],
+    source_file: { ...record.source_file, source_tags: [2, 1], roles: { 1: 'MF', 2: 'MF' } } };
+  const setup: ImportedSetup = { geometry: { skipped_source_ids: [], drive_channels: [{ id: 'drive-mf', source_ids: ['group_2'],
+    motion: 'normal', driver: { label: 'Manual driver', sd_cm2: 100, bl_t_m: 10, re_ohm: 6, mms_g: 20, fs_hz: 50 } }] },
+    options: {} as ImportedSetup['options'] };
+  const previous = { filename: 'speaker.msh', updated_at: '2026-10-26T08:31:00Z',
+    preparation: { units: 'mm', forward: '+z', up: '+y', roles: { 1: 'MF', 2: 'MF' } }, setup };
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect')
+    ? response({ ...summary, previous_setup: previous }) : prepared(mesh));
+  await loadMeshFile('speaker.msh', MSH, fetcher);
+  expect(importedSimulationSetup().driverGroups).toEqual([{ id: 'drive-mf', channelIds: ['drive-mf::group_2', 'drive-mf::group_1'] }]);
+  importedSimulationSetup().setChannelDriverField('drive-mf::group_2', 're_ohm', 7);
+  expect(fileMeshSetup().geometry.drive_channels.map(channel => channel.driver?.re_ohm)).toEqual([7, 7]);
+});
+
+it('keeps retained crossover references when a shared singleton gains a surface', async () => {
+  const mesh: RegisteredMesh = { ...record, source_tags: { group_1: 1, group_2: 2 },
+    sources: [{ id: 'group_1', role: 'MF' }, { id: 'group_2', role: 'HF' }],
+    source_file: { ...record.source_file, source_tags: [1, 2], roles: { 1: 'MF', 2: 'HF', 3: 'RIGID' } } };
+  showPrepared(mesh);
+  const setup = fileMeshSetup();
+  const channel = { hp: null, lp: null, gain: { mode: 'auto' } as const, delay: { mode: 'auto' } as const, invert: null };
+  setup.geometry.combine = { members: ['drive-mf', 'drive-hf'], reference: 'drive-mf',
+    channels: { 'drive-mf': channel, 'drive-hf': channel } };
+  await openImported({ kind: 'file', prepared: mesh, setup });
+  const next: RegisteredMesh = { ...mesh, ingest_id: 'wgi_added', source_tags: { ...mesh.source_tags, group_3: 3 },
+    sources: [...mesh.sources!, { id: 'group_3', role: 'MF' }],
+    source_file: { ...mesh.source_file, source_tags: [1, 2, 3], roles: { 1: 'MF', 2: 'HF', 3: 'MF' } } };
+  await editMeshImport({ roles: next.source_file.roles }, vi.fn(async () => prepared(next)));
+  expect(fileMeshSetup().geometry.combine).toEqual({ members: ['drive-mf::group_1', 'drive-hf'],
+    reference: 'drive-mf::group_1', channels: { 'drive-mf::group_1': channel, 'drive-hf': channel } });
+});
+
 it('keeps only matching roles when the re-export changes its group names', async () => {
   const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect')
     ? response({ ...summary, suggested_units: 'mm', previous_roles: { 1: 'RIGID', 2: 'LF' } }) : prepared(record));

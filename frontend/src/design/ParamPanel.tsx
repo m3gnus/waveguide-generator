@@ -975,9 +975,10 @@ function CadDriveChannels() {
           <details className="cad-channel-more" open={channel.exterior_transducer ? true : undefined}><summary>More</summary>
           <div data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} disabled={!!channel.exterior_transducer} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal</option><option value="axial">Axial (pistonic)</option></select></div>
           <div className="cad-channel-hint">Normal moves each source face along its own normal. Axial moves the source as a rigid piston along its axis.</div>
-          <label className="cad-driver-hint"><input type="checkbox" aria-label={`Solve driver in BEAT for ${channel.id}`} checked={!!channel.exterior_transducer}
+          <label className="cad-driver-hint"><input type="checkbox" aria-label={`Solve driver in BEAT for ${channel.id}`} checked={!!channel.exterior_transducer} disabled={group.channelIds.length > 1}
             onChange={(event) => state.setExteriorTransducer(channel.id, event.target.checked ? { version: 1, motion_axis: [0, 0, 1] } : undefined)}/>
             Solve driver in BEAT</label>
+          {group.channelIds.length > 1 && <p className="cad-driver-hint">Drive the surfaces separately to model each driver in BEAT.</p>}
           {channel.exterior_transducer && <>
             <p className="cad-driver-hint">Complete outward solids only. Enter bare Mmd, excluding air load; datasheet Mms is not Mmd. Other drivers are shorted for each excitation.</p>
             <ExteriorDriverLibraryPicker channel={channel}

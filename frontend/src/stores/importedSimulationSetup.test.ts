@@ -224,6 +224,29 @@ it('separate cards retain their values and shared cards explicitly copy the firs
   expect(shared[1].driver?.re_ohm).toBe(6);
 });
 
+it.each(['normal', 'axial'] as const)('shares the first populated driver when the first separate surface has no driver (%s motion)', (motion) => {
+  importedSimulationSetup().setRoleSharing!('MF', false);
+  importedSimulationSetup().setChannelMotion('left', motion);
+  importedSimulationSetup().setChannelDriverPreset('right', preset);
+  importedSimulationSetup().setRoleSharing!('MF', true);
+  const members = fileMeshSetup().geometry.drive_channels.filter(channel => channel.id.startsWith('drive-mf::'));
+  expect(members.map(channel => channel.driver)).toEqual([expect.objectContaining(preset.base), expect.objectContaining(preset.base)]);
+  expect(members.map(channel => channel.motion)).toEqual(['normal', 'normal']);
+  expect(importedSimulationSetup().channelDrivers['drive-mf::left']).toEqual(importedSimulationSetup().channelDrivers['drive-mf::right']);
+});
+
+it('keeps exterior transducers on individual channels even when invoked from a shared card', () => {
+  importedSimulationSetup().setExteriorTransducer('drive-mf::left', { version: 1, motion_axis: [1, 0, 0] });
+  const simulation = importedSimulationSetup();
+  expect(simulation.driveChannels.find(channel => channel.id === 'drive-mf::left')?.exterior_transducer?.motion_axis).toEqual([1, 0, 0]);
+  expect(simulation.driveChannels.find(channel => channel.id === 'drive-mf::right')?.exterior_transducer).toBeUndefined();
+  expect(simulation.driverGroups.filter(group => group.channelIds.some(id => id.startsWith('drive-mf::'))).map(group => group.channelIds))
+    .toEqual([['drive-mf::left'], ['drive-mf::right']]);
+  simulation.setExteriorTransducer('drive-mf::right', { version: 1, motion_axis: [0, 1, 0] });
+  expect(importedSimulationSetup().driveChannels.find(channel => channel.id === 'drive-mf::left')?.exterior_transducer?.motion_axis).toEqual([1, 0, 0]);
+  expect(importedSimulationSetup().driveChannels.find(channel => channel.id === 'drive-mf::right')?.exterior_transducer?.motion_axis).toEqual([0, 1, 0]);
+});
+
 it('saves and reopens a stable shared band key using existing setup channel ids', async () => {
   const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ revision_id: 'wgs_shared' })));
   stopPublisher = startCadSetupPublisher({ fetcher });
