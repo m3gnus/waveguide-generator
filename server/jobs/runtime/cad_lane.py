@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from server.jobs.models import (
-    PORT_APERTURE_NAME_GROUPS,
+    passive_cardioid_apertures,
     CadIdentityProvenance,
     ImportedGeometrySource,
     SolveRequest,
@@ -226,39 +226,13 @@ def _validate_passive_cardioid_topology(
             "passive_cardioid_topology",
             "passive cardioid requires an ingestion source tag map",
         )
-    by_upper = {
-        str(source_id).strip().upper(): str(source_id)
-        for source_id in source_tags
-    }
-    port_source_ids: list[str] = []
-    for group in PORT_APERTURE_NAME_GROUPS:
-        port_source_ids = [by_upper[name] for name in group if name in by_upper]
-        if port_source_ids:
-            break
-    if not port_source_ids:
-        raise ImportedSolveRefusal(
-            "passive_cardioid_topology",
-            "passive cardioid requires PASSIVE_CARDIOID or PORT_EXIT aperture sources",
-        )
-
-    mf_source_ids = [
-        str(source.get("id") or "")
-        for source in record.get("sources") or []
-        if isinstance(source, Mapping)
-        and str(source.get("role") or "").strip().upper() == "MF"
-        and str(source.get("id") or "") in source_tags
-    ]
-    if not mf_source_ids and "MF" in by_upper:
-        mf_source_ids = [by_upper["MF"]]
-    if len(mf_source_ids) != 1:
-        raise ImportedSolveRefusal(
-            "passive_cardioid_topology",
-            "passive cardioid requires exactly one MF diaphragm source",
-        )
+    try:
+        _, port_source_ids, mf_source_id = passive_cardioid_apertures(source_tags, record)
+    except ValueError as exc:
+        raise ImportedSolveRefusal("passive_cardioid_topology", str(exc)) from exc
     if not geometry.passive_cardioid_coupled:
         return
 
-    mf_source_id = mf_source_ids[0]
     mf_channels = [
         channel
         for channel in geometry.drive_channels

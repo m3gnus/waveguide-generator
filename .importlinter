@@ -68,8 +68,6 @@ ignore_imports =
     # solver -> cadlink: existing upward dependency.
     # Legacy use: canonical_source_role.
     server.solver.imported_channels -> server.cadlink.roles
-    # Legacy use: canonical_source_role.
-    server.solver.metal -> server.cadlink.roles
     # solver -> engines: existing upward dependency.
     # Legacy use: full3d_engine_order.
     server.solver.warmup -> server.engines.registry
@@ -96,7 +94,7 @@ ignore_imports =
     server.solver.field_plane -> server.jobs.store
     # Legacy use: ImportedGeometrySource.
     server.solver.imported_channels -> server.jobs.models
-    # Legacy use: ImportedGeometrySource, PORT_APERTURE_NAME_GROUPS, SolveRequest.
+    # Legacy use: ImportedGeometrySource, passive_cardioid_apertures, SolveRequest.
     server.solver.metal -> server.jobs.models
     # Legacy use: ImportedGeometrySource, PolarConfig, SolveRequest.
     server.solver.polar_arc -> server.jobs.models

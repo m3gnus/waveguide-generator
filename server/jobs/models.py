@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Annotated, Any, Literal, Self, cast
+from typing import Annotated, Any, Literal, Mapping, Self, cast
 
 from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, field_validator, model_serializer, model_validator
 
+from server.cadlink.wglink_protocol import canonical_source_role
 from server.contracts.canonical import canonical_utf8_strict_json
 
 from server.contracts import DriverSpec as DriverSpec, JobModel as JobModel
@@ -901,6 +902,64 @@ PORT_APERTURE_NAME_GROUPS: tuple[tuple[str, ...], ...] = (
     ("PORT_EXIT_L", "PORT_EXIT_R"),
     ("MID_PORT_EXIT_LEFT", "MID_PORT_EXIT_RIGHT"),
 )
+
+
+def passive_cardioid_apertures(
+    source_tags: Mapping[str, Any],
+    record: Mapping[str, Any],
+) -> tuple[dict[str, list[int]], list[str], str]:
+    """Resolve port and MF faces by canonical role, then legacy source-id names.
+
+    Port keys retain their source ids; MF retains its historical display key
+    unless that would collide with a port. The returned MF source id binds the
+    diaphragm to its drive channel independently of the display key.
+    """
+
+    entries = [(str(name), int(tag)) for name, tag in source_tags.items()]
+    by_upper = {name.strip().upper(): (name, tag) for name, tag in entries}
+
+    sources = [
+        (str(source.get("id") or ""), canonical_source_role(str(source.get("role") or "").strip().upper()))
+        for source in record.get("sources") or [] if isinstance(source, Mapping)
+    ]
+    port_entries = [
+        (source_id, int(source_tags[source_id]))
+        for source_id, role in sources
+        if role == "PASSIVE_CARDIOID" and source_id in source_tags
+    ]
+    if not port_entries:
+        for group in PORT_APERTURE_NAME_GROUPS:
+            port_entries = [by_upper[name] for name in group if name in by_upper]
+            if port_entries:
+                break
+    if not port_entries:
+        raise ValueError(
+            "passive cardioid requires PASSIVE_CARDIOID or PORT_EXIT aperture sources"
+        )
+
+    mf_candidates: list[tuple[str, str, int]] = []
+    for source_id, role in sources:
+        if role != "MF":
+            continue
+        if source_id in source_tags:
+            mf_candidates.append(("MF", source_id, int(source_tags[source_id])))
+    if not mf_candidates and "MF" in by_upper:
+        name, tag = by_upper["MF"]
+        mf_candidates.append((name, name, tag))
+    if len(mf_candidates) != 1:
+        raise ValueError(
+            "passive cardioid requires exactly one MF diaphragm source"
+        )
+    mf_name, mf_source_id, mf_tag = mf_candidates[0]
+
+    port_tags = [tag for _name, tag in port_entries]
+    if len(set(port_tags)) != len(port_tags) or mf_tag in port_tags:
+        raise ValueError("passive cardioid aperture tag mapping contains duplicate faces")
+    aperture_tags = {name: [tag] for name, tag in port_entries}
+    if mf_name in aperture_tags:
+        mf_name = mf_source_id
+    aperture_tags[mf_name] = [mf_tag]
+    return aperture_tags, [name for name, _tag in port_entries], mf_source_id
 
 
 class ImportedGeometrySource(JobModel):

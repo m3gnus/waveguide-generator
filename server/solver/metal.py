@@ -23,10 +23,9 @@ import numpy as np
 
 from hornlab_sim.methods import driver_coupling, radiation_impedance
 
-from server.cadlink.roles import canonical_source_role
 from server.jobs.models import (
     ImportedGeometrySource,
-    PORT_APERTURE_NAME_GROUPS,
+    passive_cardioid_apertures as _passive_cardioid_apertures,
     SolveRequest,
 )
 from server.mesh.builder import build_solver_mesh
@@ -902,58 +901,6 @@ def _imported_frame(record: Mapping[str, Any], context: SolverContext) -> Any:
             "Installed hornlab-metal-bem does not expose ObservationFrame."
         )
     return ObservationFrame(**imported_anchor_frame(record))
-
-
-def _passive_cardioid_apertures(
-    source_tags: Mapping[str, Any],
-    record: Mapping[str, Any],
-) -> tuple[dict[str, list[int]], list[str], str]:
-    """Resolve PORT_EXIT faces and the MF diaphragm from an ingest tag map.
-
-    The returned names are the physical names carried by the mapping.  This is
-    intentional: storing only the matrix and diagnostics cannot expose a solve
-    over the wrong reciprocal/passive faces, while name plus tag can.
-    """
-
-    entries = [(str(name), int(tag)) for name, tag in source_tags.items()]
-    by_upper = {name.strip().upper(): (name, tag) for name, tag in entries}
-
-    port_entries: list[tuple[str, int]] = []
-    for group in PORT_APERTURE_NAME_GROUPS:
-        port_entries = [by_upper[name] for name in group if name in by_upper]
-        if port_entries:
-            break
-    if not port_entries:
-        raise ValueError(
-            "passive cardioid requires PASSIVE_CARDIOID (or its _L/_R halves), "
-            "PORT_EXIT, PORT_EXIT_L/PORT_EXIT_R, or "
-            "mid_port_exit_left/mid_port_exit_right in the ingestion source tag map"
-        )
-
-    mf_candidates: list[tuple[str, str, int]] = []
-    for source in record.get("sources") or []:
-        if not isinstance(source, Mapping):
-            continue
-        source_id = str(source.get("id") or "")
-        if canonical_source_role(str(source.get("role") or "")) != "MF":
-            continue
-        if source_id in source_tags:
-            mf_candidates.append(("MF", source_id, int(source_tags[source_id])))
-    if not mf_candidates and "MF" in by_upper:
-        name, tag = by_upper["MF"]
-        mf_candidates.append((name, name, tag))
-    if len(mf_candidates) != 1:
-        raise ValueError(
-            "passive cardioid requires exactly one MF diaphragm in the ingestion source tag map"
-        )
-    mf_name, mf_source_id, mf_tag = mf_candidates[0]
-
-    port_tags = [tag for _name, tag in port_entries]
-    if len(set(port_tags)) != len(port_tags) or mf_tag in port_tags:
-        raise ValueError("passive cardioid aperture tag mapping contains duplicate faces")
-    aperture_tags = {name: [tag] for name, tag in port_entries}
-    aperture_tags[mf_name] = [mf_tag]
-    return aperture_tags, [name for name, _tag in port_entries], mf_source_id
 
 
 def _frequency_value_indices(
