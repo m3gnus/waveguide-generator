@@ -2,6 +2,8 @@
  * A change to apply to a finished run's own request before submitting it again.
  * Only the named keys change; nested objects (`polar_config`) merge one level.
  */
+import { postSolverMesh } from '../api/solverMesh';
+
 export type RerunPatch = { options?: Record<string, unknown> };
 
 export interface RerunDeps {
@@ -54,6 +56,10 @@ export async function rerunWithPatch(
     const current = options[key];
     options[key] = isRecord(current) && isRecord(value) ? { ...current, ...value } : value;
   }
+  // Reuse the same measured-mesh admission as an ordinary parametric Solve.
+  // In particular, a changed symmetry must not carry an earlier choice to a
+  // different artifact merely because the old request contained an override.
+  await postSolverMesh(JSON.stringify({ design: geometry.design, options }), fetcher);
   const sourceLabel = typeof effective.label === 'string' && effective.label ? effective.label : jobId;
   const label = `${sourceLabel} (rerun)`;
   const response = await fetcher('/api/solve', {

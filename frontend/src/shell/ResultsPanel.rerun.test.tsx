@@ -11,6 +11,8 @@ import { ResultsPanel } from './ResultsPanel';
 import { resetSolveAttentionForTests, solveAttention } from './solveAttention';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
+import { SolverMeshTooLarge } from '../api/solverMesh';
+import { meshCeilingChoice } from '../stores/meshCeilingChoice';
 
 vi.mock('../jobs/useCapabilities', () => ({
   useCapabilities: () => ({ error: null, engines: [], refreshCapabilities: async () => undefined }),
@@ -101,6 +103,7 @@ describe('Enable & rerun wiring', () => {
     preferencesStore.update({ chartTypes: ['beam_shape'] });
     provideExportDestinationPrompt(async () => ({ token: 't', directory: '/exports' }));
     rerun.rerunWithPatch.mockReset().mockResolvedValue('job-new');
+    meshCeilingChoice.clear();
     resetSolveAttentionForTests();
     resetSolveOptionsStore();
     workspaceModeStore.setMode('parametric');
@@ -124,6 +127,7 @@ describe('Enable & rerun wiring', () => {
     provisionalResults.clear();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    meshCeilingChoice.clear();
   });
 
   const button = () => [...host.querySelectorAll('button')].find((item) => item.textContent === 'Enable & rerun');
@@ -154,6 +158,22 @@ describe('Enable & rerun wiring', () => {
     expect(rerun.rerunWithPatch).toHaveBeenCalledWith(
       'parametric-run', { options: { polar_config: { spherical_sampling: true } } },
     );
+  });
+
+  it('holds a changed rerun at the same mesh choice and carries its artifact key', async () => {
+    rerun.rerunWithPatch.mockRejectedValueOnce(new SolverMeshTooLarge('large', 22001, 22000, 'a'.repeat(64)))
+      .mockResolvedValueOnce('job-new');
+    compareSelection.setPrimary('parametric-run');
+    await act(async () => root.render(<JobsCoordinator><ResultsPanel/></JobsCoordinator>));
+    await act(async () => { button()!.click(); });
+    const choice = meshCeilingChoice.getSnapshot();
+    expect(choice?.meshLimit).toEqual({ triangles: 22001, limit: 22000 });
+    await act(async () => { await choice!.continueSolve!(); });
+    expect(rerun.rerunWithPatch).toHaveBeenCalledTimes(2);
+    expect(rerun.rerunWithPatch.mock.calls[1][1].options).toMatchObject({
+      mesh_limit_override: true, mesh_limit_override_key: 'a'.repeat(64),
+      polar_config: { spherical_sampling: true },
+    });
   });
 
   it('releases attention, reports a refusal and permits another press', async () => {

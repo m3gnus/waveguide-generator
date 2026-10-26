@@ -17,6 +17,7 @@ const effective = {
 function fetcher() {
   return vi.fn(async (url: RequestInfo | URL) => {
     if (String(url).endsWith('/requests')) return new Response(JSON.stringify({ effective_request: effective, execution_request: { options: { engine: 'other' } } }));
+    if (String(url) === '/api/solver-mesh') return new Response(JSON.stringify({ msh_text: 'mesh', stats: { mesh_cache_key: 'key', triangle_count: 4 }, cut_planes: [] }));
     return new Response(JSON.stringify({ job_id: 'job-new' }));
   });
 }
@@ -35,7 +36,8 @@ describe('rerunWithPatch', () => {
 
     expect(id).toBe('job-new');
     expect(f.mock.calls[0][0]).toBe('/api/jobs/job-old/requests');
-    const [, init] = f.mock.calls[1] as unknown as [string, RequestInit];
+    expect(f.mock.calls[1][0]).toBe('/api/solver-mesh');
+    const [, init] = f.mock.calls[2] as unknown as [string, RequestInit];
     const body = JSON.parse(String(init.body));
     expect(body.options.engine).toBe('beat-cpu');
     expect(body.options.accuracy).toBe('high');
@@ -49,6 +51,16 @@ describe('rerunWithPatch', () => {
     expect(useSolveOptionsStore.getState().polar.distance).toBe(9);
     unsubscribe();
     expect(writes).not.toHaveBeenCalled();
+  });
+
+  it('does not submit a changed mesh before the triangle choice', async () => {
+    const f = vi.fn(async (url: RequestInfo | URL) => String(url).endsWith('/requests')
+      ? new Response(JSON.stringify({ effective_request: effective }))
+      : new Response(JSON.stringify({ detail: { code: 'mesh_too_large', triangles: 22001, limit: 22000,
+        mesh_cache_key: 'a'.repeat(64) } }), { status: 409 }));
+    await expect(rerunWithPatch('job-old', { options: { symmetry: 'full' } }, { fetcher: f as unknown as typeof fetch }))
+      .rejects.toMatchObject({ name: 'SolverMeshTooLarge', meshCacheKey: 'a'.repeat(64) });
+    expect(f.mock.calls.map(([url]) => String(url))).toEqual(['/api/jobs/job-old/requests', '/api/solver-mesh']);
   });
 
   it('refuses a run whose request cannot be read', async () => {

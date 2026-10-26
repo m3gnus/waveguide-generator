@@ -279,6 +279,18 @@ function importedSolveError(error: unknown, restored = false): unknown {
   return error instanceof Error ? new Error(explainImportedRefusal(error.message)) : error;
 }
 
+function askMeshSolveChoice(
+  name: string, triangles: number, limit: number,
+  inputs: ReturnType<typeof captureSolveInputs>, resume: () => Promise<void>,
+): void {
+  const stillCurrent = () => solveCancellationReason(inputs) === null;
+  meshCeilingChoice.ask({
+    name: name || 'This model', nextStep: 'Use a coarser mesh.', bundlePath: null,
+    meshLimit: { triangles, limit }, stillCurrent,
+    continueSolve: async () => { if (stillCurrent()) await resume(); },
+  });
+}
+
 const jobsConnection = () => jobsSocket.getSnapshot().connection;
 
 const systemNow = () => new Date();
@@ -540,15 +552,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       } catch (error) {
         if (!(error instanceof SolverMeshTooLarge)) throw error;
         if (!beforePost(continuation)) return null;
-        meshCeilingChoice.ask({
-          name: designName || 'This model', nextStep: 'Use a coarser mesh resolution.',
-          meshLimit: { triangles: error.triangles, limit: error.limit }, bundlePath: null,
-          stillCurrent: () => solveCancellationReason(choiceInputs) === null,
-          continueSolve: async () => {
-            if (solveCancellationReason(choiceInputs) !== null) return;
-            await acceptSubmission(() => submitDesign(snapshot, { ...options, mesh_limit_override: true, mesh_limit_override_key: error.meshCacheKey }, fetch, metadata),
-              { onAccepted: () => acceptSubmittedLabel(designName), arm: true });
-          },
+        askMeshSolveChoice(designName, error.triangles, error.limit, choiceInputs, async () => {
+          await acceptSubmission(() => submitDesign(snapshot, { ...options, mesh_limit_override: true, mesh_limit_override_key: error.meshCacheKey }, fetch, metadata),
+            { onAccepted: () => acceptSubmittedLabel(designName), arm: true });
         });
         return null;
       }
@@ -581,15 +587,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         if (error instanceof SolveSubmissionRefused && error.code === 'mesh_too_large'
           && typeof error.details?.triangles === 'number' && typeof error.details.limit === 'number') {
           asked = true;
-          meshCeilingChoice.ask({
-            name: designName || 'This model', nextStep: 'Use a coarser mesh.', bundlePath: null,
-            meshLimit: { triangles: error.details.triangles, limit: error.details.limit },
-            stillCurrent: () => solveCancellationReason(choiceInputs) === null,
-            continueSolve: async () => {
-              if (solveCancellationReason(choiceInputs) !== null) return;
-              await acceptSubmission(() => solveModel(record.model_id, { ...press, mesh_limit_override: true }),
-                { onAccepted: () => acceptSubmittedLabel(designName), arm: true });
-            },
+          askMeshSolveChoice(designName, error.details.triangles, error.details.limit, choiceInputs, async () => {
+            await acceptSubmission(() => solveModel(record.model_id, { ...press, mesh_limit_override: true }),
+              { onAccepted: () => acceptSubmittedLabel(designName), arm: true });
           });
           return null;
         }
@@ -671,11 +671,12 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     }
   }, [completeCadSolve, now]);
 
-  const continueRun = useCallback(async (jobId: string, patch: ContinueRunPatch = {}) => {
+  const continueRun = useCallback(async (jobId: string, patch: ContinueRunPatch = {}): Promise<string | null> => {
     // A held Fusion continuation inherits its request's token; any other call
     // is the user's own action (Retry, Solve anyway, Approve and solve).
     const attention = patch.held ? patch.held.attention : navigationGeneration();
     const cad = patch.approvals !== undefined || patch.held !== undefined || patch.mesh_limit_override !== undefined;
+    const choiceInputs = captureSolveInputs();
     return acceptSubmission(async () => {
       if (cad) {
         const approvals = patch.approvals;
@@ -708,7 +709,19 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         rememberCadSolve(child.job_id, claim?.designName ?? '', claim?.sourceIngestId ?? null);
         return child.job_id;
       }
-      return patch.options ? rerunWithPatch(jobId, patch) : jobsSocket.retryJob(jobId);
+      if (!patch.options) return jobsSocket.retryJob(jobId);
+      try {
+        return await rerunWithPatch(jobId, patch);
+      } catch (error) {
+        if (!(error instanceof SolverMeshTooLarge)) throw error;
+        const job = jobsSocket.getSnapshot().jobs.find((item) => item.id === jobId);
+        askMeshSolveChoice(job?.label || '', error.triangles, error.limit, choiceInputs, async () => {
+          await continueRun(jobId, { ...patch, options: {
+            ...patch.options, mesh_limit_override: true, mesh_limit_override_key: error.meshCacheKey,
+          } });
+        });
+        return null;
+      }
     }, {
       busyMessage: 'Another solve is being submitted. Try again in a moment.',
       attention, arm: !patch.held,
