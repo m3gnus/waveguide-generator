@@ -137,6 +137,46 @@ def test_parametric_memory_refusal_returns_plain_words(monkeypatch):
     assert response.json()["detail"] == SolverMemoryTooLarge.USER_MESSAGE
 
 
+def test_parametric_choice_key_matches_the_actual_solve_geometry(monkeypatch):
+    from server.mesh.builder import MAX_SOLVER_MESH_ARTIFACT_TRIANGLES
+
+    calls = []
+
+    async def worker(*args, **kwargs):
+        result = await _stub_worker(calls)(*args, **kwargs)
+        result["stats"]["triangle_count"] = MAX_SOLVER_MESH_ARTIFACT_TRIANGLES + 1
+        return result
+
+    registry = EngineRegistry(
+        detector=lambda: [EngineInfo("bempp", True, "test", "test")],
+        factory=lambda _name: object(),
+    )
+    monkeypatch.setattr(mesh_builder, "run_mesh_build", worker)
+    clear_solver_mesh_cache()
+
+    async def scenario():
+        design = _rosse(mesh={"wall_thickness": 0})
+        options = SolveOptions(engine="bempp")
+        with pytest.raises(HTTPException) as refused:
+            await solver_mesh_response(design, None, options=options, engine_registry=registry)
+        key = refused.value.detail["mesh_cache_key"]
+        options = options.model_copy(update={"mesh_limit_override": True, "mesh_limit_override_key": key})
+        request = SolveRequest.model_validate({"design": design, "options": options})
+        resolved = await resolve_submission(request, registry)
+        execution = _execution_request(
+            resolved.request, resolved_quadrants=resolved.symmetry_metadata["resolved_quadrants"],
+        )
+        accepted = await mesh_builder.build_solver_mesh(execution.design, execution.options)
+        assert accepted["stats"]["mesh_cache_key"] == key
+        assert accepted["stats"]["mesh_cache_hit"] is True
+        assert len(calls) == 1
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        clear_solver_mesh_cache()
+
+
 def test_missing_memory_forecast_does_not_show_developer_details(monkeypatch, caplog):
     from server.mesh.errors import MesherEstimateUnavailable
 
