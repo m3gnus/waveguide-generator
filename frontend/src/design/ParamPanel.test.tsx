@@ -485,7 +485,7 @@ describe('ParamPanel inventory UX', () => {
     const lip = host.querySelector<HTMLSelectElement>('[data-parameter-id="mesh.ath_roundover"] select')!;
     const on = [...lip.options].find((option) => option.value === '1')!;
     expect(on.disabled).toBe(true);
-    expect(host.textContent).toContain('Re-import the file without Mesh.Enclosure');
+    expect(host.textContent).toContain('Re-import the file without the enclosure');
   });
 
   it('forgets the remembered lip when another design is loaded', () => {
@@ -521,10 +521,10 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it.each([
-    ['R-OSSE', { formula: 'R-OSSE' }, 'Mesh.Roundover with R-OSSE is unsupported'],
-    ['infinite baffle', { simulation: { sim_type: 'infinite-baffle' } }, 'Mesh.Roundover requires a free-standing or bare shell'],
-    ['an enclosure', { enclosure: { depth: 200 } }, 'Mesh.Roundover requires a free-standing or bare shell'],
-    ['LengthSegments below 3', { mesh: { length_segments: 2 } }, 'Mesh.LengthSegments >= 3'],
+    ['R-OSSE', { formula: 'R-OSSE' }, 'ATH builds the mouth lip on OSSE horns only.'],
+    ['infinite baffle', { simulation: { sim_type: 'infinite-baffle' } }, 'The mouth lip needs a free-standing or bare horn'],
+    ['an enclosure', { enclosure: { depth: 200 } }, 'The mouth lip needs a free-standing or bare horn'],
+    ['LengthSegments below 3', { mesh: { length_segments: 2 } }, 'at least 3 length segments'],
   ])('disables the lip On choice for %s with the reason', (_name, extra, message) => {
     act(() => useDesignStore.getState().replaceDocument(hydrateDesignDocument({ formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null, ...extra })));
     expect(host.querySelector<HTMLOptionElement>('[data-parameter-id="mesh.ath_roundover"] option[value="1"]')!.disabled).toBe(true);
@@ -539,7 +539,7 @@ describe('ParamPanel inventory UX', () => {
       formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null, simulation: { sim_type: 'infinite-baffle' },
       mesh: { ath_roundover: { radius: 20, segments: 5 } },
     })));
-    expect(host.querySelector('.field-warning')?.textContent).toContain('Mesh.Roundover requires a free-standing or bare shell');
+    expect(host.querySelector('.field-warning')?.textContent).toContain('The mouth lip needs a free-standing or bare horn');
   });
 
   it('requires the lip radius to exceed the wall for a full rear, on both fields', () => {
@@ -594,7 +594,7 @@ describe('ParamPanel inventory UX', () => {
       simulation: { sim_type: mode === 'infinite-baffle' ? mode : 'freestanding' },
     })));
     expect(host.querySelector<HTMLOptionElement>('[data-parameter-id="mesh.ath_rear_shape"] option[value="3"]')!.disabled).toBe(true);
-    expect(host.textContent).toContain('Mesh.RearShape = 3 requires a free-standing wall. Change Mounting to Thickened waveguide (freestanding).');
+    expect(host.textContent).toContain('The Opus rear needs a free-standing wall. Change Mounting to Thickened waveguide (freestanding) to use it.');
   });
 
   it.each([[.05, .1], [1200, 1000]])('shows Opus wall clamp for %s mm without altering the document', (wall, effective) => {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { exportProfileArtifacts, reportText } from './DesignFileMenu';
+import { exportProfileArtifacts, openedMessage, reportText } from './DesignFileMenu';
 import type { GeometryExportFile, ImportReport } from '../api/designIo';
 
 describe('profile artifact export', () => {
@@ -62,6 +62,13 @@ describe('opened-file report line', () => {
     migrationsApplied: [],
     passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
   };
+
+  it('says only which file opened unless Developer details is on', () => {
+    const report = { ...base, ignoredSettings: [{ key: 'Mesh.SubdomainSlices', value: '', note: 'Mesh.SubdomainSlices is not applied.' }] };
+    expect(openedMessage('a.cfg', report, false)).toBe('Opened a.cfg');
+    expect(openedMessage('a.cfg', report, true)).toBe(`Opened a.cfg · ${reportText(report)}`);
+    expect(openedMessage('a.cfg', report, true)).toContain('Mesh.SubdomainSlices is not applied.');
+  });
 
   it('says what a migration did, not which identifier it has', () => {
     const text = reportText({

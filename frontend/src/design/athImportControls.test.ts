@@ -38,10 +38,10 @@ describe('ATH lip availability and radius/wall rule', () => {
 
   it('reports the mesher refusals and nothing for a supported design', () => {
     expect(lipUnavailableReason(load({}))).toBeUndefined();
-    expect(lipUnavailableReason(load({ formula: 'R-OSSE' }))).toContain('R-OSSE');
+    expect(lipUnavailableReason(load({ formula: 'R-OSSE' }))).toBe('ATH builds the mouth lip on OSSE horns only.');
     expect(lipUnavailableReason(load({ simulation: { sim_type: 'infinite-baffle' } }))).toContain('free-standing or bare');
     expect(lipUnavailableReason(load({ enclosure: { depth: 100 } }))).toContain('free-standing or bare');
-    expect(lipUnavailableReason(load({ mesh: { length_segments: 2 } }))).toContain('LengthSegments >= 3');
+    expect(lipUnavailableReason(load({ mesh: { length_segments: 2 } }))).toContain('at least 3 length segments');
   });
 
   it('applies Radius > WallThickness only to a lip over a full rear on a free-standing wall', () => {

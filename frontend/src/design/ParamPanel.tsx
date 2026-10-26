@@ -545,6 +545,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
         : field.id === 'mesh.ath_roundover' && option.value === 1 ? { ...option, unavailableReason: lipUnavailableReason(design) }
           : option);
     const selectedValue = field.id === 'mesh.ath_roundover' ? value ? 1 : 0 : value;
+    const athImportField = field.id === 'mesh.ath_roundover' || field.id === 'mesh.ath_rear_shape';
     const unsupported = fieldUnsupportedFeature(field, value, backend, backendPlan);
     const ibEngine = field.id === 'simulation.sim_type'
       ? backendPlan.find((candidate) => candidate.mountings?.includes('infinite-baffle'))
@@ -563,7 +564,12 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
         <OpenclUnavailableHook platform={hostPlatform} engine={ibEngine} notice="infinite_baffle_numba" />}
       {/* Listed but disabled: no engine on this host can run it. Say why here,
           because a title tooltip on a disabled option is easy to miss. */}
-      {options.filter((option) => option.unavailableReason).map((option) => <div key={`unavailable-${String(option.value)}`} className="field-warning" role="status">{option.label}: {option.unavailableReason}</div>)}
+      {options.filter((option) => option.unavailableReason).map((option) => athImportField && optionKey(option.value) !== optionKey(selectedValue)
+        // An ATH import choice this design cannot use is not a fault: a plain
+        // sentence, not a warning headed by the option it disables. Already
+        // selected, it is one, and keeps the warning.
+        ? <p key={`unavailable-${String(option.value)}`} className="section-note" role="status">{option.unavailableReason}</p>
+        : <div key={`unavailable-${String(option.value)}`} className="field-warning" role="status">{option.label}: {option.unavailableReason}</div>)}
       {field.id === 'mesh.ath_rear_shape' && opusClampNote(design) && <p className="section-note" role="status">{opusClampNote(design)}</p>}
       {/* The value survived the filter only because the design already holds
           it, so say plainly what will happen rather than leaving a control

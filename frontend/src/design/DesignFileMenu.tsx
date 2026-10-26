@@ -108,6 +108,15 @@ export function reportText(report: ImportReport): string {
 }
 
 /**
+ * The status line after opening a file. The parse report -- dialect,
+ * passthrough lists, migration and ignored-setting notes -- is developer
+ * detail nobody acts on, so it shows only with Developer details on.
+ */
+export function openedMessage(filename: string, report: ImportReport, developer: boolean): string {
+  return developer ? `Opened ${filename} · ${reportText(report)}` : `Opened ${filename}`;
+}
+
+/**
  * Export the profile pair: build both files, then write them once.
  *
  * Building stays parallel -- it only reads -- but the two files are **one**
@@ -161,7 +170,7 @@ export function DesignFileMenu() {
   const classification = useDocumentStore((state) => state.classification);
   const setCadLink = useDocumentStore((state) => state.setCadLink);
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
-  const cadApplication = usePreferences().cadApplication;
+  const { cadApplication, showDeveloperDetails } = usePreferences();
   const [open, setOpen] = useState(false);
   const [exportsOpen, setExportsOpen] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(false);
@@ -301,7 +310,7 @@ export function DesignFileMenu() {
 
   function applyOpenedDesign(opened: Awaited<ReturnType<typeof openDesignText>>, filename: string) {
     const applied = applyOpenedDocument(opened, filename);
-    setMessage(reportText(opened));
+    setMessage(openedMessage(filename, opened, showDeveloperDetails));
     if (applied.adoptionCandidate) setAdoptionCandidate(applied.adoptionCandidate);
   }
 

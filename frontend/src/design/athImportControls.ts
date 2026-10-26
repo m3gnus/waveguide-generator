@@ -21,12 +21,12 @@ function enclosurePresent(design: DesignDocument): boolean {
   return !design._absent?.includes('enclosure');
 }
 
-const ENCLOSURE_PRESENT = 'This design carries a Mesh.Enclosure block, and ATH builds no mouth lip or Opus rear with one. Re-import the file without Mesh.Enclosure to use them.';
+const ENCLOSURE_PRESENT = 'This design came with an ATH enclosure, and ATH builds no mouth lip or Opus rear with one. Re-import the file without the enclosure to use them.';
 
 export function opusMountingReason(design: DesignDocument): string | undefined {
   if (design.enclosure.depth <= 0 && enclosurePresent(design) && design.simulation.sim_type !== 'infinite-baffle' && design.mesh.wall_thickness > 0) return ENCLOSURE_PRESENT;
   if (design.simulation.sim_type === 'infinite-baffle' || design.enclosure.depth > 0 || design.mesh.wall_thickness <= 0) {
-    return 'Mesh.RearShape = 3 requires a free-standing wall. Change Mounting to Thickened waveguide (freestanding).';
+    return 'The Opus rear needs a free-standing wall. Change Mounting to Thickened waveguide (freestanding) to use it.';
   }
   return undefined;
 }
@@ -40,14 +40,17 @@ export function opusClampNote(design: DesignDocument): string | undefined {
     : undefined;
 }
 
-/** Why the mouth lip cannot be switched on for this design (mesher and server refusals). */
+/**
+ * Why the mouth lip cannot be switched on for this design (mesher and server
+ * refusals), as a sentence the panel shows on its own under the control.
+ */
 export function lipUnavailableReason(design: DesignDocument): string | undefined {
-  if (design.formula !== 'OSSE') return `Mesh.Roundover with ${design.formula} is unsupported: ATH builds the lip on OSSE only.`;
+  if (design.formula !== 'OSSE') return 'ATH builds the mouth lip on OSSE horns only.';
   if (design.simulation.sim_type === 'infinite-baffle' || design.enclosure.depth > 0) {
-    return 'Mesh.Roundover requires a free-standing or bare shell. Change Mounting to Thickened waveguide (freestanding) or Bare shell.';
+    return 'The mouth lip needs a free-standing or bare horn. Change Mounting to Thickened waveguide (freestanding) or Bare shell to use it.';
   }
   if (enclosurePresent(design)) return ENCLOSURE_PRESENT;
-  if (design.mesh.length_segments < 3) return 'Mesh.Roundover requires Mesh.LengthSegments >= 3 for the mouth chord angle.';
+  if (design.mesh.length_segments < 3) return 'The mouth lip needs at least 3 length segments.';
   return undefined;
 }
 
