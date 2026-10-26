@@ -223,12 +223,27 @@ def _imported_capability_blocker(
     return None
 
 
+_UNCHECKED = object()
+
+
+class ImportedPreflightCache:
+    """A normal BEAT compiler verdict for one plan or submission only.
+
+    The exterior velocity compiler uses the same float32 qualification on all
+    BEAT backends. Transducer preflight is excluded: its backend support differs.
+    """
+
+    def __init__(self) -> None:
+        self.beat: str | None | object = _UNCHECKED
+
+
 async def _imported_preflight_refusal(
     adapter: Any,
     record: Mapping[str, Any] | None,
     msh_text: str | None,
     drive_channels: Sequence[Any] | None = None,
     request: SolveRequest | None = None,
+    preflight_cache: ImportedPreflightCache | None = None,
 ) -> str | None:
     """An adapter's own verdict on the record and mesh, when it has one.
 
@@ -239,8 +254,18 @@ async def _imported_preflight_refusal(
     from server.solver.beat import BeatEngine
 
     if isinstance(adapter, BeatEngine) and record is not None and msh_text is not None:
-        return await asyncio.to_thread(adapter.imported_preflight, record, msh_text,
-                                       drive_channels=drive_channels, request=request)
+        transducer = any(getattr(channel, "exterior_transducer", None) is not None
+                         for channel in drive_channels or ())
+        if not transducer and preflight_cache is not None and preflight_cache.beat is not _UNCHECKED:
+            return preflight_cache.beat
+        refusal = await asyncio.to_thread(adapter.imported_preflight, record, msh_text,
+                                          drive_channels=drive_channels, request=request)
+        if not transducer:
+            if refusal:
+                refusal = f"BEAT cannot read this return's solve inputs: {refusal}"
+            if preflight_cache is not None:
+                preflight_cache.beat = refusal
+        return refusal
     preflight = getattr(adapter, "imported_preflight", None)
     if not callable(preflight) or record is None or msh_text is None:
         return None
@@ -392,6 +417,7 @@ async def imported_engine_verdict(
     imported_msh_text: str | None,
     drive_channels: Sequence[Any] | None = None,
     request: SolveRequest | None = None,
+    preflight_cache: ImportedPreflightCache | None = None,
 ) -> ImportedEngineVerdict:
     """One engine's verdict on one imported request: the one capability function.
 
@@ -445,7 +471,8 @@ async def imported_engine_verdict(
     # FEM dispatch validates its own compiled boundaries. Exterior-only
     # preflight cannot describe a mixed drive or an interior-only transducer.
     refusal = (None if "fem-regions" in needed_features else
-               await _imported_preflight_refusal(adapter, imported_record, imported_msh_text, drive_channels, request))
+               await _imported_preflight_refusal(adapter, imported_record, imported_msh_text, drive_channels,
+                                                  request, preflight_cache))
     if refusal is not None:
         return ImportedEngineVerdict(
             info.name,

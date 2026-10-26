@@ -124,6 +124,7 @@ from .imported_refusals import (
     _imported_features_needed,
     _imported_request_refusal,
     ImportedEngineVerdict,
+    ImportedPreflightCache,
     imported_engine_verdict,
     _imported_capabilities,
     _imported_accuracy,
@@ -992,6 +993,7 @@ async def resolve_imported_submission(
     imported_record: Mapping[str, Any] | None = None,
     imported_msh_text: str | None = None,
     request_refusal: tuple[str, str] | None = _REQUEST_UNCHECKED,
+    _preflight_cache: ImportedPreflightCache | None = None,
 ) -> SubmissionResolution:
     """Choose the engine for an imported-geometry submission from capability data.
 
@@ -1059,6 +1061,7 @@ async def resolve_imported_submission(
     if requested not in SELECTABLE_ENGINE_NAMES:
         raise UnknownEngineError(f"Unknown solve engine: {requested}")
 
+    preflight_cache = _preflight_cache if _preflight_cache is not None else ImportedPreflightCache()
     detected = await engine_registry.capabilities()
     needed_features = _imported_features_needed(request.geometry, imported_record)
     resolved_quadrants = (symmetry_metadata or {}).get("resolved_quadrants")
@@ -1073,7 +1076,7 @@ async def resolve_imported_submission(
             declared[info.name], resolved_quadrants=resolved_quadrants,
             needed_features=needed_features, engine_registry=engine_registry,
             imported_record=imported_record, imported_msh_text=imported_msh_text,
-            drive_channels=request.geometry.drive_channels, request=request,
+            drive_channels=request.geometry.drive_channels, request=request, preflight_cache=preflight_cache,
         )
 
     async def alternative(info):
@@ -1147,6 +1150,7 @@ async def plan_imported_submission(
     resolved_quadrants = (symmetry_metadata or {}).get("resolved_quadrants")
     needed_features = _imported_features_needed(request.geometry, imported_record)
     request_refusal = await _imported_request_refusal_async(request, imported_record, imported_msh_text)
+    preflight_cache = ImportedPreflightCache()
     verdicts: list[ImportedEngineVerdict] = []
     for name in full3d_engine_order():
         # Each engine's verdict answers "if this engine were picked", which is
@@ -1172,6 +1176,7 @@ async def plan_imported_submission(
                 imported_msh_text=imported_msh_text,
                 drive_channels=request.geometry.drive_channels,
                 request=request,
+                preflight_cache=preflight_cache,
             )
         )
     engine: str | None = None
@@ -1185,6 +1190,7 @@ async def plan_imported_submission(
             imported_record=imported_record,
             imported_msh_text=imported_msh_text,
             request_refusal=request_refusal,
+            _preflight_cache=preflight_cache,
         )
     except ImportedSolveRefusal as exc:
         code, reason = exc.reason_code, str(exc)

@@ -978,6 +978,6 @@ def test_runtime_admission_and_execution_agree_on_the_same_request(runtime, case
         assert verdict.code == "imported_return_unsupported_by_engine"
         with pytest.raises(beat.BeatUnavailable) as caught:
             beat_imported.solve_imported_beat_from_msh_text(msh, request, record, backend="cpu")
-        assert str(caught.value) == verdict.reason
+        assert verdict.reason == f"BEAT cannot read this return's solve inputs: {caught.value}"
         assert not runtime.requests
     assert verdict.solves == (case in {"normal", "axial"})
