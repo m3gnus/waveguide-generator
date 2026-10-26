@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+
 def fem_group_options_problem(regions: Sequence[Mapping[str, Any]]) -> tuple[str, str] | None:
     """Validate options again for retained records and direct solver callers."""
     from server.mesh.fem_regions import validate_group_options

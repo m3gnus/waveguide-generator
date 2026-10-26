@@ -21,9 +21,9 @@ import numpy as np
 from server.contracts.canonical import canonical_ascii_strict_json
 
 from server.cadlink.wglink_protocol import (
-    LEGACY_SOURCE_ROLE_ALIASES,
     MESH_DEFAULTS,
     SOURCE_ROLES,
+    canonical_source_role as _protocol_source_role,
     source_physical_name,
 )
 from server.contracts.geometry import (
@@ -81,9 +81,7 @@ def parse_source_physical_name(
     )
     if match is None:
         return None
-    # The mesh layer uses the protocol's alias vocabulary directly: importing
-    # the CAD role normalizer here would cross the server's layer boundary.
-    role = LEGACY_SOURCE_ROLE_ALIASES.get(match[4], match[4])
+    role = _protocol_source_role(match[4])
     if role not in SOURCE_ROLES:
         return None
     return {
