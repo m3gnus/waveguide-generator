@@ -44,7 +44,7 @@ from server.jobs.model_solve import ModelSolveRefusal, ModelSolveRequest, solve_
 from server.jobs.models import SolveAccepted
 from server.jobs.runtime import ImportedSolveRefusal
 from server.mesh.artifact import read_verified_import_mesh
-from server.mesh.file_import import MAX_MESH_BYTES, inspect_file_mesh, mesh_text, parse_file_mesh, prepare_file_mesh, solve_group_tags
+from server.mesh.file_import import MAX_MESH_BYTES, inspect_file_mesh, mesh_text, parse_file_mesh, prepare_file_mesh, solve_group_tags, validate_file_symmetry
 from server.mesh.imported import polar_grid_from_symmetry
 from server.mesh.integrity import mesh_integrity_report
 from server.mesh.prepared_gc import prepared_mesh_use
@@ -86,13 +86,9 @@ class FilePreparation(JobModel):
             self.roles = {tag: canonical_source_role(role) for tag, role in self.roles.items()}
             if any(role not in (*SOURCE_ROLES, "RIGID") for role in self.roles.values()):
                 raise ValueError("Choose a driver, Port or passive opening, or Rigid wall for each surface.")
-        if len(set(self.domain_planes)) != len(self.domain_planes) or set(self.domain_planes) - set(SYMMETRY_PLANE_AXIS):
-            raise ValueError("Symmetry planes must be x = 0 or y = 0 after axes are applied.")
-        self.domain_planes = [plane for plane in SYMMETRY_PLANE_AXIS if plane in self.domain_planes]
-        if self.reflect_planes is not None:
-            if len(set(self.reflect_planes)) != len(self.reflect_planes) or set(self.reflect_planes) - set(self.domain_planes):
-                raise ValueError("Mirror only across a declared symmetry plane, once per plane.")
-            self.reflect_planes = [plane for plane in self.domain_planes if plane in self.reflect_planes]
+        planes, reflections = validate_file_symmetry(self.domain_planes, self.reflect_planes)
+        self.domain_planes = list(planes)
+        self.reflect_planes = list(reflections) if reflections is not None else None
         return self
 
 
@@ -213,12 +209,15 @@ def _register_mesh(
     solver_text = mesh_text(mesh)
     digest = _sha256(solver_text.encode())
     original_digest = _sha256(source_bytes)
+    hf_only = all(role == "HF" for role in roles.values())
     spec = {
         "original_sha256": original_digest,
         "transform": transform,
-        "source_tags": sorted(body.source_tags),
+        "source_tags": sorted(roles) if hf_only else sorted(body.source_tags),
     }
-    if body.roles is not None:
+    # HF-only assignments are the old source_tags request, including its
+    # preparation digest and the historical SOURCE setup inventory key.
+    if body.roles is not None and not hf_only:
         spec["roles"] = {str(tag): role for tag, role in sorted(body.roles.items())}
     if body.domain_planes:
         spec["domain_planes"] = body.domain_planes

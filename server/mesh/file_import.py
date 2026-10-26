@@ -250,19 +250,36 @@ def _plane_labels(names: list[str]) -> str:
     return " and ".join("x = 0" if plane == "x0" else "y = 0" for plane in names)
 
 
+def validate_file_symmetry(
+    domain_planes: tuple[str, ...] | list[str],
+    reflect_planes: tuple[str, ...] | list[str] | None,
+) -> tuple[tuple[str, ...], tuple[str, ...] | None]:
+    """Validate and order file symmetry choices for both API and direct callers."""
+    if len(set(domain_planes)) != len(domain_planes) or set(domain_planes) - set(SYMMETRY_PLANE_AXIS):
+        raise ValueError("Symmetry planes must be x = 0 or y = 0 after axes are applied.")
+    planes = tuple(plane for plane in SYMMETRY_PLANE_AXIS if plane in domain_planes)
+    if reflect_planes is None:
+        return planes, None
+    if len(set(reflect_planes)) != len(reflect_planes) or set(reflect_planes) - set(planes):
+        raise ValueError("Mirror only across a declared symmetry plane, once per plane.")
+    return planes, tuple(plane for plane in planes if plane in reflect_planes)
+
+
 def prepare_file_mesh(
     mesh: FileMesh, units: str, forward: str, up: str, *,
     domain_planes: tuple[str, ...] | list[str] = (),
     reflect_planes: tuple[str, ...] | list[str] | None = None,
 ) -> tuple[FileMesh, dict[str, Any]]:
-    if len(set(domain_planes)) != len(domain_planes) or set(domain_planes) - set(SYMMETRY_PLANE_AXIS):
-        raise ValueError("Symmetry planes must be x = 0 or y = 0 after axes are applied.")
-    planes = tuple(plane for plane in SYMMETRY_PLANE_AXIS if plane in domain_planes)
-    if reflect_planes is not None and (len(set(reflect_planes)) != len(reflect_planes) or set(reflect_planes) - set(planes)):
-        raise ValueError("Mirror only across a declared symmetry plane, once per plane.")
+    planes, reflect_planes = validate_file_symmetry(domain_planes, reflect_planes)
     mesh, transform = transform_file_mesh(mesh, units, forward, up)
     report, verification = _symmetry_evidence(mesh, planes)
     sides = verification["detection"]["plane_vertex_side_counts"]
+    unreached = [plane for plane in planes if not sides[plane]["on_plane"]]
+    if unreached:
+        raise ValueError(f"The mesh does not reach {_plane_labels(unreached)}. Choose the correct symmetry plane or change the mesh so it reaches that plane.")
+    unnecessary = [plane for plane in (reflect_planes or ()) if sides[plane]["positive"] and not sides[plane]["negative"]]
+    if unnecessary:
+        raise ValueError(f"The mesh is already on the positive side of {_plane_labels(unnecessary)}; turn mirroring off.")
     reflections = list(reflect_planes) if reflect_planes is not None else [
         plane for plane in planes if sides[plane]["negative"] and not sides[plane]["positive"]
     ]

@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from server.cadlink.store import CadLinkStore
+from server.cadlink.roles import prepared_inventory_sha256
 from server.cadlink.wglink_protocol import source_physical_name
 from server.mesh.imported import parse_source_physical_name
 from server.jobs.runtime.cad_lane import _imported_symmetry_metadata
@@ -11,6 +12,29 @@ from server.solver.bempp_imported import imported_bempp_preflight
 from server.solver.imported_channels import channel_source_identity
 from server.mesh.file_import import FileMesh, group_role_guess, inspect_file_mesh, mesh_text, parse_file_mesh, prepare_file_mesh
 from test_mesh_import import registration, register_mesh, request
+
+
+@pytest.mark.parametrize("roles", [{2: "HF"}, {1: "RIGID", 2: "HF"}])
+def test_hf_roles_reuse_the_pinned_legacy_preparation_and_saved_setup(tmp_path, roles):
+    from server.jobs.models_api import read_setup
+
+    store = CadLinkStore.for_data_dir(tmp_path)
+    try:
+        legacy = register_mesh(store, tmp_path, registration())
+        model_id = "mesh-file:" + legacy["artifact_sha256"]
+        inventory = prepared_inventory_sha256(legacy)
+        revision = store.create_setup_revision('{"saved":true}', "sha256:legacy-setup")
+        store.record_model_setup(model_id, inventory, revision["revision_id"])
+        assigned = register_mesh(store, tmp_path, registration(source_tags=[], roles=roles))
+        assert assigned["manifest_sha256"] == legacy["manifest_sha256"] == "sha256:d37a7e7dca517e718516b5f73e6e04068286cabf934d32c9a12c0b56a161b9ff"
+        assert assigned["ingest_id"] == legacy["ingest_id"]
+        assert assigned["source_file"] == legacy["source_file"]
+        assert prepared_inventory_sha256(assigned) == inventory
+        assert read_setup(store, model_id, assigned["ingest_id"]) == {
+            "setup": {"saved": True}, "revision_id": revision["revision_id"],
+        }
+    finally:
+        store.close()
 
 
 @pytest.mark.parametrize("role", ["HF", "MF", "LF", "PASSIVE_CARDIOID", "PORT_EXIT"])
@@ -234,7 +258,28 @@ def test_bad_reduced_meshes_have_actionable_refusals(mutation, message):
 
 
 @pytest.mark.parametrize("changes", [{"domain_planes": ["z0"]}, {"domain_planes": ["x0", "x0"]},
-                                     {"reflect_planes": ["x0"]}, {"domain_planes": ["x0"], "reflect_planes": ["y0"]}])
+                                     {"reflect_planes": ["x0"]}, {"domain_planes": ["x0"], "reflect_planes": ["y0"]},
+                                     {"domain_planes": ["x0"], "reflect_planes": ["x0", "x0"]}])
 def test_only_supported_declared_mirrors_are_accepted(changes):
     with pytest.raises(ValueError):
         registration(**changes)
+    with pytest.raises(ValueError):
+        prepare_file_mesh(box_mesh(), "m", "+z", "+y", **changes)
+
+
+@pytest.mark.parametrize("plane,label", [("x0", "x = 0"), ("y0", "y = 0")])
+def test_reflecting_a_positive_side_mesh_names_mirroring_as_the_cause(plane, label):
+    mesh = box_mesh(planes=(plane,))
+    with pytest.raises(ValueError) as error:
+        prepare_file_mesh(mesh, "m", "+z", "+y", domain_planes=[plane], reflect_planes=[plane])
+    assert str(error.value) == f"The mesh is already on the positive side of {label}; turn mirroring off."
+
+
+@pytest.mark.parametrize("plane,label", [("x0", "x = 0"), ("y0", "y = 0")])
+def test_a_mesh_away_from_its_declared_plane_is_not_called_capped(plane, label):
+    mesh = box_mesh(planes=(plane,))
+    mesh.points[:, {"x0": 0, "y0": 1}[plane]] += .1
+    with pytest.raises(ValueError) as error:
+        prepare_file_mesh(mesh, "m", "+z", "+y", domain_planes=[plane])
+    assert str(error.value).startswith(f"The mesh does not reach {label}.")
+    assert "closed face" not in str(error.value)
