@@ -9,6 +9,7 @@ export type RerunPatch = { options?: Record<string, unknown> };
 export interface RerunDeps {
   fetcher?: typeof fetch;
   newId?: () => string;
+  beforeSubmit?: () => boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -39,8 +40,8 @@ async function failure(response: Response): Promise<Error> {
 export async function rerunWithPatch(
   jobId: string,
   patch: RerunPatch,
-  { fetcher = fetch, newId = () => crypto.randomUUID() }: RerunDeps = {},
-): Promise<string> {
+  { fetcher = fetch, newId = () => crypto.randomUUID(), beforeSubmit }: RerunDeps = {},
+): Promise<string | null> {
   const stored = await fetcher(`/api/jobs/${encodeURIComponent(jobId)}/requests`, { cache: 'no-store' });
   if (!stored.ok) throw await failure(stored);
   const effective = (await stored.json() as { effective_request?: unknown }).effective_request;
@@ -60,6 +61,7 @@ export async function rerunWithPatch(
   // In particular, a changed symmetry must not carry an earlier choice to a
   // different artifact merely because the old request contained an override.
   await postSolverMesh(JSON.stringify({ design: geometry.design, options }), fetcher);
+  if (beforeSubmit && !beforeSubmit()) return null;
   const sourceLabel = typeof effective.label === 'string' && effective.label ? effective.label : jobId;
   const label = `${sourceLabel} (rerun)`;
   const response = await fetcher('/api/solve', {

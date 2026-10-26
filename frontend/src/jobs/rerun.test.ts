@@ -63,6 +63,14 @@ describe('rerunWithPatch', () => {
     expect(f.mock.calls.map(([url]) => String(url))).toEqual(['/api/jobs/job-old/requests', '/api/solver-mesh']);
   });
 
+  it('does not submit if the selection changes during mesh preparation', async () => {
+    const f = fetcher();
+    await expect(rerunWithPatch('job-old', {}, {
+      fetcher: f as unknown as typeof fetch, beforeSubmit: () => false,
+    })).resolves.toBeNull();
+    expect(f.mock.calls.map(([url]) => String(url))).toEqual(['/api/jobs/job-old/requests', '/api/solver-mesh']);
+  });
+
   it('refuses a run whose request cannot be read', async () => {
     const f = vi.fn(async () => new Response(JSON.stringify({ detail: 'gone' }), { status: 409 }));
     await expect(rerunWithPatch('x', {}, { fetcher: f as unknown as typeof fetch })).rejects.toThrow('gone');

@@ -156,7 +156,7 @@ describe('Enable & rerun wiring', () => {
     expect(jobsSocket.refresh).toHaveBeenCalledOnce();
     expect(solveAttention.resultsReady('job-new')).toBe('revealed');
     expect(rerun.rerunWithPatch).toHaveBeenCalledWith(
-      'parametric-run', { options: { polar_config: { spherical_sampling: true } } },
+      'parametric-run', { options: { polar_config: { spherical_sampling: true } } }, expect.objectContaining({ beforeSubmit: expect.any(Function) }),
     );
   });
 
@@ -174,6 +174,23 @@ describe('Enable & rerun wiring', () => {
       mesh_limit_override: true, mesh_limit_override_key: 'a'.repeat(64),
       polar_config: { spherical_sampling: true },
     });
+  });
+
+  it('drops a pending rerun and its mesh choice when the selection changes', async () => {
+    const pending = deferred<string>();
+    rerun.rerunWithPatch.mockReturnValueOnce(pending.promise);
+    compareSelection.setPrimary('parametric-run');
+    await act(async () => root.render(<JobsCoordinator><ResultsPanel/></JobsCoordinator>));
+    await act(async () => { button()!.click(); });
+    const { beforeSubmit } = rerun.rerunWithPatch.mock.calls[0][2];
+    expect(beforeSubmit()).toBe(true);
+    await act(async () => { compareSelection.setPrimary('cad-run'); });
+    expect(beforeSubmit()).toBe(false);
+    await act(async () => {
+      pending.reject(new SolverMeshTooLarge('large', 22001, 22000, 'a'.repeat(64)));
+      await pending.promise.catch(() => undefined);
+    });
+    expect(meshCeilingChoice.getSnapshot()).toBeNull();
   });
 
   it('releases attention, reports a refusal and permits another press', async () => {
