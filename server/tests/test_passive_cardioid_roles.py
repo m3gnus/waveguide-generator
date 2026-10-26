@@ -62,6 +62,32 @@ def test_multiple_port_role_surfaces_are_kept_together(first_role):
     )
 
 
+@pytest.mark.parametrize("left,right", [
+    ("PASSIVE_CARDIOID_L", "PASSIVE_CARDIOID_R"),
+    ("port_exit_l", "port_exit_r"),
+    ("mid_port_exit_left", "mid_port_exit_right"),
+])
+def test_role_picked_ports_keep_name_order_in_an_r_first_record(left, right):
+    ids = ["other-port-z", right, "other-port-a", left]
+    tags = {source_id: index for index, source_id in enumerate([*ids, "diaphragm"], 1)}
+    record = {"sources": [*[{"id": source_id, "role": "PASSIVE_CARDIOID"} for source_id in ids],
+                          {"id": "diaphragm", "role": "MF"}]}
+    apertures, ports, mf_source = passive_cardioid_apertures(tags, record)
+    assert ports == [left, right, "other-port-z", "other-port-a"]
+    assert list(apertures) == [*ports, "MF"]
+    assert [apertures[name] for name in ports] == [[tags[name]] for name in ports]
+    assert mf_source == "diaphragm"
+
+
+def test_role_picked_ports_keep_the_name_row_order():
+    ids = ["PORT_EXIT_R", "PASSIVE_CARDIOID_R", "PORT_EXIT", "PASSIVE_CARDIOID_L", "PASSIVE_CARDIOID"]
+    tags = {source_id: index for index, source_id in enumerate([*ids, "diaphragm"], 1)}
+    record = {"sources": [*[{"id": source_id, "role": "PASSIVE_CARDIOID"} for source_id in ids],
+                          {"id": "diaphragm", "role": "MF"}]}
+    _, ports, _ = passive_cardioid_apertures(tags, record)
+    assert ports == ["PASSIVE_CARDIOID", "PASSIVE_CARDIOID_L", "PASSIVE_CARDIOID_R", "PORT_EXIT", "PORT_EXIT_R"]
+
+
 @pytest.mark.parametrize("roles", [[], [{"id": "unknown", "role": "PASSIVE_CARDIOID"}]])
 def test_name_fallback_remains_available_when_no_role_has_a_tag(roles):
     assert passive_cardioid_apertures({"port_exit_l": 1, "PORT_EXIT_R": 2, "mf": 3}, {"sources": roles}) == (

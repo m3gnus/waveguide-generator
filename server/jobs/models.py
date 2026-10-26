@@ -927,6 +927,9 @@ def passive_cardioid_apertures(
         for source_id, role in sources
         if role == "PASSIVE_CARDIOID" and source_id in source_tags
     ]
+    if port_entries:
+        name_order = {name: index for index, name in enumerate(name for group in PORT_APERTURE_NAME_GROUPS for name in group)}
+        port_entries.sort(key=lambda entry: name_order.get(entry[0].strip().upper(), len(name_order)))
     if not port_entries:
         for group in PORT_APERTURE_NAME_GROUPS:
             port_entries = [by_upper[name] for name in group if name in by_upper]

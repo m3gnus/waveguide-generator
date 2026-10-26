@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import FastAPI
+import numpy as np
 import pytest
 
 from server.cadlink.store import CadLinkStore
@@ -257,9 +258,15 @@ def test_reflected_role_mesh_replays_its_reduced_domain_in_a_fresh_store(tmp_pat
         app, store, runtime, engine = app_for(tmp_path / "origin")
         try:
             original = box_mesh(planes=("x0", "y0"), negative=("x0",), capped=("x0", "y0") if remove_lids else ())
+            roles = {101: "HF", 102: "MF"}
+            if remove_lids:
+                for axis, tag in ((0, 103), (1, 104)):
+                    original.tags[np.all(original.points[original.triangles, axis] == 0, axis=1)] = tag
+                    original.names[tag] = "Cut face"
+                    roles[tag] = "RIGID"
             record = register_mesh(store, app.state.data_dir, registration(
                 msh_text=mesh_text(original), units="m", source_tags=[],
-                roles={101: "HF", 102: "MF"}, domain_planes=["x0", "y0"],
+                roles=roles, domain_planes=["x0", "y0"],
                 remove_lid_planes=["x0", "y0"] if remove_lids else [],
             ))
             body = request(record)
@@ -271,7 +278,7 @@ def test_reflected_role_mesh_replays_its_reduced_domain_in_a_fresh_store(tmp_pat
             await runtime.wait_idle()
             assert runtime.store.get_job_row(job_id)["status"] == "complete"
             package = await call(app, "GET", f"/api/jobs/{job_id}/mesh-replay")
-            assert package["registration"]["roles"] == {"101": "HF", "102": "MF"}
+            assert package["registration"]["roles"] == {str(tag): role for tag, role in roles.items()}
             assert package["registration"]["domain_planes"] == ["x0", "y0"]
             if remove_lids:
                 assert package["registration"]["remove_lid_planes"] == ["x0", "y0"]
@@ -290,6 +297,7 @@ def test_reflected_role_mesh_replays_its_reduced_domain_in_a_fresh_store(tmp_pat
             assert [source["role"] for source in opened["record"]["sources"]] == ["HF", "MF"]
             if remove_lids:
                 assert opened["record"]["source_file"]["transform"]["removed_lids"] == record["source_file"]["transform"]["removed_lids"]
+                assert {group["tag"] for group in opened["record"]["summary"]["groups"]} == {1, 101, 102}
             corrupt = deepcopy(package)
             corrupt["request"]["options"]["symmetry"] = "full"
             rehash(corrupt)

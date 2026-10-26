@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -279,24 +279,30 @@ def validate_remove_lid_planes(remove_lid_planes: list[str] | tuple[str, ...], d
     return tuple(plane for plane in domain_planes if plane in remove_lid_planes)
 
 
-def _remove_lids(mesh: FileMesh, planes: tuple[str, ...], verification: dict[str, Any]) -> tuple[FileMesh, dict[str, Any]]:
+def _remove_lids(mesh: FileMesh, planes: tuple[str, ...], verification: dict[str, Any], roles: Mapping[int, str]) -> tuple[FileMesh, dict[str, Any]]:
     """Drop only in-plane triangles; requesting a plane without a lid is an error."""
     lids = _lid_evidence(mesh, verification)
     keep = np.ones(len(mesh.triangles), dtype=bool)
     removed = {}
+    surface_names = {group["tag"]: group["display_name"] for group in mesh.summary()["groups"]}
     for plane in planes:
+        if plane in verification.get("straddling_planes", []):
+            raise ValueError(f"The mesh crosses {_plane_labels([plane])}. Choose the correct symmetry or change the mesh so it stays on one side.")
         lid = lids.get(plane)
         if lid is None or not lid["candidate"]:
             raise ValueError(f"The mesh has no closed face to remove on {_plane_labels([plane])}. Turn off removal for that plane.")
+        for group in lid["groups"]:
+            tag = group["tag"]
+            if roles.get(tag, "RIGID") != "RIGID":
+                raise ValueError(f"Removing the closed face on {_plane_labels([plane])} would remove triangles from driver or port surface {surface_names[tag]!r}. Change the surface groups in the meshing tool.")
         keep &= ~_plane_triangles(mesh, plane)
         removed[plane] = {key: lid[key] for key in ("triangle_count", "groups")}
     if not keep.any():
         raise ValueError("Removing the closed face would leave the mesh with no triangles. Change the mesh in the meshing tool.")
-    empty = sorted(set(mesh.tags.tolist()) - set(mesh.tags[keep].tolist()))
-    if empty:
-        raise ValueError(f"Removing the closed face would leave surface {empty[0]} with no triangles. Change the surface groups in the meshing tool.")
     used, indices = np.unique(mesh.triangles[keep], return_inverse=True)
-    return FileMesh(mesh.points[used], indices.reshape(-1, 3), mesh.tags[keep], mesh.names), removed
+    kept_tags = set(mesh.tags[keep].tolist())
+    names = {tag: name for tag, name in mesh.names.items() if tag in kept_tags}
+    return FileMesh(mesh.points[used], indices.reshape(-1, 3), mesh.tags[keep], names), removed
 
 
 def _opening_message(verification: dict[str, Any]) -> str:
@@ -329,13 +335,14 @@ def prepare_file_mesh(
     domain_planes: tuple[str, ...] | list[str] = (),
     reflect_planes: tuple[str, ...] | list[str] | None = None,
     remove_lid_planes: tuple[str, ...] | list[str] = (),
+    roles: Mapping[int, str] | None = None,
 ) -> tuple[FileMesh, dict[str, Any]]:
     planes, reflect_planes = validate_file_symmetry(domain_planes, reflect_planes)
     remove_lid_planes = validate_remove_lid_planes(remove_lid_planes, planes)
     mesh, transform = transform_file_mesh(mesh, units, forward, up)
     report, verification = _symmetry_evidence(mesh, planes)
     if remove_lid_planes:
-        mesh, removed = _remove_lids(mesh, remove_lid_planes, verification)
+        mesh, removed = _remove_lids(mesh, remove_lid_planes, verification, roles or {})
         transform["removed_lids"] = removed
         report, verification = _symmetry_evidence(mesh, planes)
     sides = verification["detection"]["plane_vertex_side_counts"]

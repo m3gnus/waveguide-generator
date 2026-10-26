@@ -95,6 +95,11 @@ class FilePreparation(JobModel):
         self.remove_lid_planes = list(validate_remove_lid_planes(self.remove_lid_planes, planes))
         return self
 
+    def driven_roles(self) -> dict[int, str]:
+        roles = {tag: "HF" for tag in self.source_tags}
+        roles.update(self.roles or {})
+        return {tag: role for tag, role in roles.items() if role != "RIGID"}
+
 
 class MeshRegistration(MeshFile, FilePreparation):
     pass
@@ -194,18 +199,16 @@ def _register_mesh(
     validate_record: Any = None,
 ) -> dict[str, Any]:
     original = parse_file_mesh(body.msh_text)
-    mesh, transform = prepare_file_mesh(original, body.units, body.forward, body.up,
-                                      domain_planes=body.domain_planes, reflect_planes=body.reflect_planes,
-                                      remove_lid_planes=body.remove_lid_planes)
     if len(set(body.source_tags)) != len(body.source_tags) or set(body.source_tags) - set(
-        mesh.tags.tolist()
+        original.tags.tolist()
     ):
         raise ValueError("Select unique driven groups that exist in this mesh.")
-    if body.roles is not None and set(body.roles) - set(mesh.tags.tolist()):
+    if body.roles is not None and set(body.roles) - set(original.tags.tolist()):
         raise ValueError("Assign roles only to groups that exist in this mesh.")
-    roles = {tag: "HF" for tag in body.source_tags}
-    roles.update(body.roles or {})
-    roles = {tag: role for tag, role in roles.items() if role != "RIGID"}
+    roles = body.driven_roles()
+    mesh, transform = prepare_file_mesh(original, body.units, body.forward, body.up,
+                                      domain_planes=body.domain_planes, reflect_planes=body.reflect_planes,
+                                      remove_lid_planes=body.remove_lid_planes, roles=roles)
     if not roles:
         raise ValueError("Choose at least one driver surface.")
     written_tags = solve_group_tags(mesh)
