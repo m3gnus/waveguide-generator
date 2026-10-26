@@ -288,6 +288,18 @@ it('shows the file sweep range error beside the sweep fields', () => {
   expect(host.querySelector('[data-section="Sweep"] [role="alert"]')).toBeNull();
 });
 
+it('offers the shared passive cardioid controls for a file aperture role', () => {
+  opened({ prepared: { ingest_id: 'wgi_f', source_tags: { cone: 1, opening: 2 }, summary: fileSummary,
+    sources: [{ id: 'cone', role: 'MF' }, { id: 'opening', role: 'PASSIVE_CARDIOID' }] } as unknown as RegisteredMesh });
+  act(() => root.render(panel()));
+  const section = host.querySelector('[data-section="Passive cardioid"]')!;
+  expect(section).not.toBeNull();
+  const toggle = section.querySelector<HTMLInputElement>('#cad-passive-cardioid')!;
+  act(() => toggle.click());
+  expect(useImportedModelStore.getState().fileSimulation?.passiveCardioid.enabled).toBe(true);
+  expect(section.querySelector('[role="alert"]')?.textContent).toContain('Passive cardioid needs');
+});
+
 it.each([false, true])('retains the file mesh engine list and adaptive hint (developer: %s)', (developer) => {
   preferencesStore.update({ showDeveloperDetails: developer });
   queryClient.setQueryData(CAPABILITIES_QUERY_KEY, { engines: [

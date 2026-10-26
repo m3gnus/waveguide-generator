@@ -1206,20 +1206,17 @@ export function passiveCardioidBlocker(
  * offering the section on a model with no port can only ever produce a
  * refusal. Hence the section, and the wire keys, are gated on this.
  *
- * Matching mirrors `_passive_cardioid_apertures` in server/solver/metal.py: it
- * upper-cases the names it is given and knows the port under several. The name
- * may arrive as either the source role or the source id -- CAD authoring puts
- * it in one or the other -- so both are tested. The canonical role is
- * PASSIVE_CARDIOID (with _L/_R for a split port); the PORT_EXIT family is the
- * legacy spelling and stays valid for models already authored under it.
+ * Match passive_cardioid_apertures in server/jobs/models.py: canonical roles
+ * first (including the PORT_EXIT role alias), then exact legacy source names.
  */
 export function hasPassiveCardioidSurface(
   sources: readonly { id: string; role: string }[],
 ): boolean {
-  const canonical = (name: string): string => name.trim().toUpperCase().replace(/[\s-]+/g, '_');
-  return sources.some((source) => [source.role, source.id]
-    .map((name) => canonical(String(name ?? '')))
-    .some((name) => name.includes('PASSIVE_CARDIOID') || name.includes('PORT_EXIT')));
+  const name = (value: string) => String(value ?? '').trim().toUpperCase();
+  const legacyNames = new Set(['PASSIVE_CARDIOID', 'PASSIVE_CARDIOID_L', 'PASSIVE_CARDIOID_R',
+    'PORT_EXIT', 'PORT_EXIT_L', 'PORT_EXIT_R', 'MID_PORT_EXIT_LEFT', 'MID_PORT_EXIT_RIGHT']);
+  return sources.some(source => ['PASSIVE_CARDIOID', 'PORT_EXIT'].includes(name(source.role)))
+    || sources.some(source => legacyNames.has(name(source.id)));
 }
 
 /** Drive-channel ids the rail may offer. The coupled campaign owns its own. */

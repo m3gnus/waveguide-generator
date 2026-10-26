@@ -1044,7 +1044,7 @@ function CadDriveChannels() {
  * Solve rather than quietly reverting to the pre-campaign path.
  */
 function CadPassiveCardioid() {
-  const state = useCadReturnStore();
+  const state = useImportedSimulationSetup();
   const form = state.passiveCardioid;
   const blocker = passiveCardioidBlocker(state);
   const bemDriven = form.portAreaSource === 'bem_aperture';
@@ -1164,11 +1164,10 @@ function CadSimulationEmpty() {
   return <p className="cad-simulation-empty">Settings appear when {model.selected ? model.label : 'a CAD model'} is ready.</p>;
 }
 
-export function CadSimulationSections({ searching, matches, ingestRecord, cardioidSurface }: {
+export function CadSimulationSections({ searching, matches, ingestRecord }: {
   searching: boolean;
   matches: (section: CadControlSection) => boolean;
   ingestRecord?: CadReturnIngestRecord;
-  cardioidSurface: boolean;
 }) {
   const cad = useImportedSimulationSetup();
   const options = useScopedSolveOptions();
@@ -1186,7 +1185,7 @@ export function CadSimulationSections({ searching, matches, ingestRecord, cardio
     {section('driveChannels', <CadDriveChannels/>, true)}
     {cad.input === 'cad' && crossoverDriverChannels(cad).length >= 2 && section('crossover', <CadCrossover/>, false, summaries.crossover)}
     {section('directivityMap', <DirectivityMapControls/>, false, summaries.directivity)}
-    {cad.input === 'cad' && cardioidSurface && section('passiveCardioid', <CadPassiveCardioid/>, true)}
+    {hasPassiveCardioidSurface(cad.sources) && section('passiveCardioid', <CadPassiveCardioid/>, true)}
     {section('solveOptions', <><SolveOptionsControls mode="cad" ingestRecord={ingestRecord} includeSampling={false}/><AdaptiveFrequencyControls mode="cad"/><MeshValidationControl mode="cad"/></>, false, summaries.solver)}
   </>;
 }
@@ -1241,12 +1240,6 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
   const ingestRecord = useCadReturnStore((state) => state.ingestRecord);
   const selectedBundle = useCadReturnStore((state) => state.selectedBundle);
   const developer = useDeveloperDetails();
-  // The campaign needs a port aperture in the geometry. Offering it to a model
-  // that has none can only produce a server refusal, so the section is not
-  // shown at all -- and the submission drops the form to match.
-  const cardioidSurface = useCadReturnStore(
-    (state) => hasPassiveCardioidSurface(state.selectedBundle?.sources ?? []),
-  );
   const waveguideLinked = useWaveguideDefinitionApplies();
   const setFamily = useDesignStore((state) => state.setFamily);
   const replaceDocument = useDesignStore((state) => state.replaceDocument);
@@ -1488,7 +1481,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
           {definitions.map(renderRegistrySection)}
           {tab === 'geometry' && cadSectionMatches(CAD_CONTROLS.realizedDimensions.section) && <RealizedDimensionsCard forceOpen={searching}/>}
           {!searching && tab === 'simulation' && !ingestRecord && <CadSimulationEmpty/>}
-          {tab === 'simulation' && ingestRecord && <CadSimulationSections searching={searching} matches={cadSectionMatches} ingestRecord={ingestRecord} cardioidSurface={cardioidSurface}/>}
+          {tab === 'simulation' && ingestRecord && <CadSimulationSections searching={searching} matches={cadSectionMatches} ingestRecord={ingestRecord}/>}
           {tab === 'simulation' && (selectedBundle || ingestRecord) && (!searching || cadSectionMatches(CAD_CONTROLS.meshDetail.section)) && <CadMeshDetail/>}
         </>}
       {searching && [...fieldsBySection.values()].every((fields) => fields.length === 0) && matchingCadSections.size === 0 && matchingParametricSections.size === 0 && <div className="parameter-empty">No parameter labels or keys match “{query}”.</div>}

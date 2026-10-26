@@ -139,7 +139,7 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
       <p className="section-note">Solve uses these exact settings{model.restoredRevisionId ? ', the setup revision this mesh was opened with' : ''}. Editing a control below starts a new setup from what the controls show.</p>
     </section>}
     <fieldset disabled={state.busy || !registered}>
-      <CadSimulationSections searching={false} matches={() => true} cardioidSurface={false}/>
+      <CadSimulationSections searching={false} matches={() => true}/>
     </fieldset>
     </>}
     {tab === 'simulation' && state.error && <p className="field-error" role="alert">{state.error}</p>}

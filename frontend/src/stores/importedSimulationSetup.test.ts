@@ -8,7 +8,7 @@ import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { startCadSetupPublisher } from '../shell/cadSetupPublisher';
-import { resetCadReturnStore, useCadReturnStore, type DriverPreset } from './cadReturn';
+import { hasPassiveCardioidSurface, resetCadReturnStore, useCadReturnStore, type DriverPreset } from './cadReturn';
 import { editFileDraft, flushImportedSetupWrites, openImported, resetImportedModelStore, useImportedModelStore } from './importedModel';
 import { createImportedSimulationSetup, importedSimulationSetup, seedFileSimulation } from './importedSimulationSetup';
 import { fileMeshSetup, fileMeshSubmission } from './meshImport';
@@ -54,6 +54,31 @@ it('binds an independent input to its own state and record sources', () => {
   expect(adapter.get().driveChannels[0].motion).toBe('axial');
   expect(adapter.get().frequencyStartHz).toBe(75);
   expect(importedSimulationSetup().sources).toEqual(mesh.sources);
+});
+
+it('matches the server aperture roles and exact legacy source names', () => {
+  expect(hasPassiveCardioidSurface([{ id: 'group_7', role: 'PASSIVE_CARDIOID' }])).toBe(true);
+  expect(hasPassiveCardioidSurface([{ id: 'opening', role: 'port_exit' }])).toBe(true);
+  expect(hasPassiveCardioidSurface([{ id: 'mid_port_exit_right', role: 'MF' }])).toBe(true);
+  expect(hasPassiveCardioidSurface([{ id: 'not_port_exit', role: 'MF' }])).toBe(false);
+  expect(hasPassiveCardioidSurface([{ id: 'group_7', role: 'PASSIVE_CARDIOID_L' }])).toBe(false);
+});
+
+it('saves, restores and submits file cardioid physics selected by source role', () => {
+  const record = { ...mesh, source_tags: { ...mesh.source_tags, opening: 4 },
+    sources: [...mesh.sources, { id: 'opening', role: 'PASSIVE_CARDIOID' }] };
+  void openImported({ kind: 'file', prepared: record, setup: null });
+  importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(msh), 'file', record.ingest_id));
+  importedSimulationSetup().setPassiveCardioid({ enabled: true });
+  expect(() => fileMeshSetup()).toThrow('Passive cardioid needs');
+  importedSimulationSetup().setPassiveCardioid({ rearVolumeL: 6, portLengthMm: 25,
+    modelPortAreaM2: 0.05, bemPortAreaM2: 0.0094, foamResistancePaSM3: 10_000, coupled: true });
+  const saved = fileMeshSetup();
+  expect(saved.geometry).toMatchObject({ passive_cardioid_rear_volume_l: 6,
+    passive_cardioid_port_length_mm: 25, passive_cardioid_coupled: true });
+  void openImported({ kind: 'file', prepared: record, setup: saved });
+  expect(fileMeshSubmission()).toEqual(bindImportedSetup(record, saved));
+  expect(importedSimulationSetup().passiveCardioid).toMatchObject({ enabled: true, rearVolumeL: 6, coupled: true });
 });
 
 it('defaults to one card per role and keeps each surface on its own channel', () => {

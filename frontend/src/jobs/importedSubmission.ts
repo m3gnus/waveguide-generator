@@ -16,7 +16,7 @@ import {
   passiveCardioidWire,
   useCadReturnStore,
 } from '../stores/cadReturn';
-import type { SimulationData, CadDriveChannel } from '../stores/cadReturn';
+import type { SimulationData, CadDriveChannel, RoleSource } from '../stores/cadReturn';
 import { parseFrequencyList, polarValidationError, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { frequencyText } from '../results/crossoverSpec';
 
@@ -298,19 +298,24 @@ export function simulationDriverReferences(state: Pick<SimulationData, 'driveCha
   }));
 }
 
+/** Crossover and cardioid physics share the same wire rules for every input. */
+export function simulationEffectsGeometry(
+  state: Parameters<typeof combineWire>[0] & Pick<SimulationData, 'passiveCardioid'>,
+  sources: readonly RoleSource[],
+): Partial<ImportedSetup['geometry']> {
+  const present = hasPassiveCardioidSurface(sources);
+  const blocker = present ? passiveCardioidBlocker(state) : null;
+  if (blocker) throw new Error(blocker);
+  const combine = combineWire(state);
+  const cardioid = present ? passiveCardioidWire(state.passiveCardioid) : null;
+  return { ...(combine ? { combine } : {}), ...(cardioid ?? {}) };
+}
+
 export function resolveCadImportedSetup(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
   solveStore: SolveOptionsSnapshot = useImportedSolveOptionsStore.getState(),
 ): ImportedSetup {
-  // The readiness gate already refuses this, but the builder is the last thing
-  // between the rail and the wire and an enabled-yet-incomplete form must never
-  // become a silently pre-campaign submission.
-  const cardioidPresent = cardioidSurfacePresent(state);
-  if (cardioidPresent) {
-    const cardioidBlocker = passiveCardioidBlocker(state);
-    if (cardioidBlocker) throw new Error(cardioidBlocker);
-  }
-  const passiveCardioid = cardioidPresent ? passiveCardioidWire(state.passiveCardioid) : null;
+  const effects = simulationEffectsGeometry(state, state.selectedBundle?.sources ?? []);
   const nativeError = exteriorModeBlocker(state, solveStore);
   if (nativeError) throw new Error(nativeError);
   const options = solveStore.options() as ImportedSolveSubmission['options'];
@@ -323,7 +328,6 @@ export function resolveCadImportedSetup(
   // and the domain is the one the ingestion record describes.
   options.solver_mode = 'full_3d';
   options.symmetry = 'auto';
-  const combine = combineWire(state);
   return {
     geometry: {
       ...simulationDriverGeometry(state),
@@ -337,8 +341,7 @@ export function resolveCadImportedSetup(
       },
       skipped_source_ids: [...state.skippedSourceIds],
       exterior_only: state.exteriorOnly,
-      ...(combine ? { combine } : {}),
-      ...(passiveCardioid ?? {}),
+      ...effects,
     },
     options,
   };
