@@ -221,7 +221,6 @@ densified.)
 | Impedance CSV | Frequency plus real/imaginary `Z/(rho*c)`. |
 | Radiation-matrix CSV | Long-form engineering matrix and in-phase port reductions in Pa·s/m³. Every row is explicitly `engineering_exp_plus_jwt`; receiver/source aperture names remain attached, and the complex load is exported as real/imaginary values without display smoothing. Available only when the job retains the passive-cardioid artifact. |
 | Radiation-matrix NPZ | The exact stored compressed archive. It retains aperture name/area/tag, solver-convention and engineering-convention matrices, in-phase reductions, and diagnostics; no client-side round trip or numeric conversion occurs. |
-| Radiation package | Deterministic `.zip` re-simulatable equivalent source for one solved job: the bundled solver mesh plus the retained complex64 boundary `p` and `q` per frequency and per *raw* channel, with a schema-versioned manifest carrying the artifact conventions, symmetry plane, array layout, and per-member SHA-256. Traces stay on the reduced mesh and consumers image-expand; no combine state is baked in. Built and verified by `wg export-package`; refused with structured issue codes unless the job is complete and its traces cover every solved frequency. |
 
 ## Naming and failure behavior
 

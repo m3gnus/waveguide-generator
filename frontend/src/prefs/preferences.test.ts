@@ -285,6 +285,21 @@ describe('client preferences', () => {
       autoExportOnComplete: true, chartTypes: ['impedance', 'summary'], jobSort: 'name_asc', minRating: 3,
     });
   });
+  it('retires the experimental package selection without losing other preferences', () => {
+    const stored = JSON.stringify({ version: STORAGE_VERSION, preferences: {
+      exportFormats: ['radiation_package', 'csv'],
+      autoExportFormats: ['json', 'radiation_package'],
+      autoExportOnComplete: true,
+      minRating: 3,
+    } });
+    const cleaned = readPreferences(stored);
+    expect(cleaned.migrated).toBe(true);
+    expect(cleaned.value).toMatchObject({
+      exportFormats: ['csv'], autoExportFormats: ['json'], autoExportOnComplete: true, minRating: 3,
+    });
+    expect(readPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: cleaned.value })).migrated)
+      .toBe(false);
+  });
   it('leaves a VACS-only selection empty rather than reinstating formats that were turned off', () => {
     const stored = JSON.stringify({ version: 14, preferences: {
       exportFormats: ['vacs'], autoExportFormats: ['vacs'],

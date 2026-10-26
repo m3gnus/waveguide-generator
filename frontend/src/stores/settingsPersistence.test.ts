@@ -4,6 +4,7 @@ import { DurableSettings, SETTINGS_NAMESPACES } from './durableSettings';
 import { CAD_DRAFTS_NAMESPACE, journalKey, mergeCadDrafts } from './cadDraftJournal';
 import {
   resetSolveOptionsStore,
+  normalizePersistedSolveOptions,
   restorePolarUiFromAthBlocks,
   restoreSolveSettingsFromBlocks,
   useSolveOptionsStore,
@@ -140,6 +141,16 @@ describe('opening a design does not discard remembered settings', () => {
 
 describe('WG.Solve config block', () => {
   beforeEach(() => { localStorage.clear(); resetSolveOptionsStore(); });
+
+  it('loads and resaves experimental settings without restoring the retired option', () => {
+    const blocks = { [WG_SOLVE_BLOCK]: { items: { BeatPrecision: 'float64', Symmetry: 'full' } } };
+    restoreSolveSettingsFromBlocks(blocks);
+    expect(useSolveOptionsStore.getState().symmetry).toBe('full');
+    const resaved = withWgSolveBlock(undefined, wgSolveSettingsFromStore());
+    expect(resaved[WG_SOLVE_BLOCK].items).not.toHaveProperty('BeatPrecision');
+    expect(normalizePersistedSolveOptions({ beatPrecision: 'float64', symmetry: 'full' }))
+      .not.toHaveProperty('beatPrecision');
+  });
 
   it('loads older WG and ATH designs without Accuracy as Fast', () => {
     useSolveOptionsStore.getState().setAccuracy('accurate');

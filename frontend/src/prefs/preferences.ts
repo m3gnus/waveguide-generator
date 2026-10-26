@@ -491,7 +491,7 @@ const MIGRATIONS: Record<number, (preferences: Partial<Preferences>) => Partial<
  * some unrelated change happens to rewrite it, which is what the detection
  * below is for.
  */
-const RETIRED_EXPORT_FORMATS = ['vacs'];
+const RETIRED_EXPORT_FORMATS = ['vacs', 'radiation_package'];
 
 /** Whether a stored profile still names a retired format, so it needs one rewrite. */
 function holdsRetiredFormat(stored: unknown): boolean {

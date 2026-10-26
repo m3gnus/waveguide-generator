@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from server.cli.args import main
+import pytest
+
+from server.cli.args import build_parser, main
 from server.design.textcfg import parse
 from server.engines.dryrun import DryRunEngine
 from server.engines.registry import EngineInfo, EngineRegistry
@@ -28,6 +30,15 @@ Engine = dryrun
 SweepSpacing = linear
 }
 """
+
+
+def test_cli_offers_only_supported_commands(capsys) -> None:
+    parser = build_parser()
+    assert "export-package" not in parser.format_help()
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["export-package", "job-1"])
+    assert exc.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
 
 
 def _registry() -> EngineRegistry:
@@ -170,6 +181,19 @@ def test_validate_accepts_the_canonical_http_solve_request(
         "source": "flags",
     }
     assert report["errors"] == []
+
+
+def test_validate_opens_a_design_with_a_retired_solve_setting(tmp_path: Path, capsys) -> None:
+    path = _design_path(tmp_path, source=VALID_MWG.replace(
+        "SweepSpacing = linear", "SweepSpacing = linear\nBeatPrecision = float64"
+    ))
+    exit_code = main(
+        ["validate", str(path), "--json", "--no-mesh"], engine_registry=_registry()
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert report["errors"] == []
+    assert report["frequencies"]["spacing"] == "linear"
 
 
 def test_path_prediction_reports_planner_full_3d_fallback() -> None:

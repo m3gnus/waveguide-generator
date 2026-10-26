@@ -162,6 +162,14 @@ class SolveOptions(JobModel):
     accuracy: Literal["fast", "accurate"] = "fast"
     adaptive_frequency_sampling: bool = False
 
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_retired_precision(cls, value: Any) -> Any:
+        """Read experimental saved requests without restoring their retired option."""
+        if isinstance(value, Mapping) and "beat_precision" in value:
+            return {key: item for key, item in value.items() if key != "beat_precision"}
+        return value
+
     @model_serializer(mode="wrap")
     def serialize_sampling_option(self, handler: SerializerFunctionWrapHandler):  # type: ignore[no-untyped-def]
         """Keep every legacy wire encoding unchanged when sampling is off."""

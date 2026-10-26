@@ -114,33 +114,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="apply a versioned JSON solve-options overlay",
     )
 
-    package_parser = subparsers.add_parser(
-        "export-package",
-        help="export a solved job's retained traces as a re-simulatable package",
-    )
-    package_parser.add_argument(
-        "job",
-        nargs="?",
-        help="job id of a completed solve that retained field traces",
-    )
-    package_parser.add_argument(
-        "--output",
-        type=Path,
-        metavar="PATH",
-        help="write the package to a new .zip path",
-    )
-    package_parser.add_argument(
-        "--data-dir",
-        type=Path,
-        metavar="DIR",
-        help="override the application data directory",
-    )
-    package_parser.add_argument(
-        "--verify",
-        type=Path,
-        metavar="PATH",
-        help="verify an existing package's manifest and member digests instead",
-    )
     return parser
 
 
@@ -175,10 +148,6 @@ def main(
         return solve_command(
             args, engine_registry=registry, _internal_in_process=_internal_in_process
         )
-    if args.command == "export-package":
-        from .export_package import export_package_command
-
-        return export_package_command(args)
     raise AssertionError(f"unhandled command: {args.command}")
 
 

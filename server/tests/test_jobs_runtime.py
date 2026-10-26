@@ -75,6 +75,21 @@ def test_replay_preserves_a_design_from_a_versioned_snapshot() -> None:
     assert request.label == "Stored design"
 
 
+def test_replay_ignores_retired_option_in_an_experimental_job_record() -> None:
+    stored = _request().model_dump(mode="json")
+    stored["options"]["beat_precision"] = "float64"
+
+    replay = _replay_request({"config_json": stored})
+
+    assert replay.options.engine == "dryrun"
+    assert "beat_precision" not in replay.options.model_dump(mode="json")
+    assert "beat_precision" not in replay.options.model_json_schema()["properties"]
+    assert stored["options"]["beat_precision"] == "float64"
+    stored["options"]["unrelated_unknown"] = True
+    with pytest.raises(ValueError):
+        _replay_request({"config_json": stored})
+
+
 def test_result_records_choice_engine_and_actual_formulation_per_channel() -> None:
     request = _request()
     request.options.engine = "beat-metal"

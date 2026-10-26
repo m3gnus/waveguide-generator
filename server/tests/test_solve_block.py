@@ -97,3 +97,11 @@ def test_legacy_file_engine_cannot_replace_machine_execution_choice() -> None:
     )
     assert resolved.engine == "bempp"
     assert resolved.solver_mode == "full_3d"
+
+
+def test_legacy_precision_in_design_block_is_ignored() -> None:
+    resolved = solve_options_from_blocks(
+        {"WG.Solve": {"items": {"BeatPrecision": "float64", "Symmetry": "full"}}}
+    )
+    assert resolved.symmetry == "full"
+    assert "beat_precision" not in resolved.model_dump(mode="json")

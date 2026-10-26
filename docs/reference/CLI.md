@@ -22,8 +22,6 @@ language-neutral automation, use `--request REQUEST.json`; the file is the exact
 ```text
 wg validate --request request.json --json --no-mesh
 wg solve --request request.json --events ndjson --output run-001
-wg export-package JOB_ID --output retained-traces.zip
-wg export-package --verify retained-traces.zip
 ```
 
 Exactly one positional design or `--request` is required. A solve-options `--overlay`

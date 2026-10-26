@@ -92,7 +92,7 @@ points with small hollow
 circles and labels that convention in the series name. Every result chart and
 field-plane controls also disclose
 adaptive reconstruction. Numeric CSV, summary, FRD, ZMA, derived acoustics,
-full JSON, static reports, pressure-basis NPZ and portable radiation packages
+full JSON, static reports and pressure-basis NPZ
 carry a warning, solved/interpolated requested-row counts, and row flags or a
 solved-frequency list. Historical/unflagged exports retain their exact bytes.
 False/unset request options are omitted from model serialization, stored configs,

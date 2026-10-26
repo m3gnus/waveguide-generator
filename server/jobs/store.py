@@ -35,10 +35,8 @@ from shared.build_identity import build_label
 from server.solver.field_traces_store import (
     ArtifactMissing,
     FieldTraceArtifact,
-    FieldTraceBundle,
     StoredFieldTraceArtifact,
     field_trace_artifact_dir,
-    load_field_trace_bundle as load_field_trace_bundle_artifact,
     load_field_traces as load_field_traces_artifact,
     remove_field_trace_artifact,
     write_field_traces,
@@ -2837,18 +2835,6 @@ class JobStore:
             channel_id,
             artifact_dir=artifact_path,
         )
-
-    def load_field_trace_bundle(self, job_id: str) -> FieldTraceBundle:
-        """Load every retained frequency and channel from the sidecar at once."""
-
-        record = self.get_field_trace_record(job_id)
-        if record is None:
-            raise ArtifactMissing(f"field-trace artifact is missing for job {job_id}")
-        return load_field_trace_bundle_artifact(
-            job_id,
-            artifact_dir=self._field_trace_path(str(record["path"])),
-        )
-
 
     def delete_job_with_event(self, job_id: str, *, preserve_files: bool = False) -> tuple[bool, dict[str, Any] | None]:
         """Delete one row and retain a terminal deleted event, optionally keeping disk files."""
