@@ -1179,6 +1179,14 @@ export function passiveCardioidWire(form: PassiveCardioidForm): PassiveCardioidW
   };
 }
 
+const PASSIVE_CARDIOID_ROLES = new Set(['PASSIVE_CARDIOID', 'PORT_EXIT']);
+const PASSIVE_CARDIOID_NAME_GROUPS = [
+  ['PASSIVE_CARDIOID'], ['PASSIVE_CARDIOID_L', 'PASSIVE_CARDIOID_R'],
+  ['PORT_EXIT'], ['PORT_EXIT_L', 'PORT_EXIT_R'], ['MID_PORT_EXIT_LEFT', 'MID_PORT_EXIT_RIGHT'],
+];
+const PASSIVE_CARDIOID_NAMES = new Set(PASSIVE_CARDIOID_NAME_GROUPS.flat());
+const passiveCardioidKey = (value: string) => String(value ?? '').trim().toUpperCase();
+
 export interface PassiveCardioidTopology {
   sources: readonly RoleSource[];
   sourceTags: Readonly<Record<string, number>> | null;
@@ -1213,18 +1221,15 @@ export function passiveCardioidBlocker(
   const skipped = new Set(topology.skippedSourceIds);
   const tags = Object.entries(topology.sourceTags).filter(([id]) => !skipped.has(id));
   const byId = new Map(tags);
-  const byName = new Map(tags.map(([id]) => [id.trim().toUpperCase(), id]));
+  const byName = new Map(tags.map(([id]) => [passiveCardioidKey(id), id]));
   const activeSources = topology.sources.filter(source => byId.has(source.id) && !skipped.has(source.id));
-  const role = (value: string) => value.trim().toUpperCase();
-  let ports = activeSources.filter(source => ['PASSIVE_CARDIOID', 'PORT_EXIT'].includes(role(source.role))).map(source => source.id);
+  let ports = activeSources.filter(source => PASSIVE_CARDIOID_ROLES.has(passiveCardioidKey(source.role))).map(source => source.id);
   if (!ports.length) {
-    const names = [['PASSIVE_CARDIOID'], ['PASSIVE_CARDIOID_L', 'PASSIVE_CARDIOID_R'],
-      ['PORT_EXIT'], ['PORT_EXIT_L', 'PORT_EXIT_R'], ['MID_PORT_EXIT_LEFT', 'MID_PORT_EXIT_RIGHT']];
-    ports = names.map(group => group.flatMap(name => byName.has(name) ? [byName.get(name)!] : []))
+    ports = PASSIVE_CARDIOID_NAME_GROUPS.map(group => group.flatMap(name => byName.has(name) ? [byName.get(name)!] : []))
       .find(group => group.length > 0) ?? [];
   }
   if (!ports.length) return 'Add a port or passive opening to the model, then prepare it again.';
-  let mids = activeSources.filter(source => role(source.role) === 'MF').map(source => source.id);
+  let mids = activeSources.filter(source => passiveCardioidKey(source.role) === 'MF').map(source => source.id);
   if (!mids.length && byName.has('MF')) mids = [byName.get('MF')!];
   if (mids.length !== 1) return 'Passive cardioid needs exactly one mid-frequency source. Change the source roles and prepare the model again.';
   const portTags = ports.map(id => byId.get(id));
@@ -1258,11 +1263,8 @@ export function passiveCardioidBlocker(
 export function hasPassiveCardioidSurface(
   sources: readonly { id: string; role: string }[],
 ): boolean {
-  const name = (value: string) => String(value ?? '').trim().toUpperCase();
-  const legacyNames = new Set(['PASSIVE_CARDIOID', 'PASSIVE_CARDIOID_L', 'PASSIVE_CARDIOID_R',
-    'PORT_EXIT', 'PORT_EXIT_L', 'PORT_EXIT_R', 'MID_PORT_EXIT_LEFT', 'MID_PORT_EXIT_RIGHT']);
-  return sources.some(source => ['PASSIVE_CARDIOID', 'PORT_EXIT'].includes(name(source.role)))
-    || sources.some(source => legacyNames.has(name(source.id)));
+  return sources.some(source => PASSIVE_CARDIOID_ROLES.has(passiveCardioidKey(source.role)))
+    || sources.some(source => PASSIVE_CARDIOID_NAMES.has(passiveCardioidKey(source.id)));
 }
 
 /** Drive-channel ids the rail may offer. The coupled campaign owns its own. */
