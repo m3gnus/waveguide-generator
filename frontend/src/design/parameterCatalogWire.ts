@@ -1,4 +1,5 @@
 import {
+  COMPOSITE_SLOT_DISABLED_REASON,
   LEGACY_PARAMETER_REGISTRY,
   fieldAcceptsExpression,
   type ParameterDefinition,
@@ -128,6 +129,26 @@ const FIELD_CONDITIONS: Record<string, FieldConditions> = {
     },
   },
 };
+
+// The native composite shares one formula marker across optional feature slots.
+for (const [prefix, path] of [
+  ['native.adapter.', 'throat_adapter'], ['native.arc.', 'terminating_arc'],
+  ['native.lip.', 'mesh.mouth_roundover_radius_mm'], ['native.axial_scale', 'axial_scale'],
+] as const) {
+  for (const field of LEGACY_PARAMETER_REGISTRY.filter((candidate) => candidate.id.startsWith(prefix))) {
+    FIELD_CONDITIONS[field.id] = {
+      visible_when: { operator: 'any', conditions: [
+        { path: 'formula', operator: 'not_equals', value: 'OSSE-NATIVE' },
+        { path, operator: 'present' },
+      ] },
+      disabled_when: { operator: 'all', conditions: [
+        { path: 'formula', operator: 'equals', value: 'OSSE-NATIVE' },
+        { path, operator: 'absent' },
+      ] },
+      disabled_reason: COMPOSITE_SLOT_DISABLED_REASON,
+    };
+  }
+}
 
 const ICW_IMPORTED_INPUT: Condition = { operator: 'any', conditions: [
   { path: 'icw_seed', operator: 'present' }, { path: 'icw_coeffs', operator: 'present' },

@@ -21,6 +21,7 @@ import { useDocumentStore, type CadLinkClassification, type DesignIdentity } fro
 import { writeToOutputFolder, type OutputFolderWrite } from './workspace';
 import type { ConfirmReplacements } from './exportDestination';
 import { solveAttention } from '../shell/solveAttention';
+import { formatApiDetail } from '../jobs/actions';
 
 export interface MigrationApplication {
   name: string;
@@ -93,9 +94,9 @@ export interface WgLinkExportResponse {
 
 async function errorMessage(response: Response): Promise<string> {
   try {
-    const body = await response.json() as { detail?: string | { message?: string } };
-    if (typeof body.detail === 'string') return body.detail;
-    if (body.detail?.message) return body.detail.message;
+    const body = await response.json() as { detail?: unknown };
+    const formatted = formatApiDetail(body.detail);
+    if (formatted) return formatted.replace(/Value error,\s*/g, '');
   } catch { /* the status text remains useful */ }
   return `Request failed: ${response.status} ${response.statusText}`.trim();
 }
@@ -277,6 +278,16 @@ export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocu
     throw new Error(`Unsupported design formula: ${String(unwrapped.formula)}`);
   }
   const document = merge(designForFamily(formula), unwrapped);
+  if (formula === 'OSSE-NATIVE') {
+    // The composite template has active slots; an omitted wire slot is inactive.
+    if (wire.axial_scale == null) delete document.axial_scale;
+    if (wire.throat_adapter == null) delete document.throat_adapter;
+    if (wire.terminating_arc == null) delete document.terminating_arc;
+    if ((wire.mesh as Record<string, unknown> | undefined)?.mouth_roundover_radius_mm == null) {
+      delete document.mesh.mouth_roundover_radius_mm;
+      if ((wire.mesh as Record<string, unknown> | undefined)?.wall_thickness == null) document.mesh.wall_thickness = 0;
+    }
+  }
   if (document.text_import_version === 'ath-2026-09a-v2' && (wire.mesh as Record<string, unknown> | undefined)?.wall_thickness == null) absent.push('mesh.wall_thickness');
   normalizeNativeCrossSection(document);
   // R is optional on ICW: an absent rollback R enables r_aperture fallback.

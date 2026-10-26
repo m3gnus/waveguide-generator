@@ -21,8 +21,9 @@ import { cadChannelLabel, combineWire, combineSpecEffective, channelDriverPresen
 import { useDocumentStore } from '../stores/document';
 import { resetDriverLibraryStore, useDriverLibraryStore } from '../stores/driverLibrary';
 import { hydrateDesignDocument } from '../api/designIo';
-import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, type OsseFeatures } from './osseFeatures';
-import { NATIVE_FAMILIES, designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
+import * as designIo from '../api/designIo';
+import { osseFeatures, osseFormula, type OsseFeatures } from './osseFeatures';
+import { NATIVE_FAMILIES, designForFamily, mergeDesignForOsseFeatures, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { defaultPolarUi, polarConfigFromUi, resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { ParamPanel, RealizedDimensionsSection, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
@@ -866,18 +867,19 @@ describe('ParamPanel inventory UX', () => {
     ['mouth', 'roundover', 'OSSE-ROUNDOVER'],
     ['mouth', 'arc', 'OSSE-ARC'],
     ['axial', 'on', 'OSSE-AXIAL'],
-  ] as const)('selects %s = %s, returns to plain OSSE and undoes both transitions', (key, value, formula) => {
+  ] as const)('selects %s = %s, returns to plain OSSE and undoes both transitions', async (key, value, formula) => {
+    vi.spyOn(designIo, 'serializeDesignDocument').mockResolvedValue({ text: '', suggestedFilename: '' });
     const original = { ...designForFamily('OSSE'), L: 181, r0: 14, a: 46, a0: 12, k: 3, scale: 1.2 };
     act(() => useDesignStore.getState().replaceDocument(original));
-    const choose = (choice: string) => {
+    const choose = async (choice: string) => {
       const select = host.querySelector<HTMLSelectElement>(`#osse-feature-${key}`)!;
-      act(() => { select.value = choice; select.dispatchEvent(new Event('change', { bubbles: true })); });
+      await act(async () => { select.value = choice; select.dispatchEvent(new Event('change', { bubbles: true })); });
     };
-    choose(value);
+    await choose(value);
     const changed = useDesignStore.getState().design;
     expect(changed).toMatchObject({ formula, L: 181, r0: 14, a: 46, a0: 12, k: 3, scale: 1.2, s: 0 });
     expect(host.textContent).toContain('Undo restores the complete previous design.');
-    choose(key === 'throat' ? 'none' : key === 'mouth' ? 'plain' : 'off');
+    await choose(key === 'throat' ? 'none' : key === 'mouth' ? 'plain' : 'off');
     expect(useDesignStore.getState().design).toMatchObject({ formula: 'OSSE', L: 181, r0: 14, a: 46, a0: 12, k: 3, scale: 1.2 });
     act(() => useDesignStore.getState().undo());
     expect(useDesignStore.getState().design).toEqual(changed);
@@ -887,31 +889,95 @@ describe('ParamPanel inventory UX', () => {
     expect(useDesignStore.getState().design).toEqual(changed);
   });
 
-  it('allows authored adapter + axial scale and refuses unsupported combinations even for a dispatched event', () => {
+  it('composes authored adapter, mouth and axial choices and refuses controls combinations', async () => {
+    vi.spyOn(designIo, 'serializeDesignDocument').mockResolvedValue({ text: '', suggestedFilename: '' });
     act(() => useDesignStore.getState().replaceDocument(designForFamily('OSSE-ADAPTER')));
-    const choose = (key: string, value: string) => {
+    const choose = async (key: string, value: string) => {
       const select = host.querySelector<HTMLSelectElement>(`#osse-feature-${key}`)!;
-      act(() => { select.value = value; select.dispatchEvent(new Event('change', { bubbles: true })); });
+      await act(async () => { select.value = value; select.dispatchEvent(new Event('change', { bubbles: true })); });
     };
     const adapter = useDesignStore.getState().design.throat_adapter;
-    choose('axial', 'on');
+    await choose('axial', 'on');
     expect(useDesignStore.getState().design.formula).toBe('OSSE-ADAPTER-AXIAL');
     expect(useDesignStore.getState().design.throat_adapter).toEqual(adapter);
-    for (const selector of ['#osse-feature-throat option[value="controls"]', '#osse-feature-mouth option[value="arc"]', '#osse-feature-mouth option[value="roundover"]']) {
-      const option = host.querySelector<HTMLOptionElement>(selector)!;
-      expect(option.disabled).toBe(true);
-      expect(option.textContent).toContain(OSSE_FEATURE_CONFLICT);
-    }
-    choose('mouth', 'arc');
-    expect(useDesignStore.getState().design.formula).toBe('OSSE-ADAPTER-AXIAL');
-    choose('throat', 'none');
-    expect(useDesignStore.getState().design.formula).toBe('OSSE-AXIAL');
-    choose('axial', 'off');
-    expect(useDesignStore.getState().design.formula).toBe('OSSE');
-    act(() => useDesignStore.getState().replaceDocument(designForFamily('OSSE-ROUNDOVER')));
-    expect(host.querySelector<HTMLOptionElement>('#osse-feature-axial option[value="on"]')!.disabled).toBe(true);
-    expect(host.querySelector<HTMLOptionElement>('#osse-feature-throat option[value="authored"]')!.disabled).toBe(true);
+    expect(host.querySelector<HTMLOptionElement>('#osse-feature-throat option[value="controls"]')!.disabled).toBe(true);
+    await choose('mouth', 'roundover');
+    expect(useDesignStore.getState().design).toMatchObject({ formula: 'OSSE-NATIVE', throat_adapter: adapter, axial_scale: 1.1 });
+    await choose('axial', 'off');
+    expect(useDesignStore.getState().design).toMatchObject({ formula: 'OSSE-NATIVE', throat_adapter: adapter });
+    expect(useDesignStore.getState().design.axial_scale).toBeUndefined();
+    await choose('throat', 'none');
+    expect(useDesignStore.getState().design.formula).toBe('OSSE-ROUNDOVER');
+    await choose('axial', 'on');
+    expect(useDesignStore.getState().design.formula).toBe('OSSE-NATIVE');
     expect(host.querySelector<HTMLOptionElement>('#osse-feature-mouth option[value="arc"]')!.disabled).toBe(false);
+  });
+
+  it('keeps expressions and the complete design when native features cannot carry them', async () => {
+    const validate = vi.spyOn(designIo, 'serializeDesignDocument');
+    const original = designForFamily('OSSE');
+    original._expressions = { L: { value: null, raw: '120 + 5*sin(p)', dialect: 'ath' } };
+    act(() => useDesignStore.getState().replaceDocument(original));
+    const select = host.querySelector<HTMLSelectElement>('#osse-feature-mouth')!;
+    await act(async () => { select.value = 'roundover'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(validate).not.toHaveBeenCalled();
+    expect(useDesignStore.getState().design).toEqual(original);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Replace those expressions');
+  });
+
+  it('does not copy a displayed fallback for a missing OSSE dimension', async () => {
+    const validate = vi.spyOn(designIo, 'serializeDesignDocument');
+    const original = designForFamily('OSSE');
+    original._absent = ['L'];
+    act(() => useDesignStore.getState().replaceDocument(original));
+    const select = host.querySelector<HTMLSelectElement>('#osse-feature-mouth')!;
+    await act(async () => { select.value = 'roundover'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(validate).not.toHaveBeenCalled();
+    expect(useDesignStore.getState().design).toEqual(original);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Enter the missing numbers');
+  });
+
+  it.each([
+    { a: 80 }, { k: 0 }, { scale: 11 },
+  ])('keeps the original OSSE design if server validation refuses %o', async (invalid) => {
+    const validate = vi.spyOn(designIo, 'serializeDesignDocument').mockRejectedValue(new Error('invalid geometry'));
+    const original = { ...designForFamily('OSSE'), ...invalid };
+    act(() => useDesignStore.getState().replaceDocument(original));
+    const select = host.querySelector<HTMLSelectElement>('#osse-feature-mouth')!;
+    await act(async () => { select.value = 'roundover'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(validate).toHaveBeenCalledOnce();
+    expect(useDesignStore.getState().design).toEqual(original);
+    expect(select.value).toBe('plain');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('current design was kept');
+  });
+
+  it('does not apply a validation result to a design edited while the request was pending', async () => {
+    let finish!: (value: designIo.SerializeDesignResponse) => void;
+    vi.spyOn(designIo, 'serializeDesignDocument').mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    act(() => useDesignStore.getState().replaceDocument(designForFamily('OSSE')));
+    const select = host.querySelector<HTMLSelectElement>('#osse-feature-mouth')!;
+    await act(async () => { select.value = 'roundover'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    act(() => useDesignStore.getState().updateField('L', 190));
+    await act(async () => { finish({ text: '', suggestedFilename: '' }); });
+    expect(useDesignStore.getState().design).toMatchObject({ formula: 'OSSE', L: 190 });
+  });
+
+  it.each([
+    [{ throat: 'none', mouth: 'roundover', axial: 'on' }, 'Driver handle length', 'native.adapter.driver_handle_mm'],
+    [{ throat: 'none', mouth: 'roundover', axial: 'on' }, 'Arc attachment', 'native.arc.join_t'],
+    [{ throat: 'authored', mouth: 'arc', axial: 'on' }, 'Mouth roundover radius', 'native.lip.radius'],
+    [{ throat: 'authored', mouth: 'arc', axial: 'off' }, 'Absolute axial scale', 'native.axial_scale'],
+  ] as const)('disables an inactive composite control revealed by search: %s', (features, query, id) => {
+    const design = mergeDesignForOsseFeatures(designForFamily('OSSE-NATIVE'), features);
+    act(() => useDesignStore.getState().replaceDocument(design));
+    const search = host.querySelector<HTMLInputElement>('input[type="search"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, query);
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(host.querySelector<HTMLInputElement>(`[data-parameter-id="${id}"] input`)?.disabled).toBe(true);
+    expect(host.textContent).toContain('Select this feature in OSSE features before editing.');
+    expect(useDesignStore.getState().design).toEqual(design);
   });
 
   it('finds and reveals OSSE features from the parameter palette without changing the design', async () => {

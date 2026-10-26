@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { hydrateDesignDocument } from '../api/designIo';
-import { designForFamily, NATIVE_FAMILIES, resetDesignStore, serializeDesign, useDesignStore, type DesignFamily } from '../stores/design';
+import { designForFamily, mergeDesignForOsseFeatures, NATIVE_FAMILIES, resetDesignStore, serializeDesign, useDesignStore, type DesignFamily } from '../stores/design';
 import { osseFeatures, osseFormula } from './osseFeatures';
 
 afterEach(resetDesignStore);
@@ -26,14 +26,13 @@ describe('OSSE feature choices', () => {
     for (const throat of ['none', 'authored', 'controls'] as const) {
       for (const mouth of ['plain', 'roundover', 'arc'] as const) {
         for (const axial of ['off', 'on'] as const) {
-          const allowed = Number(throat !== 'none') + Number(mouth !== 'plain') + Number(axial === 'on') <= 1
-            || (throat === 'authored' && mouth === 'plain');
+          const allowed = throat !== 'controls' || (mouth === 'plain' && axial === 'off');
           expect(Boolean(osseFormula({ throat, mouth, axial }))).toBe(allowed);
           supported += Number(allowed);
         }
       }
     }
-    expect(supported).toBe(7);
+    expect(supported).toBe(13);
     for (const family of ['SOURCE-DISK', 'LOOKUP', 'R-OSSE', 'ICW', 'FREEFORM']) expect(osseFeatures(family)).toBeUndefined();
   });
 
@@ -54,7 +53,6 @@ describe('OSSE feature choices', () => {
 
   it.each(variants.slice(1))('carries shared body edits across %s and plain OSSE, retaining complete undo', (family) => {
     const original = { ...designForFamily('OSSE'), L: 141, r0: 13.5, a: 39, a0: 12, k: 1.5, scale: 1.25, h: 3, s: .6 };
-    original._expressions = { L: { value: 141, raw: '140 + 1', dialect: 'ath' as const } };
     original.morph.target_shape = 2;
     original.enclosure.depth = 250;
     useDesignStore.getState().replaceDocument(original);
@@ -71,5 +69,38 @@ describe('OSSE feature choices', () => {
     expect(useDesignStore.getState().design).toEqual(original);
     useDesignStore.getState().redo();
     expect(useDesignStore.getState().design).toEqual(variant);
+  });
+
+  it('refuses to copy a stored OSSE expression through the family conversion API', () => {
+    const original = designForFamily('OSSE');
+    original._expressions = { L: { value: null, raw: '120 + sin(p)', dialect: 'ath' } };
+    useDesignStore.getState().replaceDocument(original);
+    expect(() => useDesignStore.getState().setFamily('OSSE-ROUNDOVER', { preserveOsseBody: true })).toThrow('Replace those expressions');
+    expect(useDesignStore.getState().design).toEqual(original);
+  });
+
+  it.each([
+    ['none', 'arc', 'on'], ['authored', 'arc', 'off'], ['authored', 'arc', 'on'],
+    ['none', 'roundover', 'on'], ['authored', 'roundover', 'off'], ['authored', 'roundover', 'on'],
+  ] as const)('round-trips composite slots %s / %s / %s', (throat, mouth, axial) => {
+    const features = { throat, mouth, axial };
+    const document = mergeDesignForOsseFeatures(designForFamily('OSSE'), features);
+    expect(document.formula).toBe('OSSE-NATIVE');
+    expect(osseFeatures(document.formula, document)).toEqual(features);
+    const wire = serializeDesign(document);
+    const reopened = hydrateDesignDocument(wire);
+    expect(osseFeatures(reopened.formula, reopened)).toEqual(features);
+    expect(serializeDesign(reopened)).toEqual(wire);
+  });
+
+  it('omits an axial override edited back to uniform scale and keeps undo', () => {
+    const composite = designForFamily('OSSE-NATIVE');
+    useDesignStore.getState().replaceDocument(composite);
+    useDesignStore.getState().updateField('axial_scale', composite.scale);
+    const changed = useDesignStore.getState().design;
+    expect(changed.formula).toBe('OSSE-ROUNDOVER');
+    expect(changed.axial_scale).toBeUndefined();
+    useDesignStore.getState().undo();
+    expect(useDesignStore.getState().design).toEqual(composite);
   });
 });

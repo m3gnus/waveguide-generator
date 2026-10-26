@@ -1,7 +1,8 @@
 import { importedDriverLabel, useImportedSimulationSetup } from '../stores/importedSimulationSetup';
 import { sourceRoleLabel } from '../model/cadLabels';
 import { useDeveloperDetails } from '../prefs/preferences';
-import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, OSSE_SWITCH_NOTICE, type OsseFeatures } from './osseFeatures';
+import { osseFeatures, OSSE_SWITCH_NOTICE } from './osseFeatures';
+import { OsseFeatureChoices } from './OsseFeatureChoices';
 import { FreeformProfileInspection } from './ProfileInspection';
 import { registerParameterPanel } from './parameterPanelValidity';
 import { nativeSymmetryLimitation } from './nativeFamilies';
@@ -1190,35 +1191,6 @@ export function CadSimulationSections({ searching, matches, ingestRecord }: {
   </>;
 }
 
-const osseChoices = [
-  { key: 'throat', label: 'Throat', options: [['none', 'None'], ['authored', 'Adapter (authored)'], ['controls', 'Adapter (controls)']] },
-  { key: 'mouth', label: 'Mouth end', options: [['plain', 'Plain'], ['roundover', 'Roundover'], ['arc', 'Terminating arc']] },
-  { key: 'axial', label: 'Axial scale', options: [['off', 'Off'], ['on', 'On']] },
-] as const;
-
-function OsseFeatureChoices({ design, onChange }: { design: DesignDocument; onChange: (family: DesignFamily) => void }) {
-  const features = osseFeatures(design.formula)!;
-  return <fieldset className="osse-features" data-control-reveal-id={PARAMETRIC_CONTROLS.osseFeatures.reveal.id}>
-    <legend>OSSE features</legend>
-    <p className="section-note">Choose one feature, or an authored adapter with axial scale. Native features use circular OSSE bodies; switching is undoable.</p>
-    {osseChoices.map(({ key, label, options }) => <SelectRow key={key}>
-      <label htmlFor={`osse-feature-${key}`}>{label}</label>
-      <select id={`osse-feature-${key}`} value={features[key]} onChange={(event) => {
-        const formula = osseFormula({ ...features, [key]: event.target.value } as OsseFeatures);
-        if (formula && formula !== design.formula) onChange(formula);
-      }}>
-        {options.map(([value, name]) => {
-          const disabled = !osseFormula({ ...features, [key]: value } as OsseFeatures);
-          return <option key={value} value={value} disabled={disabled} title={disabled ? OSSE_FEATURE_CONFLICT : undefined}>
-            {name}{disabled ? ` — ${OSSE_FEATURE_CONFLICT}` : ''}
-          </option>;
-        })}
-      </select>
-    </SelectRow>)}
-    {design.formula !== 'OSSE' && <p className="section-note">{OSSE_FEATURE_CONFLICT}; authored adapter + axial scale is supported. Clear the active choice before selecting another feature.</p>}
-  </fieldset>;
-}
-
 export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embedded?: boolean }) {
   const design = useDesignStore((state) => state.design);
   const designRevision = useDesignStore((state) => state.designRevision);
@@ -1418,10 +1390,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
         </option>}
       </select>
     </SelectRow>
-    {osseFeatures(design.formula) && <OsseFeatureChoices design={design} onChange={(family) => {
-      setFamily(family, { preserveOsseBody: true });
-      setConversionNotice(OSSE_SWITCH_NOTICE);
-    }} />}
+    {osseFeatures(design.formula) && <OsseFeatureChoices design={design} onChanged={() => setConversionNotice(OSSE_SWITCH_NOTICE)} />}
     {design.formula === 'LOOKUP' && <ExperimentalBadge />}
     {conversionNotice && <div className="field-warning conversion-notice" role="status">
       {conversionNotice} <button onClick={() => setConversionNotice(null)}>Dismiss</button>

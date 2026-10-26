@@ -96,7 +96,7 @@ describe('native formula editing and persistence', () => {
     expect(pole).toMatchObject({ families: ['OSSE-ADAPTER-CONTROLS'], unit: 'mm', accepts_expression: false,
       default_by_family: { 'OSSE-ADAPTER-CONTROLS': 20.4 } });
     const axial = catalog.parameters.find((field) => field.id === 'native.axial_scale');
-    expect(axial?.default_by_family).toEqual({ 'OSSE-AXIAL': 1, 'OSSE-ADAPTER-AXIAL': 1 });
+    expect(axial?.default_by_family).toEqual({ 'OSSE-AXIAL': 1, 'OSSE-ADAPTER-AXIAL': 1, 'OSSE-NATIVE': 1.2 });
     for (const field of catalog.parameters.filter((field) => field.id.startsWith('morph.')
       || field.id.startsWith('enclosure.') || field.id === 'simulation.sim_type')) {
       expect(field.families.some((family) => (NATIVE_FAMILIES as readonly string[]).includes(family)), field.id).toBe(false);

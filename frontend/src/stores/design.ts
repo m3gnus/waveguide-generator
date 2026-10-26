@@ -6,7 +6,7 @@ import { replaceAthPolarBlocks } from './athPolars';
 import { advanceEditorMutation } from './editorMutation';
 import { DEFAULT_SWEEP } from './solveDefaults';
 import { NATIVE_FAMILIES, type NativeFamily } from '../design/nativeFamilies';
-import { osseFeatures } from '../design/osseFeatures';
+import { osseFeatures, osseFormula, type OsseFeatures } from '../design/osseFeatures';
 
 export { NATIVE_FAMILIES, type NativeFamily } from '../design/nativeFamilies';
 export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM' | 'LOOKUP' | NativeFamily;
@@ -329,6 +329,11 @@ export function designForFamily(family: DesignFamily): DesignDocument {
     if (family === 'OSSE-AXIAL' || family === 'OSSE-ADAPTER-AXIAL') native.axial_scale = 1;
     if (family === 'OSSE-ARC') native.terminating_arc = { contract_revision: 1, join_t: .05, end_tangent_deg: 100 };
     if (family === 'OSSE-ROUNDOVER') native.mesh.mouth_roundover_radius_mm = 25;
+    if (family === 'OSSE-NATIVE') {
+      native.axial_scale = 1.2;
+      native.mesh.wall_thickness = 5;
+      native.mesh.mouth_roundover_radius_mm = 25;
+    }
     return native;
   }
   if (family === 'LOOKUP') return { ...shared, formula: family, lookup_profile: [[0, 12.7], [120, 140]], a0: 0 };
@@ -593,9 +598,26 @@ function pathBelongsToSharedState(path: string): boolean {
   return root !== 'formula' && !ALL_FAMILY_SPECIFIC_FIELDS.has(root);
 }
 
+const OSSE_BODY_FIELDS = ['L', 'r0', 'a', 'a0', 'k', 's', 'scale'] as const;
+const OSSE_LITERAL_BODY_FIELDS = OSSE_BODY_FIELDS.filter((field) => field !== 's');
+const OSSE_MESH_FIELDS = ['throat_resolution', 'mouth_resolution', 'rear_resolution',
+  'angular_segments', 'length_segments', 'max_triangles', 'allow_large_mesh', 'vertical_offset'] as const;
+
+function requireLiteralOsseBody(current: DesignDocument): void {
+  const carriedPaths = new Set<string>([...OSSE_LITERAL_BODY_FIELDS, ...OSSE_MESH_FIELDS.map((field) => `mesh.${field}`)]);
+  if (Object.entries(current._expressions ?? {})
+    .some(([path, expression]) => carriedPaths.has(path) && expression.raw != null)) {
+    throw new Error('Native features require plain numbers for the shared OSSE dimensions and mesh settings. Replace those expressions before switching.');
+  }
+  if ((current._absent ?? []).some((path) => (OSSE_LITERAL_BODY_FIELDS as readonly string[]).includes(path))) {
+    throw new Error('Native features require explicit shared OSSE dimensions and scale. Enter the missing numbers before switching.');
+  }
+}
+
 /** Merge a family template with the current document's non-formula state. */
 export function mergeDesignForFamily(current: DesignDocument, family: DesignFamily, options?: { preserveOsseBody: boolean }): DesignDocument {
   if (current.formula === family) return structuredClone(current);
+  if (options?.preserveOsseBody && current.formula === 'OSSE' && isNativeFamily(family)) requireLiteralOsseBody(current);
   if (isNativeFamily(family) || isNativeFamily(current.formula)) {
     // Native domains cannot inherit active legacy morphs, prefixes or shells.
     const next = designForFamily(family);
@@ -603,15 +625,14 @@ export function mergeDesignForFamily(current: DesignDocument, family: DesignFami
       && current.formula !== 'SOURCE-DISK' && family !== 'SOURCE-DISK')
       || (options?.preserveOsseBody && osseFeatures(current.formula) && osseFeatures(family))) {
       // Native horns share the same intrinsic OSSE body and finished-mm sizing.
-      for (const key of ['L', 'r0', 'a', 'a0', 'k', 's', 'scale'] as const) {
+      for (const key of OSSE_BODY_FIELDS) {
         if (current[key] !== undefined) next[key] = current[key];
       }
       // Native bodies require s=0; plain-only termination/shape values remain
       // retrievable in the store's existing complete-document undo snapshot.
       if (current.formula === 'OSSE') next.s = 0;
       if (options?.preserveOsseBody && current.axial_scale === undefined && next.axial_scale !== undefined) next.axial_scale = current.scale;
-      for (const key of ['throat_resolution', 'mouth_resolution', 'rear_resolution',
-        'angular_segments', 'length_segments', 'max_triangles', 'allow_large_mesh', 'vertical_offset'] as const) {
+      for (const key of OSSE_MESH_FIELDS) {
         next.mesh[key] = current.mesh[key];
       }
       const authored = (value: DesignFamily) => value === 'OSSE-ADAPTER' || value === 'OSSE-ADAPTER-AXIAL';
@@ -664,6 +685,59 @@ export function mergeDesignForFamily(current: DesignDocument, family: DesignFami
   return next;
 }
 
+/** Build one canonical OSSE feature selection using the existing family templates. */
+export function mergeDesignForOsseFeatures(current: DesignDocument, features: OsseFeatures): DesignDocument {
+  const formula = osseFormula(features);
+  if (!formula) throw new Error('This OSSE feature combination is not supported.');
+  const basis = formula === 'OSSE-NATIVE'
+    ? (features.mouth === 'roundover' ? 'OSSE-ROUNDOVER' : 'OSSE-ARC')
+    : formula;
+  const next = mergeDesignForFamily(current, basis, { preserveOsseBody: true });
+  next.formula = formula;
+
+  const old = osseFeatures(current.formula, current);
+  delete next.throat_adapter;
+  delete next.axial_scale;
+  delete next.terminating_arc;
+  delete next.mesh.mouth_roundover_radius_mm;
+
+  if (features.throat !== 'none') {
+    const template = designForFamily(features.throat === 'authored' ? 'OSSE-ADAPTER' : 'OSSE-ADAPTER-CONTROLS');
+    next.throat_adapter = structuredClone(old?.throat === features.throat ? current.throat_adapter : template.throat_adapter);
+  }
+  if (features.mouth === 'arc') {
+    next.terminating_arc = structuredClone(old?.mouth === 'arc' ? current.terminating_arc : designForFamily('OSSE-ARC').terminating_arc);
+    // The adapter must end before the arc starts. Preserve the already-authored
+    // feature and choose an initial join for the newly added one.
+    if (next.throat_adapter && next.terminating_arc && next.throat_adapter.join_t >= next.terminating_arc.join_t) {
+      if (old?.mouth === 'arc') next.throat_adapter.join_t = next.terminating_arc.join_t / 2;
+      else next.terminating_arc.join_t = (next.throat_adapter.join_t + 1) / 2;
+    }
+  }
+  if (features.mouth === 'roundover') {
+    const template = designForFamily('OSSE-ROUNDOVER');
+    next.mesh.mouth_roundover_radius_mm = old?.mouth === 'roundover'
+      ? current.mesh.mouth_roundover_radius_mm : template.mesh.mouth_roundover_radius_mm;
+    next.mesh.wall_thickness = old?.mouth === 'roundover' ? current.mesh.wall_thickness : template.mesh.wall_thickness;
+  } else if (formula !== 'OSSE') next.mesh.wall_thickness = 0;
+  if (features.axial === 'on') {
+    // New overrides differ from uniform scale; equal factors do not change the
+    // geometry and are omitted when creating a new composite.
+    next.axial_scale = current.axial_scale ?? (current.scale * 1.1 <= 10 ? current.scale * 1.1 : current.scale * .9);
+    if (formula === 'OSSE-NATIVE' && next.axial_scale === next.scale) {
+      delete next.axial_scale;
+      next.formula = osseFormula({ ...features, axial: 'off' })!;
+    }
+  }
+  return next;
+}
+
+function canonicalizeEqualCompositeScale(design: DesignDocument, paths: readonly string[]): DesignDocument {
+  if (design.formula !== 'OSSE-NATIVE' || !paths.some((path) => path === 'scale' || path === 'axial_scale')
+    || design.axial_scale === undefined || design.axial_scale !== design.scale) return design;
+  return mergeDesignForOsseFeatures(design, { ...osseFeatures(design.formula, design)!, axial: 'off' });
+}
+
 export interface RevisionEvent {
   revision: number;
   reason: MutationReason;
@@ -707,6 +781,7 @@ interface DesignStore {
   setQuadrants: (quadrants: number[]) => void;
   setSourceConvention: (convention: DesignDocument['source']['velocity_convention']) => void;
   setFamily: (family: DesignFamily, options?: { preserveOsseBody: boolean }) => void;
+  setOsseFeatures: (features: OsseFeatures) => void;
   /**
    * The one whole-document replacement: cancels pending revisions, bumps the
    * load generation, announces a `load` revision, and (unless `keepHistory`)
@@ -833,14 +908,14 @@ export const useDesignStore = create<DesignStore>()(
       updateField: (path, value) => get().updateValue(path, value),
       updateValue: (path, value) => {
         set((state) => ({
-          design: refreshAbsentWall(withoutPreservedMetadata(setAtPath(state.design, path, value), path)),
+          design: canonicalizeEqualCompositeScale(refreshAbsentWall(withoutPreservedMetadata(setAtPath(state.design, path, value), path)), [path]),
           designRevision: state.designRevision + 1,
         }));
         bump(get().dragSnapshot ? 'drag' : 'edit', false);
       },
       updateValues: (updates) => {
         set((state) => ({
-          design: refreshAbsentWall(Object.keys(updates).reduce((next, path) => withoutPreservedMetadata(next, path), setMany(state.design, updates))),
+          design: canonicalizeEqualCompositeScale(refreshAbsentWall(Object.keys(updates).reduce((next, path) => withoutPreservedMetadata(next, path), setMany(state.design, updates))), Object.keys(updates)),
           designRevision: state.designRevision + 1,
         }));
         bump(get().dragSnapshot ? 'drag' : 'edit', false);
@@ -883,6 +958,12 @@ export const useDesignStore = create<DesignStore>()(
         cancelRevisionTimers();
         get().endDrag();
         set((state) => ({ design: mergeDesignForFamily(state.design, family, options), designRevision: state.designRevision + 1 }));
+        bump('family', true);
+      },
+      setOsseFeatures: (features) => {
+        cancelRevisionTimers();
+        get().endDrag();
+        set((state) => ({ design: mergeDesignForOsseFeatures(state.design, features), designRevision: state.designRevision + 1 }));
         bump('family', true);
       },
       replaceDocument: (design, options) => {

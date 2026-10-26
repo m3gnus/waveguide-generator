@@ -187,8 +187,20 @@ const SUPERFORMULA_HELP: Record<'sf_a' | 'sf_b' | 'sf_m1' | 'sf_m2' | 'sf_n1' | 
 };
 
 const nativeHorns = NATIVE_FAMILIES.filter((family) => family !== 'SOURCE-DISK');
-const authoredAdapters: DesignFamily[] = ['OSSE-ADAPTER', 'OSSE-ADAPTER-AXIAL'];
+const authoredAdapters: DesignFamily[] = ['OSSE-ADAPTER', 'OSSE-ADAPTER-AXIAL', 'OSSE-NATIVE'];
 const literalAdapters: DesignFamily[] = ['OSSE-ADAPTER-CONTROLS'];
+const compositeHas = (slot: 'adapter' | 'arc' | 'roundover' | 'axial') => (design: DesignDocument) => {
+  if (design.formula !== 'OSSE-NATIVE') return true;
+  if (slot === 'adapter') return design.throat_adapter?.mode === 'authored';
+  if (slot === 'arc') return design.terminating_arc != null;
+  if (slot === 'roundover') return design.mesh.mouth_roundover_radius_mm != null;
+  return design.axial_scale != null;
+};
+export const COMPOSITE_SLOT_DISABLED_REASON = 'Select this feature in OSSE features before editing.';
+const compositeControls = (slot: 'adapter' | 'arc' | 'roundover' | 'axial') => ({
+  visibleWhen: compositeHas(slot),
+  disabledWhen: (design: DesignDocument) => compositeHas(slot)(design) ? undefined : COMPOSITE_SLOT_DISABLED_REASON,
+});
 const nativeNumber = (id: string, path: string, label: string, options: Partial<ParameterDefinition>): ParameterDefinition =>
   number(`native.${id}`, path, path, profile, label, options);
 
@@ -205,7 +217,7 @@ export const LEGACY_PARAMETER_REGISTRY: ParameterDefinition[] = [
   nativeNumber('a0', 'a0', 'Body throat half-angle', { families: nativeHorns, unit: '°', min: 0, max: 79.999, description: 'Circular body tangent angle at its original throat, strictly below its coverage angle.' }),
   nativeNumber('k', 'k', 'Body flare constant', { families: nativeHorns, min: .01, max: 100, description: 'Positive OSSE flare constant. Axial, arc and roundover formulas require 0.5 through 10.' }),
   nativeNumber('scale', 'scale', 'Transverse / uniform scale', { families: nativeHorns, min: .001, max: 100, step: .001, precision: 3, description: 'Scales intrinsic body and adapter dimensions uniformly, or X/Y only when Absolute axial scale is present. Mesh sizes, lip radius, wall and final placement stay in finished mm. OSSE-ADAPTER and OSSE-ADAPTER-CONTROLS allow 0.001–100; other native horns require 0.01–10. Axial formulas also require axial_scale / scale in 0.1–10.' }),
-  nativeNumber('axial_scale', 'axial_scale', 'Absolute axial scale', { families: ['OSSE-AXIAL', 'OSSE-ADAPTER-AXIAL'], min: .01, max: 10, step: .001, precision: 3, description: 'Absolute Z factor, replacing uniform scale on Z. Axial/transverse ratio must be 0.1 through 10.' }),
+  nativeNumber('axial_scale', 'axial_scale', 'Absolute axial scale', { families: ['OSSE-AXIAL', 'OSSE-ADAPTER-AXIAL', 'OSSE-NATIVE'], ...compositeControls('axial'), min: .01, max: 10, step: .001, precision: 3, description: 'Absolute Z factor, replacing uniform scale on Z. Axial/transverse ratio must be 0.1 through 10.' }),
   ...([
     ['driver_exit_diameter_mm', 'Driver exit diameter', 'mm', .001, 20000, 'Intrinsic driver opening diameter. The adapter joins this opening to the retained OSSE body.'],
     ['exit_half_angle_deg', 'Driver exit half-angle', '°', -89, 89, 'Signed authored driver tangent angle; anisotropic scaling changes the finished angle.'],
@@ -213,12 +225,12 @@ export const LEGACY_PARAMETER_REGISTRY: ParameterDefinition[] = [
     ['join_t', 'Retained body start', 'fraction', 0, .999999, 'Fraction along the original OSSE body where the adapter joins it. The remaining body keeps its shape.'],
     ['driver_handle_mm', 'Driver handle length', 'mm', .001, 10000, 'Cubic handle distance along the driver tangent. Invalid or backward cubic controls are refused.'],
     ['body_handle_mm', 'Body handle length', 'mm', .001, 10000, 'Cubic handle distance along the body tangent, giving a smooth oriented join.'],
-  ] as const).map(([path, label, unit, min, max, description]) => nativeNumber(`adapter.${path}`, `throat_adapter.${path}`, label, { families: authoredAdapters, unit, min, max, step: .001, precision: 6, description })),
+  ] as const).map(([path, label, unit, min, max, description]) => nativeNumber(`adapter.${path}`, `throat_adapter.${path}`, label, { families: authoredAdapters, ...compositeControls('adapter'), unit, min, max, step: .001, precision: 6, description })),
   ...[0, 1, 2].flatMap((pole) => [0, 1].map((axis) => nativeNumber(`controls.${pole}.${axis}`, `throat_adapter.control_points_mm.${pole}.${axis}`, `Cubic P${pole} ${axis === 0 ? 'Z' : 'radius'}`, { families: literalAdapters, unit: 'mm', min: -1000000, max: 1000000, step: .001, precision: 6, description: 'Independent literal cubic pole in join-local coordinates. P3 is (0, body throat radius). The actual curve must stay forward and positive; the join may have a tangent corner.' }))),
-  nativeNumber('arc.join_t', 'terminating_arc.join_t', 'Arc attachment', { families: ['OSSE-ARC'], unit: 'fraction', min: .000001, max: 1, step: .001, precision: 6, description: 'Fraction of original body retained before the exact tangent- and curvature-matched circular suffix.' }),
-  nativeNumber('arc.end_tangent_deg', 'terminating_arc.end_tangent_deg', 'Arc end tangent', { families: ['OSSE-ARC'], unit: '°', min: .001, max: 180, description: 'Absolute oriented tangent from forward Z toward increasing radius. Must exceed the join tangent; above 90 degrees turns backward. Source-plane clearance is required.' }),
-  nativeNumber('lip.radius', 'mesh.mouth_roundover_radius_mm', 'Mouth roundover radius', { families: ['OSSE-ROUNDOVER'], section: wallEnclosure, unit: 'mm', min: .2, max: 200, description: 'Finished circular lip radius, at least 0.1 mm larger than wall thickness. The full lip must clear the rear and its outer offset must not fold.' }),
-  nativeNumber('lip.wall', 'mesh.wall_thickness', 'Wall thickness', { families: ['OSSE-ROUNDOVER'], section: wallEnclosure, unit: 'mm', min: .1, max: 199.9, description: 'Finished normal wall thickness. Must remain at least 0.1 mm below the lip radius and satisfy the curvature clearance guard.' }),
+  nativeNumber('arc.join_t', 'terminating_arc.join_t', 'Arc attachment', { families: ['OSSE-ARC', 'OSSE-NATIVE'], ...compositeControls('arc'), unit: 'fraction', min: .000001, max: 1, step: .001, precision: 6, description: 'Fraction of original body retained before the exact tangent- and curvature-matched circular suffix.' }),
+  nativeNumber('arc.end_tangent_deg', 'terminating_arc.end_tangent_deg', 'Arc end tangent', { families: ['OSSE-ARC', 'OSSE-NATIVE'], ...compositeControls('arc'), unit: '°', min: .001, max: 180, description: 'Absolute oriented tangent from forward Z toward increasing radius. Must exceed the join tangent; above 90 degrees turns backward. Source-plane clearance is required.' }),
+  nativeNumber('lip.radius', 'mesh.mouth_roundover_radius_mm', 'Mouth roundover radius', { families: ['OSSE-ROUNDOVER', 'OSSE-NATIVE'], ...compositeControls('roundover'), section: wallEnclosure, unit: 'mm', min: .2, max: 200, description: 'Finished circular lip radius, at least 0.1 mm larger than wall thickness. The full lip must clear the rear and its outer offset must not fold.' }),
+  nativeNumber('lip.wall', 'mesh.wall_thickness', 'Wall thickness', { families: ['OSSE-ROUNDOVER', 'OSSE-NATIVE'], ...compositeControls('roundover'), section: wallEnclosure, unit: 'mm', min: .1, max: 199.9, description: 'Finished normal wall thickness. Must remain at least 0.1 mm below the lip radius and satisfy the curvature clearance guard.' }),
   ...([
     ['radius_mm', 'Source disk radius', .1, 200, 'Finished radius of the normal-driven front disk.'],
     ['outer_radius_mm', 'Source body radius', .2, 500, 'Finished exterior radius, at least 0.1 mm larger than source disk radius.'],

@@ -438,6 +438,14 @@ describe('geometry export requests', () => {
 });
 
 describe('design copy serialization requests', () => {
+  it('reports the server validation reason without writing a design', async () => {
+    const fetcher = (async () => new Response(JSON.stringify({ detail: [
+      { loc: ['design', 'a'], msg: 'Value error, Body coverage angle must be below 80 degrees' },
+    ] }), { status: 422, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+    await expect(serializeDesignDocument(designForFamily('OSSE'), 'horn', fetcher))
+      .rejects.toThrow('a: Body coverage angle must be below 80 degrees');
+  });
+
   it('uses the non-mutating endpoint without a CadLink identity', async () => {
     let url = '';
     let payload: Record<string, unknown> = {};

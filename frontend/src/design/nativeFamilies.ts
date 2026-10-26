@@ -1,4 +1,4 @@
-export const NATIVE_FAMILIES = ['OSSE-ADAPTER', 'OSSE-ADAPTER-CONTROLS', 'OSSE-ADAPTER-AXIAL', 'OSSE-ROUNDOVER', 'OSSE-AXIAL', 'OSSE-ARC', 'SOURCE-DISK'] as const;
+export const NATIVE_FAMILIES = ['OSSE-ADAPTER', 'OSSE-ADAPTER-CONTROLS', 'OSSE-ADAPTER-AXIAL', 'OSSE-ROUNDOVER', 'OSSE-AXIAL', 'OSSE-ARC', 'OSSE-NATIVE', 'SOURCE-DISK'] as const;
 export type NativeFamily = typeof NATIVE_FAMILIES[number];
 
 export function nativeSymmetryLimitation(formula: string, symmetry: string): string | null {
