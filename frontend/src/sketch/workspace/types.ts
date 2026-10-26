@@ -1,3 +1,4 @@
+import type { WorkspaceHistory } from './historyAuthority';
 import type { ReactNode } from 'react';
 import type { DomainProblem, Lowered } from '../adapter';
 import type { ContextDrawingItem, SketchContext } from '../context';
@@ -40,6 +41,9 @@ export interface DisplayUI {
   names?: boolean;
   hiddenPoints?: string[];
 }
+export type WorkspaceViewState = Pick<DisplayUI, 'selection' | 'hover'>;
+export interface WorkspaceLabels { drawing?: string; tools?: string }
+export interface PropertiesActions { setSelection(ids: string[]): void }
 export interface HitCandidate { id: string; kind: 'point' | 'curve' | 'region'; role?: string; gap: number }
 export interface ToolPointer {
   phase: 'down' | 'move' | 'up'; at: XY; hit?: string; snap?: SnapResult | null;
@@ -53,20 +57,20 @@ export interface ToolDescriptor<S, C> {
 }
 export interface PropertiesSection { id: string; title: string; render(): ReactNode }
 export interface DomainAdapter<TDoc, S, C> {
-  id: string; axes: WorkspaceAxes;
+  id: string; axes: WorkspaceAxes; labels?: WorkspaceLabels;
   seed(doc: TDoc, authoring: unknown | undefined): S;
   lower(state: S): Lowered<TDoc>;
-  status(state: S): EditStatus;
-  serializeAuthoring(state: S): unknown;
+  status(state: S, lowered?: Lowered<TDoc>): EditStatus;
+  serializeAuthoring(state: S, status?: EditStatus): unknown;
   apply(state: S, command: C): S | { error: string };
   remove(state: S, selection: string[]): C[];
   compare?(before: S, after: S): string;
   display(state: S, ui: DisplayUI): DisplayModel;
-  hits(state: S, at: XY, tolerance: number): HitCandidate[];
-  marquee(state: S, box: Bounds, crossing: boolean): string[];
+  hits(state: S, at: XY, tolerance: number, ui: WorkspaceViewState): HitCandidate[];
+  marquee(state: S, box: Bounds, crossing: boolean, ui: WorkspaceViewState): string[];
   dragSet(state: S, selection: string[], hit: string): { ids: string[]; move(state: S, delta: XY, at: XY): C[] } | undefined;
   tools: ToolDescriptor<S, C>[];
-  properties(state: S, selection: string[], session: WorkspaceSession<S, C>): PropertiesSection[];
+  properties(state: S, selection: string[], session: WorkspaceSession<S, C>, actions: PropertiesActions): PropertiesSection[];
   solver?: SolverBinding<S>;
 }
 export interface SolverBinding<S> { open(state: S): Promise<SolveHandle<S>> }
@@ -76,11 +80,11 @@ export interface SolveHandle<S> {
   beginDrag(ids: string[]): Promise<void>;
   dragTo(targets: DragTarget[]): Promise<DragResult>;
   endDrag(): Promise<Diagnosis>;
-  constraint?(state: S, c: NewConstraint, opts: { reference: boolean }): Promise<S>;
-  dimension?(state: S, id: string, value: number): Promise<S>;
+  constraint?(state: S, c: NewConstraint, opts: { reference: boolean }): Promise<{ state: S; diagnosis: Diagnosis }>;
+  dimension?(state: S, id: string, value: number): Promise<{ state: S; diagnosis: Diagnosis }>;
   destroy(): void;
 }
-export interface WorkspaceSession<S, C> {
+export interface WorkspaceSession<S, C> extends WorkspaceHistory {
   readonly current: S; readonly status: EditStatus; readonly busy: boolean;
   readonly solver?: { capabilities: Capabilities; diagnosis?: Diagnosis };
   readonly rejection?: unknown; readonly notice?: string;

@@ -9,14 +9,14 @@ import { geometryHit } from './geometryHit';
 
 /** One layer and one geometry path for structural datums, limits and host geometry. */
 export function ContextLayer({ names, cursor, contour, viewport, reserved, canPick, validTargets, isPanning, sketch, items, hoveredId, highlighted, stale, view, onPick, onEditLimit, canEditLimit }: {
-  names: boolean; cursor?: XY; contour: XY[]; viewport: { width: number; height: number }; reserved: LabelBox[]; canPick: boolean; validTargets?: Set<string>; isPanning: () => boolean; sketch: Sketch; items: ContextDrawingItem[]; hoveredId?: string; highlighted: Set<string>; stale: boolean; view: View;
+  names: boolean; cursor?: XY; contour: XY[]; viewport: { width: number; height: number }; reserved: LabelBox[]; canPick: boolean; validTargets?: Set<string>; isPanning: () => boolean; sketch?: Sketch; items: ContextDrawingItem[]; hoveredId?: string; highlighted: Set<string>; stale: boolean; view: View;
   onPick: (item: ContextDrawingItem, additive: boolean) => void; onEditLimit: (radius: number) => void; canEditLimit: boolean;
 }) {
   const hatch = 'sketch-context-hatch';
   const entries = items.map(item => {
     const points = item.geometry.map(p => worldToScreen(view, p));
-    const materialised = sketch.entities.find(e => contextData(e)?.context === item.id || item.owner && contextData(e)?.context === item.owner || contextData(e)?.context === `${item.id}/support`);
-    const active = !!(item.referenceId && highlighted.has(item.referenceId) || materialised && (highlighted.has(materialised.id) || item.kind === 'point' && entityPoints(materialised).some(id => highlighted.has(id) && sketch.points.some(p => p.id === id && p.x === item.geometry[0].x && p.y === item.geometry[0].y))));
+    const materialised = sketch?.entities.find(e => contextData(e)?.context === item.id || item.owner && contextData(e)?.context === item.owner || contextData(e)?.context === `${item.id}/support`);
+    const active = !!(item.referenceId && highlighted.has(item.referenceId) || materialised && (highlighted.has(materialised.id) || item.kind === 'point' && entityPoints(materialised).some(id => highlighted.has(id) && sketch?.points.some(p => p.id === id && p.x === item.geometry[0].x && p.y === item.geometry[0].y))));
     const near = cursor && visibleAnchor(points, viewport, cursor);
     return { item, kind: item.kind, role: item.role, points, active, near, gap: near && cursor ? Math.hypot(near.x - cursor.x, near.y - cursor.y) : Infinity };
   });

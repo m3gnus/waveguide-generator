@@ -1,7 +1,8 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SketchCanvas, type CanvasSession } from './SketchCanvas';
+import { SketchCanvas } from './SketchCanvas';
+import type { SketchWorkspaceSession } from './workspace/sketchSession';
 import { applyCommand, importedSketch } from './ops';
 import { capabilities } from './solver/common';
 import { constraintFor, rules, type SelectionConstraint } from './tools/constraints';
@@ -13,7 +14,7 @@ import { INITIAL_SOURCE } from '../design/sourceContourEditing';
 import { selectionConstraints } from './tools/constraints';
 import { sketchViewKey } from './viewPreferences';
 
-let host: HTMLDivElement, root: Root, current: Sketch, session: CanvasSession;
+let host: HTMLDivElement, root: Root, current: Sketch, session: SketchWorkspaceSession;
 const context: SketchContext = { fingerprint: 'wall-1', rimPlaneLabel: '', items: [
   { id: 'wall', kind: 'segment', geometry: [{ x: 30, y: 0 }, { x: 30, y: 10 }], role: 'wall', label: 'Wall', pickable: true },
   { id: 'corner', kind: 'point', geometry: [{ x: 30, y: 0 }], owner: 'wall', role: 'wall', label: 'Corner', pickable: true },

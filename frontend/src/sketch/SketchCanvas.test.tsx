@@ -19,7 +19,7 @@ function Harness({ initial = base(), diagnosis, role }: { initial?: Sketch; diag
   const [session, setSession] = useState<SketchController<null>>();
   const handle = useRef<SketchController<null> | undefined>(undefined);
   useEffect(() => {
-    const controller = new SketchController({ sketch: initial, meta: null }, [], (s, c) => { const r = applyCommand(s.sketch, c); return 'error' in r ? r : { ...s, sketch: r.sketch }; }, (s, d) => { setState(s.sketch); setResult(diagnosis ?? d); setSession(controller); }, undefined, undefined, (s, d) => { setState(s.sketch); setResult(diagnosis ?? d); });
+    const controller = new SketchController({ initial: { sketch: initial, meta: null }, references: [], apply: (s, c) => { const r = applyCommand(s.sketch, c); return 'error' in r ? r : { ...s, sketch: r.sketch }; }, changed: (s, d) => { setState(s.sketch); setResult(diagnosis ?? d); setSession(controller); }, failed: undefined, activity: undefined, preview: (s, d) => { setState(s.sketch); setResult(diagnosis ?? d); } });
     handle.current = controller; return () => controller.destroy();
   }, [initial, diagnosis]);
   return <SketchCanvas sketch={state} diagnosis={result} session={session} references={[]} problems={[]} entityClassName={() => role ?? ''}/>;

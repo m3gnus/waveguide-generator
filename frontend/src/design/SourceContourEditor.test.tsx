@@ -192,7 +192,7 @@ describe('source editor interactions', () => {
   });
   it('shows a read-only horn throat, holds its rim exactly, and disables determined coordinates', async () => {
     const used = vi.fn();
-    await act(async () => root.render(<Editor initialDocument={INITIAL_SOURCE} onClose={() => {}} onDraftChange={used} limit={{ kind: 'throat', radius: 12.7, hard: true }}/>)); await settle();
+    await act(async () => root.render(<Editor initialDocument={INITIAL_SOURCE} onClose={() => {}} host={{ commit: record => { if (record.document && record.status === "valid") used(record.document); } }} limit={{ kind: 'throat', radius: 12.7, hard: true }}/>)); await settle();
     const label = host.querySelector('.sketch-limit text')!;
     expect(label.textContent).toContain('Throat r 12.70 🔒');
     expect(label.querySelector('title')?.textContent).toBe('Set by the horn design');
@@ -432,6 +432,45 @@ describe('source editor interactions', () => {
     const saved = JSON.parse(storage.getItem('')!);
     expect(saved.version).toBe('wg-source-authoring-v99'); expect(saved.sketch).toEqual(envelope.sketch); expect(saved.extra).toEqual(envelope.extra);
   });
+  it.each(['invalid', 'unfinished'] as const)('publishes and reopens a standalone %s record without losing names or constraints', async status => {
+    const state = sourceAdapter.seed(INITIAL_SOURCE);
+    state.sketch.entities[0].data = { ...state.sketch.entities[0].data as object, name: 'Authored diaphragm' };
+    state.sketch.constraints.push({ id: 'width', kind: 'distance', a: 'pole', b: 'rim', value: 8, driving: false, label: 'Authored width' });
+    const { serializeSourceAuthoring, parseSourceAuthoring } = await import('../sketch/adapters/sourceAuthoring');
+    storage.setItem('', JSON.stringify({ ...serializeSourceAuthoring(state), document: INITIAL_SOURCE }));
+    const commit = vi.fn();
+    const render = async () => { await act(async () => root.render(<Editor onClose={() => {}} host={{ commit }}/>)); await settle(); };
+    await render(); commit.mockClear();
+    if (status === 'invalid') {
+      const role = host.querySelector<HTMLSelectElement>('[aria-label="Patch 1 role"]')!;
+      await act(async () => { role.value = 'rigid'; role.dispatchEvent(new Event('change', { bubbles: true })); }); await settle();
+    } else await deletePoleLock();
+    expect(commit).toHaveBeenCalledTimes(1);
+    const record = commit.mock.calls[0][0];
+    expect(record.status).toBe(status); expect(record.document).toEqual(INITIAL_SOURCE);
+    expect(record.authoring.pending).toBe(true);
+    expect(record.draftKey).toBe(JSON.stringify(record.authoring));
+    const saved = JSON.parse(storage.getItem('')!);
+    expect(parseSourceAuthoring(saved, record.document)?.sketch).toEqual(record.authoring.sketch);
+    await act(async () => root.render(null)); await render();
+    expect(readSourceAuthoring(readSourceDraft()).sketch).toEqual(saved.sketch);
+    expect(host.textContent).toContain('Authored diaphragm');
+    expect(host.textContent).toContain('Authored width');
+    expect(button('Export STEP + mesh bundle').disabled).toBe(true);
+  });
+  it('publishes the changed classic document while retaining opaque authoring', async () => {
+    const commit = vi.fn();
+    const opaque = { version: 'wg-source-authoring-v99', sketch: { opaque: true } };
+    storage.setItem('', JSON.stringify({ ...opaque, document: INITIAL_SOURCE }));
+    await act(async () => root.render(<Editor onClose={() => {}} host={{ commit }}/>)); await settle();
+    commit.mockClear(); await enter('Point 2 radius', '12'); await settle();
+    expect(commit).toHaveBeenCalledTimes(1);
+    const record = commit.mock.calls[0][0];
+    expect(record.document.contour.points.at(-1).r_mm).toBe(12);
+    expect(record.authoring).toMatchObject(opaque);
+    await act(async () => root.render(null)); await mount();
+    expect(Number(input('Point 2 radius').value)).toBe(12);
+  });
   it('fix 5: persists and reopens unfinished sketches with the last valid document', async () => {
     await mount(); await deletePoleLock();
     const saved = JSON.parse(storage.getItem('')!);
@@ -454,7 +493,7 @@ describe('source editor interactions', () => {
   });
   it('fix 7: publishes and writes storage once for a multi-frame drag', async () => {
     const callback = vi.fn();
-    await act(async () => root.render(<Editor onClose={() => {}} onDraftChange={callback}/>)); await settle();
+    await act(async () => root.render(<Editor onClose={() => {}} host={{ commit: record => { if (record.document && record.status === "valid") callback(record.document); } }}/>)); await settle();
     const writes = vi.spyOn(durableSettings, 'set'), lowering = vi.spyOn(sourceAdapter, 'lower'), rules = vi.spyOn(sourceAdapter, 'rules'); callback.mockClear();
     const svg = host.querySelector<SVGSVGElement>('[aria-label="Sketch drawing"]')!, rim = host.querySelector('.sketch-point[data-id="rim"]')!;
     const x = Number(rim.getAttribute('cx')), y = Number(rim.getAttribute('cy'));
@@ -470,7 +509,7 @@ describe('source editor interactions', () => {
   });
   it.each([false, true])('restores acceptance after a rejected drag release (nested: %s)', async nested => {
     const changed = vi.fn(), use = vi.fn();
-    await act(async () => root.render(<Editor onClose={() => {}} onDraftChange={changed} onUseDocument={nested ? use : undefined}/>)); await settle();
+    await act(async () => root.render(<Editor onClose={() => {}} host={{ commit: record => { if (record.document && record.status === "valid") changed(record.document); } }} onUseDocument={nested ? use : undefined}/>)); await settle();
     const before = readSourceDraft(), accept = nested ? 'Use contour' : 'Done';
     expect(button(accept).disabled).toBe(false);
     const endDrag = SketchSession.prototype.endDrag;
@@ -1277,7 +1316,7 @@ describe('source editor interactions', () => {
     if ('error' in result) throw new Error(result.error); state = result;
     const authoring = (await import('../sketch/adapters/sourceAuthoring')).serializeSourceAuthoring(state,false);
     const changed = vi.fn();
-    const render = async (radius: number) => { await act(async () => root.render(<Editor onClose={() => {}} initialDocument={doc} initialAuthoring={authoring} limit={{kind:'throat',radius,hard:true}} onDraftChange={changed} onUseDocument={nested ? vi.fn() : undefined}/>)); await settle(); };
+    const render = async (radius: number) => { await act(async () => root.render(<Editor onClose={() => {}} initialDocument={doc} initialAuthoring={authoring} limit={{kind:'throat',radius,hard:true}} host={{ commit: record => { if (record.document && record.status === "valid") changed(record.document); } }} onUseDocument={nested ? vi.fn() : undefined}/>)); await settle(); };
     await render(12.7); expect(button(primaryAction).disabled).toBe(false); await render(14);
     expect(button(primaryAction).disabled).toBe(true);
     expect(host.querySelector('.source-throat-mismatch')!.textContent).toContain('Rim does not meet the horn throat (12.70 vs 14.00)');
@@ -1323,7 +1362,7 @@ describe('source editor interactions', () => {
     );
     const authoring = serializeSourceAuthoring(state), changed = vi.fn();
     const render = async (depth: number) => {
-      await act(async () => root.render(<Editor onClose={() => {}} initialDocument={doc} initialAuthoring={authoring} context={context(depth)} limit={{ kind: 'throat', radius: 12.7, hard: true }} onDraftChange={changed}/>)); await settle();
+      await act(async () => root.render(<Editor onClose={() => {}} initialDocument={doc} initialAuthoring={authoring} context={context(depth)} limit={{ kind: 'throat', radius: 12.7, hard: true }} host={{ commit: record => { if (record.document && record.status === "valid") changed(record.document); } }}/>)); await settle();
     };
     await render(40); expect(button('Done').disabled).toBe(false);
     await render(60);
@@ -1345,7 +1384,7 @@ describe('source editor interactions', () => {
     expect(lowered.ok).toBe(true); if (!lowered.ok) throw new Error('Invalid preset fixture');
     vi.mocked(sourceEditorApi.presets).mockResolvedValue([{id:'loaded',revision:'r1',name:'Loaded shape',document:lowered.document,authoring:serializeSourceAuthoring(state,false)}]);
     const changed = vi.fn(), use = vi.fn();
-    const render = async (radius = 14) => { await act(async () => root.render(<Editor initialDocument={INITIAL_SOURCE} onClose={() => {}} onUseDocument={nested ? use : undefined} onDraftChange={changed} limit={{kind:'throat',radius,hard:true}}/>)); await settle(); };
+    const render = async (radius = 14) => { await act(async () => root.render(<Editor initialDocument={INITIAL_SOURCE} onClose={() => {}} onUseDocument={nested ? use : undefined} host={{ commit: record => { if (record.document && record.status === "valid") changed(record.document); } }} limit={{kind:'throat',radius,hard:true}}/>)); await settle(); };
     await render();
     const before = changed.mock.calls.at(-1)![0];
     return { changed, use, before, loadedDocument: lowered.document, render };
@@ -1354,7 +1393,7 @@ describe('source editor interactions', () => {
   it.each(['Apply shape', 'Fit to limit'])('keeps shape fields aligned with scaled geometry after a rejected %s', async action => {
     const changed = vi.fn();
     const render = async (radius: number) => {
-      await act(async () => root.render(<Editor onClose={() => {}} initialDocument={INITIAL_SOURCE} onDraftChange={changed} limit={{ kind: 'throat', radius, hard: true }}/>)); await settle();
+      await act(async () => root.render(<Editor onClose={() => {}} initialDocument={INITIAL_SOURCE} host={{ commit: record => { if (record.document && record.status === "valid") changed(record.document); } }} limit={{ kind: 'throat', radius, hard: true }}/>)); await settle();
     };
     await render(16);
     let finishExpand!: () => void;
@@ -1449,7 +1488,7 @@ describe('source editor interactions', () => {
       return new Response(JSON.stringify({ ...(action === 'Discard' ? a : b), ...body }), { status: 200 });
     });
     const changed = vi.fn();
-    await act(async () => root.render(<Editor onClose={() => {}} initialDocument={INITIAL_SOURCE} limit={{ kind: 'throat', radius: 14, hard: true }} onDraftChange={changed}/>)); await settle();
+    await act(async () => root.render(<Editor onClose={() => {}} initialDocument={INITIAL_SOURCE} limit={{ kind: 'throat', radius: 14, hard: true }} host={{ commit: record => { if (record.document && record.status === "valid") changed(record.document); } }}/>)); await settle();
     await act(async () => button('Load Preset A').click()); await settle();
     expect(input('Preset name').value).toBe('Preset A');
     const before = changed.mock.calls.at(-1)![0];
@@ -1476,7 +1515,7 @@ describe('source editor interactions', () => {
     doc.contour.points[1].r_mm = 12.7; doc.contour.points[0].z_mm = Math.sqrt(13 ** 2 - 12.7 ** 2);
     const changed = vi.fn(), authoring = vi.fn();
     const render = async (radius: number) => {
-      await act(async () => root.render(<Editor onClose={() => {}} initialDocument={doc} limit={{ kind: 'throat', radius, hard: true }} onDraftChange={changed} onAuthoringChange={authoring}/>)); await settle();
+      await act(async () => root.render(<Editor onClose={() => {}} initialDocument={doc} limit={{ kind: 'throat', radius, hard: true }} host={{ commit: record => { if (record.document && record.status === "valid") changed(record.document); authoring({ ...(record.authoring as object), document: record.document }); } }}/>)); await settle();
     };
     await render(12.7);
     await act(async () => button('Dimension (D)').click());

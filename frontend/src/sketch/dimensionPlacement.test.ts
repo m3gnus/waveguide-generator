@@ -140,10 +140,10 @@ describe('dimension placement', () => {
   });
   it('is one metadata-only undo step and keeps lowering and actual /validate request bytes unchanged', async () => {
     const initial = cone(), id = initial.meta.preset!.dimensions.depth_mm;
-    const controller = new SketchController(initial, initial.meta.references, (s, c) => {
+    const controller = new SketchController({ initial: initial, references: initial.meta.references, apply: (s, c) => {
       const result = applySourceCommand(s.sketch, s.meta, c);
       return 'error' in result ? result : { sketch: result.sketch, meta: result.meta };
-    }, () => {});
+    }, changed: () => {} });
     const requests: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
       requests.push(init.body);

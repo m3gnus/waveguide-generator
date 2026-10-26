@@ -161,9 +161,9 @@ describe('associative dimensions with the real solver', () => {
     const doc = structuredClone(INITIAL_SOURCE); doc.contour.points[0].z_mm = 1;
     const context = horn();
     const initial = withSourceContext(seed(doc), context);
-    const controller = new SketchController(initial, s => s.meta.references, (s, c) => {
+    const controller = new SketchController({ initial: initial, references: s => s.meta.references, apply: (s, c) => {
       const result = applySourceCommand(s.sketch, s.meta, c); return 'error' in result ? result : result;
-    }, () => {});
+    }, changed: () => {} });
     try {
       const face = await controller.materialiseContext(context, 'plug/core/inlet');
       await controller.constraint({ kind: 'pointLineDistance', point: 'pole', line: face.id, value: 1, driving: true });
@@ -185,9 +185,9 @@ describe('associative dimensions with the real solver', () => {
   it('keeps exact canonical bytes through an unused display and clearance refresh', async () => {
     const document = expandedPreset('dome', { height_mm: 2.3 });
     const initial = withSourceContext(seed(document), horn());
-    const controller = new SketchController(initial, s => s.meta.references, (s, c) => {
+    const controller = new SketchController({ initial: initial, references: s => s.meta.references, apply: (s, c) => {
       const result = applySourceCommand(s.sketch, s.meta, c); return 'error' in result ? result : result;
-    }, () => {});
+    }, changed: () => {} });
     try {
       const before = JSON.stringify(lower(initial.sketch, initial.meta));
       const changed = hornAssemblyContext({ ...d, depth_mm: 61 }, [plug], undefined, 12.7);

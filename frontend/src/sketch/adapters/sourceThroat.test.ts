@@ -7,9 +7,9 @@ import { expandedPreset } from './presetTestSupport';
 import { INITIAL_SOURCE } from '../../design/sourceContourEditing';
 const limit = (radius: number) => ({ kind: 'throat' as const, radius, hard:true });
 function controllerFor(state: ReturnType<typeof seed>) {
-  return new SketchController<SourceMeta>(state, state => state.meta.references, (state, command) => {
+  return new SketchController<SourceMeta>({ initial: state, references: state => state.meta.references, apply: (state, command) => {
     const next = applySourceCommand(state.sketch,state.meta,command); return 'error' in next ? next : {sketch:next.sketch,meta:next.meta};
-  }, () => {});
+  }, changed: () => {} });
 }
 describe('throat intent policy', () => {
   it('follows the throat while retaining an exact typed 3 mm driving dimension', async () => {

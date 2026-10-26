@@ -25,10 +25,10 @@ function Harness({ initial }: { initial: Sketch }) {
   const [sketch, setSketch] = useState(initial), [diagnosis, setDiagnosis] = useState<Diagnosis>();
   const [session, setSession] = useState<SketchController<null>>();
   useEffect(() => {
-    const c = new SketchController({ sketch: initial, meta: null }, references, (s, command) => {
+    const c = new SketchController({ initial: { sketch: initial, meta: null }, references: references, apply: (s, command) => {
       const result = applyCommand(s.sketch, command);
       return 'error' in result ? result : { ...s, sketch: result.sketch };
-    }, (s, d) => { current = s.sketch; setSketch(s.sketch); setDiagnosis(d); setSession(c); });
+    }, changed: (s, d) => { current = s.sketch; setSketch(s.sketch); setDiagnosis(d); setSession(c); } });
     controller = c;
     return () => c.destroy();
   }, [initial]);

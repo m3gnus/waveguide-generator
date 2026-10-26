@@ -20,8 +20,7 @@ import { removeCommands } from '../tools/remove';
 import { sketchTools } from '../tools/workspaceTools';
 import { parseSourceAuthoring, serializeSourceAuthoring } from './sourceAuthoring';
 import { sourceDisplay } from './sourceDisplay';
-import { presetDimensionProblem } from './sourcePresetMapping';
-import { presetDimensionActive } from './sourcePresetMapping';
+import { presetDimensionProblem, presetDimensionActive } from './sourcePresetMapping';
 
 export interface SourceMeta {
   physical_source_id: string; rim_id: string; channel_id: string; motion: 'normal' | 'axial';
@@ -102,8 +101,7 @@ export function fitSourcePreset(state: { sketch: Sketch; meta: SourceMeta }, lim
   return scaleSourceToLimit({ ...state, sketch: { ...state.sketch, constraints: state.sketch.constraints.map(c => c.id === radius && 'driving' in c ? { ...c, driving: false } : c) } }, limit);
 }
 /** Domain codes come from chain()/rules(); unfinished drafts are neutral, finished failures are errors. */
-export function sourceProgress(sketch: Sketch, meta: SourceMeta) {
-  const problems = rules(sketch, meta);
+export function sourceProgress(sketch: Sketch, meta: SourceMeta, problems = rules(sketch, meta)) {
   const topology = chain(sketch, meta);
   const draftProblem = 'code' in topology ? topology : undefined;
   const unfinished = !!draftProblem;
@@ -307,27 +305,27 @@ export const sourceContourAdapter: DomainAdapter<SourceDocument, Authoring<Sourc
   axes: { x: { label: 'x', unit: 'mm' }, y: { label: 'y', unit: 'mm' } },
   seed: (document, authoring) => parseSourceAuthoring(authoring, document) ?? seed(document),
   lower: state => lower(state.sketch, state.meta),
-  status(state) {
-    const progress = sourceProgress(state.sketch, state.meta);
+  status(state, lowered = lower(state.sketch, state.meta)) {
+    const domainProblems = rules(state.sketch, state.meta);
+    const progress = sourceProgress(state.sketch, state.meta, domainProblems);
     if (progress.state === 'unfinished') return { kind: 'unfinished', hint: progress.hint };
-    const lowered = lower(state.sketch, state.meta);
-    const problems = uniqueProblems([...rules(state.sketch, state.meta), ...(!lowered.ok ? lowered.problems : [])]);
+    const problems = uniqueProblems([...domainProblems, ...(!lowered.ok ? lowered.problems : [])]);
     return problems.some(p => p.severity !== 'warning') ? { kind: 'invalid', problems } : { kind: 'valid' };
   },
-  serializeAuthoring: state => serializeSourceAuthoring(state, !lower(state.sketch, state.meta).ok),
+  serializeAuthoring: (state, status = sourceContourAdapter.status(state)) => serializeSourceAuthoring(state, status.kind !== 'valid'),
   apply(state, command) {
     const result = applySourceCommand(state.sketch, state.meta, command);
     return 'error' in result ? result : { sketch: result.sketch, meta: result.meta };
   },
   remove: (state, selection) => removeCommands(state.sketch, selection, state.meta.references),
   display: (state, ui) => sourceDisplay(state, ui, rules(state.sketch, state.meta)),
-  hits(state, at, tolerance) {
-    const geometry = sketchGeometry(state.sketch, state.meta.references, []);
+  hits(state, at, tolerance, ui) {
+    const geometry = sketchGeometry(state.sketch, state.meta.references, ui.selection, ui.hover, ui.hover, ui.hover);
     return rankedGeometryHits(geometryCandidates(state.sketch, at, [...geometry.hiddenCentres, ...geometry.helperPoints], state.meta.references), tolerance)
       .map(hit => ({ id: hit.id, kind: hit.kind === 'point' ? 'point' : 'curve', gap: hit.gap }));
   },
-  marquee(state, box, crossing) {
-    const geometry = sketchGeometry(state.sketch, state.meta.references, []);
+  marquee(state, box, crossing, ui) {
+    const geometry = sketchGeometry(state.sketch, state.meta.references, ui.selection, ui.hover, ui.hover, ui.hover);
     return marqueeSelection(state.sketch, { x: crossing ? box.maxX : box.minX, y: box.minY },
       { x: crossing ? box.minX : box.maxX, y: box.maxY }, [...geometry.hiddenCentres, ...geometry.helperPoints]);
   },
@@ -340,9 +338,9 @@ export const sourceContourAdapter: DomainAdapter<SourceDocument, Authoring<Sourc
     }) };
   },
   tools: sketchTools<SourceMeta>(),
-  properties: (state, selection, session) => selection.length ? [{ id: 'selection', title: 'Selection', render: () => createElement(SelectionProperties, {
-    sketch: state.sketch, references: state.meta.references, selection, enabled: !session.busy, pending: session.busy, showDriving: true,
-    command: commands => session.command(commands), removeSelection: () => { const commands = removeCommands(state.sketch, selection, state.meta.references); if (commands.length) void session.command(commands); },
+  properties: (state, selection, session, actions) => selection.length ? [{ id: 'selection', title: 'Selection', render: () => createElement(SelectionProperties, {
+    sketch: state.sketch, references: state.meta.references, selection, enabled: true, pending: session.busy, showDriving: true,
+    command: commands => session.command(commands), removeSelection: () => { const commands = removeCommands(state.sketch, selection, state.meta.references); if (commands.length) void session.command(commands).then(() => actions.setSelection([])); },
   }) }] : [],
   solver: sketchSolver(state => state.meta.references, (state, id, value) => presetDimensionProblem(state.sketch, state.meta, id, value)),
 };

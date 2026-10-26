@@ -9,16 +9,16 @@ import * as sessions from './session';
 import { INITIAL_SOURCE } from '../design/sourceContourEditing';
 const base = () => importedSketch([{ id: 'p', x: 0, y: 0 }, { id: 'q', x: 10, y: 0 }], [{ kind: 'line', id: 'line', p1: 'p', p2: 'q' }]);
 function generic(sketch = base()) {
-  return new SketchController({ sketch, meta: null }, [], (s, c) => {
+  return new SketchController({ initial: { sketch, meta: null }, references: [], apply: (s, c) => {
     const r = applyCommand(s.sketch, c); return 'error' in r ? r : { ...s, sketch: r.sketch };
-  }, () => {});
+  }, changed: () => {} });
 }
 describe('authoring session transactions', () => {
   it('converts piston in one undo step, keeps its ID and weight, and reports removed constraints', async () => {
     const initial = seed(INITIAL_SOURCE); initial.meta.weights.piston = -.5;
-    const controller = new SketchController(initial, initial.meta.references, (s, c) => {
+    const controller = new SketchController({ initial: initial, references: initial.meta.references, apply: (s, c) => {
       const r = applySourceCommand(s.sketch, s.meta, c); return 'error' in r ? r : { sketch: r.sketch, meta: r.meta };
-    }, () => {});
+    }, changed: () => {} });
     try {
       await controller.constraint({ kind: 'horizontal', line: 'piston' });
       const before = controller.current, horizontal = before.sketch.constraints.at(-1)!.id;
@@ -66,10 +66,10 @@ describe('authoring session transactions', () => {
     const initial = seedPreset(expandedPreset('flat'), 'flat', presetDefaults.flat);
     // A reversed datum cannot serve as the positive-X absolute angle baseline.
     initial.sketch.entities = initial.sketch.entities.map(e => e.id === 'baffle' && e.kind === 'line' ? { ...e, p1: e.p2, p2: e.p1 } : e);
-    const c = new SketchController(initial, initial.meta.references, (s, command) => {
+    const c = new SketchController({ initial: initial, references: initial.meta.references, apply: (s, command) => {
       const result = applySourceCommand(s.sketch, s.meta, command);
       return 'error' in result ? result : { sketch: result.sketch, meta: result.meta };
-    }, () => {});
+    }, changed: () => {} });
     try {
       await c.command({ kind: 'addLine', from: 'rim', to: { x: 11, y: 3 } }, { angle: 45 });
       const angle = c.current.sketch.constraints.find(c => c.kind === 'angle')!;
@@ -112,9 +112,9 @@ describe('authoring session transactions', () => {
     } finally { controller.destroy(); }
   });
   it('merges a deleted line join with the left identity, reports dangling constraints, and refuses unequal source weights', async () => {
-    const initial = seed(INITIAL_SOURCE), controller = new SketchController(initial, initial.meta.references, (s, c) => {
+    const initial = seed(INITIAL_SOURCE), controller = new SketchController({ initial: initial, references: initial.meta.references, apply: (s, c) => {
       const r = applySourceCommand(s.sketch, s.meta, c); return 'error' in r ? r : { sketch: r.sketch, meta: r.meta };
-    }, () => {});
+    }, changed: () => {} });
     try {
       await controller.command({ kind: 'splitAt', entity: 'piston', x: 4, y: 0 });
       const first = controller.current.sketch.entities.find(e => e.id === 'piston');
@@ -134,9 +134,9 @@ describe('authoring session transactions', () => {
   it('keeps source weights with geometry through split and undo, and records metadata separately', async () => {
     const initial = seed(INITIAL_SOURCE); initial.meta.weights.piston = -.5;
     let published: Authoring<typeof initial.meta> | undefined;
-    const controller = new SketchController(initial, initial.meta.references, (s, c) => {
+    const controller = new SketchController({ initial: initial, references: initial.meta.references, apply: (s, c) => {
       const r = applySourceCommand(s.sketch, s.meta, c); return 'error' in r ? r : { sketch: r.sketch, meta: r.meta };
-    }, state => { published = state; });
+    }, changed: state => { published = state; } });
     try {
       await controller.command({ kind: 'splitAt', entity: 'piston', x: 4, y: 0 });
       expect(Object.values(controller.current.meta.weights)).toEqual([-.5, -.5]);
@@ -147,9 +147,9 @@ describe('authoring session transactions', () => {
   });
   it('fix 3: does not publish or record a point click without movement', async () => {
     const changed = vi.fn(), initial = base();
-    const controller = new SketchController({ sketch: initial, meta: null }, [], (s, c) => {
+    const controller = new SketchController({ initial: { sketch: initial, meta: null }, references: [], apply: (s, c) => {
       const r = applyCommand(s.sketch, c); return 'error' in r ? r : { ...s, sketch: r.sketch };
-    }, changed);
+    }, changed: changed });
     try {
       await controller.beginDrag('q'); changed.mockClear();
       await controller.endDrag();
@@ -176,9 +176,9 @@ describe('authoring session transactions', () => {
 
   it.each([false, true])('restores history, publication and the live session when context installation fails during redo=%s', async redo => {
     const changed = vi.fn();
-    const controller = new SketchController({ sketch: base(), meta: null }, [], (s, c) => {
+    const controller = new SketchController({ initial: { sketch: base(), meta: null }, references: [], apply: (s, c) => {
       const r = applyCommand(s.sketch, c); return 'error' in r ? r : { ...s, sketch: r.sketch };
-    }, changed);
+    }, changed: changed });
     try {
       await controller.command({ kind: 'movePoint', id: 'q', x: 12, y: 0 });
       await controller.replaceContext(state => state);
@@ -289,4 +289,23 @@ describe('body and selection drags', () => {
     } finally { controller.destroy(); }
   });
 
+});
+
+it('rehydrates an external conflicting state without refusing it or publishing an edit', async () => {
+  const changed = vi.fn(), preview = vi.fn();
+  const controller = new SketchController({ initial: { sketch: base(), meta: null }, references: [], apply: (state, command) => {
+    const result = applyCommand(state.sketch, command); return 'error' in result ? result : { ...state, sketch: result.sketch };
+  }, changed, preview });
+  try {
+    await controller.beginDrag('q'); await controller.dragTo('q', { x: 12, y: 0 });
+    changed.mockClear();
+    const state: Authoring<null> = { sketch: { ...base(), constraints: [
+      { id: 'fixP', kind: 'fix', point: 'p' }, { id: 'fixQ', kind: 'fix', point: 'q' },
+      { id: 'length', kind: 'distance', a: 'p', b: 'q', value: 20, driving: true },
+    ] }, meta: null };
+    await controller.rehydrate(state);
+    expect(controller.current).toBe(state); expect(controller.diagnosis?.status).not.toBe('ok');
+    expect(changed).not.toHaveBeenCalled(); expect(controller.history.canUndo).toBe(false);
+    expect(preview).toHaveBeenLastCalledWith(state, controller.diagnosis);
+  } finally { controller.destroy(); }
 });

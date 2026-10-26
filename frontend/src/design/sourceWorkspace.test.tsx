@@ -9,12 +9,13 @@ import { seed } from '../sketch/adapters/sourceContour';
 import { serializeSourceAuthoring } from '../sketch/adapters/sourceAuthoring';
 import { wooferAssemblyContext } from '../sketch/adapters/sourceContext';
 import { realSessionReady } from '../sketch/testSupport';
+import type { EditRecord } from '../stores/designEdit';
 import { sketchViewKey } from '../sketch/viewPreferences';
 
 vi.mock('../api/sourceEditor', () => ({ sourceEditorApi: { validate: vi.fn(), presets: vi.fn() } }));
 
 let host: HTMLDivElement, root: Root;
-type Publish = { callback: 'onDraftChange' | 'onAuthoringChange'; payload: unknown };
+type Publish = EditRecord<SourceDocument>;
 let publishes: Publish[];
 beforeAll(realSessionReady);
 beforeEach(() => {
@@ -40,8 +41,7 @@ const button = (label: string) => {
 const settle = async () => act(async () => { await vi.advanceTimersByTimeAsync(200); });
 async function mount(document: SourceDocument = INITIAL_SOURCE, props: Partial<ComponentProps<typeof Editor>> = {}) {
   await act(async () => root.render(<Editor initialDocument={document} onClose={() => {}}
-    onDraftChange={payload => publishes.push({ callback: 'onDraftChange', payload: structuredClone(payload) })}
-    onAuthoringChange={payload => publishes.push({ callback: 'onAuthoringChange', payload: structuredClone(payload) })}
+    host={{ commit: record => publishes.push(structuredClone(record)) }}
     {...props}/>));
   await settle();
   expect(button('Line (L)').disabled).toBe(false);
@@ -71,11 +71,16 @@ function snapshotWorkspace() {
   expect({ svg: markup(svg()), toolbar: markup(host.querySelector('.sketch-toolbar')) }).toMatchSnapshot();
 }
 function snapshotPublishes() {
-  // W0 deliberately pins TODAY'S two separate host calls: document first, then
-  // authoring. W3 will deliberately replace these expectations with one atomic
-  // host call, retaining the document and authoring payloads recorded here.
-  expect(publishes.map(p => p.callback)).toEqual(['onDraftChange', 'onAuthoringChange']);
-  expect(publishes).toMatchSnapshot();
+  expect(publishes).toHaveLength(1);
+  const [record] = publishes;
+  expect(record.status).toBe('valid');
+  expect(record.draftKey).toBe(JSON.stringify(record.authoring));
+  // Retain W0's exact document and sidecar payload snapshots, projected from the
+  // single atomic host call. DOM and request-body baselines remain unchanged.
+  expect([
+    { callback: 'onDraftChange', payload: record.document },
+    { callback: 'onAuthoringChange', payload: { ...(record.authoring as object), document: record.document } },
+  ]).toMatchSnapshot();
 }
 
 describe('W0 workspace DOM at 77c641c8', () => {
@@ -139,7 +144,7 @@ describe('W0 nested editor host publishes at 77c641c8', () => {
     await pointer(host.querySelector('.sketch-entity[data-id="piston"]')!, 'pointerdown', (a.x + b.x) / 2, (a.y + b.y) / 2);
     await settle();
     snapshotPublishes();
-    expect((publishes[0].payload as SourceDocument).contour.segments).toHaveLength(2);
+    expect((publishes[0].document!).contour.segments).toHaveLength(2);
   });
   it('multi-frame drag publishes only at release, document then authoring', async () => {
     await mount(); expect(publishes).toEqual([]);
@@ -151,7 +156,7 @@ describe('W0 nested editor host publishes at 77c641c8', () => {
     }
     await pointer(svg(), 'pointerup', rim.x + 15, rim.y); await settle();
     snapshotPublishes();
-    expect((publishes[0].payload as SourceDocument).contour.points[1].r_mm).toBeGreaterThan(8);
+    expect((publishes[0].document!).contour.points[1].r_mm).toBeGreaterThan(8);
   });
   it('placed dimension and its first value each publish a pair but merge into one undo step', async () => {
     await mount(); expect(publishes).toEqual([]);
@@ -162,12 +167,12 @@ describe('W0 nested editor host publishes at 77c641c8', () => {
     expect(publishes).toEqual([]); // Typing has no host side effects.
     await click('Apply dimension value'); await settle();
     snapshotPublishes();
-    expect((placement[0].payload as SourceDocument).contour.points[1].r_mm).toBe(8);
-    expect((publishes[0].payload as SourceDocument).contour.points[1].r_mm).toBeCloseTo(10, 8);
+    expect((placement[0].document!).contour.points[1].r_mm).toBe(8);
+    expect((publishes[0].document!).contour.points[1].r_mm).toBeCloseTo(10, 8);
     publishes = [];
     await click('Undo'); await settle();
-    expect((publishes[0].payload as SourceDocument).contour.points[1].r_mm).toBe(8);
-    const envelope = publishes[1].payload as ReturnType<typeof serializeSourceAuthoring>;
+    expect((publishes[0].document!).contour.points[1].r_mm).toBe(8);
+    const envelope = publishes[0].authoring as ReturnType<typeof serializeSourceAuthoring>;
     expect(envelope.sketch.constraints.filter(c => 'value' in c)).toEqual([]);
   });
 });

@@ -210,6 +210,30 @@ describe('shared source and passage authoring', () => {
     expect(read()).toEqual(INITIAL_ASSEMBLY);
     expect(assemblyDraftFile(INITIAL_ASSEMBLY).authoring.horn).toEqual(newer);
   });
+  it.each(['horn', 'woofer'] as const)('restores a rule-invalid %s draft through the real assembly host', async source => {
+    const state = seed(INITIAL_ASSEMBLY[source]!);
+    state.sketch.entities[0].data = { ...state.sketch.entities[0].data as object, name: 'Named diaphragm' };
+    state.sketch.constraints.push({ id: 'width', kind: 'distance', a: 'pole', b: 'rim', value: 8, driving: false, label: 'Named width' });
+    storage.setItem('', JSON.stringify(INITIAL_ASSEMBLY));
+    authoringStorage.setItem('', JSON.stringify({ [source]: serializeSourceAuthoring(state) }));
+    await mount(); await act(async () => button(`Edit ${source} contour…`).click()); await settle();
+    const role = host.querySelector<HTMLSelectElement>('[aria-label="Patch 1 role"]')!;
+    await act(async () => { role.value = 'rigid'; role.dispatchEvent(new Event('change', { bubbles: true })); }); await settle();
+    const saved = envelopeFor(source);
+    expect(saved.pending).toBe(true);
+    expect(saved.document).toEqual(INITIAL_ASSEMBLY[source]);
+    expect(read()[source]).toEqual(INITIAL_ASSEMBLY[source]);
+    const restored = parseSourceAuthoring(saved, saved.document)!;
+    expect(restored.sketch).toEqual(saved.sketch);
+    expect(restored.sketch.constraints).toContainEqual(expect.objectContaining({ id: 'width', label: 'Named width' }));
+    await act(async () => button('Close').click()); await settle();
+    await act(async () => root.render(null)); await mount();
+    await act(async () => button(`Edit ${source} contour…`).click()); await settle();
+    expect(host.textContent).toContain('Named diaphragm'); expect(host.textContent).toContain('Named width');
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Patch 1 role"]')!.value).toBe('rigid');
+    expect(button('Use contour').disabled).toBe(true);
+    expect(envelopeFor(source).sketch).toEqual(saved.sketch);
+  });
   it.each(['horn', 'woofer'] as const)('keeps a pending invalid %s sketch beside the last canonical document', async source => {
     storage.setItem('', JSON.stringify(INITIAL_ASSEMBLY)); await mount();
     await act(async () => button(`Edit ${source} contour…`).click()); await settle();

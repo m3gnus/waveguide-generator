@@ -82,7 +82,7 @@ describe('W1 source workspace adapter', () => {
       const geometry = sketchGeometry(state.sketch, state.meta.references, []);
       const hidden = [...geometry.hiddenCentres, ...geometry.helperPoints];
       for (const at of [...state.sketch.points, ...curves.flatMap(item => item.kind === 'polyline' ? item.points : item.kind === 'arc' ? [item.start, item.end] : [])]) {
-        const hits = adapter.hits(state, at, 8 / view.scale);
+        const hits = adapter.hits(state, at, 8 / view.scale, { selection: [] });
         expect(hits.map(hit => hit.id)).toEqual(selectHits(state.sketch, at, 8 / view.scale, hidden));
         expect(hits.every(hit => hit.kind === 'point' || hit.kind === 'curve')).toBe(true);
       }
@@ -132,8 +132,8 @@ describe('W1 source workspace adapter', () => {
 
   it('marquees and drags selectable geometry and excludes fixed references', () => {
     const state = seed(INITIAL_SOURCE);
-    expect(adapter.marquee(state, { minX: -1, maxX: 9, minY: -1, maxY: 1 }, false)).toEqual(['pole', 'rim', 'piston']);
-    expect(adapter.marquee(state, { minX: 3, maxX: 5, minY: -1, maxY: 1 }, true)).toEqual(['piston']);
+    expect(adapter.marquee(state, { minX: -1, maxX: 9, minY: -1, maxY: 1 }, false, { selection: [] })).toEqual(['pole', 'rim', 'piston']);
+    expect(adapter.marquee(state, { minX: 3, maxX: 5, minY: -1, maxY: 1 }, true, { selection: [] })).toEqual(['piston']);
     expect(adapter.dragSet(state, [], state.meta.references[0].id)).toBeUndefined();
     const drag = adapter.dragSet(state, ['piston'], 'piston')!;
     expect(drag.ids).toEqual(['pole', 'rim']);
@@ -147,9 +147,9 @@ describe('W1 source workspace adapter', () => {
   it('exposes the existing selection property actions and drawing reducers', () => {
     const command = vi.fn().mockResolvedValue(dimension);
     const session = { command, busy: false } as unknown as WorkspaceSession<Authoring<SourceMeta>, Command>;
-    const properties = adapter.properties(dimension, ['radius'], session);
+    const properties = adapter.properties(dimension, ['radius'], session, { setSelection: vi.fn() });
     expect(renderToStaticMarkup(<>{properties[0].render()}</>)).toContain('Make reference');
-    expect(adapter.properties(dimension, [], session)).toEqual([]);
+    expect(adapter.properties(dimension, [], session, { setSelection: vi.fn() })).toEqual([]);
     const line = adapter.tools.find(tool => tool.id === 'line')!;
     const start = line.pointer({ phase: 'down', at: { x: 0, y: 0 }, tolerance: 1 }, dimension, undefined);
     const end = line.pointer({ phase: 'down', at: { x: 3, y: 4 }, tolerance: 1 }, dimension, start.local);
@@ -163,7 +163,8 @@ describe('W1 source workspace adapter', () => {
     const state = structuredClone(dimension), handle = await adapter.solver!.open(state);
     try {
       expect((await handle.diagnose(state)).diagnosis.status).toBe('ok');
-      const resized = await handle.dimension!(state, 'radius', 9);
+      const { state: resized, diagnosis } = await handle.dimension!(state, 'radius', 9);
+      expect(diagnosis.status).toBe('ok');
       expect(resized.sketch.points.find(p => p.id === 'rim')?.x).toBeCloseTo(9);
       await handle.beginDrag(['rim']);
       expect((await handle.dragTo([{ pointId: 'rim', x: 10, y: 0 }])).sketch).toBeDefined();
@@ -189,15 +190,6 @@ it('keeps line chaining through release and projects split clicks to the curve',
   expect(adapter.apply(state, result.commands![0])).not.toHaveProperty('error');
 });
 
-it('keeps the dimension second pick and commits placement only on release', () => {
-  const state = seed(INITIAL_SOURCE), tool = adapter.tools.find(tool => tool.id === 'dimension')!;
-  const down = { phase: 'down' as const, at: { x: 4, y: 2 }, tolerance: 1 };
-  const first = tool.pointer({ ...down, hit: 'piston' }, state, undefined);
-  const second = tool.pointer({ ...down, hit: state.meta.references[0].id }, state, first.local);
-  expect(second.commands).toBeUndefined();
-  expect(second.local).toEqual({ ids: ['piston', state.meta.references[0].id] });
-  const placed = tool.pointer(down, state, second.local);
-  expect(placed.commands).toBeUndefined();
-  const up = tool.pointer({ ...down, phase: 'up', reference: true }, state, placed.local);
-  expect(up.commands?.[0]).toMatchObject({ kind: 'addConstraint', constraint: { driving: false } });
+it('omits the unfinished generic dimension descriptor', () => {
+  expect(adapter.tools.some(tool => tool.id === 'dimension' || tool.shortcut === 'd')).toBe(false);
 });

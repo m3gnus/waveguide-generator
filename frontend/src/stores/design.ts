@@ -1,4 +1,5 @@
 import { useDocumentStore, type DocumentState } from './document';
+import type { EmbeddedDesignUpdates } from './designEdit';
 import { create } from 'zustand';
 import { temporal } from 'zundo';
 import { findParameterByPath } from '../design/parameterRegistry';
@@ -794,13 +795,25 @@ interface DesignStore {
     loadSource?: DesignLoadSource;
     revision?: number;
   }) => void;
+  commitEmbedded: (updates: EmbeddedDesignUpdates, mode: 'step' | 'amend' | 'drag') => void;
+  cancelDrag: () => void;
   beginDrag: () => void;
   endDrag: () => void;
   undo: () => void;
   redo: () => void;
 }
 
-function setAtPath(design: DesignDocument, path: string, value: DesignValue): DesignDocument {
+/** Read the same dotted and $last paths accepted by design edits. */
+export function getAtPath(design: DesignDocument, path: string | undefined): unknown {
+  if (!path) return undefined;
+  return path.split('.').reduce<unknown>((value, part) => {
+    if (typeof value !== 'object' || value === null) return undefined;
+    const key = part === '$last' && Array.isArray(value) ? String(value.length - 1) : part;
+    return (value as Record<string, unknown>)[key];
+  }, design);
+}
+
+function setAtPath(design: DesignDocument, path: string, value: unknown): DesignDocument {
   const next = structuredClone(design);
   const parts = path.split('.');
   let cursor: Record<string, unknown> | unknown[] = next as unknown as Record<string, unknown>;
@@ -848,7 +861,7 @@ function resolveConcretePath(design: DesignDocument, path: string): string {
   return resolved.join('.');
 }
 
-function setMany(design: DesignDocument, updates: Record<string, DesignValue>): DesignDocument {
+function setMany(design: DesignDocument, updates: EmbeddedDesignUpdates): DesignDocument {
   return Object.entries(updates).reduce((next, [path, value]) => setAtPath(next, path, value), design);
 }
 
@@ -898,6 +911,15 @@ function bump(reason: MutationReason, immediate: boolean, loadSource?: DesignLoa
   announce({ revision, reason, immediate, ...(loadSource ? { loadSource } : {}) });
 }
 
+/** Shared write path for ordinary edits and domain-owned embedded records. */
+function applyDesignUpdates(updates: EmbeddedDesignUpdates): void {
+  useDesignStore.setState((state) => ({
+    design: canonicalizeEqualCompositeScale(refreshAbsentWall(Object.keys(updates).reduce((next, path) => withoutPreservedMetadata(next, path), setMany(state.design, updates))), Object.keys(updates)),
+    designRevision: state.designRevision + 1,
+  }));
+  bump(useDesignStore.getState().dragSnapshot ? 'drag' : 'edit', false);
+}
+
 export const useDesignStore = create<DesignStore>()(
   temporal(
     (set, get) => ({
@@ -913,13 +935,16 @@ export const useDesignStore = create<DesignStore>()(
         }));
         bump(get().dragSnapshot ? 'drag' : 'edit', false);
       },
-      updateValues: (updates) => {
-        set((state) => ({
-          design: canonicalizeEqualCompositeScale(refreshAbsentWall(Object.keys(updates).reduce((next, path) => withoutPreservedMetadata(next, path), setMany(state.design, updates))), Object.keys(updates)),
-          designRevision: state.designRevision + 1,
-        }));
-        bump(get().dragSnapshot ? 'drag' : 'edit', false);
+      updateValues: applyDesignUpdates,
+      commitEmbedded: (updates, mode) => {
+        if (mode === 'drag' && !get().dragSnapshot) throw new Error('No active project drag.');
+        const temporal = useDesignStore.temporal.getState();
+        const tracking = temporal.isTracking;
+        if (mode === 'amend' && tracking) temporal.pause();
+        try { applyDesignUpdates(updates); }
+        finally { if (mode === 'amend' && tracking) temporal.resume(); }
       },
+      cancelDrag: () => restoreDesignDrag('drag'),
       updateExpression: (path, expression) => {
         set((state) => {
           let design = withoutPreservedMetadata(structuredClone(state.design), path);
@@ -1004,11 +1029,11 @@ export const useDesignStore = create<DesignStore>()(
       undo: () => {
         const snapshot = get().dragSnapshot;
         if (!snapshot && !useDesignStore.temporal.getState().pastStates.length) return;
-        cancelRevisionTimers();
         if (snapshot) {
-          useDesignStore.temporal.getState().resume();
-          set((state) => ({ design: snapshot, dragSnapshot: null, designRevision: state.designRevision + 1 }));
+          restoreDesignDrag('undo');
+          return;
         } else {
+          cancelRevisionTimers();
           useDesignStore.temporal.getState().undo();
           set((state) => ({ designRevision: state.designRevision + 1 }));
         }
@@ -1053,6 +1078,28 @@ useDesignStore.subscribe((state, previous) => {
     useDocumentStore.getState().restoreDocumentState(recorded);
   } else if (!recorded) rememberHistoryDocument(state.design);
 });
+type DesignHistory = Pick<ReturnType<typeof useDesignStore.temporal.getState>, 'pastStates' | 'futureStates'>;
+
+export function selectCanUndo(state: Pick<DesignStore, 'dragSnapshot'>, history: Pick<DesignHistory, 'pastStates'>): boolean {
+  return history.pastStates.length > 0 || !!state.dragSnapshot;
+}
+
+export function selectCanRedo(history: Pick<DesignHistory, 'futureStates'>): boolean {
+  return history.futureStates.length > 0;
+}
+
+/** Keep cancellation out of temporal history; both Escape and project Undo use it. */
+function restoreDesignDrag(reason: 'drag' | 'undo'): void {
+  const snapshot = useDesignStore.getState().dragSnapshot;
+  if (!snapshot) return;
+  cancelRevisionTimers();
+  const temporal = useDesignStore.temporal.getState();
+  temporal.pause();
+  try {
+    useDesignStore.setState(state => ({ design: snapshot, dragSnapshot: null, designRevision: state.designRevision + 1 }));
+  } finally { temporal.resume(); }
+  bump(reason, true);
+}
 
 export function resetDesignStore(): void {
   // New starts a document, so the one it replaces must not become an undo step

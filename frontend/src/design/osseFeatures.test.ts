@@ -103,4 +103,16 @@ describe('OSSE feature choices', () => {
     useDesignStore.getState().undo();
     expect(useDesignStore.getState().design).toEqual(composite);
   });
+  it.each(['ordinary', 'embedded'] as const)('keeps composite scale canonical through a %s multi-field edit and undo', (kind) => {
+    const composite = designForFamily('OSSE-NATIVE');
+    useDesignStore.getState().replaceDocument(composite);
+    const updates = { axial_scale: composite.scale };
+    if (kind === 'ordinary') useDesignStore.getState().updateValues(updates);
+    else useDesignStore.getState().commitEmbedded(updates, 'step');
+    expect(useDesignStore.getState().design.formula).toBe('OSSE-ROUNDOVER');
+    expect(useDesignStore.getState().design.axial_scale).toBeUndefined();
+    useDesignStore.getState().undo();
+    expect(useDesignStore.getState().design).toEqual(composite);
+  });
+
 });

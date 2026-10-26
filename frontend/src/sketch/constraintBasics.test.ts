@@ -20,9 +20,9 @@ const initial = () => importedSketch([
   { id: 'baffle', kind: 'line', p1: 'o', p2: 'right', reference: true, construction: true },
 ]);
 function controller(sketch: Sketch) {
-  return new SketchController({ sketch, meta: null }, [], (s, c) => {
+  return new SketchController({ initial: { sketch, meta: null }, references: [], apply: (s, c) => {
     const r = applyCommand(s.sketch, c); return 'error' in r ? r : { ...s, sketch: r.sketch };
-  }, () => {});
+  }, changed: () => {} });
 }
 const at = (s: Sketch, id: string) => s.points.find(p => p.id === id)!;
 const vector = (s: Sketch, a: string, b: string) => ({ x: at(s, b).x - at(s, a).x, y: at(s, b).y - at(s, a).y });

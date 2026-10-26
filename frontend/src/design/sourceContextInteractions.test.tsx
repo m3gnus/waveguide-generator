@@ -35,7 +35,7 @@ const svg = () => host.querySelector('[aria-label="Sketch drawing"]')!;
 const pointer = async (target: Element, type = 'pointerdown', x = 0, y = 0, shiftKey = false) => act(async () => target.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, buttons: type === 'pointerup' ? 0 : 1, shiftKey })));
 const point = (id: string) => host.querySelector(`.sketch-point[data-id="${id}"]`)!;
 const changed = vi.fn();
-const render = async (z = 2, radius = 8, present = true, stale = false) => { await act(async () => root.render(<Editor onClose={() => {}} initialDocument={documentSource} onDraftChange={changed} limit={{ kind: 'throat', radius, hard: true }} context={context(z, radius, present)} contextStale={stale}/>)); await settle(); };
+const render = async (z = 2, radius = 8, present = true, stale = false) => { await act(async () => root.render(<Editor onClose={() => {}} initialDocument={documentSource} host={{ commit: record => { if (record.document && record.status === "valid") changed(record.document); } }} limit={{ kind: 'throat', radius, hard: true }} context={context(z, radius, present)} contextStale={stale}/>)); await settle(); };
 
 it('renders exactly one context layer, finite horn datums and a locked throat marker', async () => {
   await render();

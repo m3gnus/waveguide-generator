@@ -63,10 +63,10 @@ describe('sketch names', () => {
   });
   it('keeps lowering, IDs, literal weights, and actual /validate request bytes identical through undo/redo', async () => {
     const initial = cone(); initial.meta.weights['dust-cap'] = 0; initial.meta.weights.cone = -.5;
-    const controller = new SketchController(initial, initial.meta.references, (s, c) => {
+    const controller = new SketchController({ initial: initial, references: initial.meta.references, apply: (s, c) => {
       const result = applySourceCommand(s.sketch, s.meta, c);
       return 'error' in result ? result : { sketch: result.sketch, meta: result.meta };
-    }, () => {});
+    }, changed: () => {} });
     const requests: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url, init) => {
       expect(url).toBe('/api/source-editor/validate'); requests.push(init.body);

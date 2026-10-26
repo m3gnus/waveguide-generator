@@ -8,7 +8,8 @@ import { dimensionLabel, dimensionLayouts, internalHelper } from '../dimensionGr
 import { displayName } from '../displayName';
 import { formatValue } from '../formatValue';
 import { contourScreenPoints, contourDimensionBounds } from '../displayGeometry';
-import { fit, worldToScreen, type View } from '../view';
+import { worldToScreen, type View } from '../view';
+import { displayView } from '../workspace/view';
 import type { DisplayItem, DisplayModel, DisplayUI } from '../workspace/types';
 
 /** Convert the legacy solver references once, then render every datum with the same layer. */
@@ -54,9 +55,7 @@ export function sourceBounds(sketch: Sketch, context?: SketchContext, all = fals
 }
 export function sourceInitialView(sketch: Sketch, width = 640, height = 360, context?: SketchContext, all = false): View {
   const named = sketch.constraints.filter(c => c.label && 'value' in c);
-  const { bottom, top, right, offsetX, margin } = sourceFitPadding(named);
-  const fitted = fit(sourceBounds(sketch, context, all), { width: Math.max(100, width - right), height: Math.max(100, height - bottom - top) }, margin);
-  return { ...fitted, offsetX: fitted.offsetX + offsetX, offsetY: fitted.offsetY + top };
+  return displayView({ items: [], context: [], bounds: all => sourceBounds(sketch, context, all), fitPadding: sourceFitPadding(named) }, { width, height }, all);
 }
 
 function sourceFitPadding(named: Constraint[]) {

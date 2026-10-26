@@ -115,3 +115,11 @@
 .sketch-domain-problem.unfinished { color: var(--fg3); }
 .sketch-domain-problem.invalid { color: var(--red); }
 .sketch-problem.unfinished { stroke: var(--fg3); }
+
+/* Adapter-owned states on solver-free geometry. Sketch kit colours remain unchanged. */
+.workspace-item { stroke: var(--fg3); }
+.workspace-item.problem { stroke: var(--amber); }
+.workspace-item.stale { opacity: .55; }
+.workspace-item.ghost { stroke-dasharray: 5 3; pointer-events: none; }
+.workspace-item.display-only { pointer-events: none; cursor: default; }
+.sketch-tangent-handle { fill: none; stroke: var(--fg3); stroke-width: 1; }

@@ -10,7 +10,7 @@ import { drawnSource, editPatch, editPoint, identityProblem, INITIAL_SOURCE, rem
 import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import { SketchCanvas } from '../sketch/SketchCanvas';
 import { isConstraintConflict, SketchController, type Authoring } from '../sketch/controller';
-import { applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, sourceProgress, scaleSourceToLimit, scaleSourceDimensions, fitSourcePreset, withSourceLimit, withSourceContext, sourceLimitTarget, type SourceLimit, type SourceMeta } from '../sketch/adapters/sourceContour';
+import { sourceContourAdapter, applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, sourceProgress, scaleSourceToLimit, scaleSourceDimensions, fitSourcePreset, withSourceLimit, withSourceContext, sourceLimitTarget, type SourceLimit, type SourceMeta } from '../sketch/adapters/sourceContour';
 import { presetDefaults as defaults, presetLabels, seedPreset, fitPresetDimensions } from '../sketch/adapters/sourcePreset';
 import { presetDimensionActive, presetDimensionProblem, presetTopologyMessage, reapplyPresetMessage } from '../sketch/adapters/sourcePresetMapping';
 import { refreshContext, type SketchContext } from '../sketch/context';
@@ -19,6 +19,7 @@ import { displayName } from '../sketch/displayName';
 import { uniqueProblems } from '../sketch/adapter';
 import { newerEnvelope, parseSourceAuthoring, serializeSourceAuthoring, sameSourceDocument } from '../sketch/adapters/sourceAuthoring';
 import { constraintRefs, entityPoints, type Entity, type Sketch, type Constraint } from '../sketch/model';
+import { editRecord, type EditHost } from '../sketch/workspace/editRecord';
 import type { Command } from '../sketch/commands';
 import type { Diagnosis } from '../sketch/session';
 import { arcGeometry } from '../sketch/geometry';
@@ -136,7 +137,7 @@ export function SourceContourDialog() {
   return open ? createPortal(<Editor onClose={close}/>, document.body) : null;
 }
 
-export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange, limit: hostLimit, onLimitChange, context: hostContext, contextStale = false, initialAuthoring, onAuthoringChange }: { onClose: () => void; initialDocument?: SourceDocument; onUseDocument?: (document: SourceDocument) => void; onDraftChange?: (document: SourceDocument) => void; limit?: SourceLimit; onLimitChange?: (radius: number) => void; context?: SketchContext; contextStale?: boolean; initialAuthoring?: unknown; onAuthoringChange?: (envelope: unknown) => void }) {
+export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLimit, onLimitChange, context: hostContext, contextStale = false, initialAuthoring, host }: { onClose: () => void; initialDocument?: SourceDocument; onUseDocument?: (document: SourceDocument) => void; limit?: SourceLimit; onLimitChange?: (radius: number) => void; context?: SketchContext; contextStale?: boolean; initialAuthoring?: unknown; host?: EditHost<SourceDocument> }) {
   const [attachment, setAttachment] = useState<SourceAttachment>(() => initialDocument ? structuredClone(defaultAttachment) : readSourceAttachment());
   const limit: SourceLimit = hostLimit ?? attachmentLimit(attachment);
   const attachmentRef = useRef(attachment); attachmentRef.current = attachment;
@@ -172,8 +173,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
   const [pointsOpen, setPointsOpen] = useState(false);
   const [dimensionsOpen, setDimensionsOpen] = useState(false);
   const [patchesOpen, setPatchesOpen] = useState(false);
-  const authoringCallback = useRef(onAuthoringChange); authoringCallback.current = onAuthoringChange;
-  const draftCallback = useRef(onDraftChange); draftCallback.current = onDraftChange;
+  const hostRef = useRef(host); hostRef.current = host;
   const controller = useRef<SketchController<SourceMeta> | undefined>(undefined);
   const [sketchReady, setSketchReady] = useState(false);
   const [sketchPending, setSketchPending] = useState(false);
@@ -225,6 +225,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
     setAttachment(restoredAttachment);
     const restoredLimit = hostLimit ?? attachmentLimit(restoredAttachment), restoredContext = hostContext ?? standaloneContext(restoredAttachment, restored.contour.points.at(-1)?.r_mm ?? 0);
     const moved = refreshContext(next.sketch, restoredContext).moved;
+    lastValidDocument.current = restored;
     setDraft(restored); replaceAuthor(openingSourceContext(next.meta.limit ? next : withSourceLimit(next, restoredLimit), restoredContext)); setUndo([]); setSelected(undefined); setSelectedPatch(0);
     fitted.current = false; drag.current = null;
     setNotice(envelope ? 'Newer sketch data is read-only. Classic drawing edits preserve it unchanged.' : moved ? 'Reference context changed; contour updated' : restorationNotice(next) || 'Restored source draft from saved settings.');
@@ -244,22 +245,18 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
     const initial = authorRef.current;
     let opening = true;
     setSketchReady(false);
-    const next = new SketchController(initial, state => state.meta.references, (state, command) => {
+    const next = new SketchController({ initial, references: state => state.meta.references, apply: (state, command) => {
       const result = applySourceCommand(state.sketch, state.meta, command);
       return 'error' in result ? result : { sketch: result.sketch, meta: result.meta };
-    }, (state, result) => {
+    }, changed: (state, result) => {
       if (!current) return;
       setDiagnosis(result); setSketchReady(true);
       if (opening) { opening = false; const opened = lower(state.sketch, state.meta); if (opened.ok && sameSourceDocument(draftRef.current, opened.document)) return; }
       clearLoadOffer();
       authorRef.current = state; setAuthor(state); setPreview(undefined);
-      const lowered = lower(state.sketch, state.meta); lowering.current = { state, result: lowered };
-      if (lowered.ok) {
-        draftRef.current = lowered.document; setDraft(lowered.document); draftCallback.current?.(lowered.document);
-      }
-      persistAuthoring(state, lowered.ok ? lowered.document : draftRef.current, !lowered.ok);
+      commitAuthoring(state);
       setNotice(next.notice ?? ''); setError('');
-    }, reason => { if (current) setError(reason instanceof Error ? reason.message : String(reason)); }, active => { if (current) { editingIntent.current = active; setSketchPending(active); if (!active && deferredHydration.current) { deferredHydration.current = false; hydrateRef.current(); } } }, (state, result) => { if (current) { setPreview(state === authorRef.current ? undefined : state); setDiagnosis(result); } }, (state, id, value) => presetDimensionProblem(state.sketch, state.meta, id, value), clearLoadOffer);
+    }, failed: reason => { if (current) setError(reason instanceof Error ? reason.message : String(reason)); }, activity: active => { if (current) { editingIntent.current = active; setSketchPending(active); if (!active && deferredHydration.current) { deferredHydration.current = false; hydrateRef.current(); } } }, preview: (state, result) => { if (current) { setPreview(state === authorRef.current ? undefined : state); setDiagnosis(result); } }, dimensionProblem: (state, id, value) => presetDimensionProblem(state.sketch, state.meta, id, value), historyNavigation: clearLoadOffer });
     controller.current = next;
     // Initialization errors are reported by queued operations as well.
     return () => { current = false; next.destroy(); controller.current = undefined; };
@@ -269,7 +266,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
     const key = JSON.stringify(attachment);
     if (key === savedAttachment.current) return;
     savedAttachment.current = key;
-    if (!initialDocument && !newer) persistAuthoring(authorRef.current, draftRef.current, !lower(authorRef.current.sketch, authorRef.current.meta).ok);
+    if (!initialDocument && !newer) commitAuthoring(authorRef.current, false);
   }, [attachment]);
   const installedContext = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -308,11 +305,22 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
     else setAttachment(a => ({ ...a, dimensions: { ...a.dimensions, [a.kind === 'baffle' ? 'aperture_radius_mm' : 'mouth_radius_mm']: radius } }));
   }
   const draftRef = useRef(draft); draftRef.current = draft;
+  const lastValidDocument = useRef<SourceDocument | null>(draft);
   const editingIntent = useRef(false);
-  function persistAuthoring(state: Authoring<SourceMeta>, document: SourceDocument, pending: boolean) {
-    const envelope = newer ? { ...newer, document } : { ...serializeSourceAuthoring(state, pending), document };
-    if (initialDocument) authoringCallback.current?.(envelope);
-    else storage.setItem('', JSON.stringify(newer ? envelope : { ...envelope, attachment: attachmentRef.current }));
+  function commitAuthoring(state: Authoring<SourceMeta>, notifyHost = true) {
+    const lowered = lower(state.sketch, state.meta); lowering.current = { state, result: lowered };
+    if (!classic && lowered.ok) { draftRef.current = lowered.document; setDraft(lowered.document); }
+    const record = editRecord(sourceContourAdapter, state, lastValidDocument.current, lowered);
+    if (newer) { record.authoring = newer; record.draftKey = JSON.stringify(newer); record.document = draftRef.current; }
+    if (record.status === 'valid') lastValidDocument.current = record.document;
+    const settingsHost: EditHost<SourceDocument> = { commit(record) {
+      const envelope = { ...(record.authoring as object), document: record.document };
+      storage.setItem('', JSON.stringify(newer ? envelope : { ...envelope, attachment: attachmentRef.current }));
+      if (notifyHost) hostRef.current?.commit(record);
+    } };
+    // Nested hosts own their storage. The standalone host keeps the existing one-envelope format.
+    const host = initialDocument ? hostRef.current : settingsHost;
+    host?.commit(record);
   }
   function replaceAuthor(next: Authoring<SourceMeta>) {
     clearLoadOffer();
@@ -340,7 +348,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
         channel_id: next.drive.channel_id, motion: next.drive.motion })).catch(reason => setError(String(reason))); return;
     }
     if (recordUndo) setUndo((history) => [...history.slice(-19), structuredClone(draft)]);
-    setDraft(next); persistAuthoring(classic ? seed(next) : authorRef.current, next, false); onDraftChange?.(next); setNotice(''); setError('');
+    draftRef.current = next; setDraft(next); commitAuthoring(classic ? seed(next) : authorRef.current); setNotice(''); setError('');
   }
   async function run(action: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('');
@@ -576,6 +584,6 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange,
         }}>Split selected patch at midpoint</button>
       </aside></div>
     </fieldset>
-    <footer>{loadOffer && <div role="status" className="source-load-offer">Loaded preset conflicts with the throat: <button type="button" disabled={busy || sketchPending} onClick={() => scaleToFitThroat(true)}>Scale it to fit</button> <button type="button" disabled={busy || sketchPending} onClick={clearLoadOffer}>Discard</button></div>}{rimMismatch && <div role="status" className="source-throat-mismatch">Rim does not meet the horn throat ({rimRadius?.toFixed(2) ?? '—'} vs {limit.radius.toFixed(2)}) <button type="button" disabled={busy || sketchPending} onClick={() => scaleToFitThroat()}>Scale to fit throat</button></div>}{(!rimMismatch && (classic || sketchProblems.every(p => p.severity === 'warning') && !validationError)) && <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (drawPoints !== null ? 'Drawing draft' : valid ? 'Valid contour · moving and rigid roles preserved' : 'Validating contour…')}</div>}<div ref={setStatusHost} className="source-status-host"/>{!onUseDocument && <button type="button" disabled={busy || !valid} onClick={close}>Done</button>}{onUseDocument && <button type="button" disabled={!valid || busy} onClick={() => onUseDocument(accepted!.value.document)}>Use contour</button>}{onUseDocument && <button type="button" disabled={busy} onClick={close}>Back to assembly</button>}{busy && <p role="status">Working…</p>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}<small>{onDraftChange ? 'Contour edits are remembered in the assembly draft.' : initialDocument ? 'Use contour to apply these edits to the assembly.' : 'Draft changes are remembered.'} Use Undo to recover replaced contours. Names are stored in the sketch only.</small></footer>
+    <footer>{loadOffer && <div role="status" className="source-load-offer">Loaded preset conflicts with the throat: <button type="button" disabled={busy || sketchPending} onClick={() => scaleToFitThroat(true)}>Scale it to fit</button> <button type="button" disabled={busy || sketchPending} onClick={clearLoadOffer}>Discard</button></div>}{rimMismatch && <div role="status" className="source-throat-mismatch">Rim does not meet the horn throat ({rimRadius?.toFixed(2) ?? '—'} vs {limit.radius.toFixed(2)}) <button type="button" disabled={busy || sketchPending} onClick={() => scaleToFitThroat()}>Scale to fit throat</button></div>}{(!rimMismatch && (classic || sketchProblems.every(p => p.severity === 'warning') && !validationError)) && <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (drawPoints !== null ? 'Drawing draft' : valid ? 'Valid contour · moving and rigid roles preserved' : 'Validating contour…')}</div>}<div ref={setStatusHost} className="source-status-host"/>{!onUseDocument && <button type="button" disabled={busy || !valid} onClick={close}>Done</button>}{onUseDocument && <button type="button" disabled={!valid || busy} onClick={() => onUseDocument(accepted!.value.document)}>Use contour</button>}{onUseDocument && <button type="button" disabled={busy} onClick={close}>Back to assembly</button>}{busy && <p role="status">Working…</p>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}<small>{host ? 'Contour edits are remembered in the assembly draft.' : initialDocument ? 'Use contour to apply these edits to the assembly.' : 'Draft changes are remembered.'} Use Undo to recover replaced contours. Names are stored in the sketch only.</small></footer>
   </div></div>;
 }

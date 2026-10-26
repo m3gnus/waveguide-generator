@@ -34,7 +34,7 @@ import {
 import { ExteriorDriverLibraryPicker, ChannelDriverPicker } from './DriverPicker';
 import { useWaveguideDefinitionApplies } from '../stores/waveguideLink';
 import { useCadModelStatusLine } from '../shell/CadModelStatusLine';
-import { defaultWallThickness, isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
+import { defaultWallThickness, getAtPath, isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
 import { athControlError, lipRadiusWallError, lipUnavailableReason, opusClampNote, opusMountingReason, rosseMorphNote } from './athImportControls';
 import { namespaceStorage } from '../stores/durableSettings';
 import type { SymmetryMode } from '../stores/solveOptions';
@@ -339,15 +339,6 @@ function WallEnclosureModeControl({ design, mounting = false, serverError }: { d
     {mounting && unsupported && <div className="field-warning" role="status">{backendLimitation(backend, unsupported, backendPlan)}</div>}
     {mounting && ibEngine?.name === 'bempp' && ibEngine.assembly_backend === 'numba' && <OpenclUnavailableHook platform={hostPlatform} engine={ibEngine} notice="infinite_baffle_numba" />}
   </div>;
-}
-
-function getAtPath(design: DesignDocument, path: string | undefined): unknown {
-  if (!path) return undefined;
-  return path.split('.').reduce<unknown>((value, part) => {
-    if (typeof value !== 'object' || value === null) return undefined;
-    const key = part === '$last' && Array.isArray(value) ? String(value.length - 1) : part;
-    return (value as Record<string, unknown>)[key];
-  }, design);
 }
 
 function TextField({ field, value, disabled, onCommit }: {

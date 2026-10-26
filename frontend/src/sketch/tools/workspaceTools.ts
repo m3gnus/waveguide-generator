@@ -5,7 +5,6 @@ import type { Sketch } from '../model';
 import { drawingIcons, type Tool } from '../SketchToolbar';
 import type { ToolDescriptor } from '../workspace/types';
 import { continueLine, lineState, placeLine, type LineState } from './line';
-import { candidateDimension, dimensionSecondPick, dimensionPicks, type CandidateDimension } from './dimension';
 import { projectToEntity } from '../geometry';
 import { geometryCandidates, geometryHit } from '../geometryHit';
 import { constraintToolEntries } from './constraints';
@@ -37,21 +36,6 @@ export function sketchTools<M extends { references: Reference[] }>(): ToolDescri
     },
     key(event) { return { consumed: event.key === 'Escape', ...(event.key === 'Escape' ? { local: { line: { ...lineState(), mode } } } : {}) }; },
   }));
-  const dimension: ToolDescriptor<State, Command> = {
-    id: 'dimension', group: 'Sketch', label: 'Dimension', shortcut: 'd', icon: drawingIcons.dimension, hint: () => sketchToolHints.dimension,
-    pointer(event, state, local) {
-      const current = (local as { ids: string[]; placement?: CandidateDimension } | undefined) ?? { ids: [] };
-      if (event.phase === 'up') return current.placement
-        ? { local: { ids: [] }, commands: [{ kind: 'addConstraint', constraint: { ...current.placement, driving: !event.reference } }] }
-        : { local: current };
-      if (event.phase !== 'down') return { local: current };
-      if (!current.ids.length) return { local: { ids: event.hit ? [event.hit] : [] } };
-      const second = dimensionSecondPick(state.sketch, state.meta.references, current.ids, event.hit, event.at);
-      return { local: second ? { ids: second } : { ...current, placement: candidateDimension(dimensionPicks(state.sketch, current.ids, state.meta.references), event.at) } };
-    },
-    key: event => ({ consumed: event.key === 'Escape', ...(event.key === 'Escape' ? { local: { ids: [] } } : {}) }),
-  };
-
   const split: ToolDescriptor<State, Command> = {
     id: 'split', group: 'Sketch', label: 'Split', shortcut: 's', icon: drawingIcons.split, hint: () => sketchToolHints.split,
     pointer(event, state) {
@@ -73,5 +57,5 @@ export function sketchTools<M extends { references: Reference[] }>(): ToolDescri
       return { consumed: event.key === 'Escape', ...(event.key === 'Escape' ? { local: escapeConstraint((local as ConstraintToolState | undefined) ?? constraintTool(entry.kinds)) } : {}) };
     },
   }));
-  return [...drawing, dimension, split, ...constraints];
+  return [...drawing, split, ...constraints];
 }
