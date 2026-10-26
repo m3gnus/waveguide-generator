@@ -12,6 +12,14 @@ import type { components } from './generated/openapi';
 export type SolverMeshStats = components['schemas']['SolverMeshStats'];
 export type SolverMeshResult = components['schemas']['SolverMeshResponse'];
 
+/** The measured solve mesh needs the person's choice before continuing. */
+export class SolverMeshTooLarge extends Error {
+  constructor(message: string, readonly triangles: number, readonly limit: number, readonly meshCacheKey: string) {
+    super(message);
+    this.name = 'SolverMeshTooLarge';
+  }
+}
+
 /** Preview request inputs, including validation applied to the cached artifact. */
 export function solverMeshOptions(state: SolveOptionsStore) {
   return {
@@ -70,7 +78,19 @@ export async function postSolverMesh(
     body,
     signal,
   });
-  if (!response.ok) throw new Error(await detail(response));
+  if (!response.ok) {
+    if (response.status === 409) {
+      const payload = await response.clone().json().catch(() => null) as { detail?: unknown } | null;
+      const value = payload?.detail;
+      if (value && typeof value === 'object' && 'code' in value && value.code === 'mesh_too_large'
+        && 'triangles' in value && typeof value.triangles === 'number'
+        && 'limit' in value && typeof value.limit === 'number'
+        && 'mesh_cache_key' in value && typeof value.mesh_cache_key === 'string') {
+        throw new SolverMeshTooLarge('This mesh is larger than the solve limit.', value.triangles, value.limit, value.mesh_cache_key);
+      }
+    }
+    throw new Error(await detail(response));
+  }
   const result = await response.json() as Partial<SolverMeshResult> & { stats?: Partial<SolverMeshStats> };
   if (
     typeof result.msh_text !== 'string'

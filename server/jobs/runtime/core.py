@@ -297,6 +297,14 @@ def _solver_plan_adjustments(
 def _failure_message(exc: BaseException) -> str:
     """A failed job's error message: the exception's text, never empty."""
 
+    from server.mesh.errors import MesherEstimateUnavailable, SolverMemoryTooLarge
+
+    if isinstance(exc, SolverMemoryTooLarge):
+        logger.warning("Solver memory admission refused a mesh: %s", exc)
+        return SolverMemoryTooLarge.USER_MESSAGE
+    if isinstance(exc, MesherEstimateUnavailable):
+        logger.error("Cannot check mesh memory before generation: %s", exc)
+        return MesherEstimateUnavailable.USER_MESSAGE
     text = str(exc).strip()
     if text:
         return text

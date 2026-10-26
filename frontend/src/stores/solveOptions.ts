@@ -63,6 +63,9 @@ export interface SolveOptions {
   engine: string;
   accuracy?: SolveAccuracy;
   adaptive_frequency_sampling?: boolean;
+  /** A choice for this particular mesh; never persisted as a preference. */
+  mesh_limit_override?: boolean;
+  mesh_limit_override_key?: string;
   solver_mode?: SolverMode;
   symmetry: SymmetryMode;
   mesh_validation_mode: MeshValidationMode;

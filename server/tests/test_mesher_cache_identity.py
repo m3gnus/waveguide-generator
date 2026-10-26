@@ -53,7 +53,7 @@ def test_solver_cache_rebuilds_on_same_version_revision_change(monkeypatch, revi
         nonlocal builds
         builds += 1
         return {
-            "msh_text": f"artifact-{builds}", "stats": {"warnings": []},
+            "msh_text": f"artifact-{builds}", "stats": {"warnings": [], "triangle_count": 4},
             "integrity": {"valid": True}, "metadata": {},
         }
 

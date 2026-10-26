@@ -30,7 +30,7 @@ from server.cadlink.operations import REASON_UPDATE_RESTART_PENDING
 from server.cadlink.roles import inventory_sha256, normalize_source_role, prepared_inventory_sha256
 from server.cadlink.store import FILE_MODEL_PREFIX, UNFILED_MODEL_ID, file_model_id
 from server.cadlink.wglink_protocol import SOURCE_ROLES
-from server.contracts.geometry import SYMMETRY_PLANE_AXIS
+from server.contracts.geometry import SYMMETRY_PLANE_AXIS, imported_symmetry_from_cut_planes
 from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json
 from server.integration.contracts import ErrorEnvelope, error_envelope
@@ -45,6 +45,8 @@ from server.jobs.model_solve import ModelSolveRefusal, ModelSolveRequest, solve_
 from server.jobs.models import SolveAccepted
 from server.jobs.runtime import ImportedSolveRefusal
 from server.mesh.artifact import read_verified_import_mesh
+from server.mesh.builder import _enforce_dense_solver_memory_ceiling
+from server.mesh.errors import SolverMemoryTooLarge
 from server.mesh.file_import import MAX_MESH_BYTES, file_mesh_integrity, inspect_file_mesh, mesh_text, parse_file_mesh, prepare_file_mesh, solve_group_tags, validate_file_symmetry, validate_remove_lid_planes
 from server.mesh.imported import polar_grid_from_symmetry
 from server.mesh.prepared_gc import prepared_mesh_use
@@ -220,6 +222,10 @@ def _register_mesh(
     mesh, transform = prepare_file_mesh(original, body.units, body.forward, body.up,
                                       domain_planes=body.domain_planes, reflect_planes=body.reflect_planes,
                                       remove_lid_planes=body.remove_lid_planes, roles=roles)
+    _enforce_dense_solver_memory_ceiling(
+        mesh.triangles, imported_symmetry_from_cut_planes(body.domain_planes).quadrants,
+        tags=mesh.tags,
+    )
     if not roles:
         raise ValueError("Choose at least one driver surface.")
     written_tags = solve_group_tags(mesh)
@@ -628,6 +634,8 @@ def mount_models_api(application: FastAPI) -> None:
             return await asyncio.to_thread(call, *args)
         except ModelRefusal as exc:
             return _refusal(exc.status, exc.code, str(exc))
+        except SolverMemoryTooLarge:
+            return _refusal(422, "solver_memory_exceeded", SolverMemoryTooLarge.USER_MESSAGE)
         except ValueError as exc:
             return _refusal(422, "mesh_refused", str(exc))
 

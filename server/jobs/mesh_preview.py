@@ -11,6 +11,7 @@ execution transforms are shared with the solve pipeline.
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from typing import Any, Awaitable, Callable, Literal
 
@@ -25,6 +26,9 @@ from server.jobs.models import SolveOptions, SolveRequest
 from server.jobs.plans import SolvePlanResponse, solve_plan_response
 from server.jobs.runtime.core import _execution_request, resolve_submission
 from server.mesh.child import MesherShuttingDownError
+from server.mesh.errors import MesherEstimateUnavailable, MeshTooLarge, SolverMemoryTooLarge
+
+logger = logging.getLogger(__name__)
 
 #: How often the disconnect watcher samples the request socket. Coarse on
 #: purpose: the cooperative cancel checkpoints inside the builder are sparse,
@@ -126,6 +130,17 @@ async def solver_mesh_response(
         raise HTTPException(status_code=499, detail=str(exc)) from exc
     except MesherShuttingDownError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except MeshTooLarge as exc:
+        raise HTTPException(status_code=409, detail={
+            "code": "mesh_too_large", "message": str(exc),
+            "triangles": exc.count, "limit": exc.limit, "mesh_cache_key": exc.mesh_cache_key,
+        }) from exc
+    except SolverMemoryTooLarge as exc:
+        logger.warning("Solver memory admission refused a mesh: %s", exc)
+        raise HTTPException(status_code=422, detail=SolverMemoryTooLarge.USER_MESSAGE) from exc
+    except MesherEstimateUnavailable as exc:
+        logger.exception("Cannot check mesh memory before generation")
+        raise HTTPException(status_code=422, detail=MesherEstimateUnavailable.USER_MESSAGE) from exc
     except (RuntimeError, ValueError, MesherError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:

@@ -139,7 +139,7 @@ def test_quadrant_compatibility_fallback_warning_is_request_local(monkeypatch) -
         calls += 1
         return {
             "msh_text": "$MeshFormat\n",
-            "stats": {"warnings": []},
+            "stats": {"warnings": [], "triangle_count": 4},
             "integrity": {"valid": True},
             "metadata": {},
         }

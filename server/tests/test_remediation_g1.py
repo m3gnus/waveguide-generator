@@ -389,7 +389,7 @@ def test_mesh_validation_policy_changes_runtime_outcome(monkeypatch) -> None:
     async def fake_worker(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {
             **result,
-            "stats": {"warnings": list(result["stats"]["warnings"])},
+            "stats": {"warnings": list(result["stats"]["warnings"]), "triangle_count": 4},
         }
 
     monkeypatch.setattr(mesh_builder, "run_mesh_build", fake_worker)

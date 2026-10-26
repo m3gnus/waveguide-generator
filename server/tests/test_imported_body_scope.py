@@ -329,6 +329,19 @@ def _import_through_the_gate(step_path: Path, expected_bodies: int) -> object:
     )
 
 
+def test_imported_memory_refusal_happens_before_mesh_generation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import gmsh
+    from server.mesh.errors import SolverMemoryTooLarge
+
+    step = write_open_shell(tmp_path / "impossible-sheets.step", faces=2)
+    monkeypatch.setattr(gmsh.model.mesh, "generate", lambda *_args: pytest.fail("mesh generation was reached"))
+    with pytest.raises(SolverMemoryTooLarge, match="before meshing"):
+        _run_in_gmsh_session(
+            build_imported_mesh, step, _manifest(1),
+            {**_SIZES, "rigid_size_mm": 0.00005}, include_viewport_mesh=False,
+        )
+
+
 @pytest.mark.parametrize(
     "names", [(None, None), ("body", "body")], ids=["unnamed", "duplicate-name"]
 )

@@ -525,27 +525,32 @@ export async function submitDesign(
 export class SolveSubmissionRefused extends Error {
   readonly status: number;
   readonly code: string | null;
+  readonly details: Record<string, unknown> | null;
 
-  constructor(message: string, status: number, code: string | null) {
+  constructor(message: string, status: number, code: string | null, details: Record<string, unknown> | null = null) {
     super(message);
     this.name = 'SolveSubmissionRefused';
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
 async function submissionRefusal(response: Response): Promise<SolveSubmissionRefused> {
   let message: string | null = null;
   let code: string | null = null;
+  let details: Record<string, unknown> | null = null;
   try {
     const body = await response.json() as { detail?: unknown; error?: { code?: unknown; details?: { blocker?: { message?: string } } } | null };
     message = body.error?.details?.blocker?.message || formatApiDetail(body.detail);
     code = typeof body.error?.code === 'string' ? body.error.code : null;
+    details = body.error?.details ?? null;
   } catch { /* fall through */ }
   return new SolveSubmissionRefused(
     message || `${response.status} ${response.statusText}`.trim(),
     response.status,
     code,
+    details,
   );
 }
 

@@ -6588,6 +6588,13 @@ export interface components {
              */
             mesh_ladder?: "off" | "auto";
             /**
+             * Mesh Limit Override
+             * @default false
+             */
+            mesh_limit_override?: boolean;
+            /** Mesh Limit Override Key */
+            mesh_limit_override_key?: string | null;
+            /**
              * Mesh Validation Mode
              * @default warn
              * @enum {string}
@@ -6650,6 +6657,13 @@ export interface components {
              * @enum {string}
              */
             mesh_ladder: "off" | "auto";
+            /**
+             * Mesh Limit Override
+             * @default false
+             */
+            mesh_limit_override?: boolean;
+            /** Mesh Limit Override Key */
+            mesh_limit_override_key?: string | null;
             /**
              * Mesh Validation Mode
              * @enum {string}

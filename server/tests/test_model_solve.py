@@ -479,6 +479,52 @@ def test_a_file_solve_records_its_setup_revision_and_a_duplicate_is_the_same_job
     _file_scenario(tmp_path, scenario)
 
 
+def test_file_mesh_limit_requires_choice_for_model_and_direct_solve(tmp_path, monkeypatch) -> None:
+    from server.jobs.api import create_jobs_router
+    from server.mesh import builder
+
+    monkeypatch.setattr(builder, "MAX_SOLVER_MESH_ARTIFACT_TRIANGLES", 3)
+
+    async def scenario(store, app, runtime):
+        app.include_router(create_jobs_router(runtime))
+        record = register_mesh(store, tmp_path, registration())
+        model_id = "mesh-file:" + record["artifact_sha256"]
+        body = {"prepared_id": record["ingest_id"], "client_request_id": "mesh-limit", "setup": setup_for(record)}
+        status, refused = await _file_solve(app, model_id, body)
+        assert status == 409 and refused["error"]["code"] == "mesh_too_large"
+        assert refused["error"]["details"] == {"triangles": 4, "limit": 3}
+        assert runtime.store.list_jobs()[1] == 0
+        direct = file_request(record).model_dump(mode="json")
+        status, raw = await _request(app, "POST", "/api/solve", body=direct)
+        assert status == 422 and json.loads(raw)["error"]["code"] == "mesh_too_large"
+        status, accepted = await _file_solve(app, model_id, {**body, "mesh_limit_override": True})
+        assert status == 200, accepted
+        row = runtime.store.get_job_row(accepted["job_id"])
+        assert row["config_json"]["options"]["mesh_limit_override"] is True
+        status, again = await _file_solve(app, model_id, {**body, "client_request_id": "new-press"})
+        assert status == 409 and again["error"]["code"] == "mesh_too_large"
+
+    _file_scenario(tmp_path, scenario)
+
+
+def test_file_mesh_memory_refusal_is_plain_before_solve(tmp_path, monkeypatch) -> None:
+    from dataclasses import replace
+    from server.mesh import builder
+    from server.mesh.errors import SolverMemoryTooLarge
+
+    limit = replace(builder.dense_solver_memory_limit(), bytes=1)
+    monkeypatch.setattr(builder, "dense_solver_memory_limit", lambda: limit)
+
+    async def scenario(store, app, runtime):
+        status, raw = await _request(app, "POST", "/api/models/files", body=registration().model_dump(mode="json"))
+        assert status == 422
+        assert json.loads(raw)["error"]["code"] == "solver_memory_exceeded"
+        assert json.loads(raw)["detail"] == SolverMemoryTooLarge.USER_MESSAGE
+        assert runtime.store.list_jobs()[1] == 0
+
+    _file_scenario(tmp_path, scenario)
+
+
 def test_a_file_solve_with_unreviewed_findings_is_refused(tmp_path) -> None:
     async def scenario(store, app, runtime):
         original = register_mesh(store, tmp_path, registration())

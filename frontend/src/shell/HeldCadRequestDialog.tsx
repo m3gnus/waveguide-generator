@@ -77,7 +77,9 @@ export function HeldCadRequestDialog() {
   const jobs = useCadJobs();
   const pending = useSyncExternalStore(meshCeilingChoice.subscribe, meshCeilingChoice.getSnapshot, meshCeilingChoice.getSnapshot);
   const selectedPath = useCadReturnStore(state => state.selectedBundle?.bundlePath ?? null);
-  const ceiling = pending && !pending.deferred && pending.bundlePath === selectedPath ? pending : null;
+  const ceiling = pending && !pending.deferred
+    && (pending.continueSolve ? pending.stillCurrent?.() !== false : pending.bundlePath === selectedPath)
+    ? pending : null;
   const [later, setLater] = useState<Set<string>>(() => new Set(readLater()));
   const [requested, setRequested] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -129,7 +131,7 @@ export function HeldCadRequestDialog() {
   // "Don't solve" lets the question go: the request is dismissed, or this
   // window's own choice cleared.
   const options = ceilingQuestion
-    ? [{ id: 'dismiss', label: "Don't solve" }, { id: 'change_in_fusion', label: 'Change in Fusion' },
+    ? [{ id: 'dismiss', label: "Don't solve" }, ...(!ceiling?.continueSolve ? [{ id: 'change_in_fusion', label: 'Change in Fusion' }] : []),
       ...serverOptions.filter(option => option.id !== 'dismiss')]
     : serverOptions;
   const changingNow = changing === id && ceilingQuestion !== null;
@@ -151,7 +153,9 @@ export function HeldCadRequestDialog() {
         // for the model the question was asked about.
         const asked = ceiling!;
         meshCeilingChoice.clear();
-        if (useCadReturnStore.getState().selectedBundle?.bundlePath === asked.bundlePath) {
+        if (asked.continueSolve && asked.stillCurrent?.() !== false) {
+          await asked.continueSolve();
+        } else if (!asked.continueSolve && useCadReturnStore.getState().selectedBundle?.bundlePath === asked.bundlePath) {
           await cadWorkspace.getSnapshot().prepareAndSolve({ meshLimitOverride: true });
         }
       } else if (option === 'dismiss') await dismissCadJob(job);

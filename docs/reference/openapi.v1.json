@@ -12803,6 +12803,24 @@
             "title": "Mesh Ladder",
             "type": "string"
           },
+          "mesh_limit_override": {
+            "default": false,
+            "title": "Mesh Limit Override",
+            "type": "boolean"
+          },
+          "mesh_limit_override_key": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mesh Limit Override Key"
+          },
           "mesh_validation_mode": {
             "default": "warn",
             "enum": [
@@ -12927,6 +12945,24 @@
             ],
             "title": "Mesh Ladder",
             "type": "string"
+          },
+          "mesh_limit_override": {
+            "default": false,
+            "title": "Mesh Limit Override",
+            "type": "boolean"
+          },
+          "mesh_limit_override_key": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mesh Limit Override Key"
           },
           "mesh_validation_mode": {
             "enum": [

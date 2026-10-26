@@ -48,7 +48,7 @@ from server.contracts.geometry import (
 )
 
 from .cache import SolverMeshArtifactCache, SolverMeshCacheInfo
-from .errors import MeshTooLarge, SolverMemoryTooLarge
+from .errors import MesherEstimateUnavailable, MeshTooLarge, SolverMemoryTooLarge
 from .child import (
     MesherChildError,
     MesherCrashError,
@@ -74,6 +74,8 @@ MOUTH_APERTURE_SURFACE_TAG = 12
 # Tag values match hornlab_mesher.tags; server/tests/test_geometry_contract.py
 # checks that, so importing here does not load the mesher at startup.
 
+# Triangle limits: solve admission and advisory thresholds live together here.
+# The separate file-mesh cutting budget belongs in this block when introduced.
 LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES = 18_000
 # The mesher can estimate and count triangles, but it cannot know the P1
 # vertex/DOF count that governs the dense solver's memory. Keep this loose
@@ -482,16 +484,13 @@ def _mesh_policy(
     design: DesignConfig,
     config: Mapping[str, Any],
 ) -> tuple[dict[str, Any], int, int]:
-    """Apply the non-bypassable artifact sanity cap to a mesher config.
+    """Keep the user threshold as advice in a private mesher config.
 
     ``mesh.max_triangles`` remains the user's full-domain-equivalent warning
-    threshold. The mesher still needs a hard limit, so a private copy replaces
-    that threshold with the actual-domain artifact cap converted to its
-    full-domain convention. Its estimate gate applies its own 1.25 safety
-    margin; the exact 22,000-triangle limit is repeated on the parsed artifact.
-    The legacy ``allow_large_mesh`` field is accepted on import and the wire,
-    but cannot bypass either check. Dense memory is checked from used P1
-    vertices after parsing because triangle counts cannot predict it.
+    threshold. The mesher's own triangle budget is bypassed during generation;
+    the measured solver artifact is held to the shared limit after construction.
+    Dense memory is forecast before generation and checked again from actual
+    used P1 vertices after parsing.
     """
 
     warning_limit = int(
@@ -560,7 +559,6 @@ def _dense_solver_memory_requirements(
     """
 
     used_vertex_count = int(np.unique(triangles).size)
-    multiplier = _domain_multiplier_for_quadrants(normalise_quadrants(quadrants))
     aperture_triangle_count = 0
     if (
         str(mode).strip().lower() == "infinite-baffle"
@@ -572,6 +570,24 @@ def _dense_solver_memory_requirements(
         aperture_triangle_count = int(
             np.count_nonzero(tags == MOUTH_APERTURE_SURFACE_TAG)
         )
+    return _dense_solver_memory_requirements_for_counts(
+        used_vertex_count, quadrants, mode=mode,
+        aperture_triangle_count=aperture_triangle_count,
+    )
+
+
+def _dense_solver_memory_requirements_for_counts(
+    used_vertex_count: int,
+    quadrants: int,
+    *,
+    mode: str = "",
+    aperture_triangle_count: int = 0,
+) -> dict[str, int]:
+    """One dense-memory calculation for estimated and measured meshes."""
+
+    multiplier = _domain_multiplier_for_quadrants(normalise_quadrants(quadrants))
+    if str(mode).strip().lower() != "infinite-baffle":
+        aperture_triangle_count = 0
     metal_dof_count = used_vertex_count + aperture_triangle_count
     metal_bytes = 11 * 8 * metal_dof_count**2
     bempp_bytes = 3 * 8 * multiplier * used_vertex_count**2
@@ -615,10 +631,16 @@ def _enforce_dense_solver_memory_ceiling(
         mode=mode,
         tags=tags,
     )
+    return _enforce_dense_solver_memory_requirements(requirements, applied)
+
+
+def _enforce_dense_solver_memory_requirements(
+    requirements: dict[str, int], applied: DenseSolverMemoryLimit,
+) -> dict[str, Any]:
     used_vertex_count = requirements["used_vertex_count"]
     estimated_bytes = requirements["estimated_bytes"]
     if estimated_bytes > applied.bytes:
-        multiplier = _domain_multiplier_for_quadrants(normalise_quadrants(quadrants))
+        multiplier = requirements["domain_multiplier"]
         coupled = (
             f" plus {requirements['aperture_triangle_count']:,} aperture P0 DOFs"
             if requirements["aperture_triangle_count"]
@@ -635,6 +657,106 @@ def _enforce_dense_solver_memory_ceiling(
             "before solving."
         )
     return {**requirements, "limit": applied}
+
+
+def _dense_solver_triangle_stop(
+    quadrants: int, *, mode: str = "", aperture_triangle_count: int = 0,
+    limit: DenseSolverMemoryLimit,
+) -> int:
+    """Invert the shared memory estimate, using the pre-mesh V ~= T/2 forecast."""
+    def fits(triangles: int) -> bool:
+        return _dense_solver_memory_requirements_for_counts(
+            (triangles + 1) // 2, quadrants, mode=mode,
+            aperture_triangle_count=aperture_triangle_count,
+        )["estimated_bytes"] <= limit.bytes
+
+    low, high = 0, 1
+    while fits(high):
+        low, high = high, high * 2
+    while high - low > 1:
+        middle = (low + high) // 2
+        if fits(middle):
+            low = middle
+        else:
+            high = middle
+    return low
+
+
+def _enforce_premesh_memory(
+    triangle_count: int, quadrants: int, *, mode: str = "",
+    aperture_triangle_count: int = 0, limit: DenseSolverMemoryLimit | None = None,
+) -> None:
+    """Refuse an estimated mesh that cannot fit before generating triangles."""
+    applied = dense_solver_memory_limit() if limit is None else limit
+    requirements = _dense_solver_memory_requirements_for_counts(
+        (int(triangle_count) + 1) // 2, quadrants, mode=mode,
+        aperture_triangle_count=aperture_triangle_count,
+    )
+    try:
+        _enforce_dense_solver_memory_requirements(requirements, applied)
+    except SolverMemoryTooLarge as exc:
+        stop = _dense_solver_triangle_stop(
+            quadrants, mode=mode, aperture_triangle_count=aperture_triangle_count,
+            limit=applied,
+        )
+        raise SolverMemoryTooLarge(
+            f"{exc} Requested mesh estimate: {triangle_count:,} triangles; "
+            f"allowed by memory: {stop:,} triangles (before meshing)."
+        ) from exc
+
+
+def _build_with_memory_stop(
+    config: dict[str, Any], mesh_path: Path, *, limit: DenseSolverMemoryLimit,
+    build_from_config: Callable[..., Any],
+) -> Any:
+    """Apply the mesher's own density estimate before it generates a mesh."""
+    from hornlab_mesher import mesher
+    from hornlab_mesher.cost import estimate_triangle_count
+
+    quadrants = normalise_quadrants((config.get("mesh") or {}).get("quadrants"))
+    mode = str(config.get("mode", "")).strip().lower()
+    private = deepcopy(config)
+    private["mesh"]["max_triangles"] = max(
+        1, _dense_solver_triangle_stop(quadrants, mode=mode, limit=limit)
+        * _domain_multiplier_for_quadrants(quadrants),
+    )
+    original = mesher.configure_density
+    refusal: SolverMemoryTooLarge | MesherEstimateUnavailable | None = None
+
+    def configure_with_memory_stop(geometry: Any, density: Any) -> None:
+        nonlocal refusal
+        original(geometry, density)
+        estimate = geometry.metadata.get("meshTriangleEstimate")
+        if estimate is None:
+            estimate = (geometry.metadata.get("sourceBody") or {}).get("triangleEstimate")
+        if estimate is None:
+            refusal = MesherEstimateUnavailable("Mesher did not supply its pre-mesh triangle estimate")
+            raise mesher.TriangleBudgetExceeded(str(refusal)) from refusal
+        aperture = 0
+        if mode == "infinite-baffle":
+            import gmsh
+            aperture = estimate_triangle_count([
+                (gmsh.model.occ.getMass(2, tag), density.mouth_res_mm * density.aperture_res_scale)
+                for tag in geometry.mesh_surface_groups.get("mouth_aperture", [])
+            ])
+        try:
+            _enforce_premesh_memory(
+                math.ceil(estimate), quadrants, mode=mode,
+                aperture_triangle_count=aperture, limit=limit,
+            )
+        except SolverMemoryTooLarge as exc:
+            refusal = exc
+            raise mesher.TriangleBudgetExceeded(str(exc)) from exc
+
+    mesher.configure_density = configure_with_memory_stop
+    try:
+        return build_from_config(private, mesh_path, allow_large_mesh=True)
+    except Exception:
+        if refusal is not None:
+            raise refusal
+        raise
+    finally:
+        mesher.configure_density = original
 
 
 def _require_closed_acoustic_topology(
@@ -911,6 +1033,7 @@ def _build_sync(
     config, warning_limit_full_domain, expected_domain_multiplier = _mesh_policy(
         design, _solver_mesher_config(design)
     )
+    memory_limit = dense_solver_memory_limit()
     _check_cancel(cancel_cb)
     # Inside the process's session (server/platform/temp_session.py): a stop
     # during this build ends without cleanup, and the next start sweeps it.
@@ -918,20 +1041,14 @@ def _build_sync(
         prefix="wg2-solver-mesh-", dir=spawned_directory_root()
     ) as temp_dir:
         mesh_path = Path(temp_dir) / "waveguide.msh"
-        # The user budget is advice. _mesh_policy replaced it in this private
-        # config with the independent artifact sanity cap. The mesher applies
-        # its 1.25 estimate margin before building; the exact cap is repeated on
-        # the parsed artifact below.
         try:
-            result = build_from_config(config, mesh_path, allow_large_mesh=False)
+            result = _build_with_memory_stop(
+                config, mesh_path, limit=memory_limit, build_from_config=build_from_config,
+            )
+        except (SolverMemoryTooLarge, MesherEstimateUnavailable):
+            raise
         except TriangleBudgetExceeded as exc:
-            # The pinned mesher preserves this type for both estimate and
-            # generated-count refusals; neither needs a legacy text fallback.
-            raise RuntimeError(
-                f"WG's triangle limit is {MAX_SOLVER_MESH_ARTIFACT_TRIANGLES:,} "
-                "for the part it solves. Use coarser throat/mouth/rear resolution "
-                "before solving again."
-            ) from exc
+            raise RuntimeError(mesher_error_message(config, str(exc))) from exc
         except Exception as exc:
             detail = str(exc)
             message = mesher_error_message(config, detail)
@@ -960,13 +1077,13 @@ def _build_sync(
     mode = str(config.get("mode", "")).strip().lower()
     quadrants = normalise_quadrants((config.get("mesh") or {}).get("quadrants"))
     triangle_count = int(len(triangles))
-    _enforce_artifact_triangle_ceiling(triangle_count)
     metadata = _json_safe(getattr(result, "metadata", None) or {})
     dense_memory = _enforce_dense_solver_memory_ceiling(
         triangles,
         quadrants,
         mode=mode,
         tags=tags,
+        limit=memory_limit,
     )
     unique_tags, unique_counts = np.unique(tags, return_counts=True)
     tag_count_values = {
@@ -1252,6 +1369,17 @@ async def build_solver_mesh(
             cancel_cb=cancel_cb,
         )
         _solver_mesh_cache.put(cache_key, result)
+    try:
+        _enforce_artifact_triangle_ceiling(
+            int(result["stats"]["triangle_count"]),
+            mesh_limit_override=(
+                _option(options, "mesh_limit_override", False) is True
+                and _option(options, "mesh_limit_override_key") == cache_key
+            ),
+        )
+    except MeshTooLarge as exc:
+        exc.mesh_cache_key = cache_key
+        raise
     _check_cancel(cancel_cb)
     _progress(progress_cb, "mesh_validate", 1.0, "Validated HornLab solver mesh")
 

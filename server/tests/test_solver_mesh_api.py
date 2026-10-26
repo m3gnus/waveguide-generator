@@ -84,6 +84,75 @@ def _stub_worker(calls: list[int]):
     return worker
 
 
+def test_parametric_limit_reports_facts_and_accepts_the_same_cached_mesh(monkeypatch):
+    from server.mesh.builder import MAX_SOLVER_MESH_ARTIFACT_TRIANGLES
+
+    calls = []
+
+    async def worker(*args, **kwargs):
+        result = await _stub_worker(calls)(*args, **kwargs)
+        result["stats"]["triangle_count"] = MAX_SOLVER_MESH_ARTIFACT_TRIANGLES + 1
+        return result
+
+    monkeypatch.setattr(mesh_builder, "run_mesh_build", worker)
+    clear_solver_mesh_cache()
+    app = FastAPI()
+    mount_solver_mesh(app, EngineRegistry(detector=lambda: []))
+    try:
+        with TestClient(app) as client:
+            body = {"design": _rosse().model_dump(mode="json")}
+            refused = client.post("/api/solver-mesh", json=body)
+            assert refused.status_code == 409
+            facts = refused.json()["detail"]
+            assert facts["code"] == "mesh_too_large"
+            assert (facts["triangles"], facts["limit"]) == (MAX_SOLVER_MESH_ARTIFACT_TRIANGLES + 1, MAX_SOLVER_MESH_ARTIFACT_TRIANGLES)
+            accepted = client.post("/api/solver-mesh", json={**body, "options": {
+                "mesh_limit_override": True, "mesh_limit_override_key": facts["mesh_cache_key"],
+            }})
+            assert accepted.status_code == 200
+            assert accepted.json()["stats"]["mesh_cache_hit"] is True
+            assert len(calls) == 1
+            again = client.post("/api/solver-mesh", json=body)
+            assert again.status_code == 409
+            changed = client.post("/api/solver-mesh", json={**body, "symmetry": "full", "options": {
+                "mesh_limit_override": True, "mesh_limit_override_key": facts["mesh_cache_key"],
+            }})
+            assert changed.status_code == 409
+    finally:
+        clear_solver_mesh_cache()
+
+
+def test_parametric_memory_refusal_returns_plain_words(monkeypatch):
+    from server.mesh.errors import SolverMemoryTooLarge
+
+    async def refuse(*_args, **_kwargs):
+        raise SolverMemoryTooLarge("developer-only memory details")
+
+    monkeypatch.setattr(mesh_builder, "build_solver_mesh", refuse)
+    app = FastAPI()
+    mount_solver_mesh(app, EngineRegistry(detector=lambda: []))
+    with TestClient(app) as client:
+        response = client.post("/api/solver-mesh", json={"design": _rosse().model_dump(mode="json")})
+    assert response.status_code == 422
+    assert response.json()["detail"] == SolverMemoryTooLarge.USER_MESSAGE
+
+
+def test_missing_memory_forecast_does_not_show_developer_details(monkeypatch, caplog):
+    from server.mesh.errors import MesherEstimateUnavailable
+
+    async def refuse(*_args, **_kwargs):
+        raise MesherEstimateUnavailable("internal estimate missing")
+
+    monkeypatch.setattr(mesh_builder, "build_solver_mesh", refuse)
+    app = FastAPI()
+    mount_solver_mesh(app, EngineRegistry(detector=lambda: []))
+    with caplog.at_level("ERROR"), TestClient(app) as client:
+        response = client.post("/api/solver-mesh", json={"design": _rosse().model_dump(mode="json")})
+    assert response.status_code == 422
+    assert response.json()["detail"] == MesherEstimateUnavailable.USER_MESSAGE
+    assert "internal estimate missing" in caplog.text
+
+
 def test_response_shape_cut_planes_and_cache_key_stability(monkeypatch) -> None:
     calls: list[int] = []
     monkeypatch.setattr(mesh_builder, "run_mesh_build", _stub_worker(calls))

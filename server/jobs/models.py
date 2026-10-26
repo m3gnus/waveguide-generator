@@ -161,6 +161,8 @@ class SolveOptions(JobModel):
     engine: str = "auto"
     accuracy: Literal["fast", "accurate"] = "fast"
     adaptive_frequency_sampling: bool = False
+    mesh_limit_override: bool = False
+    mesh_limit_override_key: str | None = Field(default=None, min_length=64, max_length=64)
 
     @model_validator(mode="before")
     @classmethod
@@ -176,6 +178,10 @@ class SolveOptions(JobModel):
         wire = handler(self)
         if not self.adaptive_frequency_sampling:
             wire.pop("adaptive_frequency_sampling", None)
+        if not self.mesh_limit_override:
+            wire.pop("mesh_limit_override", None)
+        if self.mesh_limit_override_key is None:
+            wire.pop("mesh_limit_override_key", None)
         return wire
 
     # ``auto`` remains accepted for old clients but resolves as Full 3D.

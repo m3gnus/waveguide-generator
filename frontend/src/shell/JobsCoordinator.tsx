@@ -1,4 +1,4 @@
-import { useRequestedSolve, awaitSolveStep, solveCancellationReason, type HeldSolveContinuation, type ModelSolveContinuation } from '../jobs/useRequestedSolve';
+import { useRequestedSolve, awaitSolveStep, captureSolveInputs, solveCancellationReason, type HeldSolveContinuation, type ModelSolveContinuation } from '../jobs/useRequestedSolve';
 import { usePrepareEngine } from '../jobs/usePrepareEngine';
 import { runtimeSetupText } from '../jobs/runtimeSetup';
 import { heldEngineSolveJob, useHeldSolvePreparation } from '../jobs/useHeldSolvePreparation';
@@ -15,7 +15,9 @@ import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { clearJobLink, jobIdFromLink, openLinkedJob } from '../jobs/jobDeepLink';
 import { compareSelection } from '../api/results';
 import type { CadReturnIngestRecord } from '../api/cadlink';
-import { importedSolvePlanRequestBody, prewarmSelectedEngine, planSolveDesign, postImportedSolvePlan, solveModel, SolveSubmissionRefused, submitDesign, type EngineSubstitution, type ImportedSolveSubmission, type ModelSolvePress, type SolvePlan } from '../jobs/actions';
+import { importedSolvePlanRequestBody, prewarmSelectedEngine, planSolveDesign, postImportedSolvePlan, solveModel, SolveSubmissionRefused, submitDesign, toSolveDesign, type EngineSubstitution, type ImportedSolveSubmission, type ModelSolvePress, type SolvePlan } from '../jobs/actions';
+import { postSolverMesh, SolverMeshTooLarge } from '../api/solverMesh';
+import { meshCeilingChoice } from '../stores/meshCeilingChoice';
 import { rerunWithPatch, type RerunPatch } from '../jobs/rerun';
 import {
   useCapabilities,
@@ -269,10 +271,10 @@ function importedSolveError(error: unknown, restored = false): unknown {
     const words = error.message.startsWith(prefix) ? error.message.slice(prefix.length) : error.message;
     if (IMPORTED_CAPABILITY_CODES.has(error.code)) return new SolveEngineUnavailableError(words);
     if (restored && RESTORED_INPUT_HINTS[error.code]) {
-      return new SolveSubmissionRefused(RESTORED_INPUT_HINTS[error.code], error.status, error.code);
+      return new SolveSubmissionRefused(RESTORED_INPUT_HINTS[error.code], error.status, error.code, error.details);
     }
     const explained = explainImportedRefusal(`${prefix}${words}`);
-    return new SolveSubmissionRefused(explained === `${prefix}${words}` ? words : explained, error.status, error.code);
+    return new SolveSubmissionRefused(explained === `${prefix}${words}` ? words : explained, error.status, error.code, error.details);
   }
   return error instanceof Error ? new Error(explainImportedRefusal(error.message)) : error;
 }
@@ -520,27 +522,50 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
 
   const run = useCallback(async (nextDesign: DesignDocument, nextRevision = revision, continuation: ModelSolveContinuation | null = null) => {
     let designName = '';
-    await acceptSubmission(async () => {
+    const jobId = await acceptSubmission(async () => {
       // Solve leaves the live document alone. The server applies BEMPP's
       // closed-wall default to its own stored request, not the editor's design.
       const options = useSolveOptionsStore.getState().options();
       const symmetryError = nativeSymmetryLimitation(nextDesign.formula, options.symmetry);
       if (symmetryError) throw new Error(symmetryError);
       const document = useDocumentStore.getState();
+      const choiceInputs = captureSolveInputs();
       await awaitSolveStep(planSolveDesign(nextDesign, options), continuation);
       designName = document.designName;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
+      const snapshot = structuredClone(nextDesign);
+      const metadata = { label, designRevision: nextRevision, designUid: document.designUid, designId: document.identity?.designId, designName, legacyDesignName: document.legacyDesignName };
+      try {
+        await awaitSolveStep(postSolverMesh(JSON.stringify({ design: toSolveDesign(snapshot), options }), fetch, continuation?.signal), continuation);
+      } catch (error) {
+        if (!(error instanceof SolverMeshTooLarge)) throw error;
+        if (!beforePost(continuation)) return null;
+        meshCeilingChoice.ask({
+          name: designName || 'This model', nextStep: 'Use a coarser mesh resolution.',
+          meshLimit: { triangles: error.triangles, limit: error.limit }, bundlePath: null,
+          stillCurrent: () => solveCancellationReason(choiceInputs) === null,
+          continueSolve: async () => {
+            if (solveCancellationReason(choiceInputs) !== null) return;
+            await acceptSubmission(() => submitDesign(snapshot, { ...options, mesh_limit_override: true, mesh_limit_override_key: error.meshCacheKey }, fetch, metadata),
+              { onAccepted: () => acceptSubmittedLabel(designName), arm: true });
+          },
+        });
+        return null;
+      }
       if (!beforePost(continuation)) return null;
-      return submitDesign(nextDesign, options, fetch, { label, designRevision: nextRevision, designUid: document.designUid, designId: document.identity?.designId, designName, legacyDesignName: document.legacyDesignName });
+      return submitDesign(snapshot, options, fetch, metadata);
     }, { onAccepted: () => acceptSubmittedLabel(designName), attention: continuation?.attention });
+    return jobId === null ? 'pending' as const : 'submitted' as const;
   }, [acceptSubmission, now, revision]);
 
   // One press of a file model's Solve: one POST /api/models/{id}/solve.
   const solveFileModel = useCallback(async (continuation: ModelSolveContinuation | null = null) => {
     let designName = '';
+    let asked = false;
     const jobId = await acceptSubmission(async () => {
       const setup = fileMeshSetup();
       const record = registeredMesh()!;
+      const choiceInputs = captureSolveInputs();
       designName = useMeshImportStore.getState().filename;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
       // An unedited reopened model keeps the setup it was opened with.
@@ -550,10 +575,28 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         ...(unchanged ?? { setup: { schema_version: 1, ...setup } as unknown as ModelSolvePress['setup'] }),
       };
       if (!beforePost(continuation)) return null;
-      return solveModel(record.model_id, press)
-        .catch((error) => { throw importedSolveError(error, unchanged !== null); });
+      try {
+        return await solveModel(record.model_id, press);
+      } catch (error) {
+        if (error instanceof SolveSubmissionRefused && error.code === 'mesh_too_large'
+          && typeof error.details?.triangles === 'number' && typeof error.details.limit === 'number') {
+          asked = true;
+          meshCeilingChoice.ask({
+            name: designName || 'This model', nextStep: 'Use a coarser mesh.', bundlePath: null,
+            meshLimit: { triangles: error.details.triangles, limit: error.details.limit },
+            stillCurrent: () => solveCancellationReason(choiceInputs) === null,
+            continueSolve: async () => {
+              if (solveCancellationReason(choiceInputs) !== null) return;
+              await acceptSubmission(() => solveModel(record.model_id, { ...press, mesh_limit_override: true }),
+                { onAccepted: () => acceptSubmittedLabel(designName), arm: true });
+            },
+          });
+          return null;
+        }
+        throw importedSolveError(error, unchanged !== null);
+      }
     }, { onAccepted: () => acceptSubmittedLabel(designName), attention: continuation?.attention });
-    return jobId === null ? 'busy' as const : 'submitted' as const;
+    return jobId === null ? asked ? 'pending' as const : 'busy' as const : 'submitted' as const;
   }, [acceptSubmission, now]);
 
   // The CAD press captures the axis shown and the findings reviewed, then
@@ -750,8 +793,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       return solveCurrentCadImport(undefined, continuation);
     }
     const current = useDesignStore.getState();
-    await run(current.design, current.designRevision, continuation);
-    return 'submitted' as const;
+    return run(current.design, current.designRevision, continuation);
   };
   const solve = useCallback(async (inherited?: number) => {
     if (submissionInFlight.current) return 'busy' as const;

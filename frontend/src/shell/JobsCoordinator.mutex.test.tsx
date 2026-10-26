@@ -60,6 +60,8 @@ import { JobsPanel } from './JobsPanel';
 import { workspaceNavigation } from './workspaceNavigation';
 import { ResultsPanel } from './ResultsPanel';
 import { resetSolveAttentionForTests, solveAttention } from './solveAttention';
+import { SolverMeshTooLarge } from '../api/solverMesh';
+import { meshCeilingChoice } from '../stores/meshCeilingChoice';
 
 // Exercise the toolbar alongside the same solve status that Results owns.
 function SolveActions() {
@@ -73,6 +75,7 @@ const mocks = vi.hoisted(() => ({
   prewarmSelectedEngine: vi.fn(),
   planSolveDesign: vi.fn(),
   submitDesign: vi.fn(),
+  postSolverMesh: vi.fn(),
   solveModel: vi.fn(),
   postImportedSolvePlan: vi.fn(),
   useRealImportedPlan: false,
@@ -122,6 +125,10 @@ vi.mock('../jobs/actions', async (importOriginal) => {
     postImportedSolvePlan: mocks.postImportedSolvePlan,
   };
 });
+vi.mock('../api/solverMesh', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../api/solverMesh')>(),
+  postSolverMesh: mocks.postSolverMesh,
+}));
 vi.mock('../jobs/useCapabilities', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../jobs/useCapabilities')>();
   return {
@@ -331,6 +338,8 @@ describe('solve invocation mutex', () => {
     mocks.planSolveDesign.mockResolvedValue(mocks.solvePlan);
     mocks.solveModel.mockReset().mockResolvedValue('job-cad');
     mocks.submitDesign.mockReset();
+    mocks.postSolverMesh.mockReset().mockResolvedValue({});
+    meshCeilingChoice.clear();
 
     mocks.getCadOperation.mockRejectedValue(new CadLinkApiError('Unknown CAD operation', [], 404));
     compareSelection.clear();
@@ -358,6 +367,7 @@ describe('solve invocation mutex', () => {
     workspaceModeStore.setMode('parametric');
     vi.clearAllTimers();
     vi.useRealTimers();
+    meshCeilingChoice.clear();
   });
 
   it.each(['parametric', 'expression', 'file', 'cad'] as const)('%s: shows a completed solve with the exact submitted snapshot', async kind => {
@@ -1671,7 +1681,8 @@ describe('solve invocation mutex', () => {
     await act(async () => {
       expect(await jobsCoordinatorBridge.getSnapshot().continueRun(held.jobId, { held })).toBeNull();
     });
-    expect(fetch).not.toHaveBeenCalled();
+    expect(vi.mocked(fetch).mock.calls.filter(([url, init]) =>
+      String(url).startsWith('/api/jobs/') || init?.method === 'POST')).toEqual([]);
     const notice = 'Prepare and solve was cancelled because the model on screen changed.';
     expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe(aborted ? null : notice);
     // The status surface must also render a notice without a readiness blocker.
@@ -2220,6 +2231,52 @@ describe('solve invocation mutex', () => {
 
     expect(mocks.submitDesign).toHaveBeenCalledTimes(2);
     expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn1', 'horn2']);
+  });
+
+  it('continues the exact parametric mesh after the shared limit choice', async () => {
+    mocks.postSolverMesh.mockRejectedValueOnce(new SolverMeshTooLarge('large', 22001, 22000, 'a'.repeat(64)));
+    mocks.submitDesign.mockResolvedValue('large-run');
+    await act(async () => { await runCurrentDesign(designForFamily('OSSE')); });
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
+    const choice = meshCeilingChoice.getSnapshot();
+    expect(choice?.meshLimit).toEqual({ triangles: 22001, limit: 22000 });
+    await act(async () => { await choice!.continueSolve!(); });
+    expect(mocks.submitDesign).toHaveBeenCalledOnce();
+    expect(mocks.submitDesign.mock.calls[0][1].mesh_limit_override).toBe(true);
+    expect(mocks.submitDesign.mock.calls[0][1].mesh_limit_override_key).toBe('a'.repeat(64));
+  });
+
+  it('does not apply a parametric limit choice after the solve settings change', async () => {
+    mocks.postSolverMesh.mockRejectedValueOnce(new SolverMeshTooLarge('large', 22001, 22000, 'a'.repeat(64)));
+    await act(async () => { await runCurrentDesign(designForFamily('OSSE')); });
+    const choice = meshCeilingChoice.getSnapshot();
+    expect(choice).not.toBeNull();
+    act(() => useSolveOptionsStore.getState().setEngine('bempp'));
+    await act(async () => { await choice!.continueSolve!(); });
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
+  });
+
+  it('asks again for a file mesh and submits its accepted press once', async () => {
+    mocks.solveModel.mockRejectedValueOnce(new SolveSubmissionRefused('large', 409, 'mesh_too_large', { triangles: 22001, limit: 22000 }))
+      .mockResolvedValueOnce('large-file');
+    act(() => {
+      workspaceModeStore.setImportedInput('file');
+      workspaceModeStore.setMode('cad');
+      useMeshImportStore.setState({ busy: false, filename: 'standalone.msh' });
+      void openImported({ kind: 'file', prepared: {
+        ingest_id: 'wgi_file', model_id: 'mesh-file:sha256:original',
+        manifest_sha256: 'sha256:mesh', artifact_sha256: 'sha256:original', source_tags: { group_2: 2 },
+      } as unknown as RegisteredMesh });
+      importedMeshStore.setFile({ name: 'standalone.msh', source: 'file', ingestId: 'wgi_file' } as ImportedMeshScene);
+    });
+    await act(async () => root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>));
+    await act(async () => host.querySelector<HTMLButtonElement>('button')!.click());
+    const choice = meshCeilingChoice.getSnapshot();
+    expect(choice?.meshLimit).toEqual({ triangles: 22001, limit: 22000 });
+    await act(async () => { await choice!.continueSolve!(); });
+    expect(mocks.solveModel).toHaveBeenCalledTimes(2);
+    expect(mocks.solveModel.mock.calls[1][1].mesh_limit_override).toBe(true);
+    expect(mocks.solveModel.mock.calls[1][1].prepared_id).toBe('wgi_file');
   });
 
   // Choosing "Bare shell" and pressing Solve used to flip the Outer body

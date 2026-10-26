@@ -39,6 +39,16 @@ from server.platform.shutdown_backstop import CLEANUP_RESERVE_SECONDS, ShutdownB
 from server.solver.base import EngineRunResult
 
 
+def test_solver_memory_refusal_keeps_diagnostics_out_of_job_message(caplog) -> None:
+    from server.jobs.runtime.core import _failure_message
+    from server.mesh.errors import SolverMemoryTooLarge
+
+    with caplog.at_level("WARNING"):
+        message = _failure_message(SolverMemoryTooLarge("internal memory estimate"))
+    assert message == SolverMemoryTooLarge.USER_MESSAGE
+    assert "internal memory estimate" in caplog.text
+
+
 def _request(*, delay_ms: int = 2, count: int = 5) -> SolveRequest:
     return SolveRequest.model_validate(
         {

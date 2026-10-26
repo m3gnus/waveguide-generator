@@ -58,6 +58,31 @@ describe('held CAD request dialog owner', () => {
     host.remove();
     vi.restoreAllMocks();
   });
+  it('uses the same triangle choice for a file or parametric solve', async () => {
+    const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
+    const resume = vi.fn().mockResolvedValue(undefined);
+    await act(async () => root.render(<HeldCadRequestDialog/>));
+    act(() => meshCeilingChoice.ask({ name: 'Horn', nextStep: 'Use a coarser mesh.', bundlePath: null,
+      meshLimit: { triangles: 22_001, limit: 22_000 }, continueSolve: resume, stillCurrent: () => true }));
+    expect(host.textContent).toContain('22,001 triangles');
+    expect(host.textContent).not.toContain('Change in Fusion');
+    await act(async () => button('Solve anyway').click());
+    expect(resume).toHaveBeenCalledOnce();
+    expect(meshCeilingChoice.getSnapshot()).toBeNull();
+  });
+
+  it('does not continue a solve whose inputs changed while the choice was open', async () => {
+    const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
+    const resume = vi.fn().mockResolvedValue(undefined);
+    let current = true;
+    await act(async () => root.render(<HeldCadRequestDialog/>));
+    act(() => meshCeilingChoice.ask({ name: 'Horn', nextStep: 'Use a coarser mesh.', bundlePath: null,
+      continueSolve: resume, stillCurrent: () => current }));
+    current = false;
+    await act(async () => button('Solve anyway').click());
+    expect(resume).not.toHaveBeenCalled();
+    expect(meshCeilingChoice.getSnapshot()).toBeNull();
+  });
   it('shows only the next step and the options, and continues through the existing solve owner', async () => {
     publishCadJobs([held()]);
     await act(async () => root.render(<HeldCadRequestDialog/>));

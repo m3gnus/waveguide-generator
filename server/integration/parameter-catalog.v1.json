@@ -1595,7 +1595,7 @@
       "step": 1000,
       "precision": 0,
       "options": [],
-      "description": "Mesher triangle limit for native exports. Solve meshes also retain the independent 22,000-triangle and dense-memory ceilings."
+      "description": "Mesher triangle limit for native exports. Solve meshes also use the shared solve limit and memory check."
     },
     {
       "id": "native.mesh.allow_large",
@@ -6058,7 +6058,7 @@
       "step": 1000,
       "precision": 0,
       "options": [],
-      "description": "Advisory warning threshold, in full-domain-equivalent triangles. Solves continue past it, but two hard ceilings you cannot raise from here will still stop one: 22,000 triangles in the actual solved domain, and the dense-solver memory limit."
+      "description": "Advisory warning threshold in full-domain-equivalent triangles. WG asks before solving a mesh above the shared solve limit, and checks whether it fits in memory."
     },
     {
       "id": "mesh.allow_large_mesh",

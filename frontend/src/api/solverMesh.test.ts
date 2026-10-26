@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
-import { postSolverMesh, solverMeshArtifactToken, solverMeshScene, type SolverMeshResult } from './solverMesh';
+import { postSolverMesh, SolverMeshTooLarge, solverMeshArtifactToken, solverMeshScene, type SolverMeshResult } from './solverMesh';
 
 const result: SolverMeshResult = {
   plan: { engine: 'metal', formulation: 'full-3d', reason: 'test', eligibility_reasons: [] },
@@ -50,6 +50,15 @@ describe('postSolverMesh', () => {
       '{}',
       fetcherReturning({ detail: 'Solver mesh exceeds the ceiling' }, false, 422),
     )).rejects.toThrow('Solver mesh exceeds the ceiling');
+  });
+
+  it('keeps the measured triangle limit for the shared solve choice', async () => {
+    const fetcher: typeof fetch = async () => new Response(JSON.stringify({ detail: {
+      code: 'mesh_too_large', triangles: 22001, limit: 22000, mesh_cache_key: 'a'.repeat(64),
+    } }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+    await expect(postSolverMesh('{}', fetcher)).rejects.toMatchObject({
+      name: 'SolverMeshTooLarge', triangles: 22001, limit: 22000, meshCacheKey: 'a'.repeat(64),
+    } satisfies Partial<SolverMeshTooLarge>);
   });
 });
 

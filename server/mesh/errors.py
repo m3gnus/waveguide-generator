@@ -8,6 +8,12 @@ from typing import Any
 from server.design.defaults import default_cad_wall_size_mm
 
 
+class MesherEstimateUnavailable(RuntimeError):
+    """The mesher omitted the estimate needed for memory admission."""
+
+    USER_MESSAGE = "WG could not prepare this model. The issue has been recorded for the developers."
+
+
 class MeshTooLarge(RuntimeError):
     """The generated solver artifact exceeds the triangle limit."""
 
@@ -16,6 +22,7 @@ class MeshTooLarge(RuntimeError):
         self.domain_planes = list(domain_planes) if domain_planes is not None else None
         self.count = count
         self.limit = limit
+        self.mesh_cache_key: str | None = None
         self.mesh_sizes = dict(mesh_sizes) if mesh_sizes is not None else None
         super().__init__(self.message())
 
@@ -27,7 +34,7 @@ class MeshTooLarge(RuntimeError):
         if self.mesh_sizes is None:
             return (f"This model meshes to {self.count:,} triangles; WG's limit is "
                     f"{self.limit:,} for the part it solves. "
-                    "Use coarser throat/mouth/rear resolution before solving again.")
+                    "Use a coarser mesh or choose Solve anyway.")
         wall = self.mesh_sizes["rigid_size_mm"]
         default_wall = default_cad_wall_size_mm()
         return (

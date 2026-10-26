@@ -184,15 +184,20 @@ more, WG asks before it solves. Fusion's progress panel says WG needs you, and
 WG shows a pop-up with the numbers, for example "It meshes to 54,739
 triangles; Waveguide Generator's limit is 22,000."
 
+The same choice applies to a parametric design or an imported file mesh. If
+you close that choice with **Later**, press **Solve** again to bring it back.
+WG also checks whether the mesh fits this machine's memory; if it does not,
+use a coarser mesh.
+
 Choose one:
 
 - **Solve anyway**: solve it as it is. It takes longer and needs more memory.
-- **Change in Fusion**: WG tells you where to change it. In Fusion, click
+- **Change in Fusion** (Fusion models): WG tells you where to change it. In Fusion, click
   **Open Sources & Mesh…** in the progress panel (or use **Waveguide
   Generator ▸ Sources & Mesh…**), raise **Walls** or add a **Coarse** size
   zone, click **Save**, then Solve again.
-- **Later**: close the pop-up. The status line keeps saying the model needs
-  your choice, with a **Choose…** button to open the pop-up again.
+- **Later**: close the pop-up. For a Fusion model, the status line keeps saying
+  the model needs your choice, with a **Choose…** button to open it again.
 - **Don't solve**: let this question go without solving.
 
 If you choose **Solve anyway** in Fusion's own pre-flight question, WG does

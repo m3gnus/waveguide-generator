@@ -84,6 +84,8 @@ from server.jobs.runtime import (
     UnknownEngineError,
 )
 from server.jobs.store import SubmissionConflictError
+from server.mesh.builder import _enforce_artifact_triangle_ceiling
+from server.mesh.errors import MeshTooLarge
 
 ACTIVE_STATUSES = ("preparing", "queued", "running")
 FILE_PRODUCER = "mesh-file"
@@ -585,6 +587,20 @@ def _refuse_restart(runtime: Any) -> None:
 # -- a file model ----------------------------------------------------------------
 
 
+def _check_file_mesh_limit(record: Mapping[str, Any], *, override: bool) -> None:
+    stats = (record.get("mesh") or {}).get("stats") or {}
+    count = stats.get("triangle_count")
+    if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+        raise ModelSolveRefusal(409, "prepared_unavailable", "Prepare this mesh again before solving.")
+    try:
+        _enforce_artifact_triangle_ceiling(count, mesh_limit_override=override)
+    except MeshTooLarge as exc:
+        raise ModelSolveRefusal(
+            409, "mesh_too_large", str(exc),
+            details={"triangles": exc.count, "limit": exc.limit},
+        ) from exc
+
+
 def _acknowledged(record: Mapping[str, Any], body: ModelSolveRequest) -> list[str]:
     """The prepared mesh's blocking findings the press reviewed; refused while any is not."""
 
@@ -615,12 +631,17 @@ async def _solve_file(
     existing = await asyncio.to_thread(runtime.store.job_for_submission_key, key)
     if existing is None:
         _refuse_restart(runtime)
+    _check_file_mesh_limit(record, override=body.mesh_limit_override)
     setup, revision_id = await asyncio.to_thread(_resolve_setup, store, body)
     try:
         request = compose_solve_request(
             setup, record, acknowledged_findings=_acknowledged(record, body),
             client_request_id=key, label=body.label,
         )
+        if body.mesh_limit_override:
+            request = request.model_copy(update={
+                "options": request.options.model_copy(update={"mesh_limit_override": True}),
+            })
     except ValueError as exc:
         if isinstance(exc, ModelSolveRefusal):
             raise
@@ -875,6 +896,11 @@ async def submit_imported_request(
     ) is not None:
         return await runtime.submit(request, cad_provenance=cad_provenance, setup_revision_id=setup_revision_id)
     record = json.loads(row["record_json"])
+    if record.get("producer") == FILE_PRODUCER:
+        try:
+            _check_file_mesh_limit(record, override=request.options.mesh_limit_override)
+        except ModelSolveRefusal as exc:
+            raise ImportedSolveRefusal(exc.code, str(exc), details=exc.details) from exc
     revision = setup_revision_id or recorded_setup_revision({"task_metadata": {"cad": dict(cad_provenance or {})}})
 
     async def submit_new() -> str:

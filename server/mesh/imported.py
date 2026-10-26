@@ -40,6 +40,7 @@ from server.mesh.builder import (
     _dense_solver_memory_limit_stats,
     _enforce_artifact_triangle_ceiling,
     _enforce_dense_solver_memory_ceiling,
+    _enforce_premesh_memory,
     _self_intersection_warnings,
 )
 from server.mesh.integrity import (
@@ -3885,6 +3886,17 @@ def build_imported_mesh(
         )
         gmsh.option.setNumber("Mesh.Algorithm", tessellation["algorithm"])
 
+        regions = []
+        for surface in rigid_surfaces:
+            target = surface_targets[surface] if surface_groups else normalized_sizes["rigid_size_mm"]
+            regions.append(Region(float(gmsh.model.occ.getMass(2, surface)), target, label="rigid", role="shadow"))
+        for spec in step_specs:
+            for surface in cut_groups[spec.name]:
+                regions.append(Region(float(gmsh.model.occ.getMass(2, surface)), spec.resolution_mm, label=spec.name, role="source"))
+        sizing_cost = estimate_mesh_cost(regions)
+        _enforce_premesh_memory(
+            sizing_cost.n_triangles, imported_symmetry_from_cut_planes(domain_planes).quadrants,
+        )
         mesh_error: Exception | None = None
         try:
             gmsh.model.mesh.generate(2)
@@ -4158,13 +4170,6 @@ def build_imported_mesh(
         bounds_max = np.max(points_mm, axis=0) * 1.0e-3
         unique_tags, counts = np.unique(tags, return_counts=True)
         tag_counts = {str(int(tag)): int(count) for tag, count in zip(unique_tags, counts, strict=True)}
-        regions = []
-        for surface in rigid_surfaces:
-            target = surface_targets[surface] if surface_groups else normalized_sizes["rigid_size_mm"]
-            regions.append(Region(float(gmsh.model.occ.getMass(2, surface)), target, label="rigid", role="shadow"))
-        for spec in step_specs:
-            for surface in cut_groups[spec.name]:
-                regions.append(Region(float(gmsh.model.occ.getMass(2, surface)), spec.resolution_mm, label=spec.name, role="source"))
         # estimate_mesh_cost is an area/h^2 model whose 2.33 constant was
         # validated on the parametric point-grid path, which meshes with
         # curvature sizing OFF. This path runs Mesh.MeshSizeFromCurvature, so
@@ -4173,7 +4178,7 @@ def build_imported_mesh(
         # against 2.38 GB -- 3.6x out on triangles and ~19x out on RAM, in the
         # optimistic direction. The mesh already exists by this point, so
         # publish the measured cost beside the floor and mark which is which.
-        sizing_estimate = estimate_mesh_cost(regions).to_dict()
+        sizing_estimate = sizing_cost.to_dict()
         sizing_estimate["basis"] = "area-over-h-squared"
         sizing_estimate["curvature_aware"] = False
         sizing_estimate["is_lower_bound"] = True

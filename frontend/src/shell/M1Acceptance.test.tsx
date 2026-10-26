@@ -235,7 +235,10 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     visible = new Set(['viewport', 'geometry']);
     publishVisiblePanels(visible);
     bindWorkspaceNavigation(dockActivate);
-    vi.stubGlobal('fetch', vi.fn(async () => resultResponse()));
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input) === '/api/solver-mesh'
+      ? new Response(JSON.stringify({ msh_text: 'mesh', stats: { mesh_cache_key: 'test', triangle_count: 1 }, cut_planes: [] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } })
+      : resultResponse()));
     mocks.solveModel.mockResolvedValue('job-1');
     vi.spyOn(jobsSocket, 'start').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'stop').mockImplementation(() => undefined);

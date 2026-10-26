@@ -11,7 +11,10 @@ export interface MeshCeilingChoice {
   /** What the model meshes to against WG's limit, as the server measured it; null when it did not say. */
   meshLimit?: CadMeshLimit | null;
   /** The selected return this choice answers; it never applies to another one. */
-  bundlePath: string;
+  bundlePath: string | null;
+  /** Other model types reuse the same dialog and retain their exact solve press. */
+  continueSolve?: () => Promise<void>;
+  stillCurrent?: () => boolean;
   /** "Later": the pop-up is closed, and the model waits for the choice. */
   deferred: boolean;
 }

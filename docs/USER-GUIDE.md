@@ -559,10 +559,10 @@ controls, so an older optional solver package cannot advertise a feature it does
 not implement. Designs carrying an unavailable option remain editable and show
 an actionable reason instead of silently changing the physics.
 
-Watch the mesh ceiling when substituting a large baffle: 22,000 triangles in the
-solved domain is a hard limit. Symmetry is the lever — a body of revolution or a
-biaxially symmetric waveguide solves on a quarter domain, which is four times
-the usable budget.
+Watch the mesh size when substituting a large baffle. WG asks before solving a
+mesh above the shared triangle limit; **Solve anyway** continues when the mesh
+fits this machine's memory. Symmetry can reduce the part that needs solving: a
+body of revolution or a biaxially symmetric waveguide solves on a quarter domain.
 
 A second ceiling bounds the memory one dense BEM solve may claim: half of the
 computer's physical memory, at most 64 GiB. When the physical memory cannot be

@@ -104,8 +104,8 @@ The mesher's `docs/native-general-horn-attachment.md` defines the rotational
 domain, angular correction bound and explicit refusals. Noncircular geometry
 remains outside this route. Preview and prepare perform no acoustic solve.
 
-The existing 22,000-triangle imported artifact ceiling remains enforced. Passive
+The shared imported artifact triangle choice remains enforced. Passive
 gap refinement covers the complete canonical wall face; a geometrically valid
 larger attachment can reach that limit. Increasing only enclosure mesh size may
-not help when the wall's gap target dominates. Such preparations refuse rather
-than weakening the facet or clearance certificate.
+not help when the wall's gap target dominates. WG asks before a larger solve
+without weakening the facet or clearance certificate.
