@@ -23,7 +23,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-from server.cadlink.roles import canonical_source_role
+from server.cadlink.roles import normalize_source_role
 from server.jobs.imported_setup import DEFAULTS_ORIGIN, CadSolveSetup, validate_setup
 
 
@@ -197,7 +197,7 @@ def _combine(
         (item["lower"], item["upper"]): item["hz"] for item in crossover["role_crossovers_hz"]
     }
     role_of = {
-        str(source["id"]): canonical_source_role(str(source.get("role") or ""))
+        str(source["id"]): normalize_source_role(str(source.get("role") or ""), mode="band")
         for source in sources
     }
 
@@ -272,7 +272,7 @@ def default_mesh(manifest: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(source, Mapping):
             continue
         suggested = source.get("suggested_resolution_mm")
-        role = canonical_source_role(str(source.get("role") or ""))
+        role = normalize_source_role(str(source.get("role") or ""), mode="band")
         policy = mesh["source_roles"].get(role)
         sizes[str(source["id"])] = (
             policy["size_mm"]

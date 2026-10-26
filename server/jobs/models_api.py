@@ -27,9 +27,9 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, TypeAdapter, mode
 
 from server.cadlink.identity import mint_id, utc_now
 from server.cadlink.operations import REASON_UPDATE_RESTART_PENDING
-from server.cadlink.roles import inventory_sha256, prepared_inventory_sha256
+from server.cadlink.roles import inventory_sha256, normalize_source_role, prepared_inventory_sha256
 from server.cadlink.store import FILE_MODEL_PREFIX, UNFILED_MODEL_ID, file_model_id
-from server.cadlink.wglink_protocol import SOURCE_ROLES, canonical_source_role
+from server.cadlink.wglink_protocol import SOURCE_ROLES
 from server.contracts.geometry import SYMMETRY_PLANE_AXIS
 from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json
@@ -94,7 +94,10 @@ class FilePreparation(JobModel):
         if self.roles is None and not self.source_tags:
             raise ValueError("Choose at least one driver surface.")
         if self.roles is not None:
-            self.roles = {tag: canonical_source_role(role) for tag, role in self.roles.items()}
+            self.roles = {
+                tag: normalize_source_role(role, mode="protocol")
+                for tag, role in self.roles.items()
+            }
             if any(role not in (*SOURCE_ROLES, "RIGID") for role in self.roles.values()):
                 raise ValueError("Choose a driver, Port or passive opening, or Rigid wall for each surface.")
         planes, reflections = validate_file_symmetry(self.domain_planes, self.reflect_planes)
@@ -558,7 +561,10 @@ def _file_import_memory(store: Any, filename: str, text: str, groups: list[dict[
             for group in previous_groups
         }
         matching_roles = {
-            str(tag): ("HF" if roles.get(str(previous_names[name])) == "SOURCE" else canonical_source_role(roles.get(str(previous_names[name]), "RIGID")))
+            str(tag): (
+                "HF" if roles.get(str(previous_names[name])) == "SOURCE"
+                else normalize_source_role(roles.get(str(previous_names[name]), "RIGID"), mode="protocol")
+            )
             for name, tag in current_names.items() if name in previous_names
         }
         if "previous_roles" not in answer:

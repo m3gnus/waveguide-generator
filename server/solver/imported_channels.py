@@ -6,7 +6,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from server.cadlink.roles import canonical_source_role
+from server.cadlink.roles import normalize_source_role
 from server.jobs.models import ImportedGeometrySource
 
 from .driver_lem import channel_drive_scaling
@@ -72,7 +72,7 @@ def channel_source_identity(
         source_id = str(source.get("id") or "")
         if not source_id:
             continue
-        role = canonical_source_role(str(source.get("role") or ""))
+        role = normalize_source_role(str(source.get("role") or ""), mode="band")
         if role in _BAND_ROLES:
             roles[source_id] = role
         label = source.get("label") or source.get("name")

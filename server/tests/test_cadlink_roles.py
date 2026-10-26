@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from server.cadlink.roles import canonical_source_role, inventory_sha256, prepared_inventory_sha256
+from server.cadlink.roles import inventory_sha256, normalize_source_role, prepared_inventory_sha256
 
 
 @pytest.mark.parametrize(
@@ -16,10 +16,27 @@ from server.cadlink.roles import canonical_source_role, inventory_sha256, prepar
         (" Rigid ", " Rigid "),
     ],
 )
-def test_canonical_source_role_only_rewrites_driver_bands(
+def test_band_mode_only_rewrites_driver_bands(
     role: str, expected: str
 ) -> None:
-    assert canonical_source_role(role) == expected
+    assert normalize_source_role(role, mode="band") == expected
+
+
+@pytest.mark.parametrize(
+    ("role", "source", "band", "protocol"),
+    [
+        (" mf ", "MF", "MF", " mf "),
+        ("PORT_EXIT", "PASSIVE_CARDIOID", "PORT_EXIT", "PASSIVE_CARDIOID"),
+        (" port_exit ", "PASSIVE_CARDIOID", " port_exit ", " port_exit "),
+        (" passive_cardioid ", "PASSIVE_CARDIOID", " passive_cardioid ", " passive_cardioid "),
+        (" Rigid ", " Rigid ", " Rigid ", " Rigid "),
+        ("", "", "", ""),
+    ],
+)
+def test_role_modes_preserve_each_caller_contract(role, source, band, protocol):
+    assert normalize_source_role(role) == source
+    assert normalize_source_role(role, mode="band") == band
+    assert normalize_source_role(role, mode="protocol") == protocol
 
 
 def test_legacy_file_inventory_retains_source_bytes_while_records_use_hf():
@@ -59,3 +76,25 @@ def test_saved_legacy_setup_is_found_after_repreparing_with_canonical_roles(tmp_
         }
     finally:
         store.close()
+
+
+@pytest.mark.parametrize(
+    ("role", "expected"),
+    [
+        ("PORT_EXIT", "sha256:313033e8e0d80f6eb66c5efdc5a582fb7da25b08b4184a8ee7aa27ab5b43cd7a"),
+        ("PASSIVE_CARDIOID", "sha256:1a14916be1f71c36f19c366dd6db2c1d155cdd5424a38effb0eb4f9d269a9aad"),
+        (" port_exit ", "sha256:c628f5744032ef9660437e0f4f80c67d38c6b0fe2f42889ab91da0e3f7c551c5"),
+        ("hf", "sha256:bf2f9413502fa8ff691fc83d6794deff9c6456a8a2c3c0d5a489033924ae09d9"),
+        (" HF ", "sha256:bf2f9413502fa8ff691fc83d6794deff9c6456a8a2c3c0d5a489033924ae09d9"),
+    ],
+)
+def test_inventory_preserves_legacy_role_identity(role, expected):
+    assert inventory_sha256([{"id": "port", "role": role, "required": True}]) == expected
+
+
+@pytest.mark.parametrize("role", ["mf", " MF ", "port_exit", " PORT_EXIT ", "passive_cardioid"])
+def test_file_preparation_keeps_protocol_role_validation_strict(role):
+    from server.jobs.models_api import FilePreparation
+
+    with pytest.raises(ValueError, match="Choose a driver"):
+        FilePreparation(units="m", forward="+z", up="+y", roles={1: role})

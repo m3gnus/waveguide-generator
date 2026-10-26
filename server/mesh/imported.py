@@ -21,9 +21,9 @@ import numpy as np
 from server.contracts.canonical import canonical_ascii_strict_json
 
 from server.cadlink.wglink_protocol import (
+    LEGACY_SOURCE_ROLE_ALIASES,
     MESH_DEFAULTS,
     SOURCE_ROLES,
-    canonical_source_role,
     source_physical_name,
 )
 from server.contracts.geometry import (
@@ -53,13 +53,25 @@ from server.platform.temp_session import temporary_directory_root
 TAG_NAMESPACE = "wg-import-v1"
 
 
-def parse_source_physical_name(name: str) -> dict[str, Any] | None:
+def parse_source_physical_name(
+    name: str, *, legacy_source_ids: bool = False,
+) -> dict[str, Any] | None:
     """Read WG surface descriptors; wglink_protocol.source_physical_name writes sources.
 
     This WG-owned descriptor home also writes the rigid-wall name. Only the
     exact descriptor grammar is accepted, and legacy source roles are returned
     in their canonical spelling. Other names are left for caller-owned hints.
+
+    Retained coupled-exterior names historically admitted source_id fields
+    without the descriptor grammar, including empty and repeated fields. This
+    explicit mode returns all such fields in order without validating the rest
+    of the name; strict descriptor consumers retain their existing behavior.
     """
+    if legacy_source_ids:
+        return {"source_ids": tuple(
+            part[len("source_id="):] for part in name.split("|")
+            if part.startswith("source_id=")
+        )}
     if name == f"{TAG_NAMESPACE}|rigid":
         return {"role": "RIGID"}
     match = re.fullmatch(
@@ -69,7 +81,9 @@ def parse_source_physical_name(name: str) -> dict[str, Any] | None:
     )
     if match is None:
         return None
-    role = canonical_source_role(match[4])
+    # The mesh layer uses the protocol's alias vocabulary directly: importing
+    # the CAD role normalizer here would cross the server's layer boundary.
+    role = LEGACY_SOURCE_ROLE_ALIASES.get(match[4], match[4])
     if role not in SOURCE_ROLES:
         return None
     return {

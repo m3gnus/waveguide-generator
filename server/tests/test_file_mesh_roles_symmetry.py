@@ -52,6 +52,8 @@ def test_descriptor_parser_round_trips_its_writer(role, instance):
     "wg-import-v1|tag=0|source_id=s|instance_id=null|role=HF",
     "wg-import-v1|tag=101|source_id=s|instance_id=null|role=unknown",
     "wg-import-v1|tag=101|source_id=s|instance_id=null|role=SOURCE",
+    "wg-import-v1|tag=101|source_id=s|instance_id=null|role=mf",
+    "wg-import-v1|tag=101|source_id=s|instance_id=null|role= port_exit ",
     "wg-import-v1|tag=101|source_id=s|role=HF",
     "wg-import-v1|tag=101|source_id=s|instance_id=null|role=HF|extra=x",
 ])

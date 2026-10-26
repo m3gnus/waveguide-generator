@@ -222,6 +222,8 @@ def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any,
                          for g in r.record.get("surface_groups", ()))
     exterior = None
     if has_interfaces:
+        from server.mesh.imported import parse_source_physical_name
+
         points, groups = read_coupled_exterior(read_verified_coupled_exterior_mesh(record))
         kinds = {name: dict(value) for name, value in record["coupled_exterior"]["physical_names"].items()}
         # The setup owns painted-source channel assignment; FEM declarations own diaphragms.
@@ -230,8 +232,8 @@ def build_imported_coupled_request(record: Mapping, geometry: Any, context: Any,
         source_channels = {source: channel.id for channel in geometry.drive_channels
                            for source in channel.source_ids}
         for name, kind in kinds.items():
-            source = next((part.split("=", 1)[1] for part in name.split("|")
-                           if part.startswith("source_id=")), None)
+            fields = parse_source_physical_name(name, legacy_source_ids=True)
+            source = next(iter(fields["source_ids"]), None)
             if source in source_channels:
                 kind["drive_channel_id"] = source_channels[source]
                 kind["motion_weight"] = source_weights[source]

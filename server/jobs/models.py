@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal, Mapping, Self, cast
 
 from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, field_validator, model_serializer, model_validator
 
-from server.cadlink.wglink_protocol import canonical_source_role
+from server.cadlink.roles import normalize_source_role
 from server.contracts.canonical import canonical_utf8_strict_json
 
 from server.contracts import DriverSpec as DriverSpec, JobModel as JobModel
@@ -919,7 +919,7 @@ def passive_cardioid_apertures(
     by_upper = {name.strip().upper(): (name, tag) for name, tag in entries}
 
     sources = [
-        (str(source.get("id") or ""), canonical_source_role(str(source.get("role") or "").strip().upper()))
+        (str(source.get("id") or ""), normalize_source_role(source.get("role") or ""))
         for source in record.get("sources") or [] if isinstance(source, Mapping)
     ]
     port_entries = [

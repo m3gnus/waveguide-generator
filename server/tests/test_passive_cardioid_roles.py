@@ -114,3 +114,12 @@ def test_role_based_apertures_cannot_share_a_physical_tag():
     record = {"sources": [{"id": "group_1", "role": "PASSIVE_CARDIOID"}, {"id": "group_2", "role": "MF"}]}
     with pytest.raises(ValueError, match="duplicate faces"):
         passive_cardioid_apertures({"group_1": 1, "group_2": 1}, record)
+
+
+@pytest.mark.parametrize("port_role", ["port_exit", " PORT_EXIT ", "passive_cardioid", " Passive_Cardioid "])
+@pytest.mark.parametrize("mf_role", ["mf", " MF "])
+def test_aperture_roles_remain_case_and_whitespace_insensitive(port_role, mf_role):
+    record = {"sources": [{"id": "port", "role": port_role}, {"id": "diaphragm", "role": mf_role}]}
+    assert passive_cardioid_apertures({"port": 1, "diaphragm": 2}, record) == (
+        {"port": [1], "MF": [2]}, ["port"], "diaphragm",
+    )

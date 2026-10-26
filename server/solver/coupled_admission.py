@@ -4,7 +4,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-
 def fem_group_options_problem(regions: Sequence[Mapping[str, Any]]) -> tuple[str, str] | None:
     """Validate options again for retained records and direct solver callers."""
     from server.mesh.fem_regions import validate_group_options
@@ -91,11 +90,12 @@ def fem_drive_problem(regions: Sequence[Mapping[str, Any]],
 
 
 def painted_source_ids(record: Mapping[str, Any]) -> set[str]:
+    from server.mesh.imported import parse_source_physical_name
+
     sources = set(record.get("source_tags") or ())
     sources.update(s["id"] for s in record.get("sources", ()) if "id" in s)
     for name in (record.get("coupled_exterior") or {}).get("physical_names", ()):
-        sources.update(part.split("=", 1)[1] for part in name.split("|")
-                       if part.startswith("source_id="))
+        sources.update(parse_source_physical_name(name, legacy_source_ids=True)["source_ids"])
     return sources
 
 
@@ -174,6 +174,7 @@ def driver_surface_problem(record: Mapping[str, Any], channels: Sequence[Any], *
                                       read_verified_fem_region_mesh, read_verified_import_mesh)
     from server.mesh.fem_coupling import read_coupled_exterior
     from server.mesh.fem_regions import parse_physical_name, read_fem_region_domain
+    from server.mesh.imported import parse_source_physical_name
     from .beat_adapter.mesh import read_surface
     from .component_symmetry import DriverSymmetryError, infer_component_symmetry, check_geometry
     from .imported import imported_domain_planes
@@ -235,8 +236,8 @@ def driver_surface_problem(record: Mapping[str, Any], channels: Sequence[Any], *
 
                 axes = tuple({"x0": 0, "y0": 1}[p] for p in imported_domain_planes(record))
                 for name, faces in _oriented_exterior_surfaces(points, groups, symmetry_plane_axes=axes):
-                    source = next((part.split("=", 1)[1] for part in name.split("|")
-                                   if part.startswith("source_id=")), None)
+                    fields = parse_source_physical_name(name, legacy_source_ids=True)
+                    source = next(iter(fields["source_ids"]), None)
                     add(sources.get(source), "exterior", points * .001, faces)
             elif msh_text is not None or record.get("mesh_store_path"):
                 mesh = read_surface(msh_text if msh_text is not None else read_verified_import_mesh(record))
@@ -347,6 +348,7 @@ def _channel_moving_meshes(record, channel, *, exterior_msh_text=None):
                                       read_verified_coupled_exterior_mesh, read_verified_import_mesh)
     from server.mesh.fem_regions import read_fem_region_domain, parse_physical_name
     from server.mesh.fem_coupling import read_coupled_exterior
+    from server.mesh.imported import parse_source_physical_name
     from server.solver.coupled_system import _fem_driver_triangles, _oriented_exterior_surfaces
     from server.solver.beat_adapter.mesh import read_surface
 
@@ -382,10 +384,19 @@ def _channel_moving_meshes(record, channel, *, exterior_msh_text=None):
         if record.get("coupled_exterior"):
             points, groups = read_coupled_exterior(read_verified_coupled_exterior_mesh(record))
             for source in channel.source_ids:
-                if not any(len(faces) and f"source_id={source}" in name.split('|') for name, faces in groups.items()):
+                if not any(
+                    len(faces) and f"{source}" in parse_source_physical_name(name, legacy_source_ids=True)["source_ids"]
+                    for name, faces in groups.items()
+                ):
                     raise ValueError(f"group {source!r} has no faces in the prepared mesh")
-            boundaries = [(faces, points[faces] * .001) for name, faces in _oriented_exterior_surfaces(points, groups, symmetry_plane_axes=axes)
-                          if any(f"source_id={source}" in name.split("|") for source in channel.source_ids)]
+            boundaries = [
+                (faces, points[faces] * .001)
+                for name, faces in _oriented_exterior_surfaces(points, groups, symmetry_plane_axes=axes)
+                if any(
+                    f"{source}" in parse_source_physical_name(name, legacy_source_ids=True)["source_ids"]
+                    for source in channel.source_ids
+                )
+            ]
         else:
             mesh = read_surface(exterior_msh_text if exterior_msh_text is not None else read_verified_import_mesh(record))
             for source in channel.source_ids:
