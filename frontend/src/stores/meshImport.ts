@@ -1,4 +1,4 @@
-import { importedSimulationSetup, reconcileFileChannels } from './importedSimulationSetup';
+import { fileSimulationSetup, reconcileFileChannels } from './importedSimulationSetup';
 import { savedChannelDrivers } from './cadSetupRestore';
 import type { CadSetup } from '../api/jobsSocket';
 import type { SimulationData } from './cadReturn';
@@ -95,7 +95,7 @@ export function meshImportChoice(draft: FileDraft): string | null {
 
 /** A source's motion edits its retained channel without replacing the other physics. */
 export function setMeshMotion(sourceId: string, motion: 'normal' | 'axial'): void {
-  const simulation = importedSimulationSetup();
+  const simulation = fileSimulationSetup.get();
   const channel = simulation.driveChannels.find(channel => channel.source_ids.includes(sourceId));
   if (channel) simulation.setChannelMotion(channel.id, motion);
 }
@@ -288,7 +288,7 @@ function fileSetupControls(): ImportedSetup {
   delete options.ground_plane;
   options.symmetry = 'auto';
   options.solver_mode = 'full_3d';
-  const simulation = importedSimulationSetup();
+  const simulation = fileSimulationSetup.get();
   const exteriorError = exteriorModeBlocker({ ...simulation, ingestRecord: null, exteriorOnly: true }, selected);
   if (exteriorError) throw new Error(exteriorError);
   const driverError = incompleteDriverBlocker(simulation);

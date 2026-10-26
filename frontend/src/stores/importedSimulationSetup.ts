@@ -15,7 +15,7 @@ import { withEditSignals } from './solveSettingsEdits';
 import { workspaceModeStore } from './workspaceMode';
 
 export interface ImportedSimulationSetup extends SimulationData, SimulationActions {
-  input: 'cad' | 'file';
+  input: 'cad' | 'file' | 'assembly';
   sources: readonly (RoleSource & { defaultDriveChannelId?: string })[];
   /** One amplifier/band branch, with one physical driver channel per surface. */
   driverGroups: ImportedDriverGroup[];
@@ -174,7 +174,9 @@ export function seedFileSimulation(record: RegisteredMesh | null, setup: Importe
 }
 
 function fileSources(record: RegisteredMesh | null): RoleSource[] {
-  return Object.keys(record?.source_tags ?? {}).map(id => ({ id, role: record?.sources?.find(source => source.id === id)?.role ?? 'HF' }));
+  // Older retained file records predate sources[]. Their source tags were HF.
+  return record?.sources ? record.sources.map(({ id, role }) => ({ id, role }))
+    : Object.keys(record?.source_tags ?? {}).map(id => ({ id, role: 'HF' }));
 }
 
 function fileData(): SimulationData {
@@ -182,93 +184,137 @@ function fileData(): SimulationData {
   return model.fileSimulation ?? seedFileSimulation(model.prepared as RegisteredMesh | null, model.setup ?? model.setupEditBase?.retained ?? null);
 }
 
-function updateFile(update: Partial<SimulationData> | ((state: SimulationData) => Partial<SimulationData>)): void {
-  const current = fileData();
-  const patch = typeof update === 'function' ? update(current) : update;
-  if (patch !== current) useImportedModelStore.setState({ fileSimulation: { ...current, ...patch } });
-}
-const singleFileActions = simulationActions(updateFile);
 const groupedActionNames = ['setChannelMotion', 'setChannelDriverField',
   'setChannelDriverPreset', 'clearChannelDriverOverrides'] as const;
-/** Fan out one card edit through the existing CAD mutations, under one edit signal. */
-function groupedAction<K extends typeof groupedActionNames[number]>(name: K): SimulationActions[K] {
-  return ((channelId: string, ...args: unknown[]) => {
-    const state = fileData();
-    const sources = fileSources(useImportedModelStore.getState().prepared as RegisteredMesh | null);
-    const ids = fileDriverGroups(sources, state.driveChannels, state.channelDrivers).find(group => group.channelIds.includes(channelId))?.channelIds ?? [channelId];
-    const action = singleFileActions[name] as (id: string, ...args: unknown[]) => unknown;
-    for (const id of ids) action(id, ...args);
-  }) as SimulationActions[K];
+type SimulationUpdate = Partial<SimulationData> | ((state: SimulationData) => Partial<SimulationData>);
+
+/** Bind the shared simulation controls to an imported input's own state and sources. */
+export function createImportedSimulationSetup(config: {
+  input: ImportedSimulationSetup['input'];
+  read: () => SimulationData;
+  write: (update: SimulationUpdate) => void;
+  sources: () => ImportedSimulationSetup['sources'];
+  skippedSourceIds: () => string[];
+  setSweep: SimulationActions['setSweep'];
+  /** CAD already owns its edit signals and source assignment. */
+  cadActions?: () => CadReturnState;
+  signal?: <T extends object>(actions: T) => T;
+}) {
+  const singleActions = simulationActions(config.write);
+  /** Fan out one card edit through the existing mutations, under one edit signal. */
+  function groupedAction<K extends typeof groupedActionNames[number]>(name: K): SimulationActions[K] {
+    return ((channelId: string, ...args: unknown[]) => {
+      const state = config.read();
+      const sources = config.sources();
+      const ids = fileDriverGroups(sources, state.driveChannels, state.channelDrivers).find(group => group.channelIds.includes(channelId))?.channelIds ?? [channelId];
+      const action = singleActions[name] as (id: string, ...args: unknown[]) => unknown;
+      for (const id of ids) action(id, ...args);
+    }) as SimulationActions[K];
+  }
+  const rawActions = {
+    ...singleActions,
+    ...Object.fromEntries(groupedActionNames.map(name => [name, groupedAction(name)])) as Pick<SimulationActions, typeof groupedActionNames[number]>,
+    setSweep: config.setSweep,
+    setCombineEnabled: (combineEnabled: boolean) => config.write({ combineEnabled }),
+    setCombineSpec: (combineSpec: SimulationData['combineSpec']) => config.write({ combineSpec }),
+    setRoleSharing(role: string, share: boolean) {
+      const sources = config.sources().filter(source => source.role === role
+        && config.read().driveChannels.some(channel => channel.source_ids.includes(source.id)));
+      const ids = new Set(sources.map(source => source.id));
+      config.write(state => {
+        const affected = state.driveChannels.filter(channel => channel.source_ids.some(id => ids.has(id)));
+        const template = affected[0];
+        if (!template || affected.some(channel => channel.exterior_transducer)) return state;
+        const driverTemplate = affected.find(channel => channelDriverPresent(state.channelDrivers[channel.id])) ?? template;
+        // A retained channel can span roles after a Geometry edit. Only detach
+        // the selected role, preserving every other surface and its coordinate.
+        const remaining = state.driveChannels.flatMap(channel => {
+          const source_ids = channel.source_ids.filter(id => !ids.has(id));
+          return source_ids.length ? [{ ...channel, source_ids,
+            ...(channel.patch_weights ? { patch_weights: Object.fromEntries(source_ids.map(id => [id, channel.patch_weights![id]])) } : {}),
+          }] : [];
+        });
+        const used = new Set(remaining.map(channel => channel.id));
+        const unique = (wanted: string) => {
+          let id = wanted;
+          for (let suffix = 2; used.has(id); suffix += 1) id = `${wanted}-${suffix}`;
+          used.add(id);
+          return id;
+        };
+        // Each new member is one prescribed source, never a multi-patch driver.
+        const replacements = sources.map(source => {
+          const previous = affected.find(channel => channel.source_ids.includes(source.id))!;
+          return { id: unique(share ? sharedChannelId(role, source.id) : source.id),
+            motion: share ? driverTemplate.motion : previous.motion, source_ids: [source.id] };
+        });
+        const first = state.driveChannels.indexOf(template);
+        const before = remaining.filter(channel => state.driveChannels.findIndex(old => old.id === channel.id) <= first);
+        const driveChannels = [...before, ...replacements, ...remaining.filter(channel => !before.includes(channel))];
+        const channelDrivers = { ...retainedChannelDrivers(state, remaining) };
+        for (const channel of replacements) {
+          const previous = share ? driverTemplate : affected.find(old => old.source_ids.includes(channel.source_ids[0]))!;
+          const form = state.channelDrivers[previous.id];
+          if (form && channelAcceptsDriver(channel)) channelDrivers[channel.id] = structuredClone(form);
+        }
+        return { driveChannels, channelDrivers };
+      });
+    },
+  };
+  const actions = config.signal ? config.signal(rawActions) : rawActions;
+  return {
+    get(): ImportedSimulationSetup {
+      const data = config.read();
+      const sources = config.sources();
+      if (config.cadActions) {
+        const cad = config.cadActions();
+        return { ...data, ...cad, input: config.input, sources, skippedSourceIds: config.skippedSourceIds(),
+          driverGroups: data.driveChannels.map(channel => ({ id: channel.id, channelIds: [channel.id] })),
+          setSweep: config.setSweep };
+      }
+      return { ...data, ...actions, input: config.input, sources,
+        driverGroups: fileDriverGroups(sources, data.driveChannels, data.channelDrivers),
+        skippedSourceIds: config.skippedSourceIds() };
+    },
+  };
 }
-const rawFileActions = {
-  ...singleFileActions,
-  ...Object.fromEntries(groupedActionNames.map(name => [name, groupedAction(name)])) as Pick<SimulationActions, typeof groupedActionNames[number]>,
-  setSweep: (update: Parameters<CadReturnState['setSweep']>[0]) => useImportedSolveOptionsStore.getState().setSweep({
+
+const cadSimulationSetup = createImportedSimulationSetup({
+  input: 'cad', read: () => useCadReturnStore.getState(),
+  write: update => useCadReturnStore.setState(update),
+  sources: () => useCadReturnStore.getState().selectedBundle?.sources ?? [],
+  skippedSourceIds: () => useCadReturnStore.getState().skippedSourceIds,
+  setSweep: update => useCadReturnStore.getState().setSweep(update),
+  cadActions: () => useCadReturnStore.getState(),
+});
+
+export const fileSimulationSetup = createImportedSimulationSetup({
+  input: 'file', read: () => {
+    const data = fileData();
+    const options = useImportedSolveOptionsStore.getState();
+    return { ...data, frequencyStartHz: options.sweepStartHz, frequencyEndHz: options.sweepEndHz, frequencyCount: options.sweepCount };
+  },
+  write: update => {
+    const current = fileData();
+    const patch = typeof update === 'function' ? update(current) : update;
+    if (patch !== current) useImportedModelStore.setState({ fileSimulation: { ...current, ...patch } });
+  },
+  sources: () => fileSources(useImportedModelStore.getState().prepared as RegisteredMesh | null),
+  skippedSourceIds: () => {
+    const model = useImportedModelStore.getState();
+    return (model.setup ?? model.setupEditBase?.retained)?.geometry.skipped_source_ids ?? [];
+  },
+  setSweep: update => useImportedSolveOptionsStore.getState().setSweep({
     ...(update.frequencyStartHz !== undefined ? { startHz: update.frequencyStartHz } : {}),
     ...(update.frequencyEndHz !== undefined ? { endHz: update.frequencyEndHz } : {}),
     ...(update.frequencyCount !== undefined ? { count: update.frequencyCount } : {}),
   }),
-  setCombineEnabled: (combineEnabled: boolean) => updateFile({ combineEnabled }),
-  setCombineSpec: (combineSpec: SimulationData['combineSpec']) => updateFile({ combineSpec }),
-  setRoleSharing(role: string, share: boolean) {
-    const sources = fileSources(useImportedModelStore.getState().prepared as RegisteredMesh | null).filter(source => source.role === role
-      && fileData().driveChannels.some(channel => channel.source_ids.includes(source.id)));
-    const ids = new Set(sources.map(source => source.id));
-    updateFile(state => {
-      const affected = state.driveChannels.filter(channel => channel.source_ids.some(id => ids.has(id)));
-      const template = affected[0];
-      if (!template || affected.some(channel => channel.exterior_transducer)) return state;
-      const driverTemplate = affected.find(channel => channelDriverPresent(state.channelDrivers[channel.id])) ?? template;
-      // A retained channel can span roles after a Geometry edit. Only detach
-      // the selected role, preserving every other surface and its coordinate.
-      const remaining = state.driveChannels.flatMap(channel => {
-        const source_ids = channel.source_ids.filter(id => !ids.has(id));
-        return source_ids.length ? [{ ...channel, source_ids,
-          ...(channel.patch_weights ? { patch_weights: Object.fromEntries(source_ids.map(id => [id, channel.patch_weights![id]])) } : {}),
-        }] : [];
-      });
-      const used = new Set(remaining.map(channel => channel.id));
-      const unique = (wanted: string) => {
-        let id = wanted;
-        for (let suffix = 2; used.has(id); suffix += 1) id = `${wanted}-${suffix}`;
-        used.add(id);
-        return id;
-      };
-      // Each new member is one prescribed source, never a multi-patch driver.
-      const replacements = sources.map(source => {
-        const previous = affected.find(channel => channel.source_ids.includes(source.id))!;
-        return { id: unique(share ? sharedChannelId(role, source.id) : source.id),
-          motion: share ? driverTemplate.motion : previous.motion, source_ids: [source.id] };
-      });
-      const first = state.driveChannels.indexOf(template);
-      const before = remaining.filter(channel => state.driveChannels.findIndex(old => old.id === channel.id) <= first);
-      const driveChannels = [...before, ...replacements, ...remaining.filter(channel => !before.includes(channel))];
-      const channelDrivers = { ...retainedChannelDrivers(state, remaining) };
-      for (const channel of replacements) {
-        const previous = share ? driverTemplate : affected.find(old => old.source_ids.includes(channel.source_ids[0]))!;
-        const form = state.channelDrivers[previous.id];
-        if (form && channelAcceptsDriver(channel)) channelDrivers[channel.id] = structuredClone(form);
-      }
-      return { driveChannels, channelDrivers };
-    });
-  },
-};
-const fileActions = withEditSignals(() => useImportedModelStore.getState() as unknown as typeof rawFileActions, rawFileActions, Object.keys(rawFileActions) as (keyof typeof rawFileActions)[], 'meshImport');
+  signal: actions => withEditSignals(() => useImportedModelStore.getState() as unknown as typeof actions,
+    actions, Object.keys(actions) as (keyof typeof actions)[], 'meshImport'),
+});
 
 /** One interface for the shared imported Simulation sections and their children. */
 export function importedSimulationSetup(): ImportedSimulationSetup {
-  if (workspaceModeStore.getSnapshot().importedInput === 'cad') {
-    const state = useCadReturnStore.getState();
-    return { ...state, input: 'cad', sources: state.selectedBundle?.sources ?? [],
-      driverGroups: state.driveChannels.map(channel => ({ id: channel.id, channelIds: [channel.id] })) };
-  }
-  const model = useImportedModelStore.getState();
-  const options = useImportedSolveOptionsStore.getState();
-  const data = fileData();
-  const sources = fileSources(model.prepared as RegisteredMesh | null);
-  return { ...data, ...fileActions, input: 'file', sources, driverGroups: fileDriverGroups(sources, data.driveChannels, data.channelDrivers),
-    skippedSourceIds: (model.setup ?? model.setupEditBase?.retained)?.geometry.skipped_source_ids ?? [],
-    frequencyStartHz: options.sweepStartHz, frequencyEndHz: options.sweepEndHz, frequencyCount: options.sweepCount };
+  return (workspaceModeStore.getSnapshot().importedInput === 'cad' ? cadSimulationSetup : fileSimulationSetup).get();
 }
 
 export function useImportedSimulationSetup(): ImportedSimulationSetup {

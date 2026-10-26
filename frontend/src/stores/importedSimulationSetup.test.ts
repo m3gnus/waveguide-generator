@@ -10,7 +10,7 @@ import { parseMSH } from '../viewport/mshParser';
 import { startCadSetupPublisher } from '../shell/cadSetupPublisher';
 import { resetCadReturnStore, useCadReturnStore, type DriverPreset } from './cadReturn';
 import { editFileDraft, flushImportedSetupWrites, openImported, resetImportedModelStore, useImportedModelStore } from './importedModel';
-import { importedSimulationSetup } from './importedSimulationSetup';
+import { createImportedSimulationSetup, importedSimulationSetup, seedFileSimulation } from './importedSimulationSetup';
 import { fileMeshSetup, fileMeshSubmission } from './meshImport';
 import { resetSolveOptionsStore } from './solveOptions';
 import { workspaceModeStore } from './workspaceMode';
@@ -37,6 +37,24 @@ beforeEach(() => {
   show();
 });
 afterEach(() => { stopPublisher?.(); stopPublisher = undefined; });
+
+it('binds an independent input to its own state and record sources', () => {
+  const record = { ...mesh, source_tags: { unrelated: 7 }, sources: [{ id: 'cone', role: 'LF' }] };
+  let state = seedFileSimulation(record, null);
+  const adapter = createImportedSimulationSetup({
+    input: 'assembly', read: () => state,
+    write: update => { state = { ...state, ...(typeof update === 'function' ? update(state) : update) }; },
+    sources: () => record.sources, skippedSourceIds: () => [],
+    setSweep: update => { state = { ...state, ...update }; },
+  });
+  expect(adapter.get().sources).toEqual([{ id: 'cone', role: 'LF' }]);
+  expect(adapter.get().driveChannels[0].source_ids).toEqual(['cone']);
+  adapter.get().setChannelMotion(state.driveChannels[0].id, 'axial');
+  adapter.get().setSweep({ frequencyStartHz: 75 });
+  expect(adapter.get().driveChannels[0].motion).toBe('axial');
+  expect(adapter.get().frequencyStartHz).toBe(75);
+  expect(importedSimulationSetup().sources).toEqual(mesh.sources);
+});
 
 it('defaults to one card per role and keeps each surface on its own channel', () => {
   const prepared = useImportedModelStore.getState().prepared;
