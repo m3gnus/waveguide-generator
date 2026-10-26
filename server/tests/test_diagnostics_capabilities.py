@@ -40,10 +40,3 @@ def test_capability_entries_have_uniform_keys_and_labels(qualification):
     assert engines[1]["label"] == "Metal"
     assert set(engines[0]) == set(engines[1])
     assert all(isinstance(engine["opencl_retry_pending"], bool) for engine in engines)
-
-
-def test_capabilities_exposes_the_file_mesh_admission_limit():
-    from server.contracts.geometry import MAX_FILE_MESH_TRIANGLES
-
-    payload = asyncio.run(capabilities.capabilities_payload(EmptyRegistry()))
-    assert payload["limits"]["file_mesh_triangles"] == MAX_FILE_MESH_TRIANGLES

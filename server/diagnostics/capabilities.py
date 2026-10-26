@@ -14,7 +14,6 @@ from dataclasses import asdict
 from typing import Any, Protocol
 
 from server.cadlink.build_flags import fem_regions_enabled, onshape_enabled
-from server.contracts.geometry import MAX_FILE_MESH_TRIANGLES
 from server.engines.registry import full3d_engine_order
 from server.integration.installed import measure_installed_stack
 from server.integration.provenance import pinned_dependency_shas
@@ -72,7 +71,6 @@ async def capabilities_payload(engine_registry: _Registry) -> dict[str, Any]:
     pinned = pinned_dependency_shas()
     installed, drift = measure_installed_stack(pinned)
     return {
-        "limits": {"file_mesh_triangles": MAX_FILE_MESH_TRIANGLES},
         "hostPlatform": platform.system().lower(),
         "opencl_qualification_max_seconds": qualification_max_seconds(),
         "engines": engines,

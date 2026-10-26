@@ -318,17 +318,6 @@ it('shows remembered settings once in the status line and has no Save setup butt
   expectNoJargon(host);
 });
 
-it('shows the server triangle refusal unchanged with no Try again or preparation request', async () => {
-  const message = 'This mesh has 20,001 triangles; Waveguide Generator accepts up to 20,000. Export a coarser mesh, or export only the half or quarter of a symmetric model.';
-  const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ error: { code: 'mesh_too_large', message } }), { status: 422 }));
-  await act(async () => { await loadMeshFile('large.msh', 'mesh', fetcher).catch(() => undefined); });
-  act(() => root.render(<MeshImportPanel tab="geometry"/>));
-  expect(host.querySelector('.cad-status-line')?.textContent).toBe(message);
-  expect(host.querySelector('.cad-status-line button')).toBeNull();
-  expect(fetcher).toHaveBeenCalledOnce();
-  expectNoJargon(host);
-});
-
 it('shows a shared setup-save failure in the file status line', async () => {
   const { useCadSetupPublisherStore } = await import('../shell/cadSetupPublisher');
   geometry({ prepared: true });

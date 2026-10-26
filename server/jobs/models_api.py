@@ -30,7 +30,7 @@ from server.cadlink.operations import REASON_UPDATE_RESTART_PENDING
 from server.cadlink.roles import inventory_sha256, prepared_inventory_sha256
 from server.cadlink.store import FILE_MODEL_PREFIX, UNFILED_MODEL_ID, file_model_id
 from server.cadlink.wglink_protocol import SOURCE_ROLES, canonical_source_role
-from server.contracts.geometry import MAX_FILE_MESH_TRIANGLES, SYMMETRY_PLANE_AXIS
+from server.contracts.geometry import SYMMETRY_PLANE_AXIS
 from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json
 from server.integration.contracts import ErrorEnvelope, error_envelope
@@ -642,11 +642,6 @@ def mount_models_api(application: FastAPI) -> None:
         def summary() -> dict[str, Any]:
             text = read_original(store, body.model_id)[1] if isinstance(body, RetainedMeshInspection) else body.msh_text
             mesh = parse_file_mesh(text)
-            count = len(mesh.triangles)
-            if isinstance(body, MeshInspection) and count > MAX_FILE_MESH_TRIANGLES:
-                raise ModelRefusal(422, "mesh_too_large",
-                    f"This mesh has {count:,} triangles; Waveguide Generator accepts up to {MAX_FILE_MESH_TRIANGLES:,}. "
-                    "Export a coarser mesh, or export only the half or quarter of a symmetric model.")
             inspected = inspect_file_mesh(mesh, body.units, body.forward, body.up)
             if isinstance(body, MeshInspection):
                 inspected.update(_file_import_memory(store, body.filename, text, inspected["groups"]))

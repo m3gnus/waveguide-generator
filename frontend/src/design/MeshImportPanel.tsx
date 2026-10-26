@@ -70,7 +70,7 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
       <CadModelStatusLine file={{ input: 'file', label: state.filename,
         reading: state.busy && !summary, preparing: state.busy && !!summary,
         choice: summary ? meshImportChoice(draft) : null, failureMessage: state.error ?? saveError,
-        canPrepare: editable && !!summary && !saveError && state.failureRetry, prepared: !!registered, triangles: summary?.triangle_count ?? null,
+        canPrepare: editable && !!summary && !saveError, prepared: !!registered, triangles: summary?.triangle_count ?? null,
         symmetryLabel: fileSymmetryLabel(planes, false), notice: state.notice,
       }} onRetry={() => prepareMeshFile()}/>
       {summary && <>

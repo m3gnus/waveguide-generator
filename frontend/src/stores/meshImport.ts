@@ -38,12 +38,11 @@ interface MeshImportState {
   motions: Record<string, 'normal' | 'axial'>;
   busy: boolean;
   error: string | null;
-  failureRetry: boolean;
   notice: string | null;
   request: number;
 }
 const initial: MeshImportState = {
-  filename: '', original: null, summary: null, motions: {}, busy: false, error: null, failureRetry: true, notice: null, request: 0,
+  filename: '', original: null, summary: null, motions: {}, busy: false, error: null, notice: null, request: 0,
 };
 let requestNumber = 0;
 export const useMeshImportStore = create<MeshImportState>(() => ({ ...initial }));
@@ -177,7 +176,7 @@ export async function prepareMeshFile(fetcher: typeof fetch = fetch, inspectFram
   if (model.input !== 'file' || meshImportChoice(draft) || (!state.original && !(modelId && model.originalAvailable))) return;
   const generation = importedMeshStore.beginIntent();
   const request = ++requestNumber;
-  useMeshImportStore.setState({ busy: true, error: null, failureRetry: true, request });
+  useMeshImportStore.setState({ busy: true, error: null, request });
   try {
     // Detection follows the chosen axes; registration still owns all verification.
     if (inspectFrame || (!state.original && draft.domainPlanes?.length && !state.summary?.lids)) {
@@ -215,8 +214,7 @@ export async function prepareMeshFile(fetcher: typeof fetch = fetch, inspectFram
   } catch (error) {
     if (importedMeshStore.isCurrentGeneration(generation)
       && JSON.stringify(useImportedModelStore.getState().fileDraft) === JSON.stringify(draft)) {
-      useMeshImportStore.setState({ error: error instanceof Error ? error.message : String(error),
-        failureRetry: !(error instanceof ImportedModelApiError && error.code === 'mesh_too_large') });
+      useMeshImportStore.setState({ error: error instanceof Error ? error.message : String(error) });
     }
   } finally {
     if (useMeshImportStore.getState().request === request) useMeshImportStore.setState({ busy: false });

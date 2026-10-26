@@ -639,39 +639,6 @@ def test_previous_preparation_keeps_symmetry_lids_axes_and_the_most_recent_choic
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("count", [20_000, 20_001])
-def test_inspect_refuses_large_mesh_before_symmetry_work(tmp_path, monkeypatch, count):
-    from dataclasses import replace
-    import numpy as np
-    from server.mesh.file_import import mesh_text
-    from test_file_mesh_roles_symmetry import box_mesh
-
-    async def scenario():
-        store = CadLinkStore.for_data_dir(tmp_path)
-        app, runtime = app_for(tmp_path, store)
-        try:
-            mesh = box_mesh()
-            large = replace(mesh, triangles=np.resize(mesh.triangles, (count, 3)), tags=np.resize(mesh.tags, count))
-            def inspected(*args):
-                assert count == 20_000, "oversized files must stop before symmetry inspection"
-                return mesh.summary()
-            monkeypatch.setattr("server.jobs.models_api.inspect_file_mesh", inspected)
-            answer = await call(app, "POST", "/api/models/files/inspect", {
-                "filename": "large.msh", "msh_text": mesh_text(large),
-            }, expected=200 if count == 20_000 else 422)
-            if count > 20_000:
-                assert answer["error"]["code"] == "mesh_too_large"
-                assert answer["error"]["message"] == (
-                    "This mesh has 20,001 triangles; Waveguide Generator accepts up to 20,000. "
-                    "Export a coarser mesh, or export only the half or quarter of a symmetric model."
-                )
-            assert store.ingest_records() == []
-        finally:
-            await runtime.shutdown()
-            store.close()
-    asyncio.run(scenario())
-
-
 def test_identical_reimport_uses_a_reused_preparation_instead_of_newest_creation(tmp_path, monkeypatch):
     from server.mesh.file_import import mesh_text
     from test_file_mesh_roles_symmetry import box_mesh
@@ -752,7 +719,7 @@ def test_inspection_keeps_settings_available_to_repair_a_missing_prepared_mesh(t
 
 
 @pytest.mark.parametrize("planes", [(), ("x0",), ("y0",), ("x0", "y0")])
-def test_retained_mesh_inspection_keeps_pre_limit_models_editable(tmp_path, monkeypatch, planes):
+def test_large_fresh_and_retained_mesh_inspections_follow_the_same_path(tmp_path, monkeypatch, planes):
     from dataclasses import replace
     import numpy as np
     from server.mesh.file_import import mesh_text
@@ -766,8 +733,7 @@ def test_retained_mesh_inspection_keeps_pre_limit_models_editable(tmp_path, monk
             count = 20_001
             large = replace(mesh, triangles=np.resize(mesh.triangles, (count, 3)), tags=np.resize(mesh.tags, count))
             original = mesh_text(large)
-            # The retained original predates the limit. Inspection still uses the
-            # normal parser; mock geometric evidence to avoid testing repeated faces.
+            # Mock geometric evidence to avoid testing repeated faces.
             monkeypatch.setattr("server.jobs.models_api.read_original", lambda *_: ("old.msh", original))
             inspected = []
             def evidence(parsed, *_):
@@ -781,9 +747,11 @@ def test_retained_mesh_inspection_keeps_pre_limit_models_editable(tmp_path, monk
             assert retained["detected_planes"] == list(planes)
             fresh = await call(app, "POST", "/api/models/files/inspect", {
                 "filename": "old.msh", "msh_text": original,
-            }, expected=422)
-            assert fresh["error"]["code"] == "mesh_too_large"
-            assert len(inspected) == 1
+            })
+            assert fresh["triangle_count"] == count
+            assert fresh["detected_planes"] == list(planes)
+            assert len(inspected) == 2
+            assert store.ingest_records() == []
         finally:
             await runtime.shutdown()
             store.close()
