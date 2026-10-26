@@ -8,6 +8,10 @@ promises on GPU-less machines had never executed a single frequency. This is
 that missing step: one installed payload, one explicitly selected CPU backend,
 and one real acoustic solve whose numbers are checked.
 
+On a fresh launch it sends the picker's BEAT CPU selection request. Auto uses
+ready engines without downloading runtimes; selecting BEAT CPU must make the
+application prepare its runtime without an external provisioner or retry.
+
 **What it qualifies.** Whatever ``--payload`` points at, using that payload's
 own interpreter and its own ``app`` layer. The intended input is an *installed*
 tree -- an unattended per-user Inno install, a non-root ``install.sh``, or a
@@ -1063,9 +1067,9 @@ def engine_row(capabilities: dict[str, Any], name: str) -> dict[str, Any]:
 def await_cpu_row(server: Server, output: Path) -> dict[str, Any]:
     """Wait for the application's own preparation to settle, and report it.
 
-    The packaged application provisions the CPU runtime itself, in a background
-    thread, on the platforms whose users need it -- that is the supported
-    product path and this waits for it rather than reaching around it. The wait
+    The packaged application provisions the selected CPU runtime itself, in a
+    background thread. Callers select it through the picker API or a saved
+    preference before waiting; Auto does not download runtimes. The wait
     ends when the row becomes available or when the application says it has
     stopped preparing, so a host that will never offer it fails in bounded time
     with the application's own reason rather than on a timeout.
@@ -2227,6 +2231,10 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
     data_dir = work / "data"
+    if data_dir.exists():
+        raise QualificationError(
+            "The CPU gate requires a fresh data directory; give --work a new directory"
+        )
     environment = isolated_environment(app, work, )
     expected_pins = pins_from_file(arguments.pins_json)
     pinned_beat_revision = expected_pins.get("beat-engine")
@@ -2282,13 +2290,22 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
     # one run while the solve describes another.
     with Server(interpreter, app, environment, data_dir, control, output / "server.log") as server:
         report["ensure_backend"] = check_ensure_backend(app, data_dir, environment, server.base, cwd=output)
+        # A first-launch user selects BEAT CPU in the picker. Auto deliberately
+        # uses ready engines without downloads. Exercise the same selection
+        # request as prewarmSelectedEngine, leaving all preparation to the
+        # application's existing owner (no prepare/retry command or restart).
+        report["cpu_selection"] = {
+            "engine": CPU_ENGINE,
+            "response": api(server.base, "/api/runtimes/beat/prewarm", {"engine": CPU_ENGINE},
+                            what="selecting BEAT CPU on the fresh install"),
+        }
         report["cpu_preparation"] = await_cpu_row(server, output)
         capabilities = server.capabilities()
         row = engine_row(capabilities, CPU_ENGINE)
         if row.get("available") is not True:
             # **The gate ends here, and does not reach around the product.**
-            # The requirement is that the application offers BEAT CPU on every
-            # supported computer, which since 69b1ed0 includes macOS. Running
+            # The requirement is that selecting BEAT CPU on a fresh install
+            # prepares it on every supported computer, including macOS. Running
             # the provisioning command here and restarting -- which this file
             # used to do -- would turn "the product did not prepare it" into a
             # passing step, and the requirement would be unqualified by the very

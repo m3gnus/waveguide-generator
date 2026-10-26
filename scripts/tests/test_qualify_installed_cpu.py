@@ -978,6 +978,7 @@ class StubApplication:
         self.settings = settings
         self.started = time.monotonic()
         self.capability_polls = 0
+        self.selected_engine = None
         self.data = Path(data_dir)
         self.data.mkdir(parents=True, exist_ok=True)
         self.health = {"status": "ok", "pid": os.getpid(),
@@ -1024,6 +1025,8 @@ class StubApplication:
             and (time.monotonic() - self.started) >= self.settings["ready_after_s"]
         )
         available = bool(settled) and self.settings["ever_ready"]
+        if self.settings.get("requires_selection"):
+            available = available and self.selected_engine == "beat-cpu"
         metal = bool(self.settings.get("metal_available", False))
         return {
             "engines": [
@@ -1151,6 +1154,12 @@ class StubApplication:
         """Answer a POST as ``(status, payload, headers)``."""
 
         state = self.state
+        if path == "/api/runtimes/beat/prewarm":
+            (self.data / "engine-selection.json").write_text(json.dumps(body), encoding="utf-8")
+            self.selected_engine = body["engine"]
+            if self.settings.get("selection_refused"):
+                return 503, {"detail": "selection unavailable"}, {}
+            return 202, {"state": "scheduled"}, {}
         if path == "/api/workspace/select":
             self.workspace["path"] = body["path"]
             return 200, self.workspace, {}
@@ -1723,7 +1732,7 @@ def test_workspace_selection_precedes_solving_on_every_platform(
     assert workspace["startup_was_isolated"] is True
     assert workspace["established_through_the_api"] is True
     assert workspace["workspace_path"] == str(tmp_path / "work" / "workspace")
-    assert requests == ["/api/workspace/select", "/api/solve"]
+    assert requests == ["/api/runtimes/beat/prewarm", "/api/workspace/select", "/api/solve"]
     at_solve = json.loads((tmp_path / "work" / "data" / "workspace-at-solve.json").read_text())
     assert at_solve["path"] == workspace["workspace_path"]
 
@@ -2338,6 +2347,43 @@ class _InProcessServer(gate.Server):
 
 def _refuse_to_launch(*_args: object, **_kwargs: object) -> None:
     raise AssertionError("an in-process imported-phase test launched a process")
+
+
+@pytest.mark.parametrize("outcome", ["ready", "stopped", "refused"])
+def test_fresh_cpu_gate_selects_the_engine_and_requires_product_preparation(
+    tmp_path, monkeypatch, _in_process, outcome
+):
+    """Auto does not download; the picker must trigger the product's own work."""
+    monkeypatch.setattr(gate, "check_pins", lambda *_args: {
+        "found": {name: {"commit": sha} for name, sha in PINS.items()}})
+    monkeypatch.setattr(gate, "stop_our_workers", lambda *_args: {"contained": True})
+    code, report = _run_imported(
+        tmp_path, requires_selection=True, ever_ready=outcome != "stopped",
+        selection_refused=outcome == "refused",
+    )
+    selection = tmp_path / "work/data/engine-selection.json"
+    assert selection.exists(), report
+    assert json.loads(selection.read_text()) == {"engine": "beat-cpu"}
+    assert not (tmp_path / "work/data/ui_settings.json").exists()
+    assert code == (0 if outcome == "ready" else 1), report
+    if outcome == "ready":
+        assert report["cpu_preparation"]["settled"] == "available"
+        assert report["solve"]["engine"] == "beat-engine"
+    elif outcome == "stopped":
+        assert report["cpu_preparation"]["settled"] == "not-preparing"
+        assert "did not offer beat-cpu" in report["error"]
+        assert "solve" not in report
+    else:
+        assert "HTTP 503" in report["error"]
+        assert "cpu_preparation" not in report
+
+
+def test_cpu_gate_refuses_a_reused_profile(tmp_path, _in_process):
+    (tmp_path / "work/data").mkdir(parents=True)
+    code, report = _run_imported(tmp_path)
+    assert code == 1
+    assert "requires a fresh data directory" in report["error"]
+    assert "cpu_selection" not in report
 
 
 @pytest.fixture
@@ -3319,6 +3365,7 @@ def test_official_qualification_entrypoint_keeps_identity_and_rejects_hbb(tmp_pa
             return result
 
     monkeypatch.setattr(gate, "Server", Server)
+    monkeypatch.setattr(gate, "api", lambda *args, **kwargs: {"state": "scheduled"})
     monkeypatch.setattr(gate, "check_ensure_backend", lambda *args, **kwargs: {"same_owner": True})
     # Runtime inspection is covered by the subprocess stub and proof-validation tests.
     monkeypatch.setattr(gate, "check_official_runtime", lambda interpreter, app, env, out, revision: {"stubbed": True, "beat_engine_revision": revision})

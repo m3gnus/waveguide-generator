@@ -242,10 +242,10 @@ jobs:
         # ditto, so what is qualified is what a user drags out of the DMG --
         # not the build directory it came from.
         #
-        # The application prepares its own CPU runtime on macOS too since
-        # 69b1ed0, so this requires that preparation like every other platform
-        # rather than reaching around it. It is the slow step here because that
-        # preparation downloads and instantiates a Julia.
+        # On a fresh launch the gate selects BEAT CPU through the same API as
+        # the picker; Auto uses ready engines without downloads. The application
+        # must then prepare its own runtime, including downloading and
+        # instantiating Julia, just as on the other platforms.
         #
         # After the uploads on purpose: a candidate that fails this gate is
         # still the candidate somebody has to look at, and the job goes red
