@@ -314,7 +314,7 @@ def test_the_strict_refusal_and_the_warning_give_the_same_remedy() -> None:
 def _crossing_mesh_design(monkeypatch, tmp_path) -> DesignConfig:
     """Stub the mesher so build_solver_mesh receives a self-intersecting mesh."""
 
-    from hornlab_mesher import TriangleBudgetExceeded
+    from hornlab_mesher import config_builder
 
     points = np.asarray(
         [
@@ -338,15 +338,9 @@ def _crossing_mesh_design(monkeypatch, tmp_path) -> DesignConfig:
         mesh_path.write_text("$MeshFormat\n", encoding="utf-8")
         return SimpleNamespace(metadata={}, units="m")
 
-    package = ModuleType("hornlab_mesher")
-    package.__path__ = [str(tmp_path)]  # type: ignore[attr-defined]
-    package.TriangleBudgetExceeded = TriangleBudgetExceeded  # type: ignore[attr-defined]
-    config_builder = ModuleType("hornlab_mesher.config_builder")
-    config_builder.build_from_config = fake_build_from_config  # type: ignore[attr-defined]
+    monkeypatch.setattr(config_builder, "build_from_config", fake_build_from_config)
     meshio = ModuleType("meshio")
     meshio.read = lambda _path: parsed  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "hornlab_mesher", package)
-    monkeypatch.setitem(sys.modules, "hornlab_mesher.config_builder", config_builder)
     monkeypatch.setitem(sys.modules, "meshio", meshio)
 
     design = DesignConfig.model_validate(
