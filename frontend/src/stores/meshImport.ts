@@ -1,8 +1,9 @@
-import { fileSimulationSetup, importedDriverLabel, reconcileFileChannels } from './importedSimulationSetup';
+import { fileSimulationSetup, importedDriverLabel, reconcileFileChannels, seedFileSimulation } from './importedSimulationSetup';
+import { combineWire } from './cadReturn';
 import { savedChannelDrivers } from './cadSetupRestore';
 import type { CadSetup } from '../api/jobsSocket';
 import type { SimulationData } from './cadReturn';
-import { exteriorModeBlocker, importedSweepRangeInvalid, incompleteDriverBlocker, simulationGeometry, simulationDriverReferences } from '../jobs/importedSubmission';
+import { crossoverBandBlocker, exteriorModeBlocker, importedSweepRangeInvalid, incompleteDriverBlocker, simulationGeometry, simulationDriverReferences } from '../jobs/importedSubmission';
 import { create } from 'zustand';
 import {
   inspectMesh, inspectMeshModel, prepareMeshModel, registerMesh, type MeshSummary, type RegisteredMesh,
@@ -216,8 +217,14 @@ function setupForPreparedFile(retained: ImportedSetup, record: RegisteredMesh, p
   setup.geometry.skipped_source_ids = setup.geometry.skipped_source_ids.filter(id => available.has(id));
   const forms = { ...savedChannelDrivers(setup.geometry as unknown as CadSetup, setup.geometry.drive_channels, setup.driver_references),
     ...previous?.channelDrivers };
-  const extended = reconcileFileChannels(record, setup.geometry.drive_channels, forms, setup.geometry.skipped_source_ids);
+  const storedGroups = setup.geometry.driver_groups?.map(group => ({ id: group.id, channelIds: group.channel_ids, label: group.label }));
+  const extended = reconcileFileChannels(record, setup.geometry.drive_channels, forms, setup.geometry.skipped_source_ids, storedGroups);
   setup.geometry.drive_channels = extended.channels;
+  const oldIds = new Set(retained.geometry.drive_channels.map(channel => channel.id));
+  const addedToSharedGroup = extended.groups.some(group => group.channelIds.length > 1 && group.channelIds.some(id => !oldIds.has(id)));
+  if (storedGroups || addedToSharedGroup) {
+    setup.geometry.driver_groups = extended.groups.map(group => ({ id: group.id, channel_ids: group.channelIds, ...(group.label ? { label: group.label } : {}) }));
+  }
   const driven = new Set(setup.geometry.drive_channels.flatMap(channel => channel.source_ids));
   if (setup.geometry.mesh) {
     setup.geometry.mesh.source_size_mm = Object.fromEntries(Object.entries(setup.geometry.mesh.source_size_mm)
@@ -232,15 +239,20 @@ function setupForPreparedFile(retained: ImportedSetup, record: RegisteredMesh, p
       return reference ? [[channel.id, reference]] : [];
     }));
   }
-  if (setup.geometry.combine && Object.keys(extended.renamed).length) {
-    const combine = setup.geometry.combine;
-    combine.members = combine.members.map(id => extended.renamed[id] ?? id);
-    if (combine.reference) combine.reference = extended.renamed[combine.reference] ?? combine.reference;
-    if (combine.channels) combine.channels = Object.fromEntries(Object.entries(combine.channels)
-      .map(([id, value]) => [extended.renamed[id] ?? id, value]));
-  }
-  if (setup.geometry.combine?.members.some(id => !setup.geometry.drive_channels.some(channel => channel.id === id))) {
+  const branches = new Set([...setup.geometry.drive_channels.map(channel => channel.id), ...(setup.geometry.driver_groups ?? []).map(group => group.id)]);
+  if (setup.geometry.combine?.members.some(id => !branches.has(id))) {
     delete setup.geometry.combine;
+  }
+  // A changed role can split a persisted branch. Reuse the crossover chain's
+  // own defaulting when its member set changes, rather than submitting a
+  // retained chain that silently omits the new branch.
+  if (setup.geometry.combine && storedGroups && JSON.stringify(storedGroups) !== JSON.stringify(extended.groups)) {
+    const simulation = seedFileSimulation(record, setup);
+    const frequencies = setup.options.frequencies_hz ?? setup.options.frequency_range ?? [200, 20_000];
+    const sources = record.sources ?? Object.keys(record.source_tags).map(id => ({ id, role: 'HF' }));
+    const combine = combineWire({ ...simulation, input: 'file', sources,
+      frequencyStartHz: frequencies[0], frequencyEndHz: frequencies[frequencies.length - 1] });
+    if (combine) setup.geometry.combine = combine; else delete setup.geometry.combine;
   }
   return setup;
 }
@@ -261,7 +273,17 @@ export function fileMeshSetup(): ImportedSetup {
   if (!record || viewport.showing !== 'file' || viewport.file?.ingestId !== record.ingest_id) {
     throw new Error('Choose units and surface roles in Geometry before solving.');
   }
-  return effectiveImportedSetup('file', record.ingest_id, fileSetupControls);
+  let controls: ImportedSetup | undefined;
+  const setup = effectiveImportedSetup('file', record.ingest_id, () => (controls = fileSetupControls()));
+  const model = useImportedModelStore.getState();
+  if (!model.setup && model.fileSimulation?.persistDriverGroups) {
+    const groups = fileSimulationSetup.get().driverGroups;
+    setup.geometry.driver_groups = groups.map(group => ({ id: group.id, channel_ids: group.channelIds,
+      ...(group.label ? { label: group.label } : {}) }));
+    const combine = (controls ?? fileSetupControls()).geometry.combine;
+    if (combine) setup.geometry.combine = combine; else delete setup.geometry.combine;
+  }
+  return setup;
 }
 
 export function fileSetupControls(): ImportedSetup {
@@ -284,6 +306,8 @@ export function fileSetupControls(): ImportedSetup {
   const label = (id: string) => importedDriverLabel(simulation, id);
   const exteriorError = exteriorModeBlocker({ ...simulation, ingestRecord: null, exteriorOnly: true }, selected, label);
   if (exteriorError) throw new Error(exteriorError);
+  const crossoverError = crossoverBandBlocker(simulation, selected);
+  if (crossoverError) throw new Error(crossoverError);
   const driverError = incompleteDriverBlocker(simulation, label);
   if (driverError) throw new Error(driverError);
   const driver_references = simulationDriverReferences(simulation);
@@ -292,10 +316,26 @@ export function fileSetupControls(): ImportedSetup {
   // Motion edits of older file setups preserve their voltage fields.
   const { drivers, effects } = simulationGeometry(simulation, simulation.sources, simulation.passiveTopology, retained?.geometry);
   return {
-    geometry: { skipped_source_ids: [], ...drivers, ...effects },
+    geometry: { skipped_source_ids: [], ...drivers,
+      ...(simulation.persistDriverGroups ? { driver_groups: simulation.driverGroups.map(group => ({
+        id: group.id, channel_ids: group.channelIds, ...(group.label ? { label: group.label } : {}),
+      })) } : {}), ...effects },
     ...(Object.keys(driver_references).length ? { driver_references } : {}),
     options,
   };
+}
+
+/** Upgrade old membership only when a setup is saved; exact replay stays exact. */
+export function fileSetupForSave(setup: ImportedSetup): ImportedSetup {
+  if (setup.geometry.driver_groups) return setup;
+  const simulation = fileSimulationSetup.get();
+  const ids = new Set(setup.geometry.drive_channels.map(channel => channel.id));
+  const groups = simulation.driverGroups.map(group => ({ ...group, channelIds: group.channelIds.filter(id => ids.has(id)) }))
+    .filter(group => group.channelIds.length);
+  if (groups.flatMap(group => group.channelIds).length !== ids.size) return setup;
+  return { ...setup, geometry: { ...setup.geometry, driver_groups: groups.map(group => ({
+    id: group.id, channel_ids: group.channelIds, ...(group.label ? { label: group.label } : {}),
+  })) } };
 }
 registerImportedSetupControls('file', fileSetupControls);
 

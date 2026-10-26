@@ -76,7 +76,8 @@ function rawWeight(
 }
 
 function memberLabel(combine: CombineMetadata, index: number): string {
-  return combine.member_roles?.[index] ?? combine.members[index];
+  return combine.member_labels?.[index] ?? combine.member_roles?.[index]
+    ?? (combine.member_channels ? `Driver ${index + 1}` : combine.members[index]);
 }
 
 function median(values: number[]): number {
@@ -113,9 +114,11 @@ export function reverseNullTraces(
 
   const pressures: Complex[][] = [];
   for (const member of members) {
-    const values = onAxisComplex(wrapper.channels[member] as ResultPayload | undefined, count);
-    if (!values) return [];
-    pressures.push(values);
+    const physical = combine.member_channels?.[member] ?? [member];
+    const fields = physical.map(id => onAxisComplex(wrapper.channels![id] as ResultPayload | undefined, count));
+    if (!fields.length || fields.some(field => !field)) return [];
+    pressures.push(Array.from({ length: count }, (_, index) => fields.reduce<Complex>(
+      (sum, field) => [sum[0] + field![index][0], sum[1] + field![index][1]], [0, 0])));
   }
 
   const gainDb = members.map((member) => (

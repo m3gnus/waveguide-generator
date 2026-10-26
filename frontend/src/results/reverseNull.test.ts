@@ -95,6 +95,18 @@ function wrapperFor(combined: ResultPayload): ResultPayload {
 }
 
 describe('reverseNullTraces', () => {
+  it('rebuilds a branch from its physical channels', () => {
+    const combine = metadata({ member_channels: { 'drive-mf': ['left', 'right'], 'drive-hf': ['drive-hf'] },
+      member_labels: ['Mid array', null] });
+    const combined = combinedChannel(combine);
+    const half = unitMember();
+    half.spl_on_axis!.spl = FREQUENCIES.map(() => 20 * Math.log10(0.5));
+    const wrapper = { ...wrapperFor(combined), channels: { left: half, right: half, 'drive-hf': unitMember(), combined } };
+    const traces = reverseNullTraces(wrapper, combined, combine);
+    expect(traces).toHaveLength(1);
+    expect(traces[0].name).toBe('Reverse null · Mid array → HF');
+    expect(traces[0].points.find(([frequency]) => frequency === 1000)![1]).toBeLessThan(-25);
+  });
   it('rebuilds the sum with the upper member inverted', () => {
     const combine = metadata();
     const combined = combinedChannel(combine);

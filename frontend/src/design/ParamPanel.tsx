@@ -969,6 +969,7 @@ function CadDriveChannels() {
         const channel = state.driveChannels.find(channel => channel.id === group.channelIds[0])!;
         const driverForm = state.channelDrivers[channel.id];
         const driverEligible = channelAcceptsDriver(channel);
+        const channelName = state.input === 'file' ? importedDriverLabel(state, channel.id) : channel.id;
         return <div className="cad-channel" data-channel-id={channel.id} data-driver-group-id={group.id} key={group.id}>
           <div className="cad-channel-summary"><span>{state.input === 'file' ? importedDriverLabel(state, channel.id)
             : group.channelIds.length > 1 ? sourceRoleLabel(activeSources.find(source => source.id === channel.source_ids[0])?.role ?? '', { driver: true }) : cadChannelLabel(state, channel.id)}</span></div>
@@ -977,29 +978,30 @@ function CadDriveChannels() {
             .filter((sourceId) => activeSources.some((source) => source.id === sourceId))
             .map((sourceId) => <div className="cad-channel-row" key={sourceId}><b>{sourceId}</b><select aria-label={`Drive channel for ${sourceId}`} disabled={!!channel.exterior_transducer} value={channel.id} onChange={(event) => state.setSourceChannel?.(sourceId, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>)}
           <details className="cad-channel-more" open={channel.exterior_transducer ? true : undefined}><summary>More</summary>
-          <div data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} disabled={!!channel.exterior_transducer} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal</option><option value="axial">Axial (pistonic)</option></select></div>
+          <div data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channelName}`} value={channel.motion} disabled={!!channel.exterior_transducer} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal</option><option value="axial">Axial (pistonic)</option></select></div>
           <div className="cad-channel-hint">Normal moves each source face along its own normal. Axial moves the source as a rigid piston along its axis.</div>
-          <label className="cad-driver-hint"><input type="checkbox" aria-label={`Solve driver in BEAT for ${channel.id}`} checked={!!channel.exterior_transducer} disabled={group.channelIds.length > 1}
+          <label className="cad-driver-hint"><input type="checkbox" aria-label={`Solve driver in BEAT for ${channelName}`} checked={!!channel.exterior_transducer} disabled={group.channelIds.length > 1}
             onChange={(event) => state.setExteriorTransducer(channel.id, event.target.checked ? { version: 1, motion_axis: [0, 0, 1] } : undefined)}/>
             Solve driver in BEAT</label>
           {group.channelIds.length > 1 && <p className="cad-driver-hint">Drive the surfaces separately to model each driver in BEAT.</p>}
           {channel.exterior_transducer && <>
             <p className="cad-driver-hint">Complete outward solids only. Enter bare Mmd, excluding air load; datasheet Mms is not Mmd. Other drivers are shorted for each excitation.</p>
-            <ExteriorDriverLibraryPicker channel={channel}
+            <ExteriorDriverLibraryPicker channel={channel} displayName={channelName}
               roleHint={activeSources.find(source => source.id === channel.source_ids[0])?.role}/>
-            <ExteriorDriverFields channelId={channel.id} form={channel.exterior_transducer}
+            <ExteriorDriverFields channelId={channelName} form={channel.exterior_transducer}
               onChange={form => state.setExteriorTransducer(channel.id, form)}/>
-            <ExteriorDriverOptions channelId={channel.id} form={channel.exterior_transducer}
+            <ExteriorDriverOptions channelId={channelName} form={channel.exterior_transducer}
               onChange={form => state.setExteriorTransducer(channel.id, form)}/>
             <p className="cad-driver-hint">Motion axis in the returned mesh frame:</p>
             <div className="cad-driver-grid">{['x', 'y', 'z'].map((axis, index) => <label key={axis}><span>{axis}</span>
-              <input type="number" aria-label={`Motion axis ${axis} for ${channel.id}`} value={channel.exterior_transducer!.motion_axis[index]}
+              <input type="number" aria-label={`Motion axis ${axis} for ${channelName}`} value={channel.exterior_transducer!.motion_axis[index]}
                 onChange={event => { const motion_axis = [...channel.exterior_transducer!.motion_axis] as [number, number, number]; motion_axis[index] = Number(event.target.value); state.setExteriorTransducer(channel.id, { ...channel.exterior_transducer!, motion_axis }); }}/>
             </label>)}</div>
           </>}
           </details>
           {driverEligible && <ChannelDriverPicker
             channel={channel}
+            displayName={channelName}
             form={driverForm}
             roleHint={activeSources.find((source) => source.id === channel.source_ids[0])?.role}
           />}
@@ -1173,7 +1175,7 @@ export function CadSimulationSections({ searching, matches, ingestRecord }: {
   const cad = useImportedSimulationSetup();
   const options = useScopedSolveOptions();
   const summaries = {
-    crossover: crossoverSummary(cad),
+    crossover: crossoverSummary(cad, cad.input === 'file' ? id => importedDriverLabel(cad, id) : undefined),
     directivity: polarSummary(options.polar),
     solver: solveOptionsSummary(options),
   };
@@ -1184,7 +1186,7 @@ export function CadSimulationSections({ searching, matches, ingestRecord }: {
   return <>
     {section('frequencySweep', <><FrequencySweepControls idPrefix="cad-solve" context="imported"/>{options.frequencyMode === 'range' && <CadFrequencySweep/>}</>, true)}
     {section('driveChannels', <CadDriveChannels/>, true)}
-    {cad.input === 'cad' && crossoverDriverChannels(cad).length >= 2 && section('crossover', <CadCrossover/>, false, summaries.crossover)}
+    {crossoverDriverChannels(cad).length >= 2 && section('crossover', <CadCrossover/>, false, summaries.crossover)}
     {section('directivityMap', <DirectivityMapControls/>, false, summaries.directivity)}
     {hasPassiveCardioidSurface(cad.sources) && section('passiveCardioid', <CadPassiveCardioid/>, true)}
     {section('solveOptions', <><SolveOptionsControls mode="cad" ingestRecord={ingestRecord} includeSampling={false}/><AdaptiveFrequencyControls mode="cad"/><MeshValidationControl mode="cad"/></>, false, summaries.solver)}

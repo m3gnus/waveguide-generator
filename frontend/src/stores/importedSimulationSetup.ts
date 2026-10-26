@@ -6,7 +6,7 @@ import { fromResult, parseWire } from '../results/crossoverSpec';
 import { savedChannelDrivers, savedPassiveCardioid } from './cadSetupRestore';
 import {
   PASSIVE_CARDIOID_DEFAULTS, cadPassiveCardioidTopology, channelAcceptsDriver, channelDriverPresent, retainedChannelDrivers, simulationActions, useCadReturnStore,
-  type CadDriveChannel, type CadReturnState, type PassiveCardioidTopology, type RoleSource, type SimulationActions, type SimulationData,
+  type CadDriveChannel, type CadReturnState, type PassiveCardioidTopology, type RoleSource, type SimulationActions, type SimulationData, type SimulationDriverGroup,
 } from './cadReturn';
 import { useImportedModelStore } from './importedModel';
 import { useImportedSolveOptionsStore } from './solveOptions';
@@ -29,11 +29,7 @@ export interface ImportedSimulationSetup extends SimulationData, SimulationActio
   setCombineSpec: CadReturnState['setCombineSpec'];
 }
 
-export interface ImportedDriverGroup {
-  /** Persisted in the existing channel ids; F5b uses this as the band branch. */
-  id: string;
-  channelIds: string[];
-}
+export type ImportedDriverGroup = SimulationDriverGroup;
 
 /** A file's card or blocker names the source role, even when its ID is opaque. */
 export function importedDriverLabel(state: Pick<ImportedSimulationSetup, 'sources' | 'driveChannels' | 'driverGroups'>,
@@ -41,19 +37,17 @@ export function importedDriverLabel(state: Pick<ImportedSimulationSetup, 'source
   const groups = state.driverGroups.map(group => {
     const channel = state.driveChannels.find(item => group.channelIds.includes(item.id));
     const role = state.sources.find(source => channel?.source_ids.includes(source.id))?.role;
-    return { id: group.id, role: role ? sourceRoleLabel(role, { driver: true }) : null };
+    return { id: group.id, role: group.label || (role ? sourceRoleLabel(role, { driver: true }) : null) };
   });
-  const group = state.driverGroups.find(item => item.channelIds.includes(channelId));
+  const group = state.driverGroups.find(item => item.id === channelId || item.channelIds.includes(channelId));
   return roleChannelLabel(group?.id ?? channelId, groups, 'number');
 }
 
 const roleGroupId = (role: string) => `drive-${role.toLowerCase()}`;
-const sharedChannelId = (role: string, sourceId: string) => `${roleGroupId(role)}::${encodeURIComponent(sourceId)}`;
+const sourceChannelId = (sourceId: string) => `source:${encodeURIComponent(sourceId)}`;
+const channelGroupId = (channelId: string) => `group:${encodeURIComponent(channelId)}`;
 
-/** A role's shared card still submits one single-source channel per surface.
- * The reserved ::source suffix records membership in the setup's existing
- * channel ids, without adding a field the server's strict schema would reject.
- * Older channel ids remain separate and their requests remain exact. */
+/** Read F5a/F5b's old encoded membership once, retaining all physical IDs. */
 export function fileDriverGroups(sources: readonly RoleSource[], channels: readonly CadDriveChannel[], drivers: SimulationData['channelDrivers']): ImportedDriverGroup[] {
   const groups = new Map<string, ImportedDriverGroup>();
   for (const channel of channels) {
@@ -91,13 +85,49 @@ export function fileDriverGroups(sources: readonly RoleSource[], channels: reado
   });
 }
 
+/** Reconcile explicit membership; file role edits detach the changed surface. */
+function resolveDriverGroups(sources: readonly RoleSource[], channels: readonly CadDriveChannel[],
+  drivers: SimulationData['channelDrivers'], saved?: ImportedDriverGroup[], splitByRole = true): ImportedDriverGroup[] {
+  const input = saved ?? fileDriverGroups(sources, channels, drivers);
+  const used = new Set<string>();
+  const assigned = new Set<string>();
+  const unique = (wanted: string, members: string[]) => {
+    let id = wanted;
+    for (let n = 2; used.has(id) || (channels.some(channel => channel.id === id) && !(members.length === 1 && members[0] === id)); n += 1) id = `${wanted}:${n}`;
+    used.add(id); return id;
+  };
+  const result: ImportedDriverGroup[] = [];
+  for (const group of input) {
+    const buckets = new Map<string, string[]>();
+    for (const id of group.channelIds) {
+      const channel = channels.find(item => item.id === id);
+      if (!channel || assigned.has(id)) continue;
+      const roles = [...new Set(channel.source_ids.map(sourceId => sources.find(source => source.id === sourceId)?.role).filter(Boolean))];
+      const key = !splitByRole ? 'group' : channel.exterior_transducer ? `exterior:${id}` : roles.length === 1 ? roles[0]!
+        : !sources.length ? 'unprepared' : `channel:${id}`;
+      const bucket = buckets.get(key) ?? [];
+      bucket.push(id); buckets.set(key, bucket); assigned.add(id);
+    }
+    let first = true;
+    for (const ids of buckets.values()) {
+      const id = unique(first ? group.id : channelGroupId(ids[0]), ids);
+      result.push({ id, channelIds: ids, ...(group.label ? { label: group.label } : {}) });
+      first = false;
+    }
+  }
+  for (const channel of channels) if (!assigned.has(channel.id)) {
+    result.push({ id: unique(channelGroupId(channel.id), [channel.id]), channelIds: [channel.id] });
+  }
+  return result.sort((a, b) => channels.findIndex(channel => channel.id === a.channelIds[0])
+    - channels.findIndex(channel => channel.id === b.channelIds[0]));
+}
+
 /** Reconcile prepared surfaces using the existing role's sharing choice. */
 export function reconcileFileChannels<T extends CadDriveChannel>(record: RegisteredMesh, original: T[],
-  drivers: SimulationData['channelDrivers'], skipped: readonly string[]): {
-    channels: T[]; from: Record<string, string>; renamed: Record<string, string>;
+  drivers: SimulationData['channelDrivers'], skipped: readonly string[], savedGroups?: ImportedDriverGroup[]): {
+    channels: T[]; from: Record<string, string>; groups: ImportedDriverGroup[];
   } {
   const from: Record<string, string> = {};
-  const renamed: Record<string, string> = {};
   const sources = fileSources(record);
   const available = new Set(sources.map(source => source.id));
   const channels = original.flatMap(channel => {
@@ -108,7 +138,7 @@ export function reconcileFileChannels<T extends CadDriveChannel>(record: Registe
   });
   const assigned = new Set(channels.flatMap(channel => channel.source_ids));
   const existing = sources.filter(source => assigned.has(source.id));
-  const groups = fileDriverGroups(existing, channels, drivers);
+  const groups = resolveDriverGroups(existing, channels, drivers, savedGroups);
   const used = new Set(channels.map(channel => channel.id));
   const unique = (wanted: string) => {
     let id = wanted;
@@ -121,32 +151,26 @@ export function reconcileFileChannels<T extends CadDriveChannel>(record: Registe
     const newSources = added.filter(source => source.role === role);
     const oldSources = existing.filter(source => source.role === role);
     const oldChannels = channels.filter(channel => channel.source_ids.some(id => oldSources.some(source => source.id === id)));
-    const group = groups.find(candidate => candidate.id === roleGroupId(role)
-      && candidate.channelIds.length === oldSources.length
+    const group = groups.find(candidate => candidate.channelIds.length === oldSources.length
       && oldChannels.every(channel => candidate.channelIds.includes(channel.id) && channel.source_ids.length === 1));
     const template = group && channels.find(channel => channel.id === group.channelIds[0]);
-    let share = !!record.sources?.length && (!oldSources.length || !!template)
+    const share = !!record.sources?.length && (!oldSources.length || !!template)
       && !oldChannels.some(channel => channel.exterior_transducer || channel.physical_source_id !== undefined || channel.patch_weights !== undefined);
-    const bare = share && oldChannels.find(channel => channel.id === roleGroupId(role));
-    const desired = [...newSources.map(source => sharedChannelId(role, source.id)),
-      ...(bare ? [sharedChannelId(role, bare.source_ids[0])] : [])];
-    if (desired.some(id => used.has(id))) share = false;
-    if (share && bare) {
-      const id = sharedChannelId(role, bare.source_ids[0]);
-      used.delete(bare.id);
-      used.add(id);
-      renamed[bare.id] = id;
-      from[id] = bare.id;
-      channels[channels.indexOf(bare)] = { ...bare, id };
-    }
+    let target = share ? group : undefined;
     for (const source of newSources) {
-      const id = unique(share ? !oldSources.length && newSources.length === 1 ? roleGroupId(role) : sharedChannelId(role, source.id) : source.id);
+      const id = unique(record.sources?.length ? sourceChannelId(source.id) : source.id);
       if (share && template) from[id] = template.id;
       channels.push({ id, source_ids: [source.id], motion: share && template ? template.motion : 'normal',
         ...(share && template && 'driver' in template ? { driver: structuredClone(template.driver) } : {}) } as T);
+      if (!target) {
+        target = { id: channelGroupId(id), channelIds: [] };
+        groups.push(target);
+      }
+      target.channelIds.push(id);
+      if (!share) target = undefined;
     }
   }
-  return { channels, from, renamed };
+  return { channels, from, groups: resolveDriverGroups(sources, channels, drivers, groups) };
 }
 
 /** New files share a driver card per role, with a channel per source patch. */
@@ -159,27 +183,36 @@ export function seedFileSimulation(record: RegisteredMesh | null, setup: Importe
       return !channelAcceptsDriver(projected) && driver ? { ...projected, driver } : projected;
     })
     : sources.map(source => ({
-      id: record?.sources?.length
-        ? sources.filter(other => other.role === source.role).length > 1 ? sharedChannelId(source.role, source.id) : roleGroupId(source.role)
-        : source.id,
+      id: record?.sources?.length ? sourceChannelId(source.id) : source.id,
       source_ids: [source.id], motion: 'normal' as const,
     }));
   // Keep live forms and channel choices through preparation, including an
   // unfinished driver which has no wire setup yet.
   let previousDrivers = previous?.channelDrivers;
+  let previousGroups = previous?.driverGroups;
   if (previous && record) {
-    const extended = reconcileFileChannels(record, previous.driveChannels, previous.channelDrivers, setup?.geometry.skipped_source_ids ?? []);
+    const extended = reconcileFileChannels(record, previous.driveChannels, previous.channelDrivers, setup?.geometry.skipped_source_ids ?? [], previous.driverGroups);
     previousDrivers = { ...retainedChannelDrivers(previous, extended.channels) };
     for (const [id, source] of Object.entries(extended.from)) {
       if (previous.channelDrivers[source]) previousDrivers[id] = structuredClone(previous.channelDrivers[source]);
     }
     if (!setup) driveChannels = extended.channels;
+    previousGroups = extended.groups;
   }
   const geometry = setup?.geometry as unknown as CadSetup | undefined;
+  const savedGroups = setup?.geometry.driver_groups?.map(group => ({ id: group.id, channelIds: group.channel_ids, label: group.label }));
+  const initialGroups = !setup && !previous && record?.sources?.length
+    ? [...new Set(sources.map(source => source.role))].map(role => {
+      const channelIds = driveChannels.filter(channel => channel.source_ids.some(id => sources.find(source => source.id === id)?.role === role)).map(channel => channel.id);
+      return { id: channelGroupId(channelIds[0]), channelIds };
+    }) : undefined;
+  const channelDrivers = previous && previousDrivers
+    ? retainedChannelDrivers({ driveChannels, channelDrivers: previousDrivers }, driveChannels)
+    : savedChannelDrivers(geometry, driveChannels, setup?.driver_references);
   return {
-    driveChannels, channelDrivers: previous && previousDrivers
-      ? retainedChannelDrivers({ driveChannels, channelDrivers: previousDrivers }, driveChannels)
-      : savedChannelDrivers(geometry, driveChannels, setup?.driver_references),
+    driveChannels, channelDrivers,
+    driverGroups: resolveDriverGroups(sources, driveChannels, channelDrivers, previousGroups ?? savedGroups ?? initialGroups),
+    persistDriverGroups: previous?.persistDriverGroups ?? (setup ? !!savedGroups : !!record?.sources?.length),
     passiveCardioid: geometry ? savedPassiveCardioid(geometry) : { ...PASSIVE_CARDIOID_DEFAULTS },
     driveVoltageV: previous?.driveVoltageV ?? setup?.geometry.drive_voltage_v ?? DEFAULT_DRIVE_VOLTAGE_V,
     maxDriveVoltageV: previous?.maxDriveVoltageV ?? setup?.geometry.max_drive_voltage_v ?? null,
@@ -217,12 +250,16 @@ export function createImportedSimulationSetup(config: {
   signal?: <T extends object>(actions: T) => T;
 }) {
   const singleActions = simulationActions(config.write);
+  const adapterGroups = (sources: ImportedSimulationSetup['sources'], state: SimulationData) =>
+    resolveDriverGroups(sources, state.driveChannels, state.channelDrivers,
+      state.driverGroups ?? (config.input === 'file' ? undefined : state.driveChannels.map(channel => ({ id: channel.id, channelIds: [channel.id] }))),
+      config.input === 'file');
   /** Fan out one card edit through the existing mutations, under one edit signal. */
   function groupedAction<K extends typeof groupedActionNames[number]>(name: K): SimulationActions[K] {
     return ((channelId: string, ...args: unknown[]) => {
       const state = config.read();
       const sources = config.sources();
-      const ids = fileDriverGroups(sources, state.driveChannels, state.channelDrivers).find(group => group.channelIds.includes(channelId))?.channelIds ?? [channelId];
+      const ids = adapterGroups(sources, state).find(group => group.channelIds.includes(channelId))?.channelIds ?? [channelId];
       const action = singleActions[name] as (id: string, ...args: unknown[]) => unknown;
       for (const id of ids) action(id, ...args);
     }) as SimulationActions[K];
@@ -230,9 +267,13 @@ export function createImportedSimulationSetup(config: {
   const rawActions = {
     ...singleActions,
     ...Object.fromEntries(groupedActionNames.map(name => [name, groupedAction(name)])) as Pick<SimulationActions, typeof groupedActionNames[number]>,
+    setExteriorTransducer: (channelId: string, form: Parameters<SimulationActions['setExteriorTransducer']>[1]) => {
+      singleActions.setExteriorTransducer(channelId, form);
+      config.write(state => ({ driverGroups: adapterGroups(config.sources(), state), persistDriverGroups: true }));
+    },
     setSweep: config.setSweep,
-    setCombineEnabled: (combineEnabled: boolean) => config.write({ combineEnabled }),
-    setCombineSpec: (combineSpec: SimulationData['combineSpec']) => config.write({ combineSpec }),
+    setCombineEnabled: (combineEnabled: boolean) => config.write({ combineEnabled, persistDriverGroups: true }),
+    setCombineSpec: (combineSpec: SimulationData['combineSpec']) => config.write({ combineSpec, persistDriverGroups: true }),
     setRoleSharing(role: string, share: boolean) {
       const sources = config.sources().filter(source => source.role === role
         && config.read().driveChannels.some(channel => channel.source_ids.includes(source.id)));
@@ -257,10 +298,11 @@ export function createImportedSimulationSetup(config: {
           used.add(id);
           return id;
         };
-        // Each new member is one prescribed source, never a multi-patch driver.
+        // Keep existing single-source IDs; splitting an old multi-source channel
+        // creates a new coordinate only for the detached surfaces.
         const replacements = sources.map(source => {
           const previous = affected.find(channel => channel.source_ids.includes(source.id))!;
-          return { id: unique(share ? sharedChannelId(role, source.id) : source.id),
+          return { id: unique(previous.source_ids.length === 1 ? previous.id : sourceChannelId(source.id)),
             motion: share ? driverTemplate.motion : previous.motion, source_ids: [source.id] };
         });
         const first = state.driveChannels.indexOf(template);
@@ -272,7 +314,14 @@ export function createImportedSimulationSetup(config: {
           const form = state.channelDrivers[previous.id];
           if (form && channelAcceptsDriver(channel)) channelDrivers[channel.id] = structuredClone(form);
         }
-        return { driveChannels, channelDrivers };
+        const remainingIds = new Set(remaining.map(channel => channel.id));
+        const groups = adapterGroups(config.sources(), state)
+          .map(group => ({ ...group, channelIds: group.channelIds.filter(id => remainingIds.has(id)) }))
+          .filter(group => group.channelIds.length);
+        if (share) groups.push({ id: channelGroupId(replacements[0].id), channelIds: replacements.map(channel => channel.id) });
+        else groups.push(...replacements.map(channel => ({ id: channelGroupId(channel.id), channelIds: [channel.id] })));
+        return { driveChannels, channelDrivers,
+          driverGroups: resolveDriverGroups(config.sources(), driveChannels, channelDrivers, groups, config.input === 'file'), persistDriverGroups: true };
       });
     },
   };
@@ -289,7 +338,7 @@ export function createImportedSimulationSetup(config: {
           setSweep: config.setSweep };
       }
       return { ...data, ...actions, input: config.input, sources,
-        driverGroups: fileDriverGroups(sources, data.driveChannels, data.channelDrivers),
+        driverGroups: adapterGroups(sources, data),
         skippedSourceIds: config.skippedSourceIds(), passiveTopology: config.passiveTopology?.() ?? null };
     },
   };

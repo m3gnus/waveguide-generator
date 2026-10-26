@@ -118,8 +118,10 @@ Use the **Simulation** tab shared with CAD models to set the sweep, drivers,
 directivity and solver. For surfaces with the same role, choose **Share one
 driver** or **Drive separately**. Sharing uses identical driver settings: each
 surface gets its own identical driver, wired to one amplifier channel. The
-**Port or passive opening** role marks an opening, but **Passive cardioid** is
-not yet available for file meshes. Choose **CAD Link** for a CAD model,
+**Crossover** uses one band for each driver group; surfaces sharing a driver
+are summed into that band. When a surface has the **Port or passive opening**
+role, **Passive cardioid** is also available. Turn off **Crossover** when using
+coupled passive cardioid with the MF driver. Choose **CAD Link** for a CAD model,
 **File mesh** for the file setup, or **Parametric** for the separate generated
 design.
 

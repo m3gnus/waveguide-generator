@@ -27,6 +27,17 @@ export function channelLabel(result: ResultPayload, channelId: string, importOri
   if (channelId === combinedChannelId(result)) return 'Combined';
   if (channelId === PASSIVE_CARDIOID_CHANNEL_ID) return 'Cardioid';
   const file = (importOrigin ?? result.metadata?.import_origin) === 'mesh-file';
+  const combinedId = combinedChannelId(result);
+  const combine = combinedId ? channelPayload(result, combinedId)?.metadata?.combine : null;
+  if (file && combine && typeof combine === 'object' && 'members' in combine && Array.isArray(combine.members)) {
+    const index = combine.members.indexOf(channelId);
+    if (index >= 0 && 'member_channels' in combine) {
+      const labels = 'member_labels' in combine && Array.isArray(combine.member_labels) ? combine.member_labels : [];
+      const roles = 'member_roles' in combine && Array.isArray(combine.member_roles) ? combine.member_roles : [];
+      const branches = combine.members.map((id, i) => ({ id: String(id), role: typeof labels[i] === 'string' && labels[i] ? labels[i] : typeof roles[i] === 'string' ? roles[i] : null }));
+      return roleChannelLabel(channelId, branches, 'number');
+    }
+  }
   return roleChannelLabel(channelId, resultChannels(result).map(({ id }) => ({ id, role: channelRole(result, id) })),
     file ? 'number' : 'id');
 }

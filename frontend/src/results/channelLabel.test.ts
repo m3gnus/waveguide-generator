@@ -4,6 +4,7 @@ import { fieldPlaneMemberResponses } from '../viewport/fieldPlaneStore';
 import { channelLabel } from './channelLabel';
 import { resultViewEntries } from './ResultViewSwitch';
 import { summaryGroups } from './summary';
+import { selectResultChannels } from './mappers';
 import type { ResultPayload } from './types';
 
 const payload = {
@@ -40,4 +41,16 @@ it('uses the run origin when naming the selected channel in the summary', () => 
     wrapper: filePayload, channelId: 'author-left' })
     .flatMap(group => group.rows).find(row => row.label === 'Channel')?.value;
   expect(metadataRow).toBe('MF 1 · 3 channels');
+});
+
+it('names group branches from saved labels and roles instead of opaque IDs', () => {
+  const grouped = { ...payload, channels: { ...payload.channels, combined: { frequencies: [1000], metadata: { combine: {
+    members: ['group:1', 'group:2'], member_channels: { 'group:1': ['author-left', 'author-right'], 'group:2': ['high'] },
+    member_labels: ['Low array', null], member_roles: ['MF', 'HF'], crossovers_hz: [1000],
+  } } } } } as unknown as ResultPayload;
+  expect(channelLabel(grouped, 'group:1', 'mesh-file')).toBe('Low array');
+  expect(channelLabel(grouped, 'group:2', 'mesh-file')).toBe('HF');
+  expect(fieldPlaneMemberResponses(grouped, 'mesh-file').map(entry => entry.label)).toEqual(['Low array', 'HF']);
+  expect(selectResultChannels('job', 'Run', grouped, 'combined', 'mesh-file').map(entry => entry.channelId))
+    .toEqual(['combined', 'author-left', 'author-right']);
 });

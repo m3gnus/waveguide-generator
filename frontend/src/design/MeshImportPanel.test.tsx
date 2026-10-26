@@ -396,10 +396,10 @@ it('renders one shared Drivers section and edits file drivers through the shared
   const cardNames = () => [...host.querySelectorAll('.cad-channel-summary span')].map(item => item.textContent);
   expect(cardNames()).toEqual(['MF driver', 'HF driver']);
   expect(host.textContent).toContain('2 surfaces · identical drivers');
-  expect(host.querySelector<HTMLInputElement>('[aria-label="Solve driver in BEAT for drive-mf::left"]')?.disabled).toBe(true);
+  expect(host.querySelector<HTMLInputElement>('[aria-label="Solve driver in BEAT for MF driver"]')?.disabled).toBe(true);
   expect(host.textContent).toContain('Drive the surfaces separately to model each driver in BEAT.');
-  type(host.querySelector<HTMLInputElement>('[aria-label="Sd for drive-mf::left"]')!, '90');
-  expect(useImportedModelStore.getState().fileSimulation?.channelDrivers['drive-mf::right'].fields.sd_cm2).toBe(90);
+  type(host.querySelector<HTMLInputElement>('[aria-label="Sd for MF driver"]')!, '90');
+  expect(useImportedModelStore.getState().fileSimulation?.channelDrivers['source:right'].fields.sd_cm2).toBe(90);
   const sharing = host.querySelector<HTMLSelectElement>('[aria-label^="Driver sharing for"]')!;
   expect(sharing.closest('details')).toBeNull();
   expect(sharing.value).toBe('share');
@@ -407,13 +407,13 @@ it('renders one shared Drivers section and edits file drivers through the shared
   choose(sharing, 'separate');
   expect(host.querySelectorAll('.cad-channel')).toHaveLength(3);
   expect(cardNames()).toEqual(['MF driver 1', 'MF driver 2', 'HF driver']);
-  expect(host.querySelector<HTMLInputElement>('[aria-label="Solve driver in BEAT for left"]')?.disabled).toBe(false);
-  expect(host.querySelector<HTMLInputElement>('[aria-label="Solve driver in BEAT for right"]')?.disabled).toBe(false);
-  type(host.querySelector<HTMLInputElement>('[aria-label="Sd for drive-hf"]')!, '75');
-  expect(useImportedModelStore.getState().fileSimulation?.channelDrivers['drive-hf'].fields.sd_cm2).toBe(75);
+  expect(host.querySelector<HTMLInputElement>('[aria-label="Solve driver in BEAT for MF driver 1"]')?.disabled).toBe(false);
+  expect(host.querySelector<HTMLInputElement>('[aria-label="Solve driver in BEAT for MF driver 2"]')?.disabled).toBe(false);
+  type(host.querySelector<HTMLInputElement>('[aria-label="Sd for HF driver"]')!, '75');
+  expect(useImportedModelStore.getState().fileSimulation?.channelDrivers['source:high'].fields.sd_cm2).toBe(75);
   expect(host.textContent).not.toContain('Each selected group is a separate');
   expect(host.textContent).not.toContain('Full domain, free space');
-  expect(host.querySelector('[data-section="Crossover"]')).toBeNull();
+  expect(host.querySelector('[data-section="Crossover"]')).not.toBeNull();
   expect(host.querySelector('[data-section="Passive cardioid"]')).toBeNull();
 });
 

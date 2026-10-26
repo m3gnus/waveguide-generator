@@ -264,7 +264,8 @@ export function powerQualificationOf(result: ResultPayload | undefined, wrapper:
   const server = raw ? fromServer(raw) : null;
   if (server) return server;
   const combine = combineMetadataOf(result);
-  if (combine && wrapper?.channels) return evaluateCombined(result, wrapper, combine.members);
+  if (combine && wrapper?.channels) return evaluateCombined(result, wrapper,
+    combine.members.flatMap(member => combine.member_channels?.[member] ?? [member]));
   return evaluateChannel(result, wrapper ?? result);
 }
 

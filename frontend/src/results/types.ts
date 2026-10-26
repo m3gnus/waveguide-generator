@@ -108,6 +108,8 @@ export interface CombinePairMetadata {
 export interface CombineMetadata {
   members: string[];
   member_roles?: Array<string | null>;
+  member_labels?: Array<string | null>;
+  member_channels?: Record<string, string[]>;
   /** One entry per adjacent pair: its crossover, or null when the pair's two
    * sections do not share one — which a per-channel spec is free to do. */
   crossovers_hz: Array<number | null>;

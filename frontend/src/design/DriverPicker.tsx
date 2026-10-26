@@ -166,8 +166,9 @@ function KindToggle({ kind, counts, onChange, channelId }: {
 /** Hornresp-unit T/S entry for one drive channel. Plain inputs are required:
  * an empty field means "not provided", which NumberField cannot represent.
  * Installation values live separately in `DriverInstallationFields`. */
-export function DriverFields({ channel, form, onField }: {
+export function DriverFields({ channel, form, onField, displayName }: {
   channel: CadDriveChannel;
+  displayName?: string;
   form: ChannelDriverForm | undefined;
   onField: (field: DriverFieldKey, value: number | null) => void;
 }) {
@@ -181,7 +182,7 @@ export function DriverFields({ channel, form, onField }: {
         min={0}
         step={step}
         value={values[driverKey] ?? ''}
-        aria-label={`${label} for ${channel.id}`}
+        aria-label={`${label} for ${displayName ?? channel.id}`}
         onChange={(event) => onField(driverKey, event.target.value === '' ? null : Number(event.target.value))}
       />
     </label>)}
@@ -192,13 +193,14 @@ export function DriverFields({ channel, form, onField }: {
 }
 
 /** Values that describe this channel's installation rather than the driver. */
-export function DriverInstallationFields({ channel, form, onField }: {
+export function DriverInstallationFields({ channel, form, onField, displayName }: {
   channel: CadDriveChannel;
+  displayName?: string;
   form: ChannelDriverForm | undefined;
   onField: (field: DriverFieldKey, value: number | null) => void;
 }) {
   const values = driverValues(form);
-  return <div className="driver-installation" role="group" aria-label={`Installation for ${channel.id}`}>
+  return <div className="driver-installation" role="group" aria-label={`Installation for ${displayName ?? channel.id}`}>
     {CAD_DRIVER_INSTALLATION_FIELDS.map(({ driverKey, label, unit, step, reveal }) => <label
       key={driverKey}
       className="cad-driver-field"
@@ -211,7 +213,7 @@ export function DriverInstallationFields({ channel, form, onField }: {
         min={0}
         step={step}
         value={values[driverKey] ?? ''}
-        aria-label={`${label} for ${channel.id}`}
+        aria-label={`${label} for ${displayName ?? channel.id}`}
         onChange={(event) => onField(driverKey, event.target.value === '' ? null : Number(event.target.value))}
       />
       {driverKey === 'rear_volume_l' && <small className="cad-driver-hint">One sealed rear chamber shared by all drivers in this channel; do not multiply by Count.</small>}
@@ -314,8 +316,9 @@ interface Candidate {
   render: (props: { active: boolean; id: string; onPick: () => void; onHover: () => void }) => ReactElement;
 }
 
-function DriverSearch({ channel, roleHint, counts, onPick }: {
+function DriverSearch({ channel, roleHint, counts, onPick, displayName }: {
   channel: CadDriveChannel;
+  displayName?: string;
   roleHint: string | undefined;
   counts: DriverKindTally;
   onPick: (preset: DriverPreset, options?: { edit?: boolean }) => void;
@@ -472,7 +475,7 @@ function DriverSearch({ channel, roleHint, counts, onPick }: {
         aria-expanded={open}
         aria-controls={listId}
         aria-activedescendant={activeId}
-        aria-label={`${CAD_CONTROLS.driverSearch.label} for ${channel.id}`}
+        aria-label={`${CAD_CONTROLS.driverSearch.label} for ${displayName ?? channel.id}`}
         placeholder="Search drivers…"
         value={query}
         onFocus={() => setOpen(true)}
@@ -484,7 +487,7 @@ function DriverSearch({ channel, roleHint, counts, onPick }: {
     {/* What the library holds, on the control that filters by it, before a
         single keystroke. A user who never opens the dropdown still learns that
         the compression half is one driver deep and where the rest of them are. */}
-    <KindToggle kind={kind} counts={counts} channelId={channel.id} onChange={chooseKind}/>
+    <KindToggle kind={kind} counts={counts} channelId={displayName ?? channel.id} onChange={chooseKind}/>
     {/* The dropdown carries hand entry as its last row, but that row only
         exists once the field has been opened. A user whose driver is not in
         the library has no reason to open it, so the way in is also stated
@@ -527,7 +530,7 @@ function DriverSearch({ channel, roleHint, counts, onPick }: {
         ? 'One more driver matches, but the library lists no Thiele-Small data for it, so it cannot be driven.'
         : `${hiddenIncomplete} more drivers match, but the library lists no Thiele-Small data for them, so they cannot be driven.`
       } Enter the values by hand instead.</p>}
-      <div id={listId} className="driver-results-list" role="listbox" aria-label={`Driver matches for ${channel.id}`}>
+      <div id={listId} className="driver-results-list" role="listbox" aria-label={`Driver matches for ${displayName ?? channel.id}`}>
         {candidates.map((candidate, index) => candidate.render({
           active: index === activeIndex,
           id: `${listId}-${index}`,
@@ -560,8 +563,9 @@ function DerivedRow({ label, value, unit }: { label: string; value: string; unit
  * reset, and the name and nominal impedance are the user's to set because *My
  * drivers* has nothing else to list it under.
  */
-function DriverSheet({ channel, form, onClose }: {
+function DriverSheet({ channel, form, onClose, displayName }: {
   channel: CadDriveChannel;
+  displayName?: string;
   form: ChannelDriverForm;
   onClose: () => void;
 }) {
@@ -710,12 +714,12 @@ function DriverSheet({ channel, form, onClose }: {
         ? <input
             type="text"
             className="driver-name-input"
-            aria-label={`Driver name for ${channel.id}`}
+            aria-label={`Driver name for ${displayName ?? channel.id}`}
             placeholder={MANUAL_DRIVER_LABEL}
             value={nameDraft ?? preset.label}
             onChange={(event) => rename(event.target.value)}
           />
-        : preset?.label ?? `Driver for ${channel.id}`}</h2>
+        : preset?.label ?? `Driver for ${displayName ?? channel.id}`}</h2>
       <div className="driver-sheet-chips">
         {!nameEditable && zText && <span className="driver-chip">{zText}</span>}
         {provenance && <span className="driver-chip">{provenance}</span>}
@@ -740,7 +744,7 @@ function DriverSheet({ channel, form, onClose }: {
           min={0}
           step={0.5}
           value={impedanceDraft ?? (preset.z_ohm === null ? '' : String(preset.z_ohm))}
-          aria-label={`Nominal impedance for ${channel.id}`}
+          aria-label={`Nominal impedance for ${displayName ?? channel.id}`}
           onChange={(event) => setImpedance(event.target.value)}
         />
         <small>Which winding this driver is, for the saved list. The solve reads Re.</small>
@@ -757,7 +761,7 @@ function DriverSheet({ channel, form, onClose }: {
             min={0}
             step={step}
             value={values[driverKey] ?? ''}
-            aria-label={`${label} for ${channel.id}`}
+            aria-label={`${label} for ${displayName ?? channel.id}`}
             onChange={(event) => state.setChannelDriverField(
               channel.id,
               driverKey,
@@ -798,8 +802,9 @@ function DriverSheet({ channel, form, onClose }: {
 }
 
 /** The picked driver, as the channel card shows it. */
-function DriverSummary({ channel, form, sheetOpen, onEdit, onClear }: {
+function DriverSummary({ channel, form, sheetOpen, onEdit, onClear, displayName }: {
   channel: CadDriveChannel;
+  displayName?: string;
   form: ChannelDriverForm;
   sheetOpen: boolean;
   onEdit: () => void;
@@ -822,7 +827,7 @@ function DriverSummary({ channel, form, sheetOpen, onEdit, onClear }: {
         data-control-reveal-id={CAD_CONTROLS.driverEdit.reveal.id}
         onClick={onEdit}
       >{sheetOpen ? 'Hide T/S' : 'Edit T/S…'}</button>
-      <button type="button" className="driver-clear-link" aria-label={`Clear driver for ${channel.id}`} onClick={onClear}>Clear</button>
+      <button type="button" className="driver-clear-link" aria-label={`Clear driver for ${displayName ?? channel.id}`} onClick={onClear}>Clear</button>
     </div>
     <div className="driver-summary-facts">
       {([
@@ -846,8 +851,9 @@ function DriverSummary({ channel, form, sheetOpen, onEdit, onClear }: {
  * the manual grid it has always shown rather than offering a field that can
  * only ever answer "no matches".
  */
-export function ChannelDriverPicker({ channel, form, roleHint }: {
+export function ChannelDriverPicker({ channel, form, roleHint, displayName }: {
   channel: CadDriveChannel;
+  displayName?: string;
   form: ChannelDriverForm | undefined;
   roleHint?: string;
 }) {
@@ -872,11 +878,13 @@ export function ChannelDriverPicker({ channel, form, roleHint }: {
       </p>
       <DriverInstallationFields
         channel={channel}
+        displayName={displayName}
         form={form}
         onField={(field, value) => state.setChannelDriverField(channel.id, field, value)}
       />
       <DriverFields
         channel={channel}
+        displayName={displayName}
         form={form}
         onField={(field, value) => state.setChannelDriverField(channel.id, field, value)}
       />
@@ -887,6 +895,7 @@ export function ChannelDriverPicker({ channel, form, roleHint }: {
     {preset === null
       ? <DriverSearch
           channel={channel}
+          displayName={displayName}
           roleHint={roleHint}
           counts={counts}
           onPick={(picked, options) => {
@@ -898,6 +907,7 @@ export function ChannelDriverPicker({ channel, form, roleHint }: {
         />
       : <DriverSummary
           channel={channel}
+          displayName={displayName}
           form={form!}
           sheetOpen={sheetOpen}
           onEdit={() => setSheetOpen((open) => !open)}
@@ -911,16 +921,17 @@ export function ChannelDriverPicker({ channel, form, roleHint }: {
         />}
     <DriverInstallationFields
       channel={channel}
+      displayName={displayName}
       form={form}
       onField={(field, value) => state.setChannelDriverField(channel.id, field, value)}
     />
     {sheetOpen && preset !== null && form
-      && <DriverSheet channel={channel} form={form} onClose={() => setSheetOpen(false)}/>}
+      && <DriverSheet channel={channel} displayName={displayName} form={form} onClose={() => setSheetOpen(false)}/>}
   </div>;
 }
 
 /** Use an explicit library pick to replace BEAT driver fields; unavailable fields are cleared. */
-export function ExteriorDriverLibraryPicker({ channel, roleHint }: { channel: CadDriveChannel; roleHint?: string }) {
+export function ExteriorDriverLibraryPicker({ channel, roleHint, displayName }: { channel: CadDriveChannel; roleHint?: string; displayName?: string }) {
   const info = useDriverLibraryStore((store) => store.info);
   const load = useDriverLibraryStore((store) => store.load);
   const counts = useMemo(() => driverKindCounts(info), [info]);
@@ -931,7 +942,7 @@ export function ExteriorDriverLibraryPicker({ channel, roleHint }: { channel: Ca
   const pickedWithoutSd = pickedLibraryDriver !== null && form?.sd_m2 === undefined
     && !(librarySd !== undefined && Number.isFinite(librarySd) && librarySd > 0);
   return <>
-    <DriverSearch channel={channel} roleHint={roleHint} counts={counts} onPick={(picked, options) => {
+    <DriverSearch channel={channel} displayName={displayName} roleHint={roleHint} counts={counts} onPick={(picked, options) => {
       setPickedLibraryDriver(options?.edit ? null : picked);
       if (options?.edit) return;
       const state = importedSimulationSetup();

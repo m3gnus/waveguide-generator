@@ -23,7 +23,7 @@ import { polarValidationError, useImportedSolveOptionsStore } from '../stores/so
 import { subscribeSolveSettingsEdits } from '../stores/solveSettingsEdits';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { effectiveImportedSetup, registerImportedSetupControls, registerImportedSetupFlush, useImportedModelStore } from '../stores/importedModel';
-import { fileMeshSetup, useMeshImportStore } from '../stores/meshImport';
+import { fileMeshSetup, fileSetupForSave, useMeshImportStore } from '../stores/meshImport';
 import { saveImportedSetup } from '../api/importedModels';
 import type { ImportedSetup } from '../jobs/importedSetup';
 
@@ -288,7 +288,7 @@ export function startCadSetupPublisher(
     if (workspaceModeStore.getSnapshot().importedInput !== 'file' || model.input !== 'file') return;
     if (!fileDirty) return;
     try {
-      const setup = fileMeshSetup();
+      const setup = fileSetupForSave(fileMeshSetup());
       const next = { modelId: model.modelId!, preparedId: model.prepared!.ingest_id, setup };
       const key = JSON.stringify(next);
       if (key !== published && key !== JSON.stringify(pending?.project)) schedule(next, null);

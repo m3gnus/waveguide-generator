@@ -117,6 +117,8 @@ export interface ImportedGeometrySubmission {
     driver?: Record<string, number | string>;
     exterior_transducer?: ExteriorTransducerForm;
   }>;
+  /** Physical channels sharing driver settings and one crossover branch. */
+  driver_groups?: Array<{ id: string; channel_ids: string[]; label?: string | null }>;
   /** The per-channel v2 crossover (CADLINK-CROSSOVER-DRIVERS.md §2). The
    * legacy `crossovers_hz`/`level_match`/`align` triple is still accepted by
    * the server and still appears on jobs submitted before this, which is why

@@ -839,9 +839,13 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
 }, CAD_RETURN_EDITS));
 
 /** Generic imported-model mutations. CAD and file inputs share these rules. */
+export interface SimulationDriverGroup { id: string; channelIds: string[]; label?: string | null }
 export type SimulationData = Pick<CadReturnState,
   'driveChannels' | 'channelDrivers' | 'passiveCardioid' | 'driveVoltageV' | 'maxDriveVoltageV'
-  | 'combineEnabled' | 'combineSpec' | 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>;
+  | 'combineEnabled' | 'combineSpec' | 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'> & {
+    driverGroups?: SimulationDriverGroup[];
+    persistDriverGroups?: boolean;
+  };
 export type SimulationActions = Pick<CadReturnState, 'setExteriorTransducer' | 'setChannelMotion' | 'setChannelDriverField' | 'setChannelDriverPreset' | 'refreshChannelDriverBases' | 'clearChannelDriverOverrides' | 'setDriveVoltage' | 'setMaxDriveVoltage' | 'setPassiveCardioid' | 'setSweep'>;
 export function simulationActions(
   set: (update: Partial<SimulationData> | ((state: SimulationData) => Partial<SimulationData>)) => void,
@@ -1333,6 +1337,7 @@ export interface RoleSource {
 
 /** CAD callers retain their snapshot API while the shared helpers consume sources. */
 type SimulationSources = { sources: readonly RoleSource[] } | Pick<CadReturnState, 'selectedBundle'>;
+type OptionalGroups = { driverGroups?: SimulationDriverGroup[]; input?: string };
 function simulationSources(state: SimulationSources): readonly RoleSource[] {
   return 'sources' in state ? state.sources : state.selectedBundle?.sources ?? [];
 }
@@ -1411,10 +1416,10 @@ export function chainDefaults(
  * which is the same rank that orders the chain. Undefined when no source
  * carries one. */
 export function combineChannelRole(
-  state: Pick<CadReturnState, 'driveChannels'> & SimulationSources,
+  state: Pick<CadReturnState, 'driveChannels'> & SimulationSources & OptionalGroups,
   channelId: string,
 ): string | undefined {
-  return memberRole(state.driveChannels, simulationSources(state), channelId);
+  return memberRole(crossoverChannels(state), simulationSources(state), channelId);
 }
 
 /** The same role and shared-role rule as result channel headings. */
@@ -1422,22 +1427,34 @@ export function cadChannelLabel(state: Pick<CadReturnState, 'driveChannels'> & S
   return roleChannelLabel(channelId, state.driveChannels.map(({ id }) => ({ id, role: combineChannelRole(state, id) })));
 }
 
-/** Port apertures are outputs, rather than additional drivers. This only gates
- * the editor: retained combined-output specs and submission defaults stay intact. */
-export function crossoverDriverChannels(state: Pick<CadReturnState, 'driveChannels'> & SimulationSources): CadDriveChannel[] {
+/** Present each explicit driver group to the existing crossover chain as one branch. */
+export function crossoverChannels(state: Pick<CadReturnState, 'driveChannels'> & OptionalGroups): CadDriveChannel[] {
+  if (!state.driverGroups) return state.driveChannels;
+  return state.driverGroups.flatMap(group => {
+    const channels = group.channelIds.flatMap(id => state.driveChannels.find(channel => channel.id === id) ?? []);
+    return channels.length ? [{ ...channels[0], id: group.id, source_ids: channels.flatMap(channel => channel.source_ids) }] : [];
+  });
+}
+
+/** Port apertures are outputs rather than additional crossover drivers. */
+export function crossoverDriverChannels(state: Pick<CadReturnState, 'driveChannels'> & SimulationSources & OptionalGroups): CadDriveChannel[] {
   const sources = simulationSources(state);
-  return state.driveChannels.filter((channel) => channel.source_ids.some((id) => {
+  return crossoverChannels(state).filter((channel) => channel.source_ids.some((id) => {
     const source = sources.find((source) => source.id === id);
     return !source || !hasPassiveCardioidSurface([source]);
   }));
 }
 
+function chainChannels(state: Pick<CadReturnState, 'driveChannels'> & SimulationSources & OptionalGroups): CadDriveChannel[] {
+  return state.input === 'file' ? crossoverDriverChannels(state) : crossoverChannels(state);
+}
+
 /** Whether the combined output is on: the user's explicit choice, or on by
  * default for a return with two or more drive channels. */
 export function combineEnabledEffective(
-  state: Pick<CadReturnState, 'combineEnabled' | 'driveChannels'>,
+  state: Pick<CadReturnState, 'combineEnabled' | 'driveChannels'> & OptionalGroups,
 ): boolean {
-  return state.combineEnabled ?? state.driveChannels.length >= 2;
+  return state.combineEnabled ?? crossoverChannels(state).length >= 2;
 }
 
 /** Chain members ordered lowest band first, from the return's source roles.
@@ -1445,20 +1462,20 @@ export function combineEnabledEffective(
  * the end, so an unroled return degrades to listing order rather than a
  * guess. */
 export function combineMembers(
-  state: Pick<CadReturnState, 'driveChannels'> & SimulationSources,
+  state: Pick<CadReturnState, 'driveChannels'> & SimulationSources & OptionalGroups,
 ): string[] {
-  return memberOrder(state.driveChannels, simulationSources(state));
+  return memberOrder(chainChannels(state), simulationSources(state));
 }
 
 export type CombineChainState = Pick<CadReturnState,
   'driveChannels' | 'combineSpec' | 'channelDrivers'
-  | 'frequencyStartHz' | 'frequencyEndHz'> & SimulationSources;
+  | 'frequencyStartHz' | 'frequencyEndHz'> & SimulationSources & OptionalGroups;
 
 /** The untouched chain: LR4 at the role defaults, auto gain when level
  * matching would default on, auto delay. Null when there is nothing to
  * combine. */
 export function combineBaseSpec(state: CombineChainState): CrossoverSpec | null {
-  const pairs = chainDefaults(state.driveChannels, simulationSources(state), state.frequencyStartHz, state.frequencyEndHz);
+  const pairs = chainDefaults(chainChannels(state), simulationSources(state), state.frequencyStartHz, state.frequencyEndHz);
   if (!pairs.length) return null;
   return expandLegacy(
     combineMembers(state),
@@ -1494,7 +1511,7 @@ export function combineSpecEffective(state: CombineChainState): CrossoverSpec | 
  * untouched form is both submittable and what a designer would have typed. */
 export function combineChain(state: CombineChainState): CombinePair[] {
   const spec = combineSpecEffective(state);
-  const defaults = chainDefaults(state.driveChannels, simulationSources(state), state.frequencyStartHz, state.frequencyEndHz);
+  const defaults = chainDefaults(chainChannels(state), simulationSources(state), state.frequencyStartHz, state.frequencyEndHz);
   if (!spec) return [];
   const specPairs = pairsOf(spec);
   return defaults.map((pair, index) => {

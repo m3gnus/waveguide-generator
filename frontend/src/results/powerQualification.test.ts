@@ -55,6 +55,17 @@ function flat(agreement: Array<number | null>, surface?: Array<number | null>, v
 }
 
 describe('power qualification', () => {
+  it('propagates every physical channel in a grouped branch', () => {
+    const combined = { frequencies: [100, 200, 300], metadata: { source_ids: ['src'], combine: {
+      members: ['low', 'high'], member_channels: { low: ['left', 'right'], high: ['high'] }, crossovers_hz: [200],
+    } } } as unknown as ResultPayload;
+    const wrapper = { frequencies: [100, 200, 300], channels: {
+      left: flat([0.1, 0.1, 0.1]), right: flat([0.1, -1, 0.1]), high: flat([0.1, 0.1, 0.1]), combined,
+    } } as ResultPayload;
+    const flags = powerQualificationOf(combined, wrapper)!;
+    expect(flags.status).toBe('unqualified');
+    expect(flags.unqualifiedChannels).toEqual(['right']);
+  });
   it('reads the server flags for the archived Speaker2 run: LF from 200 Hz, HF clean, combined names LF', () => {
     const wrapper = served();
     const lf = powerQualificationOf(channel(wrapper, 'drive-lf'), wrapper)!;

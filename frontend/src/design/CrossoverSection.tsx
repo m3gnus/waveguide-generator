@@ -5,9 +5,10 @@ import { CrossoverAdvanced } from './CrossoverAdvanced';
 import { NumberField } from './NumberField';
 import { ToggleRow } from './SolveOptionsSections';
 import { latestCombine } from '../results/latestCombine';
+import { roleChannelLabel } from '../results/channelLabel';
 import { recombineJobResults } from '../api/results';
 import { useImportedSolveOptionsStore } from '../stores/solveOptions';
-import { importedSimulationSetup, useImportedSimulationSetup } from '../stores/importedSimulationSetup';
+import { importedDriverLabel, importedSimulationSetup, useImportedSimulationSetup } from '../stores/importedSimulationSetup';
 import { useOptionalSolveControl } from '../shell/JobsCoordinator';
 import {
   driverXoMinNote,
@@ -53,12 +54,14 @@ export function combinePairLabel(pair: CombinePair): string {
 }
 
 /** Share pair wording between Basic fields and the collapsed header. */
-export function crossoverSummary(state: Parameters<typeof combineChain>[0] & Pick<ReturnType<typeof useCadReturnStore.getState>, 'combineEnabled'>): string {
+export function crossoverSummary(state: Parameters<typeof combineChain>[0] & Pick<ReturnType<typeof useCadReturnStore.getState>, 'combineEnabled'>,
+  label?: (id: string) => string): string {
   if (!combineEnabledEffective(state)) return 'Off';
   const spec = combineSpecEffective(state);
   return combineChain(state).map((pair) => {
     const corners = spec && pairsOf(spec).find(({ key }) => key === pair.key);
-    return `${combinePairLabel(pair)} · ${corners && !corners.linked ? unlinkedPairNote(corners) : `${pair.hz} Hz`}`;
+    const display = label ? `${label(pair.lower)} → ${label(pair.upper)}` : combinePairLabel(pair);
+    return `${display} · ${corners && !corners.linked ? unlinkedPairNote(corners) : `${pair.hz} Hz`}`;
   }).join(' · ') || 'Combined output';
 }
 
@@ -125,7 +128,7 @@ function PairRow({ pair, spec, preset, onChange }: {
       precision={0}
       disabled={!linked}
       disabledReason={linked ? undefined : 'This pair is not symmetric; edit each channel in Advanced.'}
-      description={`${CAD_CONTROLS.crossoverFrequency.label} · ${pair.lower} → ${pair.upper}`}
+      description={`${CAD_CONTROLS.crossoverFrequency.label} · ${combinePairLabel(pair)}`}
       onCommit={(value) => onChange(withPair(spec, pair.key, { hz: value }))}
     />
     <div className={`crossover-shape-row${linked ? '' : ' field-disabled'}`} data-control-reveal-id={CAD_CONTROLS.crossoverFamily.reveal.id}>
@@ -178,10 +181,16 @@ function storedGainUnit(): GainUnit {
 /** Whether the rail's spec and the shown run name the same members, in the
  * same order. A run combined from other channels is a different combine, and
  * no crossover edit here can be applied to it. */
-function sameMembers(spec: CrossoverSpec, shown: ReturnType<typeof latestCombine.getSnapshot>): boolean {
+function sameMembers(spec: CrossoverSpec, shown: ReturnType<typeof latestCombine.getSnapshot>, membership?: string): boolean {
   const members = shown?.combine.members ?? [];
-  return spec.members.length === members.length
-    && spec.members.every((member, index) => member === members[index]);
+  if (spec.members.length !== members.length || !spec.members.every((member, index) => member === members[index])) return false;
+  if (!membership) return true;
+  const current = JSON.parse(membership) as Record<string, string[]>;
+  return members.every(member => {
+    const left = [...(current[member] ?? [member])].sort();
+    const right = [...(shown?.combine.member_channels?.[member] ?? [member])].sort();
+    return JSON.stringify(left) === JSON.stringify(right);
+  });
 }
 
 function outsideSolvedBand(spec: CrossoverSpec | null, shown: ReturnType<typeof latestCombine.getSnapshot>): number | null {
@@ -217,6 +226,7 @@ function useLiveRecombine(
   spec: CrossoverSpec | null,
   enabled: boolean,
   shown: ReturnType<typeof latestCombine.getSnapshot>,
+  membership?: string,
 ): { live: boolean; busy: boolean; error: string | null } {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -232,7 +242,7 @@ function useLiveRecombine(
     if (!enabled || !spec || !shown?.canApply || outsideSolvedBand(spec, shown) !== null) { rest(); return; }
     const applied = fromResult(shown.combine);
     if (!applied) return;
-    if (!sameMembers(spec, shown)) return;
+    if (!sameMembers(spec, shown, membership)) return;
     const at = shown;
     // What the stored result holds, or has already been asked to hold.
     const stored = sent.current?.jobId === at.jobId ? sent.current.spec : applied;
@@ -261,7 +271,7 @@ function useLiveRecombine(
       });
     }, LIVE_RECOMBINE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [spec, enabled, shown]);
+  }, [spec, enabled, shown, membership]);
   return { live: Boolean(shown?.canApply), busy, error };
 }
 
@@ -273,13 +283,14 @@ function useLiveRecombine(
  * When it does not, the reason is stated with the dock's own way out of it
  * rather than left as an edit that appears to have been swallowed.
  */
-function LiveNote({ shown, live, busy, error, members, outside }: {
+function LiveNote({ shown, live, busy, error, members, outside, file }: {
   shown: NonNullable<ReturnType<typeof latestCombine.getSnapshot>>;
   live: boolean;
   busy: boolean;
   error: string | null;
   members: boolean;
   outside?: number | null;
+  file: boolean;
 }) {
   const solve = useOptionalSolveControl();
   const [sweepSolve, setSweepSolve] = useState(false);
@@ -295,8 +306,11 @@ function LiveNote({ shown, live, busy, error, members, outside }: {
     </p>;
   }
   if (!members) {
+    const branches = shown.combine.members.map((id, index) => ({ id,
+      role: shown.combine.member_labels?.[index] ?? shown.combine.member_roles?.[index] }));
+    const names = file ? branches.map(branch => roleChannelLabel(branch.id, branches, 'number')) : shown.combine.members;
     return <p className="section-note warning" role="status" aria-live="polite">
-      The shown run combines {(shown.combine.members ?? []).join(' + ') || 'other channels'}, not the channels above, so these settings are not its crossover. Solve this return to combine it this way.
+      The shown run combines {names.join(' + ') || 'other channels'}, not the channels above, so these settings are not its crossover. Solve this return to combine it this way.
     </p>;
   }
   if (outside !== null && outside !== undefined && shown.solvedBandHz) {
@@ -331,22 +345,25 @@ export function CadCrossover() {
   const shown = useSyncExternalStore(latestCombine.subscribe, latestCombine.getSnapshot, latestCombine.getSnapshot);
   const enabled = combineEnabledEffective(state);
   const spec = combineSpecEffective(state);
-  const liveState = useLiveRecombine(spec, enabled && crossoverDriverChannels(state).length >= 2, shown);
+  const membership = state.input === 'file' ? JSON.stringify(Object.fromEntries(state.driverGroups.map(group => [group.id, group.channelIds]))) : undefined;
+  const liveState = useLiveRecombine(spec, enabled && crossoverDriverChannels(state).length >= 2, shown, membership);
   if (crossoverDriverChannels(state).length < 2) return <p className="section-note">Two or more drive channels are required for a combined output.</p>;
   const apply = (next: CrossoverSpec) => state.setCombineSpec(next);
   const resolved = resolvedChannels(shown?.combine);
   const maxOutput = shown?.combine.max_output ?? null;
   const { live, busy, error: liveError } = liveState;
+  const driverFor = (member: string) => state.channelDrivers[state.driverGroups.find(group => group.id === member)?.channelIds[0] ?? member];
   /** A member's short name for the Basic readouts: its band role when the
    * return gave it one, and its channel id when it did not. */
   const shortLabel = (member: string): string => {
+    if (state.input === 'file') return importedDriverLabel(state, member);
     const pair = combineChain(state).find((item) => item.lower === member || item.upper === member);
     return (pair?.lower === member ? pair.lowerRole : pair?.upperRole) ?? member;
   };
   /** The nominal impedance a member's watts are stated into: what the driver
    * says, falling back to Re, divided across parallel drivers. */
   const impedanceFor = (member: string): number | null => {
-    const form = state.channelDrivers[member];
+    const form = driverFor(member);
     const values = driverValues(form);
     return nominalImpedanceOhm({
       z_nom_ohm: values.z_nom_ohm ?? form?.preset?.z_ohm ?? null,
@@ -386,9 +403,9 @@ export function CadCrossover() {
       {!advanced && <>
         {combineChain(state).map((pair) => <PairRow
           key={pair.key}
-          pair={pair}
+          pair={state.input === 'file' ? { ...pair, lowerRole: shortLabel(pair.lower), upperRole: shortLabel(pair.upper) } : pair}
           spec={spec}
-          preset={state.channelDrivers[pair.upper]?.preset ?? null}
+          preset={driverFor(pair.upper)?.preset ?? null}
           onChange={apply}
         />)}
         <ModeRow
@@ -422,11 +439,12 @@ export function CadCrossover() {
         spec={spec}
         resolved={resolved}
         memberLabel={(member) => {
+          if (state.input === 'file') return shortLabel(member);
           const pair = combineChain(state).find((item) => item.lower === member || item.upper === member);
           const role = pair?.lower === member ? pair.lowerRole : pair?.upperRole;
           return role ? `${role} · ${member}` : member;
         }}
-        presetFor={(member) => state.channelDrivers[member]?.preset ?? null}
+        presetFor={(member) => driverFor(member)?.preset ?? null}
         gainUnit={gainUnit}
         onGainUnit={selectGainUnit}
         driveVoltageV={state.driveVoltageV}
@@ -434,7 +452,7 @@ export function CadCrossover() {
         usageFor={(member) => maxOutput?.members?.[member] ?? null}
         onChange={apply}
       />}
-      {shown && <LiveNote shown={shown} live={live} busy={busy} error={liveError} members={sameMembers(spec, shown)} outside={outsideSolvedBand(spec, shown)}/>}
+      {shown && <LiveNote shown={shown} live={live} busy={busy} error={liveError} members={sameMembers(spec, shown, membership)} outside={outsideSolvedBand(spec, shown)} file={state.input === 'file'}/>}
     </>}
   </>;
 }

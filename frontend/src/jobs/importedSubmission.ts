@@ -103,6 +103,31 @@ export function importedSubmissionBlocker(
       }))) {
     return 'Source assignment or motion changed. Edit the source assembly and prepare it again.';
   }
+  const crossoverError = crossoverBandBlocker(state, solveStore);
+  if (crossoverError) return crossoverError;
+  // Same rule as the cardioid form below, for the same reason: a driver the
+  // user asked for and did not finish is refused here rather than dropped on
+  // the way to the wire. Dropping it solved the channel unit-driven under a
+  // rail that named a driver, and the run's missing power, current and
+  // excursion were the first sign of it.
+  const driverError = incompleteDriverBlocker(state);
+  if (driverError) return driverError;
+  // A half-filled cardioid form is refused here rather than dropped silently.
+  // Dropping it would submit the pre-campaign solve under a rail that says a
+  // campaign is configured, which is the one failure mode this feature cannot
+  // afford: the curve would look plausible and be the wrong physics.
+  // Only while this model actually has the port aperture: a stale enabled form
+  // on a model without one is dropped, not turned into a blocker for a section
+  // the rail no longer shows.
+  if (cardioidSurfacePresent(state)) {
+    const cardioid = passiveCardioidBlocker(state, cadPassiveCardioidTopology(state));
+    if (cardioid) return cardioid;
+  }
+  return null;
+}
+
+/** The same solved-band check for CAD and file crossover settings. */
+export function crossoverBandBlocker(state: Parameters<typeof combineWire>[0], solveStore: SolveOptionsSnapshot): string | null {
   // Match SolveRequest.validate_combine_band for the exact spec sent on the
   // wire, including independently edited HP and LP corners.
   const combine = combineWire(state);
@@ -129,24 +154,6 @@ export function importedSubmissionBlocker(
         }
       }
     }
-  }
-  // Same rule as the cardioid form below, for the same reason: a driver the
-  // user asked for and did not finish is refused here rather than dropped on
-  // the way to the wire. Dropping it solved the channel unit-driven under a
-  // rail that named a driver, and the run's missing power, current and
-  // excursion were the first sign of it.
-  const driverError = incompleteDriverBlocker(state);
-  if (driverError) return driverError;
-  // A half-filled cardioid form is refused here rather than dropped silently.
-  // Dropping it would submit the pre-campaign solve under a rail that says a
-  // campaign is configured, which is the one failure mode this feature cannot
-  // afford: the curve would look plausible and be the wrong physics.
-  // Only while this model actually has the port aperture: a stale enabled form
-  // on a model without one is dropped, not turned into a blocker for a section
-  // the rail no longer shows.
-  if (cardioidSurfacePresent(state)) {
-    const cardioid = passiveCardioidBlocker(state, cadPassiveCardioidTopology(state));
-    if (cardioid) return cardioid;
   }
   return null;
 }
@@ -238,7 +245,8 @@ export function importedSubmissionNotices(
   // left at unit acceleration. The two are not in the same units, and it is
   // level matching -- not physics -- that puts them on one chart.
   if (combining) {
-    const mixedMembers = undriven.filter((id) => members.has(id));
+    const mixedMembers = undriven.filter((id) => members.has(id)
+      || state.driverGroups?.some(group => members.has(group.id) && group.channelIds.includes(id)));
     if (mixedMembers.length) {
       const mixedLabels = [...new Set(mixedMembers.map(label))];
       notices.push(
@@ -316,6 +324,14 @@ export function simulationGeometry(
   if (blocker) throw new Error(blocker);
   const combine = combineWire(state);
   const cardioid = present ? passiveCardioidWire(state.passiveCardioid) : null;
+  if (state.input === 'file' && cardioid?.passive_cardioid_coupled && combine) {
+    const members = new Set(combine.members.flatMap(id => state.driverGroups?.find(group => group.id === id)?.channelIds ?? [id]));
+    const byRole = sources.filter(source => source.role.toUpperCase() === 'MF');
+    const midSources = new Set((byRole.length ? byRole : sources.filter(source => source.id.toUpperCase() === 'MF')).map(source => source.id));
+    if (state.driveChannels.some(channel => members.has(channel.id) && channel.source_ids.some(id => midSources.has(id)))) {
+      throw new Error('Turn off Crossover while using coupled passive cardioid.');
+    }
+  }
   return { drivers: simulationDriverGeometry(state, retained),
     effects: { ...(combine ? { combine } : {}), ...(cardioid ?? {}) } };
 }

@@ -57,7 +57,8 @@ export function selectResultChannels(id: string, label: string, result: ResultDa
   });
   const combine = combineMetadataOf(payload.channels[active] as ResultPayload);
   const members = combine
-    ? combine.members.filter((member) => member !== active && member in payload.channels!)
+    ? combine.members.flatMap(member => combine.member_channels?.[member] ?? [member])
+      .filter((member) => member !== active && member in payload.channels!)
     : [];
   return [entry(active, false), ...members.map((member) => entry(member, true))];
 }
