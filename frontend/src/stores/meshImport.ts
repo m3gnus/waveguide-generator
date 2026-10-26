@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import {
-  MeshImportApiError, inspectMesh, inspectMeshModel, prepareMeshModel, registerMesh, type MeshSummary, type RegisteredMesh,
+  inspectMesh, inspectMeshModel, prepareMeshModel, registerMesh, type MeshSummary, type RegisteredMesh,
 } from '../api/meshImport';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -14,7 +14,7 @@ import type { ImportedSolveSubmission } from '../jobs/actions';
 import { beforeSolveSettingsEdit, noteSolveSettingsEdit, subscribeSolveSettingsEdits } from './solveSettingsEdits';
 import { openMeshReplay } from '../api/meshReplay';
 import { bindImportedSetup, importedSetupOf, type ImportedSetup } from '../jobs/importedSetup';
-import { ImportedModelApiError, saveImportedSetup } from '../api/importedModels';
+import { ImportedModelApiError } from '../api/importedModels';
 import { withChannelMotion } from './cadReturn';
 import {
   editFileDraft, effectiveImportedSetup, flushImportedSetupWrites, importedModelBlocker, isCurrentOpen, openImported,
@@ -149,10 +149,9 @@ export async function loadMeshFile(filename: string, text: string, fetcher: type
       domainPlanes: preparation?.domain_planes ?? summary.detected_planes ?? [],
       reflectPlanes: preparation?.reflect_planes ?? null, removeLidPlanes: preparation?.remove_lid_planes ?? [] });
     if (previous?.setup) {
-      applyWireOptionsToImportedSolveOptions(previous.setup.options as Partial<SolveOptions>);
+      const motions = seedFileSetup(previous.setup);
       useImportedModelStore.setState({ setup: structuredClone(previous.setup) });
-      useMeshImportStore.setState({ motions: Object.fromEntries(previous.setup.geometry.drive_channels.flatMap(channel =>
-        channel.source_ids.map(id => [id, channel.motion ?? 'normal']))) });
+      useMeshImportStore.setState({ motions });
     }
     if (previous) {
       const time = new Date(previous.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -217,7 +216,7 @@ export async function prepareMeshFile(fetcher: typeof fetch = fetch, inspectFram
     if (importedMeshStore.isCurrentGeneration(generation)
       && JSON.stringify(useImportedModelStore.getState().fileDraft) === JSON.stringify(draft)) {
       useMeshImportStore.setState({ error: error instanceof Error ? error.message : String(error),
-        failureRetry: !(error instanceof MeshImportApiError && error.code === 'mesh_too_large') });
+        failureRetry: !(error instanceof ImportedModelApiError && error.code === 'mesh_too_large') });
     }
   } finally {
     if (useMeshImportStore.getState().request === request) useMeshImportStore.setState({ busy: false });
@@ -327,22 +326,28 @@ function assertFileRecord(record: RegisteredMesh, setup: ImportedSetup | null, p
   }
 }
 
-/** Show one prepared file mesh with the setup it opens with (none: the options seeded for a file). */
-function fillFileRail(record: RegisteredMesh, setup: ImportedSetup | null, generation: number): boolean {
-  if (!importedMeshStore.isCurrentGeneration(generation)) return false;
-  if (!importedMeshStore.setFile(preparedFileScene(record), generation)) return false;
-  workspaceModeStore.setMode('cad');
+/** Restore the file's options and motions from the same baseline for every open path. */
+function seedFileSetup(setup: ImportedSetup | null): MeshImportState['motions'] {
   // The setup's own options seed the imported instance, over a copy of the
   // parametric options for whatever the setup does not state.
   seedImportedSolveOptionsForFile();
   if (setup) applyWireOptionsToImportedSolveOptions(setup.options as Partial<SolveOptions>);
   useImportedSolveOptionsStore.setState({ groundPlane: { enabled: false, axis: 'y', height_m: 0 } });
+  return Object.fromEntries((setup?.geometry.drive_channels ?? []).flatMap(channel =>
+    channel.source_ids.map(id => [id, channel.motion ?? 'normal'])));
+}
+
+/** Show one prepared file mesh with the setup it opens with (none: the options seeded for a file). */
+function fillFileRail(record: RegisteredMesh, setup: ImportedSetup | null, generation: number): boolean {
+  if (!importedMeshStore.isCurrentGeneration(generation)) return false;
+  if (!importedMeshStore.setFile(preparedFileScene(record), generation)) return false;
+  workspaceModeStore.setMode('cad');
+  const motions = seedFileSetup(setup);
   useMeshImportStore.setState({ ...initial, filename: record.source_file.filename,
     summary: { ...record.summary, kept_sides: { ...record.summary.kept_sides,
       ...Object.fromEntries((record.symmetry?.reflected_planes ?? []).map(plane => [plane, 'negative' as const])),
     } },
-    motions: Object.fromEntries((setup?.geometry.drive_channels ?? []).flatMap(channel =>
-      channel.source_ids.map(id => [id, channel.motion ?? 'normal']))),
+    motions,
     request: useMeshImportStore.getState().request,
   });
   return true;
@@ -400,11 +405,4 @@ export async function loadMeshReplay(text: string, fetcher: typeof fetch = fetch
   } finally {
     if (useMeshImportStore.getState().request === requestNumberAtStart) useMeshImportStore.setState({ busy: false });
   }
-}
-
-/** Save the same effective setup Solve submits, through the imported-model owner. */
-export async function saveMeshSetup(fetcher: typeof fetch = fetch): Promise<void> {
-  const setup = fileMeshSetup();
-  const record = registeredMesh()!;
-  await saveImportedSetup(record.model_id, record.ingest_id, setup, fetcher);
 }

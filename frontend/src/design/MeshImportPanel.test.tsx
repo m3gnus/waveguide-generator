@@ -330,21 +330,28 @@ it('shows the server triangle refusal unchanged with no Try again or preparation
 it('shows a shared setup-save failure in the file status line', async () => {
   const { useCadSetupPublisherStore } = await import('../shell/cadSetupPublisher');
   geometry({ prepared: true });
-  act(() => useCadSetupPublisherStore.setState({ error: 'Settings not saved. Edit a setting to retry.' }));
+  act(() => useCadSetupPublisherStore.getState().record('failed', { input: 'file', modelId: useImportedModelStore.getState().modelId }));
   expect(host.querySelector('.cad-status-line')?.textContent).toBe('Settings not saved. Edit a setting to retry.');
   expect(host.querySelector('.cad-status-line button')).toBeNull();
   expectNoJargon(host);
-  act(() => useCadSetupPublisherStore.setState({ error: null }));
+  act(() => useCadSetupPublisherStore.setState({ errors: {} }));
 });
 
-it('does not offer Try again when inspecting an edited retained model exceeds the server limit', async () => {
-  const message = 'This mesh has 20,001 triangles; Waveguide Generator accepts up to 20,000. Export a coarser mesh, or export only the half or quarter of a symmetric model.';
-  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: { code: 'mesh_too_large', message } }), { status: 422 })));
-  geometry({ original: false, prepared: true });
-  act(() => useImportedModelStore.setState({ originalAvailable: true }));
-  act(() => button('Change axes').click());
-  await act(async () => choose(host.querySelector<HTMLSelectElement>('[aria-label="Mesh up axis"]')!, '+x'));
-  expect(host.querySelector('.cad-status-line')?.textContent).toBe(message);
-  expect(host.querySelector('.cad-status-line button')).toBeNull();
-  expectNoJargon(host);
+
+it('shows only save errors belonging to this file model', async () => {
+  const { useCadSetupPublisherStore } = await import('../shell/cadSetupPublisher');
+  geometry({ prepared: true });
+  const modelId = useImportedModelStore.getState().modelId;
+  act(() => {
+    const { record } = useCadSetupPublisherStore.getState();
+    record('failed', { input: 'cad', modelId });
+    record('failed', { input: 'file', modelId: 'mesh-file:other' });
+  });
+  expect(host.querySelector('.cad-status-line')?.textContent).toContain('Ready to solve');
+  act(() => useCadSetupPublisherStore.getState().record('failed', { input: 'file', modelId }));
+  expect(host.querySelector('.cad-status-line')?.textContent).toBe('Settings not saved. Edit a setting to retry.');
+  act(() => useCadSetupPublisherStore.getState().record('saved', { input: 'file', modelId }));
+  expect(host.querySelector('.cad-status-line')?.textContent).toContain('Ready to solve');
+  expect(Object.keys(useCadSetupPublisherStore.getState().errors)).toHaveLength(2);
+  act(() => useCadSetupPublisherStore.setState({ errors: {} }));
 });

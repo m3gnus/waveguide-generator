@@ -1,3 +1,4 @@
+import { saveImportedSetup } from '../api/importedModels';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createImportedMeshScene } from '../viewport/importedMesh';
@@ -6,7 +7,7 @@ import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from './workspaceMode';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
 import { editMeshImport, fileMeshSubmission, loadMeshFile, prepareMeshFile, loadMeshReplay, registeredMesh,
-  saveMeshSetup, setMeshMotion, useMeshImportStore } from './meshImport';
+  fileMeshSetup, setMeshMotion, useMeshImportStore } from './meshImport';
 import { openImported, reopenLastModel, resetImportedModelStore, unchangedSetup, useImportedModelStore, editFileDraft } from './importedModel';
 import { readLastModel } from './lastModel';
 import type { RegisteredMesh, MeshSummary } from '../api/meshImport';
@@ -141,7 +142,7 @@ describe('standalone imported mesh', () => {
     useImportedSolveOptionsStore.getState().setSweep({ startHz: 250, endHz: 8000, count: 17 });
     const expected = fileMeshSubmission();
     const save = vi.fn<typeof fetch>(async () => response({ revision_id: 'wgs_saved' }));
-    await saveMeshSetup(save);
+    await saveImportedSetup(registeredMesh()!.model_id, registeredMesh()!.ingest_id, fileMeshSetup(), save);
     const { prepared_id: savedFor, setup } = JSON.parse(save.mock.calls[0][1]?.body as string);
     expect(savedFor).toBe(record.ingest_id);
     expect(save.mock.calls[0][0]).toBe(`/api/models/${encodeURIComponent(record.model_id)}/setup`);
@@ -431,7 +432,7 @@ describe('server-valid file setup edit contract', () => {
 
   async function expectSavedSetup(setup: ImportedSetup) {
     const save = vi.fn<typeof fetch>(async () => response({ revision_id: 'wgs_contract' }));
-    await saveMeshSetup(save);
+    await saveImportedSetup(registeredMesh()!.model_id, registeredMesh()!.ingest_id, fileMeshSetup(), save);
     expect(save).toHaveBeenCalledOnce();
     expect(JSON.parse(save.mock.calls[0][1]?.body as string).setup).toEqual({ schema_version: 1, ...setup });
     const { geometry, options } = setup;
@@ -507,7 +508,7 @@ describe('portable mesh replay', () => {
     await loadMeshReplay('{}', vi.fn(async () => response({ record: replayRecord, request })));
     const before = fileMeshSubmission();
     const save = vi.fn<typeof fetch>(async () => response({ revision_id: 'wgs_saved' }));
-    await saveMeshSetup(save);
+    await saveImportedSetup(registeredMesh()!.model_id, registeredMesh()!.ingest_id, fileMeshSetup(), save);
     const { setup } = JSON.parse(save.mock.calls[0][1]?.body as string);
     expect(setup).toEqual(setupOfRequest(request));
     expect(fileMeshSubmission()).toEqual(before);
@@ -531,7 +532,7 @@ describe('portable mesh replay', () => {
     delete expected.geometry.drive_channels[0].driver;
     expect(fileMeshSubmission()).toEqual(expected);
     const save = vi.fn<typeof fetch>(async () => response({ revision_id: 'wgs_edited' }));
-    await saveMeshSetup(save);
+    await saveImportedSetup(registeredMesh()!.model_id, registeredMesh()!.ingest_id, fileMeshSetup(), save);
     expect(JSON.parse(save.mock.calls[0][1]?.body as string).setup).toEqual(setupOfRequest(expected));
   });
 

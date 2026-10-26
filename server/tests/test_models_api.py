@@ -749,3 +749,42 @@ def test_inspection_keeps_settings_available_to_repair_a_missing_prepared_mesh(t
             await runtime.shutdown()
             store.close()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("planes", [(), ("x0",), ("y0",), ("x0", "y0")])
+def test_retained_mesh_inspection_keeps_pre_limit_models_editable(tmp_path, monkeypatch, planes):
+    from dataclasses import replace
+    import numpy as np
+    from server.mesh.file_import import mesh_text
+    from test_file_mesh_roles_symmetry import box_mesh
+
+    async def scenario():
+        store = CadLinkStore.for_data_dir(tmp_path)
+        app, runtime = app_for(tmp_path, store)
+        try:
+            mesh = box_mesh(planes=planes)
+            count = 20_001
+            large = replace(mesh, triangles=np.resize(mesh.triangles, (count, 3)), tags=np.resize(mesh.tags, count))
+            original = mesh_text(large)
+            # The retained original predates the limit. Inspection still uses the
+            # normal parser; mock geometric evidence to avoid testing repeated faces.
+            monkeypatch.setattr("server.jobs.models_api.read_original", lambda *_: ("old.msh", original))
+            inspected = []
+            def evidence(parsed, *_):
+                inspected.append(parsed)
+                return {**parsed.summary(), "detected_planes": list(planes)}
+            monkeypatch.setattr("server.jobs.models_api.inspect_file_mesh", evidence)
+            retained = await call(app, "POST", "/api/models/files/inspect", {
+                "model_id": "mesh-file:old", "units": "m", "forward": "+z", "up": "+y",
+            })
+            assert retained["triangle_count"] == count
+            assert retained["detected_planes"] == list(planes)
+            fresh = await call(app, "POST", "/api/models/files/inspect", {
+                "filename": "old.msh", "msh_text": original,
+            }, expected=422)
+            assert fresh["error"]["code"] == "mesh_too_large"
+            assert len(inspected) == 1
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())

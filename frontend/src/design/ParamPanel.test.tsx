@@ -151,7 +151,7 @@ describe('ParamPanel inventory UX', () => {
 
     resetSolveOptionsStore();
     resetDriverLibraryStore();
-    useCadSetupPublisherStore.setState({ error: null });
+    useCadSetupPublisherStore.setState({ errors: {} });
     workspaceModeStore.setMode('parametric');
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     host = document.createElement('div');
@@ -163,7 +163,7 @@ describe('ParamPanel inventory UX', () => {
     act(() => root.unmount());
     host.remove();
     queryClient.clear();
-    useCadSetupPublisherStore.setState({ error: null });
+    useCadSetupPublisherStore.setState({ errors: {} });
     workspaceModeStore.setMode('parametric');
     vi.restoreAllMocks();
     vi.unstubAllGlobals();

@@ -1,5 +1,5 @@
 import type { ImportedSetup } from '../jobs/importedSetup';
-import { formatApiDetail } from '../jobs/actions';
+import { requestImportedModel } from './importedModels';
 
 export interface MeshSummary {
   known_model?: { model_id: string; latest_prepared_id: string };
@@ -44,19 +44,10 @@ export interface FilePreparation {
 
 const modelPath = (modelId: string) => `/api/models/${encodeURIComponent(modelId)}`;
 
-export class MeshImportApiError extends Error {
-  constructor(message: string, readonly code: string | null) { super(message); }
-}
-
-async function request<T>(url: string, body?: unknown, fetcher: typeof fetch = fetch): Promise<T> {
-  const response = await fetcher(url, body === undefined ? undefined : {
+function request<T>(url: string, body?: unknown, fetcher: typeof fetch = fetch): Promise<T> {
+  return requestImportedModel(url, fetcher, 'Mesh import', body === undefined ? undefined : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
-  if (!response.ok) {
-    const error = await response.json().catch(() => null) as { error?: { message?: string; code?: string }; detail?: unknown } | null;
-    throw new MeshImportApiError(error?.error?.message ?? formatApiDetail(error?.detail) ?? `Mesh import failed (${response.status}).`, error?.error?.code ?? null);
-  }
-  return response.json() as Promise<T>;
 }
 
 export const inspectMesh = (filename: string, msh_text: string, fetcher?: typeof fetch, frame?: { units?: string; forward: string; up: string }) =>

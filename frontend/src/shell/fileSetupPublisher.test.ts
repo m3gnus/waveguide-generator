@@ -118,3 +118,17 @@ it('does not replace the model setup merely by reopening a saved model', async (
   await vi.advanceTimersByTimeAsync(101);
   expect(fetcher).not.toHaveBeenCalled();
 });
+
+it('attributes a late file save failure to the model that issued it', async () => {
+  let finish!: (response: Response) => void;
+  const pending = new Promise<Response>(resolve => { finish = resolve; });
+  const onSaveState = vi.fn();
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).startsWith('/api/models/') ? pending : response({}));
+  stop = startCadSetupPublisher({ fetcher, debounceMs: 100, retryDelaysMs: [], onSaveState });
+  setMeshMotion('group_2', 'axial');
+  await vi.advanceTimersByTimeAsync(101);
+  workspaceModeStore.setImportedInput('cad');
+  finish(new Response(JSON.stringify({ detail: 'Could not save settings.' }), { status: 500 }));
+  await vi.advanceTimersByTimeAsync(1);
+  expect(onSaveState).toHaveBeenCalledExactlyOnceWith('failed', { input: 'file', modelId: record.model_id });
+});

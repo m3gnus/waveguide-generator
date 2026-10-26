@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { editMeshImport, prepareMeshFile, setMeshMotion, useMeshImportStore, meshImportChoice } from '../stores/meshImport';
 import { FILE_SURFACE_ROLES, fileSymmetryLabel, sourceRoleLabel } from '../model/cadLabels';
-import { useCadSetupPublisherStore } from '../shell/cadSetupPublisher';
+import { useImportedSetupSaveError } from '../shell/cadSetupPublisher';
 import { CadModelStatusLine } from '../shell/CadModelStatusLine';
 import { FileModelDetails } from '../shell/CadModelDetails';
 import { useImportedModelStore } from '../stores/importedModel';
@@ -22,8 +22,8 @@ const AXES = ['+x', '-x', '+y', '-y', '+z', '-z'];
 /** The ready-mesh workflow does not expose CAD generation or connection controls. */
 export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | 'simulation'; embedded?: boolean }) {
   const state = useMeshImportStore();
-  const saveError = useCadSetupPublisherStore(state => state.error);
   const model = useImportedModelStore();
+  const saveError = useImportedSetupSaveError('file', model.input === 'file' ? model.modelId : null);
   const draft = model.fileDraft;
   const registered = model.input === 'file' ? model.prepared as RegisteredMesh | null : null;
   // The geometry can change whenever an original exists to prepare it from:

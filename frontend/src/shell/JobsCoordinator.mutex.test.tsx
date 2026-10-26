@@ -1,3 +1,4 @@
+import { saveImportedSetup } from '../api/importedModels';
 import './cadlink/restores';
 import { archivedRequest, job as archivedJob, json, mesh as archivedMesh, record as archivedRecord, workspaceFor } from './cadlink/selection.fixtures';
 import { captureSolveInputs } from '../jobs/useRequestedSolve';
@@ -30,7 +31,7 @@ import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsSt
 import { solveOptionsStoreForMode, useScopedSolveOptions } from '../stores/solveOptionsContext';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
-import { saveMeshSetup, useMeshImportStore } from '../stores/meshImport';
+import { fileMeshSetup, registeredMesh, useMeshImportStore } from '../stores/meshImport';
 import { readLastModel, rememberLastModel } from '../stores/lastModel';
 import type { RegisteredMesh } from '../api/meshImport';
 import type { ImportedMeshScene } from '../viewport/importedMesh';
@@ -2987,7 +2988,7 @@ describe('solve invocation mutex', () => {
     act(() => resetImportedModelStore());
   });
 
-  it('submits the same complete file setup before and after Save setup', async () => {
+  it('submits the same complete file setup before and after recording its setup', async () => {
     const replay = importedSubmission('wgi_saved_replay');
     replay.geometry.drive_voltage_v = 4.2;
     replay.geometry.drive_channels[0].driver = { re_ohm: 6.2, sd_cm2: 26, bl_t_m: 12.4, mms_g: 2.4, fs_hz: 620 };
@@ -3009,7 +3010,7 @@ describe('solve invocation mutex', () => {
     await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     const before = structuredClone(press().setup);
     const save = vi.fn<typeof fetch>(async () => json({ revision_id: 'wgs_saved' }));
-    await act(async () => { await saveMeshSetup(save); });
+    await act(async () => { await saveImportedSetup(registeredMesh()!.model_id, registeredMesh()!.ingest_id, fileMeshSetup(), save); });
     await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     expect(before).toEqual({ schema_version: 1, ...setup });
     expect(press(1).setup).toEqual(before);

@@ -21,7 +21,7 @@ export async function writeImportedSetup(modelId: string,
   body: { setup: unknown; prepared_id?: string; inventory?: CadSourceInventoryEntry[] },
   fetcher: typeof fetch = fetch, options: { keepalive?: boolean } = {},
 ): Promise<{ revision_id: string; content_sha256: string; inventory_sha256: string }> {
-  return read(`/api/models/${encodeURIComponent(modelId)}/setup`, fetcher, 'Setup', {
+  return requestImportedModel(`/api/models/${encodeURIComponent(modelId)}/setup`, fetcher, 'Setup', {
     method: 'PUT', ...(options.keepalive ? { keepalive: true } : {}),
     headers: { 'Content-Type': 'application/json', 'X-WG-Setup-Writer': setupWriter, 'X-WG-Setup-Seq': String(++setupSequence) },
     body: JSON.stringify(body),
@@ -33,7 +33,7 @@ export const saveImportedSetup = (modelId: string, preparedId: string, setup: Im
   writeImportedSetup(modelId, { prepared_id: preparedId, setup: { schema_version: 1, ...setup } }, fetcher, options);
 export const readImportedSetup = (modelId: string, preparedId: string, fetcher: typeof fetch = fetch):
   Promise<{ setup: ImportedSetup | null; revision_id?: string | null }> =>
-  read(`/api/models/${encodeURIComponent(modelId)}/setup?prepared_id=${encodeURIComponent(preparedId)}`, fetcher, 'Setup');
+  requestImportedModel(`/api/models/${encodeURIComponent(modelId)}/setup?prepared_id=${encodeURIComponent(preparedId)}`, fetcher, 'Setup');
 
 /** An imported model as the server keeps it (`server/jobs/models_api.py`). */
 export interface ImportedModelSummary {
@@ -67,7 +67,7 @@ export interface RunWorkspace {
   refusal?: { code: string; message: string } | null;
 }
 
-async function read<T>(path: string, fetcher: typeof fetch, what: string, init?: RequestInit): Promise<T> {
+export async function requestImportedModel<T>(path: string, fetcher: typeof fetch, what: string, init?: RequestInit): Promise<T> {
   const response = await fetcher(path, init);
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: { message?: unknown; code?: unknown }; detail?: unknown } | null;
@@ -80,16 +80,16 @@ async function read<T>(path: string, fetcher: typeof fetch, what: string, init?:
 
 /** The one read a run is reopened from: its model, prepared mesh, original and setup. */
 export const readRunWorkspace = (jobId: string, fetcher: typeof fetch = fetch): Promise<RunWorkspace> =>
-  read(`/api/runs/${encodeURIComponent(jobId)}/workspace`, fetcher, 'This run’s workspace');
+  requestImportedModel(`/api/runs/${encodeURIComponent(jobId)}/workspace`, fetcher, 'This run’s workspace');
 
 /** A model, its latest preparation and, when named, one preparation with its mesh. */
 export const readImportedModel = (modelId: string, preparedId: string | null, fetcher: typeof fetch = fetch):
   Promise<{ model: ImportedModelSummary; latest_prepared: PreparedSummary | null; prepared?: PreparedSummary; original_available: boolean }> =>
-  read(`/api/models/${encodeURIComponent(modelId)}${preparedId ? `?prepared_id=${encodeURIComponent(preparedId)}` : ''}`,
+  requestImportedModel(`/api/models/${encodeURIComponent(modelId)}${preparedId ? `?prepared_id=${encodeURIComponent(preparedId)}` : ''}`,
     fetcher, 'This model');
 
 /** A CAD return can read its setup before its mesh is prepared. Same inventory key as reopen. */
 export const readCadInventorySetup = (modelId: string, inventory: CadSourceInventoryEntry[], fetcher: typeof fetch = fetch):
   Promise<{ setup: ImportedSetup | null; revision_id?: string | null; cad_claimed?: boolean }> =>
-  read(`/api/models/${encodeURIComponent(modelId)}/setup?inventory=${encodeURIComponent(JSON.stringify(inventory))}`,
+  requestImportedModel(`/api/models/${encodeURIComponent(modelId)}/setup?inventory=${encodeURIComponent(JSON.stringify(inventory))}`,
     fetcher, 'This model’s settings');

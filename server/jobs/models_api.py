@@ -643,7 +643,7 @@ def mount_models_api(application: FastAPI) -> None:
             text = read_original(store, body.model_id)[1] if isinstance(body, RetainedMeshInspection) else body.msh_text
             mesh = parse_file_mesh(text)
             count = len(mesh.triangles)
-            if count > MAX_FILE_MESH_TRIANGLES:
+            if isinstance(body, MeshInspection) and count > MAX_FILE_MESH_TRIANGLES:
                 raise ModelRefusal(422, "mesh_too_large",
                     f"This mesh has {count:,} triangles; Waveguide Generator accepts up to {MAX_FILE_MESH_TRIANGLES:,}. "
                     "Export a coarser mesh, or export only the half or quarter of a symmetric model.")

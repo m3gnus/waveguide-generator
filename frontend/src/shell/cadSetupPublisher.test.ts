@@ -98,6 +98,25 @@ describe('CAD setup publisher', () => {
     workspaceModeStore.setMode('parametric');
   });
 
+  it('attributes a late CAD save failure to the model that issued it', async () => {
+    vi.useFakeTimers();
+    workspaceModeStore.setImportedInput('cad');
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
+    let finish!: (response: Response) => void;
+    const pending = new Promise<Response>(resolve => { finish = resolve; });
+    const fetcher = vi.fn<typeof fetch>(async url => isSetupPut(String(url)) ? pending : json({}));
+    const onSaveState = vi.fn();
+    const stop = startCadSetupPublisher({ fetcher, debounceMs: 100, retryDelaysMs: [], onSaveState });
+    useCadReturnStore.getState().setExteriorOnly(true);
+    await vi.advanceTimersByTimeAsync(101);
+    workspaceModeStore.setImportedInput('file');
+    finish(new Response(JSON.stringify({ detail: 'Could not save settings.' }), { status: 500 }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onSaveState).toHaveBeenCalledExactlyOnceWith('failed', { input: 'cad', modelId: 'wgl_a' });
+    stop();
+    workspaceModeStore.setImportedInput('cad');
+  });
+
   it('records which FEM regions an exterior-only choice excludes', () => {
     const store = useCadReturnStore.getState();
     store.selectBundle(bundle, 'wgl_speaker');
@@ -710,7 +729,7 @@ describe('shell-owned CAD setup publisher', () => {
     resetSolveOptionsStore();
 
     resetCadCoordinationForTests('off');
-    useCadSetupPublisherStore.setState({ error: null });
+    useCadSetupPublisherStore.setState({ errors: {} });
     useCadConnectionStore.setRecoveryError(null);
     cadReceiptsStore.setState({ recoveryError: null });
     workspaceModeStore.setMode('cad');
@@ -755,6 +774,24 @@ describe('shell-owned CAD setup publisher', () => {
     expect(host.textContent).toContain('could not check Fusion Sends (offline)');
     act(() => { cadReceiptsStore.setState({ recoveryError: null }); });
     expect(host.textContent).toBe('');
+  });
+
+  it('shows only the selected CAD model’s save error, keeping other inputs and models separate', () => {
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
+    const Feedback = () => createElement('p', null, useCadFeedbackError(null));
+    act(() => {
+      const { record } = useCadSetupPublisherStore.getState();
+      record('failed', { input: 'file', modelId: 'wgl_a' });
+      record('failed', { input: 'cad', modelId: 'wgl_b' });
+      root.render(createElement(Feedback));
+    });
+    expect(host.textContent).toBe('');
+    act(() => useCadSetupPublisherStore.getState().record('failed', { input: 'cad', modelId: 'wgl_a' }));
+    expect(host.textContent).toBe('Settings not saved. Edit a setting to retry.');
+    act(() => useCadReturnStore.getState().selectBundle(bundle, 'wgl_c'));
+    expect(host.textContent).toBe('');
+    act(() => useCadSetupPublisherStore.getState().record('saved', { input: 'cad', modelId: 'wgl_a' }));
+    expect(Object.keys(useCadSetupPublisherStore.getState().errors)).toHaveLength(2);
   });
 
   const mount = async () => act(async () => { root.render(createElement(Shell)); await vi.advanceTimersByTimeAsync(10); });
@@ -804,9 +841,9 @@ describe('shell-owned CAD setup publisher', () => {
     useCadReturnStore.getState().setExteriorOnly(true);
     await advance(6_000);
     expect(calls).toHaveLength(3);
-    expect(useCadSetupPublisherStore.getState().error).toBe('Settings not saved. Edit a setting to retry.');
+    expect(Object.values(useCadSetupPublisherStore.getState().errors)).toEqual(['Settings not saved. Edit a setting to retry.']);
     useCadReturnStore.getState().setExteriorOnly(false);
     await advance(800);
-    expect(useCadSetupPublisherStore.getState().error).toBeNull();
+    expect(useCadSetupPublisherStore.getState().errors).toEqual({});
   });
 });

@@ -37,6 +37,12 @@ export interface CadProjectSetup {
   setup: CadSolveSetup;
 }
 
+interface SetupSaveOwner { input: 'cad' | 'file'; modelId: string | null }
+const saveOwnerKey = (owner: SetupSaveOwner) => JSON.stringify([owner.input, owner.modelId]);
+const cadSaveOwner = (): SetupSaveOwner => ({ input: 'cad', modelId: projectLineage(useCadReturnStore.getState()) });
+const publishedSaveOwner = (setup: PublishedSetup): SetupSaveOwner => 'modelId' in setup
+  ? { input: 'file', modelId: setup.modelId } : { input: 'cad', modelId: setup.lineageId };
+
 type PublishedSetup = CadProjectSetup | { modelId: string; preparedId: string; setup: ImportedSetup };
 
 type CadReturnSnapshot = ReturnType<typeof useCadReturnStore.getState>;
@@ -156,7 +162,7 @@ export function startCadSetupPublisher(
     /** Waits before each retry of a failed recording; its length bounds the attempts. */
     retryDelaysMs?: number[];
     /** `failed` once every attempt at an edit has failed; `saved` when a later one lands. */
-    onSaveState?: (state: 'failed' | 'saved') => void;
+    onSaveState?: (state: 'failed' | 'saved', owner: SetupSaveOwner) => void;
   } = {},
 ): () => void {
   const fetcher = options.fetcher ?? fetch;
@@ -169,14 +175,15 @@ export function startCadSetupPublisher(
   let pending: PendingSetup | null = null;
   const journals = new Map<string, NonNullable<ReturnType<typeof retainCadDraft>>>();
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let failed = false;
-  let solverFailed = false;
-  let reportedFailure = false;
-  const reportSaveState = () => {
-    const next = failed || solverFailed;
-    if (next === reportedFailure) return;
-    reportedFailure = next;
-    onSaveState(next ? 'failed' : 'saved');
+  const failures = new Map<string, { setup: boolean; solver: boolean }>();
+  const reportSaveState = (owner: SetupSaveOwner, source: 'setup' | 'solver', failed: boolean) => {
+    const key = saveOwnerKey(owner);
+    const prior = failures.get(key) ?? { setup: false, solver: false };
+    const next = { ...prior, [source]: failed };
+    const wasFailed = prior.setup || prior.solver;
+    const isFailed = next.setup || next.solver;
+    if (isFailed) failures.set(key, next); else failures.delete(key);
+    if (isFailed !== wasFailed) onSaveState(isFailed ? 'failed' : 'saved', owner);
   };
   type SolverSelection = { engine: string; accuracy: 'fast' | 'accurate' };
   let solverSelection: SolverSelection | null = null;
@@ -200,6 +207,7 @@ export function startCadSetupPublisher(
   const writes: Array<{ run: () => void; next: PublishedSetup; key: string; attempt: number }> = [];
   const send = (next: PublishedSetup, key: string, attempt: number, keepalive: boolean) => {
     retrying = null;
+    const owner = publishedSaveOwner(next);
     const journal = journals.get(key);
     const sequence = ++writeSequence;
     const run = () => {
@@ -214,7 +222,7 @@ export function startCadSetupPublisher(
           clearCadDraft(journal.key, journal.raw, saved.revisionId ?? null); journals.delete(key);
         }
         if ('modelId' in next && published === key) fileDirty = false;
-        if (failed && published === key) { failed = false; reportSaveState(); }
+        if (published === key) reportSaveState(owner, 'setup', false);
       }, () => {
         // A newer edit has taken over: it is what needs recording now.
         if (published !== key) return;
@@ -224,7 +232,7 @@ export function startCadSetupPublisher(
           return;
         }
         published = null;
-        if (!failed) { failed = true; reportSaveState(); }
+        reportSaveState(owner, 'setup', true);
       }).finally(() => {
         if (!keepalive) {
           writeInFlight = false;
@@ -321,7 +329,7 @@ export function startCadSetupPublisher(
   // One outstanding write: the backend must finish an older choice before
   // it receives the latest one. Changes during a write replace the queued
   // choice rather than publishing intermediate selections out of order.
-  const sendSolverSelection = (next: SolverSelection, attempt = 0) => {
+  const sendSolverSelection = (next: SolverSelection, attempt = 0, owner = cadSaveOwner()) => {
     solverInFlight = true;
     const key = JSON.stringify(next);
     const latest = () => solverSelection !== null && JSON.stringify(solverSelection) === key;
@@ -330,8 +338,7 @@ export function startCadSetupPublisher(
       if (stopped) return;
       savedSolverSelection = key;
       if (!latest()) { sendSolverSelection(solverSelection!); return; }
-      solverFailed = false;
-      reportSaveState();
+      reportSaveState(owner, 'solver', false);
     }, (error: unknown) => {
       solverInFlight = false;
       if (stopped) return;
@@ -344,12 +351,11 @@ export function startCadSetupPublisher(
       if (transient && attempt < retryDelays.length) {
         solverRetry = setTimeout(() => {
           solverRetry = null;
-          if (!stopped) sendSolverSelection(solverSelection!, attempt + 1);
+          if (!stopped) sendSolverSelection(solverSelection!, attempt + 1, owner);
         }, retryDelays[attempt]);
         return;
       }
-      solverFailed = true;
-      reportSaveState();
+      reportSaveState(owner, 'solver', true);
     });
   };
 
@@ -417,22 +423,38 @@ export function startCadSetupPublisher(
   };
 }
 
-/** Shared imported-setup save feedback remains available outside CAD workspace owners. */
-export const useCadSetupPublisherStore = create<{ error: string | null }>(() => ({ error: null }));
+/** Save feedback stays with the input and model that issued the write. */
+export const useCadSetupPublisherStore = create<{
+  errors: Record<string, string>;
+  record(state: 'failed' | 'saved', owner: SetupSaveOwner): void;
+}>(set => ({
+  errors: {},
+  record(state, owner) {
+    set(current => {
+      const errors = { ...current.errors };
+      const key = saveOwnerKey(owner);
+      if (state === 'failed') errors[key] = 'Settings not saved. Edit a setting to retry.';
+      else delete errors[key];
+      return { errors };
+    });
+  },
+}));
+
+export function useImportedSetupSaveError(input: 'cad' | 'file', modelId: string | null): string | null {
+  return useCadSetupPublisherStore(state => state.errors[saveOwnerKey({ input, modelId })] ?? null);
+}
 
 /** All CAD feedback surfaces give action errors precedence over setup-save failures. */
 export function useCadFeedbackError(actionError: string | null): string | null {
   const reconnectError = useCadConnectionStore((state) => state.recoveryError);
   const receiptError = useCadReceiptsStore((state) => state.recoveryError);
-  return useCadSetupPublisherStore((state) => actionError ?? reconnectError
-    ?? (receiptError ? `WG could not check Fusion Sends (${receiptError}). Refresh CAD Link to try again.` : null) ?? state.error);
+  const modelId = useCadReturnStore(projectLineage);
+  const saveError = useImportedSetupSaveError('cad', modelId);
+  return actionError ?? reconnectError
+    ?? (receiptError ? `WG could not check Fusion Sends (${receiptError}). Refresh CAD Link to try again.` : null) ?? saveError;
 }
 
 export function CadSetupPublisher() {
-  useEffect(() => startCadSetupPublisher({
-    onSaveState: (state) => useCadSetupPublisherStore.setState({
-      error: state === 'failed' ? 'Settings not saved. Edit a setting to retry.' : null,
-    }),
-  }), []);
+  useEffect(() => startCadSetupPublisher({ onSaveState: useCadSetupPublisherStore.getState().record }), []);
   return null;
 }
