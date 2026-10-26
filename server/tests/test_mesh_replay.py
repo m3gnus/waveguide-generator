@@ -211,3 +211,28 @@ def test_cad_runs_are_not_relabelled_as_portable_file_meshes(tmp_path, monkeypat
             store.close()
 
     asyncio.run(scenario())
+
+
+def test_explicit_file_roles_survive_replay_into_a_fresh_store(tmp_path):
+    async def scenario():
+        app, store, runtime, _ = app_for(tmp_path / "origin")
+        try:
+            record = register_mesh(store, app.state.data_dir, registration(
+                source_tags=[], roles={1: "RIGID", 2: "MF"},
+            ))
+            job_id = await runtime.submit(request(record))
+            await runtime.wait_idle()
+            package = await call(app, "GET", f"/api/jobs/{job_id}/mesh-replay")
+            assert package["registration"]["roles"] == {"1": "RIGID", "2": "MF"}
+        finally:
+            await runtime.shutdown()
+            store.close()
+        app, store, runtime, _ = app_for(tmp_path / "fresh")
+        try:
+            restored = await call(app, "POST", "/api/mesh-replay", package)
+            assert restored["record"]["sources"][0]["role"] == "MF"
+            assert restored["record"]["manifest_sha256"] == record["manifest_sha256"]
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())

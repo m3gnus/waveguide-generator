@@ -57,7 +57,7 @@ from server.cadlink.interpretation.solver_frame import (
 from server.cadlink.joblane.manual_solve import OperationConflict, SnapshotNotRetained, UnknownIngest
 from server.cadlink.joblane.project_setup import compose_solve_request
 from server.cadlink.operations import REASON_CODES, REASON_UPDATE_RESTART_PENDING, REJECTED
-from server.cadlink.roles import inventory_sha256
+from server.cadlink.roles import prepared_inventory_sha256
 from server.cadlink.store import UNFILED_MODEL_ID
 from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json
@@ -301,7 +301,7 @@ def _matches(
         how = "same"
         if revision is None and preparing:
             if not standing:
-                saved = store.get_model_setup(model_id, inventory_sha256(record.get("sources") or []))
+                saved = store.get_model_setup(model_id, prepared_inventory_sha256(record))
                 standing.append(str(saved["revision_id"]) if saved else None)
             revision = standing[0]
         if _revision_inputs(store, revision, cache, target.manifest) != target.inputs:
@@ -440,7 +440,7 @@ def _record_for_model(store: Any, model_id: str, record: Mapping[str, Any], revi
     """
 
     if model_id != UNFILED_MODEL_ID:
-        inventory = inventory_sha256(record.get("sources") or [])
+        inventory = prepared_inventory_sha256(record)
         standing = store.get_model_setup(model_id, inventory)
         # Preserve user ownership when an old automatic run is selected
         # again, including a user setup recorded before the sticky provenance

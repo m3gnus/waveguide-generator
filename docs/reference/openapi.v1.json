@@ -4919,12 +4919,26 @@
             "title": "Forward",
             "type": "string"
           },
+          "roles": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "maxProperties": 256,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roles"
+          },
           "source_tags": {
             "items": {
               "type": "integer"
             },
             "maxItems": 128,
-            "minItems": 1,
             "title": "Source Tags",
             "type": "array"
           },
@@ -4954,8 +4968,7 @@
         "required": [
           "units",
           "forward",
-          "up",
-          "source_tags"
+          "up"
         ],
         "title": "FilePreparation",
         "type": "object"
@@ -8482,12 +8495,26 @@
             "title": "Msh Text",
             "type": "string"
           },
+          "roles": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "maxProperties": 256,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roles"
+          },
           "source_tags": {
             "items": {
               "type": "integer"
             },
             "maxItems": 128,
-            "minItems": 1,
             "title": "Source Tags",
             "type": "array"
           },
@@ -8518,7 +8545,6 @@
           "units",
           "forward",
           "up",
-          "source_tags",
           "filename",
           "msh_text"
         ],

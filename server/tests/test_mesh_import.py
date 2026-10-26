@@ -97,7 +97,6 @@ def test_units_transform_groups_and_precision(units, scale):
         ("1 2 2 2 2 1 3 2", "1 3 2 2 2 1 3 2 4"),
         ("1 2 2 2 2 1 3 2", "1 9 2 2 2 1 3 2 4 2 3"),
         ("1 2 2 2 2 1 3 2", "1 4 2 2 2 1 3 2 4"),
-        ("1 2 2 2 2 1 3 2", "1 2 2 0 2 1 3 2"),
         ("1 2 2 2 2 1 3 2", "1 2 2 2 2 1 3 9"),
         ("2 100 0 0", "1 100 0 0"),
         ("2 100 0 0", "2 nan 0 0"),
@@ -169,11 +168,25 @@ def test_registration_retains_verified_integrity_for_bempp_admission(tmp_path):
         store.close()
 
 
-def test_inspection_preserves_untagged_meshes_but_registration_requires_groups(tmp_path):
+def test_untagged_surface_can_be_a_wall_or_source(tmp_path):
     text = MESH.replace("1 2 2 2 2 1 3 2", "1 2 0 1 3 2")
-    assert 0 in parse_file_mesh(text, require_groups=False).tags
-    with pytest.raises(ValueError, match="physical group"):
-        parse_file_mesh(text)
+    mesh = parse_file_mesh(text)
+    group = next(group for group in mesh.summary()["groups"] if group["tag"] == 0)
+    assert group["display_name"] == "Untagged surface"
+    assert group["suggested_role"] == "RIGID"
+    store = CadLinkStore.for_data_dir(tmp_path)
+    try:
+        record = register_mesh(store, tmp_path, registration(msh_text=text, source_tags=[], roles={0: "MF"}))
+        assert record["sources"][0]["id"] == "group_0"
+        assert record["sources"][0]["role"] == "MF"
+        assert record["source_tags"] == {"group_0": 2}
+        assert set(parse_file_mesh(read_verified_import_mesh(record)).tags) == {1, 2}
+        # A positive tag already in use is preserved, and tag zero gets a free one.
+        mesh.tags[-1] = 2
+        written = parse_file_mesh(mesh_text(mesh))
+        assert set(written.tags) == {1, 2, 3}
+    finally:
+        store.close()
 
 
 def test_touching_shells_cannot_hide_an_inward_component():
@@ -201,8 +214,9 @@ class RecordingEngine:
         return EngineRunResult(
             results={
                 "frequencies": [100, 200],
-                "channels": {"group_2": {"frequencies": [100, 200], "metadata": {}}},
-                "channel_order": ["group_2"],
+                "channels": {channel.id: {"frequencies": [100, 200], "metadata": {}}
+                             for channel in body.geometry.drive_channels},
+                "channel_order": [channel.id for channel in body.geometry.drive_channels],
                 "metadata": {},
             },
             msh_text=imported_record["_execution_msh_text"],

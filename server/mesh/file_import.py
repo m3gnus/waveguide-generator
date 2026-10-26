@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+from server.mesh.imported import parse_source_physical_name
 from server.mesh.integrity import mesh_integrity_report, mesh_self_intersection_report
 
 MAX_MESH_BYTES = 16 * 1024 * 1024
@@ -24,6 +25,33 @@ AXES = {
 UNIT_TO_METRES = {"mm": 0.001, "cm": 0.01, "m": 1.0, "in": 0.0254}
 
 
+def _name_role(name: str) -> tuple[str, bool]:
+    words = re.findall(r"[a-z0-9]+", name.lower())
+    for role, prefixes, generic in (
+        ("HF", ("hf", "tweeter", "compression", "cd"), False),
+        ("MF", ("mf", "mid"), False),
+        ("LF", ("lf", "woofer", "bass"), False),
+        ("PASSIVE_CARDIOID", ("port", "vent", "passive", "cardioid", "opening"), False),
+        ("HF", ("source", "drive", "driver", "diaphragm", "radiat"), True),
+    ):
+        if any(word.startswith(prefixes) for word in words):
+            return role, generic
+    return "RIGID", False
+
+
+def group_role_guess(name: str) -> dict[str, str]:
+    """Interpret a group through the descriptor owner, then bounded name hints."""
+    descriptor = parse_source_physical_name(name)
+    if descriptor is not None:
+        role = descriptor["role"]
+        label = {"RIGID": "Walls", "PASSIVE_CARDIOID": "Port or passive opening"}.get(
+            role, f"{role} source"
+        )
+        return {"suggested_role": role, "role_from": "file", "display_name": label}
+    role, _ = _name_role(name)
+    return {"suggested_role": role, "role_from": "default" if role == "RIGID" else "name", "display_name": name}
+
+
 @dataclass
 class FileMesh:
     points: np.ndarray
@@ -33,18 +61,28 @@ class FileMesh:
 
     def summary(self) -> dict[str, Any]:
         tags, counts = np.unique(self.tags, return_counts=True)
+        groups = []
+        generic = []
+        for tag, count in zip(tags, counts):
+            name = self.names.get(int(tag), "Untagged surface" if tag == 0 else f"Group {tag}")
+            guess = group_role_guess(name)
+            if guess["role_from"] == "file":
+                guess["display_name"] += f" ({tag})"
+            group = {"tag": int(tag), "name": name, "triangle_count": int(count), **guess}
+            if guess["role_from"] == "name" and _name_role(name)[1]:
+                generic.append(group)
+            groups.append(group)
+        if len(generic) > 1:
+            for group in generic:
+                group["suggested_role"] = "RIGID"
+                group["needs_role_choice"] = True
+        extent = float(np.ptp(self.points, axis=0).max())
         return {
             "node_count": len(self.points),
             "triangle_count": len(self.triangles),
             "dimensions": np.ptp(self.points, axis=0).tolist(),
-            "groups": [
-                {
-                    "tag": int(tag),
-                    "name": self.names.get(int(tag), f"Group {tag}"),
-                    "triangle_count": int(count),
-                }
-                for tag, count in zip(tags, counts)
-            ],
+            "groups": groups,
+            "suggested_units": "m" if any(group["role_from"] == "file" for group in groups) or extent <= 5 else "mm" if extent >= 20 else None,
         }
 
 
@@ -57,7 +95,7 @@ def _integer(value: str, maximum: int = 2**31 - 1, minimum: int = 0) -> int:
     return result
 
 
-def parse_file_mesh(text: str, *, require_groups: bool = True) -> FileMesh:
+def parse_file_mesh(text: str) -> FileMesh:
     if len(text.encode("utf-8")) > MAX_MESH_BYTES:
         raise ValueError("Mesh exceeds the 16 MiB import limit.")
     lines = iter(text.strip().splitlines())
@@ -96,7 +134,7 @@ def parse_file_mesh(text: str, *, require_groups: bool = True) -> FileMesh:
             if not match:
                 raise ValueError("Invalid physical group name.")
             if match[1] == "2":
-                tag = _integer(match[2], minimum=1)
+                tag = _integer(match[2])
                 if tag in names:
                     raise ValueError("Repeated surface physical group ID.")
                 names[tag] = match[3]
@@ -135,16 +173,14 @@ def parse_file_mesh(text: str, *, require_groups: bool = True) -> FileMesh:
         except KeyError as exc:
             raise ValueError("Mesh element references a missing node.") from exc
         if kind == 2:
-            if require_groups and (not element_tags or element_tags[0] == 0):
-                raise ValueError(
-                    "Every triangle needs a positive physical group ID. Assign surface groups before export."
-                )
             triangles.append(corners)
             tags.append(element_tags[0] if element_tags else 0)
     if not triangles:
         raise ValueError("Mesh contains no linear triangles.")
     if len(set(tags)) > 256:
         raise ValueError("Mesh import supports at most 256 surface groups.")
+    if 0 in tags:
+        names[0] = "Untagged surface"
     return FileMesh(coordinates, np.asarray(triangles, dtype=np.int64), np.asarray(tags), names)
 
 
@@ -214,10 +250,19 @@ def prepare_file_mesh(
     }
 
 
+def solve_group_tags(mesh: FileMesh) -> dict[int, int]:
+    tags = np.unique(mesh.tags)
+    # Gmsh's solve groups are positive. Keep every existing tag and give the
+    # single untagged group the first free positive tag.
+    free = next(tag for tag in range(1, len(tags) + 2) if tag not in tags)
+    return {int(tag): int(tag) if tag else free for tag in tags}
+
+
 def mesh_text(mesh: FileMesh) -> str:
     tags = np.unique(mesh.tags)
+    written = solve_group_tags(mesh)
     lines = ["$MeshFormat", "2.2 0 8", "$EndMeshFormat", "$PhysicalNames", str(len(tags))]
-    lines.extend(f'2 {tag} "{mesh.names.get(int(tag), f"Group {tag}")}"' for tag in tags)
+    lines.extend(f'2 {written[int(tag)]} "{mesh.names.get(int(tag), "Untagged surface" if tag == 0 else f"Group {tag}")}"' for tag in tags)
     lines.extend(["$EndPhysicalNames", "$Nodes", str(len(mesh.points))])
     lines.extend(
         f"{i} " + " ".join(format(float(value), ".17g") for value in point)
@@ -225,7 +270,7 @@ def mesh_text(mesh: FileMesh) -> str:
     )
     lines.extend(["$EndNodes", "$Elements", str(len(mesh.triangles))])
     lines.extend(
-        f"{i} 2 2 {int(tag)} {int(tag)} " + " ".join(str(int(node) + 1) for node in triangle)
+        f"{i} 2 2 {written[int(tag)]} {written[int(tag)]} " + " ".join(str(int(node) + 1) for node in triangle)
         for i, (triangle, tag) in enumerate(zip(mesh.triangles, mesh.tags), 1)
     )
     return "\n".join([*lines, "$EndElements", ""])

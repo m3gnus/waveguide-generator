@@ -26,8 +26,9 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, TypeAdapter, mode
 
 from server.cadlink.identity import mint_id, utc_now
 from server.cadlink.operations import REASON_UPDATE_RESTART_PENDING
-from server.cadlink.roles import inventory_sha256
+from server.cadlink.roles import inventory_sha256, prepared_inventory_sha256
 from server.cadlink.store import FILE_MODEL_PREFIX, UNFILED_MODEL_ID, file_model_id
+from server.cadlink.wglink_protocol import SOURCE_ROLES, canonical_source_role
 from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json
 from server.integration.contracts import ErrorEnvelope, error_envelope
@@ -42,7 +43,7 @@ from server.jobs.model_solve import ModelSolveRefusal, ModelSolveRequest, solve_
 from server.jobs.models import SolveAccepted
 from server.jobs.runtime import ImportedSolveRefusal
 from server.mesh.artifact import read_verified_import_mesh
-from server.mesh.file_import import MAX_MESH_BYTES, mesh_text, parse_file_mesh, prepare_file_mesh
+from server.mesh.file_import import MAX_MESH_BYTES, mesh_text, parse_file_mesh, prepare_file_mesh, solve_group_tags
 from server.mesh.integrity import mesh_integrity_report
 from server.mesh.prepared_gc import prepared_mesh_use
 from server.platform.staging import publish_staging_directory
@@ -64,7 +65,18 @@ class FilePreparation(JobModel):
     units: Literal["mm", "cm", "m", "in"]
     forward: Axis
     up: Axis
-    source_tags: list[int] = Field(min_length=1, max_length=128)
+    source_tags: list[int] = Field(default_factory=list, max_length=128)
+    roles: dict[int, str] | None = Field(default=None, max_length=256)
+
+    @model_validator(mode="after")
+    def surface_roles(self) -> FilePreparation:
+        if self.roles is None and not self.source_tags:
+            raise ValueError("Choose at least one driver surface.")
+        if self.roles is not None:
+            self.roles = {tag: canonical_source_role(role) for tag, role in self.roles.items()}
+            if any(role not in (*SOURCE_ROLES, "RIGID") for role in self.roles.values()):
+                raise ValueError("Choose a driver, Port or passive opening, or Rigid wall for each surface.")
+        return self
 
 
 class MeshRegistration(MeshFile, FilePreparation):
@@ -170,6 +182,14 @@ def _register_mesh(
         mesh.tags.tolist()
     ):
         raise ValueError("Select unique driven groups that exist in this mesh.")
+    if body.roles is not None and set(body.roles) - set(mesh.tags.tolist()):
+        raise ValueError("Assign roles only to groups that exist in this mesh.")
+    roles = {tag: "HF" for tag in body.source_tags}
+    roles.update(body.roles or {})
+    roles = {tag: role for tag, role in roles.items() if role != "RIGID"}
+    if not roles:
+        raise ValueError("Choose at least one driver surface.")
+    written_tags = solve_group_tags(mesh)
     filename = body.filename.replace("\\", "/").rsplit("/", 1)[-1]
     source_bytes = body.msh_text.encode("utf-8")
     solver_text = mesh_text(mesh)
@@ -180,6 +200,8 @@ def _register_mesh(
         "transform": transform,
         "source_tags": sorted(body.source_tags),
     }
+    if body.roles is not None:
+        spec["roles"] = {str(tag): role for tag, role in sorted(body.roles.items())}
     spec_digest = _sha256(canonical_utf8_strict_json(spec).encode())
     model_id = file_model_id(original_digest)
 
@@ -206,12 +228,12 @@ def _register_mesh(
     sources = [
         {
             "id": f"group_{tag}",
-            "role": "SOURCE",
+            "role": roles[tag],
             "required": True,
-            "name": mesh.names.get(tag, f"Group {tag}"),
+            "name": mesh.names.get(tag, "Untagged surface" if tag == 0 else f"Group {tag}"),
             "observed": {"total_area_mm2": float(areas_mm2[mesh.tags == tag].sum())},
         }
-        for tag in sorted(body.source_tags)
+        for tag in sorted(roles)
     ]
     ingest_id = mint_id("wgi_")
     created_at = utc_now()
@@ -232,7 +254,7 @@ def _register_mesh(
         or claim_project_folder(store, f"model:{model_id}", Path(filename).stem),
         "document": {"name": filename},
         "sources": sources,
-        "source_tags": {source["id"]: tag for source, tag in zip(sources, sorted(body.source_tags))},
+        "source_tags": {source["id"]: written_tags[tag] for source, tag in zip(sources, sorted(roles))},
         "findings": [],
         "skipped_source_ids": [],
         "acoustic_domain": "free-space",
@@ -408,7 +430,7 @@ def _setup_inventory(store: Any, model_id: str, prepared_id: str | None) -> tupl
         if not prepared_id:
             raise ModelRefusal(404, "model_not_found", "Imported model not found.")
     _row, record = _prepared_row(store, model_id, prepared_id)
-    return inventory_sha256(record.get("sources") or []), record
+    return prepared_inventory_sha256(record), record
 
 
 def read_setup(
@@ -482,7 +504,7 @@ def mount_models_api(application: FastAPI) -> None:
         """Read a file's groups and size, without retaining anything."""
 
         def summary() -> dict[str, Any]:
-            return parse_file_mesh(body.msh_text, require_groups=False).summary()
+            return parse_file_mesh(body.msh_text).summary()
 
         return await answer(summary)
 

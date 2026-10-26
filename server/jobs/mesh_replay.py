@@ -55,7 +55,11 @@ class MeshReplayPackage(MeshReplayInputs):
 
 
 def _inputs(package: MeshReplayInputs) -> dict[str, Any]:
-    return package.model_dump(mode="json", exclude={"content_sha256"})
+    payload = package.model_dump(mode="json", exclude={"content_sha256"})
+    # New optional preparation fields must not alter historical package checksums.
+    if payload["registration"]["roles"] is None:
+        payload["registration"].pop("roles")
+    return payload
 
 
 def _validate_file_request(request: SolveRequest) -> None:
@@ -119,6 +123,7 @@ def build_mesh_replay(runtime: Any, store: Any, job_id: str) -> dict[str, Any]:
             filename=source["filename"], msh_text=original_text,
             units=source["transform"]["units"], forward=source["transform"]["forward"],
             up=source["transform"]["up"], source_tags=source["source_tags"],
+            roles=source.get("roles"),
         ),
         original_sha256=_digest(original_text), solver_msh_text=solver_text,
         solver_sha256=_digest(solver_text), request=request,

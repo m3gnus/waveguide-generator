@@ -8,8 +8,8 @@ Do not expose bundle, return / CAD return / `.wgreturn`, manifest, schema,
 request id / Return ID / UUIDs, inbox / IPC, acknowledgement, selector /
 `entity_token` / `options['…']`, traceback, main thread / event, gate, ingest,
 operation, lineage, finding ids, raw role constants, UTF-8 / byte limits, or
-determinant / orthonormal / chirality in primary CAD copy. Say “Passive
-radiator” for `PASSIVE_CARDIOID`. An explicit “details in Text Commands” link
+determinant / orthonormal / chirality in primary CAD copy. Say “Port or passive
+opening” for `PASSIVE_CARDIOID`. An explicit “details in Text Commands” link
 belongs only inside Diagnostics. The user's own document names are their own
 words, even when a name includes one of these terms.
 

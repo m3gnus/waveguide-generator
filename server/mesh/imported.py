@@ -20,7 +20,12 @@ import numpy as np
 
 from server.contracts.canonical import canonical_ascii_strict_json
 
-from server.cadlink.wglink_protocol import MESH_DEFAULTS, source_physical_name
+from server.cadlink.wglink_protocol import (
+    MESH_DEFAULTS,
+    SOURCE_ROLES,
+    canonical_source_role,
+    source_physical_name,
+)
 from server.contracts.geometry import (
     CUT_PLANE_AXIS,
     FIRST_SOURCE_TAG as FIRST_SOURCE_TAG,
@@ -46,6 +51,35 @@ from server.platform.temp_session import temporary_directory_root
 
 
 TAG_NAMESPACE = "wg-import-v1"
+
+
+def parse_source_physical_name(name: str) -> dict[str, Any] | None:
+    """Read WG surface descriptors; wglink_protocol.source_physical_name writes sources.
+
+    This WG-owned descriptor home also writes the rigid-wall name. Only the
+    exact descriptor grammar is accepted, and legacy source roles are returned
+    in their canonical spelling. Other names are left for caller-owned hints.
+    """
+    if name == f"{TAG_NAMESPACE}|rigid":
+        return {"role": "RIGID"}
+    match = re.fullmatch(
+        rf"{re.escape(TAG_NAMESPACE)}\|tag=([1-9][0-9]*)\|source_id=([^|]+)"
+        r"\|instance_id=([^|]+)\|role=([^|]+)",
+        name,
+    )
+    if match is None:
+        return None
+    role = canonical_source_role(match[4])
+    if role not in SOURCE_ROLES:
+        return None
+    return {
+        "tag": int(match[1]),
+        "source_id": match[2],
+        "instance_id": None if match[3] == "null" else match[3],
+        "role": role,
+    }
+
+
 RIGID_TAG = 1
 # Tag values match hornlab_mesher.tags; server/tests/test_geometry_contract.py
 # checks that, so importing here does not load the mesher at startup.

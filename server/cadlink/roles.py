@@ -53,3 +53,17 @@ def inventory_sha256(sources: Sequence[Mapping[str, Any]]) -> str:
     return "sha256:" + hashlib.sha256(
         canonical_utf8_strict_json(entries).encode("utf-8")
     ).hexdigest()
+
+
+def prepared_inventory_sha256(record: Mapping[str, Any]) -> str:
+    """Keep legacy file setups under their historical inventory key.
+
+    File requests using source_tags now record the canonical HF role, but
+    their saved setups predate roles and hash SOURCE. Explicit role assignments
+    use the ordinary role inventory; CAD records are unchanged.
+    """
+    sources = record.get("sources") or []
+    if record.get("producer") == "mesh-file" and "roles" not in (record.get("source_file") or {}):
+        sources = [{**source, "role": "SOURCE" if source.get("role") == "HF" else source.get("role")}
+                   for source in sources]
+    return inventory_sha256(sources)

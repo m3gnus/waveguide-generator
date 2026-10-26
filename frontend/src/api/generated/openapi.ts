@@ -4222,8 +4222,12 @@ export interface components {
              * @enum {string}
              */
             forward: "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
+            /** Roles */
+            roles?: {
+                [key: string]: string;
+            } | null;
             /** Source Tags */
-            source_tags: number[];
+            source_tags?: number[];
             /**
              * Units
              * @enum {string}
@@ -5187,8 +5191,12 @@ export interface components {
             forward: "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
             /** Msh Text */
             msh_text: string;
+            /** Roles */
+            roles?: {
+                [key: string]: string;
+            } | null;
             /** Source Tags */
-            source_tags: number[];
+            source_tags?: number[];
             /**
              * Units
              * @enum {string}

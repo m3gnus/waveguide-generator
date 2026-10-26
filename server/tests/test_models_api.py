@@ -10,7 +10,7 @@ from urllib.parse import quote
 from fastapi import FastAPI
 import pytest
 
-from server.cadlink.roles import inventory_sha256
+from server.cadlink.roles import inventory_sha256, prepared_inventory_sha256
 from server.cadlink.store import CadLinkStore
 from server.jobs.imported_setup import setup_content, setup_digest, validate_setup
 from server.jobs.models_api import mount_models_api
@@ -86,7 +86,7 @@ def test_saved_file_setup_survives_restart_without_a_job(tmp_path, findings):
             saved = await call(app, "PUT", path, body)
             assert await call(app, "PUT", path, body) == saved
             expected = setup_digest(validate_setup(setup))
-            inventory = inventory_sha256(record["sources"])
+            inventory = prepared_inventory_sha256(record)
             assert saved["inventory_sha256"] == inventory
             revision = store.get_setup_revision(store.get_model_setup(model_id, inventory)["revision_id"])
             assert revision["content_sha256"] == expected == saved["content_sha256"]
