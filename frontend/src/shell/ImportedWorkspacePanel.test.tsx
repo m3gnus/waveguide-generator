@@ -105,14 +105,26 @@ const mount = () => act(async () => root.render(<QueryClientProvider client={cli
 
 it('mounts file geometry and simulation controls once and preserves drafts across repeated switches', async () => {
   workspaceModeStore.setImportedInput('file'); workspaceModeStore.setMode('cad');
-  useMeshImportStore.setState({ filename: '測定.msh', original: 'mesh', summary: { groups: [{ name: 'Source', tag: 17, triangle_count: 3 }] } as never });
+  useMeshImportStore.setState({ filename: '測定.msh', original: 'mesh', summary: { node_count: 4, triangle_count: 3, dimensions: [2, 3, 4],
+    groups: [{ name: 'Source', tag: 17, triangle_count: 3 }] } });
   useImportedModelStore.setState({ input: 'file', fileDraft: { units: 'cm', forward: '+x', up: '+z', selected: [17] } });
   const draft = useImportedModelStore.getState().fileDraft;
   const sweep = useImportedSolveOptionsStore.getState().sweepCount;
   await mount();
   for (let index = 0; index < 3; index++) {
-    expect(host.querySelectorAll('[aria-label="Mesh units"]')).toHaveLength(1);
-    expect(host.querySelectorAll('[aria-label="Use Source (17) as a source"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[aria-label="Imported mesh geometry"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[aria-label="Imported mesh simulation"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[aria-label="Mesh units"]')).toHaveLength(0);
+    const changeSize = host.querySelectorAll<HTMLButtonElement>('[aria-label="Change size"]');
+    expect(changeSize).toHaveLength(1);
+    await act(async () => changeSize[0].click());
+    const units = host.querySelectorAll<HTMLSelectElement>('[aria-label="Mesh units"]');
+    expect(units).toHaveLength(1);
+    expect(units[0].value).toBe('cm');
+    const roles = host.querySelectorAll<HTMLSelectElement>('[aria-label="Role for Source"]');
+    expect(roles).toHaveLength(1);
+    expect(roles[0].value).toBe('HF');
+    expect([...host.querySelectorAll('button')].some(button => /Prepare|Save setup/.test(button.textContent ?? ''))).toBe(false);
     expect(host.querySelectorAll('[aria-label="Mesh frequency count"]')).toHaveLength(1);
     expect(host.querySelector('[aria-label="Imported mesh geometry"] [aria-label="Mesh frequency count"]')).toBeNull();
     expect(host.querySelector('[aria-label="Imported mesh simulation"] [aria-label="Mesh units"]')).toBeNull();

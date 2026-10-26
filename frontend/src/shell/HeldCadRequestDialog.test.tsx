@@ -14,8 +14,9 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 
 const actions = vi.hoisted(() => ({ continueRun: vi.fn(), dismiss: vi.fn() }));
 const coordinator = vi.hoisted(() => ({ continueRun: (...args: unknown[]) => actions.continueRun(...args) }));
+type SolveControl = NonNullable<ReturnType<typeof import('./JobsCoordinator').useOptionalSolveControl>>;
 /** The one Solve owner, when a test puts one on screen. */
-const solveControl = vi.hoisted(() => ({ current: null as null | Record<string, unknown> }));
+const solveControl = vi.hoisted(() => ({ current: null as null | (Partial<SolveControl> & Pick<SolveControl, 'importedGeometryActive'>) }));
 vi.mock('./JobsCoordinator', () => ({
   jobsCoordinatorBridge: { getSnapshot: () => coordinator, subscribe: () => () => undefined },
   useOptionalSolveControl: () => solveControl.current,
@@ -209,7 +210,7 @@ describe('held CAD request dialog owner', () => {
 
   it('shows a prepared request as Ready to solve in Results, with Solve, never as a question', async () => {
     const solve = vi.fn().mockResolvedValue('submitted');
-    solveControl.current = { solve, disabled: false, title: 'Solve', cadMode: true, submitting: false,
+    solveControl.current = { solve, disabled: false, title: 'Solve', cadMode: true, importedGeometryActive: true, submitting: false,
       readiness: null, readinessRequested: false, waitingForEngine: false, actionError: null, preparationError: null };
     const ready = { ...held('ready'), stage_message: 'Ready to solve',
       cad_state: { ...held().cad_state!, held: true, reason: 'ready_to_solve', attention: 'ready',
@@ -229,6 +230,7 @@ describe('held CAD request dialog owner', () => {
     expect(host.querySelector('[role="dialog"]')).toBeNull();
     // One Solve, the status line's, never a second competing one in Results.
     expect([...host.querySelectorAll('button')].filter(node => node.textContent === 'Solve')).toHaveLength(1);
+    expect(button('Solve').disabled).toBe(false);
     await act(async () => button('Solve').click());
     // The one Solve owner solves the settings and frame on screen; the server
     // resumes this request's preparation when they are unchanged.
@@ -241,7 +243,7 @@ describe('held CAD request dialog owner', () => {
     ['a failed press', { actionError: 'Solve refused: choose settings.' }],
   ])('shows %s first, never a competing Ready to solve', async (_name, state) => {
     const solve = vi.fn().mockResolvedValue('submitted');
-    solveControl.current = { solve, disabled: false, title: 'Solve', cadMode: true, submitting: false,
+    solveControl.current = { solve, disabled: false, title: 'Solve', cadMode: true, importedGeometryActive: true, submitting: false,
       readiness: null, readinessRequested: false, waitingForEngine: false, waitingEngine: 'beat-metal', actionError: null, preparationError: null,
       stopWaiting: vi.fn(), ...state };
     const ready = { ...held('ready'), stage_message: 'Ready to solve',
@@ -266,7 +268,7 @@ describe('held CAD request dialog owner', () => {
   });
 
   it('keeps an engine that cannot solve the return in its readiness view, never "Needs a change"', async () => {
-    solveControl.current = { solve: vi.fn(), disabled: false, title: 'Solve', cadMode: true, submitting: false,
+    solveControl.current = { solve: vi.fn(), disabled: false, title: 'Solve', cadMode: true, importedGeometryActive: true, submitting: false,
       readiness: null, readinessRequested: false, waitingForEngine: false, actionError: null, preparationError: null };
     const engine = { ...held('engine'), stage_message: 'Needs a change',
       cad_state: { ...held().cad_state!, held: true, reason: 'engine_cannot_solve_return', attention: 'action',

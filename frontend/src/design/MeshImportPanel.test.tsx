@@ -186,25 +186,27 @@ it('automatically prepares role, mirror, size and axis edits and retries only th
     ? new Response(JSON.stringify(fileSummary))
     : new Response(JSON.stringify({ detail: 'Close the opening in the meshing tool.' }), { status: 422 }));
   vi.stubGlobal('fetch', prepare);
+  // Capability probes share global fetch; count only this panel's preparation requests.
+  const preparations = () => prepare.mock.calls.filter(([url]) => String(url) === '/api/models/files');
   geometry();
   act(() => useMeshImportStore.setState({ summary: { ...fileSummary, kept_sides: { x0: 'negative', y0: 'positive' } } }));
   await act(async () => choose(host.querySelector<HTMLSelectElement>('[aria-label="Role for HF source (101)"]')!, 'LF'));
-  expect(JSON.parse(prepare.mock.calls[0][1]?.body as string).roles).toEqual({ 0: 'RIGID', 101: 'LF', 102: 'MF' });
+  expect(JSON.parse(preparations()[0][1]?.body as string).roles).toEqual({ 0: 'RIGID', 101: 'LF', 102: 'MF' });
   expect(host.querySelector('.cad-status-line')?.textContent).toContain('Close the opening');
   expectNoJargon(host);
   await act(async () => host.querySelector<HTMLButtonElement>('.cad-status-line button')!.click());
-  expect(prepare).toHaveBeenCalledTimes(2);
+  expect(preparations()).toHaveLength(2);
   act(() => button('Change symmetry').click());
   await act(async () => host.querySelector<HTMLInputElement>('[aria-label="Mirror from the negative side"]')!.click());
-  expect(JSON.parse(prepare.mock.calls[2][1]?.body as string).reflect_planes).toEqual([]);
+  expect(JSON.parse(preparations()[2][1]?.body as string).reflect_planes).toEqual([]);
   expect(host.textContent).toContain('kept on the negative side');
   expectNoJargon(host);
   act(() => button('Change size').click());
   await act(async () => choose(host.querySelector<HTMLSelectElement>('[aria-label="Mesh units"]')!, 'cm'));
-  expect(JSON.parse(prepare.mock.calls[3][1]?.body as string).units).toBe('cm');
+  expect(JSON.parse(preparations()[3][1]?.body as string).units).toBe('cm');
   act(() => button('Change axes').click());
   await act(async () => choose(host.querySelector<HTMLSelectElement>('[aria-label="Mesh up axis"]')!, '+x'));
-  expect(JSON.parse(prepare.mock.calls[5][1]?.body as string)).toMatchObject({ up: '+x', domain_planes: ['x0', 'y0'] });
+  expect(JSON.parse(preparations()[4][1]?.body as string)).toMatchObject({ up: '+x', domain_planes: ['x0', 'y0'] });
   expect(host.querySelectorAll('.cad-status-line button')).toHaveLength(1);
   expectNoJargon(host);
 });

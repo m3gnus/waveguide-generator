@@ -539,7 +539,7 @@ it('uses the server-named retry job even when its parent remains in the current 
   await f.observe([parent]);
   await f.showRequest({ operationId: 'request', jobId: 'child' });
   expect(fetcher).toHaveBeenCalledWith('/api/status/child');
-  expect(fetcher).toHaveBeenCalledWith('/api/runs/child/workspace');
+  expect(fetcher).toHaveBeenCalledWith('/api/runs/child/workspace', undefined);
 });
 
 it('keeps a newer Send while an explicit history model is loading', async () => {
@@ -561,7 +561,7 @@ it('keeps an explicit fetched job through an empty socket page while its model l
   const f = fixture(vi.fn(async input => String(input).startsWith('/api/status/') ? json(old)
     : String(input).endsWith('/workspace') ? reply.promise : json(record)));
   const opening = f.showRequest({ operationId: old.id, jobId: old.id });
-  await vi.waitFor(() => expect(f.fetcher).toHaveBeenCalledWith('/api/runs/outside-page/workspace'));
+  await vi.waitFor(() => expect(f.fetcher).toHaveBeenCalledWith('/api/runs/outside-page/workspace', undefined));
   const snapshot = f.observe([]);
   reply.resolve(json(workspaceFor()));
   await opening; await snapshot;
