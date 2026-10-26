@@ -348,6 +348,7 @@ async def beat_worker_prewarm(
     engine_registry: EngineRegistry, settings: object | None = None, *,
     requested: str | None = None,
     cancellation_callback: Callable[[], None] | None = None,
+    admission_callback: Callable[[], None] | None = None,
 ) -> None:
     """Warm the BEAT Julia worker once the engine to warm is known.
 
@@ -390,7 +391,8 @@ async def beat_worker_prewarm(
     if cancellation_callback is not None:
         from functools import partial
 
-        warm = partial(warm, cancellation_callback=cancellation_callback)
+        warm = partial(warm, cancellation_callback=cancellation_callback,
+                       admission_callback=admission_callback)
 
     if os.environ.get("WG2_SOLVER_WARMUP") != "0" and await asyncio.to_thread(preparation_in_flight):
         logging.getLogger("wg.solver.warmup").info(
@@ -635,11 +637,18 @@ def create_app(
         application.state.beat_prewarm_engine = engine
 
         def check_cancelled() -> None:
-            runtime = getattr(application.state, "jobs_runtime", None)
-            if cancelled.is_set() or (runtime is not None and runtime.running_job_ids):
+            if cancelled.is_set():
                 from server.solver.beat_runtime.session import SessionCancelled
 
                 raise SessionCancelled("BEAT prewarm cancelled")
+
+        def check_admission() -> None:
+            check_cancelled()
+            runtime = getattr(application.state, "jobs_runtime", None)
+            if runtime is not None and runtime.running_job_ids:
+                from server.solver.beat_runtime.session import SessionCancelled
+
+                raise SessionCancelled("BEAT prewarm deferred while a solve is running")
 
         async def run_prewarm() -> None:
             runtime = getattr(application.state, "jobs_runtime", None)
@@ -660,11 +669,12 @@ def create_app(
                 while await asyncio.to_thread(cpu_preparation_in_flight):
                     await asyncio.sleep(0.1)
                 check_cancelled()
-                await asyncio.to_thread(start_selected_provisioning, engine, cancellation_callback=check_cancelled)
+                await asyncio.to_thread(start_selected_provisioning, engine, cancellation_callback=check_admission)
                 resolved = None if engine == "beat" or engine.startswith("beat-") else await resolve_prewarm_engine(engine_registry, engine)
                 if resolved is not None and resolved.startswith("beat-"):
                     await beat_worker_prewarm(engine_registry, getattr(application.state, "settings", None),
-                                             requested=resolved, cancellation_callback=check_cancelled)
+                                             requested=resolved, cancellation_callback=check_cancelled,
+                                             admission_callback=check_admission)
                     return
                 if resolved == "metal":
                     await prewarm_solver(resolved)
@@ -679,6 +689,7 @@ def create_app(
             await beat_worker_prewarm(
                 engine_registry, getattr(application.state, "settings", None),
                 requested=engine, cancellation_callback=check_cancelled,
+                admission_callback=check_admission,
             )
 
         application.state.beat_prewarm_task = asyncio.create_task(

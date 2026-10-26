@@ -365,7 +365,9 @@ def test_process_default_manager_stays_closed_for_good(monkeypatch, operation):
         manager.get_manager().get_worker()
 
 
-def test_condemned_client_retry_respects_real_manager_shutdown(engine_tree):
+@pytest.mark.parametrize('operation', ['acquire', 'wait_until_idle'])
+@pytest.mark.parametrize('shutdown', [False, True])
+def test_condemned_client_retry_respects_real_manager_shutdown(engine_tree, operation, shutdown):
     class Worker:
         def __init__(self, **kwargs):
             pass
@@ -376,10 +378,20 @@ def test_condemned_client_retry_respects_real_manager_shutdown(engine_tree):
     runtime = manager.WorkerManager(mode='child', engine_factory=Worker)
     client = runtime.get_worker(julia_executable=sys.executable, environment={})
     client.unusable = True
-    runtime.shutdown()
-    with pytest.raises(OwnershipClosed, match='admission is closed'):
-        client.acquire(lambda: None)
-    assert not runtime._clients
+    if shutdown:
+        runtime.shutdown()
+        with pytest.raises(OwnershipClosed, match='admission is closed'):
+            getattr(client, operation)(lambda: None)
+        assert not runtime._clients
+    else:
+        try:
+            result = getattr(client, operation)(lambda: None)
+            replacement = result.client if operation == 'acquire' else result
+            assert replacement is not client and not replacement.unusable
+            if operation == 'acquire':
+                result.close()
+        finally:
+            runtime.shutdown()
 
 
 def test_cancel_condemns_client_and_queued_solve_negotiates_fresh_worker(engine_tree):

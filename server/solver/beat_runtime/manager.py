@@ -252,18 +252,33 @@ class ManagedWorker:
         with self._changed:
             if not wait and self._lease is not None:
                 raise WorkerBusy("BEAT worker is solving; prewarm skipped")
-            while self._lease is not None and not self._closed and not self.unusable:
-                check()
-                self._changed.wait(0.05)
-            check()
-            if self._closed or self.unusable:
-                raise OwnershipClosed("BEAT manager admission is closed")
+            self._wait_for_idle_locked(check)
             self._lease = WorkerLease(self)
             return self._lease
+
+    def _wait_for_idle_locked(self, check: Callable[[], None]) -> None:
+        while self._lease is not None and not self._closed and not self.unusable:
+            check()
+            self._changed.wait(0.05)
+        check()
+        if self._closed or self.unusable:
+            raise OwnershipClosed("BEAT manager admission is closed")
 
     def holds(self, lease: WorkerLease) -> bool:
         with self._changed:
             return self._lease is lease
+
+    def wait_until_idle(self, check: Callable[[], None], *, retry: bool = True) -> ManagedWorker:
+        """Wait without allocating a session while a previous lease drains."""
+        try:
+            with self._changed:
+                self._wait_for_idle_locked(check)
+                return self
+        except OwnershipClosed:
+            if not retry or not self.unusable or self._replacement is None:
+                raise
+            check()
+            return self._replacement().wait_until_idle(check, retry=False)
 
     def release(self, lease: WorkerLease) -> None:
         with self._changed:

@@ -235,6 +235,132 @@ def test_optional_prewarm_yields_to_active_lease_and_reuses_completed_probe(runt
     assert [e["type"] for e in events(key)].count("submitted") == 1
 
 
+def test_prewarm_waits_for_a_draining_lease_without_recreating_sessions(runtime_factory, monkeypatch):
+    make, _, _ = runtime_factory
+    runtime = make()
+    client = runtime.get_worker()
+    lease = client.acquire(lambda: None)
+    sessions = []
+    entered = SolveSession.__enter__
+
+    def track(session):
+        sessions.append(session)
+        return entered(session)
+
+    monkeypatch.setattr(SolveSession, "__enter__", track)
+    errors = []
+
+    def work():
+        try:
+            warmup.warm_up(mode="tiny", worker_manager=runtime, idle_only=True,
+                           wait_for_idle=True, cancellation_callback=lambda: None)
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=work)
+    thread.start()
+    try:
+        time.sleep(0.2)
+        assert not sessions
+        lease.close()
+        thread.join(10)
+        assert not thread.is_alive()
+        assert not errors
+        assert len(sessions) == 1
+    finally:
+        lease.close()
+        thread.join(10)
+
+
+def test_waiting_prewarm_cancels_without_disturbing_the_existing_lease(runtime_factory, monkeypatch):
+    make, _, _ = runtime_factory
+    runtime = make()
+    client = runtime.get_worker()
+    lease = client.acquire(lambda: None)
+    cancelled, waiting = threading.Event(), threading.Event()
+    errors = []
+    monkeypatch.setattr(SolveSession, "__enter__", lambda session: pytest.fail("session created while waiting"))
+
+    def check():
+        waiting.set()
+        if cancelled.is_set():
+            raise RuntimeError("selection cancelled")
+
+    def work():
+        try:
+            warmup.warm_up(mode="tiny", worker_manager=runtime, idle_only=True,
+                           wait_for_idle=True, cancellation_callback=check)
+        except RuntimeError as exc:
+            errors.append(str(exc))
+
+    thread = threading.Thread(target=work)
+    thread.start()
+    try:
+        assert waiting.wait(2)
+        cancelled.set()
+        thread.join(2)
+        assert not thread.is_alive()
+        assert errors == ["selection cancelled"]
+        assert client.holds(lease)
+    finally:
+        cancelled.set()
+        lease.close()
+        thread.join(2)
+
+
+def test_solve_waits_for_admitted_prewarm_and_reuses_its_worker(runtime_factory, monkeypatch, tmp_path):
+    make, key, _ = runtime_factory
+    gate = tmp_path / "release-probe"
+    monkeypatch.setenv("TEST_PROBE_GATE", str(gate))
+    runtime = make()
+    running = threading.Event()
+    errors = []
+
+    def admission():
+        if running.is_set():
+            raise RuntimeError("a solve is running")
+
+    def warm():
+        try:
+            warmup.warm_up(mode="tiny", worker_manager=runtime, idle_only=True, wait_for_idle=True,
+                           cancellation_callback=lambda: None, admission_callback=admission)
+        except BaseException as exc:
+            errors.append(exc)
+
+    def solve():
+        try:
+            with SolveSession() as session:
+                mesh = session.directory / "solve.msh"
+                mesh.write_bytes(probe._FIXTURE.read_bytes())
+                session.submit(runtime.get_worker(), probe.build_request(mesh))
+                assert list(session.events())[-1]["type"] == "completed"
+        except BaseException as exc:
+            errors.append(exc)
+
+    warm_thread = threading.Thread(target=warm)
+    solve_thread = threading.Thread(target=solve)
+    warm_thread.start()
+    try:
+        wait_until(lambda: sum(e["type"] == "submitted" for e in events(key)) == 1)
+        running.set()
+        solve_thread.start()
+        time.sleep(0.2)
+        assert warm_thread.is_alive() and solve_thread.is_alive()
+        assert not any(e["type"] == "terminated" for e in events(key))
+        gate.touch()
+        warm_thread.join(10)
+        solve_thread.join(10)
+        assert not warm_thread.is_alive() and not solve_thread.is_alive()
+        assert not errors
+        assert [e["type"] for e in events(key)].count("started") == 1
+        assert [e["type"] for e in events(key)].count("submitted") == 2
+    finally:
+        gate.touch()
+        warm_thread.join(10)
+        if solve_thread.ident is not None:
+            solve_thread.join(10)
+
+
 def test_selection_cancel_retires_only_its_warmup(runtime_factory, monkeypatch, tmp_path):
     make, key, _ = runtime_factory
     monkeypatch.setenv("TEST_PROBE_GATE", str(tmp_path / "never"))

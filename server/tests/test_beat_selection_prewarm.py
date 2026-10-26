@@ -26,7 +26,7 @@ def app(tmp_path, monkeypatch):
 def test_picker_schedules_once_without_waiting_and_deselect_cancels(app, monkeypatch):
     calls, callbacks = [], []
 
-    async def fake(_registry, _settings, *, requested, cancellation_callback):
+    async def fake(_registry, _settings, *, requested, cancellation_callback, admission_callback):
         calls.append(requested)
         callbacks.append(cancellation_callback)
         await asyncio.Event().wait()
@@ -51,6 +51,37 @@ def test_picker_schedules_once_without_waiting_and_deselect_cancels(app, monkeyp
         with pytest.raises(SessionCancelled):
             callbacks[0]()
         assert calls == ['beat-metal']
+
+    asyncio.run(scenario())
+
+
+def test_running_solve_blocks_new_prewarm_but_does_not_cancel_an_admitted_one(app, monkeypatch):
+    app.state.jobs_runtime = SimpleNamespace(running_job_ids=set())
+    callbacks = []
+
+    async def fake(_registry, _settings, *, cancellation_callback, admission_callback, **kwargs):
+        callbacks.append((cancellation_callback, admission_callback))
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(app_module, "beat_worker_prewarm", fake)
+
+    async def scenario():
+        await app.state.prewarm_beat_worker("beat-cpu")
+        async with asyncio.timeout(2):
+            while not callbacks:
+                await asyncio.sleep(0.001)
+        cancel, admission = callbacks[0]
+        app.state.jobs_runtime.running_job_ids.add("solve")
+        cancel()  # An admitted warmup can finish and the solve waits for its worker.
+        with pytest.raises(SessionCancelled, match="deferred"):
+            admission()
+        await app.state.prewarm_beat_worker("metal")
+        with pytest.raises(SessionCancelled, match="cancelled"):
+            cancel()
+        task = app.state.beat_prewarm_task
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
     asyncio.run(scenario())
 

@@ -26,10 +26,12 @@ class SolveSession:
     """Use as a context manager, including when no event is ever read."""
 
     def __init__(self, *, cancellation_callback: Callable[[], None] | None = None,
+                 admission_callback: Callable[[], None] | None = None,
                  cancel_grace_s: float = 0.25) -> None:
         if not 0 <= cancel_grace_s < float("inf"):
             raise ValueError("Cancel grace must be finite and nonnegative")
         self.cancellation_callback = cancellation_callback
+        self.admission_callback = admission_callback
         self.cancel_grace_s = cancel_grace_s
         self.directory: Path | None = None
         self.cancel_path: Path | None = None
@@ -77,6 +79,11 @@ class SolveSession:
         if self.cancellation_callback is not None:
             self.cancellation_callback()
 
+    def _check_admission(self) -> None:
+        self._check()
+        if self.admission_callback is not None:
+            self.admission_callback()
+
     def _start_monitor(self) -> None:
         with self._lock:
             if self._monitor is None and not self._closed:
@@ -112,12 +119,12 @@ class SolveSession:
         request = payload if isinstance(payload, dict) and payload.get("cancel_path") == cancel_path else dict(payload, cancel_path=cancel_path)
         # Serialize before admission: bad requests cannot disturb a warm worker.
         self.request_path.write_text(json.dumps(request, allow_nan=False), encoding="utf-8")
-        self._check()
+        self._check_admission()
         if self.cancellation_callback is not None:
             self._start_monitor()
         try:
-            lease = (client.acquire(self._check) if wait_for_worker
-                     else client.acquire(self._check, wait=False))
+            lease = (client.acquire(self._check_admission) if wait_for_worker
+                     else client.acquire(self._check_admission, wait=False))
             with self._lock:
                 self._lease = lease
             self._check()

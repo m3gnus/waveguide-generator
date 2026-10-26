@@ -15,17 +15,29 @@ from .session import SolveSession
 def warm_up(*, beat_backend: str = "cpu", mode: str = "worker",
             worker_manager: WorkerManager | None = None,
             cancellation_callback: Callable[[], None] | None = None,
-            idle_only: bool = False, **options: Any) -> bool:
+            admission_callback: Callable[[], None] | None = None,
+            idle_only: bool = False, wait_for_idle: bool = False, **options: Any) -> bool:
     """Off does nothing; worker starts Julia; tiny proves a compiled solve."""
     if mode not in {"off", "worker", "tiny"}:
         raise ValueError("Warm-up mode must be off, worker, or tiny")
     if mode == "off":
         return False
     client = (worker_manager or get_manager()).get_worker(beat_backend, **options)
+
+    def check_admission() -> None:
+        if cancellation_callback is not None:
+            cancellation_callback()
+        if admission_callback is not None:
+            admission_callback()
+
     if idle_only and client.solved:
         return True
+    if idle_only and wait_for_idle:
+        client = client.wait_until_idle(check_admission)
+        if client.solved:
+            return True
     if mode == "worker":
-        lease = client.acquire(cancellation_callback or (lambda: None), wait=not idle_only)
+        lease = client.acquire(check_admission, wait=not idle_only)
         try:
             lease.start()
             lease.finish("completed")
@@ -33,7 +45,8 @@ def warm_up(*, beat_backend: str = "cpu", mode: str = "worker",
             lease.close()
         return True
 
-    with SolveSession(cancellation_callback=cancellation_callback) as session:
+    with SolveSession(cancellation_callback=cancellation_callback,
+                      admission_callback=admission_callback) as session:
         assert session.directory is not None
 
         class ProbeWorker:

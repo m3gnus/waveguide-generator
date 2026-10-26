@@ -202,7 +202,8 @@ def _warm_metal() -> None:
     solve(str(WARMUP_MESH), config)
 
 
-def _warm_beat(backend: str, *, cancellation_callback: Callable[[], None] | None = None) -> bool:
+def _warm_beat(backend: str, *, cancellation_callback: Callable[[], None] | None = None,
+               admission_callback: Callable[[], None] | None = None) -> bool:
     """Start and exercise the BEAT Engine's persistent Julia worker.
 
     BEAT is the one engine whose cost was never being paid off the user's
@@ -236,7 +237,8 @@ def _warm_beat(backend: str, *, cancellation_callback: Callable[[], None] | None
     from .beat_runtime.warmup import warm_up
 
     with beat_warmup_recorded():
-        options = ({"cancellation_callback": cancellation_callback, "idle_only": True}
+        options = ({"cancellation_callback": cancellation_callback, "admission_callback": admission_callback,
+                    "idle_only": True, "wait_for_idle": True}
                    if cancellation_callback is not None else {})
         return warm_up(beat_backend=backend, mode="tiny", **options)
 
@@ -500,6 +502,7 @@ def persisted_engine_preference(settings: object | None) -> str | None:
 
 def prewarm_beat_worker_for_engine(
     engine: str | None, *, cancellation_callback: Callable[[], None] | None = None,
+    admission_callback: Callable[[], None] | None = None,
 ) -> bool:
     """Warm the BEAT Julia worker for the backend this host will actually solve on.
 
@@ -566,9 +569,9 @@ def prewarm_beat_worker_for_engine(
             # A cancelled selection can still own admission while its session
             # monitor retires the warmup. Wait off-thread for that lease to
             # drain, so BEAT -> Metal -> BEAT does not leave the final pick cold.
-            while not _warm_beat(backend, cancellation_callback=cancellation_callback):
+            while not _warm_beat(backend, cancellation_callback=cancellation_callback,
+                                 admission_callback=admission_callback):
                 cancellation_callback()
-                time.sleep(0.05)
     except Exception as exc:  # noqa: BLE001 - a prewarm is an optimisation
         log.info(
             "BEAT worker prewarm failed after %.1f s: %s", time.monotonic() - began, exc
