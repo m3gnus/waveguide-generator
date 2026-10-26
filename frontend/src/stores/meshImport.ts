@@ -2,7 +2,7 @@ import { fileSimulationSetup, reconcileFileChannels } from './importedSimulation
 import { savedChannelDrivers } from './cadSetupRestore';
 import type { CadSetup } from '../api/jobsSocket';
 import type { SimulationData } from './cadReturn';
-import { exteriorModeBlocker, incompleteDriverBlocker, simulationDriverGeometry, simulationDriverReferences } from '../jobs/importedSubmission';
+import { exteriorModeBlocker, importedSweepRangeInvalid, incompleteDriverBlocker, simulationDriverGeometry, simulationDriverReferences } from '../jobs/importedSubmission';
 import { create } from 'zustand';
 import {
   inspectMesh, inspectMeshModel, prepareMeshModel, registerMesh, type MeshSummary, type RegisteredMesh,
@@ -276,19 +276,18 @@ function fileSetupControls(): ImportedSetup {
   // instance's; this view only adds the mesh's geometry and source motions.
   const selected = useImportedSolveOptionsStore.getState();
   const options = selected.options() as ImportedSolveSubmission['options'];
+  const simulation = fileSimulationSetup.get();
   if (selected.frequencyMode === 'range') {
-    if (!(selected.sweepStartHz > 0) || !(selected.sweepEndHz > selected.sweepStartHz)
-      || !Number.isInteger(selected.sweepCount) || selected.sweepCount < 2 || selected.sweepCount > 401) {
+    if (importedSweepRangeInvalid(simulation, 2)) {
       throw new Error('Enter an increasing frequency range and 2–401 frequencies.');
     }
-    options.frequency_range = [selected.sweepStartHz, selected.sweepEndHz];
-    options.num_frequencies = selected.sweepCount;
+    options.frequency_range = [simulation.frequencyStartHz, simulation.frequencyEndHz];
+    options.num_frequencies = simulation.frequencyCount;
   }
   // The file rail has no ground plane control, so none is ever sent.
   delete options.ground_plane;
   options.symmetry = 'auto';
   options.solver_mode = 'full_3d';
-  const simulation = fileSimulationSetup.get();
   const exteriorError = exteriorModeBlocker({ ...simulation, ingestRecord: null, exteriorOnly: true }, selected);
   if (exteriorError) throw new Error(exteriorError);
   const driverError = incompleteDriverBlocker(simulation);

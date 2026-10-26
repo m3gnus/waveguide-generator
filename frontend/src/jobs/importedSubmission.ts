@@ -32,6 +32,15 @@ export function importedPolarFromPlan(plan: ImportedSolvePlan | null | undefined
 export type CadReturnSnapshot = ReturnType<typeof useCadReturnStore.getState>;
 export type SolveOptionsSnapshot = ReturnType<typeof useImportedSolveOptionsStore.getState>;
 
+/** Validate the generated range owned by the current imported input. */
+export function importedSweepRangeInvalid(
+  state: Pick<SimulationData, 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>,
+  minimumCount = 1,
+): boolean {
+  return !(state.frequencyStartHz > 0) || !(state.frequencyEndHz > state.frequencyStartHz)
+    || !Number.isInteger(state.frequencyCount) || state.frequencyCount < minimumCount || state.frequencyCount > 401;
+}
+
 /**
  * Whether this return can carry a cardioid campaign at all.
  *
@@ -54,12 +63,7 @@ export function importedSubmissionBlocker(
 ): string | null {
   const opening = importedModelBlocker('cad');
   if (opening) return opening;
-  const rangeInvalid = solveStore.frequencyMode === 'range' && (
-    !(state.frequencyStartHz > 0)
-    || state.frequencyEndHz <= state.frequencyStartHz
-    || state.frequencyCount < 1
-    || state.frequencyCount > 401
-  );
+  const rangeInvalid = solveStore.frequencyMode === 'range' && importedSweepRangeInvalid(state);
   const listInvalid = solveStore.frequencyMode === 'list'
     && parseFrequencyList(solveStore.frequencyListText).frequencies === null;
   const femVolumes = state.ingestRecord?.evidence?.fem_air_volumes ?? [];

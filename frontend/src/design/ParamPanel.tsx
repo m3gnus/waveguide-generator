@@ -13,7 +13,7 @@ import { useQuery } from '@tanstack/react-query';
 import { convertDesignToFreeform } from '../api/designIo';
 import { previewSocket } from '../api/previewSocket';
 import type { CadRealizedDimensions, CadRealizedParameter, CadReturnIngestRecord } from '../api/cadlink';
-import { importedSubmissionBlocker, importedSubmissionNotices } from '../jobs/importedSubmission';
+import { importedSubmissionBlocker, importedSubmissionNotices, importedSweepRangeInvalid } from '../jobs/importedSubmission';
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
 import { useActiveBackendCapability, useCapabilities, usePlannedBackendCapabilities } from '../jobs/useCapabilities';
 import { cadMeshIsEditable } from '../api/cadMesh';
@@ -916,7 +916,9 @@ function CadFrequencySweep() {
   const cadReturn = useImportedSimulationSetup();
   const solveStore = useScopedSolveOptions();
   const blocker = cadReturn.input === 'cad' ? importedSubmissionBlocker(useCadReturnStore.getState(), solveStore) : null;
-  const rangeMessage = blocker === 'Enter a valid explicit frequency sweep.' ? blocker : null;
+  const rangeMessage = cadReturn.input === 'file' && importedSweepRangeInvalid(cadReturn, 2)
+    ? 'Enter an increasing frequency range and 2–401 frequencies.'
+    : blocker === 'Enter a valid explicit frequency sweep.' ? blocker : null;
   return <>
     <NumberField label={CAD_CONTROLS.sweepStart.label} revealId={CAD_CONTROLS.sweepStart.reveal.id} unit="Hz" value={cadReturn.frequencyStartHz} min={1} step={10} precision={0} description="Lowest frequency of the generated sweep." onCommit={(frequencyStartHz) => cadReturn.setSweep({ frequencyStartHz })}/>
     <NumberField label={CAD_CONTROLS.sweepEnd.label} revealId={CAD_CONTROLS.sweepEnd.reveal.id} unit="Hz" value={cadReturn.frequencyEndHz} min={1} step={10} precision={0} description="Highest frequency of the generated sweep." onCommit={(frequencyEndHz) => cadReturn.setSweep({ frequencyEndHz })}/>

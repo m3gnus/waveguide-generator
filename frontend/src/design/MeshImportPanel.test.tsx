@@ -278,6 +278,16 @@ it('shows the solve controls in the file rail and writes edits to the imported o
   expect(useImportedSolveOptionsStore.getState().frequencyListText).toBe('300 700 1500');
 });
 
+it('shows the file sweep range error beside the sweep fields', () => {
+  opened({ prepared: { ingest_id: 'wgi_f', source_tags: { group_2: 2 }, summary: fileSummary } as unknown as RegisteredMesh });
+  act(() => root.render(panel()));
+  act(() => useImportedSolveOptionsStore.getState().setSweep({ startHz: 1000, endHz: 500 }));
+  expect(host.querySelector('[data-section="Sweep"] [role="alert"]')?.textContent)
+    .toBe('Enter an increasing frequency range and 2–401 frequencies.');
+  act(() => useImportedSolveOptionsStore.getState().setSweep({ endHz: 2000 }));
+  expect(host.querySelector('[data-section="Sweep"] [role="alert"]')).toBeNull();
+});
+
 it.each([false, true])('retains the file mesh engine list and adaptive hint (developer: %s)', (developer) => {
   preferencesStore.update({ showDeveloperDetails: developer });
   queryClient.setQueryData(CAPABILITIES_QUERY_KEY, { engines: [

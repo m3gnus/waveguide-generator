@@ -12,6 +12,10 @@ import { SETTINGS_NAMESPACES } from '../stores/durableSettings';
 import { CadCrossover } from './CrossoverSection';
 import { solveControlStore } from '../shell/JobsCoordinator';
 import { useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { useImportedModelStore, resetImportedModelStore } from '../stores/importedModel';
+import { importedSimulationSetup, seedFileSimulation } from '../stores/importedSimulationSetup';
+import type { RegisteredMesh } from '../api/meshImport';
+import { workspaceModeStore } from '../stores/workspaceMode';
 
 const recombineMocks = vi.hoisted(() => ({ recombine: vi.fn() }));
 vi.mock('../api/results', async (importOriginal) => ({
@@ -74,6 +78,8 @@ describe('live recombine from the rail', () => {
     localStorage.clear();
     resetDocumentStore();
     resetCadReturnStore();
+    resetImportedModelStore();
+    workspaceModeStore.setImportedInput('cad');
     latestCombine.reset();
     recombineMocks.recombine.mockReset();
     onApplied = vi.fn<(jobId: string, updated: JobResults) => void>();
@@ -89,6 +95,7 @@ describe('live recombine from the rail', () => {
   });
   afterEach(() => {
     act(() => root.unmount());
+    workspaceModeStore.setImportedInput('cad');
     latestCombine.reset();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -149,6 +156,28 @@ describe('live recombine from the rail', () => {
     expect(useImportedSolveOptionsStore.getState().frequencyMode).toBe('range');
     expect(useSolveOptionsStore.getState().frequencyMode).toBe('list');
     useSolveOptionsStore.getState().setFrequencyMode('range');
+  });
+
+  it('extends the file sweep through the file adapter when re-solving', async () => {
+    workspaceModeStore.setImportedInput('file');
+    const cad = useCadReturnStore.getState();
+    const record = {
+      ingest_id: 'wgi_file', manifest_sha256: 'sha256:a', artifact_sha256: 'sha256:b',
+      source_tags: { 'source-mf': 1, 'source-hf': 2 }, sources: bundle.sources,
+    } as unknown as RegisteredMesh;
+    useImportedModelStore.setState({ input: 'file', prepared: record,
+      fileSimulation: { ...seedFileSimulation(record, null), combineEnabled: null } });
+    useImportedSolveOptionsStore.getState().setSweep({ startHz: 200, endHz: 20_000, count: 36 });
+    const run = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(solveControlStore, 'getSnapshot').mockReturnValue({ solve: run, disabled: false } as unknown as NonNullable<ReturnType<typeof solveControlStore.getSnapshot>>);
+    render();
+    publishShown({ solvedBandHz: [200, 20_000] });
+    act(() => importedSimulationSetup().setCombineSpec(expandLegacy(['drive-mf', 'drive-hf'], [100])));
+    await act(async () => { vi.advanceTimersByTime(450); await Promise.resolve(); });
+    act(() => [...host.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Re-solve with sweep from 100 Hz')!.click());
+    expect(useImportedSolveOptionsStore.getState().sweepStartHz).toBe(100);
+    expect(useCadReturnStore.getState().frequencyStartHz).toBe(cad.frequencyStartHz);
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it('restores a crossover reverted while its own request is still outstanding', async () => {
