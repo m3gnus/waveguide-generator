@@ -1,7 +1,9 @@
 # Dependency compatibility
 
-The mesher pin `1883e32b` is release 0.2.8.
-It differs from the previous interim pin `b09819ca` only in its version string.
+The mesher pin `4ae1cfa6` declares version 0.2.8.
+Compared with `1883e32b`, it fixes ICW mouth endpoint intersections in
+`general_horn.radii_at_z`; geometry is unchanged. The remaining changes are tests.
+`mesh_sizing.py` is unchanged, so CAD Link retains its earlier vendoring provenance.
 When it cuts a solid to its symmetry domain it keeps periodic (seam-closed) faces
 such as a throat cylinder, which the earlier cutter could drop, and it raises
 `RuntimeError` ("OCC cut lost retained portions") rather than return a cut that

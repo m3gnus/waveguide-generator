@@ -401,7 +401,7 @@ def test_addin_sizing_is_exactly_the_pinned_mesher(addin: Path, tmp_path: Path):
     subprocess.run(['git', '-C', str(source), 'fetch', '--quiet', '--no-tags', '--depth', '1',
                     os.environ.get('MESHER_SOURCE_GIT', pin['repo']), pin['sha'], manifest['commit']], check=True)
     expected = subprocess.check_output(['git', '-C', str(source), 'show', f"{pin['sha']}:{manifest['path']}"])
-    # A version-only mesher release may retain the earlier vendoring provenance.
+    # A mesher pin with identical sizing may retain the earlier vendoring provenance.
     original = subprocess.check_output(['git', '-C', str(source), 'show',
                                         f"{manifest['commit']}:{manifest['path']}"])
     assert original == expected
