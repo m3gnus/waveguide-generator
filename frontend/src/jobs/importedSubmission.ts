@@ -303,24 +303,26 @@ export function simulationDriverReferences(state: Pick<SimulationData, 'driveCha
   }));
 }
 
-/** Crossover and cardioid physics share the same wire rules for every input. */
-export function simulationEffectsGeometry(
-  state: Parameters<typeof combineWire>[0] & Pick<SimulationData, 'passiveCardioid'>,
+/** Build imported simulation physics once for CAD, files and future inputs. */
+export function simulationGeometry(
+  state: Parameters<typeof combineWire>[0] & Pick<SimulationData, 'passiveCardioid' | 'driveVoltageV' | 'maxDriveVoltageV'>,
   sources: readonly RoleSource[],
-): Partial<ImportedSetup['geometry']> {
+  retained?: ImportedSetup['geometry'],
+): { drivers: ReturnType<typeof simulationDriverGeometry>; effects: Partial<ImportedSetup['geometry']> } {
   const present = hasPassiveCardioidSurface(sources);
   const blocker = present ? passiveCardioidBlocker(state) : null;
   if (blocker) throw new Error(blocker);
   const combine = combineWire(state);
   const cardioid = present ? passiveCardioidWire(state.passiveCardioid) : null;
-  return { ...(combine ? { combine } : {}), ...(cardioid ?? {}) };
+  return { drivers: simulationDriverGeometry(state, retained),
+    effects: { ...(combine ? { combine } : {}), ...(cardioid ?? {}) } };
 }
 
 export function resolveCadImportedSetup(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
   solveStore: SolveOptionsSnapshot = useImportedSolveOptionsStore.getState(),
 ): ImportedSetup {
-  const effects = simulationEffectsGeometry(state, state.selectedBundle?.sources ?? []);
+  const { drivers, effects } = simulationGeometry(state, state.selectedBundle?.sources ?? []);
   const nativeError = exteriorModeBlocker(state, solveStore);
   if (nativeError) throw new Error(nativeError);
   const options = solveStore.options() as ImportedSolveSubmission['options'];
@@ -335,7 +337,7 @@ export function resolveCadImportedSetup(
   options.symmetry = 'auto';
   return {
     geometry: {
-      ...simulationDriverGeometry(state),
+      ...drivers,
       mesh: {
         rigid_size_mm: state.meshSizes.rigid_size_mm,
         transition_mm: state.meshSizes.transition_mm,

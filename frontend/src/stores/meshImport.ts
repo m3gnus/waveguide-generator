@@ -2,7 +2,7 @@ import { fileSimulationSetup, importedDriverLabel, reconcileFileChannels } from 
 import { savedChannelDrivers } from './cadSetupRestore';
 import type { CadSetup } from '../api/jobsSocket';
 import type { SimulationData } from './cadReturn';
-import { exteriorModeBlocker, importedSweepRangeInvalid, incompleteDriverBlocker, simulationDriverGeometry, simulationDriverReferences, simulationEffectsGeometry } from '../jobs/importedSubmission';
+import { exteriorModeBlocker, importedSweepRangeInvalid, incompleteDriverBlocker, simulationGeometry, simulationDriverReferences } from '../jobs/importedSubmission';
 import { create } from 'zustand';
 import {
   inspectMesh, inspectMeshModel, prepareMeshModel, registerMesh, type MeshSummary, type RegisteredMesh,
@@ -290,9 +290,9 @@ function fileSetupControls(): ImportedSetup {
   const model = useImportedModelStore.getState();
   const retained = model.setup ?? model.setupEditBase?.retained;
   // Motion edits of older file setups preserve their voltage fields.
-  const geometry = simulationDriverGeometry(simulation, retained?.geometry);
+  const { drivers, effects } = simulationGeometry(simulation, simulation.sources, retained?.geometry);
   return {
-    geometry: { skipped_source_ids: [], ...geometry, ...simulationEffectsGeometry(simulation, simulation.sources) },
+    geometry: { skipped_source_ids: [], ...drivers, ...effects },
     ...(Object.keys(driver_references).length ? { driver_references } : {}),
     options,
   };
