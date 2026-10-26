@@ -13,6 +13,19 @@ class ExtensibleResultModel(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class SolverFingerprint(BaseModel):
+    """Observed solver source and executable identity for one run."""
+
+    package: str | None = None
+    version: str | None = None
+    commit: str | None = None
+    source_sha256: str | None = None
+    build_sha256: str | None = None
+    script_sha256: str | None = None
+    interpreter_sha256: str | None = None
+    backend: str | None = None
+
+
 class ResultProvenance(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -38,6 +51,8 @@ class ResultProvenance(BaseModel):
     effective_geometry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     effective_solve_options_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     resolved_engine: str
+    #: Distinct observed solver identities; older results have no such field.
+    solver_fingerprints: list[SolverFingerprint] | None = None
     cad_identity: CadIdentityProvenance | None = None
 
 

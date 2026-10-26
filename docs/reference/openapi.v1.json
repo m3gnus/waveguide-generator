@@ -11373,6 +11373,20 @@
             "title": "Solve Options Sha256",
             "type": "string"
           },
+          "solver_fingerprints": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SolverFingerprint"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solver Fingerprints"
+          },
           "wg_version": {
             "title": "Wg Version",
             "type": "string"
@@ -12490,6 +12504,101 @@
           "geometry"
         ],
         "title": "SolveRequest",
+        "type": "object"
+      },
+      "SolverFingerprint": {
+        "description": "Observed solver source and executable identity for one run.",
+        "properties": {
+          "backend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backend"
+          },
+          "build_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Build Sha256"
+          },
+          "commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit"
+          },
+          "interpreter_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interpreter Sha256"
+          },
+          "package": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Package"
+          },
+          "script_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Script Sha256"
+          },
+          "source_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Sha256"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "SolverFingerprint",
         "type": "object"
       },
       "SolverFrameConfirmationRequest": {

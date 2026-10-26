@@ -144,6 +144,37 @@ class MetalUnavailable(RuntimeError):
 logger = logging.getLogger(__name__)
 
 
+def _metal_fingerprints(results: Sequence[Any]) -> list[dict[str, str | None]]:
+    """Retain each distinct source and helper actually used by native sweeps."""
+    fingerprints: list[dict[str, str | None]] = []
+    for result in results:
+        runtime = getattr(result, "native_runtime", None)
+        runtime = runtime if isinstance(runtime, Mapping) else {}
+        source = runtime.get("source")
+        source = source if isinstance(source, Mapping) else {}
+        helper = runtime.get("helper")
+        helper = helper if isinstance(helper, Mapping) else {}
+        swift = runtime.get("swift")
+        swift = swift if isinstance(swift, Mapping) else {}
+
+        def text(value: Any) -> str | None:
+            return value if isinstance(value, str) and value and value != "0+unknown" else None
+
+        script = helper.get("source") == "swift-script"
+        fingerprint = {
+            "package": "hornlab-metal-bem", "version": text(source.get("version")),
+            "commit": text(source.get("repository_revision")),
+            "source_sha256": text(source.get("source_sha256")),
+            "build_sha256": None if script else text(helper.get("sha256")),
+            "script_sha256": text(helper.get("sha256")) if script else None,
+            "interpreter_sha256": text(swift.get("sha256")) if script else None,
+            "backend": "metal",
+        }
+        if fingerprint not in fingerprints:
+            fingerprints.append(fingerprint)
+    return fingerprints
+
+
 def _native_config_or_unavailable(kwargs: Mapping[str, Any]) -> Any:
     """Apply one capability-error ladder to parametric and imported configs."""
 
@@ -807,6 +838,7 @@ def solve_metal_from_msh_text(
         stage_callback("finalizing", 1.0, "Packaging Metal BEM solver results")
 
     metadata: dict[str, Any] = {
+        "_solver_fingerprints": _metal_fingerprints(band_results if ladder_bands is not None else [result]),
         "solver_backend": "metal",
         "solver_mode": "full_3d",
         "device_interface": {"selected": "metal", "metal": status},
@@ -1989,6 +2021,7 @@ def solve_imported_metal_from_msh_text(
         else []
     ) or []
     metadata = {
+        "_solver_fingerprints": _metal_fingerprints(results),
         "result_contract_version": 2,
         "geometry_type": "imported",
         "solver_backend": "metal",

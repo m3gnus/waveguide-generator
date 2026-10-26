@@ -149,6 +149,26 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
   if (metadata('mesh_cache_hit') === true || metadataMesh?.mesh_cache_hit === true) row(solve, 'Mesh cache', 'reused');
   group(groups, 'Solve', solve);
 
+  const provenance = object(wrapper.provenance) ?? object(result.provenance);
+  const fingerprints = Array.isArray(provenance?.solver_fingerprints) ? provenance.solver_fingerprints : [];
+  fingerprints.forEach((entry, index) => {
+    const fingerprint = object(entry);
+    if (!fingerprint) return;
+    const source: SummaryRow[] = [];
+    row(source, 'Package', string(fingerprint.package) ?? 'Unknown');
+    row(source, 'Version', string(fingerprint.version) ?? 'Unknown');
+    row(source, 'Backend', string(fingerprint.backend) ?? 'Unknown');
+    for (const [key, label] of [
+      ['commit', 'Commit'], ['source_sha256', 'Source hash'], ['build_sha256', 'Build hash'],
+      ['script_sha256', 'Script hash'], ['interpreter_sha256', 'Interpreter hash'],
+    ] as const) {
+      const value = string(fingerprint[key]);
+      if (value) row(source, label, value.slice(0, 12), value);
+      else if (key === 'commit' || key === 'source_sha256' || key === 'build_sha256') row(source, label, 'Unknown');
+    }
+    group(groups, fingerprints.length > 1 ? `Solver source ${index + 1}` : 'Solver source', source);
+  });
+
   // How the sources moved. An axial drive is a rigid piston along one axis per
   // source, resolved from the mesh; the axis is read-only here.
   const motion: SummaryRow[] = [];

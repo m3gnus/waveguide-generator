@@ -68,6 +68,44 @@ def pinned_dependency_shas() -> dict[str, str]:
     return dict(_release_identity()[1])
 
 
+def _text(*values: Any) -> str | None:
+    return next((value for value in values if isinstance(value, str) and value), None)
+
+
+def _beat_fingerprints(results: Mapping[str, Any], metadata: Mapping[str, Any]) -> list[dict[str, str | None]]:
+    """Reuse the engine diagnostics carried by BEAT's existing result logs."""
+    sources = [metadata]
+    channels = results.get("channels")
+    if isinstance(channels, Mapping):
+        sources.extend(item.get("metadata", {}) for item in channels.values() if isinstance(item, Mapping))
+    fingerprints: list[dict[str, str | None]] = []
+    for entry in sources:
+        if not isinstance(entry, Mapping):
+            continue
+        beat = entry.get("beat")
+        if not isinstance(beat, Mapping) or not isinstance(beat.get("solver_log"), list):
+            continue
+        for line in beat["solver_log"]:
+            diag = line.get("native_diagnostics") if isinstance(line, Mapping) else None
+            run = diag.get("engine_provenance") if isinstance(diag, Mapping) else None
+            if not isinstance(run, Mapping):
+                continue
+            engine, runtime, execution = (run.get(key) for key in ("engine", "runtime", "execution"))
+            engine = engine if isinstance(engine, Mapping) else {}
+            runtime = runtime if isinstance(runtime, Mapping) else {}
+            execution = execution if isinstance(execution, Mapping) else {}
+            fingerprint = {
+                "package": "beat-engine", "version": _text(engine.get("version")),
+                "commit": _text(engine.get("repository_revision")),
+                "source_sha256": _text(engine.get("source_sha256")),
+                "build_sha256": _text(runtime.get("sysimage_sha256")),
+                "backend": _text(execution.get("backend")),
+            }
+            if fingerprint not in fingerprints:
+                fingerprints.append(fingerprint)
+    return fingerprints
+
+
 def enrich_result_contract(
     results: Mapping[str, Any],
     request: "SolveRequest",
@@ -111,6 +149,21 @@ def enrich_result_contract(
     enriched["result_contract_version"] = result_version
     enriched["client_request_id"] = request.client_request_id
     enriched["client_metadata"] = request.client_metadata
+    metadata = dict(enriched.get("metadata") or {})
+    fingerprints = metadata.pop("_solver_fingerprints", None)
+    if not isinstance(fingerprints, list) or not fingerprints:
+        fingerprints = _beat_fingerprints(enriched, metadata)
+    if not fingerprints:
+        # An older adapter may not expose its executing source/build. Do not
+        # replace the missing observation with a declared or installed pin.
+        solver = metadata.get("solver_engine")
+        solver = solver if isinstance(solver, Mapping) else {}
+        fingerprints = [{
+            "package": _text(solver.get("package"), metadata.get("engine")),
+            "version": _text(solver.get("package_version")),
+            "commit": None, "source_sha256": None, "build_sha256": None,
+            "backend": _text(solver.get("device"), metadata.get("solver_backend"), request.options.engine),
+        }]
     provenance = {
         "schema_version": PROVENANCE_CONTRACT_VERSION,
         "wg_version": wg_version,
@@ -137,11 +190,11 @@ def enrich_result_contract(
         "geometry_sha256": geometry_sha256,
         "solve_options_sha256": solve_options_sha256,
         "resolved_engine": request.options.engine,
+        "solver_fingerprints": deepcopy(fingerprints),
     }
     if cad_identity is not None:
         provenance["cad_identity"] = deepcopy(dict(cad_identity))
     enriched["provenance"] = provenance
-    metadata = dict(enriched.get("metadata") or {})
     metadata.setdefault("result_contract_version", result_version)
     if cad_identity is not None:
         metadata["cad_identity"] = deepcopy(dict(cad_identity))

@@ -33,6 +33,27 @@ function row(groups: SummaryGroup[], groupTitle: string, label: string) {
 }
 
 describe('simulation summary groups', () => {
+  it('shows the recorded source and build identities from the result wrapper', () => {
+    const commit = 'a'.repeat(40);
+    const source = 'b'.repeat(64);
+    const build = 'c'.repeat(64);
+    const wrapper: ResultPayload = { frequencies: [], provenance: { solver_fingerprints: [{
+      package: 'hornlab-metal-bem', version: '0.3.0.dev0', commit,
+      source_sha256: source, build_sha256: build, backend: 'metal',
+    }] } };
+    const groups = summaryGroups({ result: { frequencies: [500] }, wrapper });
+    expect(row(groups, 'Solver source', 'Package')?.value).toBe('hornlab-metal-bem');
+    expect(row(groups, 'Solver source', 'Version')?.value).toBe('0.3.0.dev0');
+    expect(row(groups, 'Solver source', 'Commit')).toEqual({ label: 'Commit', value: commit.slice(0, 12), title: commit });
+    expect(row(groups, 'Solver source', 'Source hash')?.title).toBe(source);
+    expect(row(groups, 'Solver source', 'Build hash')?.title).toBe(build);
+    expect(row(groups, 'Solver source', 'Backend')?.value).toBe('metal');
+  });
+
+  it('does not invent identity for older results', () => {
+    expect(summaryGroups({ result: { frequencies: [500] } }).some(({ title }) => title === 'Solver source')).toBe(false);
+  });
+
   it.each([
     ['official', '1.2.3', 'Official BEAT · 1.2.3'],
     ['hbb', '0.9.0', 'Legacy HBB · 0.9.0'],

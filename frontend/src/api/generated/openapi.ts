@@ -6074,6 +6074,8 @@ export interface components {
             schema_version: 1;
             /** Solve Options Sha256 */
             solve_options_sha256: string;
+            /** Solver Fingerprints */
+            solver_fingerprints?: components["schemas"]["SolverFingerprint"][] | null;
             /** Wg Version */
             wg_version: string;
         } & {
@@ -6472,6 +6474,28 @@ export interface components {
             options?: components["schemas"]["SolveOptions"];
             /** Parent Job Id */
             parent_job_id?: string | null;
+        };
+        /**
+         * SolverFingerprint
+         * @description Observed solver source and executable identity for one run.
+         */
+        SolverFingerprint: {
+            /** Backend */
+            backend?: string | null;
+            /** Build Sha256 */
+            build_sha256?: string | null;
+            /** Commit */
+            commit?: string | null;
+            /** Interpreter Sha256 */
+            interpreter_sha256?: string | null;
+            /** Package */
+            package?: string | null;
+            /** Script Sha256 */
+            script_sha256?: string | null;
+            /** Source Sha256 */
+            source_sha256?: string | null;
+            /** Version */
+            version?: string | null;
         };
         /** SolverFrameConfirmationRequest */
         SolverFrameConfirmationRequest: {
