@@ -5093,7 +5093,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Flat baffle left between the horn mouth and the left edge of the box, which is what sets the box size on that side. A positive margin is never eaten by Edge radius — the roundover shrinks instead.",
+      "description": "Margin from the mouth to the left edge of the box. The mouth extent is rounded outward to whole millimetres before adding the margin. If the resulting baffle is less than 0.1 mm wide beside any enclosure wall, the box sides continue straight from the mouth rim (flush mount). Existing enclosures with at least 0.1 mm of baffle keep their shape, even when a margin is zero.",
       "visible_when": {
         "path": "enclosure.depth",
         "operator": "greater_than",
@@ -5133,7 +5133,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Flat baffle left between the horn mouth and the top edge of the box, which is what sets the box size on that side. A positive margin is never eaten by Edge radius — the roundover shrinks instead.",
+      "description": "Margin from the mouth to the top edge of the box. The mouth extent is rounded outward to whole millimetres before adding the margin. If the resulting baffle is less than 0.1 mm wide beside any enclosure wall, the box sides continue straight from the mouth rim (flush mount). Existing enclosures with at least 0.1 mm of baffle keep their shape, even when a margin is zero.",
       "visible_when": {
         "path": "enclosure.depth",
         "operator": "greater_than",
@@ -5173,7 +5173,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Flat baffle left between the horn mouth and the right edge of the box, which is what sets the box size on that side. A positive margin is never eaten by Edge radius — the roundover shrinks instead.",
+      "description": "Margin from the mouth to the right edge of the box. The mouth extent is rounded outward to whole millimetres before adding the margin. If the resulting baffle is less than 0.1 mm wide beside any enclosure wall, the box sides continue straight from the mouth rim (flush mount). Existing enclosures with at least 0.1 mm of baffle keep their shape, even when a margin is zero.",
       "visible_when": {
         "path": "enclosure.depth",
         "operator": "greater_than",
@@ -5213,7 +5213,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Flat baffle left between the horn mouth and the bottom edge of the box, which is what sets the box size on that side. A positive margin is never eaten by Edge radius — the roundover shrinks instead.",
+      "description": "Margin from the mouth to the bottom edge of the box. The mouth extent is rounded outward to whole millimetres before adding the margin. If the resulting baffle is less than 0.1 mm wide beside any enclosure wall, the box sides continue straight from the mouth rim (flush mount). Existing enclosures with at least 0.1 mm of baffle keep their shape, even when a margin is zero.",
       "visible_when": {
         "path": "enclosure.depth",
         "operator": "greater_than",
