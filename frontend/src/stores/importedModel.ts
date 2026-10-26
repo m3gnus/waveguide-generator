@@ -32,7 +32,15 @@ import { workspaceModeStore } from './workspaceMode';
 export type ImportedInput = 'file' | 'cad';
 export type ImportedPhase = 'empty' | 'loading' | 'ready' | 'failed';
 /** How a file's original becomes its solver mesh; preparing it again makes a new prepared mesh. */
-export interface FileDraft { units: string; forward: string; up: string; selected: number[] }
+export interface FileDraft {
+  units: string; forward: string; up: string;
+  /** Legacy source assignments remain readable; new edits carry explicit roles. */
+  selected: number[];
+  roles?: Record<string, string | null>;
+  domainPlanes?: string[];
+  /** null lets preparation mirror a negative-side model automatically. */
+  reflectPlanes?: string[] | null;
+}
 /** The prepared mesh on screen: a file's registered mesh, or a CAD ingestion record. */
 export type ImportedPrepared = { ingest_id: string; manifest_sha256: string; artifact_sha256: string; model_id?: string | null };
 
@@ -140,10 +148,14 @@ export function registerImportedView(input: ImportedInput, view: ImportedView): 
 }
 
 function fileDraftOf(prepared: Extract<ImportedSource, { kind: 'file' }>['prepared'] | PreparedSummary): FileDraft {
-  const file = (prepared as { source_file?: { transform?: Partial<FileDraft>; source_tags?: number[] } } | null)?.source_file;
+  const record = prepared as import('../api/meshImport').RegisteredMesh | null;
+  const file = record?.source_file;
+  const roles = file?.roles ?? Object.fromEntries((file?.source_tags ?? []).map(tag => [tag, 'HF']));
   return {
     units: file?.transform?.units ?? '', forward: file?.transform?.forward ?? '+z', up: file?.transform?.up ?? '+y',
-    selected: [...(file?.source_tags ?? [])],
+    selected: Object.entries(roles).filter(([, role]) => role !== 'RIGID').map(([tag]) => Number(tag)),
+    roles, domainPlanes: file?.domain_planes ?? record?.symmetry?.domain_planes ?? [],
+    reflectPlanes: file?.reflect_planes ?? null,
   };
 }
 
@@ -403,7 +415,10 @@ export function isCurrentOpen(generation: number): boolean {
 /** Change how a file is prepared: its prepared mesh no longer matches, and the opened setup ends. */
 export function editFileDraft(patch: Partial<FileDraft>): void {
   useImportedModelStore.setState((state) => ({
-    fileDraft: { ...state.fileDraft, ...patch, selected: [...(patch.selected ?? state.fileDraft.selected)] },
+    fileDraft: { ...state.fileDraft, ...patch,
+      ...(patch.selected && !patch.roles ? { roles: Object.fromEntries(patch.selected.map(tag => [tag, state.fileDraft.roles?.[tag] && state.fileDraft.roles[tag] !== 'RIGID' ? state.fileDraft.roles[tag] : 'HF'])) } : {}),
+      selected: patch.roles ? Object.entries(patch.roles).filter(([, role]) => role && role !== 'RIGID').map(([tag]) => Number(tag))
+        : [...(patch.selected ?? state.fileDraft.selected)] },
     prepared: null, setup: null, restoredRevisionId: null,
   }));
 }

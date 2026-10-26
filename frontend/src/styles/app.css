@@ -1493,3 +1493,16 @@ textarea:disabled { opacity: .48; }
 .notice-actions { display: flex; flex-wrap: wrap; gap: var(--space-6); margin-top: var(--space-6); }
 .notice-warning { border-color: var(--amber); background: color-mix(in srgb, var(--amber) 8%, transparent); }
 .notice-error { border-color: var(--red); background: color-mix(in srgb, var(--red) 8%, transparent); }
+
+.mesh-import-panel .mesh-surfaces .field-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.mesh-import-panel .mesh-surfaces select { width: 100%; max-width: 100%; min-width: 0; }
+.mesh-surface-name { overflow-wrap: anywhere; }
+.mesh-surface-name small { display: block; color: var(--fg3); padding-left: 14px; }
+.mesh-surface-swatch { display: inline-block; width: 8px; height: 8px; margin-right: 6px; background: var(--vp-horn-material); }
+.mesh-surface-swatch[data-role="HF"] { background: var(--vp-hf-material); }
+.mesh-surface-swatch[data-role="MF"] { background: var(--vp-mf-material); }
+.mesh-surface-swatch[data-role="LF"] { background: var(--vp-lf-material); }
+.mesh-surface-swatch[data-role="PASSIVE_CARDIOID"] { background: var(--vp-port-material); }
+
+.mesh-import-panel .link-button { border: 0; padding: 0; }
+.mesh-import-panel .cad-domain { margin-block: 8px; }

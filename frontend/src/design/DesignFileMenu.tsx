@@ -374,7 +374,6 @@ export function DesignFileMenu() {
         if (useMeshImportStore.getState().request === readRequest) useMeshImportStore.setState({ busy: false });
       }
       if (!importedMeshStore.isCurrentGeneration(generation)) return;
-      setMessage(`Imported ${file.name}. Choose units and Radiating surfaces in Geometry, then prepare the mesh.`);
     });
   }
 

@@ -5,7 +5,12 @@ export interface MeshSummary {
   triangle_count: number;
   dimensions: number[];
   dimensions_mm?: number[];
-  groups: Array<{ tag: number; name: string; triangle_count: number }>;
+  suggested_units?: string | null;
+  detected_planes?: string[];
+  kept_sides?: Record<string, 'positive' | 'negative' | 'both' | 'on_plane'>;
+  groups: Array<{ tag: number; name: string; triangle_count: number;
+    suggested_role?: string | null; needs_role_choice?: boolean; role_from?: 'file' | 'name' | 'default'; display_name?: string }>;
+
 }
 /** One prepared mesh of an imported file model, with its solver mesh. */
 export interface RegisteredMesh {
@@ -15,12 +20,21 @@ export interface RegisteredMesh {
   producer: 'mesh-file';
   manifest_sha256: string;
   artifact_sha256: string;
-  source_file: { filename: string; transform: { units: string; forward: string; up: string }; source_tags: number[] };
+  source_file: { filename: string; transform: { units: string; forward: string; up: string }; source_tags: number[]; roles?: Record<string, string>; domain_planes?: string[]; reflect_planes?: string[] | null };
   source_tags: Record<string, number>;
   summary: MeshSummary;
+  sources?: Array<{ id: string; role: string; name?: string }>;
+  symmetry?: { domain_planes: string[]; cut_planes: string[]; reflected_planes?: string[] };
+  mesh?: { integrity?: Record<string, unknown> };
   msh_text: string;
 }
-export interface FilePreparation { units: string; forward: string; up: string; source_tags: number[] }
+export interface FilePreparation {
+  units: string; forward: string; up: string;
+  source_tags?: number[];
+  roles?: Record<string, string>;
+  domain_planes?: string[];
+  reflect_planes?: string[] | null;
+}
 
 const modelPath = (modelId: string) => `/api/models/${encodeURIComponent(modelId)}`;
 
@@ -35,8 +49,8 @@ async function request<T>(url: string, body?: unknown, fetcher: typeof fetch = f
   return response.json() as Promise<T>;
 }
 
-export const inspectMesh = (filename: string, msh_text: string, fetcher?: typeof fetch) =>
-  request<MeshSummary>('/api/models/files/inspect', { filename, msh_text }, fetcher);
+export const inspectMesh = (filename: string, msh_text: string, fetcher?: typeof fetch, frame?: { units?: string; forward: string; up: string }) =>
+  request<MeshSummary>('/api/models/files/inspect', { filename, msh_text, ...frame }, fetcher);
 /** Import a file as its model and prepare it; the same file and preparation is the same mesh. */
 export const registerMesh = async (body: FilePreparation & { filename: string; msh_text: string }, fetcher?: typeof fetch) =>
   (await request<{ prepared: RegisteredMesh }>('/api/models/files', body, fetcher)).prepared;

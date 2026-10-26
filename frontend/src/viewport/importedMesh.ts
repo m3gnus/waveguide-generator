@@ -27,6 +27,7 @@ export interface ImportedMeshScene {
 export interface ImportedMeshSceneOptions {
   /** File imports assign excitation by tag, independent of physical names. */
   drivenTags?: readonly number[];
+  rolesByTag?: Readonly<Record<string, string | null>>;
   /** The supplied mesh already covers the complete display domain. */
   fullDomain?: boolean;
   /** False for a refused preparation: it has geometry but no solve domain. */
@@ -228,6 +229,7 @@ const ROLE_BY_SOLVER_GROUP: Record<string, SourceRole> = {
 
 function sourceRoleFor(label: string): SourceRole | null {
   const upper = label.toUpperCase();
+  if (upper === 'PASSIVE_CARDIOID') return 'PORT_EXIT';
   if ((SOURCE_ROLES as readonly string[]).includes(upper)) return upper as SourceRole;
   return ROLE_BY_SOLVER_GROUP[label] ?? null;
 }
@@ -273,7 +275,9 @@ export function createImportedMeshScene(
   }
   const surfaces: SceneSurface[] = [...grouped.entries()].map(([tag, values]) => {
     const geometry = splitCreaseNormals(mesh.vertices, Uint32Array.from(values));
-    const group = describeTag(tag, mesh.physicalNames);
+    const group = options.rolesByTag
+      ? { role: `imported.${options.rolesByTag[tag] ?? 'RIGID'}.${tag}`, sourceRole: sourceRoleFor(options.rolesByTag[tag] ?? 'RIGID') }
+      : describeTag(tag, mesh.physicalNames);
     return {
       key: `msh:${name}:${tag}`,
       role: options.drivenTags ? `imported.${options.drivenTags.includes(tag) ? 'driven' : 'rigid'}.${mesh.physicalNames.get(tag) ?? tag}` : group.role,

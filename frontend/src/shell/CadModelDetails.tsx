@@ -1,3 +1,4 @@
+import type { RegisteredMesh, MeshSummary } from '../api/meshImport';
 import { sourceRoleLabel } from '../model/cadLabels';
 import { useMemo, useState, type ReactNode } from 'react';
 import type { CadReturnFinding, CadReturnIngestRecord } from '../api/cadlink';
@@ -103,7 +104,7 @@ export function modelSummary(record: CadReturnIngestRecord): string {
       : 'full model';
   return [
     bodies.length === 1 ? bodies[0] : bodies.length > 1 ? pluralized(bodies.length, 'body', 'bodies') : null,
-    `${pluralized(sourceCount, 'source')}${roles.length ? ` (${roles.map(sourceRoleLabel).join(', ')})` : ''}`,
+    `${pluralized(sourceCount, 'source')}${roles.length ? ` (${roles.map(role => sourceRoleLabel(role)).join(', ')})` : ''}`,
     recordInterpretation(record) ? null : domain,
   ].filter(Boolean).join(' · ');
 }
@@ -590,6 +591,23 @@ export function CadModelDetails({ record, label, prepared, fetcher }: {
         className="cad-detail"
         title="The snapshot is the returned model, named by its manifest hash. The preparation holds the mesh on screen that would be solved."
       >Snapshot <code>{shortSha256(record.manifest_sha256)}</code> · Preparation <code>{record.ingest_id}</code></p>
+    </DeveloperDetails>
+  </CadDrawer>;
+}
+
+/** File input uses the same Model details drawer, check row and developer disclosure. */
+export function FileModelDetails({ record, summary, axes, setup }: {
+  record: RegisteredMesh | null; summary: MeshSummary | null; axes: ReactNode; setup: unknown;
+}) {
+  const origins = new Set(summary?.groups.map(group => group.role_from));
+  return <CadDrawer title="Model details" className="cad-model-details" keepMounted>
+    {axes}
+    {record && <CheckRow check={{ key: 'file-checks', name: 'Checks', state: 'ok', verdict: 'passed', title: 'The mesh checks passed.' }}/>}
+    <p className="cad-detail">Roles: {origins.has('file') && origins.has('name') ? 'from the file / guessed from names'
+      : origins.has('file') ? 'from the file' : origins.has('name') ? 'guessed from names' : 'chosen in Surfaces'}</p>
+    {summary && <p className="cad-detail">{summary.triangle_count.toLocaleString()} triangles · {summary.node_count.toLocaleString()} points</p>}
+    <DeveloperDetails>
+      <pre>{JSON.stringify({ groups: summary?.groups, checks: record?.mesh?.integrity, preparation: record?.ingest_id, setup }, null, 2)}</pre>
     </DeveloperDetails>
   </CadDrawer>;
 }

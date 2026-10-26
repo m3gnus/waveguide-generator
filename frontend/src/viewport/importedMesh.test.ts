@@ -196,3 +196,13 @@ describe('the whole model of a reduced CAD solve', () => {
       .toEqual(['x0']);
   });
 });
+
+it.each([
+  ['HF', 'HF', 'hf-smooth'], ['MF', 'MF', 'mf-smooth'], ['LF', 'LF', 'lf-smooth'],
+  ['PASSIVE_CARDIOID', 'PORT_EXIT', 'port-smooth'], ['RIGID', null, 'horn-smooth'],
+])('colours an explicitly assigned %s file surface through sourceRole', (role, sourceRole, materialClass) => {
+  const geometry = mesh([0, 0, 0, 1, 0, 0, 0, 1, 0], [[0, 1, 2]]);
+  geometry.physicalNames.set(7, 'HF'); // The explicit assignment overrides a name guess.
+  const scene = createImportedMeshScene('roles.msh', geometry, 'file', null, [], { rolesByTag: { 7: role } });
+  expect(scene.scene.surfaces[0]).toMatchObject({ sourceRole, materialClass });
+});

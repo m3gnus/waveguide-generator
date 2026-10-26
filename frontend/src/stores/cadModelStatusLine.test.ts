@@ -208,3 +208,30 @@ describe('the CAD model status line', () => {
     expect(said.text).not.toContain('Solved');
   });
 });
+
+describe('file input uses the same status line', () => {
+  const file = { input: 'file' as const, label: 'speaker.msh', reading: false, preparing: false,
+    choice: null, failureMessage: null, canPrepare: true, prepared: true, triangles: 9730, symmetryLabel: 'Quarter model' };
+  it.each([
+    [{ reading: true }, 'Reading speaker.msh…', 'none'],
+    [{ preparing: true }, 'Preparing speaker.msh…', 'none'],
+    [{ choice: "Choose the file's units.", prepared: false }, "Choose the file's units.", 'none'],
+    [{ choice: 'Choose which surface is a driver.', prepared: false }, 'Choose which surface is a driver.', 'none'],
+    [{ failureMessage: 'Close the opening in the meshing tool.' }, 'Close the opening in the meshing tool.', 'try-again'],
+    [{}, 'Ready to solve · 9,730 triangles · quarter model', 'solve'],
+  ])('states %j without jargon', (patch, text, action) => {
+    const status = cadModelStatusLine({ ...file, ...patch }, null);
+    expect(status).toMatchObject({ text, action });
+    expectNoJargon(status.text);
+    if (status.actionLabel) expectNoJargon(status.actionLabel);
+  });
+  it('reuses solving and solved behavior for file requests', () => {
+    const job = cadJobFixture(operation('file-run', 'accepted'), { status: 'running', progress: .5 });
+    const running = cadModelStatusLine(file, { kind: 'running', job, message: '' });
+    expect(running).toMatchObject({ text: 'Solving · 50%', action: 'none' });
+    const solved = cadModelStatusLine(file, { kind: 'solved', job: { ...job, status: 'complete' }, message: '' });
+    expect(solved.action).toBe('show-results');
+    expectNoJargon(running.text);
+    expectNoJargon(solved.text);
+  });
+});

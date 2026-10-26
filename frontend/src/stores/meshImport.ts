@@ -19,7 +19,7 @@ import { withChannelMotion } from './cadReturn';
 import {
   editFileDraft, effectiveImportedSetup, importedModelBlocker, isCurrentOpen, openImported,
   registerImportedSetupControls, registerImportedView, useImportedModelStore,
-  type ImportedView,
+  type ImportedView, type FileDraft,
 } from './importedModel';
 
 /**
@@ -74,9 +74,19 @@ export function beginMeshFileImport(filename: string): number {
 }
 
 /** Changing how the file is prepared leaves the preview visible but never solvable. */
-export function editMeshImport(patch: Partial<{ units: string; forward: string; up: string; selected: number[] }>) {
+export async function editMeshImport(patch: Partial<FileDraft>, fetcher: typeof fetch = fetch): Promise<void> {
   editFileDraft(patch);
   useMeshImportStore.setState({ error: null, notice: null });
+  await prepareMeshFile(fetcher, patch.forward !== undefined || patch.up !== undefined);
+}
+
+/** A missing guess waits at its field instead of sending an incomplete preparation. */
+export function meshImportChoice(draft: FileDraft): string | null {
+  if (!draft.units) return "Choose the file's units.";
+  if (Object.values(draft.roles ?? {}).some(role => role === null) || !draft.selected.length) {
+    return 'Choose which surface is a driver.';
+  }
+  return null;
 }
 
 /** A source's motion edits its retained channel without replacing the other physics. */
@@ -100,10 +110,12 @@ export async function loadMeshFile(filename: string, text: string, fetcher: type
   try {
     const summary = await inspectMesh(filename, text, fetcher);
     if (!importedMeshStore.isCurrentGeneration(generation)) return;
-    const scene = createImportedMeshScene(filename, parseMSH(text));
+    const roles = Object.fromEntries(summary.groups.map(group => [group.tag, group.needs_role_choice ? null : group.suggested_role ?? 'RIGID']));
+    const scene = createImportedMeshScene(filename, parseMSH(text), 'file', null, [], { rolesByTag: roles });
     if (!importedMeshStore.setFile(scene, generation)) return;
     useMeshImportStore.setState({ summary, busy: false });
-    editFileDraft({ selected: summary.groups.filter(group => /^(LF|MF|HF|source|drive)$/i.test(group.name)).map(group => group.tag) });
+    editFileDraft({ roles, units: summary.suggested_units ?? '', domainPlanes: summary.detected_planes ?? [], reflectPlanes: null });
+    await prepareMeshFile(fetcher);
   } catch (error) {
     if (importedMeshStore.isCurrentGeneration(generation)) {
       useMeshImportStore.setState({ busy: false, error: String(error) });
@@ -115,17 +127,31 @@ export async function loadMeshFile(filename: string, text: string, fetcher: type
 }
 
 /** Prepare the file as the rail is set: from the original in hand, or the one the server retained. */
-export async function prepareMeshFile(fetcher: typeof fetch = fetch): Promise<void> {
+export async function prepareMeshFile(fetcher: typeof fetch = fetch, inspectFrame = false): Promise<void> {
   const state = useMeshImportStore.getState();
   const model = useImportedModelStore.getState();
-  const draft = model.fileDraft;
+  let draft = model.fileDraft;
   const modelId = model.input === 'file' ? model.modelId : null;
-  if (state.busy || (!state.original && !(modelId && model.originalAvailable))) return;
+  if (model.input !== 'file' || meshImportChoice(draft) || (!state.original && !(modelId && model.originalAvailable))) return;
   const generation = importedMeshStore.beginIntent();
   const request = ++requestNumber;
   useMeshImportStore.setState({ busy: true, error: null, request });
   try {
-    const preparation = { units: draft.units, forward: draft.forward, up: draft.up, source_tags: draft.selected };
+    // Detection follows the chosen axes; registration still owns all verification.
+    if (inspectFrame && state.original) {
+      const summary = await inspectMesh(state.filename, state.original, fetcher,
+        { units: draft.units, forward: draft.forward, up: draft.up });
+      if (!importedMeshStore.isCurrentGeneration(generation)
+        || JSON.stringify(useImportedModelStore.getState().fileDraft) !== JSON.stringify(draft)) return;
+      useMeshImportStore.setState({ summary });
+      editFileDraft({ domainPlanes: summary.detected_planes ?? [], reflectPlanes: null });
+      draft = useImportedModelStore.getState().fileDraft;
+    }
+    const preparation = { units: draft.units, forward: draft.forward, up: draft.up,
+      roles: Object.fromEntries(Object.entries(draft.roles ?? Object.fromEntries(draft.selected.map(tag => [tag, 'HF'])))
+        .map(([tag, role]) => [tag, role ?? 'RIGID'])),
+      domain_planes: draft.domainPlanes ?? [], reflect_planes: draft.reflectPlanes ?? null };
+
     // The same file prepared the same way is the same retained mesh. Without
     // the original in hand (a restored file), the server prepares its own copy.
     const record = state.original
@@ -137,13 +163,16 @@ export async function prepareMeshFile(fetcher: typeof fetch = fetch): Promise<vo
     const current = useImportedModelStore.getState().fileDraft;
     if (useMeshImportStore.getState().original !== state.original || JSON.stringify(current) !== JSON.stringify(draft)) return;
     if (importedMeshStore.setFile(preparedFileScene(record), generation)) {
-      useMeshImportStore.setState({ summary: state.summary ?? record.summary });
+      useMeshImportStore.setState({ summary: useMeshImportStore.getState().summary ?? record.summary });
       const latest = useImportedModelStore.getState();
       const retained = latest.setup ?? latest.setupEditBase?.retained;
       await openImported({ kind: 'file', prepared: record, setup: retained ? setupForPreparedFile(retained, record) : null });
     }
   } catch (error) {
-    if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ error: error instanceof Error ? error.message : String(error) });
+    if (importedMeshStore.isCurrentGeneration(generation)
+      && JSON.stringify(useImportedModelStore.getState().fileDraft) === JSON.stringify(draft)) {
+      useMeshImportStore.setState({ error: error instanceof Error ? error.message : String(error) });
+    }
   } finally {
     if (useMeshImportStore.getState().request === request) useMeshImportStore.setState({ busy: false });
   }
@@ -195,7 +224,7 @@ export function fileMeshSetup(): ImportedSetup {
   if (opening) throw new Error(opening);
   if (state.busy) throw new Error('Wait for mesh preparation to finish.');
   if (!record || viewport.showing !== 'file' || viewport.file?.ingestId !== record.ingest_id) {
-    throw new Error('Choose units and driven groups, then prepare this mesh before solving.');
+    throw new Error('Choose units and surface roles in Geometry before solving.');
   }
   return effectiveImportedSetup('file', record.ingest_id, fileSetupControls);
 }
@@ -218,7 +247,7 @@ function fileSetupControls(): ImportedSetup {
   }
   // The file rail has no ground plane control, so none is ever sent.
   delete options.ground_plane;
-  options.symmetry = 'full';
+  options.symmetry = 'auto';
   options.solver_mode = 'full_3d';
   const retained = model.setup ?? model.setupEditBase?.retained;
   const channels = retained?.geometry.drive_channels
@@ -238,7 +267,11 @@ registerImportedSetupControls('file', fileSetupControls);
 
 function preparedFileScene(record: RegisteredMesh) {
   return createImportedMeshScene(record.source_file.filename, parseMSH(record.msh_text), 'file', record.ingest_id,
-    [], { drivenTags: Object.values(record.source_tags) });
+    record.symmetry?.domain_planes ?? [], { rolesByTag: {
+      ...Object.fromEntries((record.summary.groups ?? []).map(group => [group.tag, 'RIGID'])),
+      ...Object.fromEntries(Object.entries(record.source_tags).map(([id, tag]) =>
+        [tag, record.sources?.find(source => source.id === id)?.role ?? 'HF'])),
+    } });
 }
 
 function assertFileRecord(record: RegisteredMesh, setup: ImportedSetup | null, preparedId: string): void {
@@ -258,7 +291,10 @@ function fillFileRail(record: RegisteredMesh, setup: ImportedSetup | null, gener
   seedImportedSolveOptionsForFile();
   if (setup) applyWireOptionsToImportedSolveOptions(setup.options as Partial<SolveOptions>);
   useImportedSolveOptionsStore.setState({ groundPlane: { enabled: false, axis: 'y', height_m: 0 } });
-  useMeshImportStore.setState({ ...initial, filename: record.source_file.filename, summary: record.summary,
+  useMeshImportStore.setState({ ...initial, filename: record.source_file.filename,
+    summary: { ...record.summary, kept_sides: { ...record.summary.kept_sides,
+      ...Object.fromEntries((record.symmetry?.reflected_planes ?? []).map(plane => [plane, 'negative' as const])),
+    } },
     motions: Object.fromEntries((setup?.geometry.drive_channels ?? []).flatMap(channel =>
       channel.source_ids.map(id => [id, channel.motion ?? 'normal']))),
     request: useMeshImportStore.getState().request,

@@ -7,7 +7,7 @@ import { workspaceModeStore } from './workspaceMode';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
 import { editMeshImport, fileMeshSubmission, loadMeshFile, prepareMeshFile, loadMeshReplay, registeredMesh,
   saveMeshSetup, setMeshMotion, useMeshImportStore } from './meshImport';
-import { openImported, reopenLastModel, resetImportedModelStore, unchangedSetup, useImportedModelStore } from './importedModel';
+import { openImported, reopenLastModel, resetImportedModelStore, unchangedSetup, useImportedModelStore, editFileDraft } from './importedModel';
 import { readLastModel } from './lastModel';
 import type { RegisteredMesh, MeshSummary } from '../api/meshImport';
 import type { ImportedSetup } from '../jobs/importedSetup';
@@ -68,6 +68,73 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('standalone imported mesh', () => {
+  it('automatically prepares confident server guesses with roles and the detected domain', async () => {
+    const guessed = { ...summary, suggested_units: 'mm', detected_planes: ['x0', 'y0'], kept_sides: { x0: 'negative', y0: 'positive' },
+      groups: summary.groups.map(group => ({ ...group, suggested_role: group.tag === 2 ? 'MF' : 'RIGID', role_from: 'file' })) };
+    const mesh = { ...record, sources: [{ id: 'group_2', role: 'MF' }],
+      source_file: { ...record.source_file, roles: { 1: 'RIGID', 2: 'MF' }, domain_planes: ['x0', 'y0'], reflect_planes: null },
+      symmetry: { domain_planes: ['x0', 'y0'], cut_planes: [], reflected_planes: ['x0'] } };
+    const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect') ? response(guessed) : prepared(mesh));
+    await loadMeshFile('speaker.msh', MSH, fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetcher.mock.calls[1][1]?.body as string)).toMatchObject({
+      roles: { 1: 'RIGID', 2: 'MF' }, units: 'mm', domain_planes: ['x0', 'y0'], reflect_planes: null,
+    });
+    expect(JSON.parse(fetcher.mock.calls[1][1]?.body as string)).not.toHaveProperty('source_tags');
+    expect(registeredMesh()?.sources?.[0].role).toBe('MF');
+    expect(fileMeshSubmission().options.symmetry).toBe('auto');
+    expect(importedMeshStore.getSnapshot().file?.scene.surfaces.find(surface => surface.sourceRole)?.sourceRole).toBe('MF');
+    await editMeshImport({ roles: { 1: 'RIGID', 2: 'LF' } }, fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(fetcher.mock.calls[2][1]?.body as string).roles).toEqual({ 1: 'RIGID', 2: 'LF' });
+  });
+
+  it('waits for ambiguous role guesses and units, then prepares after the choices', async () => {
+    const guessed = { ...summary, suggested_units: null,
+      groups: summary.groups.map(group => ({ ...group, suggested_role: 'RIGID', needs_role_choice: group.tag === 2 })) };
+    const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect') ? response(guessed) : prepared(record));
+    await loadMeshFile('speaker.msh', MSH, fetcher);
+    await editMeshImport({ units: 'mm' }, fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(useImportedModelStore.getState().fileDraft.roles?.[2]).toBeNull();
+    await editMeshImport({ roles: { 1: 'RIGID', 2: 'HF' } }, fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(registeredMesh()?.ingest_id).toBe(record.ingest_id);
+  });
+
+  it('rechecks detection in the chosen axes before automatically preparing', async () => {
+    const guessed = { ...summary, suggested_units: 'mm', detected_planes: ['x0'], groups: summary.groups.map(group => ({ ...group, suggested_role: group.tag === 2 ? 'HF' : 'RIGID' })) };
+    const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect') ? response(guessed) : prepared(record));
+    await loadMeshFile('speaker.msh', MSH, fetcher);
+    fetcher.mockImplementation(async url => String(url).endsWith('/inspect') ? response({ ...guessed, detected_planes: ['y0'] }) : prepared(record));
+    await editMeshImport({ forward: '+z', up: '+x' }, fetcher);
+    expect(JSON.parse(fetcher.mock.calls[2][1]?.body as string)).toMatchObject({ units: 'mm', forward: '+z', up: '+x' });
+    expect(JSON.parse(fetcher.mock.calls[3][1]?.body as string)).toMatchObject({ domain_planes: ['y0'], forward: '+z', up: '+x' });
+  });
+
+  it('allows later edits to replace an in-flight preparation and ignores its stale failure', async () => {
+    showPrepared();
+    const earlier = deferred<Response>();
+    const first = editMeshImport({ units: 'cm' }, vi.fn(() => earlier.promise));
+    const newer = { ...record, ingest_id: 'wgi_newer' };
+    await editMeshImport({ units: 'in' }, vi.fn(async () => prepared(newer)));
+    earlier.resolve(response({ detail: 'Earlier mesh could not be prepared.' }, 422));
+    await first;
+    expect(registeredMesh()?.ingest_id).toBe('wgi_newer');
+    expect(useMeshImportStore.getState()).toMatchObject({ busy: false, error: null });
+  });
+
+  it('keeps a preparation refusal until an explicit retry or edit', async () => {
+    showPrepared();
+    const fetcher = vi.fn<typeof fetch>(async () => response({ detail: 'Close the opening in the meshing tool.' }, 422));
+    await editMeshImport({ reflectPlanes: [] }, fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(useMeshImportStore.getState().error).toBe('Close the opening in the meshing tool.');
+    await prepareMeshFile(vi.fn(async () => prepared(record)));
+    expect(useMeshImportStore.getState()).toMatchObject({ busy: false, error: null });
+    expect(registeredMesh()?.ingest_id).toBe(record.ingest_id);
+  });
+
   it('saves a prepared setup before any Solve and reopens its model with it', async () => {
     showPrepared();
     useMeshImportStore.setState({ motions: { group_2: 'axial' } });
@@ -124,11 +191,11 @@ describe('standalone imported mesh', () => {
     await loadMeshFile('speaker.msh', MSH, fetcher);
     expect(JSON.parse(fetcher.mock.calls[0][1]?.body as string)).toEqual({ filename: 'speaker.msh', msh_text: MSH });
     expect(() => fileMeshSubmission()).toThrow('Choose units');
-    editMeshImport({ units: 'mm', selected: [2] });
+    editFileDraft({ units: 'mm', selected: [2] });
     const register = vi.fn<typeof fetch>(async () => prepared(record));
     await prepareMeshFile(register);
     expect(register.mock.calls[0][0]).toBe('/api/models/files');
-    expect(JSON.parse(register.mock.calls[0][1]?.body as string)).toMatchObject({ units: 'mm', source_tags: [2], msh_text: MSH });
+    expect(JSON.parse(register.mock.calls[0][1]?.body as string)).toMatchObject({ units: 'mm', roles: { 2: 'HF' }, domain_planes: [], reflect_planes: null, msh_text: MSH });
     expect(importedMeshStore.getSnapshot().file?.ingestId).toBe(record.ingest_id);
     // A registration fills the store: the file's model and its prepared mesh.
     expect(useImportedModelStore.getState()).toMatchObject({ input: 'file', modelId: record.model_id, phase: 'ready',
@@ -136,17 +203,17 @@ describe('standalone imported mesh', () => {
     const body = fileMeshSubmission();
     expect(body.geometry).not.toHaveProperty('mesh');
     expect(body.geometry.drive_channels).toEqual([{ id: 'group_2', source_ids: ['group_2'], motion: 'normal' }]);
-    expect(body.options.symmetry).toBe('full');
+    expect(body.options.symmetry).toBe('auto');
     // No hard-coded rig: the imported instance's polar settings and spacing go out.
     expect(body.options.polar_config.angle_range).toEqual([0, 180, 37]);
     expect(body.options.frequency_spacing).toBe('log');
-    editMeshImport({ units: 'in' });
+    editFileDraft({ units: 'in' });
     expect(() => fileMeshSubmission()).toThrow('Choose units');
   });
 
   it('solves with the imported options\' polar settings and frequency spacing, never the parametric ones', async () => {
     await loadMeshFile('speaker.msh', MSH, vi.fn<typeof fetch>(async () => response(summary)));
-    editMeshImport({ units: 'mm', selected: [2] });
+    editFileDraft({ units: 'mm', selected: [2] });
     await prepareMeshFile(vi.fn<typeof fetch>(async () => prepared(record)));
     const parametricBefore = JSON.stringify(useSolveOptionsStore.getState().options());
     useImportedSolveOptionsStore.getState().setFrequencySpacing('linear');
@@ -272,10 +339,10 @@ describe('standalone imported mesh', () => {
 
   it('refuses a preparation whose group choices changed while the backend ran', async () => {
     await loadMeshFile('speaker.msh', MSH, vi.fn(async () => response(summary)));
-    editMeshImport({ units: 'mm', selected: [2] });
+    editFileDraft({ units: 'mm', selected: [2] });
     const wait = deferred<Response>();
     const pending = prepareMeshFile(vi.fn(() => wait.promise));
-    editMeshImport({ selected: [1] });
+    editFileDraft({ selected: [1] });
     wait.resolve(prepared(record));
     await pending;
     expect(registeredMesh()).toBeNull();
@@ -311,14 +378,14 @@ describe('a reopened file run', () => {
     expect(useMeshImportStore.getState().original).toBeNull();
     expect(useImportedModelStore.getState()).toMatchObject({ originalAvailable: true, restoredRevisionId: 'wgs_recorded',
       fileDraft: { units: 'mm', forward: '+z', up: '+y', selected: [2] } });
-    editMeshImport({ units: 'cm' });
+    editFileDraft({ units: 'cm' });
     // Changing the preparation ends the opened setup.
     expect(useImportedModelStore.getState()).toMatchObject({ prepared: null, restoredRevisionId: null, setup: null });
     const again = { ...record, ingest_id: 'wgi_again', source_file: { ...record.source_file, transform: { units: 'cm', forward: '+z', up: '+y' } } };
     const fetcher = vi.fn<typeof fetch>(async () => prepared(again));
     await prepareMeshFile(fetcher);
     expect(fetcher.mock.calls[0][0]).toBe(`/api/models/${encodeURIComponent(record.model_id)}/prepare`);
-    expect(JSON.parse(fetcher.mock.calls[0][1]?.body as string)).toEqual({ units: 'cm', forward: '+z', up: '+y', source_tags: [2] });
+    expect(JSON.parse(fetcher.mock.calls[0][1]?.body as string)).toEqual({ units: 'cm', forward: '+z', up: '+y', roles: { 2: 'HF' }, domain_planes: [], reflect_planes: null });
     expect(useImportedModelStore.getState()).toMatchObject({ prepared: again, modelId: record.model_id });
     expect(fileMeshSubmission().geometry.ingest_id).toBe('wgi_again');
   });
@@ -335,8 +402,8 @@ describe('a reopened file run', () => {
     const selectedRigid = { ...record, source_tags: { group_1: 1 } };
     await openImported({ kind: 'run', job: fileJob() }, workspaceFetcher(setupOf({}), selectedRigid));
     const surfaces = importedMeshStore.getSnapshot().file!.scene.surfaces;
-    expect(surfaces.find(surface => surface.role.includes('Rigid'))?.materialClass).toBe('source-smooth');
-    expect(surfaces.find(surface => surface.role.includes('HF'))?.materialClass).toBe('horn-smooth');
+    expect(surfaces.find(surface => surface.key.endsWith(':1'))).toMatchObject({ sourceRole: 'HF', materialClass: 'hf-smooth' });
+    expect(surfaces.find(surface => surface.key.endsWith(':2'))).toMatchObject({ sourceRole: null, materialClass: 'horn-smooth' });
   });
 
   it('keeps the setup revision the run was made from until a setting is edited', async () => {
@@ -407,12 +474,19 @@ describe('server-valid file setup edit contract', () => {
     await openImported({ kind: 'run', job: fileJob() }, workspaceFetcher(setup, meshFor(setup)));
     for (const motion of edit.motions ?? []) setMeshMotion(edit.source_id!, motion);
     if (edit.selected !== undefined) {
-      editMeshImport({ selected: edit.selected });
+      editFileDraft({ selected: edit.selected });
       const next: RegisteredMesh = { ...record, ingest_id: 'wgi_reprepared',
         source_tags: Object.fromEntries(edit.selected.map(tag => [`group_${tag}`, tag])),
         source_file: { ...record.source_file, source_tags: edit.selected } };
-      await prepareMeshFile(vi.fn(async () => prepared(next)));
+      const prepare = vi.fn(async () => prepared(next));
+      await prepareMeshFile(prepare);
       expect(useMeshImportStore.getState().error).toBeNull();
+      if (!edit.selected.length) {
+        expect(prepare).not.toHaveBeenCalled();
+        expect(registeredMesh()).toBeNull();
+        expect(() => fileMeshSubmission()).toThrow('Choose units');
+        return;
+      }
     }
     await expectSavedSetup(expected);
   });
@@ -488,7 +562,7 @@ describe('portable mesh replay', () => {
   it('keeps retained physics when only file preparation axes change', async () => {
     const request = exactRequest();
     await loadMeshReplay('{}', vi.fn(async () => response({ record: replayRecord, request })));
-    editMeshImport({ forward: '+x', up: '+z' });
+    editFileDraft({ forward: '+x', up: '+z' });
     expect(() => fileMeshSubmission()).toThrow('Choose units');
     const next = { ...replayRecord, ingest_id: 'wgi_rotated',
       source_file: { ...replayRecord.source_file, transform: { units: 'mm', forward: '+x', up: '+z' } } };

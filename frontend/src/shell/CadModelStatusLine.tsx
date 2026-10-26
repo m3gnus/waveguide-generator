@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { useCurrentModelStatus } from '../model/currentModel';
 import { useCadModelSelection } from '../stores/cadModelState';
-import { cadModelStatusLine, type CadModelStatusLine as Line } from '../stores/cadModelStatusLine';
+import { cadModelStatusLine, type CadModelStatusLine as Line, type FileModelView } from '../stores/cadModelStatusLine';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { meshCeilingChoice } from '../stores/meshCeilingChoice';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
@@ -12,14 +12,14 @@ import { workspaceNavigation } from './workspaceNavigation';
 /** The selected CAD model, its request, and its one status line. Every
  * surface gets the same words: the CAD app named is the user's (Onshape
  * users never read Fusion's instruction). */
-export function useCadModelStatusLine() {
+export function useCadModelStatusLine(file?: FileModelView) {
   const { status } = useCurrentModelStatus();
   const model = useCadModelSelection(status);
   const control = useOptionalSolveControl();
   const application = cadApplicationName(usePreferences().cadApplication);
   const shown = useSyncExternalStore(heldRequestShown.subscribe, heldRequestShown.getSnapshot, heldRequestShown.getSnapshot);
   useSyncExternalStore(workspaceNavigation.subscribe, workspaceNavigation.getSnapshot, workspaceNavigation.getSnapshot);
-  const line = cadModelStatusLine(model, status, {
+  const line = cadModelStatusLine(file ?? model, status, {
     resultsShown: workspaceNavigation.isVisible('results'),
     waitingForEngine: control?.waitingForEngine ?? false,
     application,
@@ -48,8 +48,8 @@ export function runCadStatusAction(line: Line, solve: (() => unknown) | undefine
  * The model card's one status line: what state the selected model is in, and
  * the one thing to do about it. No other surface repeats it with an action.
  */
-export function CadModelStatusLine({ actions = true }: { actions?: boolean }) {
-  const { line } = useCadModelStatusLine();
+export function CadModelStatusLine({ actions = true, file, onRetry }: { actions?: boolean; file?: FileModelView; onRetry?: () => unknown }) {
+  const { line } = useCadModelStatusLine(file);
   const control = useOptionalSolveControl();
   const solveUnavailable = line.action === 'solve' && (!control?.cadMode || control.disabled);
   return <div className={`cad-status-line cad-status-line-${line.tone}`} role="status" data-status-action={line.action}>
@@ -62,7 +62,7 @@ export function CadModelStatusLine({ actions = true }: { actions?: boolean }) {
       disabled={solveUnavailable}
       aria-busy={line.action === 'solve' ? control?.submitting ?? false : undefined}
       title={line.action === 'solve' ? control?.title ?? 'Solve is not available here.' : undefined}
-      onClick={() => runCadStatusAction(line, control?.solve)}
+      onClick={() => file && line.action === 'try-again' && !line.jobId ? void onRetry?.() : runCadStatusAction(line, control?.solve)}
     >{line.action === 'solve' && control?.submitting ? 'Solving…' : line.actionLabel}</button>}
   </div>;
 }

@@ -67,7 +67,13 @@ export interface CadStatusContext {
 
 type CadModelView = Pick<ReturnType<typeof selectCadModelState>,
   'selected' | 'label' | 'phase' | 'preparation' | 'heldRequest' | 'meshChoice' | 'failureMessage' | 'triangles' | 'canPrepare' | 'preparesAutomatically' | 'record' | 'bundle' | 'application'>
-  & Partial<Pick<ReturnType<typeof selectCadModelState>, 'failureRetry'>>;
+  & Partial<Pick<ReturnType<typeof selectCadModelState>, 'failureRetry'>> & { input?: 'cad'; symmetryLabel?: string };
+
+export interface FileModelView {
+  input: 'file'; label: string; reading: boolean; preparing: boolean;
+  choice: string | null; failureMessage: string | null; canPrepare: boolean;
+  prepared: boolean; triangles: number | null; symmetryLabel: string;
+}
 
 const ACTION_LABEL: Record<Exclude<CadStatusAction, 'none'>, string> = {
   solve: 'Solve', choose: 'Choose…', 'try-again': 'Try again', 'show-results': 'Show results',
@@ -101,7 +107,18 @@ function solving(job: JobItem): CadModelStatusLine {
  * `request` is `currentModelStatus` for the model on screen, the same request
  * `selectCadModelState` was given.
  */
-export function cadModelStatusLine(model: CadModelView, request: CadModelRequest | null, context: CadStatusContext = {}): CadModelStatusLine {
+export function cadModelStatusLine(model: CadModelView | FileModelView, request: CadModelRequest | null, context: CadStatusContext = {}): CadModelStatusLine {
+  if (model.input === 'file') {
+    if (model.reading) return line(`Reading ${model.label}…`, 'reading…', 'busy');
+    if (model.preparing) return line(`Preparing ${model.label}…`, 'preparing…', 'busy');
+    if (model.failureMessage) return line(model.failureMessage, 'could not prepare', 'attention', model.canPrepare ? 'try-again' : 'none');
+    if (model.choice) return line(model.choice, 'needs a choice', 'attention');
+    if (!model.label) return line('Import a mesh to get started.', 'no mesh selected', 'idle');
+    model = { selected: true, label: model.label, phase: model.prepared ? 'prepared' : 'preparing',
+      preparation: model.prepared ? 'prepared' : 'none', triangles: model.triangles, symmetryLabel: model.symmetryLabel,
+      canPrepare: model.canPrepare, preparesAutomatically: true, failureMessage: null,
+      heldRequest: null, meshChoice: null, record: null, bundle: null, application: 'CAD' };
+  }
   const { label } = model;
   if (!model.selected) {
     return line(`No CAD model yet. In ${context.application ?? 'Fusion'}, use ${APP_NAME} ▸ Send or Solve.`, 'none selected', 'idle');
@@ -205,7 +222,8 @@ function couldNotPrepare(label: string): string {
 
 function ready(model: CadModelView): CadModelStatusLine {
   const triangles = model.triangles === null ? '' : ` · ${model.triangles.toLocaleString()} triangles`;
-  return line(`Ready to solve${triangles}`, `ready${triangles}`, 'ready', 'solve');
+  const symmetry = model.symmetryLabel ? ` · ${model.symmetryLabel.toLowerCase()}` : '';
+  return line(`Ready to solve${triangles}${symmetry}`, `ready${triangles}${symmetry}`, 'ready', 'solve');
 }
 
 const count = (value: number) => value.toLocaleString();
