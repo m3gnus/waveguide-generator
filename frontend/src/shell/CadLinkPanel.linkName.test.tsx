@@ -10,6 +10,7 @@ import { resetDesignStore, useDesignStore } from '../stores/design';
 import { nativeCadLimitation, NATIVE_FAMILIES } from '../design/nativeFamilies';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { CadLinkPanel } from './CadLinkPanel';
+import type { OnshapeStatus } from '../api/onshape';
 
 const link = (instanceId: string, linkName?: string | null) => ({
   instanceId, designName: 'WG design', linkName,
@@ -124,6 +125,26 @@ describe('CadLinkPanel Fusion connection', () => {
       act(() => action.click());
     }
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it.each([...NATIVE_FAMILIES, 'LOOKUP'] as const)('disables Onshape sends for %s in every link state', (formula) => {
+    useDesignStore.getState().setFamily(formula);
+    preferencesStore.setOnshapeAvailable(true);
+    preferencesStore.update({ cadApplication: 'onshape' });
+    const note = nativeCadLimitation(formula)!;
+    for (const state of ['not_linked', 'stale', 'current'] as const) {
+      const status: OnshapeStatus = {
+        state, credentials: { configured: true, credentialsPath: '', detail: null, insecureKeyFile: false },
+        link: null, matchingLinks: [], selectedInstanceId: null, wgChangesAvailable: state === 'stale', currentFormula: formula,
+      };
+      render(null, { onshapeStatus: status });
+      const action = host.querySelector<HTMLButtonElement>(state === 'current' ? '.cad-link-card .cad-link-actions button' : '.cad-primary-action')!;
+      expect(action.disabled).toBe(true);
+      expect(action.title).toBe(note);
+      expect(host.querySelector('.cad-link-card .section-note')?.textContent).toBe(note);
+      act(() => action.click());
+    }
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('/onshape/send'))).toBe(false);
   });
 
   it('sends supported designs through the existing coordinator action', () => {

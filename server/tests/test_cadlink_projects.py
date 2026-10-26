@@ -12,6 +12,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,6 +29,20 @@ from server.cadlink.api import (
 )
 from server.workspace.archive import archive_cad_document
 from server.tests.cad_document_fixtures import identify_document
+
+
+@pytest.fixture(autouse=True)
+def temporary_documents_in_test_directory(tmp_path: Path, monkeypatch) -> None:
+    from server.cadlink import api
+
+    monkeypatch.setattr(api, "temporary_directory_root", lambda: str(tmp_path))
+
+
+def response_bytes(response) -> bytes:
+    async def read():
+        return b"".join([chunk async for chunk in response.body_iterator])
+
+    return asyncio.run(read())
 
 
 def project(app, *, filename: str = "Tritonia.cfg") -> tuple[str, str]:
@@ -135,8 +150,8 @@ def test_downloading_a_model_hands_back_the_archived_file(tmp_path: Path) -> Non
         download_project_document(lineage_id, "sha256:aaa", SimpleNamespace(app=app))
     )
 
-    assert Path(response.path).read_bytes() == b"model-aaa"
-    assert response.filename == "Tritonia_260820-0900_aaa.f3d"
+    assert response_bytes(response) == b"model-aaa"
+    assert "Tritonia_260820-0900_aaa.f3d" in response.headers["content-disposition"]
 
 
 def test_downloading_a_model_that_was_never_captured_says_why(tmp_path: Path) -> None:
@@ -505,8 +520,8 @@ def test_downloading_a_legacy_named_model_serves_its_own_filename(tmp_path: Path
         download_project_document(lineage_id, "sha256:aaa", SimpleNamespace(app=app))
     )
 
-    assert Path(response.path).read_bytes() == b"legacy-model-aaa"
-    assert response.filename == "sha256_aaa.f3d"
+    assert response_bytes(response) == b"legacy-model-aaa"
+    assert "sha256_aaa.f3d" in response.headers["content-disposition"]
 
 
 def test_a_second_capture_of_a_legacy_document_is_a_no_op(tmp_path: Path) -> None:
@@ -550,7 +565,7 @@ def test_pruned_model_is_listed_and_downloaded_from_its_run_copy(tmp_path: Path)
     assert [item["returnStateHash"] for item in listing["items"]] == ["sha256:bbb", "sha256:aaa"]
     assert listing["items"][1]["filename"] == document.name
     response = asyncio.run(download_project_document(lineage, "sha256:aaa", request))
-    assert Path(response.path) == document
+    assert response_bytes(response) == b"model-aaa"
     assert document.read_bytes() == b"model-aaa"
 
 
@@ -592,11 +607,14 @@ def test_open_uses_the_same_pruned_run_copy(tmp_path: Path, monkeypatch) -> None
     response = client.post(f"/api/cadlink/projects/{lineage}/documents/sha256:aaa/open")
     assert response.status_code == 200
     assert response.json()["status"] == "opened"
-    assert opened == [document]
+    assert len(opened) == 1
+    assert opened[0] != document
+    assert opened[0].name == document.name
+    assert opened[0].read_bytes() == b"model-aaa"
     assert "new document" in response.json()["message"]
     assert client.post(f"/api/cadlink/projects/{lineage}/documents/sha256:missing/open").status_code == 404
     assert client.post(f"/api/cadlink/projects/{lineage}/documents/bad*hash/open").status_code == 422
-    assert opened == [document]
+    assert len(opened) == 1
 
 
 def test_disabled_launch_shows_the_run_folder_without_starting_fusion(tmp_path: Path, monkeypatch) -> None:
@@ -630,6 +648,7 @@ def test_open_reports_installation_errors(tmp_path: Path, monkeypatch) -> None:
         asyncio.run(api.open_project_document(lineage, "sha256:aaa", SimpleNamespace(app=app)))
     assert refused.value.status_code == 409
     assert "Install Fusion 360" in refused.value.detail
+    assert not list(tmp_path.glob("wg2-fusion-document-*"))
 
 
 def test_open_refuses_other_archived_file_types(tmp_path: Path, monkeypatch) -> None:
@@ -787,7 +806,7 @@ def test_recorded_run_path_finds_verified_model_after_root_override(tmp_path: Pa
     listing = asyncio.run(list_project_documents(lineage, request))
     assert [item['returnStateHash'] for item in listing['items']] == ['sha256:aaa']
     response = asyncio.run(download_project_document(lineage, 'sha256:aaa', request))
-    assert Path(response.path) == original
+    assert response_bytes(response) == original.read_bytes()
     assert original.read_bytes() == b'model-aaa'
     assert jobs.get_job_row('old-run')['task_metadata']['archived_path'] == str(old_run)
     # Every fallback still goes through the retained manifest verification.
@@ -887,11 +906,217 @@ def test_recorded_root_finds_pinned_cad_file_after_runs_override(tmp_path, monke
         listing = asyncio.run(api.list_project_documents(lineage, request))
         assert listing["items"][0]["filename"] == document.name
     elif operation == "download":
-        assert Path(asyncio.run(api.download_project_document(lineage, "sha256:aaa", request)).path) == document
+        response = asyncio.run(api.download_project_document(lineage, "sha256:aaa", request))
+        assert response_bytes(response) == document.read_bytes()
     else:
         assert asyncio.run(api.open_project_document(lineage, "sha256:aaa", request))["status"] == "opened"
-        assert opened == [document]
+        assert len(opened) == 1 and opened[0] != document
+        assert opened[0].read_bytes() == document.read_bytes()
     assert list(override.iterdir()) == []
+
+
+@pytest.mark.parametrize("operation", ["download", "open"])
+@pytest.mark.parametrize("change", ["replace", "overwrite"])
+def test_swap_after_lookup_is_refused(tmp_path, monkeypatch, operation, change):
+    from server.cadlink import api
+
+    app, lineage, document = older_run_document(tmp_path)
+    original_resolve = api._resolve_project_document
+
+    async def resolve_then_swap(*args):
+        candidate = await original_resolve(*args)
+        if change == "replace":
+            replacement = candidate.with_name("replacement.f3d")
+            replacement.write_bytes(b"forged-aa")
+            replacement.replace(candidate)
+        else:
+            candidate.write_bytes(b"forged-aa")
+        return candidate
+
+    monkeypatch.setattr(api, "_resolve_project_document", resolve_then_swap)
+    monkeypatch.delenv("WG2_CAD_LAUNCH", raising=False)
+    monkeypatch.setattr(api, "open_cad_document", lambda _path: pytest.fail("Unverified document opened"))
+    handler = api.download_project_document if operation == "download" else api.open_project_document
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(handler(lineage, "sha256:aaa", SimpleNamespace(app=app)))
+    assert refused.value.status_code == 404
+    assert not list(tmp_path.glob("wg2-fusion-document-*"))
+
+
+@pytest.mark.parametrize("operation", ["download", "open"])
+def test_archive_changes_after_copy_do_not_change_delivered_bytes(tmp_path, monkeypatch, operation):
+    from fastapi.testclient import TestClient
+    from server.cadlink import api
+
+    app, lineage, document = older_run_document(tmp_path)
+    original_copy = api._verified_document_copy
+    copies = []
+
+    def copy_then_change(*args):
+        copy, stream, checksum = original_copy(*args)
+        copies.append(copy)
+        document.write_bytes(b"forged-aa")
+        return copy, stream, checksum
+
+    monkeypatch.setattr(api, "_verified_document_copy", copy_then_change)
+    monkeypatch.delenv("WG2_CAD_LAUNCH", raising=False)
+    opened = []
+    monkeypatch.setattr(api, "open_cad_document", lambda path: opened.append(path.read_bytes()))
+    client = TestClient(app, base_url="http://127.0.0.1")
+    url = f"/api/cadlink/projects/{lineage}/documents/sha256:aaa"
+    if operation == "download":
+        response = client.get(url)
+        assert response.status_code == 200 and response.content == b"model-aaa"
+        assert document.name in response.headers["content-disposition"]
+        assert not copies[0].exists()  # The response owns cleanup.
+    else:
+        response = client.post(url + "/open")
+        assert response.status_code == 200 and opened == [b"model-aaa"]
+        assert copies[0].read_bytes() == b"model-aaa"  # Fusion may read it later.
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows may deny renaming an open file")
+@pytest.mark.parametrize("byte_range,expected", [(None, b"model-aaa"), ("bytes=0-4", b"model")])
+def test_download_streams_the_verified_handle_even_if_its_path_is_replaced(tmp_path, monkeypatch, byte_range, expected):
+    from fastapi.testclient import TestClient
+    from server.cadlink import api
+
+    app, lineage, _document = older_run_document(tmp_path)
+    original_copy = api._verified_document_copy
+
+    def replace_private_path(*args):
+        copy, stream, checksum = original_copy(*args)
+        copy.rename(copy.with_name("displaced.f3d"))
+        copy.write_bytes(b"forged-aa")
+        return copy, stream, checksum
+
+    monkeypatch.setattr(api, "_verified_document_copy", replace_private_path)
+    client = TestClient(app, base_url="http://127.0.0.1")
+    response = client.get(
+        f"/api/cadlink/projects/{lineage}/documents/sha256:aaa",
+        headers={"Range": byte_range} if byte_range else {},
+    )
+    assert response.status_code == (206 if byte_range else 200) and response.content == expected
+    assert not list(tmp_path.glob("wg2-fusion-document-*"))
+
+
+def test_download_ranges_use_verified_content_and_clean_up(tmp_path):
+    from fastapi.testclient import TestClient
+
+    app, lineage, _document = older_run_document(tmp_path)
+    client = TestClient(app, base_url="http://127.0.0.1")
+    url = f"/api/cadlink/projects/{lineage}/documents/sha256:aaa"
+    single = client.get(url, headers={"Range": "bytes=0-4"})
+    assert single.status_code == 206
+    assert single.content == b"model"
+    assert single.headers["content-range"] == "bytes 0-4/9"
+    assert single.headers["content-length"] == "5"
+    assert single.headers["content-encoding"] == "identity"
+
+    resumed = client.get(url, headers={"Range": "bytes=5-", "If-Range": single.headers["etag"]})
+    assert resumed.status_code == 206 and resumed.content == b"-aaa"
+    assert resumed.headers["etag"] == single.headers["etag"]
+
+    multiple = client.get(url, headers={"Range": "bytes=0-1,4-5"})
+    assert multiple.status_code == 206
+    assert multiple.headers["content-type"].startswith("multipart/byteranges; boundary=")
+    assert b"Content-Range: bytes 0-1/9\r\n\r\nmo\r\n" in multiple.content
+    assert b"Content-Range: bytes 4-5/9\r\n\r\nl-\r\n" in multiple.content
+    assert len(multiple.content) == int(multiple.headers["content-length"])
+
+    unsatisfied = client.get(url, headers={"Range": "bytes=99-"})
+    assert unsatisfied.status_code == 416
+    assert unsatisfied.headers["content-range"] == "bytes */9"
+    assert client.get(url, headers={"Range": "bytes=broken"}).status_code == 400
+    full = client.get(url, headers={"Range": "bytes=0-4", "If-Range": '"not-current"'})
+    assert full.status_code == 200 and full.content == b"model-aaa"
+    assert not list(tmp_path.glob("wg2-fusion-document-*"))
+
+
+def test_in_place_change_during_copy_is_refused(tmp_path, monkeypatch):
+    from server.cadlink import api
+
+    app, lineage, document = older_run_document(tmp_path)
+    document.write_bytes(b"a" * (1024 * 1024) + b"original")
+    identify_document(app, document, lineage, "sha256:aaa")
+    path_open = Path.open
+    fdopen = os.fdopen
+
+    class ChangingStream:
+        def __init__(self, stream):
+            self.stream = stream
+            self.changed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+
+        def fileno(self):
+            return self.stream.fileno()
+
+        def read(self, size):
+            chunk = self.stream.read(size)
+            if not self.changed:
+                self.changed = True
+                with path_open(document, "r+b") as writer:
+                    writer.seek(1024 * 1024)
+                    writer.write(b"modified")
+            return chunk
+
+    def open_with_change(descriptor, *args, **kwargs):
+        stream = fdopen(descriptor, *args, **kwargs)
+        return ChangingStream(stream) if os.fstat(descriptor).st_ino == document.stat().st_ino else stream
+
+    monkeypatch.setattr(os, "fdopen", open_with_change)
+    with pytest.raises(HTTPException) as refused:
+        api._verified_document_copy(SimpleNamespace(app=app), lineage, "sha256:aaa", document)
+    assert refused.value.status_code == 404
+    assert not list(tmp_path.glob("wg2-fusion-document-*"))
+
+
+@pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="The platform has no no-follow open flag")
+def test_link_swapped_in_at_open_is_refused(tmp_path, monkeypatch):
+    from server.cadlink import api
+
+    app, lineage, document = older_run_document(tmp_path)
+    target = tmp_path / "outside.f3d"
+    target.write_bytes(document.read_bytes())
+    open_fd = os.open
+
+    def swap_link(path, flags, *args, **kwargs):
+        if path == document:
+            document.unlink()
+            document.symlink_to(target)
+        return open_fd(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", swap_link)
+    with pytest.raises(HTTPException) as refused:
+        api._verified_document_copy(SimpleNamespace(app=app), lineage, "sha256:aaa", document)
+    assert refused.value.status_code == 404
+    assert not list(tmp_path.glob("wg2-fusion-document-*"))
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo") or not hasattr(os, "O_NONBLOCK"), reason="POSIX FIFO flags required")
+def test_fifo_swapped_in_at_open_is_refused_without_blocking(tmp_path, monkeypatch):
+    from server.cadlink import api
+
+    app, lineage, document = older_run_document(tmp_path)
+    open_fd = os.open
+
+    def swap_fifo(path, flags, *args, **kwargs):
+        if path == document:
+            document.unlink()
+            os.mkfifo(document)
+            assert flags & os.O_NONBLOCK
+        return open_fd(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", swap_fifo)
+    with pytest.raises(HTTPException) as refused:
+        api._verified_document_copy(SimpleNamespace(app=app), lineage, "sha256:aaa", document)
+    assert refused.value.status_code == 404
+    assert not list(tmp_path.glob("wg2-fusion-document-*"))
 
 
 def test_lookup_prefers_verified_cad_then_legacy_run_copy(tmp_path):

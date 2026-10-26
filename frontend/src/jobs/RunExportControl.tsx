@@ -102,8 +102,10 @@ function unavailableFormatReason(
   designExportable: boolean,
   designUnavailableReason: string,
 ): string | undefined {
-  const provenanceReason = parameterExportReason({ kind: modelKindForRun(job) }, item.format);
-  if (provenanceReason) return provenanceReason;
+  const modelKind = modelKindForRun(job);
+  const provenanceReason = parameterExportReason({ kind: modelKind }, item.format);
+  if (provenanceReason) return modelKind === 'file' && item.format === 'stl'
+    ? `${provenanceReason} Use Mesh replay to save the solve mesh and settings.` : provenanceReason;
   if (item.id === 'polar_frd' && Object.keys(job.polar_grid ?? {}).length === 0) {
     return 'This run has no directivity data for a polar FRD set.';
   }
@@ -114,7 +116,7 @@ function unavailableFormatReason(
   if (item.needsPressureBasis && !job.has_pressure_basis_artifact) {
     const cause = job.persistence_warnings?.filter((warning) => /pressure[- ]basis/i.test(warning)).join(' ');
     return cause ? `This run has no retained complex pressure basis. ${cause}`
-      : 'This run has no retained complex pressure basis. Re-solve the imported CAD model to create one.';
+      : 'This run has no retained complex pressure basis. Re-solve the imported model to create one.';
   }
   if (item.needsDesign && !designExportable) return designUnavailableReason;
   return undefined;
@@ -159,7 +161,8 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
   const family = hydrateJobDesign(job)?.formula ?? '';
   const cadLimitation = nativeCadLimitation(family);
   const designAvailability = jobDesignAvailability(job);
-  const cadRun = modelKindForRun(job) !== 'parametric';
+  const modelKind = modelKindForRun(job);
+  const importedRun = modelKind !== 'parametric';
   const designUnavailableReason = designAvailability.reason ?? designState.reason ?? 'This run has no recoverable design.';
   const formatReason = (item: CatalogItem) => unavailableFormatReason(item, job, designExportable, designUnavailableReason);
 
@@ -286,7 +289,7 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
       id: 'mesh-replay', label: 'Mesh replay', trailing: '.wgreplay', group: 'Geometry & design',
       disabled: operation.busy, onSelect: async () => { await exportReplay(); },
     }] : []),
-    ...(!cadRun ? [{
+    ...(!importedRun ? [{
       id: 'send-to-cad',
       label: 'Send to CAD',
       trailing: '.wglink',
@@ -298,7 +301,7 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
       error: operation.lastErrorFormats.length === 0 ? operation.lastError ?? undefined : undefined,
       onSelect: async () => { await sendRunToCad(); },
     }] : []),
-    ...FORMAT_CATALOG.filter((item) => !cadRun || !item.needsDesign || item.id === 'step').map((item): ActionMenuItem => {
+    ...FORMAT_CATALOG.filter((item) => !importedRun || !item.needsDesign || item.id === 'step' || (modelKind === 'file' && item.id === 'stl')).map((item): ActionMenuItem => {
       const disabledReason = formatReason(item);
       return {
         id: item.id,

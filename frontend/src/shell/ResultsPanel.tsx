@@ -2688,7 +2688,8 @@ export function ResultsPanel() {
         result={primaryRaw ?? primary}
         channelId={activeChannel ?? undefined}
         disabledReason={primaryIsProvisional ? 'Export is available when the solve finishes'
-          : !primary || !cadResultMatchesViewport ? 'Select a run with results to export' : undefined}
+          : !cadResultMatchesViewport && primaryVerdict !== 'current' ? "Show this run's model to export its results"
+            : !primary || !cadResultMatchesViewport ? 'Select a run with results to export' : undefined}
         onOpenExportSettings={() => setPreferencesOpen(true)}
       /> : <button disabled title="Select a run to export">Export</button>}
       <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>

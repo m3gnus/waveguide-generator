@@ -246,6 +246,7 @@ export function CadLinkPanel() {
   // The outbound leg for Onshape. There is no local client to notify and no
   // workspace folder to write into: WG uploads the bundle over HTTPS itself.
   const sendToOnshape = async (allowPublic = false) => {
+    if (cadLimitation) return;
     const request = ++onshapeSendGeneration.current;
     const sourceRevision = designRevision;
     const documentLoad = currentDocumentLoad();
@@ -385,7 +386,7 @@ export function CadLinkPanel() {
 
   const linkActions = onshape
     ? <>
-      <button className="link-button" disabled={sendingToOnshape} onClick={() => void sendToOnshape()}>Send to Onshape</button>
+      <button className="link-button" disabled={sendingToOnshape || Boolean(cadLimitation)} title={cadLimitation} onClick={() => void sendToOnshape()}>Send to Onshape</button>
       {linkedDocument && <button className="link-button" disabled={ingesting} title="Export the linked Part Studio to STEP, verify its source evidence, and prepare it for the viewport and solver." onClick={() => { void cadWorkspaceView.returnFromOnshape().catch(() => undefined); }}>Bring geometry into WG</button>}
       {linkedDocument?.documentUrl && <a className="link-button" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open in Onshape</a>}
       {linkedDocument && unlinkButton}
@@ -449,7 +450,7 @@ export function CadLinkPanel() {
           <button className="primary cad-primary-action" disabled={sendingToFusion || Boolean(cadLimitation)} title={cadLimitation} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Send WG changes to Fusion'}</button>
         </div>}
         {/* Onshape: the same card carries its send/return pair. */}
-        {onshape && workflow.state !== 'not-configured' && !confirmPublicDocument && workflow.action && <button className="primary cad-primary-action" disabled={sendingToOnshape} onClick={() => void sendToOnshape()}>{sendingToOnshape ? (workflow.action === 'update' ? 'Updating…' : 'Creating…') : onshapeActionLabel}</button>}
+        {onshape && workflow.state !== 'not-configured' && !confirmPublicDocument && workflow.action && <button className="primary cad-primary-action" disabled={sendingToOnshape || Boolean(cadLimitation)} title={cadLimitation} onClick={() => void sendToOnshape()}>{sendingToOnshape ? (workflow.action === 'update' ? 'Updating…' : 'Creating…') : onshapeActionLabel}</button>}
         {onshape && linkedDocument && workflow.state !== 'not-configured' && <button className="cad-secondary-action" disabled={ingesting} onClick={() => { void cadWorkspaceView.returnFromOnshape().catch(() => undefined); }}>{ingesting ? 'Receiving & preparing…' : 'Bring Onshape geometry into WG'}</button>}
         {onshape && linkedDocument?.documentUrl && <a className="link-button cad-onshape-open" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open {linkedDocument.documentName} in Onshape</a>}
         {onshape && linkedDocument && workflow.state !== 'not-configured' && unlinkButton}
@@ -471,10 +472,10 @@ export function CadLinkPanel() {
       </select>
       <small>Freshness, geometry requests and updates use this exact managed body.</small>
     </label>}
-    {!onshape && cadLimitation && <p className="section-note">{cadLimitation}</p>}
+    {cadLimitation && <p className="section-note">{cadLimitation}</p>}
     {onshape && publicOnly && !confirmPublicDocument && <Notice tone="warning" title="This Onshape plan creates public documents.">{onshapeConnection?.plan?.name ?? 'The Free plan'} makes every document world-readable — anyone with the link can view this waveguide. Confidential designs belong in Fusion 360 or on a paid Onshape plan.</Notice>}
     {onshape && onshapeConnection?.insecureKeyFile && <Notice tone="error">The Onshape key file at {onshapeConnection.credentialsPath} is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.</Notice>}
-    {onshape && confirmPublicDocument && <div className="cad-direction-alert" role="alert"><div><b>This document will be public</b><span>{confirmPublicDocument}</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmPublicDocument(null)}>Cancel</button><button className="primary" disabled={sendingToOnshape} onClick={() => void sendToOnshape(true)}>Continue: create a public document</button></div></div>}
+    {onshape && confirmPublicDocument && <div className="cad-direction-alert" role="alert"><div><b>This document will be public</b><span>{confirmPublicDocument}</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmPublicDocument(null)}>Cancel</button><button className="primary" disabled={sendingToOnshape || Boolean(cadLimitation)} title={cadLimitation} onClick={() => void sendToOnshape(true)}>Continue: create a public document</button></div></div>}
     {onshape && confirmUnlink && linkedDocument && <div className="cad-direction-alert" role="alert"><div><b>Unlink {linkedDocument.documentName}?</b><span>WG forgets this link. The Onshape document is left exactly as it is, and the next send creates a new document.</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmUnlink(false)}>Cancel</button><button className="primary" disabled={unlinkingOnshape} onClick={() => void unlinkFromOnshape()}>Unlink {linkedDocument.documentName}</button></div></div>}
     {!onshape && (fusionAddinNeedsInstall(fusionStatus) || installingAddin || addinNotice) && <div className="cad-link-actions cad-addin-install">
       <button className="link-button" disabled={installingAddin} onClick={() => void installAddin()}

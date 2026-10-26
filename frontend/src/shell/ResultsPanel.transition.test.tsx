@@ -421,6 +421,25 @@ describe('atomic results display transitions', () => {
     }
   });
 
+  it('explains why a CAD result cannot be exported after the viewport changes model', async () => {
+    workspaceModeStore.setImportedInput('cad'); workspaceModeStore.setMode('cad');
+    useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_old' } as never });
+    importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_old' } as never);
+    publishJobs([{ ...job('old'), script_snapshot: null, cad_source: { ingest_id: 'wgi_old' } as JobItem['cad_source'],
+      config_summary: { formula_type: 'cad-import', geometry_type: 'imported' },
+    }]);
+    await act(async () => { root.render(<ResultsPanel/>); });
+    await act(async () => { pending.get('old')!(response([100])); });
+    expect(host.querySelector<HTMLButtonElement>('.action-menu-primary')?.disabled).toBe(false);
+    await act(async () => {
+      useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_other' } as never });
+      importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_other' } as never);
+    });
+    const trigger = host.querySelector<HTMLButtonElement>('.action-menu-primary')!;
+    expect(trigger.disabled).toBe(true);
+    expect(trigger.title).toBe("Show this run's model to export its results");
+  });
+
   it('forwards the full result envelope and active channel through the shared export control', async () => {
     preferencesStore.update({ exportFormats: ['csv'] });
     vi.spyOn(jobsSocket, 'patchMetadata').mockResolvedValue(undefined);

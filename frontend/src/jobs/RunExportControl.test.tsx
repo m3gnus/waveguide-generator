@@ -184,6 +184,20 @@ describe('RunExportControl', () => {
     expect(document.body.textContent).not.toContain('Solved from a Fusion return');
   });
 
+  it('distinguishes an imported mesh run and explains unavailable geometry formats', async () => {
+    preferencesStore.update({ exportFormats: ['csv', 'stl'] });
+    render(completeJob({ config_summary: { geometry_type: 'imported', import_origin: 'mesh-file' }, script_snapshot: null }));
+    openMenu();
+    expect(menuItem('Mesh replay').getAttribute('aria-disabled')).toBeNull();
+    expect(menuItem('STEP solid').textContent).toContain('imported mesh models');
+    expect(menuItem('STL mesh').getAttribute('aria-disabled')).toBe('true');
+    expect(menuItem('STL mesh').textContent).toContain('Use Mesh replay');
+    expect(document.querySelector('[role="menu"]')?.textContent).not.toContain('Send to CAD');
+    await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await settle(); });
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Use Mesh replay');
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['csv'], 'confirm');
+  });
+
   it.each([
     ['step', 'STEP export is not available for imported models.'],
     ['mwg_config', 'Imported models have no WG parameter config to export.'],

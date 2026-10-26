@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 import threading
 from types import SimpleNamespace
@@ -453,7 +454,7 @@ def test_transient_verification_io_is_retryable_and_cannot_release_retention(tmp
     imported_run(app, "job-a", "aaa", status="complete")
     payload = ArchiveRunDocumentRequest(jobId="job-a")
     original = runs / STEM / "cad" / "Tritonia_260820-0900_aaa.f3d"
-    real_open = Path.open
+    real_open, real_os_open = Path.open, os.open
     failing = True
 
     def transient_open(path, *args, **kwargs):
@@ -463,7 +464,13 @@ def test_transient_verification_io_is_retryable_and_cannot_release_retention(tmp
             raise OSError("transient cloud read failure")
         return real_open(path, *args, **kwargs)
 
+    def transient_descriptor_open(path, flags, *args, **kwargs):
+        if failing and read_target == "model" and Path(path) == original:
+            raise OSError("transient cloud read failure")
+        return real_os_open(path, flags, *args, **kwargs)
+
     monkeypatch.setattr(Path, "open", transient_open)
+    monkeypatch.setattr(os, "open", transient_descriptor_open)
     answer = asyncio.run(archive_run_document(payload, SimpleNamespace(app=app)))
     assert answer["placed"] is False
     assert answer["retryable"] is True

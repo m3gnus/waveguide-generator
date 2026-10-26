@@ -835,18 +835,23 @@ def test_move_preview_propagates_transient_cad_io_and_can_retry(tmp_path, monkey
     sidecar.write_text(json.dumps({"ingestId": record["ingest_id"], "returnStateHash": digest}))
     manager = app.state.run_moves
     manager.jobs.initialize()
-    real_iterdir, real_open = Path.iterdir, Path.open
+    real_iterdir, real_open, real_os_open = Path.iterdir, Path.open, os.open
     def iterdir(path):
         if target == "directory" and path == directory:
             raise OSError("transient directory read")
         return real_iterdir(path)
     def open_file(path, *args, **kwargs):
-        if ((target == "sidecar" and path == sidecar) or (target == "model" and path == document)
+        if ((target == "sidecar" and path == sidecar)
                 or (target == "manifest" and path.name == "wgreturn.json")):
             raise OSError("transient file read")
         return real_open(path, *args, **kwargs)
+    def open_descriptor(path, flags, *args, **kwargs):
+        if target == "model" and Path(path) == document:
+            raise OSError("transient file read")
+        return real_os_open(path, flags, *args, **kwargs)
     monkeypatch.setattr(Path, "iterdir", iterdir)
     monkeypatch.setattr(Path, "open", open_file)
+    monkeypatch.setattr(os, "open", open_descriptor)
     with pytest.raises(OSError, match="transient"):
         manager.preview(f"lineage:{lineage}", "Model")
     monkeypatch.undo()

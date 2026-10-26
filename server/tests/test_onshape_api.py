@@ -22,6 +22,7 @@ from server.cadlink.onshape.client import OnshapeClient
 from server.cadlink.onshape.credentials import OnshapeCredentials
 from server.cadlink.store import CadLinkStore
 from server.design.schema import DesignConfig
+from server.design.native import NATIVE_FORMULAS
 from server.design.textcfg import serialize
 
 from test_onshape_adapter import FakeTransport, _send_transport
@@ -927,3 +928,22 @@ def test_send_uses_immutable_publisher_and_pushes_exact_retry_path(tmp_path, mon
     locator = Path(b["bundlePath"]).parent / f'{identity.design_id}.latest.json'
     assert json.loads(locator.read_text())["exportId"] == b["exportId"]
     assert len(writes) == 2
+
+
+@pytest.mark.parametrize("family", [*sorted(NATIVE_FORMULAS), "LOOKUP"])
+@pytest.mark.parametrize("build_mode", ["import", "native"])
+def test_send_refuses_unsupported_families_before_contacting_onshape(tmp_path, monkeypatch, family, build_mode):
+    from fastapi import HTTPException
+    from test_lookup import design as lookup_design
+    from test_native_formulas import small_design
+
+    design = lookup_design() if family == "LOOKUP" else small_design(family)
+    payload = onshape_api.OnshapeSendRequest(
+        design=design, designRevision=1, buildMode=build_mode,
+    )
+    monkeypatch.setattr(onshape_api, "_client", lambda _request: pytest.fail("Onshape was contacted"))
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(onshape_api.send(payload, _request(_store(tmp_path), tmp_path), "test"))
+    assert refused.value.status_code == 422
+    assert family in refused.value.detail
+    assert "cannot be sent" in refused.value.detail

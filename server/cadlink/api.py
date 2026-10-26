@@ -12,14 +12,19 @@ import os
 from pathlib import Path
 import platform
 import re
+import secrets
 import sqlite3
+import stat
 import subprocess
+import tempfile
 import time
-from typing import Any, Literal, Mapping
+from typing import Any, BinaryIO, Callable, Iterator, Literal, Mapping
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from starlette.background import BackgroundTask
+from starlette.responses import MalformedRangeHeader, RangeNotSatisfiable
 
 
 from server.cadlink.identity import SaveIdentity, design_hash
@@ -36,6 +41,7 @@ from server.platform.acl_repair import path_has_reparse_point
 from server.platform.cad_launch import launch_disabled, open_cad_document
 from server.platform.incidents import record_incident
 from server.platform.process import background_process_kwargs
+from server.platform.temp_session import remove_tree, temporary_directory_root
 from server.workspace.api import (
     CadWorkspaceState,
     WorkspaceState,
@@ -1413,9 +1419,10 @@ async def _project_folder(request: Request, lineage_id: str) -> tuple[Path, str]
 
 def _verified_run_document(
     request: Request, lineage_id: str, digest: str, document: Path,
-    *, strict_io: bool = False,
+    *, strict_io: bool = False, copy_to: BinaryIO | None = None,
+    checksum_out: list[str] | None = None,
 ) -> bool:
-    """Verify every archive candidate against its retained manifest and lineage."""
+    """Verify against the retained evidence, optionally copying the verified bytes."""
 
     try:
         sidecar_path = cad_document_sidecar(document, digest)
@@ -1433,13 +1440,29 @@ def _verified_run_document(
             return False
         member = cad_document_member(manifest)
         evidence = (manifest.get("files") or {}).get(member) or {}
-        if not evidence.get("sha256") or document.stat().st_size != evidence.get("size_bytes"):
+        size = evidence.get("size_bytes")
+        if not evidence.get("sha256") or not isinstance(size, int) or size < 0:
             return False
         checksum = hashlib.sha256()
-        with document.open("rb") as stream:
+        copied = 0
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        descriptor = os.open(document, flags)
+        with os.fdopen(descriptor, "rb") as stream:
+            file_stat = os.fstat(stream.fileno())
+            if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_size != size:
+                return False
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                copied += len(chunk)
+                if copied > size:
+                    return False
                 checksum.update(chunk)
-        return "sha256:" + checksum.hexdigest() == evidence["sha256"]
+                if copy_to is not None:
+                    copy_to.write(chunk)
+        actual = "sha256:" + checksum.hexdigest()
+        verified = copied == size and actual == evidence["sha256"]
+        if verified and checksum_out is not None:
+            checksum_out.append(actual)
+        return verified
     except FileNotFoundError:
         return False
     except OSError:
@@ -1556,6 +1579,61 @@ async def _resolve_project_document(
     return document
 
 
+def _verified_document_copy(request: Request, lineage_id: str, digest: str, document: Path) -> tuple[Path, BinaryIO, str]:
+    """Copy and verify the same bytes into a private, session-owned directory."""
+
+    directory = Path(tempfile.mkdtemp(prefix="wg2-fusion-document-", dir=temporary_directory_root()))
+    copy = directory / document.name
+    destination = None
+    try:
+        destination = copy.open("x+b")
+        checksum: list[str] = []
+        if not _verified_run_document(request, lineage_id, digest, document, copy_to=destination, checksum_out=checksum):
+            raise HTTPException(status_code=404, detail="The archived Fusion file could not be verified.")
+        destination.flush()
+        destination.seek(0)
+        return copy, destination, checksum[0]
+    except BaseException:
+        if destination is not None:
+            destination.close()
+        remove_tree(directory)
+        raise
+
+
+def _close_document_copy(copy: Path, stream: BinaryIO) -> None:
+    try:
+        stream.close()
+    finally:
+        remove_tree(copy.parent)
+
+
+def _document_chunks(
+    copy: Path, stream: BinaryIO, ranges: list[tuple[int, int]] | None = None,
+    part_header: Callable[[int, int], bytes] | None = None, boundary: str | None = None,
+) -> Iterator[bytes]:
+    try:
+        if ranges is None:
+            yield from iter(lambda: stream.read(1024 * 1024), b"")
+        else:
+            for start, end in ranges:
+                if part_header is not None:
+                    yield part_header(start, end)
+                stream.seek(start)
+                remaining = end - start
+                while remaining:
+                    chunk = stream.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise OSError("The verified Fusion file could not be read completely.")
+                    remaining -= len(chunk)
+                    yield chunk
+                if part_header is not None:
+                    yield b"\r\n"
+            if boundary is not None:
+                yield f"--{boundary}--".encode("ascii")
+    finally:
+        _close_document_copy(copy, stream)
+
+
 @router.get("/projects/{lineage_id}/documents/{return_state_hash}", response_model=None)
 async def download_project_document(
     lineage_id: str, return_state_hash: str, request: Request
@@ -1563,11 +1641,57 @@ async def download_project_document(
     """Hand back the Fusion document one geometry version was captured from."""
 
     document = await _resolve_project_document(lineage_id, return_state_hash, request)
-    return FileResponse(
-        document,
-        media_type="application/octet-stream",
-        filename=document.name,
-    )
+    copy, stream, checksum = await asyncio.to_thread(_verified_document_copy, request, lineage_id, return_state_hash, document)
+    try:
+        # Reuse Starlette's filename, range parsing and multipart formatting;
+        # the body reads the verified handle instead of reopening the path.
+        stat_result = os.fstat(stream.fileno())
+        size = stat_result.st_size
+        file_response = FileResponse(
+            copy, filename=document.name, media_type="application/octet-stream",
+            stat_result=stat_result,
+        )
+        # A content validator stays stable across private copies, and identity
+        # encoding keeps byte ranges about the bytes in the verified file.
+        file_response.headers["etag"] = f'"{checksum}"'
+        file_response.headers["content-encoding"] = "identity"
+        headers = dict(file_response.headers)
+        request_headers = getattr(request, "headers", {})
+        http_range, if_range = request_headers.get("range"), request_headers.get("if-range")
+        ranges = None
+        if http_range is not None and (if_range is None or file_response._should_use_range(if_range)):
+            try:
+                ranges = file_response._parse_range_header(http_range, size)
+            except MalformedRangeHeader as exc:
+                _close_document_copy(copy, stream)
+                return PlainTextResponse(exc.content, status_code=400)
+            except RangeNotSatisfiable as exc:
+                _close_document_copy(copy, stream)
+                return PlainTextResponse(status_code=416, headers={"Content-Range": f"bytes */{exc.max_size}"})
+        part_header = None
+        boundary = None
+        status = 200
+        if ranges:
+            status = 206
+            if len(ranges) == 1:
+                start, end = ranges[0]
+                headers["content-range"] = f"bytes {start}-{end - 1}/{size}"
+                headers["content-length"] = str(end - start)
+            else:
+                boundary = secrets.token_hex(13)
+                length, part_header = file_response.generate_multipart(
+                    ranges, boundary, size, file_response.headers["content-type"],
+                )
+                headers["content-type"] = f"multipart/byteranges; boundary={boundary}"
+                headers["content-length"] = str(length)
+        return StreamingResponse(
+            _document_chunks(copy, stream, ranges, part_header, boundary), status_code=status,
+            media_type="application/octet-stream", headers=headers,
+            background=BackgroundTask(_close_document_copy, copy, stream),
+        )
+    except BaseException:
+        _close_document_copy(copy, stream)
+        raise
 
 
 @router.post("/projects/{lineage_id}/documents/{return_state_hash}/open")
@@ -1583,7 +1707,15 @@ async def open_project_document(
         if launch_disabled():
             subprocess.Popen(open_folder_command(document.parent), **background_process_kwargs())
             return {"status": "revealed", "message": "Opened the archive folder. Opening Fusion is disabled on this computer."}
-        await asyncio.to_thread(open_cad_document, document)
+        copy, stream, _checksum = await asyncio.to_thread(_verified_document_copy, request, lineage_id, return_state_hash, document)
+        try:
+            stream.close()
+            # Launching is asynchronous: Fusion may read the path after this
+            # request returns, so the session owns the copy until shutdown.
+            await asyncio.to_thread(open_cad_document, copy)
+        except BaseException:
+            remove_tree(copy.parent)
+            raise
     except (OSError, RuntimeError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"status": "opened", "message": "Sent to Fusion. The file imports as a new document."}

@@ -127,7 +127,10 @@ describe('run archive and automatic export in one Workspace', () => {
       preferences: preferencesStore.getSnapshot(), fetcher,
     });
     expect(exported.failures.map(failure => failure.format)).toEqual(['step', 'stl', 'mwg_config', 'fusion_csv']);
-    expect(exported.failures.every(failure => failure.reason.includes('imported models') || failure.reason.includes('Imported models'))).toBe(true);
+    const importedModel = kind === 'file' ? 'imported mesh models' : 'imported models';
+    expect(exported.failures[0].reason).toContain(`STEP export is not available for ${importedModel}`);
+    expect(exported.failures[1].reason).toContain(`STL export is not available for ${importedModel}`);
+    expect(exported.failures.slice(2).every(failure => failure.reason.includes('Imported models'))).toBe(true);
     expect(exported.files).toHaveLength(1);
     expect([...files.keys()].every(path => path.endsWith('.csv'))).toBe(true);
     expect(fetcher.mock.calls.some(([path]) => String(path).startsWith('/api/export/') || path === '/api/design/serialize')).toBe(false);

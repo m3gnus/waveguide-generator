@@ -47,14 +47,14 @@ from server.platform.instance import LOCK_OPEN_FLAGS, lock_exclusive, pid_is_run
 SESSION_PREFIX = "wg2-run-"
 OWNER_LOCK_NAME = ".owner.lock"
 
-#: What releases before per-process sessions left directly in the temporary
-#: directory: the server's own ``TemporaryDirectory`` prefixes.
+#: Directories left outside a session by older releases or a failed session start.
 LEGACY_PREFIXES = (
     "wg2-solver-mesh-",
     "wg2-imported-mesh-",
     "wg2-imported-viewport-",
     "wg2-field-plane-",
     "wg2-stl-mesh-",
+    "wg2-fusion-document-",
     # The OpenCL check's result directory, from a BEMPP worker of a release
     # that made it outside the session.
     "wg2-opencl-",

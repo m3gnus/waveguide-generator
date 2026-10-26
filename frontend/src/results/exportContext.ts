@@ -40,6 +40,10 @@ export function resultExportSelection(job: JobItem, model: CurrentModel = modelF
 /** One capability rule for document, manual run and automatic run exports. */
 export function parameterExportReason(model: Pick<CurrentModel, 'kind'>, format: ExportFormat): string | undefined {
   if (model.kind === 'parametric') return undefined;
+  if (model.kind === 'file') {
+    if (format === 'step') return 'STEP export is not available for imported mesh models.';
+    if (format === 'stl') return 'STL export is not available for imported mesh models.';
+  }
   const reasons: Partial<Record<ExportFormat, string>> = {
     step: 'STEP export is not available for imported models.',
     stl: 'STL export is not available for imported models.',
