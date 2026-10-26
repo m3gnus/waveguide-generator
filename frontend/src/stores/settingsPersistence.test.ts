@@ -143,11 +143,12 @@ describe('WG.Solve config block', () => {
   beforeEach(() => { localStorage.clear(); resetSolveOptionsStore(); });
 
   it('loads and resaves experimental settings without restoring the retired option', () => {
-    const blocks = { [WG_SOLVE_BLOCK]: { items: { BeatPrecision: 'float64', Symmetry: 'full' } } };
+    const blocks = { [WG_SOLVE_BLOCK]: { items: { BeatPrecision: 'float64', Symmetry: 'full' }, lines: [], comments: [], entries: [] } };
     restoreSolveSettingsFromBlocks(blocks);
     expect(useSolveOptionsStore.getState().symmetry).toBe('full');
-    const resaved = withWgSolveBlock(undefined, wgSolveSettingsFromStore());
+    const resaved = withWgSolveBlock(blocks, wgSolveSettingsFromStore());
     expect(resaved[WG_SOLVE_BLOCK].items).not.toHaveProperty('BeatPrecision');
+    expect(blocks[WG_SOLVE_BLOCK].items.BeatPrecision).toBe('float64');
     expect(normalizePersistedSolveOptions({ beatPrecision: 'float64', symmetry: 'full' }))
       .not.toHaveProperty('beatPrecision');
   });
