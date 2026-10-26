@@ -476,6 +476,34 @@ def solve_imported_beat_from_msh_text(
 
         try:
             if adaptive:
+                # Each channel is solved independently. Other sources remain
+                # in the same mesh as rigid faces, while the compiled source
+                # and port lists contain only the excited channel. BEAT's
+                # radiation-impedance output requires every listed source to
+                # be excited and orders its values by component order.
+                selected_ports = compiled.channel_ports[channel.id]
+                system = compiled.wire["compiled_system"]
+                ports_by_id = {port["id"]: port for port in system["excitation_ports"]}
+                components_by_id = {component["id"]: component for component in system["components"]}
+                ports = [ports_by_id[port_id] for port_id in selected_ports]
+                components = [components_by_id[port["component_id"]] for port in ports]
+                moving = {boundary for component in components for boundary in component["boundary_ids"]}
+                selected_system = {
+                    **system,
+                    "components": components,
+                    "excitation_ports": ports,
+                    "boundaries": [
+                        {**boundary, "kind": "rigid"}
+                        if boundary["kind"] == "moving" and boundary["id"] not in moving else boundary
+                        for boundary in system["boundaries"]
+                    ],
+                    "metadata": {**system["metadata"], "channel_ports": {channel.id: list(selected_ports)}},
+                }
+                selected = replace(compiled,
+                                   channel_ports={channel.id: selected_ports},
+                                   channel_loading={channel.id: compiled.channel_loading[channel.id]},
+                                   wire={**compiled.wire, "compiled_system": selected_system,
+                                         "excitation_port_ids": list(selected_ports)})
 
                 def publish(native):
                     if result_callback is None:
@@ -532,13 +560,7 @@ def solve_imported_beat_from_msh_text(
                     next_revision[0] += 1
 
                 def solve_batch(batch):
-                    # Reuse the compiled topology, exciting only this channel's
-                    # ports while its independent adaptive sweep refines.
-                    selected = replace(compiled,
-                                       channel_ports={channel.id: compiled.channel_ports[channel.id]},
-                                       channel_loading={channel.id: compiled.channel_loading[channel.id]},
-                                       wire={**compiled.wire, "excitation_port_ids":
-                                             list(compiled.channel_ports[channel.id])})
+                    # Reuse this channel's projection throughout refinement.
                     return solve_compiled(
                         batch_request(selected, batch), channel_id=channel.id,
                         worker_manager=_worker_manager, julia_executable=_julia_executable,

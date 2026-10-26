@@ -286,6 +286,42 @@ def test_imported_production(runtime, monkeypatch, adaptive, axial, backend):
     np.testing.assert_allclose(decoded[0], [.01, 0, 0] if not axial else [0, 0, 0])
 
 
+@pytest.mark.parametrize("axial", [False, True])
+@pytest.mark.parametrize("channels", [
+    [{"id": "left", "source_ids": ["source-a", "source-b"]},
+     {"id": "right", "source_ids": ["source-c"]}],
+    [{"id": "left", "source_ids": ["source-a"]},
+     {"id": "right", "source_ids": ["source-c", "source-b"]}],
+    [{"id": "all", "source_ids": ["source-c", "source-b", "source-a"]}],
+])
+def test_adaptive_imported_batches_validate_with_only_the_selected_sources(runtime, channels, axial):
+    contract = pytest.importorskip("beat_engine.beat_contract")
+    channels = [{**channel, "motion": "axial" if axial and index == 0 else "normal"}
+                for index, channel in enumerate(channels)]
+    request = cad._request(drive_channels=channels)
+    request.options.adaptive_frequency_sampling = True
+    request.options.frequencies_hz = None
+    request.options.frequency_range = [100., 1000.]
+    request.options.num_frequencies = 24
+    mesh = cad.MESH_Z if axial else cad.MESH
+    result = beat_imported.solve_imported_beat_from_msh_text(
+        mesh, request, cad._record(msh_text=mesh), backend="cpu")
+    assert set(result["channels"]) == {channel["id"] for channel in channels}
+    expected = {tuple(f"excitation:{channel['motion']}:{source}" for source in channel["source_ids"])
+                for channel in channels}
+    assert {tuple(wire["excitation_port_ids"]) for wire in runtime.requests} == expected
+    for wire in runtime.requests:
+        contract.validate_solve_request(wire)
+        system = wire["compiled_system"]
+        port_ids = wire["excitation_port_ids"]
+        assert [port["id"] for port in system["excitation_ports"]] == port_ids
+        assert [component["id"] for component in system["components"]] == [
+            f"component:{port}" for port in port_ids]
+        active = {boundary for component in system["components"] for boundary in component["boundary_ids"]}
+        assert all(boundary["kind"] == ("moving" if boundary["id"] in active else "rigid")
+                   for boundary in system["boundaries"])
+
+
 @pytest.mark.parametrize("imported", [False, True])
 @pytest.mark.parametrize("adaptive", [False, True])
 def test_cancelled_prefix_is_packaged(runtime, imported, adaptive):
@@ -617,8 +653,13 @@ def test_compiled_topology_built_once_per_request(runtime, monkeypatch, imported
             MESH.read_text(), _context(adaptive_frequency_sampling=adaptive,
                                       num_frequencies=24 if adaptive else 3), backend="cpu")
     assert len(builds) == 1
-    assert all(request["compiled_system"] in [built.wire["compiled_system"] for built in builds]
-               for request in runtime.requests)
+    original = builds[0].wire["compiled_system"]
+    if imported and adaptive:
+        assert all(all(request["compiled_system"][key] == original[key]
+                       for key in ("id", "contract_version", "meshes", "regions", "interfaces"))
+                   for request in runtime.requests)
+    else:
+        assert all(request["compiled_system"] == original for request in runtime.requests)
 
 
 def test_missing_source_frame_refuses_before_worker(runtime):
