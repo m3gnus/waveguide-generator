@@ -102,11 +102,12 @@ function ModeRow({ label, help, revealId, mode, values, onSelect }: {
   </>;
 }
 
-function PairRow({ pair, spec, preset, onChange }: {
+function PairRow({ pair, spec, preset, onChange, file }: {
   pair: CombinePair;
   spec: CrossoverSpec;
   preset: DriverPreset | null;
   onChange: (spec: CrossoverSpec) => void;
+  file: boolean;
 }) {
   const linked = pair.linked;
   const specPair = pairsOf(spec).find((item) => item.key === pair.key);
@@ -128,7 +129,7 @@ function PairRow({ pair, spec, preset, onChange }: {
       precision={0}
       disabled={!linked}
       disabledReason={linked ? undefined : 'This pair is not symmetric; edit each channel in Advanced.'}
-      description={`${CAD_CONTROLS.crossoverFrequency.label} · ${combinePairLabel(pair)}`}
+      description={`${CAD_CONTROLS.crossoverFrequency.label} · ${file ? combinePairLabel(pair) : `${pair.lower} → ${pair.upper}`}`}
       onCommit={(value) => onChange(withPair(spec, pair.key, { hz: value }))}
     />
     <div className={`crossover-shape-row${linked ? '' : ' field-disabled'}`} data-control-reveal-id={CAD_CONTROLS.crossoverFamily.reveal.id}>
@@ -406,6 +407,7 @@ export function CadCrossover() {
           pair={state.input === 'file' ? { ...pair, lowerRole: shortLabel(pair.lower), upperRole: shortLabel(pair.upper) } : pair}
           spec={spec}
           preset={driverFor(pair.upper)?.preset ?? null}
+          file={state.input === 'file'}
           onChange={apply}
         />)}
         <ModeRow

@@ -7,7 +7,7 @@ import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from './workspaceMode';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
 import { editMeshImport, fileMeshSubmission, loadMeshFile, prepareMeshFile, loadMeshReplay, registeredMesh,
-  fileMeshSetup, useMeshImportStore } from './meshImport';
+  fileMeshSetup, fileSetupForSave, useMeshImportStore } from './meshImport';
 import { openImported, reopenLastModel, resetImportedModelStore, unchangedSetup, useImportedModelStore, editFileDraft } from './importedModel';
 import { fileSimulationSetup, importedSimulationSetup } from './importedSimulationSetup';
 import { readLastModel } from './lastModel';
@@ -778,6 +778,35 @@ it('rebuilds the crossover when re-preparation splits a driver group by role', a
   expect(setup.geometry.combine?.members).toHaveLength(3);
   expect(setup.geometry.combine?.members).toEqual(expect.arrayContaining(setup.geometry.driver_groups!.map(group => group.id)));
 });
+
+it.each(['resistance', 'physical crossover'] as const)(
+  'keeps legacy channels separate through preparation when using %s', async reason => {
+    const mesh: RegisteredMesh = { ...record, source_tags: { group_1: 1, group_2: 2, group_3: 3 },
+      sources: [{ id: 'group_1', role: 'MF' }, { id: 'group_2', role: 'MF' }, { id: 'group_3', role: 'HF' }],
+      source_file: { ...record.source_file, source_tags: [1, 2, 3], roles: { 1: 'MF', 2: 'MF', 3: 'HF' } } };
+    showPrepared(mesh);
+    const legacy: ImportedSetup = { geometry: { skipped_source_ids: [], drive_channels: [
+      { id: 'drive-mf::group_1', source_ids: ['group_1'], motion: 'normal' },
+      { id: 'drive-mf::group_2', source_ids: ['group_2'], motion: 'normal' },
+      { id: 'drive-hf', source_ids: ['group_3'], motion: 'normal' },
+    ], ...(reason === 'resistance' ? { rg_ohm: 0.5 } : {
+      combine: { members: ['drive-mf::group_1', 'drive-hf'], crossovers_hz: [1200] },
+    }) }, options: fileMeshSetup().options };
+    await openImported({ kind: 'file', prepared: mesh, setup: legacy });
+    const next = { ...mesh, ingest_id: 'wgi_extra', source_tags: { ...mesh.source_tags, group_4: 4 },
+      sources: [...mesh.sources!, { id: 'group_4', role: 'MF' }],
+      source_file: { ...mesh.source_file, source_tags: [1, 2, 3, 4], roles: { 1: 'MF', 2: 'MF', 3: 'HF', 4: 'MF' } } };
+    await editMeshImport({ roles: next.source_file.roles }, vi.fn(async () => prepared(next)));
+    expect(useMeshImportStore.getState().error).toBeNull();
+    const setup = fileSetupForSave(fileMeshSetup());
+    expect(setup.geometry.drive_channels.map(channel => channel.id)).toEqual([
+      'drive-mf::group_1', 'drive-mf::group_2', 'drive-hf', 'source:group_4',
+    ]);
+    expect(setup.geometry.driver_groups?.every(group => group.channel_ids.length === 1)).toBe(true);
+    expect(setup.geometry.rg_ohm).toEqual(legacy.geometry.rg_ohm);
+    expect(setup.geometry.combine).toEqual(legacy.geometry.combine);
+  },
+);
 
 it('keeps only matching roles when the re-export changes its group names', async () => {
   const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect')

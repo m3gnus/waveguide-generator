@@ -76,6 +76,10 @@ it('shows one crossover branch per driver group and excludes the passive opening
   expect(wire.driver_groups?.find(group => group.id === groups[0].id)?.channel_ids).toEqual(['source:left', 'source:right']);
   expect(wire.combine?.members).not.toContain(groups[2].id);
   expect(host.textContent).not.toContain('group:source');
+  const label = [...host.querySelectorAll<HTMLLabelElement>('label.field-label')]
+    .find(item => item.textContent === 'MF driver → HF driver')!;
+  act(() => label.dispatchEvent(new FocusEvent('focusin', { bubbles: true })));
+  expect(document.querySelector('[role="tooltip"]')?.textContent).toContain('Crossover frequency · MF driver → HF driver');
   act(() => importedSimulationSetup().setRoleSharing!('MF', false));
   const separate = fileSetupControls().geometry;
   expect(separate.combine?.members).toHaveLength(3);

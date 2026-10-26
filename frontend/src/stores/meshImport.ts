@@ -1,4 +1,5 @@
 import { fileSimulationSetup, importedDriverLabel, reconcileFileChannels, seedFileSimulation } from './importedSimulationSetup';
+import { driverGroupsFromWire, driverGroupsToWire } from './importedDriverGroups';
 import { combineWire } from './cadReturn';
 import { savedChannelDrivers } from './cadSetupRestore';
 import type { CadSetup } from '../api/jobsSocket';
@@ -217,13 +218,18 @@ function setupForPreparedFile(retained: ImportedSetup, record: RegisteredMesh, p
   setup.geometry.skipped_source_ids = setup.geometry.skipped_source_ids.filter(id => available.has(id));
   const forms = { ...savedChannelDrivers(setup.geometry as unknown as CadSetup, setup.geometry.drive_channels, setup.driver_references),
     ...previous?.channelDrivers };
-  const storedGroups = setup.geometry.driver_groups?.map(group => ({ id: group.id, channelIds: group.channel_ids, label: group.label }));
-  const extended = reconcileFileChannels(record, setup.geometry.drive_channels, forms, setup.geometry.skipped_source_ids, storedGroups);
+  const storedGroups = setup.geometry.driver_groups && driverGroupsFromWire(setup.geometry.driver_groups);
+  // Only carry live choices from this setup. A freshly opened file may still
+  // have an empty simulation while its saved setup is being prepared.
+  const previousGroups = previous?.driveChannels.some(channel => setup.geometry.drive_channels.some(saved => saved.id === channel.id))
+    ? previous.driverGroups : undefined;
+  const extended = reconcileFileChannels(record, setup.geometry.drive_channels, forms, setup.geometry.skipped_source_ids,
+    storedGroups ?? previousGroups);
   setup.geometry.drive_channels = extended.channels;
   const oldIds = new Set(retained.geometry.drive_channels.map(channel => channel.id));
   const addedToSharedGroup = extended.groups.some(group => group.channelIds.length > 1 && group.channelIds.some(id => !oldIds.has(id)));
   if (storedGroups || addedToSharedGroup) {
-    setup.geometry.driver_groups = extended.groups.map(group => ({ id: group.id, channel_ids: group.channelIds, ...(group.label ? { label: group.label } : {}) }));
+    setup.geometry.driver_groups = driverGroupsToWire(extended.groups);
   }
   const driven = new Set(setup.geometry.drive_channels.flatMap(channel => channel.source_ids));
   if (setup.geometry.mesh) {
@@ -276,12 +282,17 @@ export function fileMeshSetup(): ImportedSetup {
   let controls: ImportedSetup | undefined;
   const setup = effectiveImportedSetup('file', record.ingest_id, () => (controls = fileSetupControls()));
   const model = useImportedModelStore.getState();
-  if (!model.setup && model.fileSimulation?.persistDriverGroups) {
-    const groups = fileSimulationSetup.get().driverGroups;
-    setup.geometry.driver_groups = groups.map(group => ({ id: group.id, channel_ids: group.channelIds,
-      ...(group.label ? { label: group.label } : {}) }));
-    const combine = (controls ?? fileSetupControls()).geometry.combine;
-    if (combine) setup.geometry.combine = combine; else delete setup.geometry.combine;
+  if (!model.setup && model.fileSimulation?.persistDriverGroups && controls) {
+    // A role edit may split a group before the next control edit. The edit
+    // baseline already sees that split, while the retained setup does not.
+    const groups = driverGroupsToWire(fileSimulationSetup.get().driverGroups);
+    if (JSON.stringify(groups) !== JSON.stringify(setup.geometry.driver_groups)) {
+      setup.geometry.driver_groups = groups;
+    }
+    const combine = controls.geometry.combine;
+    if (JSON.stringify(combine?.members) !== JSON.stringify(setup.geometry.combine?.members)) {
+      if (combine) setup.geometry.combine = combine; else delete setup.geometry.combine;
+    }
   }
   return setup;
 }
@@ -313,13 +324,15 @@ export function fileSetupControls(): ImportedSetup {
   const driver_references = simulationDriverReferences(simulation);
   const model = useImportedModelStore.getState();
   const retained = model.setup ?? model.setupEditBase?.retained;
+  if (simulation.persistDriverGroups && (retained?.geometry.rg_ohm ?? 0) !== 0
+    && simulation.driverGroups.some(group => group.channelIds.length > 1)) {
+    throw new Error('Set generator resistance to 0 ohms or drive the surfaces separately.');
+  }
   // Motion edits of older file setups preserve their voltage fields.
   const { drivers, effects } = simulationGeometry(simulation, simulation.sources, simulation.passiveTopology, retained?.geometry);
   return {
     geometry: { skipped_source_ids: [], ...drivers,
-      ...(simulation.persistDriverGroups ? { driver_groups: simulation.driverGroups.map(group => ({
-        id: group.id, channel_ids: group.channelIds, ...(group.label ? { label: group.label } : {}),
-      })) } : {}), ...effects },
+      ...(simulation.persistDriverGroups ? { driver_groups: driverGroupsToWire(simulation.driverGroups) } : {}), ...effects },
     ...(Object.keys(driver_references).length ? { driver_references } : {}),
     options,
   };
@@ -333,9 +346,7 @@ export function fileSetupForSave(setup: ImportedSetup): ImportedSetup {
   const groups = simulation.driverGroups.map(group => ({ ...group, channelIds: group.channelIds.filter(id => ids.has(id)) }))
     .filter(group => group.channelIds.length);
   if (groups.flatMap(group => group.channelIds).length !== ids.size) return setup;
-  return { ...setup, geometry: { ...setup.geometry, driver_groups: groups.map(group => ({
-    id: group.id, channel_ids: group.channelIds, ...(group.label ? { label: group.label } : {}),
-  })) } };
+  return { ...setup, geometry: { ...setup.geometry, driver_groups: driverGroupsToWire(groups) } };
 }
 registerImportedSetupControls('file', fileSetupControls);
 

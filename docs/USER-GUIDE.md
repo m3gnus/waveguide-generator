@@ -117,7 +117,9 @@ the half or quarter from the meshing tool to solve faster.
 Use the **Simulation** tab shared with CAD models to set the sweep, drivers,
 directivity and solver. For surfaces with the same role, choose **Share one
 driver** or **Drive separately**. Sharing uses identical driver settings: each
-surface gets its own identical driver, wired to one amplifier channel. The
+surface gets its own identical driver, wired to one amplifier channel. Sharing
+requires zero generator resistance; choose **Drive separately** for a setup
+with nonzero generator resistance. The
 **Crossover** uses one band for each driver group; surfaces sharing a driver
 are summed into that band. When a surface has the **Port or passive opening**
 role, **Passive cardioid** is also available. Turn off **Crossover** when using

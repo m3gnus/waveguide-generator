@@ -12,7 +12,7 @@ import { observeFileDriverBaseRefresh, refreshChannelDriverBases } from '../shel
 import { hasPassiveCardioidSurface, resetCadReturnStore, useCadReturnStore, type DriverPreset } from './cadReturn';
 import { editFileDraft, flushImportedSetupWrites, openImported, resetImportedModelStore, useImportedModelStore } from './importedModel';
 import { createImportedSimulationSetup, importedSimulationSetup, seedFileSimulation } from './importedSimulationSetup';
-import { fileMeshSetup, fileMeshSubmission } from './meshImport';
+import { fileMeshSetup, fileMeshSubmission, fileSetupForSave } from './meshImport';
 import { resetSolveOptionsStore } from './solveOptions';
 import { workspaceModeStore } from './workspaceMode';
 
@@ -222,6 +222,31 @@ it('migrates encoded legacy membership on save without renaming its physical cha
   expect(fileMeshSubmission()).toEqual(bindImportedSetup(mesh, saved));
 });
 
+it.each(['resistance', 'physical crossover'] as const)(
+  'migrates legacy encoded IDs as separate channels when using %s', reason => {
+    const legacy: ImportedSetup = { geometry: { skipped_source_ids: [], drive_channels: [
+      { id: 'drive-mf::left', source_ids: ['left'], motion: 'normal' },
+      { id: 'drive-mf::right', source_ids: ['right'], motion: 'normal' },
+      { id: 'drive-hf', source_ids: ['high'], motion: 'normal' },
+    ], ...(reason === 'resistance' ? { rg_ohm: 0.5 } : {
+      combine: { members: ['drive-mf::left', 'drive-hf'], crossovers_hz: [1200] },
+    }) }, options: fileMeshSetup().options };
+    show(legacy);
+    expect(fileMeshSubmission()).toEqual(bindImportedSetup(mesh, legacy));
+    expect(importedSimulationSetup().driverGroups.map(group => group.channelIds)).toEqual([
+      ['drive-mf::left'], ['drive-mf::right'], ['drive-hf'],
+    ]);
+    const saved = fileSetupForSave(fileMeshSetup());
+    expect(saved.geometry.driver_groups?.every(group => group.channel_ids.length === 1)).toBe(true);
+    expect(saved.geometry.combine).toEqual(legacy.geometry.combine);
+    expect(saved.geometry.rg_ohm).toEqual(legacy.geometry.rg_ohm);
+    if (reason === 'resistance') {
+      importedSimulationSetup().setRoleSharing!('MF', true);
+      expect(() => fileMeshSetup()).toThrow('Set generator resistance to 0 ohms or drive the surfaces separately.');
+    }
+  },
+);
+
 it('keeps source IDs and gives a newly split role its own crossover branch', () => {
   importedSimulationSetup().setCombineEnabled(true);
   const saved = fileMeshSetup();
@@ -234,6 +259,28 @@ it('keeps source IDs and gives a newly split role its own crossover branch', () 
   expect(next.geometry.driver_groups).toHaveLength(3);
   expect(next.geometry.combine?.members).toHaveLength(3);
   expect(next.geometry.combine?.members).toEqual(expect.arrayContaining(next.geometry.driver_groups!.map(group => group.id)));
+});
+
+it('preserves the saved crossover form on an unrelated group edit', () => {
+  importedSimulationSetup().setCombineEnabled(true);
+  const saved = fileMeshSetup();
+  const members = saved.geometry.combine!.members;
+  saved.geometry.combine = { members, crossovers_hz: [1200], level_match: false, align: false };
+  show(saved);
+  importedSimulationSetup().setChannelMotion('source:high', 'axial');
+  expect(fileMeshSetup().geometry.combine).toEqual(saved.geometry.combine);
+});
+
+it('reorders crossover branches after their roles swap without renaming channels', () => {
+  importedSimulationSetup().setCombineEnabled(true);
+  const saved = fileMeshSetup();
+  const [mid, high] = saved.geometry.combine!.members;
+  const swapped = { ...mesh, sources: mesh.sources.map(source => ({ ...source, role: source.role === 'MF' ? 'HF' : 'MF' })) };
+  void openImported({ kind: 'file', prepared: swapped, setup: saved });
+  importedSimulationSetup().setChannelMotion('source:high', 'axial');
+  const next = fileMeshSetup();
+  expect(next.geometry.combine?.members).toEqual([high, mid]);
+  expect(next.geometry.drive_channels.map(channel => channel.id)).toEqual(['source:left', 'source:right', 'source:high']);
 });
 
 it('keeps file driver state with the file model when switching imported inputs', () => {

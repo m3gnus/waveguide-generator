@@ -4,6 +4,7 @@ import type { CadSetup } from '../api/jobsSocket';
 import type { ImportedSetup } from '../jobs/importedSetup';
 import { fromResult, parseWire } from '../results/crossoverSpec';
 import { savedChannelDrivers, savedPassiveCardioid } from './cadSetupRestore';
+import { driverGroupsFromWire } from './importedDriverGroups';
 import {
   PASSIVE_CARDIOID_DEFAULTS, cadPassiveCardioidTopology, channelAcceptsDriver, channelDriverPresent, retainedChannelDrivers, simulationActions, useCadReturnStore,
   type CadDriveChannel, type CadReturnState, type PassiveCardioidTopology, type RoleSource, type SimulationActions, type SimulationData, type SimulationDriverGroup,
@@ -200,7 +201,7 @@ export function seedFileSimulation(record: RegisteredMesh | null, setup: Importe
     previousGroups = extended.groups;
   }
   const geometry = setup?.geometry as unknown as CadSetup | undefined;
-  const savedGroups = setup?.geometry.driver_groups?.map(group => ({ id: group.id, channelIds: group.channel_ids, label: group.label }));
+  const savedGroups = setup?.geometry.driver_groups && driverGroupsFromWire(setup.geometry.driver_groups);
   const initialGroups = !setup && !previous && record?.sources?.length
     ? [...new Set(sources.map(source => source.role))].map(role => {
       const channelIds = driveChannels.filter(channel => channel.source_ids.some(id => sources.find(source => source.id === id)?.role === role)).map(channel => channel.id);
@@ -209,9 +210,19 @@ export function seedFileSimulation(record: RegisteredMesh | null, setup: Importe
   const channelDrivers = previous && previousDrivers
     ? retainedChannelDrivers({ driveChannels, channelDrivers: previousDrivers }, driveChannels)
     : savedChannelDrivers(geometry, driveChannels, setup?.driver_references);
+  let groups = resolveDriverGroups(sources, driveChannels, channelDrivers, previousGroups ?? savedGroups ?? initialGroups);
+  if (setup && !savedGroups) {
+    // Legacy requests may have independent crossover branches or generator
+    // resistance. Their encoded IDs must not imply an invalid shared branch.
+    const members = new Set(setup.geometry.combine?.members ?? []);
+    groups = groups.flatMap(group => group.channelIds.length > 1
+      && ((setup.geometry.rg_ohm ?? 0) !== 0 || group.channelIds.some(id => members.has(id)))
+      ? group.channelIds.map(id => ({ id: channelGroupId(id), channelIds: [id] })) : [group]);
+    groups = resolveDriverGroups(sources, driveChannels, channelDrivers, groups);
+  }
   return {
     driveChannels, channelDrivers,
-    driverGroups: resolveDriverGroups(sources, driveChannels, channelDrivers, previousGroups ?? savedGroups ?? initialGroups),
+    driverGroups: groups,
     persistDriverGroups: previous?.persistDriverGroups ?? (setup ? !!savedGroups : !!record?.sources?.length),
     passiveCardioid: geometry ? savedPassiveCardioid(geometry) : { ...PASSIVE_CARDIOID_DEFAULTS },
     driveVoltageV: previous?.driveVoltageV ?? setup?.geometry.drive_voltage_v ?? DEFAULT_DRIVE_VOLTAGE_V,

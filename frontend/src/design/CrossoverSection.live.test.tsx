@@ -95,6 +95,14 @@ describe('live recombine from the rail', () => {
     host.remove();
   });
 
+  it('keeps the authored channel IDs in CAD crossover help', () => {
+    render();
+    const label = [...host.querySelectorAll<HTMLLabelElement>('label.field-label')]
+      .find(item => item.textContent === 'MF → HF')!;
+    act(() => label.dispatchEvent(new FocusEvent('focusin', { bubbles: true })));
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toContain('Crossover frequency · drive-mf → drive-hf');
+  });
+
   it('applies an edit to the shown run after the debounce, through the bridge', async () => {
     const updated = { channels: {} } as unknown as JobResults;
     recombineMocks.recombine.mockResolvedValue(updated);
