@@ -5,7 +5,7 @@ import type { ImportedSolveSubmission } from '../jobs/actions';
 import type { RegisteredMesh } from '../api/meshImport';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { expectNoJargon } from '../testing/expectNoJargon';
-import { useMeshImportStore } from '../stores/meshImport';
+import { loadMeshFile, useMeshImportStore } from '../stores/meshImport';
 import { resetImportedModelStore, useImportedModelStore } from '../stores/importedModel';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
@@ -111,6 +111,23 @@ it('shows descriptor roles, the quarter size and an editable untagged wall witho
   expect(host.textContent).toContain('Faces +z · up +y');
   expect(host.textContent).toContain('Roles: from the file');
   expect([...host.querySelectorAll('button')].some(node => /Prepare|Try again/.test(node.textContent ?? ''))).toBe(false);
+  expectNoJargon(host);
+});
+
+it.each(['inspect', 'parse'] as const)('shows a %s refusal without an error prefix or Try again', async (stage) => {
+  const inspect = vi.fn<typeof fetch>(async () => stage === 'inspect'
+    ? new Response(JSON.stringify({ detail: 'The mesh contains no triangles.' }), { status: 422 })
+    : new Response(JSON.stringify(fileSummary)));
+  let refusal: Error | null = null;
+  await act(async () => {
+    await loadMeshFile('broken.msh', 'not a mesh', inspect).catch(error => { refusal = error; });
+  });
+  expect(refusal).toBeInstanceOf(Error);
+  act(() => root.render(<MeshImportPanel tab="geometry"/>));
+  expect(host.querySelector('.cad-status-line')?.textContent).toBe(refusal!.message);
+  expect(useMeshImportStore.getState().error).toBe(refusal!.message);
+  expect(host.querySelector('.cad-status-line button')).toBeNull();
+  expect(inspect).toHaveBeenCalledOnce();
   expectNoJargon(host);
 });
 

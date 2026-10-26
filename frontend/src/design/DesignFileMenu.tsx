@@ -368,7 +368,7 @@ export function DesignFileMenu() {
       const readRequest = beginMeshFileImport(file.name);
       try { await loadMeshFile(file.name, await file.text(), fetch, generation); }
       catch (error) {
-        if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ busy: false, error: String(error) });
+        if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ busy: false, error: error instanceof Error ? error.message : String(error) });
         throw error;
       } finally {
         if (useMeshImportStore.getState().request === readRequest) useMeshImportStore.setState({ busy: false });

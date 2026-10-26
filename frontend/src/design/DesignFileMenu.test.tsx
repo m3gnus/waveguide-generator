@@ -11,6 +11,7 @@ import { wgSolveSettingsFromStore } from '../stores/designWire';
 import { withWgSolveBlock } from '../stores/wgSolveBlock';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { resetImportedModelStore, useImportedModelStore } from '../stores/importedModel';
+import { useMeshImportStore } from '../stores/meshImport';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
 import { cadWorkspace } from '../stores/cadWorkspace';
@@ -291,6 +292,19 @@ describe('design file export menu', () => {
     expect(importedMeshStore.getSnapshot().showing).toBe('file');
     expect(inspect).toHaveBeenCalledWith('/api/models/files/inspect', expect.objectContaining({ method: 'POST' }));
     expect(container.querySelector('[role="status"]')).toBeNull();
+  });
+
+  it('keeps an inspection refusal message without an Error prefix', async () => {
+    const message = 'The mesh contains no triangles.';
+    const inspect = vi.fn(async () => new Response(JSON.stringify({ detail: message }), { status: 422 }));
+    vi.stubGlobal('fetch', inspect);
+    act(() => root.render(<DesignFileMenu/>));
+    const input = container.querySelector<HTMLInputElement>('[aria-label="Import Gmsh mesh file"]')!;
+    Object.defineProperty(input, 'files', { configurable: true, value: [new File([meshFixture], 'broken.msh')] });
+    await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
+    expect(useMeshImportStore.getState().error).toBe(message);
+    expect(container.querySelector('[role="status"]')?.textContent).toBe(message);
+    expect(inspect).toHaveBeenCalledOnce();
   });
 
   it('lists extensions only in file pickers, so the macOS window does not grey out .msh files', async () => {

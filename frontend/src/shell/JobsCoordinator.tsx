@@ -92,6 +92,8 @@ interface SolveControl {
   solve(attention?: number): Promise<'submitted' | 'busy' | 'blocked' | 'pending'>;
   /** CAD Link mode: Solve solves the CAD model on screen. */
   cadMode: boolean;
+  /** Solve uses imported geometry, from CAD Link or a file. */
+  importedGeometryActive: boolean;
   disabled: boolean;
   submitting: boolean;
   label: string;
@@ -804,6 +806,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     planPending: solvePlanPending,
     solve,
     cadMode: cadGeometryActive,
+    importedGeometryActive: cadGeometryActive || fileGeometryActive,
     disabled: !solveEnabled,
     submitting,
     label: 'Solve',

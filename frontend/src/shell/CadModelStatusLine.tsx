@@ -51,7 +51,7 @@ export function runCadStatusAction(line: Line, solve: (() => unknown) | undefine
 export function CadModelStatusLine({ actions = true, file, onRetry }: { actions?: boolean; file?: FileModelView; onRetry?: () => unknown }) {
   const { line } = useCadModelStatusLine(file);
   const control = useOptionalSolveControl();
-  const solveUnavailable = line.action === 'solve' && (!control?.cadMode || control.disabled);
+  const solveUnavailable = line.action === 'solve' && (!control?.importedGeometryActive || control.disabled);
   return <div className={`cad-status-line cad-status-line-${line.tone}`} role="status" data-status-action={line.action}>
     <span className="cad-status-dot" aria-hidden="true"/>
     <span className="cad-status-text">{line.text}</span>

@@ -2906,11 +2906,11 @@ describe('solve invocation mutex', () => {
     await act(async () => { root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>); });
     const solve = host.querySelector<HTMLButtonElement>('button')!;
     expect(solve.disabled).toBe(true);
-    expect(solve.title).toContain('Choose units and driven groups');
+    expect(solve.title).toContain('Choose units and surface roles');
     expect(mocks.solveModel).not.toHaveBeenCalled();
   });
 
-  it('solves the prepared file from the main command, with one model Solve and no CAD job', async () => {
+  it.each(['main command', 'file status line'] as const)('solves the prepared file from the %s, with one model Solve and no CAD job', async (surface) => {
     act(() => { readyCad('wgi_retained_cad'); workspaceModeStore.setMode('cad'); });
     workspaceModeStore.setImportedInput('file'); workspaceModeStore.setMode('cad');
     const accepted = deferred<string>();
@@ -2922,10 +2922,18 @@ describe('solve invocation mutex', () => {
       useImportedSolveOptionsStore.getState().setSweep({ startHz: 100, endHz: 200, count: 2 });
       importedMeshStore.setFile({ name: 'standalone.msh', source: 'file', ingestId: 'wgi_file' } as ImportedMeshScene);
     });
-    await act(async () => root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>));
+    await act(async () => root.render(<JobsCoordinator>{surface === 'main command' ? <MainSolveButton/> : <CadModelStatusLine file={{
+      input: 'file', label: 'standalone.msh', reading: false, preparing: false, choice: null,
+      failureMessage: null, canPrepare: true, prepared: true, triangles: 4, symmetryLabel: 'Full model',
+    }}/>}</JobsCoordinator>));
+    const control = solveControlStore.getSnapshot()!;
+    expect(control.importedGeometryActive).toBe(true);
+    expect(control.cadMode).toBe(false);
+    const command = vi.spyOn(control, 'solve');
     const solve = host.querySelector<HTMLButtonElement>('button')!;
     expect(solve.disabled).toBe(false);
     await act(async () => { solve.click(); solve.click(); });
+    expect(command).toHaveBeenCalledTimes(2);
     expect(mocks.solveModel).toHaveBeenCalledOnce();
     const [modelId, body] = mocks.solveModel.mock.calls[0] as [string, ModelSolvePress];
     expect(modelId).toBe('mesh-file:sha256:original');

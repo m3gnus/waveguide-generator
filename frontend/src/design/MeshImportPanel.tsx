@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { editMeshImport, prepareMeshFile, saveMeshSetup, setMeshMotion, useMeshImportStore, meshImportChoice, loadMeshFile } from '../stores/meshImport';
+import { editMeshImport, prepareMeshFile, saveMeshSetup, setMeshMotion, useMeshImportStore, meshImportChoice } from '../stores/meshImport';
 import { FILE_SURFACE_ROLES, fileSymmetryLabel, sourceRoleLabel } from '../model/cadLabels';
 import { CadModelStatusLine } from '../shell/CadModelStatusLine';
 import { FileModelDetails } from '../shell/CadModelDetails';
@@ -68,9 +68,9 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
       <CadModelStatusLine file={{ input: 'file', label: state.filename,
         reading: state.busy && !summary, preparing: state.busy && !!summary,
         choice: summary ? meshImportChoice(draft) : null, failureMessage: state.error,
-        canPrepare: editable, prepared: !!registered, triangles: summary?.triangle_count ?? null,
+        canPrepare: editable && !!summary, prepared: !!registered, triangles: summary?.triangle_count ?? null,
         symmetryLabel: fileSymmetryLabel(planes, false),
-      }} onRetry={() => !summary && state.original ? loadMeshFile(state.filename, state.original).catch(() => undefined) : prepareMeshFile()}/>
+      }} onRetry={() => prepareMeshFile()}/>
       {summary && <>
         <fieldset className="mesh-surfaces" disabled={!editable}>
           <legend>Surfaces</legend>

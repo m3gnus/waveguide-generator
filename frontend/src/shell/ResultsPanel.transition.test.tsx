@@ -138,7 +138,7 @@ describe('atomic results display transitions', () => {
     expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe('old');
     expect(host.textContent).not.toContain('Loading results');
     control.mockReturnValue({
-      plan: null, planPending: false, cadMode: false, disabled: false, submitting: false, label: 'Solve',
+      plan: null, planPending: false, cadMode: false, importedGeometryActive: false, disabled: false, submitting: false, label: 'Solve',
       title: 'BEAT Metal is warming up.', readinessRequested: true, waitingForEngine: true, waitingEngine: 'beat-metal',
       readiness: { code: 'engine_unavailable', engine: 'beat-metal', message: 'BEAT Metal is warming up.',
         remedies: [{ kind: 'wait' }, { kind: 'use_engine', engine: 'beat-cpu', label: 'Use BEAT CPU', same_solver: true }] },

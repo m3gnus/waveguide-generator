@@ -118,7 +118,7 @@ export async function loadMeshFile(filename: string, text: string, fetcher: type
     await prepareMeshFile(fetcher);
   } catch (error) {
     if (importedMeshStore.isCurrentGeneration(generation)) {
-      useMeshImportStore.setState({ busy: false, error: String(error) });
+      useMeshImportStore.setState({ busy: false, error: error instanceof Error ? error.message : String(error) });
     }
     throw error;
   } finally {
