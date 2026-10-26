@@ -13,6 +13,7 @@ import { compareSelection, provisionalResults } from '../api/results';
 import { currentModel, currentModelScene, currentCadScenes, spatialResult, useCurrentModel, type CurrentModel } from '../model/currentModel';
 import { postSymmetry, toSolveDesign } from '../jobs/actions';
 import { planAdjustmentNotice } from '../jobs/planAdjustments';
+import { hasMeshProvenance, useMeshFreshnessStore } from '../jobs/meshFreshness';
 import { useOptionalSolveControl } from '../shell/JobsCoordinator';
 import { postSolverMesh, solverMeshArtifactToken, solverMeshDesignKey, solverMeshOptions, solverMeshScene } from '../api/solverMesh';
 import { useCadReturnStore } from '../stores/cadReturn';
@@ -387,19 +388,27 @@ export function Viewport() {
   const cadName = cad.label;
   const theme = useViewportTheme();
   const preferences = useViewerPreferences();
-  const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
+  const jobsSnapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
+  const jobs = jobsSnapshot.jobs;
   const solveRunningOrQueued = jobs.some((job) => isActiveJobStatus(job.status));
   const cadEmpty = cadViewportEmptyCopy(cad);
   const resultSelection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
+  const recordedFreshness = useMeshFreshnessStore(state => resultSelection.primary ? state.jobs[resultSelection.primary] : undefined);
+  const selectedJob = jobs.find(candidate => candidate.id === resultSelection.primary);
+  const meshFreshness = hasMeshProvenance(selectedJob) ? recordedFreshness : undefined;
+  useEffect(() => {
+    const job = jobs.find(candidate => candidate.id === resultSelection.primary);
+    if (job) useMeshFreshnessStore.getState().check(job, false, jobsSnapshot.epoch);
+  }, [jobs, resultSelection.primary, jobsSnapshot.epoch]);
   const coherenceContext = useCurrentModel();
   const provisional = useSyncExternalStore(provisionalResults.subscribe, provisionalResults.getSnapshot, provisionalResults.getSnapshot);
   const availableFieldJob = useMemo(
     () => fieldPlaneJob(jobs, resultSelection.primary, coherenceContext, provisional.entries),
-    [coherenceContext.key, coherenceContext.lineage, coherenceContext.kind, coherenceContext.viewportShowing, jobs, resultSelection.primary, provisional.entries],
+    [coherenceContext.key, coherenceContext.lineage, coherenceContext.kind, coherenceContext.viewportShowing, jobs, resultSelection.primary, provisional.entries, meshFreshness],
   );
   const availableFemJob = useMemo(
     () => femFieldJob(jobs, resultSelection.primary, coherenceContext, provisional.entries),
-    [coherenceContext.key, coherenceContext.lineage, coherenceContext.kind, coherenceContext.viewportShowing, jobs, resultSelection.primary, provisional.entries],
+    [coherenceContext.key, coherenceContext.lineage, coherenceContext.kind, coherenceContext.viewportShowing, jobs, resultSelection.primary, provisional.entries, meshFreshness],
   );
   const availablePlaneJob = availableFemJob ?? availableFieldJob;
   const resultRun = spatialResult(coherenceContext, resultSelection, jobs, provisional.entries);
@@ -911,9 +920,9 @@ export function Viewport() {
   }, [cadIngestId, cadName, cadSolverMesh, cadSolverRetry, cadSolverViewSelected]);
 
   useEffect(() => {
-    if (availablePlaneJob || !fieldEnabled) return;
+    if (availablePlaneJob || !fieldEnabled || meshFreshness === 'pending') return;
     useFieldPlaneStore.getState().reportUnavailable('re-solve to enable field planes');
-  }, [availablePlaneJob, fieldEnabled]);
+  }, [availablePlaneJob, fieldEnabled, meshFreshness]);
 
   useEffect(() => {
     if (!fieldEnabled || !availablePlaneJob || !activeScene) return;
@@ -933,10 +942,11 @@ export function Viewport() {
   }, [solveRunningOrQueued]);
 
   useEffect(() => {
+    if (meshFreshness === 'pending') return;
     if (availablePlaneJob && fieldEnabled && fieldPlane) return;
     if (clipMode === 'field-plane') setClipMode('off');
     if (!availablePlaneJob && invertFieldClip) setInvertFieldClip(false);
-  }, [availablePlaneJob, clipMode, fieldEnabled, fieldPlane, invertFieldClip]);
+  }, [availablePlaneJob, clipMode, fieldEnabled, fieldPlane, invertFieldClip, meshFreshness]);
 
   useEffect(() => {
     useFieldPlaneStore.getState().applyRenderingPreferences({

@@ -2,6 +2,7 @@ import { EmptyState } from './EmptyState';
 import { Notice } from './Notice';
 import { CurrentModelStatus } from './CurrentModelStatus';
 import { selectJob } from '../jobs/selectJob';
+import { hasMeshProvenance, useMeshFreshnessStore } from '../jobs/meshFreshness';
 import { samplingNotes } from '../results/sampling';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
@@ -2242,7 +2243,8 @@ function MeasuredOverlayRow({ overlay }: { overlay: MeasuredOverlay }) {
 }
 
 export function ResultsPanel() {
-  const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
+  const jobsSnapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
+  const jobs = jobsSnapshot.jobs;
   const provisional = useSyncExternalStore(provisionalResults.subscribe, provisionalResults.getSnapshot, provisionalResults.getSnapshot);
   const coordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
   const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
@@ -2434,6 +2436,20 @@ export function ResultsPanel() {
   const showingPrevious = Boolean(selection.primary && display && display.key !== selectionKey && !error);
   const available = useMemo(() => jobs.filter((job) => job.status === 'complete' && job.has_results && !ids.includes(job.id)), [ids, jobs]);
   const primaryJob = jobs.find(job => job.id === selection.primary) ?? resolved.job;
+  const meshFreshness = useMeshFreshnessStore(state => state.jobs);
+  useEffect(() => {
+    if (primaryJob) useMeshFreshnessStore.getState().check(primaryJob, false, jobsSnapshot.epoch);
+    if (resolved.job) useMeshFreshnessStore.getState().check(resolved.job, false, jobsSnapshot.epoch);
+    for (const id of selection.overlays ?? []) {
+      const job = jobs.find(candidate => candidate.id === id);
+      if (job) useMeshFreshnessStore.getState().check(job, false, jobsSnapshot.epoch);
+    }
+  }, [primaryJob, resolved.job, jobs, selection.overlays, jobsSnapshot.epoch]);
+  const staleMeshes = [...new Set([primaryJob?.id, resolved.job?.id, ...(selection.overlays ?? [])])]
+    .flatMap(id => {
+      const job = jobs.find(candidate => candidate.id === id);
+      return job && hasMeshProvenance(job) && meshFreshness[job.id] === 'stale' ? [job] : [];
+    });
   const primaryVerdict = primaryJob ? runVerdict(primaryJob, coherenceContext) : 'current';
   // The selected run finished but its results were cleaned up: nothing to
   // fetch or draw, and the dock says so rather than showing another run.
@@ -2722,6 +2738,7 @@ export function ResultsPanel() {
     </div>}
     {preferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}
     {error && <Notice tone="error" actions={<button type="button" className="btn" onClick={() => { setFetchError(null); setFetchAttempt((value) => value + 1); }}>Retry</button>}>{error}</Notice>}
+    {staleMeshes.map(job => <Notice key={job.id} tone="warning">The mesh for {runDisplayName(job)} may differ from the one used to solve it. The mesher or resolved geometry has changed; solve again to update these results.</Notice>)}
     {showingPrevious && <div className="job-warning" role="status" style={{ margin: 7 }}>Showing previous results while fetching the selected run…</div>}
     {/* Three different empty docks, said apart: a failed fetch, a fetch still
         in flight, and nothing selected at all. The last used to claim it was

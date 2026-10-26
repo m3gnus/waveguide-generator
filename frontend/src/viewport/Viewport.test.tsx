@@ -8,6 +8,7 @@ const restoreCadJobModel = (run: JobItem, display: ImportedDisplay = {}, fetcher
 
 import { currentModel, shownResult, spatialResult } from '../model/currentModel';
 import { selectJob } from '../jobs/selectJob';
+import { useMeshFreshnessStore } from '../jobs/meshFreshness';
 import unreadable from '../model/fixtures/unreadable.json';
 import { readFileSync } from 'node:fs';
 import { act } from 'react';
@@ -299,6 +300,60 @@ describe('Viewport preview errors', () => {
     expect(host.querySelector('[aria-label="Invert field-plane clip side"]')).toBeNull();
     expect(host.querySelector<HTMLButtonElement>('.section-cut-toggle')).not.toBeNull();
     expect(host.querySelectorAll('.viewport-tools .viewport-tool-group:empty')).toHaveLength(0);
+  });
+
+  it('keeps an enabled field while mesh freshness is checked, then removes it if stale', async () => {
+    const job = { ...completeJob('freshness-pending', true), provenance: { mesher_version: '1', geometry_hash: 'sha256:old' } };
+    let finish!: (response: Response) => void;
+    const pending = new Promise<Response>(resolve => { finish = resolve; });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => String(input).endsWith('/mesh-freshness')
+      ? pending : new Response('', { status: 404 }));
+    useMeshFreshnessStore.setState({ jobs: {} });
+    act(() => {
+      publishJobs([job]);
+      compareSelection.setPrimary(job.id);
+      useFieldPlaneStore.setState({ enabled: true, jobId: job.id, plane: fieldPlane, status: 'ready' });
+    });
+    await act(async () => { await Promise.resolve(); });
+    expect(useMeshFreshnessStore.getState().jobs[job.id]).toBe('pending');
+    expect(useFieldPlaneStore.getState().enabled).toBe(true);
+    await act(async () => {
+      finish(new Response(JSON.stringify({ freshness: 'stale' })));
+      await pending;
+    });
+    await vi.waitFor(() => expect(useFieldPlaneStore.getState().enabled).toBe(false));
+    useMeshFreshnessStore.setState({ jobs: {} });
+  });
+
+  it('preserves field clipping while a current mesh is rechecked', async () => {
+    const job = { ...completeJob('freshness-clip', true), provenance: { mesher_version: '1', geometry_hash: 'sha256:mesh' } };
+    let finish!: (response: Response) => void;
+    const pending = new Promise<Response>(resolve => { finish = resolve; });
+    let reads = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      if (!String(input).endsWith('/mesh-freshness')) return new Response('', { status: 404 });
+      reads += 1;
+      return reads === 1 ? new Response(JSON.stringify({ freshness: 'current' })) : pending;
+    });
+    useMeshFreshnessStore.setState({ jobs: {} });
+    act(() => {
+      publishJobs([job]);
+      compareSelection.setPrimary(job.id);
+      useFieldPlaneStore.setState({ enabled: true, jobId: job.id, plane: fieldPlane, status: 'ready' });
+    });
+    await vi.waitFor(() => expect(useMeshFreshnessStore.getState().jobs[job.id]).toBe('current'));
+    const clip = host.querySelector<HTMLButtonElement>('[aria-label="Clip model to field plane"]')!;
+    act(() => clip.click());
+    expect(clip.getAttribute('aria-pressed')).toBe('true');
+    act(() => useMeshFreshnessStore.getState().check(job, true, 1));
+    expect(useMeshFreshnessStore.getState().jobs[job.id]).toBe('pending');
+    await act(async () => {
+      finish(new Response(JSON.stringify({ freshness: 'current' })));
+      await pending;
+    });
+    await vi.waitFor(() => expect(useMeshFreshnessStore.getState().jobs[job.id]).toBe('current'));
+    expect(host.querySelector('[aria-label="Clip model to field plane"]')?.getAttribute('aria-pressed')).toBe('true');
+    useMeshFreshnessStore.setState({ jobs: {} });
   });
 
   it('cycles the section cut through three axes and back off from one button', () => {

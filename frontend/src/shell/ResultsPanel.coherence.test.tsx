@@ -13,6 +13,7 @@ import { preferencesStore } from '../prefs/preferences';
 import { jobsCoordinatorBridge, solveControlStore } from './JobsCoordinator';
 import { ResultsPanel } from './ResultsPanel';
 import { importedMeshStore } from '../viewport/importedMeshStore';
+import { useMeshFreshnessStore } from '../jobs/meshFreshness';
 
 const modelMocks = vi.hoisted(() => ({ showJobModel: vi.fn() }));
 vi.mock('../jobs/showJobModel', () => ({ showJobModel: modelMocks.showJobModel }));
@@ -119,6 +120,7 @@ describe('results run coherence', () => {
     compareSelection.clear();
     provisionalResults.clear();
     resultsCache.clear();
+    useMeshFreshnessStore.setState({ jobs: {} });
     preferencesStore.resetForTests();
     preferencesStore.update({ chartTypes: ['summary'] });
     modelMocks.showJobModel.mockReset().mockResolvedValue(true);
@@ -159,6 +161,24 @@ describe('results run coherence', () => {
       await Promise.resolve();
     });
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'cad', following: true });
+  });
+
+  it('warns when a selected run has stale mesh provenance while keeping its results', async () => {
+    const run = job('old-mesh', 1, liveDesign());
+    const overlay = job('old-overlay', 2, liveDesign());
+    run.provenance = { mesher_version: '1', geometry_hash: 'sha256:old' };
+    overlay.provenance = run.provenance;
+    publishJobs([run, overlay]);
+    compareSelection.setPrimary(run.id);
+    compareSelection.toggleOverlay(overlay.id);
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(
+      url.endsWith('/mesh-freshness') ? { freshness: 'stale' } : finalResult(),
+    ), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
+    await vi.waitFor(() => expect(host.textContent).toContain('The mesh for #1 · old-mesh may differ'));
+    await vi.waitFor(() => expect(host.textContent).toContain('The mesh for #2 · old-overlay may differ'));
+    expect(host.textContent).toContain('solve again to update these results');
+    expect(host.querySelector('[data-result-primary]')?.getAttribute('data-result-primary')).toBe(run.id);
   });
 
   it('empties charts on a new unsolved CAD model and restores matching results when its mesh returns', async () => {

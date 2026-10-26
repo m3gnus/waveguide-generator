@@ -51,7 +51,7 @@ to run with only the standard library, bypassing the contracts package initializ
 | `server/contracts/source_contour.py:48` | `validate_contour_request` | `canonical_ascii_strict_json` |
 | `server/design/textcfg.py:75` | `_semantic_fingerprint` | `canonical_ascii_json` |
 | `server/engines/dryrun.py:19` | `_canonical_seed` | `canonical_ascii_json` |
-| `server/exports/geometry_identity.py:17` | `geometry_hash` | `canonical_ascii_strict_json` |
+| `server/preview/geometry_identity.py:17` | `geometry_hash` | `canonical_ascii_strict_json` |
 | `server/integration/api.py:140` | `design_schema_text` | `canonical_ascii_strict_json` |
 | `server/integration/provenance.py:12` | `_canonical_json` | `canonical_utf8_strict_bytes` |
 | `server/jobs/models.py:1135` | `SolveRequest.validate_client_metadata` | `canonical_utf8_strict_json` |

@@ -13,7 +13,7 @@ describe('job completion automation', () => {
     const failure = new Error('disk full');
     const reportError = vi.fn();
     const reportDiagnostic = vi.fn();
-    const dependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted: vi.fn(), markExported: vi.fn(), archiveCompleted: vi.fn().mockRejectedValue(failure), markArchived: vi.fn(), reportError, reportDiagnostic };
+    const dependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted: vi.fn(), markExported: vi.fn(), archiveCompleted: vi.fn().mockRejectedValue(failure), markArchived: vi.fn(), reportError, reportMeshNotice: vi.fn(), reportDiagnostic };
     const preferences = { ...preferencesStore.getSnapshot(), autoDownloadMesh: false, autoExportOnComplete: false, archiveRunsOnComplete: true };
     await automation.process([job], preferences, dependencies);
     expect(reportError).toHaveBeenCalledExactlyOnceWith('Run archive failed for abcdef: disk full');
@@ -22,7 +22,7 @@ describe('job completion automation', () => {
 
   it('downloads and exports each eligible job once and records completion', async () => {
     const automation = new JobAutomation();
-    const dependencies = { downloadMesh: vi.fn().mockResolvedValue('mesh.msh'), markMeshDownloaded: vi.fn().mockResolvedValue(undefined), exportCompleted: vi.fn().mockResolvedValue({ files: ['result.csv'], failures: [] }), markExported: vi.fn().mockResolvedValue(undefined), archiveCompleted: vi.fn().mockResolvedValue(undefined), markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(), now: () => '2026-08-04T12:00:00Z' };
+    const dependencies = { downloadMesh: vi.fn().mockResolvedValue('mesh.msh'), markMeshDownloaded: vi.fn().mockResolvedValue(undefined), exportCompleted: vi.fn().mockResolvedValue({ files: ['result.csv'], failures: [] }), markExported: vi.fn().mockResolvedValue(undefined), archiveCompleted: vi.fn().mockResolvedValue(undefined), markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(), reportMeshNotice: vi.fn(), now: () => '2026-08-04T12:00:00Z' };
     const preferences = { ...preferencesStore.getSnapshot(), autoDownloadMesh: true, autoExportOnComplete: true, exportFormats: ['png' as const], autoExportFormats: ['csv' as const] };
     await automation.process([job], preferences, dependencies);
     await automation.process([job], preferences, dependencies);
@@ -50,18 +50,20 @@ describe('job completion automation', () => {
       return new Response(JSON.stringify({ directory: 'server-folder/7_recorded-run', files: [savedPath] }));
     });
     const reportError = vi.fn();
+    const reportMeshNotice = vi.fn();
     const dependencies = {
       downloadMesh: (item: JobItem, reportNotice: (message: string) => void) => saveMeshArtifactToWorkspace(item, reportNotice, fetcher),
       markMeshDownloaded: vi.fn().mockResolvedValue(undefined),
-      exportCompleted: vi.fn(), markExported: vi.fn(), archiveCompleted: vi.fn(), markArchived: vi.fn(), reportError,
+      exportCompleted: vi.fn(), markExported: vi.fn(), archiveCompleted: vi.fn(), markArchived: vi.fn(), reportError, reportMeshNotice,
     };
     const preferences = { ...preferencesStore.getSnapshot(), autoDownloadMesh: true, autoExportOnComplete: false, archiveRunsOnComplete: false };
     await automation.process([job], preferences, dependencies);
     await automation.process([job], preferences, dependencies);
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(dependencies.markMeshDownloaded).toHaveBeenCalledExactlyOnceWith(job, savedPath);
-    expect(reportError).toHaveBeenCalledTimes(regenerated ? 1 : 0);
-    if (regenerated) expect(reportError).toHaveBeenCalledWith("This run's original mesh was no longer stored, so it was rebuilt with the current mesher and may differ from the mesh that was solved.");
+    expect(reportError).not.toHaveBeenCalled();
+    expect(reportMeshNotice).toHaveBeenCalledTimes(regenerated ? 1 : 0);
+    if (regenerated) expect(reportMeshNotice).toHaveBeenCalledWith(job.id, 'Run #1: the original mesh was no longer stored, so it was rebuilt with the current mesher and may differ from the mesh that was solved.');
   });
 
   it('holds a partial export failure for the session and retries only failed formats after restart', async () => {
@@ -70,7 +72,7 @@ describe('job completion automation', () => {
       .mockResolvedValueOnce({ files: ['result.csv'], failures: [{ format: 'json', reason: 'disk full' }] })
       .mockResolvedValueOnce({ files: ['result.json'], failures: [] });
     const markExported = vi.fn().mockResolvedValue(undefined);
-    const dependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted, markExported, archiveCompleted: vi.fn().mockResolvedValue(undefined), markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(), now: () => '2026-08-04T12:00:00Z' };
+    const dependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted, markExported, archiveCompleted: vi.fn().mockResolvedValue(undefined), markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(), reportMeshNotice: vi.fn(), now: () => '2026-08-04T12:00:00Z' };
     const preferences: Preferences = { ...preferencesStore.getSnapshot(), autoExportOnComplete: true, autoExportFormats: ['csv', 'json'] as ExportFormat[] };
     await automation.process([job], preferences, dependencies);
     expect(markExported.mock.calls[0][3]).toBeNull();
@@ -95,7 +97,7 @@ describe('job completion automation', () => {
     const dependencies = {
       downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted,
       markExported: failedMark,
-      archiveCompleted: vi.fn().mockResolvedValue(undefined), markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(), now: () => '2026-08-04T12:00:00Z',
+      archiveCompleted: vi.fn().mockResolvedValue(undefined), markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(), reportMeshNotice: vi.fn(), now: () => '2026-08-04T12:00:00Z',
     };
     const preferences: Preferences = { ...preferencesStore.getSnapshot(), autoExportOnComplete: true, autoExportFormats: ['json'] };
     await automation.process([job], preferences, dependencies);
@@ -112,7 +114,7 @@ describe('job completion automation', () => {
   it('keeps rejected export and metadata attempts guarded until a fresh session', async () => {
     const preferences: Preferences = { ...preferencesStore.getSnapshot(), autoExportOnComplete: true, autoExportFormats: ['json'] };
     const rejectedExport = vi.fn().mockRejectedValueOnce(new Error('results offline')).mockResolvedValue({ files: ['result.json'], failures: [] });
-    const exportDependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted: rejectedExport, markExported: vi.fn().mockResolvedValue(undefined), archiveCompleted: vi.fn().mockResolvedValue(undefined), markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn() };
+    const exportDependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted: rejectedExport, markExported: vi.fn().mockResolvedValue(undefined), archiveCompleted: vi.fn().mockResolvedValue(undefined), markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(), reportMeshNotice: vi.fn() };
     const firstSession = new JobAutomation();
     await firstSession.process([job], preferences, exportDependencies);
     await firstSession.process([job], preferences, exportDependencies);
@@ -131,7 +133,7 @@ describe('job completion automation', () => {
 
   it('reports enabled auto-export with no automatic formats instead of silently doing nothing', async () => {
     const automation = new JobAutomation();
-    const dependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted: vi.fn(), markExported: vi.fn(), archiveCompleted: vi.fn().mockResolvedValue(undefined), markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn() };
+    const dependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted: vi.fn(), markExported: vi.fn(), archiveCompleted: vi.fn().mockResolvedValue(undefined), markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(), reportMeshNotice: vi.fn() };
     const preferences: Preferences = { ...preferencesStore.getSnapshot(), autoExportOnComplete: true, exportFormats: ['csv'], autoExportFormats: [] };
     await automation.process([job], preferences, dependencies);
     await automation.process([job], preferences, dependencies);
@@ -143,7 +145,7 @@ describe('job completion automation', () => {
   it('downloads a legacy unmarked mesh once and a fresh session skips its persisted marker', async () => {
     const downloadMesh = vi.fn().mockResolvedValue('mesh.msh');
     const markMeshDownloaded = vi.fn().mockResolvedValue(undefined);
-    const dependencies = { downloadMesh, markMeshDownloaded, exportCompleted: vi.fn(), markExported: vi.fn(), archiveCompleted: vi.fn().mockResolvedValue(undefined), markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn() };
+    const dependencies = { downloadMesh, markMeshDownloaded, exportCompleted: vi.fn(), markExported: vi.fn(), archiveCompleted: vi.fn().mockResolvedValue(undefined), markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(), reportMeshNotice: vi.fn() };
     const preferences = { ...preferencesStore.getSnapshot(), autoDownloadMesh: true };
     await new JobAutomation().process([job], preferences, dependencies);
     expect(markMeshDownloaded).toHaveBeenCalledWith(job, 'mesh.msh');
@@ -154,7 +156,7 @@ describe('job completion automation', () => {
 
   it('does not duplicate a completed browser download when persisting its marker fails', async () => {
     const downloadMesh = vi.fn().mockResolvedValue('mesh.msh');
-    const dependencies = { downloadMesh, markMeshDownloaded: vi.fn().mockRejectedValue(new Error('metadata offline')), exportCompleted: vi.fn(), markExported: vi.fn(), archiveCompleted: vi.fn().mockResolvedValue(undefined), markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn() };
+    const dependencies = { downloadMesh, markMeshDownloaded: vi.fn().mockRejectedValue(new Error('metadata offline')), exportCompleted: vi.fn(), markExported: vi.fn(), archiveCompleted: vi.fn().mockResolvedValue(undefined), markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(), reportMeshNotice: vi.fn() };
     const preferences = { ...preferencesStore.getSnapshot(), autoDownloadMesh: true };
     const automation = new JobAutomation();
     await automation.process([job], preferences, dependencies);
@@ -168,7 +170,7 @@ describe('job completion automation', () => {
   it('releases the mesh guard after failure so a later update can retry', async () => {
     const automation = new JobAutomation();
     const downloadMesh = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue('mesh.msh');
-    const dependencies = { downloadMesh, markMeshDownloaded: vi.fn().mockResolvedValue(undefined), exportCompleted: vi.fn(), markExported: vi.fn(), archiveCompleted: vi.fn().mockResolvedValue(undefined), markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn() };
+    const dependencies = { downloadMesh, markMeshDownloaded: vi.fn().mockResolvedValue(undefined), exportCompleted: vi.fn(), markExported: vi.fn(), archiveCompleted: vi.fn().mockResolvedValue(undefined), markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(), reportMeshNotice: vi.fn() };
     const preferences = { ...preferencesStore.getSnapshot(), autoDownloadMesh: true };
     await automation.process([job], preferences, dependencies);
     await automation.process([job], preferences, dependencies);
@@ -184,7 +186,7 @@ describe('run archiving', () => {
     return {
       downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted: vi.fn(),
       markExported: vi.fn(), archiveCompleted: vi.fn().mockResolvedValue(undefined),
-      markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(),
+      markArchived: vi.fn().mockResolvedValue(undefined), reportError: vi.fn(), reportMeshNotice: vi.fn(),
       now: () => '2026-08-19T12:00:00Z',
     };
   }
@@ -257,7 +259,7 @@ it('queues a historical backlog before HTTP, including overlapping process calls
     await gate; active--;
     return { files: ['result.csv'], failures: [] };
   });
-  const dependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted, markExported: vi.fn(), archiveCompleted: vi.fn(), markArchived: vi.fn(), reportError: vi.fn() };
+  const dependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted, markExported: vi.fn(), archiveCompleted: vi.fn(), markArchived: vi.fn(), reportError: vi.fn(), reportMeshNotice: vi.fn() };
   const prefs = { ...preferencesStore.getSnapshot(), archiveRunsOnComplete: false, autoExportOnComplete: true, autoExportFormats: ['csv' as const] };
   const historical = Array.from({ length: 40 }, (_, index) => ({ ...job, id: `old-${index}` }));
   const first = automation.process(historical, prefs, dependencies);
@@ -271,7 +273,7 @@ it('queues a historical backlog before HTTP, including overlapping process calls
 });
 
 it('does not regenerate blocked formats after reopening, and retains completed formats on retry', async () => {
-  const dependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted: vi.fn().mockResolvedValue({ files: ['one.step'], failures: [] }), markExported: vi.fn(), archiveCompleted: vi.fn(), markArchived: vi.fn(), reportError: vi.fn() };
+  const dependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted: vi.fn().mockResolvedValue({ files: ['one.step'], failures: [] }), markExported: vi.fn(), archiveCompleted: vi.fn(), markArchived: vi.fn(), reportError: vi.fn(), reportMeshNotice: vi.fn() };
   const prefs = { ...preferencesStore.getSnapshot(), archiveRunsOnComplete: false, autoExportOnComplete: true, autoExportFormats: ['csv', 'step'] as ExportFormat[] };
   const blocked = { ...job, auto_export_formats: { csv: { status: 'complete' as const, attempted_at: 'yesterday' }, step: { status: 'blocked' as const, attempted_at: 'today', reason: 'Existing destination' } } };
   await new JobAutomation().process([blocked], prefs, dependencies);
@@ -282,7 +284,7 @@ it('does not regenerate blocked formats after reopening, and retains completed f
 });
 
 it('holds a conflicted automatic run archive across reopening', async () => {
-  const dependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted: vi.fn(), markExported: vi.fn(), archiveCompleted: vi.fn(), markArchived: vi.fn(), reportError: vi.fn() };
+  const dependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted: vi.fn(), markExported: vi.fn(), archiveCompleted: vi.fn(), markArchived: vi.fn(), reportError: vi.fn(), reportMeshNotice: vi.fn() };
   const prefs = { ...preferencesStore.getSnapshot(), archiveRunsOnComplete: true, autoExportOnComplete: false };
   const blocked = { ...job, auto_export_formats: { run_archive: { status: 'blocked' as const, attempted_at: 'today', reason: 'Conflict' } } };
   await new JobAutomation().process([blocked], prefs, dependencies);

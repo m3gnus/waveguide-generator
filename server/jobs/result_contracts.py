@@ -6,7 +6,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, model_validator
 
-from server.jobs.models import CadIdentityProvenance
+from server.jobs.models import CadIdentityProvenance, RunProvenance
 
 
 class ExtensibleResultModel(BaseModel):
@@ -28,9 +28,7 @@ class SolverFingerprint(BaseModel):
     backend: str | None = None
 
 
-class ResultProvenance(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
+class ResultProvenance(RunProvenance):
     schema_version: Literal[1]
     wg_version: str
     #: What ``pins.json`` declares this release should run.

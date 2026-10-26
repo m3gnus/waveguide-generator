@@ -7608,6 +7608,16 @@
             "title": "Progress",
             "type": "number"
           },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "queued_at": {
             "title": "Queued At",
             "type": "string"
@@ -8377,6 +8387,16 @@
             "title": "Progress",
             "type": "number"
           },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "queued_at": {
             "title": "Queued At",
             "type": "string"
@@ -9139,6 +9159,25 @@
           }
         },
         "title": "MeshConfig",
+        "type": "object"
+      },
+      "MeshFreshnessResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "freshness": {
+            "enum": [
+              "current",
+              "stale",
+              "unknown"
+            ],
+            "title": "Freshness",
+            "type": "string"
+          }
+        },
+        "required": [
+          "freshness"
+        ],
+        "title": "MeshFreshnessResponse",
         "type": "object"
       },
       "MeshInspection": {
@@ -11990,6 +12029,17 @@
             "title": "Execution Solve Options Sha256",
             "type": "string"
           },
+          "geometry_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Geometry Hash"
+          },
           "geometry_sha256": {
             "pattern": "^[0-9a-f]{64}$",
             "title": "Geometry Sha256",
@@ -12015,6 +12065,28 @@
               }
             ],
             "title": "Installed Dependency Shas"
+          },
+          "mesher_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mesher Source"
+          },
+          "mesher_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mesher Version"
           },
           "request_identity": {
             "const": "execution",
@@ -12134,6 +12206,47 @@
           "model_id"
         ],
         "title": "RetainedMeshInspection",
+        "type": "object"
+      },
+      "RunProvenance": {
+        "additionalProperties": true,
+        "description": "Extensible provenance shared by a run and its result.",
+        "properties": {
+          "geometry_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Geometry Hash"
+          },
+          "mesher_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mesher Source"
+          },
+          "mesher_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mesher Version"
+          }
+        },
+        "title": "RunProvenance",
         "type": "object"
       },
       "RunWorkspace": {
@@ -17538,6 +17651,45 @@
           }
         },
         "summary": "Job Log"
+      }
+    },
+    "/api/jobs/{job_id}/mesh-freshness": {
+      "get": {
+        "operationId": "job_mesh_freshness_api_jobs__job_id__mesh_freshness_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeshFreshnessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Job Mesh Freshness"
       }
     },
     "/api/jobs/{job_id}/mesh-replay": {

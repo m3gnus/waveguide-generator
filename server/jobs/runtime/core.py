@@ -65,6 +65,7 @@ from server.jobs.cad_intent import (
 )
 from server.platform.feature_flags import fem_regions_enabled
 from server.jobs.design_availability import resolve_job_design
+from server.jobs.mesh_provenance import classify_open as classify_mesh_open, record_for_design
 from server.jobs.retention import MAX_RETAINED_RESULTS, RESULT_RETENTION_DAYS
 from server.jobs.imported_polar import widen_polar_to_derivation
 from server.jobs.models import (
@@ -2979,6 +2980,26 @@ class JobRuntime:
     async def get_results(self, job_id: str) -> dict[str, Any]:
         return json.loads(await self.get_results_text(job_id))
 
+    async def mesh_freshness(self, job_id: str) -> str:
+        """Compare only on demand: resolving every job on a list would block it."""
+
+        await self.start()
+        row = await asyncio.to_thread(self._require_job, job_id)
+        metadata = row.get("task_metadata") or {}
+        provenance = metadata.get("provenance") if isinstance(metadata, Mapping) else None
+        if not isinstance(provenance, Mapping):
+            return "unknown"
+        config = row.get("config_json") or {}
+        geometry = config.get("geometry") if isinstance(config, Mapping) else None
+        if not isinstance(geometry, Mapping) or geometry.get("type") != "parametric":
+            return "unknown"
+        try:
+            design = DesignConfig.model_validate(geometry.get("design"))
+            return await asyncio.to_thread(classify_mesh_open, provenance, design)
+        except Exception:
+            logger.exception("Could not compare mesh provenance for job %s", job_id)
+            return "unknown"
+
     async def get_results_text(self, job_id: str) -> str:
         """The stored results JSON, read off the event loop and not re-parsed."""
 
@@ -3952,6 +3973,16 @@ class JobRuntime:
 
         effective_request = effective_request or request
 
+        mesh_provenance = None
+        if isinstance(effective_request.geometry, ParametricGeometrySource):
+            try:
+                mesh_provenance = await asyncio.to_thread(record_for_design, effective_request.design)
+                if mesh_provenance is not None:
+                    await asyncio.to_thread(self.store.mutate_job_metadata, job_id, {"provenance": mesh_provenance})
+            except Exception:
+                # Provenance must not turn a valid solve into a failed one.
+                logger.exception("Could not record mesh provenance for job %s", job_id)
+
         await self._append_log(job_id, f"Initializing {engine.name} solver")
         fallback_reason = ((symmetry_metadata or {}).get("solver_plan") or {}).get("fallback_reason")
         if fallback_reason:
@@ -4250,6 +4281,8 @@ class JobRuntime:
                 symmetry_metadata=symmetry_metadata,
                 cad_identity=cad_identity,
             )
+            if mesh_provenance is not None:
+                finished_results["provenance"].update(mesh_provenance)
             channel_executions = {
                 channel_id: payload.get("metadata", {}).get("solve_execution")
                 for channel_id, payload in (finished_results.get("channels") or {}).items()
@@ -5072,6 +5105,7 @@ class JobRuntime:
             "script_snapshot": design.snapshot
             if design.snapshot is not None
             else row.get("script_snapshot"),
+            **({"provenance": metadata["provenance"]} if isinstance(metadata.get("provenance"), Mapping) else {}),
             "design_availability": design_availability,
             "design_revision": int(metadata.get("design_revision") or 0),
             "polar_grid": metadata.get("polar_grid") or {},

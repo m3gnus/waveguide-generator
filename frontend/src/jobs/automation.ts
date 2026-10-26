@@ -13,6 +13,7 @@ export interface AutomationDependencies {
   archiveCompleted(job: JobItem): Promise<void>;
   markArchived(job: JobItem, archivedAt: string): Promise<void>;
   reportError(message: string): void;
+  reportMeshNotice(jobId: string, message: string): void;
   /** Where a caught error's stack goes for the developers; the user still sees `reportError`. */
   reportDiagnostic?(operation: string, error: unknown, context: { job_id: string }): void;
   now?(): string;
@@ -44,7 +45,7 @@ export class JobAutomation {
       tasks.push(this.enqueue(async () => {
         let filename: string;
         try {
-          filename = await dependencies.downloadMesh(job, dependencies.reportError);
+          filename = await dependencies.downloadMesh(job, message => dependencies.reportMeshNotice(job.id, message));
         } catch (error) {
           // Nothing was saved, so a later job update may safely retry.
           this.meshStarted.delete(job.id);

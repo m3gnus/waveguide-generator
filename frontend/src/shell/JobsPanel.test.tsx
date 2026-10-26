@@ -19,6 +19,7 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { jobCardPropsEqual, JobsPanel, selectJob, type JobCardProps } from './JobsPanel';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { resetSolveStageClocksForTests } from './solveProgress';
+import { useRunExportStore } from '../stores/runExports';
 
 const designMocks = vi.hoisted(() => ({ replaceWithJobDesign: vi.fn() }));
 vi.mock('../jobs/jobDesign', () => ({
@@ -68,6 +69,7 @@ describe('jobs panel run list', () => {
     resetDocumentStore();
     resetSolveOptionsStore();
     resetSolveStageClocksForTests();
+    useRunExportStore.getState().resetForTests();
     importedMeshStore.clear();
     compareSelection.setPrimary(null);
     workspaceModeStore.setMode('parametric');
@@ -86,6 +88,23 @@ describe('jobs panel run list', () => {
     expect(host.querySelectorAll('.job-card')).toHaveLength(1);
     expect(host.querySelector('.job-card')?.textContent).toContain('Real failure');
     expect(host.querySelector('[title="Remove 1 failed run"]')).not.toBeNull();
+  });
+
+  it('keeps regenerated-mesh notices on their own runs until dismissed', async () => {
+    const first = job(1, 'Horn A');
+    const second = job(2, 'Horn B');
+    publishJobs([first, second]);
+    useRunExportStore.getState().reportMeshNotice(first.id, 'Horn A was rebuilt');
+    useRunExportStore.getState().reportMeshNotice(second.id, 'Horn B was rebuilt');
+    await act(async () => root.render(<JobsPanel/>));
+    const notices = [...host.querySelectorAll('.notice-warning')];
+    expect(notices.map(notice => notice.textContent)).toEqual(expect.arrayContaining([
+      expect.stringContaining('Horn A was rebuilt'), expect.stringContaining('Horn B was rebuilt'),
+    ]));
+    const firstNotice = notices.find(notice => notice.textContent?.includes('Horn A was rebuilt'))!;
+    await act(async () => (firstNotice.querySelector('button') as HTMLButtonElement).click());
+    expect(host.textContent).not.toContain('Horn A was rebuilt');
+    expect(host.textContent).toContain('Horn B was rebuilt');
   });
 
   it('filters source, stable project and retained model without joining same-named imports', async () => {

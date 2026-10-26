@@ -959,7 +959,7 @@
     },
     {
       "kind": "inline",
-      "path": "server/exports/geometry_identity.py",
+      "path": "server/preview/geometry_identity.py",
       "scope": "geometry_hash",
       "ordinal": 0,
       "original_line": 35,

@@ -1,10 +1,11 @@
 import { showUnreadableRun } from '../model/currentModel';
-import { type JobItem } from '../api/jobsSocket';
+import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { cadWorkspace } from '../stores/cadWorkspace';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { noteExplicitNavigation } from '../shell/workspaceNavigation';
 import { replaceWithJobDesign } from './jobDesign';
 import { openImported } from '../stores/importedModel';
+import { useMeshFreshnessStore } from './meshFreshness';
 // The rails a reopened imported run is shown in: the file and the CAD rail.
 import '../stores/meshImport';
 import '../shell/cadlink/restores';
@@ -35,6 +36,7 @@ export async function showJobModel(
     onError('This result has no readable design snapshot, so its model cannot be shown.');
     return false;
   }
+  useMeshFreshnessStore.getState().check(job, true, jobsSocket.getSnapshot().epoch);
   workspaceModeStore.setMode('parametric');
   return true;
 }

@@ -807,7 +807,7 @@ describe('result exporters', () => {
     const expectedName = `123_asro68${regenerated ? '-regenerated' : ''}.msh`;
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response('stored mesh bytes', {
       status: 200,
-      headers: { 'Content-Disposition': 'attachment; filename="artifact-uuid.msh"', ...(regenerated ? { 'X-WG2-Mesh-Regenerated': '1' } : {}) },
+      headers: { 'Content-Disposition': 'attachment; filename="artifact-uuid.msh"', ...(regenerated ? { 'X-WG2-Mesh-Regenerated': '1', 'X-WG2-Mesher-Version': '0.2.8' } : {}) },
     }));
     const filename = await downloadMeshArtifact({
       id: 'artifact-uuid', run_number: 123, label: 'asro68', config_summary: {},
@@ -818,7 +818,7 @@ describe('result exporters', () => {
     expect(saveBlob).toHaveBeenCalledTimes(1);
     expect(saveBlob.mock.calls[0][1]).toBe(expectedName);
     expect(reportNotice).toHaveBeenCalledTimes(regenerated ? 1 : 0);
-    if (regenerated) expect(reportNotice).toHaveBeenCalledWith("This run's original mesh was no longer stored, so it was rebuilt with the current mesher and may differ from the mesh that was solved.");
+    if (regenerated) expect(reportNotice).toHaveBeenCalledWith('#123 · asro68: the original mesh was no longer stored, so it was rebuilt with the current mesher (0.2.8) and may differ from the mesh that was solved.');
     expect(await (saveBlob.mock.calls[0][0] as Blob).text()).toBe('stored mesh bytes');
   });
 
@@ -1049,7 +1049,7 @@ describe('result exporters', () => {
     expect(payload.members[0].relative_path).toBe(expectedName);
     expect(await payload.members[0].blob.text()).toBe('mesh bytes');
     expect(reportNotice).toHaveBeenCalledTimes(regenerated ? 1 : 0);
-    if (regenerated) expect(reportNotice).toHaveBeenCalledWith("This run's original mesh was no longer stored, so it was rebuilt with the current mesher and may differ from the mesh that was solved.");
+    if (regenerated) expect(reportNotice).toHaveBeenCalledWith('#123 · asro68: the original mesh was no longer stored, so it was rebuilt with the current mesher and may differ from the mesh that was solved.');
     expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
       '/api/mesh-artifact/artifact-uuid', '/api/workspace/write-export',
     ]);

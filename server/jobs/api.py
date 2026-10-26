@@ -35,6 +35,7 @@ from server.jobs.models import (
     PolarConfig,
     JobMetadataPatch,
     JobStatusResponse,
+    MeshFreshnessResponse,
     MetadataResponse,
     SolveAccepted,
     SolveRequest,
@@ -724,6 +725,15 @@ def create_jobs_router(
     async def job_status(job_id: str) -> JobStatusResponse:
         try:
             return JobStatusResponse.model_validate(await runtime.get_job(job_id))
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
+
+    @router.get("/api/jobs/{job_id}/mesh-freshness", response_model=MeshFreshnessResponse)
+    async def job_mesh_freshness(job_id: str, response: Response) -> MeshFreshnessResponse:
+        try:
+            freshness = await runtime.mesh_freshness(job_id)
+            response.headers["Cache-Control"] = "no-store"
+            return MeshFreshnessResponse(freshness=freshness)
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
 

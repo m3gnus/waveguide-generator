@@ -112,6 +112,8 @@ export interface JobItem extends JobNullableFields {
   mesh_discarded_at?: string | null;
   log_tail: string[];
   design_availability?: components['schemas']['DesignAvailability'] | null;
+  /** Mesher identity and other provenance retained with this run. */
+  provenance?: components['schemas']['RunProvenance'] | null;
   symmetry?: Record<string, unknown>;
   solve_path?: 'full-3d' | 'axisymmetric-meridian' | 'interior-fem' | 'coupled-fem-bem' | null;
   axisymmetric_eligibility_reasons?: string[];

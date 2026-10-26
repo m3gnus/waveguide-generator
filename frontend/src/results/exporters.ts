@@ -19,7 +19,7 @@ import { serializeDesign, type DesignDocument } from '../stores/design';
 import { designFileExtension } from '../stores/designName';
 import { designWireWithSolveSettings } from '../stores/designWire';
 import type { WgSolveSettings } from '../stores/wgSolveBlock';
-import { resolveChartTheme, type ExportFormat, type Preferences } from '../prefs/preferences';
+import { resolveChartTheme, runDisplayName, type ExportFormat, type Preferences } from '../prefs/preferences';
 import { applySmoothing, type SmoothingValue } from './smoothing';
 import { buildDerivedAcousticsCsv, buildDerivedAcousticsJson } from './derivedAcoustics';
 import { buildOnAxisFrd, buildPolarFrdSet } from './frd';
@@ -1021,8 +1021,6 @@ export async function runAutomaticWorkspaceExport(
   return directory === undefined ? { files, failures } : { files, failures, directory };
 }
 
-export const REGENERATED_MESH_NOTICE = "This run's original mesh was no longer stored, so it was rebuilt with the current mesher and may differ from the mesh that was solved.";
-
 export async function downloadMeshArtifact(
   job: Pick<JobItem, 'id' | 'run_number' | 'label' | 'config_summary'>,
   reportNotice: (message: string) => void,
@@ -1034,7 +1032,10 @@ export async function downloadMeshArtifact(
   const regenerated = response.headers.get('X-WG2-Mesh-Regenerated') === '1';
   const filename = `${exportStemForJob(job)}${regenerated ? '-regenerated' : ''}.msh`;
   saveBlob(await response.blob(), filename);
-  if (regenerated) reportNotice(REGENERATED_MESH_NOTICE);
+  if (regenerated) {
+    const version = response.headers.get('X-WG2-Mesher-Version');
+    reportNotice(`${runDisplayName(job)}: the original mesh was no longer stored, so it was rebuilt with the current mesher${version ? ` (${version})` : ''} and may differ from the mesh that was solved.`);
+  }
   return filename;
 }
 

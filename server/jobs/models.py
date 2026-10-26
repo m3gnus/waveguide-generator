@@ -6,7 +6,7 @@ import math
 import re
 from typing import Annotated, Any, Literal, Mapping, Self, cast
 
-from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, field_validator, model_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, field_validator, model_serializer, model_validator
 
 from server.cadlink.roles import normalize_source_role
 from server.contracts.canonical import canonical_utf8_strict_json
@@ -1725,6 +1725,16 @@ class FrequencyProgress(JobModel):
     channel: FrequencyChannel | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
+class RunProvenance(BaseModel):
+    """Extensible provenance shared by a run and its result."""
+
+    model_config = ConfigDict(extra="allow")
+
+    mesher_version: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    geometry_hash: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    mesher_source: str | None = Field(default=None, exclude_if=lambda value: value is None)
+
+
 class JobItem(JobArchiveIdentity, JobDesignIdentity):
     id: str
     client_request_id: str | None = None
@@ -1775,6 +1785,8 @@ class JobItem(JobArchiveIdentity, JobDesignIdentity):
     cancellation_requested: bool
     mesh_stats: dict[str, Any] | None
     script_snapshot: dict[str, Any] | None
+    #: Shared run provenance. Older jobs have no recorded mesher evidence.
+    provenance: RunProvenance | None = Field(default=None, exclude_if=lambda value: value is None)
     design_availability: DesignAvailability
     design_revision: int
     polar_grid: dict[str, Any]
@@ -1824,6 +1836,13 @@ class JobItem(JobArchiveIdentity, JobDesignIdentity):
 class JobStatusResponse(JobItem):
     updated_at: str
     message: str | None = None
+
+
+MeshFreshness = Literal["current", "stale", "unknown"]
+
+
+class MeshFreshnessResponse(JobModel):
+    freshness: MeshFreshness
 
 
 class JobListResponse(JobModel):

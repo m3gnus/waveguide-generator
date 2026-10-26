@@ -133,13 +133,13 @@ def _shallow_dict_merge(stored: Any, requested: Any) -> dict[str, Any]:
     elif isinstance(stored, Mapping):
         stored_values = stored
     else:
-        raise ValueError("Stored auto_export_formats metadata must be an object")
+        raise ValueError("Stored dictionary metadata must be an object")
     if requested is None:
         requested_values: Mapping[str, Any] = {}
     elif isinstance(requested, Mapping):
         requested_values = requested
     else:
-        raise ValueError("auto_export_formats metadata must be an object")
+        raise ValueError("Dictionary metadata must be an object")
     return {**stored_values, **requested_values}
 
 
@@ -148,6 +148,7 @@ def _shallow_dict_merge(stored: Any, requested: Any) -> dict[str, Any]:
 METADATA_MERGE_POLICIES: Mapping[str, MetadataMergeStrategy] = {
     "exported_files": _ordered_string_set_union,
     "auto_export_formats": _shallow_dict_merge,
+    "provenance": _shallow_dict_merge,
 }
 
 

@@ -8,6 +8,7 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { hydrateDesignDocument } from '../api/designIo';
 import { replaceWithJobDesign } from '../jobs/jobDesign';
 import { designFingerprint, jobDesignFingerprint } from './runCoherence';
+import { useMeshFreshnessStore } from '../jobs/meshFreshness';
 import { currentModelScene, currentModel, runContextMarker, runVerdict, runProvenanceMarker, shownResult, spatialResult, type CurrentModel } from '../model/currentModel';
 
 let nextJob = 0;
@@ -171,6 +172,21 @@ describe('run coherence', () => {
       kind: 'cad', key: 'wgi_store', lineage: 'wgi_store', ingestId: 'wgi_store', viewportShowing: false,
     });;
   });
+});
+
+it('keeps historical charts while withholding spatial data for a changed mesh', () => {
+  const design = designForFamily('OSSE');
+  const run = { ...parametric(design), status: 'complete' as const, has_results: true,
+    provenance: { mesher_version: '1', geometry_hash: 'sha256:mesh' } };
+  const model = contextFor(design);
+  useMeshFreshnessStore.setState({ jobs: { [run.id]: 'stale' } });
+  expect(shownResult(model, { primary: run.id }, [run]).canRender).toBe(true);
+  expect(spatialResult(model, { primary: run.id }, [run])).toBeNull();
+  const legacy = { ...run, provenance: null };
+  expect(spatialResult(model, { primary: legacy.id }, [legacy])).toBe(legacy);
+  useMeshFreshnessStore.setState({ jobs: { [run.id]: 'current' } });
+  expect(spatialResult(model, { primary: run.id }, [run])).toBe(run);
+  useMeshFreshnessStore.setState({ jobs: {} });
 });
 
 it.each(['wire', 'sidecar', 'both'] as const)('matches the actual reopened submission for legacy %s snapshots', shape => {

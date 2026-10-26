@@ -34,6 +34,7 @@ import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
 import { currentRunNameSource } from '../jobs/runNameSource';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { archiveRunToWorkspace, saveMeshArtifactToWorkspace } from '../results/exporters';
+import { useRunExportStore } from '../stores/runExports';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useCadReturnStore } from '../stores/cadReturn';
@@ -784,6 +785,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       },
       markArchived: async () => undefined,
       reportError,
+      reportMeshNotice: (jobId, message) => useRunExportStore.getState().reportMeshNotice(jobId, message),
     });
   }, [automation, jobs, preferences, reportError]);
 

@@ -11,6 +11,7 @@ import { useDocumentStore } from '../stores/document';
 import { useImportedModelStore } from '../stores/importedModel';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
 import { importedMeshStore, type ImportedMeshState } from '../viewport/importedMeshStore';
+import { hasMeshProvenance, useMeshFreshnessStore } from '../jobs/meshFreshness';
 
 /** D4 MODEL identity: parametric design content or imported solve geometry SHA
  * (legacy ingestion fallback). It does not identify the complete solve request;
@@ -197,7 +198,8 @@ export function shownResult(model: CurrentModel, selection: ResultSelection, job
 export function spatialResult(model: CurrentModel, selection: ResultSelection, jobs: readonly JobItem[],
   provisional: Readonly<Record<string, unknown>> = {}): JobItem | null {
   const { job } = shownResult(model, selection, jobs, provisional);
-  return job && runVerdict(job, model) === 'current' ? job : null;
+  const meshFreshness = job && hasMeshProvenance(job) && useMeshFreshnessStore.getState().jobs[job.id];
+  return job && runVerdict(job, model) === 'current' && meshFreshness !== 'stale' && meshFreshness !== 'pending' ? job : null;
 }
 
 /** Existing job data only; slice 4 can supply readiness at this single seam. */

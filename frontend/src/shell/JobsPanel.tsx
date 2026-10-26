@@ -6,6 +6,7 @@ import { runSourceForJob } from '../jobs/exportNaming';
 import { runDocumentName, runSourceLabel, runSourceText } from '../jobs/runIdentity';
 import { RunModelDetails } from './RunModelDetails';
 import { retryBlockedExport } from '../jobs/autoExportOwner';
+import { useRunExportStore } from '../stores/runExports';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { isActiveJobStatus, JobModelProtectionError, jobsSocket, type JobItem } from '../api/jobsSocket';
@@ -144,6 +145,7 @@ export function jobCardPropsEqual(previous: JobCardProps, next: JobCardProps): b
 }
 
 const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExportSettings }: JobCardProps) {
+  const meshNotice = useRunExportStore(state => state.meshNotices[job.id]);
   const overlaid = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot).overlays.includes(job.id);
   const running = isActiveJobStatus(job.status);
   const failed = job.status === 'error';
@@ -260,6 +262,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
       {!running && <button className="job-remove" aria-label={`Remove ${displayName}`} title="Remove this job" onClick={() => onRemove(job)}><Icon name="close"/></button>}
     </div>
     {renameError && <div className="job-error job-rename-error" role="alert">{renameError}</div>}
+    {meshNotice && <Notice tone="warning" actions={<button type="button" className="btn" onClick={() => useRunExportStore.getState().dismissMeshNotice(job.id)}>Dismiss</button>}>{meshNotice}</Notice>}
     {job.results_discarded_at && <div className="job-retention-note">Results were cleaned up to save space.</div>}
     {expanded && (fileImport || cadInputs) && <RunModelDetails job={job}/>}
     {expanded && cadInputs && <CadSolveInputs

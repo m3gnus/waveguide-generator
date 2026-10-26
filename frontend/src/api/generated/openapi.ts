@@ -1441,6 +1441,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/mesh-freshness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Job Mesh Freshness */
+        get: operations["job_mesh_freshness_api_jobs__job_id__mesh_freshness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/mesh-replay": {
         parameters: {
             query?: never;
@@ -5038,6 +5055,7 @@ export interface components {
             pressure_basis_artifact_bytes?: number | null;
             /** Progress */
             progress: number;
+            provenance?: components["schemas"]["RunProvenance"] | null;
             /** Queued At */
             queued_at: string;
             /** Radiation Impedance Artifact Bytes */
@@ -5258,6 +5276,7 @@ export interface components {
             pressure_basis_artifact_bytes?: number | null;
             /** Progress */
             progress: number;
+            provenance?: components["schemas"]["RunProvenance"] | null;
             /** Queued At */
             queued_at: string;
             /** Radiation Impedance Artifact Bytes */
@@ -5427,6 +5446,14 @@ export interface components {
             wall_thickness?: components["schemas"]["Expr"] | null;
             /** Z Map Points */
             z_map_points?: string | null;
+        };
+        /** MeshFreshnessResponse */
+        MeshFreshnessResponse: {
+            /**
+             * Freshness
+             * @enum {string}
+             */
+            freshness: "current" | "stale" | "unknown";
         };
         /** MeshInspection */
         MeshInspection: {
@@ -6298,12 +6325,18 @@ export interface components {
             execution_request_sha256: string;
             /** Execution Solve Options Sha256 */
             execution_solve_options_sha256: string;
+            /** Geometry Hash */
+            geometry_hash?: string | null;
             /** Geometry Sha256 */
             geometry_sha256: string;
             /** Installed Dependency Shas */
             installed_dependency_shas?: {
                 [key: string]: string | null;
             } | null;
+            /** Mesher Source */
+            mesher_source?: string | null;
+            /** Mesher Version */
+            mesher_version?: string | null;
             /**
              * Request Identity
              * @constant
@@ -6345,6 +6378,20 @@ export interface components {
              * @enum {string}
              */
             up?: "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
+        };
+        /**
+         * RunProvenance
+         * @description Extensible provenance shared by a run and its result.
+         */
+        RunProvenance: {
+            /** Geometry Hash */
+            geometry_hash?: string | null;
+            /** Mesher Source */
+            mesher_source?: string | null;
+            /** Mesher Version */
+            mesher_version?: string | null;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * RunWorkspace
@@ -9532,6 +9579,37 @@ export interface operations {
                 };
                 content: {
                     "text/plain": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    job_mesh_freshness_api_jobs__job_id__mesh_freshness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeshFreshnessResponse"];
                 };
             };
             /** @description Validation Error */

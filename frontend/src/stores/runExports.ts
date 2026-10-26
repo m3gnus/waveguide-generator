@@ -18,6 +18,9 @@ export interface RunExportOutcome {
 
 interface RunExportStore {
   jobs: Record<string, RunExportJobState>;
+  meshNotices: Record<string, string>;
+  reportMeshNotice(jobId: string, notice: string): void;
+  dismissMeshNotice(jobId: string): void;
   execute(jobId: string, formats: ExportFormat[], task: () => Promise<RunExportOutcome>): Promise<RunExportOutcome>;
   clearFeedback(jobId: string): void;
   resetForTests(): void;
@@ -51,6 +54,16 @@ function clearNoticeTimer(jobId: string): void {
  */
 export const useRunExportStore = create<RunExportStore>((set) => ({
   jobs: {},
+  meshNotices: {},
+  reportMeshNotice(jobId, notice) {
+    set(state => ({ meshNotices: { ...state.meshNotices, [jobId]: notice } }));
+  },
+  dismissMeshNotice(jobId) {
+    set(state => {
+      const { [jobId]: _notice, ...meshNotices } = state.meshNotices;
+      return { meshNotices };
+    });
+  },
   execute(jobId, formats, task) {
     const existing = pending.get(jobId);
     if (existing) return existing;
@@ -123,6 +136,6 @@ export const useRunExportStore = create<RunExportStore>((set) => ({
     pending.clear();
     noticeTimers.forEach((timer) => clearTimeout(timer));
     noticeTimers.clear();
-    set({ jobs: {} });
+    set({ jobs: {}, meshNotices: {} });
   },
 }));
