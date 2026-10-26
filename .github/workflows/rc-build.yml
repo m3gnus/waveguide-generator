@@ -501,7 +501,10 @@ jobs:
         # drop a character before the application sees it.
         run: |
           $ErrorActionPreference = "Stop"
-          $root = Join-Path $env:RUNNER_TEMP ("cpu-gate-" + [guid]::NewGuid().ToString("N"))
+          # Short on purpose: WG refuses a Windows WG folder longer than 74
+          # characters (server/platform/paths.py), and the gate's folder sits
+          # under <root>\beat-quit-work\ with a deliberately non-ASCII name.
+          $root = Join-Path $env:RUNNER_TEMP ("cpu-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
           New-Item -ItemType Directory -Path $root | Out-Null
           "WG2_CPU_GATE_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           $setup = (Get-ChildItem -File build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe |

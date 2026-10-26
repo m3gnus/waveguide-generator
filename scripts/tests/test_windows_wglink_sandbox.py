@@ -567,7 +567,7 @@ def assert_inline_setup_allowlist(source: str) -> None:
     assert sum(c[0].lower() == 'start-process' for c in commands) == 1
     assert_environment_pair(tokens, ['$env:WG2_DATA_DIR = Join-Path $root "data"'])
     for fragment in (
-        '$root = Join-Path $env:RUNNER_TEMP ("cpu-gate-" + [guid]::NewGuid().ToString("N"))',
+        '$root = Join-Path $env:RUNNER_TEMP ("cpu-" + [guid]::NewGuid().ToString("N").Substring(0, 8))',
         '$install = Join-Path $root "app"', '$installLog = Join-Path $root "inno-install.log"',
         '$addins = Join-Path $root "fusion-addins"',
         '$env:WG2_DATA_DIR = Join-Path $root "data"; New-Item -ItemType Directory -Path $addins, $env:WG2_DATA_DIR | Out-Null',
