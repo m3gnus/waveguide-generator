@@ -1,3 +1,4 @@
+import { useImportedSimulationSetup } from '../stores/importedSimulationSetup';
 import { sourceRoleLabel } from '../model/cadLabels';
 import { useDeveloperDetails } from '../prefs/preferences';
 import { osseFeatures, osseFormula, OSSE_FEATURE_CONFLICT, OSSE_SWITCH_NOTICE, type OsseFeatures } from './osseFeatures';
@@ -911,14 +912,14 @@ function RealizedDimensionsCard({ forceOpen = false }: { forceOpen?: boolean }) 
 }
 
 function CadFrequencySweep() {
-  const cadReturn = useCadReturnStore();
+  const cadReturn = useImportedSimulationSetup();
   const solveStore = useScopedSolveOptions();
-  const blocker = importedSubmissionBlocker(cadReturn, solveStore);
+  const blocker = cadReturn.input === 'cad' ? importedSubmissionBlocker(useCadReturnStore.getState(), solveStore) : null;
   const rangeMessage = blocker === 'Enter a valid explicit frequency sweep.' ? blocker : null;
   return <>
-    <NumberField label={CAD_CONTROLS.sweepStart.label} revealId={CAD_CONTROLS.sweepStart.reveal.id} unit="Hz" value={cadReturn.frequencyStartHz} min={1} step={10} precision={0} description="Lowest frequency of the generated imported-CAD sweep." onCommit={(frequencyStartHz) => cadReturn.setSweep({ frequencyStartHz })}/>
-    <NumberField label={CAD_CONTROLS.sweepEnd.label} revealId={CAD_CONTROLS.sweepEnd.reveal.id} unit="Hz" value={cadReturn.frequencyEndHz} min={1} step={10} precision={0} description="Highest frequency of the generated imported-CAD sweep." onCommit={(frequencyEndHz) => cadReturn.setSweep({ frequencyEndHz })}/>
-    <NumberField label={CAD_CONTROLS.frequencySamples.label} revealId={CAD_CONTROLS.frequencySamples.reveal.id} value={cadReturn.frequencyCount} min={1} max={401} step={1} precision={0} description="How many frequencies are solved across the imported-CAD range." onCommit={(frequencyCount) => cadReturn.setSweep({ frequencyCount })}/>
+    <NumberField label={CAD_CONTROLS.sweepStart.label} revealId={CAD_CONTROLS.sweepStart.reveal.id} unit="Hz" value={cadReturn.frequencyStartHz} min={1} step={10} precision={0} description="Lowest frequency of the generated sweep." onCommit={(frequencyStartHz) => cadReturn.setSweep({ frequencyStartHz })}/>
+    <NumberField label={CAD_CONTROLS.sweepEnd.label} revealId={CAD_CONTROLS.sweepEnd.reveal.id} unit="Hz" value={cadReturn.frequencyEndHz} min={1} step={10} precision={0} description="Highest frequency of the generated sweep." onCommit={(frequencyEndHz) => cadReturn.setSweep({ frequencyEndHz })}/>
+    <NumberField label={CAD_CONTROLS.frequencySamples.label} revealId={CAD_CONTROLS.frequencySamples.reveal.id} value={cadReturn.frequencyCount} min={1} max={401} step={1} precision={0} description="How many frequencies are solved across the sweep range." onCommit={(frequencyCount) => cadReturn.setSweep({ frequencyCount })}/>
     {rangeMessage && <div className="field-error" role="alert">{rangeMessage}</div>}
   </>;
 }
@@ -926,38 +927,51 @@ function CadFrequencySweep() {
 /**
  * Per-channel driver setup.
  *
- * One card per drive channel, each carrying its motion and its driver picker.
+ * One card per driver group, carrying motion and the shared driver picker.
  * There is no driver on/off switch and no source-to-channel assignment UI any
  * more: every source drives its own default channel, and a channel is
  * voltage-driven exactly when a driver is present on it — picked from the
  * library or typed by hand — and unit-driven when it is cleared.
  */
 function CadDriveChannels() {
-  const state = useCadReturnStore();
-  const sources = state.selectedBundle?.sources ?? [];
+  const state = useImportedSimulationSetup();
+  const sources = state.sources;
   const activeSources = sources.filter((source) => !state.skippedSourceIds.includes(source.id));
   // The coupled campaign writes its derived output to a reserved channel id.
   // Withholding it from the assignable list is what turns a server refusal
   // into a collision that cannot be made in the first place.
   const channelIds = assignableChannelIds(
-    [...new Set(sources.map((source) => source.defaultDriveChannelId))],
+    [...new Set(sources.map((source) => source.defaultDriveChannelId ?? source.id))],
     state.passiveCardioid.enabled && state.passiveCardioid.coupled,
   );
   // The one place a reassignment select survives: a channel stranded on an id
   // that is no longer assignable — the id the coupled campaign reserves. The
   // refusal that raises tells the user to reassign that source, and hiding the
   // only control that can is how a blocker becomes a dead end.
-  const showsAssignment = (channel: { id: string }) => !channelIds.includes(channel.id);
+  const showsAssignment = (channel: { id: string }) => state.input === 'cad' && !channelIds.includes(channel.id);
   return <>
+    {state.input === 'file' && [...new Set(activeSources.map(source => source.role))].map(role => {
+      const sameRole = activeSources.filter(source => source.role === role);
+      if (sameRole.length < 2) return null;
+      const channels = state.driveChannels.filter(channel => channel.source_ids.some(id => sameRole.some(source => source.id === id)));
+      return <label className="field-row" key={role}><span>{sourceRoleLabel(role, { driver: true })}</span>
+        <select aria-label={`Driver sharing for ${sourceRoleLabel(role, { driver: true })}`} value={state.driverGroups.some(group => group.channelIds.length === sameRole.length && channels.every(channel => group.channelIds.includes(channel.id))) ? 'share' : 'separate'}
+          disabled={channels.some(channel => !!channel.exterior_transducer)}
+          onChange={event => state.setRoleSharing?.(role, event.target.value === 'share')}>
+          <option value="share">Share one driver</option><option value="separate">Drive separately</option>
+        </select></label>;
+    })}
     <div className="cad-channel-list">
-      {state.driveChannels.map((channel) => {
+      {state.driverGroups.map((group) => {
+        const channel = state.driveChannels.find(channel => channel.id === group.channelIds[0])!;
         const driverForm = state.channelDrivers[channel.id];
         const driverEligible = channelAcceptsDriver(channel);
-        return <div className="cad-channel" data-channel-id={channel.id} key={channel.id}>
-          <div className="cad-channel-summary"><span>{cadChannelLabel(state, channel.id)}</span></div>
+        return <div className="cad-channel" data-channel-id={channel.id} data-driver-group-id={group.id} key={group.id}>
+          <div className="cad-channel-summary"><span>{group.channelIds.length > 1 ? sourceRoleLabel(activeSources.find(source => source.id === channel.source_ids[0])?.role ?? '', { driver: true }) : cadChannelLabel(state, channel.id)}</span></div>
+          {group.channelIds.length > 1 && <p className="cad-driver-hint">{group.channelIds.length} surfaces · identical drivers. Each surface gets its own driver, wired to one amplifier channel.</p>}
           {showsAssignment(channel) && channel.source_ids
             .filter((sourceId) => activeSources.some((source) => source.id === sourceId))
-            .map((sourceId) => <div className="cad-channel-row" key={sourceId}><b>{sourceId}</b><select aria-label={`Drive channel for ${sourceId}`} disabled={!!channel.exterior_transducer} value={channel.id} onChange={(event) => state.setSourceChannel(sourceId, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>)}
+            .map((sourceId) => <div className="cad-channel-row" key={sourceId}><b>{sourceId}</b><select aria-label={`Drive channel for ${sourceId}`} disabled={!!channel.exterior_transducer} value={channel.id} onChange={(event) => state.setSourceChannel?.(sourceId, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>)}
           <details className="cad-channel-more" open={channel.exterior_transducer ? true : undefined}><summary>More</summary>
           <div data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} disabled={!!channel.exterior_transducer} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal</option><option value="axial">Axial (pistonic)</option></select></div>
           <div className="cad-channel-hint">Normal moves each source face along its own normal. Axial moves the source as a rigid piston along its axis.</div>
@@ -1146,13 +1160,13 @@ function CadSimulationEmpty() {
   return <p className="cad-simulation-empty">Settings appear when {model.selected ? model.label : 'a CAD model'} is ready.</p>;
 }
 
-function CadSimulationSections({ searching, matches, ingestRecord, cardioidSurface }: {
+export function CadSimulationSections({ searching, matches, ingestRecord, cardioidSurface }: {
   searching: boolean;
   matches: (section: CadControlSection) => boolean;
-  ingestRecord: CadReturnIngestRecord;
+  ingestRecord?: CadReturnIngestRecord;
   cardioidSurface: boolean;
 }) {
-  const cad = useCadReturnStore();
+  const cad = useImportedSimulationSetup();
   const options = useScopedSolveOptions();
   const summaries = {
     crossover: crossoverSummary(cad),
@@ -1166,9 +1180,9 @@ function CadSimulationSections({ searching, matches, ingestRecord, cardioidSurfa
   return <>
     {section('frequencySweep', <><FrequencySweepControls idPrefix="cad-solve" context="imported"/>{options.frequencyMode === 'range' && <CadFrequencySweep/>}</>, true)}
     {section('driveChannels', <CadDriveChannels/>, true)}
-    {crossoverDriverChannels(cad).length >= 2 && section('crossover', <CadCrossover/>, false, summaries.crossover)}
+    {cad.input === 'cad' && crossoverDriverChannels(cad).length >= 2 && section('crossover', <CadCrossover/>, false, summaries.crossover)}
     {section('directivityMap', <DirectivityMapControls/>, false, summaries.directivity)}
-    {cardioidSurface && section('passiveCardioid', <CadPassiveCardioid/>, true)}
+    {cad.input === 'cad' && cardioidSurface && section('passiveCardioid', <CadPassiveCardioid/>, true)}
     {section('solveOptions', <><SolveOptionsControls mode="cad" ingestRecord={ingestRecord} includeSampling={false}/><AdaptiveFrequencyControls mode="cad"/><MeshValidationControl mode="cad"/></>, false, summaries.solver)}
   </>;
 }

@@ -1,3 +1,4 @@
+import { simulationDriverReferences } from '../jobs/importedSubmission';
 import { retainCadDraft, clearCadDraft, subscribeCadDraftRestores } from '../stores/cadProjectSettings';
 import { useEffect } from 'react';
 import { CadLinkApiError } from '../api/cadlink';
@@ -103,12 +104,7 @@ function cadProjectSetupControls(
   let resolved: ReturnType<typeof resolveCadImportedSetup>;
   try { resolved = resolveCadImportedSetup(state, solveStore); }
   catch { return null; }
-  const driverReferences = Object.fromEntries(state.driveChannels.flatMap((channel) => {
-    const preset = state.channelDrivers[channel.id]?.preset;
-    return resolved.geometry.drive_channels.find(item => item.id === channel.id)?.driver && preset
-      ? [[channel.id, { driver_id: preset.id, source: preset.source }]]
-      : [];
-  }));
+  const driverReferences = simulationDriverReferences(state);
   return {
     lineageId,
     // The roles exactly as the return states them; the backend owns their

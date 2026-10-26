@@ -1,7 +1,8 @@
 import { planeWords } from '../api/domainDecision';
 import { useState } from 'react';
-import { useShallow } from 'zustand/react/shallow';
-import { editMeshImport, prepareMeshFile, setMeshMotion, useMeshImportStore, meshImportChoice } from '../stores/meshImport';
+import { useDeveloperDetails } from '../prefs/preferences';
+import { CadSimulationSections } from './ParamPanel';
+import { editMeshImport, prepareMeshFile, useMeshImportStore, meshImportChoice } from '../stores/meshImport';
 import { FILE_SURFACE_ROLES, fileSymmetryLabel, sourceRoleLabel } from '../model/cadLabels';
 import { useImportedSetupSaveError } from '../shell/cadSetupPublisher';
 import { CadModelStatusLine } from '../shell/CadModelStatusLine';
@@ -11,9 +12,7 @@ import type { RegisteredMesh } from '../api/meshImport';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { restoreParametricWorkingDesign } from '../model/currentModel';
 import { noteExplicitNavigation } from '../shell/workspaceNavigation';
-import { useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { SolveOptionsStoreProvider } from '../stores/solveOptionsContext';
-import { DirectivityMapControls, SolveOptionsControls } from './SolveOptionsSections';
 
 import '../shell/cadLinkPanel.css';
 
@@ -29,9 +28,7 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
   // The geometry can change whenever an original exists to prepare it from:
   // this browser read it, or the server kept it for the model.
   const editable = state.original !== null || (model.input === 'file' && model.modelId !== null && model.originalAvailable);
-  const frequencyMode = useImportedSolveOptionsStore(s => s.frequencyMode);
-  const sweep = useImportedSolveOptionsStore(useShallow(s => ({ startHz: s.sweepStartHz, endHz: s.sweepEndHz, count: s.sweepCount })));
-  const setSweep = useImportedSolveOptionsStore(s => s.setSweep);
+  const developer = useDeveloperDetails();
   const [symmetryOpen, setSymmetryOpen] = useState(false);
   const [sizeOpen, setSizeOpen] = useState(false);
   const [axesOpen, setAxesOpen] = useState(false);
@@ -138,28 +135,11 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
       <p>{frequencySummary}</p>
       <p>{replayOptions.polar_config.enabled_axes.join(', ')} polars · {replayAngleStep}° steps · {replayOptions.polar_config.distance} m</p>
       <p>Engine: {replayOptions.engine} · Accuracy: {replayOptions.accuracy ?? 'fast'}</p>
-      <details><summary>Full resolved setup</summary><pre aria-label="Full resolved replay setup">{JSON.stringify({ geometry: replay.geometry, options: replayOptions }, null, 2)}</pre></details>
+      {developer && <details className="developer-details"><summary>Full resolved setup</summary><pre aria-label="Full resolved replay setup">{JSON.stringify({ geometry: replay.geometry, options: replayOptions }, null, 2)}</pre></details>}
       <p className="section-note">Solve uses these exact settings{model.restoredRevisionId ? ', the setup revision this mesh was opened with' : ''}. Editing a control below starts a new setup from what the controls show.</p>
     </section>}
-    <fieldset disabled={state.busy}>
-      <legend>{replay ? 'New setup controls' : 'Simulation'}</legend>
-      {!replay && <p className="section-note">Each selected group is a separate unit-acceleration source (1 m/s²). No electrical driver model or crossover is applied.</p>}
-      {Object.keys(registered?.source_tags ?? {}).map(id => <label className="field-row" key={id}>{state.summary?.groups.find(group => group.tag === registered?.source_tags[id])?.display_name ?? registered?.sources?.find(source => source.id === id)?.name ?? id}
-        <select aria-label={`Motion ${id}`} value={state.motions[id] ?? 'normal'} onChange={e => setMeshMotion(id, e.target.value as 'normal' | 'axial')}>
-          <option value="normal">Normal to surface</option><option value="axial">Along source axis</option>
-        </select>
-      </label>)}
-      {frequencyMode === 'range' && (['startHz', 'endHz', 'count'] as const).map((key, index) => <label className="field-row" key={key}>{['Start (Hz)', 'End (Hz)', 'Frequencies'][index]}
-        <input aria-label={['Mesh sweep start', 'Mesh sweep end', 'Mesh frequency count'][index]} type="number" value={Number.isFinite(sweep[key]) ? sweep[key] : ''}
-          min={1} max={key === 'count' ? 401 : undefined} step={key === 'count' ? 1 : 'any'}
-          onChange={e => setSweep({ [key]: e.target.valueAsNumber })}/>
-      </label>)}
-      <SolveOptionsControls mode="cad" />
-      {!replay && <p className="section-note">Full domain, free space. The directivity rig below starts as a copy of the parametric settings; the origin of the mesh is not moved automatically. Use Solve above; Runs keeps the exact mesh and settings.</p>}
-    </fieldset>
-    <fieldset disabled={state.busy}>
-      <legend>Directivity map</legend>
-      <DirectivityMapControls />
+    <fieldset disabled={state.busy || !registered}>
+      <CadSimulationSections searching={false} matches={() => true} cardioidSurface={false}/>
     </fieldset>
     </>}
     {tab === 'simulation' && state.error && <p className="field-error" role="alert">{state.error}</p>}

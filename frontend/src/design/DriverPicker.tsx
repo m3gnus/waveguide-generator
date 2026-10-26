@@ -1,3 +1,4 @@
+import { importedSimulationSetup, useImportedSimulationSetup } from '../stores/importedSimulationSetup';
 import { EmptyState } from '../shell/EmptyState';
 import { prefillExteriorDriver } from '../stores/exteriorTransducer';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
@@ -16,7 +17,6 @@ import {
   driverBaseFromSpec,
   driverShortfallText,
   driverValues,
-  useCadReturnStore,
   type CadDriveChannel,
   type ChannelDriverForm,
   type DriverFieldKey,
@@ -565,7 +565,7 @@ function DriverSheet({ channel, form, onClose }: {
   form: ChannelDriverForm;
   onClose: () => void;
 }) {
-  const state = useCadReturnStore();
+  const state = useImportedSimulationSetup();
   const saveMine = useDriverLibraryStore((store) => store.save);
   const removeMine = useDriverLibraryStore((store) => store.remove);
   const savedDrivers = useDriverLibraryStore((store) => store.saved);
@@ -851,7 +851,7 @@ export function ChannelDriverPicker({ channel, form, roleHint }: {
   form: ChannelDriverForm | undefined;
   roleHint?: string;
 }) {
-  const state = useCadReturnStore();
+  const state = useImportedSimulationSetup();
   const status = useDriverLibraryStore((store) => store.status);
   const info = useDriverLibraryStore((store) => store.info);
   const load = useDriverLibraryStore((store) => store.load);
@@ -926,7 +926,7 @@ export function ExteriorDriverLibraryPicker({ channel, roleHint }: { channel: Ca
   const counts = useMemo(() => driverKindCounts(info), [info]);
   useEffect(() => { void load(); }, [load]);
   const [pickedLibraryDriver, setPickedLibraryDriver] = useState<DriverPreset | null>(null);
-  const form = useCadReturnStore(store => store.driveChannels.find(c => c.id === channel.id)?.exterior_transducer);
+  const form = useImportedSimulationSetup().driveChannels.find(c => c.id === channel.id)?.exterior_transducer;
   const librarySd = pickedLibraryDriver?.base.sd_cm2;
   const pickedWithoutSd = pickedLibraryDriver !== null && form?.sd_m2 === undefined
     && !(librarySd !== undefined && Number.isFinite(librarySd) && librarySd > 0);
@@ -934,7 +934,7 @@ export function ExteriorDriverLibraryPicker({ channel, roleHint }: { channel: Ca
     <DriverSearch channel={channel} roleHint={roleHint} counts={counts} onPick={(picked, options) => {
       setPickedLibraryDriver(options?.edit ? null : picked);
       if (options?.edit) return;
-      const state = useCadReturnStore.getState();
+      const state = importedSimulationSetup();
       const form = state.driveChannels.find(c => c.id === channel.id)?.exterior_transducer;
       if (form) state.setExteriorTransducer(channel.id, prefillExteriorDriver(form, picked.base, { replace: true }));
     }}/>

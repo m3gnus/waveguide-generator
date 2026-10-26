@@ -50,7 +50,7 @@ function savedDriveChannels(setup: CadSetup | null | undefined, record: CadRetur
   return channels.length === raw.length ? channels : [];
 }
 
-function savedChannelDrivers(
+export function savedChannelDrivers(
   setup: CadSetup | null | undefined,
   channels: CadDriveChannel[],
   references: CadSolveSetup['driver_references'],
@@ -76,7 +76,7 @@ function savedChannelDrivers(
   }));
 }
 
-function savedPassiveCardioid(setup: CadSetup | null | undefined): PassiveCardioidForm {
+export function savedPassiveCardioid(setup: CadSetup | null | undefined): PassiveCardioidForm {
   const rearVolumeL = finite(setup?.passive_cardioid_rear_volume_l);
   if (rearVolumeL === null) return { ...PASSIVE_CARDIOID_DEFAULTS };
   const portAreaSource = setup?.port_area_source === 'bem_aperture' ? 'bem_aperture' : 'user';

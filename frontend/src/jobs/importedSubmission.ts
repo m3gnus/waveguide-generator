@@ -16,7 +16,7 @@ import {
   passiveCardioidWire,
   useCadReturnStore,
 } from '../stores/cadReturn';
-import type { CadDriveChannel } from '../stores/cadReturn';
+import type { SimulationData, CadDriveChannel } from '../stores/cadReturn';
 import { parseFrequencyList, polarValidationError, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { frequencyText } from '../results/crossoverSpec';
 
@@ -130,11 +130,8 @@ export function importedSubmissionBlocker(
   // the way to the wire. Dropping it solved the channel unit-driven under a
   // rail that named a driver, and the run's missing power, current and
   // excursion were the first sign of it.
-  const incomplete = incompleteDriverChannels(state);
-  if (incomplete.length) {
-    return `${incomplete.map(({ channelId, missing }) => `${channelId} still needs ${missing}`).join('; ')}. `
-      + 'Complete the driver, or clear it to solve that channel unit-driven.';
-  }
+  const driverError = incompleteDriverBlocker(state);
+  if (driverError) return driverError;
   // A half-filled cardioid form is refused here rather than dropped silently.
   // Dropping it would submit the pre-campaign solve under a rail that says a
   // campaign is configured, which is the one failure mode this feature cannot
@@ -149,7 +146,7 @@ export function importedSubmissionBlocker(
   return null;
 }
 
-export function exteriorModeBlocker(state: CadReturnSnapshot, solveStore: SolveOptionsSnapshot): string | null {
+export function exteriorModeBlocker(state: Parameters<typeof combineWire>[0] & Pick<CadReturnSnapshot, 'ingestRecord' | 'exteriorOnly' | 'passiveCardioid' | 'maxDriveVoltageV'>, solveStore: SolveOptionsSnapshot): string | null {
   if (!state.driveChannels.some(channel => channel.exterior_transducer)) return null;
   const fem = !state.exteriorOnly && (state.ingestRecord?.evidence?.fem_regions?.length ?? 0) > 0;
   const engines = fem ? ['auto', 'beat-cpu', 'beat-metal', 'beat-cuda', 'beat-rocm'] : ['beat-cpu', 'beat-metal'];
@@ -207,7 +204,7 @@ function list(items: string[]): string {
  * draw. `importedSubmissionBlocker` remains the only thing that stops a solve.
  */
 export function importedSubmissionNotices(
-  state: CadReturnSnapshot = useCadReturnStore.getState(),
+  state: Parameters<typeof combineSpecEffective>[0] & Pick<CadReturnSnapshot, 'combineEnabled'> = useCadReturnStore.getState(),
 ): string[] {
   const undriven = undrivenChannels(state);
   // Counted from the submittable wire, not as "everything else": a channel
@@ -262,6 +259,41 @@ function submittedDriver(
   return channelAcceptsDriver(channel) ? channelDriverWire(state.channelDrivers[channel.id]) : undefined;
 }
 
+/** Incomplete drivers must never silently become unit-driven submissions. */
+export function incompleteDriverBlocker(state: Pick<SimulationData, 'driveChannels' | 'channelDrivers'>): string | null {
+  const incomplete = incompleteDriverChannels(state);
+  return incomplete.length
+    ? `${incomplete.map(({ channelId, missing }) => `${channelId} still needs ${missing}`).join('; ')}. Complete the driver, or clear it to solve that channel unit-driven.`
+    : null;
+}
+
+/** Channel physics has one wire owner for CAD and file inputs. */
+export function simulationDriverGeometry(state: Pick<SimulationData, 'driveChannels' | 'channelDrivers' | 'driveVoltageV' | 'maxDriveVoltageV'>, retained?: ImportedSetup['geometry']): Pick<ImportedSetup['geometry'], 'drive_channels' | 'drive_voltage_v' | 'max_drive_voltage_v'> {
+  return {
+      drive_channels: state.driveChannels.map((channel) => {
+        const driver = submittedDriver(state, channel);
+        return { ...channel, source_ids: [...channel.source_ids], ...(driver ? { driver } : {}) };
+      }),
+      ...(state.driveChannels.some((channel) => channel.exterior_transducer || submittedDriver(state, channel)) || retained?.drive_voltage_v !== undefined
+        ? {
+          drive_voltage_v: state.driveVoltageV,
+          // Only ever a ceiling for the maximum-output pass, so it rides
+          // along with the voltage it is a ceiling on and is omitted when
+          // there is no amplifier to state.
+          ...(state.maxDriveVoltageV ? { max_drive_voltage_v: state.maxDriveVoltageV } : {}),
+        }
+        : {}),
+  };
+}
+
+export function simulationDriverReferences(state: Pick<SimulationData, 'driveChannels' | 'channelDrivers'>): NonNullable<ImportedSetup['driver_references']> {
+  return Object.fromEntries(state.driveChannels.flatMap(channel => {
+    const preset = state.channelDrivers[channel.id]?.preset;
+    return submittedDriver(state, channel) && preset
+      ? [[channel.id, { driver_id: preset.id, source: preset.source }]] : [];
+  }));
+}
+
 export function resolveCadImportedSetup(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
   solveStore: SolveOptionsSnapshot = useImportedSolveOptionsStore.getState(),
@@ -290,19 +322,7 @@ export function resolveCadImportedSetup(
   const combine = combineWire(state);
   return {
     geometry: {
-      drive_channels: state.driveChannels.map((channel) => {
-        const driver = submittedDriver(state, channel);
-        return { ...channel, source_ids: [...channel.source_ids], ...(driver ? { driver } : {}) };
-      }),
-      ...(state.driveChannels.some((channel) => channel.exterior_transducer || submittedDriver(state, channel))
-        ? {
-          drive_voltage_v: state.driveVoltageV,
-          // Only ever a ceiling for the maximum-output pass, so it rides
-          // along with the voltage it is a ceiling on and is omitted when
-          // there is no amplifier to state.
-          ...(state.maxDriveVoltageV ? { max_drive_voltage_v: state.maxDriveVoltageV } : {}),
-        }
-        : {}),
+      ...simulationDriverGeometry(state),
       mesh: {
         rigid_size_mm: state.meshSizes.rigid_size_mm,
         transition_mm: state.meshSizes.transition_mm,

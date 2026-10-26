@@ -1,3 +1,5 @@
+import { importedSimulationSetup } from './importedSimulationSetup';
+import { exteriorModeBlocker, incompleteDriverBlocker, simulationDriverGeometry, simulationDriverReferences } from '../jobs/importedSubmission';
 import { create } from 'zustand';
 import {
   inspectMesh, inspectMeshModel, prepareMeshModel, registerMesh, type MeshSummary, type RegisteredMesh,
@@ -11,11 +13,10 @@ import {
   useImportedSolveOptionsStore, type SolveOptions,
 } from './solveOptions';
 import type { ImportedSolveSubmission } from '../jobs/actions';
-import { beforeSolveSettingsEdit, noteSolveSettingsEdit, subscribeSolveSettingsEdits } from './solveSettingsEdits';
+import { subscribeSolveSettingsEdits } from './solveSettingsEdits';
 import { openMeshReplay } from '../api/meshReplay';
 import { bindImportedSetup, importedSetupOf, type ImportedSetup } from '../jobs/importedSetup';
 import { ImportedModelApiError } from '../api/importedModels';
-import { withChannelMotion } from './cadReturn';
 import {
   editFileDraft, effectiveImportedSetup, flushImportedSetupWrites, importedModelBlocker, isCurrentOpen, openImported,
   registerImportedSetupControls, registerImportedView, useImportedModelStore,
@@ -27,22 +28,20 @@ import {
  *
  * The model, its prepared mesh, how it is prepared (`fileDraft`) and the
  * setup it was opened with live in `stores/importedModel.ts`. This holds what
- * only the rail needs: the file being read, its groups, the source motions on
- * screen and the rail's own words.
+ * only the rail needs: the file being read, its groups and the rail's own words.
  */
 interface MeshImportState {
   filename: string;
   /** The original's text, while this browser read it; a restored file has none (the server keeps it). */
   original: string | null;
   summary: MeshSummary | null;
-  motions: Record<string, 'normal' | 'axial'>;
   busy: boolean;
   error: string | null;
   notice: string | null;
   request: number;
 }
 const initial: MeshImportState = {
-  filename: '', original: null, summary: null, motions: {}, busy: false, error: null, notice: null, request: 0,
+  filename: '', original: null, summary: null, busy: false, error: null, notice: null, request: 0,
 };
 let requestNumber = 0;
 export const useMeshImportStore = create<MeshImportState>(() => ({ ...initial }));
@@ -93,15 +92,9 @@ export function meshImportChoice(draft: FileDraft): string | null {
 
 /** A source's motion edits its retained channel without replacing the other physics. */
 export function setMeshMotion(sourceId: string, motion: 'normal' | 'axial'): void {
-  beforeSolveSettingsEdit({ source: 'meshImport', control: 'motion' });
-  const model = useImportedModelStore.getState();
-  const setup = model.setup ?? model.setupEditBase?.retained;
-  const channel = setup?.geometry.drive_channels.find(channel => channel.source_ids.includes(sourceId));
-  const sources = channel?.source_ids ?? [sourceId];
-  const nextMotion = channel ? withChannelMotion(channel, motion).motion : motion;
-  useMeshImportStore.setState((state) => ({ motions: { ...state.motions,
-    ...Object.fromEntries(sources.map(id => [id, nextMotion])) } }));
-  noteSolveSettingsEdit({ source: 'meshImport', control: 'motion' });
+  const simulation = importedSimulationSetup();
+  const channel = simulation.driveChannels.find(channel => channel.source_ids.includes(sourceId));
+  if (channel) simulation.setChannelMotion(channel.id, motion);
 }
 
 export async function loadMeshFile(filename: string, text: string, fetcher: typeof fetch = fetch, generation = importedMeshStore.beginIntent()): Promise<void> {
@@ -148,9 +141,8 @@ export async function loadMeshFile(filename: string, text: string, fetcher: type
       domainPlanes: preparation?.domain_planes ?? summary.detected_planes ?? [],
       reflectPlanes: preparation?.reflect_planes ?? null, removeLidPlanes: preparation?.remove_lid_planes ?? [] });
     if (previous?.setup) {
-      const motions = seedFileSetup(previous.setup);
+      seedFileOptions(previous.setup);
       useImportedModelStore.setState({ setup: structuredClone(previous.setup) });
-      useMeshImportStore.setState({ motions });
     }
     if (previous) {
       const time = new Date(previous.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -273,9 +265,6 @@ export function fileMeshSetup(): ImportedSetup {
 }
 
 function fileSetupControls(): ImportedSetup {
-  const state = useMeshImportStore.getState();
-  const model = useImportedModelStore.getState();
-  const record = model.prepared as RegisteredMesh;
   // Every option, the sweep range and count included, is the imported
   // instance's; this view only adds the mesh's geometry and source motions.
   const selected = useImportedSolveOptionsStore.getState();
@@ -292,17 +281,19 @@ function fileSetupControls(): ImportedSetup {
   delete options.ground_plane;
   options.symmetry = 'auto';
   options.solver_mode = 'full_3d';
+  const simulation = importedSimulationSetup();
+  const exteriorError = exteriorModeBlocker({ ...simulation, ingestRecord: null, exteriorOnly: true }, selected);
+  if (exteriorError) throw new Error(exteriorError);
+  const driverError = incompleteDriverBlocker(simulation);
+  if (driverError) throw new Error(driverError);
+  const driver_references = simulationDriverReferences(simulation);
+  const model = useImportedModelStore.getState();
   const retained = model.setup ?? model.setupEditBase?.retained;
-  const channels = retained?.geometry.drive_channels
-    ?? Object.keys(record.source_tags).map(id => ({ id, source_ids: [id], motion: 'normal' as const }));
+  // Motion edits of older file setups preserve their voltage fields.
+  const geometry = simulationDriverGeometry(simulation, retained?.geometry);
   return {
-    geometry: { skipped_source_ids: [],
-      drive_channels: channels.map(channel => {
-        const motion = channel.source_ids.map(id => state.motions[id]).find(value => value !== undefined) ?? channel.motion ?? 'normal';
-        // Keep the before-edit projection exact, including server-valid legacy
-        // fields the fresh editor would not offer. Only a motion edit reconciles them.
-        return motion === channel.motion ? channel : withChannelMotion(channel, motion);
-      }) },
+    geometry: { skipped_source_ids: [], ...geometry },
+    ...(Object.keys(driver_references).length ? { driver_references } : {}),
     options,
   };
 }
@@ -324,15 +315,13 @@ function assertFileRecord(record: RegisteredMesh, setup: ImportedSetup | null, p
   }
 }
 
-/** Restore the file's options and motions from the same baseline for every open path. */
-function seedFileSetup(setup: ImportedSetup | null): MeshImportState['motions'] {
+/** Restore file options from the same baseline for every open path. */
+function seedFileOptions(setup: ImportedSetup | null): void {
   // The setup's own options seed the imported instance, over a copy of the
   // parametric options for whatever the setup does not state.
   seedImportedSolveOptionsForFile();
   if (setup) applyWireOptionsToImportedSolveOptions(setup.options as Partial<SolveOptions>);
   useImportedSolveOptionsStore.setState({ groundPlane: { enabled: false, axis: 'y', height_m: 0 } });
-  return Object.fromEntries((setup?.geometry.drive_channels ?? []).flatMap(channel =>
-    channel.source_ids.map(id => [id, channel.motion ?? 'normal'])));
 }
 
 /** Show one prepared file mesh with the setup it opens with (none: the options seeded for a file). */
@@ -340,12 +329,11 @@ function fillFileRail(record: RegisteredMesh, setup: ImportedSetup | null, gener
   if (!importedMeshStore.isCurrentGeneration(generation)) return false;
   if (!importedMeshStore.setFile(preparedFileScene(record), generation)) return false;
   workspaceModeStore.setMode('cad');
-  const motions = seedFileSetup(setup);
+  seedFileOptions(setup);
   useMeshImportStore.setState({ ...initial, filename: record.source_file.filename,
     summary: { ...record.summary, kept_sides: { ...record.summary.kept_sides,
       ...Object.fromEntries((record.symmetry?.reflected_planes ?? []).map(plane => [plane, 'negative' as const])),
     } },
-    motions,
     request: useMeshImportStore.getState().request,
   });
   return true;

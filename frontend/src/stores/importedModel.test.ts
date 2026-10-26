@@ -38,7 +38,7 @@ function deferred<T>() { let resolve!: (value: T) => void; const promise = new P
 beforeEach(() => {
   localStorage.clear();
   importedMeshStore.clear();
-  useMeshImportStore.setState({ filename: '', original: null, summary: null, motions: {}, busy: false, error: null, notice: null });
+  useMeshImportStore.setState({ filename: '', original: null, summary: null, busy: false, error: null, notice: null });
   workspaceModeStore.setMode('parametric');
   workspaceModeStore.setImportedInput('cad');
   resetSolveOptionsStore();
@@ -62,7 +62,8 @@ describe('openImported', () => {
     });
     expect(importedModelBlocker('file')).toBeNull();
     // The rail and the options are the model's own.
-    expect(useMeshImportStore.getState()).toMatchObject({ filename: 'speaker.msh', motions: { group_2: 'axial' }, busy: false });
+    expect(useMeshImportStore.getState()).toMatchObject({ filename: 'speaker.msh', busy: false });
+    expect(useImportedModelStore.getState().fileSimulation?.driveChannels).toEqual(setup.geometry.drive_channels);
     expect(useImportedSolveOptionsStore.getState()).toMatchObject({ engine: 'metal', frequencyMode: 'list', frequencySpacing: 'linear' });
     expect(importedMeshStore.getSnapshot().file?.ingestId).toBe(mesh.ingest_id);
   });

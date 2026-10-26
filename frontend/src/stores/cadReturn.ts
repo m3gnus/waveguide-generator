@@ -514,7 +514,7 @@ export function withChannelMotion<T extends CadDriveChannel & { driver?: unknown
  * channel to still exist, still accept a driver, and still hold exactly the
  * source it was filled in for.
  */
-function retainedChannelDrivers(
+export function retainedChannelDrivers(
   state: Pick<CadReturnState, 'channelDrivers' | 'driveChannels'>,
   nextChannels: CadDriveChannel[],
 ): Record<string, ChannelDriverForm> {
@@ -820,23 +820,6 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
     });
   },
-  setExteriorTransducer: (channelId, form) => {
-    set((state) => {
-      const driveChannels = state.driveChannels.map(channel => {
-        if (channel.id !== channelId) return channel;
-        const { exterior_transducer: _previous, ...base } = channel;
-        return form ? { ...base, motion: 'axial' as const, exterior_transducer: _previous ? form
-          : prefillExteriorDriver(form, driverValues(state.channelDrivers[channelId])) } : base;
-      });
-      return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
-    });
-  },
-  setChannelMotion: (channelId, motion) => {
-    set((state) => {
-      const driveChannels = state.driveChannels.map((channel) => channel.id === channelId ? withChannelMotion(channel, motion) : channel);
-      return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
-    });
-  },
   setAreaDriftOverride: (sourceId, enabled) => {
     supersedeIngestIntent();
     set((state) => ({
@@ -852,6 +835,37 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
   },
   setCombineEnabled: (combineEnabled) => { set({ combineEnabled }); },
   setCombineSpec: (combineSpec) => { set({ combineSpec }); },
+  ...simulationActions(set),
+}, CAD_RETURN_EDITS));
+
+/** Generic imported-model mutations. CAD and file inputs share these rules. */
+export type SimulationData = Pick<CadReturnState,
+  'driveChannels' | 'channelDrivers' | 'passiveCardioid' | 'driveVoltageV' | 'maxDriveVoltageV'
+  | 'combineEnabled' | 'combineSpec' | 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>;
+export type SimulationActions = Pick<CadReturnState, 'setExteriorTransducer' | 'setChannelMotion' | 'setChannelDriverField' | 'setChannelDriverPreset' | 'refreshChannelDriverBases' | 'clearChannelDriverOverrides' | 'setDriveVoltage' | 'setMaxDriveVoltage' | 'setPassiveCardioid' | 'setSweep'>;
+export function simulationActions(
+  set: (update: Partial<SimulationData> | ((state: SimulationData) => Partial<SimulationData>)) => void,
+): SimulationActions {
+  return {
+  setExteriorTransducer: (channelId, form) => {
+    set((state) => {
+      const driveChannels = state.driveChannels.map(channel => {
+        if (channel.id !== channelId) return channel;
+        const { exterior_transducer: _previous, ...base } = channel;
+        return form ? { ...base, motion: 'axial' as const, exterior_transducer: _previous ? form
+          : prefillExteriorDriver(form, driverValues(state.channelDrivers[channelId])) } : base;
+      });
+      return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
+    });
+  },
+  setChannelMotion: (channelId, motion) => {
+    set((state) => {
+      const current = state.driveChannels.find(channel => channel.id === channelId);
+      if (!current || current.exterior_transducer || current.motion === motion) return state;
+      const driveChannels = state.driveChannels.map((channel) => channel.id === channelId ? withChannelMotion(channel, motion) : channel);
+      return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
+    });
+  },
   setChannelDriverField: (channelId, field, value) => {
     set((state) => {
       const current = state.channelDrivers[channelId] ?? { ...EMPTY_DRIVER_FORM };
@@ -929,7 +943,8 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
     set((state) => ({ passiveCardioid: normalizePassiveCardioid({ ...state.passiveCardioid, ...patch }) }));
   },
   setSweep: (update) => { set(update); },
-}, CAD_RETURN_EDITS));
+  };
+}
 
 /** Only WG's own installation inputs survive a driver change or a reset. */
 function retainedInstallationFields(
@@ -1271,8 +1286,10 @@ export interface RoleSource {
   role: string;
 }
 
-function bundleSources(state: Pick<CadReturnState, 'selectedBundle'>): RoleSource[] {
-  return (state.selectedBundle?.sources ?? []).map(({ id, role }) => ({ id, role }));
+/** CAD callers retain their snapshot API while the shared helpers consume sources. */
+type SimulationSources = { sources: readonly RoleSource[] } | Pick<CadReturnState, 'selectedBundle'>;
+function simulationSources(state: SimulationSources): readonly RoleSource[] {
+  return 'sources' in state ? state.sources : state.selectedBundle?.sources ?? [];
 }
 
 function memberRole(
@@ -1349,21 +1366,21 @@ export function chainDefaults(
  * which is the same rank that orders the chain. Undefined when no source
  * carries one. */
 export function combineChannelRole(
-  state: Pick<CadReturnState, 'driveChannels' | 'selectedBundle'>,
+  state: Pick<CadReturnState, 'driveChannels'> & SimulationSources,
   channelId: string,
 ): string | undefined {
-  return memberRole(state.driveChannels, bundleSources(state), channelId);
+  return memberRole(state.driveChannels, simulationSources(state), channelId);
 }
 
 /** The same role and shared-role rule as result channel headings. */
-export function cadChannelLabel(state: Pick<CadReturnState, 'driveChannels' | 'selectedBundle'>, channelId: string): string {
+export function cadChannelLabel(state: Pick<CadReturnState, 'driveChannels'> & SimulationSources, channelId: string): string {
   return roleChannelLabel(channelId, state.driveChannels.map(({ id }) => ({ id, role: combineChannelRole(state, id) })));
 }
 
 /** Port apertures are outputs, rather than additional drivers. This only gates
  * the editor: retained combined-output specs and submission defaults stay intact. */
-export function crossoverDriverChannels(state: Pick<CadReturnState, 'driveChannels' | 'selectedBundle'>): CadDriveChannel[] {
-  const sources = bundleSources(state);
+export function crossoverDriverChannels(state: Pick<CadReturnState, 'driveChannels'> & SimulationSources): CadDriveChannel[] {
+  const sources = simulationSources(state);
   return state.driveChannels.filter((channel) => channel.source_ids.some((id) => {
     const source = sources.find((source) => source.id === id);
     return !source || !hasPassiveCardioidSurface([source]);
@@ -1383,20 +1400,20 @@ export function combineEnabledEffective(
  * the end, so an unroled return degrades to listing order rather than a
  * guess. */
 export function combineMembers(
-  state: Pick<CadReturnState, 'driveChannels' | 'selectedBundle'>,
+  state: Pick<CadReturnState, 'driveChannels'> & SimulationSources,
 ): string[] {
-  return memberOrder(state.driveChannels, bundleSources(state));
+  return memberOrder(state.driveChannels, simulationSources(state));
 }
 
 export type CombineChainState = Pick<CadReturnState,
-  'driveChannels' | 'selectedBundle' | 'combineSpec' | 'channelDrivers'
-  | 'frequencyStartHz' | 'frequencyEndHz'>;
+  'driveChannels' | 'combineSpec' | 'channelDrivers'
+  | 'frequencyStartHz' | 'frequencyEndHz'> & SimulationSources;
 
 /** The untouched chain: LR4 at the role defaults, auto gain when level
  * matching would default on, auto delay. Null when there is nothing to
  * combine. */
 export function combineBaseSpec(state: CombineChainState): CrossoverSpec | null {
-  const pairs = chainDefaults(state.driveChannels, bundleSources(state), state.frequencyStartHz, state.frequencyEndHz);
+  const pairs = chainDefaults(state.driveChannels, simulationSources(state), state.frequencyStartHz, state.frequencyEndHz);
   if (!pairs.length) return null;
   return expandLegacy(
     combineMembers(state),
@@ -1432,7 +1449,7 @@ export function combineSpecEffective(state: CombineChainState): CrossoverSpec | 
  * untouched form is both submittable and what a designer would have typed. */
 export function combineChain(state: CombineChainState): CombinePair[] {
   const spec = combineSpecEffective(state);
-  const defaults = chainDefaults(state.driveChannels, bundleSources(state), state.frequencyStartHz, state.frequencyEndHz);
+  const defaults = chainDefaults(state.driveChannels, simulationSources(state), state.frequencyStartHz, state.frequencyEndHz);
   if (!spec) return [];
   const specPairs = pairsOf(spec);
   return defaults.map((pair, index) => {

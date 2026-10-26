@@ -1,3 +1,4 @@
+import { useDriverLibraryStore } from '../stores/driverLibrary';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -23,6 +24,8 @@ beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   useMeshImportStore.setState(initial, true);
   resetSolveOptionsStore();
+  preferencesStore.update({ showDeveloperDetails: false });
+  useDriverLibraryStore.setState({ info: null, status: 'ready' });
   workspaceModeStore.setImportedInput('file');
   resetImportedModelStore();
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ engines: [] }))));
@@ -68,14 +71,17 @@ it('shows actual replay frequencies and physics, with full resolved settings ins
   expect(summary.textContent).toContain('Engine: metal · Accuracy: accurate');
   expect(host.textContent).not.toContain('No electrical driver model or crossover is applied.');
   expect(host.textContent).not.toContain('starts as a copy of the parametric settings');
+  expect(summary.querySelector('.developer-details')).toBeNull();
+  act(() => preferencesStore.update({ showDeveloperDetails: true }));
   expect(summary.querySelector('details summary')?.textContent).toBe('Full resolved setup');
   expect(JSON.parse(host.querySelector('[aria-label="Full resolved replay setup"]')!.textContent!)).toEqual({ geometry, options: replay.options });
   expect(summary.textContent).toContain('the setup revision this mesh was opened with');
-  expect(host.textContent).toContain('New setup controls');
+  expect(host.querySelectorAll('.cad-channel-list')).toHaveLength(1);
   act(() => useImportedSolveOptionsStore.getState().setSweep({ count: 29 }));
   expect(host.querySelector('[aria-label="Exact mesh replay"]')).toBeNull();
   expect(useImportedModelStore.getState().restoredRevisionId).toBeNull();
-  expect(host.textContent).toContain('starts as a copy of the parametric settings');
+  expect(host.textContent).not.toContain('Full domain, free space');
+  preferencesStore.update({ showDeveloperDetails: false });
 });
 
 
@@ -185,8 +191,11 @@ it('automatically prepares role, mirror, size and axis edits and retries only th
   const prepare = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect')
     ? new Response(JSON.stringify(fileSummary))
     : new Response(JSON.stringify({ detail: 'Close the opening in the meshing tool.' }), { status: 422 }));
-  vi.stubGlobal('fetch', prepare);
-  // Capability probes share global fetch; count only this panel's preparation requests.
+  const otherRequests = globalThis.fetch;
+  // Shared sections may flush durable UI settings while a preparation is
+  // awaited. Count actual mesh requests rather than unrelated settings writes.
+  vi.stubGlobal('fetch', ((url, init) => String(url).startsWith('/api/models/files')
+    ? prepare(url, init) : otherRequests(url, init)) as typeof fetch);
   const preparations = () => prepare.mock.calls.filter(([url]) => String(url) === '/api/models/files');
   geometry();
   act(() => useMeshImportStore.setState({ summary: { ...fileSummary, kept_sides: { x0: 'negative', y0: 'positive' } } }));
@@ -241,7 +250,7 @@ it('shows the solve controls in the file rail and writes edits to the imported o
   opened({ prepared: { ingest_id: 'wgi_f', source_tags: { group_2: 2 }, summary: fileSummary } as unknown as RegisteredMesh });
   act(() => root.render(panel()));
   // Sweep range, engine and accuracy, spacing, and the directivity rig are all on screen.
-  expect(host.querySelector('[aria-label="Mesh sweep start"]')).not.toBeNull();
+  expect(host.querySelector('[data-control-reveal-id="cad.frequency.start"] input')).not.toBeNull();
   expect(host.querySelector('#solve-accuracy')).not.toBeNull();
   expect(host.querySelector('#cad-solve-engine')).not.toBeNull();
   expect(host.querySelector('#polar-distance')).not.toBeNull();
@@ -251,13 +260,16 @@ it('shows the solve controls in the file rail and writes edits to the imported o
   expect(useImportedSolveOptionsStore.getState().frequencySpacing).toBe('linear');
   choose(host.querySelector<HTMLSelectElement>('#solve-accuracy')!, 'accurate');
   expect(useImportedSolveOptionsStore.getState().accuracy).toBe('accurate');
-  type(host.querySelector<HTMLInputElement>('[aria-label="Mesh frequency count"]')!, '21');
+  const count = host.querySelector<HTMLInputElement>('[data-control-reveal-id="cad.frequency.samples"] input')!;
+  act(() => count.focus());
+  type(count, '21');
+  act(() => count.blur());
   expect(useImportedSolveOptionsStore.getState().sweepCount).toBe(21);
   // The parametric options are not the ones edited.
   expect(useSolveOptionsStore.getState().frequencySpacing).not.toBe('linear');
   // List mode replaces the range inputs.
   choose(host.querySelector<HTMLSelectElement>('#cad-solve-frequency-mode')!, 'list');
-  expect(host.querySelector('[aria-label="Mesh sweep start"]')).toBeNull();
+  expect(host.querySelector('[data-control-reveal-id="cad.frequency.start"] input')).toBeNull();
   type(host.querySelector<HTMLTextAreaElement>('#cad-solve-frequency-list')!, '300 700 1500');
   expect(useImportedSolveOptionsStore.getState().frequencyListText).toBe('300 700 1500');
 });
@@ -345,4 +357,35 @@ it('shows only save errors belonging to this file model', async () => {
   expect(host.querySelector('.cad-status-line')?.textContent).toContain('Ready to solve');
   expect(Object.keys(useCadSetupPublisherStore.getState().errors)).toHaveLength(2);
   act(() => useCadSetupPublisherStore.setState({ errors: {} }));
+});
+
+it('renders one shared Drivers section and edits file drivers through the shared picker', () => {
+  const mesh = { ingest_id: 'wgi_roles', source_tags: { left: 1, right: 2, high: 3 }, summary: fileSummary,
+    sources: [{ id: 'left', role: 'MF' }, { id: 'right', role: 'MF' }, { id: 'high', role: 'HF' }],
+  } as unknown as RegisteredMesh;
+  opened({ prepared: mesh });
+  act(() => root.render(panel()));
+  expect(host.querySelectorAll('[data-section="Drivers"]')).toHaveLength(1);
+  expect(host.querySelectorAll('.cad-channel')).toHaveLength(2);
+  expect(host.textContent).toContain('2 surfaces · identical drivers');
+  type(host.querySelector<HTMLInputElement>('[aria-label="Sd for drive-mf::left"]')!, '90');
+  expect(useImportedModelStore.getState().fileSimulation?.channelDrivers['drive-mf::right'].fields.sd_cm2).toBe(90);
+  const sharing = host.querySelector<HTMLSelectElement>('[aria-label^="Driver sharing for"]')!;
+  expect(sharing.closest('details')).toBeNull();
+  expect(sharing.value).toBe('share');
+  expect([...sharing.options].map(option => option.textContent)).toEqual(['Share one driver', 'Drive separately']);
+  choose(sharing, 'separate');
+  expect(host.querySelectorAll('.cad-channel')).toHaveLength(3);
+  type(host.querySelector<HTMLInputElement>('[aria-label="Sd for drive-hf"]')!, '75');
+  expect(useImportedModelStore.getState().fileSimulation?.channelDrivers['drive-hf'].fields.sd_cm2).toBe(75);
+  expect(host.textContent).not.toContain('Each selected group is a separate');
+  expect(host.textContent).not.toContain('Full domain, free space');
+  expect(host.querySelector('[data-section="Crossover"]')).toBeNull();
+  expect(host.querySelector('[data-section="Passive cardioid"]')).toBeNull();
+});
+
+it('disables the shared Simulation controls while no prepared file is available', () => {
+  opened({ prepared: null });
+  act(() => root.render(panel()));
+  expect(host.querySelector<HTMLFieldSetElement>('[aria-label="Imported mesh simulation"] fieldset')?.disabled).toBe(true);
 });

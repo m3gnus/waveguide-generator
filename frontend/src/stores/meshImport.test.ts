@@ -9,6 +9,7 @@ import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsSt
 import { editMeshImport, fileMeshSubmission, loadMeshFile, prepareMeshFile, loadMeshReplay, registeredMesh,
   fileMeshSetup, setMeshMotion, useMeshImportStore } from './meshImport';
 import { openImported, reopenLastModel, resetImportedModelStore, unchangedSetup, useImportedModelStore, editFileDraft } from './importedModel';
+import { importedSimulationSetup } from './importedSimulationSetup';
 import { readLastModel } from './lastModel';
 import type { RegisteredMesh, MeshSummary } from '../api/meshImport';
 import type { ImportedSetup } from '../jobs/importedSetup';
@@ -138,7 +139,7 @@ describe('standalone imported mesh', () => {
 
   it('saves a prepared setup before any Solve and reopens its model with it', async () => {
     showPrepared();
-    useMeshImportStore.setState({ motions: { group_2: 'axial' } });
+    setMeshMotion('group_2', 'axial');
     useImportedSolveOptionsStore.getState().setSweep({ startHz: 250, endHz: 8000, count: 17 });
     const expected = fileMeshSubmission();
     const save = vi.fn<typeof fetch>(async () => response({ revision_id: 'wgs_saved' }));
@@ -614,6 +615,33 @@ it('reuses the previous preparation and exact physics for a changed file with th
   expect(useMeshImportStore.getState().notice).toMatch(/^Using the settings from speaker.msh \(.+\)$/);
   useImportedSolveOptionsStore.getState().setSweep({ count: 21 });
   expect(useMeshImportStore.getState().notice).toBeNull();
+});
+
+it('restores and edits shared drivers after a changed file reuses remembered settings', async () => {
+  const mesh: RegisteredMesh = { ...record, source_tags: { group_1: 1, group_2: 2 },
+    sources: [{ id: 'group_1', role: 'MF' }, { id: 'group_2', role: 'MF' }],
+    source_file: { ...record.source_file, source_tags: [1, 2], roles: { 1: 'MF', 2: 'MF' } } };
+  showPrepared(mesh);
+  const simulation = importedSimulationSetup();
+  simulation.setChannelDriverPreset('drive-mf::group_1', { id: 'catalog:woofer', label: 'Woofer', source: 'database', kind: 'lf', z_ohm: 8,
+    xo_min_hz: null, base: { sd_cm2: 100, bl_t_m: 10, re_ohm: 6, mms_g: 20, fs_hz: 50 } });
+  simulation.setDriveVoltage(4.2);
+  simulation.setMaxDriveVoltage(18);
+  const setup = fileMeshSetup();
+  const previous = { filename: 'speaker.msh', updated_at: '2026-10-26T08:31:00Z',
+    preparation: { units: 'mm', forward: '+z', up: '+y', roles: { 1: 'MF', 2: 'MF' } }, setup };
+  const changed = { ...mesh, ingest_id: 'wgi_changed' };
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect')
+    ? response({ ...summary, previous_setup: previous }) : prepared(changed));
+  await loadMeshFile('speaker.msh', MSH, fetcher);
+  expect(fileMeshSubmission()).toEqual(bindImportedSetup(changed, setup));
+  expect(importedSimulationSetup().driverGroups).toEqual([{ id: 'drive-mf', channelIds: ['drive-mf::group_1', 'drive-mf::group_2'] }]);
+  importedSimulationSetup().setChannelDriverField('drive-mf::group_1', 're_ohm', 7);
+  const edited = fileMeshSetup();
+  expect(edited.geometry.drive_channels.map(channel => channel.source_ids)).toEqual([['group_1'], ['group_2']]);
+  expect(edited.geometry.drive_channels.map(channel => channel.driver?.re_ohm)).toEqual([7, 7]);
+  expect(edited.geometry).toMatchObject({ drive_voltage_v: 4.2, max_drive_voltage_v: 18 });
+  expect(edited.driver_references).toEqual(setup.driver_references);
 });
 
 it('keeps only matching roles when the re-export changes its group names', async () => {

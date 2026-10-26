@@ -125,8 +125,10 @@ it('mounts file geometry and simulation controls once and preserves drafts acros
     expect(roles).toHaveLength(1);
     expect(roles[0].value).toBe('HF');
     expect([...host.querySelectorAll('button')].some(button => /Prepare|Save setup/.test(button.textContent ?? ''))).toBe(false);
-    expect(host.querySelectorAll('[aria-label="Mesh frequency count"]')).toHaveLength(1);
-    expect(host.querySelector('[aria-label="Imported mesh geometry"] [aria-label="Mesh frequency count"]')).toBeNull();
+    const samples = host.querySelectorAll<HTMLInputElement>('[data-control-reveal-id="cad.frequency.samples"] input');
+    expect(samples).toHaveLength(1);
+    expect(Number(samples[0].value)).toBe(sweep);
+    expect(host.querySelector('[aria-label="Imported mesh geometry"] [data-control-reveal-id="cad.frequency.samples"]')).toBeNull();
     expect(host.querySelector('[aria-label="Imported mesh simulation"] [aria-label="Mesh units"]')).toBeNull();
     expect(host.querySelector('.run-name-field')).toBeNull();
     await act(async () => workspaceModeStore.setImportedInput('cad'));

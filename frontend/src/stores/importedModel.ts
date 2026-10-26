@@ -1,3 +1,6 @@
+import { seedFileSimulation } from './importedSimulationSetup';
+import type { SimulationData } from './cadReturn';
+import type { RegisteredMesh } from '../api/meshImport';
 import { enginePreference, restoreEnginePreference, useImportedSolveOptionsStore } from './solveOptions';
 import { create } from 'zustand';
 import type { CadReturnIngestRecord } from '../api/cadlink';
@@ -68,6 +71,7 @@ export interface ImportedModelState {
   /** Startup model follows late durable preference hydration until an explicit edit/open. */
   followEnginePreference: boolean;
   fileDraft: FileDraft;
+  fileSimulation: SimulationData | null;
   generation: number;
   phase: ImportedPhase;
   error: string | null;
@@ -77,7 +81,7 @@ export const EMPTY_FILE_DRAFT: Readonly<FileDraft> = Object.freeze({ units: '', 
 
 function emptyState(input: ImportedInput | null): Omit<ImportedModelState, 'generation'> {
   return {
-    input, model: null, modelId: null, prepared: null, originalAvailable: false, setup: null,
+    input, fileSimulation: null, model: null, modelId: null, prepared: null, originalAvailable: false, setup: null,
     restoredRevisionId: null, followEnginePreference: false, setupEditBase: null, fileDraft: { ...EMPTY_FILE_DRAFT, selected: [] }, phase: 'empty', error: null,
   };
 }
@@ -186,6 +190,8 @@ function openKnown(source: Extract<ImportedSource, { kind: 'file' | 'cad' }>): v
   const same = source.kind === 'cad' && held?.input === 'cad'
     && (held.prepared?.ingest_id === source.record.ingest_id
       || (modelId !== 'unfiled' && held.modelId === modelId && held.setupEditBase !== null));
+  const previousSimulation = source.kind === 'file' && held?.input === 'file'
+    && held.modelId === modelId && held.prepared === null ? held.fileSimulation : null;
   const next: Omit<ImportedModelState, 'generation'> = {
     ...emptyState(input),
     model: modelId && modelId !== 'unfiled'
@@ -193,12 +199,16 @@ function openKnown(source: Extract<ImportedSource, { kind: 'file' | 'cad' }>): v
     modelId,
     prepared,
     originalAvailable: source.kind === 'file' && prepared !== null,
-    setup: source.kind === 'file' ? source.setup ?? null : same ? held!.setup : null,
-    setupEditBase: same ? held!.setupEditBase : null,
+    setup: source.kind === 'file' ? previousSimulation ? null : source.setup ?? null : same ? held!.setup : null,
+    setupEditBase: source.kind === 'file' && previousSimulation && source.setup
+      ? { retained: source.setup, controls: held?.setupEditBase?.controls ?? source.setup }
+      : same ? held!.setupEditBase : null,
     restoredRevisionId: same ? held!.restoredRevisionId : null,
     ...(same ? { model: held!.model, modelId: held!.modelId, originalAvailable: held!.originalAvailable } : {}),
     fileDraft: source.kind === 'file' && source.prepared ? fileDraftOf(source.prepared)
       : source.kind === 'file' ? { ...EMPTY_FILE_DRAFT, selected: [] } : useImportedModelStore.getState().fileDraft,
+    fileSimulation: input === 'file' ? seedFileSimulation(prepared as RegisteredMesh | null, source.kind === 'file' ? source.setup ?? null : null,
+      previousSimulation) : null,
     phase: prepared ? 'ready' : 'empty',
   };
   if (workspaceModeStore.getSnapshot().importedInput !== input) {
@@ -208,6 +218,12 @@ function openKnown(source: Extract<ImportedSource, { kind: 'file' | 'cad' }>): v
     return;
   }
   useImportedModelStore.setState(next);
+  // Re-preparation keeps live (possibly incomplete) edits. Its retained wire
+  // is an edit base, never an exact replay that can bypass draft validation.
+  if (previousSimulation && next.setupEditBase) {
+    const controls = readSetupControls('file');
+    if (controls) useImportedModelStore.setState({ setupEditBase: { ...next.setupEditBase, controls } });
+  }
   if (!same) captureSetupControls();
 }
 
@@ -313,6 +329,7 @@ export async function openImported(source: ImportedSource, fetcher: typeof fetch
       setup: opened.setup && opened.exact ? structuredClone(opened.setup) : null,
       restoredRevisionId: opened.setup && opened.exact ? opened.revisionId : null,
       setupEditBase: null,
+      fileSimulation: input === 'file' ? seedFileSimulation(prepared as RegisteredMesh, opened.setup) : null,
       fileDraft: input === 'file' ? fileDraftOf(opened.prepared) : useImportedModelStore.getState().fileDraft,
       phase: 'ready', error: null, followEnginePreference: source.kind === 'model' && source.useEnginePreference === true,
     });
@@ -426,6 +443,10 @@ export function isCurrentOpen(generation: number): boolean {
 
 /** Change how a file is prepared: its prepared mesh no longer matches, and the opened setup ends. */
 export function editFileDraft(patch: Partial<FileDraft>): void {
+  const current = useImportedModelStore.getState();
+  const controls = current.input === 'file' && current.prepared && !current.setup && !current.setupEditBase
+    ? readSetupControls('file') : null;
+  if (controls) useImportedModelStore.setState({ setupEditBase: { retained: controls, controls } });
   useImportedModelStore.setState((state) => ({
     fileDraft: { ...state.fileDraft, ...patch,
       ...(patch.selected && !patch.roles ? { roles: Object.fromEntries(patch.selected.map(tag => [tag, state.fileDraft.roles?.[tag] && state.fileDraft.roles[tag] !== 'RIGID' ? state.fileDraft.roles[tag] : 'HF'])) } : {}),
