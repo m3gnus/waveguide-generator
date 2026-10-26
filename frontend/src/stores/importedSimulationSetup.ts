@@ -309,7 +309,7 @@ export const fileSimulationSetup = createImportedSimulationSetup({
     ...(update.frequencyCount !== undefined ? { count: update.frequencyCount } : {}),
   }),
   signal: actions => withEditSignals(() => useImportedModelStore.getState() as unknown as typeof actions,
-    actions, Object.keys(actions) as (keyof typeof actions)[], 'meshImport'),
+    actions, Object.keys(actions).filter(name => name !== 'refreshChannelDriverBases') as (keyof typeof actions)[], 'meshImport'),
 });
 
 /** One interface for the shared imported Simulation sections and their children. */

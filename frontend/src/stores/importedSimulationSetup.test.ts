@@ -8,6 +8,7 @@ import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { startCadSetupPublisher } from '../shell/cadSetupPublisher';
+import { observeFileDriverBaseRefresh, refreshChannelDriverBases } from '../shell/cadlink/restores';
 import { hasPassiveCardioidSurface, resetCadReturnStore, useCadReturnStore, type DriverPreset } from './cadReturn';
 import { editFileDraft, flushImportedSetupWrites, openImported, resetImportedModelStore, useImportedModelStore } from './importedModel';
 import { createImportedSimulationSetup, importedSimulationSetup, seedFileSimulation } from './importedSimulationSetup';
@@ -79,6 +80,34 @@ it('saves, restores and submits file cardioid physics selected by source role', 
   void openImported({ kind: 'file', prepared: record, setup: saved });
   expect(fileMeshSubmission()).toEqual(bindImportedSetup(record, saved));
   expect(importedSimulationSetup().passiveCardioid).toMatchObject({ enabled: true, rearVolumeL: 6, coupled: true });
+});
+
+it('refreshes a file preset on reopen without changing its saved solve', async () => {
+  importedSimulationSetup().setChannelDriverPreset('drive-hf', preset);
+  const saved = fileMeshSetup();
+  const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ spec: { re_ohm: 7 }, xo_min_hz: 1200 })));
+  const stop = observeFileDriverBaseRefresh(fetcher);
+  try {
+    const reopened = { ...mesh, ingest_id: 'wgi_reopened' };
+    void openImported({ kind: 'file', prepared: reopened, setup: saved });
+    importedMeshStore.setFile(createImportedMeshScene('speaker.msh', parseMSH(msh), 'file', reopened.ingest_id));
+    await vi.waitFor(() => expect(importedSimulationSetup().channelDrivers['drive-hf'].preset?.base.re_ohm).toBe(7));
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fileMeshSubmission()).toEqual(bindImportedSetup(reopened, saved));
+    expect(useImportedModelStore.getState().setup).toEqual(saved);
+  } finally { stop(); }
+});
+
+it('does not apply a file driver refresh to a newer model', async () => {
+  importedSimulationSetup().setChannelDriverPreset('drive-hf', preset);
+  let resolve!: (response: Response) => void;
+  const pending = new Promise<Response>(done => { resolve = done; });
+  const refresh = refreshChannelDriverBases(() => pending, 'file');
+  const next = { ...mesh, ingest_id: 'wgi_other', model_id: 'mesh-file:other' };
+  void openImported({ kind: 'file', prepared: next, setup: null });
+  resolve(new Response(JSON.stringify({ spec: { re_ohm: 7 } })));
+  expect(await refresh).toEqual([]);
+  expect(importedSimulationSetup().channelDrivers['drive-hf']).toBeUndefined();
 });
 
 it('defaults to one card per role and keeps each surface on its own channel', () => {

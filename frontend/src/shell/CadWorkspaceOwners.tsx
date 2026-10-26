@@ -25,7 +25,7 @@ import { createCadOutboundController } from './cadlink/outbound';
 import { createCadReturnWaiter } from './cadlink/returnWaiter';
 import { createReceiptDisplay } from './cadlink/receiptDisplay';
 import { createFusionSolveDisplay } from './cadlink/fusionSolveDisplay';
-import { observeCadProjectLoads, observeLastModel, refreshChannelDriverBases } from './cadlink/restores';
+import { observeCadProjectLoads, observeFileDriverBaseRefresh, observeLastModel, refreshChannelDriverBases } from './cadlink/restores';
 import { solvedCadModels } from './cadlink/solvedModel';
 import { solveControlStore } from './JobsCoordinator';
 import { solveAttention } from './solveAttention';
@@ -379,6 +379,7 @@ export function mountCadWorkspaceOwners(): () => void {
     observeCadProjectLoads({ enterCadWorkspace, manualSelectionAt, projectOpenPending, initialChoiceOwed, refusedForeignReturn,
       returnListRequest, seenReturnRevisions, refreshRef: { current: refreshReturns }, selectBundleRef: { current: selectBundle },
       setError: reportError, setStatus: reportStatus }),
+    observeFileDriverBaseRefresh(),
     observeLastModel({ reportStatus, reportError, refusedForeignReturn, selectBundle: (bundle, project) => selectBundle(bundle, project, true),
       jobLinkPending: () => jobIdFromLink(window.location.search) !== null,
       restorePending: lastModelRestorePending, onSettled: refreshOwedInitialChoice }),

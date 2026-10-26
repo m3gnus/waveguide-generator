@@ -19,7 +19,8 @@ import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { cadProjectName, listCadProjects, newestReturnForProject } from '../../api/cadProjects';
 import { enterCadWorkspace, returnBelongsToAnotherProject, type RefreshOptions } from './arrivals';
 import { showIngestedMeshInViewport } from './artifactLoader';
-import { isCurrentOpen, openImported, registerImportedView, reopenLastModel, type ImportedView } from '../../stores/importedModel';
+import { isCurrentOpen, openImported, registerImportedView, reopenLastModel, useImportedModelStore, type ImportedView } from '../../stores/importedModel';
+import { fileSimulationSetup } from '../../stores/importedSimulationSetup';
 import { restoreCadProjectSettings, resetCadProjectSettingsLoad, hasCadDraftForModel, migrateCadProfiles } from '../../stores/cadProjectSettings';
 import { cadHistorySetup } from '../../stores/cadSetupRestore';
 import { seedImportedSolveOptionsFromParametric } from '../../stores/solveOptions';
@@ -27,12 +28,14 @@ import { DEFAULT_SWEEP } from '../../stores/solveDefaults';
 import { reportCadAutomationError } from './caughtErrors';
 export { cadHistorySetup } from '../../stores/cadSetupRestore';
 
-export async function refreshChannelDriverBases(fetcher: typeof fetch = fetch): Promise<string[]> {
+export async function refreshChannelDriverBases(fetcher: typeof fetch = fetch, input: 'cad' | 'file' = 'cad'): Promise<string[]> {
   const owner = useCadReturnStore.getState();
   const selection = owner.captureSelectionIntent();
   const bundle = owner.selectedBundle ? bundleIdentity(owner.selectedBundle) : null;
   const documentLoad = currentDocumentLoad();
-  const forms = useCadReturnStore.getState().channelDrivers;
+  const fileOwner = useImportedModelStore.getState();
+  const inputRevision = workspaceModeStore.getSnapshot().inputRevision;
+  const forms = input === 'file' ? fileSimulationSetup.get().channelDrivers : owner.channelDrivers;
   const saved = new Map(useDriverLibraryStore.getState().saved.map((driver) => [driver.id, driver]));
   const updates: Record<string, DriverBaseUpdate> = {};
   await Promise.all(Object.entries(forms).map(async ([channelId, form]) => {
@@ -51,12 +54,44 @@ export async function refreshChannelDriverBases(fetcher: typeof fetch = fetch): 
       xo_min_hz: typeof hit.xo_min_hz === 'number' && Number.isFinite(hit.xo_min_hz) ? hit.xo_min_hz : null,
     };
   }));
+  if (input === 'file') {
+    const current = useImportedModelStore.getState();
+    if (workspaceModeStore.getSnapshot().importedInput !== 'file'
+      || workspaceModeStore.getSnapshot().inputRevision !== inputRevision
+      || current.input !== 'file' || current.phase !== 'ready' || current.modelId !== fileOwner.modelId
+      || current.prepared !== fileOwner.prepared) return [];
+    return fileSimulationSetup.get().refreshChannelDriverBases(updates);
+  }
   const current = useCadReturnStore.getState();
   if (!current.isCurrentSelectionIntent(selection)
     || current.projectLineageId !== owner.projectLineageId
     || (current.selectedBundle ? bundleIdentity(current.selectedBundle) : null) !== bundle
     || !isCurrentDocumentLoad(documentLoad)) return [];
   return useCadReturnStore.getState().refreshChannelDriverBases(updates);
+}
+
+/** Refresh file presets on opening or re-preparing, without treating hydration as an edit. */
+export function observeFileDriverBaseRefresh(fetcher: typeof fetch = fetch): () => void {
+  let active = true;
+  let queued = false;
+  const refresh = () => {
+    if (queued) return;
+    queued = true;
+    queueMicrotask(() => {
+      queued = false;
+      if (active && workspaceModeStore.getSnapshot().importedInput === 'file'
+        && useImportedModelStore.getState().input === 'file' && useImportedModelStore.getState().phase === 'ready') {
+        void refreshChannelDriverBases(fetcher, 'file').catch(() => undefined);
+      }
+    });
+  };
+  const stop = useImportedModelStore.subscribe((state, previous) => {
+    if (state.input === 'file' && state.phase === 'ready' && state.prepared
+      && (previous.input !== 'file' || previous.phase !== 'ready' || previous.prepared !== state.prepared
+        || (state.setup !== null && state.setup !== previous.setup))) refresh();
+  });
+  refresh();
+  return () => { active = false; stop(); };
 }
 
 /**
