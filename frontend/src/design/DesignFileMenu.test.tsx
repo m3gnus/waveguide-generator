@@ -293,6 +293,23 @@ describe('design file export menu', () => {
     expect(container.querySelector('[role="status"]')?.textContent).toContain('Choose units and Radiating surfaces');
   });
 
+  it('lists extensions only in file pickers, so the macOS window does not grey out .msh files', async () => {
+    // pywebview's macOS open panel honours only the MIME types in `accept`.
+    act(() => root.render(<DesignFileMenu/>));
+    const accepts = [...container.querySelectorAll<HTMLInputElement>('input[type="file"]')].map((input) => input.accept);
+    expect(accepts).toContain('.msh');
+    expect(accepts).toContain('.wgreplay');
+    for (const accept of accepts) expect(accept).not.toContain('/');
+
+    const fetcher = vi.fn();
+    vi.stubGlobal('fetch', fetcher);
+    const input = container.querySelector<HTMLInputElement>('[aria-label="Import Gmsh mesh file"]');
+    Object.defineProperty(input, 'files', { configurable: true, value: [new File(['x'], 'horn.step')] });
+    await act(async () => { input?.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('horn.step is not a Gmsh mesh. Choose a .msh file.');
+  });
+
   it('offers both STEP bodies', () => {
     const labels = open().map((item) => item.textContent ?? '');
     expect(labels.some((label) => label.startsWith('STEP solid'))).toBe(true);

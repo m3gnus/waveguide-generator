@@ -56,7 +56,18 @@ import {
 } from './openCadProject';
 import { sentToCadMessage } from './useSendToCad';
 
-const ACCEPT = '.cfg,.txt,.mwg,.json,text/plain,application/json';
+// Extensions only. The macOS desktop window (pywebview on WKWebView) filters its
+// open panel by the MIME types in `accept` and ignores the extensions, so a MIME
+// type here greys out every file macOS does not map to it (.msh, .mwg, .cfg,
+// .wgreplay). With no MIME type the panel shows every file and the handlers
+// check the name.
+const ACCEPT = '.cfg,.txt,.mwg,.json';
+const MESH_ACCEPT = '.msh';
+const REPLAY_ACCEPT = '.wgreplay';
+
+function requireExtension(name: string, extension: string, kind: string) {
+  if (!name.toLowerCase().endsWith(extension)) throw new Error(`${name} is not ${kind}. Choose a ${extension} file.`);
+}
 
 const CLASSIFICATION_DISPLAY: Record<CadLinkClassification, { label: string; detail: string }> = {
   current: { label: 'current', detail: 'Current: this file matches the latest saved version in this machine’s CAD-link registry.' },
@@ -351,6 +362,7 @@ export function DesignFileMenu() {
     input.value = '';
     if (!file || busyRef.current) return;
     await act(async () => {
+      requireExtension(file.name, MESH_ACCEPT, 'a Gmsh mesh');
       if (file.size > 16 * 1024 * 1024) throw new Error('Mesh exceeds the 16 MiB import limit.');
       const generation = importedMeshStore.beginIntent();
       const readRequest = beginMeshFileImport(file.name);
@@ -371,6 +383,7 @@ export function DesignFileMenu() {
     input.value = '';
     if (!file || busyRef.current) return;
     await act(async () => {
+      requireExtension(file.name, REPLAY_ACCEPT, 'a mesh replay');
       if (file.size > MAX_MESH_REPLAY_BYTES) throw new Error('Mesh replay exceeds the 64 MiB import limit.');
       const generation = importedMeshStore.beginIntent();
       const readRequest = beginMeshFileImport(file.name);
@@ -528,8 +541,8 @@ export function DesignFileMenu() {
     </button>}
     <input ref={openInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, false)}/>
     <input ref={reportInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, true)}/>
-    <input ref={meshInput} hidden tabIndex={-1} type="file" accept=".msh,text/plain" aria-label="Import Gmsh mesh file" onChange={(event) => void readMesh(event.currentTarget)}/>
-    <input ref={replayInput} hidden tabIndex={-1} type="file" accept=".wgreplay,application/json" aria-label="Open mesh replay file" onChange={(event) => void readReplay(event.currentTarget)}/>
+    <input ref={meshInput} hidden tabIndex={-1} type="file" accept={MESH_ACCEPT} aria-label="Import Gmsh mesh file" onChange={(event) => void readMesh(event.currentTarget)}/>
+    <input ref={replayInput} hidden tabIndex={-1} type="file" accept={REPLAY_ACCEPT} aria-label="Open mesh replay file" onChange={(event) => void readReplay(event.currentTarget)}/>
     <SharedDesignIdDialog question={sharedQuestion}/>
     {open && <div role="menu" aria-label="Design file menu" className="design-menu-popover">
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void newDesign()}><span>New</span><kbd>cfg</kbd></button>
