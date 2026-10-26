@@ -4942,6 +4942,15 @@
             ],
             "title": "Reflect Planes"
           },
+          "remove_lid_planes": {
+            "description": "Remove closed faces on these declared symmetry planes. A plane without a closed face is rejected.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 2,
+            "title": "Remove Lid Planes",
+            "type": "array"
+          },
           "roles": {
             "anyOf": [
               {
@@ -8583,6 +8592,15 @@
               }
             ],
             "title": "Reflect Planes"
+          },
+          "remove_lid_planes": {
+            "description": "Remove closed faces on these declared symmetry planes. A plane without a closed face is rejected.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 2,
+            "title": "Remove Lid Planes",
+            "type": "array"
           },
           "roles": {
             "anyOf": [

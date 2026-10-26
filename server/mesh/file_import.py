@@ -10,13 +10,14 @@ import numpy as np
 
 from server.contracts.geometry import SYMMETRY_PLANE_AXIS
 from server.mesh.imported import (
+    SYMMETRY_SNAP_TOLERANCE_MM,
     _edge_connected_components,
     parse_source_physical_name,
     reflect_triangle_mesh,
     verify_reduced_orientation,
     verify_symmetry_cut,
 )
-from server.mesh.integrity import mesh_integrity_report, mesh_self_intersection_report
+from server.mesh.integrity import mesh_integrity_report, mesh_self_intersection_report, on_coordinate_plane
 
 MAX_MESH_BYTES = 16 * 1024 * 1024
 MAX_NODES = 200_000
@@ -207,11 +208,17 @@ def transform_file_mesh(
     }
 
 
-def _symmetry_evidence(mesh: FileMesh, planes: tuple[str, ...]) -> tuple[dict[str, Any], dict[str, Any]]:
-    report = mesh_integrity_report(
+def file_mesh_integrity(mesh: FileMesh, planes: tuple[str, ...] | list[str]) -> dict[str, Any]:
+    """Report file topology with the shared symmetry detector's tolerance."""
+    return mesh_integrity_report(
         mesh.points, mesh.triangles,
         symmetry_plane_axes=tuple(SYMMETRY_PLANE_AXIS[plane] for plane in planes),
+        symmetry_plane_tolerance=SYMMETRY_SNAP_TOLERANCE_MM * 1e-3,
     )
+
+
+def _symmetry_evidence(mesh: FileMesh, planes: tuple[str, ...]) -> tuple[dict[str, Any], dict[str, Any]]:
+    report = file_mesh_integrity(mesh, planes)
     samples = report["off_plane_open_edges_sample"]
     topology = {
         "free_edges": report["open_edge_count"],
@@ -232,12 +239,64 @@ def inspect_file_mesh(mesh: FileMesh, units: str | None, forward: str, up: str) 
     sides = verification["detection"]["plane_vertex_side_counts"]
     return {
         **summary,
+        "lids": _lid_evidence(transformed, verification),
         "detected_planes": [plane for plane in verification["detected_planes"] if plane in SYMMETRY_PLANE_AXIS],
         "kept_sides": {
             plane: "both" if side["negative"] and side["positive"] else "negative" if side["negative"] else "positive" if side["positive"] else "on_plane"
             for plane, side in sides.items() if plane in SYMMETRY_PLANE_AXIS
         },
     }
+
+
+def _plane_triangles(mesh: FileMesh, plane: str) -> np.ndarray:
+    # The detector in verify_symmetry_cut works in mm with this same tolerance.
+    return on_coordinate_plane(
+        mesh.points * 1000, mesh.triangles, SYMMETRY_PLANE_AXIS[plane],
+        tolerance=SYMMETRY_SNAP_TOLERANCE_MM,
+    )
+
+
+def _lid_evidence(mesh: FileMesh, verification: dict[str, Any]) -> dict[str, Any]:
+    lids = {}
+    sides = verification["detection"]["plane_vertex_side_counts"]
+    for plane in SYMMETRY_PLANE_AXIS:
+        mask = _plane_triangles(mesh, plane)
+        tags, counts = np.unique(mesh.tags[mask], return_counts=True)
+        if not len(tags):
+            continue
+        side = sides[plane]
+        lids[plane] = {
+            "triangle_count": int(mask.sum()),
+            "groups": [{"tag": int(tag), "triangle_count": int(count)} for tag, count in zip(tags, counts)],
+            "candidate": bool(side["negative"]) != bool(side["positive"]),
+        }
+    return lids
+
+
+def validate_remove_lid_planes(remove_lid_planes: list[str] | tuple[str, ...], domain_planes: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    if len(set(remove_lid_planes)) != len(remove_lid_planes) or set(remove_lid_planes) - set(domain_planes):
+        raise ValueError("Remove a closed face only on a declared symmetry plane, once per plane.")
+    return tuple(plane for plane in domain_planes if plane in remove_lid_planes)
+
+
+def _remove_lids(mesh: FileMesh, planes: tuple[str, ...], verification: dict[str, Any]) -> tuple[FileMesh, dict[str, Any]]:
+    """Drop only in-plane triangles; requesting a plane without a lid is an error."""
+    lids = _lid_evidence(mesh, verification)
+    keep = np.ones(len(mesh.triangles), dtype=bool)
+    removed = {}
+    for plane in planes:
+        lid = lids.get(plane)
+        if lid is None or not lid["candidate"]:
+            raise ValueError(f"The mesh has no closed face to remove on {_plane_labels([plane])}. Turn off removal for that plane.")
+        keep &= ~_plane_triangles(mesh, plane)
+        removed[plane] = {key: lid[key] for key in ("triangle_count", "groups")}
+    if not keep.any():
+        raise ValueError("Removing the closed face would leave the mesh with no triangles. Change the mesh in the meshing tool.")
+    empty = sorted(set(mesh.tags.tolist()) - set(mesh.tags[keep].tolist()))
+    if empty:
+        raise ValueError(f"Removing the closed face would leave surface {empty[0]} with no triangles. Change the surface groups in the meshing tool.")
+    used, indices = np.unique(mesh.triangles[keep], return_inverse=True)
+    return FileMesh(mesh.points[used], indices.reshape(-1, 3), mesh.tags[keep], mesh.names), removed
 
 
 def _opening_message(verification: dict[str, Any]) -> str:
@@ -269,10 +328,16 @@ def prepare_file_mesh(
     mesh: FileMesh, units: str, forward: str, up: str, *,
     domain_planes: tuple[str, ...] | list[str] = (),
     reflect_planes: tuple[str, ...] | list[str] | None = None,
+    remove_lid_planes: tuple[str, ...] | list[str] = (),
 ) -> tuple[FileMesh, dict[str, Any]]:
     planes, reflect_planes = validate_file_symmetry(domain_planes, reflect_planes)
+    remove_lid_planes = validate_remove_lid_planes(remove_lid_planes, planes)
     mesh, transform = transform_file_mesh(mesh, units, forward, up)
     report, verification = _symmetry_evidence(mesh, planes)
+    if remove_lid_planes:
+        mesh, removed = _remove_lids(mesh, remove_lid_planes, verification)
+        transform["removed_lids"] = removed
+        report, verification = _symmetry_evidence(mesh, planes)
     sides = verification["detection"]["plane_vertex_side_counts"]
     unreached = [plane for plane in planes if not sides[plane]["on_plane"]]
     if unreached:
@@ -298,7 +363,7 @@ def prepare_file_mesh(
             if verification["wrong_side_planes"]:
                 raise ValueError(f"The mesh is on the negative side of {_plane_labels(verification['wrong_side_planes'])}. Enable mirroring in the symmetry settings.")
             if verification["capped_planes"]:
-                raise ValueError(f"The mesh has a closed face on {_plane_labels(verification['capped_planes'])}. The symmetry plane must be open; remove that face in the meshing tool.")
+                raise ValueError(f"The mesh has a closed face on {_plane_labels(verification['capped_planes'])}. Remove it in the symmetry settings, or export the mesh open on the symmetry plane.")
             raise ValueError(_opening_message(verification))
         orientation = verify_reduced_orientation(mesh.points * 1000, mesh.triangles, cut_planes=planes)
         if orientation["inverted_component_count"] or orientation["unresolved_component_count"]:

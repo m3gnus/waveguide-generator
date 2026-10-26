@@ -60,7 +60,7 @@ def _inputs(package: MeshReplayInputs) -> dict[str, Any]:
     # New optional preparation fields must not alter historical package checksums.
     if payload["registration"]["roles"] is None:
         payload["registration"].pop("roles")
-    for field, default in (("domain_planes", []), ("reflect_planes", None)):
+    for field, default in (("domain_planes", []), ("reflect_planes", None), ("remove_lid_planes", [])):
         if payload["registration"][field] == default:
             payload["registration"].pop(field)
     return payload
@@ -115,7 +115,8 @@ def build_mesh_replay(runtime: Any, store: Any, job_id: str) -> dict[str, Any]:
         raise ValueError("The retained original mesh changed. Reimport and solve it before exporting replay.")
     mesh, _ = prepare_file_mesh(parse_file_mesh(original_text), source["transform"]["units"],
                                 source["transform"]["forward"], source["transform"]["up"],
-                                domain_planes=source.get("domain_planes", []), reflect_planes=source.get("reflect_planes"))
+                                domain_planes=source.get("domain_planes", []), reflect_planes=source.get("reflect_planes"),
+                                remove_lid_planes=source.get("remove_lid_planes", []))
     if mesh_text(mesh) != solver_text:
         raise ValueError("The original mesh no longer reconstructs the run's solver mesh.")
     # Remove local job ancestry and a spent submission key, keeping the entire
@@ -132,6 +133,7 @@ def build_mesh_replay(runtime: Any, store: Any, job_id: str) -> dict[str, Any]:
             up=source["transform"]["up"], source_tags=source["source_tags"],
             roles=source.get("roles"),
             domain_planes=source.get("domain_planes", []), reflect_planes=source.get("reflect_planes"),
+            remove_lid_planes=source.get("remove_lid_planes", []),
         ),
         original_sha256=_digest(original_text), solver_msh_text=solver_text,
         solver_sha256=_digest(solver_text), request=request,
@@ -159,7 +161,8 @@ def restore_mesh_replay(
     if _digest(body.msh_text) != package.original_sha256:
         raise ValueError("The original mesh checksum does not match the replay package.")
     mesh, _ = prepare_file_mesh(parse_file_mesh(body.msh_text), body.units, body.forward, body.up,
-                                domain_planes=body.domain_planes, reflect_planes=body.reflect_planes)
+                                domain_planes=body.domain_planes, reflect_planes=body.reflect_planes,
+                                remove_lid_planes=body.remove_lid_planes)
     # Reconstruct, do not trust a packaged solver mesh or a transform matrix.
     reconstructed = mesh_text(mesh)
     if (_digest(package.solver_msh_text) != package.solver_sha256

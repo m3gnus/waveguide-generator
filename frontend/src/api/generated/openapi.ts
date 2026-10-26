@@ -4226,6 +4226,11 @@ export interface components {
             forward: "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
             /** Reflect Planes */
             reflect_planes?: string[] | null;
+            /**
+             * Remove Lid Planes
+             * @description Remove closed faces on these declared symmetry planes. A plane without a closed face is rejected.
+             */
+            remove_lid_planes?: string[];
             /** Roles */
             roles?: {
                 [key: string]: string;
@@ -5213,6 +5218,11 @@ export interface components {
             msh_text: string;
             /** Reflect Planes */
             reflect_planes?: string[] | null;
+            /**
+             * Remove Lid Planes
+             * @description Remove closed faces on these declared symmetry planes. A plane without a closed face is rejected.
+             */
+            remove_lid_planes?: string[];
             /** Roles */
             roles?: {
                 [key: string]: string;

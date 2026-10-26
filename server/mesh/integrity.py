@@ -16,6 +16,13 @@ import numpy as np
 SYMMETRY_PLANE_TOLERANCE_M = 1.0e-9
 
 
+def on_coordinate_plane(
+    points: np.ndarray, elements: np.ndarray, axis: int, *, tolerance: float,
+) -> np.ndarray:
+    """Test all vertices of each edge or triangle against one origin plane."""
+    return np.all(np.abs(points[elements, axis]) <= tolerance, axis=1)
+
+
 def _first_occurrences(rows: np.ndarray) -> np.ndarray:
     """Mask marking, for each row, whether it is the first of its value.
 
@@ -37,6 +44,7 @@ def mesh_integrity_report(
     *,
     expected_volume_sign: int | None = 1,
     symmetry_plane_axes: tuple[int, ...] = (),
+    symmetry_plane_tolerance: float = SYMMETRY_PLANE_TOLERANCE_M,
 ) -> dict[str, Any]:
     """Report topology and orientation of a canonical triangle mesh.
 
@@ -160,9 +168,9 @@ def mesh_integrity_report(
         ends = np.asarray(open_edges, dtype=np.int64)
         on_a_plane = np.zeros(len(ends), dtype=bool)
         for axis in symmetry_plane_axes:
-            on_a_plane |= (
-                np.abs(points[ends[:, 0], axis]) <= SYMMETRY_PLANE_TOLERANCE_M
-            ) & (np.abs(points[ends[:, 1], axis]) <= SYMMETRY_PLANE_TOLERANCE_M)
+            on_a_plane |= on_coordinate_plane(
+                points, ends, axis, tolerance=symmetry_plane_tolerance,
+            )
         off_plane_open_edges = [
             edge for edge, on_plane in zip(open_edges, on_a_plane) if not on_plane
         ]

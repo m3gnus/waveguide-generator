@@ -251,14 +251,16 @@ def test_explicit_file_roles_survive_replay_into_a_fresh_store(tmp_path):
 
 
 @pytest.mark.parametrize("symmetry", ["auto", "quarter"])
-def test_reflected_role_mesh_replays_its_reduced_domain_in_a_fresh_store(tmp_path, symmetry):
+@pytest.mark.parametrize("remove_lids", [False, True])
+def test_reflected_role_mesh_replays_its_reduced_domain_in_a_fresh_store(tmp_path, symmetry, remove_lids):
     async def scenario():
         app, store, runtime, engine = app_for(tmp_path / "origin")
         try:
-            original = box_mesh(planes=("x0", "y0"), negative=("x0",))
+            original = box_mesh(planes=("x0", "y0"), negative=("x0",), capped=("x0", "y0") if remove_lids else ())
             record = register_mesh(store, app.state.data_dir, registration(
                 msh_text=mesh_text(original), units="m", source_tags=[],
                 roles={101: "HF", 102: "MF"}, domain_planes=["x0", "y0"],
+                remove_lid_planes=["x0", "y0"] if remove_lids else [],
             ))
             body = request(record)
             body.geometry.drive_channels[0].id = "hf"
@@ -271,6 +273,10 @@ def test_reflected_role_mesh_replays_its_reduced_domain_in_a_fresh_store(tmp_pat
             package = await call(app, "GET", f"/api/jobs/{job_id}/mesh-replay")
             assert package["registration"]["roles"] == {"101": "HF", "102": "MF"}
             assert package["registration"]["domain_planes"] == ["x0", "y0"]
+            if remove_lids:
+                assert package["registration"]["remove_lid_planes"] == ["x0", "y0"]
+            else:
+                assert "remove_lid_planes" not in package["registration"]
             first_mesh = engine.calls[0][1]
         finally:
             await runtime.shutdown()
@@ -282,6 +288,8 @@ def test_reflected_role_mesh_replays_its_reduced_domain_in_a_fresh_store(tmp_pat
             assert opened["record"]["symmetry"]["domain_planes"] == ["x0", "y0"]
             assert opened["record"]["symmetry"]["reflected_planes"] == ["x0"]
             assert [source["role"] for source in opened["record"]["sources"]] == ["HF", "MF"]
+            if remove_lids:
+                assert opened["record"]["source_file"]["transform"]["removed_lids"] == record["source_file"]["transform"]["removed_lids"]
             corrupt = deepcopy(package)
             corrupt["request"]["options"]["symmetry"] = "full"
             rehash(corrupt)

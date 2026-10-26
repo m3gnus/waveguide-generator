@@ -44,9 +44,8 @@ from server.jobs.model_solve import ModelSolveRefusal, ModelSolveRequest, solve_
 from server.jobs.models import SolveAccepted
 from server.jobs.runtime import ImportedSolveRefusal
 from server.mesh.artifact import read_verified_import_mesh
-from server.mesh.file_import import MAX_MESH_BYTES, inspect_file_mesh, mesh_text, parse_file_mesh, prepare_file_mesh, solve_group_tags, validate_file_symmetry
+from server.mesh.file_import import MAX_MESH_BYTES, file_mesh_integrity, inspect_file_mesh, mesh_text, parse_file_mesh, prepare_file_mesh, solve_group_tags, validate_file_symmetry, validate_remove_lid_planes
 from server.mesh.imported import polar_grid_from_symmetry
-from server.mesh.integrity import mesh_integrity_report
 from server.mesh.prepared_gc import prepared_mesh_use
 from server.platform.staging import publish_staging_directory
 from server.workspace.archive_identity import claim_project_folder
@@ -77,6 +76,10 @@ class FilePreparation(JobModel):
     roles: dict[int, str] | None = Field(default=None, max_length=256)
     domain_planes: list[str] = Field(default_factory=list, max_length=2)
     reflect_planes: list[str] | None = Field(default=None, max_length=2)
+    remove_lid_planes: list[str] = Field(
+        default_factory=list, max_length=2,
+        description="Remove closed faces on these declared symmetry planes. A plane without a closed face is rejected.",
+    )
 
     @model_validator(mode="after")
     def surface_roles(self) -> FilePreparation:
@@ -89,6 +92,7 @@ class FilePreparation(JobModel):
         planes, reflections = validate_file_symmetry(self.domain_planes, self.reflect_planes)
         self.domain_planes = list(planes)
         self.reflect_planes = list(reflections) if reflections is not None else None
+        self.remove_lid_planes = list(validate_remove_lid_planes(self.remove_lid_planes, planes))
         return self
 
 
@@ -191,7 +195,8 @@ def _register_mesh(
 ) -> dict[str, Any]:
     original = parse_file_mesh(body.msh_text)
     mesh, transform = prepare_file_mesh(original, body.units, body.forward, body.up,
-                                      domain_planes=body.domain_planes, reflect_planes=body.reflect_planes)
+                                      domain_planes=body.domain_planes, reflect_planes=body.reflect_planes,
+                                      remove_lid_planes=body.remove_lid_planes)
     if len(set(body.source_tags)) != len(body.source_tags) or set(body.source_tags) - set(
         mesh.tags.tolist()
     ):
@@ -223,6 +228,8 @@ def _register_mesh(
         spec["domain_planes"] = body.domain_planes
         # Retain the choice, including an explicit opt-out, for faithful replay.
         spec["reflect_planes"] = body.reflect_planes
+    if body.remove_lid_planes:
+        spec["remove_lid_planes"] = body.remove_lid_planes
     spec_digest = _sha256(canonical_utf8_strict_json(spec).encode())
     model_id = file_model_id(original_digest)
 
@@ -289,7 +296,7 @@ def _register_mesh(
         "evidence": {"fem_regions": [], "fem_air_volumes": []},
         "mesh": {
             "stats": {"triangle_count": len(mesh.triangles), "node_count": len(mesh.points)},
-            "integrity": mesh_integrity_report(mesh.points, mesh.triangles, symmetry_plane_axes=tuple(SYMMETRY_PLANE_AXIS[plane] for plane in body.domain_planes)),
+            "integrity": file_mesh_integrity(mesh, body.domain_planes),
             "metadata": {},
         },
         "summary": {
