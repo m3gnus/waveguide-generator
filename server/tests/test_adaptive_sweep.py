@@ -225,6 +225,65 @@ def test_shared_weights_and_froissart_cleanup_keep_samples():
     assert model.values.shape[1] == 3
 
 
+def test_barycentric_fit_does_not_send_infinities_to_matrix_products():
+    from server.solver.adaptive_rational import Rational
+
+    class FiniteMatrix(np.ndarray):
+        def __matmul__(self, other):
+            assert np.isfinite(self).all()
+            return super().__matmul__(other)
+
+    support = np.array([-1., 1.]).view(FiniteMatrix)
+    model = Rational(support, np.array([[2.], [4.]]), np.array([1., -1.]), [])
+    np.testing.assert_allclose(model([-1., 0., 1.]).ravel(), [2., 3., 4.])
+    np.testing.assert_array_equal(model([-1., 1.]).ravel(), [2., 4.])
+    assert model([]).shape == (0, 1)
+
+
+@pytest.mark.parametrize("invalid", [np.nan, np.inf, -np.inf])
+@pytest.mark.parametrize("side", ["a", "b"])
+def test_difference_db_keeps_finite_channel_peaks_when_another_value_is_invalid(invalid, side):
+    from server.solver.adaptive_sweep import difference_db
+
+    a = np.array([[1000., 1.], [1., 100.], [.5, .1]])
+    b = np.array([[1000., 1.], [1., 100.], [1., .1]])
+    (a if side == "a" else b)[0, 0] = invalid
+    scores = difference_db(a, b)
+    a[0, 0] = b[0, 0] = 1000.
+    reference = difference_db(a, b)
+    assert scores[0] == 1e9
+    np.testing.assert_allclose(scores[1:], reference[1:])
+
+
+def test_nonfinite_prediction_marks_only_its_frequency_and_prevents_convergence(monkeypatch):
+    from server.solver import adaptive_sweep as sweep
+
+    f = np.geomspace(100, 101, 24)
+    target = 11
+
+    class Model:
+        def __init__(self, *args, physical=False, **kwargs):
+            self.physical = physical
+
+        def __call__(self, frequencies):
+            values = np.ones((len(frequencies), 1), dtype=complex)
+            if self.physical and len(frequencies) == len(f):
+                values[target] = np.nan
+            return values
+
+        def safe(self):
+            return True
+
+    monkeypatch.setattr(sweep, "SweepModel", Model)
+    planner = SweepPlanner(f, delays_s=0)
+    assert target not in planner.pending
+    planner.add(planner.pending, np.ones((len(planner.pending), 1), dtype=complex))
+    scores = sweep.difference_db(planner.prediction, np.ones((len(f), 1)))
+    assert np.flatnonzero(scores == 1e9).tolist() == [target]
+    assert target in planner.pending
+    assert not planner.safe and planner.stable == 0
+
+
 @pytest.mark.parametrize("f", [[0, 1], [1, 1], [2, 1], [1, np.nan]])
 def test_bad_grid_is_refused(f):
     with pytest.raises(ValueError):

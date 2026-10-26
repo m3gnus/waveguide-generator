@@ -67,10 +67,17 @@ def enabled(context) -> bool:
 
 
 def difference_db(a, b):
+    valid_a, valid_b = np.isfinite(a), np.isfinite(b)
+    # One invalid prediction should demand that frequency, not poison each
+    # channel's peak and make every frequency appear equally unreliable.
+    a = np.where(valid_a, a, 0)
+    b = np.where(valid_b, b, 0)
     peak = np.maximum(np.max(np.abs(a), axis=0), np.max(np.abs(b), axis=0))
     denominator = np.maximum(np.maximum(np.abs(a), np.abs(b)), peak[None] * 10 ** (-30 / 20))
     relative = np.abs(a - b) / np.maximum(denominator, 1e-30)
-    return np.nan_to_num(np.max(20 * np.log10(1 + relative), axis=1), nan=1e9, posinf=1e9)
+    scores = np.nan_to_num(np.max(20 * np.log10(1 + relative), axis=1), nan=1e9, posinf=1e9)
+    scores[~np.all(valid_a & valid_b, axis=1)] = 1e9
+    return scores
 
 
 class SweepPlanner:

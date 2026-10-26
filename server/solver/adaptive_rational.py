@@ -20,11 +20,18 @@ class Rational:
         x = np.atleast_1d(x).astype(complex)
         delta = x[:, None] - self.support
         exact = delta == 0
-        with np.errstate(divide="ignore", invalid="ignore"):
-            c = 1 / delta
-            result = (c @ (self.weights[:, None] * self.values)) / (c @ self.weights)[:, None]
+        exact_rows = np.any(exact, axis=1)
+        result = np.empty((len(x), self.values.shape[1]), dtype=complex)
         rows, cols = np.where(exact)
         result[rows] = self.values[cols]
+        if np.any(~exact_rows):
+            # Exact support rows are already known. Keep their infinities out
+            # of BLAS rather than relying on overwriting a non-finite result.
+            with np.errstate(divide="ignore", invalid="ignore"):
+                c = 1 / delta[~exact_rows]
+                result[~exact_rows] = (
+                    (c @ (self.weights[:, None] * self.values)) / (c @ self.weights)[:, None]
+                )
         return result
 
     def poles_residues(self):
