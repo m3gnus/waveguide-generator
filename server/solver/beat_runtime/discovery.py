@@ -76,11 +76,41 @@ def recorded_julia(
     return None
 
 
+def _path_julia(env: Mapping[str, str]) -> str | None:
+    """The first PATH Julia WG can read and hash.
+
+    juliaup and the Microsoft Store install ``julia.exe`` as an App Execution
+    Alias under WindowsApps. Opening that reparse point fails (OSError 22), so
+    it, and any other unreadable candidate, falls through to the next entry.
+    """
+    seen: set[str] = set()
+    for directory in env.get("PATH", os.defpath).split(os.pathsep):
+        candidate = shutil.which("julia", path=directory) if directory else None
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        path = Path(candidate)
+        if (paths.hbb_executable(path, environ=env) or paths.reparse_point(path)
+                or any(part.lower() == "windowsapps" for part in path.parts)):
+            continue
+        try:
+            executable_identity(path)
+        except OSError:
+            continue
+        return candidate
+    return None
+
+
 def discover_julia(
     explicit: str | None = None, *, configured: str | None = None,
     root: Path | None = None, environ: Mapping[str, str] | None = None,
+    include_path: bool = True,
 ) -> str | None:
-    """Resolve explicit → configured → WG-recorded → PATH; never run Julia."""
+    """Resolve explicit → configured → WG-recorded → WG's pinned → PATH; never run Julia.
+
+    ``include_path=False`` is for provisioning, which installs WG's pinned
+    Julia rather than adopting whichever Julia PATH happens to name.
+    """
     env = os.environ if environ is None else environ
     configured = configured if configured is not None else env.get(JULIA_ENV_VAR)
     for source, candidate in (("explicit", explicit), ("configured", configured)):
@@ -100,9 +130,14 @@ def discover_julia(
         and backend["julia_identity"] == record["identity"]
         for backend in state.read_backend_states(directory).values()
     )
-    recorded = (None if record and record.get("selection") == "explicit" and not provisioned
+    # A PATH Julia adopted by an earlier WG is kept only while it is proved.
+    recorded = (None if record and record.get("selection") in {"explicit", "path"} and not provisioned
                 else recorded_julia(directory, environ=env))
     if recorded is not None:
         return recorded
-    candidate = shutil.which("julia", path=env.get("PATH", os.defpath))
-    return candidate if candidate and not paths.hbb_executable(Path(candidate), environ=env) else None
+    from .installer import pinned_julia
+
+    pinned = pinned_julia(directory)
+    if pinned is not None:
+        return str(pinned)
+    return _path_julia(env) if include_path else None

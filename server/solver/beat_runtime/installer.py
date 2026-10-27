@@ -207,6 +207,16 @@ def _owned(tree: Path, spec: JuliaDownload) -> bool:
     return marker == {"provider": PROVIDER_ID, "version": JULIA_VERSION, "platform": spec.platform}
 
 
+def pinned_julia(root: Path, *, system: str | None = None, machine: str | None = None) -> Path | None:
+    """WG's own pinned portable Julia under ``root``, when installed and intact."""
+    try:
+        spec = julia_download(system, machine)
+    except RuntimeError:
+        return None
+    target = root / "julia" / spec.directory
+    return _executable(target, spec.windows) if _owned(target, spec) and _valid_tree(target, spec) else None
+
+
 def _valid_tree(tree: Path, spec: JuliaDownload) -> bool:
     executable = _executable(tree, spec.windows)
     return executable.is_file() and (spec.windows or os.access(executable, os.X_OK)) and executable.resolve().is_relative_to(tree.resolve())
@@ -394,7 +404,7 @@ def ensure_julia(
     paths.checked_root(root)
     if paths.is_link(root):
         raise RuntimeError(f"Linked runtime directory refused: {root}")
-    existing = discovery.discover_julia(explicit, configured=configured, root=root, environ=env)
+    existing = discovery.discover_julia(explicit, configured=configured, root=root, environ=env, include_path=False)
     configured_path = configured if configured is not None else env.get(discovery.JULIA_ENV_VAR, "")
     for source, candidate in (("explicit", explicit), ("configured", configured_path)):
         if candidate and candidate.strip():
@@ -410,10 +420,10 @@ def ensure_julia(
         relative = resolved.relative_to(root.resolve()) if resolved.is_relative_to(root.resolve()) else None
         managed = relative is not None and len(relative.parts) > 1 and relative.parts[0] == "julia"
         current = managed and (relative.parts[1] == JULIA_VERSION or relative.parts[1].startswith(f"{JULIA_VERSION}-"))
-        if managed and not current:
-            existing = shutil.which("julia", path=env.get("PATH", os.defpath))
-            if existing and Path(existing).resolve().is_relative_to((root / "julia").resolve()):
-                existing = None
+        if managed and not (current and record and record["executable"] == existing):
+            # An outdated or unrecorded WG Julia goes through the pinned install
+            # below, never to whatever PATH names.
+            existing = None
     if existing and paths.hbb_executable(Path(existing), environ=env):
         existing = None
     if existing:
@@ -444,10 +454,8 @@ def ensure_julia(
     if _WINDOWS:
         _check_windows_paths(root.absolute(), spec)
     _recover(root, spec)
-    target = root / "julia" / spec.directory
-    if _owned(target, spec) and _valid_tree(target, spec):
-        executable = _executable(target, spec.windows)
-    else:
+    executable = pinned_julia(root, system=system, machine=machine)
+    if executable is None:
         check_disk_space(root, required_bytes)
         _private_directory(root)
         archive = root / ("dl" if spec.windows else "downloads") / spec.filename

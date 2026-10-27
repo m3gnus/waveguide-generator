@@ -108,8 +108,14 @@ def expected_identity(
     )
     julia = discovery.discover_julia(julia_executable, root=directory, environ=env)
     if julia:
+        try:
+            julia_identity = discovery.executable_identity(Path(julia))
+        except OSError:
+            # An unreadable launcher is no Julia WG can prove. Leave it to
+            # provisioning, which installs WG's own or reports the selection.
+            return expected
         recorded = state.read_julia(directory)
-        expected.update(julia_executable=julia, julia_identity=discovery.executable_identity(Path(julia)),
+        expected.update(julia_executable=julia, julia_identity=julia_identity,
                         julia_version=recorded["version"] if recorded and recorded["executable"] == julia else None)
     return expected
 
