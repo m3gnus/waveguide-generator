@@ -98,6 +98,14 @@ function solving(job: JobItem): CadModelStatusLine {
   return percent > 0 ? line(`Solving · ${percent}%`, `solving ${percent}%`, 'busy') : line('Solving…', 'solving…', 'busy');
 }
 
+/** A line with nothing to say beside open charts: the plain ready line, a
+ * solved or idle one. Attention and busy lines, and any action but Show
+ * results, stay (Solve counts only on the ready line, where the top bar owns it). */
+export function isQuietStatusLine(line: Pick<CadModelStatusLine, 'tone' | 'action'>): boolean {
+  if (line.tone === 'attention' || line.tone === 'busy') return false;
+  return line.action === 'none' || line.action === 'show-results' || (line.tone === 'ready' && line.action === 'solve');
+}
+
 /**
  * The selected imported model's status (a CAD model or a mesh file), in one
  * sentence with at most one action. Results shows it once, with the action

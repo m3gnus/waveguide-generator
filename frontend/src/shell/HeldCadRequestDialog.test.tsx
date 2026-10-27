@@ -209,6 +209,58 @@ describe('held CAD request dialog owner', () => {
     expect(actions.continueRun).toHaveBeenCalledWith('failed');
   });
 
+  describe('with charts open for the current model (activeOnly)', () => {
+    const open = (record?: unknown) => {
+      workspaceModeStore.setMode('cad');
+      if (record) useCadReturnStore.setState({ ingestRecord: record as never, needsIngest: false });
+    };
+    it('still says a held request, with Choose…', async () => {
+      const job = held();
+      publishCadJobs([job]);
+      const record = { ingest_id: 'mesh', manifest_sha256: job.cad_state!.snapshot!.manifest_sha256 };
+      open(record);
+      await act(async () => root.render(<><HeldCadRequestDialog/><CurrentModelStatus record={record as never} actions solveStatus activeOnly/></>));
+      act(() => button('Later').click());
+      const status = host.querySelector('[data-model-status="waiting"]')!;
+      expect(status.textContent).toContain('needs your choice');
+      expect([...status.querySelectorAll('button')].map(node => node.textContent)).toEqual(['Choose…']);
+    });
+    it('still says a failed preparation, with Try again', async () => {
+      const calm = 'Waveguide Generator could not prepare Speaker. This has been recorded for the developers.';
+      const failed = { ...held('failed'), status: 'error', stage: 'error', error_message: calm,
+        cad_state: { ...held().cad_state!, state: 'needs_user_input', held: false, prepare_failed: true, reason: 'preparation_failed',
+          message: calm, next_step: null, options: [{ id: 'retry', label: 'Try again' }] } } as JobItem;
+      publishCadJobs([failed]);
+      const record = { ingest_id: 'mesh', manifest_sha256: failed.cad_state!.snapshot!.manifest_sha256 };
+      open(record);
+      await act(async () => root.render(<CurrentModelStatus record={record as never} actions solveStatus activeOnly/>));
+      const status = host.querySelector('[data-model-status="prepare-failed"]')!;
+      expect(status.textContent).toContain(calm);
+      expect([...status.querySelectorAll('button')].map(node => node.textContent)).toEqual(['Try again']);
+    });
+    it('still says the browser\'s mesh-size choice, with Choose…', async () => {
+      const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
+      useCadReturnStore.setState({ selectedBundle: { bundlePath: 'b', name: 'b', documentName: 'Speaker', readable: true, modifiedAt: '2026-10-24T10:00:00Z' } as never, ingestRecord: null });
+      open();
+      await act(async () => root.render(<CurrentModelStatus actions solveStatus activeOnly/>));
+      act(() => meshCeilingChoice.ask({ name: 'Speaker', nextStep: 'Change the mesh resolution.', bundlePath: 'b', deferred: true } as never));
+      act(() => meshCeilingChoice.defer());
+      expect(host.querySelector('.cad-status-line')?.textContent).toContain('Speaker needs your choice');
+      expect([...host.querySelectorAll('.cad-status-line button')].map(node => node.textContent)).toEqual(['Choose…']);
+      act(() => meshCeilingChoice.clear());
+      useCadReturnStore.setState({ selectedBundle: null });
+    });
+    it('hides the plain ready line', async () => {
+      const ready = { ...held('ready'), cad_state: { ...held().cad_state!, held: true, reason: 'ready_to_solve', attention: 'ready',
+        message: 'Prepared. Press Solve to start it.' } } as JobItem;
+      publishCadJobs([ready]);
+      const record = { ingest_id: 'mesh', manifest_sha256: ready.cad_state!.snapshot!.manifest_sha256 };
+      open(record);
+      await act(async () => root.render(<CurrentModelStatus record={record as never} actions solveStatus activeOnly/>));
+      expect(host.querySelector('.cad-status-line')).toBeNull();
+    });
+  });
+
   it('shows a prepared request as Ready to solve in Results, with Solve, never as a question', async () => {
     const solve = vi.fn().mockResolvedValue('submitted');
     solveControl.current = { solve, disabled: false, title: 'Solve', cadMode: true, importedGeometryActive: true, submitting: false,

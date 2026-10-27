@@ -22,9 +22,9 @@ import { CurrentModelStatus } from '../shell/CurrentModelStatus';
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 const panel = () => <QueryClientProvider client={queryClient}><MeshImportPanel tab="geometry"/><MeshImportPanel tab="simulation"/></QueryClientProvider>;
 /** The Imported mesh card beside Results, the one home of the file's status line. */
-function renderGeometry() {
+function renderGeometry(activeOnly = false) {
   workspaceModeStore.setMode('cad');
-  act(() => root.render(<><MeshImportPanel tab="geometry"/><section aria-label="Results"><CurrentModelStatus actions solveStatus/></section></>));
+  act(() => root.render(<><MeshImportPanel tab="geometry"/><section aria-label="Results"><CurrentModelStatus actions solveStatus activeOnly={activeOnly}/></section></>));
 }
 
 const initial = useMeshImportStore.getState();
@@ -171,6 +171,15 @@ it('shows one status action, and Try again only after a preparation problem', as
   expect(host.querySelectorAll('.cad-status-line button')).toHaveLength(1);
   expect(host.querySelector('.cad-status-line button')?.textContent).toBe('Try again');
   expectNoJargon(host);
+});
+
+it('still says a preparation problem, with Try again, when charts are open', () => {
+  geometry({ prepared: true });
+  renderGeometry(true);
+  expect(host.querySelector('.cad-status-line')).toBeNull();
+  act(() => useMeshImportStore.setState({ busy: false, error: 'The mesh has an opening. Close it in the meshing tool.' }));
+  expect(host.querySelector('.cad-status-line')?.textContent).toContain('The mesh has an opening.');
+  expect(host.querySelector('.cad-status-line button')?.textContent).toBe('Try again');
 });
 
 it('asks only for missing units and marks the choice at its field', () => {

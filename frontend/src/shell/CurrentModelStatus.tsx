@@ -3,8 +3,8 @@ import { isActiveJobStatus } from '../api/jobsSocket';
 import { cadJobSummary, isReadyCadJob } from '../jobs/cadSolve';
 import { messageBlocker } from '../jobs/solveReadiness';
 import { useCurrentModelStatus } from '../model/currentModel';
-import { CadModelStatusLine, useFileModelView } from './CadModelStatusLine';
-import { ENGINE_HOLDS } from '../stores/cadModelStatusLine';
+import { CadModelStatusLine, useCadModelStatusLine, useFileModelView } from './CadModelStatusLine';
+import { ENGINE_HOLDS, isQuietStatusLine } from '../stores/cadModelStatusLine';
 import { jobsCoordinatorBridge, useOptionalSolveControl } from './JobsCoordinator';
 import { Notice } from './Notice';
 import { clearSolveStageClock, MODEL_STATUS_TITLE, SolveProgressView } from './solveProgress';
@@ -23,6 +23,7 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
   const fileView = useFileModelView();
   const file = model.kind === 'file' ? fileView : undefined;
   const control = useOptionalSolveControl();
+  const { line } = useCadModelStatusLine(file);
   const latestJob = status.job;
   const unavailable = !control || (!!record && !control.cadMode);
   // A prepared request blocks nothing: its sentence is never a readiness blocker.
@@ -58,7 +59,9 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
     </div>;
     // A finished run's clock goes with it, so a later sample under the same id starts afresh.
     if (latestJob) clearSolveStageClock(latestJob.id);
-    if (activeOnly && !terminalFailure) return null;
+    // Beside open charts only a quiet line is hidden; a model-side problem or
+    // question (and its action) is still said.
+    if (activeOnly && !terminalFailure && isQuietStatusLine(line)) return null;
     return <div className="current-model-status" data-model-status={status.kind}>
       <CadModelStatusLine file={file}/>
     </div>;
