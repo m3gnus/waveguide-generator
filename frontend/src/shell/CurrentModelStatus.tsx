@@ -3,7 +3,7 @@ import { isActiveJobStatus } from '../api/jobsSocket';
 import { cadJobSummary, isReadyCadJob } from '../jobs/cadSolve';
 import { messageBlocker } from '../jobs/solveReadiness';
 import { useCurrentModelStatus } from '../model/currentModel';
-import { useCadModelStatusLine } from './CadModelStatusLine';
+import { CadModelStatusLine, useFileModelView } from './CadModelStatusLine';
 import { ENGINE_HOLDS } from '../stores/cadModelStatusLine';
 import { jobsCoordinatorBridge, useOptionalSolveControl } from './JobsCoordinator';
 import { Notice } from './Notice';
@@ -13,14 +13,15 @@ import { clearSolveStageClock, MODEL_STATUS_TITLE, SolveProgressView } from './s
  * The current model's run status in Results (and, given a `record`, for one
  * CAD preparation).
  *
- * A CAD model's state is its status line (`cadModelStatusLine`), whose one
- * action lives in the model card and Solve in the top bar: here it is stated
- * without a button. Results keeps what it owns: run progress, and the solve
- * readiness view with its engine remedies.
+ * Results is the one home of an imported model's status (a CAD model or a
+ * mesh file): its status line (`cadModelStatusLine`), shown once with its one
+ * action beside it. No card, subtitle or overlay repeats it. Results also
+ * keeps run progress, and the solve readiness view with its engine remedies.
  */
 export function CurrentModelStatus({ record, actions = false, solveStatus = false, activeOnly = false }: { record?: CadReturnIngestRecord; actions?: boolean; solveStatus?: boolean; activeOnly?: boolean }) {
   const { model, status } = useCurrentModelStatus(record);
-  const { model: cad, line } = useCadModelStatusLine();
+  const fileView = useFileModelView();
+  const file = model.kind === 'file' ? fileView : undefined;
   const control = useOptionalSolveControl();
   const latestJob = status.job;
   const unavailable = !control || (!!record && !control.cadMode);
@@ -37,13 +38,13 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
     || (readiness && (engineHold || control?.readinessRequested)));
   const terminalFailure = status.kind === 'failed' || (status.kind === 'refused' && !held);
 
-  if (model.kind === 'cad') {
+  if (model.kind === 'cad' || model.kind === 'file') {
     // A Solve press in progress or refused, or an engine gate: the readiness
     // view and its remedies, never a second Solve.
     // A latest attempt that failed or was refused is still said beside it.
     if (pending) return <div className="current-model-status" data-model-status={status.kind}>
       <SolveProgressView showReadiness readiness={readiness} held={engineHold}/>
-      {terminalFailure && <p className="current-model-status-line">{line.text}</p>}
+      {terminalFailure && <CadModelStatusLine file={file} actions={false}/>}
     </div>;
     // Run progress: a request still being prepared reads in the operation's
     // own stages; once bound, in its job's.
@@ -59,8 +60,7 @@ export function CurrentModelStatus({ record, actions = false, solveStatus = fals
     if (latestJob) clearSolveStageClock(latestJob.id);
     if (activeOnly && !terminalFailure) return null;
     return <div className="current-model-status" data-model-status={status.kind}>
-      <p className="current-model-status-line" role="status">{status.kind === 'never-solved' && line.action === 'solve'
-        ? `No results for ${cad.label} yet.` : line.text}</p>
+      <CadModelStatusLine file={file}/>
     </div>;
   }
 

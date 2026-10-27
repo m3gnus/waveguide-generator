@@ -86,8 +86,11 @@ const currentFusion: FusionCadStatus = {
  * be solved here at all, so it needs the same query client the app provides. */
 const capabilityClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
+/** The CAD rail beside Results, the one home of the model's status line. */
 function CadLinkTestSurface() {
-  return <QueryClientProvider client={capabilityClient}><CadWorkspaceOwners/><CadLinkPanel/></QueryClientProvider>;
+  return <QueryClientProvider client={capabilityClient}><CadWorkspaceOwners/><CadLinkPanel/>
+    <section aria-label="Results"><CurrentModelStatus actions solveStatus/></section>
+  </QueryClientProvider>;
 }
 
 function FullCadLinkTestSurface({ results = false }: { results?: boolean }) {
@@ -2101,11 +2104,13 @@ describe('CadLinkPanel', () => {
       if (String(input).endsWith('/ingest')) return pendingIngest;
       return json(record);
     }));
+    workspaceModeStore.setMode('cad');
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
 
-    // Preparing has no button: the line says so, once.
-    expect(host.querySelector('.cad-model-card .cad-status-line')?.textContent).toBe('Preparing Speaker…');
-    expect(host.querySelector('.cad-model-card .cad-status-line button')).toBeNull();
+    // Preparing has no button: the line says so, once, in Results.
+    expect(host.querySelector('.cad-model-card .cad-status-line')).toBeNull();
+    expect(host.querySelector('[aria-label="Results"] .cad-status-line')?.textContent).toBe('Preparing Speaker…');
+    expect(host.querySelector('.cad-status-line button')).toBeNull();
     await act(async () => {
       resolveIngest(json(record));
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
@@ -3104,8 +3109,10 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
     const card = host.querySelector('.cad-model-card')!;
-    expect(card.querySelector('.cad-status-line')?.textContent).toContain(calm);
-    expect(card.querySelector('.cad-status-line button[data-action="try-again"]')?.textContent).toBe('Try again');
+    const results = host.querySelector('[aria-label="Results"]')!;
+    expect(card.querySelector('.cad-status-line')).toBeNull();
+    expect(results.querySelector('.cad-status-line')?.textContent).toContain(calm);
+    expect(results.querySelector('.cad-status-line button[data-action="try-again"]')?.textContent).toBe('Try again');
     // Never red, never a path or a code.
     expect(host.querySelector('.notice-error')).toBeNull();
     for (const word of ['$.', 'bundle', 'validation', 'snapshot_invalid', 'suggested_resolution']) expect(host.textContent).not.toContain(word);
@@ -3127,7 +3134,7 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
     expect(useCadReturnStore.getState().areaDriftSourceIds).toContain('source-hf');
-    expect(host.querySelector('.cad-model-card .cad-status-line')?.textContent).toContain('Waveguide Generator could not prepare Speaker.');
+    expect(host.querySelector('[aria-label="Results"] .cad-status-line')?.textContent).toContain('Waveguide Generator could not prepare Speaker.');
     expect(host.querySelector('.notice-error[role="alert"]')?.textContent).toContain('Role resolution refused');
     expect(host.querySelector('.cad-status-line button[data-action="try-again"]')?.textContent).toBe('Try again');
     expect(host.textContent).not.toContain('Allow recorded area drift');

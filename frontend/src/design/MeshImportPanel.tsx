@@ -2,10 +2,9 @@ import { planeWords } from '../api/domainDecision';
 import { useState } from 'react';
 import { useDeveloperDetails } from '../prefs/preferences';
 import { CadSimulationSections } from './ParamPanel';
-import { editMeshImport, prepareMeshFile, useMeshImportStore, meshImportChoice } from '../stores/meshImport';
+import { editMeshImport, useMeshImportStore } from '../stores/meshImport';
 import { FILE_SURFACE_ROLES, fileSymmetryLabel, sourceRoleLabel } from '../model/cadLabels';
-import { useImportedSetupSaveError } from '../shell/cadSetupPublisher';
-import { CadModelStatusLine } from '../shell/CadModelStatusLine';
+import { useMeshFileEditable } from '../shell/CadModelStatusLine';
 import { FileModelDetails } from '../shell/CadModelDetails';
 import { useImportedModelStore } from '../stores/importedModel';
 import type { RegisteredMesh } from '../api/meshImport';
@@ -22,12 +21,9 @@ const AXES = ['+x', '-x', '+y', '-y', '+z', '-z'];
 export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | 'simulation'; embedded?: boolean }) {
   const state = useMeshImportStore();
   const model = useImportedModelStore();
-  const saveError = useImportedSetupSaveError('file', model.input === 'file' ? model.modelId : null);
   const draft = model.fileDraft;
   const registered = model.input === 'file' ? model.prepared as RegisteredMesh | null : null;
-  // The geometry can change whenever an original exists to prepare it from:
-  // this browser read it, or the server kept it for the model.
-  const editable = state.original !== null || (model.input === 'file' && model.modelId !== null && model.originalAvailable);
+  const editable = useMeshFileEditable();
   const developer = useDeveloperDetails();
   const [symmetryOpen, setSymmetryOpen] = useState(false);
   const [sizeOpen, setSizeOpen] = useState(false);
@@ -63,13 +59,8 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
   return <SolveOptionsStoreProvider mode="cad"><div className={`param-panel mesh-import-panel${embedded ? '' : ' panel-scroll'}`} aria-label={`Imported mesh ${tab}`}>
     {tab === 'geometry' && <>
     <section className="cad-workflow cad-model-card">
+      {/* Its status line and action live in Results, once. */}
       <header className="cad-model-identity"><b className="cad-model-name">{state.filename || 'Mesh file'}</b></header>
-      <CadModelStatusLine file={{ input: 'file', label: state.filename,
-        reading: state.busy && !summary, preparing: state.busy && !!summary,
-        choice: summary ? meshImportChoice(draft) : null, failureMessage: state.error ?? saveError,
-        canPrepare: editable && !!summary && !saveError, prepared: !!registered, triangles: summary?.triangle_count ?? null,
-        symmetryLabel: fileSymmetryLabel(planes, false), notice: state.notice,
-      }} onRetry={() => prepareMeshFile()}/>
       {summary && <>
         <fieldset className="mesh-surfaces" disabled={!editable}>
           <legend>Surfaces</legend>

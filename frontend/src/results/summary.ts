@@ -32,6 +32,8 @@ export interface SummaryContext {
   job?: JobItem | null;
   /** The active drive channel, when the wrapper carries channels. */
   channelId?: string | null;
+  /** Developer details are on: ids and hashes are shown. */
+  developer?: boolean;
 }
 
 /** Grouped provenance for the Simulation Summary card. */
@@ -308,13 +310,15 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
       // is where a curve is traced back to a physical driver, so the name the
       // user gave it in CAD cannot be dropped in favour of a label.
       const label = channelLabel(wrapper, context.channelId, importOrigin);
-      const named = importOrigin === 'mesh-file' || label === context.channelId ? label : `${label} (${context.channelId})`;
+      const named = importOrigin === 'mesh-file' || label === context.channelId || !context.developer ? label : `${label} (${context.channelId})`;
       row(importRows, 'Channel', `${named} · ${channels.length.toLocaleString()} channels`);
     }
-    const ingestId = string(wrapperMetadata.ingest_id);
-    if (ingestId) row(importRows, 'Ingest', ingestId);
-    const manifest = string(wrapperMetadata.manifest_sha256);
-    if (manifest) row(importRows, 'Manifest', manifest.slice(0, 12), manifest);
+    if (context.developer) {
+      const ingestId = string(wrapperMetadata.ingest_id);
+      if (ingestId) row(importRows, 'Ingest', ingestId);
+      const manifest = string(wrapperMetadata.manifest_sha256);
+      if (manifest) row(importRows, 'Manifest', manifest.slice(0, 12), manifest);
+    }
   }
   group(groups, 'Import', importRows);
 

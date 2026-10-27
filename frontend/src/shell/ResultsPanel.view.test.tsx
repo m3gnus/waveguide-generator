@@ -375,13 +375,15 @@ describe('results dock view switch', () => {
     expect(host.textContent).toContain("Show that run's model");
   });
 
-  it('names the shown channel on the summary card', async () => {
+  it('names the shown channel on the summary card, with its id only for developers', async () => {
     publishJobs([job('primary', 1)]);
     compareSelection.setPrimary('primary');
     await render();
     await chooseView('MF');
 
-    const rows = [...host.querySelectorAll('.result-summary-row')].map((row) => row.textContent);
-    expect(rows).toContain(`ChannelMF (drive-mf) · ${(3).toLocaleString()} channels`);
+    const rows = () => [...host.querySelectorAll('.result-summary-row')].map((row) => row.textContent);
+    expect(rows()).toContain(`ChannelMF · ${(3).toLocaleString()} channels`);
+    await act(async () => { preferencesStore.update({ showDeveloperDetails: true }); });
+    expect(rows()).toContain(`ChannelMF (drive-mf) · ${(3).toLocaleString()} channels`);
   });
 });

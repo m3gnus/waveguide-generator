@@ -22,7 +22,7 @@ import type { CadOperationSummary } from '../api/cadOperations';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { RECOVERED_NEGATIVE_HALF } from '../api/domainDecision.fixtures';
 import { resetCadReturnStore } from '../stores/cadReturn';
-import { resetCadSolverFrameStore } from '../stores/cadSolverFrame';
+import { resetCadSolverFrameStore, useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { resetSolveStageClocksForTests } from './solveProgress';
 
@@ -324,6 +324,22 @@ describe('Model details, and the run status Results shows for its model', () => 
       await show(fetcher);
       expect(head().getAttribute('aria-expanded')).toBe('false');
       expect(host.querySelector('.cad-solver-frame-differs')).toBeNull();
+    });
+
+    it('keeps Model details folded for a frame changed elsewhere, on every mount, and says it inside', async () => {
+      // The axis on screen moved without the user: Solve already follows it,
+      // so the notice informs and never reopens the drawer.
+      useCadSolverFrameStore.setState({ frames: { wgi_run: {
+        ingestId: 'wgi_run', status: 'ready', frame: FRAME as never, linked: false, axis: '+z', picked: false, changedFrom: '-y', error: null,
+      } } });
+      const fetcher = fetcherFor(FRAME);
+      await show(fetcher);
+      expect(head().getAttribute('aria-expanded')).toBe('false');
+      expect(host.querySelector('.cad-solver-frame-changed')?.textContent).toContain('changed elsewhere to +z');
+      act(() => root.render(<div/>));
+      await show(fetcher);
+      expect(head().getAttribute('aria-expanded')).toBe('false');
+      expectNoJargon(host);
     });
 
     it('opens where a request for this model waits at the frame gate, though the axis is unchanged', async () => {

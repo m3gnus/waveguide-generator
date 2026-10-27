@@ -275,7 +275,7 @@ export function CadProjectHeader() {
           onOpened={(name) => setNotice(`Opened ${name}`)}
           onError={setError}
         /></h3>
-        {/* The model's state is its card's status line, never repeated here. */}
+        {/* The model's state is its status line in Results, never repeated here. */}
         {(project || !model.selected) && <p className="cad-project-meta">{project
           ? (runs.length ? `${pluralized(runs.length, 'run')} in this project` : 'No runs in this project yet')
           : 'Send a design to CAD, or switch to one you already have.'}</p>}

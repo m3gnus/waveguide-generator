@@ -1154,17 +1154,14 @@ function CadMeshDetail() {
 }
 
 /** Before the selected model is prepared, the Simulation tab has nothing to
- * set: one line. A model that stopped or waits for the user says why in the
- * model's own status line (`cadModelStatusLine`), and where to act. */
+ * set: one line. A model that stopped or waits for the user is pointed at
+ * Results, the one home of its status line and action. */
 function CadSimulationEmpty() {
-  const { model, line } = useCadModelStatusLine();
-  if (model.phase === 'prepare-failed' || model.phase === 'stopped' || model.phase === 'waiting') {
-    return <div className="cad-simulation-empty" role="status">
-      <p>{line.text}</p>
-      <p>See the Imported mesh tab.</p>
-    </div>;
-  }
-  return <p className="cad-simulation-empty">Settings appear when {model.selected ? model.label : 'a CAD model'} is ready.</p>;
+  const { model } = useCadModelStatusLine();
+  const needsUser = model.phase === 'prepare-failed' || model.phase === 'stopped' || model.phase === 'waiting';
+  return <p className="cad-simulation-empty" role={needsUser ? 'status' : undefined}>
+    Settings appear when {model.selected ? model.label : 'a CAD model'} is ready.{needsUser && ' Its status and next step are in Results.'}
+  </p>;
 }
 
 export function CadSimulationSections({ searching, matches, ingestRecord }: {

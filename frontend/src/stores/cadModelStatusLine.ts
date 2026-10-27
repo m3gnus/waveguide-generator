@@ -42,7 +42,7 @@ export type CadStatusAction = 'solve' | 'choose' | 'try-again' | 'show-results' 
 export type CadStatusTone = 'idle' | 'busy' | 'ready' | 'attention' | 'done';
 
 export interface CadModelStatusLine {
-  /** The sentence the model card shows, once. */
+  /** The sentence Results shows, once. */
   text: string;
   /** A few words for the status bar ("ready · 3,035 triangles"). */
   short: string;
@@ -99,10 +99,9 @@ function solving(job: JobItem): CadModelStatusLine {
 }
 
 /**
- * The selected CAD model's status, in one sentence with at most one action.
- * Every surface that states the model's state reads this: the model card
- * shows it once; the status bar uses `short`; the viewport says it when it has
- * nothing to draw; Results states it without the action.
+ * The selected imported model's status (a CAD model or a mesh file), in one
+ * sentence with at most one action. Results shows it once, with the action
+ * beside it; the status bar uses `short`. No other surface repeats it.
  *
  * `request` is `currentModelStatus` for the model on screen, the same request
  * `selectCadModelState` was given.

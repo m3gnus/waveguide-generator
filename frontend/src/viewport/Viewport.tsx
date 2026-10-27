@@ -1,6 +1,6 @@
 import { SOURCE_ROLE_LABELS } from '../model/cadLabels';
 import { useCadModelStatusLine } from '../shell/CadModelStatusLine';
-import type { CadModelStatusLine } from '../stores/cadModelStatusLine';
+import { workspaceNavigation } from '../shell/workspaceNavigation';
 import { designFingerprint } from '../results/runCoherence';
 import { importedModelBlocker, useImportedModelStore } from '../stores/importedModel';
 import { useShallow } from 'zustand/react/shallow';
@@ -327,18 +327,13 @@ export function fieldPlaneUnavailableTooltip(jobs: readonly JobItem[]): string {
   }
 }
 
-/** Where to act on a CAD model's status line when the viewport has nothing to draw. */
-const CAD_EMPTY_HINT: Partial<Record<CadModelStatusLine['action'], string>> = {
-  choose: 'Choose how to continue on the Imported mesh tab.',
-  'try-again': 'Try again on the Imported mesh tab.',
-  solve: 'Solve it from the top bar.',
-  'show-results': 'Its results are in Results.',
-};
-
-/** The viewport's words when it has no CAD mesh to draw: the model's own
- * status line (`cadModelStatusLine`), and where its action is. */
-export function cadViewportEmptyCopy(line: Pick<CadModelStatusLine, 'text' | 'action'>): { title: string; detail: string } {
-  return { title: line.text, detail: CAD_EMPTY_HINT[line.action] ?? '' };
+/** The viewport's words when it has no CAD mesh to draw. The model's status
+ * line and its action live in Results, once: the viewport names the model and
+ * points there, never repeating the line. */
+export function cadViewportEmptyCopy(model: { selected: boolean; label: string }): { title: string; detail: string } {
+  return model.selected
+    ? { title: model.label, detail: 'Its status and next step are in Results.' }
+    : { title: 'No CAD model yet', detail: 'Results says how to send one.' };
 }
 
 /** Whether replacing one viewport scene with another should re-frame the camera.
@@ -387,14 +382,14 @@ export function Viewport() {
   const solveSymmetry = useSolveOptionsStore((state) => state.symmetry);
   const designName = useDocumentStore((state) => state.designName);
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
-  const { model: cad, line: cadLine } = useCadModelStatusLine();
+  const { model: cad } = useCadModelStatusLine();
   const cadRecord = cad.record;
   const cadName = cad.label;
   const theme = useViewportTheme();
   const preferences = useViewerPreferences();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const solveRunningOrQueued = jobs.some((job) => isActiveJobStatus(job.status));
-  const cadEmpty = cadViewportEmptyCopy(cadLine);
+  const cadEmpty = cadViewportEmptyCopy(cad);
   const resultSelection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const coherenceContext = useCurrentModel();
   const provisional = useSyncExternalStore(provisionalResults.subscribe, provisionalResults.getSnapshot, provisionalResults.getSnapshot);
@@ -1045,11 +1040,11 @@ export function Viewport() {
           ? designName || 'Untitled design'
           : importedMesh?.name ?? (fileInputActive ? 'Imported mesh' : workspaceMode === 'cad' ? cadName : designName || 'Untitled design')}</b>
         {/* A CAD model's subtitle is its solved triangle count; the display
-            mesh's own counts are one hover away. Without a mesh it is the
-            model's status line. */}
+            mesh's own counts are one hover away. Without a mesh it has none:
+            the model's status line lives in Results. */}
         <span title={importedMeshDetail ?? undefined}>{importedMesh
           ? cadMeshShown ? `${importedMesh.solvedTriangleCount.toLocaleString()} triangles` : importedMeshDetail
-          : fileInputActive ? 'Mesh file · configure in Geometry' : workspaceMode === 'cad' ? cadEmpty.title : viewportSubtitle(design, nativeOpening)}</span>
+          : fileInputActive ? 'Mesh file · configure in Geometry' : workspaceMode === 'cad' ? null : viewportSubtitle(design, nativeOpening)}</span>
       </div>
       <div className="viewport-live">
         {workspaceMode === 'parametric' && <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>}
@@ -1082,6 +1077,8 @@ export function Viewport() {
       <i className="viewport-empty-mark"><i /></i>
       <b>{fileInputActive ? 'Import a mesh file' : workspaceMode === 'cad' ? cadEmpty.title : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</b>
       <span>{fileInputActive ? 'Use Import mesh above, then choose Radiating surfaces in Geometry.' : workspaceMode === 'cad' ? cadEmpty.detail : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</span>
+      {workspaceMode === 'cad' && !fileInputActive && !workspaceNavigation.isVisible('results')
+        && <button type="button" className="btn viewport-retry" onClick={() => workspaceNavigation.navigate('results')}>Show Results</button>}
     </div>}
     <div className="viewport-notices">
       {(showNoticeRefresh || showConnectionNotice) && <div

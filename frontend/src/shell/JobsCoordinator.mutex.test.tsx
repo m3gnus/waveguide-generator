@@ -1140,7 +1140,7 @@ describe('solve invocation mutex', () => {
     });
     const render = () => root.render(<JobsCoordinator><SolveActions/><CurrentReadiness/></JobsCoordinator>);
     await act(async () => render());
-    expect(host.textContent).toContain('No results for Speaker yet.');
+    expect(host.querySelector('.current-model-status .cad-status-line')?.textContent).toMatch(/^Ready to solve.*Solve$/);
     expect(host.textContent).not.toContain('getting ready');
     expect(host.querySelector('.solve-readiness')).toBeNull();
     await act(async () => { host.querySelector<HTMLButtonElement>('.solve-button')!.click(); });
