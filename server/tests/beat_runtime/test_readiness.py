@@ -110,6 +110,30 @@ def test_failed_and_interrupted_records_have_independent_reasons(proved_cpu, sta
     assert ("offline" if status == "failed" else "instantiate") in verdict.reason
 
 
+def test_failed_and_active_setup_carry_plain_detail(proved_cpu, monkeypatch):
+    root, _, _, saved, query, _, _ = proved_cpu
+    saved.update(status="failed", step="instantiate", error="offline")
+    state.write_state(saved, root)
+    assert readiness.backend_readiness("cpu", root, **query).detail == "offline"
+    saved.update(status="in_progress", step="precompile", error=None)
+    state.write_state(saved, root)
+    monkeypatch.setattr(readiness.locks, "provisioning_active", lambda root: True)
+    verdict = readiness.backend_readiness("cpu", root, force_refresh=True, **query)
+    assert (verdict.state, verdict.detail) == ("provisioning", "compiling, about 4 min")
+    assert readiness.backend_status("cpu", root, **query)["detail"] == "compiling, about 4 min"
+
+
+@pytest.mark.parametrize("step,words", [
+    ("starting", "starting"), ("instantiate", "installing packages"), ("precompile", "compiling, about 4 min"),
+    ("cpu_probe", "test solve"), ("metal_device", "checking the GPU"),
+    ("Downloading julia-1.12.7-win64.zip: 120 / 280 MB", "Downloading julia-1.12.7-win64.zip: 120 / 280 MB"),
+    ("Unpacking julia-1.12.7-win64.zip", "Unpacking julia-1.12.7-win64.zip"),
+    ("  Precompiling project... 12 dependencies", None), (None, None),
+])
+def test_plain_step_words(step, words):
+    assert readiness.plain_step(step) == words
+
+
 def test_metal_failure_leaves_cpu_ready(proved_cpu, monkeypatch):
     root, _, _, _, query, _, setup = proved_cpu
     monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {

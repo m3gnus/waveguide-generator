@@ -21,6 +21,8 @@ export interface EngineCapability {
   version: string | null;
   runtime_state?: 'unprepared' | 'preparing' | 'failed' | 'ready' | 'unavailable' | null;
   runtime_preparable?: boolean;
+  /** Plain words for the setup step while preparing, or why setup failed. Absent on older servers. */
+  runtime_detail?: string | null;
   fast_paths: string[];
   /** Server-owned retry lifecycle; absent on older servers. */
   opencl_retry_pending?: boolean;

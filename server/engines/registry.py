@@ -132,6 +132,8 @@ class EngineInfo:
     opencl_unavailable_reason: str | None = None
     runtime_state: Literal["unprepared", "preparing", "failed", "ready", "unavailable"] | None = None
     runtime_preparable: bool = False
+    #: Plain words for the setup step while preparing, or the reason it failed.
+    runtime_detail: str | None = None
 
     def short_label(self) -> str:
         """Compact solver names for readiness messages and actions."""
@@ -389,6 +391,7 @@ def _beat_engine_info(backend: str, status: Mapping[str, Any]) -> EngineInfo:
         available=bool(status.get("available")) and runtime_state not in {"preparing", "failed"},
         reason=reason or str(status.get("reason") or f"{name} capability probe returned no reason"),
         runtime_state=runtime_state, runtime_preparable=preparable,
+        runtime_detail=status.get("detail") if runtime_state in {"preparing", "failed"} else None,
         version=str(status["version"]) if status.get("version") is not None else None,
         formulations=("full-3d",),
         # No ground plane: the BEAT adapter does not translate one yet.
@@ -942,7 +945,7 @@ class EngineRegistry:
         self, detected: tuple[EngineInfo, ...] | None = None,
     ) -> tuple[EngineInfo, ...]:
         """Overlay live preparation once, without mutating the cached probe."""
-        from server.solver.beat_cpu_runtime import runtime_preparation_status
+        from server.solver.beat_cpu_runtime import runtime_preparation_detail, runtime_preparation_status
 
         snapshot = []
         for item in (self._cache or ()) if detected is None else detected:
@@ -950,7 +953,8 @@ class EngineRegistry:
                              if item.name.startswith("beat-") else (None, None))
             if state is not None and not (state == "failed" and item.available):
                 item = replace(item, runtime_state=state, reason=reason, available=False,
-                               runtime_preparable=state == "failed" and item.runtime_preparable)
+                               runtime_preparable=state == "failed" and item.runtime_preparable,
+                               runtime_detail=runtime_preparation_detail(item.name[5:]))
             snapshot.append(item)
         return tuple(snapshot)
 

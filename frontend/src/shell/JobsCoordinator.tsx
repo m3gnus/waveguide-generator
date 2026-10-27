@@ -1,5 +1,6 @@
 import { useRequestedSolve, awaitSolveStep, solveCancellationReason, type HeldSolveContinuation, type ModelSolveContinuation } from '../jobs/useRequestedSolve';
 import { usePrepareEngine } from '../jobs/usePrepareEngine';
+import { runtimeSetupText } from '../jobs/runtimeSetup';
 import { heldEngineSolveJob, useHeldSolvePreparation } from '../jobs/useHeldSolvePreparation';
 import { messageBlocker, type SolveReadinessState } from '../jobs/solveReadiness';
 import { currentModel, useCurrentModel } from '../model/currentModel';
@@ -105,6 +106,8 @@ interface SolveControl {
   preparationError: string | null;
   actionError: string | null;
   preparingEngine: string | null;
+  /** A BEAT runtime's setup state in plain words for the status line, if it has one. */
+  runtimeSetup?(engine: string | null | undefined): string | null;
   readinessRequested: boolean;
   waitingForEngine: boolean;
   waitingEngine: string | null;
@@ -801,6 +804,10 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     preparationError: preparation.error,
     actionError,
     preparingEngine: preparation.starting ?? engines.find(engine => engine.name === selectedEngine && engine.runtime_state === 'preparing')?.name ?? null,
+    runtimeSetup: (name: string | null | undefined) => {
+      const engine = engines.find(item => item.name === name);
+      return engine ? runtimeSetupText(engine, 'status') : null;
+    },
     useEngine: (engine: string) => solveOptions.setEngine(engine),
     plan: solvePlan,
     planPending: solvePlanPending,

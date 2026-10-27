@@ -37,6 +37,8 @@ PROVISION_THREAD_NAME = "wg2-beat-cpu-provision"
 _provision_lock = threading.Lock()
 _provision_thread: threading.Thread | None = None
 _provision_step: str | None = None
+#: The last named step (instantiate, precompile, ...), which progress lines do not overwrite.
+_provision_phase: str | None = None
 _provision_cancel = threading.Event()
 _provision_resources: list[Any] = []
 _preparation_in_flight = False
@@ -127,10 +129,10 @@ def cpu_preparation_in_flight() -> bool:
 
 
 def _record_step(step: str | None) -> None:
-    global _provision_step
+    global _provision_step, _provision_phase
     with _provision_lock:
         changed = _provision_step != step
-        _provision_step = step
+        _provision_step = _provision_phase = step
     if changed:
         _notify_readiness_listeners()
 
@@ -293,7 +295,7 @@ def _start_official_provisioning(env: Mapping[str, str], *, backend: str = CPU_B
         return OwnedWorker()
 
     def worker() -> None:
-        global _preparation_in_flight, _provision_step, _gpu_stage_backend, _gpu_stage_step
+        global _preparation_in_flight, _provision_step, _provision_phase, _gpu_stage_backend, _gpu_stage_step
         global _official_cpu_stage_pending
         try:
             if prepare_cpu:
@@ -361,7 +363,7 @@ def _start_official_provisioning(env: Mapping[str, str], *, backend: str = CPU_B
             with _provision_lock:
                 _provision_resources.clear()
                 _preparation_in_flight = _official_cpu_stage_pending = False
-                _provision_step = _gpu_stage_backend = _gpu_stage_step = None
+                _provision_step = _provision_phase = _gpu_stage_backend = _gpu_stage_step = None
             _notify_readiness_listeners()
 
     with _provision_lock:
@@ -413,8 +415,10 @@ def preparation_enabled(backend: str, *, environ: Mapping[str, str] | None = Non
             and (backend == CPU_BACKEND or str(env.get(SKIP_GPU_PROVISION_ENV_VAR, "")).strip() != "1"))
 
 
-def runtime_preparation_status(backend: str) -> tuple[str | None, str | None]:
-    """Overlay current work and unexpected failures on persisted readiness."""
+def _preparation_overlay(backend: str) -> tuple[str | None, str | None, str | None]:
+    """This process's preparation of ``backend``: state, raw step, and plain detail."""
+    from .beat_runtime.readiness import plain_step
+
     with _provision_lock:
         active = _preparation_in_flight
         requested = _requested_backend
@@ -422,14 +426,30 @@ def runtime_preparation_status(backend: str) -> tuple[str | None, str | None]:
         cpu = _official_cpu_stage_pending or _provision_step is not None
         gpu = _gpu_stage_backend
         step = _provision_step if backend == CPU_BACKEND else _gpu_stage_step
+        phase = _provision_phase if backend == CPU_BACKEND else None
+    if active and (requested == backend or backend == CPU_BACKEND and cpu or gpu == backend):
+        return "preparing", step, plain_step(step or "starting") or plain_step(phase)
+    if error:
+        return "failed", None, error
+    return None, None, None
+
+
+def runtime_preparation_status(backend: str) -> tuple[str | None, str | None]:
+    """Overlay current work and unexpected failures on persisted readiness."""
+    state, step, detail = _preparation_overlay(backend)
     from .beat import BEAT_BACKEND_LABELS
 
     label = BEAT_BACKEND_LABELS.get(backend, f"BEAT {backend}").split(" — ")[0]
-    if active and (requested == backend or backend == CPU_BACKEND and cpu or gpu == backend):
+    if state == "preparing":
         return "preparing", f"Preparing {label} (step: {step or 'starting'})."
-    if error:
-        return "failed", f"{label} preparation failed: {error}"
+    if state == "failed":
+        return "failed", f"{label} preparation failed: {detail}"
     return None, None
+
+
+def runtime_preparation_detail(backend: str) -> str | None:
+    """The plain setup step, or the failure, behind ``runtime_preparation_status``."""
+    return _preparation_overlay(backend)[2]
 
 
 def start_runtime_preparation(backend: str) -> threading.Thread:
@@ -512,6 +532,7 @@ __all__ = [
     "start_cpu_provisioning",
     "start_runtime_preparation",
     "runtime_preparation_status",
+    "runtime_preparation_detail",
     "preparation_enabled",
     "selected_backend",
     "RuntimePreparationConflict",

@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from server.engines.registry import EngineInfo, EngineRegistry, _official_runtime_statuses
+from server.engines.registry import EngineInfo, EngineRegistry, _beat_engine_info, _official_runtime_statuses
 from server.solver import beat_cpu_runtime as facade
 from server.solver.beat_runtime import hardware, provider, readiness
 
@@ -41,6 +41,49 @@ def test_preparation_status_uses_backend_display_label(official, monkeypatch, ba
     assert facade.runtime_preparation_status(backend) == (
         "preparing", f"Preparing {label} (step: precompile).",
     )
+
+
+def test_cpu_setup_detail_keeps_its_step_through_package_output(official, monkeypatch):
+    monkeypatch.setattr(facade, "_preparation_in_flight", True)
+    monkeypatch.setattr(facade, "_requested_backend", "cpu")
+    facade._record_step("starting")
+    facade._provision_status("Downloading julia-1.12.7-win64.zip: 120 / 280 MB")
+    assert facade.runtime_preparation_detail("cpu") == "Downloading julia-1.12.7-win64.zip: 120 / 280 MB"
+    facade._record_step("precompile")
+    facade._provision_status("  Precompiling project... 12 dependencies")
+    assert facade.runtime_preparation_detail("cpu") == "compiling, about 4 min"
+    facade._record_step(None)
+    monkeypatch.setattr(facade, "_preparation_in_flight", False)
+    monkeypatch.setattr(facade, "_preparation_errors", {"cpu": "offline"})
+    assert facade.runtime_preparation_detail("cpu") == "offline"
+    assert facade.runtime_preparation_status("cpu") == ("failed", "BEAT · CPU preparation failed: offline")
+
+
+def test_gpu_setup_detail_has_no_words_for_package_output(official, monkeypatch):
+    monkeypatch.setattr(facade, "_preparation_in_flight", True)
+    monkeypatch.setattr(facade, "_requested_backend", "metal")
+    monkeypatch.setattr(facade, "_gpu_stage_backend", "metal")
+    monkeypatch.setattr(facade, "_gpu_stage_step", "metal_device")
+    assert facade.runtime_preparation_detail("metal") == "checking the GPU"
+    monkeypatch.setattr(facade, "_gpu_stage_step", "  Precompiling project...")
+    assert facade.runtime_preparation_detail("metal") is None
+    monkeypatch.setattr(facade, "_gpu_stage_step", None)
+    assert facade.runtime_preparation_detail("metal") == "starting"
+
+
+def test_capabilities_publish_setup_detail(official, monkeypatch):
+    monkeypatch.setattr(facade, "runtime_preparation_status", lambda backend:
+                        ("preparing", "Preparing BEAT · CPU (step: precompile).") if backend == "cpu" else (None, None))
+    monkeypatch.setattr(facade, "runtime_preparation_detail", lambda backend: "compiling, about 4 min")
+    engines = EngineRegistry(detector=lambda: [], cpu_refresh=False)
+    engines._initial_probe_task = type("Done", (), {"done": lambda self: True})()
+    monkeypatch.setattr(engines, "_start_detection", lambda: None)
+    rows = {row.name: row for row in asyncio.run(engines.capabilities())}
+    assert (rows["beat-cpu"].runtime_state, rows["beat-cpu"].runtime_detail) == ("preparing", "compiling, about 4 min")
+    failed = _beat_engine_info("cpu", {"available": False, "state": "failed", "reason": "long", "detail": "offline"})
+    assert (failed.runtime_state, failed.runtime_detail) == ("failed", "offline")
+    ready = _beat_engine_info("cpu", {"available": True, "state": "ready", "reason": "proved", "detail": None})
+    assert ready.runtime_detail is None
 
 
 def test_official_presentation_does_not_load_hbb(official, monkeypatch):

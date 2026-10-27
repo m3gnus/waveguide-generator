@@ -429,12 +429,18 @@ so a missing driver or an uninstalled runtime says so instead of vanishing.
 private Julia runtime that has to be downloaded, instantiated, and then proved
 by actually solving a 1 kHz test frequency; only after that does the engine
 report itself available. Source installations prepare it during setup. The
-packaged application prepares only the solver you have selected: choose
-**BEAT · CPU** in the solver picker and WG prepares it in the background, on
-Windows, Linux and macOS, without restarting. A solve started meanwhile waits
-("… is warming up. The solve starts when it is ready.") and then runs. **Auto**
-uses engines that are already ready and downloads nothing; on CPU-only
-computers it uses BEMPP if it is ready. The BEAT row keeps its progress or failure reason.
+packaged application sets up BEAT · CPU in the background after launch when
+**Automatic** is selected, and otherwise sets up only the solver you select:
+choose **BEAT · CPU** in the solver picker and WG sets it up in the background,
+on Windows, Linux and macOS, without restarting. The first setup takes about
+5 minutes: a 280 MB Julia download, then a compile of about 4 minutes. The
+picker row says where it is: "Not set up: select to set up (about 5 min)",
+"Setting up… (step)", "ready", or "Setup failed: reason". A solve that asked for
+BEAT · CPU waits, shows the same words, and then runs. **Automatic** keeps
+solving with engines that are already ready (on CPU-only computers, BEMPP) and
+uses BEAT · CPU for the next solve once it is ready; a solve that is already
+running keeps its solver. WG always uses its own Julia 1.12.7, even when another
+Julia (for example from juliaup or the Microsoft Store) is on PATH.
 `WG2_SKIP_BEAT_CPU_PROVISION=1` switches preparation off.
 
 On Apple Silicon, AUTO prefers Metal. AUTO walks the same order on every

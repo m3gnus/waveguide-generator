@@ -29,6 +29,32 @@ class BackendReadiness:
     ready: bool
     state: str
     reason: str
+    #: Plain words for the setup step while provisioning, or the recorded error once failed.
+    detail: str | None = None
+
+
+_STEP_WORDS = {
+    "starting": "starting", "lock": "waiting for another setup to finish",
+    "resolve_assets": "checking files", "resolve_julia": "checking files",
+    "check_disk_space": "checking disk space", "instantiate": "installing packages",
+    "precompile": "compiling, about 4 min", "cuda_cudss": "downloading GPU libraries",
+}
+
+
+def plain_step(step: str | None) -> str | None:
+    """A provisioning step, or a download/unpack progress line, in plain words.
+
+    Other progress lines (Julia's own package output) have no plain reading: None.
+    """
+    if not step:
+        return None
+    if step.startswith(("Downloading", "Unpacking")):
+        return step
+    if step.endswith("_probe"):
+        return "test solve"
+    if step.endswith("_device"):
+        return "checking the GPU"
+    return _STEP_WORDS.get(step)
 
 
 def add_readiness_listener(listener: Callable[[], None]) -> None:
@@ -139,7 +165,8 @@ def _prove_backend_readiness(
         root = paths.runtime_dir(environ=options.get("environ")) if directory is None else paths.checked_root(directory)
         record = state.read_state(root, backend=backend)
         if record and record["status"] == "in_progress" and locks.provisioning_active(root):
-            return BackendReadiness(False, "provisioning", f"BEAT {backend} provisioning is active (step: {record['step']}).")
+            return BackendReadiness(False, "provisioning", f"BEAT {backend} provisioning is active (step: {record['step']}).",
+                                    plain_step(record["step"]))
         expected = expected_identity(backend, root, **options)
     except assets.AssetsUnavailable as exc:
         return BackendReadiness(False, "package-unusable", str(exc))
@@ -147,7 +174,8 @@ def _prove_backend_readiness(
         return BackendReadiness(False, "identity-unavailable", f"BEAT {backend} identity unavailable: {exc}")
     matches = record is not None and all(record.get(key) == value for key, value in expected.items())
     if matches and record["status"] == "failed":
-        return BackendReadiness(False, "failed", f"BEAT {backend} provisioning failed: {record['error'] or 'unknown error'}. Use Retry to prepare it again.")
+        return BackendReadiness(False, "failed", f"BEAT {backend} provisioning failed: {record['error'] or 'unknown error'}. Use Retry to prepare it again.",
+                                record["error"] or None)
     if matches and record["status"] == "in_progress":
         return BackendReadiness(False, "interrupted", f"BEAT {backend} provisioning stopped at {record['step']}; provision again.")
     if not expected["julia_executable"]:
@@ -210,7 +238,7 @@ def backend_readiness(
 
 def backend_status(backend: str, directory: Path | None = None, **options: Any) -> dict[str, Any]:
     verdict = backend_readiness(backend, directory, **options)
-    return dict(available=verdict.ready, state=verdict.state, reason=verdict.reason,
+    return dict(available=verdict.ready, state=verdict.state, reason=verdict.reason, detail=verdict.detail,
                 backend=backend, version=None, surface_traces=False)
 
 
