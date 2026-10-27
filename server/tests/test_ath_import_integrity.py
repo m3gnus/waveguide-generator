@@ -254,6 +254,63 @@ def test_expression_values_are_evaluated_before_the_check(extra: str, key: str) 
     assert key in str(caught.value)
 
 
+def test_a_constant_unit_scale_z_imports_as_the_horn_without_it() -> None:
+    plain = parse(BASE).design
+    for value in ("1", "0.5+0.5", "cos(0)"):
+        design = parse(BASE + f"Scale.Z = {value}\n").design
+        assert design.extra_keys == {"Scale.Z": value}
+        assert design_to_mesher_config(design) == design_to_mesher_config(plain)
+
+
+# Each value equals the item's no-op value at p = 0 only. ATH evaluates an
+# azimuth expression around the turn (a reference Scale.Z = 1+0.5*sin(p) file
+# scales the profile by up to 5.68 mm), so p = 0 must not stand for the horn.
+AZIMUTH_DEPENDENT_NOOPS = {
+    "Scale.Z": "Scale.Z = 1+0.5*sin(p)\n",
+    "HornGeometry": "HornGeometry = 1+sin(p)\n",
+    "Mesh.Roundover": "Mesh.Roundover = sin(p)\n",
+    "Rollback": "Rollback = sin(p)\nRollback.StartAt = 0.8\n",
+}
+ROSSE_BASE = (BASE.replace("OSSE = {\n L = 120\n", "R-OSSE = {\n R = 150\n b = 0.2\n m = 0.8\n r = 0.4\n tmax = 1\n")
+              .replace(" s = 0.7\n n = 4\n", ""))
+
+
+@pytest.mark.parametrize(
+    "text, key",
+    [
+        *((BASE + extra, key) for key, extra in AZIMUTH_DEPENDENT_NOOPS.items()),
+        (BASE + "Scale.Z = 1+0*p\n", "Scale.Z"),
+        (BASE + "Scale.Z = 1+0.5*sin(p)^2\n", "Scale.Z"),
+        (BASE + "Mesh = {\n Roundover = sin(p)\n}\n", "Mesh.Roundover"),
+        (BASE.replace(" q = 0.995\n", " q = 0.995\n Scale.Z = 1+0.5*sin(p)\n"), "OSSE.Scale.Z"),
+    ],
+)
+def test_azimuth_dependent_no_op_values_are_refused_by_name(text: str, key: str) -> None:
+    with pytest.raises(TextConfigError, match="unsupported item") as caught:
+        parse(text)
+    assert key in str(caught.value)
+    assert "refers to the azimuth p" in str(caught.value)
+
+
+def test_an_azimuth_dependent_unread_rotation_is_not_taken_as_zero() -> None:
+    assert parse(ROSSE_BASE + "Rot = 0\n").dialect == "ath"
+    with pytest.raises(TextConfigError, match="unsupported item.*Rot"):
+        parse(ROSSE_BASE + "Rot = sin(p)\n")
+
+
+@pytest.mark.parametrize("key", sorted(AZIMUTH_DEPENDENT_NOOPS))
+@pytest.mark.parametrize("rear", ["", "Mesh.RearShape = 3\nMesh.WallThickness = 5\n"])
+def test_saved_designs_keep_their_reading_of_azimuth_dependent_no_ops(key: str, rear: str) -> None:
+    # A WG-saved file opens with the reading it was saved with. The Opus rear
+    # also sends it through the mesher's validator.
+    extra = AZIMUTH_DEPENDENT_NOOPS[key]
+    head = "; Parameter config\n; Waveguide Generator geometry-interpretation: ath-2026-09a-v2\n"
+    saved = parse(head + BASE + rear + extra)
+    plain = parse(head + BASE + rear)
+    assert saved.design.model_dump(exclude={"extra_keys"}) == plain.design.model_dump(exclude={"extra_keys"})
+    assert extra in serialize(saved)
+
+
 def test_throat_profile_expression_is_evaluated() -> None:
     with pytest.raises(TextConfigError, match="Throat.Profile"):
         parse(BASE.replace(" q = 0.995\n", " q = 0.995\n Throat.Profile = 1+2\n"))

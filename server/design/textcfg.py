@@ -788,8 +788,34 @@ def _ath_number(raw: str) -> float | None:
     return value if math.isfinite(value) else None
 
 
-def _ath_rollback_disabled(flat: Mapping[str, str]) -> bool:
-    return "Rollback" in flat and _ath_number(flat["Rollback"]) == 0.0
+def _references_azimuth(value: Any) -> bool:
+    """Whether an ATH expression refers to the azimuth `p`."""
+    if not isinstance(value, str):
+        return False
+    try:
+        tree = ast.parse(value.replace("^", "**"), mode="eval")
+    except (SyntaxError, ValueError):
+        return False
+    return any(isinstance(node, ast.Name) and node.id == "p" for node in ast.walk(tree))
+
+
+def _ath_is_noop(
+    name: str, value: str, table: Mapping[str, float] = _ATH_NOOP_VALUES, *, fresh: bool = True
+) -> bool:
+    """Whether an item is at the constant value at which ATH ignores it.
+
+    In a fresh ATH file a value that refers to the azimuth is never a no-op:
+    ATH evaluates `Scale.Z = 1+0.5*sin(p)` per azimuth, so the value at p = 0
+    does not stand for the horn. The mesher's importer refuses these too. A
+    WG-saved file (`fresh=False`) keeps the p = 0 reading it was saved with.
+    """
+    if fresh and _references_azimuth(value):
+        return False
+    return name in table and _ath_number(value) == table[name]
+
+
+def _ath_rollback_disabled(flat: Mapping[str, str], *, fresh: bool = True) -> bool:
+    return "Rollback" in flat and _ath_is_noop("Rollback", flat["Rollback"], fresh=fresh)
 
 
 def _ath_name(name: str) -> str:
@@ -827,11 +853,6 @@ def _refuse_unsupported_ath_items(
     WG writes it reads back, extras included.
     """
 
-    def noop(base: str, value: str) -> bool:
-        # Defaults ATH treats as "off": the item is present and changes nothing.
-        expected = _ATH_NOOP_VALUES.get(base)
-        return expected is not None and _ath_number(value) == expected
-
     rollback_disabled = _ath_rollback_disabled(flat)
 
     def inactive_rollback(name: str) -> bool:
@@ -844,6 +865,12 @@ def _refuse_unsupported_ath_items(
             entry.strip() and not entry.strip().startswith(("_", ";", "#"))
             for entry in (*block.entries, *block.lines)
         )
+
+    def varying(name: str, value: str, reason: str) -> str:
+        # A no-op at p = 0 is not a no-op where ATH evaluates the rest of the turn.
+        if _ath_name(name) in _ATH_NOOP_VALUES and _references_azimuth(value):
+            return reason + "; this value refers to the azimuth p, so its p = 0 value does not stand for the horn"
+        return reason
 
     found: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -865,8 +892,8 @@ def _refuse_unsupported_ath_items(
             continue
         reason = _ath_unsupported_reason(key)
         if reason is not None:
-            if not noop(_ath_name(key), value):
-                add(key, reason)
+            if not _ath_is_noop(_ath_name(key), value):
+                add(key, varying(key, value, reason))
         elif key.startswith(_ENCLOSURE_FLAT_PREFIX):
             member = key[len(_ENCLOSURE_FLAT_PREFIX):]
             if member not in _ATH_ENCLOSURE_MEMBERS and not member.startswith("_"):
@@ -898,8 +925,8 @@ def _refuse_unsupported_ath_items(
                 inner = _ath_unsupported_reason(key)
                 if inner is None and base != "OSSE":
                     inner = _ATH_ROSSE_BLOCK_ONLY.get(key)
-                if inner is not None and not noop(_ath_name(key), value) and not inactive_rollback(key):
-                    add(f"{base}.{key}", inner)
+                if inner is not None and not _ath_is_noop(_ath_name(key), value) and not inactive_rollback(key):
+                    add(f"{base}.{key}", varying(key, value, inner))
         # A named in-block child (a block opened inside this one) never reaches
         # `items`; the lexer already refuses nesting.
     # The selected profile block's Throat.Profile wins over the top-level one.
@@ -1000,7 +1027,7 @@ def _refuse_unread_ath_items(
                 note=f"ATH reads {key} only inside the R-OSSE block, so it has no effect at top level.",
             ))
             continue
-        if key in _ATH_UNREAD_NOOP_VALUES and _ath_number(value) == _ATH_UNREAD_NOOP_VALUES[key]:
+        if _ath_is_noop(key, value, _ATH_UNREAD_NOOP_VALUES):
             continue
         reason = (
             _UNSUPPORTED_ATH_REASONS.get(key)
@@ -1093,7 +1120,7 @@ def _build_payload(
         if throat_profile is not None and text_number(throat_profile) != 1:
             raise TextConfigError(f"Throat.Profile = {text_number(throat_profile)} is not supported; only the OS-SE profile (1) is implemented")
     rollback = sorted(key for key in refusal_keys if key == "Rollback" or key.startswith("Rollback."))
-    if rollback and not _ath_rollback_disabled(flat):
+    if rollback and not _ath_rollback_disabled(flat, fresh=refuse_unsupported):
         raise TextConfigError(f"Rollback is not supported by this mesher (saw {', '.join(rollback)})")
     if dialect == "ath" and refuse_unsupported:
         _refuse_unsupported_ath_items(flat, blocks, formula=formula, block_name=block_name)
@@ -1133,10 +1160,8 @@ def _build_payload(
 
         diameter = text_number(selected["Throat.Diameter"])
         try:
-            if isinstance(diameter, str):
-                tree = ast.parse(diameter.replace("^", "**"), mode="eval")
-                if any(isinstance(node, ast.Name) and node.id == "p" for node in ast.walk(tree)):
-                    raise ValueError("azimuth-varying diameter is unsupported")
+            if _references_azimuth(diameter):
+                raise ValueError("azimuth-varying diameter is unsupported")
             ath_radius = eval_param(diameter) / 2.0
         except (SyntaxError, TypeError, ValueError, OverflowError) as exc:
             raise TextConfigError(
@@ -1382,7 +1407,9 @@ def _mesher_validation_text(
     Normalize only those already checked cases before its geometry validation.
     """
     ignored_names = {item.key for item in ignored}
-    rollback_off = _ath_rollback_disabled(flat)
+    # A fresh file reaches this point only after `_refuse_unsupported_ath_items`
+    # refused azimuth-dependent no-op values; a saved one keeps its reading.
+    rollback_off = _ath_rollback_disabled(flat, fresh=False)
 
     def items(source: Mapping[str, str], prefix: str = "") -> list[str]:
         rows = []
@@ -1392,7 +1419,7 @@ def _mesher_validation_text(
                 continue
             if rollback_off and (name == "Rollback" or name.startswith("Rollback.")):
                 continue
-            if name in _ATH_NOOP_VALUES and _ath_number(value) == _ATH_NOOP_VALUES[name]:
+            if _ath_is_noop(name, value, fresh=False):
                 continue
             if name in {"Mesh.RearShape", "Throat.Profile", "OSSE.Throat.Profile"}:
                 number = _ath_number(value)
