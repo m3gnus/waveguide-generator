@@ -85,10 +85,60 @@ def test_selection_prepares_only_that_backend(official, monkeypatch, backend):
     assert calls == [backend]
 
 
-@pytest.mark.parametrize("engine", [None, "auto", "metal", "bempp"])
+@pytest.mark.parametrize("engine", ["metal", "bempp"])
 def test_non_beat_selection_never_provisions(official, monkeypatch, engine):
     monkeypatch.setattr(readiness, "backend_readiness", lambda *a, **k: pytest.fail("unselected runtime probed"))
     assert facade.start_selected_provisioning(engine) is None
+
+
+@pytest.mark.parametrize("engine", [None, "auto"])
+def test_automatic_prepares_cpu_in_the_background_as_0_3_5_did(official, monkeypatch, engine):
+    begun, finish = threading.Event(), threading.Event()
+    calls = []
+    monkeypatch.delenv(facade.SKIP_PROVISION_ENV_VAR, raising=False)
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kw: pytest.fail("Automatic inventoried a GPU"))
+    monkeypatch.setattr(readiness, "backend_readiness", lambda *a, **kw:
+                        readiness.BackendReadiness(False, "unprovisioned", "mock"))
+
+    def provision(**kwargs):
+        calls.append("cpu")
+        kwargs["step_cb"]("precompile")
+        begun.set()
+        assert finish.wait(2)
+        return {"status": "ready"}
+
+    monkeypatch.setattr(readiness, "provision_cpu", provision)
+    try:
+        thread = facade.start_selected_provisioning(engine)
+        assert thread is not None and begun.wait(2)
+        assert facade.runtime_preparation_status("cpu")[0] == "preparing"
+        # The picker's own Automatic prewarm, and choosing BEAT CPU, keep it running.
+        for keep in (None, "auto", "beat-cpu"):
+            facade.cancel_unselected_preparation(keep)
+            assert not facade._provision_cancel.is_set()
+        assert facade.start_selected_provisioning("auto") is thread
+    finally:
+        finish.set()
+    thread.join(2)
+    assert calls == ["cpu"]
+
+
+def test_automatic_does_not_retry_a_failed_setup_by_itself(official, monkeypatch):
+    monkeypatch.delenv(facade.SKIP_PROVISION_ENV_VAR, raising=False)
+    monkeypatch.setattr(readiness, "backend_readiness", lambda *a, **kw:
+                        readiness.BackendReadiness(False, "failed", "recorded"))
+    monkeypatch.setattr(readiness, "provision_cpu", lambda **kw: pytest.fail("failed setup retried at startup"))
+    assert facade.start_selected_provisioning("auto") is None
+
+
+def test_automatic_uses_beat_cpu_only_once_ready():
+    from server.engines.registry import EngineInfo, _beat_engine_info, resolve_auto_engine
+
+    bempp = EngineInfo(name="bempp", available=True, reason="ready", version=None, fast_paths=())
+    preparing = _beat_engine_info("cpu", {"available": False, "state": "provisioning", "reason": "setting up"})
+    ready = _beat_engine_info("cpu", {"available": True, "state": "ready", "reason": "proved"})
+    assert resolve_auto_engine(capabilities=[preparing, bempp]) == "bempp"
+    assert resolve_auto_engine(capabilities=[ready, bempp]) == "beat-cpu"
 
 
 def test_cpu_provisioning_does_not_inventory_or_prepare_gpu(official, monkeypatch):

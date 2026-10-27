@@ -209,10 +209,22 @@ class _PreparationCancelled(BaseException):
     """Unwind provisioner exclusion without recording user cancellation as failure."""
 
 
+def selected_backend(engine: str | None) -> str | None:
+    """The BEAT runtime an engine selection prepares.
+
+    Automatic (or no saved choice) prepares BEAT CPU in the background, as 0.3.5
+    did, so AUTO can use it once ready; until then AUTO solves with what is ready.
+    """
+    if engine is None or engine == "auto":
+        return CPU_BACKEND
+    backend = engine.removeprefix("beat-")
+    return backend if engine.startswith("beat-") and backend in (CPU_BACKEND, *GPU_BACKENDS) else None
+
+
 def cancel_unselected_preparation(engine: str | None) -> None:
     """Stop only children owned by a preparation whose engine was deselected."""
     with _provision_lock:
-        if not _preparation_in_flight or engine == f"beat-{_requested_backend}":
+        if not _preparation_in_flight or selected_backend(engine) == _requested_backend:
             return
         _provision_cancel.set()
         resources = tuple(_provision_resources)
@@ -448,11 +460,9 @@ def start_runtime_preparation(backend: str) -> threading.Thread:
 
 
 def start_selected_provisioning(engine: str | None, *, cancellation_callback: Callable[[], None] | None = None) -> threading.Thread | None:
-    """Prepare only the selected backend; Auto uses ready engines without downloads."""
-    if engine is None or not engine.startswith("beat-"):
-        return None
-    backend = engine.removeprefix("beat-")
-    if backend not in (CPU_BACKEND, *GPU_BACKENDS) or not preparation_enabled(backend):
+    """Prepare only the selected backend; Automatic prepares BEAT CPU."""
+    backend = selected_backend(engine)
+    if backend is None or not preparation_enabled(backend):
         return None
     return _start_official_provisioning(os.environ, backend=backend, cancellation_callback=cancellation_callback)
 
@@ -503,5 +513,6 @@ __all__ = [
     "start_runtime_preparation",
     "runtime_preparation_status",
     "preparation_enabled",
+    "selected_backend",
     "RuntimePreparationConflict",
 ]
