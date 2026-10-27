@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { startCadSetupPublisher } from './cadSetupPublisher';
 import { openImported, resetImportedModelStore } from '../stores/importedModel';
-import { editMeshImport, fileMeshSetup, loadMeshFile, useMeshImportStore } from '../stores/meshImport';
+import { editMeshImport, fileMeshSetup, fileSetupForSave, loadMeshFile, useMeshImportStore } from '../stores/meshImport';
 import { fileSimulationSetup } from '../stores/importedSimulationSetup';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -45,7 +45,7 @@ it('automatically saves motion and solver edits through the shared publisher', a
   await vi.advanceTimersByTimeAsync(101);
   expect(fetcher).toHaveBeenCalledOnce();
   expect(fetcher.mock.calls[0][0]).toBe(`/api/models/${encodeURIComponent(record.model_id)}/setup`);
-  expect(JSON.parse(fetcher.mock.calls[0][1]?.body as string)).toEqual({ prepared_id: record.ingest_id, setup: { schema_version: 1, ...fileMeshSetup() } });
+  expect(JSON.parse(fetcher.mock.calls[0][1]?.body as string)).toEqual({ prepared_id: record.ingest_id, setup: { schema_version: 1, ...fileSetupForSave(fileMeshSetup()) } });
   expect(fileMeshSetup().geometry.drive_channels[0].motion).toBe('axial');
   expect(useMeshImportStore.getState().notice).toBeNull();
 });
