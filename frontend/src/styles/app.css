@@ -1440,7 +1440,7 @@ textarea:disabled { opacity: .48; }
 /* Pre-job stages use the solve progress area, with no banner treatment. */
 .current-model-status { display: grid; gap: var(--space-8); min-width: 0; font-size: var(--text-base); }
 .current-model-status .notice { margin-bottom: 0; }
-.current-model-status-line { margin: 0; padding: var(--space-6) var(--space-8); color: var(--fg2); }
+.current-model-status .cad-status-line { padding: var(--space-6) var(--space-8); }
 .solve-readiness { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-6); }
 .solve-readiness-note { flex-basis: 100%; }
 .solve-readiness button { white-space: normal; text-align: left; }

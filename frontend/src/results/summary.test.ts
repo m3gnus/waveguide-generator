@@ -205,7 +205,12 @@ describe('simulation summary groups', () => {
       title: 'Shared batch time for all 2 imported drive channels; not an isolated channel solve.',
     });
     expect(row(groups, 'Import', 'Channel')?.value).toBe('high · 2 channels');
-    expect(row(groups, 'Import', 'Manifest')).toEqual({ label: 'Manifest', value: manifest.slice(0, 12), title: manifest });
+    // Ids and hashes are developer details.
+    expect(row(groups, 'Import', 'Ingest')).toBeUndefined();
+    expect(row(groups, 'Import', 'Manifest')).toBeUndefined();
+    const developer = summaryGroups({ result: channel, wrapper, channelId: 'high', developer: true });
+    expect(row(developer, 'Import', 'Ingest')?.value).toBe('wgi_123');
+    expect(row(developer, 'Import', 'Manifest')).toEqual({ label: 'Manifest', value: manifest.slice(0, 12), title: manifest });
     expect(row(groups, 'Validity', 'Governing ceiling')?.value).toBe('20.0 kHz');
     expect(row(groups, 'Validity', 'Source tweeter')?.value).toBe('20.0 kHz');
     expect(groups.find(({ title }) => title === 'Validity')?.tone).toBeUndefined();
@@ -328,7 +333,7 @@ describe('simulation summary groups', () => {
     expect(row(groups, 'Validity', 'Accuracy')?.value).toBe('Results might not be very accurate above 1.20 kHz.');
   });
 
-  it('names the channel by band and keeps the id the user authored', () => {
+  it('names the channel by band, with the id the user authored for developers', () => {
     const wrapper: ResultPayload = {
       frequencies: [],
       channel_order: ['drive-mf', 'drive-hf'],
@@ -339,13 +344,15 @@ describe('simulation summary groups', () => {
       metadata: { geometry_type: 'imported' },
     };
 
-    const groups = summaryGroups({
+    const groups = (developer: boolean) => summaryGroups({
       result: wrapper.channels!['drive-mf'] as ResultPayload,
       wrapper,
       channelId: 'drive-mf',
+      developer,
     });
 
-    expect(row(groups, 'Import', 'Channel')?.value).toBe(`MF (drive-mf) · ${grouped(2)} channels`);
+    expect(row(groups(false), 'Import', 'Channel')?.value).toBe(`MF · ${grouped(2)} channels`);
+    expect(row(groups(true), 'Import', 'Channel')?.value).toBe(`MF (drive-mf) · ${grouped(2)} channels`);
   });
 
   it('states the crossovers and the alignment delays of a combined channel', () => {

@@ -4,12 +4,14 @@ import { runDocumentName, runSourceLabel } from '../jobs/runIdentity';
 import { runSourceForJob } from '../jobs/exportNaming';
 import { useDocumentStore } from '../stores/document';
 import { modelForRun } from '../model/currentModel';
+import { useDeveloperDetails } from '../prefs/preferences';
 import type { JobItem } from '../api/jobsSocket';
 import { listProjectDocuments, openProjectDocument, projectDocumentUrl, type CadProjectDocument } from '../api/cadProjects';
 
 /** Optional CAD attachments decorate the shared run; their failure cannot hide it. */
 export function RunModelDetails({ job }: { job: JobItem }) {
   const runModel = modelForRun(job);
+  const developer = useDeveloperDetails();
   const currentName = useDocumentStore(state => job.design_uid && state.designUid === job.design_uid ? state.designName : null);
   const lineage = job.cad_source?.lineage_id ?? job.cad_state?.snapshot?.project_lineage_id;
   const hash = job.cad_source?.return_state_hash;
@@ -74,8 +76,11 @@ export function RunModelDetails({ job }: { job: JobItem }) {
       </dd></>}
       <dt>Document</dt><dd>{document}</dd>
       <dt>Source</dt><dd>{runSourceLabel(job)}</dd>
-      <dt>Model</dt><dd>{runModel.lineage || runModel.key || 'Not recorded'}</dd>
-      <dt>Model hash</dt><dd>{modelHash || 'Not recorded'}</dd>
+      {/* Ids and hashes are for developers. */}
+      {developer && <>
+        <dt>Model</dt><dd>{runModel.lineage || runModel.key || 'Not recorded'}</dd>
+        <dt>Model hash</dt><dd>{modelHash || 'Not recorded'}</dd>
+      </>}
     </dl>
     {runSourceForJob(job) !== 'mesh-file' && attachment}
     <MoveRunsButton target={{ key: moveKey, name: moveName }}>

@@ -35,7 +35,7 @@ import { hydrateJobDesign } from '../jobs/jobDesign';
 import { workspaceNavigation } from './workspaceNavigation';
 import { showJobModel } from '../jobs/showJobModel';
 import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
-import { CHART_TYPES, GROUP_DELAY_UNITS, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType, type GroupDelayUnit, type PolarPlane } from '../prefs/preferences';
+import { CHART_TYPES, GROUP_DELAY_UNITS, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, useDeveloperDetails, usePreferences, type ChartType, type GroupDelayUnit, type PolarPlane } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { directivityFrequencyTickLabels } from '../results/directivityFrequencyAxis';
 import { runOfLabel, seriesColorsByLabel } from '../results/seriesColors';
@@ -1332,7 +1332,8 @@ function SummaryGroupBlock({ group }: { group: SummaryGroup }) {
 }
 
 function Summary({ result, wrapper, job, channelId, density }: { result: ResultPayload; density: ChartDensity } & SummarySourceProps) {
-  const groups = useMemo(() => summaryGroups({ result, wrapper, job, channelId }), [channelId, job, result, wrapper]);
+  const developer = useDeveloperDetails();
+  const groups = useMemo(() => summaryGroups({ result, wrapper, job, channelId, developer }), [channelId, developer, job, result, wrapper]);
   const [copied, setCopied] = useState(false);
   const copiedTimer = useRef<number | null>(null);
   useEffect(() => () => {

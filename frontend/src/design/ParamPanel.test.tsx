@@ -1728,7 +1728,7 @@ describe('ParamPanel inventory UX', () => {
       .not.toContain('cad-control-cad.mesh-detail');
   });
 
-  it('points a model whose preparation failed at the Imported mesh tab, in its status line\'s words', () => {
+  it('points a model whose preparation failed at Results, without repeating its status line', () => {
     const before = cadWorkspace.getState();
     act(() => {
       cadWorkspace.setState({ ingestError: 'stage 1 bundle validation: $.sources[x]', ingesting: false, preparationIntent: undefined });
@@ -1737,7 +1737,8 @@ describe('ParamPanel inventory UX', () => {
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
     const empty = host.querySelector('.cad-simulation-empty')!;
-    expect(empty.textContent).toMatch(/^Waveguide Generator could not prepare .+\.See the Imported mesh tab\.$/);
+    expect(empty.textContent).toMatch(/^Settings appear when .+ is ready\. Its status and next step are in Results\.$/);
+    expect(empty.textContent).not.toContain('could not prepare');
     expect(empty.textContent).not.toContain('$.');
     expect(host.querySelector('[data-section]')).toBeNull();
     act(() => cadWorkspace.setState(before, true));

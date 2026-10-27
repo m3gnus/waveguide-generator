@@ -136,14 +136,14 @@ vi.mock('../api/previewSocket', () => ({
 }));
 
 import { femFieldJob, fieldPlaneUnavailableTooltip, cadViewportEmptyCopy, refitsCamera, Viewport } from './Viewport';
+import { workspaceNavigation } from '../shell/workspaceNavigation';
 
 describe('CAD viewport empty-state copy', () => {
-  it('says the model\'s own status line, and where its action is', () => {
-    expect(cadViewportEmptyCopy({ text: 'Preparing Tritonia…', action: 'none' })).toEqual({ title: 'Preparing Tritonia…', detail: '' });
-    expect(cadViewportEmptyCopy({ text: 'Tritonia needs your choice: it is larger than WG\'s limit.', action: 'choose' }))
-      .toEqual({ title: 'Tritonia needs your choice: it is larger than WG\'s limit.', detail: 'Choose how to continue on the Imported mesh tab.' });
-    expect(cadViewportEmptyCopy({ text: 'Waveguide Generator could not prepare Tritonia. This has been recorded for the developers.', action: 'try-again' }).detail)
-      .toBe('Try again on the Imported mesh tab.');
+  it('names the model and points to Results, never repeating its status line', () => {
+    expect(cadViewportEmptyCopy({ selected: true, label: 'Tritonia' }))
+      .toEqual({ title: 'Tritonia', detail: 'Its status and next step are in Results.' });
+    expect(cadViewportEmptyCopy({ selected: false, label: '' }))
+      .toEqual({ title: 'No CAD model yet', detail: 'Results says how to send one.' });
   });
 });
 
@@ -889,6 +889,22 @@ describe('Viewport preview errors', () => {
     });
     const label = host.querySelector('[aria-label="Solved domain"]')?.textContent;
     expect(label).toContain(quadrants === 1234 ? 'Full model' : quadrants === 1 ? 'Quarter model' : 'Half model');
+  });
+
+  it('gives a CAD model without a mesh no status subtitle or overlay line, only the way to Results', () => {
+    act(() => {
+      useCadReturnStore.setState({ ingestRecord: null, selectedBundle: { documentName: 'Speaker CAD', name: 'speaker.wgreturn' } as never });
+      workspaceModeStore.setMode('cad');
+    });
+    expect(host.querySelector('.viewport-title b')?.textContent).toBe('Speaker CAD');
+    expect(host.querySelector('.viewport-title span')?.textContent).toBe('');
+    const empty = host.querySelector('.viewport-empty')!;
+    expect(empty.querySelector('b')?.textContent).toBe('Speaker CAD');
+    expect(empty.querySelector('span')?.textContent).toBe('Its status and next step are in Results.');
+    expect(host.textContent).not.toMatch(/Preparing|Ready to solve|needs your choice|not prepared/);
+    const navigate = vi.spyOn(workspaceNavigation, 'navigate').mockReturnValue(true);
+    act(() => empty.querySelector<HTMLButtonElement>('button.btn')!.click());
+    expect(navigate).toHaveBeenCalledWith('results');
   });
 
   it('switches between the parametric scene and matching CAD slot', () => {

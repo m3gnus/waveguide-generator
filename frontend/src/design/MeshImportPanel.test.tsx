@@ -17,9 +17,15 @@ import { resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsSt
 import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
 import { preferencesStore } from '../prefs/preferences';
 import { MeshImportPanel } from './MeshImportPanel';
+import { CurrentModelStatus } from '../shell/CurrentModelStatus';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 const panel = () => <QueryClientProvider client={queryClient}><MeshImportPanel tab="geometry"/><MeshImportPanel tab="simulation"/></QueryClientProvider>;
+/** The Imported mesh card beside Results, the one home of the file's status line. */
+function renderGeometry() {
+  workspaceModeStore.setMode('cad');
+  act(() => root.render(<><MeshImportPanel tab="geometry"/><section aria-label="Results"><CurrentModelStatus actions solveStatus/></section></>));
+}
 
 const initial = useMeshImportStore.getState();
 let root: Root;
@@ -103,7 +109,7 @@ function geometry({ original = true, prepared = false } = {}) {
   opened({ originalAvailable: original, fileDraft: { units: 'm', forward: '+z', up: '+y', selected: [101, 102],
     roles: { 101: 'HF', 102: 'MF', 0: 'RIGID' }, domainPlanes: ['x0', 'y0'], reflectPlanes: null },
     prepared: prepared ? { ingest_id: 'wgi_file', summary: fileSummary, source_tags: { group_101: 101, group_102: 102 } } as unknown as RegisteredMesh : null });
-  act(() => root.render(<MeshImportPanel tab="geometry"/>));
+  renderGeometry();
 }
 function button(label: string) { return host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!; }
 
@@ -124,6 +130,17 @@ it('shows descriptor roles, the quarter size and an editable untagged wall witho
   expectNoJargon(host);
 });
 
+it('states the file status once, in Results, with its action beside it and none in the card', () => {
+  geometry({ prepared: true });
+  expect(host.querySelector('.cad-model-card .cad-status-line')).toBeNull();
+  expect(host.querySelectorAll('.cad-status-line')).toHaveLength(1);
+  const line = host.querySelector('[aria-label="Results"] .cad-status-line')!;
+  expect(line.querySelector('.cad-status-text')?.textContent).toBe('Ready to solve · 9,730 triangles · quarter model');
+  expect(line.querySelector('button.cad-status-action')?.textContent).toBe('Solve');
+  expect(host.textContent?.split('Ready to solve')).toHaveLength(2);
+  expectNoJargon(host);
+});
+
 it.each(['inspect', 'parse'] as const)('shows a %s refusal without an error prefix or Try again', async (stage) => {
   const inspect = vi.fn<typeof fetch>(async () => stage === 'inspect'
     ? new Response(JSON.stringify({ detail: 'The mesh contains no triangles.' }), { status: 422 })
@@ -133,7 +150,7 @@ it.each(['inspect', 'parse'] as const)('shows a %s refusal without an error pref
     await loadMeshFile('broken.msh', 'not a mesh', inspect).catch(error => { refusal = error; });
   });
   expect(refusal).toBeInstanceOf(Error);
-  act(() => root.render(<MeshImportPanel tab="geometry"/>));
+  renderGeometry();
   expect(host.querySelector('.cad-status-line')?.textContent).toBe(refusal!.message);
   expect(useMeshImportStore.getState().error).toBe(refusal!.message);
   expect(host.querySelector('.cad-status-line button')).toBeNull();

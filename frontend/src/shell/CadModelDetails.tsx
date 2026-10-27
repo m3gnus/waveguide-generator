@@ -30,8 +30,8 @@ import { workspaceNavigation } from './workspaceNavigation';
  * One collapsed "Model details" on the Imported mesh tab (PLAN.md U4): what
  * the model is, how it is solved and which way it radiates (with the one
  * Change), the mesh Fusion set, the settings Solve uses, the checks, and FEM
- * regions. The model's state and its one action are the status line above
- * it; nothing here repeats them. What the user can act on opens the details
+ * regions. The model's state and its one action are its status line in
+ * Results; nothing here repeats them. What the user can act on opens the details
  * by itself; the evidence behind each statement is developer detail.
  */
 
@@ -498,14 +498,15 @@ function OfferedFemRegions({ record }: { record: CadReturnIngestRecord }) {
   </section>;
 }
 
-/** Whether the solver frame shown needs the user: it changed elsewhere, WG
- * suggests another axis the user has not kept the frame against, or the
- * model's own axis cannot be solved. */
+/** Whether the solver frame shown needs the user: WG suggests another axis
+ * the user has not kept the frame against, or the model's own axis cannot be
+ * solved. A frame changed elsewhere only informs (Solve already follows it),
+ * so its notice waits inside Model details without opening it. */
 function useFrameNeedsUser(ingestId: string, unlinked: boolean): boolean {
   return useCadSolverFrameStore((state) => {
     const view = state.frames[ingestId];
     if (!unlinked || !view || view.linked) return false;
-    return Boolean(view.changedFrom || openDiffers(view, state.keptDiffers[ingestId])
+    return Boolean(openDiffers(view, state.keptDiffers[ingestId])
       || (!view.picked && view.frame?.notAllowed));
   });
 }

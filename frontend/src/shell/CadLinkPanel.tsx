@@ -1,7 +1,6 @@
 import { useCadModelSelection, useCadModelState } from '../stores/cadModelState';
 import { ENGINE_HOLDS } from '../stores/cadModelStatusLine';
 import { useCurrentModelStatus } from '../model/currentModel';
-import { CadModelStatusLine } from './CadModelStatusLine';
 import { EmptyState } from './EmptyState';
 import { Notice } from './Notice';
 import { useCadFeedbackError } from './cadSetupPublisher';
@@ -538,8 +537,7 @@ export function CadLinkPanel() {
         <time dateTime={record?.created_at || bundle.modifiedAt} title={fullTime(record?.created_at || bundle.modifiedAt)}>{relativeTime(record?.created_at || bundle.modifiedAt)}</time>
       </div>}
       {state.setupLoading && <Notice>Loading model settings…</Notice>}
-      {/* The one status line of the model on screen, and its one action. */}
-      {(bundle || record) && <CadModelStatusLine/>}
+      {/* The model's status line and its one action live in Results, once. */}
       {/* What lies behind the line, for developers: the raw text of WG's own
           failure, and why the mesh on screen no longer matches. */}
       {(bundle || record) && <CadModelDeveloperDetails staleReason={state.ingestStaleReason}/>}

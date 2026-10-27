@@ -687,7 +687,7 @@ describe('results chart layouts', () => {
     expect([...host.querySelectorAll('.result-summary dd')].map((value) => value.textContent)).toEqual(['bempp-cl', 'Element quality fell below the requested threshold.']);
     expect(host.querySelector('.result-summary-row')?.getAttribute('title')).toBe('Solver backend');
     expect(host.querySelector('.result-summary-group[data-tone="warning"]')?.textContent).toContain('Warnings');
-    expect(summaryMocks.groups).toHaveBeenCalledWith({ result, wrapper, job: null, channelId: 'hf' });
+    expect(summaryMocks.groups).toHaveBeenCalledWith({ result, wrapper, job: null, channelId: 'hf', developer: false });
   });
 
   it('renders a quiet summary empty state when there are no groups', () => {
