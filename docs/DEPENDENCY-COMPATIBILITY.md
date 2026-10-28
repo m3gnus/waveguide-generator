@@ -62,15 +62,21 @@ RearShape 3 imports is refused by name. Native rear construction is unchanged.
 See [Native source contour ingestion](architecture/NATIVE-SOURCE-CONTOURS.md)
 and [Source contour and assembly editors](architecture/source-contour-editor.md).
 
-The Metal `7c461f7` and BEM++ `8e69106` pins provide opt-in `solve_compiled`
-facades for the prescribed-source exterior-pressure subset of BEAT inputs.
-They reuse WG's request compiler and the pinned BEAT contract. Native pressure
-comparisons establish input-translation equivalence to independent calls to
-each same backend; they do not establish numerical equivalence to BEAT.
-Metal retains native quadrature and omits BEAT order overrides; BEM++ retains
-native orders 4/4. Full production output requests remain refused.
-See [Installed legacy BEAT input qualification](LEGACY-BEAT-INPUT-QUALIFICATION.md).
+The Metal pin `50fd3d3` supplies a BEAT-compatible worker using the existing
+request compiler and event/result decoder. WG routes its qualified single-source,
+normal-motion exterior Metal solves through that interface, with the existing
+explicit `complex_k` formulation and 0.005 shift. Other Metal features retain
+the native interface. The selected engine remains Metal, and BEAT Metal stays
+a separate choice. Existing power, surface traces, drive ports and observation
+conventions are retained. Results record observed source/version/commit and
+helper/shader identity; unavailable identity remains unknown.
 
-These pins do not change production routing or engine defaults. Source and
-consumer checks remain distinct from installed application qualification,
-Windows installed qualification, acoustic performance and manufacturing suitability.
+The BEM++ pin `8e69106` retains its opt-in prescribed-source exterior-pressure
+`solve_compiled` facade and native orders 4/4. Same-backend pressure comparisons
+establish input-translation equivalence; they do not establish numerical
+equivalence between Metal, BEM++ and BEAT. See
+[Installed legacy BEAT input qualification](LEGACY-BEAT-INPUT-QUALIFICATION.md).
+
+Engine defaults and saved engine choices are retained. Source and consumer
+checks remain distinct from installed application qualification, Windows
+installed qualification, acoustic performance and manufacturing suitability.
