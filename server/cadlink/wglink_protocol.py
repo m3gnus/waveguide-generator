@@ -171,10 +171,6 @@ def default_mesh(sources: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 PREFLIGHT_BLOCK = 'block'
 PREFLIGHT_ASK = 'ask'
 PREFLIGHT_NOTE = 'note'
-#: The solved-triangle ceiling when WG does not advertise its own, and the
-#: count above which an estimate is shown amber (WG's full-domain warning).
-DEFAULT_SOLVED_TRIANGLE_LIMIT = 22000
-DEFAULT_TRIANGLE_WARNING = 18000
 #: The solve-request field naming the WG holds the user already answered.
 ACKNOWLEDGED_FIELD = 'acknowledged'
 #: ``ask`` finding -> the WG hold its "anyway" answer settles.
@@ -331,11 +327,15 @@ def preflight_findings(draft: Mapping[str, Any], *, limits: Mapping[str, Any] | 
     return sorted(findings, key=lambda finding: order[finding['severity']])
 
 
-def solved_triangle_limit(limits: Mapping[str, Any] | None = None) -> int:
-    """The solved-triangle ceiling: WG's advertised one, else the fallback."""
-    limit = (limits or {}).get('solvedTriangles')
-    return limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 \
-        else DEFAULT_SOLVED_TRIANGLE_LIMIT
+def advertised_limit(limits: Mapping[str, Any] | None, key: str) -> int | None:
+    """One triangle limit WG advertises, or None: WG owns the numbers, never a default here."""
+    value = (limits or {}).get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def solved_triangle_limit(limits: Mapping[str, Any] | None = None) -> int | None:
+    """The solved-triangle ceiling WG advertises, or None when it does not (or sends a bad one)."""
+    return advertised_limit(limits, 'solvedTriangles')
 
 
 #: The ceiling's remedy inside Sources & Mesh, where the sizes are on screen.
@@ -346,13 +346,15 @@ def ceiling_finding(least: object, *, limits: Mapping[str, Any] | None = None,
                     symmetry: str = 'auto', in_sources_and_mesh: bool = False) -> dict[str, Any] | None:
     """The ``mesh_ceiling`` finding for the fewest triangles WG could solve, or None.
 
+    With no advertised ceiling there is nothing to compare against: None.
+
     ``symmetry`` is the mesh settings' (``'auto'`` or ``'off'``): with it off
     the count is the whole model's, and the words do not mention symmetry.
     Sources & Mesh shows it as a warning, with the remedy for that dialog;
     Solve asks it on OK.
     """
     limit = solved_triangle_limit(limits)
-    if not isinstance(least, int) or isinstance(least, bool) or least <= limit:
+    if limit is None or not isinstance(least, int) or isinstance(least, bool) or least <= limit:
         return None
     prefix = 'This model' if symmetry == 'off' else f'Even if {APP_NAME} can use symmetry, this model'
     finding = preflight_finding('mesh_ceiling', (
@@ -1964,17 +1966,25 @@ REQUEST_STATUS_SEQ_LIMIT = 2 ** 63
 _STATUS_INT_LIMIT = REQUEST_STATUS_SEQ_LIMIT
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]+")
 
-#: Words no user-visible text may contain (matched case-insensitively, as
-#: whole words): transport, storage and pipeline vocabulary, exception words
-#: and raw role constants. Tests in both repositories hold every user string
-#: to it, and status text drops any WG sentence that trips it.
+#: Technical vocabulary no user-visible text may contain. Ambiguous everyday
+#: words are checked in their technical contexts below, not in isolation.
 USER_TEXT_FORBIDDEN_TERMS = (
     "bundle", "wgreturn", "cad return", "manifest", "schema", "request id",
     "return id", "inbox", "ipc", "acknowledgement", "selector", "entity_token",
     "traceback", "exception", "main thread", "gate", "ingest", "operation",
     "lineage", "finding", "PASSIVE_CARDIOID", "UTF-8", "refused", "failed",
-    "error", "return", "uuid", "main-thread", "event", "Text Commands",
-    "options", "byte", "bytes", "determinant", "orthonormal", "chirality",
+    "uuid", "main-thread", "Text Commands", "determinant", "orthonormal", "chirality",
+)
+
+# Some of these words also belong to ordinary instructions, such as "return
+# to Fusion" or "review the options". Keep technical uses behind Diagnostics
+# without discarding the rest of the user's sentence.
+_USER_TEXT_TECHNICAL_PATTERNS = (
+    ("return", r"^\s*return\s*$|\b(?:a|the|this|that|each|its)\s+return\b|\breturn\s+(?:file|folder|path|record|data|payload|request|message)\b"),
+    ("event", r"^\s*event\s*$|\b(?:custom|ipc|internal|main-thread)\s+event\b|\bevent\s+(?:handler|loop|queue|payload|id|callback)\b"),
+    ("options", r"\boptions\s*(?:\[|\.(?=[a-z_]))"),
+    ("error", r"^\s*error\s*$|\b\w+(?:error|exception)\b|\b(?:internal\s+error|error\s+code)\b"),
+    ("byte", r"^\s*bytes?\s*$|\b\d[\d,]*\s*bytes?\b|\bbytes?\s+(?:limit|limits|length|size|array|offset)\b"),
 )
 
 
@@ -1990,8 +2000,10 @@ def user_text_violations(text: str, *, names: Sequence[object] = ()) -> list[str
     for name in names:
         if isinstance(name, str) and name.strip():
             lowered = lowered.replace(name.strip().lower(), " ")
-    return [term for term in USER_TEXT_FORBIDDEN_TERMS
-            if re.search(r"(?<![a-z0-9_])" + re.escape(term.lower()) + r"(?![a-z0-9_])", lowered)]
+    forbidden = [term for term in USER_TEXT_FORBIDDEN_TERMS
+                 if re.search(r"(?<![a-z0-9_])" + re.escape(term.lower()) + r"(?![a-z0-9_])", lowered)]
+    return forbidden + [term for term, pattern in _USER_TEXT_TECHNICAL_PATTERNS
+                        if re.search(pattern, lowered)]
 
 
 def could_not_prepare_text(document_name: object) -> str:

@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from server.cadlink import wglink_protocol
+from server.cadlink.fusion.fusion_delivery import capabilities
 from server.cadlink.intake import solve_command
 from server.cadlink.intake.preflight import admission_refusal, blocking_findings
 from server.cadlink.intake.solve_command import InvalidRequest, _command_from_payload, collect_solve_deliveries
@@ -103,9 +104,17 @@ def test_a_manifest_never_claims_a_body_was_declared():
     assert admission_refusal(manifest) is None
 
 
-def test_wg_owns_the_ceiling_the_addin_falls_back_to():
-    assert wglink_protocol.DEFAULT_SOLVED_TRIANGLE_LIMIT == MAX_SOLVER_MESH_ARTIFACT_TRIANGLES
-    assert wglink_protocol.DEFAULT_TRIANGLE_WARNING == LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES
+def test_wg_advertises_its_limits_and_the_addin_uses_only_valid_advertisements():
+    limits = capabilities()["meshLimits"]
+    assert limits == {"solvedTriangles": MAX_SOLVER_MESH_ARTIFACT_TRIANGLES,
+                      "fullDomainWarning": LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES}
+    assert wglink_protocol.solved_triangle_limit(limits) == MAX_SOLVER_MESH_ARTIFACT_TRIANGLES
+    assert wglink_protocol.advertised_limit(limits, "fullDomainWarning") == LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES
+    assert wglink_protocol.ceiling_finding(MAX_SOLVER_MESH_ARTIFACT_TRIANGLES + 1, limits=limits)["code"] == "mesh_ceiling"
+    for unknown in (None, {}, {"solvedTriangles": True}, {"solvedTriangles": 0},
+                    {"solvedTriangles": "22000"}):
+        assert wglink_protocol.solved_triangle_limit(unknown) is None
+        assert wglink_protocol.ceiling_finding(MAX_SOLVER_MESH_ARTIFACT_TRIANGLES + 1, limits=unknown) is None
     assert wglink_protocol.ACKNOWLEDGES["mesh_ceiling"] == "mesh_too_large"
     assert REASON_CODES["mesh_too_large"] != REJECTED  # The hold the answer settles.
 
