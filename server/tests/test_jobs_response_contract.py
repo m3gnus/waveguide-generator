@@ -68,6 +68,7 @@ def test_serialized_historical_rows_satisfy_response_contract(config):
 def test_stored_solve_options_preserve_nondefault_values(detailed):
     options = SolveOptions(
         accuracy="accurate", mesh_ladder="auto",
+        mesh_limit_override=True, mesh_limit_override_key="a" * 64,
         ground_plane={"enabled": True, "axis": "x", "height_m": 1.5},
     ).model_dump(mode="json")
     wire = JobRuntime._serialize_job(_row({
@@ -193,7 +194,9 @@ def test_schema_uses_response_option_requirements_without_changing_requests():
     assert {"solve_execution", "channel_solve_executions", "design_availability", "client_metadata"} <= set(schema["required"])
     response_options = schema["$defs"]["SolveOptionsResponse"]
     assert set(OPTION_FIELDS) == set(response_options["required"])
-    assert set(response_options["properties"]) == set(response_options["required"]) | {"adaptive_frequency_sampling"}
+    assert set(response_options["properties"]) == set(response_options["required"]) | {
+        "adaptive_frequency_sampling", "mesh_limit_override", "mesh_limit_override_key",
+    }
     assert set(schema["$defs"]["DesignAvailability"]["properties"]) == set(
         schema["$defs"]["DesignAvailability"]["required"]
     )
