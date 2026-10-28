@@ -30,7 +30,7 @@ from server.solver.imported import (
 
 #: Refusals whose message is already the user's sentence: the reason code
 #: stays on ``reason_code`` and never prefixes the words a person reads.
-WORDED_REFUSAL_CODES = frozenset({"reduced_axis_not_allowed"})
+WORDED_REFUSAL_CODES = frozenset({"reduced_axis_not_allowed", "solver_memory_exceeded"})
 
 
 class ImportedSolveRefusal(ValueError):

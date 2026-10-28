@@ -527,6 +527,39 @@ def test_file_mesh_memory_refusal_is_plain_before_solve(tmp_path, monkeypatch, c
     assert "dense-solver memory estimate" in caplog.text
 
 
+@pytest.mark.parametrize("direct", [False, True])
+@pytest.mark.parametrize("override", [False, True])
+def test_retained_file_mesh_rechecks_memory_before_submission(tmp_path, monkeypatch, caplog, direct, override) -> None:
+    from dataclasses import replace
+    from server.jobs.api import create_jobs_router
+    from server.mesh import builder
+    from server.mesh.errors import SolverMemoryTooLarge
+
+    async def scenario(store, app, runtime):
+        app.include_router(create_jobs_router(runtime))
+        record = register_mesh(store, tmp_path, registration())
+        # The preparation survived a restart with a lower memory ceiling.
+        limit = replace(builder.dense_solver_memory_limit(), bytes=1)
+        monkeypatch.setattr(builder, "dense_solver_memory_limit", lambda: limit)
+        if direct:
+            request = file_request(record).model_dump(mode="json")
+            request["options"]["mesh_limit_override"] = override
+            status, raw = await _request(app, "POST", "/api/solve", body=request)
+            refused = json.loads(raw)
+        else:
+            status, refused = await _file_solve(app, "mesh-file:" + record["artifact_sha256"], {
+                "prepared_id": record["ingest_id"], "client_request_id": "retained-memory",
+                "setup": setup_for(record), "mesh_limit_override": override,
+            })
+        assert status == 422, refused
+        assert refused["error"]["code"] == "solver_memory_exceeded"
+        assert refused["error"]["message"] == SolverMemoryTooLarge.USER_MESSAGE
+        assert runtime.store.list_jobs()[1] == 0
+
+    _file_scenario(tmp_path, scenario)
+    assert "Solver mesh uses" in caplog.text
+
+
 def test_a_file_solve_with_unreviewed_findings_is_refused(tmp_path) -> None:
     async def scenario(store, app, runtime):
         original = register_mesh(store, tmp_path, registration())

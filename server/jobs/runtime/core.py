@@ -593,6 +593,27 @@ class SymmetryValidationError(ValueError):
     """The requested solve domain requires a mirror plane the geometry lacks."""
 
 
+def _refuse_file_mesh_memory(msh_text: str, quadrants: int) -> None:
+    """Admit retained file meshes against this host's current memory limit."""
+    from server.mesh.builder import _enforce_dense_solver_memory_ceiling
+    from server.mesh.errors import SolverMemoryTooLarge
+    from server.solver.imported import _msh_triangles
+
+    try:
+        _, triangles, tags = _msh_triangles(msh_text)
+    except ValueError as exc:
+        raise ImportedSolveRefusal(
+            "ingest_mesh_unavailable", "Prepare this mesh again before solving.",
+        ) from exc
+    try:
+        _enforce_dense_solver_memory_ceiling(triangles, quadrants, tags=tags)
+    except SolverMemoryTooLarge as exc:
+        logger.warning("Solver memory admission refused a retained file mesh: %s", exc)
+        raise ImportedSolveRefusal(
+            "solver_memory_exceeded", SolverMemoryTooLarge.USER_MESSAGE,
+        ) from exc
+
+
 def _refuse_inverted_reduced_mesh(record: Mapping[str, Any], msh_text: str) -> None:
     """Refuse a reduced mesh wound against the model it mirrors.
 
@@ -2157,6 +2178,10 @@ class JobRuntime:
                 "ingest_mesh_unavailable",
                 str(exc),
             ) from exc
+        if file_mesh:
+            await asyncio.to_thread(
+                _refuse_file_mesh_memory, msh_text, int(symmetry_metadata["resolved_quadrants"]),
+            )
         await asyncio.to_thread(_refuse_inverted_reduced_mesh, record, msh_text)
         effective_polar_grid(request)
         # Validate provenance before any archive identity is claimed as well.
