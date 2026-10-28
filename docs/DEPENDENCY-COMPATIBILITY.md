@@ -1,6 +1,6 @@
 # Dependency compatibility
 
-The mesher pin `7c58e751` declares version 0.2.8 and includes later development
+The mesher pin `fc8d7d1c` declares version 0.2.8 and includes later development
 changes. It retains the ICW mouth endpoint-intersection fix from `4ae1cfa6`
 in `general_horn.radii_at_z`.
 `mesh_sizing.py` is unchanged, so CAD Link retains its earlier vendoring provenance.
@@ -31,12 +31,22 @@ azimuth-dependent values remain refused. Fresh ATH OSSE text
 with `Length = 0` is refused as an unsupported source-only model. Saved and
 native geometry retain their existing interpretation.
 
-It also refuses enclosures that leave less than 0.1 mm of front baffle beside the
-mouth on any physical wall side. Preview and mesh construction share the
-mesher's enclosure-bounds validation; solve admission calls its public
-`resolve_enclosure_bounds()` with the final execution domain. The refusal
-names the side and the margin to increase. Measurement-only callers use
-`measure_enclosure_box_bounds()` without admitting geometry for construction.
+Enclosures with less than 0.1 mm of physical baffle beside any wall now
+continue straight back from the fitted mouth rim as a flush enclosure. Every
+previously accepted enclosure retains its original construction, including
+zero margins with fractional mouth extents. The new flush path refuses a
+configured woofer, sampled rings wider behind the mouth, and fitted rims that
+fold across a reduced-domain cut or cross themselves. The existing native
+roundover/enclosure refusal remains. Preview, mesh and solve admission share
+`resolve_enclosure_bounds()` with the execution domain; measurement-only
+callers retain `measure_enclosure_box_bounds()`.
+
+STEP and mesh support the new flush construction. WGLink bundles, Fusion and
+Onshape share an explicit flush refusal until fitted-mouth reconstruction is
+supported there. This enabling pin ships with that consumer guard. Against
+`7c58e751`, qualification retained 70 raw byte-identical artifact pairs across
+16 existing saved/configuration and accepted-enclosure cases, including STEP,
+mesh, preview and build/manifest metadata (fixed STEP clock only).
 
 This pin also supplies native source-contour, front-baffle woofer,
 shared horn/woofer and passive phase-plug contracts, and the public
