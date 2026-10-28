@@ -12,10 +12,31 @@ logger = logging.getLogger(__name__)
 _WALL_FOLD = re.compile(
     r"^.+ generated outer offset grid (?:has a normal flip |self-intersects )"
 )
+_OFFSET_DEGENERACY = re.compile(
+    r"^.+ generated outer offset grid has (?:a degenerate (?P<side>inner|outer) normal "
+    r"|degenerate inner and outer normals )"
+)
+
+
+def offset_degeneracy_message(detail: str) -> str | None:
+    """Name collapsed surfaces without inferring a thickness-caused fold."""
+    match = _OFFSET_DEGENERACY.match(detail)
+    if match is None:
+        return None
+    side = match.group("side")
+    surface = (f"The {side} surface collapses in part." if side is not None else
+               "The inner and outer surfaces collapse together in part.")
+    return (
+        f"{surface} Adjust the local profile so nearby sections remain distinct, "
+        "then try again."
+    )
 
 
 def wall_fold_message(config: Mapping[str, Any], detail: str) -> str | None:
-    """Recognise offset folds for every family, retaining unrelated diagnostics."""
+    """Recognise invalid offset grids while preserving each diagnosed cause."""
+    collapsed = offset_degeneracy_message(detail)
+    if collapsed is not None:
+        return collapsed
     if not _WALL_FOLD.match(detail):
         return None
     thickness = config.get("mesh", {}).get("wallThickness")
@@ -62,11 +83,13 @@ def mesher_error_message(
     config: Mapping[str, Any] | Callable[[], Mapping[str, Any]], detail: str
 ) -> str:
     """Translate once, and keep the original technical diagnostic in the log."""
-    if not _WALL_FOLD.match(detail) and _BAFFLE_GEOMETRY_MARKER not in detail:
-        return detail
-    if callable(config):
-        config = config()
-    message = wall_fold_message(config, detail) or _infinite_baffle_geometry_refusal(config, detail)
+    message = offset_degeneracy_message(detail)
+    if message is None:
+        if not _WALL_FOLD.match(detail) and _BAFFLE_GEOMETRY_MARKER not in detail:
+            return detail
+        if callable(config):
+            config = config()
+        message = wall_fold_message(config, detail) or _infinite_baffle_geometry_refusal(config, detail)
     if message is None:
         return detail
     logger.warning("Mesher geometry diagnostic: %s", detail)

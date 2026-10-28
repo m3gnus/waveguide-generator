@@ -36,6 +36,7 @@ from server.preview.core import _cache_relevant_config, _recentred_preview_confi
 from server.preview.errors import (
     _infinite_baffle_geometry_refusal as _infinite_baffle_geometry_refusal,
     mesher_error_message,
+    offset_degeneracy_message,
 )
 
 from server.contracts.geometry import (
@@ -720,7 +721,10 @@ def _self_intersection_warnings(
     if coplanar:
         overlaps += f" and {coplanar:,} overlap in-plane"
     remedy = SELF_INTERSECTION_REMEDY
-    if fold:
+    collapsed = offset_degeneracy_message(fold) if fold else None
+    if collapsed is not None:
+        remedy = collapsed
+    elif fold:
         # A folded offset cannot be meshed apart at any density, so when one is
         # present it replaces the remedy above rather than sitting next to it
         # telling the user the opposite thing.
@@ -730,11 +734,12 @@ def _self_intersection_warnings(
             "mesh density can separate the shell from itself. Reduce Wall "
             "Thickness, or open the curvature at that station."
         )
+    usual_cause = "" if collapsed else "On a free-standing waveguide this is usually a thin wall. "
     return [
         f"{SELF_INTERSECTION_WARNING_PREFIX}: {overlaps}{where}. Surfaces that "
         "pass through each other are not the boundary the design describes, so "
-        "the solved field is not the field of the intended geometry. On a "
-        f"free-standing waveguide this is usually a thin wall. {remedy}"
+        "the solved field is not the field of the intended geometry. "
+        f"{usual_cause}{remedy}"
     ]
 
 def _large_mesh_warnings(

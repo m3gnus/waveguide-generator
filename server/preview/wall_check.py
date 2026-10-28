@@ -22,7 +22,7 @@ def _key(config: Mapping[str, Any]) -> str:
 
 
 def remember(config: Mapping[str, Any], detail: str | None) -> None:
-    """Only a successful fine preview or a recognised offset fold is evidence."""
+    """Only a successful fine preview or a recognised offset-grid failure is evidence."""
     if detail is not None and wall_fold_message(config, detail) is None:
         return
     key = _key(config)
