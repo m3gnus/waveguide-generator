@@ -21,6 +21,10 @@ MAX_SOLVED_GAP_OCTAVES = 1 / 6
 _ORDER_TOLERANCE = 1e-12
 
 
+def _exceeds_max_gap(gaps_octaves):
+    return gaps_octaves > MAX_SOLVED_GAP_OCTAVES + _ORDER_TOLERANCE
+
+
 def _nearest_log_point(frequencies, candidates, target):
     distances = abs(np.log2(frequencies[candidates]) - target)
     # Geometric midpoints can be equidistant to rounding precision. Prefer the
@@ -171,7 +175,7 @@ class SweepPlanner:
             self.stable = 0
             estimate = np.ones(len(f))
         gaps_octaves = np.diff(np.log2(f[ids]))
-        density_met = bool(np.all(gaps_octaves <= MAX_SOLVED_GAP_OCTAVES + 1e-12))
+        density_met = not np.any(_exceeds_max_gap(gaps_octaves))
         if self.stable >= 2 and density_met:
             self.stop_reason = "estimated_convergence"
             self.pending = np.array([], dtype=int)
@@ -192,7 +196,7 @@ class SweepPlanner:
             candidate = None
             for gap in oversized:
                 left, right = coverage_ids[gap : gap + 2]
-                if coverage_gaps[gap] <= MAX_SOLVED_GAP_OCTAVES + 1e-12:
+                if not _exceeds_max_gap(coverage_gaps[gap]):
                     # A tie group can straddle the coverage threshold.
                     continue
                 candidates = np.arange(left + 1, right)
@@ -284,6 +288,8 @@ def solve_native_adaptively(
     # Add native coverage queries, then publish only the original requested grid.
     f = native_acquisition_frequencies(context)
     requested_ids = np.searchsorted(f, requested)
+    # If omitting any interior row breaks coverage, acquire everything at once.
+    full_acquisition = len(f) >= 2 and np.all(_exceeds_max_gap(np.log2(f[2:] / f[:-2])))
     planner = None
     template = None
     layout = []
@@ -293,7 +299,10 @@ def solve_native_adaptively(
     while planner is None or len(planner.pending):
         if cancel:
             cancel()
-        ids = SweepPlanner(f, delays_s=0).pending if planner is None else planner.pending
+        if planner is None and full_acquisition:
+            ids = np.arange(len(f))
+        else:
+            ids = SweepPlanner(f, delays_s=0).pending if planner is None else planner.pending
         result = solve_batch(f[ids].tolist())
         batches.append(result)
         if getattr(result, "cancelled", False):

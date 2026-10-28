@@ -351,6 +351,115 @@ def test_native_batches_reconstruct_auxiliary_fields_and_stream_full_grid():
     assert payload["metadata"]["adaptive_sampling"]["solved_count"] == sum(map(len, batches))
 
 
+@pytest.mark.parametrize("count", [24, 60])
+def test_mandatory_native_grid_uses_one_batch_and_publishes_full_sweep(monkeypatch, count):
+    from server.solver import adaptive_sweep as sweep
+
+    context = SolverContext(None, (50, 16000), count, adaptive_frequency_sampling=True)
+    requested = np.geomspace(50, 16000, count)
+    acquisition = sweep.native_acquisition_frequencies(context)
+    batches, snapshots, cancellations = [], [], []
+
+    def no_fit(*args, **kwargs):
+        pytest.fail("a mandatory full sweep must not fit a rational model")
+
+    monkeypatch.setattr(sweep, "SweepModel", no_fit)
+
+    def solve(batch):
+        batches.append(batch)
+        f = np.asarray(batch)
+        values = (1 / (f - 600j))[:, None, None]
+        return SimpleNamespace(
+            frequencies_hz=f, pressure_complex=values, impedance=values[:, 0, 0],
+            sphere_pressure_complex=values * 2, surface_pressure_complex=values[:, 0],
+            surface_neumann_complex=values[:, 0] * 3,
+            surface_pressure_avg={2: values[:, 0, 0] * 4},
+            timings={"solve": len(f)}, solver_log=[{"frequency": value} for value in batch],
+        )
+
+    result = solve_native_adaptively(
+        context, solve, distance_m=2, sound_speed=343, publish=snapshots.append,
+        cancel=lambda: cancellations.append(True),
+    )
+    assert batches == [acquisition.tolist()]
+    assert cancellations == [True]
+    assert len(snapshots) == 1 and snapshots[0] is result
+    np.testing.assert_array_equal(result.frequencies_hz, requested)
+    values = (1 / (requested - 600j))[:, None, None]
+    np.testing.assert_array_equal(result.pressure_complex, values)
+    np.testing.assert_array_equal(result.impedance, values[:, 0, 0])
+    np.testing.assert_array_equal(result.sphere_pressure_complex, values * 2)
+    np.testing.assert_array_equal(result.surface_pressure_complex, values[:, 0])
+    np.testing.assert_array_equal(result.surface_neumann_complex, values[:, 0] * 3)
+    np.testing.assert_array_equal(result.surface_pressure_avg[2], values[:, 0, 0] * 4)
+    np.testing.assert_array_equal(result.directivity_db, 20 * np.log10(np.abs(values) / 20e-6))
+    assert result.frequency_status == ["solved"] * count
+    assert result.timings == {"solve": len(acquisition)}
+    assert result.solver_log == [{"frequency": value} for value in acquisition]
+    assert result.adaptive_sampling == dict(
+        solved_count=count, requested_count=count, native_solved_count=len(acquisition),
+        solved_frequencies_hz=acquisition.tolist(),
+        max_gap_octaves=float(np.max(np.diff(np.log2(acquisition)))),
+        max_allowed_gap_octaves=sweep.MAX_SOLVED_GAP_OCTAVES,
+        tolerance_db=0.1, estimate_db=0.0, stop_reason="full_sweep",
+    )
+
+
+@pytest.mark.parametrize("f", [
+    np.linspace(100, 200, 24),
+    100 * 2 ** (np.arange(24) * (1 / 6 + 5e-13) / 2),
+])
+def test_optional_native_grid_keeps_planning_multiple_batches(f):
+    context = SolverContext(None, (f[0], f[-1]), len(f), frequencies_hz=tuple(f),
+                            adaptive_frequency_sampling=True)
+    batches = []
+
+    def solve(batch):
+        batches.append(batch)
+        return SimpleNamespace(frequencies_hz=np.asarray(batch),
+                               pressure_complex=np.ones((len(batch), 1, 1), complex))
+
+    result = solve_native_adaptively(context, solve, distance_m=0, sound_speed=343)
+    assert len(batches) > 1
+    assert len(batches[0]) == 8
+    np.testing.assert_array_equal(result.frequencies_hz, f)
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_mandatory_native_grid_honours_cancellation(partial):
+    context = SolverContext(None, (50, 16000), 60, adaptive_frequency_sampling=True)
+    batches, snapshots, cancellations = [], [], []
+
+    def solve(batch):
+        batches.append(batch)
+        return SimpleNamespace(
+            frequencies_hz=np.asarray(batch[:3]), pressure_complex=np.ones((3, 1, 1), complex),
+            cancelled=True,
+        )
+
+    def cancel():
+        cancellations.append(True)
+        if not partial:
+            raise RuntimeError("cancelled")
+
+    if partial:
+        result = solve_native_adaptively(
+            context, solve, distance_m=2, sound_speed=343, publish=snapshots.append, cancel=cancel,
+        )
+        assert result.cancelled
+        np.testing.assert_array_equal(result.frequencies_hz, batches[0][:3])
+        assert len(result.directivity_db) == 3
+        assert len(batches) == 1
+    else:
+        with pytest.raises(RuntimeError, match="cancelled"):
+            solve_native_adaptively(
+                context, solve, distance_m=2, sound_speed=343, publish=snapshots.append, cancel=cancel,
+            )
+        assert not batches
+    assert cancellations == [True]
+    assert not snapshots
+
+
 def test_snapshot_merge_replaces_rows_and_keeps_other_channels():
     current = {"channels": {"a": {"frequencies": [1, 2], "spl_on_axis": {"spl": [0, 1]}}}}
     delta = {
@@ -478,7 +587,7 @@ def test_svd_failure_falls_back_to_exact_full_sweep(monkeypatch):
 
 @pytest.mark.parametrize("failure", ["nan", "batch", "cancel"])
 def test_native_invalid_rows_batch_failure_and_cancellation_propagate(failure):
-    context = SolverContext(None, (200, 1000), 24, adaptive_frequency_sampling=True)
+    context = SolverContext(None, (200, 1000), 48, adaptive_frequency_sampling=True)
     batches = []
 
     def solve(batch):
