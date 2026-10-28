@@ -829,6 +829,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/design/freeform/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Compare */
+        post: operations["compare_api_design_freeform_compare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/design/freeform/curves": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Curves */
+        post: operations["curves_api_design_freeform_curves_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/design/freeform/insert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Insert */
+        post: operations["insert_api_design_freeform_insert_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/design/import-report": {
         parameters: {
             query?: never;
@@ -3290,6 +3341,56 @@ export interface components {
             /** Deleted Ids */
             deleted_ids: string[];
         };
+        /** CompareRequest */
+        CompareRequest: {
+            after: components["schemas"]["DesignConfig"];
+            before: components["schemas"]["DesignConfig"];
+            /** Content Key */
+            content_key: string;
+        };
+        /** CompareResponse */
+        CompareResponse: {
+            H: components["schemas"]["Deviation"];
+            V: components["schemas"]["Deviation"];
+            /** Content Key */
+            content_key: string;
+        };
+        /** ComparisonExtents */
+        ComparisonExtents: {
+            /** After */
+            after: [
+                number,
+                number
+            ];
+            /** Before */
+            before: [
+                number,
+                number
+            ];
+            /**
+             * Comparison Domain
+             * @enum {string}
+             */
+            comparison_domain: "full" | "overlap_only" | "no_overlap";
+            /** Extents Equal */
+            extents_equal: boolean;
+            /** Overlap */
+            overlap: [
+                number,
+                number
+            ] | null;
+        };
+        /** ComparisonMethod */
+        ComparisonMethod: {
+            /** Estimate */
+            estimate: string;
+            /** Grid */
+            grid: string;
+            /** Peak Refinement */
+            peak_refinement: string;
+            /** Uniform Samples */
+            uniform_samples: number;
+        };
         /**
          * ConfigBlock
          * @description An unrecognized v1 block retained as ordered rows and item strings.
@@ -3390,6 +3491,63 @@ export interface components {
             shape: "circle" | "ellipse" | "superellipse" | "rounded_rectangle";
             t: components["schemas"]["Expr"];
         };
+        /** CurveAnchor */
+        CurveAnchor: {
+            /** Angleindeg */
+            angleInDeg: number | null;
+            /** Angleoutdeg */
+            angleOutDeg: number | null;
+            /** Explicitin */
+            explicitIn: boolean;
+            /** Explicitout */
+            explicitOut: boolean;
+            /** Handlein */
+            handleIn: [
+                number,
+                number
+            ] | null;
+            /** Handleout */
+            handleOut: [
+                number,
+                number
+            ] | null;
+            /**
+             * Join
+             * @enum {string}
+             */
+            join: "smooth" | "corner";
+            /** R */
+            r: number;
+            /** T */
+            t: number;
+            /** Z */
+            z: number;
+        };
+        /** CurveSpan */
+        CurveSpan: {
+            /** Bezier */
+            bezier: [
+                number,
+                number
+            ][];
+            /** Straight */
+            straight: boolean;
+        };
+        /** CurvesRequest */
+        CurvesRequest: {
+            /** Content Key */
+            content_key: string;
+            design: components["schemas"]["DesignConfig"];
+        };
+        /** CurvesResponse */
+        CurvesResponse: {
+            H: components["schemas"]["PlaneCurve"];
+            V: components["schemas"]["PlaneCurve"];
+            /** Content Key */
+            content_key: string;
+            /** Warnings */
+            warnings: string[];
+        };
         /**
          * DelaySpec
          * @description A channel's delay: aligned automatically, or stated in ms.
@@ -3482,6 +3640,21 @@ export interface components {
              * @constant
              */
             version?: 1;
+        };
+        /** Deviation */
+        Deviation: {
+            /** Curve At Z Mm */
+            curve_at_z_mm: number | null;
+            /** Curve Deviation Mm */
+            curve_deviation_mm: number | null;
+            /** Evaluator At Z Mm */
+            evaluator_at_z_mm: number | null;
+            /** Evaluator Deviation Mm */
+            evaluator_deviation_mm: number | null;
+            extents: components["schemas"]["ComparisonExtents"];
+            method: components["schemas"]["ComparisonMethod"];
+            /** Sample Count */
+            sample_count: number;
         };
         /** DirectivityRenderRequest */
         DirectivityRenderRequest: {
@@ -4315,6 +4488,8 @@ export interface components {
             profile_h: components["schemas"]["FreeformProfile"];
             profile_v: components["schemas"]["FreeformProfile"];
             scale?: components["schemas"]["Expr"] | null;
+            /** Shared Profile */
+            shared_profile?: boolean | null;
             simulation?: components["schemas"]["SimulationConfig"];
             slot_length?: components["schemas"]["Expr"] | null;
             source?: components["schemas"]["SourceConfig"];
@@ -4323,9 +4498,31 @@ export interface components {
             throat_ext_angle?: components["schemas"]["Expr"] | null;
             throat_ext_length?: components["schemas"]["Expr"] | null;
         };
+        /** FreeformError */
+        FreeformError: {
+            /** Content Key */
+            content_key: string | null;
+            /** Detail */
+            detail: string | {
+                [key: string]: unknown;
+            }[];
+        };
         /** FreeformPoint */
         FreeformPoint: {
             angle_deg?: components["schemas"]["Expr"] | null;
+            angle_out_deg?: components["schemas"]["Expr"] | null;
+            /** Handle In */
+            handle_in?: [
+                number,
+                number
+            ] | null;
+            /** Handle Out */
+            handle_out?: [
+                number,
+                number
+            ] | null;
+            /** Join */
+            join?: ("smooth" | "corner") | null;
             r: components["schemas"]["Expr"];
             t: components["schemas"]["Expr"];
         };
@@ -4680,6 +4877,41 @@ export interface components {
             reason: string;
             /** Requested */
             requested: string;
+        };
+        /** Inflection */
+        Inflection: {
+            /** Tangentdropdeg */
+            tangentDropDeg: number;
+            /** Zendmm */
+            zEndMm: number;
+            /** Zstartmm */
+            zStartMm: number;
+        };
+        /** InsertRequest */
+        InsertRequest: {
+            /** Content Key */
+            content_key: string;
+            design: components["schemas"]["DesignConfig"];
+            /**
+             * Mode
+             * @default exact
+             * @enum {string}
+             */
+            mode?: "exact" | "refit";
+            /**
+             * Plane
+             * @enum {string}
+             */
+            plane: "H" | "V";
+            /** Z Mm */
+            z_mm: number;
+        };
+        /** InsertResponse */
+        InsertResponse: {
+            /** Content Key */
+            content_key: string;
+            design: components["schemas"]["DesignConfig"];
+            deviation: components["schemas"]["Deviation"];
         };
         /** JobItem */
         JobItem: {
@@ -5750,6 +5982,20 @@ export interface components {
              * @enum {string}
              */
             requested: "omitted" | "explicit_zero";
+        };
+        /** PlaneCurve */
+        PlaneCurve: {
+            /** Anchors */
+            anchors: components["schemas"]["CurveAnchor"][];
+            /** Inflections */
+            inflections: components["schemas"]["Inflection"][];
+            /** Samples */
+            samples: [
+                number,
+                number
+            ][];
+            /** Spans */
+            spans: components["schemas"]["CurveSpan"][];
         };
         /** Point */
         Point: {
@@ -8209,6 +8455,105 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    compare_api_design_freeform_compare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompareRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompareResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FreeformError"];
+                };
+            };
+        };
+    };
+    curves_api_design_freeform_curves_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CurvesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurvesResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FreeformError"];
+                };
+            };
+        };
+    };
+    insert_api_design_freeform_insert_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InsertRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsertResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FreeformError"];
                 };
             };
         };

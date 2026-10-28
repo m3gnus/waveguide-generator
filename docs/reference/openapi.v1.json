@@ -2348,6 +2348,155 @@
         "title": "ClearFailedResponse",
         "type": "object"
       },
+      "CompareRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/DesignConfig"
+          },
+          "before": {
+            "$ref": "#/components/schemas/DesignConfig"
+          },
+          "content_key": {
+            "title": "Content Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "before",
+          "after",
+          "content_key"
+        ],
+        "title": "CompareRequest",
+        "type": "object"
+      },
+      "CompareResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "H": {
+            "$ref": "#/components/schemas/Deviation"
+          },
+          "V": {
+            "$ref": "#/components/schemas/Deviation"
+          },
+          "content_key": {
+            "title": "Content Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content_key",
+          "H",
+          "V"
+        ],
+        "title": "CompareResponse",
+        "type": "object"
+      },
+      "ComparisonExtents": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "After",
+            "type": "array"
+          },
+          "before": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Before",
+            "type": "array"
+          },
+          "comparison_domain": {
+            "enum": [
+              "full",
+              "overlap_only",
+              "no_overlap"
+            ],
+            "title": "Comparison Domain",
+            "type": "string"
+          },
+          "extents_equal": {
+            "title": "Extents Equal",
+            "type": "boolean"
+          },
+          "overlap": {
+            "anyOf": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overlap"
+          }
+        },
+        "required": [
+          "before",
+          "after",
+          "extents_equal",
+          "overlap",
+          "comparison_domain"
+        ],
+        "title": "ComparisonExtents",
+        "type": "object"
+      },
+      "ComparisonMethod": {
+        "additionalProperties": false,
+        "properties": {
+          "estimate": {
+            "title": "Estimate",
+            "type": "string"
+          },
+          "grid": {
+            "title": "Grid",
+            "type": "string"
+          },
+          "peak_refinement": {
+            "title": "Peak Refinement",
+            "type": "string"
+          },
+          "uniform_samples": {
+            "title": "Uniform Samples",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "estimate",
+          "uniform_samples",
+          "grid",
+          "peak_refinement"
+        ],
+        "title": "ComparisonMethod",
+        "type": "object"
+      },
       "ConfigBlock": {
         "additionalProperties": false,
         "description": "An unrecognized v1 block retained as ordered rows and item strings.",
@@ -2607,6 +2756,197 @@
         "title": "CrossSectionStation",
         "type": "object"
       },
+      "CurveAnchor": {
+        "additionalProperties": false,
+        "properties": {
+          "angleInDeg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Angleindeg"
+          },
+          "angleOutDeg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Angleoutdeg"
+          },
+          "explicitIn": {
+            "title": "Explicitin",
+            "type": "boolean"
+          },
+          "explicitOut": {
+            "title": "Explicitout",
+            "type": "boolean"
+          },
+          "handleIn": {
+            "anyOf": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handlein"
+          },
+          "handleOut": {
+            "anyOf": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handleout"
+          },
+          "join": {
+            "enum": [
+              "smooth",
+              "corner"
+            ],
+            "title": "Join",
+            "type": "string"
+          },
+          "r": {
+            "title": "R",
+            "type": "number"
+          },
+          "t": {
+            "title": "T",
+            "type": "number"
+          },
+          "z": {
+            "title": "Z",
+            "type": "number"
+          }
+        },
+        "required": [
+          "t",
+          "z",
+          "r",
+          "join",
+          "explicitIn",
+          "explicitOut",
+          "handleIn",
+          "handleOut",
+          "angleInDeg",
+          "angleOutDeg"
+        ],
+        "title": "CurveAnchor",
+        "type": "object"
+      },
+      "CurveSpan": {
+        "additionalProperties": false,
+        "properties": {
+          "bezier": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Bezier",
+            "type": "array"
+          },
+          "straight": {
+            "title": "Straight",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "straight",
+          "bezier"
+        ],
+        "title": "CurveSpan",
+        "type": "object"
+      },
+      "CurvesRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "content_key": {
+            "title": "Content Key",
+            "type": "string"
+          },
+          "design": {
+            "$ref": "#/components/schemas/DesignConfig"
+          }
+        },
+        "required": [
+          "design",
+          "content_key"
+        ],
+        "title": "CurvesRequest",
+        "type": "object"
+      },
+      "CurvesResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "H": {
+            "$ref": "#/components/schemas/PlaneCurve"
+          },
+          "V": {
+            "$ref": "#/components/schemas/PlaneCurve"
+          },
+          "content_key": {
+            "title": "Content Key",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "content_key",
+          "H",
+          "V",
+          "warnings"
+        ],
+        "title": "CurvesResponse",
+        "type": "object"
+      },
       "DelaySpec": {
         "additionalProperties": false,
         "description": "A channel's delay: aligned automatically, or stated in ms.",
@@ -2829,6 +3169,76 @@
           "design"
         ],
         "title": "DesignSnapshot",
+        "type": "object"
+      },
+      "Deviation": {
+        "additionalProperties": false,
+        "properties": {
+          "curve_at_z_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Curve At Z Mm"
+          },
+          "curve_deviation_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Curve Deviation Mm"
+          },
+          "evaluator_at_z_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluator At Z Mm"
+          },
+          "evaluator_deviation_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluator Deviation Mm"
+          },
+          "extents": {
+            "$ref": "#/components/schemas/ComparisonExtents"
+          },
+          "method": {
+            "$ref": "#/components/schemas/ComparisonMethod"
+          },
+          "sample_count": {
+            "title": "Sample Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "extents",
+          "method",
+          "sample_count",
+          "curve_deviation_mm",
+          "curve_at_z_mm",
+          "evaluator_deviation_mm",
+          "evaluator_at_z_mm"
+        ],
+        "title": "Deviation",
         "type": "object"
       },
       "DirectivityRenderRequest": {
@@ -5233,6 +5643,17 @@
               }
             ]
           },
+          "shared_profile": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared Profile"
+          },
           "simulation": {
             "$ref": "#/components/schemas/SimulationConfig"
           },
@@ -5295,6 +5716,43 @@
         "title": "FreeformConfig",
         "type": "object"
       },
+      "FreeformError": {
+        "additionalProperties": false,
+        "properties": {
+          "content_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Key"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "required": [
+          "content_key",
+          "detail"
+        ],
+        "title": "FreeformError",
+        "type": "object"
+      },
       "FreeformPoint": {
         "additionalProperties": false,
         "properties": {
@@ -5307,6 +5765,73 @@
                 "type": "null"
               }
             ]
+          },
+          "angle_out_deg": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "handle_in": {
+            "anyOf": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handle In"
+          },
+          "handle_out": {
+            "anyOf": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handle Out"
+          },
+          "join": {
+            "anyOf": [
+              {
+                "enum": [
+                  "smooth",
+                  "corner"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Join"
           },
           "r": {
             "$ref": "#/components/schemas/Expr"
@@ -6620,6 +7145,93 @@
           "engines"
         ],
         "title": "ImportedSolvePlanResponse",
+        "type": "object"
+      },
+      "Inflection": {
+        "additionalProperties": false,
+        "properties": {
+          "tangentDropDeg": {
+            "title": "Tangentdropdeg",
+            "type": "number"
+          },
+          "zEndMm": {
+            "title": "Zendmm",
+            "type": "number"
+          },
+          "zStartMm": {
+            "title": "Zstartmm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "zStartMm",
+          "zEndMm",
+          "tangentDropDeg"
+        ],
+        "title": "Inflection",
+        "type": "object"
+      },
+      "InsertRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "content_key": {
+            "title": "Content Key",
+            "type": "string"
+          },
+          "design": {
+            "$ref": "#/components/schemas/DesignConfig"
+          },
+          "mode": {
+            "default": "exact",
+            "enum": [
+              "exact",
+              "refit"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "plane": {
+            "enum": [
+              "H",
+              "V"
+            ],
+            "title": "Plane",
+            "type": "string"
+          },
+          "z_mm": {
+            "title": "Z Mm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "design",
+          "content_key",
+          "plane",
+          "z_mm"
+        ],
+        "title": "InsertRequest",
+        "type": "object"
+      },
+      "InsertResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "content_key": {
+            "title": "Content Key",
+            "type": "string"
+          },
+          "design": {
+            "$ref": "#/components/schemas/DesignConfig"
+          },
+          "deviation": {
+            "$ref": "#/components/schemas/Deviation"
+          }
+        },
+        "required": [
+          "content_key",
+          "design",
+          "deviation"
+        ],
+        "title": "InsertResponse",
         "type": "object"
       },
       "JobItem": {
@@ -10410,6 +11022,57 @@
           "policy_version"
         ],
         "title": "PlanAdjustment",
+        "type": "object"
+      },
+      "PlaneCurve": {
+        "additionalProperties": false,
+        "properties": {
+          "anchors": {
+            "items": {
+              "$ref": "#/components/schemas/CurveAnchor"
+            },
+            "title": "Anchors",
+            "type": "array"
+          },
+          "inflections": {
+            "items": {
+              "$ref": "#/components/schemas/Inflection"
+            },
+            "title": "Inflections",
+            "type": "array"
+          },
+          "samples": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Samples",
+            "type": "array"
+          },
+          "spans": {
+            "items": {
+              "$ref": "#/components/schemas/CurveSpan"
+            },
+            "title": "Spans",
+            "type": "array"
+          }
+        },
+        "required": [
+          "anchors",
+          "spans",
+          "samples",
+          "inflections"
+        ],
+        "title": "PlaneCurve",
         "type": "object"
       },
       "Point": {
@@ -15378,6 +16041,129 @@
         "summary": "Choose Endpoint",
         "tags": [
           "design-io"
+        ]
+      }
+    },
+    "/api/design/freeform/compare": {
+      "post": {
+        "operationId": "compare_api_design_freeform_compare_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompareResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FreeformError"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Compare",
+        "tags": [
+          "freeform"
+        ]
+      }
+    },
+    "/api/design/freeform/curves": {
+      "post": {
+        "operationId": "curves_api_design_freeform_curves_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CurvesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurvesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FreeformError"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Curves",
+        "tags": [
+          "freeform"
+        ]
+      }
+    },
+    "/api/design/freeform/insert": {
+      "post": {
+        "operationId": "insert_api_design_freeform_insert_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InsertResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FreeformError"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "summary": "Insert",
+        "tags": [
+          "freeform"
         ]
       }
     },

@@ -311,6 +311,10 @@ def _lex(text: str, repeats: list[tuple[str, _RawBlock]] | None = None) -> tuple
             continue
         if current is not None:
             blocks[current].entries.append(stripped)
+        if current in {"Freeform.H.Points", "Freeform.V.Points"}:
+            # Named point tokens contain '=' but remain rows, never block keys.
+            blocks[current].lines.append(line)
+            continue
         if "=" in line:
             key, value = (part.strip() for part in line.split("=", 1))
             if value.startswith("function anonymous("):
@@ -550,6 +554,10 @@ _FREEFORM_FLAT_ITEMS = frozenset(
         "Freeform.ThroatAngle",
         "Freeform.OvershootPolicy",
         "Freeform.InflectionPolicy",
+        "Freeform.Shared",
+        *{f"Freeform.{axis}.{key}" for axis in ("H", "V") for key in
+          ("ThroatJoin", "MouthJoin", "ThroatHandle", "MouthHandle",
+           "ThroatPointAngle", "MouthPointAngle", "ThroatRadius", "Inactive")},
     }
 )
 _FREEFORM_BLOCKS = frozenset(
@@ -568,6 +576,8 @@ _FREEFORM_PROFILE_ITEMS = frozenset(
         "ThroatAngle",
         "ThroatTangentScale",
         "MouthTangentScale",
+        "ThroatJoin", "MouthJoin", "ThroatHandle", "MouthHandle",
+        "ThroatPointAngle", "MouthPointAngle", "ThroatRadius", "Inactive",
     }
 )
 _FREEFORM_STATION_SHAPES = frozenset(
@@ -591,8 +601,45 @@ def _validate_block_items(block_name: str, block: _RawBlock, allowed: frozenset[
         raise TextConfigError(f"{block_name} item {unknown}: unknown item name")
 
 
+def _handle(raw: str, label: str) -> list[float]:
+    parts = raw.split(",")
+    if len(parts) != 2:
+        raise TextConfigError(f"{label}: expected dz,dr")
+    return [_finite(part, label) for part in parts]
+
+
+def _freeform_flag(raw: str, label: str) -> bool:
+    if raw not in {"0", "1"}:
+        raise TextConfigError(f"{label}: expected 1 or 0")
+    return raw == "1"
+
+
 def _point(raw: str, block_name: str, row: int, length: float) -> dict[str, Any]:
     parts = raw.split()
+    if any(part == "corner" or "=" in part for part in parts[2:]):
+        if len(parts) < 2:
+            raise TextConfigError(f"{block_name} row {row}: expected z r")
+        result = _point(" ".join(parts[:2]), block_name, row, length)
+        names = {"a": "angle_deg", "aout": "angle_out_deg", "hin": "handle_in", "hout": "handle_out"}
+        for token in parts[2:]:
+            if token == "corner":
+                key, value = "join", "corner"
+            elif "=" in token and token.split("=", 1)[0] in names:
+                name, raw_value = token.split("=", 1)
+                key = names[name]
+                if name in {"hin", "hout"}:
+                    value = _handle(raw_value, f"{block_name} row {row} {name}")
+                else:
+                    angle = _finite(raw_value, f"{block_name} row {row} {name}")
+                    if not -90 < angle < 90:
+                        raise TextConfigError(f"{block_name} row {row}: angle must be between -90 and 90")
+                    value = raw_value
+            else:
+                raise TextConfigError(f"{block_name} row {row}: unknown token {token!r}")
+            if key in result:
+                raise TextConfigError(f"{block_name} row {row}: repeated {key}")
+            result[key] = value
+        return result
     if len(parts) not in (2, 3, 4):
         raise TextConfigError(f"{block_name} row {row}: expected 2, 3, or 4 numeric values")
     values = [_finite(part, f"{block_name} row {row} column {index + 1}") for index, part in enumerate(parts)]
@@ -626,10 +673,16 @@ def _freeform_payload(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) 
 
     def profile(axis: str) -> dict[str, Any]:
         block_name = f"Freeform.{axis}"
-        info = blocks.get(block_name)
-        if info is None or "MouthRadius" not in info.items:
+        original = blocks.get(block_name)
+        info = _RawBlock(items={**(original.items if original else {}), **{
+            key: flat[f"{block_name}.{key}"] for key in _FREEFORM_PROFILE_ITEMS
+            if f"{block_name}.{key}" in flat
+        }})
+        if "MouthRadius" not in info.items:
             raise TextConfigError(f"{block_name} requires MouthRadius")
         _validate_block_items(block_name, info, _FREEFORM_PROFILE_ITEMS)
+        if axis == "H" and "Inactive" in info.items:
+            raise TextConfigError("Freeform.H.Inactive is not supported; shared profiles use H")
         mouth_radius = _finite(info.items["MouthRadius"], f"{block_name}.MouthRadius")
         if mouth_radius <= 0:
             raise TextConfigError(f"{block_name}.MouthRadius must be greater than 0")
@@ -646,9 +699,16 @@ def _freeform_payload(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) 
         z_values = [float(point["t"]) * length_value for point in interior]
         if any(right <= left for left, right in zip(z_values, z_values[1:])):
             raise TextConfigError(f"{points_block_name} z values must be strictly increasing")
-        points = [{"t": 0, "r": throat_radius}]
+        points = [{"t": 0, "r": info.items.get("ThroatRadius", throat_radius)}]
         points.extend(interior)
         points.append({"t": 1, "r": info.items["MouthRadius"]})
+        for prefix, point, handle_name in (("Throat", points[0], "handle_out"), ("Mouth", points[-1], "handle_in")):
+            if f"{prefix}Join" in info.items:
+                point["join"] = info.items[f"{prefix}Join"]
+            if f"{prefix}Handle" in info.items:
+                point[handle_name] = _handle(info.items[f"{prefix}Handle"], f"{block_name}.{prefix}Handle")
+            if f"{prefix}PointAngle" in info.items:
+                point["angle_deg"] = info.items[f"{prefix}PointAngle"]
         result = {
             "points": points,
             "throat_angle_deg": info.items.get(
@@ -717,6 +777,15 @@ def _freeform_payload(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) 
         "cross_sections": stations,
         "inflection_policy": flat.get("Freeform.InflectionPolicy"),
     }
+    inactive = flat.get("Freeform.V.Inactive", blocks.get("Freeform.V", _RawBlock()).items.get("Inactive"))
+    if inactive is not None and inactive != "1":
+        raise TextConfigError("Freeform.V.Inactive: expected 1")
+    if "Freeform.Shared" in flat:
+        result["shared_profile"] = _freeform_flag(flat["Freeform.Shared"], "Freeform.Shared")
+        if inactive is not None and not result["shared_profile"]:
+            raise TextConfigError("Freeform.V.Inactive = 1 conflicts with Freeform.Shared = 0")
+    elif inactive is not None:
+        result["shared_profile"] = True
     if "Freeform.OvershootPolicy" in flat:
         result["overshoot_policy"] = flat["Freeform.OvershootPolicy"]
     return result
@@ -1712,6 +1781,14 @@ def _serialize_freeform(lines: list[str], config: FreeformConfig) -> None:
     _line(lines, "Freeform.ThroatRadius", throat_radius)
     _line(lines, "Freeform.ThroatAngle", profile_h.throat_angle_deg)
     _line(lines, "Freeform.InflectionPolicy", config.inflection_policy)
+    if config.shared_profile is not None:
+        _line(lines, "Freeform.Shared", "1" if config.shared_profile else "0")
+    if config.shared_profile:
+        _line(lines, "Freeform.V.Inactive", "1")
+
+    def handle_text(handle: tuple[float, float] | None) -> str | None:
+        return None if handle is None else ",".join(repr(v) for v in handle)
+
     for axis, profile in (("H", profile_h), ("V", profile_v)):
         _block(
             lines,
@@ -1720,6 +1797,13 @@ def _serialize_freeform(lines: list[str], config: FreeformConfig) -> None:
                 ("MouthRadius", profile.points[-1].r if profile.points else None),
                 ("ThroatAngle", profile.throat_angle_deg),
                 ("MouthAngle", profile.mouth_angle_deg),
+                ("ThroatRadius", profile.points[0].r if axis == "V" and config.shared_profile and profile.points[0].r != throat_radius else None),
+                ("ThroatJoin", "corner" if profile.points[0].join == "corner" else None),
+                ("MouthJoin", "corner" if profile.points[-1].join == "corner" else None),
+                ("ThroatHandle", handle_text(profile.points[0].handle_out)),
+                ("MouthHandle", handle_text(profile.points[-1].handle_in)),
+                ("ThroatPointAngle", profile.points[0].angle_deg),
+                ("MouthPointAngle", profile.points[-1].angle_deg),
             ],
         )
         rows = []
@@ -1729,8 +1813,17 @@ def _serialize_freeform(lines: list[str], config: FreeformConfig) -> None:
             assert point_t is not None and length_value is not None
             z_mm = round(point_t * length_value, 12)
             values = [_text(Expr(value=z_mm)), _text(point.r)]
+            extended = (point.join == "corner" or point.angle_out_deg is not None
+                        or point.handle_in is not None or point.handle_out is not None)
             if point.angle_deg is not None:
-                values.append(_text(point.angle_deg))
+                values.append(("a=" if extended else "") + _text(point.angle_deg))
+            if point.angle_out_deg is not None:
+                values.append("aout=" + _text(point.angle_out_deg))
+            if point.join == "corner":
+                values.append("corner")
+            for name, handle in (("hin", point.handle_in), ("hout", point.handle_out)):
+                if handle is not None:
+                    values.append(f"{name}={handle_text(handle)}")
             rows.append(" ".join(values))
         _block(lines, f"Freeform.{axis}.Points", [], rows)
     rows = []

@@ -316,6 +316,68 @@ After parsing/migration, the typed API stores both complete meridians as
 at `t=1`, and is strictly increasing. The first cross-section is `0 circle` or `0 ellipse`; the last
 is at `t=1`. Circle is accepted at any station and retains its spelling.
 
+FREEFORM is a Waveguide Generator extension; ATH does not understand these keys.
+Custom profiles additionally accept interior point rows:
+
+```text
+z r [a=<deg>] [aout=<deg>] [corner] [hin=<dz>,<dr>] [hout=<dz>,<dr>]
+```
+
+The positional `z r angleDeg` spelling is still accepted and is retained by the
+canonical writer for smooth points without handles. `z r corner` needs no angle.
+`aout` is legal only at an interior corner. Handles are finite numeric millimetre
+vectors relative to the anchor, never expressions. `hin` is forbidden at the
+throat, `hout` at the mouth. Smooth-handle collinearity and curve feasibility are
+validated by the mesher; curve API failures preserve its plane, span and z message.
+
+These WG-only keys are accepted either inside `Freeform.H` / `Freeform.V` or with
+fully qualified names (for example `Freeform.H.ThroatJoin`):
+
+| Profile key | Meaning |
+| --- | --- |
+| `ThroatJoin`, `MouthJoin` | `smooth` (default) or `corner` at the endpoint. The writer emits only `corner`. |
+| `ThroatHandle`, `MouthHandle` | `dz,dr`; the throat's outgoing and mouth's incoming handle. |
+| `ThroatPointAngle`, `MouthPointAngle` | Optional angle on the endpoint point itself. It overrides the profile's `ThroatAngle` / `MouthAngle`, including at a corner. |
+| `ThroatRadius` (V) | Retained V throat radius when shared mode makes V inactive and its throat differs from H. |
+
+`Freeform.Shared = 1|0` selects shared or separate profiles. Absent means separate,
+so existing documents keep their geometry. Shared mode retains the complete V
+profile but sends H for both mesher profiles. The writer adds
+`Freeform.V.Inactive = 1` in shared mode; this marker also implies shared mode when
+`Freeform.Shared` is absent. An explicit `Shared = 0` conflicts with that marker.
+A stored inactive V may have a different throat radius. Endpoint point angles and
+V's optional throat radius keep text saves lossless for these previously
+unrepresentable states. No new keys are written for legacy smooth profiles.
+The design format version and ATH import/export conventions are unchanged.
+
+### Mesh-free custom profile APIs
+
+All three JSON routes use intrinsic design millimetres, independent of `scale`.
+Every response, including an error, echoes the supplied string `content_key`.
+Malformed requests without a string key return `content_key: null`.
+
+| POST route | Request | Response fields besides `content_key` |
+| --- | --- | --- |
+| `/api/design/freeform/curves` | `{design, content_key}` | `H`, `V`, `warnings`, from the mesher's curve query. Anchors include both `z` and `t = z / length`; spans include resolved Bézier controls. |
+| `/api/design/freeform/insert` | `{design, plane: "H"\|"V", z_mm, mode: "exact"\|"refit", content_key}` | `design` and `deviation`. Mode defaults to `exact`. Shared profiles always insert into H and keep stored V. |
+| `/api/design/freeform/compare` | `{before, after, content_key}` | `H`, `V`, each containing a deviation summary. |
+
+Exact insertion delegates to the mesher with the build's effective default throat
+angle (15.5° when absent) and retains the entire resolved cubic curve. Refit adds a
+plain smooth anchor at the production evaluator's radius and releases every
+explicit handle in the edited plane before resolving the profile. Both refuse
+endpoints, existing anchors, and more than 64 points.
+
+Each deviation summary contains separate curve and production-evaluator radial
+deviations and their axial locations, extent and overlap metadata, the sampling
+method and sample count. The mesher owns the sampled comparison; its estimates
+are not certified maxima. Unequal extents are compared over their overlap, which
+is labelled explicitly. The returned summary omits the sampling grid. Evaluator
+deviation describes the unscaled meridian before morphing, not a comparison of
+the complete wall, mouth outline or source cap. None of these routes builds a mesh.
+Validation failures return 422 with `detail` containing the mesher's message or
+request-validation errors. LOOKUP remains on its legacy schema and translation.
+
 The reader accepts retired tangent scales, per-anchor strength and overshoot policy
 only long enough to migrate old files. The canonical writer never emits those
 removed controls: tangent speed is solved automatically. Circle stations remain valid

@@ -240,16 +240,27 @@ def _source_shape(value: Expr | None) -> str | float | None:
 
 def _profile_points(
     profile: FreeformProfile, length: Expr, scale: float
-) -> list[list[str | float]]:
+) -> list[Any]:
     length_value = _structural_number(length, "FREEFORM length")
-    rows: list[list[str | float]] = []
+    rows: list[Any] = []
     for index, point in enumerate(profile.points):
         t = _structural_number(point.t, f"FREEFORM point {index + 1} t")
-        row = [t * length_value * scale, _scaled_expr(point.r, scale)]
-        if point.angle_deg is not None:
-            row.append(_expr(point.angle_deg))
-        rows.append([item for item in row if item is not None])
-    return rows  # type: ignore[return-value]
+        z, r = t * length_value * scale, _scaled_expr(point.r, scale)
+        if (point.join == "corner" or point.angle_out_deg is not None
+                or point.handle_in is not None or point.handle_out is not None):
+            rows.append(_clean({
+                "z": z, "r": r, "join": point.join,
+                "angleDeg": _expr(point.angle_deg),
+                "angleOutDeg": _expr(point.angle_out_deg),
+                "handleIn": [v * scale for v in point.handle_in] if point.handle_in is not None else None,
+                "handleOut": [v * scale for v in point.handle_out] if point.handle_out is not None else None,
+            }))
+        else:
+            row = [z, r]
+            if point.angle_deg is not None:
+                row.append(_expr(point.angle_deg))
+            rows.append([item for item in row if item is not None])
+    return rows
 
 
 def _freeform_profile(
@@ -298,7 +309,7 @@ def _profile(
             {
                 "formula": "FREEFORM",
                 "profileH": _freeform_profile(design.profile_h, design.length, scale),
-                "profileV": _freeform_profile(design.profile_v, design.length, scale),
+                "profileV": _freeform_profile(design.profile_h if design.shared_profile else design.profile_v, design.length, scale),
                 "crossSections": stations,
                 "inflectionPolicy": design.inflection_policy,
             }

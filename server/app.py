@@ -944,6 +944,9 @@ def create_app(
     mount_solver_mesh(application, engine_registry)
     mount_preview(application, extra_ws_origins=extra_ws_origins)
     mount_design_io(application)
+    from server.preview.freeform import mount_freeform
+
+    mount_freeform(application)
     mount_exports(application)
     # One restart-approved latch per server process (contract §4.2). The update
     # service sets it as it writes the handoff request, and the routes that

@@ -1,7 +1,25 @@
 import { describe, expect, it, vi } from 'vitest';
-import { chooseDesignFile, convertDesignToFreeform, exportGeometryToOutputFolder, freeformFromProfileCsv, hydrateDesignDocument, sendDesignToCad, serializeDesignDocument } from './designIo';
+import { chooseDesignFile, convertDesignToFreeform, exportGeometryToOutputFolder, freeformFromProfileCsv, hydrateDesignDocument, openDesignText, sendDesignToCad, serializeDesignDocument } from './designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
 import { expectNoJargon } from '../testing/expectNoJargon';
+
+async function untouchedRoundTrip(original: Record<string, unknown>): Promise<Record<string, unknown>> {
+  let saved: Record<string, unknown> | undefined;
+  const fetcher = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+    if (String(url) === '/api/design/open') {
+      return new Response(JSON.stringify({ design: saved ?? original }), { status: 200 });
+    }
+    if (String(url) === '/api/design/serialize') {
+      saved = JSON.parse(String(init?.body)).design as Record<string, unknown>;
+      return new Response(JSON.stringify({ text: 'saved.cfg', suggestedFilename: 'saved.cfg' }), { status: 200 });
+    }
+    throw new Error(`Unexpected request ${String(url)}`);
+  }) as typeof fetch;
+  const opened = await openDesignText('old.cfg', fetcher);
+  const document = hydrateDesignDocument(opened.design);
+  const file = await serializeDesignDocument(document, 'saved', fetcher, undefined, null, '');
+  return serializeDesign(hydrateDesignDocument((await openDesignText(file.text, fetcher)).design));
+}
 
 describe('design hydration', () => {
   it.each(['R-OSSE', 'OSSE', 'ICW', 'FREEFORM'] as const)(
@@ -72,6 +90,47 @@ describe('design hydration', () => {
     expect(design.a).toBe(25);
     expect(design._expressions).toMatchObject({ R: { value: 280, raw: '140 * 2' }, a: { value: null, raw: 'coverage(p)' } });
     expect(serializeDesign(design)).toMatchObject({ R: { value: 280, raw: '140 * 2' }, a: { value: null, raw: 'coverage(p)' } });
+  });
+
+  it('opens, saves untouched, and reopens a legacy FREEFORM with expressions and absent fields', async () => {
+    const profile = {
+      points: [
+        { t: 0, r: 12.7 },
+        { t: { value: 1 / 3, raw: '1 / 3' }, r: { value: 30, raw: '15 * 2' } },
+        { t: 1, r: 140 },
+      ],
+      throat_angle_deg: 15.5,
+      mouth_angle_deg: 60,
+    };
+    const original = {
+      formula: 'FREEFORM', length: { value: 120, raw: '60 * 2' },
+      profile_h: profile, profile_v: structuredClone(profile),
+      cross_sections: [{ t: 0, shape: 'circle' }, { t: 1, shape: 'ellipse' }],
+      mesh: { wall_thickness: null }, scale: null,
+    };
+    const wire = await untouchedRoundTrip(original);
+    expect(wire.length).toEqual(original.length);
+    expect((wire.profile_h as typeof profile).points[1]).toEqual(profile.points[1]);
+    expect((wire.profile_v as typeof profile).points[1]).toEqual(profile.points[1]);
+    expect((wire.mesh as Record<string, unknown>).wall_thickness).toBeNull();
+    expect(wire).not.toHaveProperty('shared_profile');
+    expect((wire.profile_h as typeof profile).points[1]).not.toHaveProperty('handle_in');
+    expect((wire.profile_h as typeof profile).points[1]).not.toHaveProperty('handle_out');
+  });
+
+  it('opens, saves untouched, and reopens legacy LOOKUP without converting its table', async () => {
+    const original = {
+      formula: 'LOOKUP', lookup_profile: [[0, 12.7], [40, 30], [120, 140]],
+      a0: { value: 22, raw: '11 * 2' }, scale: null, mesh: { wall_thickness: null },
+    };
+    const wire = await untouchedRoundTrip(original);
+    expect(wire.formula).toBe('LOOKUP');
+    expect(wire.lookup_profile).toEqual(original.lookup_profile);
+    expect(wire.a0).toEqual(original.a0);
+    expect(wire.scale).toBeNull();
+    expect((wire.mesh as Record<string, unknown>).wall_thickness).toBeNull();
+    expect(wire).not.toHaveProperty('shared_profile');
+    expect(wire).not.toHaveProperty('profile_h');
   });
 
   it('keeps legacy sidecars inert while preserving executable wire expressions', () => {

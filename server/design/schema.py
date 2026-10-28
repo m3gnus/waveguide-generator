@@ -1018,10 +1018,18 @@ class LookupConfig(DesignCommon):
         return self
 
 
+FreeformHandleNumber = Annotated[float, Field(strict=True, allow_inf_nan=False)]
+FreeformHandle = tuple[FreeformHandleNumber, FreeformHandleNumber]
+
+
 class FreeformPoint(StrictModel):
     t: Expr
     r: Expr
     angle_deg: Expr | None = None
+    join: Literal["smooth", "corner"] | None = Field(default=None, exclude_if=lambda v: v is None)
+    angle_out_deg: Expr | None = Field(default=None, exclude_if=lambda v: v is None)
+    handle_in: FreeformHandle | None = Field(default=None, exclude_if=lambda v: v is None)
+    handle_out: FreeformHandle | None = Field(default=None, exclude_if=lambda v: v is None)
 
 
 class FreeformProfile(StrictModel):
@@ -1046,6 +1054,17 @@ class FreeformProfile(StrictModel):
             raise ValueError("the first FREEFORM profile point must have t = 0")
         if scalars[-1] != 1:
             raise ValueError("the last FREEFORM profile point must have t = 1")
+        for index, point in enumerate(points):
+            if index == 0 and point.handle_in is not None:
+                raise ValueError("FREEFORM first point cannot have handle_in")
+            if index == len(points) - 1 and point.handle_out is not None:
+                raise ValueError("FREEFORM last point cannot have handle_out")
+            if point.angle_out_deg is not None and (
+                index in (0, len(points) - 1) or point.join != "corner"
+            ):
+                raise ValueError("FREEFORM angle_out_deg requires an interior corner")
+        # Smooth-handle collinearity and span feasibility are checked by the
+        # mesher; the curve API preserves its plane/span/z diagnostics as 422.
         return points
 
 
@@ -1084,6 +1103,7 @@ class FreeformConfig(DesignCommon):
     length: Expr
     profile_h: FreeformProfile
     profile_v: FreeformProfile
+    shared_profile: bool | None = Field(default=None, exclude_if=lambda v: v is None)
     cross_sections: list[CrossSectionStation] = Field(min_length=2, max_length=32)
     inflection_policy: Literal["reject", "warn"] | None = None
     corner_grids: list[CornerGrid] = Field(default_factory=list)
@@ -1129,7 +1149,7 @@ class FreeformConfig(DesignCommon):
 
     @model_validator(mode="after")
     def _shared_throat_radius(self) -> "FreeformConfig":
-        if self.profile_v.points[0].r != self.profile_h.points[0].r:
+        if not self.shared_profile and self.profile_v.points[0].r != self.profile_h.points[0].r:
             raise ValueError(
                 "FREEFORM profile throat radii must match because design format 2 "
                 "stores one shared throat radius"
