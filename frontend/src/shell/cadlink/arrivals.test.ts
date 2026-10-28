@@ -332,6 +332,20 @@ it('fences a manual pick without aborting its previous in-flight ingest', async 
   expect(useCadReturnStore.getState().ingestRecord).toBeNull();
 });
 
+it('says the incoming Onshape model was not applied when the design changed', async () => {
+  useDocumentStore.getState().setCadLink({ designId: 'wgd_open', lineageId: 'wgl_open', baseEditVersion: 1 }, 'current');
+  const status = vi.fn(); const show = vi.fn();
+  const applyIngest = useCadReturnStore.getState().applyIngest;
+  useCadReturnStore.setState({ applyIngest: () => false });
+  const actions = createCadArrivalActions({ setStatus: status, showIngestedMesh: show },
+    async () => json({ bundle, ingest: record }));
+  try { await actions.returnFromOnshape(); }
+  finally { useCadReturnStore.setState({ applyIngest }); }
+  expect(status).toHaveBeenLastCalledWith('The incoming Onshape model was not applied because the selected design changed while Onshape was sending it.');
+  expect(useCadReturnStore.getState().ingestRecord).toBeNull();
+  expect(show).not.toHaveBeenCalled();
+});
+
 it.each(['design identity', 'instance'] as const)('fences an Onshape return after a changed %s without React', async (change) => {
   useDocumentStore.getState().setCadLink({ designId: 'wgd_first', lineageId: 'wgl_first', baseEditVersion: 1 }, 'current');
   let instanceId = 'instance-first';

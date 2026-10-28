@@ -683,7 +683,7 @@ export function createCadArrivalActions(
       state.selectArrivedBundle(bundle, result.ingest.project?.lineage_id, fetcher);
       ingestGeneration = state.beginIngestIntent();
       if (!useCadReturnStore.getState().applyIngest(result.ingest, ingestGeneration)) {
-        setStatus('Kept the selected design because it changed while Onshape was sending the model.');
+        setStatus('The incoming Onshape model was not applied because the selected design changed while Onshape was sending it.');
         return;
       }
       setBundles([bundle]);
