@@ -3540,6 +3540,37 @@ def test_a_hung_start_fails_with_the_servers_thread_stacks(tmp_path, monkeypatch
     assert server._process.poll() is not None
 
 
+@pytest.mark.skipif(os.name != "posix", reason="external fatal-signal stack request is POSIX-only")
+@pytest.mark.parametrize("captured", ["", "Thread: hang_here_at_startup\n"])
+def test_stack_dump_retains_captured_output_when_process_exit_is_slow(tmp_path, monkeypatch, captured):
+    log = tmp_path / "server.log"
+    previous = "fake server starting\n"
+    log.write_text(previous)
+
+    class SlowExit:
+        pid = 123
+
+        def poll(self):
+            return None
+
+        def wait(self, *, timeout):
+            raise subprocess.TimeoutExpired("fake server", timeout)
+
+    def request_stacks(pid, sig):
+        assert pid == SlowExit.pid and sig == gate.signal.SIGABRT
+        with log.open("a") as output:
+            output.write(captured)
+
+    monkeypatch.setattr(gate.os, "kill", request_stacks)
+    result = gate.dump_server_stacks(SlowExit(), log)
+    if captured:
+        assert captured in result
+        assert previous not in result
+        assert "no stack dump" not in result
+    else:
+        assert "no stack dump: TimeoutExpired" in result
+
+
 def test_a_server_that_already_exited_has_no_stacks_to_ask_for(tmp_path) -> None:
     log = tmp_path / "server.log"
     log.write_text("", encoding="utf-8")

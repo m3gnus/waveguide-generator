@@ -607,10 +607,14 @@ def dump_server_stacks(process: subprocess.Popen[Any], log_path: Path) -> str:
         offset = log_path.stat().st_size
     except OSError:
         offset = 0
+    exit_timeout = None
     try:
         os.kill(process.pid, signal.SIGABRT)
         process.wait(timeout=STACK_DUMP_SETTLE_S)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except subprocess.TimeoutExpired as exc:
+        # The diagnostic can be written before process exit settles.
+        exit_timeout = exc
+    except OSError as exc:
         return f"(no stack dump: {type(exc).__name__}: {exc})"
     try:
         with log_path.open("rb") as log:
@@ -619,6 +623,8 @@ def dump_server_stacks(process: subprocess.Popen[Any], log_path: Path) -> str:
     except OSError as exc:
         return f"(no stack dump: could not read {log_path}: {exc})"
     if not dump.strip():
+        if exit_timeout is not None:
+            return f"(no stack dump: {type(exit_timeout).__name__}: {exit_timeout})"
         return "(no stack dump: the server wrote nothing when asked)"
     if len(dump) > STACK_DUMP_LIMIT:
         dump = dump[:STACK_DUMP_LIMIT] + f"\n... (truncated; the rest is in {log_path})"
