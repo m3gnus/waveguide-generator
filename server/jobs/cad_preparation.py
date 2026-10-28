@@ -90,6 +90,7 @@ from server.cadlink.joblane.preparation_inputs import (
     cad_provenance_record,
     resumable_record,
 )
+from server.cadlink.joblane.fusion_settings import record_settings_setup, settings_revision
 from server.cadlink.joblane.project_setup import ExcitationRefused, compose_solve_request
 from server.jobs.imported_setup import DEFAULTS_ORIGIN, CadSolveSetup
 from server.jobs.imported_setup import is_default_setup, setup_content, setup_digest, snapshot_setup
@@ -665,6 +666,19 @@ def prepare_job_sync(
             else "Choose the solve settings for this model in WG, then solve it.",
         )
     setup, revision_id = loaded
+    # The solve settings the user changed in Fusion's panel: applied once, by
+    # the delivery's first preparation. A resumed or continued run names the
+    # setup it recorded, which already has them.
+    applied_settings = bool(intent.solve_settings) and named_revision is None
+    if applied_settings:
+        try:
+            setup, revision_id = settings_revision(store, setup, revision_id, dict(intent.solve_settings))
+        except ValueError as exc:
+            return run.refuse(
+                "setup_required",
+                f"The solve settings sent from Fusion cannot be used: {exc}. "
+                "Change them in Fusion's Waveguide Generator panel, then solve again.",
+            )
     # Keep the requested settings even if reading the retained copy fails.
     run.advance(cad={"setup": _setup_record(store, revision_id)})
     manifest_sha256 = str(retained["manifest_sha256"])
@@ -683,6 +697,13 @@ def prepare_job_sync(
             "return_unavailable",
             "WG could not read its retained copy of this return.",
         )
+    # They are the model's settings from now on, as if chosen in WG; a
+    # first-time model is named only once its ingest files it (below).
+    settings_revision_id = revision_id
+    # A resumed first-time model already has the revised setup, but its
+    # earlier held preparation may not have ingested and named the model yet.
+    settings_unrecorded = bool(intent.solve_settings) and not record_settings_setup(
+        store, retained_manifest, settings_revision_id)
     if run.intent.parent_job_id is None and not run.intent.bundle_path.startswith("ingest/"):
         # A delivery admitted before WG held its return (its retention wait
         # ran out) was never judged at admission: its first preparation is.
@@ -772,6 +793,8 @@ def prepare_job_sync(
                        else f"Preparing the mesh failed: {exc}")
             return run.refuse(code, message, exception=exc)
 
+    if settings_unrecorded:
+        record_settings_setup(store, retained_manifest, settings_revision_id, project=record.get("project"))
     if setup.origin == DEFAULTS_ORIGIN:
         standing = _remember_default_setup(store, retained_manifest, record, revision_id)
         if standing is not None:

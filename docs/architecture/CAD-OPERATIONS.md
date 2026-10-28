@@ -418,6 +418,17 @@ immediately with keepalive, even when an older write is in flight. Per-window se
 write sequences prevent an older request from overwriting that successor. Clients
 without ordering headers retain their existing write behavior.
 
+A Fusion Solve may carry `solveSettings` (sweep start, end, count and spacing;
+`wglink_protocol.request_solve_settings`), advertised as `solveSettings: 1`. They
+are part of the delivery's inputs and digest. The delivery's first preparation
+(no named or recorded revision) applies them to the setup it would otherwise
+use -- the model's own, or WG's defaults for a first-time model -- creates a
+revision without `origin`, and records it as the model's setup with
+`user_choice` (`cadlink/joblane/fusion_settings.py`). A first-time model is
+recorded once its ingest names the project. Settings that cannot be combined
+with the setup refuse the preparation with `setup_required`. The request status
+reports the sweep of the job's setup as `settings`; Fusion's panel shows it.
+
 The old v1–v4 `cadSolveProfiles` namespace migrates once into the draft journal.
 Malformed entries are skipped individually. Legacy drafts apply only if that model
 has no server setup for the inventory; valid ones publish through the same publisher.

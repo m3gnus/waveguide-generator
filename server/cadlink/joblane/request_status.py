@@ -75,6 +75,7 @@ from server.cadlink.wglink_protocol import (
 )
 from server.jobs.cad_intent import UNAVAILABLE_BUNDLE_PATH, cad_of, intent_of
 from server.jobs.cad_preparation import job_cad_state
+from server.cadlink.joblane.fusion_settings import revision_sweep
 from server.jobs.progress import job_frequency_progress
 from server.platform.incidents import record_incident
 from server.solver.imported import imported_domain_planes
@@ -279,6 +280,7 @@ def project_request_status(
     ingest: Mapping[str, Any] | None = None,
     previous: Mapping[str, Any] | None = None,
     bundle_name: str | None = None,
+    settings: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """The status record of one request (without ``seq``/``updatedAt``), and any incident owed.
 
@@ -287,7 +289,9 @@ def project_request_status(
     ``cad`` that job's read model (``job_cad_state``); ``ingest`` the record
     of the mesh a solved job used; ``previous`` the status last written, as
     the validator read it; ``bundle_name`` names the model when no snapshot
-    does (:func:`bundle_document_name`). A Solve whose job is gone was dismissed in WG (or
+    does (:func:`bundle_document_name`); ``settings`` is the frequency sweep of the
+    setup the job prepares with, once it has one (``fusion_settings.revision_sweep``).
+    A Solve whose job is gone was dismissed in WG (or
     its run removed): it keeps a finished state it already had, without the
     run it no longer has, and otherwise reads ``cancelled``.
     """
@@ -327,6 +331,8 @@ def project_request_status(
             return {**kept, **{key: value for key, value in record.items() if value is not None}}, None
         return {**record, "state": "cancelled", "cancelReason": "dismissed"}, None
     record["job"] = _job_ref(job)
+    if settings:
+        record["settings"] = dict(settings)
     status = str(job.get("status"))
     cad = cad or {}
     if status == "preparing":
@@ -602,8 +608,11 @@ class RequestStatusPublisher:
             self._other_jobs.discard(str(job["id"]))
         previous = self._records.get(request_id)
         bundle_name = None if _document_name(operation, cad) else self._bundle_name(request_id, operation)
+        setup = cad_of(job).get("setup") if job is not None else None
+        settings = revision_sweep(self.store, setup.get("revision_id")) if isinstance(setup, Mapping) else None
         projected, incident = project_request_status(
             receipt, operation, job, cad, ingest=ingest, previous=previous, bundle_name=bundle_name,
+            settings=settings,
         )
         candidate = validate_request_status(
             {**projected, "seq": _next_seq(previous), "updatedAt": utc_now()}, request_id=request_id,

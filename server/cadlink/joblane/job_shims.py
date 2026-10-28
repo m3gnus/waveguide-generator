@@ -18,7 +18,7 @@ from contextvars import ContextVar
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from server.jobs.cad_intent import CadSolveIntent, INTERRUPTED_MESSAGE, UNAVAILABLE_BUNDLE_PATH, cad_of
+from server.jobs.cad_intent import CadSolveIntent, INTERRUPTED_MESSAGE, UNAVAILABLE_BUNDLE_PATH, cad_of, solve_settings_items
 from server.jobs.solve_anyway import Answered, Pressed, carries
 from server.jobs.models import SolveRequest
 from server.cadlink.operations import (
@@ -204,6 +204,7 @@ async def _admit_operation_solve(ctx, operation_id, press, *, manual, schedule, 
                            if press.approve_preparation_id else None),
                 acknowledged=acknowledged,
                 mesh_limit_override=fusion_override,
+                solve_settings=solve_settings_items(inputs.get("solve_settings")),
             )
         except ValueError as exc:
             raise BadSolvePayload(str(exc)) from exc

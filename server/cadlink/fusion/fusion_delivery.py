@@ -48,6 +48,8 @@ from server.cadlink.wglink_protocol import (
     REQUEST_STATUS_SCHEMA_VERSION,
     WG_REQUEST_SCHEMA_VERSION,
     SHOW_REQUEST_CAPABILITY,
+    SOLVE_SETTINGS_CAPABILITY,
+    SOLVE_SETTINGS_VERSION,
     SHOW_REQUEST_SCHEMA_VERSION,
 )
 
@@ -153,6 +155,8 @@ def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:
         # Each request's status file next to its receipt (request_status.py).
         REQUEST_STATUS_CAPABILITY: REQUEST_STATUS_SCHEMA_VERSION,
         SHOW_REQUEST_CAPABILITY: SHOW_REQUEST_SCHEMA_VERSION,
+        # A Solve's ``solveSettings`` are applied to the model's setup (fusion_settings.py).
+        SOLVE_SETTINGS_CAPABILITY: SOLVE_SETTINGS_VERSION,
         "fusionRequestDelivery": FUSION_REQUEST_DELIVERY,
         "sourceIdentity": SOURCE_IDENTITY,
         "documentUp": DOCUMENT_UP,
@@ -177,6 +181,7 @@ def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:
         # The delivery loop that writes status files is off too.
         del advertised[REQUEST_STATUS_CAPABILITY]
         del advertised[SHOW_REQUEST_CAPABILITY]
+        del advertised[SOLVE_SETTINGS_CAPABILITY]
     return advertised
 
 

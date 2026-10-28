@@ -11,7 +11,9 @@ from collections.abc import Mapping
 import hashlib
 from typing import Any, Literal
 
-from server.cadlink.wglink_protocol import APP_NAME, MESH_TOO_LARGE_CODE, could_not_prepare_text
+from server.cadlink.wglink_protocol import (
+    APP_NAME, MESH_TOO_LARGE_CODE, ProtocolValidationError, could_not_prepare_text, request_solve_settings,
+)
 from server.contracts.canonical import canonical_utf8_strict_json as canonical_json
 from server.mesh.errors import SolverMemoryTooLarge
 
@@ -425,7 +427,11 @@ _MAY_BE_EMPTY = frozenset({(PREPARE_AND_SOLVE, "return_id")})
 # holds the user already answered in Fusion before a Solve (the shared
 # protocol's ``ACKNOWLEDGES``, e.g. Solve anyway over the triangle ceiling): a
 # sorted, non-empty list of hold codes, part of the request's identity.
-_OPTIONAL_INPUTS: Mapping[str, tuple[str, ...]] = {PREPARE_AND_SOLVE: ("acknowledged",)}
+# ``solve_settings`` are the solve settings the user changed in Fusion's panel
+# (the shared protocol's ``request_solve_settings``): a non-empty object, part
+# of the request's identity too, applied to the model's setup before preparing.
+_OPTIONAL_INPUTS: Mapping[str, tuple[str, ...]] = {PREPARE_AND_SOLVE: ("acknowledged", "solve_settings")}
+_OBJECT_INPUTS = frozenset({"solve_settings"})
 
 
 def require_kind(kind: object) -> str:
@@ -496,6 +502,15 @@ def _fields(
         if field not in value:
             continue
         item = value[field]
+        if field in _OBJECT_INPUTS:
+            try:
+                settings = request_solve_settings(item)
+            except ProtocolValidationError as exc:
+                raise ValueError(f"{kind} {part} field '{field}' is not usable: {exc}") from exc
+            if not settings or settings != item:
+                raise ValueError(f"{kind} {part} field '{field}' must be canonical solve settings")
+            normalized[field] = dict(settings)
+            continue
         if (
             not isinstance(item, list) or not item
             or not all(isinstance(entry, str) and entry for entry in item)
@@ -536,12 +551,15 @@ def request_digest(
 
 def prepare_and_solve_request(
     *, return_id: str, bundle_path: str, manifest_sha256: str, acknowledged: tuple[str, ...] = (),
+    solve_settings: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Target and inputs of a solve command. A solve addresses nothing in CAD.
 
     ``acknowledged``: the holds the user answered before sending (canonical,
     ``wglink_protocol.request_acknowledged``); only a request that has any
-    names them.
+    names them. ``solve_settings``: the solve settings the user changed in
+    Fusion (canonical, ``wglink_protocol.request_solve_settings``); only a
+    request that has any names them.
     """
 
     inputs: dict[str, Any] = {
@@ -549,6 +567,8 @@ def prepare_and_solve_request(
     }
     if acknowledged:
         inputs["acknowledged"] = list(acknowledged)
+    if solve_settings:
+        inputs["solve_settings"] = dict(solve_settings)
     return normalize_request(PREPARE_AND_SOLVE, {}, inputs)
 
 

@@ -56,11 +56,13 @@ from server.cadlink.operations import (
 )
 from server.cadlink.wglink_protocol import (
     ACKNOWLEDGED_FIELD,
+    SOLVE_SETTINGS_FIELD,
     REQUEST_STATUS_SUFFIX,
     SOLVE_COMMAND_SCHEMA_VERSION,
     WG_REQUEST_SCHEMA_VERSION,
     ProtocolValidationError,
     request_acknowledged,
+    request_solve_settings,
     request_status_known,
     request_status_terminal,
     validate_request_status,
@@ -224,9 +226,12 @@ class PendingSolveCommand:
     #: The holds the user answered in Fusion before this Solve (schema 4, a
     #: Solve only; canonical, ``wglink_protocol.request_acknowledged``).
     acknowledged: tuple[str, ...] = ()
+    #: The solve settings the user changed in Fusion's panel (schema 4, a Solve
+    #: only; canonical ``wglink_protocol.request_solve_settings`` as items).
+    solve_settings: tuple[tuple[str, Any], ...] = ()
 
     def payload(self) -> dict[str, Any]:
-        payload = {
+        payload: dict[str, Any] = {
             "kind": self.kind,
             "commandId": self.command_id,
             "returnId": self.return_id,
@@ -236,6 +241,8 @@ class PendingSolveCommand:
         }
         if self.acknowledged:
             payload[ACKNOWLEDGED_FIELD] = list(self.acknowledged)
+        if self.solve_settings:
+            payload[SOLVE_SETTINGS_FIELD] = dict(self.solve_settings)
         return payload
 
 
@@ -254,6 +261,8 @@ class DeliveredItem:
     return_id: str | None = None
     #: Solve deliveries only: part of the request's identity (its digest).
     acknowledged: tuple[str, ...] = ()
+    #: Solve deliveries only: part of the request's identity (its digest).
+    solve_settings: tuple[tuple[str, Any], ...] = ()
 
     @classmethod
     def from_command(cls, command: PendingSolveCommand) -> DeliveredItem:
@@ -264,6 +273,7 @@ class DeliveredItem:
             manifest_sha256=command.manifest_sha256,
             return_id=command.return_id if command.kind == PREPARE_AND_SOLVE else None,
             acknowledged=command.acknowledged if command.kind == PREPARE_AND_SOLVE else (),
+            solve_settings=command.solve_settings if command.kind == PREPARE_AND_SOLVE else (),
         )
 
     def request(self) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -273,6 +283,7 @@ class DeliveredItem:
                 bundle_path=self.bundle_path,
                 manifest_sha256=self.manifest_sha256,
                 acknowledged=self.acknowledged,
+                solve_settings=dict(self.solve_settings),
             )
         if self.kind == RECEIVE_SNAPSHOT:
             return normalize_request(
@@ -435,6 +446,14 @@ def _command_from_payload(
             acknowledged = request_acknowledged(payload[ACKNOWLEDGED_FIELD])
         except ProtocolValidationError as exc:
             raise InvalidRequest(f"Its {ACKNOWLEDGED_FIELD} is not a list of answered questions.") from exc
+    solve_settings: dict[str, Any] = {}
+    if SOLVE_SETTINGS_FIELD in payload:
+        if schema != KINDED_SCHEMA_VERSION or kind != PREPARE_AND_SOLVE:
+            raise InvalidRequest("Only a schema-4 solve request changes solve settings.")
+        try:
+            solve_settings = request_solve_settings(payload[SOLVE_SETTINGS_FIELD])
+        except ProtocolValidationError as exc:
+            raise InvalidRequest(f"Its solve settings cannot be used: {exc}") from exc
     return PendingSolveCommand(
         marker_path=path,
         command_id=str(command_id),
@@ -444,6 +463,7 @@ def _command_from_payload(
         requested_at=str(payload.get("requestedAt") or ""),
         kind=str(kind),
         acknowledged=acknowledged,
+        solve_settings=tuple(sorted(solve_settings.items())),
     )
 
 
@@ -1035,6 +1055,7 @@ def solve_command_request(command: PendingSolveCommand) -> tuple[dict[str, Any],
         bundle_path=command.bundle_path,
         manifest_sha256=command.manifest_sha256,
         acknowledged=command.acknowledged,
+        solve_settings=dict(command.solve_settings),
     )
 
 

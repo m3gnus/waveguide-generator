@@ -452,6 +452,93 @@ def request_acknowledged(value: object) -> tuple[str, ...]:
     return tuple(sorted(set(value) & ACKNOWLEDGEABLE_HOLDS))
 
 
+
+# Solve settings a Fusion Solve may change. WG owns every solve setting: it
+# records them for each model and solves with the model's latest. A Solve
+# request may carry ``solveSettings``, the fields the user changed in Fusion's
+# panel; WG records them as the model's setup before preparing, so they are
+# WG's from then on, in WG's own settings too. Fusion keeps no copy: the panel
+# shows what the last solve used (the status record's ``settings``) and holds
+# only the edits not yet sent. WG advertises ``solveSettings: 1`` when it reads
+# the field; a request to an older WG never carries it.
+SOLVE_SETTINGS_FIELD = 'solveSettings'
+SOLVE_SETTINGS_CAPABILITY = 'solveSettings'
+SOLVE_SETTINGS_VERSION = 1
+SOLVE_SETTINGS_SPACINGS = ('log', 'linear')
+#: WG's ceiling on the frequencies one solve computes.
+SOLVE_SETTINGS_MAX_COUNT = 401
+#: Field -> what a user calls it, for refusals and the panel.
+SOLVE_SETTINGS_LABELS = {
+    'frequencyStartHz': 'Start frequency',
+    'frequencyEndHz': 'End frequency',
+    'frequencyCount': 'Number of frequencies',
+    'frequencySpacing': 'Spacing',
+}
+
+
+def _settings_hz(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    value = float(value)
+    return value if math.isfinite(value) and value > 0 else None
+
+
+def _settings_count(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if 1 <= value <= SOLVE_SETTINGS_MAX_COUNT else None
+
+
+def _solve_settings(value: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """The known fields that are valid, and the labels of those that are not."""
+    found: dict[str, Any] = {}
+    wrong: list[str] = []
+    readers = {'frequencyStartHz': _settings_hz, 'frequencyEndHz': _settings_hz,
+               'frequencyCount': _settings_count,
+               'frequencySpacing': lambda item: item if item in SOLVE_SETTINGS_SPACINGS else None}
+    for key, read in readers.items():
+        if key not in value:
+            continue
+        item = read(value[key])
+        if item is None:
+            wrong.append(SOLVE_SETTINGS_LABELS[key])
+        else:
+            found[key] = item
+    start, end = found.get('frequencyStartHz'), found.get('frequencyEndHz')
+    if start is not None and end is not None and end <= start:
+        wrong.append(SOLVE_SETTINGS_LABELS['frequencyEndHz'])
+    return found, wrong
+
+
+def request_solve_settings(value: object) -> dict[str, Any]:
+    """A solve request's ``solveSettings``, canonical: only known fields, all valid.
+
+    Unknown fields are dropped, so a newer add-in's setting this WG does not
+    have is not a refusal. A field this reader knows with a value it cannot
+    use is: the Solve would otherwise use settings the user did not choose.
+    Frequencies are positive and finite (an end above a start when both are
+    given); the count is 1 to ``SOLVE_SETTINGS_MAX_COUNT``; spacing is
+    ``log`` or ``linear``.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ProtocolValidationError(f'{SOLVE_SETTINGS_FIELD} must be an object')
+    found, wrong = _solve_settings(value)
+    if wrong:
+        raise ProtocolValidationError(
+            f'{SOLVE_SETTINGS_FIELD} has values WG cannot use: ' + ', '.join(wrong))
+    return found
+
+
+def solve_settings_problems(value: Mapping[str, Any]) -> list[str]:
+    """The labels of the fields in ``value`` a Solve could not use. Never raises."""
+    try:
+        return _solve_settings(value)[1] if isinstance(value, Mapping) else []
+    except Exception:  # noqa: BLE001 - a check never raises
+        return []
+
+
 # Add-in writer structural profile.
 _addin_SUPPORTED_RETURN_FEATURES = frozenset({'checksummed-files-v1', 'assembly-frame-v1', 'instance-records-v1', 'fem-air-volume-v1', 'reduced-domain-v1', 'source-identity-v1', 'document-up-v1', 'domain-automatic-v1', 'fem-regions-v1', MESH_SIZING_FEATURE})
 _addin_SOURCE_IDENTITY_FEATURE = 'source-identity-v1'
@@ -2030,6 +2117,17 @@ def _status_failure(value: object, name: object = None) -> dict[str, Any] | None
     return failure
 
 
+def _status_settings(value: object) -> dict[str, Any] | None:
+    """The solve settings a request's solve uses, as far as they read; None for none."""
+    if not isinstance(value, Mapping):
+        return None
+    found = _solve_settings(value)[0]
+    start, end = found.get('frequencyStartHz'), found.get('frequencyEndHz')
+    if start is not None and end is not None and end <= start:
+        found.pop('frequencyEndHz')
+    return found or None
+
+
 def _validate_request_status(value: object, request_id: str | None) -> dict[str, Any] | None:
     if not isinstance(value, Mapping) or value.get("contract") != REQUEST_STATUS_CONTRACT:
         return None
@@ -2067,6 +2165,7 @@ def _validate_request_status(value: object, request_id: str | None) -> dict[str,
         "job": _status_job(value.get("job")),
         "notice": _status_choice(value.get("notice"), REQUEST_STATUS_NOTICES),
         "failure": _status_failure(value.get("failure"), record["documentName"]),
+        "settings": _status_settings(value.get("settings")),
     }
     result = value.get("result")
     solved = _status_job(result)

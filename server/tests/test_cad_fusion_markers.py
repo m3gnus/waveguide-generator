@@ -230,6 +230,7 @@ def test_wg_advertises_its_delivery_versions_at_startup(
         "solveAcknowledgement": 1,
         "requestStatus": 1,
         "showRequest": 1,
+        "solveSettings": 1,
         "fusionRequestDelivery": 3,
         "sourceIdentity": 1,
         "documentUp": 1,
@@ -254,6 +255,7 @@ def test_wg_whose_consumer_is_off_does_not_advertise_solve_delivery(
     assert "solveAcknowledgement" not in advertised
     assert "requestStatus" not in advertised
     assert "showRequest" not in advertised
+    assert "solveSettings" not in advertised
     assert advertised["fusionRequestDelivery"] == 3
     assert [path.name for path in _ipc(data_dir).iterdir() if path.name.endswith(".tmp")] == []
 

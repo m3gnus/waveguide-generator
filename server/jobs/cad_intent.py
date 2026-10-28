@@ -14,6 +14,7 @@ import copy
 from dataclasses import dataclass, replace
 from typing import Any
 
+from server.cadlink.wglink_protocol import ProtocolValidationError, request_solve_settings
 from server.jobs.solve_anyway import Answered, Pressed, carries
 from server.cadlink.operations import (
     PREPARE_AND_SOLVE,
@@ -97,6 +98,10 @@ class CadSolveIntent:
     #: The holds the user answered in Fusion before sending (the delivery's
     #: ``acknowledged``): part of the delivery's identity, so its digest.
     acknowledged: tuple[str, ...] = ()
+    #: The solve settings the user changed in Fusion's panel (the delivery's
+    #: ``solve_settings``, as sorted items): part of the delivery's identity,
+    #: and applied to the model's setup by the delivery's first preparation.
+    solve_settings: tuple[tuple[str, Any], ...] = ()
 
     def to_config(self) -> dict[str, Any]:
         """The ``config_json`` of a preparing job."""
@@ -123,6 +128,8 @@ class CadSolveIntent:
             config["mesh_limit_override"] = True
         if self.acknowledged:
             config["acknowledged"] = list(self.acknowledged)
+        if self.solve_settings:
+            config["solve_settings"] = dict(self.solve_settings)
         return config
 
     @classmethod
@@ -150,6 +157,7 @@ class CadSolveIntent:
             acknowledged=tuple(
                 str(name) for name in config.get("acknowledged") or () if isinstance(name, str)
             ),
+            solve_settings=solve_settings_items(config.get("solve_settings")),
         )
 
     def delivery_digest(self) -> str:
@@ -164,8 +172,22 @@ class CadSolveIntent:
             bundle_path=self.bundle_path,
             manifest_sha256=self.manifest_sha256,
             acknowledged=self.acknowledged,
+            solve_settings=dict(self.solve_settings),
         )
         return request_digest(PREPARE_AND_SOLVE, target, inputs)
+
+
+def solve_settings_items(value: Any) -> tuple[tuple[str, Any], ...]:
+    """Stored solve settings as an intent holds them; () for none or unreadable.
+
+    The delivery checked them on arrival; a stored copy WG can no longer read
+    is dropped rather than refusing the job, and the solve keeps WG's setup.
+    """
+
+    try:
+        return tuple(sorted(request_solve_settings(value).items()))
+    except ProtocolValidationError:
+        return ()
 
 
 def _optional_text(value: Any) -> str | None:

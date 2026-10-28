@@ -56,7 +56,7 @@ missing **Run on Startup**; fix those in Fusion's add-in list.
    panel, **Open in Fusion 360** does the same. A completed parametric run's
    export menu also has **Send to CAD**.
 2. WG writes the design and starts or raises Fusion, and the add-in inserts
-   it. If it does not, use **Manage Link… → Insert** in Fusion.
+   it. If it does not, use **Advanced → Insert** in Fusion.
 3. Save and name the Fusion document. That name identifies its runs in WG.
 4. Add the flange, baffle, enclosure, woofer openings and other passages with
    Fusion's normal tools. Keep every surface the sound meets in the model.
@@ -77,7 +77,7 @@ A model in WG is a snapshot. After editing in Fusion, use **Send to WG** or
    Check the **Pre-flight** list: the included bodies and the drivers must
    describe the speaker you mean.
 2. Use solid bodies for walls and baffles. A visible surface body that is part
-   of the speaker needs **Manage Link… → Declare Body… → Exterior shell**.
+   of the speaker needs **Advanced → Declare Body… → Exterior shell**.
    Mark modelling aids **Exclude** and hide them; a visible excluded body
    stops the Send.
 3. Do not send air volumes as ordinary bodies: air is not a wall. Declare
@@ -157,10 +157,17 @@ The add-in's progress panel (titled **Waveguide Generator**, docked right)
 opens on every Send or Solve. It follows the model through preparing, waiting
 for the solver, solving with a frequency count ("Solving · 12 of 36
 frequencies"), and solved, with **Show results in Waveguide Generator**. It
-opens by itself when WG needs you. **Requests…** reopens it and lists recent
-Sends and Solves for **This document** or **All documents**; **Clear
-finished** tidies the list. If WG has not picked the model up yet, the panel
-says so and offers **Send again**.
+opens by itself when WG needs you. **Show Panel** reopens it. Its top row has
+**Sources & Mesh…** and **Solve in WG**; below them it lists this document's
+recent Sends and Solves, and **Clear finished** tidies the list. If WG has not
+picked the model up yet, the panel says so and offers **Send again**.
+
+The panel's **Solve settings** show the start and end frequency, the number of
+frequencies and their spacing this model's last solve used. Change any of them
+and the next **Solve in WG** uses your values. WG keeps them as the model's
+settings, exactly as if you had changed them in WG, so WG shows the same values
+afterwards. A blank field keeps WG's value; **Keep WG's settings** drops your
+changes before they are sent. Drivers and everything else stay in WG.
 
 If WG is not running, the add-in starts it in the background where it can. If
 that is not possible, it says why; start WG yourself and try again.
@@ -278,7 +285,7 @@ bass-reflex box is not recognised automatically.
 couple it to the outside field. In Fusion:
 
 1. Model each air volume as one closed solid body.
-2. Run **Manage Link… → Declare FEM Region…** on it. Name it, set its mesh
+2. Run **Advanced → Declare FEM Region…** on it. Name it, set its mesh
    size and loss factor.
 3. Add a group for every face set that is not a plain wall: a **Driver
    diaphragm (moving)** with its role, an **Interface to exterior air** where

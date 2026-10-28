@@ -23,7 +23,7 @@ from server.cadlink.joblane.preparation import (
 )
 from server.cadlink.intake.solve_command import record_outcome
 from server.cadlink.store import CadLinkStore
-from server.jobs.cad_intent import CadSolveIntent
+from server.jobs.cad_intent import CadSolveIntent, solve_settings_items
 from server.jobs.cad_preparation import CadPreparationHost, job_operation_view
 from server.jobs.runtime import JobConflictError, JobRuntime
 from server.jobs.runtime.core import SubmissionValidation, _CadLanePort
@@ -466,6 +466,8 @@ class JobsHarness(Harness):
             frame_axis=kwargs.get("expected_frame_axis"),
             approvals=approvals,
             submit=kwargs.get("submit", True),
+            # As job_shims reads it from the delivery.
+            solve_settings=solve_settings_items(inputs.get("solve_settings")),
         )
 
     def prepare(self, operation_id: str = "cmd-1", *, ingest: Any = None, **kwargs: Any) -> dict[str, Any]:
