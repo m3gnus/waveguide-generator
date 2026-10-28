@@ -326,6 +326,13 @@ def test_existing_automatic_nowaistbanding_setup_prepares_and_solves_below_ceili
     (bundle / "wgreturn.json").write_bytes(body)
     _accept(harness.store, "cmd-1", "wgreturn/box.wgreturn", "sha256:" + hashlib.sha256(body).hexdigest())
 
+    if fine_walls:
+        # Exercise the triangle choice independently of this host's RAM. The
+        # pre-mesh memory guard can refuse the first preparation too, so both
+        # child builds need this budget. Memory safety is covered separately in
+        # test_mesh_builder and test_cad_child_memory_override.
+        monkeypatch.setenv(DENSE_SOLVER_MEMORY_LIMIT_ENV, str(32 * 1024**3))
+        monkeypatch.setenv(DENSE_SOLVER_MEMORY_LIMIT_UNSAFE_ENV, "1")
     summary = harness.prepare(ingest=ingest_bundle)
     if fine_walls:
         assert summary["reason"] == "mesh_too_large", summary
@@ -355,12 +362,6 @@ def test_existing_automatic_nowaistbanding_setup_prepares_and_solves_below_ceili
         assert not harness.submitted
         # The real isolated mesh builder accepts the explicit choice, with the
         # same fine settings. Job-level consent and binding are tested in test_cad_held.
-        # Its dense-solver estimate (~16.4 GiB) passes the memory guard only on
-        # a host with more than ~33 GiB, so give the guard an explicit budget
-        # rather than this host's RAM; the guard itself is tested in
-        # test_mesh_builder and test_cad_child_memory_override.
-        monkeypatch.setenv(DENSE_SOLVER_MEMORY_LIMIT_ENV, str(32 * 1024**3))
-        monkeypatch.setenv(DENSE_SOLVER_MEMORY_LIMIT_UNSAFE_ENV, "1")
         record = ingest_bundle(bundle, setup["geometry"]["mesh"], [], harness.store, harness.data_dir,
                                prep_options={"mesh_limit_override": True})
         assert record["mesh"]["stats"]["triangle_count"] > 22_000
