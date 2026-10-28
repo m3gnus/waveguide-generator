@@ -1,6 +1,6 @@
 # Dependency compatibility
 
-The mesher pin `fc8d7d1c` declares version 0.2.8 and includes later development
+The mesher pin `92fb6275` declares version 0.2.8 and includes later development
 changes. It retains the ICW mouth endpoint-intersection fix from `4ae1cfa6`
 in `general_horn.radii_at_z`.
 `mesh_sizing.py` is unchanged, so CAD Link retains its earlier vendoring provenance.
@@ -47,6 +47,15 @@ supported there. This enabling pin ships with that consumer guard. Against
 `7c58e751`, qualification retained 70 raw byte-identical artifact pairs across
 16 existing saved/configuration and accepted-enclosure cases, including STEP,
 mesh, preview and build/manifest metadata (fixed STEP clock only).
+
+New flush builds also select Gmsh's existing older initial boundary recovery
+to avoid duplicate throat/source triangles observed on Linux. The existing
+meshing owner restores the caller's options on success and failure. Fitted
+surfaces, validation, repair and every previously accepted enclosure path
+remain unchanged. Qualification against `fc8d7d1c` retained the same 70 raw
+identity pairs; the original failing flush case and affected checks passed
+with both locked and latest Linux dependencies. Hosted Windows verification
+of this correction remains separate from these source checks.
 
 This pin also supplies native source-contour, front-baffle woofer,
 shared horn/woofer and passive phase-plug contracts, and the public
