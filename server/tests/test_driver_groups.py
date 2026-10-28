@@ -64,6 +64,7 @@ def test_setup_roundtrip_and_legacy_serialization():
     (lambda g: g["driver_groups"].append({"id": "other", "channel_ids": ["a"]}), "only one driver group"),
     (lambda g: g["driver_groups"][0].update(id="a"), "collides"),
     (lambda g: g["drive_channels"][1].update(motion="axial"), "identical motion and drivers"),
+    (lambda g: g["combine"].update(members=["bass", "missing"]), "unknown drive channels or groups"),
     (lambda g: g["combine"].update(members=["bass", "a"]), "whole driver group"),
     (lambda g: g["combine"].update(members=["a", "c"]), "whole driver group"),
     (lambda g: g.update(rg_ohm=0.5), "generator resistance to 0 ohms"),

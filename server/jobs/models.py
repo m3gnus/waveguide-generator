@@ -1149,10 +1149,10 @@ class ImportedGeometrySource(JobModel):
                 raise ValueError("driver group channels must have identical motion and drivers")
         if self.combine is not None:
             known_branches = known | set(group_ids)
-            unknown = [name for name in self.combine.members if name not in known_branches]
-            if unknown:
+            unknown_members = [name for name in self.combine.members if name not in known_branches]
+            if unknown_members:
                 raise ValueError(
-                    f"combine members name unknown drive channels or groups: {unknown}"
+                    f"combine members name unknown drive channels or groups: {unknown_members}"
                 )
             physical = self.physical_members(self.combine.members)
             if len(physical) != len(set(physical)):
