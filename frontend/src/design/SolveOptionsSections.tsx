@@ -11,6 +11,7 @@ import {
   engineDisplayName,
 } from './backendSupport';
 import { useSolveControlBackend } from '../jobs/useSolveControlBackend';
+import { runtimeSetupText } from '../jobs/runtimeSetup';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import type { CadReturnIngestRecord } from '../api/cadlink';
@@ -46,13 +47,21 @@ function importedEngineChoice(engine: EngineCapability, verdict: ImportedEngineV
   const imported = choosableForImportedGeometry(engine);
   const refused = verdict ? !verdict.solves && !(verdict.stage === 'availability' && selectableEngine(engine))
     : !selectableEngine(engine) || !imported;
+  const setup = runtimeSetupText(engine);
   const reason = verdict && !verdict.solves
-    ? verdict.stage === 'availability' && !showRepair ? null : verdict.reason ?? 'cannot solve this model'
+    ? verdict.stage === 'availability' && (setup || !showRepair) ? null : verdict.reason ?? 'cannot solve this model'
     : !imported ? 'does not solve imported CAD geometry'
     : !engine.available && showRepair && !engine.name.startsWith('beat-') ? engine.reason : null;
   const note = engine.qualification === 'pending' ? checking ? ' · checking OpenCL…' : ''
-    : reason ? ` · ${reason}` : !engine.available ? ' · unavailable' : engine.version ? ` · ${engine.version}` : '';
+    : reason ? ` · ${reason}` : availabilityNote(engine);
   return { refused, note };
+}
+
+/** A row's state: BEAT setup in plain words, else unavailable or its version. */
+function availabilityNote(engine: EngineCapability, reason = false): string {
+  const setup = runtimeSetupText(engine);
+  return setup ? ` · ${setup}` : !engine.available ? ` · unavailable${reason && engine.reason ? `: ${engine.reason}` : ''}`
+    : engine.version ? ` · ${engine.version}` : '';
 }
 
 const ACCURATE_HELP = 'Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions.';
@@ -254,7 +263,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
     <SelectRow revealId="solve-engine" text="Advanced engine override. AUTO follows the Fast or Accurate choice. An explicit engine takes precedence."><label htmlFor="solve-engine">Advanced backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
         <option value="auto">Automatic — follow accuracy</option>
         {store.engine === 'beat' && <option value="beat">BEAT — legacy family selection</option>}
-        {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!selectableEngine(engine)}>{engine.label || engine.name}{engine.qualification === 'pending' ? qualificationRefreshNeeded || error ? '' : ' · checking OpenCL…' : engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${!engine.name.startsWith('beat-') && engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
+        {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!selectableEngine(engine)}>{engine.label || engine.name}{engine.qualification === 'pending' ? qualificationRefreshNeeded || error ? '' : ' · checking OpenCL…' : availabilityNote(engine, !engine.name.startsWith('beat-'))}</option>)}
       </select></SelectRow>
     </> : <>
       {/* Keep the current override recoverable even if a new model refuses it.

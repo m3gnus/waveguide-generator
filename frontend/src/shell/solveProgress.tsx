@@ -395,7 +395,17 @@ function useReadinessProgress(enabled: boolean, readiness?: SolveReadinessState 
   const visible = held || control?.readinessRequested;
   const waiting = control?.waitingForEngine === true;
   const warmingEngine = control?.waitingEngine && control.waitingEngine !== 'auto' ? control.waitingEngine : blocker?.engine ?? control?.waitingEngine;
-  const message = waiting ? `${resolveEngineLabel(warmingEngine) || warmingEngine} is warming up. The solve starts when it is ready.` : visible ? blocker?.message ?? (control?.disabled ? control.title : null) : null;
+  // A BEAT runtime that is not ready says where its setup is, in plain words.
+  const setupSentence = (engine: string | null | undefined) => {
+    const setup = control?.runtimeSetup?.(engine);
+    if (!setup || setup === 'ready') return null;
+    const text = `${resolveEngineLabel(engine) || engine}: ${setup}`;
+    return text.endsWith('…') ? text : `${text}.`;
+  };
+  const waitingSetup = waiting ? setupSentence(warmingEngine) : null;
+  const message = waiting
+    ? waitingSetup ? `${waitingSetup} The solve starts when it is ready.` : `${resolveEngineLabel(warmingEngine) || warmingEngine} is warming up. The solve starts when it is ready.`
+    : visible ? setupSentence(blocker?.engine) ?? blocker?.message ?? (control?.disabled ? control.title : null) : null;
   if (!message && !control?.actionError && !control?.preparationError) return null;
   const errors = [...new Set([control?.actionError, control?.preparationError])]
     .filter((error): error is string => !!error);

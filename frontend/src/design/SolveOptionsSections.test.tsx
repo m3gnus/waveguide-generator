@@ -103,6 +103,24 @@ describe('solve and directivity control help', () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
+  it.each(['parametric', 'cad'] as const)('names the BEAT CPU setup state in plain words in the %s picker', mode => {
+    for (const [state, detail, words] of [
+      ['unprepared', null, 'BEAT CPU · Not set up: select to set up (about 5 min)'],
+      ['preparing', 'compiling, about 4 min', 'BEAT CPU · Setting up… (compiling, about 4 min)'],
+      ['ready', null, 'BEAT CPU · ready'],
+      ['failed', 'Download failed', 'BEAT CPU · Setup failed: Download failed'],
+    ] as const) {
+      queryClient.setQueryData(CAPABILITIES_QUERY_KEY, { engines: [{ name: 'beat-cpu', label: 'BEAT CPU',
+        available: state === 'ready', reason: 'Runtime has not been provisioned and proved.', runtime_state: state,
+        runtime_preparable: state === 'unprepared' || state === 'failed', runtime_detail: detail,
+        geometry_sources: ['parametric', 'imported'], fast_paths: [], version: 'test' }] });
+      render(<SolveOptionsControls mode={mode}/>);
+      const option = host.querySelector<HTMLOptionElement>('option[value="beat-cpu"]')!;
+      expect(option.textContent).toBe(words);
+      expect(option.disabled).toBe(false);
+    }
+  });
+
   it.each([
     ['parametric', 'Windows'], ['parametric', 'Linux'], ['cad', 'Windows'], ['cad', 'Linux'],
   ] as const)('uses the planned backend without a separate preparation notice in %s on %s', (mode, hostPlatform) => {

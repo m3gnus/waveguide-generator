@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from server.engines.registry import EngineInfo, EngineRegistry, _official_runtime_statuses
+from server.engines.registry import EngineInfo, EngineRegistry, _beat_engine_info, _official_runtime_statuses
 from server.solver import beat_cpu_runtime as facade
 from server.solver.beat_runtime import hardware, provider, readiness
 
@@ -41,6 +41,49 @@ def test_preparation_status_uses_backend_display_label(official, monkeypatch, ba
     assert facade.runtime_preparation_status(backend) == (
         "preparing", f"Preparing {label} (step: precompile).",
     )
+
+
+def test_cpu_setup_detail_keeps_its_step_through_package_output(official, monkeypatch):
+    monkeypatch.setattr(facade, "_preparation_in_flight", True)
+    monkeypatch.setattr(facade, "_requested_backend", "cpu")
+    facade._record_step("starting")
+    facade._provision_status("Downloading julia-1.12.7-win64.zip: 120 / 280 MB")
+    assert facade.runtime_preparation_detail("cpu") == "Downloading julia-1.12.7-win64.zip: 120 / 280 MB"
+    facade._record_step("precompile")
+    facade._provision_status("  Precompiling project... 12 dependencies")
+    assert facade.runtime_preparation_detail("cpu") == "compiling, about 4 min"
+    facade._record_step(None)
+    monkeypatch.setattr(facade, "_preparation_in_flight", False)
+    monkeypatch.setattr(facade, "_preparation_errors", {"cpu": "offline"})
+    assert facade.runtime_preparation_detail("cpu") == "offline"
+    assert facade.runtime_preparation_status("cpu") == ("failed", "BEAT · CPU preparation failed: offline")
+
+
+def test_gpu_setup_detail_has_no_words_for_package_output(official, monkeypatch):
+    monkeypatch.setattr(facade, "_preparation_in_flight", True)
+    monkeypatch.setattr(facade, "_requested_backend", "metal")
+    monkeypatch.setattr(facade, "_gpu_stage_backend", "metal")
+    monkeypatch.setattr(facade, "_gpu_stage_step", "metal_device")
+    assert facade.runtime_preparation_detail("metal") == "checking the GPU"
+    monkeypatch.setattr(facade, "_gpu_stage_step", "  Precompiling project...")
+    assert facade.runtime_preparation_detail("metal") is None
+    monkeypatch.setattr(facade, "_gpu_stage_step", None)
+    assert facade.runtime_preparation_detail("metal") == "starting"
+
+
+def test_capabilities_publish_setup_detail(official, monkeypatch):
+    monkeypatch.setattr(facade, "runtime_preparation_status", lambda backend:
+                        ("preparing", "Preparing BEAT · CPU (step: precompile).") if backend == "cpu" else (None, None))
+    monkeypatch.setattr(facade, "runtime_preparation_detail", lambda backend: "compiling, about 4 min")
+    engines = EngineRegistry(detector=lambda: [], cpu_refresh=False)
+    engines._initial_probe_task = type("Done", (), {"done": lambda self: True})()
+    monkeypatch.setattr(engines, "_start_detection", lambda: None)
+    rows = {row.name: row for row in asyncio.run(engines.capabilities())}
+    assert (rows["beat-cpu"].runtime_state, rows["beat-cpu"].runtime_detail) == ("preparing", "compiling, about 4 min")
+    failed = _beat_engine_info("cpu", {"available": False, "state": "failed", "reason": "long", "detail": "offline"})
+    assert (failed.runtime_state, failed.runtime_detail) == ("failed", "offline")
+    ready = _beat_engine_info("cpu", {"available": True, "state": "ready", "reason": "proved", "detail": None})
+    assert ready.runtime_detail is None
 
 
 def test_official_presentation_does_not_load_hbb(official, monkeypatch):
@@ -85,10 +128,60 @@ def test_selection_prepares_only_that_backend(official, monkeypatch, backend):
     assert calls == [backend]
 
 
-@pytest.mark.parametrize("engine", [None, "auto", "metal", "bempp"])
+@pytest.mark.parametrize("engine", ["metal", "bempp"])
 def test_non_beat_selection_never_provisions(official, monkeypatch, engine):
     monkeypatch.setattr(readiness, "backend_readiness", lambda *a, **k: pytest.fail("unselected runtime probed"))
     assert facade.start_selected_provisioning(engine) is None
+
+
+@pytest.mark.parametrize("engine", [None, "auto"])
+def test_automatic_prepares_cpu_in_the_background_as_0_3_5_did(official, monkeypatch, engine):
+    begun, finish = threading.Event(), threading.Event()
+    calls = []
+    monkeypatch.delenv(facade.SKIP_PROVISION_ENV_VAR, raising=False)
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kw: pytest.fail("Automatic inventoried a GPU"))
+    monkeypatch.setattr(readiness, "backend_readiness", lambda *a, **kw:
+                        readiness.BackendReadiness(False, "unprovisioned", "mock"))
+
+    def provision(**kwargs):
+        calls.append("cpu")
+        kwargs["step_cb"]("precompile")
+        begun.set()
+        assert finish.wait(2)
+        return {"status": "ready"}
+
+    monkeypatch.setattr(readiness, "provision_cpu", provision)
+    try:
+        thread = facade.start_selected_provisioning(engine)
+        assert thread is not None and begun.wait(2)
+        assert facade.runtime_preparation_status("cpu")[0] == "preparing"
+        # The picker's own Automatic prewarm, and choosing BEAT CPU, keep it running.
+        for keep in (None, "auto", "beat-cpu"):
+            facade.cancel_unselected_preparation(keep)
+            assert not facade._provision_cancel.is_set()
+        assert facade.start_selected_provisioning("auto") is thread
+    finally:
+        finish.set()
+    thread.join(2)
+    assert calls == ["cpu"]
+
+
+def test_automatic_does_not_retry_a_failed_setup_by_itself(official, monkeypatch):
+    monkeypatch.delenv(facade.SKIP_PROVISION_ENV_VAR, raising=False)
+    monkeypatch.setattr(readiness, "backend_readiness", lambda *a, **kw:
+                        readiness.BackendReadiness(False, "failed", "recorded"))
+    monkeypatch.setattr(readiness, "provision_cpu", lambda **kw: pytest.fail("failed setup retried at startup"))
+    assert facade.start_selected_provisioning("auto") is None
+
+
+def test_automatic_uses_beat_cpu_only_once_ready():
+    from server.engines.registry import EngineInfo, _beat_engine_info, resolve_auto_engine
+
+    bempp = EngineInfo(name="bempp", available=True, reason="ready", version=None, fast_paths=())
+    preparing = _beat_engine_info("cpu", {"available": False, "state": "provisioning", "reason": "setting up"})
+    ready = _beat_engine_info("cpu", {"available": True, "state": "ready", "reason": "proved"})
+    assert resolve_auto_engine(capabilities=[preparing, bempp]) == "bempp"
+    assert resolve_auto_engine(capabilities=[ready, bempp]) == "beat-cpu"
 
 
 def test_cpu_provisioning_does_not_inventory_or_prepare_gpu(official, monkeypatch):

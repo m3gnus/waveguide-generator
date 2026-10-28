@@ -90,8 +90,11 @@ def checked_root(
 
 def is_link(path: Path) -> bool:
     """Include Windows junctions and other reparse points in link checks."""
-    if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
-        return True
+    return path.is_symlink() or getattr(path, "is_junction", lambda: False)() or reparse_point(path)
+
+
+def reparse_point(path: Path) -> bool:
+    """A Windows reparse point, such as a junction or a Store App Execution Alias."""
     try:
         return bool(getattr(path.lstat(), "st_file_attributes", 0)
                     & stat.FILE_ATTRIBUTE_REPARSE_POINT)

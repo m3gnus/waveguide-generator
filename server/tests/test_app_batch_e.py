@@ -259,6 +259,7 @@ def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:
             "opencl_retry_pending",
             "runtime_state",
             "runtime_preparable",
+            "runtime_detail",
         }
         for engine in engines
     )

@@ -104,6 +104,30 @@ def test_saved_beat_startup_and_same_picker_selection_join_one_task(app, monkeyp
     asyncio.run(scenario())
 
 
+def test_automatic_prewarm_starts_cpu_setup_only_after_running_solve(app, monkeypatch):
+    from server.solver import beat_cpu_runtime
+
+    started = []
+    app.state.jobs_runtime = SimpleNamespace(running_job_ids={'real-solve'})
+    monkeypatch.setattr(beat_cpu_runtime, 'cpu_preparation_in_flight', lambda: False)
+    monkeypatch.setattr(beat_cpu_runtime, 'start_selected_provisioning',
+                        lambda engine, **kwargs: started.append(engine))
+    monkeypatch.setattr(app_module, 'resolve_prewarm_engine', lambda *a, **k: asyncio.sleep(0, 'bempp'))
+    monkeypatch.setattr(warmup, 'prewarm_bempp_worker_for_engine', lambda engine: None)
+
+    async def scenario():
+        status, _, _ = await _request_with_headers(app, 'POST', '/api/runtimes/beat/prewarm',
+                                                  body={'engine': 'auto'})
+        assert status == 202
+        await asyncio.sleep(0.02)
+        assert not started  # Never start setup, or change solver, under a running solve.
+        app.state.jobs_runtime.running_job_ids = set()
+        await app.state.beat_prewarm_task
+        assert started == ['auto']
+
+    asyncio.run(scenario())
+
+
 def test_unavailable_runtime_never_launches_a_warmup(monkeypatch):
     monkeypatch.delenv('WG2_SOLVER_WARMUP', raising=False)
     monkeypatch.setattr(official_beat, 'production_statuses', lambda **kwargs: {

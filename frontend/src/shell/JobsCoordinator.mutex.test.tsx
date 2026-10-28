@@ -1,3 +1,4 @@
+import { expectNoJargon } from '../testing/expectNoJargon';
 import { saveImportedSetup } from '../api/importedModels';
 import './cadlink/restores';
 import { archivedRequest, job as archivedJob, json, mesh as archivedMesh, record as archivedRecord, workspaceFor } from './cadlink/selection.fixtures';
@@ -1100,7 +1101,7 @@ describe('solve invocation mutex', () => {
       await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
     }
     const progress = host.querySelector('.results-panel .solve-progress.solve-readiness')!;
-    expect(progress.textContent).toBe('BEAT Metal is warming up. The solve starts when it is ready.Stop');
+    expect(progress.textContent).toBe('BEAT Metal: Setting up… The solve starts when it is ready.Stop');
     expect(host.querySelectorAll('.solve-readiness')).toHaveLength(1);
     expect(host.querySelector('[data-toolbar-solve] .solve-button')?.textContent).not.toMatch(/warm|ready|waiting|refused/i);
     expect(host.querySelector('.beat-runtime-preparation')).toBeNull();
@@ -1130,6 +1131,23 @@ describe('solve invocation mutex', () => {
     expect([...view.querySelectorAll('button')].map(button => button.textContent)).toEqual(buttons);
     expect(host.querySelector<HTMLButtonElement>('.solve-button')!.disabled).toBe(readiness.code !== 'engine_unavailable');
     expect(host.querySelector('[data-toolbar-solve] .solve-readiness')).toBeNull();
+  });
+  it.each([
+    { state: 'unprepared', detail: null, expected: 'BEAT Metal: Not set up.' },
+    { state: 'preparing', detail: 'compiling, about 4 min', expected: 'BEAT Metal: Setting up… (compiling, about 4 min).' },
+    { state: 'failed', detail: 'Download failed', expected: 'BEAT Metal: Setup failed: Download failed.' },
+  ] as const)('the solve status line names a $state BEAT runtime in plain words', async ({ state, detail, expected }) => {
+    act(() => {
+      blockedCad();
+      mocks.importedPlan.plan.readiness = blocker;
+      mocks.capabilities.engines = [{ name: 'beat-metal', available: false, runtime_state: state, runtime_detail: detail,
+        runtime_preparable: state !== 'preparing', reason: 'BEAT metal: Runtime has not been provisioned and proved.' } as EngineCapability];
+    });
+    await act(async () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>));
+    await act(async () => { await solveControlStore.getSnapshot()!.solve(); });
+    const view = host.querySelector('.solve-readiness')!;
+    expect(view.querySelector('span')?.textContent).toBe(expected);
+    expectNoJargon(view);
   });
   it.each(['ready', 'stop', 'model change', 'engine change', 'failure', 'unmount'])('a requested warming solve continues exactly once, or cancels: %s', async outcome => {
     act(() => {
@@ -1228,7 +1246,7 @@ describe('solve invocation mutex', () => {
     const render = () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
     await act(async () => render());
     const progress = host.querySelector('.solve-progress.solve-readiness')!;
-    expect(progress.textContent).toBe('BEAT Metal is warming up. The solve starts when it is ready.Stop');
+    expect(progress.textContent).toBe('BEAT Metal: Setting up… The solve starts when it is ready.Stop');
     expect([...progress.querySelectorAll('button')].map(button => button.textContent)).toEqual(['Stop']);
     expect(host.querySelector('[data-toolbar-solve] .solve-button')?.textContent).not.toMatch(/warm|ready|waiting|refused/i);
     expect(posts).toEqual([]); // Fusion already requested Solve; no extra click or prepare POST.
@@ -1241,7 +1259,7 @@ describe('solve invocation mutex', () => {
       mocks.capabilities.engines = [{ ...mocks.capabilities.engines[0], runtime_state: 'failed' } as EngineCapability];
       mocks.importedPlan.plan.readiness = blocker;
       await act(async () => render());
-      expect(host.querySelector('.solve-progress.solve-readiness')?.textContent).toContain(blocker.message);
+      expect(host.querySelector('.solve-progress.solve-readiness')?.textContent).toContain('BEAT Metal: Setup failed: reason unknown.');
       expect(host.querySelector('.solve-readiness')?.textContent).toContain('Prepare BEAT Metal and solve');
     }
     mocks.capabilities.engines = [{ ...mocks.capabilities.engines[0], available: true, runtime_state: 'ready' } as EngineCapability];

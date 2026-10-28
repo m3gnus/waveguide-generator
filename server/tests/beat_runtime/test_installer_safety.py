@@ -160,14 +160,18 @@ def test_archive_total_size_and_member_count_limits(tmp_path, monkeypatch, windo
     assert not (root / "julia" / spec.directory).exists()
 
 
-def test_one_off_explicit_installer_selection_does_not_outrank_later_path(tmp_path, monkeypatch):
+def test_one_off_explicit_installer_selection_does_not_outrank_wg_julia(tmp_path, monkeypatch):
     one_off = executable(tmp_path / "one-off")
     default = executable(tmp_path / "default")
     assert installer.ensure_julia(explicit=str(one_off)) == str(one_off)
     assert discovery.read_julia_record()["selection"] == "explicit"
     monkeypatch.setattr(discovery.shutil, "which", lambda *a, **k: str(default))
-    assert installer.ensure_julia() == str(default)
-    assert discovery.read_julia_record()["selection"] == "path"
+    source = archive(tmp_path)
+    spec = fake_download(monkeypatch, source)
+    # Neither the one-off choice nor a non-WG PATH Julia becomes the runtime's Julia.
+    installed = installer.ensure_julia(fetcher=lambda url, destination: destination.write_bytes(source.read_bytes()))
+    assert installed == str(paths.runtime_dir() / "julia" / spec.directory / "bin" / "julia")
+    assert discovery.read_julia_record()["origin"] == "managed"
 
 
 @pytest.mark.parametrize("target", ["julia/bin/julia", installer._STAGING_MARKER])
