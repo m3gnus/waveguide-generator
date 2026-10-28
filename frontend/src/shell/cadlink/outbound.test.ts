@@ -241,7 +241,12 @@ describe.each(['file', 'cad', 'another parametric model'] as const)('current-mod
   function expectStopped(controller: ReturnType<typeof createCadOutboundController>, fetcher: typeof fetch) {
     expect(exportsFrom(fetcher)).toHaveLength(0);
     expect(controller.getState()).toMatchObject({ sendingToFusion: false, pendingFusionConflict: false });
-    expect(controller.getState().error).toMatch(/model changed|imported models/i);
+    const reason = replacement === 'another parametric model'
+      ? 'The model changed. Start the export again.'
+      : replacement === 'file'
+        ? 'STEP export is not available for imported mesh models.'
+        : 'STEP export is not available for imported models.';
+    expect(controller.getState().error).toBe(reason);
   }
 
   it('stops after the first Fusion status await', async () => {
@@ -325,9 +330,15 @@ describe.each(['file', 'cad', 'another parametric model'] as const)('current-mod
   });
 });
 
-it.each(['sendWgToFusion', 'confirmFusionConflict'] as const)('refuses %s begun on an imported model', async (entry) => {
-  const { controller, reader, fetcher } = setup();
-  workspaceModeStore.setMode('cad');
-  await expect(controller[entry]()).rejects.toThrow('imported models');
-  expect(reader).not.toHaveBeenCalled(); expect(fetcher).not.toHaveBeenCalled();
+describe.each(['file', 'cad'] as const)('send guard begun on imported %s', (kind) => {
+  it.each(['sendWgToFusion', 'confirmFusionConflict'] as const)('refuses %s before reading status', async (entry) => {
+    const { controller, reader, fetcher } = setup();
+    workspaceModeStore.setImportedInput(kind);
+    workspaceModeStore.setMode('cad');
+    const reason = kind === 'file'
+      ? 'STEP export is not available for imported mesh models.'
+      : 'STEP export is not available for imported models.';
+    await expect(controller[entry]()).rejects.toThrow(reason);
+    expect(reader).not.toHaveBeenCalled(); expect(fetcher).not.toHaveBeenCalled();
+  });
 });
