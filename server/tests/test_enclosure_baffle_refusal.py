@@ -1,4 +1,4 @@
-"""A design-time enclosure refusal must agree with the actual mesh build."""
+"""Enclosure admission must agree across preview, planning and mesh builds."""
 
 from __future__ import annotations
 
@@ -24,18 +24,26 @@ def enclosure_design():
     )
 
 
-def _assert_baffle_message(message, side="right"):
-    assert "baffle beside the mouth" in message
-    assert f"on the {side}" in message
-    assert f"set the {side} margin to at least 0.1 mm" in message
+def _assert_roundover_message(message):
+    assert "OSSE-ROUNDOVER does not support enclosure.depth" in message
     assert "Could not create line" not in message
 
 
+def _with_roundover(enclosure_design):
+    from server.tests.test_native_formulas import design_payload
+
+    design = design_payload("OSSE-ROUNDOVER")
+    design["enclosure"] = enclosure_design["enclosure"]
+    return design
+
+
 @pytest.mark.parametrize("lod", ["coarse", "fine"])
-@pytest.mark.parametrize("margin", [0, 0.05, 0.1])
-def test_viewport_reports_readable_enclosure_refusal(enclosure_design, lod, margin):
+@pytest.mark.parametrize(("margin", "refused"), [(0, False), (0.05, False), (0.1, False), (0, True)])
+def test_viewport_shares_flush_admission(enclosure_design, lod, margin, refused):
     for side in ("space_l", "space_r", "space_t", "space_b"):
         enclosure_design["enclosure"][side] = margin
+    if refused:
+        enclosure_design = _with_roundover(enclosure_design)
 
     async def scenario():
         transport = FakeTransport()
@@ -49,11 +57,11 @@ def test_viewport_reports_readable_enclosure_refusal(enclosure_design, lod, marg
                 timeout=15,
             )
             errors = [m for m in transport.json if m["kind"] == "error"]
-            if margin < 0.1:
+            if refused:
                 assert not transport.binary
                 assert len(errors) == 1
                 assert errors[0]["code"] == "validation"
-                _assert_baffle_message(errors[0]["fields"]["design"])
+                _assert_roundover_message(json.dumps(errors[0]))
             else:
                 assert not errors
                 header, buffers = decode(transport.binary[0])
@@ -68,9 +76,9 @@ def test_viewport_reports_readable_enclosure_refusal(enclosure_design, lod, marg
 
 
 @pytest.mark.parametrize("symmetry", ["auto", "full", "half_xz", "half_yz", "quarter"])
-@pytest.mark.parametrize(("margin", "side"), [(0, "right"), (0.05, "right"), (0.1, None)])
+@pytest.mark.parametrize(("margin", "refused"), [(0, False), (0.05, False), (0.1, False), (0, True)])
 def test_plan_submit_and_solver_mesh_share_enclosure_admission(
-    tmp_path, monkeypatch, enclosure_design, symmetry, margin, side,
+    tmp_path, monkeypatch, enclosure_design, symmetry, margin, refused,
 ):
     for name in ("space_l", "space_r", "space_t", "space_b"):
         enclosure_design["enclosure"][name] = margin
@@ -78,7 +86,8 @@ def test_plan_submit_and_solver_mesh_share_enclosure_admission(
     async def no_build(*args, **kwargs):
         pytest.fail("a refused enclosure must not start a mesh build")
 
-    if side is not None:
+    if refused:
+        enclosure_design = _with_roundover(enclosure_design)
         monkeypatch.setattr(mesh_builder, "run_mesh_build", no_build)
 
     async def scenario():
@@ -93,14 +102,14 @@ def test_plan_submit_and_solver_mesh_share_enclosure_admission(
         monkeypatch.setattr(app.state.jobs_runtime.engine_registry, "get_engine", registry.get_engine)
         body = {"design": enclosure_design, "options": {"engine": "metal", "symmetry": symmetry}}
         paths = ["/api/solve/plan", "/api/solver-mesh"]
-        if side is not None:
+        if refused:
             paths.append("/api/solve")
         for path in paths:
             status, raw = await http_request(app, "POST", path, body=body)
             payload = json.loads(raw)
-            assert status == (422 if side is not None else 200), payload
-            if side is not None:
-                _assert_baffle_message(payload["detail"], side)
+            assert status == (422 if refused else 200), payload
+            if refused:
+                _assert_roundover_message(json.dumps(payload))
             elif path == "/api/solve/plan":
                 assert not payload.get("refusal")
             else:
@@ -114,10 +123,10 @@ def test_plan_submit_and_solver_mesh_share_enclosure_admission(
         mesh_builder.clear_solver_mesh_cache()
 
 
-def test_plan_validates_the_resolved_mesh_not_the_design_quadrants(enclosure_design):
-    from hornlab_mesher.config_builder import resolve_enclosure_bounds
+def test_plan_validates_the_resolved_mesh_not_the_design_quadrants(enclosure_design, monkeypatch):
+    from hornlab_mesher import config_builder
     from server.jobs.models import SolveRequest
-    from server.jobs.runtime.core import SymmetryValidationError, resolve_submission
+    from server.jobs.runtime.core import resolve_submission
 
     # Bottom is a symmetry cut in quarter/half_xz, but a real wall in half_yz.
     enclosure_design["enclosure"].update(space_l=0.1, space_r=0.1, space_t=0.1)
@@ -128,11 +137,21 @@ def test_plan_validates_the_resolved_mesh_not_the_design_quadrants(enclosure_des
     request = SolveRequest.model_validate({
         "design": enclosure_design, "options": {"engine": "metal", "symmetry": "half_yz"},
     })
-    # The original quarter-domain mesh is valid; validating only it misses bottom.
-    assert resolve_enclosure_bounds(mesh_builder._solver_mesher_config(request.design))
-    with pytest.raises(SymmetryValidationError) as error:
-        asyncio.run(resolve_submission(request, registry, preview=True))
-    _assert_baffle_message(str(error.value), "bottom")
+    # The quarter-domain enclosure has a baffle on both physical sides. Its
+    # bottom becomes a real, flush wall only in the resolved half-yz domain.
+    real_bounds = config_builder.resolve_enclosure_bounds
+    original = real_bounds(mesh_builder._solver_mesher_config(request.design))
+    assert not original.get("flush_mount", False)
+    validated = []
+
+    def record_bounds(config, **kwargs):
+        bounds = real_bounds(config, **kwargs)
+        validated.append((str(config["mesh"]["quadrants"]), bounds.get("flush_mount", False)))
+        return bounds
+
+    monkeypatch.setattr(config_builder, "resolve_enclosure_bounds", record_bounds)
+    asyncio.run(resolve_submission(request, registry, preview=True))
+    assert validated == [("14", True)]
 
 
 @pytest.mark.parametrize("enclosure", [None, {}, {"depth": 0}])
