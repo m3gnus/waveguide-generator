@@ -1,6 +1,6 @@
 # Dependency compatibility
 
-The mesher pin `0f885553` declares version 0.2.8 and includes later development
+The mesher pin `7c58e751` declares version 0.2.8 and includes later development
 changes. It retains the ICW mouth endpoint-intersection fix from `4ae1cfa6`
 in `general_horn.radii_at_z`.
 `mesh_sizing.py` is unchanged, so CAD Link retains its earlier vendoring provenance.
@@ -15,6 +15,14 @@ cutter's explicit `triangle_surface_mesh=True` option, with
 keep the general cut path. This pin alone does not enable automatic cutting
 of imported mesh files. Failed cleanup after a successful cut raises instead
 of leaving temporary faces to be meshed.
+
+Welding, unused-vertex compaction and degenerate-triangle filtering share one
+owner while preserving their generated/imported caller behavior. The pin's
+qualification compared 216 mesh files and 16 identical refusals with its
+`0f885553` base. Offset validation keeps the same invalid-cell decisions and
+first location, but distinguishes collapsed inner, outer and paired surface
+normals from actual folds. WG preserves the existing refusal paths and names
+the collapsed surface without attributing it to excessive wall thickness.
 
 It also includes ATH R-OSSE morph import and early singular-coverage checks.
 R-OSSE block `Rot` and top-level `arcterm`/`trunc` follow ATH as named,
