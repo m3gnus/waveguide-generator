@@ -183,7 +183,7 @@ def test_unmeasured_r_osse_block_members_are_refused_by_name(family, extra):
 
 @pytest.mark.parametrize("family", ["R-OSSE", "ROSSE"])
 @pytest.mark.parametrize("extra", ["Rot = 10", "Length = 180", "Rot = ignored", "Length = ignored"])
-def test_ignored_r_osse_block_keys_are_accepted_and_reported(family, extra):
+def test_ignored_r_osse_block_keys_are_accepted_and_reported(family, extra, caplog):
     text = _profile(family, extra)
     parsed = parse(text)
     key, value = extra.split(" = ")
@@ -192,7 +192,14 @@ def test_ignored_r_osse_block_keys_are_accepted_and_reported(family, extra):
     assert parsed.design == parse(_profile(family)).design
     got = _translate_or_pin_refusal(parsed.design)
     if got is not None:
-        expected = _ath_oracle(text, _profile(family), (f"{family}.{key}",))
+        if key == "Rot":
+            # Pin 0f885553 follows ATH: in-block Rot is a named no-op.
+            caplog.clear()
+            expected = parse_text_config(text)
+            assert f"ignoring {family}.Rot = {value}:" in caplog.text
+            np.testing.assert_array_equal(_grid(expected), _grid(parse_text_config(_profile(family))))
+        else:
+            expected = _ath_oracle(text, _profile(family), (f"{family}.{key}",))
         np.testing.assert_array_equal(_grid(got), _grid(expected))
     opened = asyncio.run(open_design(text))
     assert opened["ignoredSettings"][0]["key"] == f"{family}.{key}"
@@ -213,15 +220,18 @@ def test_r_osse_top_level_composition_refuses_even_with_ignored_block_copy(famil
 
 @pytest.mark.parametrize("family", ["R-OSSE", "ROSSE"])
 @pytest.mark.parametrize("extra", ["Rot = 10\nLength = 180", "Rot = ignored\nLength = ignored"])
-def test_ignored_block_rot_and_length_with_zero_top_rot(family, extra):
+def test_ignored_block_rot_and_length_with_zero_top_rot(family, extra, caplog):
     text = _profile(family, extra) + "\nRot = 0"
     parsed = parse(text)
     assert {item.key for item in parsed.ignored_settings} == {f"{family}.Rot", f"{family}.Length"}
     got = _translate_or_pin_refusal(parsed.design)
     if got is not None:
+        caplog.clear()
         expected = _ath_oracle(
-            text, _profile(family) + "\nRot = 0", (f"{family}.Rot", f"{family}.Length"),
+            text, _profile(family) + "\nRot = 0", (f"{family}.Length",),
         )
+        rotation = extra.splitlines()[0].removeprefix("Rot = ")
+        assert f"ignoring {family}.Rot = {rotation}:" in caplog.text
         np.testing.assert_array_equal(_grid(got), _grid(expected))
 
 

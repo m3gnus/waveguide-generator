@@ -16,8 +16,10 @@ keep the general cut path. This pin alone does not enable automatic cutting
 of imported mesh files. Failed cleanup after a successful cut raises instead
 of leaving temporary faces to be meshed.
 
-It also includes ATH R-OSSE morph import, early singular-coverage checks and
-the constant-only interpretation of no-op import values. Fresh ATH OSSE text
+It also includes ATH R-OSSE morph import and early singular-coverage checks.
+R-OSSE block `Rot` and top-level `arcterm`/`trunc` follow ATH as named,
+ignored no-ops. A no-op `Scale.Z` must be constant and exactly 1; nonunit or
+azimuth-dependent values remain refused. Fresh ATH OSSE text
 with `Length = 0` is refused as an unsupported source-only model. Saved and
 native geometry retain their existing interpretation.
 
