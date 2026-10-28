@@ -1,13 +1,25 @@
 # Dependency compatibility
 
-The mesher pin `4ae1cfa6` declares version 0.2.8.
-Compared with `1883e32b`, it fixes ICW mouth endpoint intersections in
-`general_horn.radii_at_z`; geometry is unchanged. The remaining changes are tests.
+The mesher pin `0f885553` declares version 0.2.8 and includes later development
+changes. It retains the ICW mouth endpoint-intersection fix from `4ae1cfa6`
+in `general_horn.radii_at_z`.
 `mesh_sizing.py` is unchanged, so CAD Link retains its earlier vendoring provenance.
 When it cuts a solid to its symmetry domain it keeps periodic (seam-closed) faces
 such as a throat cylinder, which the earlier cutter could drop, and it raises
 `RuntimeError` ("OCC cut lost retained portions") rather than return a cut that
 lost retained geometry; WG then meshes the whole model.
+
+The pin adds validated triangle-surface cutting through the existing OCC
+cutter's explicit `triangle_surface_mesh=True` option, with
+`TriangleCutRefused` for unsafe triangle cuts. Existing CAD and FEM callers
+keep the general cut path. This pin alone does not enable automatic cutting
+of imported mesh files. Failed cleanup after a successful cut raises instead
+of leaving temporary faces to be meshed.
+
+It also includes ATH R-OSSE morph import, early singular-coverage checks and
+the constant-only interpretation of no-op import values. Fresh ATH OSSE text
+with `Length = 0` is refused as an unsupported source-only model. Saved and
+native geometry retain their existing interpretation.
 
 It also refuses enclosures that leave less than 0.1 mm of front baffle beside the
 mouth on any physical wall side. Preview and mesh construction share the
