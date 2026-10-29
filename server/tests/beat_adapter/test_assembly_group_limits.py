@@ -18,7 +18,14 @@ def test_heterogeneous_driver_group_packages_and_recombines_with_real_ratings(so
     solve_request = SolveRequest.model_validate(payload)
     result, _compiled, _partial = _solve(solid, record, monkeypatch, solve_request)
     combined = result["channels"]["combined"]
-    assert combined["metadata"]["combine"]["channels"][G_LF]["gain_max_db"] is not None
+    combine = combined["metadata"]["combine"]
+    assert combine["channels"][G_LF]["gain_max_db"] is None
+    assert "max_output" not in combine
+    ratings = combine["driver_basis_limits"][G_LF]
+    assert ratings["xmax_mm"] is None
+    assert ratings["physical_driver_limits"][W1] == {"xmax_mm": 2.0, "rated_power_w": 30.0,
+                                                      "max_voltage_v": None, "member_weight": 0.25}
+    assert ratings["physical_driver_limits"][W2]["xmax_mm"] == 7.0
     again = recombine_stored_results(result, result["_channel_bases_npz"], solve_request.geometry.combine, solve_request)
     assert again["channels"]["combined"]["metadata"]["combine"] == combined["metadata"]["combine"]
     assert result["channels"][W1]["metadata"]["driver"]["spec"]["xmax_mm"] == 2.0

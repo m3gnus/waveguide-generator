@@ -23,7 +23,7 @@ from server.contracts.conventions import PHASE_TIME_CONVENTION
 
 from .combine import combine_drive_channels
 from .context import SolverContext
-from .driver_limits import MemberLimits, member_limits_from_channel
+from .driver_limits import MemberLimits, member_limits_from_channel, member_limit_ratings
 from .result_mapping import build_solver_response
 
 
@@ -97,6 +97,7 @@ def package_combined_channel(
             )
 
     resolved = spec.resolved()
+    coupled_exterior = any(getattr(channel, "exterior_transducer", None) is not None for channel in drive_channels)
     combined_result, combine_payload = combine_drive_channels(
         results_by_id,
         members=list(spec.members),
@@ -104,11 +105,16 @@ def package_combined_channel(
         reference=resolved["reference"],
         member_validity_hz=member_validity_hz,
         member_roles={member: member_roles.get(physical[member][0]) for member in spec.members},
-        member_limits=member_limits,
+        # A shorted voltage basis is not the operating displacement/current
+        # under all simultaneous drives. Keep ratings, without output claims.
+        member_limits={} if coupled_exterior else member_limits,
         member_channels=physical if labels else None,
         member_labels=labels if labels else None,
         member_processing=request.geometry.branch_processing(list(spec.members)) if labels else None,
     )
+    if coupled_exterior:
+        combine_payload["driver_basis_limits"] = {member: member_limit_ratings(limit) for member, limit in member_limits.items()}
+        combine_payload["driver_limits_omitted"] = "Maximum output is unavailable for coupled assembly drives."
 
     metadata: dict[str, Any] = {
         "solver_mode": "full_3d",

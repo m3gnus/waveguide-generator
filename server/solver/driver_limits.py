@@ -109,6 +109,15 @@ class Headroom:
         return float(self.scale[index]), reason, index
 
 
+def member_limit_ratings(limits: MemberLimits) -> dict[str, Any]:
+    """Retain real ratings without assigning a single rating to unlike drivers."""
+
+    return {"xmax_mm": limits.xmax_mm, "rated_power_w": limits.rated_power_w,
+            "max_voltage_v": limits.max_voltage_v,
+            **({"physical_driver_limits": {channel_id: {**member_limit_ratings(member), "member_weight": weight}
+                for channel_id, (member, weight) in limits.physical_members.items()}} if limits.physical_members else {})}
+
+
 def _finite_array(value: Any) -> np.ndarray | None:
     if value is None:
         return None

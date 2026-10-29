@@ -35,7 +35,7 @@ from server.contracts.conventions import (
     solver_to_engineering,
 )
 
-from .driver_limits import MemberLimits, gain_ceiling_db, headroom
+from .driver_limits import MemberLimits, gain_ceiling_db, headroom, member_limit_ratings
 from .filters import Filter, channel_weight, pair_inverts
 
 _TWO_PI = 2.0 * np.pi
@@ -741,14 +741,7 @@ def _max_output_payload(
             # "124 W of 400 W" is an answer -- and it is *real* power, which
             # at an impedance peak is nothing like the nominal watts a gain
             # in W is stated in.
-            "xmax_mm": limits[name].xmax_mm,
-            "rated_power_w": limits[name].rated_power_w,
-            "max_voltage_v": limits[name].max_voltage_v,
-            **({"physical_driver_limits": {channel_id: {
-                "xmax_mm": limit.xmax_mm, "rated_power_w": limit.rated_power_w,
-                "max_voltage_v": limit.max_voltage_v, "member_weight": weight,
-            } for channel_id, (limit, weight) in limits[name].physical_members.items()}}
-               if limits[name].physical_members else {}),
+            **member_limit_ratings(limits[name]),
         }
         binds = np.isfinite(room.scale) & (room.scale < system_scale)
         system_scale[binds] = room.scale[binds]
