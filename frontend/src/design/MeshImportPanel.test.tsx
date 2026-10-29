@@ -496,3 +496,13 @@ it('shows the prepared file domain in the shared Solver details', () => {
   act(() => useImportedModelStore.setState({ prepared: null }));
   expect(domain?.textContent).toBe('Prepared domainWaiting for preparation');
 });
+
+
+it('keeps a file restore note visible when Results hides quiet readiness', () => {
+  geometry({ prepared: true });
+  renderGeometry(true);
+  expect(host.querySelector('.cad-status-line')).toBeNull();
+  act(() => useMeshImportStore.setState({ notice: 'Mesh replay opened. Solve keeps its settings.' }));
+  expect(host.querySelector('.cad-status-line')?.textContent).toContain('Mesh replay opened. Solve keeps its settings.');
+  expect(host.querySelector('.cad-status-line')?.textContent).toContain('Ready to solve');
+});

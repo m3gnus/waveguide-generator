@@ -5,7 +5,7 @@ import { currentModelStatus, type CurrentModel } from '../model/currentModel';
 import { bundle, record } from '../shell/cadlink/selection.fixtures';
 import states from '../../../server/tests/fixtures/cad_request_states.json';
 import { selectCadModelState, type CadModelRequest } from './cadModelState';
-import { cadModelStatusLine, cadRequestState, cadRequestsChipLabel } from './cadModelStatusLine';
+import { cadModelStatusLine, cadRequestState, cadRequestsChipLabel, isQuietStatusLine } from './cadModelStatusLine';
 import type { MeshCeilingChoice } from './meshCeilingChoice';
 import { cadJobFixture } from '../jobs/cadSolve.fixtures';
 import type { CadOperationSummary } from '../api/cadOperations';
@@ -243,4 +243,17 @@ it('keeps file readiness and import notes as separate facts', () => {
     symmetryLabel: 'Quarter model', notice: 'Using the settings from an earlier import' }, null);
   expect(status.text).toBe('Ready to solve · 9,730 triangles · quarter model · Using the settings from an earlier import');
   expect(status).toMatchObject({ tone: 'ready', action: 'solve', short: 'ready · 9,730 triangles · quarter model' });
+});
+
+
+it('keeps a restored file note visible beside a solved run', () => {
+  const job = cadJobFixture(operation('file-run', 'accepted'), { status: 'complete' });
+  const status = cadModelStatusLine({ input: 'file', label: 'speaker.msh', reading: false, preparing: false,
+    choice: null, failureMessage: null, canPrepare: true, prepared: true, triangles: 9730,
+    symmetryLabel: 'Quarter model', notice: 'This run uses an older saved setup.' },
+  { kind: 'solved', job, message: '' }, { resultsShown: true });
+  expect(status.text).toContain('Solved');
+  expect(status.text).toContain('This run uses an older saved setup.');
+  expect(status.action).toBe('none');
+  expect(isQuietStatusLine(status)).toBe(false);
 });

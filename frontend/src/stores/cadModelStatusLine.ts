@@ -52,6 +52,8 @@ export interface CadModelStatusLine {
   actionLabel: string | null;
   /** The request a choose / try-again acts on; null for the browser's own preparation. */
   jobId: string | null;
+  /** A file restore/import fact that must remain visible beside open results. */
+  notice?: string;
 }
 
 export interface CadStatusContext {
@@ -101,7 +103,8 @@ function solving(job: JobItem): CadModelStatusLine {
 /** A line with nothing to say beside open charts: the plain ready line, a
  * solved or idle one. Attention and busy lines, and any action but Show
  * results, stay (Solve counts only on the ready line, where the top bar owns it). */
-export function isQuietStatusLine(line: Pick<CadModelStatusLine, 'tone' | 'action'>): boolean {
+export function isQuietStatusLine(line: Pick<CadModelStatusLine, 'tone' | 'action' | 'notice'>): boolean {
+  if (line.notice) return false;
   if (line.tone === 'attention' || line.tone === 'busy') return false;
   return line.action === 'none' || line.action === 'show-results' || (line.tone === 'ready' && line.action === 'solve');
 }
@@ -191,7 +194,7 @@ export function cadModelStatusLine(model: CadModelView | FileModelView, request:
   if (requestState === 'solved' && request?.kind === 'solved' && job) {
     const run = job.run_number ? ` · run #${job.run_number}` : '';
     const when = job.completed_at ? ` · ${relativeTime(job.completed_at)}` : '';
-    return line(`Solved${run}${when}`, 'solved', 'done', context.resultsShown ? 'none' : 'show-results', job.id);
+    return withNotice(line(`Solved${run}${when}`, 'solved', 'done', context.resultsShown ? 'none' : 'show-results', job.id), model.notice);
   }
   if (request?.kind === 'failed' && job) {
     // WG's words when the server has some for the user; never the raw error.
@@ -230,7 +233,11 @@ function couldNotPrepare(label: string): string {
 function ready(model: CadModelView): CadModelStatusLine {
   const triangles = model.triangles === null ? '' : ` · ${model.triangles.toLocaleString()} triangles`;
   const symmetry = model.symmetryLabel ? ` · ${model.symmetryLabel.toLowerCase()}` : '';
-  return line(`Ready to solve${triangles}${symmetry}${model.notice ? ` · ${model.notice}` : ''}`, `ready${triangles}${symmetry}`, 'ready', 'solve');
+  return withNotice(line(`Ready to solve${triangles}${symmetry}`, `ready${triangles}${symmetry}`, 'ready', 'solve'), model.notice);
+}
+
+function withNotice(status: CadModelStatusLine, notice: string | null | undefined): CadModelStatusLine {
+  return notice ? { ...status, text: `${status.text} · ${notice}`, notice } : status;
 }
 
 const count = (value: number) => value.toLocaleString();
