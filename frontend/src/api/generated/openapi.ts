@@ -2669,6 +2669,46 @@ export interface components {
             /** Jobid */
             jobId: string;
         };
+        /**
+         * AssemblyConfig
+         * @description The design's integrated Sources and baffle assembly.
+         *
+         *     The horn is always the live design horn and ``design.enclosure`` the only
+         *     box; enabled woofers cut its front baffle. Disabled woofers keep every
+         *     setting and are excluded from geometry and solve.
+         */
+        AssemblyConfig: {
+            crossover?: components["schemas"]["AssemblyCrossover"] | null;
+            /**
+             * Drive Voltage V
+             * @default 2.83
+             */
+            drive_voltage_v?: number;
+            /** Drivers */
+            drivers?: {
+                [key: string]: components["schemas"]["AssemblyDriver"];
+            };
+            hf_source?: components["schemas"]["AssemblyHfSource"];
+            /** Signal Groups */
+            signal_groups?: components["schemas"]["AssemblySignalGroup"][];
+            /** Woofers */
+            woofers?: components["schemas"]["AssemblyWoofer"][];
+        };
+        /**
+         * AssemblyCrossover
+         * @description The shared crossover over signal groups; the combine wire, by group id.
+         */
+        AssemblyCrossover: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled?: boolean;
+            /** Spec */
+            spec?: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** AssemblyDimensions */
         AssemblyDimensions: {
             /**
@@ -2705,6 +2745,90 @@ export interface components {
                 number
             ];
         };
+        /**
+         * AssemblyDriver
+         * @description Optional T/S driver of one radiator, bound by identity, never label.
+         *
+         *     ``exterior_transducer`` is the BEAT bare-driver wire without its motion
+         *     axis: assembly diaphragms move along the axial Z direction.
+         */
+        AssemblyDriver: {
+            /** Exterior Transducer */
+            exterior_transducer: {
+                [key: string]: unknown;
+            };
+            reference?: components["schemas"]["AssemblyDriverReference"] | null;
+        };
+        /** AssemblyDriverReference */
+        AssemblyDriverReference: {
+            /** Driver Id */
+            driver_id: string;
+            /** Source */
+            source?: string | null;
+        };
+        /**
+         * AssemblyHfSource
+         * @description The horn's classic prescribed throat source, with the mesher's identity.
+         */
+        AssemblyHfSource: {
+            /**
+             * Kind
+             * @default classic
+             * @constant
+             */
+            kind?: "classic";
+            /**
+             * Radiator Id
+             * @default horn-throat
+             * @constant
+             */
+            radiator_id?: "horn-throat";
+        };
+        /**
+         * AssemblyMember
+         * @description Per-radiator processing applied before the signal group's sum.
+         */
+        AssemblyMember: {
+            /**
+             * Delay Ms
+             * @default 0
+             */
+            delay_ms?: number;
+            /**
+             * Invert
+             * @default false
+             */
+            invert?: boolean;
+            /** Radiator Id */
+            radiator_id: string;
+            /**
+             * Weight
+             * @default 1
+             */
+            weight?: number;
+        };
+        /**
+         * AssemblyPlacement
+         * @description Front placement in the horn-throat frame.
+         *
+         *     ``above``/``below`` keep ``gap_mm`` from the final mouth's cardinal Y rim to
+         *     the nearest aperture edge and centre the woofer on x=0. ``free`` stores the
+         *     centre. The design mesher resolves positions with one closed form.
+         */
+        AssemblyPlacement: {
+            /**
+             * Anchor
+             * @enum {string}
+             */
+            anchor: "above" | "below" | "free";
+            /** Gap Mm */
+            gap_mm?: number | null;
+            spacing_to?: components["schemas"]["AssemblySpacing"] | null;
+            /** X Mm */
+            x_mm?: number | null;
+            /** Y Mm */
+            y_mm?: number | null;
+        };
         /** AssemblyRequest */
         AssemblyRequest: {
             dimensions: components["schemas"]["AssemblyDimensions"];
@@ -2727,6 +2851,78 @@ export interface components {
             /** Phase Plugs */
             phase_plugs?: components["schemas"]["PhasePlug"][];
             woofer?: components["schemas"]["SourceDocument"] | null;
+        };
+        /** AssemblySignalGroup */
+        AssemblySignalGroup: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Members */
+            members: components["schemas"]["AssemblyMember"][];
+        };
+        /**
+         * AssemblySpacing
+         * @description Optional centre-to-centre distance to another woofer, by identity.
+         */
+        AssemblySpacing: {
+            /** Distance Mm */
+            distance_mm: number;
+            /** Radiator Id */
+            radiator_id: string;
+        };
+        /** AssemblyWoofer */
+        AssemblyWoofer: {
+            ath?: components["schemas"]["AthLfProvenance"] | null;
+            /**
+             * Drive
+             * @default prescribed
+             * @enum {string}
+             */
+            drive?: "prescribed" | "rigid";
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled?: boolean;
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            placement: components["schemas"]["AssemblyPlacement"];
+            /** Radius Mm */
+            radius_mm: number;
+            /** Resolution Mm */
+            resolution_mm?: number | null;
+            shape: components["schemas"]["AssemblyWooferShape"];
+        };
+        /** AssemblyWooferShape */
+        AssemblyWooferShape: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "piston" | "ath_cone";
+            /**
+             * Recess Mm
+             * @default 0
+             */
+            recess_mm?: number;
+        };
+        /**
+         * AthLfProvenance
+         * @description Which ATH ``Mesh.Enclosure.LFSource`` block a woofer was imported from.
+         */
+        AthLfProvenance: {
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "A" | "B";
+            /** Sid */
+            sid?: number | null;
+            /** Weight */
+            weight?: number | null;
         };
         /** AthRoundoverConfig */
         AthRoundoverConfig: {
@@ -4467,6 +4663,7 @@ export interface components {
         };
         /** FreeformConfig */
         FreeformConfig: {
+            assembly?: components["schemas"]["AssemblyConfig"] | null;
             /** Ath Axial Sampling Rule */
             ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
             /** Ath Nac */
@@ -4685,6 +4882,7 @@ export interface components {
             R?: components["schemas"]["Expr"] | null;
             a?: components["schemas"]["Expr"] | null;
             a0?: components["schemas"]["Expr"] | null;
+            assembly?: components["schemas"]["AssemblyConfig"] | null;
             /** Ath Axial Sampling Rule */
             ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
             /** Ath Nac */
@@ -5346,6 +5544,7 @@ export interface components {
          */
         LookupConfig: {
             a0?: components["schemas"]["Expr"] | null;
+            assembly?: components["schemas"]["AssemblyConfig"] | null;
             /** Ath Axial Sampling Rule */
             ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
             /** Ath Nac */
@@ -5684,6 +5883,7 @@ export interface components {
              * @default 15.5
              */
             a0?: number;
+            assembly?: components["schemas"]["AssemblyConfig"] | null;
             /** Ath Axial Sampling Rule */
             ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
             /** Ath Nac */
@@ -5751,6 +5951,7 @@ export interface components {
             L?: components["schemas"]["Expr"] | null;
             a?: components["schemas"]["Expr"] | null;
             a0?: components["schemas"]["Expr"] | null;
+            assembly?: components["schemas"]["AssemblyConfig"] | null;
             /** Ath Axial Sampling Rule */
             ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
             /** Ath Nac */
@@ -6159,6 +6360,7 @@ export interface components {
             R?: components["schemas"]["Expr"] | null;
             a?: components["schemas"]["Expr"] | null;
             a0?: components["schemas"]["Expr"] | null;
+            assembly?: components["schemas"]["AssemblyConfig"] | null;
             /** Ath Axial Sampling Rule */
             ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
             /** Ath Nac */
@@ -6897,6 +7099,7 @@ export interface components {
         };
         /** SourceDiskConfig */
         SourceDiskConfig: {
+            assembly?: components["schemas"]["AssemblyConfig"] | null;
             /** Ath Axial Sampling Rule */
             ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
             /** Ath Nac */

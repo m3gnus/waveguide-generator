@@ -18,6 +18,81 @@
         "title": "ArchiveRunDocumentRequest",
         "type": "object"
       },
+      "AssemblyConfig": {
+        "additionalProperties": false,
+        "description": "The design's integrated Sources and baffle assembly.\n\nThe horn is always the live design horn and ``design.enclosure`` the only\nbox; enabled woofers cut its front baffle. Disabled woofers keep every\nsetting and are excluded from geometry and solve.",
+        "properties": {
+          "crossover": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssemblyCrossover"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "drive_voltage_v": {
+            "default": 2.83,
+            "exclusiveMinimum": 0.0,
+            "maximum": 1000.0,
+            "title": "Drive Voltage V",
+            "type": "number"
+          },
+          "drivers": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AssemblyDriver"
+            },
+            "title": "Drivers",
+            "type": "object"
+          },
+          "hf_source": {
+            "$ref": "#/components/schemas/AssemblyHfSource"
+          },
+          "signal_groups": {
+            "items": {
+              "$ref": "#/components/schemas/AssemblySignalGroup"
+            },
+            "title": "Signal Groups",
+            "type": "array"
+          },
+          "woofers": {
+            "items": {
+              "$ref": "#/components/schemas/AssemblyWoofer"
+            },
+            "maxItems": 16,
+            "title": "Woofers",
+            "type": "array"
+          }
+        },
+        "title": "AssemblyConfig",
+        "type": "object"
+      },
+      "AssemblyCrossover": {
+        "additionalProperties": false,
+        "description": "The shared crossover over signal groups; the combine wire, by group id.",
+        "properties": {
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "spec": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec"
+          }
+        },
+        "title": "AssemblyCrossover",
+        "type": "object"
+      },
       "AssemblyDimensions": {
         "additionalProperties": false,
         "properties": {
@@ -176,6 +251,183 @@
         "title": "AssemblyDimensions",
         "type": "object"
       },
+      "AssemblyDriver": {
+        "additionalProperties": false,
+        "description": "Optional T/S driver of one radiator, bound by identity, never label.\n\n``exterior_transducer`` is the BEAT bare-driver wire without its motion\naxis: assembly diaphragms move along the axial Z direction.",
+        "properties": {
+          "exterior_transducer": {
+            "additionalProperties": true,
+            "title": "Exterior Transducer",
+            "type": "object"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssemblyDriverReference"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "exterior_transducer"
+        ],
+        "title": "AssemblyDriver",
+        "type": "object"
+      },
+      "AssemblyDriverReference": {
+        "additionalProperties": false,
+        "properties": {
+          "driver_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Driver Id",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "required": [
+          "driver_id"
+        ],
+        "title": "AssemblyDriverReference",
+        "type": "object"
+      },
+      "AssemblyHfSource": {
+        "additionalProperties": false,
+        "description": "The horn's classic prescribed throat source, with the mesher's identity.",
+        "properties": {
+          "kind": {
+            "const": "classic",
+            "default": "classic",
+            "title": "Kind",
+            "type": "string"
+          },
+          "radiator_id": {
+            "const": "horn-throat",
+            "default": "horn-throat",
+            "title": "Radiator Id",
+            "type": "string"
+          }
+        },
+        "title": "AssemblyHfSource",
+        "type": "object"
+      },
+      "AssemblyMember": {
+        "additionalProperties": false,
+        "description": "Per-radiator processing applied before the signal group's sum.",
+        "properties": {
+          "delay_ms": {
+            "default": 0.0,
+            "maximum": 1000.0,
+            "minimum": 0.0,
+            "title": "Delay Ms",
+            "type": "number"
+          },
+          "invert": {
+            "default": false,
+            "title": "Invert",
+            "type": "boolean"
+          },
+          "radiator_id": {
+            "title": "Radiator Id",
+            "type": "string"
+          },
+          "weight": {
+            "default": 1.0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "radiator_id"
+        ],
+        "title": "AssemblyMember",
+        "type": "object"
+      },
+      "AssemblyPlacement": {
+        "additionalProperties": false,
+        "description": "Front placement in the horn-throat frame.\n\n``above``/``below`` keep ``gap_mm`` from the final mouth's cardinal Y rim to\nthe nearest aperture edge and centre the woofer on x=0. ``free`` stores the\ncentre. The design mesher resolves positions with one closed form.",
+        "properties": {
+          "anchor": {
+            "enum": [
+              "above",
+              "below",
+              "free"
+            ],
+            "title": "Anchor",
+            "type": "string"
+          },
+          "gap_mm": {
+            "anyOf": [
+              {
+                "maximum": 10000.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap Mm"
+          },
+          "spacing_to": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssemblySpacing"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "x_mm": {
+            "anyOf": [
+              {
+                "maximum": 10000.0,
+                "minimum": -10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "X Mm"
+          },
+          "y_mm": {
+            "anyOf": [
+              {
+                "maximum": 10000.0,
+                "minimum": -10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Y Mm"
+          }
+        },
+        "required": [
+          "anchor"
+        ],
+        "title": "AssemblyPlacement",
+        "type": "object"
+      },
       "AssemblyRequest": {
         "additionalProperties": false,
         "properties": {
@@ -244,6 +496,194 @@
           "dimensions"
         ],
         "title": "AssemblyRequest",
+        "type": "object"
+      },
+      "AssemblySignalGroup": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/AssemblyMember"
+            },
+            "minItems": 1,
+            "title": "Members",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "members"
+        ],
+        "title": "AssemblySignalGroup",
+        "type": "object"
+      },
+      "AssemblySpacing": {
+        "additionalProperties": false,
+        "description": "Optional centre-to-centre distance to another woofer, by identity.",
+        "properties": {
+          "distance_mm": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 10000.0,
+            "title": "Distance Mm",
+            "type": "number"
+          },
+          "radiator_id": {
+            "title": "Radiator Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "radiator_id",
+          "distance_mm"
+        ],
+        "title": "AssemblySpacing",
+        "type": "object"
+      },
+      "AssemblyWoofer": {
+        "additionalProperties": false,
+        "properties": {
+          "ath": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AthLfProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "drive": {
+            "default": "prescribed",
+            "enum": [
+              "prescribed",
+              "rigid"
+            ],
+            "title": "Drive",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "placement": {
+            "$ref": "#/components/schemas/AssemblyPlacement"
+          },
+          "radius_mm": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 1000.0,
+            "title": "Radius Mm",
+            "type": "number"
+          },
+          "resolution_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 1000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution Mm"
+          },
+          "shape": {
+            "$ref": "#/components/schemas/AssemblyWooferShape"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "radius_mm",
+          "shape",
+          "placement"
+        ],
+        "title": "AssemblyWoofer",
+        "type": "object"
+      },
+      "AssemblyWooferShape": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "piston",
+              "ath_cone"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "recess_mm": {
+            "default": 0.0,
+            "maximum": 1000.0,
+            "minimum": 0.0,
+            "title": "Recess Mm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "AssemblyWooferShape",
+        "type": "object"
+      },
+      "AthLfProvenance": {
+        "additionalProperties": false,
+        "description": "Which ATH ``Mesh.Enclosure.LFSource`` block a woofer was imported from.",
+        "properties": {
+          "key": {
+            "enum": [
+              "A",
+              "B"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "sid": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sid"
+          },
+          "weight": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weight"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "title": "AthLfProvenance",
         "type": "object"
       },
       "AthRoundoverConfig": {
@@ -5490,6 +5930,16 @@
       "FreeformConfig": {
         "additionalProperties": false,
         "properties": {
+          "assembly": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssemblyConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "ath_axial_sampling_rule": {
             "anyOf": [
               {
@@ -6291,6 +6741,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assembly": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssemblyConfig"
               },
               {
                 "type": "null"
@@ -8675,6 +9135,16 @@
               }
             ]
           },
+          "assembly": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssemblyConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "ath_axial_sampling_rule": {
             "anyOf": [
               {
@@ -9791,6 +10261,16 @@
             "title": "A0",
             "type": "number"
           },
+          "assembly": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssemblyConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "ath_axial_sampling_rule": {
             "anyOf": [
               {
@@ -10070,6 +10550,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assembly": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssemblyConfig"
               },
               {
                 "type": "null"
@@ -11437,6 +11927,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assembly": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssemblyConfig"
               },
               {
                 "type": "null"
@@ -13705,6 +14205,16 @@
       "SourceDiskConfig": {
         "additionalProperties": false,
         "properties": {
+          "assembly": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssemblyConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "ath_axial_sampling_rule": {
             "anyOf": [
               {

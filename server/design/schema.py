@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
 from pydantic import (
+    AfterValidator,
     AliasChoices,
     BaseModel,
     BeforeValidator,
@@ -705,6 +706,254 @@ class GuidingCurveConfig(StrictModel):
     rotation: Expr | None = None
 
 
+AssemblyNumber = Annotated[float, Field(strict=False, allow_inf_nan=False)]
+_ASSEMBLY_LABEL_MAX = 80
+_ASSEMBLY_BLOB_MAX_KEYS = 32
+
+
+def _radiator_uuid(value: str) -> str:
+    from server.contracts.assembly import is_radiator_uuid
+
+    if not is_radiator_uuid(value):
+        raise ValueError("radiator ids are lower-case canonical UUIDs")
+    return value
+
+
+RadiatorUuid = Annotated[str, AfterValidator(_radiator_uuid)]
+
+
+def _assembly_member_id(value: str) -> str:
+    from server.contracts.assembly import HF_RADIATOR_ID
+
+    return value if value == HF_RADIATOR_ID else _radiator_uuid(value)
+
+
+AssemblyMemberId = Annotated[str, AfterValidator(_assembly_member_id)]
+
+
+def _assembly_label(value: str) -> str:
+    text = value.strip()
+    if not text or len(text) > _ASSEMBLY_LABEL_MAX or _LINE_BREAK.search(text) or not text.isprintable():
+        raise ValueError(f"assembly labels are 1-{_ASSEMBLY_LABEL_MAX} printable characters on one line")
+    return text
+
+
+AssemblyLabel = Annotated[str, AfterValidator(_assembly_label)]
+
+
+def _json_blob(value: Any, location: str) -> Any:
+    """A bounded JSON object of finite numbers, booleans and nested objects.
+
+    The design layer stores solve-side specifications (driver numbers, the
+    crossover) verbatim; their owning job models validate them when an
+    assembly is compiled into a solve setup, so the contract stays single.
+    """
+
+    if not isinstance(value, Mapping) or len(value) > _ASSEMBLY_BLOB_MAX_KEYS:
+        raise ValueError(f"{location} must be a JSON object of at most {_ASSEMBLY_BLOB_MAX_KEYS} keys")
+    result: dict[str, Any] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not key:
+            raise ValueError(f"{location} keys must be nonempty strings")
+        if isinstance(item, bool) or item is None or isinstance(item, str):
+            result[key] = item
+        elif isinstance(item, (int, float)):
+            if not math.isfinite(float(item)):
+                raise ValueError(f"{location}.{key} must be finite")
+            result[key] = item
+        elif isinstance(item, Mapping):
+            result[key] = _json_blob(item, f"{location}.{key}")
+        elif isinstance(item, (list, tuple)) and len(item) <= _ASSEMBLY_BLOB_MAX_KEYS:
+            result[key] = [
+                _json_blob(entry, f"{location}.{key}") if isinstance(entry, Mapping) else entry
+                for entry in item
+            ]
+            if any(isinstance(entry, float) and not math.isfinite(entry) for entry in result[key]):
+                raise ValueError(f"{location}.{key} must be finite")
+        else:
+            raise ValueError(f"{location}.{key} has an unsupported value")
+    return result
+
+
+class AssemblySpacing(StrictModel):
+    """Optional centre-to-centre distance to another woofer, by identity."""
+
+    radiator_id: RadiatorUuid
+    distance_mm: AssemblyNumber = Field(gt=0, le=10_000)
+
+
+class AssemblyPlacement(StrictModel):
+    """Front placement in the horn-throat frame.
+
+    ``above``/``below`` keep ``gap_mm`` from the final mouth's cardinal Y rim to
+    the nearest aperture edge and centre the woofer on x=0. ``free`` stores the
+    centre. The design mesher resolves positions with one closed form.
+    """
+
+    anchor: Literal["above", "below", "free"]
+    gap_mm: AssemblyNumber | None = Field(default=None, ge=0, le=10_000, exclude_if=lambda v: v is None)
+    x_mm: AssemblyNumber | None = Field(default=None, ge=-10_000, le=10_000, exclude_if=lambda v: v is None)
+    y_mm: AssemblyNumber | None = Field(default=None, ge=-10_000, le=10_000, exclude_if=lambda v: v is None)
+    spacing_to: AssemblySpacing | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @model_validator(mode="after")
+    def _anchor_fields(self) -> "AssemblyPlacement":
+        if self.anchor == "free":
+            if self.x_mm is None or self.y_mm is None or self.gap_mm is not None:
+                raise ValueError("free placement stores x_mm and y_mm and no gap_mm")
+        elif self.gap_mm is None or self.x_mm is not None or self.y_mm is not None:
+            raise ValueError(f"{self.anchor} placement stores gap_mm and no x_mm/y_mm")
+        return self
+
+
+class AssemblyWooferShape(StrictModel):
+    kind: Literal["piston", "ath_cone"]
+    recess_mm: AssemblyNumber = Field(default=0.0, ge=0, le=1_000, exclude_if=lambda v: v == 0)
+
+    @model_validator(mode="after")
+    def _mesher_shape(self) -> "AssemblyWooferShape":
+        # The design mesher owns the diaphragm contract (recess weld floor).
+        from hornlab_mesher.enclosure_woofers import AthConeShape, PistonShape
+
+        if self.kind == "ath_cone":
+            if self.recess_mm:
+                raise ValueError("the ATH cone has a fixed recess; recess_mm is piston-only")
+            AthConeShape()
+        else:
+            PistonShape(recess_mm=self.recess_mm)
+        return self
+
+
+class AthLfProvenance(StrictModel):
+    """Which ATH ``Mesh.Enclosure.LFSource`` block a woofer was imported from."""
+
+    key: Literal["A", "B"]
+    weight: AssemblyNumber | None = Field(default=None, exclude_if=lambda v: v is None)
+    sid: int | None = Field(default=None, ge=1, exclude_if=lambda v: v is None)
+
+
+class AssemblyWoofer(StrictModel):
+    id: RadiatorUuid
+    label: AssemblyLabel
+    enabled: bool = True
+    radius_mm: AssemblyNumber = Field(gt=0, le=1_000)
+    shape: AssemblyWooferShape
+    resolution_mm: AssemblyNumber | None = Field(default=None, gt=0, le=1_000, exclude_if=lambda v: v is None)
+    placement: AssemblyPlacement
+    drive: Literal["prescribed", "rigid"] = "prescribed"
+    ath: AthLfProvenance | None = Field(default=None, exclude_if=lambda v: v is None)
+
+
+class AssemblyHfSource(StrictModel):
+    """The horn's classic prescribed throat source, with the mesher's identity."""
+
+    radiator_id: Literal["horn-throat"] = "horn-throat"
+    kind: Literal["classic"] = "classic"
+
+
+class AssemblyDriverReference(StrictModel):
+    driver_id: str = Field(min_length=1, max_length=256)
+    source: str | None = Field(default=None, max_length=64, exclude_if=lambda v: v is None)
+
+
+class AssemblyDriver(StrictModel):
+    """Optional T/S driver of one radiator, bound by identity, never label.
+
+    ``exterior_transducer`` is the BEAT bare-driver wire without its motion
+    axis: assembly diaphragms move along the axial Z direction.
+    """
+
+    exterior_transducer: dict[str, Any]
+    reference: AssemblyDriverReference | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @field_validator("exterior_transducer", mode="before")
+    @classmethod
+    def _transducer(cls, value: Any) -> Any:
+        blob = _json_blob(value, "exterior_transducer")
+        if "motion_axis" in blob:
+            raise ValueError("assembly drivers move along axial Z; omit motion_axis")
+        return blob
+
+
+class AssemblyMember(StrictModel):
+    """Per-radiator processing applied before the signal group's sum."""
+
+    radiator_id: AssemblyMemberId
+    weight: AssemblyNumber = Field(default=1.0, ge=0, le=100, exclude_if=lambda v: v == 1)
+    delay_ms: AssemblyNumber = Field(default=0.0, ge=0, le=1_000, exclude_if=lambda v: v == 0)
+    invert: bool = Field(default=False, exclude_if=lambda v: v is False)
+
+
+class AssemblySignalGroup(StrictModel):
+    id: RadiatorUuid
+    label: AssemblyLabel
+    members: list[AssemblyMember] = Field(min_length=1)
+
+
+class AssemblyCrossover(StrictModel):
+    """The shared crossover over signal groups; the combine wire, by group id."""
+
+    enabled: bool = False
+    spec: dict[str, Any] | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @field_validator("spec", mode="before")
+    @classmethod
+    def _spec(cls, value: Any) -> Any:
+        return None if value is None else _json_blob(value, "crossover.spec")
+
+
+class AssemblyConfig(StrictModel):
+    """The design's integrated Sources and baffle assembly.
+
+    The horn is always the live design horn and ``design.enclosure`` the only
+    box; enabled woofers cut its front baffle. Disabled woofers keep every
+    setting and are excluded from geometry and solve.
+    """
+
+    hf_source: AssemblyHfSource = Field(default_factory=AssemblyHfSource)
+    woofers: list[AssemblyWoofer] = Field(default_factory=list, max_length=16)
+    drivers: dict[str, AssemblyDriver] = Field(default_factory=dict, exclude_if=lambda v: not v)
+    signal_groups: list[AssemblySignalGroup] = Field(default_factory=list)
+    crossover: AssemblyCrossover | None = Field(default=None, exclude_if=lambda v: v is None)
+    drive_voltage_v: AssemblyNumber = Field(default=2.83, gt=0, le=1_000, exclude_if=lambda v: v == 2.83)
+
+    @model_validator(mode="after")
+    def _identities(self) -> "AssemblyConfig":
+        from server.contracts.assembly import HF_RADIATOR_ID
+
+        ids = [woofer.id for woofer in self.woofers]
+        if len(set(ids)) != len(ids):
+            raise ValueError("woofer ids must be unique")
+        known = set(ids)
+        for woofer in self.woofers:
+            target = woofer.placement.spacing_to
+            if target is not None and (target.radiator_id == woofer.id or target.radiator_id not in known):
+                raise ValueError("spacing_to names another woofer of this assembly")
+        targets = {
+            woofer.id: woofer.placement.spacing_to.radiator_id
+            for woofer in self.woofers if woofer.placement.spacing_to is not None
+        }
+        for start in targets:
+            seen = {start}
+            cursor = targets.get(start)
+            while cursor is not None:
+                if cursor in seen:
+                    raise ValueError("spacing_to relations must not form a cycle")
+                seen.add(cursor)
+                cursor = targets.get(cursor)
+        unknown_drivers = sorted(set(self.drivers) - known)
+        if unknown_drivers:
+            raise ValueError("drivers are keyed by woofer radiator id; unknown: " + ", ".join(unknown_drivers))
+        group_ids = [group.id for group in self.signal_groups]
+        if len(set(group_ids)) != len(group_ids) or known.intersection(group_ids):
+            raise ValueError("signal group ids must be unique and distinct from radiator ids")
+        members = [member.radiator_id for group in self.signal_groups for member in group.members]
+        radiators = known | {HF_RADIATOR_ID}
+        if len(set(members)) != len(members) or set(members) != radiators:
+            raise ValueError("every radiator belongs to exactly one signal group")
+        return self
+
+
 class DesignCommon(StrictModel):
     """Fields shared by all formula families and all v1 export sections."""
 
@@ -733,6 +982,7 @@ class DesignCommon(StrictModel):
     output: OutputConfig = Field(default_factory=OutputConfig)
     extra_keys: dict[str, str] = Field(default_factory=dict)
     extra_blocks: dict[str, ConfigBlock] = Field(default_factory=dict)
+    assembly: AssemblyConfig | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def _ath_controls(self) -> "DesignCommon":
@@ -1291,6 +1541,8 @@ class DesignConfig(RootModel[DesignVariant]):
 
 
 __all__ = [
+    "AssemblyConfig",
+    "AssemblyWoofer",
     "ConfigBlock",
     "CornerGrid",
     "CrossSectionStation",

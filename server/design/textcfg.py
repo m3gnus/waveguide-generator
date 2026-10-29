@@ -1644,7 +1644,7 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
             raise TextConfigError("WG.Geometry requires a stamped WG design and exactly one JSON Payload")
         try:
             controls = json.loads(geometry_controls.items["Payload"])
-            if not isinstance(controls, dict) or set(controls) - {"cross_section", "depth_margin_mm", "icw"}:
+            if not isinstance(controls, dict) or set(controls) - {"cross_section", "depth_margin_mm", "icw", "assembly"}:
                 raise ValueError("unknown WG.Geometry controls")
             if "icw" in controls:
                 advanced = controls["icw"]
@@ -1657,6 +1657,8 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
                 payload["cross_section"] = controls["cross_section"]
             if "depth_margin_mm" in controls:
                 payload.setdefault("enclosure", {})["depth_margin_mm"] = controls["depth_margin_mm"]
+            if "assembly" in controls:
+                payload["assembly"] = controls["assembly"]
             payload["extra_blocks"].pop("WG.Geometry", None)
         except (ValueError, TypeError) as exc:
             raise TextConfigError(f"invalid WG.Geometry controls: {exc}") from exc
@@ -1945,6 +1947,9 @@ def _serialize_canonical(
         controls["cross_section"] = config.cross_section.model_dump()
     if config.enclosure is not None and config.enclosure.depth_margin_mm is not None:
         controls["depth_margin_mm"] = config.enclosure.depth_margin_mm
+    if config.assembly is not None:
+        # The integrated Sources and baffle assembly is WG-only; ATH ignores it.
+        controls["assembly"] = config.assembly.model_dump(mode="json")
     if isinstance(config, ICWConfig):
         advanced = {key: value for key, value in config.model_dump(mode="json").items() if key in ICW_ADVANCED_KEYS}
         if advanced:

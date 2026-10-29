@@ -23,6 +23,19 @@ async function untouchedRoundTrip(original: Record<string, unknown>): Promise<Re
 }
 
 describe('design hydration', () => {
+  it('reopens a saved assembly unchanged and leaves a horn-only design without one', async () => {
+    const assembly = {
+      hf_source: { radiator_id: 'horn-throat', kind: 'classic' },
+      woofers: [{ id: '00000000-0000-4000-8000-0000000000aa', label: 'Woofer 1', radius_mm: 80,
+        shape: { kind: 'ath_cone' }, placement: { anchor: 'above', gap_mm: 10 }, ath: { key: 'A' } }],
+      signal_groups: [{ id: '00000000-0000-4000-8000-0000000000b1', label: 'All',
+        members: [{ radiator_id: 'horn-throat' }, { radiator_id: '00000000-0000-4000-8000-0000000000aa', delay_ms: 0.5 }] }],
+    };
+    const wire = { ...serializeDesign(designForFamily('R-OSSE')), assembly };
+    expect((await untouchedRoundTrip(wire)).assembly).toEqual(assembly);
+    expect(hydrateDesignDocument(serializeDesign(designForFamily('R-OSSE'))).assembly).toBeUndefined();
+  });
+
   it.each(['R-OSSE', 'OSSE', 'ICW', 'FREEFORM'] as const)(
     'uses the new sweep defaults for omitted or null fields in %s',
     (formula) => {

@@ -8,6 +8,7 @@ import { advanceEditorMutation } from './editorMutation';
 import { DEFAULT_SWEEP } from './solveDefaults';
 import { NATIVE_FAMILIES, type NativeFamily } from '../design/nativeFamilies';
 import { osseFeatures, osseFormula, type OsseFeatures } from '../design/osseFeatures';
+import type { DesignAssembly } from './assembly';
 
 export { NATIVE_FAMILIES, type NativeFamily } from '../design/nativeFamilies';
 export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM' | 'LOOKUP' | NativeFamily;
@@ -227,6 +228,8 @@ export interface DesignDocument {
   cross_sections?: CrossSectionStation[];
   inflection_policy?: string;
   corner_grids?: CornerGrid[];
+  /** Integrated Sources and baffle assembly; absent for a horn-only design. */
+  assembly?: DesignAssembly;
   /** UI sidecar for lossless ATH expression spelling; stripped on the wire. */
   _expressions?: Record<string, ExprNumber>;
   /** Schema paths omitted by the source config; restored to null on the wire. */
@@ -653,6 +656,8 @@ export function mergeDesignForFamily(current: DesignDocument, family: DesignFami
     next.output = structuredClone(current.output);
     next.extra_keys = structuredClone(current.extra_keys);
     next.extra_blocks = structuredClone(current.extra_blocks);
+    // The assembly belongs to the design, whichever horn formula it uses.
+    if (current.assembly) next.assembly = structuredClone(current.assembly);
     return next;
   }
 

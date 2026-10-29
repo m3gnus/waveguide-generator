@@ -287,3 +287,23 @@ it('retains a permanent id in autosave and mints one for older drafts', () => {
   expect(useDocumentStore.getState().designUid).toMatch(/^wgu_/);
   expect(useDocumentStore.getState().designUid).not.toBe(uid);
 });
+
+it('restores the design assembly with its identities', () => {
+  resetDesignStore();
+  const woofer = '00000000-0000-4000-8000-0000000000aa';
+  const assembly = {
+    hf_source: { radiator_id: 'horn-throat', kind: 'classic' as const },
+    woofers: [{ id: woofer, label: 'Woofer 1', enabled: false, radius_mm: 80, shape: { kind: 'piston' as const },
+      placement: { anchor: 'below' as const, gap_mm: 10 }, drive: 'prescribed' as const }],
+    signal_groups: [
+      { id: '00000000-0000-4000-8000-0000000000b1', label: 'HF', members: [{ radiator_id: 'horn-throat' }] },
+      { id: '00000000-0000-4000-8000-0000000000b2', label: 'Woofer 1', members: [{ radiator_id: woofer }] },
+    ],
+  };
+  useDesignStore.getState().commitEmbedded({ assembly }, 'step');
+  writeAutosave();
+  resetDesignStore();
+  expect(useDesignStore.getState().design.assembly).toBeUndefined();
+  expect(restoreAutosave()).toBe(true);
+  expect(useDesignStore.getState().design.assembly).toEqual(assembly);
+});
