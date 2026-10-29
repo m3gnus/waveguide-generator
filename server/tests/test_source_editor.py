@@ -354,7 +354,7 @@ def test_optional_or_corrupt_preset_authoring_never_breaks_library(client, tmp_p
         path.write_text(companion)
     assert client.get("/api/source-editor/presets").json() == [saved]
     assert client.put("/api/source-editor/presets/" + saved["id"], json={"name": "Still editable", "document": saved["document"], "expected_revision": saved["revision"]}).status_code == 200
-    assert json.loads(path.read_text()) == {}
+    assert not path.exists() if companion is None else json.loads(path.read_text()) == {}
 
 
 def test_stale_authoring_revision_is_ignored_and_pruned_on_write(client, tmp_path):
@@ -392,11 +392,11 @@ def test_authoring_entry_cap_and_failed_atomic_replace_preserve_library(client, 
     from pathlib import Path
     monkeypatch.setattr(json_file.os, "replace", inspect_atomic)
     assert client.put(url, json={**body, "authoring": {"a": 2}}).status_code == 503
-    assert observed == [companion, path]
+    assert observed == [path.with_name("source_preset_recovery.json"), companion, path, companion]
     assert path.read_bytes() == before
-    # A crash between the atomic replacements can lose only optional authoring;
-    # it must never attach a new sketch to an old document revision.
-    assert client.get("/api/source-editor/presets").json() == [{k: v for k, v in saved.items() if k != "authoring"}]
+    assert companion.read_bytes() == before_companion
+    assert client.get("/api/source-editor/presets").json() == [saved]
+    assert PresetStore(path).list() == [saved]
     assert not list(tmp_path.glob(".source_presets.json.*"))
     assert not list(tmp_path.glob(".source_preset_authoring.json.*"))
 
@@ -425,3 +425,130 @@ def test_preset_authoring_accepts_any_json_value(client, authoring):
     assert "authoring" in response.json()
     assert response.json()["authoring"] == authoring
     assert client.get("/api/source-editor/presets").json()[0]["authoring"] == authoring
+
+
+@pytest.mark.parametrize("operation", ["create", "update", "delete"])
+@pytest.mark.parametrize("failure", ["companion", "library", "interrupted"])
+def test_preset_pair_failure_preserves_authoring_on_reload(client, tmp_path, monkeypatch, operation, failure):
+    path = tmp_path / "source_presets.json"
+    companion = tmp_path / "source_preset_authoring.json"
+    doc = shape(client)["document"]
+    saved = client.post("/api/source-editor/presets", json={
+        "name": "Authored", "document": doc, "authoring": {"constraints": ["kept"]},
+    }).json()
+    before = path.read_bytes(), companion.read_bytes()
+    replace = json_file.os.replace
+
+    class Interrupted(BaseException):
+        pass
+
+    def fail(source, destination):
+        if destination == (companion if failure == "companion" else path):
+            if failure == "interrupted":
+                raise Interrupted()
+            raise OSError("injected storage failure")
+        return replace(source, destination)
+
+    monkeypatch.setattr(json_file.os, "replace", fail)
+    url = "/api/source-editor/presets/" + saved["id"]
+    def request():
+        if operation == "delete":
+            return client.delete(url, params={"revision": saved["revision"]})
+        body = {"name": "Changed", "document": doc, "authoring": {"changed": True}}
+        if operation == "update":
+            return client.put(url, json={**body, "expected_revision": saved["revision"]})
+        return client.post("/api/source-editor/presets", json=body)
+
+    if failure == "interrupted":
+        with pytest.raises(Interrupted):
+            request()
+    else:
+        assert request().status_code == 503
+    monkeypatch.setattr(json_file.os, "replace", replace)
+    assert PresetStore(path).list() == [saved]
+    assert (path.read_bytes(), companion.read_bytes()) == before
+    assert not path.with_name("source_preset_recovery.json").exists()
+
+
+def test_preset_recovery_after_library_commit_keeps_new_pair(client, tmp_path, monkeypatch):
+    path = tmp_path / "source_presets.json"
+    recovery = path.with_name("source_preset_recovery.json")
+    unlink = type(path).unlink
+    def keep_recovery(self, *args, **kwargs):
+        if self == recovery:
+            raise PermissionError("cleanup unavailable")
+        return unlink(self, *args, **kwargs)
+    monkeypatch.setattr(type(path), "unlink", keep_recovery)
+    saved = client.post("/api/source-editor/presets", json={
+        "name": "Committed", "document": shape(client)["document"], "authoring": {"kept": True},
+    }).json()
+    assert recovery.exists()
+    monkeypatch.setattr(type(path), "unlink", unlink)
+    assert PresetStore(path).list() == [saved]
+    assert not recovery.exists()
+
+
+def test_legacy_presets_do_not_require_companion_writes(client, tmp_path, monkeypatch):
+    companion = tmp_path / "source_preset_authoring.json"
+    replace = json_file.os.replace
+    def fail_companion(source, destination):
+        if destination == companion:
+            raise PermissionError("companion unavailable")
+        return replace(source, destination)
+    monkeypatch.setattr(json_file.os, "replace", fail_companion)
+    response = client.post("/api/source-editor/presets", json={"name": "Legacy", "document": shape(client)["document"]})
+    assert response.status_code == 200
+    saved = response.json()
+    assert client.delete("/api/source-editor/presets/" + saved["id"], params={"revision": saved["revision"]}).status_code == 200
+    assert PresetStore(tmp_path / "source_presets.json").list() == []
+    assert not companion.exists()
+
+
+
+def test_failed_preset_rollback_blocks_reads_until_recovery_succeeds(client, tmp_path, monkeypatch):
+    path = tmp_path / "source_presets.json"
+    companion = tmp_path / "source_preset_authoring.json"
+    recovery = path.with_name("source_preset_recovery.json")
+    saved = client.post("/api/source-editor/presets", json={
+        "name": "Original", "document": shape(client)["document"], "authoring": {"keep": 1},
+    }).json()
+    before = path.read_bytes(), companion.read_bytes()
+    replace = json_file.os.replace
+    companion_writes = 0
+    def fail(source, destination):
+        nonlocal companion_writes
+        if destination == companion:
+            companion_writes += 1
+        if destination == path or destination == companion and companion_writes > 1:
+            raise PermissionError("storage disappeared after companion publication")
+        return replace(source, destination)
+    monkeypatch.setattr(json_file.os, "replace", fail)
+    url = "/api/source-editor/presets/" + saved["id"]
+    assert client.delete(url, params={"revision": saved["revision"]}).status_code == 503
+    assert recovery.exists()
+    assert client.get("/api/source-editor/presets").status_code == 503
+    assert path.read_bytes() == before[0]
+    monkeypatch.setattr(json_file.os, "replace", replace)
+    assert PresetStore(path).list() == [saved]
+    assert (path.read_bytes(), companion.read_bytes()) == before
+    assert not recovery.exists()
+
+
+def test_interrupted_first_authored_save_restores_absent_files(client, tmp_path, monkeypatch):
+    path = tmp_path / "source_presets.json"
+    replace = json_file.os.replace
+    class Interrupted(BaseException):
+        pass
+    def interrupt(source, destination):
+        if destination == path:
+            raise Interrupted()
+        return replace(source, destination)
+    monkeypatch.setattr(json_file.os, "replace", interrupt)
+    with pytest.raises(Interrupted):
+        client.post("/api/source-editor/presets", json={
+            "name": "Interrupted", "document": shape(client)["document"], "authoring": {"keep": 1},
+        })
+    monkeypatch.setattr(json_file.os, "replace", replace)
+    store = PresetStore(path)
+    assert store.list() == []
+    assert not path.exists() and not store.authoring_path.exists()

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from io import BytesIO
-from functools import partial
 import json
 from pathlib import Path
 import tempfile
@@ -245,9 +244,38 @@ class PresetStore:
     def __init__(self, path: Path):
         self.path = path
         self.authoring_path = path.with_name("source_preset_authoring.json")
+        self.recovery_path = path.with_name("source_preset_recovery.json")
         self.lock = threading.Lock()
 
+    def _recover(self):
+        """Finish a committed pair or restore the companion of the old library.
+
+        The library's atomic replacement is the commit point. Keep the previous
+        companion until that point, including across process interruption.
+        """
+        if not self.recovery_path.exists():
+            return
+        try:
+            recovery = json.loads(self.recovery_path.read_text(encoding="utf-8"))
+            if (set(recovery) != {"library", "authoring"}
+                    or not isinstance(recovery["library"], str)
+                    or recovery["authoring"] is not None and not isinstance(recovery["authoring"], str)):
+                raise ValueError("malformed preset recovery")
+            current = self.path.read_bytes() if self.path.exists() else None
+            if current != recovery["library"].encode():
+                previous = bytes.fromhex(recovery["authoring"]) if recovery["authoring"] is not None else None
+                if previous is None:
+                    self.authoring_path.unlink(missing_ok=True)
+                elif not self.authoring_path.exists() or self.authoring_path.read_bytes() != previous:
+                    write_json_atomic(self.authoring_path, previous, durable_directory=True)
+            self.recovery_path.unlink()
+        except (ValueError, TypeError, KeyError) as exc:
+            raise HTTPException(500, "Source preset recovery is unreadable; recover it before editing.") from exc
+        except OSError as exc:
+            raise HTTPException(503, "Source preset recovery needs storage access. Try again after restoring it.") from exc
+
     def _read(self):
+        self._recover()
         if not self.path.exists():
             return {}
         try:
@@ -296,25 +324,39 @@ class PresetStore:
         library = json.dumps({"version": 1, "presets": presets}, allow_nan=False).encode()
         if len(library) > 8 * 1024 * 1024:
             raise HTTPException(422, "Source preset library exceeds 8 MiB.")
-        # Revisions make a torn pair safe: commit the companion first. If the
-        # library replace fails, readers ignore the new unmatched revision.
         authoring = {key: entry for key, entry in authoring.items()
                      if key in presets and entry["revision"] == presets[key]["revision"]}
         if len(authoring) > self.MAX_ENTRIES:
             raise HTTPException(422, "At most 128 source authoring entries are supported.")
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            # Stage the library first so a staging failure changes neither file.
-            with staged_json(self.path, library) as publish_library:
-                write_json_atomic(
-                    self.authoring_path, authoring,
-                    encode=partial(json_bytes, indent=None, allow_nan=False, trailing_newline=False),
-                )
-                publish_library()
+            self._recover()
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            previous = self.authoring_path.read_bytes() if self.authoring_path.exists() else None
+            companion = json_bytes(authoring, indent=None, allow_nan=False, trailing_newline=False)
+            # Legacy saves need no companion write when there is no authoring.
+            if previous == companion or previous is None and not authoring:
+                write_json_atomic(self.path, library, durable_directory=True)
+                return
+            # Stage both files before recording the recoverable transaction.
+            with staged_json(self.path, library, durable_directory=True) as publish_library:
+                with staged_json(self.authoring_path, companion, durable_directory=True) as publish_authoring:
+                    write_json_atomic(self.recovery_path, {
+                        "library": library.decode(),
+                        "authoring": previous.hex() if previous is not None else None,
+                    }, durable_directory=True)
+                    publish_authoring()
+                    publish_library()
+            # A cleanup failure cannot undo a committed pair. The next read
+            # verifies the commit point before removing the recovery record.
+            try:
+                self.recovery_path.unlink()
+            except OSError:
+                pass
         except OSError as exc:
+            self._recover()
             raise HTTPException(
                 503,
-                "Source preset could not be persisted. Try again after restoring storage access.",
+                "Source preset could not be persisted. Previous preset retained; try again after restoring storage access.",
             ) from exc
 
     def list(self):
