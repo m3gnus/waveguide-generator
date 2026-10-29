@@ -22,6 +22,12 @@
         "additionalProperties": false,
         "description": "Compile one captured design revision's assembly into a prepared mesh.",
         "properties": {
+          "build_session": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Build Session",
+            "type": "string"
+          },
           "design": {
             "additionalProperties": true,
             "title": "Design",

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import uuid
 
 import pytest
 
@@ -69,6 +70,13 @@ def setup_for(record, *, engine, drivers=False, combine=True, processing=None):
         "polar_config": {"enabled_axes": ["horizontal"], "spherical_theta_count": 5, "spherical_phi_count": 8}}}
 
 
+@pytest.fixture(autouse=True)
+def own_build_session():
+    """Each test is its own client: revisions are ordered within a build session only."""
+    global SESSION
+    SESSION = str(uuid.uuid4())
+
+
 @pytest.fixture
 def compiled_app(tmp_path):
     store = CadLinkStore.for_data_dir(tmp_path)
@@ -83,9 +91,13 @@ def compiled_app(tmp_path):
     store.close()
 
 
+SESSION = str(uuid.uuid4())
+
+
 def compile_body(revision=1, **changes):
     dump = {**copy.deepcopy(HORN), "assembly": assembly(woofer()), **changes}
-    return {"design": dump, "design_uid": UID, "design_name": "Front horn", "design_revision": revision}
+    return {"design": dump, "design_uid": UID, "design_name": "Front horn", "design_revision": revision,
+            "build_session": SESSION}
 
 
 def test_assembly_jobs_are_created_through_the_model_solve_for_each_engine(compiled_app):

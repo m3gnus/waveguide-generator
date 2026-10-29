@@ -2721,6 +2721,11 @@ export interface components {
          * @description Compile one captured design revision's assembly into a prepared mesh.
          */
         AssemblyCompileRequest: {
+            /**
+             * Build Session
+             * @default
+             */
+            build_session?: string;
             /** Design */
             design: {
                 [key: string]: unknown;

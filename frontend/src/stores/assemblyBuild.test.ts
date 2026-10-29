@@ -39,6 +39,7 @@ describe('assembly background build', () => {
     commitAssembly(setPlacement(useDesignStore.getState().design.assembly!, woofer, { anchor: 'below', gap_mm: 25 }));
     const second = requestAssemblyBuild(fetcher);
     expect(pending.map(item => item.body.design_revision)).toEqual([before, before + 1]);
+    expect(pending[0].body.build_session).toBe(pending[1].body.build_session);
     answer(1, record('wgi_new'));
     await second;
     answer(0, record('wgi_old'));

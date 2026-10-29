@@ -170,6 +170,8 @@ class AssemblyCompileRequest(AssemblyContextRequest):
     design_uid: DesignUid
     design_name: str = Field(default="", max_length=240)
     design_revision: int = Field(ge=1)
+    #: The client's build session: its revisions are ordered within it only.
+    build_session: str = Field(default="", max_length=128)
 
 
 class ModelRefusal(ValueError):
@@ -772,6 +774,7 @@ def mount_models_api(application: FastAPI) -> None:
             outcome = await compile_design_assembly(
                 store, data_dir, body.design, design_uid=body.design_uid,
                 design_name=body.design_name, design_revision=body.design_revision,
+                build_session=body.build_session,
             )
         except AssemblySuperseded:
             return {"status": "superseded"}

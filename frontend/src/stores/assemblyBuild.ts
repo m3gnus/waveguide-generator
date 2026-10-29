@@ -30,6 +30,8 @@ export interface AssemblyBuildState {
 }
 
 const IDLE: AssemblyBuildState = { status: 'idle', requested: null, published: null, refusal: null };
+/** This page's builds: the server orders revisions within one page and document only. */
+const PAGE_SESSION = globalThis.crypto?.randomUUID?.() ?? `page-${Date.now()}-${Math.random()}`;
 
 export const useAssemblyBuildStore = create<AssemblyBuildState>(() => ({ ...IDLE }));
 
@@ -75,6 +77,7 @@ export async function requestAssemblyBuild(fetcher: typeof fetch = fetch): Promi
   try {
     const result = await compileAssembly({
       design: serializeDesign(design), design_uid: designUid ?? '', design_name: designName, design_revision: designRevision,
+      build_session: `${PAGE_SESSION}:${load}`,
     }, fetcher);
     if (!owns()) return { status: 'superseded' };
     if (result.status === 'published') {

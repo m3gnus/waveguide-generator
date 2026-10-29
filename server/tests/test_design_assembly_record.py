@@ -330,7 +330,8 @@ def test_the_models_api_compiles_and_draws_an_assembly(store, tmp_path):
             refused = await call(app, "POST", "/api/models/assembly/context",
                                  {"design": {**dump, "enclosure": {"depth": 0}}})
             assert "enclosure depth" in refused["refusal"]
-            body = {"design": dump, "design_uid": UID, "design_name": "Front horn", "design_revision": 2}
+            body = {"design": dump, "design_uid": UID, "design_name": "Front horn", "design_revision": 2,
+                    "build_session": "models-api-test"}
             compiled = await call(app, "POST", "/api/models/assembly/compile", body)
             assert compiled["status"] == "published" and compiled["model"]["producer"] == "design-assembly"
             prepared = compiled["prepared"]
@@ -344,3 +345,21 @@ def test_the_models_api_compiles_and_draws_an_assembly(store, tmp_path):
         finally:
             await runtime.shutdown()
     asyncio.run(scenario())
+
+
+def test_revisions_are_ordered_within_a_client_build_session_only(store, tmp_path):
+    """A reloaded page numbers its revisions afresh and must not be fenced by an old session."""
+    fence = AssemblyBuildFence()
+    dump = design(assembly=assembly(woofer(enabled=False)))
+    first = asyncio.run(compile_design_assembly(
+        store, tmp_path, dump, design_uid=UID, design_name="x", design_revision=7,
+        build_session="page-1", fence=fence))
+    assert first["status"] == "published"
+    with pytest.raises(AssemblySuperseded):
+        asyncio.run(compile_design_assembly(
+            store, tmp_path, dump, design_uid=UID, design_name="x", design_revision=3,
+            build_session="page-1", fence=fence))
+    again = asyncio.run(compile_design_assembly(
+        store, tmp_path, dump, design_uid=UID, design_name="x", design_revision=1,
+        build_session="page-2", fence=fence))
+    assert again["status"] == "published" and again["reused"]

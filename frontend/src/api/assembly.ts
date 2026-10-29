@@ -59,5 +59,6 @@ const post = <T>(path: string, body: unknown, fetcher: typeof fetch, what: strin
 export const fetchAssemblyContext = (design: Record<string, unknown>, fetcher: typeof fetch = fetch) =>
   post<AssemblyFrontContext>('/api/models/assembly/context', { design }, fetcher, 'The front view');
 
-export const compileAssembly = (body: { design: Record<string, unknown>; design_uid: string; design_name: string; design_revision: number },
+export const compileAssembly = (body: { design: Record<string, unknown>; design_uid: string; design_name: string;
+  design_revision: number; build_session: string },
   fetcher: typeof fetch = fetch) => post<AssemblyCompileResult>('/api/models/assembly/compile', body, fetcher, 'The assembly');

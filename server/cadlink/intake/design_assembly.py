@@ -17,6 +17,7 @@ replaces a newer one, and identical content is the record already published.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 import hashlib
@@ -72,23 +73,37 @@ class AssemblySuperseded(RuntimeError):
     """A newer revision of the same design was asked for; this build is not published."""
 
 
+#: Build sessions remembered per process; the oldest is forgotten first.
+_FENCE_SESSIONS = 1024
+
+
 @dataclass
 class AssemblyBuildFence:
-    """The newest design revision asked for, per design: only it may publish."""
+    """The newest revision asked for, per design and client build session.
 
-    _latest: dict[str, int] = field(default_factory=dict)
+    A client numbers revisions from its own document load, so the order is
+    meaningful only within one ``(design, session)``: a reloaded page, another
+    window or a reopened design starts a session of its own and is never
+    fenced by another's numbers.
+    """
+
+    _latest: OrderedDict[tuple[str, str], int] = field(default_factory=OrderedDict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def begin(self, design_uid: str, revision: int) -> tuple[str, int]:
+    def begin(self, design_uid: str, revision: int, session: str = "") -> tuple[str, str, int]:
+        key = (design_uid, session)
         with self._lock:
-            if revision < self._latest.get(design_uid, revision):
+            if revision < self._latest.get(key, revision):
                 raise AssemblySuperseded("A newer revision of this design is already being prepared.")
-            self._latest[design_uid] = revision
-        return design_uid, revision
+            self._latest[key] = revision
+            self._latest.move_to_end(key)
+            while len(self._latest) > _FENCE_SESSIONS:
+                self._latest.popitem(last=False)
+        return design_uid, session, revision
 
-    def current(self, token: tuple[str, int]) -> bool:
+    def current(self, token: tuple[str, str, int]) -> bool:
         with self._lock:
-            return self._latest.get(token[0]) == token[1]
+            return self._latest.get((token[0], token[1])) == token[2]
 
 
 FENCE = AssemblyBuildFence()
@@ -373,7 +388,7 @@ def _reuse(store: Any, model_id: str, spec_digest: str) -> tuple[dict[str, Any] 
 def _publish_record(
     store: Any, data_dir: Path, design: DesignConfig, built: Mapping[str, Any], *,
     design_uid: str, design_name: str, design_revision: int, spec_digest: str,
-    model_id: str, known: list[str], fence: AssemblyBuildFence, token: tuple[str, int],
+    model_id: str, known: list[str], fence: AssemblyBuildFence, token: tuple[str, str, int],
 ) -> dict[str, Any] | None:
     parent = data_dir / "imports" / "files"
     parent.mkdir(parents=True, exist_ok=True)
@@ -411,7 +426,7 @@ def _publish_record(
 
 async def compile_design_assembly(
     store: Any, data_dir: Path, design_dump: Mapping[str, Any], *,
-    design_uid: str, design_name: str, design_revision: int,
+    design_uid: str, design_name: str, design_revision: int, build_session: str = "",
     fence: AssemblyBuildFence = FENCE, cancel_cb: Any = None,
 ) -> dict[str, Any]:
     """Compile and publish the design's assembly, or report it superseded.
@@ -429,7 +444,7 @@ async def compile_design_assembly(
     model_id = design_model_id(design_uid)
     if not model_id:
         raise AssemblyRefusal("Save the design before solving its assembly.")
-    token = fence.begin(design_uid, design_revision)
+    token = fence.begin(design_uid, design_revision, build_session)
     spec_digest = _digest(compile_spec(design))
     reused, known = await asyncio.to_thread(_held, _reuse, store, model_id, spec_digest)
     if reused is not None:
