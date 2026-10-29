@@ -401,6 +401,15 @@ def _select_reused(store: Any, model_id: str, ingest_id: str, fence: AssemblyBui
     return True
 
 
+def _reuse_and_select(store: Any, model_id: str, spec_digest: str, fence: AssemblyBuildFence,
+                      token: tuple[str, str, int]) -> tuple[dict[str, Any] | None, list[str], bool]:
+    """Lookup and selection share one collection hold; a hit cannot disappear between them."""
+
+    reused, known = _reuse(store, model_id, spec_digest)
+    selected = reused is not None and _select_reused(store, model_id, str(reused["ingest_id"]), fence, token)
+    return reused, known, selected
+
+
 def _publish_record(
     store: Any, data_dir: Path, design: DesignConfig, built: Mapping[str, Any], *,
     design_uid: str, design_name: str, design_revision: int, spec_digest: str,
@@ -462,10 +471,9 @@ async def compile_design_assembly(
         raise AssemblyRefusal("Save the design before solving its assembly.")
     token = fence.begin(design_uid, design_revision, build_session)
     spec_digest = _digest(compile_spec(design))
-    reused, known = await asyncio.to_thread(_held, _reuse, store, model_id, spec_digest)
+    reused, known, selected = await asyncio.to_thread(
+        _held, _reuse_and_select, store, model_id, spec_digest, fence, token)
     if reused is not None:
-        selected = await asyncio.to_thread(
-            _held, _select_reused, store, model_id, str(reused["ingest_id"]), fence, token)
         return {"status": "published", "record": reused, "reused": True} if selected else {"status": "superseded"}
     built = await build_assembly_mesh(design, cancel_cb)
     if not fence.current(token):

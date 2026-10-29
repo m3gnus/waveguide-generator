@@ -426,3 +426,28 @@ def test_a_to_b_to_a_makes_the_reused_record_latest_and_keeps_it(store, tmp_path
     report = collect_prepared_meshes(store, jobs, tmp_path, terminal_states=TERMINAL_STATES)
     assert report.removed_ingests == [between["ingest_id"]]
     assert open(first["mesh_store_path"], encoding="utf-8").read().startswith("$MeshFormat")
+
+
+def test_collection_between_reuse_lookup_and_selection_cannot_remove_candidate(store, tmp_path, monkeypatch):
+    jobs = JobStore.for_data_dir(tmp_path)
+    jobs.initialize()
+    first = compile_(store, tmp_path, design(assembly=assembly(woofer())))["record"]
+    compile_(store, tmp_path, design(assembly=assembly(woofer(gap=30))), revision=2)
+    past = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat().replace("+00:00", "Z")
+    with store._lock, store._transaction() as conn:
+        conn.execute("UPDATE ingests SET created_at = ?, last_used_at = NULL", (past,))
+
+    real = asyncio.to_thread
+    collections = []
+
+    async def collect_after_worker_returns(call, *args, **kwargs):
+        result = await real(call, *args, **kwargs)
+        if call is design_assembly._held:
+            collections.append(collect_prepared_meshes(store, jobs, tmp_path, terminal_states=TERMINAL_STATES))
+        return result
+
+    monkeypatch.setattr(asyncio, "to_thread", collect_after_worker_returns)
+    again = compile_(store, tmp_path, design(assembly=assembly(woofer())), revision=3)
+    assert again["reused"] and again["record"]["ingest_id"] == first["ingest_id"]
+    assert collections and all(first["ingest_id"] not in report.removed_ingests for report in collections)
+    assert store.get_model(design_model_id(UID))["latest_ingest_id"] == first["ingest_id"]
