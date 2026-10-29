@@ -152,7 +152,7 @@ def test_drivers_on_an_engine_without_coupling_are_refused_with_the_reason(compi
     (lambda setup: setup["geometry"].update(required_features=[]), 422, None),
     (lambda setup: setup["geometry"]["combine"]["channels"].update(
         {next(iter(setup["geometry"]["combine"]["channels"])): {"gain": {"mode": "max"}}}), 422, None),
-    (lambda setup: setup["geometry"]["drive_channels"].pop(), 422, "drive_source_coverage"),
+    (lambda setup: setup["geometry"]["drive_channels"].pop(), 422, "native_source_contract"),
 ])
 def test_an_assembly_setup_is_held_to_its_record(compiled_app, change, status, code):
     app, runtime, _store = compiled_app
@@ -162,7 +162,7 @@ def test_an_assembly_setup_is_held_to_its_record(compiled_app, change, status, c
             compiled = await call(app, "POST", "/api/models/assembly/compile", compile_body())
             record = compiled["prepared"]
             setup = setup_for(record, engine="beat-cpu", drivers=True)
-            if code == "drive_source_coverage":
+            if code == "native_source_contract":
                 setup["geometry"].pop("combine")
                 setup["geometry"]["driver_groups"] = None
             change(setup)
@@ -173,6 +173,41 @@ def test_an_assembly_setup_is_held_to_its_record(compiled_app, change, status, c
         finally:
             await runtime.shutdown()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("contradiction", ["normal-motion", "split-patches", "reversed-axis", "tilted-axis"])
+def test_cone_excitation_cannot_be_redefined_by_a_solve_setup(compiled_app, contradiction):
+    app, runtime, _store = compiled_app
+
+    async def scenario():
+        try:
+            compiled = await call(app, "POST", "/api/models/assembly/compile",
+                                  compile_body(assembly=assembly(woofer(shape="ath_cone"))))
+            record = compiled["prepared"]
+            setup = setup_for(record, engine="beat-cpu", drivers=True, combine=False)
+            setup["geometry"]["driver_groups"] = None
+            channel = setup["geometry"]["drive_channels"][1]
+            assert len(channel["source_ids"]) > 1
+            if contradiction == "normal-motion":
+                channel.pop("exterior_transducer")
+                channel["motion"] = "normal"
+            elif contradiction == "split-patches":
+                setup["geometry"]["drive_channels"][1:] = [
+                    {"id": source, "source_ids": [source], "motion": "normal"}
+                    for source in channel["source_ids"]]
+            else:
+                channel["exterior_transducer"] = {**DRIVER, "motion_axis":
+                    [0.0, 0.0, -1.0] if contradiction == "reversed-axis" else [1.0, 0.0, 1.0]}
+            refused = await call(app, "POST", f"/api/models/{compiled['model']['model_id']}/solve", {
+                "prepared_id": record["ingest_id"], "client_request_id": "contradictory", "setup": setup}, expected=422)
+            assert refused["error"]["code"] == "native_source_contract"
+            assert "excitation" in refused["error"]["message"]
+            assert runtime.store.list_jobs() == ([], 0)
+        finally:
+            await runtime.shutdown()
+    asyncio.run(scenario())
+
+
 
 
 def test_a_stale_record_is_never_reused_after_the_geometry_changes(compiled_app):

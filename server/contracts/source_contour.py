@@ -1,6 +1,7 @@
 """Authoritative native contour request/excitation admission contract."""
 
 import hashlib
+import math
 
 from server.contracts.canonical import canonical_ascii_strict_json
 
@@ -21,6 +22,24 @@ def validate_contour_request(geometry, record):
             raise ValueError("a design assembly solve negotiates exactly its compiled record's feature")
         if any(c.patch_weights is not None or c.physical_source_id is not None for c in geometry.drive_channels):
             raise ValueError("design assembly radiators are driven whole; patch weights belong to native contours")
+        expected = {excitation["id"]: excitation for excitation in record["excitations"]}
+        if (len(geometry.drive_channels) != len(expected)
+                or {channel.id for channel in geometry.drive_channels} != set(expected)
+                or set(geometry.skipped_source_ids) != set(record.get("skipped_source_ids", ()))):
+            raise ValueError("design assembly channels must match the compiled radiator excitations")
+        for channel in geometry.drive_channels:
+            excitation = expected[channel.id]
+            if (set(channel.source_ids) != set(excitation["source_ids"])
+                    or channel.motion != excitation["motion"] or channel.driver is not None):
+                raise ValueError("design assembly request contradicts the compiled radiator excitation")
+            if channel.exterior_transducer is not None:
+                axis = channel.exterior_transducer.motion_axis
+                length = math.hypot(*axis)
+                if "motion_axis" not in excitation or any(
+                    not math.isclose(value / length, target, abs_tol=1e-12)
+                    for value, target in zip(axis, excitation["motion_axis"])
+                ):
+                    raise ValueError("design assembly transducer axis contradicts the compiled radiator excitation")
         return
     native = record.get("native_source")
     required = getattr(geometry, "required_features", [])
