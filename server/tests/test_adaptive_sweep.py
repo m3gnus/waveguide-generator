@@ -17,7 +17,7 @@ from scipy.signal import find_peaks
 from server.jobs.models import SolveOptions
 from server.jobs.result_contracts import ParametricResultEnvelope
 from server.jobs.runtime.provisional import merge_provisional_results
-from server.solver.adaptive_rational import SweepModel, aaa
+from server.solver.adaptive_rational import Rational, SweepModel, aaa
 from server.solver.adaptive_sweep import SweepPlanner, enabled, solve_native_adaptively
 from server.solver.context import SolverContext
 from server.solver.result_mapping import build_solver_response
@@ -57,7 +57,7 @@ def _adaptive_diagnostics(monkeypatch):
 
     class ObservedModel(base_model):
         def __init__(self, *args, **kwargs):
-            self.record = {"physical": kwargs.get("physical", False), "safe_checks": [], "exceptions": []}
+            self.record = {"physical": kwargs.get("physical", False), "safe_checks": [], "exceptions": [], "predictions": []}
             if current is not None:
                 current["fits"].append(self.record)
             try:
@@ -80,7 +80,14 @@ def _adaptive_diagnostics(monkeypatch):
 
         def __call__(self, frequencies):
             try:
-                return super().__call__(frequencies)
+                values = super().__call__(frequencies)
+                invalid = np.flatnonzero(~np.all(np.isfinite(values), axis=1))
+                self.record["predictions"].append({
+                    "query_count": len(np.atleast_1d(frequencies)),
+                    "nonfinite_count": len(invalid),
+                    "nonfinite_rows": invalid[:_DIAGNOSTIC_ROUNDS].tolist(),
+                })
+                return values
             except Exception as exc:
                 self.record["exceptions"].append({"stage": "prediction", "type": type(exc).__name__, "message": str(exc)[:1000]})
                 raise
@@ -144,7 +151,7 @@ def test_reference_fit_and_batched_acquisition(monkeypatch):
         assert "interpolated" in planner.status
 
 
-@pytest.mark.parametrize("failure", ["budget", "fit"])
+@pytest.mark.parametrize("failure", ["budget", "fit", "nonfinite"])
 def test_adaptive_diagnostics_preserve_failure_and_report_fit_state(monkeypatch, capsys, failure):
     f = np.geomspace(200, 1000, 24)
     planner = SweepPlanner(f, delays_s=0)
@@ -152,6 +159,16 @@ def test_adaptive_diagnostics_preserve_failure_and_report_fit_state(monkeypatch,
         def failed_fit(*args, **kwargs):
             raise np.linalg.LinAlgError("injected fitting failure")
         monkeypatch.setattr(SweepModel, "__init__", failed_fit)
+    if failure == "nonfinite":
+        original_call = SweepModel.__call__
+
+        def nonfinite_prediction(model, frequencies):
+            values = original_call(model, frequencies)
+            if len(frequencies) == len(f):
+                values[2] = np.nan
+            return values
+
+        monkeypatch.setattr(SweepModel, "__call__", nonfinite_prediction)
     with pytest.raises(AssertionError, match="diagnostic sample cap"):
         with _adaptive_diagnostics(monkeypatch) as add:
             ids = planner.pending.copy()
@@ -178,6 +195,11 @@ def test_adaptive_diagnostics_preserve_failure_and_report_fit_state(monkeypatch,
         assert fit["support_count"] == len(fit["support"]) > 0
         assert fit["removed_count"] == len(fit["removed"]) == 0
         assert not fit["exceptions"]
+        assert fit["predictions"] == [
+            {"query_count": len(f), "nonfinite_count": int(failure == "nonfinite"),
+             "nonfinite_rows": [2] if failure == "nonfinite" else []},
+        ]
+        assert row["safe"] is (failure != "nonfinite")
 
 
 def test_adaptive_diagnostic_collection_cannot_replace_original_failure(monkeypatch, capsys):
@@ -225,19 +247,28 @@ def test_shared_weights_and_froissart_cleanup_keep_samples():
     assert model.values.shape[1] == 3
 
 
-def test_barycentric_fit_does_not_send_infinities_to_matrix_products():
-    from server.solver.adaptive_rational import Rational
-
+@pytest.mark.parametrize("channels", [1, 38, 300])
+@pytest.mark.parametrize("support_count", [2, 6, 10, 22])
+def test_barycentric_fit_does_not_send_infinities_to_matrix_products(channels, support_count):
     class FiniteMatrix(np.ndarray):
         def __matmul__(self, other):
             assert np.isfinite(self).all()
             return super().__matmul__(other)
 
-    support = np.array([-1., 1.]).view(FiniteMatrix)
-    model = Rational(support, np.array([[2.], [4.]]), np.array([1., -1.]), [])
-    np.testing.assert_allclose(model([-1., 0., 1.]).ravel(), [2., 3., 4.])
-    np.testing.assert_array_equal(model([-1., 1.]).ravel(), [2., 4.])
-    assert model([]).shape == (0, 1)
+    # Mixed support/query rows and channel widths exercise distinct BLAS
+    # kernels. The independent linear function has no poles or fit ambiguity.
+    support = np.linspace(-1, 1, support_count).view(FiniteMatrix)
+    slopes = np.linspace(1, 3, channels)
+    values = (support[:, None] + 2) * slopes
+    # Polynomial barycentric weights reproduce the linear function exactly.
+    weights = np.array([
+        1 / np.prod(point - np.delete(support, i)) for i, point in enumerate(support)
+    ])
+    model = Rational(support, values, weights, [])
+    query = np.r_[support, (support[:-1] + support[1:]) / 2, support[::-1]]
+    np.testing.assert_allclose(model(query), (query[:, None] + 2) * slopes, rtol=1e-9)
+    np.testing.assert_array_equal(model(support), values)
+    assert model([]).shape == (0, channels)
 
 
 @pytest.mark.parametrize("invalid", [np.nan, np.inf, -np.inf])
