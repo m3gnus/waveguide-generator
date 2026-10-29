@@ -5,6 +5,7 @@ synthetic stand-in, so these tests qualify the request, packaging, bases and
 recombination, never acoustics.
 """
 
+import io
 import numpy as np
 import pytest
 from pydantic import ValidationError
@@ -18,6 +19,7 @@ from server.solver.beat_adapter.transducers import (
 )
 from server.solver.combine import combine_drive_channels, deserialize_channel_bases, member_processing_weights
 from server.solver.recombine import recombine_stored_results
+from server.solver.pressure_basis import export_pressure_basis
 from server.tests.beat_adapter.test_transducers import raw
 
 DRIVER = dict(version=1, re_ohm=6.0, le_h=0.0005, bl_n_per_a=7.0, mmd_kg=0.02,
@@ -181,6 +183,61 @@ def test_mixed_results_keep_each_basis_and_build_the_crossover_once(solid, recor
     stored = {key: value for key, value in result.items() if not key.startswith("_")}
     again = recombine_stored_results(stored, result["_channel_bases_npz"], solve_request.geometry.combine, solve_request)
     np.testing.assert_allclose(again["channels"]["combined"]["spl_on_axis"]["spl"], combined["spl_on_axis"]["spl"])
+
+
+def test_removing_drivers_preserves_the_prescribed_hf_velocity_basis(make_mesh, record, monkeypatch):
+    from server.solver import beat_imported, official_beat
+    from server.solver.beat_adapter.results import SweepResult, acceleration_scale
+
+    solid = make_mesh([[0, 0, 0], [-1, -1, 0], [1, -1, 0], [1, 1, 0], [-1, 1, 0], [0, 0, 1]],
+                     [[0, 2, 1], [0, 3, 2], [0, 4, 3], [0, 1, 4],
+                      [1, 2, 5], [2, 3, 5], [3, 4, 5], [4, 1, 5]], [2, 3, 4, 1, 1, 1, 1, 1])
+    driven = request(combine=False)
+    mixed, _compiled, _partial = _solve(solid, record, monkeypatch, driven)
+    payload = driven.model_dump(mode="json")
+    for channel in payload["geometry"]["drive_channels"]:
+        channel.pop("exterior_transducer", None)
+    fallback = SolveRequest.model_validate(payload)
+    monkeypatch.setattr(official_beat, "production_statuses", lambda **kw: {"cpu": {"available": True}})
+
+    def native(compiled, **kwargs):
+        frequencies = np.asarray(compiled.wire["frequencies_hz"])
+        scale = np.asarray([acceleration_scale(f) for f in frequencies])
+        channels = {}
+        for index, channel_id in enumerate(compiled.channel_ports):
+            pressure = np.full((len(frequencies), len(compiled.layout.planes), len(compiled.layout.angles_deg)), 1 + 2j)
+            pressure *= ((index + 1) * frequencies / 100 * scale)[:, None, None]
+            sphere = None if "sphere" not in compiled.layout.points_m else np.repeat(
+                pressure[:, 0, :1], len(compiled.layout.points_m["sphere"]), axis=1)
+            channels[channel_id] = SweepResult(frequencies, pressure, np.zeros(pressure.shape),
+                np.ones(len(frequencies), dtype=complex), compiled.layout.angles_deg, list(compiled.layout.planes),
+                sphere, compiled.layout.sphere_theta_deg, compiled.layout.sphere_phi_deg,
+                None, None, False, len(frequencies), [])
+        return channels
+
+    monkeypatch.setattr(official_beat, "solve_compiled", native)
+    result = beat_imported.solve_imported_beat_from_msh_text(solid, fallback, record, backend="cpu")
+    before = deserialize_channel_bases(mixed["_channel_bases_npz"])["results_by_id"]["horn-throat"]
+    after = deserialize_channel_bases(result["_channel_bases_npz"])["results_by_id"]["horn-throat"]
+    np.testing.assert_allclose(after.pressure_complex, before.pressure_complex, rtol=1e-12)
+    np.testing.assert_allclose(after.sphere_pressure_complex, before.sphere_pressure_complex, rtol=1e-12)
+    np.testing.assert_allclose(result["channels"]["horn-throat"]["spl_on_axis"]["spl"],
+                               mixed["channels"]["horn-throat"]["spl_on_axis"]["spl"])
+    assert result["channels"]["horn-throat"]["metadata"]["source_normalization"] == "native_rms_velocity"
+
+
+@pytest.mark.parametrize(("channel_id", "normalization"), [
+    ("horn-throat", "native_rms_velocity"), (W1, "native_rms_voltage")])
+def test_mixed_pressure_basis_archive_preserves_its_physical_normalization(solid, record, monkeypatch, channel_id, normalization):
+    result, _compiled, _partial = _solve(solid, record, monkeypatch, request())
+    exported = export_pressure_basis(result["_channel_bases_npz"], result, channel_id)
+    retained = deserialize_channel_bases(result["_channel_bases_npz"])["results_by_id"][channel_id]
+    with np.load(io.BytesIO(exported.content), allow_pickle=False) as archive:
+        assert archive["source_normalization"].item() == normalization
+        np.testing.assert_allclose(archive["pressure_complex"], np.conjugate(retained.pressure_complex))
+        np.testing.assert_allclose(archive["frequencies_hz"], retained.frequencies_hz)
+
+
 
 
 def test_member_delay_polarity_and_weight_precede_the_group_sum():

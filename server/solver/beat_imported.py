@@ -51,9 +51,11 @@ from .imported import (
 )
 from .imported_channels import (
     apply_channel_driver,
+    assembly_prescribed_entry,
     channel_basis_metadata,
     channel_source_identity,
     imported_validity_metadata,
+    normalize_assembly_prescribed_result,
 )
 from .result_mapping import (
     build_provisional_frequency_response,
@@ -152,12 +154,13 @@ def _beat_section(
     merged_tags: list[int] | None,
     result: Any,
     precision: str = "single",
+    velocity_rms: bool = False,
 ) -> dict[str, Any]:
     section: dict[str, Any] = {
         "native_symmetry_plane": native_plane,
         "formulation": "burton_miller",
         "backend": backend,
-        "drive_convention": _DRIVE_CONVENTION,
+        "drive_convention": "q=i*rho*omega*v_n on a 1 m/s RMS velocity basis" if velocity_rms else _DRIVE_CONVENTION,
         "precision": precision,
         "solver_log": json_safe_native_value(
             response_solver_log(getattr(result, "solver_log", []))
@@ -210,6 +213,7 @@ def _combined_channel_response(
                 native_plane=native_plane,
                 merged_tags=None,
                 result=combined_result,
+                velocity_rms=geometry.design_assembly,
             ),
         }
 
@@ -412,6 +416,7 @@ def solve_imported_beat_from_msh_text(
         ) -> bool:
             if result_callback is None:
                 return True
+            entry = assembly_prescribed_entry(entry, frequency_hz, geometry)
             pressure = np.asarray(
                 entry.get("observation_pressure_complex"), dtype=np.complex128
             )
@@ -508,6 +513,9 @@ def solve_imported_beat_from_msh_text(
                 def publish(native):
                     if result_callback is None:
                         return
+                    from copy import copy
+                    native = copy(native)
+                    normalize_assembly_prescribed_result(native, geometry)
                     snapshot = build_solver_response(
                         result=native,
                         config=config,
@@ -611,6 +619,8 @@ def solve_imported_beat_from_msh_text(
         stage_callback("finalizing", 1.0, "Packaging imported drive-channel bases")
 
     driver_payloads: dict[str, dict[str, Any]] = {}
+    for result in sorted_results.values():
+        normalize_assembly_prescribed_result(result, geometry)
     for channel in geometry.drive_channels:
         if channel.id not in sorted_results:
             continue
@@ -645,6 +655,8 @@ def solve_imported_beat_from_msh_text(
         if _native_result_callback is not None:
             _native_result_callback(channel.id, result)
         channel_metadata = {
+            **({"source_normalization": "native_rms_velocity",
+                "drive": {"velocity_rms_m_per_s": 1.0, "motion": channel.motion}} if geometry.design_assembly else {}),
             "solver_backend": "beat",
             "solver_mode": "full_3d",
             "geometry_type": "imported",
@@ -683,6 +695,7 @@ def solve_imported_beat_from_msh_text(
                 merged_tags=sorted(channel_tags[channel.id]),
                 result=result,
                 precision=precision,
+                velocity_rms=geometry.design_assembly,
             ),
         }
         channel_response = build_solver_response(
@@ -693,6 +706,8 @@ def solve_imported_beat_from_msh_text(
             metadata=channel_metadata,
             sound_speed_m_per_s=(343.0),
         )
+        if geometry.design_assembly:
+            channel_response["metadata"]["impedance_drive"] = "rms_velocity"
         if len(channel.source_ids) > 1:
             channel_response.pop("impedance", None)
             channel_response["metadata"]["impedance_omitted"] = (

@@ -452,6 +452,7 @@ def _mixed_basis_metadata(compiled, geometry: Any, record: Mapping, indices: Map
         channel.id: {
             "basis_contract": MIXED_BASIS_CONTRACT,
             "basis": "velocity_rms" if channel.exterior_transducer is None else "voltage_rms",
+            "source_normalization": "native_rms_velocity" if channel.exterior_transducer is None else "native_rms_voltage",
             "excitation_port_ids": [ports[i] for i in indices[channel.id]],
             "reference_voltage_rms_v": float(compiled.wire["solver_options"]["transducer_reference_voltage_v"]),
             "undriven_transducers": "shorted",

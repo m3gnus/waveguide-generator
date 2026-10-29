@@ -103,13 +103,10 @@ def export_pressure_basis(
     ]
     source_tags = [int(value) for value in stored.get("source_tags", [])]
     source_areas = [float(value) for value in stored.get("source_areas_m2", [])]
-    normalization = str(stored.get("source_normalization") or "")
+    normalization = str(stored.get("source_normalization") or public_metadata.get("source_normalization") or "")
     if not normalization:
-        normalization = (
-            "voltage_driven_driver_lem"
-            if public_metadata.get("impedance_drive") == "voltage"
-            else "unit_normal_acceleration"
-        )
+        normalization = {"rms_voltage": "native_rms_voltage", "voltage": "voltage_driven_driver_lem"}.get(
+            public_metadata.get("impedance_drive"), "unit_normal_acceleration")
 
     arrays: dict[str, np.ndarray] = {
         "format_version": np.asarray(PRESSURE_BASIS_VERSION, dtype=np.int32),

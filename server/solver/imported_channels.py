@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Mapping
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -132,7 +133,7 @@ def channel_basis_metadata(
             "source_normalization": (
                 "voltage_driven_driver_lem"
                 if channel.id in driver_payloads
-                else "unit_normal_acceleration"
+                else "native_rms_velocity" if geometry.design_assembly else "unit_normal_acceleration"
             ),
         }
         if channel.patch_weights is not None:
@@ -185,26 +186,27 @@ def apply_channel_driver(
         drive_voltage_v=drive_voltage_v,
         rg_ohm=rg_ohm,
     )
-    result.pressure_complex = (
-        np.asarray(result.pressure_complex, dtype=np.complex128)
-        * scale_raw[:, None, None]
-    )
-    sphere = getattr(result, "sphere_pressure_complex", None)
-    if sphere is not None:
-        result.sphere_pressure_complex = (
-            np.asarray(sphere, dtype=np.complex128) * scale_raw[:, None]
-        )
-    surface_pressure = getattr(result, "surface_pressure_complex", None)
-    if surface_pressure is not None:
-        result.surface_pressure_complex = (
-            np.asarray(surface_pressure, dtype=np.complex128) * scale_raw[:, None]
-        )
-    surface_neumann = getattr(result, "surface_neumann_complex", None)
-    if surface_neumann is not None:
-        result.surface_neumann_complex = (
-            np.asarray(surface_neumann, dtype=np.complex128) * scale_raw[:, None]
-        )
-    power_scale = np.square(np.abs(scale_raw))
+    scale_channel_result(result, scale_raw)
+    payload["source_id"] = source_id
+    payload["source_area_m2"] = area_m2
+    return payload
+
+
+def scale_channel_result(result: Any, scale: np.ndarray) -> None:
+    """Scale retained complex fields and physical power together, before packaging."""
+
+    for name in ("pressure_complex", "sphere_pressure_complex", "surface_pressure_complex", "surface_neumann_complex"):
+        value = getattr(result, name, None)
+        if value is not None:
+            array = np.asarray(value, dtype=np.complex128)
+            setattr(result, name, array * scale.reshape((-1,) + (1,) * (array.ndim - 1)))
+    for name in ("spl_db",):
+        value = getattr(result, name, None)
+        if value is not None:
+            array = np.asarray(value, dtype=float)
+            with np.errstate(divide="ignore"):
+                setattr(result, name, array + (20 * np.log10(np.abs(scale))).reshape((-1,) + (1,) * (array.ndim - 1)))
+    power_scale = np.square(np.abs(scale))
     for field in ("radiated_power_surface_w", "radiated_power_sphere_w"):
         radiated_power = getattr(result, field, None)
         if radiated_power is not None:
@@ -213,6 +215,36 @@ def apply_channel_driver(
                 field,
                 np.asarray(radiated_power, dtype=np.float64) * power_scale,
             )
-    payload["source_id"] = source_id
-    payload["source_area_m2"] = area_m2
-    return payload
+
+
+def normalize_assembly_prescribed_result(result: Any, geometry: ImportedGeometrySource) -> None:
+    """Assembly prescribed channels use 1 m/s RMS on every backend and driver route.
+
+    The legacy imported solvers return pressure per unit acceleration under
+    exp(-jwt). Undo that velocity factor once; ordinary CAD/file bases keep
+    their established acceleration normalization.
+    """
+
+    if not geometry.design_assembly:
+        return
+    scale = -2j * np.pi * np.asarray(result.frequencies_hz, dtype=float)
+    scale_channel_result(result, scale)
+    impedance = getattr(result, "impedance", None)
+    if impedance is not None:
+        result.impedance = np.asarray(impedance) * scale
+
+
+def assembly_prescribed_entry(entry: Mapping[str, Any], frequency_hz: float,
+                              geometry: ImportedGeometrySource) -> dict[str, Any]:
+    """Apply the same basis conversion to a provisional single-frequency row."""
+
+    if not geometry.design_assembly:
+        return dict(entry)
+    fields = {"observation_pressure_complex": "pressure_complex",
+              "observation_sphere_pressure_complex": "sphere_pressure_complex",
+              "observation_spl_db": "spl_db", "observation_directivity_db": "directivity_db", "impedance": "impedance"}
+    native = SimpleNamespace(frequencies_hz=[frequency_hz], **{
+        target: np.asarray(entry[source])[None, ...]
+        for source, target in fields.items() if entry.get(source) is not None})
+    normalize_assembly_prescribed_result(native, geometry)
+    return {**entry, **{source: getattr(native, target)[0] for source, target in fields.items() if hasattr(native, target)}}

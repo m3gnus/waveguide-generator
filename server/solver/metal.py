@@ -85,6 +85,8 @@ from .imported import (
     verify_record_mesh_text,
 )
 from .imported_channels import (
+    assembly_prescribed_entry,
+    normalize_assembly_prescribed_result,
     apply_channel_driver,
     channel_basis_metadata,
     channel_source_identity,
@@ -1663,6 +1665,7 @@ def solve_imported_metal_from_msh_text(
         ):
             if not isinstance(source_entry, dict):
                 raise ValueError("streamed imported Metal source result is invalid")
+            source_entry = assembly_prescribed_entry(source_entry, frequency_hz, geometry)
             channel_context = SolverContext.from_imported_request(
                 request, quadrants=quadrants, source_motion=channel.motion
             )
@@ -1842,6 +1845,7 @@ def solve_imported_metal_from_msh_text(
 
         driver_payloads: dict[str, dict[str, Any]] = {}
         for channel, result in zip(geometry.drive_channels, results, strict=True):
+            normalize_assembly_prescribed_result(result, geometry)
             cardioid_owns_driver = (
                 coupled_mf_channel is not None and channel.id == coupled_mf_channel.id
             )
@@ -1861,6 +1865,8 @@ def solve_imported_metal_from_msh_text(
                 request, quadrants=quadrants, source_motion=channel.motion
             )
             channel_metadata = {
+                **({"source_normalization": "native_rms_velocity",
+                    "drive": {"velocity_rms_m_per_s": 1.0, "motion": channel.motion}} if geometry.design_assembly else {}),
                 "solver_backend": "metal",
                 "solver_mode": "full_3d",
                 "geometry_type": "imported",
@@ -1901,6 +1907,8 @@ def solve_imported_metal_from_msh_text(
                     "hornlab_metal_bem"
                 ),
             )
+            if geometry.design_assembly:
+                channel_response["metadata"]["impedance_drive"] = "rms_velocity"
             if len(channel.source_ids) > 1:
                 channel_response.pop("impedance", None)
                 channel_response["metadata"]["impedance_omitted"] = (

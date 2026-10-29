@@ -81,6 +81,17 @@ def test_pressure_basis_export_requires_a_channel_when_artifact_has_many() -> No
         export_pressure_basis(artifact, {"channels": {}}, "missing")
 
 
+@pytest.mark.parametrize("metadata,expected", [
+    ({"source_normalization": "native_rms_velocity"}, "native_rms_velocity"),
+    ({"impedance_drive": "rms_voltage"}, "native_rms_voltage"),
+])
+def test_existing_mixed_archives_use_the_public_normalization_contract(metadata, expected):
+    artifact = serialize_channel_bases({"drive": _native_basis()}, metadata_by_id={"drive": {"source_motion": "normal"}})
+    exported = export_pressure_basis(artifact, {"channels": {"drive": {"metadata": metadata}}})
+    with np.load(io.BytesIO(exported.content), allow_pickle=False) as archive:
+        assert archive["source_normalization"].item() == expected
+
+
 def test_pressure_basis_export_discloses_reconstructed_rows_only_when_flagged():
     native = _native_basis()
     native.frequency_status = ["interpolated"]
