@@ -41,6 +41,7 @@ import { SolveOptionsStoreProvider, useScopedSolveOptions } from '../stores/solv
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { AdaptiveFrequencyControls, FrequencySweepControls, MeshValidationControl, DirectivityMapControls, SolveOptionsControls, solveOptionsSummary, polarSummary, ToggleRow } from './SolveOptionsSections';
 import { ExperimentalBadge } from './ExperimentalBadge';
+import { rememberUnseparatedVertical } from './customProfileEdit';
 import { CustomProfileLengthField, CustomProfilePaste, CustomProfileTable, EditableLookupTable, EditableStationTable, FREEFORM_POSITION_NOTE, freeformAngleDisabledReason, freeformAngleOverride } from './FreeformEditors';
 import { lambdaSixthHint } from './lambdaLimit';
 import { NumberField } from './NumberField';
@@ -1392,7 +1393,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
     </div>}
     {freeformChoice && <div className="family-switch-choice" role="group" aria-label="Start a Custom profile">
       <b>Start a Custom profile</b><span>It starts blank, with one anchor table shaping both planes. Converting the current design is not available yet: an equivalence check of the generated wall, mouth and source cap is still to come.</span>
-      <div><button onClick={() => { setFamily('FREEFORM'); setConversionNotice(sectionResetNotice('FREEFORM')); setFreeformChoice(false); }}>Start blank</button><button onClick={() => setFreeformChoice(false)}>Cancel</button></div>
+      <div><button onClick={() => { setFamily('FREEFORM'); rememberUnseparatedVertical(useDesignStore.getState().design); setConversionNotice(sectionResetNotice('FREEFORM')); setFreeformChoice(false); }}>Start blank</button><button onClick={() => setFreeformChoice(false)}>Cancel</button></div>
     </div>}
   </Section>;
 

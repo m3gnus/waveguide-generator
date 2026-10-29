@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore, type CrossSectionStation, type FreeformPoint } from '../stores/design';
 import type { ParameterDefinition } from './parameterRegistry';
 import { stubProfileServer } from '../testing/customProfileServer';
+import { rememberUnseparatedVertical } from './customProfileEdit';
 import { CustomProfileLengthField, CustomProfilePaste, CustomProfileTable, EditableLookupTable, EditableStationTable, FREEFORM_IMPORT_HINT } from './FreeformEditors';
 
 const stationField: ParameterDefinition = {
@@ -327,10 +328,12 @@ describe('Custom profile table, insertion, paste and Length', () => {
     design.profile_h!.points = [{ t: 0, r: 12.7 }, { t: .5, r: 60, join: 'corner', angle_deg: 25, handle_out: [6, 3] }, { t: 1, r: 140 }];
     load(design);
     act(() => root.render(<CustomProfileTable field={hField} plane="H" />));
-    await vi.waitFor(async () => { await settle(); expect(host.querySelector('[data-anchor-index="1"] .anchor-state')?.textContent).toContain('pinned out'); });
-    expect([...host.querySelectorAll('th')].map((th) => th.textContent)).toEqual(['z (mm)', 'r (mm)', 'Join', 'In (°)', 'Out (°)', 'State', '']);
-    expect(host.querySelectorAll('tbody tr')).toHaveLength(3);
+    await vi.waitFor(async () => { await settle(); expect(host.querySelector('[data-anchor-index="1"] + .anchor-state-row')?.textContent).toContain('pinned out'); });
+    expect([...host.querySelectorAll('th')].map((th) => th.textContent)).toEqual(['z (mm)', 'r (mm)', 'Join', 'In (°)', 'Out (°)', '']);
+    expect(host.querySelectorAll('tbody tr[data-anchor-index]')).toHaveLength(3);
     expect(inputWithLabel(host, 'H throat z').disabled).toBe(true);
+    // Fixed endpoint positions are not validation errors (they would mark the whole panel invalid).
+    expect(host.querySelector('[aria-invalid="true"]')).toBeNull();
     expect(inputWithLabel(host, 'H mouth z').disabled).toBe(true);
     expect(inputWithLabel(host, 'H throat angle in').disabled).toBe(true);
     expect(inputWithLabel(host, 'H mouth angle out').disabled).toBe(true);
@@ -338,7 +341,7 @@ describe('Custom profile table, insertion, paste and Length', () => {
     expect(inputWithLabel(host, 'H point 1 angle in').value).toBe('25.00');
     expect(inputWithLabel(host, 'H point 1 angle out').placeholder).toBe('= in');
     expect(host.querySelector<HTMLSelectElement>('select[aria-label="H point 1 join"]')!.value).toBe('corner');
-    expect(host.querySelector('[data-anchor-index="0"] .anchor-state')?.textContent).toContain('profile throat angle');
+    expect(host.querySelector('[data-anchor-index="0"] + .anchor-state-row')?.textContent).toContain('profile throat angle');
     expect(host.querySelector('button[aria-label="Delete H throat"]')).toBeNull();
     expect(host.textContent).toContain('Separate vertical profile');
     expect(host.querySelector('.custom-profile-scroll table')).not.toBeNull();
@@ -465,31 +468,38 @@ describe('Custom profile table, insertion, paste and Length', () => {
   it('separates V from a new shared design without changing it, keeps V when shared again, and reconciles the throat explicitly', async () => {
     stubProfileServer();
     useDesignStore.getState().setFamily('FREEFORM');
+    rememberUnseparatedVertical(useDesignStore.getState().design);
     useDesignStore.temporal.getState().clear();
     expect(useDesignStore.getState().design.shared_profile).toBe(true);
     act(() => root.render(<><CustomProfileTable field={hField} plane="H" /><CustomProfileTable field={vField} plane="V" /></>));
     expect(host.textContent).toContain('Profile anchors (both planes)');
-    // Change the H throat while shared: the inactive V keeps its stored throat.
     const toggle = () => host.querySelector<HTMLInputElement>('.profile-separate-vertical input[type="checkbox"]')!;
+    // Edit H while shared: the hidden V seed is untouched.
     commitDraft('H throat radius', '15');
     await accept();
     expect(useDesignStore.getState().design.profile_v!.points[0].r).toBe(12.7);
+    // First separation of a new design starts V from H, so the geometry does not change.
     act(() => toggle().click());
-    expect(host.textContent).toContain('Use H throat for V first');
-    act(() => button('Use H throat for V').click());
-    await accept();
-    expect(useDesignStore.getState().design.profile_v!.points[0].r).toBe(15);
-    expect(useDesignStore.getState().design.shared_profile).toBe(true);
-    act(() => toggle().click());
+    await vi.waitFor(async () => { await settle(); expect(host.textContent).toContain('starts as a copy of the horizontal profile'); });
     await accept();
     expect(useDesignStore.getState().design.shared_profile).toBe(false);
     expect(useDesignStore.getState().design.profile_v).toEqual(useDesignStore.getState().design.profile_h);
+    // Shared again: V is kept, inactive; a later H throat edit does not touch it.
     act(() => toggle().click());
     await accept();
     expect(useDesignStore.getState().design.shared_profile).toBe(true);
+    commitDraft('H throat radius', '18');
+    await accept();
     expect(useDesignStore.getState().design.profile_v!.points[0].r).toBe(15);
+    act(() => toggle().click());
+    expect(host.textContent).toContain('Use H throat for V first');
+    expect(button('Restore stored vertical profile').disabled).toBe(true);
+    act(() => button('Use H throat for V').click());
+    await accept();
+    expect(useDesignStore.getState().design.profile_v!.points[0].r).toBe(18);
+    expect(useDesignStore.getState().design.shared_profile).toBe(true);
     // Each logical operation was one Undo step.
-    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(4);
+    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(5);
   });
 
   it('asks whether to restore a different stored V or start it from H, never overwriting it silently', async () => {

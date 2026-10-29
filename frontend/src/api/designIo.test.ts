@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { chooseDesignFile, convertDesignToFreeform, exportGeometryToOutputFolder, freeformFromProfileCsv, hydrateDesignDocument, openDesignText, sendDesignToCad, serializeDesignDocument } from './designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
+import { setAnchorAngle } from '../design/customProfileEdit';
 import { expectNoJargon } from '../testing/expectNoJargon';
 
 async function untouchedRoundTrip(original: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -131,6 +132,47 @@ describe('design hydration', () => {
     expect((wire.mesh as Record<string, unknown>).wall_thickness).toBeNull();
     expect(wire).not.toHaveProperty('shared_profile');
     expect(wire).not.toHaveProperty('profile_h');
+  });
+
+  it('opens, saves untouched, and reopens a Custom profile with shared mode, joins, angles and handles', async () => {
+    const h = {
+      points: [
+        { t: 0, r: 12.7, join: 'corner', handle_out: [5.25, 1.5] },
+        { t: 1 / 3, r: 33.316727208506954, join: 'corner', angle_deg: 20, angle_out_deg: 35 },
+        { t: 0.6666666666666666, r: 75.57363549552346, handle_in: [-4.123456789012345, -2.5], handle_out: [8.24691357802469, 5] },
+        { t: 1, r: 140, angle_deg: 60 },
+      ],
+      throat_angle_deg: 15.5, mouth_angle_deg: 60,
+    };
+    // The inactive V is retained exactly, including a throat that differs from H.
+    const v = { points: [{ t: 0, r: 14 }, { t: .5, r: 50 }, { t: 1, r: 100 }], throat_angle_deg: 12, mouth_angle_deg: 45 };
+    for (const shared of [true, false]) {
+      const original = {
+        formula: 'FREEFORM', length: 120, shared_profile: shared,
+        profile_h: h, profile_v: shared ? v : { ...v, points: [{ t: 0, r: 12.7 }, ...v.points.slice(1)] },
+        cross_sections: [{ t: 0, shape: 'circle' }, { t: 1, shape: 'ellipse' }],
+      };
+      const wire = await untouchedRoundTrip(original);
+      expect(wire.shared_profile).toBe(shared);
+      expect(wire.profile_h).toEqual(h);
+      expect(wire.profile_v).toEqual(original.profile_v);
+    }
+  });
+
+  it('keeps every legacy FREEFORM absence when its table is edited, and never infers shared mode', async () => {
+    const profile = { points: [{ t: 0, r: 12.7 }, { t: .5, r: 60 }, { t: 1, r: 140 }], throat_angle_deg: 15.5, mouth_angle_deg: 60 };
+    const legacy = hydrateDesignDocument({
+      formula: 'FREEFORM', length: { value: 120, raw: '60 * 2' }, profile_h: profile, profile_v: structuredClone(profile),
+      cross_sections: [{ t: 0, shape: 'circle' }, { t: 1, shape: 'ellipse' }], mesh: { wall_thickness: null }, scale: null,
+    });
+    const edited = setAnchorAngle(legacy, 'H', 1, 'in', 25).after;
+    const wire = serializeDesign(edited);
+    expect(wire).not.toHaveProperty('shared_profile');
+    expect(wire.length).toEqual({ value: 120, raw: '60 * 2' });
+    expect(wire.scale).toBeNull();
+    expect((wire.mesh as Record<string, unknown>).wall_thickness).toBeNull();
+    expect((wire.profile_h as typeof profile).points[1]).toEqual({ t: .5, r: 60, angle_deg: 25 });
+    expect(wire.profile_v).toEqual(profile);
   });
 
   it('keeps legacy sidecars inert while preserving executable wire expressions', () => {

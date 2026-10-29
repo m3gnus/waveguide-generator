@@ -328,16 +328,26 @@ function scaledAngle(angle: number, factor: number): number {
 /**
  * Stretch: an exact affine axial transform. Stored t stays, radii stay, handle
  * dz scales by new/old, and every explicit angle becomes its stretched direction.
+ *
+ * The automatic tangent solver is not affine-invariant, so an automatic
+ * handle of an active plane is pinned to its resolved handle from the
+ * current curve query (`curves`, for this exact design), scaled the same way.
+ * An inactive V has no resolved curve of its own; its authored values are
+ * transformed and its automatic spans refit when it is separated again.
  */
-export function stretchLength(design: DesignDocument, newLength: number): ProfileEditResult {
+export function stretchLength(design: DesignDocument, newLength: number, curves: CurvesResponse): ProfileEditResult {
   const oldLength = lengthOf(design);
   checkLength(newLength, oldLength);
   const factor = newLength / oldLength;
   const after = structuredClone(design);
   after.length = newLength;
   const rewritten: string[] = [];
+  const pinned: string[] = [];
+  const active = activePlanes(design);
   for (const plane of ['H', 'V'] as const) {
     const profile = after[PROFILE_KEY[plane]]!;
+    const anchors = active.includes(plane) ? curves[plane].anchors : undefined;
+    if (anchors && anchors.length !== profile.points.length) throw new ProfileEditRefusal('The resolved curve is out of date. Wait for the curve check and try again.');
     for (const field of ['throat_angle_deg', 'mouth_angle_deg'] as const) {
       const angle = profile[field];
       if (!present(angle)) continue;
@@ -353,33 +363,75 @@ export function stretchLength(design: DesignDocument, newLength: number): Profil
         point[field] = scaledAngle(angle, factor);
         rewritten.push(pointPath(plane, index, field));
       }
-      if (present(point.handle_in)) point.handle_in = [point.handle_in[0] * factor, point.handle_in[1]];
-      if (present(point.handle_out)) point.handle_out = [point.handle_out[0] * factor, point.handle_out[1]];
+      for (const [key, resolvedKey] of [['handle_in', 'handleIn'], ['handle_out', 'handleOut']] as const) {
+        const handle = point[key] ?? anchors?.[index][resolvedKey] ?? undefined;
+        if (!present(handle)) continue;
+        if (!present(point[key])) pinned.push(`${pointLabel(plane, index, profile.points.length)} (${key === 'handle_in' ? 'in' : 'out'})`);
+        point[key] = [handle[0] * factor, handle[1]];
+      }
     });
   }
   clearMetadata(after, ['length', ...rewritten]);
   return { after, notes: [
     `Stretch profile: every anchor, handle and station keeps its fraction of Length (${formatMm(oldLength)} → ${formatMm(newLength)} mm); radii are unchanged.`,
     rewritten.length ? `${rewritten.length} explicit angle${rewritten.length === 1 ? ' is' : 's are'} rewritten to the stretched direction.` : 'No explicit angle needed rewriting.',
-    ...(isSharedProfile(design) ? ['The inactive vertical profile is stretched too, so it stays consistent if it is separated again.'] : []),
+    pinned.length ? `To keep the stretch exact, these automatic handles are pinned to the stretched resolved curve and no longer refit automatically: ${pinned.join(', ')}.` : 'Every handle was already pinned.',
+    ...(isSharedProfile(design) ? ['The inactive vertical profile is stretched by its authored values; its automatic spans refit if it is separated again.'] : []),
   ] };
+}
+
+/** A paste that adopts its own length stretches the rest, so it needs the resolved curve too. */
+export function pasteBuilder(pasted: PastedProfile, choice: PasteChoice, fetcher: typeof fetch = fetch): EditBuilder {
+  return async (design, { origin, signal }) => {
+    const adopting = choice.adoptLength && pasted.importedLength !== lengthOf(design);
+    const curves = adopting ? await queryFreeformCurves(design, profileRequestKey(origin, design), signal, fetcher) : undefined;
+    return applyPastedProfile(design, pasted, choice, curves);
+  };
+}
+
+/** Stretch needs the resolved curve of the exact design it transforms. */
+export function stretchLengthBuilder(newLength: number, fetcher: typeof fetch = fetch): EditBuilder {
+  return async (design, { origin, signal }) => {
+    const curves = await queryFreeformCurves(design, profileRequestKey(origin, design), signal, fetcher);
+    return stretchLength(design, newLength, curves);
+  };
 }
 
 /**
  * Move mouth: interior anchors, stations and handles keep their absolute mm;
  * only the mouth moves. Refused when an interior position would reach the new mouth.
+ *
+ * Automatic spans are fitted globally, so the earlier spans of an active plane
+ * are pinned to their resolved handles (`curves`, for this exact design) and
+ * only the last span, into the moved mouth, is refitted.
  */
-export function moveMouth(design: DesignDocument, newLength: number): ProfileEditResult {
+export function moveMouth(design: DesignDocument, newLength: number, curves: CurvesResponse): ProfileEditResult {
   const oldLength = lengthOf(design);
   checkLength(newLength, oldLength);
   const ratio = oldLength / newLength;
   const after = structuredClone(design);
   after.length = newLength;
   const rewritten: string[] = [];
+  const pinned: string[] = [];
+  const active = activePlanes(design);
   for (const plane of ['H', 'V'] as const) {
     const profile = after[PROFILE_KEY[plane]]!;
+    const anchors = active.includes(plane) ? curves[plane].anchors : undefined;
+    if (anchors && anchors.length !== profile.points.length) throw new ProfileEditRefusal('The resolved curve is out of date. Wait for the curve check and try again.');
+    const last = profile.points.length - 1;
     profile.points.forEach((point, index) => {
-      if (index === 0 || index === profile.points.length - 1) return;
+      if (anchors) {
+        // Every span before the last keeps its resolved shape.
+        const sides = [index > 0 && index < last ? 'in' : null, index < last - 1 ? 'out' : null].filter(Boolean) as ('in' | 'out')[];
+        for (const side of sides) {
+          const key = side === 'in' ? 'handle_in' : 'handle_out';
+          const resolved = anchors[index][side === 'in' ? 'handleIn' : 'handleOut'];
+          if (present(point[key]) || !present(resolved)) continue;
+          point[key] = [resolved[0], resolved[1]];
+          pinned.push(`${pointLabel(plane, index, profile.points.length)} (${side})`);
+        }
+      }
+      if (index === 0 || index === last) return;
       const z = point.t * oldLength;
       if (z >= newLength) throw new ProfileEditRefusal(`${pointLabel(plane, index, profile.points.length)} is at z = ${formatMm(z)} mm, at or beyond the new mouth (${formatMm(newLength)} mm). Delete or move it first, or use Stretch profile.`);
       requireLiteral(design, pointPath(plane, index, 't'), `${pointLabel(plane, index, profile.points.length)} position`);
@@ -399,8 +451,17 @@ export function moveMouth(design: DesignDocument, newLength: number): ProfileEdi
   clearMetadata(after, ['length', ...rewritten]);
   return { after, notes: [
     `Move mouth: interior anchors, handles and stations keep their positions in mm; only the mouth moves (${formatMm(oldLength)} → ${formatMm(newLength)} mm).`,
-    ...(isSharedProfile(design) ? ['The inactive vertical profile keeps its positions too.'] : []),
+    pinned.length ? `So that only the last span changes, these automatic handles are pinned to the current curve and no longer refit automatically: ${pinned.join(', ')}.` : 'The spans before the mouth were already pinned or are straight.',
+    ...(isSharedProfile(design) ? ['The inactive vertical profile keeps its positions too; its automatic spans refit if it is separated again.'] : []),
   ] };
+}
+
+/** Move mouth needs the resolved curve of the exact design it transforms. */
+export function moveMouthBuilder(newLength: number, fetcher: typeof fetch = fetch): EditBuilder {
+  return async (design, { origin, signal }) => {
+    const curves = await queryFreeformCurves(design, profileRequestKey(origin, design), signal, fetcher);
+    return moveMouth(design, newLength, curves);
+  };
 }
 
 function checkLength(newLength: number, oldLength: number): void {
@@ -431,7 +492,8 @@ export function setSeparateVertical(design: DesignDocument, separate: boolean, s
     after.shared_profile = true;
     return { after, notes: ['The vertical profile is kept but inactive; the horizontal profile now shapes both planes.'] };
   }
-  const blocker = separateVerticalBlocker(design);
+  // Seeding replaces V with H, so only a restore needs the throats to agree.
+  const blocker = seed ? undefined : separateVerticalBlocker(design);
   if (blocker) throw new ProfileEditRefusal(blocker);
   after.shared_profile = false;
   if (seed) {
@@ -457,6 +519,23 @@ function remapVerticalFromHorizontal(design: DesignDocument): void {
     design._absent = [...design._absent.filter((key) => !key.startsWith(prefix)), ...design._absent.flatMap((key) => copy(key) ?? [])];
     if (!design._absent.length) delete design._absent;
   }
+}
+
+/**
+ * A new shared design's V is only a hidden seed until it is first separated.
+ * The file format has no marker for that, so this remembers, for the open
+ * document only, the V a new Custom profile started with. A reopened file's
+ * V has unknown provenance and is treated as authored (the user chooses).
+ */
+const unseparatedVertical = new Map<number, string>();
+
+export function rememberUnseparatedVertical(design: DesignDocument): void {
+  if (isSharedProfile(design)) unseparatedVertical.set(currentDocumentLoad(), JSON.stringify(design.profile_v));
+}
+
+/** True while the stored V is still the untouched seed of a design created in this session. */
+export function isUnseparatedVertical(design: DesignDocument): boolean {
+  return isSharedProfile(design) && unseparatedVertical.get(currentDocumentLoad()) === JSON.stringify(design.profile_v);
 }
 
 /** Explicit, undoable reconciliation of a retained V throat with H. */
@@ -493,7 +572,7 @@ export interface PastedProfile {
 }
 
 /** Replace one or both tables with pasted rows as one atomic edit. */
-export function applyPastedProfile(design: DesignDocument, pasted: PastedProfile, choice: PasteChoice): ProfileEditResult {
+export function applyPastedProfile(design: DesignDocument, pasted: PastedProfile, choice: PasteChoice, curves?: CurvesResponse): ProfileEditResult {
   const shared = isSharedProfile(design);
   const target = shared ? 'H' : pasted.pointsByPlane ? 'both' : choice.target;
   const length = choice.adoptLength ? pasted.importedLength : lengthOf(design);
@@ -501,7 +580,8 @@ export function applyPastedProfile(design: DesignDocument, pasted: PastedProfile
   // Adopting the pasted length is a Length change for everything the paste
   // does not replace (the other plane, stations): it is the explicit Stretch.
   const adopting = choice.adoptLength && length !== lengthOf(design);
-  const stretched = adopting ? stretchLength(design, length) : undefined;
+  if (adopting && !curves) throw new ProfileEditRefusal('Adopting the pasted length stretches the rest of the profile, which needs the resolved curve. Wait for the curve check and try again.');
+  const stretched = adopting ? stretchLength(design, length, curves!) : undefined;
   const base = stretched?.after ?? design;
   const after = structuredClone(base);
   const notes: string[] = [];

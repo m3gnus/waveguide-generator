@@ -1,12 +1,12 @@
-import { useEffect, useId, useMemo, useState } from 'react';
+import { Fragment, useEffect, useId, useMemo, useState } from 'react';
 import { useDesignStore, type CrossSectionStation, type DesignDocument, type FreeformPoint } from '../stores/design';
 import type { CurveAnchor, CurveDeviation, InsertMode } from '../api/freeformProfile';
 import type { GeneratedPlaneChange } from '../api/profileSamples';
 import { Notice } from '../shell/Notice';
 import {
-  activePlanes, angleField, applyPastedProfile, deleteAnchor, formatAngle, formatMm, horizontalThroatForVertical, insertAnchorBuilder,
-  isSharedProfile, MAX_FREEFORM_ANCHORS, moveMouth, previewAcceptable, separateVerticalBlocker, setAnchorAngle, setAnchorJoin,
-  setAnchorValue, setSeparateVertical, stretchLength, useCurrentProfileCurves, useProfileEdit, type Plane,
+  activePlanes, angleField, deleteAnchor, formatAngle, formatMm, horizontalThroatForVertical, insertAnchorBuilder,
+  isSharedProfile, isUnseparatedVertical, MAX_FREEFORM_ANCHORS, moveMouthBuilder, previewAcceptable, separateVerticalBlocker, setAnchorAngle, setAnchorJoin,
+  pasteBuilder, setAnchorValue, setSeparateVertical, stretchLengthBuilder, useCurrentProfileCurves, useProfileEdit, type Plane,
 } from './customProfileEdit';
 import { ToggleRow } from './SolveOptionsSections';
 import type { ParameterDefinition } from './parameterRegistry';
@@ -230,9 +230,12 @@ function generatedLine(plane: string, change: GeneratedPlaneChange): string {
   if (change.domain === 'unavailable') return `${plane}: unavailable — ${change.reason}`;
   if (change.domain === 'no_overlap') return `${plane}: no common z range in the generated profiles; nothing to compare.`;
   const where = change.domain === 'overlap_only'
-    ? ` over the overlap only (before ${change.extents.before.map(formatMm).join('–')} mm, after ${change.extents.after.map(formatMm).join('–')} mm)`
+    ? ` Over the overlap only (before ${change.extents.before.map(formatMm).join('–')} mm, after ${change.extents.after.map(formatMm).join('–')} mm).`
     : '';
-  return `${plane}: largest radius change ${formatDeviation(change.maxChangeMm)} mm at z = ${formatDeviation(change.atZMm)} mm${where}, from ${change.sampleCount} exported z samples (linear between samples).`;
+  const shared = change.maxChangeMm === null
+    ? 'no exported z row is shared by both profiles'
+    : `largest radius change ${formatDeviation(change.maxChangeMm)} mm at z = ${formatDeviation(change.atZMm)} mm over the ${change.sampleCount} z rows both exports share`;
+  return `${plane}: ${shared}; between rows ${formatDeviation(change.interpolatedMaxChangeMm)} mm at z = ${formatDeviation(change.interpolatedAtZMm)} mm (linear between ${change.interpolatedSampleCount} exported rows, so it includes rows added or removed by the edit).${where}`;
 }
 
 /** The before/after feedback of one proposed edit, with Accept and Cancel. */
@@ -279,34 +282,38 @@ export function ProfileEditPreviewPanel({ edit }: { edit: ProfileEdit }) {
   </Notice>;
 }
 
-/** Separate vertical profile: on reveals V (restored or started from H); off keeps V inactive. */
+/**
+ * Separate vertical profile: on reveals V; off keeps V stored and inactive.
+ * The first separation of a new design starts V from H (no geometry change);
+ * a different stored V is restored only by explicit choice.
+ */
 function SeparateVerticalControl({ edit }: { edit: ProfileEdit }) {
   const design = useDesignStore((state) => state.design);
   const [choosing, setChoosing] = useState(false);
   const shared = isSharedProfile(design);
   const blocker = separateVerticalBlocker(design);
-  const equal = JSON.stringify(design.profile_h) === JSON.stringify(design.profile_v);
   const id = useId();
+  const seed = () => { setChoosing(false); edit.propose('Separate the vertical profile, starting from the horizontal profile', (current) => setSeparateVertical(current, true, true)); };
   return <div className="profile-separate-vertical">
     <ToggleRow id={`${id}-separate`} label="Separate vertical profile" checked={!shared}
-      help="Off: the horizontal table shapes both planes and the vertical profile is kept, inactive. On: the vertical plane uses its own table."
+      help="Off: the horizontal table shapes both planes and the vertical profile is kept, inactive. On: the vertical plane uses its own table, started from the horizontal profile the first time."
       onChange={(checked) => {
         setChoosing(false);
         if (!checked) edit.propose('Use one profile for both planes', (current) => setSeparateVertical(current, false));
-        else if (blocker) setChoosing(true);
-        else if (equal) edit.propose('Separate the vertical profile', (current) => setSeparateVertical(current, true));
+        else if (isUnseparatedVertical(design)) seed();
+        else if (!blocker && JSON.stringify(design.profile_h) === JSON.stringify(design.profile_v)) edit.propose('Separate the vertical profile', (current) => setSeparateVertical(current, true));
         else setChoosing(true);
       }} />
-    {shared && choosing && blocker && <div className="field-warning" role="status">{blocker}{' '}
-      <button type="button" className="btn" onClick={() => { setChoosing(false); edit.propose('Use H throat for V', horizontalThroatForVertical); }}>Use H throat for V</button>
-    </div>}
-    {shared && choosing && !blocker && <div className="family-switch-choice" role="group" aria-label="Separate the vertical profile">
-      <span>A different vertical profile is stored.</span>
+    {shared && choosing && <div className="family-switch-choice" role="group" aria-label="Separate the vertical profile">
+      <span>A different vertical profile is stored with this design.</span>
       <div>
-        <button type="button" onClick={() => { setChoosing(false); edit.propose('Restore the stored vertical profile', (current) => setSeparateVertical(current, true)); }}>Restore stored vertical profile</button>
-        <button type="button" onClick={() => { setChoosing(false); edit.propose('Start the vertical profile from the horizontal profile', (current) => setSeparateVertical(current, true, true)); }}>Start from horizontal</button>
+        <button type="button" disabled={Boolean(blocker)} title={blocker} onClick={() => { setChoosing(false); edit.propose('Restore the stored vertical profile', (current) => setSeparateVertical(current, true)); }}>Restore stored vertical profile</button>
+        <button type="button" onClick={seed}>Start from horizontal</button>
         <button type="button" onClick={() => setChoosing(false)}>Cancel</button>
       </div>
+      {blocker && <p className="field-warning" role="status">{blocker}{' '}
+        <button type="button" className="btn" onClick={() => { setChoosing(false); edit.propose('Use H throat for V', horizontalThroatForVertical); }}>Use H throat for V</button>
+      </p>}
     </div>}
   </div>;
 }
@@ -352,7 +359,7 @@ export function CustomProfileTable({ plane }: { field: ParameterDefinition; plan
     <div className="readonly-table-head"><HelpTipHeading title={title} text={CUSTOM_PROFILE_TABLE_HELP}>{title}</HelpTipHeading><span>{points.length} / {MAX_FREEFORM_ANCHORS} anchors</span></div>
     {plane === 'H' && <SeparateVerticalControl edit={edit} />}
     <div className="custom-profile-scroll">
-      <table><thead><tr><th>z (mm)</th><th>r (mm)</th><th>Join</th><th>In (°)</th><th>Out (°)</th><th>State</th><th /></tr></thead>
+      <table><thead><tr><th>z (mm)</th><th>r (mm)</th><th>Join</th><th>In (°)</th><th>Out (°)</th><th /></tr></thead>
         <tbody>{points.map((point, index) => {
           const endpoint = index === 0 || index === points.length - 1;
           const inField = angleField(point, index, points.length, 'in');
@@ -365,19 +372,19 @@ export function CustomProfileTable({ plane }: { field: ParameterDefinition; plan
             const reason = key === null ? (index === 0 ? 'The throat has no incoming side.' : 'The mouth has no outgoing side.')
               : side === 'out' && outShared ? 'A smooth anchor has one tangent: edit In (°).' : undefined;
             const stored = key ? point[key] : undefined;
-            return <NumberField label={`${plane} ${label(index)} angle ${side}`} value={reason ? undefined : stored} min={endpoint ? -90 : -89.9999} max={endpoint ? 90 : 89.9999} step={.1} precision={6} displayPrecision={2} unit="°" optional
+            return <NumberField label={`${plane} ${label(index)} angle ${side}`} value={reason ? undefined : stored} min={endpoint ? -90 : -89.9999} max={endpoint ? 90 : 89.9999} step={.1} precision={6} displayPrecision={2} optional
               placeholder={reason ? '—' : side === 'out' && key === 'angle_out_deg' && point.angle_deg != null ? '= in' : resolved != null ? `auto ${resolved.toFixed(1)}` : 'auto'}
               disabled={Boolean(reason)} disabledReason={reason}
               validate={(value) => check(() => setAnchorAngle(design, plane, index, side, value))}
               onClear={() => edit.propose(`Clear ${plane} ${label(index)} angle`, (current) => setAnchorAngle(current, plane, index, side, undefined))}
               onCommit={(value) => edit.propose(`Set ${plane} ${label(index)} ${side === 'in' ? 'incoming' : 'outgoing'} angle`, (current) => setAnchorAngle(current, plane, index, side, value))} />;
           };
-          return <tr key={index} data-anchor-index={index}>
-            <td><NumberField label={`${plane} ${label(index)} z`} value={positionMm(point.t, length)} step={.1} precision={12} displayPrecision={4} unit="mm"
+          return <Fragment key={index}><tr data-anchor-index={index}>
+            <td><NumberField label={`${plane} ${label(index)} z`} value={positionMm(point.t, length)} step={.1} precision={12} displayPrecision={4}
               disabled={endpoint} disabledReason={index === 0 ? 'The throat is at z = 0.' : endpoint ? 'The mouth is at Length; change Length to move it.' : undefined}
-              validate={(value) => check(() => setAnchorValue(design, plane, index, 'z', value))}
+              validate={endpoint ? undefined : (value) => check(() => setAnchorValue(design, plane, index, 'z', value))}
               onCommit={(value) => edit.propose(`Move ${plane} ${label(index)}`, (current) => setAnchorValue(current, plane, index, 'z', value))} /></td>
-            <td><NumberField label={`${plane} ${label(index)} radius`} value={point.r} step={.1} precision={12} displayPrecision={4} unit="mm"
+            <td><NumberField label={`${plane} ${label(index)} radius`} value={point.r} step={.1} precision={12} displayPrecision={4}
               validate={(value) => check(() => setAnchorValue(design, plane, index, 'r', value))}
               onCommit={(value) => edit.propose(`Set ${plane} ${label(index)} radius`, (current) => setAnchorValue(current, plane, index, 'r', value))} /></td>
             <td><select aria-label={`${plane} ${label(index)} join`} value={point.join ?? 'smooth'}
@@ -386,10 +393,10 @@ export function CustomProfileTable({ plane }: { field: ParameterDefinition; plan
             </select></td>
             <td>{angleCell('in', inField)}</td>
             <td>{angleCell('out', outField)}</td>
-            <td className="anchor-state">{anchorState(point, index, points.length, anchor, aligned?.spans[index])}</td>
             <td>{!endpoint && <button type="button" aria-label={`Delete ${plane} ${label(index)}`}
               onClick={() => edit.propose(`Delete ${plane} ${label(index)}`, (current) => deleteAnchor(current, plane, index))}>−</button>}</td>
-          </tr>;
+          </tr>
+          <tr className="anchor-state-row"><td colSpan={6} className="anchor-state">{anchorState(point, index, points.length, anchor, aligned?.spans[index])}</td></tr></Fragment>;
         })}</tbody>
       </table>
     </div>
@@ -456,7 +463,7 @@ export function CustomProfilePaste() {
     </fieldset>}
     {disabledReason && <div id={`${id}-reason`} className={error ? 'field-error' : 'disabled-reason'} role={error ? 'alert' : undefined}>{disabledReason}</div>}
     <button type="button" disabled={Boolean(disabledReason)} aria-describedby={disabledReason ? `${id}-reason` : undefined}
-      onClick={() => valid && edit.propose(`Import into ${targetLabel}`, (current) => applyPastedProfile(current, valid, { target: effectiveTarget, adoptLength, join }))}>Import into {targetLabel}</button>
+      onClick={() => valid && edit.propose(`Import into ${targetLabel}`, pasteBuilder(valid, { target: effectiveTarget, adoptLength, join }))}>Import into {targetLabel}</button>
     <ProfileEditPreviewPanel edit={edit} />
   </div>;
 }
@@ -477,8 +484,8 @@ export function CustomProfileLengthField({ field, serverError }: { field: Parame
       <b>Length {formatMm(length)} → {formatMm(pending)} mm</b>
       <span>Stretch profile scales every anchor, handle and station along z; Move mouth keeps interior positions in mm and moves only the mouth.</span>
       <div>
-        <button type="button" onClick={() => edit.propose(`Stretch profile to ${formatMm(pending)} mm`, (current) => stretchLength(current, pending))}>Stretch profile</button>
-        <button type="button" onClick={() => edit.propose(`Move mouth to ${formatMm(pending)} mm`, (current) => moveMouth(current, pending))}>Move mouth</button>
+        <button type="button" onClick={() => edit.propose(`Stretch profile to ${formatMm(pending)} mm`, stretchLengthBuilder(pending))}>Stretch profile</button>
+        <button type="button" onClick={() => edit.propose(`Move mouth to ${formatMm(pending)} mm`, moveMouthBuilder(pending))}>Move mouth</button>
         <button type="button" onClick={() => { edit.cancel(); setPending(undefined); }}>Cancel</button>
       </div>
     </div>}

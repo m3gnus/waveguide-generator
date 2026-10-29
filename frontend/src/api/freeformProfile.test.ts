@@ -59,12 +59,13 @@ describe('Custom profile curve client', () => {
 
 describe('generated-profile change', () => {
   const line = (points: [number, number][]) => points.map(([z, r]) => ({ z, r }));
-  it('measures the largest radius change over the common range and names its limits', () => {
+  it('measures change at shared export rows separately from resampling between rows', () => {
     const before = { H: line([[0, 10], [50, 20], [100, 30]]), V: line([[0, 10], [100, 30]]) };
-    const after = { H: line([[0, 10], [50, 25], [100, 30]]), V: line([[0, 10], [100, 30]]) };
+    const after = { H: line([[0, 10], [50, 25], [100, 30]]), V: line([[0, 10], [40, 19], [100, 30]]) };
     const change = compareProfileSamples(before, after);
-    expect(change.H).toMatchObject({ domain: 'full', maxChangeMm: 5, atZMm: 50, sampleCount: 3 });
-    expect(change.V).toMatchObject({ domain: 'full', maxChangeMm: 0 });
+    expect(change.H).toMatchObject({ domain: 'full', maxChangeMm: 5, atZMm: 50, sampleCount: 3, interpolatedMaxChangeMm: 5, interpolatedSampleCount: 3 });
+    // A row added on an unchanged straight line is not a change at shared rows.
+    expect(change.V).toMatchObject({ domain: 'full', maxChangeMm: 0, sampleCount: 2, interpolatedMaxChangeMm: 1, interpolatedAtZMm: 40, interpolatedSampleCount: 3 });
   });
 
   it('reports overlap-only, no-overlap and unmeasurable planes honestly', () => {

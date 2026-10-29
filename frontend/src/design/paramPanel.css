@@ -128,9 +128,9 @@
 .editable-parameter-table td .field-row { display: block; min-height: 0; }
 .editable-parameter-table td .field-row > .modified-dot { display: none; }
 .custom-profile-scroll { overflow-x: auto; }
-.custom-profile-table table { min-width: 440px; }
-.custom-profile-table th:nth-child(6), .custom-profile-table td.anchor-state { width: 28%; }
-.custom-profile-table td.anchor-state { color: var(--fg4); white-space: normal; overflow-wrap: anywhere; }
+.custom-profile-table table { min-width: 280px; }
+.custom-profile-table th:nth-child(3) { width: 22%; }
+.custom-profile-table tr.anchor-state-row td { padding: 0 2px 3px; border-top: 0; color: var(--fg4); white-space: normal; overflow-wrap: anywhere; }
 .custom-profile-insert { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px; border-top: 1px solid var(--hair-soft); }
 .custom-profile-insert > .field-row { flex: 1 1 140px; min-width: 0; }
 .profile-edit-preview, .profile-edit-notice { margin: 4px; }

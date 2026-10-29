@@ -5,7 +5,7 @@ import { designForFamily, mergeDesignForFamily, resetDesignStore, serializeDesig
 import {
   applyPastedProfile, commitProfileEdit, currentEditOrigin, deleteAnchor, horizontalThroatForVertical, insertAnchorBuilder, moveMouth,
   POSITION_ROUND_TRIP_TOLERANCE, ProfileEditRefusal, separateVerticalBlocker, setAnchorAngle, setAnchorJoin, setAnchorValue,
-  setSeparateVertical, stretchLength, useProfileEdit, withInsertedProfile,
+  setSeparateVertical, stretchLength, useProfileEdit, withInsertedProfile, isUnseparatedVertical, rememberUnseparatedVertical,
 } from './customProfileEdit';
 import type { CurvesResponse } from '../api/freeformProfile';
 
@@ -106,31 +106,49 @@ describe('Custom profile edit transformations', () => {
   it('stretches as an exact affine axial transform of both profiles', () => {
     const design = { ...custom(), shared_profile: true };
     design.profile_v!.points.splice(1, 0, { t: .4, r: 50, angle_deg: 30 });
-    const { after } = stretchLength(design, 240);
+    // Resolved handles of the active plane; H point 3 and the endpoints are automatic.
+    const resolved = (index: number) => ({ handleIn: index ? [-3, -1] : null, handleOut: index < 4 ? [3, 1] : null });
+    const curves = { H: { anchors: design.profile_h!.points.map((_point, index) => resolved(index)) }, V: { anchors: [] } } as unknown as CurvesResponse;
+    const { after, notes } = stretchLength(design, 240, curves);
     expect(after.length).toBe(240);
     expect(after.profile_h!.points.map((point) => point.t)).toEqual(design.profile_h!.points.map((point) => point.t));
     expect(after.profile_h!.points[2].handle_out).toEqual([20, 4]);
+    // Automatic handles are pinned to the resolved curve, scaled, so the stretch stays exact.
+    expect(after.profile_h!.points[3]).toMatchObject({ handle_in: [-6, -1], handle_out: [6, 1] });
+    expect(after.profile_h!.points[0].handle_out).toEqual([6, 1]);
+    expect(after.profile_h!.points[4].handle_in).toEqual([-6, -1]);
+    expect(notes.join(' ')).toContain('no longer refit automatically: H throat (out), H point 3 (in), H point 3 (out), H mouth (in)');
+    // The inactive V has no resolved curve of its own: authored values only.
+    expect(after.profile_v!.points[1]).not.toHaveProperty('handle_in');
     expect(after.profile_h!.points[1].angle_deg).toBeCloseTo(Math.atan(Math.tan(20 * Math.PI / 180) / 2) * 180 / Math.PI, 12);
     expect(after.profile_h!.throat_angle_deg).toBeCloseTo(Math.atan(Math.tan(15.5 * Math.PI / 180) / 2) * 180 / Math.PI, 12);
     // The retained V is transformed too.
     expect(after.profile_v!.points[1].angle_deg).toBeCloseTo(Math.atan(Math.tan(30 * Math.PI / 180) / 2) * 180 / Math.PI, 12);
     expect(after.cross_sections).toEqual(design.cross_sections);
     design._expressions = { 'profile_h.points.1.angle_deg': { value: 20, raw: '10*2' } };
-    expect(() => stretchLength(design, 240)).toThrow('expression "10*2"');
+    expect(() => stretchLength(design, 240, curves)).toThrow('expression "10*2"');
+    expect(() => stretchLength({ ...design, _expressions: undefined }, 240, { ...curves, H: { anchors: [] } } as unknown as CurvesResponse)).toThrow('out of date');
   });
 
   it('moves only the mouth, keeping interior mm within 1e-12, and refuses a crossing', () => {
     const design = custom();
     design.cross_sections = [{ t: 0, shape: 'ellipse' }, { t: .3, shape: 'ellipse' }, { t: 1, shape: 'ellipse' }];
-    const { after } = moveMouth(design, 150);
+    const anchors = (points: unknown[]) => points.map(() => ({ handleIn: [-2, -1], handleOut: [2, 1] }));
+    const curves = { H: { anchors: anchors(design.profile_h!.points) }, V: { anchors: anchors(design.profile_v!.points) } } as unknown as CurvesResponse;
+    const { after, notes } = moveMouth(design, 150, curves);
     after.profile_h!.points.slice(1, -1).forEach((point, index) => {
       expect(Math.abs(point.t * 150 - design.profile_h!.points[index + 1].t * 120)).toBeLessThan(POSITION_ROUND_TRIP_TOLERANCE);
     });
     expect(after.profile_h!.points.at(-1)!.t).toBe(1);
     expect(after.profile_h!.points[2].handle_out).toEqual([10, 4]);
+    // Spans before the last keep their resolved handles; the last span stays free.
+    expect(after.profile_h!.points[0].handle_out).toEqual([2, 1]);
+    expect(after.profile_h!.points[3]).toEqual({ t: after.profile_h!.points[3].t, r: 90, handle_in: [-2, -1] });
+    expect(after.profile_h!.points[4]).toEqual({ t: 1, r: 140 });
+    expect(notes[1]).toContain('H throat (out), H point 3 (in)');
     expect(Math.abs(after.cross_sections![1].t * 150 - 36)).toBeLessThan(POSITION_ROUND_TRIP_TOLERANCE);
-    expect(() => moveMouth(design, 90)).toThrow('at or beyond the new mouth');
-    expect(() => moveMouth(design, 120)).toThrow('unchanged');
+    expect(() => moveMouth(design, 90, curves)).toThrow('at or beyond the new mouth');
+    expect(() => moveMouth(design, 120, curves)).toThrow('unchanged');
   });
 
   it('keeps the inserted plane, re-keys its expressions and leaves V, stations and other metadata untouched', () => {
@@ -152,7 +170,9 @@ describe('Custom profile edit transformations', () => {
     expect(kept.length).toBe(120);
     expect(kept.profile_h!.points.every((point) => point.join === 'corner')).toBe(true);
     expect(kept.profile_v!.points[0].r).toBe(10);
-    const adopted = applyPastedProfile(design, pasted, { target: 'H', adoptLength: true, join: 'smooth' }).after;
+    expect(() => applyPastedProfile(design, pasted, { target: 'H', adoptLength: true, join: 'smooth' })).toThrow('resolved curve');
+    const unresolved = { anchors: design.profile_h!.points.map(() => ({ handleIn: null, handleOut: null })) };
+    const adopted = applyPastedProfile(design, pasted, { target: 'H', adoptLength: true, join: 'smooth' }, { H: unresolved, V: { anchors: design.profile_v!.points.map(() => ({ handleIn: null, handleOut: null })) } } as unknown as CurvesResponse).after;
     expect(adopted.length).toBe(200);
     expect(adopted.profile_h!.points.some((point) => point.join)).toBe(false);
     // The untouched V is stretched explicitly with the adopted length, not rescaled silently.
@@ -161,6 +181,18 @@ describe('Custom profile edit transformations', () => {
     expect(adopted.profile_v!.mouth_angle_deg).toBeCloseTo(stretch(60), 12);
     const tooMany = { points: Array.from({ length: 65 }, (_value, index) => ({ t: index / 64, r: 10 + index })), importedLength: 120 };
     expect(() => applyPastedProfile(design, tooMany, { target: 'H', adoptLength: false, join: 'corner' })).toThrow('at most 64');
+  });
+
+  it('remembers only this document\'s untouched V seed', () => {
+    resetDesignStore();
+    act(() => useDesignStore.getState().setFamily('FREEFORM'));
+    const design = useDesignStore.getState().design;
+    expect(isUnseparatedVertical(design)).toBe(false);
+    rememberUnseparatedVertical(design);
+    expect(isUnseparatedVertical(design)).toBe(true);
+    expect(isUnseparatedVertical({ ...design, profile_v: { ...design.profile_v!, mouth_angle_deg: 50 } })).toBe(false);
+    act(() => useDesignStore.getState().replaceDocument(design));
+    expect(isUnseparatedVertical(useDesignStore.getState().design)).toBe(false);
   });
 
   it('seeds a new shared design with an inactive V equal to H and never infers shared mode', () => {
@@ -175,6 +207,10 @@ describe('Custom profile edit transformations', () => {
     expect(off.shared_profile).toBe(true);
     expect(off.profile_v).toEqual(fresh.profile_v);
     expect(mergeDesignForFamily(fresh, 'OSSE')).not.toHaveProperty('shared_profile');
+    // Seeding replaces V with H, so a diverged throat does not block it; a restore does.
+    const diverged = setAnchorValue(fresh, 'H', 0, 'r', 20).after;
+    expect(() => setSeparateVertical(diverged, true)).toThrow('Use H throat for V');
+    expect(setSeparateVertical(diverged, true, true).after.profile_v).toEqual(diverged.profile_h);
   });
 });
 
