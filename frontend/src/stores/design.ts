@@ -33,6 +33,13 @@ export interface FreeformPoint {
   t: number;
   r: number;
   angle_deg?: number;
+  /** Absent in older files: the mesher treats the anchor as smooth. */
+  join?: 'smooth' | 'corner';
+  /** Outgoing wall angle of an interior corner; `angle_deg` is then incoming. */
+  angle_out_deg?: number;
+  /** Explicit Bézier handles as [dz, dr] in design mm before Scale. */
+  handle_in?: [number, number];
+  handle_out?: [number, number];
 }
 
 export interface FreeformProfile {
@@ -215,6 +222,8 @@ export interface DesignDocument {
   extra_blocks: Record<string, ConfigBlock>;
   profile_h?: FreeformProfile;
   profile_v?: FreeformProfile;
+  /** True: profile_h drives both planes and profile_v is retained inactive. Absent in older files. */
+  shared_profile?: boolean;
   cross_sections?: CrossSectionStation[];
   inflection_policy?: string;
   corner_grids?: CornerGrid[];
@@ -389,7 +398,7 @@ const FAMILY_SPECIFIC_FIELDS = {
   ],
   LOOKUP: ['lookup_profile', 'a0'],
   FREEFORM: [
-    'length', 'profile_h', 'profile_v', 'cross_sections', 'inflection_policy',
+    'length', 'profile_h', 'profile_v', 'shared_profile', 'cross_sections', 'inflection_policy',
     'corner_grids',
   ],
 } as const satisfies Record<Exclude<DesignFamily, NativeFamily>, readonly (keyof DesignDocument)[]>;
@@ -662,7 +671,11 @@ export function mergeDesignForFamily(current: DesignDocument, family: DesignFami
   else delete shared._absent;
 
   const next = { ...designForFamily(family), ...shared, formula: family } as DesignDocument;
-  if (family === 'FREEFORM') next.cross_section = { exponent: 2, aspect_ratio: 1 };
+  if (family === 'FREEFORM') {
+    next.cross_section = { exponent: 2, aspect_ratio: 1 };
+    // A new Custom profile edits one table; its V copy stays inactive until separated.
+    next.shared_profile = true;
+  }
   if (family === 'LOOKUP') {
     // LOOKUP starts from a conical whole meridian, not an analytic conversion.
     next.throat_ext_angle = 0; next.throat_ext_length = 0; next.slot_length = 0;
