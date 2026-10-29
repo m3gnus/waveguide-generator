@@ -498,10 +498,15 @@ export function applyPastedProfile(design: DesignDocument, pasted: PastedProfile
   const target = shared ? 'H' : pasted.pointsByPlane ? 'both' : choice.target;
   const length = choice.adoptLength ? pasted.importedLength : lengthOf(design);
   if (!(length >= 20 && length <= 1_000)) throw new ProfileEditRefusal('Length must be between 20 and 1000 mm.');
-  const after = structuredClone(design);
+  // Adopting the pasted length is a Length change for everything the paste
+  // does not replace (the other plane, stations): it is the explicit Stretch.
+  const adopting = choice.adoptLength && length !== lengthOf(design);
+  const stretched = adopting ? stretchLength(design, length) : undefined;
+  const base = stretched?.after ?? design;
+  const after = structuredClone(base);
   const notes: string[] = [];
   const replace = (plane: Plane, imported: FreeformPoint[]) => {
-    const current = profileOf(design, plane).points;
+    const current = profileOf(base, plane).points;
     const rows = normalizedImportedPoints(imported, current, plane);
     const points = rows.map((point) => {
       const row: FreeformPoint = { t: point.t, r: point.r };
@@ -509,7 +514,7 @@ export function applyPastedProfile(design: DesignDocument, pasted: PastedProfile
       if (choice.join === 'corner') row.join = 'corner';
       return row;
     });
-    after[PROFILE_KEY[plane]] = { ...profileOf(design, plane), points };
+    after[PROFILE_KEY[plane]] = { ...profileOf(base, plane), points };
     remapPointMetadata(after, plane, current.length, () => null);
     notes.push(`${plane}: ${points.length} anchors as ${choice.join === 'corner' ? 'corners (adjacent corners without angles join with straight spans)' : 'smooth anchors with automatic tangents'}.`);
   };
@@ -525,10 +530,8 @@ export function applyPastedProfile(design: DesignDocument, pasted: PastedProfile
     after.profile_h!.points[0].r = radius;
     after.profile_v!.points[0].r = radius;
   }
-  if (choice.adoptLength && length !== lengthOf(design)) {
-    after.length = length;
-    clearMetadata(after, ['length']);
-    notes.push(`Length becomes ${formatMm(length)} mm (pasted). Existing stations keep their fractions of Length.`);
+  if (adopting) {
+    notes.push(`Length becomes ${formatMm(length)} mm (pasted). Everything the paste does not replace is stretched with it (Stretch profile): ${stretched!.notes.join(' ')}`);
   } else if (pasted.importedLength !== lengthOf(design)) {
     notes.push(`Pasted positions are stretched from ${formatMm(pasted.importedLength)} mm to the current Length ${formatMm(lengthOf(design))} mm.`);
   }

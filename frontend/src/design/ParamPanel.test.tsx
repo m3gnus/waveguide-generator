@@ -655,7 +655,8 @@ describe('ParamPanel inventory UX', () => {
     act(() => useDesignStore.getState().replaceDocument(loaded));
     const family = host.querySelector<HTMLSelectElement>('#family')!;
     const option = family.querySelector<HTMLOptionElement>('option[value="LOOKUP"]')!;
-    expect(option.textContent).toBe('LOOKUP (EXPERIMENTAL)');
+    expect(option.textContent).toBe('Legacy straight-line profile');
+    expect(host.textContent).toContain('It is not converted to a Custom profile.');
     expect(option.selected).toBe(true);
     expect(family.value).toBe('LOOKUP');
     expect(serializeDesign(useDesignStore.getState().design)).toEqual(serializeDesign(loaded));
@@ -714,7 +715,7 @@ describe('ParamPanel inventory UX', () => {
     const family = host.querySelector<HTMLSelectElement>('#family')!;
     act(() => { family.value = next; family.dispatchEvent(new Event('change', { bubbles: true })); });
     if (next === 'FREEFORM') {
-      const blank = [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Switch to FREEFORM"] button')].find((button) => button.textContent === 'Start blank')!;
+      const blank = [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Start a Custom profile"] button')].find((button) => button.textContent === 'Start blank')!;
       act(() => blank.click());
     }
     expect(host.querySelector('.conversion-notice')?.textContent).toContain('reset to 2 and 1');
@@ -1072,61 +1073,27 @@ describe('ParamPanel inventory UX', () => {
     }
   });
 
-  it('does not apply a FREEFORM conversion after the user cancels it', async () => {
-    const originalFormula = useDesignStore.getState().design.formula;
-    let resolveConversion!: (response: Response) => void;
-    const conversion = new Promise<Response>((resolve) => { resolveConversion = resolve; });
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
-      if (String(input).startsWith('/api/export/profiles')) return conversion;
-      return Promise.resolve(new Response('not found', { status: 404 }));
-    }));
+  it('names the family Custom profile, starts it blank and shared, and does not offer the approximate conversion', () => {
+    const fetcher = vi.fn<typeof fetch>();
+    vi.stubGlobal('fetch', fetcher);
     const family = host.querySelector<HTMLSelectElement>('#family')!;
+    expect(family.querySelector<HTMLOptionElement>('option[value="FREEFORM"]')!.textContent).toBe('Custom profile');
     act(() => {
       family.value = 'FREEFORM';
       family.dispatchEvent(new Event('change', { bubbles: true }));
     });
-    const buttons = () => [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Switch to FREEFORM"] button')];
-    act(() => buttons().find((button) => button.textContent === 'Convert current design')!.click());
-    expect(host.textContent).toContain('Converting…');
-    act(() => buttons().find((button) => button.textContent === 'Cancel')!.click());
-
-    await act(async () => {
-      resolveConversion(new Response('# x_cm;y_cm;z_cm\n1;0;0\n14;0;12\n\n0;1;0\n0;14;12\n', { status: 200 }));
-      await conversion;
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(useDesignStore.getState().design.formula).toBe(originalFormula);
-    expect(host.querySelector('[aria-label="Switch to FREEFORM"]')).toBeNull();
-  });
-
-  it('keeps a rolled-back conversion notice after the switch closes, until it is dismissed', async () => {
-    // One meridian per plane that rolls back after z = 137.52 mm to a 140 mm mouth.
-    const tail = [[0, 12.7], [60, 40], [120, 95], [137.15, 118.25], [137.52, 125.08], [132.43, 135.72], [119.71, 140]];
-    const meridian = (plane: 'H' | 'V') => tail.map(([z, r]) => (plane === 'H' ? `${r / 10};0;${z / 10}` : `0;${r / 10};${z / 10}`)).join('\n');
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => Promise.resolve(String(input).startsWith('/api/export/profiles')
-      ? new Response(`# x_cm;y_cm;z_cm\n${meridian('H')}\n\n${meridian('V')}\n`, { status: 200 })
-      : new Response('not found', { status: 404 }))));
-    const family = host.querySelector<HTMLSelectElement>('#family')!;
-    act(() => {
-      family.value = 'FREEFORM';
-      family.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    const convert = [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Switch to FREEFORM"] button')].find((button) => button.textContent === 'Convert current design')!;
-    await act(async () => {
-      convert.click();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-
-    expect(useDesignStore.getState().design.formula).toBe('FREEFORM');
-    expect(host.querySelector('[aria-label="Switch to FREEFORM"]')).toBeNull();
-    const notice = host.querySelector('.conversion-notice')!;
-    expect(notice.getAttribute('role')).toBe('status');
-    expect(notice.textContent).toContain('rolls back');
-    expect(notice.textContent).toContain('horizontal 125.1 mm (source 140.0 mm)');
-    act(() => notice.querySelector('button')!.click());
-    expect(host.querySelector('.conversion-notice')).toBeNull();
+    const choice = host.querySelector('[aria-label="Start a Custom profile"]')!;
+    expect([...choice.querySelectorAll('button')].map((button) => button.textContent)).toEqual(['Start blank', 'Cancel']);
+    expect(choice.textContent).toContain('Converting the current design is not available yet');
+    act(() => [...choice.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Start blank')!.click());
+    const design = useDesignStore.getState().design;
+    expect(design.formula).toBe('FREEFORM');
+    expect(design.shared_profile).toBe(true);
+    expect(design.profile_v).toEqual(design.profile_h);
+    expect(host.querySelector('[data-section="Model Type"] .section-summary')?.textContent).toBe('Custom profile');
+    expect(fetcher.mock.calls.some(([url]) => String(url).startsWith('/api/export/profiles?kind=profiles') && String((fetcher.mock.calls[0][1] as RequestInit | undefined)?.body ?? '').includes('freeform-conversion'))).toBe(false);
+    act(() => useDesignStore.getState().undo());
+    expect(useDesignStore.getState().design.formula).not.toBe('FREEFORM');
   });
 
   it('filters across labels and ATH/v1 keys, including a mode-hidden field', () => {

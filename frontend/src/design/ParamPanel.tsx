@@ -11,7 +11,6 @@ import { ExteriorDriverFields, ExteriorDriverOptions } from './ExteriorDriverOpt
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { convertDesignToFreeform } from '../api/designIo';
 import { previewSocket } from '../api/previewSocket';
 import type { CadRealizedDimensions, CadRealizedParameter, CadReturnIngestRecord } from '../api/cadlink';
 import { importedSubmissionBlocker, importedSubmissionNotices, importedSweepRangeInvalid } from '../jobs/importedSubmission';
@@ -458,6 +457,11 @@ export function previewErrorForParameter(
     if (message) return message;
   }
   return undefined;
+}
+
+/** User-facing family names; the persisted formula keys do not change. */
+function familyLabel(family: DesignFamily): string {
+  return family === 'FREEFORM' ? 'Custom profile' : family === 'LOOKUP' ? 'Legacy straight-line profile' : family;
 }
 
 function FieldControl({ field, design, serverError }: { field: ParameterDefinition; design: DesignDocument; serverError?: string }) {
@@ -1209,15 +1213,11 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
   const developer = useDeveloperDetails();
   const waveguideLinked = useWaveguideDefinitionApplies();
   const setFamily = useDesignStore((state) => state.setFamily);
-  const replaceDocument = useDesignStore((state) => state.replaceDocument);
   const helpVisible = useParameterHelp();
   const [filterQuery, setQuery] = useState('');
   const query = workspaceMode === 'cad' && tab === 'geometry' && !waveguideLinked ? '' : filterQuery;
   const [freeformChoice, setFreeformChoice] = useState(false);
-  const [conversionError, setConversionError] = useState<string | null>(null);
   const [conversionNotice, setConversionNotice] = useState<string | null>(null);
-  const [converting, setConverting] = useState(false);
-  const conversionGeneration = useRef(0);
   const searching = Boolean(query.trim());
   const definitions = useMemo(() => (workspaceMode === 'cad' ? CAD_PARAMETER_SECTION_DEFINITIONS : PARAMETER_SECTION_DEFINITIONS)
     .filter((definition) => definition.tab === tab)
@@ -1284,8 +1284,6 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
       window.removeEventListener(REVEAL_PARAMETER_EVENT, onEvent);
     };
   }, [tab]);
-
-  useEffect(() => () => { conversionGeneration.current += 1; }, []);
 
   const renderField = (field: ParameterDefinition) => <div className="parameter-entry" data-parameter-id={field.id} data-parameter-key={field.legacyKey} tabIndex={field.kind === 'indicator' ? -1 : undefined} key={field.id}>
     <FieldControl field={field} design={design} serverError={previewErrorForParameter(field, currentPreviewFields)} />
@@ -1362,13 +1360,13 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
   const sectionResetNotice = (family: DesignFamily) => design.cross_section
     && (design.cross_section.exponent !== 2 || design.cross_section.aspect_ratio !== 1)
     && (family === 'FREEFORM' || isNativeFamily(family))
-    ? `${family} uses its own section shape. The base cross-section exponent and aspect ratio were reset to 2 and 1.`
+    ? `${familyLabel(family)} uses its own section shape. The base cross-section exponent and aspect ratio were reset to 2 and 1.`
     : null;
 
   const modelTypeSection = <Section
     title="Model Type"
     description="Select the horn family that defines the profile equation and its primary dimensions."
-    summary={osseFeatures(design.formula) ? 'OSSE' : design.formula}
+    summary={osseFeatures(design.formula) ? 'OSSE' : familyLabel(design.formula)}
     forceOpen={searching}
   >
     <SelectRow className="family-row">
@@ -1380,45 +1378,21 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
         if (family === 'FREEFORM' && design.formula !== 'FREEFORM') setFreeformChoice(true);
         else { setFreeformChoice(false); setFamily(family); setConversionNotice(family === 'LOOKUP' ? 'LOOKUP starts with a conical table defining the whole meridian (12.7 mm throat to 140 mm mouth over 120 mm, scaled by the current Scale). Edit or paste [z, r] samples in Profile. Analytic coefficients, throat extensions, slots, adapters and imported ATH geometry controls were removed.' : sectionResetNotice(family)); }
       }}>
-        <option>OSSE</option><option>R-OSSE</option><option>ICW</option><option>FREEFORM</option>
+        <option>OSSE</option><option>R-OSSE</option><option>ICW</option><option value="FREEFORM">{familyLabel('FREEFORM')}</option>
+        {/* A saved LOOKUP stays editable under its own straight-line rules; it is never offered for a new design. */}
         {(design.formula === 'LOOKUP' || design.formula === 'SOURCE-DISK') && <option value={design.formula}>
-          {design.formula === 'LOOKUP' ? 'LOOKUP (EXPERIMENTAL)' : design.formula}
+          {familyLabel(design.formula)}
         </option>}
       </select>
     </SelectRow>
     {osseFeatures(design.formula) && <OsseFeatureChoices design={design} onChanged={() => setConversionNotice(OSSE_SWITCH_NOTICE)} />}
-    {design.formula === 'LOOKUP' && <ExperimentalBadge />}
+    {design.formula === 'LOOKUP' && <><ExperimentalBadge /><p className="section-note">A saved LOOKUP table: linear between its z, r samples, with its own morph, mouth, source-cap and sampling rules. It is not converted to a Custom profile.</p></>}
     {conversionNotice && <div className="field-warning conversion-notice" role="status">
       {conversionNotice} <button onClick={() => setConversionNotice(null)}>Dismiss</button>
     </div>}
-    {freeformChoice && <div className="family-switch-choice" role="group" aria-label="Switch to FREEFORM">
-      <b>Switch to FREEFORM</b><span>Choose how to initialize the editable profiles.</span>
-      <div><button onClick={() => { setFamily('FREEFORM'); setConversionNotice(sectionResetNotice('FREEFORM')); setFreeformChoice(false); }}>Start blank</button><button disabled={converting} onClick={() => {
-        const conversion = ++conversionGeneration.current;
-        const sourceRevision = useDesignStore.getState().designRevision;
-        setConverting(true); setConversionError(null);
-        void convertDesignToFreeform(design).then(({ design: converted, notice }) => {
-          if (conversion !== conversionGeneration.current) return;
-          if (useDesignStore.getState().designRevision !== sourceRevision) {
-            setConversionError('The design changed while it was being converted. Review the edits and try again.');
-            return;
-          }
-          replaceDocument(converted, { keepHistory: true });
-          // The choice closes on success, so the notice lives outside it.
-          setConversionNotice([notice, sectionResetNotice('FREEFORM')].filter(Boolean).join(' ') || null);
-          setFreeformChoice(false);
-        }).catch((error) => {
-          if (conversion === conversionGeneration.current) setConversionError(error instanceof Error ? error.message : String(error));
-        }).finally(() => {
-          if (conversion === conversionGeneration.current) setConverting(false);
-        });
-      }}>{converting ? 'Converting…' : 'Convert current design'}</button><button onClick={() => {
-        conversionGeneration.current += 1;
-        setConverting(false);
-        setConversionError(null);
-        setFreeformChoice(false);
-      }}>Cancel</button></div>
-      {conversionError && <div className="field-error" role="alert">{conversionError}</div>}
+    {freeformChoice && <div className="family-switch-choice" role="group" aria-label="Start a Custom profile">
+      <b>Start a Custom profile</b><span>It starts blank, with one anchor table shaping both planes. Converting the current design is not available yet: an equivalence check of the generated wall, mouth and source cap is still to come.</span>
+      <div><button onClick={() => { setFamily('FREEFORM'); setConversionNotice(sectionResetNotice('FREEFORM')); setFreeformChoice(false); }}>Start blank</button><button onClick={() => setFreeformChoice(false)}>Cancel</button></div>
     </div>}
   </Section>;
 

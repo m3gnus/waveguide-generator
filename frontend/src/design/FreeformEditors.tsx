@@ -173,6 +173,7 @@ export function EditableLookupTable({ field, points }: { field: ParameterDefinit
 export { normalizedImportedPoints } from './customProfileEdit';
 
 export const FREEFORM_POSITION_NOTE = 'Anchor and station positions are measured from the throat along Length, in mm before Scale. Changing Length asks whether to stretch the profile or move only the mouth.';
+export const CUSTOM_PROFILE_TABLE_HELP = 'Every anchor, throat and mouth included, at z mm from the throat before Scale. A smooth anchor has one tangent (automatic unless an angle or handle pins it); a corner may take different incoming and outgoing angles, and two neighbouring corners without facing angles join with a straight span. Each edit is previewed with its curve deviation and generated-profile change before it applies.';
 export const FREEFORM_IMPORT_HINT = 'One anchor per line in mm: z r [angle °], with commas, tabs or spaces; lookup z,r tables paste as they are. Lines starting with # and a header row are ignored. A row at z = 0 sets the throat radius; the last row sets the mouth radius and the length. Both planes at once: z;H;V in centimetres.';
 
 /** Why a profile-level endpoint angle is ignored in one plane (precedence: handle, point angle, corner chord). */
@@ -328,7 +329,7 @@ function anchorState(point: FreeformPoint, index: number, count: number, anchor:
 }
 
 /** The active Custom profile table for one plane: every anchor, including throat and mouth. */
-export function CustomProfileTable({ field, plane }: { field: ParameterDefinition; plane: Plane }) {
+export function CustomProfileTable({ plane }: { field: ParameterDefinition; plane: Plane }) {
   const design = useDesignStore((state) => state.design);
   const points = (plane === 'H' ? design.profile_h : design.profile_v)?.points ?? [];
   const length = design.length ?? 120;
@@ -348,7 +349,7 @@ export function CustomProfileTable({ field, plane }: { field: ParameterDefinitio
       : points.length >= MAX_FREEFORM_ANCHORS ? `A Custom profile supports at most ${MAX_FREEFORM_ANCHORS} anchors, including the throat and mouth.`
         : points.some((point) => point.t * length === insertZ) ? 'An anchor is already at this z.' : undefined;
   return <div className="editable-parameter-table custom-profile-table" role="group" aria-label={title} data-control-reveal-id={`control.customProfile${plane}`}>
-    <div className="readonly-table-head"><HelpTipHeading title={title} text={field.description}>{title}</HelpTipHeading><span>{points.length} / {MAX_FREEFORM_ANCHORS} anchors</span></div>
+    <div className="readonly-table-head"><HelpTipHeading title={title} text={CUSTOM_PROFILE_TABLE_HELP}>{title}</HelpTipHeading><span>{points.length} / {MAX_FREEFORM_ANCHORS} anchors</span></div>
     {plane === 'H' && <SeparateVerticalControl edit={edit} />}
     <div className="custom-profile-scroll">
       <table><thead><tr><th>z (mm)</th><th>r (mm)</th><th>Join</th><th>In (°)</th><th>Out (°)</th><th>State</th><th /></tr></thead>

@@ -155,6 +155,10 @@ describe('Custom profile edit transformations', () => {
     const adopted = applyPastedProfile(design, pasted, { target: 'H', adoptLength: true, join: 'smooth' }).after;
     expect(adopted.length).toBe(200);
     expect(adopted.profile_h!.points.some((point) => point.join)).toBe(false);
+    // The untouched V is stretched explicitly with the adopted length, not rescaled silently.
+    const stretch = (angle: number) => Math.atan2(Math.sin(angle * Math.PI / 180), (200 / 120) * Math.cos(angle * Math.PI / 180)) * 180 / Math.PI;
+    expect(adopted.profile_v!.throat_angle_deg).toBeCloseTo(stretch(15.5), 12);
+    expect(adopted.profile_v!.mouth_angle_deg).toBeCloseTo(stretch(60), 12);
     const tooMany = { points: Array.from({ length: 65 }, (_value, index) => ({ t: index / 64, r: 10 + index })), importedLength: 120 };
     expect(() => applyPastedProfile(design, tooMany, { target: 'H', adoptLength: false, join: 'corner' })).toThrow('at most 64');
   });
