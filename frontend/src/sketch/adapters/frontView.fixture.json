@@ -1,0 +1,456 @@
+{
+ "before": {
+  "assembly": {
+   "signal_groups": [
+    {
+     "id": "00000000-0000-4000-8000-0000000000b1",
+     "label": "All",
+     "members": [
+      {
+       "radiator_id": "horn-throat"
+      },
+      {
+       "radiator_id": "00000000-0000-4000-8000-0000000000a1"
+      },
+      {
+       "radiator_id": "00000000-0000-4000-8000-0000000000a2"
+      },
+      {
+       "radiator_id": "00000000-0000-4000-8000-0000000000a3"
+      },
+      {
+       "radiator_id": "00000000-0000-4000-8000-0000000000a4"
+      }
+     ]
+    }
+   ],
+   "woofers": [
+    {
+     "id": "00000000-0000-4000-8000-0000000000a1",
+     "label": "Woofer 1",
+     "placement": {
+      "anchor": "below",
+      "gap_mm": 10
+     },
+     "radius_mm": 80,
+     "shape": {
+      "kind": "piston"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-0000000000a2",
+     "label": "Woofer 2",
+     "placement": {
+      "anchor": "above",
+      "gap_mm": 10
+     },
+     "radius_mm": 60,
+     "shape": {
+      "kind": "piston"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-0000000000a3",
+     "label": "Woofer 3",
+     "placement": {
+      "anchor": "free",
+      "spacing_to": {
+       "distance_mm": 190,
+       "radiator_id": "00000000-0000-4000-8000-0000000000a1"
+      },
+      "x_mm": 120,
+      "y_mm": -320
+     },
+     "radius_mm": 50,
+     "shape": {
+      "kind": "piston"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-0000000000a4",
+     "label": "Woofer 4",
+     "placement": {
+      "anchor": "free",
+      "x_mm": -220,
+      "y_mm": 260
+     },
+     "radius_mm": 40,
+     "shape": {
+      "kind": "piston"
+     }
+    }
+   ]
+  },
+  "context": {
+   "mouth_bottom_mm": -100.0,
+   "mouth_top_mm": 100.0,
+   "woofers": [
+    {
+     "radiator_id": "00000000-0000-4000-8000-0000000000a1",
+     "radius_mm": 80.0,
+     "x_mm": 0.0,
+     "y_mm": -190.0
+    },
+    {
+     "radiator_id": "00000000-0000-4000-8000-0000000000a2",
+     "radius_mm": 60.0,
+     "x_mm": 0.0,
+     "y_mm": 170.0
+    },
+    {
+     "radiator_id": "00000000-0000-4000-8000-0000000000a3",
+     "radius_mm": 50.0,
+     "x_mm": 128.87321951928251,
+     "y_mm": -329.6126544792227
+    },
+    {
+     "radiator_id": "00000000-0000-4000-8000-0000000000a4",
+     "radius_mm": 40.0,
+     "x_mm": -220.0,
+     "y_mm": 260.0
+    }
+   ]
+  }
+ },
+ "cases": {
+  "free-centre": {
+   "assembly": {
+    "signal_groups": [
+     {
+      "id": "00000000-0000-4000-8000-0000000000b1",
+      "label": "All",
+      "members": [
+       {
+        "radiator_id": "horn-throat"
+       },
+       {
+        "radiator_id": "00000000-0000-4000-8000-0000000000a1"
+       },
+       {
+        "radiator_id": "00000000-0000-4000-8000-0000000000a2"
+       },
+       {
+        "radiator_id": "00000000-0000-4000-8000-0000000000a3"
+       },
+       {
+        "radiator_id": "00000000-0000-4000-8000-0000000000a4"
+       }
+      ]
+     }
+    ],
+    "woofers": [
+     {
+      "id": "00000000-0000-4000-8000-0000000000a1",
+      "label": "Woofer 1",
+      "placement": {
+       "anchor": "below",
+       "gap_mm": 10
+      },
+      "radius_mm": 80,
+      "shape": {
+       "kind": "piston"
+      }
+     },
+     {
+      "id": "00000000-0000-4000-8000-0000000000a2",
+      "label": "Woofer 2",
+      "placement": {
+       "anchor": "above",
+       "gap_mm": 10
+      },
+      "radius_mm": 60,
+      "shape": {
+       "kind": "piston"
+      }
+     },
+     {
+      "id": "00000000-0000-4000-8000-0000000000a3",
+      "label": "Woofer 3",
+      "placement": {
+       "anchor": "free",
+       "spacing_to": {
+        "distance_mm": 190,
+        "radiator_id": "00000000-0000-4000-8000-0000000000a1"
+       },
+       "x_mm": 120,
+       "y_mm": -320
+      },
+      "radius_mm": 50,
+      "shape": {
+       "kind": "piston"
+      }
+     },
+     {
+      "id": "00000000-0000-4000-8000-0000000000a4",
+      "label": "Woofer 4",
+      "placement": {
+       "anchor": "free",
+       "x_mm": -205.5,
+       "y_mm": 271
+      },
+      "radius_mm": 40,
+      "shape": {
+       "kind": "piston"
+      }
+     }
+    ]
+   },
+   "context": {
+    "mouth_bottom_mm": -100.0,
+    "mouth_top_mm": 100.0,
+    "woofers": [
+     {
+      "radiator_id": "00000000-0000-4000-8000-0000000000a1",
+      "radius_mm": 80.0,
+      "x_mm": 0.0,
+      "y_mm": -190.0
+     },
+     {
+      "radiator_id": "00000000-0000-4000-8000-0000000000a2",
+      "radius_mm": 60.0,
+      "x_mm": 0.0,
+      "y_mm": 170.0
+     },
+     {
+      "radiator_id": "00000000-0000-4000-8000-0000000000a3",
+      "radius_mm": 50.0,
+      "x_mm": 128.87321951928251,
+      "y_mm": -329.6126544792227
+     },
+     {
+      "radiator_id": "00000000-0000-4000-8000-0000000000a4",
+      "radius_mm": 40.0,
+      "x_mm": -205.5,
+      "y_mm": 271.0
+     }
+    ]
+   }
+  },
+  "gap-and-radius": {
+   "assembly": {
+    "signal_groups": [
+     {
+      "id": "00000000-0000-4000-8000-0000000000b1",
+      "label": "All",
+      "members": [
+       {
+        "radiator_id": "horn-throat"
+       },
+       {
+        "radiator_id": "00000000-0000-4000-8000-0000000000a1"
+       },
+       {
+        "radiator_id": "00000000-0000-4000-8000-0000000000a2"
+       },
+       {
+        "radiator_id": "00000000-0000-4000-8000-0000000000a3"
+       },
+       {
+        "radiator_id": "00000000-0000-4000-8000-0000000000a4"
+       }
+      ]
+     }
+    ],
+    "woofers": [
+     {
+      "id": "00000000-0000-4000-8000-0000000000a1",
+      "label": "Woofer 1",
+      "placement": {
+       "anchor": "below",
+       "gap_mm": 25
+      },
+      "radius_mm": 70,
+      "shape": {
+       "kind": "piston"
+      }
+     },
+     {
+      "id": "00000000-0000-4000-8000-0000000000a2",
+      "label": "Woofer 2",
+      "placement": {
+       "anchor": "above",
+       "gap_mm": 4
+      },
+      "radius_mm": 60,
+      "shape": {
+       "kind": "piston"
+      }
+     },
+     {
+      "id": "00000000-0000-4000-8000-0000000000a3",
+      "label": "Woofer 3",
+      "placement": {
+       "anchor": "free",
+       "spacing_to": {
+        "distance_mm": 190,
+        "radiator_id": "00000000-0000-4000-8000-0000000000a1"
+       },
+       "x_mm": 120,
+       "y_mm": -320
+      },
+      "radius_mm": 50,
+      "shape": {
+       "kind": "piston"
+      }
+     },
+     {
+      "id": "00000000-0000-4000-8000-0000000000a4",
+      "label": "Woofer 4",
+      "placement": {
+       "anchor": "free",
+       "x_mm": -220,
+       "y_mm": 260
+      },
+      "radius_mm": 40,
+      "shape": {
+       "kind": "piston"
+      }
+     }
+    ]
+   },
+   "context": {
+    "mouth_bottom_mm": -100.0,
+    "mouth_top_mm": 100.0,
+    "woofers": [
+     {
+      "radiator_id": "00000000-0000-4000-8000-0000000000a1",
+      "radius_mm": 70.0,
+      "x_mm": 0.0,
+      "y_mm": -195.0
+     },
+     {
+      "radiator_id": "00000000-0000-4000-8000-0000000000a2",
+      "radius_mm": 60.0,
+      "x_mm": 0.0,
+      "y_mm": 164.0
+     },
+     {
+      "radiator_id": "00000000-0000-4000-8000-0000000000a3",
+      "radius_mm": 50.0,
+      "x_mm": 131.58104735604556,
+      "y_mm": -332.06359099588076
+     },
+     {
+      "radiator_id": "00000000-0000-4000-8000-0000000000a4",
+      "radius_mm": 40.0,
+      "x_mm": -220.0,
+      "y_mm": 260.0
+     }
+    ]
+   }
+  },
+  "spacing-distance": {
+   "assembly": {
+    "signal_groups": [
+     {
+      "id": "00000000-0000-4000-8000-0000000000b1",
+      "label": "All",
+      "members": [
+       {
+        "radiator_id": "horn-throat"
+       },
+       {
+        "radiator_id": "00000000-0000-4000-8000-0000000000a1"
+       },
+       {
+        "radiator_id": "00000000-0000-4000-8000-0000000000a2"
+       },
+       {
+        "radiator_id": "00000000-0000-4000-8000-0000000000a3"
+       },
+       {
+        "radiator_id": "00000000-0000-4000-8000-0000000000a4"
+       }
+      ]
+     }
+    ],
+    "woofers": [
+     {
+      "id": "00000000-0000-4000-8000-0000000000a1",
+      "label": "Woofer 1",
+      "placement": {
+       "anchor": "below",
+       "gap_mm": 10
+      },
+      "radius_mm": 80,
+      "shape": {
+       "kind": "piston"
+      }
+     },
+     {
+      "id": "00000000-0000-4000-8000-0000000000a2",
+      "label": "Woofer 2",
+      "placement": {
+       "anchor": "above",
+       "gap_mm": 10
+      },
+      "radius_mm": 60,
+      "shape": {
+       "kind": "piston"
+      }
+     },
+     {
+      "id": "00000000-0000-4000-8000-0000000000a3",
+      "label": "Woofer 3",
+      "placement": {
+       "anchor": "free",
+       "spacing_to": {
+        "distance_mm": 230,
+        "radiator_id": "00000000-0000-4000-8000-0000000000a1"
+       },
+       "x_mm": 120,
+       "y_mm": -320
+      },
+      "radius_mm": 50,
+      "shape": {
+       "kind": "piston"
+      }
+     },
+     {
+      "id": "00000000-0000-4000-8000-0000000000a4",
+      "label": "Woofer 4",
+      "placement": {
+       "anchor": "free",
+       "x_mm": -220,
+       "y_mm": 260
+      },
+      "radius_mm": 40,
+      "shape": {
+       "kind": "piston"
+      }
+     }
+    ]
+   },
+   "context": {
+    "mouth_bottom_mm": -100.0,
+    "mouth_top_mm": 100.0,
+    "woofers": [
+     {
+      "radiator_id": "00000000-0000-4000-8000-0000000000a1",
+      "radius_mm": 80.0,
+      "x_mm": 0.0,
+      "y_mm": -190.0
+     },
+     {
+      "radiator_id": "00000000-0000-4000-8000-0000000000a2",
+      "radius_mm": 60.0,
+      "x_mm": 0.0,
+      "y_mm": 170.0
+     },
+     {
+      "radiator_id": "00000000-0000-4000-8000-0000000000a3",
+      "radius_mm": 50.0,
+      "x_mm": 156.00442362860514,
+      "y_mm": -359.0047922643222
+     },
+     {
+      "radiator_id": "00000000-0000-4000-8000-0000000000a4",
+      "radius_mm": 40.0,
+      "x_mm": -220.0,
+      "y_mm": 260.0
+     }
+    ]
+   }
+  }
+ }
+}
