@@ -1600,6 +1600,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/models/assembly/compile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Assembly Compile
+         * @description Compile the design's assembly and publish it as its design model's prepared mesh.
+         *
+         *     ``superseded``: a newer revision of the design was asked for meanwhile,
+         *     and this one was not published.
+         */
+        post: operations["assembly_compile_api_models_assembly_compile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/models/assembly/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Assembly Context
+         * @description The front view's live outlines, woofer placements and clearances.
+         *
+         *     Solver-free: the design mesher's closed-form placement against the
+         *     live horn and box, without building a mesh. A design the assembly
+         *     cannot be placed on answers with its refusal.
+         */
+        post: operations["assembly_context_api_models_assembly_context_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/models/files": {
         parameters: {
             query?: never;
@@ -2670,6 +2717,25 @@ export interface components {
             jobId: string;
         };
         /**
+         * AssemblyCompileRequest
+         * @description Compile one captured design revision's assembly into a prepared mesh.
+         */
+        AssemblyCompileRequest: {
+            /** Design */
+            design: {
+                [key: string]: unknown;
+            };
+            /**
+             * Design Name
+             * @default
+             */
+            design_name?: string;
+            /** Design Revision */
+            design_revision: number;
+            /** Design Uid */
+            design_uid: string;
+        };
+        /**
          * AssemblyConfig
          * @description The design's integrated Sources and baffle assembly.
          *
@@ -2693,6 +2759,16 @@ export interface components {
             signal_groups?: components["schemas"]["AssemblySignalGroup"][];
             /** Woofers */
             woofers?: components["schemas"]["AssemblyWoofer"][];
+        };
+        /**
+         * AssemblyContextRequest
+         * @description A design whose Sources and baffle assembly the front view is drawing.
+         */
+        AssemblyContextRequest: {
+            /** Design */
+            design: {
+                [key: string]: unknown;
+            };
         };
         /**
          * AssemblyCrossover
@@ -10133,6 +10209,90 @@ export interface operations {
             };
             /** @description A retained record is unreadable */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    assembly_compile_api_models_assembly_compile_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssemblyCompileRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Unknown model or prepared mesh */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Restart pending, mismatched or unavailable mesh */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Mesh or setup refused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    assembly_context_api_models_assembly_context_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssemblyContextRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Mesh or setup refused */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

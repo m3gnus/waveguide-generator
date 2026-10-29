@@ -160,7 +160,7 @@ def read_native_source(directory):
 def ingest_native_source(directory, *, store, data_dir, sizes):
     """Publish one immutable native ingestion accepted by the imported job route."""
     from server.jobs.models import ImportedMeshSizes
-    from server.cadlink.intake.ingest import solve_model_sha256
+    from server.mesh.prepared_record import seal_prepared_record
     from server.mesh.artifact import mesh_text_sha256
 
     manifest, contour, drive, manifest_hash = read_native_source(directory)
@@ -406,9 +406,7 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
                     ),
                 },
             }
-            record["solve_model_sha256"] = solve_model_sha256(record)
-            record["report_sha256"] = _digest(_canonical(record))
-            return _canonical(record).decode()
+            return seal_prepared_record(record, producer="native")
 
         try:
             row = store.allocate_ingest(

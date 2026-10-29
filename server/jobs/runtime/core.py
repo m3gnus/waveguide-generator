@@ -28,6 +28,7 @@ import uuid
 
 from server.cadlink.intake.ingest import IngestRefusal, current_fem_evidence
 from server.mesh.records import get_prepared_mesh as get_ingestion_record
+from server.mesh.prepared_record import is_ready_mesh
 from server.cadlink.interpretation.domain_decision import (
     decision_summary,
 )
@@ -1840,6 +1841,13 @@ class JobRuntime:
                 "source_file": imported.record["source_file"],
                 "source_tags": imported.record["source_tags"],
             }
+        elif imported is not None and imported.record.get("producer") == "design-assembly":
+            summary["import_origin"] = "design-assembly"
+            summary["formula_type"] = "design-assembly"
+            summary["design_assembly"] = {
+                "design": imported.record["design"],
+                "source_tags": imported.record["source_tags"],
+            }
         summary["symmetry"] = symmetry_metadata
         polar_grid = effective_polar_grid(request)
         if isinstance(request.geometry, ParametricGeometrySource):
@@ -1921,7 +1929,7 @@ class JobRuntime:
         These checks are also authoritative at Solve. Readiness evidence is
         deliberately checked only when the snapshot is actually submitted.
         """
-        file_mesh = record.get("producer") == "mesh-file"
+        file_mesh = is_ready_mesh(record)
         sources = _imported_record_sources(record)
         source_by_id = {str(source.get("id")): source for source in sources}
         requested_skips = set(geometry.skipped_source_ids)
@@ -2092,7 +2100,7 @@ class JobRuntime:
         # against one recorded answer: the person's choice, or WG's decision
         # stored for this record at preparation, never a re-derivation
         # (docs/architecture/CAD-OPERATIONS.md, "Unlinked solver frame").
-        file_mesh = record.get("producer") == "mesh-file"
+        file_mesh = is_ready_mesh(record)
         gated = not file_mesh and record.get("native_source") is None
         # A radiation axis the model's reduced domain cannot use is the
         # design's, not a frame to confirm again: the whole model is needed.
@@ -2198,7 +2206,7 @@ class JobRuntime:
         assert isinstance(geometry, ImportedGeometrySource)
         record, msh_text = validated.record, validated.msh_text
         symmetry_metadata = validated.symmetry_metadata
-        file_mesh = record.get("producer") == "mesh-file"
+        file_mesh = is_ready_mesh(record)
         mesh_record = record.get("mesh")
         mesh_stats = (
             dict(mesh_record.get("stats") or {})

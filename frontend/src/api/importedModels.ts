@@ -38,7 +38,7 @@ export const readImportedSetup = (modelId: string, preparedId: string, fetcher: 
 /** An imported model as the server keeps it (`server/jobs/models_api.py`). */
 export interface ImportedModelSummary {
   model_id: string;
-  producer: 'mesh-file' | 'cad';
+  producer: 'mesh-file' | 'cad' | 'design-assembly';
   display_name: string;
   archive_stem?: string | null;
   latest_prepared_id?: string | null;

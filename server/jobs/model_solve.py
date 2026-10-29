@@ -86,6 +86,7 @@ from server.jobs.runtime import (
 from server.jobs.store import SubmissionConflictError
 from server.mesh.builder import _enforce_artifact_triangle_ceiling
 from server.mesh.errors import MeshTooLarge
+from server.mesh.prepared_record import READY_MESH_PRODUCERS, is_ready_mesh
 
 ACTIVE_STATUSES = ("preparing", "queued", "running")
 FILE_PRODUCER = "mesh-file"
@@ -857,7 +858,7 @@ async def solve_model(state: Any, model_id: str, body: ModelSolveRequest) -> str
     # Marked used before it is read: a collection deciding meanwhile keeps it.
     await asyncio.to_thread(store.touch_ingest, body.prepared_id)
     model, record = await asyncio.to_thread(_model_and_record, store, model_id, body.prepared_id)
-    if model.get("producer") == FILE_PRODUCER:
+    if model.get("producer") in READY_MESH_PRODUCERS:
         job_id = await _solve_file(runtime, store, model_id, body, record)
     else:
         job_id = await _solve_cad(state, runtime, store, model_id, body, record)
@@ -896,7 +897,7 @@ async def submit_imported_request(
     ) is not None:
         return await runtime.submit(request, cad_provenance=cad_provenance, setup_revision_id=setup_revision_id)
     record = json.loads(row["record_json"])
-    if record.get("producer") == FILE_PRODUCER:
+    if is_ready_mesh(record):
         try:
             _check_file_mesh_limit(record, override=request.options.mesh_limit_override)
         except ModelSolveRefusal as exc:

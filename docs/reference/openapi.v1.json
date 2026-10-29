@@ -18,6 +18,40 @@
         "title": "ArchiveRunDocumentRequest",
         "type": "object"
       },
+      "AssemblyCompileRequest": {
+        "additionalProperties": false,
+        "description": "Compile one captured design revision's assembly into a prepared mesh.",
+        "properties": {
+          "design": {
+            "additionalProperties": true,
+            "title": "Design",
+            "type": "object"
+          },
+          "design_name": {
+            "default": "",
+            "maxLength": 240,
+            "title": "Design Name",
+            "type": "string"
+          },
+          "design_revision": {
+            "minimum": 1.0,
+            "title": "Design Revision",
+            "type": "integer"
+          },
+          "design_uid": {
+            "pattern": "^wgu_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+            "title": "Design Uid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "design",
+          "design_uid",
+          "design_revision"
+        ],
+        "title": "AssemblyCompileRequest",
+        "type": "object"
+      },
       "AssemblyConfig": {
         "additionalProperties": false,
         "description": "The design's integrated Sources and baffle assembly.\n\nThe horn is always the live design horn and ``design.enclosure`` the only\nbox; enabled woofers cut its front baffle. Disabled woofers keep every\nsetting and are excluded from geometry and solve.",
@@ -66,6 +100,22 @@
           }
         },
         "title": "AssemblyConfig",
+        "type": "object"
+      },
+      "AssemblyContextRequest": {
+        "additionalProperties": false,
+        "description": "A design whose Sources and baffle assembly the front view is drawing.",
+        "properties": {
+          "design": {
+            "additionalProperties": true,
+            "title": "Design",
+            "type": "object"
+          }
+        },
+        "required": [
+          "design"
+        ],
+        "title": "AssemblyContextRequest",
         "type": "object"
       },
       "AssemblyCrossover": {
@@ -18604,6 +18654,110 @@
           }
         },
         "summary": "Find Model",
+        "tags": [
+          "Imported models"
+        ]
+      }
+    },
+    "/api/models/assembly/compile": {
+      "post": {
+        "description": "Compile the design's assembly and publish it as its design model's prepared mesh.\n\n``superseded``: a newer revision of the design was asked for meanwhile,\nand this one was not published.",
+        "operationId": "assembly_compile_api_models_assembly_compile_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssemblyCompileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Assembly Compile Api Models Assembly Compile Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown model or prepared mesh"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Restart pending, mismatched or unavailable mesh"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Mesh or setup refused"
+          }
+        },
+        "summary": "Assembly Compile",
+        "tags": [
+          "Imported models"
+        ]
+      }
+    },
+    "/api/models/assembly/context": {
+      "post": {
+        "description": "The front view's live outlines, woofer placements and clearances.\n\nSolver-free: the design mesher's closed-form placement against the\nlive horn and box, without building a mesh. A design the assembly\ncannot be placed on answers with its refusal.",
+        "operationId": "assembly_context_api_models_assembly_context_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssemblyContextRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Assembly Context Api Models Assembly Context Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Mesh or setup refused"
+          }
+        },
+        "summary": "Assembly Context",
         "tags": [
           "Imported models"
         ]

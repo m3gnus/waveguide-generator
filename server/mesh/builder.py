@@ -1017,6 +1017,171 @@ def _build_sync(
     """Build and inspect one artifact; runs in the mesher child (or, with
     ``WG2_TEST_MESH_IN_PROCESS=1`` in tests, on the gmsh worker thread)."""
 
+    design = DesignConfig.model_validate(design_dump)
+    return _build_design_artifact(design, _solver_mesher_config(design), cancel_cb)
+
+
+class AssemblyRefusal(ValueError):
+    """A design assembly the design mesher cannot build, in the user's words."""
+
+
+def assembly_woofer_rows(design: DesignConfig) -> list[dict[str, Any]]:
+    """The design mesher's placement rows of every woofer, enabled or not.
+
+    Disabled woofers still own placement for relations that name them; the
+    mesher emits enabled ones only.
+    """
+
+    assembly = design.root.assembly
+    if assembly is None:
+        return []
+    rows = []
+    for woofer in assembly.woofers:
+        placement = woofer.placement.model_dump(mode="json")
+        rows.append({
+            "radiator_id": woofer.id,
+            "enabled": woofer.enabled,
+            "radius_mm": woofer.radius_mm,
+            "shape": woofer.shape.model_dump(mode="json"),
+            "placement": placement,
+            "drive": {"kind": woofer.drive},
+            **({"resolution_mm": woofer.resolution_mm} if woofer.resolution_mm is not None else {}),
+        })
+    return rows
+
+
+def assembly_mesher_config(design: DesignConfig) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The full-domain design-mesher config of a design assembly, and its placement.
+
+    The horn is the design's own, through the same translation as every
+    design mesh. Woofer centres come from the design mesher's one closed-form
+    placement against the final mouth's cardinal Y samples; ``placement``
+    reports those samples and the resolved centres for the front view.
+    """
+
+    from hornlab_mesher.config_builder import resolve_geometry
+    from hornlab_mesher.enclosure_woofers import mouth_y_edges, resolve_woofer_placements
+
+    if design.root.assembly is None:
+        raise AssemblyRefusal("This design has no Sources and baffle assembly.")
+    config = _solver_mesher_config(design)
+    config.setdefault("mesh", {})["quadrants"] = FULL_DOMAIN_QUADRANTS
+    probe = deepcopy(config)
+    try:
+        geometry = resolve_geometry(probe).geometry
+        bottom, top = mouth_y_edges(geometry.inner_points)
+    except Exception as exc:
+        raise AssemblyRefusal(f"WG cannot place woofers on this horn: {mesher_error_message(probe, str(exc))}") from exc
+    rows = assembly_woofer_rows(design)
+    try:
+        resolved = resolve_woofer_placements(rows, mouth_bottom_mm=bottom, mouth_top_mm=top)
+    except ValueError as exc:
+        raise AssemblyRefusal(f"Woofer placement: {exc}.") from exc
+    if resolved:
+        if config.get("mode") != "enclosure" or not isinstance(config.get("enclosure"), Mapping):
+            raise AssemblyRefusal(
+                "Woofers cut the enclosure's front baffle. Set an enclosure depth, or disable the woofers."
+            )
+        config["enclosure"]["woofers"] = resolved
+    placement = {
+        "frame": "horn-throat-pre-placement-mm",
+        "mouth_bottom_mm": bottom,
+        "mouth_top_mm": top,
+        "woofers": [{key: row[key] for key in ("radiator_id", "x_mm", "y_mm", "radius_mm")} for row in resolved],
+    }
+    return config, placement
+
+
+def _assembly_front_context_sync(
+    design_dump: dict[str, Any],
+    cancel_cb: CancelCallback | None = None,
+) -> dict[str, Any]:
+    """The front view's solver-free context: live outlines, placements and clearances.
+
+    Distances are reference values from the same closed-form placement the
+    build uses; the build itself certifies the 0.1 mm clearances exactly.
+    """
+
+    from hornlab_mesher.config_builder import resolve_enclosure_bounds, resolve_geometry
+
+    design = DesignConfig.model_validate(design_dump)
+    try:
+        config, placement = assembly_mesher_config(design)
+    except AssemblyRefusal as exc:
+        return {"refusal": str(exc)}
+    probe = deepcopy(config)
+    if isinstance(probe.get("enclosure"), dict):
+        probe["enclosure"].pop("woofers", None)
+    geometry = resolve_geometry(probe).geometry
+    ring = np.asarray(geometry.inner_points)[:, -1, :2]
+    step = max(1, len(ring) // 256)
+    outline = [[float(x), float(y)] for x, y in ring[::step]]
+    bounds = resolve_enclosure_bounds(probe, warn_prefix=None) if probe.get("mode") == "enclosure" else None
+    baffle = None if bounds is None else {
+        "x0_mm": bounds["bx0"], "x1_mm": bounds["bx1"], "y0_mm": bounds["by0"], "y1_mm": bounds["by1"],
+        "edge_mm": bounds.get("clamped_edge", 0.0),
+    }
+    clearances = {}
+    woofers = placement["woofers"]
+    for woofer in woofers:
+        centre = np.asarray([woofer["x_mm"], woofer["y_mm"]])
+        radius = woofer["radius_mm"]
+        entry: dict[str, Any] = {
+            "mouth_mm": float(np.min(np.linalg.norm(ring - centre, axis=1)) - radius),
+            "woofers": {
+                other["radiator_id"]: float(np.hypot(*(centre - [other["x_mm"], other["y_mm"]])) - radius - other["radius_mm"])
+                for other in woofers if other["radiator_id"] != woofer["radiator_id"]
+            },
+        }
+        if baffle is not None:
+            inset = baffle["edge_mm"]
+            entry["baffle_edge_mm"] = float(min(
+                centre[0] - (baffle["x0_mm"] + inset), (baffle["x1_mm"] - inset) - centre[0],
+                centre[1] - (baffle["y0_mm"] + inset), (baffle["y1_mm"] - inset) - centre[1],
+            ) - radius)
+        clearances[woofer["radiator_id"]] = entry
+    return {**placement, "mouth_outline_mm": outline, "baffle": baffle, "clearances": clearances,
+            "minimum_clearance_mm": 0.1}
+
+
+async def assembly_front_context(design: DesignConfig) -> dict[str, Any]:
+    """Run ``_assembly_front_context_sync`` where a mesher failure cannot hurt the server."""
+
+    return await run_mesh_build(_assembly_front_context_sync, design.model_dump(mode="json"))
+
+
+def _build_assembly_sync(
+    design_dump: dict[str, Any],
+    cancel_cb: CancelCallback | None = None,
+) -> dict[str, Any]:
+    """A design assembly's artifact, in the same child and guards as a design mesh."""
+
+    design = DesignConfig.model_validate(design_dump)
+    config, placement = assembly_mesher_config(design)
+    result = _build_design_artifact(design, config, cancel_cb, assembly=True)
+    result["placement"] = placement
+    return result
+
+
+async def build_assembly_mesh(
+    design: DesignConfig, cancel_cb: CancelCallback | None = None,
+) -> dict[str, Any]:
+    """Build a design assembly's solver artifact in the killable mesher child.
+
+    Unlike ``build_solver_mesh`` nothing is cached here: the compiled record
+    is content-addressed by its producer, which reuses a published artifact.
+    """
+
+    return await run_mesh_build(_build_assembly_sync, design.model_dump(mode="json"), cancel_cb=cancel_cb)
+
+
+def _build_design_artifact(
+    design: DesignConfig,
+    solver_config: dict[str, Any],
+    cancel_cb: CancelCallback | None = None,
+    *,
+    assembly: bool = False,
+) -> dict[str, Any]:
     try:
         from hornlab_mesher import TriangleBudgetExceeded
         from hornlab_mesher.config_builder import build_from_config
@@ -1028,10 +1193,9 @@ def _build_sync(
     # rich, and only a real build ever needs to parse an artifact.
     import meshio
 
-    design = DesignConfig.model_validate(design_dump)
     _check_cancel(cancel_cb)
     config, warning_limit_full_domain, expected_domain_multiplier = _mesh_policy(
-        design, _solver_mesher_config(design)
+        design, solver_config
     )
     memory_limit = dense_solver_memory_limit()
     _check_cancel(cancel_cb)
@@ -1090,7 +1254,11 @@ def _build_sync(
         int(tag): int(count)
         for tag, count in zip(unique_tags, unique_counts, strict=True)
     }
-    invalid_tags = sorted(set(tag_count_values) - CANONICAL_SURFACE_TAGS)
+    # An assembly's moving patches carry the tags its own tag map declares.
+    assembly_tags = {
+        int(tag) for tag in (metadata.get("source_tags") or {}).values()
+    } if assembly else set()
+    invalid_tags = sorted(set(tag_count_values) - CANONICAL_SURFACE_TAGS - assembly_tags)
     if invalid_tags:
         raise RuntimeError(
             f"HornLab mesher returned unsupported surface tags: {invalid_tags}"
@@ -1135,7 +1303,7 @@ def _build_sync(
     integrity["element_quality"] = mesh_element_quality_report(vertices, triangles)
     _require_closed_acoustic_topology(config, integrity)
     tag_counts = {
-        str(tag): tag_count_values.get(tag, 0) for tag in sorted(CANONICAL_SURFACE_TAGS)
+        str(tag): tag_count_values.get(tag, 0) for tag in sorted(CANONICAL_SURFACE_TAGS | assembly_tags)
     }
     bounds_min = np.min(vertices, axis=0)
     bounds_max = np.max(vertices, axis=0)
@@ -1439,6 +1607,11 @@ __all__ = [
     "SELF_INTERSECTION_REMEDY",
     "SELF_INTERSECTION_WARNING_PREFIX",
     "SOLVER_MESH_CACHE_FORMAT_VERSION",
+    "AssemblyRefusal",
+    "assembly_front_context",
+    "assembly_mesher_config",
+    "assembly_woofer_rows",
+    "build_assembly_mesh",
     "build_solver_mesh",
     "clear_solver_mesh_cache",
     "dense_solver_memory_limit",

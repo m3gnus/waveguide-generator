@@ -29,7 +29,8 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, TypeAdapter, mode
 from server.cadlink.identity import mint_id, utc_now
 from server.cadlink.operations import REASON_UPDATE_RESTART_PENDING
 from server.cadlink.roles import inventory_sha256, normalize_source_role, prepared_inventory_sha256
-from server.cadlink.store import FILE_MODEL_PREFIX, UNFILED_MODEL_ID, file_model_id
+from server.cadlink.intake.design_assembly import AssemblySuperseded, compile_design_assembly
+from server.cadlink.store import FILE_MODEL_PREFIX, UNFILED_MODEL_ID, design_model_id, file_model_id
 from server.cadlink.wglink_protocol import SOURCE_ROLES
 from server.contracts.geometry import SYMMETRY_PLANE_AXIS, imported_symmetry_from_cut_planes
 from server.contracts import JobModel
@@ -46,11 +47,15 @@ from server.jobs.model_solve import ModelSolveRefusal, ModelSolveRequest, solve_
 from server.jobs.models import SolveAccepted
 from server.jobs.runtime import ImportedSolveRefusal
 from server.mesh.artifact import read_verified_import_mesh
-from server.mesh.builder import _enforce_dense_solver_memory_ceiling
+from server.design.schema import DesignConfig
+from server.design.uid import DesignUid
+from server.mesh.builder import _enforce_dense_solver_memory_ceiling, assembly_front_context
+from server.mesh.child import MesherChildError, MesherCrashError
 from server.mesh.errors import SolverMemoryTooLarge
 from server.mesh.file_import import MAX_MESH_BYTES, file_mesh_integrity, inspect_file_mesh, mesh_text, parse_file_mesh, prepare_file_mesh, solve_group_tags, validate_file_symmetry, validate_remove_lid_planes
 from server.mesh.imported import polar_grid_from_symmetry
 from server.mesh.prepared_gc import prepared_mesh_use
+from server.mesh.prepared_record import seal_prepared_record
 from server.platform.staging import publish_staging_directory
 from server.workspace.archive_identity import claim_project_folder
 
@@ -151,6 +156,20 @@ class ModelSetupWrite(BaseModel):
         if self.prepared_id is not None and self.inventory is not None:
             raise ValueError("name a prepared mesh or a source inventory, not both")
         return self
+
+
+class AssemblyContextRequest(JobModel):
+    """A design whose Sources and baffle assembly the front view is drawing."""
+
+    design: dict[str, Any]
+
+
+class AssemblyCompileRequest(AssemblyContextRequest):
+    """Compile one captured design revision's assembly into a prepared mesh."""
+
+    design_uid: DesignUid
+    design_name: str = Field(default="", max_length=240)
+    design_revision: int = Field(ge=1)
 
 
 class ModelRefusal(ValueError):
@@ -345,7 +364,7 @@ def _register_mesh(
             created_at=created_at,
             manifest_sha256=spec_digest,
             artifact_sha256=original_digest,
-            record_json=json.dumps(record, allow_nan=False),
+            record_json=seal_prepared_record(record, producer="mesh-file"),
             known_ingest_ids=[candidate["ingest_id"] for candidate in candidates],
         )
     except BaseException:
@@ -416,6 +435,8 @@ def public_record(record: dict[str, Any], model_id: str | None) -> dict[str, Any
         "ingest_id", "producer", "created_at", "manifest_sha256", "artifact_sha256",
         "source_file", "source_tags", "sources", "summary",
         "symmetry", "polar_grid_derivation",
+        # A design assembly's captured revision and its compiled inventories.
+        "design", "radiators", "excitations", "signal_groups", "required_features",
     )
     public = {
         **{key: record[key] for key in keys if key in record},
@@ -719,6 +740,62 @@ def mount_models_api(application: FastAPI) -> None:
             }
 
         return await answer(run)
+
+    @router.post("/assembly/context", responses={422: refused[422]})
+    async def assembly_context(body: AssemblyContextRequest) -> Any:
+        """The front view's live outlines, woofer placements and clearances.
+
+        Solver-free: the design mesher's closed-form placement against the
+        live horn and box, without building a mesh. A design the assembly
+        cannot be placed on answers with its refusal.
+        """
+
+        try:
+            design = DesignConfig.model_validate(body.design)
+            return await assembly_front_context(design)
+        except (MesherChildError, MesherCrashError) as exc:
+            return _refusal(422, "assembly_refused", str(exc))
+        except ValueError as exc:
+            return _refusal(422, "assembly_refused", str(exc))
+
+    @router.post("/assembly/compile", responses=refused)
+    async def assembly_compile(body: AssemblyCompileRequest) -> Any:
+        """Compile the design's assembly and publish it as its design model's prepared mesh.
+
+        ``superseded``: a newer revision of the design was asked for meanwhile,
+        and this one was not published.
+        """
+
+        if (blocked := restart_pending()) is not None:
+            return blocked
+        try:
+            outcome = await compile_design_assembly(
+                store, data_dir, body.design, design_uid=body.design_uid,
+                design_name=body.design_name, design_revision=body.design_revision,
+            )
+        except AssemblySuperseded:
+            return {"status": "superseded"}
+        except SolverMemoryTooLarge as exc:
+            logger.warning("Solver memory admission refused an assembly: %s", exc)
+            return _refusal(422, "solver_memory_exceeded", SolverMemoryTooLarge.USER_MESSAGE)
+        except (MesherChildError, MesherCrashError) as exc:
+            return _refusal(422, "assembly_refused", str(exc))
+        except ValueError as exc:
+            return _refusal(422, "assembly_refused", str(exc))
+        if outcome["status"] != "published":
+            return {"status": outcome["status"]}
+        record = outcome["record"]
+        model_id = design_model_id(body.design_uid)
+
+        def published() -> dict[str, Any]:
+            return {
+                "status": "published",
+                "reused": outcome["reused"],
+                "model": _model_summary(store.get_model(model_id)),
+                "prepared": _prepared_with_mesh(record, model_id),
+            }
+
+        return await read(published)
 
     @router.post("/{model_id}/prepare", responses=refused)
     async def prepare(model_id: str, body: FilePreparation) -> Any:

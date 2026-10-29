@@ -143,9 +143,13 @@ def is_stale(row: Mapping[str, Any], cutoff: datetime) -> bool:
 
 
 def _producer(record: Mapping[str, Any]) -> str | None:
-    """``mesh-file`` or ``cad``; None for anything this collector does not own."""
+    """``mesh-file`` or ``cad``; None for anything this collector does not own.
 
-    if record.get("producer") == "mesh-file":
+    A design assembly is a ready mesh in its own ``files`` folder, collected
+    exactly as an imported file's.
+    """
+
+    if record.get("producer") in {"mesh-file", "design-assembly"}:
         return "mesh-file"
     if "producer" not in record and record.get("bundle_store_path") and record.get("mesh_store_path"):
         return "cad"

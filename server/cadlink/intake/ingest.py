@@ -43,6 +43,7 @@ from server.mesh.imported import (
 from server.mesh.artifact import mesh_text_sha256, read_verified_import_mesh
 from server.mesh.errors import MeshTooLarge, SolverMemoryTooLarge
 from server.mesh.prepared_gc import prepared_mesh_use
+from server.mesh.prepared_record import seal_prepared_record, solve_model_sha256 as solve_model_sha256
 from server.integration.mesher_identity import mesher_identity
 from server.platform.paths import data_paths
 from server.platform.staging import publish_staging_directory
@@ -206,34 +207,6 @@ def _fem_rule(exc: BaseException) -> bool:
     return isinstance(exc, FemRegionMeshError) or (
         isinstance(exc, ChildRefusal) and exc.details.get("budget_exhausted") is True
     )
-
-
-def solve_model_sha256(record: Mapping[str, Any]) -> str:
-    """Identity of prepared geometry and its effective solver interpretation."""
-    normalisation = record["normalisation"]
-    solve_model = {
-        "version": 1,
-        "mesh_content_sha256": record["mesh_content_sha256"],
-        "solver_frame_matrix": normalisation.get("matrix"),
-        "solver_frame": normalisation.get("solver_frame"),
-        "symmetry": record["symmetry"],
-        "domain_interpretation": record["domain_interpretation"],
-        "source_tags": record["source_tags"],
-        "tag_map": record["tag_map"],
-        "identity": record["identity"],
-    }
-    if record.get("native_source") is not None:
-        solve_model["native_source"] = record["native_source"]
-    if record.get("fem_regions"):
-        solve_model["fem_regions"] = [
-            {key: region[key] for key in (
-                "region_id", "mesh_content_sha256", "medium", "surface_groups",
-            )}
-            for region in record["fem_regions"]
-        ]
-    if record.get("coupled_exterior"):
-        solve_model["coupled_exterior_sha256"] = record["coupled_exterior"]["mesh_content_sha256"]
-    return "sha256:" + hashlib.sha256(_canonical(solve_model)).hexdigest()
 
 
 def _finding_id(kind: str, identity: Any) -> str:
@@ -2280,9 +2253,7 @@ def _ingest_bundle(
             record["fem_regions"] = fem_regions
         if coupled_exterior is not None:
             record["coupled_exterior"] = coupled_exterior
-        record["solve_model_sha256"] = solve_model_sha256(record)
-        record["report_sha256"] = "sha256:" + hashlib.sha256(_canonical(record)).hexdigest()
-        return _canonical(record).decode("utf-8")
+        return seal_prepared_record(record, producer="cad")
 
     try:
         row = store.allocate_ingest(

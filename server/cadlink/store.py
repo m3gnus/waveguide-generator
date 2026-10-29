@@ -339,7 +339,7 @@ _SCHEMA = (
     """
     CREATE TABLE IF NOT EXISTS imported_models (
       model_id TEXT PRIMARY KEY,
-      producer TEXT NOT NULL CHECK (producer IN ('mesh-file', 'cad')),
+      producer TEXT NOT NULL CHECK (producer IN ('mesh-file', 'cad', 'design-assembly')),
       display_name TEXT NOT NULL,
       archive_stem TEXT,
       latest_ingest_id TEXT,
@@ -458,6 +458,23 @@ def file_model_id(artifact_sha256: str) -> str:
     return FILE_MODEL_PREFIX + artifact_sha256
 
 
+DESIGN_MODEL_PREFIX = "design-assembly:"
+
+
+def design_model_id(design_uid: str) -> str:
+    """The model a design's compiled assembly belongs to: its permanent design id.
+
+    '' for an id that is not a design id, so such a record is never filed.
+    """
+
+    from server.design.uid import validate_design_uid
+
+    try:
+        return DESIGN_MODEL_PREFIX + str(validate_design_uid(design_uid)) if design_uid else ""
+    except ValueError:
+        return ""
+
+
 def _text(value: object) -> str:
     return str(value or "").strip() if isinstance(value, str) else ""
 
@@ -472,6 +489,12 @@ def _record_model(conn: sqlite3.Connection, record: Mapping[str, Any]) -> tuple[
     the project that happens to be open.
     """
 
+    if record.get("producer") == "design-assembly":
+        # A design's compiled assembly belongs to its saved-design identity.
+        design = record.get("design") if isinstance(record.get("design"), Mapping) else {}
+        model_id = design_model_id(_text(design.get("design_uid")))
+        return (model_id, "design-assembly", _text(design.get("name")),
+                _text(record.get("archive_stem"))) if model_id else ("", "design-assembly", "", "")
     if record.get("producer") == "mesh-file":
         artifact = _text(record.get("artifact_sha256"))
         if not artifact.startswith("sha256:"):
@@ -572,6 +595,30 @@ def _file_ingest_under_model(
         (model_id, producer, name, stem or None, ingest_id, created_at, created_at),
     )
     return model_id
+
+
+def _widen_model_producers(conn: sqlite3.Connection) -> None:
+    """Admit design-assembly models in a store made before they existed.
+
+    SQLite cannot alter a CHECK constraint, so the table is copied once into
+    the current definition, inside the opening transaction. Rows, ids and
+    columns are unchanged and nothing indexes or references the table; an
+    older release keeps reading and writing it as before.
+    """
+
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'imported_models'"
+    ).fetchone()
+    if row is None or "'design-assembly'" in str(row[0]):
+        return
+    conn.execute("ALTER TABLE imported_models RENAME TO imported_models_before_assembly")
+    conn.execute(next(statement for statement in _SCHEMA if "TABLE IF NOT EXISTS imported_models" in statement))
+    conn.execute(
+        "INSERT INTO imported_models (model_id, producer, display_name, archive_stem, "
+        "latest_ingest_id, created_at, updated_at) SELECT model_id, producer, display_name, "
+        "archive_stem, latest_ingest_id, created_at, updated_at FROM imported_models_before_assembly"
+    )
+    conn.execute("DROP TABLE imported_models_before_assembly")
 
 
 def _file_unfiled_ingests(conn: sqlite3.Connection) -> None:
@@ -935,6 +982,7 @@ class CadLinkStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS ingests_by_model ON ingests(model_id, created_at)"
             )
+            _widen_model_producers(conn)
             _file_unfiled_ingests(conn)
             archive_identity.initialize_registry(conn)
             _migrate_legacy_file_setups(conn)
@@ -2366,19 +2414,27 @@ class CadLinkStore:
         artifact_sha256: str,
         record_json: str,
         known_ingest_ids: Iterable[str] = (),
+        model_id: str | None = None,
+        commit_guard: Callable[[sqlite3.Connection], bool] | None = None,
     ) -> tuple[dict[str, Any], bool]:
-        """Record a file preparation whose files are already published.
+        """Record a ready-mesh preparation whose files are already published.
 
         A short transaction, with no file I/O in it. When another preparation
-        of the same file and spec committed meanwhile -- one the caller had not
+        of the same model and spec committed meanwhile -- one the caller had not
         already checked (``known_ingest_ids``) -- that one is returned and this
         one is not recorded: ``(row, False)``. The caller removes its files.
+        ``model_id`` defaults to the file model of ``artifact_sha256``; a
+        design assembly names its design model. ``commit_guard`` runs inside
+        the transaction first, as ``allocate_ingest``'s does: a build that is
+        no longer current commits nothing.
         """
 
         self.initialize()
-        model_id = file_model_id(artifact_sha256)
+        model_id = model_id or file_model_id(artifact_sha256)
         known = set(known_ingest_ids)
         with self._lock, self._transaction() as conn:
+            if commit_guard is not None and not commit_guard(conn):
+                raise StaleAttempt("the preparation is no longer current")
             for row in conn.execute(
                 "SELECT * FROM ingests WHERE model_id = ? AND manifest_sha256 = ? "
                 "ORDER BY created_at DESC, ingest_id DESC",

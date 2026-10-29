@@ -63,11 +63,11 @@ def initialize_registry(conn: sqlite3.Connection) -> None:
             f"SELECT {column}, archive_stem FROM {table} "
             "WHERE archive_stem IS NOT NULL AND archive_stem != ''"
         ):
-            # Imported CAD models are lineages, not file identities.
+            # Imported CAD models are lineages; files and design assemblies are models.
             identity = str(row[0])
             key = (
                 "lineage:" + identity
-                if table == "imported_models" and not identity.startswith("mesh-file:")
+                if table == "imported_models" and not identity.startswith(("mesh-file:", "design-assembly:"))
                 else prefix + identity
             )
             mirrors.append((table, column, identity, key, str(row[1])))

@@ -49,6 +49,7 @@ from server.jobs.model_solve import recorded_setup_revision
 from server.jobs.models import SolveRequest
 from server.jobs.models_api import ModelRefusal, public_record, read_original
 from server.mesh.artifact import read_verified_import_mesh
+from server.mesh.prepared_record import is_ready_mesh
 
 
 
@@ -237,7 +238,7 @@ def read_run_workspace(row: Mapping[str, Any], store: Any) -> RunWorkspace:
         )
         return answer
     prepared = public_record(record, str(model_id))
-    if (record.get("producer") or "cad") == "mesh-file":
+    if is_ready_mesh(record):
         try:
             prepared["msh_text"] = read_verified_import_mesh(record)
         except (OSError, ValueError) as exc:
