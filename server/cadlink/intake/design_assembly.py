@@ -46,6 +46,7 @@ from server.mesh.artifact import read_verified_import_mesh
 from server.mesh.builder import (
     AssemblyRefusal,
     _solver_mesher_config,
+    assembly_ath_envelope,
     assembly_woofer_rows,
     build_assembly_mesh,
 )
@@ -107,6 +108,7 @@ def geometry_spec(design: DesignConfig) -> dict[str, Any]:
     assert assembly is not None
     return {
         "mesher_config": _solver_mesher_config(design),
+        "ath_lf_envelope": assembly_ath_envelope(design),
         "woofers": assembly_woofer_rows(design),
         "signal_groups": [
             {"id": group.id, "members": [member.radiator_id for member in group.members]}

@@ -184,6 +184,8 @@ export interface DesignDocument {
     depth_margin_mm?: number;
     front_resolution: number | number[];
     back_resolution: number | number[];
+    /** ATH Dim: overall +X, +Y, -X, -Y distances from the horn axis to the box sides. */
+    dim_mm?: [number, number, number, number];
     baffle_margin: number;
   };
   mesh: {
@@ -1179,6 +1181,7 @@ export function serializeDesign(design: DesignDocument): Record<string, unknown>
     space_b: enclosure.space_b,
     front_resolution: enclosure.front_resolution,
     back_resolution: enclosure.back_resolution,
+    ...(enclosure.dim_mm ? { dim_mm: [...enclosure.dim_mm] } : {}),
   };
   const payload: Record<string, unknown> = {
     ...root,

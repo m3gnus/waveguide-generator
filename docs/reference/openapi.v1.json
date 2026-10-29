@@ -4866,6 +4866,38 @@
             "description": "Minimum clearance behind the horn in mm; defaults to 1 mm",
             "title": "Depth Margin Mm"
           },
+          "dim_mm": {
+            "anyOf": [
+              {
+                "maxItems": 4,
+                "minItems": 4,
+                "prefixItems": [
+                  {
+                    "exclusiveMinimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "exclusiveMinimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "exclusiveMinimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "exclusiveMinimum": 0.0,
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Overall +X, +Y, -X, -Y distances from the horn axis to the box sides in mm",
+            "title": "Dim Mm"
+          },
           "edge_radius": {
             "anyOf": [
               {

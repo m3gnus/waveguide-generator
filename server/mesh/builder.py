@@ -1050,6 +1050,18 @@ def assembly_woofer_rows(design: DesignConfig) -> list[dict[str, Any]]:
     return rows
 
 
+def assembly_ath_envelope(design: DesignConfig) -> bool:
+    """Whether an enabled woofer came from ATH's LFSource: the mesher's ATH box rule.
+
+    The design mesher's measured LFSource compatibility (box rounding and the
+    imported cone's chord bound) applies to those designs only; horn-only and
+    WG-authored assemblies keep the established enclosure bytes.
+    """
+
+    assembly = design.root.assembly
+    return assembly is not None and any(w.enabled and w.ath is not None for w in assembly.woofers)
+
+
 def assembly_mesher_config(design: DesignConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     """The full-domain design-mesher config of a design assembly, and its placement.
 
@@ -1083,6 +1095,8 @@ def assembly_mesher_config(design: DesignConfig) -> tuple[dict[str, Any], dict[s
                 "Woofers cut the enclosure's front baffle. Set an enclosure depth, or disable the woofers."
             )
         config["enclosure"]["woofers"] = resolved
+        if assembly_ath_envelope(design):
+            config["enclosure"]["ath_lf_envelope"] = True
     placement = {
         "frame": "horn-throat-pre-placement-mm",
         "mouth_bottom_mm": bottom,
@@ -1608,6 +1622,7 @@ __all__ = [
     "SELF_INTERSECTION_WARNING_PREFIX",
     "SOLVER_MESH_CACHE_FORMAT_VERSION",
     "AssemblyRefusal",
+    "assembly_ath_envelope",
     "assembly_front_context",
     "assembly_mesher_config",
     "assembly_woofer_rows",

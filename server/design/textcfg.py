@@ -537,6 +537,14 @@ def _enclosure(
     for source, target in mapping.items():
         if source in block.items:
             result[target] = block.items[source]
+    if "Dim" in block.items:
+        # The design mesher owns ATH's Dim reading (four positive distances).
+        from hornlab_mesher.config_parser import ConfigError, ath_enclosure_dim
+
+        try:
+            result["dim_mm"] = list(ath_enclosure_dim(block.items["Dim"]))
+        except ConfigError as exc:
+            raise TextConfigError(str(exc)) from exc
     if "Spacing" in block.items:
         parts = [part.strip() for part in block.items["Spacing"].split(",")]
         if v2 and len(parts) != 4:
@@ -808,7 +816,7 @@ _UNSUPPORTED_ATH_REASONS: dict[str, str] = {
     "FusionRotaryProfile": "the rotary profile with flange and joint is not implemented",
     "BEE": "the LF enclosure is not implemented",
     "Source.Array": "source arrays are not implemented",
-    "LFSource": "secondary LF sources are not implemented",
+    "LFSource": "LF sources are read only as Mesh.Enclosure members (LFSource.A and LFSource.B)",
     "Source.Contours": "contour-drawn (dome) sources are not implemented; WG would solve "
     "with its default throat source",
     "Mesh.ThroatSegments": "the throat-extension slice count is read but never built; use Mesh.ZMapPoints",
@@ -816,7 +824,6 @@ _UNSUPPORTED_ATH_REASONS: dict[str, str] = {
     "Mesh.ThroatSliceDensity": "the throat slice density is read but never built",
     "Coverage.Mode": "the coverage mode is read but never built",
     "Plan": "user-defined enclosure plans are not implemented; use Depth and Spacing",
-    "Dim": "enclosure dimensions by Dim are not implemented; use Spacing",
 }
 # Applied by ATH only inside the R-OSSE block; a top-level copy is ignored by ATH.
 _ATH_ROSSE_BLOCK_ONLY = {
@@ -826,6 +833,14 @@ _ATH_ROSSE_BLOCK_ONLY = {
 _ATH_ENCLOSURE_MEMBERS = frozenset(
     {"Depth", "EdgeRadius", "EdgeType", "FrontResolution", "BackResolution", "Spacing"}
 )
+
+
+def _ath_enclosure_member(member: str) -> bool:
+    """Read by WG: the box members, and the LF sources and Dim the design mesher reads."""
+
+    from hornlab_mesher.config_parser import ATH_ENCLOSURE_LF_KEYS
+
+    return member in _ATH_ENCLOSURE_MEMBERS or member in ATH_ENCLOSURE_LF_KEYS
 # R-OSSE block members measured against ATH (the importer's profile aliases).
 # `Rot`, `Length` and `Scale` are read from inside the block by neither ATH nor
 # this importer (reported as ignored); every other member is unmeasured and
@@ -965,7 +980,7 @@ def _refuse_unsupported_ath_items(
                 add(key, varying(key, value, reason))
         elif key.startswith(_ENCLOSURE_FLAT_PREFIX):
             member = key[len(_ENCLOSURE_FLAT_PREFIX):]
-            if member not in _ATH_ENCLOSURE_MEMBERS and not member.startswith("_"):
+            if not _ath_enclosure_member(member) and not member.startswith("_"):
                 add(key, _UNSUPPORTED_ATH_REASONS.get(
                     member, "this enclosure member is not implemented; WG reads Depth, "
                     "EdgeRadius, EdgeType, FrontResolution, BackResolution and Spacing"))
@@ -984,7 +999,7 @@ def _refuse_unsupported_ath_items(
         base = _ath_name(name)
         if base == "Mesh.Enclosure":
             for key in block.items:
-                if key.startswith("_") or key in _ATH_ENCLOSURE_MEMBERS:
+                if key.startswith("_") or _ath_enclosure_member(key):
                     continue
                 add(f"Mesh.Enclosure.{key}", _UNSUPPORTED_ATH_REASONS.get(
                     key, "this enclosure member is not implemented; WG reads Depth, "
@@ -1409,7 +1424,7 @@ def _build_payload(
             consumed_keys.update(
                 key for key in flat
                 if key.startswith(_ENCLOSURE_FLAT_PREFIX)
-                and key[len(_ENCLOSURE_FLAT_PREFIX):] in _ATH_ENCLOSURE_MEMBERS
+                and _ath_enclosure_member(key[len(_ENCLOSURE_FLAT_PREFIX):])
             )
 
     if v2:
@@ -1465,6 +1480,78 @@ def _build_payload(
     return payload
 
 
+def _ath_enclosure_items(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) -> dict[str, str]:
+    """``Mesh.Enclosure`` members as the design mesher's text parser merges them."""
+
+    block = blocks.get("Mesh.Enclosure")
+    return {
+        **{key[len(_ENCLOSURE_FLAT_PREFIX):]: value for key, value in flat.items()
+           if key.startswith(_ENCLOSURE_FLAT_PREFIX) and len(key) > len(_ENCLOSURE_FLAT_PREFIX)},
+        **(block.items if block is not None else {}),
+    }
+
+
+def _apply_ath_lf_sources(
+    payload: dict[str, Any], enclosure_items: Mapping[str, str], quadrants: Any,
+    mesher_config: Mapping[str, Any], ignored: list[IgnoredSetting],
+) -> None:
+    """Import ATH ``Mesh.Enclosure.LFSource.A``/``B`` as design assembly woofers.
+
+    The design mesher reads the blocks and reports its normalisation (an
+    omitted weight driven at 0 dB, zero or repeated SIDs left unset, B kept
+    in full domain); WG mints the radiator identities and keeps ATH's
+    placement relations. The box is ATH's own: the mesher's default depth and
+    margins fill only what the file leaves out, and nothing is enlarged.
+    """
+
+    import uuid
+
+    from hornlab_mesher.config_parser import ConfigError, ath_enclosure_sources
+
+    from server.contracts.assembly import HF_RADIATOR_ID
+
+    try:
+        rows, notes, override = ath_enclosure_sources(enclosure_items, quadrants=quadrants)
+    except ConfigError as exc:
+        raise TextConfigError(str(exc)) from exc
+    ignored.extend(IgnoredSetting(key=key, value=value, note=note) for key, value, note in notes)
+    if not rows:
+        return
+    if override is not None:
+        payload.setdefault("mesh", {})["quadrants"] = override
+    resolved = mesher_config.get("enclosure") or {}
+    enclosure = payload.setdefault("enclosure", {})
+    if enclosure.get("depth") is None:
+        enclosure["depth"] = resolved["depth_mm"]
+    for name in ("space_l", "space_t", "space_r", "space_b"):
+        if enclosure.get(name) is None and resolved.get(name + "_mm") is not None:
+            enclosure[name] = resolved[name + "_mm"]
+    woofers: list[dict[str, Any]] = []
+    groups: list[dict[str, Any]] = [
+        {"id": str(uuid.uuid4()), "label": "HF", "members": [{"radiator_id": HF_RADIATOR_ID}]}
+    ]
+    for row in rows:
+        radiator = str(uuid.uuid4())
+        ath = {"key": row["ath"]["key"],
+               **{name: row["ath"][name] for name in ("weight", "sid") if name in row["ath"]}}
+        woofers.append({
+            "id": radiator, "label": row["label"], "enabled": True, "radius_mm": row["radius_mm"],
+            "shape": dict(row["shape"]), "resolution_mm": row["resolution_mm"],
+            "placement": dict(row["placement"]), "drive": row["drive"]["kind"], "ath": ath,
+        })
+        # A stated nonzero DrivingWeight scales the prescribed velocity; its
+        # sign is polarity. Zero is a rigid, undriven diaphragm (``drive``).
+        weight = ath.get("weight")
+        member: dict[str, Any] = {"radiator_id": radiator}
+        if weight not in (None, 0):
+            if abs(weight) != 1:
+                member["weight"] = abs(weight)
+            if weight < 0:
+                member["invert"] = True
+        groups.append({"id": str(uuid.uuid4()), "label": row["label"], "members": [member]})
+    payload["assembly"] = {"woofers": woofers, "signal_groups": groups}
+
+
 def _mesher_validation_text(
     flat: Mapping[str, str], blocks: Mapping[str, _RawBlock], comments: list[str],
     payload: Mapping[str, Any], ignored: list[IgnoredSetting],
@@ -1505,9 +1592,13 @@ def _mesher_validation_text(
     # Even a zero-depth enclosure conflicts with an explicit infinite baffle
     # in the mesher's fresh-import contract. Do not hide that authored pair.
     explicit_baffle = _ath_number(flat.get("ABEC.SimType", flat.get("Simulation.SimType", ""))) == 1
+    # ATH builds the box for LF sources or Dim whatever Depth says, with the
+    # design mesher's measured default depth; they are never preconfiguration.
+    lf_box = any(_ath_enclosure_member(key) and key not in _ATH_ENCLOSURE_MEMBERS
+                 for key in _ath_enclosure_items(flat, blocks))
     inactive_enclosure = (enclosure is not None
                           and _ath_number(str(enclosure.get("depth", "0"))) == 0
-                          and not explicit_baffle)
+                          and not explicit_baffle and not lf_box)
     if inactive_enclosure:
         rows = [row for row in rows if not row.startswith(_ENCLOSURE_FLAT_PREFIX)]
         if payload.get("simulation", {}).get("sim_type") is None:
@@ -1690,9 +1781,13 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         from hornlab_mesher.config_builder import build_geometry_params
         try:
             validation_text = _mesher_validation_text(flat, blocks, comments, payload, ignored_profile)
-            build_geometry_params(parse_text_config(validation_text))
+            mesher_config = parse_text_config(validation_text)
+            build_geometry_params(mesher_config)
         except (ConfigError, ValueError) as exc:
             raise TextConfigError(str(exc)) from exc
+        if fresh_ath:
+            _apply_ath_lf_sources(payload, _ath_enclosure_items(flat, blocks),
+                                  flat.get("Mesh.Quadrants"), mesher_config, ignored_profile)
     try:
         design = DesignConfig.model_validate(payload)
     except ValidationError as exc:
@@ -1705,7 +1800,9 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         comments=comments,
         raw_values=raw_values,
         cadlink=cadlink,
-        source_text=text,
+        # Imported LF sources were given radiator identities here, which the
+        # ATH text does not carry: keep them by never re-writing that text.
+        source_text=None if fresh_ath and design.root.assembly is not None else text,
         ignored_profile=ignored_profile + [
             IgnoredSetting(
                 key=f"{name}.{key}" if name else key,
@@ -1856,6 +1953,7 @@ def _serialize_enclosure(lines: list[str], config: Any, *, v2: bool = False) -> 
             ("EdgeRadius", config.edge_radius),
             ("EdgeType", config.edge_type),
             ("Spacing", spacing),
+            ("Dim", ",".join(format(value, ".15g") for value in config.dim_mm) if config.dim_mm is not None else None),
             ("FrontResolution", config.front_resolution),
             ("BackResolution", config.back_resolution),
         ],

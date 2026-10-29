@@ -58,7 +58,6 @@ UNSUPPORTED = {
     "BEE": BASE + "BEE = {\n x = 1\n}\n",
     "Mesh.Roundover": BASE + "Mesh = {\n Roundover = 10\n}\n",
     "Mesh.Enclosure.Plan": BASE + "Mesh.Enclosure = {\n Depth = 200\n Plan = bigbox\n}\n",
-    "Mesh.Enclosure.Dim": BASE + "Mesh.Enclosure = {\n Depth = 200\n Dim = 300,400\n}\n",
     "Throat.Profile": BASE.replace(" q = 0.995\n", " q = 0.995\n Throat.Profile = 3\n"),
 }
 
@@ -564,6 +563,12 @@ GAP_STUDY_KEYS = {
 @pytest.mark.parametrize("family, base", [("OSSE", BASE), ("R-OSSE", RBASE)])
 @pytest.mark.parametrize("key", sorted(GAP_STUDY_KEYS))
 def test_every_gap_study_key_has_transport_or_a_named_refusal(family: str, base: str, key: str) -> None:
+    if key == "Mesh.Enclosure.Dim":
+        # Dim is read through the design mesher's contract (test_ath_lfsource.py):
+        # four positive distances, or this named refusal.
+        with pytest.raises(TextConfigError, match="Mesh.Enclosure.Dim must contain four"):
+            parse(base + GAP_STUDY_KEYS[key])
+        return
     if key == "Source.Contours":
         from server.tests._ath_contract import assert_v2_refusal
         assert_v2_refusal(base + GAP_STUDY_KEYS[key])

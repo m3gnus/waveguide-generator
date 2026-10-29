@@ -589,6 +589,9 @@ class CrossSectionConfig(StrictModel):
     aspect_ratio: Annotated[float, Field(strict=True, allow_inf_nan=False)] = Field(default=1.0, gt=0, description="Dimensionless width-to-height scaling")
 
 
+EnclosureDim = Annotated[float, Field(gt=0, allow_inf_nan=False)]
+
+
 class EnclosureConfig(StrictModel):
     depth: Expr | None = None
     depth_margin_mm: Annotated[float, Field(strict=True, allow_inf_nan=False)] | None = Field(default=None, ge=0, exclude_if=lambda v: v is None, description="Minimum clearance behind the horn in mm; defaults to 1 mm")
@@ -600,6 +603,12 @@ class EnclosureConfig(StrictModel):
     space_b: Expr | None = None
     front_resolution: ResolutionExpr | None = None
     back_resolution: ResolutionExpr | None = None
+    # ATH's Mesh.Enclosure.Dim: overall distances from the horn axis to the
+    # +X, +Y, -X and -Y box sides, in mm, read by the design mesher's parser.
+    dim_mm: tuple[EnclosureDim, EnclosureDim, EnclosureDim, EnclosureDim] | None = Field(
+        default=None, exclude_if=lambda v: v is None,
+        description="Overall +X, +Y, -X, -Y distances from the horn axis to the box sides in mm",
+    )
 
     @field_validator("depth_margin_mm")
     @classmethod

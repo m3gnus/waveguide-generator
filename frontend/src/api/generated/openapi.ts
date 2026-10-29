@@ -4313,6 +4313,16 @@ export interface components {
              * @description Minimum clearance behind the horn in mm; defaults to 1 mm
              */
             depth_margin_mm?: number | null;
+            /**
+             * Dim Mm
+             * @description Overall +X, +Y, -X, -Y distances from the horn axis to the box sides in mm
+             */
+            dim_mm?: [
+                number,
+                number,
+                number,
+                number
+            ] | null;
             edge_radius?: components["schemas"]["Expr"] | null;
             edge_type?: components["schemas"]["Expr"] | null;
             /** Front Resolution */

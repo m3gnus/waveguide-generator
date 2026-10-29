@@ -23,6 +23,15 @@ async function untouchedRoundTrip(original: Record<string, unknown>): Promise<Re
 }
 
 describe('design hydration', () => {
+  it('keeps an imported ATH Dim box on save', () => {
+    const wire = { ...serializeDesign(designForFamily('OSSE')) } as Record<string, unknown>;
+    wire.enclosure = { ...(wire.enclosure as Record<string, unknown>), depth: 300, dim_mm: [150, 160, 150, 400] };
+    const document = hydrateDesignDocument(wire);
+    expect(document.enclosure.dim_mm).toEqual([150, 160, 150, 400]);
+    expect((serializeDesign(document).enclosure as Record<string, unknown>).dim_mm).toEqual([150, 160, 150, 400]);
+    expect(serializeDesign(designForFamily('OSSE')).enclosure).not.toHaveProperty('dim_mm');
+  });
+
   it('reopens a saved assembly unchanged and leaves a horn-only design without one', async () => {
     const assembly = {
       hf_source: { radiator_id: 'horn-throat', kind: 'classic' },

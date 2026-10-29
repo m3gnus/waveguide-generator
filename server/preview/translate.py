@@ -586,6 +586,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                 "edgeType": _expr(enclosure.edge_type),
                 "frontMeshSize": enclosure_resolution(enclosure.front_resolution),
                 "backMeshSize": enclosure_resolution(enclosure.back_resolution),
+                "dim_mm": list(enclosure.dim_mm) if enclosure.dim_mm is not None else None,
             }
         )
     if root.text_import_version is not None:
