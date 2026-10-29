@@ -2451,6 +2451,33 @@ class CadLinkStore:
             row = conn.execute("SELECT * FROM ingests WHERE ingest_id = ?", (ingest_id,)).fetchone()
         return dict(row), True
 
+    def select_model_ingest(
+        self, model_id: str, ingest_id: str, *,
+        commit_guard: Callable[[sqlite3.Connection], bool] | None = None,
+    ) -> None:
+        """Make one of a model's prepared meshes its latest again, and note its use.
+
+        A reused preparation (an A -> B -> A edit) is current again: model
+        reads and collection must select and keep it, not the one in between.
+        ``commit_guard`` runs inside the transaction first, as
+        ``insert_file_ingest``'s does: a request that is no longer current
+        moves nothing.
+        """
+
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            if commit_guard is not None and not commit_guard(conn):
+                raise StaleAttempt("the preparation is no longer current")
+            now = utc_now()
+            moved = conn.execute(
+                "UPDATE imported_models SET latest_ingest_id = ?, updated_at = MAX(updated_at, ?) "
+                "WHERE model_id = ? AND EXISTS (SELECT 1 FROM ingests WHERE ingest_id = ? AND model_id = ?)",
+                (ingest_id, now, model_id, ingest_id, model_id),
+            ).rowcount
+            if not moved:
+                raise KeyError(f"{ingest_id} is not a prepared mesh of {model_id}")
+            conn.execute("UPDATE ingests SET last_used_at = ? WHERE ingest_id = ?", (now, ingest_id))
+
     def lineage_known(self, lineage_id: str) -> bool:
         """Whether a saved design or a claimed CAD document carries this lineage."""
 

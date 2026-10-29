@@ -79,15 +79,18 @@ _FENCE_SESSIONS = 1024
 
 @dataclass
 class AssemblyBuildFence:
-    """The newest revision asked for, per design and client build session.
+    """Which compile of a design may still publish.
 
-    A client numbers revisions from its own document load, so the order is
-    meaningful only within one ``(design, session)``: a reloaded page, another
-    window or a reopened design starts a session of its own and is never
-    fenced by another's numbers.
+    A client numbers revisions from its own document load, so revision order
+    is meaningful only within one ``(design, session)``: a reloaded page,
+    another window or a reopened design starts a session of its own and is
+    never refused by another's numbers. Across sessions the newest request
+    wins: once a later request exists for the design, an older one still in
+    flight -- from any session -- publishes nothing and moves no pointer.
     """
 
     _latest: OrderedDict[tuple[str, str], int] = field(default_factory=OrderedDict)
+    _newest: OrderedDict[str, tuple[str, int]] = field(default_factory=OrderedDict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def begin(self, design_uid: str, revision: int, session: str = "") -> tuple[str, str, int]:
@@ -97,13 +100,16 @@ class AssemblyBuildFence:
                 raise AssemblySuperseded("A newer revision of this design is already being prepared.")
             self._latest[key] = revision
             self._latest.move_to_end(key)
-            while len(self._latest) > _FENCE_SESSIONS:
-                self._latest.popitem(last=False)
+            self._newest[design_uid] = (session, revision)
+            self._newest.move_to_end(design_uid)
+            for remembered in (self._latest, self._newest):
+                while len(remembered) > _FENCE_SESSIONS:
+                    remembered.popitem(last=False)
         return design_uid, session, revision
 
     def current(self, token: tuple[str, str, int]) -> bool:
         with self._lock:
-            return self._latest.get((token[0], token[1])) == token[2]
+            return self._newest.get(token[0]) == (token[1], token[2])
 
 
 FENCE = AssemblyBuildFence()
@@ -380,9 +386,19 @@ def _reuse(store: Any, model_id: str, spec_digest: str) -> tuple[dict[str, Any] 
     for row in candidates:
         existing = json.loads(row["record_json"])
         if _intact(existing):
-            store.touch_ingest(str(existing["ingest_id"]))
             return existing, []
     return None, [str(row["ingest_id"]) for row in candidates]
+
+
+def _select_reused(store: Any, model_id: str, ingest_id: str, fence: AssemblyBuildFence,
+                   token: tuple[str, str, int]) -> bool:
+    """Make a reused record the model's latest again, only while this compile is current."""
+
+    try:
+        store.select_model_ingest(model_id, ingest_id, commit_guard=lambda _conn: fence.current(token))
+    except StaleAttempt:
+        return False
+    return True
 
 
 def _publish_record(
@@ -448,7 +464,9 @@ async def compile_design_assembly(
     spec_digest = _digest(compile_spec(design))
     reused, known = await asyncio.to_thread(_held, _reuse, store, model_id, spec_digest)
     if reused is not None:
-        return {"status": "published", "record": reused, "reused": True}
+        selected = await asyncio.to_thread(
+            _held, _select_reused, store, model_id, str(reused["ingest_id"]), fence, token)
+        return {"status": "published", "record": reused, "reused": True} if selected else {"status": "superseded"}
     built = await build_assembly_mesh(design, cancel_cb)
     if not fence.current(token):
         return {"status": "superseded"}

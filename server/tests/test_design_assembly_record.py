@@ -363,3 +363,66 @@ def test_revisions_are_ordered_within_a_client_build_session_only(store, tmp_pat
         store, tmp_path, dump, design_uid=UID, design_name="x", design_revision=1,
         build_session="page-2", fence=fence))
     assert again["status"] == "published" and again["reused"]
+
+
+def test_an_older_document_load_cannot_publish_over_a_reopened_design(store, tmp_path, monkeypatch):
+    """Revision 50 of an old load is still building when a reopened design asks for revision 2."""
+    fence = AssemblyBuildFence()
+    real = design_assembly.build_assembly_mesh
+    reopened = {}
+
+    async def reopened_meanwhile(design, cancel_cb=None):
+        built = await real(design, cancel_cb)
+        if not reopened:
+            reopened["started"] = True
+            reopened["result"] = await compile_design_assembly(
+                store, tmp_path, design_b, design_uid=UID, design_name="x", design_revision=2,
+                build_session="load-new", fence=fence)
+        return built
+
+    design_a = design(assembly=assembly(woofer()))
+    design_b = design(assembly=assembly(woofer(gap=30)))
+    monkeypatch.setattr(design_assembly, "build_assembly_mesh", reopened_meanwhile)
+    old = asyncio.run(compile_design_assembly(
+        store, tmp_path, design_a, design_uid=UID, design_name="x", design_revision=50,
+        build_session="load-old", fence=fence))
+    assert old == {"status": "superseded"}
+    newer = reopened["result"]["record"]
+    assert reopened["result"]["status"] == "published"
+    assert store.get_model(design_model_id(UID))["latest_ingest_id"] == newer["ingest_id"]
+    assert [row["ingest_id"] for row in store.list_model_ingests(design_model_id(UID))] == [newer["ingest_id"]]
+
+
+def test_a_stale_reuse_moves_no_pointer(store, tmp_path, monkeypatch):
+    fence = AssemblyBuildFence()
+    run = lambda dump, revision, session: asyncio.run(compile_design_assembly(  # noqa: E731
+        store, tmp_path, dump, design_uid=UID, design_name="x", design_revision=revision,
+        build_session=session, fence=fence))
+    first = run(design(assembly=assembly(woofer())), 1, "load-old")["record"]
+    second = run(design(assembly=assembly(woofer(gap=30))), 2, "load-old")["record"]
+    real = design_assembly._reuse
+
+    def reopened_meanwhile(*args):
+        found = real(*args)
+        fence.begin(UID, 1, "load-new")
+        return found
+
+    monkeypatch.setattr(design_assembly, "_reuse", reopened_meanwhile)
+    assert run(design(assembly=assembly(woofer())), 3, "load-old") == {"status": "superseded"}
+    assert store.get_model(design_model_id(UID))["latest_ingest_id"] == second["ingest_id"] != first["ingest_id"]
+
+
+def test_a_to_b_to_a_makes_the_reused_record_latest_and_keeps_it(store, tmp_path):
+    jobs = JobStore.for_data_dir(tmp_path)
+    jobs.initialize()
+    first = compile_(store, tmp_path, design(assembly=assembly(woofer())))["record"]
+    between = compile_(store, tmp_path, design(assembly=assembly(woofer(gap=30))), revision=2)["record"]
+    again = compile_(store, tmp_path, design(assembly=assembly(woofer())), revision=3)
+    assert again["reused"] and again["record"]["ingest_id"] == first["ingest_id"]
+    assert store.get_model(design_model_id(UID))["latest_ingest_id"] == first["ingest_id"]
+    past = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat().replace("+00:00", "Z")
+    with store._lock, store._transaction() as conn:
+        conn.execute("UPDATE ingests SET created_at = ?, last_used_at = NULL", (past,))
+    report = collect_prepared_meshes(store, jobs, tmp_path, terminal_states=TERMINAL_STATES)
+    assert report.removed_ingests == [between["ingest_id"]]
+    assert open(first["mesh_store_path"], encoding="utf-8").read().startswith("$MeshFormat")
