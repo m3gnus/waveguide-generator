@@ -1,6 +1,6 @@
 # Waveguide Generator user guide
 
-Status: current overview, verified against the application on 2026-10-12.
+Status: current overview, checked against current dev source on 2026-10-29.
 
 ## Launching
 
