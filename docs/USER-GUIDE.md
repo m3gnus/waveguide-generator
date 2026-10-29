@@ -72,7 +72,10 @@ WG**. The dialog remembers your settings in the Fusion document.
 WG shows the mesh read-only in **Model details** on the Imported mesh tab: the
 sizes, the triangle count and the memory estimate. The limit is 22,000
 triangles for the part WG solves. When a model is over it, WG asks before
-solving and offers **Solve anyway**, **Change in Fusion** or **Later**. See the
+solving and offers **Solve anyway**, **Change in Fusion** or **Later**. This
+same triangle choice applies to parametric designs and file meshes. **Solve
+anyway** continues past the triangle limit; a separate memory refusal cannot
+be overridden this way and needs a coarser mesh. See the
 [CAD Link guide](CAD-LINK-GUIDE.md).
 
 ### Import and solve a mesh
@@ -83,13 +86,12 @@ folder is needed. WG accepts ASCII Gmsh 2.2 linear triangular surface meshes
 up to 16 MiB; STL, OBJ, binary and volume meshes are not supported.
 
 WG prepares the mesh automatically after import and after you change its
-settings. If it needs a choice or finds a problem, the status line tells you what
-to do. **Try again** appears after a preparation failure when retrying is possible.
-When the mesh is ready, press **Solve** in the status line or the top bar.
+settings. **Results** is the single status home for an imported model. It shows
+preparation choices and offers **Try again** when a retry is possible. When the
+mesh is ready, press **Solve** in Results or in the top bar.
 
 In **Geometry**, check **Surfaces**. Each row shows a group from the file and
-its triangle count. WG recognizes its own exact group-name format and reads
-its `role=` value; it guesses roles from other names. Check the guesses and
+its triangle count. WG suggests roles from group names. Check the guesses and
 choose a role for each surface:
 
 - **HF driver**, **MF driver** or **LF driver** for a driver surface.
@@ -128,8 +130,9 @@ requires zero generator resistance; choose **Drive separately** for a setup
 with nonzero generator resistance. The
 **Crossover** uses one band for each driver group; surfaces sharing a driver
 are summed into that band. When a surface has the **Port or passive opening**
-role, **Passive cardioid** is also available. Turn off **Crossover** when using
-coupled passive cardioid with the MF driver. Choose **CAD Link** for a CAD model,
+role, **Passive cardioid** is also available. Coupled Passive cardioid uses an
+MF driver and port topology and cannot be combined with **Crossover**. Choose
+**CAD Link** for a CAD model,
 **File mesh** for the file setup, or **Parametric** for the separate generated
 design.
 
@@ -137,8 +140,8 @@ WG saves setup edits with the model automatically. Importing the same file
 again reopens its last preparation and settings. If a changed file has the
 same name before the extension and the same unique group names, WG reuses the
 previous settings and shows a one-time note. If some names differ, WG keeps
-the roles of matching groups and guesses the others. The status line reports
-if settings could not be saved.
+the roles of matching groups and guesses the others. **Results** reports if
+settings could not be saved.
 
 Runs retains the exact mesh and resolved settings. Select a run to restore its
 setup, or **Rerun** to replay its stored request. A prepared mesh that no run,
@@ -182,6 +185,13 @@ ground plane and logging. Mesh contains Solve domain, surface sampling, resoluti
 and validation policy; density settings do not change the geometry. Export contains
 placement and file round-trip values and is collapsed by default.
 
+On **Waveguide in enclosure**, a side margin of **0 mm** is supported when the
+fitted mouth leaves less than 0.1 mm of baffle beside that wall: the enclosure
+side continues straight back from the mouth rim. A zero margin does not make
+every horn flush-mountable. WG still checks the fitted shape and refuses
+unsupported cases; its message identifies a side that needs at least 0.1 mm
+of baffle when that is the remedy.
+
 The viewport shows mouth width × height and horn depth beside the timing readout,
 with one **mm** unit at the end. It adds overall width × height when either differs
 from the mouth by more than 0.05 mm, and enclosure width × height × depth when present.
@@ -205,7 +215,7 @@ choices without rewriting the design file.
 cannot use and explains why. Check those reasons after changing engines or
 Mounting. The **Simulation Summary** records the engine that actually ran,
 the requested engine when it differs, routing and any fallback reason. BEAT runs
-also show their provider, package version and precision when those were recorded.
+also show their provider and package version when available.
 
 **Adaptive frequency sampling** in **Simulation → Frequency sweep** is **Experimental** and available
 only for BEAT, with at least 24 output frequencies, a free-standing
@@ -542,6 +552,8 @@ imported geometry. Metal does, and so does BEAT · CPU, which runs on every
 platform without a GPU. BEAT · Metal does when you choose it yourself, in Fast
 or Accurate. BEMPP does too, where it assembles on an OpenCL device;
 a build that would fall back to numba does not offer imported geometry.
+Metal also supports eligible single-source, normal-motion exterior solves;
+those runs remain shown as **Metal** in the solver choice and results.
 BEAT · CPU mirrors an x0 half and an x0+y0 quarter natively; a return cut on y0
 alone is refused on BEAT with the reason, and solves on Metal or BEMPP. BEMPP
 refuses a return with open edges off its mirror planes, because it holds the
@@ -564,17 +576,10 @@ mesh above the shared triangle limit; **Solve anyway** continues when the mesh
 fits this machine's memory. Symmetry can reduce the part that needs solving: a
 body of revolution or a biaxially symmetric waveguide solves on a quarter domain.
 
-A second ceiling bounds the memory one dense BEM solve may claim: half of the
-computer's physical memory, at most 64 GiB. When the physical memory cannot be
-determined it is a conservative 4 GiB instead. The refusal message names the
-ceiling and where it came from, and the mesh statistics in the API response
-record it (`dense_solver_memory_limit_source`, for example
-`unknown-memory-default`) and the probe that measured physical memory
-(`dense_solver_physical_memory_source`). `WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES`
-sets it to an exact byte count. A value above physical memory, or above 4 GiB
-when physical memory is unknown, is refused unless
-`WG2_DENSE_SOLVER_MEMORY_LIMIT_UNSAFE=1` is also set. Both variables apply to
-imported CAD geometry too: the isolated process that meshes it receives them.
+The triangle limit and the memory check answer different questions. **Solve
+anyway** continues after WG reports that the mesh is over 22,000 triangles,
+but it does not override a memory refusal. If WG says the mesh needs more
+memory than the computer can provide, make the mesh coarser before solving.
 
 ## Files and exports
 
@@ -768,11 +773,11 @@ inspect or set up. Does not solve.") or **Solve in WG** ("Send and solve
 now.") after modelling.
 
 WG prepares a Fusion model automatically when it arrives, when you choose it
-under **Model versions**, and when WG reopens it after a restart. One status
-line under the model's name says what is happening and offers at most one
-action: **Solve**, **Choose…** when WG needs your choice, **Show results**, or
-**Try again** after a failure. **Model details** (folded) holds the checks,
-which way the model radiates and the mesh. **Solve** is also in the top bar.
+under **Model versions**, and when WG reopens it after a restart. **Results**
+is the single status home for imported models, including CAD and file meshes.
+Its status line says what is happening and offers the available action, such
+as **Solve**, **Choose…** or **Try again**. **Model details** (folded) holds the
+checks, which way the model radiates and the mesh. **Solve** is also in the top bar.
 Completed solves are listed in the **Jobs** panel; **View project runs**
 filters it to the model.
 

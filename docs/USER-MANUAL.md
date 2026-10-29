@@ -66,19 +66,54 @@ Keep only one **WGLink** entry in Fusion's add-in list.
    **New** for a fresh design, or **Open…** to open a saved `.cfg` file.
 3. On the **Geometry** tab, open **Model Type** and choose a **Family**, for
    example R-OSSE or OSSE.
-4. Change the numbers under **Profile**, **Throat**, **Mouth** and
+4. For OSSE, open **OSSE features** to choose a throat adapter, mouth end and
+   axial scale. The authored adapter can be combined with a roundover or
+   terminating arc and with axial scale. **Adapter (controls)** is a separate
+   construction and cannot be combined with those mouth or axial features.
+5. Change the numbers under **Profile**, **Throat**, **Mouth** and
    **Mounting**. The 3D view updates as you type.
-5. On the **Simulation** tab, check **Frequency sweep** (the start and end
+6. On the **Simulation** tab, check **Frequency sweep** (the start and end
    frequency, and how many frequencies to solve). Leave **Solver** on its
    automatic choice unless you have a reason to change it.
-6. Click **Solve** at the top right.
-7. The run appears in the **Jobs** panel with its progress. When it finishes,
+7. Click **Solve** at the top right.
+8. The run appears in the **Jobs** panel with its progress. When it finishes,
    the charts appear in **Results**.
 
 To save your design, click the design name and choose **Export a copy**.
 Every solved run also keeps a copy of its design.
 
-## 3. Bring a Fusion model into WG
+## 3. Import and solve a mesh file
+
+1. Choose **Imported mesh** at the top of WG, then click **Import mesh…**.
+   Choose an ASCII Gmsh 2.2 file containing a triangular surface mesh. STL,
+   OBJ, binary and volume meshes are not supported.
+2. In **Geometry → Surfaces**, check each file group and assign its role:
+   **HF driver**, **MF driver**, **LF driver**, **Port or passive opening**,
+   or **Rigid wall**. WG suggests roles from group names; check them before
+   continuing. Triangles without a group appear as **Untagged surface** and
+   start as a rigid wall.
+3. Check the file **Size** and units, then check the forward and up axes in
+   **Model details**. Under **Symmetry**, choose a full model, a declared half
+   model on x = 0 or y = 0, or a quarter model. WG detects open symmetry
+   planes. If the mesh is on the negative side, WG mirrors it across the plane.
+   When WG finds a closed face on a declared symmetry plane, choose **Remove
+   the closed face** there if needed.
+4. WG prepares the mesh after import and after preparation settings change.
+   Preparation choices or a retry appear with the imported-model status in
+   **Results**. When it is ready, use **Solve** there or in the top bar.
+5. In **Simulation**, set the shared frequency sweep and solver. For surfaces
+   with the same role, choose **Share one driver** or **Drive separately**.
+   **Crossover** provides a band for each driver group. **Passive cardioid**
+   requires an MF driver and a port topology; turn **Crossover** off when using
+   coupled Passive cardioid.
+
+WG saves setup changes automatically. Importing the same file again restores
+its last settings. A full symmetric file mesh cannot be cut automatically to a
+half or quarter; export the reduced mesh from your meshing tool first. See the
+[import and solve a mesh](USER-GUIDE.md#import-and-solve-a-mesh) section for
+file formats, role guesses and retained runs.
+
+## 4. Bring a Fusion model into WG
 
 You can start from a waveguide designed in WG, or from a model you drew in
 Fusion.
@@ -137,9 +172,9 @@ button for that.
 
 ### In WG: check the model and solve
 
-1. Look at the **status line** under the model's name. It says what is
-   happening and offers at most one button, for example "Ready to solve ·
-   3,035 triangles" with **Solve**.
+1. Open **Results** to see the imported model's status and its one available
+   action, for example **Solve**, **Choose…** or **Try again**. This is the
+   single status home for imported models.
 2. Optional: click **Model details** to see the drivers, how the model will
    be solved (whole, half or quarter), which way it radiates, its mesh and the
    checks. Mesh sizes are read-only here. To change them, use **Sources &
@@ -151,13 +186,13 @@ button for that.
      data.
    - **Crossover** (only with two or more drivers), **Directivity** and
      **Solver** are folded. Their one-line summaries show the current choice.
-4. Click **Solve** in the status line or at the top right.
+4. Click **Solve** in Results or at the top right.
 
-## 4. Read the results
+## 5. Read the results
 
 1. When a solve finishes, Fusion's progress panel says "Solved" and offers
-   **Show results in Waveguide Generator**. In WG, the status line offers
-   **Show results**.
+   **Show results in Waveguide Generator**. **Results** in WG is the home for
+   imported-model status and actions as well as the charts.
 2. **Results** shows the charts: on-axis response, horizontal and vertical
    directivity maps, directivity index and more. Use the chart menus to pick a
    different chart.
@@ -172,7 +207,7 @@ Gaps or warnings on a chart mean some frequencies did not solve. Do not judge
 a design from those parts. See [Solve, jobs, and results](USER-GUIDE.md#solve-jobs-and-results)
 for every chart.
 
-## 5. When WG needs you
+## 6. When WG needs you
 
 Most of the time WG goes from preparing to solved by itself. Two things can
 stop it.
@@ -184,10 +219,13 @@ more, WG asks before it solves. Fusion's progress panel says WG needs you, and
 WG shows a pop-up with the numbers, for example "It meshes to 54,739
 triangles; Waveguide Generator's limit is 22,000."
 
-The same choice applies to a parametric design or an imported file mesh. If
-you close that choice with **Later**, press **Solve** again to bring it back.
-WG also checks whether the mesh fits this machine's memory; if it does not,
-use a coarser mesh.
+The same 22,000-triangle choice applies to a parametric design, a file mesh or
+a Fusion model. **Solve anyway** continues past that triangle limit; it can be
+slower and needs more memory. The memory check is separate: if WG says the mesh
+needs more memory than this computer has, **Solve anyway** cannot bypass that
+refusal. Make the mesh coarser in Fusion, or use a coarser source file or
+parametric mesh setting. If you close the triangle question with **Later**,
+press **Solve** again to bring it back.
 
 Choose one:
 
@@ -196,8 +234,8 @@ Choose one:
   **Open Sources & Mesh…** in the progress panel (or use **Waveguide
   Generator ▸ Sources & Mesh…**), raise **Walls** or add a **Coarse** size
   zone, click **Save**, then Solve again.
-- **Later**: close the pop-up. For a Fusion model, the status line keeps saying
-  the model needs your choice, with a **Choose…** button to open it again.
+- **Later**: close the pop-up. The imported-model status in **Results** keeps
+  the model's choice available with **Choose…**.
 - **Don't solve**: let this question go without solving.
 
 If you choose **Solve anyway** in Fusion's own pre-flight question, WG does
@@ -205,14 +243,14 @@ not ask again.
 
 ### WG could not prepare the model
 
-Sometimes WG cannot prepare a model because of a problem inside WG. The status
-line then says "Waveguide Generator could not prepare <name>." When WG offers
-it, click **Try again**. If it keeps failing, report it (see the FAQ below).
+Sometimes WG cannot prepare a model. Its status in **Results** says what
+happened and offers **Try again** when retrying is possible. If it keeps
+happening, report it (see the FAQ below).
 
-If the status line names something you can fix, such as a missing driver, fix
-it in Fusion and Send again.
+If the status names something you can fix, such as a missing driver, fix it in
+Fusion and Send again.
 
-## 6. FAQ and troubleshooting
+## 7. FAQ and troubleshooting
 
 **Fusion has no Waveguide Generator panel.**
 Open **Utilities → Scripts and Add-Ins**, select **WGLink**, click **Run** and
