@@ -1,19 +1,21 @@
 /**
- * Solve a design assembly: the one model Solve (`POST /api/models/{id}/solve`)
- * on the compiled record of the design on screen, with the setup the shared
- * Simulation sections show.
+ * The press of a design assembly's Solve: the one model Solve
+ * (`POST /api/models/{id}/solve`) on the compiled record of the design on
+ * screen, with the setup the shared Simulation sections show. The jobs
+ * coordinator submits it, under the same lock and attention as every Solve.
  */
 import { assemblyBuildCurrent, requestAssemblyBuild, useAssemblyBuildStore } from '../stores/assemblyBuild';
 import { assemblyImportedSetup } from '../stores/assemblySimulation';
 import { useDesignStore } from '../stores/design';
 import { useSolveOptionsStore } from '../stores/solveOptions';
-import { solveModel, type ImportedSolveSubmission } from './actions';
+import type { ImportedSolveSubmission, ModelSolvePress } from './actions';
 import { resolveAssemblySetup } from './importedSubmission';
 
-export interface AssemblySolveResult { jobId: string; notice: string | null }
+export interface AssemblySolvePress { modelId: string; press: ModelSolvePress; notice: string | null }
 
-export async function solveAssembly(fetcher: typeof fetch = fetch,
-  newPressId: () => string = () => globalThis.crypto.randomUUID()): Promise<AssemblySolveResult> {
+/** Build the design's assembly if it is not current, then the press for its record. */
+export async function prepareAssemblySolve(fetcher: typeof fetch = fetch,
+  newPressId: () => string = () => globalThis.crypto.randomUUID()): Promise<AssemblySolvePress> {
   const { design } = useDesignStore.getState();
   if (!design.assembly) throw new Error('This design has no Sources and baffle assembly.');
   if (!assemblyBuildCurrent(useAssemblyBuildStore.getState(), design)) {
@@ -28,10 +30,12 @@ export async function solveAssembly(fetcher: typeof fetch = fetch,
     assemblyImportedSetup(), design.assembly,
     useSolveOptionsStore.getState().options() as ImportedSolveSubmission['options'], design.simulation,
   );
-  const jobId = await solveModel(published.model.model_id, {
-    prepared_id: published.record.ingest_id,
-    client_request_id: `assembly-${newPressId()}`,
-    setup: { schema_version: 1, ...setup } as unknown as Parameters<typeof solveModel>[1]['setup'],
-  }, fetcher);
-  return { jobId, notice };
+  return {
+    modelId: published.model.model_id, notice,
+    press: {
+      prepared_id: published.record.ingest_id,
+      client_request_id: `assembly-${newPressId()}`,
+      setup: { schema_version: 1, ...setup } as unknown as ModelSolvePress['setup'],
+    },
+  };
 }

@@ -12,8 +12,8 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { fetchAssemblyContext } from '../api/assembly';
-import { solveAssembly } from '../jobs/assemblySolve';
 import { useModalDialogFocus } from '../shell/dialogFocus';
+import { useOptionalSolveControl } from '../shell/JobsCoordinator';
 import { frontViewAdapter, frontViewBinding, type FrontCommand, type FrontViewContext } from '../sketch/adapters/frontView';
 import { PlainController } from '../sketch/workspace/plainController';
 import { ProjectHistoryAuthority } from '../sketch/workspace/projectHistoryAuthority';
@@ -97,12 +97,14 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
   useEffect(() => () => controller?.destroy(), [controller]);
   useEffect(() => { if (!controller) onClose(); }, [controller]);
   const build = useAssemblyBuildStore();
+  const solveControl = useOptionalSolveControl();
   const [notice, setNotice] = useState('');
   const [selection, setSelection] = useState<string[]>([]);
   if (!controller || !state) return null;
   const solve = () => {
     setNotice('');
-    solveAssembly(fetcher).then(result => setNotice(result.notice ?? 'Solve submitted.'),
+    // The jobs coordinator owns every submission; it reports a refusal itself.
+    solveControl?.solveAssembly?.().then(result => setNotice(result.jobId ? result.notice ?? 'Solve submitted.' : ''),
       (reason: unknown) => setNotice(reason instanceof Error ? reason.message : String(reason)));
   };
   return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Sources and baffle" className="source-editor front-workspace">
@@ -113,7 +115,7 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
     <Workspace adapter={adapter} state={state} session={controller} selection={selection} onSelectionChange={setSelection}/>
     <footer className="source-editor-toolbar">
       <button type="button" disabled={build.status === 'building'} onClick={() => { void requestAssemblyBuild(fetcher).catch(() => {}); }}>Build</button>
-      <button type="button" onClick={solve}>Solve</button>
+      <button type="button" disabled={!solveControl?.solveAssembly || solveControl.submitting} onClick={solve}>Solve</button>
       <span role="status">{error || build.refusal || notice || (build.status === 'building' ? 'Building the assembly…' : build.status === 'published' ? 'Assembly built.' : '')}</span>
     </footer>
   </div></div>;

@@ -15,6 +15,7 @@ import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { clearJobLink, jobIdFromLink, openLinkedJob } from '../jobs/jobDeepLink';
 import { compareSelection } from '../api/results';
 import type { CadReturnIngestRecord } from '../api/cadlink';
+import { prepareAssemblySolve } from '../jobs/assemblySolve';
 import { importedSolvePlanRequestBody, prewarmSelectedEngine, planSolveDesign, postImportedSolvePlan, solveModel, SolveSubmissionRefused, submitDesign, toSolveDesign, type EngineSubstitution, type ImportedSolveSubmission, type ModelSolvePress, type SolvePlan } from '../jobs/actions';
 import { postSolverMesh, SolverMeshTooLarge } from '../api/solverMesh';
 import { meshCeilingChoice } from '../stores/meshCeilingChoice';
@@ -94,6 +95,8 @@ interface SolveControl {
   /** `attention`: the token of the user action this Solve continues (a pull
    * and solve), so it is never captured again; omitted, the press is the action. */
   solve(attention?: number): Promise<'submitted' | 'busy' | 'blocked' | 'pending'>;
+  /** Solve the open design's Sources and baffle assembly; resolves to its fallback notice. */
+  solveAssembly?(): Promise<{ jobId: string | null; notice: string | null }>;
   /** CAD Link mode: Solve solves the CAD model on screen. */
   cadMode: boolean;
   /** Solve uses imported geometry, from CAD Link or a file. */
@@ -564,6 +567,17 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     return jobId === null ? 'pending' as const : 'submitted' as const;
   }, [acceptSubmission, now, revision]);
 
+  // One press of a design assembly's Solve: one POST /api/models/{id}/solve.
+  const solveDesignAssembly = useCallback(async () => {
+    let notice: string | null = null;
+    const jobId = await acceptSubmission(async () => {
+      const prepared = await prepareAssemblySolve();
+      notice = prepared.notice;
+      return solveModel(prepared.modelId, prepared.press);
+    }, { arm: true });
+    return { jobId, notice };
+  }, [acceptSubmission]);
+
   // One press of a file model's Solve: one POST /api/models/{id}/solve.
   const solveFileModel = useCallback(async (continuation: ModelSolveContinuation | null = null) => {
     let designName = '';
@@ -870,6 +884,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     plan: solvePlan,
     planPending: solvePlanPending,
     solve,
+    solveAssembly: solveDesignAssembly,
     cadMode: cadGeometryActive,
     importedGeometryActive: cadGeometryActive || fileGeometryActive,
     disabled: !solveEnabled,
@@ -888,7 +903,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
               : cadGeometryActive
                 ? capabilityError ?? importedUnavailable ?? 'No engine can solve imported CAD geometry here'
                 : parametricUnavailable),
-  }), [requested.state, requestCurrent, warming, actionError, engines, readiness, preparation.prepare, preparation.error, preparation.starting, prepareAndSolve, solveOptions, cadGeometryActive, capabilityError, fileBlocker, fileGeometryActive, importedUnavailable, importedEngineLabel, parametricUnavailable, planError, planPending, selectedEngine, solve, solveEnabled, solveBlocker, solvePlan, solvePlanPending, submitting]);
+  }), [requested.state, requestCurrent, warming, actionError, engines, readiness, preparation.prepare, preparation.error, preparation.starting, prepareAndSolve, solveOptions, cadGeometryActive, capabilityError, fileBlocker, fileGeometryActive, importedUnavailable, importedEngineLabel, parametricUnavailable, planError, planPending, selectedEngine, solve, solveDesignAssembly, solveEnabled, solveBlocker, solvePlan, solvePlanPending, submitting]);
 
   useEffect(() => {
     publishSolveControl(control);
