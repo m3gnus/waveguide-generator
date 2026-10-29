@@ -1458,6 +1458,8 @@ class SolveRequest(JobDesignIdentity):
             return self
 
         root = self.geometry.design.root
+        if root.assembly is not None:
+            raise ValueError("Solve a Sources and baffle assembly through its compiled model so every radiator is included.")
         simulation = root.simulation
 
         def scalar(expr: Any, default: float, field: str) -> float:

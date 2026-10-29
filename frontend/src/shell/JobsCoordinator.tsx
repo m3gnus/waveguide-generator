@@ -538,6 +538,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const run = useCallback(async (nextDesign: DesignDocument, nextRevision = revision, continuation: ModelSolveContinuation | null = null) => {
     let designName = '';
     const jobId = await acceptSubmission(async () => {
+      if (nextDesign.assembly) {
+        throw new Error('This design includes a Sources and baffle assembly. Solve it from Sources and baffle so every enabled radiator is included.');
+      }
       // Solve leaves the live document alone. The server applies BEMPP's
       // closed-wall default to its own stored request, not the editor's design.
       const options = useSolveOptionsStore.getState().options();

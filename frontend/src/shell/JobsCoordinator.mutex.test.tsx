@@ -62,6 +62,7 @@ import { ResultsPanel } from './ResultsPanel';
 import { resetSolveAttentionForTests, solveAttention } from './solveAttention';
 import { SolverMeshTooLarge } from '../api/solverMesh';
 import { meshCeilingChoice } from '../stores/meshCeilingChoice';
+import { addWoofer, emptyAssembly } from '../stores/assembly';
 
 // Exercise the toolbar alongside the same solve status that Results owns.
 function SolveActions() {
@@ -588,6 +589,23 @@ describe('solve invocation mutex', () => {
     expect(host.querySelector('.solve-readiness')).toBeNull();
     expect(host.querySelector('.beat-runtime-preparation')).toBeNull();
     client.clear();
+  });
+
+  it.each(['toolbar', 'Cmd+Enter', 'Ctrl+Enter'])('visibly refuses an ordinary %s solve of an assembly instead of solving only its horn', async press => {
+    await act(async () => {
+      const assembly = addWoofer(emptyAssembly(), { anchor: 'below' }).assembly;
+      useDesignStore.getState().commitEmbedded({ assembly }, 'step');
+      root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    });
+    await act(async () => {
+      if (press === 'toolbar') await solveControlStore.getSnapshot()!.solve();
+      else window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter',
+        metaKey: press === 'Cmd+Enter', ctrlKey: press === 'Ctrl+Enter', bubbles: true, cancelable: true }));
+    });
+    expect(host.textContent).toContain('Solve it from Sources and baffle');
+    expect(mocks.postSolverMesh).not.toHaveBeenCalled();
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
+    expect(mocks.solveModel).not.toHaveBeenCalled();
   });
 
   const blocker: SolveBlocker = { code: 'engine_unavailable', engine: 'beat-metal',
