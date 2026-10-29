@@ -8,6 +8,7 @@ import {
   setSeparateVertical, stretchLength, useProfileEdit, withInsertedProfile, isUnseparatedVertical, rememberUnseparatedVertical,
 } from './customProfileEdit';
 import type { CurvesResponse } from '../api/freeformProfile';
+import { hydrateDesignDocument } from '../api/designIo';
 
 function custom(): DesignDocument {
   const design = designForFamily('FREEFORM');
@@ -310,5 +311,92 @@ describe('Custom profile commit and preview', () => {
       expect(edit.notice).toMatch(/discarded/);
       expect(serializeDesign(useDesignStore.getState().design)).toEqual(serializeDesign(reopened));
     });
+  });
+});
+
+describe('opened documents keep every value an edit writes', () => {
+  // A saved file opened through the server: every optional point field is wire null.
+  function opened(): DesignDocument {
+    const point = (t: number, r: number) => ({ t, r, angle_deg: null, angle_out_deg: null, join: null, handle_in: null, handle_out: null });
+    const profile = () => ({ points: [point(0, 12.7), point(.5, 60), point(1, 140)], throat_angle_deg: 15.5, mouth_angle_deg: 60 });
+    return hydrateDesignDocument({
+      formula: 'FREEFORM', length: 120, profile_h: profile(), profile_v: profile(),
+      cross_sections: [{ t: 0, shape: 'ellipse' }, { t: 1, shape: 'ellipse' }],
+    });
+  }
+  const resolved = (design: DesignDocument) => {
+    const anchors = (points: unknown[]) => points.map((_point, index) => ({ handleIn: index ? [-5, -2] : null, handleOut: index < points.length - 1 ? [10, 4] : null }));
+    return { H: { anchors: anchors(design.profile_h!.points) }, V: { anchors: anchors(design.profile_v!.points) } } as unknown as CurvesResponse;
+  };
+  /** Save as the wire carries it, reopen, and return the reopened wire. */
+  const reopen = (design: DesignDocument) => serializeDesign(hydrateDesignDocument(JSON.parse(JSON.stringify(serializeDesign(design)))));
+  const wirePoints = (wire: Record<string, unknown>, plane: 'profile_h' | 'profile_v') => (wire[plane] as { points: Record<string, unknown>[] }).points;
+
+  it('has the omissions this test relies on', () => {
+    expect(opened()._absent).toContain('profile_h.points.0.handle_out');
+    expect(wirePoints(serializeDesign(opened()), 'profile_h')[0].handle_out).toBeNull();
+  });
+
+  it('serializes the handles Stretch pins, in the preview and after save/reopen', () => {
+    const design = opened();
+    const { after } = stretchLength(design, 240, resolved(design));
+    expect(after.profile_h!.points[0].handle_out).toEqual([20, 4]);
+    for (const wire of [serializeDesign(after), reopen(after)]) {
+      expect(wirePoints(wire, 'profile_h')[0].handle_out).toEqual([20, 4]);
+      expect(wirePoints(wire, 'profile_h')[1]).toMatchObject({ handle_in: [-10, -2], handle_out: [20, 4] });
+      expect(wirePoints(wire, 'profile_h')[2].handle_in).toEqual([-10, -2]);
+      // Untouched omissions stay null.
+      expect(wirePoints(wire, 'profile_h')[1].angle_deg).toBeNull();
+    }
+  });
+
+  it('serializes the handles Move mouth pins, in the preview and after save/reopen', () => {
+    const design = opened();
+    const { after } = moveMouth(design, 150, resolved(design));
+    for (const wire of [serializeDesign(after), reopen(after)]) {
+      expect(wirePoints(wire, 'profile_h')[0].handle_out).toEqual([10, 4]);
+      expect(wirePoints(wire, 'profile_h')[1].handle_in).toEqual([-5, -2]);
+      // The last span stays free.
+      expect(wirePoints(wire, 'profile_h')[1].handle_out).toBeNull();
+      expect(wirePoints(wire, 'profile_h')[2].handle_in).toBeNull();
+    }
+  });
+
+  it.each(['exact', 'refit'] as const)('serializes a %s insertion with its pinned neighbours and keeps other omissions', (mode) => {
+    const design = opened();
+    const inserted = structuredClone(design);
+    const pins = mode === 'exact';
+    inserted.profile_h!.points = [
+      { t: 0, r: 12.7, ...(pins ? { handle_out: [3, 1] as [number, number] } : {}) },
+      { t: .25, r: 35, join: 'smooth', ...(pins ? { handle_in: [-3, -1] as [number, number], handle_out: [3, 1] as [number, number] } : {}) },
+      { t: .5, r: 60, ...(pins ? { handle_in: [-3, -1] as [number, number] } : {}) },
+      { t: 1, r: 140 },
+    ];
+    const after = withInsertedProfile(design, inserted, 'H');
+    for (const wire of [serializeDesign(after), reopen(after)]) {
+      const points = wirePoints(wire, 'profile_h');
+      expect(points).toHaveLength(4);
+      expect(points[0].handle_out).toEqual(pins ? [3, 1] : null);
+      expect(points[1].join).toBe('smooth');
+      // A new point has no recorded omissions: unpinned handles are simply absent.
+      expect(points[1].handle_in ?? null).toEqual(pins ? [-3, -1] : null);
+      expect(points[1].handle_out ?? null).toEqual(pins ? [3, 1] : null);
+      expect(points[2].handle_in).toEqual(pins ? [-3, -1] : null);
+      // The shifted mouth keeps its own omissions; V is untouched.
+      expect(points[3].angle_deg).toBeNull();
+      expect(wire.profile_v).toEqual(serializeDesign(design).profile_v);
+    }
+  });
+
+  it('serializes angles, joins and pins written by table edits on an opened file', () => {
+    const design = opened();
+    const angled = setAnchorAngle(design, 'H', 1, 'in', 25).after;
+    expect(wirePoints(reopen(angled), 'profile_h')[1].angle_deg).toBe(25);
+    const corner = setAnchorJoin(angled, 'H', 1, 'corner').after;
+    expect(wirePoints(reopen(corner), 'profile_h')[1].join).toBe('corner');
+    const out = setAnchorAngle(corner, 'H', 1, 'out', 40).after;
+    expect(wirePoints(reopen(out), 'profile_h')[1]).toMatchObject({ angle_deg: 25, angle_out_deg: 40, join: 'corner' });
+    const pasted = applyPastedProfile(design, { points: [{ t: 0, r: 12.7 }, { t: .5, r: 40 }, { t: 1, r: 140 }], importedLength: 120 }, { target: 'H', adoptLength: false, join: 'corner' }).after;
+    expect(wirePoints(reopen(pasted), 'profile_h').map((point) => point.join)).toEqual(['corner', 'corner', 'corner']);
   });
 });

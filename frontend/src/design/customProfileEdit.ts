@@ -6,7 +6,7 @@ import {
 import { inspectProfileSamples } from '../api/designIo';
 import { compareProfileSamples, type GeneratedProfileChange } from '../api/profileSamples';
 import {
-  currentDocumentLoad, serializeDesign, useDesignStore,
+  currentDocumentLoad, getAtPath, serializeDesign, useDesignStore,
   type CrossSectionStation, type DesignDocument, type ExprNumber, type FreeformPoint, type FreeformProfile,
 } from '../stores/design';
 
@@ -95,6 +95,25 @@ function remapPointMetadata(design: DesignDocument, plane: Plane, oldCount: numb
   }
 }
 
+/**
+ * Drop recorded omissions (`_absent`) for paths that now hold a value.
+ *
+ * An opened file records each wire-null optional point field (a handle, angle or join) as
+ * absent, and serialization overlays those paths with null. Every value an
+ * edit writes, including handles it pins, must therefore leave `_absent`, or
+ * the preview, the curve query and the saved file would silently drop it.
+ */
+function reconcileAbsent(design: DesignDocument): DesignDocument {
+  if (!design._absent) return design;
+  // Only point fields: hydration keeps their wire nulls, so a value there was
+  // written by an edit. Document-level omissions (Scale, wall thickness) are
+  // displayed with defaults while absent and must stay omitted.
+  const pointPath = /^profile_[hv]\.points\./;
+  const absent = design._absent.filter((path) => !pointPath.test(path) || !present(getAtPath(design, path)));
+  if (absent.length) design._absent = absent; else delete design._absent;
+  return design;
+}
+
 /** Remove the metadata of exactly these edited leaf paths: the user replaced them. */
 function clearMetadata(design: DesignDocument, paths: string[]): void {
   const edited = new Set(paths);
@@ -150,7 +169,7 @@ export function deleteAnchor(design: DesignDocument, plane: Plane, index: number
   const after = withPlane(design, plane, next);
   remapPointMetadata(after, plane, points.length, (old) => old === index ? null : old > index ? old - 1 : old);
   clearMetadata(after, [pointPath(plane, index - 1, 'handle_out'), pointPath(plane, index, 'handle_in')]);
-  return { after, notes: [
+  return { after: reconcileAbsent(after), notes: [
     `Deleted ${pointLabel(plane, index, points.length)} at z = ${formatMm(positionMm(points[index].t, lengthOf(design)))} mm.`,
     released.length ? `Released the facing handles of the neighbours: ${released.join(', ')}. Those spans use automatic tangents.` : 'No neighbouring handle was pinned.',
     describePins(plane, next),
@@ -187,7 +206,7 @@ export function setAnchorValue(design: DesignDocument, plane: Plane, index: numb
     }
   }
   clearMetadata(after, touched);
-  return { after, notes: [describePins(plane, next) ?? 'No handle is pinned in this plane; spans next to the anchor refit automatically.'] };
+  return { after: reconcileAbsent(after), notes: [describePins(plane, next) ?? 'No handle is pinned in this plane; spans next to the anchor refit automatically.'] };
 }
 
 /**
@@ -236,7 +255,7 @@ export function setAnchorAngle(design: DesignDocument, plane: Plane, index: numb
   const after = withPlane(design, plane, next);
   clearMetadata(after, [pointPath(plane, index, field), pointPath(plane, index, 'handle_in'), pointPath(plane, index, 'handle_out')]);
   notes.push(describePins(plane, next) ?? 'No handle is pinned in this plane.');
-  return { after, notes };
+  return { after: reconcileAbsent(after), notes };
 }
 
 /** Wall direction (radians) of one side: explicit handle, then authored angle, then the resolved curve. */
@@ -300,7 +319,7 @@ export function setAnchorJoin(design: DesignDocument, plane: Plane, index: numbe
   const after = withPlane(design, plane, next);
   clearMetadata(after, ['join', 'angle_deg', 'angle_out_deg', 'handle_in', 'handle_out'].map((field) => pointPath(plane, index, field)));
   notes.push(describePins(plane, next) ?? 'No handle is pinned in this plane.');
-  return { after, notes };
+  return { after: reconcileAbsent(after), notes };
 }
 
 /** Drop wire nulls (an omitted optional value) so a hydrated point has the store's shape. */
@@ -317,7 +336,8 @@ export function withInsertedProfile(design: DesignDocument, inserted: DesignDocu
   const after = withPlane(design, plane, points);
   // Surviving points keep their authored expressions and omissions at their new indices.
   remapPointMetadata(after, plane, before.length, (old) => old >= index ? old + 1 : old);
-  return after;
+  // The insertion pins neighbouring handles; omissions recorded for those paths no longer hold.
+  return reconcileAbsent(after);
 }
 
 function scaledAngle(angle: number, factor: number): number {
@@ -372,7 +392,7 @@ export function stretchLength(design: DesignDocument, newLength: number, curves:
     });
   }
   clearMetadata(after, ['length', ...rewritten]);
-  return { after, notes: [
+  return { after: reconcileAbsent(after), notes: [
     `Stretch profile: every anchor, handle and station keeps its fraction of Length (${formatMm(oldLength)} → ${formatMm(newLength)} mm); radii are unchanged.`,
     rewritten.length ? `${rewritten.length} explicit angle${rewritten.length === 1 ? ' is' : 's are'} rewritten to the stretched direction.` : 'No explicit angle needed rewriting.',
     pinned.length ? `To keep the stretch exact, these automatic handles are pinned to the stretched resolved curve and no longer refit automatically: ${pinned.join(', ')}.` : 'Every handle was already pinned.',
@@ -449,7 +469,7 @@ export function moveMouth(design: DesignDocument, newLength: number, curves: Cur
     rewritten.push(`cross_sections.${index}.t`);
   });
   clearMetadata(after, ['length', ...rewritten]);
-  return { after, notes: [
+  return { after: reconcileAbsent(after), notes: [
     `Move mouth: interior anchors, handles and stations keep their positions in mm; only the mouth moves (${formatMm(oldLength)} → ${formatMm(newLength)} mm).`,
     pinned.length ? `So that only the last span changes, these automatic handles are pinned to the current curve and no longer refit automatically: ${pinned.join(', ')}.` : 'The spans before the mouth were already pinned or are straight.',
     ...(isSharedProfile(design) ? ['The inactive vertical profile keeps its positions too; its automatic spans refit if it is separated again.'] : []),
@@ -490,7 +510,7 @@ export function setSeparateVertical(design: DesignDocument, separate: boolean, s
   const after = structuredClone(design);
   if (!separate) {
     after.shared_profile = true;
-    return { after, notes: ['The vertical profile is kept but inactive; the horizontal profile now shapes both planes.'] };
+    return { after: reconcileAbsent(after), notes: ['The vertical profile is kept but inactive; the horizontal profile now shapes both planes.'] };
   }
   // Seeding replaces V with H, so only a restore needs the throats to agree.
   const blocker = seed ? undefined : separateVerticalBlocker(design);
@@ -499,9 +519,9 @@ export function setSeparateVertical(design: DesignDocument, separate: boolean, s
   if (seed) {
     after.profile_v = structuredClone(profileOf(design, 'H'));
     remapVerticalFromHorizontal(after);
-    return { after, notes: ['The vertical profile starts as a copy of the horizontal profile, so the geometry does not change.'] };
+    return { after: reconcileAbsent(after), notes: ['The vertical profile starts as a copy of the horizontal profile, so the geometry does not change.'] };
   }
-  return { after, notes: [sameProfile(design.profile_h, design.profile_v)
+  return { after: reconcileAbsent(after), notes: [sameProfile(design.profile_h, design.profile_v)
     ? 'The stored vertical profile equals the horizontal profile, so the geometry does not change.'
     : 'Restores the stored vertical profile. The preview shows how the vertical plane changes.'] };
 }
@@ -543,7 +563,7 @@ export function horizontalThroatForVertical(design: DesignDocument): ProfileEdit
   const after = structuredClone(design);
   after.profile_v!.points[0].r = profileOf(design, 'H').points[0].r;
   clearMetadata(after, ['profile_v.points.0.r']);
-  return { after, notes: [`The stored vertical throat radius becomes ${formatMm(after.profile_v!.points[0].r)} mm; the rest of the vertical profile is unchanged.`] };
+  return { after: reconcileAbsent(after), notes: [`The stored vertical throat radius becomes ${formatMm(after.profile_v!.points[0].r)} mm; the rest of the vertical profile is unchanged.`] };
 }
 
 /**
@@ -615,7 +635,7 @@ export function applyPastedProfile(design: DesignDocument, pasted: PastedProfile
   } else if (pasted.importedLength !== lengthOf(design)) {
     notes.push(`Pasted positions are stretched from ${formatMm(pasted.importedLength)} mm to the current Length ${formatMm(lengthOf(design))} mm.`);
   }
-  return { after, notes };
+  return { after: reconcileAbsent(after), notes };
 }
 
 export function formatMm(value: number): string {
@@ -847,6 +867,6 @@ export function insertAnchorBuilder(plane: Plane, zMm: number, mode: InsertMode,
       ? [`Exact insertion at z = ${formatMm(zMm)} mm in ${edited}: the curve is split where it is, and the new anchor and any neighbouring automatic spans that would move get explicit handles.`]
       : [`Refit insertion at z = ${formatMm(zMm)} mm in ${edited}: every explicit handle in ${edited} is released and the plane is fitted automatically through its anchors.`];
     const pins = describePins(edited, profileOf(after, edited).points);
-    return { after, notes: pins ? [...notes, pins] : notes };
+    return { after: reconcileAbsent(after), notes: pins ? [...notes, pins] : notes };
   };
 }
