@@ -391,7 +391,8 @@ export const CAD_CONTROL_DESCRIPTORS: readonly CadControlDescriptor[] = [
   ...CAD_CARDIOID_FIELD_CONTROLS,
 ];
 
-export function cadControlIsAvailable(descriptor: CadControlDescriptor, cadReturnReady: boolean, editableMesh = false, waveguideLinked = true, bundleAvailable = false): boolean {
+export function cadControlIsAvailable(descriptor: CadControlDescriptor, cadReturnReady: boolean, editableMesh = false, waveguideLinked = true, bundleAvailable = false, meshDetailAvailable = false): boolean {
+  if (descriptor.id === CAD_CONTROLS.meshDetail.id) return meshDetailAvailable;
   if (descriptor.availability === 'bundle-return') return bundleAvailable || cadReturnReady;
   if (descriptor.availability === 'onshape-return') return editableMesh;
   if (descriptor.availability === 'waveguide-linked') return waveguideLinked;

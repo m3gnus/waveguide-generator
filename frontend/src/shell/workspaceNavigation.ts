@@ -1,6 +1,7 @@
 export type WorkspaceRevealTarget = 'cad-requests' | 'cad-link';
 let revealTarget: WorkspaceRevealTarget | null = null;
 let reveals = 0;
+let claimedReveal: WorkspaceRevealTarget | null = null;
 
 export type WorkspacePanel = 'geometry' | 'simulation' | 'viewport' | 'results' | 'jobs';
 
@@ -34,6 +35,7 @@ function emit(): void {
 export function noteExplicitNavigation(): void {
   explicitNavigations += 1;
   revealTarget = null;
+  claimedReveal = null;
   emit();
 }
 
@@ -69,9 +71,12 @@ export const workspaceNavigation = {
     return activated;
   },
   getRevealTarget(): WorkspaceRevealTarget | null { return revealTarget; },
+  /** A reveal owner scrolled and focused the target, rather than navigation cancelling it. */
+  wasRevealed(target: WorkspaceRevealTarget): boolean { return claimedReveal === target; },
   claimReveal(target: WorkspaceRevealTarget): void {
     if (revealTarget !== target) return;
     revealTarget = null;
+    claimedReveal = target;
     emit();
   },
   /** Whether the dock shows this panel now: present and not behind a sibling tab. */
@@ -84,7 +89,7 @@ export const workspaceNavigation = {
   },
   /** A value that changes whenever visibility or the navigation count does. */
   getSnapshot(): string {
-    return `${explicitNavigations}:${reveals}:${revealTarget ?? ''}:${[...visiblePanels].sort().join(',')}`;
+    return `${explicitNavigations}:${reveals}:${revealTarget ?? ''}:${claimedReveal ?? ''}:${[...visiblePanels].sort().join(',')}`;
   },
 };
 
@@ -105,6 +110,7 @@ export function resetWorkspaceNavigationForTests(): void {
   explicitNavigations = 0;
   revealTarget = null;
   reveals = 0;
+  claimedReveal = null;
   visiblePanels = new Set();
   emit();
 }

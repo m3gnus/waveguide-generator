@@ -7,7 +7,7 @@ import { cadJobSummary } from '../jobs/cadSolve';
 import legacy from '../jobs/cadRefusedJob.fixture.json';
 import { HeldCadRequestDialog, openHeldRequest, resetHeldRequestSessionForTests } from './HeldCadRequestDialog';
 import { CurrentModelStatus } from './CurrentModelStatus';
-import { CadModelStatusLine } from './CadModelStatusLine';
+import { runCadStatusAction, CadModelStatusLine } from './CadModelStatusLine';
 import { workspaceNavigation } from './workspaceNavigation';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -58,6 +58,28 @@ describe('held CAD request dialog owner', () => {
     host.remove();
     vi.restoreAllMocks();
   });
+  it('routes remedial status actions to mesh settings or the CAD connection', () => {
+    const navigate = vi.spyOn(workspaceNavigation, 'navigate').mockReturnValue(true);
+    const reveal = vi.spyOn(workspaceNavigation, 'reveal').mockReturnValue(true);
+    const solve = vi.fn();
+    const line = { text: 'Change the mesh.', short: 'change mesh', tone: 'attention' as const, actionLabel: 'Settings', jobId: 'refused' };
+    runCadStatusAction({ ...line, action: 'mesh-settings' }, solve);
+    expect(navigate).toHaveBeenCalledWith('simulation');
+    runCadStatusAction({ ...line, action: 'cad-link' }, solve);
+    expect(reveal).toHaveBeenCalledWith('cad-link');
+    expect(solve).not.toHaveBeenCalled();
+  });
+
+  it('preserves non-ceiling request dismissal', async () => {
+    const job = held();
+    job.cad_state = { ...job.cad_state!, reason: 'setup_required' };
+    publishCadJobs([job]);
+    await act(async () => root.render(<HeldCadRequestDialog/>));
+    await act(async () => button('Dismiss request').click());
+    expect(actions.dismiss).toHaveBeenCalledWith(expect.objectContaining({ id: job.id }));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+
   it('uses the same triangle choice for a file or parametric solve', async () => {
     const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
     const resume = vi.fn().mockResolvedValue(undefined);
@@ -104,10 +126,10 @@ describe('held CAD request dialog owner', () => {
     const name = job.cad_state!.snapshot!.document_name!;
     expect(dialog.querySelector('h2')?.textContent).toBe(`${name} is larger than Waveguide Generator's limit`);
     expect(dialog.textContent).toContain('It meshes to 54,739 triangles; Waveguide Generator\'s limit is 22,000. Solving it anyway is slower and needs more memory.');
-    expect([...dialog.querySelectorAll('button')].map(node => node.textContent)).toEqual(['Later', "Don't solve", 'Change in Fusion', 'Solve anyway']);
-    // Don't solve lets the request go.
-    await act(async () => button("Don't solve").click());
-    expect(actions.dismiss).toHaveBeenCalledWith(expect.objectContaining({ id: job.id }));
+    expect([...dialog.querySelectorAll('button')].map(node => node.textContent)).toEqual(['Later', 'Change in Fusion', 'Solve anyway']);
+    // Later releases the modal while keeping the request available.
+    await act(async () => button('Later').click());
+    expect(actions.dismiss).not.toHaveBeenCalled();
     expect(host.querySelector('[role="dialog"]')).toBeNull();
     expect(dialog.textContent).not.toMatch(/axis|radiat/i);
     expect(dialog.textContent).not.toContain('Dismiss');
@@ -417,13 +439,23 @@ describe('held CAD request dialog owner', () => {
     useCadReturnStore.setState({ selectedBundle: null });
   });
 
-  it('lets this window\'s own ceiling question go with Don\'t solve', async () => {
+  it('does not direct an Onshape mesh to Fusion', async () => {
+    const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
+    useCadReturnStore.setState({ selectedBundle: { ...ceilingBundle('onshape'), bundleOrigin: 'onshape' }, ingestRecord: null });
+    await act(async () => root.render(<HeldCadRequestDialog/>));
+    act(() => meshCeilingChoice.ask({ name: 'Onshape horn', nextStep: NEXT, bundlePath: 'onshape' }));
+    expect([...host.querySelectorAll('button')].map(node => node.textContent)).toEqual(['Later', 'Solve anyway']);
+    act(() => meshCeilingChoice.clear());
+  });
+
+  it('defers this window\'s own ceiling question with Later', async () => {
     const { meshCeilingChoice } = await import('../stores/meshCeilingChoice');
     useCadReturnStore.setState({ selectedBundle: ceilingBundle('b'), ingestRecord: null });
     await act(async () => root.render(<HeldCadRequestDialog/>));
     act(() => meshCeilingChoice.ask({ name: 'NoWaistbanding', nextStep: NEXT, bundlePath: 'b' }));
-    await act(async () => button("Don't solve").click());
-    expect(meshCeilingChoice.getSnapshot()).toBeNull();
+    await act(async () => button('Later').click());
+    expect(meshCeilingChoice.getSnapshot()?.deferred).toBe(true);
+    meshCeilingChoice.clear();
     expect(host.querySelector('[role="dialog"]')).toBeNull();
     useCadReturnStore.setState({ selectedBundle: null });
   });

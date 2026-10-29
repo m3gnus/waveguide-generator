@@ -17,7 +17,7 @@ import type { CadRealizedDimensions, CadRealizedParameter, CadReturnIngestRecord
 import { importedSubmissionBlocker, importedSubmissionNotices, importedSweepRangeInvalid } from '../jobs/importedSubmission';
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
 import { useActiveBackendCapability, useCapabilities, usePlannedBackendCapabilities } from '../jobs/useCapabilities';
-import { cadMeshIsEditable } from '../api/cadMesh';
+import { cadMeshDetailContent, cadMeshIsEditable } from '../api/cadMesh';
 import { backendLimitation, symmetryDomainLimitation } from './backendSupport';
 import { CadCrossover, crossoverSummary } from './CrossoverSection';
 import {
@@ -968,7 +968,8 @@ function CadDriveChannels() {
           {group.channelIds.length > 1 && <p className="cad-driver-hint">{group.channelIds.length} surfaces · identical drivers. Each surface gets its own driver, wired to one amplifier channel.</p>}
           {showsAssignment(channel) && channel.source_ids
             .filter((sourceId) => activeSources.some((source) => source.id === sourceId))
-            .map((sourceId) => <div className="cad-channel-row" key={sourceId}><b>{sourceId}</b><select aria-label={`Drive channel for ${sourceId}`} disabled={!!channel.exterior_transducer} value={channel.id} onChange={(event) => state.setSourceChannel?.(sourceId, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>)}
+            .map((sourceId) => <div className="cad-channel-row" key={sourceId}><b>{sourceId}</b><select aria-label={`Drive channel for ${sourceId}`} disabled={!!channel.exterior_transducer} value={channel.id} onChange={(event) => state.setSourceChannel?.(sourceId, event.target.value)}><option value={channel.id} disabled>{channel.id} (unavailable)</option>{channelIds.map((id) => <option value={id} key={id} disabled={state.driveChannels.some(target => target.id === id && !!target.exterior_transducer)}>{id}</option>)}</select></div>)}
+          {showsAssignment(channel) && state.driveChannels.some(item => item.exterior_transducer) && <p className="cad-channel-hint" role="status">Before reassigning, turn off Solve driver in BEAT in More for the source and destination channels.</p>}
           <details className="cad-channel-more" open={channel.exterior_transducer ? true : undefined}><summary>More</summary>
           <div data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channelName}`} value={channel.motion} disabled={!!channel.exterior_transducer} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal</option><option value="axial">Axial (pistonic)</option></select></div>
           <div className="cad-channel-hint">Normal moves each source face along its own normal. Axial moves the source as a rigid piston along its axis.</div>
@@ -1120,10 +1121,8 @@ function CadMeshDetail() {
     cadWorkspace.getSnapshot,
   );
   const error = useCadFeedbackError(cadWorkspaceView.error);
-  const editable = cadMeshIsEditable(state.selectedBundle);
-  const driftSources = new Set([...state.areaDriftSourceIds, ...(state.ingestRecord?.role_findings ?? [])
-    .filter((finding) => String(finding.kind).includes('area-drift'))
-    .map((finding) => String(finding.source_id))]);
+  const { editable, driftSourceIds: driftSources, hasFem, sources, available } = cadMeshDetailContent(state);
+  if (!available && !error && !cadWorkspaceView.status) return null;
   return <div className="cad-mesh-controls" data-control-reveal-id={CAD_CONTROLS.meshDetail.reveal.id} tabIndex={-1}>
     {editable && <div className="cad-mesh-intro"><p>Smaller values are finer. Curved CAD faces receive bounded extra refinement automatically.</p><button className="primary" disabled={cadWorkspaceView.ingesting || !state.selectedBundle?.readable} onClick={() => void cadWorkspaceView.ingest()}>{cadWorkspaceView.ingesting ? 'Preparing…' : 'Rebuild mesh'}</button></div>}
     {editable && <>
@@ -1133,13 +1132,13 @@ function CadMeshDetail() {
       <NumberField label={CAD_CONTROLS.rigidSize.label} revealId={CAD_CONTROLS.rigidSize.reveal.id} unit="mm" value={state.meshSizes.rigid_size_mm} min={0.01} step={0.5} precision={2} description="Mesh size for every surface that is not a source." onCommit={state.setRigidSize}/>
       <NumberField label={CAD_CONTROLS.transitionSize.label} revealId={CAD_CONTROLS.transitionSize.reveal.id} unit="mm" value={state.meshSizes.transition_mm} min={0.01} step={0.5} precision={2} description="Distance over which the mesh grows from each source's size to the wall size." onCommit={state.setTransition}/>
     </>}
-    {((state.ingestRecord?.evidence?.fem_air_volumes?.length ?? 0) > 0 || (state.ingestRecord?.evidence?.fem_regions?.length ?? 0) > 0) && <ToggleRow id="cad-exterior-only" label={CAD_CONTROLS.exteriorOnly.label} revealId={CAD_CONTROLS.exteriorOnly.reveal.id} help="Explicitly exclude the returned FEM air volumes and FEM regions. This solves only the exterior free-space problem." checked={state.exteriorOnly} onChange={state.setExteriorOnly}/>}
-    {(state.selectedBundle?.sources ?? []).filter(source => editable || !source.required || driftSources.has(source.id)).map((source) => <div className={`cad-source ${state.skippedSourceIds.includes(source.id) ? 'skipped' : ''}`} key={source.id}>
+    {hasFem && <ToggleRow id="cad-exterior-only" label={CAD_CONTROLS.exteriorOnly.label} revealId={CAD_CONTROLS.exteriorOnly.reveal.id} help="Explicitly exclude the returned FEM air volumes and FEM regions. This solves only the exterior free-space problem." checked={state.exteriorOnly} onChange={state.setExteriorOnly}/>}
+    {sources.map((source) => <div className={`cad-source ${state.skippedSourceIds.includes(source.id) ? 'skipped' : ''}`} key={source.id}>
       {editable ? <NumberField label={`${sourceRoleLabel(source.role)} source`} revealId={CAD_CONTROLS.sourceSize.reveal.id} unit="mm" value={state.meshSizes.source_size_mm[source.id] ?? source.suggestedResolutionMm} min={0.01} step={0.25} precision={2} description={`${developer ? `${source.id} · ` : ''}suggested ${source.suggestedResolutionMm} mm`} disabled={state.skippedSourceIds.includes(source.id)} onCommit={(value) => state.setSourceSize(source.id, value)}/> : <b>{sourceRoleLabel(source.role)} source</b>}
       {!source.required && <ToggleRow id={`skip-${source.id}`} label={CAD_CONTROLS.skipSource.label} revealId={CAD_CONTROLS.skipSource.reveal.id} help="Exclude this optional source from preparation and the solve. This creates a blocking finding." checked={state.skippedSourceIds.includes(source.id)} onChange={(checked) => state.setSkipped(source.id, checked)}/>}
       {driftSources.has(source.id) && <ToggleRow id={`drift-${source.id}`} label={CAD_CONTROLS.areaDrift.label} revealId={CAD_CONTROLS.areaDrift.reveal.id} help="Explicitly accept the source-area mismatch and prepare again. The override is recorded as a finding on the prepared model." checked={state.areaDriftOverrides.includes(source.id)} onChange={(checked) => state.setAreaDriftOverride(source.id, checked)}/>}
     </div>)}
-    {state.ingestStaleReason && <div className="field-error" role="status">{state.ingestStaleReason}</div>}
+    {state.ingestStaleReason && <div className="field-error" role="status">{state.ingestStaleReason} {editable ? 'Use Rebuild mesh above to apply these settings.' : 'Settings changes prepare automatically; see Results for progress and the next step.'}</div>}
     {error && <div className="field-error" role="alert">{error}</div>}
     {cadWorkspaceView.status && <p className="section-note" role="status">{cadWorkspaceView.status}</p>}
   </div>;
@@ -1166,7 +1165,7 @@ export function CadSimulationSections({ searching, matches, ingestRecord }: {
   const summaries = {
     crossover: crossoverSummary(cad, cad.input === 'file' ? id => importedDriverLabel(cad, id) : undefined),
     directivity: polarSummary(options.polar),
-    solver: solveOptionsSummary(options),
+    solver: [solveOptionsSummary(options), options.meshValidationMode !== 'warn' ? `mesh checks: ${options.meshValidationMode}` : null].filter(Boolean).join(' · '),
   };
   const section = (key: 'frequencySweep' | 'driveChannels' | 'crossover' | 'directivityMap' | 'solveOptions' | 'passiveCardioid', body: ReactNode, defaultOpen = false, summary?: string) => {
     const control = CAD_CONTROLS[key];
@@ -1202,12 +1201,14 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const ingestRecord = useCadReturnStore((state) => state.ingestRecord);
   const selectedBundle = useCadReturnStore((state) => state.selectedBundle);
+  const meshDetailAvailable = useCadReturnStore(state => cadMeshDetailContent(state).available);
   const developer = useDeveloperDetails();
   const waveguideLinked = useWaveguideDefinitionApplies();
   const setFamily = useDesignStore((state) => state.setFamily);
   const replaceDocument = useDesignStore((state) => state.replaceDocument);
   const helpVisible = useParameterHelp();
-  const [query, setQuery] = useState('');
+  const [filterQuery, setQuery] = useState('');
+  const query = workspaceMode === 'cad' && tab === 'geometry' && !waveguideLinked ? '' : filterQuery;
   const [freeformChoice, setFreeformChoice] = useState(false);
   const [conversionError, setConversionError] = useState<string | null>(null);
   const [conversionNotice, setConversionNotice] = useState<string | null>(null);
@@ -1228,10 +1229,10 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
   })), [definitions, design, query, workspaceMode]);
   const matchingCadSections = useMemo(() => new Set(CAD_CONTROL_DESCRIPTORS
     .filter((descriptor) => workspaceMode === 'cad' && descriptor.tab === tab)
-    .filter((descriptor) => cadControlIsAvailable(descriptor, Boolean(ingestRecord), cadMeshIsEditable(selectedBundle), waveguideLinked, Boolean(selectedBundle)))
+    .filter((descriptor) => cadControlIsAvailable(descriptor, Boolean(ingestRecord), cadMeshIsEditable(selectedBundle), waveguideLinked, Boolean(selectedBundle), meshDetailAvailable))
     .filter((descriptor) => !descriptor.developerOnly || developer)
     .filter((descriptor) => cadControlMatchesQuery(descriptor, query))
-    .map((descriptor) => descriptor.section)), [developer, ingestRecord, selectedBundle, query, tab, waveguideLinked, workspaceMode]);
+    .map((descriptor) => descriptor.section)), [developer, ingestRecord, selectedBundle, meshDetailAvailable, query, tab, waveguideLinked, workspaceMode]);
   const cadSectionMatches = (section: CadControlSection) => matchingCadSections.has(section);
   const matchingParametricSections = useMemo(() => new Set(PARAMETRIC_CONTROL_DESCRIPTORS
     .filter((descriptor) => workspaceMode === 'parametric' && descriptor.tab === tab)
@@ -1423,7 +1424,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
     <SolveOptionsStoreProvider mode={workspaceMode}>
     <div ref={registerParameterPanel} className={`param-panel${embedded ? '' : ' panel-scroll'}`} data-param-tab={tab}>
       {workspaceMode === 'parametric' && tab === 'geometry' && <RunNameField/>}
-      <div className="parameter-search">
+      {(workspaceMode !== 'cad' || tab !== 'geometry' || waveguideLinked) && <div className="parameter-search">
         <label className="sr-only" htmlFor={`parameter-filter-${tab}`}>Filter {tab} parameters</label>
         <input id={`parameter-filter-${tab}`} type="search" value={query} placeholder="Filter labels or keys…" onChange={(event) => setQuery(event.target.value)} />
         {query && <button aria-label="Clear parameter filter" onClick={() => setQuery('')}>×</button>}
@@ -1434,7 +1435,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
           title={helpVisible ? 'Hide section descriptions' : 'Show section descriptions'}
           onClick={() => parameterHelpStore.toggle()}
         ><Icon name="info" /></button>
-      </div>
+      </div>}
       {workspaceMode === 'parametric' && tab === 'geometry' && (!searching || (osseFeatures(design.formula) && matchingParametricSections.has('Model Type'))) && modelTypeSection}
       {workspaceMode === 'parametric' ? definitions.map(renderRegistrySection)
         : <>

@@ -1319,6 +1319,54 @@ describe('ParamPanel inventory UX', () => {
     expect(entries.some(({ id }) => id === 'cad-control-cad.mesh.skip-source')).toBe(true);
   });
 
+  it('omits the empty geometry filter for a CAD-authored model', () => {
+    act(() => {
+      setCadReady({ linked: false });
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="geometry"/>));
+    });
+    expect(host.querySelector('#parameter-filter-geometry')).toBeNull();
+    act(() => setCadReady({ linked: true }));
+    expect(host.querySelector('#parameter-filter-geometry')).not.toBeNull();
+  });
+
+  it('hides an empty Mesh detail target until actionable content appears', () => {
+    act(() => {
+      setCadReady();
+      useCadReturnStore.setState({ selectedBundle: { ...cadBundle, sources: cadBundle.sources.filter(source => source.required) },
+        ingestRecord: { ...cadRecord, evidence: {}, role_findings: [] } as unknown as CadReturnIngestRecord,
+        areaDriftSourceIds: [], ingestStaleReason: null });
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation"/>));
+    });
+    const target = () => host.querySelector('[data-control-reveal-id="cad.mesh-detail"]');
+    const entry = () => buildParameterPaletteEntries(undefined, { mode: 'cad' }).find(item => item.id === 'cad-control-cad.mesh-detail');
+    expect(target()).toBeNull();
+    expect(entry()).toBeUndefined();
+    act(() => useCadReturnStore.setState({ areaDriftSourceIds: ['source-hf'] }));
+    expect(target()).not.toBeNull();
+    expect(entry()).toBeDefined();
+    act(() => useCadReturnStore.setState({ ingestStaleReason: 'Source settings changed.' }));
+    expect(host.textContent).toContain('Settings changes prepare automatically; see Results');
+  });
+
+  it.each(['off', 'strict'] as const)('shows and resets retained %s mesh checks without developer details', mode => {
+    act(() => {
+      setCadReady();
+      useImportedSolveOptionsStore.getState().setMeshValidationMode(mode);
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation"/>));
+    });
+    expect(host.textContent).toContain(`Mesh checks: ${mode}`);
+    expect(host.querySelector('[data-section="Solver"] .section-head')?.textContent).toContain(`mesh checks: ${mode}`);
+    expect(host.querySelector('#mesh-validation-mode')).toBeNull();
+    expect(host.querySelector('#solve-verbose')).toBeNull();
+    act(() => [...host.querySelectorAll('button')].find(button => button.textContent === 'Use recommended mesh checks')!.click());
+    expect(useImportedSolveOptionsStore.getState().meshValidationMode).toBe('warn');
+    expect(host.textContent).not.toContain('Mesh checks:');
+    expect(preferencesStore.getSnapshot().showDeveloperDetails).toBe(false);
+  });
+
   it.each([false, true])('lists only enabled developer entries and preserves preference on reveal (%s)', async (developer) => {
     act(() => {
       preferencesStore.update({ showDeveloperDetails: developer });
@@ -1791,7 +1839,7 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('[role="alert"]')?.textContent).toBe(refusal);
     expect(host.querySelector('#skip-source-mf')).not.toBeNull();
     expect(buildParameterPaletteEntries(undefined, { mode: 'cad', cadReturnReady: false }).map((entry) => entry.id))
-      .not.toContain('cad-control-cad.mesh-detail');
+      .toContain('cad-control-cad.mesh-detail');
   });
 
   it('points a model whose preparation failed at Results, without repeating its status line', () => {
@@ -2240,7 +2288,7 @@ describe('ParamPanel inventory UX', () => {
       enabled: true, coupled: true, rearVolumeL: 6, portLengthMm: 25,
       modelPortAreaM2: 0.05, bemPortAreaM2: 0.0094, foamResistancePaSM3: 10_000,
     }));
-    expect(options()).toEqual(['drive-port']);
+    expect(options()).toEqual(['passive_cardioid', 'drive-port']);
     expect(host.querySelector('[aria-label="Drive channel for source-mf"]')!.closest('details')).toBeNull();
     // The channel that already claims the id predates the choice, so the
     // prevention is backed by a refusal the user can act on -- and the control
@@ -2249,6 +2297,21 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('[data-section="Passive cardioid"] [role="alert"]')?.textContent)
       .toContain('Reassign that source');
     expect(host.querySelector('.cad-channel[data-channel-id="passive_cardioid"] .cad-channel-row')).not.toBeNull();
+    const assignment = () => host.querySelector<HTMLSelectElement>('[aria-label="Drive channel for source-mf"]')!;
+    expect(assignment().value).toBe('passive_cardioid');
+    expect(assignment().selectedOptions[0].textContent).toContain('(unavailable)');
+    act(() => useCadReturnStore.getState().setExteriorTransducer('passive_cardioid', { version: 1, motion_axis: [0, 0, 1] }));
+    expect(assignment().disabled).toBe(true);
+    expect(host.textContent).toContain('Before reassigning, turn off Solve driver in BEAT');
+    act(() => host.querySelector<HTMLInputElement>('[aria-label="Solve driver in BEAT for passive_cardioid"]')!.click());
+    expect(assignment().disabled).toBe(false);
+    act(() => {
+      assignment().value = 'drive-port';
+      assignment().dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(useCadReturnStore.getState().driveChannels.find(channel => channel.source_ids.includes('source-mf'))?.id).toBe('drive-port');
+    expect(host.querySelector('[aria-label="Drive channel for source-mf"]')).toBeNull();
+
   });
 
   it('offers no source assignment outside a stranded channel', () => {

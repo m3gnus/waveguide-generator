@@ -159,6 +159,20 @@ describe('the CAD model status line', () => {
     for (const result of [full, newer, recorded]) expectNoJargon(`${result.text} ${result.short}`, { forbidden: JARGON });
   });
 
+  it.each(['solver_memory_exceeded', 'snapshot_changed'])('routes a prepared %s refusal to a remedy', reason => {
+    const job = { id: 'refused', status: 'error', cad_state: { state: 'needs_user_input', reason,
+      held: false, attention: 'action', message: 'Change the model.', next_step: 'Send it again.' } } as unknown as JobItem;
+    expect(line(onScreen, idle, { kind: 'refused', job })).toMatchObject({ action: 'cad-link', jobId: 'refused' });
+    expect(line(onScreen, idle, { kind: 'prepare-failed', job }).action).toBe('cad-link');
+    if (reason === 'solver_memory_exceeded') expect(line({ ...onScreen, selectedBundle: { ...bundle, bundleOrigin: 'onshape' } }, idle, { kind: 'refused', job }).action).toBe('mesh-settings');
+  });
+
+  it('never offers Solve for an unheld action refusal on a prepared model', () => {
+    const job = { id: 'refused', status: 'error', cad_state: { state: 'needs_user_input', reason: 'excitation_refused',
+      held: false, attention: 'action', message: 'Change the drive channels.' } } as unknown as JobItem;
+    expect(line(onScreen, idle, requestFor(job))).toMatchObject({ action: 'none', tone: 'attention' });
+  });
+
   it('words the top-bar chip for requests about other models', () => {
     const question = { kind: 'prepare_and_solve', attention: 'question' } as const;
     expect(cadRequestsChipLabel([question], { otherModels: true })).toBe('Another model needs your choice');

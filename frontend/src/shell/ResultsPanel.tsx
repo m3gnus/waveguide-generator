@@ -95,9 +95,9 @@ function cleanedUpMessage(job: JobItem): string {
   return `${name}'s results were cleaned up${date}. Solve it again to see them.`;
 }
 
-function labelFor(id: string, jobs: ReturnType<typeof jobsSocket.getSnapshot>['jobs']): string {
+export function labelFor(id: string, jobs: ReturnType<typeof jobsSocket.getSnapshot>['jobs']): string {
   const job = jobs.find((item) => item.id === id);
-  return job ? runDisplayName(job) : `osse-${id.slice(0, 6)}`;
+  return runDisplayName(job ?? { id, run_number: null, label: null });
 }
 
 /**

@@ -5,6 +5,26 @@ export function cadMeshIsEditable(bundle: CadReturnBundle | null): boolean {
   return bundle?.bundleOrigin === 'onshape';
 }
 
+/** Shared content policy for Simulation and its Mesh detail palette target. */
+export function cadMeshDetailContent(state: {
+  selectedBundle: CadReturnBundle | null;
+  ingestRecord: CadReturnIngestRecord | null;
+  areaDriftSourceIds: readonly string[];
+  ingestStaleReason: string | null;
+}) {
+  const editable = cadMeshIsEditable(state.selectedBundle);
+  const driftSourceIds = new Set([...state.areaDriftSourceIds, ...(state.ingestRecord?.role_findings ?? [])
+    .filter((finding) => String(finding.kind).includes('area-drift'))
+    .map((finding) => String(finding.source_id))]);
+  const hasFem = (state.ingestRecord?.evidence?.fem_air_volumes?.length ?? 0) > 0
+    || (state.ingestRecord?.evidence?.fem_regions?.length ?? 0) > 0;
+  const sources = (state.selectedBundle?.sources ?? [])
+    .filter((source) => editable || !source.required || driftSourceIds.has(source.id));
+  return { editable, driftSourceIds, hasFem, sources,
+    available: Boolean(state.selectedBundle || state.ingestRecord)
+      && (editable || hasFem || sources.length > 0 || !!state.ingestStaleReason) };
+}
+
 /** Prefer measured cost over the area estimate on curved CAD surfaces. */
 export function cadMeshSizing(record: CadReturnIngestRecord): Record<string, unknown> {
   const estimate = record.sizing_estimate ?? {};

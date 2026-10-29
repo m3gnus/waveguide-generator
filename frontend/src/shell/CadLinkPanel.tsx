@@ -470,7 +470,7 @@ export function CadLinkPanel() {
           </option>;
         })}
       </select>
-      <small>Freshness, geometry requests and updates use this exact managed body.</small>
+      <small>Freshness, geometry requests and updates use this exact managed body. Placements of the same design are never merged.</small>
     </label>}
     {cadLimitation && <p className="section-note">{cadLimitation}</p>}
     {onshape && publicOnly && !confirmPublicDocument && <Notice tone="warning" title="This Onshape plan creates public documents.">{onshapeConnection?.plan?.name ?? 'The Free plan'} makes every document world-readable — anyone with the link can view this waveguide. Confidential designs belong in Fusion 360 or on a paid Onshape plan.</Notice>}

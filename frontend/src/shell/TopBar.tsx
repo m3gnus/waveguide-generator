@@ -1,5 +1,5 @@
 import { RunMoveRecoveryNotice } from './MoveRunsDialog';
-import { cadMeshIsEditable } from '../api/cadMesh';
+import { cadMeshDetailContent, cadMeshIsEditable } from '../api/cadMesh';
 import { selectJob } from '../jobs/selectJob';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
@@ -108,6 +108,7 @@ export function buildParameterPaletteEntries(family?: DesignFamily, context: Par
   const cadReturnReady = context.cadReturnReady ?? Boolean(useCadReturnStore.getState().ingestRecord);
   const editableCadMesh = context.editableCadMesh ?? cadMeshIsEditable(useCadReturnStore.getState().selectedBundle);
   const cadBundleAvailable = context.cadBundleAvailable ?? Boolean(useCadReturnStore.getState().selectedBundle);
+  const meshDetailAvailable = cadMeshDetailContent(useCadReturnStore.getState()).available;
   const waveguideLinked = context.waveguideLinked ?? waveguideDefinitionAppliesNow();
   const sectionDefinitions = mode === 'cad' ? CAD_PARAMETER_SECTION_DEFINITIONS : PARAMETER_SECTION_DEFINITIONS;
   const sectionByTitle = new Map(sectionDefinitions.map((section) => [section.title, section]));
@@ -153,7 +154,7 @@ export function buildParameterPaletteEntries(family?: DesignFamily, context: Par
   }
 
   const cadEntries: PaletteEntry[] = CAD_CONTROL_DESCRIPTORS
-    .filter((descriptor) => cadControlIsAvailable(descriptor, cadReturnReady, editableCadMesh, waveguideLinked, cadBundleAvailable))
+    .filter((descriptor) => cadControlIsAvailable(descriptor, cadReturnReady, editableCadMesh, waveguideLinked, cadBundleAvailable, meshDetailAvailable))
     .filter((descriptor) => !descriptor.developerOnly || preferencesStore.getSnapshot().showDeveloperDetails)
     .map((descriptor) => ({
       id: `cad-control-${descriptor.id}`,
@@ -311,7 +312,11 @@ export function AttentionNotices() {
     && !(request.source === 'job' && isFailedCadPreparation(request.job)));
   const waitingCount = waiting.length;
   // A visible Geometry tab can still have its requests below the scroll fold.
-  const showWaiting = waitingCount > 0;
+  const [shownRequests, setShownRequests] = useState<string | null>(null);
+  const requestKey = waiting.map(request => request.id).join('|');
+  const requestsVisible = shownRequests === requestKey && workspaceNavigation.isVisible('geometry')
+    && workspaceNavigation.wasRevealed('cad-requests');
+  const showWaiting = waitingCount > 0 && !requestsVisible;
   const showReady = readyRun !== null && !workspaceNavigation.isVisible('results');
   // A Solve the user asked for failed after they moved on: its error is in Results.
   const showFailed = failedAction !== null && !workspaceNavigation.isVisible('results');
@@ -328,6 +333,7 @@ export function AttentionNotices() {
       className="attention-notice attention-waiting"
       title={first?.message ?? waitingLabel}
       onClick={() => {
+        setShownRequests(requestKey);
         workspaceNavigation.reveal('cad-requests');
       }}
     ><i/>{waitingLabel} · Show</button>}

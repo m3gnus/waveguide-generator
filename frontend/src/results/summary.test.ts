@@ -308,7 +308,9 @@ describe('simulation summary groups', () => {
 
     const diagnostics = summaryGroups({ result }).find(({ title }) => title === 'Diagnostics');
 
-    expect(diagnostics?.rows.find(({ label }) => label === 'Mesh validation')?.value).toBe('warnings · warn mode');
+    expect(diagnostics?.rows.find(({ label }) => label === 'Mesh checks')?.value).toBe('warnings');
+    expect(diagnostics?.rows.some(({ label }) => label === 'Mesh validation')).toBe(false);
+    expect(row(summaryGroups({ result, developer: true }), 'Diagnostics', 'Mesh validation')?.value).toBe('warnings · warn mode');
     expect(diagnostics?.rows.filter(({ label }) => label === 'Warning').map(({ value }) => value)).toEqual([large]);
   });
 

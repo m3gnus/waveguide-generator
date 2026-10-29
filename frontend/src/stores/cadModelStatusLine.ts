@@ -37,7 +37,7 @@ export function cadRequestState(job: Pick<JobItem, 'status' | 'cad_state'>): Cad
 }
 
 /** The one action a status line offers. Preparation runs automatically. */
-export type CadStatusAction = 'solve' | 'choose' | 'try-again' | 'show-results' | 'none';
+export type CadStatusAction = 'solve' | 'choose' | 'try-again' | 'show-results' | 'mesh-settings' | 'cad-link' | 'none';
 
 export type CadStatusTone = 'idle' | 'busy' | 'ready' | 'attention' | 'done';
 
@@ -78,7 +78,7 @@ export interface FileModelView {
 }
 
 const ACTION_LABEL: Record<Exclude<CadStatusAction, 'none'>, string> = {
-  solve: 'Solve', choose: 'Choose…', 'try-again': 'Try again', 'show-results': 'Show results',
+  'mesh-settings': 'Mesh settings…', 'cad-link': 'CAD Link…', solve: 'Solve', choose: 'Choose…', 'try-again': 'Try again', 'show-results': 'Show results',
 };
 
 /** The holds that wait for a solve engine: Results describes them, with their remedies. */
@@ -167,6 +167,17 @@ export function cadModelStatusLine(model: CadModelView | FileModelView, request:
       ? line(`The selected engine cannot solve ${label}. Results says what to change.`, 'engine cannot solve it', 'attention')
       : line('Solve engine is getting ready…', 'engine getting ready…', 'busy');
   }
+  // These requests cannot be retried unchanged. A prepared model still needs
+  // a route to its mesh controls or the CAD connection for a fresh Send.
+  if (prepared && (request?.kind === 'prepare-failed' || request?.kind === 'refused')) {
+    if (state?.reason === 'solver_memory_exceeded') {
+      return line(serverWords || `${label} needs a coarser mesh.`, 'mesh needs less memory', 'attention',
+        model.bundle?.bundleOrigin === 'onshape' ? 'mesh-settings' : 'cad-link', job?.id ?? null);
+    }
+    if (state?.reason === 'snapshot_changed') {
+      return line(serverWords || `${label} changed after it was sent. Send it again.`, 'send it again', 'attention', 'cad-link', job?.id ?? null);
+    }
+  }
   // A failed preparation, in the server's words (one owner: the protocol's
   // could-not-prepare sentence, or what the user can change), with Try again
   // where the server offers it.
@@ -182,7 +193,7 @@ export function cadModelStatusLine(model: CadModelView | FileModelView, request:
   // (a kept request that names a change WG settles with the settings on
   // screen); a rejected one is changed in Fusion or nowhere.
   if (request?.kind === 'refused' && job) {
-    const solvable = prepared && state?.state === 'needs_user_input';
+    const solvable = prepared && state?.held === true && state.attention !== 'action';
     return line(serverWords || `${APP_NAME} could not solve ${label}.`, 'not solved', 'attention', solvable ? 'solve' : 'none', job.id);
   }
   // Its mesh no longer matches the settings or the return: what was solved

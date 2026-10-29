@@ -207,7 +207,10 @@ export function MeshValidationControl({ mode = 'parametric' }: { mode?: Workspac
   const developer = useDeveloperDetails();
   // For a CAD model the mesh is Fusion's and WG's own check decides: the
   // policy is a developer control.
-  if (mode === 'cad' && !developer) return null;
+  if (mode === 'cad' && !developer) return store.meshValidationMode === 'warn' ? null : <p className="section-note" role="status">
+    Mesh checks: {store.meshValidationMode === 'off' ? 'off' : 'strict'}.{' '}
+    <button type="button" onClick={() => store.setMeshValidationMode('warn')}>Use recommended mesh checks</button>
+  </p>;
   return <>
     <SelectRow revealId="mesh-validation-mode" text="What happens when the solver mesh fails its topology check. Warn solves anyway and reports the problem; Strict refuses to solve a mesh that is not watertight; Off hides the warning entirely. Results from an invalid mesh cannot be trusted, so leave this on Warn unless you know why."><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></SelectRow>
   </>;

@@ -1,3 +1,4 @@
+import { publishVisiblePanels, resetWorkspaceNavigationForTests } from './workspaceNavigation';
 import { expectNoJargon } from '../testing/expectNoJargon';
 import legacyHold from '../jobs/cadRefusedJob.fixture.json';
 import { cadJobFixture, publishCadJobs } from '../jobs/cadSolve.fixtures';
@@ -131,6 +132,27 @@ describe('workspace mode switch', () => {
     const reveal = vi.spyOn(workspaceNavigation, 'reveal').mockReturnValue(true);
     act(() => host.querySelector<HTMLButtonElement>('.attention-waiting')!.click());
     expect(reveal).toHaveBeenCalledWith('cad-requests');
+  });
+
+  it('acknowledges Show only after the request is visible and claimed, retaining history', async () => {
+    resetWorkspaceNavigationForTests();
+    const state = cadJobSummary(legacyHold as unknown as JobItem);
+    const choice = cadJobFixture({ ...state, reason: 'setup_required', jobId: 'choice' }, { status: 'held' });
+    act(() => publishCadJobs([choice]));
+    await act(async () => root.render(<AttentionNotices/>));
+    act(() => host.querySelector<HTMLButtonElement>('.attention-waiting')!.click());
+    expect(host.querySelector('.attention-waiting')).not.toBeNull();
+    act(() => publishVisiblePanels(['geometry']));
+    expect(host.querySelector('.attention-waiting')).not.toBeNull();
+    act(() => workspaceNavigation.navigate('geometry'));
+    expect(host.querySelector('.attention-waiting')).not.toBeNull();
+    act(() => host.querySelector<HTMLButtonElement>('.attention-waiting')!.click());
+    act(() => workspaceNavigation.claimReveal('cad-requests'));
+    expect(host.querySelector('.attention-waiting')).toBeNull();
+    expect(jobsSocket.getSnapshot().jobs).toContainEqual(expect.objectContaining({ id: 'choice' }));
+    act(() => publishVisiblePanels(['results']));
+    expect(host.querySelector('.attention-waiting')).not.toBeNull();
+    resetWorkspaceNavigationForTests();
   });
 
   it('routes first-time CAD Link users directly to the setup workflow', () => {

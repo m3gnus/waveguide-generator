@@ -454,7 +454,8 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
     const diagnostics: SummaryRow[] = [];
     const validationMode = string(meshValidation?.mode);
     const validationState = validationFailed ? 'failed' : validationWarned ? 'warnings' : integrity?.valid === true ? 'passed' : null;
-    if (validationState) row(diagnostics, 'Mesh validation', `${validationState}${validationMode ? ` · ${validationMode} mode` : ''}`);
+    if (validationState) row(diagnostics, context.developer ? 'Mesh validation' : 'Mesh checks',
+      `${validationState}${context.developer && validationMode ? ` · ${validationMode} mode` : ''}`);
     if (partial) row(diagnostics, 'Solve status', 'partial');
     cappedRows(diagnostics, 'Warning', warningTexts);
     cappedRows(diagnostics, 'Failed', failures);

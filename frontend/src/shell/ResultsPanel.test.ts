@@ -1,3 +1,4 @@
+import { labelFor } from './ResultsPanel';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -987,5 +988,13 @@ describe('measurement angle selection', () => {
       .toBe('absolute · distance unspecified · V 5° / 15°');
     expect(measurementAngleEntries(items, resolveMeasurementSelection(result, 'vertical', [15]))
       .map(({ result: payload }) => payload.spl_on_axis?.spl?.[0])).toEqual([90, 85]);
+  });
+});
+
+
+describe('missing run labels', () => {
+  it('uses shared run naming when a result arrives before its job', () => {
+    expect(labelFor('missing-id', [])).toBe('Run');
+    expect(labelFor('known', [{ id: 'known', run_number: 12, label: 'Horn' } as never])).toBe('#12 · Horn');
   });
 });

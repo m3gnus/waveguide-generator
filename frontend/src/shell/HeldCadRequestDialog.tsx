@@ -76,7 +76,8 @@ const GENERIC_NEXT_STEP = 'This request needs your choice before WG can solve it
 export function HeldCadRequestDialog() {
   const jobs = useCadJobs();
   const pending = useSyncExternalStore(meshCeilingChoice.subscribe, meshCeilingChoice.getSnapshot, meshCeilingChoice.getSnapshot);
-  const selectedPath = useCadReturnStore(state => state.selectedBundle?.bundlePath ?? null);
+  const selectedBundle = useCadReturnStore(state => state.selectedBundle);
+  const selectedPath = selectedBundle?.bundlePath ?? null;
   const ceiling = pending && !pending.deferred
     && (pending.continueSolve ? pending.stillCurrent?.() !== false : pending.bundlePath === selectedPath)
     ? pending : null;
@@ -128,10 +129,9 @@ export function HeldCadRequestDialog() {
   const serverOptions = job
     ? state?.options?.length ? state.options : [{ id: 'review', label: 'Review request' }, { id: 'dismiss', label: 'Dismiss request' }]
     : [{ id: 'solve_anyway', label: 'Solve anyway' }];
-  // "Don't solve" lets the question go: the request is dismissed, or this
-  // window's own choice cleared.
+  // The ceiling has three choices; dismissal remains on other requests.
   const options = ceilingQuestion
-    ? [{ id: 'dismiss', label: "Don't solve" }, ...(!ceiling?.continueSolve ? [{ id: 'change_in_fusion', label: 'Change in Fusion' }] : []),
+    ? [...((!!job || (!ceiling?.continueSolve && selectedBundle?.bundleOrigin !== 'onshape')) ? [{ id: 'change_in_fusion', label: 'Change in Fusion' }] : []),
       ...serverOptions.filter(option => option.id !== 'dismiss')]
     : serverOptions;
   const changingNow = changing === id && ceilingQuestion !== null;
