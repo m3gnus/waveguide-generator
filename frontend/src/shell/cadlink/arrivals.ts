@@ -194,8 +194,8 @@ export async function refreshCadReturnArrivals(
           )
         )) ?? null
       : null;
-    // Background CAD discovery cannot take a file import's viewport intent.
-    if (workspaceModeStore.getSnapshot().importedInput === 'file') return;
+    // Background CAD discovery cannot take another input's viewport intent.
+    if (workspaceModeStore.getSnapshot().importedInput !== 'cad') return;
     const opened = arrived ?? initial;
     const projectMismatch = Boolean(
       opened && returnBelongsToAnotherProject(opened, currentDesignId),

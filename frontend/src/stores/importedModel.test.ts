@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
 import type { RegisteredMesh } from '../api/meshImport';
-import { record as cadRecord } from '../shell/cadlink/selection.fixtures';
+import { bundle, record as cadRecord } from '../shell/cadlink/selection.fixtures';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import {
   applyCadOptions, cadOptionsSnapshot, discardParkedCadModel, importedModelBlocker, openImported,
@@ -10,7 +10,11 @@ import {
 } from './importedModel';
 import { migrateLastModel, readLastModel, rememberLastModel } from './lastModel';
 import { fileMeshSetup, useMeshImportStore } from './meshImport';
-import { useCadReturnStore } from './cadReturn';
+import { resetCadReturnStore, useCadReturnStore } from './cadReturn';
+import { createCadReturnArrivalReader } from '../shell/cadlink/arrivals';
+import { createReceiptDisplay } from '../shell/cadlink/receiptDisplay';
+import { createCadReceiptsStore, type CadReceipt } from './cadReceipts';
+import { preferencesStore } from '../prefs/preferences';
 import { noteSolveSettingsEdit } from './solveSettingsEdits';
 import '../shell/cadlink/restores';
 import { resetSolveOptionsStore, restoreEnginePreference, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
@@ -544,5 +548,107 @@ describe('the last model', () => {
       expect(readLastModel('cad')?.model_id).toBe('wgl_project');
       expect(localStorage.getItem('wg2.cad.project.v1')).toBeNull();
     });
+  });
+});
+
+// The delayed workspace response and empty-to-fresh listing reproduce the
+// history cancellation race through the actual shared open and arrival owners.
+describe.each(['file', 'assembly'] as const)('%s history arrival ownership', input => {
+  function history(id = 'historical') {
+    const channels = [{ id: 'horn-throat', source_ids: ['horn-throat'], motion: 'normal' }];
+    const prepared = input === 'file' ? mesh : { ingest_id: 'wgi_assembly', model_id: 'design-assembly:wgu_saved',
+      producer: 'design-assembly', manifest_sha256: 'sha256:manifest', artifact_sha256: 'sha256:artifact', msh_text: MSH,
+      design: { name: 'Saved assembly' }, excitations: channels, sources: [{ id: 'horn-throat', role: 'HF' }],
+      source_tags: { 'horn-throat': 2 } };
+    const content = input === 'file' ? setup : { ...setup, geometry: { required_features: ['wg-design-assembly-v1'],
+      drive_channels: channels, skipped_source_ids: [] } };
+    const job = { ...run(id), config_summary: { geometry_type: 'imported',
+      import_origin: input === 'assembly' ? 'design-assembly' : 'mesh-file' } } as unknown as JobItem;
+    const response = () => json(workspace({ prepared, model: { model_id: prepared.model_id, producer: prepared.producer },
+      setup: { revision_id: `wgs_${id}`, content } }));
+    return { job, prepared, content, response };
+  }
+
+  beforeEach(() => { resetCadReturnStore(); preferencesStore.resetForTests(); });
+
+  it.each(['polling', 'Send'] as const)('finishes a delayed open when background %s discovers a CAD return', async arrival => {
+    let items: typeof bundle[] = [];
+    const prepare = vi.fn();
+    const listing = vi.fn<typeof fetch>(async () => json({ cadFolderConfigured: true, items }));
+    const enter = vi.fn();
+    const reader = createCadReturnArrivalReader({ autoIngestSelected: prepare, enterCadWorkspace: enter }, listing);
+    await reader.refresh({ background: true, autoOpenNew: true });
+    const selected = { ...bundle, bundlePath: 'wgreturn/kept.wgreturn', returnId: 'wgr_kept' };
+    useCadReturnStore.setState({ selectedBundle: selected });
+    const cadBefore = useCadReturnStore.getState();
+    const saved = history();
+    const waiting = deferred<Response>();
+    const opening = openImported({ kind: 'run', job: saved.job }, (() => waiting.promise) as typeof fetch);
+    expect(useImportedModelStore.getState().phase).toBe('loading');
+    expect(workspaceModeStore.getSnapshot().importedInput).toBe(input);
+    const generation = importedMeshStore.captureGeneration();
+    items = [bundle];
+    if (arrival === 'polling') {
+      await reader.refresh({ background: true, autoOpenNew: true });
+      expect(listing).toHaveBeenCalledTimes(2);
+    } else {
+      const receipts = createCadReceiptsStore(null);
+      const receipt: CadReceipt = { receipt_id: 'send:1', send_id: 'send-1', send_sequence: 1, project_id: null,
+        design_ids: [], ingest_id: null, outcome: 'accepted', reason: null, message: null,
+        created_at: bundle.modifiedAt, sent_at: bundle.modifiedAt, cursor: 1, bundle_path: bundle.bundlePath,
+        manifest_sha256: null, document_name: 'Speaker', retained_copy: true, refusal: null };
+      const show = vi.fn();
+      expect(await createReceiptDisplay({ enterCadWorkspace: enter, showIngestedMesh: show, prepareSelected: prepare },
+        receipts, listing)(receipt)).toBe(true);
+      expect(receipts.getState().feedback['send:1']).toMatchObject({ outcome: 'superseded',
+        message: expect.stringContaining(input === 'file' ? 'mesh file stays selected' : 'assembly stays selected') });
+      expect(show).not.toHaveBeenCalled();
+      expect(listing).toHaveBeenCalledOnce(); // The Send takes no listing or viewport intent.
+    }
+    expect(importedMeshStore.isCurrentGeneration(generation)).toBe(true);
+    expect(useCadReturnStore.getState()).toBe(cadBefore);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(enter).not.toHaveBeenCalled();
+    waiting.resolve(saved.response());
+    expect(await opening).toBe(true);
+    expect(useImportedModelStore.getState()).toMatchObject({ input, phase: 'ready', prepared: saved.prepared,
+      restoredRevisionId: 'wgs_historical', setup: saved.content });
+    expect(workspaceModeStore.getSnapshot().importedInput).toBe(input);
+    expect(importedModelBlocker(input)).toBeNull();
+    expect(unchangedSetup(input, saved.prepared.ingest_id)).toEqual({ setup_revision_id: 'wgs_historical' });
+    expect(importedMeshStore.getSnapshot()).toMatchObject({ showing: 'file', file: { ingestId: saved.prepared.ingest_id } });
+  });
+
+  it.each([200, 500])('settles a viewport-canceled read when its response is %s', async status => {
+    const saved = history();
+    const waiting = deferred<Response>();
+    const opening = openImported({ kind: 'run', job: saved.job }, (() => waiting.promise) as typeof fetch);
+    importedMeshStore.showParametric();
+    const generation = importedMeshStore.captureGeneration();
+    waiting.resolve(status === 200 ? saved.response() : json({ detail: 'read failed' }, status));
+    expect(await opening).toBe(false);
+    expect(useImportedModelStore.getState()).toMatchObject({ input, phase: 'failed', prepared: null,
+      error: expect.stringContaining('canceled') });
+    expect(importedMeshStore.isCurrentGeneration(generation)).toBe(true);
+    expect(importedMeshStore.getSnapshot()).toMatchObject({ showing: 'parametric', file: null });
+    if (input === 'file') expect(useMeshImportStore.getState()).toMatchObject({ busy: false,
+      error: expect.stringContaining('canceled') });
+  });
+
+  it('leaves a newer history open loading when the older response settles', async () => {
+    const older = history('older');
+    const newer = history('newer');
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    const openingFirst = openImported({ kind: 'run', job: older.job }, (() => first.promise) as typeof fetch);
+    const openingSecond = openImported({ kind: 'run', job: newer.job }, (() => second.promise) as typeof fetch);
+    const selected = useImportedModelStore.getState();
+    first.resolve(older.response());
+    expect(await openingFirst).toBe(false);
+    expect(useImportedModelStore.getState()).toBe(selected);
+    expect(selected.phase).toBe('loading');
+    second.resolve(newer.response());
+    expect(await openingSecond).toBe(true);
+    expect(useImportedModelStore.getState()).toMatchObject({ input, phase: 'ready', restoredRevisionId: 'wgs_newer' });
   });
 });

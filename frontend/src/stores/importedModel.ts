@@ -316,12 +316,21 @@ export async function openImported(source: ImportedSource, fetcher: typeof fetch
   // open (the rail then shows why, and stops waiting).
   const stopped = () => {
     const state = useImportedModelStore.getState();
-    if (state.generation === generation && state.phase === 'failed' && rail.current()) rail.fail(state.error ?? '');
+    if (state.generation !== generation || state.input !== input) return false;
+    if (state.phase === 'failed' && rail.current()) rail.fail(state.error ?? '');
     // A cancelled setup read of the mesh still on screen leaves its prior
     // model usable. Never replace a newer model or revive a failed open.
-    if (retained && state.generation === generation && state.phase === 'loading'
-      && state.prepared?.ingest_id === preparedId && importedMeshStore.getSnapshot().cad?.ingestId === preparedId) {
-      useImportedModelStore.setState({ phase: 'ready' });
+    if (state.phase === 'loading') {
+      if (retained && state.prepared?.ingest_id === preparedId
+        && importedMeshStore.getSnapshot().cad?.ingestId === preparedId) {
+        useImportedModelStore.setState({ phase: 'ready' });
+      } else {
+        const message = 'Opening this model was canceled. Select the run again.';
+        useImportedModelStore.setState({ phase: 'failed', error: message });
+        // Each rail fences its own feedback; settling this read must never
+        // take a newer viewport intent or leave the file rail busy.
+        rail.fail(message);
+      }
     }
     return false;
   };

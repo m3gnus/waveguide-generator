@@ -81,8 +81,10 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
     newestSentAt = Math.max(newestSentAt, sentAt);
     newestCursor = receipt.cursor;
     newestReceiptId = receipt.receipt_id;
-    if (workspaceModeStore.getSnapshot().importedInput === 'file') {
-      report(receipt, 'superseded', `Received ${name}; your mesh file stays selected. Select CAD Link to use a CAD model.`);
+    const input = workspaceModeStore.getSnapshot().importedInput;
+    if (input !== 'cad') {
+      const selected = input === 'file' ? 'mesh file' : 'assembly';
+      report(receipt, 'superseded', `Received ${name}; your ${selected} stays selected. Select CAD Link to use a CAD model.`);
       return true;
     }
     const inputRevision = workspaceModeStore.getSnapshot().inputRevision;
