@@ -1,6 +1,6 @@
 # Dependency compatibility
 
-The mesher pin `92fb6275` declares version 0.2.8 and includes later development
+The mesher pin `866f1674` declares version 0.2.8 and includes later development
 changes. It retains the ICW mouth endpoint-intersection fix from `4ae1cfa6`
 in `general_horn.radii_at_z`.
 `mesh_sizing.py` is unchanged, so CAD Link retains its earlier vendoring provenance.
@@ -56,6 +56,18 @@ remain unchanged. Qualification against `fc8d7d1c` retained the same 70 raw
 identity pairs; the original failing flush case and affected checks passed
 with both locked and latest Linux dependencies. Hosted Windows verification
 of this correction remains separate from these source checks.
+
+Profile queries collect their warnings within the existing build owner, so
+concurrent curve queries do not change process-wide warning filters. Numeric
+profile controls reject booleans, inactive endpoint block angles no longer
+override an explicit handle, point angle or corner, and curve evaluation shares
+the production span/boundary handling. Cubic construction, inversion, shrink
+arithmetic and accepted native mesh output are retained. Historical wall
+identity checks keep their fixed baselines after a rebase; missing history is
+a failure rather than a skipped comparison. The existing near-vertical exact
+insertion conditioning limitation remains; no tolerance or geometry fix is
+implied. Source/identity and consumer checks remain separate from installed
+and platform qualification.
 
 This pin also supplies native source-contour, front-baffle woofer,
 shared horn/woofer and passive phase-plug contracts, and the public
