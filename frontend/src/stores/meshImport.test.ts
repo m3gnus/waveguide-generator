@@ -603,7 +603,7 @@ it('reopens identical bytes through the model path without registering another m
   ]);
   expect(unchangedSetup('file', record.ingest_id)).toEqual({ setup_revision_id: 'wgs_last' });
   expect(fileMeshSubmission()).toEqual(bindImportedSetup(record, setup));
-  expect(useMeshImportStore.getState().notice).toBe('Ready to solve · settings from your last import');
+  expect(useMeshImportStore.getState().notice).toBe('Settings from your last import');
 });
 
 it('reuses the previous preparation and exact physics for a changed file with the same groups', async () => {
@@ -618,7 +618,7 @@ it('reuses the previous preparation and exact physics for a changed file with th
   await loadMeshFile('speaker.msh', MSH, fetcher);
   expect(JSON.parse(fetcher.mock.calls[1][1]?.body as string)).toMatchObject(previous.preparation);
   expect(fileMeshSubmission()).toEqual(bindImportedSetup(mesh, setup));
-  expect(useMeshImportStore.getState().notice).toMatch(/^Using the settings from speaker.msh \(.+\)$/);
+  expect(useMeshImportStore.getState().notice).toBe(`Using the settings from speaker.msh (${new Date(previous.updated_at).toLocaleString()})`);
   useImportedSolveOptionsStore.getState().setSweep({ count: 21 });
   expect(useMeshImportStore.getState().notice).toBeNull();
 });
@@ -854,4 +854,38 @@ it('does not rebuild on a network error while reopening identical bytes', async 
   });
   await expect(loadMeshFile('speaker.msh', MSH, fetcher)).rejects.toThrow('offline');
   expect(fetcher).toHaveBeenCalledTimes(2);
+});
+
+it('re-inspects the latest frame when a role edit supersedes an axis inspection', async () => {
+  showPrepared();
+  useMeshImportStore.setState({ original: null, summary });
+  const firstInspection = deferred<Response>();
+  const first = editMeshImport({ up: '+x' }, vi.fn(() => firstInspection.promise));
+  const newer = { ...record, ingest_id: 'wgi_latest_frame', source_file: { ...record.source_file,
+    transform: { ...record.source_file.transform, up: '+x' }, roles: { 1: 'RIGID', 2: 'LF' }, domain_planes: ['y0'] } };
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect')
+    ? response({ ...summary, detected_planes: ['y0'] }) : prepared(newer));
+  await editMeshImport({ roles: { 1: 'RIGID', 2: 'LF' } }, fetcher);
+  firstInspection.resolve(response({ ...summary, detected_planes: ['x0'] }));
+  await first;
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(JSON.parse(fetcher.mock.calls[1][1]?.body as string)).toMatchObject({ up: '+x', roles: { 2: 'LF' }, domain_planes: ['y0'] });
+  expect(useImportedModelStore.getState().fileDraft.domainPlanes).toEqual(['y0']);
+  expect(registeredMesh()?.ingest_id).toBe('wgi_latest_frame');
+});
+
+it('previews a role edit immediately while keeping the prepared snapshot immutable', async () => {
+  showPrepared();
+  const snapshot = importedMeshStore.getSnapshot().file!;
+  const waiting = deferred<Response>();
+  const editing = editMeshImport({ roles: { 1: 'RIGID', 2: 'LF' } }, vi.fn(() => waiting.promise));
+  const preview = importedMeshStore.getSnapshot().file!;
+  expect(preview.scene.surfaces.find(surface => surface.role === 'imported.LF.2')?.sourceRole).toBe('LF');
+  expect(snapshot.scene.surfaces).not.toEqual(preview.scene.surfaces);
+  expect(preview.artifactToken).toBe(snapshot.artifactToken);
+  expect(preview.scene.surfaces[0].positions).toBe(snapshot.scene.surfaces[0].positions);
+  expect(registeredMesh()).toBeNull();
+  waiting.resolve(response({ detail: 'Close the opening.' }, 422));
+  await editing;
+  expect(importedMeshStore.getSnapshot().file).toBe(preview);
 });

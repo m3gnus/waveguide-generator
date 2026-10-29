@@ -151,8 +151,16 @@ export function registerImportedSetupFlush(flush: () => Promise<void>): () => vo
   setupFlush = flush;
   return () => { if (setupFlush === flush) setupFlush = null; };
 }
-export function flushImportedSetupWrites(): Promise<void> {
-  return setupFlush?.() ?? Promise.resolve();
+let preparationFlush: (() => Promise<void>) | null = null;
+/** File preparation can finish after its rail leaves; its owner still records pending edits. */
+export function registerImportedPreparationFlush(flush: () => Promise<void>): void {
+  preparationFlush = flush;
+}
+export async function flushImportedSetupWrites(): Promise<void> {
+  const publishing = setupFlush?.();
+  await preparationFlush?.();
+  await publishing;
+  await setupFlush?.();
 }
 
 const views: Partial<Record<ImportedInput, ImportedView>> = {};

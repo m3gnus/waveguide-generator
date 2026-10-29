@@ -23,7 +23,7 @@ import { polarValidationError, useImportedSolveOptionsStore } from '../stores/so
 import { subscribeSolveSettingsEdits } from '../stores/solveSettingsEdits';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { effectiveImportedSetup, registerImportedSetupControls, registerImportedSetupFlush, useImportedModelStore } from '../stores/importedModel';
-import { fileMeshSetup, fileSetupForSave, useMeshImportStore } from '../stores/meshImport';
+import { fileMeshSetup, fileSetupForSave, subscribePreparedFileSetup, useMeshImportStore } from '../stores/meshImport';
 import { saveImportedSetup } from '../api/importedModels';
 import type { ImportedSetup } from '../jobs/importedSetup';
 
@@ -374,6 +374,12 @@ export function startCadSetupPublisher(
   };
 
   const unsubscribers = [
+    subscribePreparedFileSetup(next => {
+      // Record the departed preparation through the same ordered writer.
+      flush();
+      schedule(next, null);
+      flush();
+    }),
     subscribeSolveSettingsEdits(edit => {
       if (edit?.source === 'solveOptions') return;
       if (workspaceModeStore.getSnapshot().importedInput === 'file') {

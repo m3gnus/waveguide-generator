@@ -415,8 +415,8 @@ def prepare_file_mesh(
     return mesh, transform
 
 
-def solve_group_tags(mesh: FileMesh) -> dict[int, int]:
-    tags = np.unique(mesh.tags)
+def solve_group_tags(mesh: FileMesh | list[int]) -> dict[int, int]:
+    tags = np.unique(mesh.tags if isinstance(mesh, FileMesh) else mesh)
     # Gmsh's solve groups are positive. Keep every existing tag and give the
     # single untagged group the first free positive tag.
     free = next(tag for tag in range(1, len(tags) + 2) if tag not in tags)

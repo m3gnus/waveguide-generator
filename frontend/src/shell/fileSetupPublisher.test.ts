@@ -133,3 +133,28 @@ it('attributes a late file save failure to the model that issued it', async () =
   await vi.advanceTimersByTimeAsync(1);
   expect(onSaveState).toHaveBeenCalledExactlyOnceWith('failed', { input: 'file', modelId: record.model_id });
 });
+
+it('records the latest options for a departed file when its preparation finishes', async () => {
+  let finishPreparation!: (value: Response) => void;
+  const preparing = new Promise<Response>(resolve => { finishPreparation = resolve; });
+  const writer = vi.fn<typeof fetch>(async () => response({ revision_id: 'wgs_saved' }));
+  stop = startCadSetupPublisher({ fetcher: writer, debounceMs: 100 });
+  const next = { ...record, ingest_id: 'wgi_resized', source_file: { ...record.source_file,
+    transform: { ...record.source_file.transform, units: 'cm' } } };
+  // A role edit avoids a frame inspection; the request below is preparation itself.
+  const editing = editMeshImport({ roles: { 2: 'HF' } }, vi.fn(() => preparing));
+  useImportedSolveOptionsStore.getState().setSweep({ count: 19 });
+  const reader = vi.fn<typeof fetch>(async () => response({ ...record.summary, suggested_units: null }));
+  const loading = loadMeshFile('another.msh', text + '\n', reader);
+  expect(reader).not.toHaveBeenCalled();
+  finishPreparation(response({ prepared: next }));
+  await editing;
+  await loading;
+  await vi.advanceTimersByTimeAsync(101);
+  const writes = writer.mock.calls.filter(([url]) => String(url).startsWith('/api/models/'));
+  expect(writes).toHaveLength(1);
+  expect(writes[0][0]).toBe(`/api/models/${encodeURIComponent(record.model_id)}/setup`);
+  expect(JSON.parse(writes[0][1]?.body as string)).toMatchObject({ prepared_id: next.ingest_id,
+    setup: { options: { num_frequencies: 19 } } });
+  expect(useMeshImportStore.getState().filename).toBe('another.msh');
+});

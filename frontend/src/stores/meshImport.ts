@@ -9,7 +9,8 @@ import { create } from 'zustand';
 import {
   inspectMesh, inspectMeshModel, prepareMeshModel, registerMesh, type MeshSummary, type RegisteredMesh,
 } from '../api/meshImport';
-import { createImportedMeshScene } from '../viewport/importedMesh';
+import { fullTime } from '../shell/cadTime';
+import { createImportedMeshScene, previewImportedMeshRoles } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from './workspaceMode';
@@ -24,7 +25,7 @@ import { bindImportedSetup, importedSetupOf, type ImportedSetup } from '../jobs/
 import { ImportedModelApiError } from '../api/importedModels';
 import {
   editFileDraft, effectiveImportedSetup, flushImportedSetupWrites, importedModelBlocker, isCurrentOpen, openImported,
-  registerImportedSetupControls, registerImportedView, useImportedModelStore,
+  registerImportedPreparationFlush, registerImportedSetupControls, registerImportedView, useImportedModelStore,
   type ImportedView, type FileDraft,
 } from './importedModel';
 
@@ -44,9 +45,10 @@ interface MeshImportState {
   error: string | null;
   notice: string | null;
   request: number;
+  frameDirty: boolean;
 }
 const initial: MeshImportState = {
-  filename: '', original: null, summary: null, busy: false, error: null, notice: null, request: 0,
+  filename: '', original: null, summary: null, busy: false, error: null, notice: null, request: 0, frameDirty: false,
 };
 let requestNumber = 0;
 export const useMeshImportStore = create<MeshImportState>(() => ({ ...initial }));
@@ -82,7 +84,15 @@ export function beginMeshFileImport(filename: string): number {
 /** Changing how the file is prepared leaves the preview visible but never solvable. */
 export async function editMeshImport(patch: Partial<FileDraft>, fetcher: typeof fetch = fetch): Promise<void> {
   editFileDraft(patch);
-  useMeshImportStore.setState({ error: null, notice: null });
+  const state = useMeshImportStore.getState();
+  useMeshImportStore.setState({ error: null, notice: null,
+    frameDirty: state.frameDirty || patch.forward !== undefined || patch.up !== undefined });
+  if (patch.roles || patch.selected) {
+    const scene = importedMeshStore.getSnapshot().file;
+    const draft = useImportedModelStore.getState().fileDraft;
+    if (scene) importedMeshStore.setFile(previewImportedMeshRoles(scene,
+      draft.roles ?? Object.fromEntries(draft.selected.map(tag => [tag, 'HF']))), importedMeshStore.captureGeneration());
+  }
   await prepareMeshFile(fetcher, patch.forward !== undefined || patch.up !== undefined);
 }
 
@@ -109,7 +119,7 @@ export async function loadMeshFile(filename: string, text: string, fetcher: type
       const known = summary.known_model;
       try {
         if (await openImported({ kind: 'model', modelId: known.model_id, preparedId: known.latest_prepared_id }, fetcher)) {
-          useMeshImportStore.setState({ notice: 'Ready to solve · settings from your last import' });
+          useMeshImportStore.setState(state => ({ notice: [state.notice, 'Settings from your last import'].filter(Boolean).join(' · ') }));
         }
         return;
       } catch (error) {
@@ -143,7 +153,7 @@ export async function loadMeshFile(filename: string, text: string, fetcher: type
       useImportedModelStore.setState({ setup: structuredClone(previous.setup) });
     }
     if (previous) {
-      const time = new Date(previous.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const time = fullTime(previous.updated_at);
       useMeshImportStore.setState({ notice: `Using the settings from ${previous.filename} (${time})` });
     }
     await prepareMeshFile(fetcher);
@@ -157,8 +167,27 @@ export async function loadMeshFile(filename: string, text: string, fetcher: type
   }
 }
 
+type PreparedFileSetup = { modelId: string; preparedId: string; setup: ImportedSetup };
+const preparationSaves = new Set<(setup: PreparedFileSetup) => void>();
+/** The existing setup publisher records edits belonging to a rail that has left. */
+export function subscribePreparedFileSetup(listener: (setup: PreparedFileSetup) => void): () => void {
+  preparationSaves.add(listener);
+  return () => { preparationSaves.delete(listener); };
+}
+let preparationPromise: Promise<void> | null = null;
+let preparationIntent = 0;
+registerImportedPreparationFlush(async () => { await preparationPromise; });
+
 /** Prepare the file as the rail is set: from the original in hand, or the one the server retained. */
-export async function prepareMeshFile(fetcher: typeof fetch = fetch, inspectFrame = false): Promise<void> {
+export function prepareMeshFile(fetcher: typeof fetch = fetch, inspectFrame = false): Promise<void> {
+  const preparing = prepareMeshFileIntent(fetcher, inspectFrame, ++preparationIntent);
+  preparationPromise = preparing;
+  const settled = () => { if (preparationPromise === preparing) preparationPromise = null; };
+  void preparing.then(settled, settled);
+  return preparing;
+}
+
+async function prepareMeshFileIntent(fetcher: typeof fetch, inspectFrame: boolean, intent: number): Promise<void> {
   const state = useMeshImportStore.getState();
   const model = useImportedModelStore.getState();
   let draft = model.fileDraft;
@@ -167,16 +196,31 @@ export async function prepareMeshFile(fetcher: typeof fetch = fetch, inspectFram
   const generation = importedMeshStore.beginIntent();
   const request = ++requestNumber;
   useMeshImportStore.setState({ busy: true, error: null, request });
+  let retained: ImportedSetup | null = null;
+  let simulation: SimulationData | null = null;
+  const capture = () => {
+    if (useMeshImportStore.getState().request !== request || useImportedModelStore.getState().input !== 'file') return;
+    const latest = useImportedModelStore.getState();
+    try {
+      const controls = fileSetupControls();
+      retained = structuredClone(latest.setup ?? latest.setupEditBase?.retained ?? controls);
+      simulation = latest.fileSimulation ? structuredClone(latest.fileSimulation) : null;
+    } catch { retained = null; } // Incomplete edits never fall back to an older valid setup.
+  };
+  capture();
+  const unsubscribe = subscribeSolveSettingsEdits(edit => {
+    if (edit?.source === 'meshImport' || edit?.source === 'importedSolveOptions') capture();
+  });
   try {
     // Detection follows the chosen axes; registration still owns all verification.
-    if (inspectFrame || (!state.original && draft.domainPlanes?.length && !state.summary?.lids)) {
+    if (inspectFrame || state.frameDirty || (!state.original && draft.domainPlanes?.length && !state.summary?.lids)) {
       const frame = { units: draft.units, forward: draft.forward, up: draft.up };
       const summary = state.original ? await inspectMesh(state.filename, state.original, fetcher, frame)
         : await inspectMeshModel(modelId!, frame, fetcher);
       if (!importedMeshStore.isCurrentGeneration(generation)
         || JSON.stringify(useImportedModelStore.getState().fileDraft) !== JSON.stringify(draft)) return;
-      useMeshImportStore.setState({ summary });
-      if (inspectFrame) editFileDraft({ domainPlanes: summary.detected_planes ?? [], reflectPlanes: null, removeLidPlanes: [] });
+      useMeshImportStore.setState({ summary, frameDirty: false });
+      if (inspectFrame || state.frameDirty) editFileDraft({ domainPlanes: summary.detected_planes ?? [], reflectPlanes: null, removeLidPlanes: [] });
       draft = useImportedModelStore.getState().fileDraft;
     }
     const preparation = { units: draft.units, forward: draft.forward, up: draft.up,
@@ -190,7 +234,13 @@ export async function prepareMeshFile(fetcher: typeof fetch = fetch, inspectFram
     const record = state.original
       ? await registerMesh({ filename: state.filename, msh_text: state.original, ...preparation }, fetcher)
       : await prepareMeshModel(modelId!, preparation, fetcher);
-    if (!importedMeshStore.isCurrentGeneration(generation)) return;
+    if (!importedMeshStore.isCurrentGeneration(generation)) {
+      if (intent === preparationIntent && retained) {
+        const setup = setupForPreparedFile(retained, record, simulation);
+        preparationSaves.forEach(save => save({ modelId: record.model_id, preparedId: record.ingest_id, setup }));
+      }
+      return;
+    }
     // Form edits during the request invalidate its result even when the viewport
     // has not changed. A submitted snapshot cannot acquire newer assignments.
     const current = useImportedModelStore.getState().fileDraft;
@@ -207,6 +257,7 @@ export async function prepareMeshFile(fetcher: typeof fetch = fetch, inspectFram
       useMeshImportStore.setState({ error: error instanceof Error ? error.message : String(error) });
     }
   } finally {
+    unsubscribe();
     if (useMeshImportStore.getState().request === request) useMeshImportStore.setState({ busy: false });
   }
 }
@@ -352,7 +403,10 @@ registerImportedSetupControls('file', fileSetupControls);
 
 function preparedFileScene(record: RegisteredMesh) {
   return createImportedMeshScene(record.source_file.filename, parseMSH(record.msh_text), 'file', record.ingest_id,
-    record.symmetry?.domain_planes ?? [], { rolesByTag: {
+    record.symmetry?.domain_planes ?? [], { originalTagsByTag: Object.fromEntries([
+      ...(record.summary.groups ?? []).map(group => [group.solve_tag ?? group.tag, group.tag]),
+      ...Object.entries(record.source_tags).map(([id, tag]) => [tag, Number(id.replace('group_', ''))]),
+    ]), rolesByTag: {
       ...Object.fromEntries((record.summary.groups ?? []).map(group => [group.tag, 'RIGID'])),
       ...Object.fromEntries(Object.entries(record.source_tags).map(([id, tag]) =>
         [tag, record.sources?.find(source => source.id === id)?.role ?? 'HF'])),

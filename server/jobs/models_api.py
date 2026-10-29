@@ -299,7 +299,7 @@ def _register_mesh(
         "mesh_content_sha256": digest,
         "mesh_size_bytes": len(solver_text.encode()),
         "mesh_store_path": str(destination / "solve.msh"),
-        "source_file": {"filename": filename, **spec},
+        "source_file": {"filename": filename, **spec, "groups": original.summary()["groups"]},
         # One folder for every run of this file, however it was prepared.
         "archive_stem": model.get("archive_stem")
         or claim_project_folder(store, f"model:{model_id}", Path(filename).stem),
@@ -323,7 +323,7 @@ def _register_mesh(
             "metadata": {},
         },
         "summary": {
-            **mesh.summary(),
+            **_file_preparation_summary(mesh.summary(), body.units),
             "dimensions_mm": (np.ptp(mesh.points, axis=0) * 1000).tolist(),
         },
     }
@@ -399,6 +399,16 @@ def _model_summary(model: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _file_preparation_summary(summary: dict[str, Any], units: str) -> dict[str, Any]:
+    """Keep original group IDs beside the IDs written by the shared tag mapper."""
+    written = solve_group_tags([group["tag"] for group in summary["groups"]])
+    return {
+        **summary,
+        "suggested_units": units,
+        "groups": [{**group, "solve_tag": written[group["tag"]]} for group in summary["groups"]],
+    }
+
+
 def public_record(record: dict[str, Any], model_id: str | None) -> dict[str, Any]:
     """What a client sees of a prepared mesh. A CAD snapshot has no source file."""
 
@@ -407,11 +417,17 @@ def public_record(record: dict[str, Any], model_id: str | None) -> dict[str, Any
         "source_file", "source_tags", "sources", "summary",
         "symmetry", "polar_grid_derivation",
     )
-    return {
+    public = {
         **{key: record[key] for key in keys if key in record},
         "producer": record.get("producer") or "cad",
         "model_id": model_id,
     }
+
+    if public["producer"] == "mesh-file" and "summary" in public:
+        public["summary"] = _file_preparation_summary(
+            public["summary"], record["source_file"]["transform"]["units"],
+        )
+    return public
 
 
 def _prepared_with_mesh(record: dict[str, Any], model_id: str | None) -> dict[str, Any]:
@@ -554,11 +570,19 @@ def _file_import_memory(store: Any, filename: str, text: str, groups: list[dict[
     for row in candidates:
         record = json.loads(row["record_json"])
         previous_id = file_model_id(record["artifact_sha256"])
-        try:
-            original = text if previous_id == model_id else read_original(store, previous_id)[1]
-        except ModelRefusal:
-            continue
-        previous_groups = parse_file_mesh(original).summary()["groups"]
+        # Source groups belong to the immutable artifact; a prepared summary
+        # can omit a removed symmetry lid. Old records without lid removal
+        # already retain the complete original group list in their summary.
+        file = record["source_file"]
+        previous_groups = file.get("groups")
+        if previous_groups is None and not file.get("transform", {}).get("removed_lids"):
+            previous_groups = record.get("summary", {}).get("groups")
+        if previous_groups is None:
+            try:
+                original = text if previous_id == model_id else read_original(store, previous_id)[1]
+            except ModelRefusal:
+                continue
+            previous_groups = parse_file_mesh(original).summary()["groups"]
         previous_names = {group["name"]: group["tag"] for group in previous_groups}
         # Ambiguous names cannot identify a source safely. Keep the inspect guesses.
         if len(previous_names) != len(previous_groups) or len(current_names) != len(groups):

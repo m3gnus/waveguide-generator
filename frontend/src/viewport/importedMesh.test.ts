@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createImportedMeshScene } from './importedMesh';
+import { createImportedMeshScene, previewImportedMeshRoles } from './importedMesh';
 import type { ParsedMSH } from './mshParser';
 import type { SceneSurface } from './types';
 
@@ -205,4 +205,20 @@ it.each([
   geometry.physicalNames.set(7, 'HF'); // The explicit assignment overrides a name guess.
   const scene = createImportedMeshScene('roles.msh', geometry, 'file', null, [], { rolesByTag: { 7: role } });
   expect(scene.scene.surfaces[0]).toMatchObject({ sourceRole, materialClass });
+});
+
+it('previews remapped untagged surfaces and their reflected copies without changing geometry', () => {
+  const geometry = mesh([0, 0, 0, 1, 0, 0, 0, 1, 0], [[0, 1, 2]]);
+  const original = createImportedMeshScene('zero.msh', geometry, 'file', 'prepared', ['x0'],
+    { rolesByTag: { 7: 'RIGID' }, originalTagsByTag: { 7: 0 } });
+  const preview = previewImportedMeshRoles(original, { 0: 'PASSIVE_CARDIOID' });
+  expect(preview.scene.surfaces.length).toBeGreaterThan(1);
+  for (const [index, surface] of preview.scene.surfaces.entries()) {
+    expect(surface).toMatchObject({ sourceRole: 'PORT_EXIT', materialClass: 'port-smooth' });
+    expect(surface.positions).toBe(original.scene.surfaces[index].positions);
+    expect(surface.indices).toBe(original.scene.surfaces[index].indices);
+    expect(original.scene.surfaces[index].sourceRole).toBeNull();
+  }
+  expect(preview.ingestId).toBe(original.ingestId);
+  expect(preview.artifactToken).toBe(original.artifactToken);
 });

@@ -28,6 +28,7 @@ export interface ImportedMeshSceneOptions {
   /** File imports assign excitation by tag, independent of physical names. */
   drivenTags?: readonly number[];
   rolesByTag?: Readonly<Record<string, string | null>>;
+  originalTagsByTag?: Readonly<Record<string, number>>;
   /** The supplied mesh already covers the complete display domain. */
   fullDomain?: boolean;
   /** False for a refused preparation: it has geometry but no solve domain. */
@@ -280,6 +281,7 @@ export function createImportedMeshScene(
       : describeTag(tag, mesh.physicalNames);
     return {
       key: `msh:${name}:${tag}`,
+      physicalGroupTag: options.originalTagsByTag?.[tag] ?? tag,
       role: options.drivenTags ? `imported.${options.drivenTags.includes(tag) ? 'driven' : 'rigid'}.${mesh.physicalNames.get(tag) ?? tag}` : group.role,
       shading: 'smooth',
       materialClass: options.drivenTags ? (options.drivenTags.includes(tag) ? 'source-smooth' : 'horn-smooth') : group.sourceRole
@@ -319,3 +321,15 @@ export function createImportedMeshScene(
 const WELD_GRID = 1e-4;
 export const CREASE_ANGLE_DEGREES = 30;
 const CREASE_COSINE = Math.cos(CREASE_ANGLE_DEGREES * Math.PI / 180);
+
+/** Recolour only the display projection; the prepared artifact and its identity stay immutable. */
+export function previewImportedMeshRoles(mesh: ImportedMeshScene, roles: Readonly<Record<string, string | null>>): ImportedMeshScene {
+  return { ...mesh, scene: { ...mesh.scene, surfaces: mesh.scene.surfaces.map(surface => {
+    const tag = (surface as SceneSurface & { physicalGroupTag?: number }).physicalGroupTag;
+    if (tag === undefined) return surface;
+    const role = roles[tag] ?? 'RIGID';
+    const sourceRole = sourceRoleFor(role);
+    return { ...surface, role: `imported.${role}.${tag}`, sourceRole,
+      materialClass: sourceRole ? `${ROLE_MATERIAL_FAMILY[sourceRole]}-smooth` as const : 'horn-smooth' as const };
+  }) } };
+}

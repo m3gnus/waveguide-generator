@@ -373,12 +373,12 @@ it('shows removed closed faces in Model details', () => {
 
 it('shows remembered settings once in the status line and has no Save setup button', () => {
   geometry({ prepared: true });
-  act(() => useMeshImportStore.setState({ notice: 'Ready to solve · settings from your last import' }));
-  expect(host.querySelector('.cad-status-line')?.textContent).toBe('Ready to solve · settings from your last importSolve');
+  act(() => useMeshImportStore.setState({ notice: 'Settings from your last import' }));
+  expect(host.querySelector('.cad-status-line')?.textContent).toBe('Ready to solve · 9,730 triangles · quarter model · Settings from your last importSolve');
   expect(host.textContent).not.toContain('Save setup');
   expectNoJargon(host);
   act(() => useMeshImportStore.setState({ notice: 'Using the settings from speaker.msh (09:31)' }));
-  expect(host.querySelector('.cad-status-line')?.textContent).toBe('Using the settings from speaker.msh (09:31)Solve');
+  expect(host.querySelector('.cad-status-line')?.textContent).toBe('Ready to solve · 9,730 triangles · quarter model · Using the settings from speaker.msh (09:31)Solve');
   expectNoJargon(host);
 });
 

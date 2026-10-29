@@ -13,7 +13,7 @@ export interface MeshSummary {
   detected_planes?: string[];
   lids?: Record<string, { triangle_count: number; candidate: boolean; groups: Array<{ tag: number; triangle_count: number }> }>;
   kept_sides?: Record<string, 'positive' | 'negative' | 'both' | 'on_plane'>;
-  groups: Array<{ tag: number; name: string; triangle_count: number;
+  groups: Array<{ tag: number; solve_tag?: number; name: string; triangle_count: number;
     suggested_role?: string | null; needs_role_choice?: boolean; role_from?: 'file' | 'name' | 'default'; display_name?: string }>;
 
 }

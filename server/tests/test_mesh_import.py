@@ -14,7 +14,7 @@ import pytest
 
 from server.cadlink.store import CadLinkStore
 from server.jobs.api import create_jobs_router
-from server.jobs.models_api import MeshRegistration, mount_models_api, register_mesh
+from server.jobs.models_api import MeshRegistration, mount_models_api, public_record, register_mesh
 from server.jobs.models import SolveRequest
 from server.jobs.runtime import ImportedSolveRefusal, JobRuntime
 from server.jobs.store import JobStore
@@ -180,6 +180,20 @@ def test_untagged_surface_can_be_a_wall_or_source(tmp_path):
         assert record["sources"][0]["id"] == "group_0"
         assert record["sources"][0]["role"] == "MF"
         assert record["source_tags"] == {"group_0": 2}
+        untagged = next(group for group in record["summary"]["groups"] if group["tag"] == 0)
+        assert untagged["solve_tag"] == 2
+        assert record["summary"]["suggested_units"] == "mm"
+        assert record["source_file"]["groups"] == parse_file_mesh(text).summary()["groups"]
+        # Older stored records get the same explicit mapping without rewriting
+        # their immutable preparation, identity or solve bytes.
+        legacy = json.loads(json.dumps(record))
+        for group in legacy["summary"]["groups"]:
+            group.pop("solve_tag")
+        legacy["summary"]["suggested_units"] = "m"
+        public = public_record(legacy, "mesh-file:" + record["artifact_sha256"])
+        assert public["summary"] == record["summary"]
+        assert public["manifest_sha256"] == legacy["manifest_sha256"]
+        assert "solve_tag" not in legacy["summary"]["groups"][0]
         assert set(parse_file_mesh(read_verified_import_mesh(record)).tags) == {1, 2}
         # A positive tag already in use is preserved, and tag zero gets a free one.
         mesh.tags[-1] = 2

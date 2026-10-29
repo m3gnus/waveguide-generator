@@ -235,3 +235,12 @@ describe('file input uses the same status line', () => {
     expectNoJargon(solved.text);
   });
 });
+
+
+it('keeps file readiness and import notes as separate facts', () => {
+  const status = cadModelStatusLine({ input: 'file', label: 'speaker.msh', reading: false, preparing: false,
+    choice: null, failureMessage: null, canPrepare: true, prepared: true, triangles: 9730,
+    symmetryLabel: 'Quarter model', notice: 'Using the settings from an earlier import' }, null);
+  expect(status.text).toBe('Ready to solve · 9,730 triangles · quarter model · Using the settings from an earlier import');
+  expect(status).toMatchObject({ tone: 'ready', action: 'solve', short: 'ready · 9,730 triangles · quarter model' });
+});

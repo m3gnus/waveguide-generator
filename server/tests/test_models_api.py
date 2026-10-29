@@ -809,3 +809,31 @@ def test_large_fresh_and_retained_mesh_inspections_follow_the_same_path(tmp_path
             await runtime.shutdown()
             store.close()
     asyncio.run(scenario())
+
+
+def test_repeated_inspection_does_not_reparse_retained_same_stem_originals(tmp_path, monkeypatch):
+    from server.jobs import models_api
+
+    async def scenario():
+        store = CadLinkStore.for_data_dir(tmp_path)
+        app, runtime = app_for(tmp_path, store)
+        try:
+            body = registration().model_dump()
+            for suffix in ("", "\n", "\n\n"):
+                register_mesh(store, tmp_path, registration(msh_text=body["msh_text"] + suffix))
+            parse = models_api.parse_file_mesh
+            parsed = []
+            def counted(text):
+                parsed.append(text)
+                return parse(text)
+            monkeypatch.setattr(models_api, "parse_file_mesh", counted)
+            for _ in range(2):
+                result = await call(app, "POST", "/api/models/files/inspect", {
+                    "filename": body["filename"], "msh_text": body["msh_text"] + "\n\n\n",
+                })
+                assert result["previous_setup"]["preparation"]["units"] == "mm"
+            assert len(parsed) == 2  # One current upload per request; no retained-original parsing.
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())

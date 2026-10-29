@@ -230,7 +230,7 @@ function couldNotPrepare(label: string): string {
 function ready(model: CadModelView): CadModelStatusLine {
   const triangles = model.triangles === null ? '' : ` · ${model.triangles.toLocaleString()} triangles`;
   const symmetry = model.symmetryLabel ? ` · ${model.symmetryLabel.toLowerCase()}` : '';
-  return line(model.notice ?? `Ready to solve${triangles}${symmetry}`, `ready${triangles}${symmetry}`, 'ready', 'solve');
+  return line(`Ready to solve${triangles}${symmetry}${model.notice ? ` · ${model.notice}` : ''}`, `ready${triangles}${symmetry}`, 'ready', 'solve');
 }
 
 const count = (value: number) => value.toLocaleString();
