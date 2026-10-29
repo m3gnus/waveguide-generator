@@ -4087,7 +4087,12 @@ export interface components {
         };
         /**
          * DriverGroup
-         * @description Physical channels sharing one driver setting and crossover branch.
+         * @description Physical channels sharing one crossover branch.
+         *
+         *     Without ``member_processing`` the members also share one driver setting
+         *     and motion. A signal group states each member's processing instead; its
+         *     members may then differ in driver and motion, and are summed after their
+         *     own weight, delay and polarity.
          */
         DriverGroup: {
             /** Channel Ids */
@@ -4096,6 +4101,10 @@ export interface components {
             id: string;
             /** Label */
             label?: string | null;
+            /** Member Processing */
+            member_processing?: {
+                [key: string]: components["schemas"]["MemberProcessing"];
+            } | null;
         };
         /** DriverHit */
         DriverHit: {
@@ -5093,7 +5102,7 @@ export interface components {
             /** Port Area Source */
             port_area_source?: ("user" | "bem_aperture") | null;
             /** Required Features */
-            required_features?: ("native-source-contour-v1" | "native-front-baffle-woofer-v1" | "native-shared-horn-woofer-v1" | "native-phase-plug-passages-v1" | "native-general-horn-attachment-v1")[];
+            required_features?: ("native-source-contour-v1" | "native-front-baffle-woofer-v1" | "native-shared-horn-woofer-v1" | "native-phase-plug-passages-v1" | "native-general-horn-attachment-v1" | "wg-design-assembly-v1")[];
             /**
              * Rg Ohm
              * @default 0
@@ -5682,6 +5691,30 @@ export interface components {
         /** ManualSolveOperationResponse */
         ManualSolveOperationResponse: {
             operation: components["schemas"]["CadOperationSummary"];
+        };
+        /**
+         * MemberProcessing
+         * @description One member's weight, delay and polarity, applied before its group's sum.
+         *
+         *     Engineering convention: the member contributes
+         *     ``weight * (-1 if invert) * exp(-j*2*pi*f*delay)`` times its own response.
+         */
+        MemberProcessing: {
+            /**
+             * Delay Ms
+             * @default 0
+             */
+            delay_ms?: number;
+            /**
+             * Invert
+             * @default false
+             */
+            invert?: boolean;
+            /**
+             * Weight
+             * @default 1
+             */
+            weight?: number;
         };
         /** MeshConfig */
         MeshConfig: {

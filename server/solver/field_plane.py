@@ -31,6 +31,7 @@ from server.platform.temp_session import temporary_directory_root
 
 from .combine import (
     expand_legacy_channels,
+    member_processing_weights,
     normalize_channel,
     raw_channel_weights,
 )
@@ -561,6 +562,7 @@ class FieldPlaneService:
             delays_s,
             inverted,
             physical if "member_channels" in combine else None,
+            self._member_processing(combine, physical),
         )
         unknown = [channel for member in members for channel in physical[member] if channel not in raw_channels]
         if unknown:
@@ -568,8 +570,9 @@ class FieldPlaneService:
                 f"system synthesis references unknown retained channels: {unknown}"
             )
 
+        processing = self._member_processing(combine, physical)
         loaded = [
-            self._load_branch(job_id, request.frequency_index, physical[member])
+            self._load_branch(job_id, request.frequency_index, physical[member], processing)
             for member in members
         ]
         first = loaded[0]
@@ -652,8 +655,10 @@ class FieldPlaneService:
             delays_s,
             inverted,
             physical if "member_channels" in combine else None,
+            self._member_processing(combine, physical),
         )
-        loaded = self._load_branch(job_id, frequency_index, physical[member_id])
+        loaded = self._load_branch(job_id, frequency_index, physical[member_id],
+                                   self._member_processing(combine, physical))
         mesh_text, frequency_hz, k_real, symmetry_plane = loaded[:4]
         weights = raw_channel_weights(
             np.asarray([frequency_hz], dtype=np.float64),
@@ -692,16 +697,41 @@ class FieldPlaneService:
             raise ArtifactCorrupt("stored system synthesis metadata is invalid")
         return physical
 
-    def _load_branch(self, job_id: str, frequency_index: int, channel_ids: list[str]) -> tuple[Any, ...]:
-        if len(channel_ids) == 1:
+    @staticmethod
+    def _member_processing(
+        combine: Mapping[str, Any], physical: Mapping[str, list[str]],
+    ) -> dict[str, Mapping[str, Any]]:
+        """A signal group's stored member processing, by physical channel."""
+
+        raw = combine.get("member_processing")
+        if raw is None:
+            return {}
+        channels = {channel for members in physical.values() for channel in members}
+        if not isinstance(raw, Mapping) or not set(raw) <= channels or any(
+            not isinstance(item, Mapping) for item in raw.values()
+        ):
+            raise ArtifactCorrupt("stored system synthesis metadata is invalid")
+        return {str(channel): item for channel, item in raw.items()}
+
+    def _load_branch(
+        self, job_id: str, frequency_index: int, channel_ids: list[str],
+        processing: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> tuple[Any, ...]:
+        processed = {channel: item for channel, item in (processing or {}).items() if channel in channel_ids}
+        if len(channel_ids) == 1 and not processed:
             return self._load_channel(job_id, frequency_index, channel_ids[0])
         loaded = [self._load_channel(job_id, frequency_index, channel_id) for channel_id in channel_ids]
         first = loaded[0]
         if any(channel[:4] != first[:4] or channel[6] != first[6] for channel in loaded[1:]):
             raise ArtifactCorrupt("retained system channels do not share geometry and frequency metadata")
-        pressure = sum((np.asarray(channel[4], dtype=np.complex128) for channel in loaded),
+        # The same member factors the combined result was synthesised with.
+        factors = member_processing_weights(np.asarray([first[1]], dtype=np.float64), processed)
+        scale = {channel: complex(factors[channel][0]) if channel in factors else 1.0 for channel in channel_ids}
+        pressure = sum((scale[channel_id] * np.asarray(channel[4], dtype=np.complex128)
+                        for channel_id, channel in zip(channel_ids, loaded, strict=True)),
                        np.zeros_like(np.asarray(first[4]), dtype=np.complex128))
-        neumann = sum((np.asarray(channel[5], dtype=np.complex128) for channel in loaded),
+        neumann = sum((scale[channel_id] * np.asarray(channel[5], dtype=np.complex128)
+                       for channel_id, channel in zip(channel_ids, loaded, strict=True)),
                       np.zeros_like(np.asarray(first[5]), dtype=np.complex128))
         return (*first[:4], pressure, neumann, first[6])
 
@@ -860,6 +890,7 @@ class FieldPlaneService:
         delays_s: Mapping[str, float],
         inverted: Mapping[str, bool],
         physical: Mapping[str, list[str]] | None = None,
+        processing: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> str:
         def canonical_float(value: float) -> float:
             return 0.0 if value == 0.0 else value
@@ -893,6 +924,11 @@ class FieldPlaneService:
         }
         if physical is not None:
             canonical["member_channels"] = [[name, physical[name]] for name in members]
+        if processing:
+            # Absent for every synthesis before signal groups: its digest holds.
+            canonical["member_processing"] = [
+                [channel, dict(processing[channel])] for channel in sorted(processing)
+            ]
         encoded = canonical_ascii_strict_json(canonical).encode("utf-8")
         digest = hashlib.sha256(b"field-plane-synthesis:combine:" + encoded)
         return digest.hexdigest()[:16]

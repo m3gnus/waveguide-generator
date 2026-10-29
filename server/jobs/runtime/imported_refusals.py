@@ -323,7 +323,11 @@ def _imported_request_refusal(
     if not coupled_regions and any(c.exterior_transducer is not None for c in request.geometry.drive_channels):
         # The engine choice is refused by the shared selection policy,
         # never here: the planner applies this refusal to every engine's verdict.
-        if not all(c.exterior_transducer is not None for c in request.geometry.drive_channels):
+        # A compiled design assembly solves its prescribed sources beside its
+        # drivers in one coupled request; other returns still need FEM regions.
+        if not request.geometry.design_assembly and not all(
+            c.exterior_transducer is not None for c in request.geometry.drive_channels
+        ):
             return "exterior_transducer_mixed_channels", "Exterior-only transducer jobs require a model on every drive channel; mixed drives require FEM regions"
         if any(not c.source_ids for c in request.geometry.drive_channels):
             return "exterior_transducer_missing_source", "An exterior-only transducer needs painted source faces; a FEM-only driver requires FEM regions"

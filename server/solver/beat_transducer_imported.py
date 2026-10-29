@@ -32,12 +32,53 @@ from .beat_adapter.transducers import (
 from .context import SolverContext
 from .frequency_sweep import canonical_frequencies
 from .imported import imported_anchor_frame, imported_domain_planes, imported_symmetry_from_cut_planes
-from .imported_channels import channel_source_identity
+from .combine import serialize_channel_bases
+from .combined_channel import package_combined_channel
+from .imported_channels import channel_source_identity, imported_validity_metadata
 from .result_mapping import build_solver_response, json_safe_native_value
 
 
 def enabled(channels: Sequence) -> bool:
     return any(getattr(channel, "exterior_transducer", None) is not None for channel in channels)
+
+
+def mixed_allowed(record: Mapping) -> bool:
+    """A compiled design assembly solves prescribed sources beside its drivers.
+
+    Every other return keeps the all-driver contract: its mixed drives need
+    FEM regions.
+    """
+    return record.get("producer") == "design-assembly"
+
+
+#: Version of the retained mixed-basis contract: each channel's complex
+#: pressure basis with its excitation definition, so a stored recombination
+#: rebuilds the same system without re-solving.
+MIXED_BASIS_CONTRACT = "beat-v3-assembly-mixed-v1"
+
+
+def excitation_plan(record: Mapping, msh_text: str, channels: Sequence) -> tuple[list, list[str], dict[str, list[int]]]:
+    """``(ideal sources, excitation port order, channel -> port indices)``.
+
+    Drivers excite through their voltage port; a prescribed channel through
+    one 1 m/s RMS ideal basis per source, in the channel order, so every
+    channel keeps its own basis and the request is solved once.
+    """
+    from .beat_adapter.request import imported_source_bases
+
+    prescribed = [channel for channel in channels if channel.exterior_transducer is None]
+    sources, prescribed_ports = imported_source_bases(record, msh_text, prescribed) if prescribed else ([], {})
+    order: list[str] = []
+    indices: dict[str, list[int]] = {}
+    drivers = {driver.id: driver for driver in drivers_for(record, channels)}
+    for channel in channels:
+        ports = [drivers[channel.id].port_id] if channel.id in drivers else prescribed_ports[channel.id]
+        indices[channel.id] = []
+        for port in ports:
+            if port not in order:
+                order.append(port)
+            indices[channel.id].append(order.index(port))
+    return sources, order, indices
 
 
 def preflight(record: Mapping, msh_text: str, channels: Sequence, *, backend: str) -> str | None:
@@ -47,8 +88,11 @@ def preflight(record: Mapping, msh_text: str, channels: Sequence, *, backend: st
         planes = imported_domain_planes(record)
         if any(p not in {"x0", "y0"} for p in planes):
             raise ValueError("Exterior transducers support only x0 and y0 symmetry planes")
-        if not channels or any(channel.exterior_transducer is None for channel in channels):
+        if not channels or (not mixed_allowed(record) and any(
+                channel.exterior_transducer is None for channel in channels)):
             raise ValueError("Every channel must carry an exterior transducer in this mode")
+        if any(channel.exterior_transducer is None and channel.driver is not None for channel in channels):
+            raise ValueError("A prescribed channel beside exterior drivers cannot carry a lumped driver model")
         mesh = read_surface(msh_text)
         from server.solver.component_symmetry import infer_component_symmetry
         from server.solver.coupled_admission import validate_driver_sd_geometry
@@ -140,6 +184,8 @@ def drivers_for(record: Mapping, channels: Sequence) -> list[ExteriorDriver]:
     drivers = []
     for channel in channels:
         spec = channel.exterior_transducer
+        if spec is None:
+            continue
         drivers.append(
             ExteriorDriver(
                 channel.id,
@@ -152,9 +198,16 @@ def drivers_for(record: Mapping, channels: Sequence) -> list[ExteriorDriver]:
 
 
 def package_sweep(
-    sweep: TransducerSweep, compiled, request: Any, record: Mapping, *, started: float
+    sweep: TransducerSweep, compiled, request: Any, record: Mapping, *, started: float,
+    port_indices: Mapping[str, Sequence[int]] | None = None,
 ) -> dict:
-    """Retain native RMS pressure; use the common display mapper without a LEM."""
+    """Retain native RMS pressure; use the common display mapper without a LEM.
+
+    ``port_indices`` names each channel's excitation columns (a prescribed
+    channel sums its sources' ideal bases); by default channel *i* is port *i*.
+    A design assembly also retains its channel bases and builds its crossover
+    through the shared combined-channel packager.
+    """
     geometry = request.geometry
     symmetry = imported_symmetry_from_cut_planes(imported_domain_planes(record))
     context = SolverContext.from_imported_request(request, quadrants=symmetry.quadrants, source_motion="axial")
@@ -181,16 +234,22 @@ def package_sweep(
         native_symmetry_plane=symmetry.native_plane,
     )
     identity = channel_source_identity(geometry, record)
+    indices = {channel.id: list(port_indices[channel.id]) if port_indices is not None else [position]
+               for position, channel in enumerate(geometry.drive_channels)}
     channels = {}
-    for port_index, channel in enumerate(geometry.drive_channels):
+    native_by_id: dict[str, SweepResult] = {}
+    for channel in geometry.drive_channels:
+        ports = indices[channel.id]
+        port_index = ports[0]
+        # Linear superposition of a channel's own excitation columns.
         pressure = np.stack(
             [
-                np.stack([row.pressure_rms_pa[plane][port_index] for plane in layout.planes])
+                np.stack([sum(row.pressure_rms_pa[plane][i] for i in ports) for plane in layout.planes])
                 for row in sweep.rows
             ]
         )
         sphere = (
-            np.stack([row.pressure_rms_pa["sphere"][port_index] for row in sweep.rows])
+            np.stack([sum(row.pressure_rms_pa["sphere"][i] for i in ports) for row in sweep.rows])
             if "sphere" in layout.points_m
             else None
         )
@@ -212,6 +271,7 @@ def package_sweep(
             sweep.requested_frequency_count,
             [],
         )
+        native_by_id[channel.id] = native
         response = build_solver_response(
             result=native,
             config=config,
@@ -227,7 +287,27 @@ def package_sweep(
             },
             sound_speed_m_per_s=343.0,
         )
-        port = compiled.wire["excitation_port_ids"][port_index]
+        excitation = [compiled.wire["excitation_port_ids"][i] for i in ports]
+        if channel.exterior_transducer is None:
+            # A prescribed source: its 1 m/s RMS velocity basis, every driver
+            # shorted and loaded by it. It has no electrical input of its own.
+            response.pop("impedance", None)
+            response["metadata"].update(
+                impedance_omitted="prescribed velocity source: no electrical input",
+                source_normalization="native_rms_velocity",
+                drive={"velocity_rms_m_per_s": 1.0, "motion": channel.motion},
+                beat_transducer={
+                    "version": 1,
+                    "excitation_port_ids": excitation,
+                    "transducer_ids": list(sweep.rows[0].transducer_ids) if sweep.rows else [],
+                    "phasor_convention": SOLVER_TIME_CONVENTION,
+                    "amplitude_convention": "rms",
+                    "undriven_transducers": "shorted",
+                },
+            )
+            channels[channel.id] = response
+            continue
+        port = excitation[0]
         zin = [row.input_impedance_ohm(port) for row in sweep.rows]
         impedance = {
             "frequencies": frequencies.tolist(),
@@ -306,30 +386,82 @@ def package_sweep(
             },
         )
         channels[channel.id] = response
-    return json_safe_native_value(
+    channel_order = [channel.id for channel in geometry.drive_channels]
+    metadata: dict[str, Any] = {
+        "solver_engine": solver_engine,
+        "beat_transducer_contract": 1,
+        "cancelled": sweep.cancelled,
+        "requested_frequency_count": sweep.requested_frequency_count,
+        "native_diagnostics": [row.diagnostics for row in sweep.rows],
+        "radiation_impedance_matrix": {
+            "frequencies": frequencies.tolist(),
+            "units": "N*s/m",
+            "values": [json_safe_native_value(row.radiation.values) for row in sweep.rows],
+            "metadata": [row.radiation.metadata for row in sweep.rows],
+        },
+    }
+    bases = None
+    if mixed_allowed(record) and sweep.rows:
+        bases = serialize_channel_bases(native_by_id, metadata_by_id=_mixed_basis_metadata(
+            compiled, geometry, record, indices))
+        if geometry.combine is not None and not sweep.cancelled:
+            spec = geometry.combine
+            channels[spec.id] = package_combined_channel(
+                spec=spec, drive_channels=geometry.drive_channels, results_by_id=native_by_id,
+                member_channels=channels, per_source_validity=imported_validity_metadata(record),
+                member_roles={channel_id: item.get("role") for channel_id, item in identity.items()},
+                max_drive_voltage_v=None, frequencies_hz=frequencies, request=request,
+                quadrants=symmetry.quadrants, config_motion="normal", config=config, start_time=started,
+                sound_speed_m_per_s=343.0,
+                backend_metadata=lambda _combined: {
+                    "solver_backend": solver_engine["engine"], "solver_engine": dict(solver_engine),
+                    "engine": "beat-engine",
+                },
+            )
+            channel_order.append(spec.id)
+    else:
+        metadata["channel_bases_unavailable_reason"] = "native_voltage_bases_not_supported_by_legacy_recombine"
+    envelope = json_safe_native_value(
         {
             "result_kind": "multi_channel",
             "result_contract_version": 2,
-            "channel_order": [channel.id for channel in geometry.drive_channels],
+            "channel_order": channel_order,
             "channels": channels,
             "frequencies": frequencies.tolist(),
-            "metadata": {
-                "solver_engine": solver_engine,
-                "beat_transducer_contract": 1,
-                "cancelled": sweep.cancelled,
-                "requested_frequency_count": sweep.requested_frequency_count,
-                "native_diagnostics": [row.diagnostics for row in sweep.rows],
-                "channel_bases_unavailable_reason": "native_voltage_bases_not_supported_by_legacy_recombine",
-                "radiation_impedance_matrix": {
-                    "frequencies": frequencies.tolist(),
-                    "units": "N*s/m",
-                    "values": [json_safe_native_value(row.radiation.values) for row in sweep.rows],
-                    "metadata": [row.radiation.metadata for row in sweep.rows],
-                },
-            },
+            "metadata": metadata,
             "_field_trace_unavailable_reason": "native_transducer_traces_not_retained",
         }
     )
+    if bases is not None:
+        envelope["_channel_bases_npz"] = bases
+    return envelope
+
+
+def _mixed_basis_metadata(compiled, geometry: Any, record: Mapping, indices: Mapping[str, Sequence[int]]) -> dict:
+    """What each retained basis is: its excitation and the termination of every other port.
+
+    A voltage basis is per RMS volt at the reference voltage with every other
+    driver shorted and every ideal source rigid; a velocity basis is per 1 m/s
+    RMS with every driver shorted. Operating electrical results are not
+    retained here: they need this tensor and termination definition, never
+    a sum of basis impedances.
+    """
+    tags = record["source_tags"]
+    ports = compiled.wire["excitation_port_ids"]
+    return {
+        channel.id: {
+            "basis_contract": MIXED_BASIS_CONTRACT,
+            "basis": "velocity_rms" if channel.exterior_transducer is None else "voltage_rms",
+            "excitation_port_ids": [ports[i] for i in indices[channel.id]],
+            "reference_voltage_rms_v": float(compiled.wire["solver_options"]["transducer_reference_voltage_v"]),
+            "undriven_transducers": "shorted",
+            "source_ids": list(channel.source_ids),
+            "source_tags": [int(tags[source]) for source in channel.source_ids],
+            "source_motion": channel.motion,
+            "phase_convention": SOLVER_TIME_CONVENTION,
+        }
+        for channel in geometry.drive_channels
+    }
 
 
 def solve(
@@ -357,12 +489,15 @@ def solve(
     context = SolverContext.from_imported_request(request, quadrants=symmetry.quadrants, source_motion="axial")
     precision = "float64" if backend == "cpu" else "float32"
     frame = imported_anchor_frame(record)
+    ideal, port_order, port_indices = excitation_plan(record, msh_text, request.geometry.drive_channels)
     compiled = build_transducer_request(
         msh_text,
         drivers=drivers_for(record, request.geometry.drive_channels),
         layout=_layout(context, frame, precision),
         frame=frame,
         frequencies_hz=canonical_frequencies(context),
+        ideal_sources=ideal,
+        excitation_port_ids=port_order,
         reference_voltage_rms_v=request.geometry.drive_voltage_v,
         backend=backend,
         precision=precision,
@@ -379,7 +514,13 @@ def solve(
             )
         if result_callback:
             delta = TransducerSweep(sweep.rows[-1:], False, sweep.requested_frequency_count)
-            frame = package_sweep(delta, compiled, request, record, started=started)
+            frame = package_sweep(delta, compiled, request, record, started=started,
+                                  port_indices=port_indices)
+            frame.pop("_channel_bases_npz", None)
+            if request.geometry.combine is not None:
+                # The crossover is the durable final's, from the whole sweep.
+                frame["channels"].pop(request.geometry.combine.id, None)
+                frame["channel_order"] = [c.id for c in request.geometry.drive_channels]
             frame.pop("_field_trace_unavailable_reason", None)
             frame["metadata"]["provisional"] = {
                 "completed_frequency_count": len(sweep.rows),
@@ -403,4 +544,4 @@ def solve(
         if stage_callback
         else None,
     )
-    return package_sweep(native, compiled, request, record, started=started)
+    return package_sweep(native, compiled, request, record, started=started, port_indices=port_indices)

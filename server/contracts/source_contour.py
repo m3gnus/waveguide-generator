@@ -12,6 +12,16 @@ GENERAL_FEATURE = "native-general-horn-attachment-v1"
 
 
 def validate_contour_request(geometry, record):
+    from server.contracts.assembly import ASSEMBLY_RECORD_FEATURE
+
+    required = list(getattr(geometry, "required_features", []))
+    if ASSEMBLY_RECORD_FEATURE in required or ASSEMBLY_RECORD_FEATURE in record.get("required_features", ()):
+        # A compiled design assembly negotiates its own feature and nothing else.
+        if required != [ASSEMBLY_RECORD_FEATURE] or list(record.get("required_features", ())) != required:
+            raise ValueError("a design assembly solve negotiates exactly its compiled record's feature")
+        if any(c.patch_weights is not None or c.physical_source_id is not None for c in geometry.drive_channels):
+            raise ValueError("design assembly radiators are driven whole; patch weights belong to native contours")
+        return
     native = record.get("native_source")
     required = getattr(geometry, "required_features", [])
     if native is None:

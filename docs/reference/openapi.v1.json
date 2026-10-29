@@ -4201,7 +4201,7 @@
       },
       "DriverGroup": {
         "additionalProperties": false,
-        "description": "Physical channels sharing one driver setting and crossover branch.",
+        "description": "Physical channels sharing one crossover branch.\n\nWithout ``member_processing`` the members also share one driver setting\nand motion. A signal group states each member's processing instead; its\nmembers may then differ in driver and motion, and are summed after their\nown weight, delay and polarity.",
         "properties": {
           "channel_ids": {
             "items": {
@@ -4227,6 +4227,20 @@
               }
             ],
             "title": "Label"
+          },
+          "member_processing": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/MemberProcessing"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Member Processing"
           }
         },
         "required": [
@@ -7456,7 +7470,8 @@
                 "native-front-baffle-woofer-v1",
                 "native-shared-horn-woofer-v1",
                 "native-phase-plug-passages-v1",
-                "native-general-horn-attachment-v1"
+                "native-general-horn-attachment-v1",
+                "wg-design-assembly-v1"
               ],
               "type": "string"
             },
@@ -9423,6 +9438,33 @@
           "operation"
         ],
         "title": "ManualSolveOperationResponse",
+        "type": "object"
+      },
+      "MemberProcessing": {
+        "additionalProperties": false,
+        "description": "One member's weight, delay and polarity, applied before its group's sum.\n\nEngineering convention: the member contributes\n``weight * (-1 if invert) * exp(-j*2*pi*f*delay)`` times its own response.",
+        "properties": {
+          "delay_ms": {
+            "default": 0.0,
+            "maximum": 1000.0,
+            "minimum": 0.0,
+            "title": "Delay Ms",
+            "type": "number"
+          },
+          "invert": {
+            "default": false,
+            "title": "Invert",
+            "type": "boolean"
+          },
+          "weight": {
+            "default": 1.0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "title": "MemberProcessing",
         "type": "object"
       },
       "MeshConfig": {

@@ -318,6 +318,28 @@ def raw_channel_weights(
     return {name: engineering_to_solver(weights_eng[name]) for name in members}
 
 
+def member_processing_weights(
+    freqs: np.ndarray, processing: Mapping[str, Mapping[str, Any]],
+) -> dict[str, np.ndarray]:
+    """Factor per physical channel for its signal-group member processing.
+
+    Weight, delay and polarity are engineering-convention quantities, as the
+    crossover's are, and are conjugated once here for raw solver fields.
+    """
+
+    frequencies = np.asarray(freqs, dtype=np.float64).reshape(-1)
+    weights: dict[str, np.ndarray] = {}
+    for channel_id, item in processing.items():
+        delay_s = float(item.get("delay_ms", 0.0)) * 1.0e-3
+        engineering = (
+            float(item.get("weight", 1.0))
+            * (-1.0 if item.get("invert") else 1.0)
+            * np.exp(-1j * _TWO_PI * frequencies * delay_s)
+        )
+        weights[str(channel_id)] = engineering_to_solver(engineering)
+    return weights
+
+
 def _interp_complex(freqs: np.ndarray, values: np.ndarray, target_hz: float) -> complex:
     """Interpolate magnitude and unwrapped phase separately at ``target_hz``."""
 
@@ -773,6 +795,7 @@ def combine_drive_channels(
     member_limits: Mapping[str, MemberLimits] | None = None,
     member_channels: Mapping[str, list[str]] | None = None,
     member_labels: Mapping[str, str | None] | None = None,
+    member_processing: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Sum member channel results into one synthetic native-shaped result.
 
@@ -792,26 +815,41 @@ def combine_drive_channels(
     # Resolve a group into a single acoustic branch before the ordinary
     # crossover, alignment and level-matching calculations. Physical bases
     # remain separately stored, so this same path also serves recombination.
+    # A signal group's members carry their own weight, delay and polarity,
+    # applied before the sum, so the group is still one branch afterwards.
     partial_group_balloon = False
     if member_channels is not None:
         branches: dict[str, Any] = {}
         for member in members:
             ids = member_channels.get(member, [member])
             base = results_by_id[ids[0]]
-            if len(ids) == 1:
+            processed = [channel_id for channel_id in ids if channel_id in (member_processing or {})]
+            if len(ids) == 1 and not processed:
                 branches[member] = base
                 continue
             results = [results_by_id[channel_id] for channel_id in ids]
             frequencies = np.asarray(base.frequencies_hz)
             angles = np.asarray(base.observation_angles_deg)
-            fields = [np.asarray(result.pressure_complex, dtype=np.complex128) for result in results]
+            factors = member_processing_weights(
+                frequencies, {channel_id: member_processing[channel_id] for channel_id in processed}
+            ) if processed else {}
+
+            def scaled(values: Any, channel_id: str) -> Any:
+                if values is None or channel_id not in factors:
+                    return values
+                array = np.asarray(values, dtype=np.complex128)
+                return array * factors[channel_id].reshape((-1,) + (1,) * (array.ndim - 1))
+
+            fields = [scaled(np.asarray(result.pressure_complex, dtype=np.complex128), channel_id)
+                      for channel_id, result in zip(ids, results, strict=True)]
             if any(not np.array_equal(np.asarray(result.frequencies_hz), frequencies)
                    or not np.array_equal(np.asarray(result.observation_angles_deg), angles)
                    or list(result.observation_planes) != list(base.observation_planes)
                    or field.shape != fields[0].shape
                    for result, field in zip(results, fields, strict=True)):
                 raise ValueError("combine members do not share one observation grid")
-            spheres = [getattr(result, "sphere_pressure_complex", None) for result in results]
+            spheres = [scaled(getattr(result, "sphere_pressure_complex", None), channel_id)
+                       for channel_id, result in zip(ids, results, strict=True)]
             partial_group_balloon |= any(value is not None for value in spheres) and not all(value is not None for value in spheres)
             sphere = sum((np.asarray(value, dtype=np.complex128) for value in spheres),
                          np.zeros_like(np.asarray(spheres[0], dtype=np.complex128))) if all(
@@ -1246,6 +1284,10 @@ def combine_drive_channels(
     if member_channels is not None:
         payload["member_channels"] = {member: list(member_channels.get(member, [member])) for member in members}
         payload["member_labels"] = [(member_labels or {}).get(member) for member in members]
+        if member_processing:
+            payload["member_processing"] = {
+                str(channel_id): dict(item) for channel_id, item in member_processing.items()
+            }
     max_output = _max_output_payload(
         freqs,
         list(members),

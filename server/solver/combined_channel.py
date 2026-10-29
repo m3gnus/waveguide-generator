@@ -115,6 +115,7 @@ def package_combined_channel(
         member_limits=member_limits,
         member_channels=physical if labels else None,
         member_labels=labels if labels else None,
+        member_processing=request.geometry.branch_processing(list(spec.members)) if labels else None,
     )
 
     metadata: dict[str, Any] = {

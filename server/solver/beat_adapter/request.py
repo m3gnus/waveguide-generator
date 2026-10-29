@@ -332,20 +332,15 @@ def build_parametric_request(
         mesh_scale_to_m=mesh_scale_to_m, **options)
 
 
-def build_imported_request(
-    msh_text: str, context: SolverContext, record: Mapping[str, Any],
-    drive_channels: Sequence[DriveChannel], *, frequencies_hz: Sequence[float] | None = None,
-    precision: str = "float32", **options: Any,
-) -> CompiledRequest:
-    """Retain CAD source IDs, axes, channels and anchor frame in solver coordinates."""
-    from server.solver.imported import imported_domain_planes, imported_symmetry_from_cut_planes
+def imported_source_bases(
+    record: Mapping[str, Any], msh_text: str, drive_channels: Sequence[DriveChannel],
+) -> tuple[list[SourceBasis], dict[str, list[str]]]:
+    """Each prescribed channel's ideal-source bases and the ports that drive it.
 
-    context.validate()
-    if context.sim_type != 2:
-        raise ValueError("Imported adapter requires an exterior radiation problem")
-    symmetry = imported_symmetry_from_cut_planes(imported_domain_planes(record))
-    if symmetry.quadrants != context.quadrants:
-        raise ValueError("Stored context and ingestion record disagree on symmetry")
+    One basis per source and motion, with the record's tags and the resolved
+    per-tag axial axes; shared by the prescribed and mixed transducer routes.
+    """
+
     tags = record.get("source_tags")
     if not isinstance(tags, Mapping):
         raise ValueError("Ingestion record requires source_tags")
@@ -368,6 +363,24 @@ def build_imported_request(
                 by_key[key] = source.port_id
             members.append(by_key[key])
         channels[channel.id] = members
+    return sources, channels
+
+
+def build_imported_request(
+    msh_text: str, context: SolverContext, record: Mapping[str, Any],
+    drive_channels: Sequence[DriveChannel], *, frequencies_hz: Sequence[float] | None = None,
+    precision: str = "float32", **options: Any,
+) -> CompiledRequest:
+    """Retain CAD source IDs, axes, channels and anchor frame in solver coordinates."""
+    from server.solver.imported import imported_domain_planes, imported_symmetry_from_cut_planes
+
+    context.validate()
+    if context.sim_type != 2:
+        raise ValueError("Imported adapter requires an exterior radiation problem")
+    symmetry = imported_symmetry_from_cut_planes(imported_domain_planes(record))
+    if symmetry.quadrants != context.quadrants:
+        raise ValueError("Stored context and ingestion record disagree on symmetry")
+    sources, channels = imported_source_bases(record, msh_text, drive_channels)
     frame = imported_anchor_frame(record)
     return build_request(
         msh_text, sources=sources, channel_ports=channels, frame=frame,

@@ -387,3 +387,55 @@ export function buildImportedSubmission(
   // without changing the setup that persistence and its digest describe.
   return bindImportedSetup(record, setup, blockingFindingWire(record));
 }
+
+/** Engines whose imported solve couples exterior drivers (BEAT v3 CPU and Metal). */
+const COUPLED_DRIVER_ENGINES = new Set(['auto', 'beat-cpu', 'beat-metal']);
+
+export interface AssemblySetupResolution {
+  setup: ImportedSetup;
+  /** Set when the chosen engine solves the radiators at prescribed velocity instead. */
+  notice: string | null;
+}
+
+/**
+ * The setup a design assembly's Solve sends, from the same wire owner as CAD
+ * and file inputs. Channels are the record's radiators; signal groups carry
+ * their members' processing; the sweep is the design's. An engine that cannot
+ * couple exterior drivers solves the radiators at prescribed velocity, and
+ * says so, rather than being refused for drivers it cannot take.
+ */
+export function resolveAssemblySetup(
+  state: Parameters<typeof combineWire>[0] & Pick<SimulationData, 'passiveCardioid' | 'driveVoltageV' | 'maxDriveVoltageV'> & { sources: readonly RoleSource[] },
+  assembly: { signal_groups?: Array<{ id: string; members: Array<{ radiator_id: string; weight?: number; delay_ms?: number; invert?: boolean }> }> },
+  options: ImportedSolveSubmission['options'],
+  sweep: { f1: number; f2: number; num_frequencies: number },
+): AssemblySetupResolution {
+  const coupled = COUPLED_DRIVER_ENGINES.has(String(options.engine ?? 'auto'));
+  const driven = state.driveChannels.some(channel => channel.exterior_transducer);
+  const physics = coupled ? state : { ...state, driveChannels: state.driveChannels.map(({ exterior_transducer: _driver, ...channel }) => channel) };
+  const { drivers, effects } = simulationGeometry(physics, state.sources, null);
+  const processing = new Map((assembly.signal_groups ?? []).flatMap(group => group.members.map(member => [member.radiator_id, {
+    weight: member.weight ?? 1, delay_ms: member.delay_ms ?? 0, invert: member.invert ?? false,
+  }] as const)));
+  const groups = (state.driverGroups ?? []).map(group => ({
+    id: group.id, channel_ids: [...group.channelIds], ...(group.label ? { label: group.label } : {}),
+    member_processing: Object.fromEntries(group.channelIds.map(id => [id, processing.get(id) ?? { weight: 1, delay_ms: 0, invert: false }])),
+  }));
+  const resolvedOptions = { ...structuredClone(options), solver_mode: 'full_3d' as const, symmetry: 'auto' as const };
+  if (!resolvedOptions.frequencies_hz) {
+    resolvedOptions.frequency_range = [sweep.f1, sweep.f2];
+    resolvedOptions.num_frequencies = sweep.num_frequencies;
+  }
+  return {
+    setup: {
+      geometry: {
+        ...drivers, required_features: ['wg-design-assembly-v1'],
+        driver_groups: groups, skipped_source_ids: [], exterior_only: false, ...effects,
+      },
+      options: resolvedOptions,
+    },
+    notice: driven && !coupled
+      ? 'This engine solves every radiator at prescribed velocity. Drivers and their mutual loading need BEAT (CPU or Metal).'
+      : null,
+  };
+}

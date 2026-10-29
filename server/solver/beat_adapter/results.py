@@ -729,7 +729,8 @@ def coupled_envelope(sweep, request, *, context, geometry, record, config, start
             reference=resolved["reference"],
             member_roles={name: identity.get(branches[name][0], {}).get("role") for name in spec.members},
             member_channels=branches if labels else None,
-            member_labels=labels if labels else None)
+            member_labels=labels if labels else None,
+            member_processing=geometry.branch_processing(list(spec.members)) if labels else None)
         response = build_solver_response(
             result=combined, config=config, context=context, start_time=started,
             metadata={"drive_channel_id": spec.id, "derived_from_channels": physical,
