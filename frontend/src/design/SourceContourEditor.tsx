@@ -11,7 +11,7 @@ import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import { SketchCanvas } from '../sketch/SketchCanvas';
 import { isConstraintConflict, SketchController, type Authoring } from '../sketch/controller';
 import { sourceContourAdapter, applySourceCommand, contourPointOrder, lower, movingWeights, rules, seed, sourceProgress, scaleSourceToLimit, scaleSourceDimensions, fitSourcePreset, withSourceLimit, withSourceContext, sourceLimitTarget, type SourceLimit, type SourceMeta } from '../sketch/adapters/sourceContour';
-import { presetDefaults as defaults, presetLabels, seedPreset, fitPresetDimensions } from '../sketch/adapters/sourcePreset';
+import { presetDefaults as defaults, presetLabels, seedPreset, fitPresetDimensions, portableSourcePreset } from '../sketch/adapters/sourcePreset';
 import { presetDimensionActive, presetDimensionProblem, presetTopologyMessage, reapplyPresetMessage } from '../sketch/adapters/sourcePresetMapping';
 import { refreshContext, type SketchContext } from '../sketch/context';
 import { contextClearances, standaloneContext } from '../sketch/adapters/sourceContext';
@@ -375,7 +375,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLim
   }
   async function adopt(value: SourceValidation, preset?: ContourLoad['shape'], savedAuthoring?: unknown, identity?: SourcePreset) {
     const restored = parseSourceAuthoring(savedAuthoring, value.document);
-    const loaded = preset ? seedPreset(value.document, preset.shape, preset.dimensions) : restored ?? seed(value.document);
+    const loaded = preset ? seedPreset(value.document, preset.shape, preset.dimensions) : restored ? portableSourcePreset(restored) : seed(value.document);
     const load: ContourLoad = { authoring: loaded, validation: value, shape: preset, preset: identity, restored: !!restored };
     const next = withSourceContext(preset ? fitSourcePreset(loaded, limitRef.current) : withSourceLimit(loaded, limitRef.current), contextRef.current);
     if (!classic && controller.current) {
@@ -549,8 +549,8 @@ export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLim
           await adopt(await sourceEditorApi.expand(shape, fitted, draft), { shape, dimensions: fitted });
         })}>Fit to limit</button>
         </details><details><summary>Saved presets</summary><label>Preset name<input aria-label="Preset name" value={name} maxLength={80} onChange={(e) => setName(e.target.value)}/></label><div className="source-editor-toolbar">
-          <button type="button" disabled={!valid || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft, undefined, serializeSourceAuthoring(classic ? seed(draft) : authorRef.current, false)); setPresets([...presets, item]); setSelected(item); setNotice('Saved new preset.'); })}>Save new preset</button>
-          <button type="button" disabled={!valid || !selected || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft, selected, serializeSourceAuthoring(classic ? seed(draft) : authorRef.current, false)); setPresets(presets.map((p) => p.id === item.id ? item : p)); setSelected(item); setNotice('Updated preset.'); })}>Update loaded preset</button>
+          <button type="button" disabled={!valid || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft, undefined, serializeSourceAuthoring(portableSourcePreset(classic ? seed(draft) : authorRef.current), false)); setPresets([...presets, item]); setSelected(item); setNotice('Saved new preset.'); })}>Save new preset</button>
+          <button type="button" disabled={!valid || !selected || !name.trim()} onClick={() => void run(async () => { const item = await sourceEditorApi.save(name, draft, selected, serializeSourceAuthoring(portableSourcePreset(classic ? seed(draft) : authorRef.current), false)); setPresets(presets.map((p) => p.id === item.id ? item : p)); setSelected(item); setNotice('Updated preset.'); })}>Update loaded preset</button>
           <button type="button" onClick={() => void run(async () => { setPresets(await sourceEditorApi.presets()); setNotice('Preset library refreshed. Load a preset to use its latest revision.'); })}>Refresh presets</button>
         </div>
         {presets.map((preset) => <div key={preset.id} className="source-preset"><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { await adopt(await sourceEditorApi.validate(preset.document), undefined, preset.authoring, preset); })}>Load {preset.name}</button><button type="button" aria-label={`Delete preset ${preset.name}`} onClick={() => void run(async () => { await sourceEditorApi.delete(preset); setPresets(presets.filter((p) => p.id !== preset.id)); if (selected?.id === preset.id) setSelected(undefined); setNotice('Deleted preset. Current contour retained.'); })}>Delete</button></div>)}
@@ -561,7 +561,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLim
         </div><button type="button" disabled={!valid} onClick={() => void run(async () => {
           const blob = await sourceEditorApi.export(draft, attachment, meshSize); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'native-source.zip'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000); setNotice('Exported native source bundle: STEP, mesh and hash-bound source recipe.');
         })}>Export STEP + mesh bundle</button>
-        <p>Source presets store the contour and drive. Attachment and mesh size apply to this export.</p></details>}
+        <p>Source presets store the contour and drive. External references are kept as fixed construction. Attachment and mesh size apply to this export.</p></details>}
         </div>
         <details className="source-points" open={classic || pointsOpen} onToggle={e => setPointsOpen(e.currentTarget.open)}><summary>All points</summary><div className="source-table"><table><thead><tr><th>Point</th><th>r mm</th><th>z mm</th><th/></tr></thead><tbody>{tablePoints.filter(p => pointsOpen || classic || p.id !== selectedPoint?.id).map(p => pointRow(p, tablePoints.indexOf(p)))}</tbody></table></div></details>
         {!classic && <details className="source-dimensions" open={dimensionsOpen} onToggle={event => setDimensionsOpen(event.currentTarget.open)}><summary>All dimensions</summary>

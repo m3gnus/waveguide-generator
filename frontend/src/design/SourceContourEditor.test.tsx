@@ -786,6 +786,33 @@ describe('source editor interactions', () => {
     expect(host.querySelector(`[data-row-id="${id}"]`)!.textContent).toContain('My depth');
     expect(host.querySelector('[data-row-id="dust-cap"]')!.textContent).toContain('Phase cap');
   });
+  it('loads an older nested preset without live plug context and saves the fixed construction', async () => {
+    const { hornAssemblyContext } = await import('../sketch/adapters/sourceContext');
+    const { materialiseContext, contextData } = await import('../sketch/context');
+    const { serializeSourceAuthoring } = await import('../sketch/adapters/sourceAuthoring');
+    const { INITIAL_ASSEMBLY } = await import('./SourceAssemblyEditor');
+    const state = sourceAdapter.seed(INITIAL_SOURCE);
+    const context = hornAssemblyContext(INITIAL_ASSEMBLY.dimensions, [
+      { id: 'core', z0_mm: 2, z1_mm: 6, inner0_mm: 0, outer0_mm: 2, inner1_mm: 0, outer1_mm: 3 },
+    ], undefined, 8);
+    const picked = materialiseContext(state.sketch, context, 'plug/core/inlet');
+    state.sketch = picked.sketch;
+    const item = { id: 'nested', revision: 'r1', name: 'Nested', document: INITIAL_SOURCE, authoring: serializeSourceAuthoring(state) };
+    vi.mocked(sourceEditorApi.presets).mockResolvedValue([item]);
+    vi.mocked(sourceEditorApi.save).mockImplementation(async (name, document, previous, authoring) => ({ ...previous!, name, document, authoring }));
+    await mount();
+    await act(async () => button('Load Nested').click()); await settle();
+    expect(host.textContent).not.toContain('no longer exists');
+    expect(button('Done').disabled).toBe(false);
+    const restored = readSourceAuthoring(readSourceDraft());
+    expect(restored.sketch.entities.some(e => contextData(e))).toBe(false);
+    expect(restored.sketch.entities.find(e => e.id === picked.id)).toMatchObject({ construction: true, reference: false, data: { name: 'Plug core inlet' } });
+    expect(readSourceDraft()).toEqual(INITIAL_SOURCE);
+    await act(async () => button('Update loaded preset').click()); await settle();
+    expect(vi.mocked(sourceEditorApi.save).mock.calls.at(-1)![3]).toMatchObject({ sketch: restored.sketch });
+    expect(item.authoring.sketch.entities.some(e => contextData(e))).toBe(true);
+  });
+
   it('drawing creates explicit points and blocks export until the drawing is finished', async () => {
     await mountClassic(); await act(async () => button('Draw lines').click());
     expect(button('Export STEP + mesh bundle').disabled).toBe(true);

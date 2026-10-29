@@ -1,7 +1,10 @@
 import type { SourceDocument } from '../../api/sourceEditor';
 import { applyCommand } from '../ops';
 import type { NewConstraint } from '../model';
-import { seed } from './sourceContour';
+import { seed, type SourceMeta } from './sourceContour';
+import type { Authoring } from '../controller';
+import { contextData } from '../context';
+import { entityPoints } from '../model';
 
 export type PresetShape = 'flat' | 'dome' | 'cone';
 export const presetDefaults = {
@@ -79,4 +82,26 @@ export function seedPreset(document: SourceDocument, shape: PresetShape, dimensi
     if (dimensions.land_width_mm) dimension('land_width_mm', 'distanceX', dimensions.surround_width_mm ? 'surround.rim' : rim, 'rim');
   }
   return { sketch, meta: { ...meta, preset: { shape, dimensions: mapping, values: { ...dimensions } } } };
+}
+
+/** A library preset has no assembly host. Keep external geometry and constraints
+ * as fixed construction rather than retaining unavailable live associations.
+ */
+export function portableSourcePreset(state: Authoring<SourceMeta>): Authoring<SourceMeta> {
+  const external = state.sketch.entities.filter(e => contextData(e));
+  if (!external.length) return state;
+  let sketch = structuredClone(state.sketch);
+  for (const entity of external) {
+    const data = contextData(entity)!;
+    sketch.entities = sketch.entities.map(e => e.id === entity.id
+      ? { ...e, reference: false, construction: true, data: { name: data.label ?? 'Saved context' } } : e);
+    for (const point of entityPoints(entity)) {
+      if (sketch.constraints.some(c => c.kind === 'fix' && c.point === point)) continue;
+      const result = applyCommand(sketch, { kind: 'addConstraint', constraint: { kind: 'fix', point } });
+      if ('error' in result) throw new Error(result.error);
+      sketch = result.sketch;
+    }
+  }
+  const { missingContext: _missing, clearances: _clearances, ...meta } = state.meta;
+  return { sketch, meta };
 }

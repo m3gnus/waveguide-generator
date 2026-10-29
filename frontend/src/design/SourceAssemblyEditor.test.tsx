@@ -144,6 +144,27 @@ describe('shared source and passage authoring', () => {
     expect(envelopeFor('woofer')).toEqual(authoring);
   });
 
+  it('keeps the pending woofer sketch through disable, unrelated edits and re-enable', async () => {
+    storage.setItem('', JSON.stringify(INITIAL_ASSEMBLY)); await mount();
+    await act(async () => button('Edit woofer contour…').click()); await settle();
+    await pointer(host.querySelector('.sketch-entity[data-id="piston"]')!); await pointer(svg(), 'pointerup');
+    await act(async () => button('Delete selection').click()); await settle();
+    const pending = envelopeFor('woofer');
+    expect(pending.pending).toBe(true);
+    await act(async () => button('Close').click()); await settle();
+    const toggle = () => [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(input => input.closest('label')?.textContent === 'Include woofer')!;
+    await act(async () => toggle().click()); await settle();
+    await enter('Enclosure width', '95');
+    expect(envelopeFor('woofer')).toEqual(pending);
+    await act(async () => toggle().click()); await settle();
+    expect(read().woofer).toEqual(INITIAL_ASSEMBLY.woofer);
+    expect(envelopeFor('woofer')).toEqual(pending);
+    await act(async () => button('Edit woofer contour…').click()); await settle();
+    expect(host.querySelector('.sketch-entity[data-id="piston"]')).toBeNull();
+    expect(button('Use contour').disabled).toBe(true);
+    expect(envelopeFor('woofer').sketch).toEqual(pending.sketch);
+  });
+
   it('saves a portable envelope and restores names, constraints and placements after clearing authoring', async () => {
     const state = seed(INITIAL_ASSEMBLY.horn);
     state.sketch.entities.find(e => e.id === 'piston')!.data = { name: 'Portable diaphragm' };

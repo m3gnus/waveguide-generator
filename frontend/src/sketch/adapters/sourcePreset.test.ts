@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { presetDefaults, presetLabels, seedPreset, type PresetShape } from './sourcePreset';
+import { presetDefaults, presetLabels, seedPreset, portableSourcePreset, type PresetShape } from './sourcePreset';
 import { expandedPreset, optionalPresetCorpus, presetCorpus } from './presetTestSupport';
 import { applySourceCommand, lower, rules } from './sourceContour';
 import { createSession } from '../session';
 import { applyCommand } from '../ops';
-import { parseSketch, toJSON } from '../model';
+import { parseSketch, toJSON, entityPoints } from '../model';
+import { contextData, materialiseContext } from '../context';
+import { hornAssemblyContext, standaloneContext } from './sourceContext';
+import { INITIAL_ASSEMBLY } from '../../design/SourceAssemblyEditor';
+import { parseSourceAuthoring, serializeSourceAuthoring } from './sourceAuthoring';
+import { withSourceContext } from './sourceContour';
 import { arcGeometry } from '../geometry';
 import type { Command } from '../commands';
 
@@ -134,6 +139,46 @@ describe('named parametric presets', () => {
       await session.beginDrag(['pole']); await session.dragTo({ pointId: 'pole', x: 0, y: 4 }); await session.endDrag();
       expect(session.sketch.points.find(p => p.id === 'pole')!.y).toBeCloseTo(4, 6);
       expectGeometry(lower(session.sketch, initial.meta), expandedPreset('dome', { height_mm: 4 }));
+    } finally { session.destroy(); }
+  });
+});
+
+
+describe('portable preset context', () => {
+  it('keeps nested plug geometry and associative constraints as fixed construction on standalone reload', async () => {
+    const document = expandedPreset('flat', { radius_mm: 4 });
+    const state = seedPreset(document, 'flat', { radius_mm: 4 });
+    const context = hornAssemblyContext(INITIAL_ASSEMBLY.dimensions, [
+      { id: 'core', z0_mm: 2, z1_mm: 6, inner0_mm: 0, outer0_mm: 2, inner1_mm: 0, outer1_mm: 3 },
+    ], undefined, 4);
+    const picked = materialiseContext(state.sketch, context, 'plug/core/inlet');
+    const constrained = applyCommand(picked.sketch, { kind: 'addConstraint', constraint: {
+      kind: 'pointLineDistance', point: 'pole', line: picked.id, value: 2, driving: true, label: 'Plug clearance',
+      placement: { offset: 4, along: .5 },
+    } });
+    if ('error' in constrained) throw new Error(constrained.error);
+    const before = { ...state, sketch: constrained.sketch };
+    const oldEnvelope = serializeSourceAuthoring(before);
+    expect(parseSourceAuthoring(oldEnvelope, document)).not.toBeNull();
+    const portable = portableSourcePreset(parseSourceAuthoring(oldEnvelope, document)!);
+    expect(lower(portable.sketch, portable.meta)).toEqual(lower(before.sketch, before.meta));
+    expect(portable.sketch.constraints).toEqual(expect.arrayContaining(before.sketch.constraints));
+    const line = portable.sketch.entities.find(e => e.id === picked.id)!;
+    expect(line).toMatchObject({ reference: false, construction: true, data: { name: 'Plug core inlet' } });
+    for (const point of entityPoints(line)) expect(portable.sketch.constraints).toContainEqual(expect.objectContaining({ kind: 'fix', point }));
+    expect(portable.sketch.entities.some(e => contextData(e))).toBe(false);
+    expect(before.sketch.entities.some(e => contextData(e))).toBe(true);
+    expect(portableSourcePreset(portable)).toBe(portable);
+    const saved = serializeSourceAuthoring(portable);
+    const loaded = parseSourceAuthoring(saved, document)!;
+    expect(loaded).not.toBeNull();
+    const standalone = withSourceContext(loaded, standaloneContext(undefined, 4));
+    expect(rules(standalone.sketch, standalone.meta).some(p => p.code === 'missing-context')).toBe(false);
+    const session = await createSession(standalone.sketch, { references: standalone.meta.references });
+    try {
+      const solved = await session.solveFull();
+      expect(solved.status).toBe('ok');
+      expectGeometry(lower(solved.sketch, standalone.meta), document);
     } finally { session.destroy(); }
   });
 });
