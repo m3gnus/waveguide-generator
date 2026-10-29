@@ -167,8 +167,18 @@ function spatialSelectorViolations(raw: string): string[] {
   if (!/fieldEnabled && fieldSource === 'exterior' && fieldJobId === availableFieldJob\?\.id\s*&& <FieldPlaneProbeTooltip/.test(raw)) {
     problems.push('FieldPlaneProbeTooltip: spatial selection bypass');
   }
-  // Viewport has no use for the standalone-chart exception.
-  if (/\bshownResult\b/.test(raw.replace(literalsAndComments, token => token.startsWith('//') || token.startsWith('/*') ? ' ' : token))) problems.push('chart selector in viewport');
+  // Resolve a freshness candidate before filtering spatial eligibility, so a
+  // pending/stale fallback stays subscribed. Only freshness may use that job;
+  // geometry still has to pass through spatialResult.
+  const source = raw.replace(literalsAndComments, token => token.startsWith('//') || token.startsWith('/*') ? ' ' : token);
+  const withoutFreshness = source
+    .replace(/(\bimport\s*\{[^}]*?)\bshownResult\s*,\s*/, '$1')
+    .replace(/\bconst shownJob = shownResult\(coherenceContext, resultSelection, jobs, provisional\.entries\)\.job;/, '')
+    .replace(/\bconst recordedFreshness = useMeshFreshnessStore\(state => shownJob \? state\.jobs\[shownJob\.id\] : undefined\);/, '')
+    .replace(/\bconst meshFreshness = hasMeshProvenance\(shownJob\) \? recordedFreshness : undefined;/, '')
+    .replace(/useEffect\(\(\) => \{\s*if \(shownJob\) useMeshFreshnessStore\.getState\(\)\.check\(shownJob, false, jobsSnapshot\.epoch\);\s*\}, \[shownJob, jobsSnapshot\.epoch\]\);/, '');
+  if (/\bshownResult\b/.test(withoutFreshness)) problems.push('chart selector in viewport');
+  if (/\bshownJob\b/.test(withoutFreshness)) problems.push('freshness candidate used outside freshness');
   return problems;
 }
 
@@ -207,6 +217,19 @@ describe('one current model and shown result owner', () => {
       : source.slice(0, start) + source.slice(start).replace('spatialResult(context, { primary: selectedJobId }, jobs, provisional)',
       'shownResult(context, { primary: selectedJobId }, jobs, provisional).job');
     expect(spatialSelectorViolations(changed)).toContain(`${name}: spatial selection bypass`);
+  });
+
+  it.each([
+    ['chart selector in viewport',
+      'const resultRun = spatialResult(coherenceContext, resultSelection, jobs, provisional.entries);',
+      'const resultRun = shownResult(coherenceContext, resultSelection, jobs, provisional.entries).job;'],
+    ['freshness candidate used outside freshness',
+      'spatialResultId={availablePlaneJob?.id ?? null}',
+      'spatialResultId={shownJob?.id ?? null}'],
+  ])('rejects %s while allowing the freshness subscription', (problem, before, after) => {
+    const source = sources['../viewport/Viewport.tsx'];
+    expect(source).toContain(before);
+    expect(spatialSelectorViolations(source.replace(before, after))).toContain(problem);
   });
 
   it('uses the effective solve representation for live and saved parametric identity', () => {
