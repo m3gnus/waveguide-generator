@@ -778,6 +778,7 @@ is the single status home for imported models, including CAD and file meshes.
 Its status line says what is happening and offers the available action, such
 as **Solve**, **Choose…** or **Try again**. **Model details** (folded) holds the
 checks, which way the model radiates and the mesh. **Solve** is also in the top bar.
+Use **Try again** after a failure.
 Completed solves are listed in the **Jobs** panel; **View project runs**
 filters it to the model.
 

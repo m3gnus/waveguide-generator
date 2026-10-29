@@ -191,7 +191,7 @@ def test_cache_metadata_bytes_and_replace_failure(tmp_path, monkeypatch, viewpor
     assert set(tmp_path.iterdir()) == {mesh, metadata}
 
 
-@pytest.mark.parametrize("failed_target", ["authoring", "library", None])
+@pytest.mark.parametrize("failed_target", ["recovery", "authoring", "library", None])
 def test_presets_pair_bytes_order_and_failure(tmp_path, monkeypatch, failed_target):
     from server.source_editor import PresetStore
 
@@ -207,8 +207,19 @@ def test_presets_pair_bytes_order_and_failure(tmp_path, monkeypatch, failed_targ
     replaced = []
     def replace(source, target):
         assert modes[Path(source)] == 0o600
-        kind = "library" if Path(target) == store.path else "authoring"
-        assert Path(source).read_bytes() == (library_bytes if kind == "library" else authoring_bytes)
+        raw = Path(source).read_bytes()
+        if Path(target) == store.recovery_path:
+            kind = "recovery"
+            assert json.loads(raw) == {
+                "library": library_bytes.decode(), "authoring": b'old authoring'.hex(),
+            }
+        elif Path(target) == store.path:
+            kind = "library"
+            assert raw == library_bytes
+        else:
+            assert Path(target) == store.authoring_path
+            kind = "rollback" if raw == b'old authoring' else "authoring"
+            assert raw == (b'old authoring' if kind == "rollback" else authoring_bytes)
         if failed_target == kind:
             raise PermissionError("preset locked")
         replaced.append(kind)
@@ -220,10 +231,14 @@ def test_presets_pair_bytes_order_and_failure(tmp_path, monkeypatch, failed_targ
         assert exc.value.status_code == 503
         assert isinstance(exc.value.__cause__, PermissionError)
         assert store.path.read_bytes() == b'old library'
-        assert store.authoring_path.read_bytes() == (b'old authoring' if failed_target == "authoring" else authoring_bytes)
+        assert store.authoring_path.read_bytes() == b'old authoring'
+        assert replaced == {
+            "recovery": [], "authoring": ["recovery"],
+            "library": ["recovery", "authoring", "rollback"],
+        }[failed_target]
     else:
         store._write(presets, authoring)
-        assert replaced == ["authoring", "library"]
+        assert replaced == ["recovery", "authoring", "library"]
         assert store.path.read_bytes() == library_bytes
         assert store.authoring_path.read_bytes() == authoring_bytes
     assert set(tmp_path.iterdir()) == {store.path, store.authoring_path}
