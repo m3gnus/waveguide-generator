@@ -80,28 +80,20 @@ def package_combined_channel(
     frequencies = np.asarray(frequencies_hz, dtype=np.float64).reshape(-1)
     member_limits: dict[str, MemberLimits] = {}
     for member in spec.members:
-        limits = [member_limits_from_channel(member_channels.get(channel_id),
-                    frequencies_hz=frequencies, max_voltage_v=max_drive_voltage_v)
-                  for channel_id in physical[member]]
-        limits = [limit for limit in limits if limit is not None]
-        if len(physical[member]) == 1 and limits:
-            member_limits[member] = limits[0]
+        limits = {channel_id: limit for channel_id in physical[member]
+                  if (limit := member_limits_from_channel(member_channels.get(channel_id),
+                      frequencies_hz=frequencies, max_voltage_v=max_drive_voltage_v)) is not None}
+        processing = (request.geometry.branch_processing([member]) or {}) if labels else {}
+        if len(physical[member]) == 1 and limits and not processing:
+            member_limits[member] = next(iter(limits.values()))
         elif len(limits) == len(physical[member]):
-            # Shared drivers have the same ratings. Preserve their real units
-            # while the most stressed physical driver sets each group ceiling.
-            first = limits[0]
-            ratings = (first.xmax_mm, first.rated_power_w, first.drive_voltage_v, first.max_voltage_v)
-            if any((limit.xmax_mm, limit.rated_power_w, limit.drive_voltage_v, limit.max_voltage_v) != ratings
-                   for limit in limits[1:]):
-                raise ValueError("Driver group results have inconsistent driver ratings.")
-            excursion = [limit.excursion_mm for limit in limits if limit.excursion_mm is not None]
-            power = [limit.power_w for limit in limits if limit.power_w is not None]
+            # A group has no single Xmax/power rating. Its most stressed
+            # physical driver sets the ceiling, after its own member weight.
             member_limits[member] = MemberLimits(
-                excursion_mm=np.maximum.reduce(excursion) if excursion else None,
-                power_w=np.maximum.reduce(power) if power else None,
-                xmax_mm=first.xmax_mm, rated_power_w=first.rated_power_w,
-                drive_voltage_v=first.drive_voltage_v, max_voltage_v=first.max_voltage_v,
-                label=first.label,
+                excursion_mm=None, power_w=None, xmax_mm=None, rated_power_w=None,
+                drive_voltage_v=None, max_voltage_v=None,
+                physical_members={channel_id: (limit, float(processing.get(channel_id, {}).get("weight", 1.0)))
+                                  for channel_id, limit in limits.items()},
             )
 
     resolved = spec.resolved()

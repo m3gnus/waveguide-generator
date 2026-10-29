@@ -744,6 +744,11 @@ def _max_output_payload(
             "xmax_mm": limits[name].xmax_mm,
             "rated_power_w": limits[name].rated_power_w,
             "max_voltage_v": limits[name].max_voltage_v,
+            **({"physical_driver_limits": {channel_id: {
+                "xmax_mm": limit.xmax_mm, "rated_power_w": limit.rated_power_w,
+                "max_voltage_v": limit.max_voltage_v, "member_weight": weight,
+            } for channel_id, (limit, weight) in limits[name].physical_members.items()}}
+               if limits[name].physical_members else {}),
         }
         binds = np.isfinite(room.scale) & (room.scale < system_scale)
         system_scale[binds] = room.scale[binds]

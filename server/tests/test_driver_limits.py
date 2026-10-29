@@ -20,6 +20,21 @@ def _freqs() -> np.ndarray:
     return np.geomspace(100.0, 10_000.0, 64)
 
 
+def test_group_limits_keep_heterogeneous_ratings_and_apply_member_weights_before_headroom():
+    first = MemberLimits(excursion_mm=np.array([1.0, 4.0]), power_w=np.array([1.0, 16.0]),
+                         xmax_mm=2.0, rated_power_w=4.0, drive_voltage_v=2.0, max_voltage_v=None)
+    second = MemberLimits(excursion_mm=np.array([8.0, 1.0]), power_w=None,
+                          xmax_mm=8.0, rated_power_w=None, drive_voltage_v=3.0, max_voltage_v=None)
+    group = MemberLimits(excursion_mm=None, power_w=None, xmax_mm=None, rated_power_w=None,
+                         drive_voltage_v=None, max_voltage_v=None, physical_members={"a": (first, 0.5), "b": (second, 1.0)})
+    room = headroom(group, np.ones(2))
+    np.testing.assert_allclose(room.scale, [1.0, 1.0])
+    assert room.excursion_fraction == 1.0 and room.power_fraction == 1.0
+    assert group.xmax_mm is None and group.rated_power_w is None
+    assert group.physical_members["a"][0].xmax_mm == 2.0
+    assert group.physical_members["b"][0].xmax_mm == 8.0
+
+
 def _member(eng_on_axis: np.ndarray, freqs: np.ndarray | None = None) -> SimpleNamespace:
     angles = np.asarray([-30.0, 0.0, 30.0])
     planes = ["horizontal", "vertical"]

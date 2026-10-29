@@ -31,7 +31,7 @@ band -- a single gain has to survive its worst frequency.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 import numpy as np
@@ -64,12 +64,16 @@ class MemberLimits:
     drive_voltage_v: float | None
     max_voltage_v: float | None
     label: str | None = None
+    #: A signal group retains each physical driver's ratings and its member weight.
+    physical_members: Mapping[str, tuple[MemberLimits, float]] = field(default_factory=dict)
 
     @property
     def known(self) -> bool:
         """Whether any ceiling at all can be computed for this member."""
 
         return bool(
+            any(limit.known for limit, _weight in self.physical_members.values())
+            or
             (self.xmax_mm is not None and self.excursion_mm is not None)
             or (self.rated_power_w is not None and self.power_w is not None)
             or (self.max_voltage_v is not None and self.drive_voltage_v is not None)
@@ -271,6 +275,21 @@ def headroom(limits: MemberLimits, applied_magnitude: np.ndarray) -> Headroom:
     """
 
     magnitude = np.abs(np.asarray(applied_magnitude, dtype=np.float64)).reshape(-1)
+    if limits.physical_members:
+        rooms = [headroom(member, magnitude * abs(weight)) for member, weight in limits.physical_members.values()]
+        scales = np.stack([room.scale for room in rooms])
+        indices = np.argmin(scales, axis=0)
+        reasons = np.stack([room.reason for room in rooms])
+
+        def largest(name: str) -> float | None:
+            values = [value for room in rooms if (value := getattr(room, name)) is not None]
+            return max(values) if values else None
+
+        return Headroom(
+            scale=np.min(scales, axis=0), reason=np.take_along_axis(reasons, indices[None, :], axis=0)[0],
+            excursion_fraction=largest("excursion_fraction"), power_fraction=largest("power_fraction"),
+            voltage_fraction=largest("voltage_fraction"),
+        )
     scale = np.full(magnitude.shape, _NO_LIMIT, dtype=np.float64)
     reason = np.full(magnitude.shape, "", dtype=object)
     fractions: dict[str, float | None] = {XMAX: None, POWER: None, VOLTAGE: None}
