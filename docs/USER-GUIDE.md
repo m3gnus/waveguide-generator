@@ -188,8 +188,8 @@ placement and file round-trip values and is collapsed by default.
 On **Waveguide in enclosure**, a side margin of **0 mm** is supported when the
 fitted mouth leaves less than 0.1 mm of baffle beside that wall: the enclosure
 side continues straight back from the mouth rim. A zero margin does not make
-every horn flush-mountable. WG still checks the fitted shape and refuses
-unsupported cases; its message identifies a side that needs at least 0.1 mm
+every horn flush-mountable. WG still checks the fitted shape; some combinations
+are unsupported, and its message identifies a side that needs at least 0.1 mm
 of baffle when that is the remedy.
 
 The viewport shows mouth width × height and horn depth beside the timing readout,
