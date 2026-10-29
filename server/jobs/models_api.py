@@ -542,7 +542,10 @@ def _latest_file_preparation(store: Any, model_id: str) -> dict[str, Any]:
                key=lambda row: (row.get("last_used_at") or row["created_at"], row["created_at"], row["ingest_id"]))
 
 
-def _file_import_memory(store: Any, filename: str, text: str, groups: list[dict[str, Any]]) -> dict[str, Any]:
+def _file_import_memory(
+    store: Any, filename: str, text: str, groups: list[dict[str, Any]],
+    legacy_groups: OrderedDict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
     """Use the retained model and setup owners; no filename or digest index of our own."""
 
     model_id = file_model_id(_sha256(text.encode("utf-8")))
@@ -578,11 +581,19 @@ def _file_import_memory(store: Any, filename: str, text: str, groups: list[dict[
         if previous_groups is None and not file.get("transform", {}).get("removed_lids"):
             previous_groups = record.get("summary", {}).get("groups")
         if previous_groups is None:
-            try:
-                original = text if previous_id == model_id else read_original(store, previous_id)[1]
-            except ModelRefusal:
-                continue
-            previous_groups = parse_file_mesh(original).summary()["groups"]
+            # Old lid-removal records predate source-group metadata. Cache only
+            # their small group lists, keyed by immutable original digest.
+            digest = record["artifact_sha256"]
+            previous_groups = legacy_groups.get(digest)
+            if previous_groups is None:
+                try:
+                    original = text if previous_id == model_id else read_original(store, previous_id)[1]
+                except ModelRefusal:
+                    continue
+                previous_groups = parse_file_mesh(original).summary()["groups"]
+                legacy_groups[digest] = previous_groups
+                if len(legacy_groups) > 64:
+                    legacy_groups.popitem(last=False)
         previous_names = {group["name"]: group["tag"] for group in previous_groups}
         # Ambiguous names cannot identify a source safely. Keep the inspect guesses.
         if len(previous_names) != len(previous_groups) or len(current_names) != len(groups):
@@ -629,6 +640,7 @@ def mount_models_api(application: FastAPI) -> None:
     data_dir = Path(application.state.data_dir)
     # Pagehide sends immediately. Refuse an older request from that same page
     # if its successor already committed; clients without headers keep working.
+    legacy_groups: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
     setup_writes = asyncio.Lock()
     accepted_setup_writes: OrderedDict[tuple[str, str, str], int] = OrderedDict()
     refused = {
@@ -686,7 +698,7 @@ def mount_models_api(application: FastAPI) -> None:
             mesh = parse_file_mesh(text)
             inspected = inspect_file_mesh(mesh, body.units, body.forward, body.up)
             if isinstance(body, MeshInspection):
-                inspected.update(_file_import_memory(store, body.filename, text, inspected["groups"]))
+                inspected.update(_file_import_memory(store, body.filename, text, inspected["groups"], legacy_groups))
             return inspected
 
         return await answer(summary)

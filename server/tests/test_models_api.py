@@ -811,7 +811,8 @@ def test_large_fresh_and_retained_mesh_inspections_follow_the_same_path(tmp_path
     asyncio.run(scenario())
 
 
-def test_repeated_inspection_does_not_reparse_retained_same_stem_originals(tmp_path, monkeypatch):
+@pytest.mark.parametrize("legacy_lids", [False, True])
+def test_repeated_inspection_does_not_reparse_retained_same_stem_originals(tmp_path, monkeypatch, legacy_lids):
     from server.jobs import models_api
 
     async def scenario():
@@ -819,8 +820,25 @@ def test_repeated_inspection_does_not_reparse_retained_same_stem_originals(tmp_p
         app, runtime = app_for(tmp_path, store)
         try:
             body = registration().model_dump()
+            if legacy_lids:
+                from server.mesh.file_import import mesh_text
+                from test_file_mesh_roles_symmetry import box_mesh
+                body.update(msh_text=mesh_text(box_mesh(planes=("x0", "y0"), capped=("x0",))),
+                            units="m", source_tags=[], roles={101: "HF", 102: "MF"},
+                            domain_planes=["x0", "y0"], remove_lid_planes=["x0"])
             for suffix in ("", "\n", "\n\n"):
-                register_mesh(store, tmp_path, registration(msh_text=body["msh_text"] + suffix))
+                register_mesh(store, tmp_path, models_api.MeshRegistration.model_validate({
+                    **body, "msh_text": body["msh_text"] + suffix,
+                }))
+            if legacy_lids:
+                latest = models_api._latest_file_preparation
+                def historical(*args):
+                    row = dict(latest(*args))
+                    record = json.loads(row["record_json"])
+                    record["source_file"].pop("groups")
+                    row["record_json"] = json.dumps(record)
+                    return row
+                monkeypatch.setattr(models_api, "_latest_file_preparation", historical)
             parse = models_api.parse_file_mesh
             parsed = []
             def counted(text):
@@ -831,8 +849,10 @@ def test_repeated_inspection_does_not_reparse_retained_same_stem_originals(tmp_p
                 result = await call(app, "POST", "/api/models/files/inspect", {
                     "filename": body["filename"], "msh_text": body["msh_text"] + "\n\n\n",
                 })
-                assert result["previous_setup"]["preparation"]["units"] == "mm"
-            assert len(parsed) == 2  # One current upload per request; no retained-original parsing.
+                assert result["previous_setup"]["preparation"]["units"] == body["units"]
+            # Current uploads always parse. Legacy lid metadata is read once,
+            # then reused; modern records never reparse retained originals.
+            assert len(parsed) == 2 + int(legacy_lids)
         finally:
             await runtime.shutdown()
             store.close()
