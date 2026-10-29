@@ -476,3 +476,23 @@ it.each(['share', 'separate'] as const)('shows the %s choice after adding a surf
   if (choice === 'share') expect(host.textContent).toContain('3 surfaces · identical drivers');
   importedMeshStore.clear();
 });
+
+
+it('shows the prepared file domain in the shared Solver details', () => {
+  geometry({ prepared: true });
+  const prepared = useImportedModelStore.getState().prepared as RegisteredMesh;
+  act(() => {
+    useImportedModelStore.setState({ prepared: { ...prepared,
+      symmetry: { domain_planes: ['x0', 'y0'], cut_planes: [] } } as RegisteredMesh });
+    preferencesStore.update({ showDeveloperDetails: true });
+    root.render(<QueryClientProvider client={queryClient}><MeshImportPanel tab="simulation"/></QueryClientProvider>);
+  });
+  const domain = [...host.querySelectorAll('.cad-solve-fact')].find(node => node.textContent?.startsWith('Prepared domain'));
+  expect(domain?.textContent).toBe('Prepared domainQuarter model');
+  expect(host.textContent).not.toContain('none · full domain');
+  // The prepared record, rather than an unsaved draft, owns this diagnostic.
+  act(() => useImportedModelStore.setState({ fileDraft: { ...useImportedModelStore.getState().fileDraft, domainPlanes: [] } }));
+  expect(domain?.textContent).toBe('Prepared domainQuarter model');
+  act(() => useImportedModelStore.setState({ prepared: null }));
+  expect(domain?.textContent).toBe('Prepared domainWaiting for preparation');
+});

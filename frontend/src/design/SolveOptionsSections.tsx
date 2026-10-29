@@ -13,6 +13,9 @@ import {
 import { useSolveControlBackend } from '../jobs/useSolveControlBackend';
 import { runtimeSetupText } from '../jobs/runtimeSetup';
 import { useCadReturnStore } from '../stores/cadReturn';
+import { useImportedModelStore } from '../stores/importedModel';
+import type { RegisteredMesh } from '../api/meshImport';
+import { fileSymmetryLabel } from '../model/cadLabels';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { importedPolarFromPlan } from '../jobs/importedSubmission';
@@ -228,6 +231,8 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
   // Only diagnostic controls are developer detail; repair reasons remain visible.
   const importedInput = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot).importedInput;
   const cadModel = mode === 'cad' && importedInput !== 'file';
+  const fileRecord = useImportedModelStore(state => state.input === 'file'
+    ? state.prepared as RegisteredMesh | null : null);
   const developer = useDeveloperDetails() || mode !== 'cad';
   const { engines, hostPlatform, error, isLoading: capabilitiesLoading,
     qualificationRefreshNeeded, refreshCapabilities } = useCapabilities();
@@ -278,7 +283,9 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
         })}
       </select></HelpTipRow>
       <p className="cad-solve-fact"><b>Runs on</b><span>{importedEngine ? `${importedEngine} · full 3-D · free space` : 'See solve readiness in Results.'}</span></p>
-      {developer && <p className="cad-solve-fact"><b>Prepared cut planes</b><span>{ingestRecord?.symmetry.cut_planes?.length ? ingestRecord.symmetry.cut_planes.join(', ') : 'none · full domain'}</span></p>}
+      {developer && (importedInput === 'file'
+        ? <p className="cad-solve-fact"><b>Prepared domain</b><span>{fileRecord ? fileSymmetryLabel(fileRecord.symmetry?.domain_planes ?? [], false) : 'Waiting for preparation'}</span></p>
+        : <p className="cad-solve-fact"><b>Prepared cut planes</b><span>{ingestRecord?.symmetry.cut_planes?.length ? ingestRecord.symmetry.cut_planes.join(', ') : 'none · full domain'}</span></p>)}
     </>}
     {error ? <span className="section-note" role="status">Capability refresh failed. Check the backend connection. <button type="button" onClick={refreshCapabilities}>Refresh</button></span> : qualificationRefreshNeeded
       ? <span className="section-note" role="status">BEMPP · <button type="button" onClick={refreshCapabilities}>Refresh</button></span>
