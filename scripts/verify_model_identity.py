@@ -101,7 +101,8 @@ def normalize_design_snapshot(document: Any) -> dict[str, Any]:
                 key: getattr(design.enclosure, key)
                 for key in design.enclosure.__class__.model_fields
                 if key not in EXCLUDED_ENCLOSURE_KEYS
-                and (key != "depth_margin_mm" or design.enclosure.depth_margin_mm is not None)
+                # Optional fields participate only when stated, like the sections below.
+                and (key not in ("depth_margin_mm", "dim_mm") or getattr(design.enclosure, key) is not None)
             }
         )
         selected = {
