@@ -72,11 +72,17 @@ def test_ingest_warns_and_keeps_exterior_only_reachable(tmp_path, monkeypatch, e
 
     from server.tests.test_cadlink_ingest import _built_for_source
     from server.tests.test_imported_beat import MESH
+    from server.mesh.imported import allocate_imported_tags
 
     # The geometry contracts have separate real-mesher tests. Here exercise
     # the complete ingest/report path for all declaration combinations.
     source_id = manifest["sources"][0]["id"] if exterior == "painted-source" else "source-a"
     built = _built_for_source(source_id)
+    # Interface-only returns have no painted exterior sources. The synthetic
+    # child's tags must describe the same inventory as the real allocator.
+    declared = json.loads((bundle / "wgreturn.json").read_text())["sources"]
+    built["tag_allocation"] = allocate_imported_tags(declared)
+    built["role_resolution"] = {source["id"]: built["role_resolution"][source["id"]] for source in declared}
     built["msh_text"] = MESH
     monkeypatch.setattr(ingest, "build_imported_mesh_isolated", lambda *a, **k: built)
     monkeypatch.setattr(ingest, "_mesh_coupled_regions", lambda *a, **k: (None, {}))

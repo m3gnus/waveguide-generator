@@ -185,15 +185,29 @@ def test_group_gain_ceiling_is_the_first_physical_driver_limit():
     assert group_limit == pytest.approx(single_limit)
     group_usage = group_combine["max_output"]["members"]["bass"]
     single_usage = single_combine["max_output"]["members"]["b"]
-    assert group_usage["xmax_mm"] == 4.
-    assert group_usage["rated_power_w"] == 60.
-    assert group_usage["max_voltage_v"] == 24.
+    # A group retains physical ratings rather than assigning one driver's
+    # rating to the group; the most constrained driver still sets its ceiling.
+    assert group_usage["xmax_mm"] is None
+    assert group_usage["rated_power_w"] is None
+    assert group_usage["max_voltage_v"] is None
+    assert group_usage["physical_driver_limits"] == {
+        name: {"xmax_mm": 4., "rated_power_w": 60., "max_voltage_v": 24., "member_weight": 1.}
+        for name in ("a", "b")
+    }
     assert group_usage["excursion_fraction"] == pytest.approx(single_usage["excursion_fraction"])
     assert group_usage["power_fraction"] == pytest.approx(single_usage["power_fraction"])
     results["channels"]["b"]["metadata"]["driver"]["spec"]["xmax_mm"] = 5.
-    with pytest.raises(ValueError, match="inconsistent driver ratings"):
-        recombine_stored_results(results, bases,
-            ChannelCombineSpec(members=["bass", "c"], crossovers_hz=[500.]), request)
+    heterogeneous = recombine_stored_results(results, bases,
+        ChannelCombineSpec(members=["bass", "c"], crossovers_hz=[500.], level_match=False), request)
+    physical = recombine_stored_results(results, bases,
+        ChannelCombineSpec(members=["b", "c"], crossovers_hz=[500.], level_match=False), ungrouped)
+    heterogeneous_combine = heterogeneous["channels"]["combined"]["metadata"]["combine"]
+    physical_combine = physical["channels"]["combined"]["metadata"]["combine"]
+    assert heterogeneous_combine["channels"]["bass"]["gain_max_db"] == pytest.approx(
+        physical_combine["channels"]["b"]["gain_max_db"])
+    ratings = heterogeneous_combine["max_output"]["members"]["bass"]["physical_driver_limits"]
+    assert ratings["a"]["xmax_mm"] == 4.
+    assert ratings["b"]["xmax_mm"] == 5.
 
 
 def test_field_plane_synthesizes_group_traces_with_one_branch_weight(monkeypatch):
