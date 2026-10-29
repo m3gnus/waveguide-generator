@@ -26,6 +26,7 @@ import { osseFeatures, osseFormula, type OsseFeatures } from './osseFeatures';
 import { NATIVE_FAMILIES, designForFamily, mergeDesignForOsseFeatures, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { defaultPolarUi, polarConfigFromUi, resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
+import { stubProfileServer } from '../testing/customProfileServer';
 import { ParamPanel, RealizedDimensionsSection, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
 
 /**
@@ -1532,7 +1533,8 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelectorAll('#cad-solve-frequency-mode')).toHaveLength(1);
   });
 
-  it('keeps the single FREEFORM importer available for a linked design in CAD mode', () => {
+  it('keeps the single FREEFORM importer available for a linked design in CAD mode', async () => {
+    stubProfileServer();
     act(() => {
       useDesignStore.getState().setFamily('FREEFORM');
       setCadReady();
@@ -1548,8 +1550,16 @@ describe('ParamPanel inventory UX', () => {
       textarea.dispatchEvent(new Event('input', { bubbles: true }));
     });
     act(() => host.querySelector<HTMLButtonElement>('.point-paste button')!.click());
+    // The paste is previewed first; nothing changes until it is accepted.
+    await vi.waitFor(async () => {
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+      expect([...host.querySelectorAll<HTMLButtonElement>('.point-paste button')].find((button) => button.textContent === 'Accept')?.disabled).toBe(false);
+    });
+    expect(useDesignStore.getState().design.profile_h!.points.at(-1)!.r).toBe(140);
+    act(() => [...host.querySelectorAll<HTMLButtonElement>('.point-paste button')].find((button) => button.textContent === 'Accept')!.click());
     expect(useDesignStore.getState().design.profile_h!.points.at(-1)!.r).toBe(180);
-    expect(useDesignStore.getState().design.profile_v!.points[0].r).toBe(18);
+    // One shared table: the inactive vertical profile is kept as it was.
+    expect(useDesignStore.getState().design.profile_v!.points[0].r).toBe(12.7);
   });
 
   it('drops the waveguide definition for geometry that was authored in CAD', () => {
@@ -2734,7 +2744,9 @@ describe('ParamPanel inventory UX', () => {
       root.render(withQueryClient(<ParamPanel tab="geometry" />));
     });
     expect(host.querySelector('[aria-label="Generated bore profile"]')).not.toBeNull();
-    expect(host.querySelectorAll('.editable-parameter-table')).toHaveLength(3);
+    // A new Custom profile has one table for both planes, plus the stations.
+    expect(host.querySelectorAll('.editable-parameter-table')).toHaveLength(2);
+    expect(host.querySelectorAll('.custom-profile-table')).toHaveLength(1);
     expect(host.querySelectorAll('.point-paste textarea')).toHaveLength(0);
     expect(host.querySelector('[data-section="Import points"] .section-head')?.getAttribute('aria-expanded')).toBe('false');
     act(() => host.querySelector<HTMLButtonElement>('[data-section="Import points"] .section-head')!.click());
@@ -2749,6 +2761,10 @@ describe('ParamPanel inventory UX', () => {
 
   it('groups FREEFORM controls in order, summarizes each plane and leaves saved designs unchanged', () => {
     act(() => useDesignStore.getState().setFamily('FREEFORM'));
+    // A new design shares one table; a separate vertical profile shows its own group.
+    expect(host.querySelector('[data-section="Vertical profile"]')).toBeNull();
+    expect(host.querySelector('[data-section="Horizontal profile"] .section-summary')?.textContent).toBe('140 mm · 2 anchors · both planes');
+    act(() => useDesignStore.getState().replaceDocument(designForFamily('FREEFORM')));
     const before = serializeDesign(useDesignStore.getState().design);
     const profile = host.querySelector('[data-section="Profile"]')!;
     expect([...profile.querySelectorAll('[data-section]')].map((group) => group.getAttribute('data-section'))).toEqual([
@@ -2763,7 +2779,7 @@ describe('ParamPanel inventory UX', () => {
     ] as const) {
       expect([...profile.querySelectorAll(`[data-section="${group}"] [data-parameter-id]`)].map((field) => field.getAttribute('data-parameter-id'))).toEqual(ids);
     }
-    expect(profile.querySelector('[data-section="Horizontal profile"] .section-summary')?.textContent).toBe('140 mm · 0 points');
+    expect(profile.querySelector('[data-section="Horizontal profile"] .section-summary')?.textContent).toBe('140 mm · 2 anchors');
     expect(profile.querySelector('[data-section="Vertical profile"] .section-summary')?.textContent).toBe('matches horizontal');
     expect(profile.querySelectorAll('.position-note')).toHaveLength(1);
     expect(profile.querySelector('.profile-inspection > p')).toBeNull();
@@ -2771,17 +2787,24 @@ describe('ParamPanel inventory UX', () => {
     expect(profile.querySelector('.profile-inspection')).toBeNull();
     expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
     act(() => useDesignStore.getState().updateValue('profile_v.points', [{ t: 0, r: 12.7 }, { t: .5, r: 60 }, { t: 1, r: 100 }]));
-    expect(profile.querySelector('[data-section="Vertical profile"] .section-summary')?.textContent).toBe('100 mm · 1 points');
+    expect(profile.querySelector('[data-section="Vertical profile"] .section-summary')?.textContent).toBe('100 mm · 3 anchors');
   });
 
   it('explains imported endpoint angle overrides beside the affected FREEFORM fields (B4)', () => {
     act(() => {
-      useDesignStore.getState().setFamily('FREEFORM');
+      useDesignStore.getState().replaceDocument(designForFamily('FREEFORM'));
       useDesignStore.getState().updateValue('profile_v.points', [{ t: 0, r: 12.7, angle_deg: 15 }, { t: 1, r: 100, angle_deg: 65 }]);
     });
-    expect(host.querySelector('[data-parameter-id="freeform.throatAngle"]')?.textContent).toContain('Overridden by the angle on the imported throat point.');
-    expect(host.querySelector('[data-parameter-id="freeform.mouthAngleV"]')?.textContent).toContain('Overridden by the angle on the imported mouth point.');
-    expect(host.querySelector('[data-parameter-id="freeform.mouthAngleH"]')?.textContent).not.toContain('Overridden');
+    expect(host.querySelector('[data-parameter-id="freeform.throatAngle"]')?.textContent).toContain('Ignored where the angle on the V throat anchor sets the direction instead.');
+    const mouthV = host.querySelector('[data-parameter-id="freeform.mouthAngleV"]')!;
+    expect(mouthV.textContent).toContain('Not used: the angle on the V mouth anchor sets this direction');
+    expect(mouthV.querySelector('input')!.disabled).toBe(true);
+    expect(Number(mouthV.querySelector('input')!.value)).toBe(60);
+    expect(host.querySelector('[data-parameter-id="freeform.mouthAngleH"]')?.textContent).not.toContain('Not used');
+    // Precedence also covers explicit handles and corner chords.
+    act(() => useDesignStore.getState().updateValue('profile_h.points', [{ t: 0, r: 12.7, join: 'corner' }, { t: 1, r: 140, handle_in: [-10, -5] }]));
+    expect(host.querySelector('[data-parameter-id="freeform.throatAngle"]')?.textContent).toContain('the chord from the H throat corner');
+    expect(host.querySelector('[data-parameter-id="freeform.mouthAngleH"]')?.textContent).toContain('the explicit mouth handle in H');
   });
 
   it('states the λ/6 mesh limit for the sweep this design will actually solve', () => {
@@ -2811,7 +2834,8 @@ describe('ParamPanel inventory UX', () => {
     expect(hint()).toBeNull();
   });
 
-  it('changes FREEFORM length without moving or dropping normalized anchors', () => {
+  it('changes FREEFORM length only through Stretch profile or Move mouth', async () => {
+    stubProfileServer();
     act(() => {
       useDesignStore.getState().setFamily('FREEFORM');
       useDesignStore.getState().updateValue('profile_h.points', [
@@ -2827,10 +2851,20 @@ describe('ParamPanel inventory UX', () => {
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
     act(() => input.blur());
+    // The generic field cannot bypass the choice.
+    expect(useDesignStore.getState().design.length).toBe(120);
+    const choice = () => [...host.querySelectorAll<HTMLButtonElement>('[data-parameter-id="freeform.length"] button')];
+    expect(choice().map((button) => button.textContent)).toEqual(['Stretch profile', 'Move mouth', 'Cancel']);
+    act(() => choice()[0].click());
+    await vi.waitFor(async () => {
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+      expect(choice().find((button) => button.textContent === 'Accept')?.disabled).toBe(false);
+    });
+    act(() => choice().find((button) => button.textContent === 'Accept')!.click());
     expect(useDesignStore.getState().design.length).toBe(60);
     expect(useDesignStore.getState().design.profile_h!.points).toEqual(before);
     expect(useDesignStore.getState().design.cross_sections).toEqual(stationsBefore);
-    expect(host.textContent).toContain('Point and station positions are measured from the throat along Length, before Scale. Changing Length stretches them proportionally.');
+    expect(host.textContent).toContain('Changing Length asks whether to stretch the profile or move only the mouth.');
   });
 });
 

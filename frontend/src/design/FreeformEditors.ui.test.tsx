@@ -3,12 +3,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore, type CrossSectionStation, type FreeformPoint } from '../stores/design';
 import type { ParameterDefinition } from './parameterRegistry';
-import { EditableLookupTable, EditablePointTable, EditableStationTable, FreeformPointImport, FREEFORM_IMPORT_HINT } from './FreeformEditors';
-
-const pointField: ParameterDefinition = {
-  id: 'freeform.pointsH', legacyKey: 'profile_h.points', section: 'Profile',
-  label: 'Horizontal points', kind: 'table',
-};
+import { stubProfileServer } from '../testing/customProfileServer';
+import { CustomProfileLengthField, CustomProfilePaste, CustomProfileTable, EditableLookupTable, EditableStationTable, FREEFORM_IMPORT_HINT } from './FreeformEditors';
 
 const stationField: ParameterDefinition = {
   id: 'freeform.crossSections', legacyKey: 'cross_sections', section: 'Profile',
@@ -135,26 +131,6 @@ describe('FREEFORM numeric tables', () => {
     act(() => label.dispatchEvent(new PointerEvent('lostpointercapture', { bubbles: true, pointerId: 1 })));
     act(() => useDesignStore.getState().undo());
     expect(useDesignStore.getState().design.lookup_profile).toEqual([[0, 12.7], [50, 20], [120, 140]]);
-  });
-
-  it('explains and reverts invalid or blank point values without updating the design', () => {
-    const points: FreeformPoint[] = [{ t: 0, r: 12.7 }, { t: .5, r: 60 }, { t: 1, r: 140 }];
-    const updateValue = vi.spyOn(useDesignStore.getState(), 'updateValue');
-    act(() => root.render(<EditablePointTable field={pointField} points={points}/>));
-    expect(host.querySelector('.position-note')).toBeNull();
-    const z = inputWithLabel(host, 'H point 1 z');
-
-    act(() => enterDraft(z, '999'));
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe('Must be between 1 and 119 mm.');
-    act(() => z.blur());
-    expect(z.value).toBe('60.0000');
-    expect(updateValue).not.toHaveBeenCalled();
-
-    act(() => enterDraft(z, ''));
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe('This value is required.');
-    act(() => z.blur());
-    expect(z.value).toBe('60.0000');
-    expect(updateValue).not.toHaveBeenCalled();
   });
 
   it('explains and reverts out-of-range, blank, or unparsable station values without updating the design', () => {
@@ -284,44 +260,16 @@ describe('FREEFORM numeric tables', () => {
     expect(results[0]).toBe(percent / 100);
   });
 
-  it('moves only the selected point by distance, rejects duplicates and crossings, and undoes the edit', () => {
-    const points: FreeformPoint[] = [{ t: 0, r: 12.7 }, { t: .25, r: 30 }, { t: .75, r: 80 }, { t: 1, r: 140 }];
-    useDesignStore.getState().replaceDocument({ ...designForFamily('FREEFORM'), length: 200, profile_h: { points } });
-    const before = JSON.stringify(serializeDesign(useDesignStore.getState().design));
-    const render = () => act(() => root.render(<EditablePointTable field={pointField} points={useDesignStore.getState().design.profile_h!.points}/>));
-    render();
-    const z = inputWithLabel(host, 'H point 1 z');
-    act(() => z.focus()); act(() => z.blur());
-    expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(before);
-    act(() => host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
-    for (const [value, message] of [['150', 'match another point'], ['160', 'no crossing'], ['0', 'match another point']]) {
-      const distance = inputWithLabel(host, 'H point 1 distance from previous');
-      act(() => enterDraft(distance, value));
-      expect(host.textContent).toContain(message);
-      act(() => distance.blur());
-      expect(useDesignStore.getState().design.profile_h!.points).toEqual(points);
-    }
-    const distance = inputWithLabel(host, 'H point 1 distance from previous');
-    act(() => enterDraft(distance, '60')); act(() => distance.blur()); render();
-    expect(useDesignStore.getState().design.profile_h!.points).toEqual([points[0], { t: .3, r: 30 }, points[2], points[3]]);
-    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
-    act(() => useDesignStore.getState().undo());
-    expect(useDesignStore.getState().design.profile_h!.points).toEqual(points);
-  });
-
-  it.each(['station', 'point', 'distance', 'radius', 'angle'] as const)('applies the same limits to typed and scrubbed %s values and groups a scrub into one undo', (kind) => {
+  it.each(['station'] as const)('applies the same limits to typed and scrubbed %s values and groups a scrub into one undo', (kind) => {
     const points: FreeformPoint[] = [{ t: 0, r: 12.7 }, { t: .25, r: 30, angle_deg: 20 }, { t: .75, r: 80 }, { t: 1, r: 140 }];
     const initial = { ...designForFamily('FREEFORM'), length: 200, profile_h: { points }, cross_sections: [
       { t: 0, shape: 'ellipse' as const }, { t: .25, shape: 'ellipse' as const }, { t: .75, shape: 'ellipse' as const }, { t: 1, shape: 'ellipse' as const },
     ] };
     useDesignStore.getState().replaceDocument(initial);
-    const render = () => act(() => root.render(kind === 'station'
-      ? <EditableStationTable field={stationField} stations={useDesignStore.getState().design.cross_sections!}/>
-      : <EditablePointTable field={pointField} points={useDesignStore.getState().design.profile_h!.points}/>));
+    const render = () => act(() => root.render(<EditableStationTable field={stationField} stations={useDesignStore.getState().design.cross_sections!}/>));
     render();
-    if (kind === 'distance') act(() => host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
-    const labelText = kind === 'station' ? 'Station 2 position' : `H point 1 ${kind === 'point' ? 'z' : kind === 'distance' ? 'distance from previous' : kind}`;
-    const bad = kind === 'radius' ? '0' : kind === 'angle' ? '90' : '150';
+    const labelText = `${kind === 'station' ? 'Station' : ''} 2 position`.trim();
+    const bad = '150';
     const input = inputWithLabel(host, labelText);
     act(() => enterDraft(input, bad));
     expect(input.getAttribute('aria-invalid')).toBe('true');
@@ -337,7 +285,7 @@ describe('FREEFORM numeric tables', () => {
       act(() => frames.splice(0).forEach((frame) => frame(0))); render();
     };
     act(() => label.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1, clientX: 0 })));
-    move(kind === 'radius' ? -300 : kind === 'angle' ? 700 : 1000);
+    move(1000);
     expect(useDesignStore.getState().design).toEqual(initial);
     move(10); move(20);
     act(() => label.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 })));
@@ -349,146 +297,217 @@ describe('FREEFORM numeric tables', () => {
 
 });
 
-describe('FREEFORM shared import and point controls', () => {
+describe('Custom profile table, insertion, paste and Length', () => {
   let host: HTMLDivElement;
   let root: Root;
-  const paste = (text: string) => act(() => {
-    const textarea = host.querySelector('textarea')!;
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, text);
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-  });
-  const importButton = () => host.querySelector<HTMLButtonElement>('.point-paste button')!;
-  const choose = (value: string) => act(() => host.querySelector<HTMLInputElement>(`input[value="${value}"]`)!.click());
+  const hField: ParameterDefinition = { id: 'freeform.interiorH', legacyKey: 'interiorH', path: 'profile_h.points', section: 'Profile', label: 'Horizontal profile', kind: 'table' };
+  const vField: ParameterDefinition = { ...hField, id: 'freeform.interiorV', legacyKey: 'interiorV', path: 'profile_v.points', label: 'Vertical profile' };
+  const lengthField: ParameterDefinition = { id: 'freeform.length', legacyKey: 'length', path: 'length', section: 'Profile', label: 'Length', kind: 'number', min: 20, max: 1_000 };
+  const button = (text: string) => [...host.querySelectorAll('button')].find((candidate) => candidate.textContent === text)!;
+  const settle = async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); }); };
+  async function accept() {
+    await vi.waitFor(async () => { await settle(); expect(button('Accept')?.disabled).toBe(false); });
+    act(() => button('Accept').click());
+  }
+  const commitDraft = (label: string, value: string) => { const input = inputWithLabel(host, label); act(() => enterDraft(input, value)); act(() => input.blur()); };
+  function load(design = designForFamily('FREEFORM')) {
+    act(() => useDesignStore.getState().replaceDocument(design));
+  }
+
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     resetDesignStore();
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  });
+  afterEach(() => { act(() => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  it('shows every anchor with endpoints, joins, angles and the resolved state', async () => {
+    stubProfileServer();
+    const design = designForFamily('FREEFORM');
+    design.profile_h!.points = [{ t: 0, r: 12.7 }, { t: .5, r: 60, join: 'corner', angle_deg: 25, handle_out: [6, 3] }, { t: 1, r: 140 }];
+    load(design);
+    act(() => root.render(<CustomProfileTable field={hField} plane="H" />));
+    await vi.waitFor(async () => { await settle(); expect(host.querySelector('[data-anchor-index="1"] .anchor-state')?.textContent).toContain('pinned out'); });
+    expect([...host.querySelectorAll('th')].map((th) => th.textContent)).toEqual(['z (mm)', 'r (mm)', 'Join', 'In (°)', 'Out (°)', 'State', '']);
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(3);
+    expect(inputWithLabel(host, 'H throat z').disabled).toBe(true);
+    expect(inputWithLabel(host, 'H mouth z').disabled).toBe(true);
+    expect(inputWithLabel(host, 'H throat angle in').disabled).toBe(true);
+    expect(inputWithLabel(host, 'H mouth angle out').disabled).toBe(true);
+    expect(inputWithLabel(host, 'H point 1 z').value).toBe('60.0000');
+    expect(inputWithLabel(host, 'H point 1 angle in').value).toBe('25.00');
+    expect(inputWithLabel(host, 'H point 1 angle out').placeholder).toBe('= in');
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="H point 1 join"]')!.value).toBe('corner');
+    expect(host.querySelector('[data-anchor-index="0"] .anchor-state')?.textContent).toContain('profile throat angle');
+    expect(host.querySelector('button[aria-label="Delete H throat"]')).toBeNull();
+    expect(host.textContent).toContain('Separate vertical profile');
+    expect(host.querySelector('.custom-profile-scroll table')).not.toBeNull();
+  });
+
+  it('inserts on the curve by default, previews both measurements, and accepts as one Undo step', async () => {
+    const server = stubProfileServer();
+    load();
+    const initial = serializeDesign(useDesignStore.getState().design);
+    act(() => root.render(<CustomProfileTable field={hField} plane="H" />));
+    commitDraft('Insert H anchor at z', '40');
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="H insertion mode"]')!.value).toBe('exact');
+    act(() => button('Add point').click());
+    await vi.waitFor(async () => { await settle(); expect(host.textContent).toContain('Generated profile change'); expect(host.textContent).toContain('largest radius change 0 mm'); });
+    expect(host.textContent).toContain('H: curve deviation 0.125 mm at z = 40 mm over the full profile');
+    expect(host.textContent).toContain('Sampled estimate over 16390 z values, not a certified maximum.');
+    expect(host.textContent).toContain('Exact insertion at z = 40 mm in H');
+    const insert = server.mock.calls.find(([url]) => String(url).endsWith('/insert'))!;
+    expect(JSON.parse(String(insert[1]?.body))).toMatchObject({ plane: 'H', z_mm: 40, mode: 'exact' });
+    expect(serializeDesign(useDesignStore.getState().design)).toEqual(initial);
+    await accept();
+    const points = useDesignStore.getState().design.profile_h!.points;
+    expect(points).toHaveLength(3);
+    expect(points[1]).toEqual({ t: 40 / 120, r: 50, join: 'smooth', handle_in: [-5, -2], handle_out: [5, 2] });
+    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
+    expect(host.textContent).toContain('Undo restores the previous profile.');
+    act(() => useDesignStore.getState().undo());
+    expect(serializeDesign(useDesignStore.getState().design)).toEqual(initial);
+    act(() => useDesignStore.getState().redo());
+    expect(useDesignStore.getState().design.profile_h!.points[1].handle_out).toEqual([5, 2]);
+  });
+
+  it('cancels without touching the document or history and refuses invalid input locally', async () => {
+    stubProfileServer();
+    const design = designForFamily('FREEFORM');
+    design.profile_h!.points = [{ t: 0, r: 12.7 }, { t: .5, r: 60 }, { t: 1, r: 140 }];
+    load(design);
+    act(() => root.render(<CustomProfileTable field={hField} plane="H" />));
+    const radius = inputWithLabel(host, 'H point 1 radius');
+    act(() => enterDraft(radius, '0'));
+    expect(radius.getAttribute('aria-invalid')).toBe('true');
+    expect(host.textContent).toContain('Radius must be greater than 0 mm.');
+    act(() => radius.blur());
+    const z = inputWithLabel(host, 'H point 1 z');
+    act(() => enterDraft(z, '130'));
+    expect(host.textContent).toContain('strictly between its neighbours');
+    act(() => z.blur());
+    commitDraft('H point 1 radius', '70');
+    await vi.waitFor(async () => { await settle(); expect(button('Accept')).toBeTruthy(); });
+    act(() => button('Cancel').click());
+    expect(useDesignStore.getState().design.profile_h!.points[1].r).toBe(60);
+    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(0);
+  });
+
+  it('shows a server refusal and keeps the current design', async () => {
+    stubProfileServer({ refuse: 'FREEFORM profileH span 1 has a handle that reverses z' });
+    load();
+    act(() => root.render(<CustomProfileTable field={hField} plane="H" />));
+    act(() => { const select = host.querySelector<HTMLSelectElement>('select[aria-label="H mouth join"]')!; Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, 'corner'); select.dispatchEvent(new Event('change', { bubbles: true })); });
+    await vi.waitFor(async () => { await settle(); expect(host.textContent).toContain('Not valid: FREEFORM profileH span 1 has a handle that reverses z'); });
+    expect(button('Accept').disabled).toBe(true);
+    expect(useDesignStore.getState().design.profile_h!.points[1]).not.toHaveProperty('join');
+  });
+
+  it('deletes an interior anchor and releases its neighbours\' facing handles after preview', async () => {
+    stubProfileServer();
+    const design = designForFamily('FREEFORM');
+    design.profile_h!.points = [{ t: 0, r: 12.7, handle_out: [3, 1] }, { t: .5, r: 60 }, { t: 1, r: 140, handle_in: [-4, -2] }];
+    load(design);
+    act(() => root.render(<CustomProfileTable field={hField} plane="H" />));
+    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Delete H point 1"]')!.click());
+    await vi.waitFor(async () => { await settle(); expect(host.textContent).toContain('Released the facing handles'); });
+    await accept();
+    expect(useDesignStore.getState().design.profile_h!.points).toEqual([{ t: 0, r: 12.7 }, { t: 1, r: 140 }]);
+  });
+
+  it('pastes lookup-style rows as corners by default and explains semicolon rows', async () => {
+    stubProfileServer();
+    load();
+    act(() => root.render(<CustomProfilePaste />));
+    expect(host.textContent).toContain(FREEFORM_IMPORT_HINT);
+    const paste = (text: string) => act(() => {
+      const textarea = host.querySelector('textarea')!;
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, text);
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    paste('0;12,7\n120;140');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('for z and r in mm, separate them with a comma, tab or space');
+    paste('z_mm,r_mm\n0,12.7\n60,40\n120,140');
+    expect(host.querySelector<HTMLInputElement>('input[name$="-join"]:checked')!.parentElement!.textContent).toContain('Corners');
+    act(() => button('Import into the horizontal profile').click());
+    await accept();
+    const design = useDesignStore.getState().design;
+    expect(design.profile_h!.points).toEqual([{ t: 0, r: 12.7, join: 'corner' }, { t: .5, r: 40, join: 'corner' }, { t: 1, r: 140, join: 'corner' }]);
+    expect(design.profile_v!.points[0].r).toBe(12.7);
+    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
+  });
+
+  it('offers only Stretch profile or Move mouth for a Length change, each previewed', async () => {
+    stubProfileServer();
+    const design = designForFamily('FREEFORM');
+    design.profile_h!.points = [{ t: 0, r: 12.7 }, { t: .5, r: 60, handle_out: [10, 2] }, { t: 1, r: 140 }];
+    load(design);
+    act(() => root.render(<CustomProfileLengthField field={lengthField} />));
+    commitDraft('Length', '50');
+    expect(useDesignStore.getState().design.length).toBe(120);
+    act(() => button('Move mouth').click());
+    await vi.waitFor(async () => { await settle(); expect(host.textContent).toContain('at or beyond the new mouth'); });
+    act(() => button('Close').click());
+    commitDraft('Length', '240');
+    act(() => button('Stretch profile').click());
+    await accept();
+    const stretched = useDesignStore.getState().design;
+    expect(stretched.length).toBe(240);
+    expect(stretched.profile_h!.points[1]).toEqual({ t: .5, r: 60, handle_out: [20, 2] });
+    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
+    commitDraft('Length', '300');
+    act(() => button('Move mouth').click());
+    await accept();
+    expect(Math.abs(useDesignStore.getState().design.profile_h!.points[1].t * 300 - 120)).toBeLessThan(1e-12);
+    expect(useDesignStore.getState().design.profile_h!.points[1].handle_out).toEqual([20, 2]);
+  });
+
+  it('separates V from a new shared design without changing it, keeps V when shared again, and reconciles the throat explicitly', async () => {
+    stubProfileServer();
     useDesignStore.getState().setFamily('FREEFORM');
     useDesignStore.temporal.getState().clear();
-    host = document.createElement('div'); document.body.append(host); root = createRoot(host);
-    act(() => root.render(<FreeformPointImport />));
-  });
-  afterEach(() => { act(() => root.unmount()); host.remove(); });
-
-  it('explains the format and disabled import, and shows no summary before a valid parse (B2, B7)', () => {
-    expect(host.textContent).toContain(FREEFORM_IMPORT_HINT);
-    expect(importButton().disabled).toBe(true);
-    expect(host.textContent).toContain('Paste valid points to import.');
-    expect(importButton().getAttribute('aria-describedby')).toBe(host.querySelector('.disabled-reason')!.id);
-    expect(host.querySelector('.paste-meta')).toBeNull();
-    paste('not points');
-    expect(host.querySelector('[role="alert"]')).not.toBeNull();
-    expect(host.querySelector('.paste-meta')).toBeNull();
-    expect(host.textContent).not.toContain('—');
-  });
-
-  it('clears parse and length errors as the paste or length choice changes (B1)', () => {
-    paste('0 12.7\n10 30');
-    expect(importButton().disabled).toBe(true);
-    expect(host.textContent).toContain('Imported length must be between 20 and 1000 mm.');
-    act(() => host.querySelectorAll<HTMLInputElement>('fieldset')[1].querySelectorAll('input')[1].click());
-    expect(host.querySelector('[role="alert"]')).toBeNull();
-    expect(importButton().disabled).toBe(false);
-    paste('0 bad\n120 200');
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('non-numeric');
-    paste('0 12.7\n120 200');
-    expect(host.querySelector('[role="alert"]')).toBeNull();
-    expect(importButton().disabled).toBe(false);
+    expect(useDesignStore.getState().design.shared_profile).toBe(true);
+    act(() => root.render(<><CustomProfileTable field={hField} plane="H" /><CustomProfileTable field={vField} plane="V" /></>));
+    expect(host.textContent).toContain('Profile anchors (both planes)');
+    // Change the H throat while shared: the inactive V keeps its stored throat.
+    const toggle = () => host.querySelector<HTMLInputElement>('.profile-separate-vertical input[type="checkbox"]')!;
+    commitDraft('H throat radius', '15');
+    await accept();
+    expect(useDesignStore.getState().design.profile_v!.points[0].r).toBe(12.7);
+    act(() => toggle().click());
+    expect(host.textContent).toContain('Use H throat for V first');
+    act(() => button('Use H throat for V').click());
+    await accept();
+    expect(useDesignStore.getState().design.profile_v!.points[0].r).toBe(15);
+    expect(useDesignStore.getState().design.shared_profile).toBe(true);
+    act(() => toggle().click());
+    await accept();
+    expect(useDesignStore.getState().design.shared_profile).toBe(false);
+    expect(useDesignStore.getState().design.profile_v).toEqual(useDesignStore.getState().design.profile_h);
+    act(() => toggle().click());
+    await accept();
+    expect(useDesignStore.getState().design.shared_profile).toBe(true);
+    expect(useDesignStore.getState().design.profile_v!.points[0].r).toBe(15);
+    // Each logical operation was one Undo step.
+    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(4);
   });
 
-  it('forces Both for compact two-plane data and retains both distinct profiles (B3)', () => {
-    choose('V');
-    paste('0;1.5;1.5\n6;5;4\n12;20;10');
-    expect(host.textContent).toContain('This z;H;V paste contains both planes, so it imports into Both.');
-    expect(host.querySelector<HTMLInputElement>('input[value="both"]')!.checked).toBe(true);
-    expect([...host.querySelectorAll<HTMLInputElement>('fieldset:first-of-type input')].every((input) => input.disabled)).toBe(true);
-    expect(importButton().textContent).toBe('Import into both profiles');
-    act(() => importButton().click());
-    const design = useDesignStore.getState().design;
-    expect(design.profile_h!.points).toEqual([{ t: 0, r: 15 }, { t: .5, r: 50 }, { t: 1, r: 200 }]);
-    expect(design.profile_v!.points).toEqual([{ t: 0, r: 15 }, { t: .5, r: 40 }, { t: 1, r: 100 }]);
-  });
-
-  it('explains conflicting compact throat radii without changing the design (B5)', () => {
-    const before = serializeDesign(useDesignStore.getState().design);
-    paste('0;1.5;2\n12;20;10');
-    expect(host.textContent).toContain('The throat must be one circle.');
-    expect(importButton().disabled).toBe(true);
-    expect(serializeDesign(useDesignStore.getState().design)).toEqual(before);
-  });
-
-  it.each(['H', 'V'])('mirrors a %s-only imported throat, preserves the other plane and undoes atomically (B5, B8)', (plane) => {
-    const before = structuredClone(useDesignStore.getState().design);
-    choose(plane);
-    paste('0 18 15\n50 60\n200 180 65');
-    act(() => importButton().click());
-    const design = useDesignStore.getState().design;
-    const selected = plane === 'H' ? design.profile_h! : design.profile_v!;
-    const other = plane === 'H' ? design.profile_v! : design.profile_h!;
-    const oldOther = plane === 'H' ? before.profile_v! : before.profile_h!;
-    expect(selected.points).toEqual([{ t: 0, r: 18, angle_deg: 15 }, { t: .25, r: 60 }, { t: 1, r: 180, angle_deg: 65 }]);
-    expect(other.points).toEqual([{ ...oldOther.points[0], r: 18 }, ...oldOther.points.slice(1)]);
-    expect(design.length).toBe(200);
-    expect(host.querySelector('textarea')!.value).toBe('');
-    expect(host.textContent).toContain(`Imported 3 points into the ${plane === 'H' ? 'horizontal' : 'vertical'} profile. Undo restores the previous profile.`);
-    expect(importButton().disabled).toBe(true);
-    act(() => importButton().click());
-    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
-    act(() => useDesignStore.getState().undo());
-    expect(useDesignStore.getState().design).toEqual(before);
-  });
-
-  it('groups named radios, hides equal-length choices and stretches normalized points to the kept length (B6)', () => {
-    paste('0 12.7\n60 60\n120 200');
-    expect(host.querySelectorAll('fieldset')).toHaveLength(1);
-    paste('0 12.7\n100 60\n200 200');
-    const fieldsets = [...host.querySelectorAll('fieldset')];
-    expect(fieldsets).toHaveLength(2);
-    for (const fieldset of fieldsets) {
-      const names = [...fieldset.querySelectorAll('input')].map((input) => input.name);
-      expect(names[0]).toBeTruthy(); expect(new Set(names).size).toBe(1);
-      expect(fieldset.querySelector('legend')).not.toBeNull();
-      expect(fieldset.querySelectorAll('.ui-check').length).toBe(names.length);
-    }
-    expect(fieldsets[0].querySelector('input')!.name).not.toBe(fieldsets[1].querySelector('input')!.name);
-    expect(host.textContent).toContain('Use pasted length (200 mm)');
-    expect(host.textContent).toContain('Keep 120 mm and stretch the pasted points to fit');
-    act(() => fieldsets[1].querySelectorAll('input')[1].click());
-    act(() => importButton().click());
-    expect(useDesignStore.getState().design.length).toBe(120);
-    expect(useDesignStore.getState().design.profile_h!.points[1].t).toBe(.5);
-  });
-
-  it('can apply single-plane data to Both without changing stations', () => {
-    const stations = structuredClone(useDesignStore.getState().design.cross_sections);
-    choose('both'); paste('0 16\n60 45\n120 200');
-    act(() => importButton().click());
-    const design = useDesignStore.getState().design;
-    expect(design.profile_h!.points).toEqual(design.profile_v!.points);
-    expect(design.cross_sections).toEqual(stations);
-  });
-
-  it('shows the empty state, inserts in the largest gap and uses auto angles and a ToggleRow', () => {
-    const render = () => act(() => root.render(<EditablePointTable field={pointField} points={useDesignStore.getState().design.profile_h!.points} />));
-    render();
-    expect(host.querySelector('[role="group"]')?.getAttribute('aria-label')).toBe(pointField.label);
-    expect(host.textContent).toContain('No spline points. The curve runs from throat to mouth, shaped by the throat and mouth angles. Add point inserts one in the largest gap.');
-    expect([...host.querySelectorAll('th')].map((th) => th.textContent)).toEqual(['z (mm)', 'r (mm)', 'Angle (°)', '']);
-    expect(host.querySelector('.point-paste')).toBeNull();
-    act(() => host.querySelector<HTMLButtonElement>('.editable-parameter-table > button')!.click());
-    render();
-    expect(useDesignStore.getState().design.profile_h!.points[1].t).toBe(.5);
-    expect(host.textContent).not.toContain('No spline points.');
-    expect(inputWithLabel(host, 'H point 1 angle').placeholder).toBe('auto');
-    expect(host.querySelector('.toggle-row')?.textContent).toContain('Show spacing column');
-    act(() => host.querySelector<HTMLInputElement>('.toggle-row input')!.click());
-    expect(host.querySelector('th:nth-child(2)')?.textContent).toBe('Spacing (mm)');
-    expect(host.querySelector('button[aria-label="Remove H point 1"]')?.getAttribute('type')).toBe('button');
-  });
-
-  it('explains why Add point is disabled at the limit (B7)', () => {
-    const points = Array.from({ length: 64 }, (_, index) => ({ t: index / 63, r: 12.7 + index }));
-    act(() => root.render(<EditablePointTable field={pointField} points={points} />));
-    expect(host.querySelector<HTMLButtonElement>('.editable-parameter-table > button')!.disabled).toBe(true);
-    expect(host.textContent).toContain('A profile supports at most 62 spline points. Remove a point before adding another.');
+  it('asks whether to restore a different stored V or start it from H, never overwriting it silently', async () => {
+    stubProfileServer();
+    const design = { ...designForFamily('FREEFORM'), shared_profile: true };
+    design.profile_v!.points = [{ t: 0, r: 12.7 }, { t: .5, r: 33 }, { t: 1, r: 90 }];
+    load(design);
+    act(() => root.render(<CustomProfileTable field={hField} plane="H" />));
+    act(() => host.querySelector<HTMLInputElement>('.profile-separate-vertical input[type="checkbox"]')!.click());
+    expect(button('Restore stored vertical profile')).toBeTruthy();
+    act(() => button('Restore stored vertical profile').click());
+    await vi.waitFor(async () => { await settle(); expect(host.textContent).toContain('Restores the stored vertical profile.'); });
+    act(() => button('Cancel').click());
+    expect(useDesignStore.getState().design.shared_profile).toBe(true);
+    act(() => host.querySelector<HTMLInputElement>('.profile-separate-vertical input[type="checkbox"]')!.click());
+    act(() => button('Start from horizontal').click());
+    await accept();
+    expect(useDesignStore.getState().design.shared_profile).toBe(false);
+    expect(useDesignStore.getState().design.profile_v).toEqual(design.profile_h);
   });
 });

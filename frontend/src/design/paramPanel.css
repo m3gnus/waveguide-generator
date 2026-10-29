@@ -127,6 +127,17 @@
 .editable-parameter-table td input, .editable-parameter-table td select { width: 100%; min-width: 0; height: 20px; padding: 0 2px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg); font: var(--text-micro) var(--mono); }
 .editable-parameter-table td .field-row { display: block; min-height: 0; }
 .editable-parameter-table td .field-row > .modified-dot { display: none; }
+.custom-profile-scroll { overflow-x: auto; }
+.custom-profile-table table { min-width: 440px; }
+.custom-profile-table th:nth-child(6), .custom-profile-table td.anchor-state { width: 28%; }
+.custom-profile-table td.anchor-state { color: var(--fg4); white-space: normal; overflow-wrap: anywhere; }
+.custom-profile-insert { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px; border-top: 1px solid var(--hair-soft); }
+.custom-profile-insert > .field-row { flex: 1 1 140px; min-width: 0; }
+.profile-edit-preview, .profile-edit-notice { margin: 4px; }
+.profile-edit-notes { margin: 2px 0; padding-left: 16px; }
+.profile-edit-measure { margin-top: 4px; overflow-wrap: anywhere; }
+.profile-edit-measure > span { color: var(--fg4); }
+.profile-edit-measure p { margin: 2px 0; }
 .editable-parameter-table td .field-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .editable-parameter-table td .number-control { box-sizing: border-box; width: 100%; height: 20px; padding: 0 2px; border: 1px solid var(--hair); background: var(--ctl-grad); }
 .editable-parameter-table td .number-control input { height: auto; padding: 0; border: 0; border-radius: 0; background: transparent; }

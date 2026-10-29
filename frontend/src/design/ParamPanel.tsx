@@ -42,7 +42,7 @@ import { SolveOptionsStoreProvider, useScopedSolveOptions } from '../stores/solv
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { AdaptiveFrequencyControls, FrequencySweepControls, MeshValidationControl, DirectivityMapControls, SolveOptionsControls, solveOptionsSummary, polarSummary, ToggleRow } from './SolveOptionsSections';
 import { ExperimentalBadge } from './ExperimentalBadge';
-import { EditableLookupTable, EditablePointTable, EditableStationTable, FreeformPointImport, FREEFORM_POSITION_NOTE, freeformAngleOverride } from './FreeformEditors';
+import { CustomProfileLengthField, CustomProfilePaste, CustomProfileTable, EditableLookupTable, EditableStationTable, FREEFORM_POSITION_NOTE, freeformAngleDisabledReason, freeformAngleOverride } from './FreeformEditors';
 import { lambdaSixthHint } from './lambdaLimit';
 import { NumberField } from './NumberField';
 import { SelectRow } from './SelectRow';
@@ -472,7 +472,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
   const beginDrag = useDesignStore((state) => state.beginDrag);
   const endDrag = useDesignStore((state) => state.endDrag);
   const value = getAtPath(design, field.path);
-  const modeReason = field.disabledWhen?.(design);
+  const modeReason = field.disabledWhen?.(design) ?? freeformAngleDisabledReason(field, design);
   const disabledReason = field.disabledReason ?? modeReason;
   const disabled = Boolean(disabledReason);
   // Session memory so Off then On, or Opus to 1 to Opus, restores what was set.
@@ -508,8 +508,11 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
       });
       return;
     }
-    if (field.mirrorPaths?.length) {
-      updateValues(Object.fromEntries([field.path, ...field.mirrorPaths].map((path) => [path, next])));
+    // A shared Custom profile keeps its stored vertical profile inactive and untouched.
+    const mirrorPaths = design.formula === 'FREEFORM' && design.shared_profile
+      ? field.mirrorPaths?.filter((path) => !path.startsWith('profile_v.')) : field.mirrorPaths;
+    if (mirrorPaths?.length) {
+      updateValues(Object.fromEntries([field.path, ...mirrorPaths].map((path) => [path, next])));
     } else {
       updateValue(field.path, next);
     }
@@ -525,8 +528,9 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
   if (field.kind === 'table') {
     if (field.id === 'lookup.profile') return <EditableLookupTable field={field} points={design.lookup_profile ?? []} />;
     if (field.id === 'freeform.crossSections') return <EditableStationTable field={field} stations={Array.isArray(value) ? value : []} />;
-    return <EditablePointTable field={field} points={Array.isArray(value) ? value : []} />;
+    return <CustomProfileTable field={field} plane={field.id.endsWith('V') ? 'V' : 'H'} />;
   }
+  if (field.id === 'freeform.length' && design.formula === 'FREEFORM') return <CustomProfileLengthField field={field} serverError={serverError} />;
   if (field.disabledReason && !field.path) {
     return <div className="schema-gap" title={field.disabledReason}>
       <span>{field.label}</span><button disabled>{field.kind === 'toggle' ? 'Off' : 'Unavailable'}</button><small>{field.disabledReason}</small>
@@ -1336,7 +1340,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
           || validationMessage(field, design) || storedValueError(field, design)));
         return <Section key={group.title} title={group.title} summary={group.summary?.(design)} description={group.description} forceOpen={searching || hasError}>
           {groupSlots.map((id) => {
-            if (id === 'control.freeformImport') return hasCustomSlot ? <FreeformPointImport key={id} /> : null;
+            if (id === 'control.freeformImport') return hasCustomSlot ? <CustomProfilePaste key={id} /> : null;
             if (id === 'control.freeformInspection') return hasCustomSlot ? <FreeformProfileInspection key={id} /> : null;
             const field = groupFields.find((candidate) => candidate.id === id);
             return field ? renderField(field) : null;

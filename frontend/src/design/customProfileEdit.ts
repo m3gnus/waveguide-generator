@@ -467,6 +467,19 @@ export function horizontalThroatForVertical(design: DesignDocument): ProfileEdit
   return { after, notes: [`The stored vertical throat radius becomes ${formatMm(after.profile_v!.points[0].r)} mm; the rest of the vertical profile is unchanged.`] };
 }
 
+/**
+ * Pasted rows as a complete table: a pasted z = 0 row is the throat and a
+ * t = 1 row the mouth; otherwise the current endpoint is kept. Never truncates.
+ */
+export function normalizedImportedPoints(imported: FreeformPoint[], current: FreeformPoint[], plane: Plane = 'H'): FreeformPoint[] {
+  const sorted = structuredClone(imported).sort((a, b) => a.t - b.t);
+  const throat = sorted[0]?.t === 0 ? sorted.shift()! : structuredClone(current[0]);
+  const mouth = sorted.at(-1)?.t === 1 ? sorted.pop()! : structuredClone(current.at(-1)!);
+  const rows = [{ ...throat, t: 0 }, ...sorted.filter((point) => point.t > 0 && point.t < 1), { ...mouth, t: 1 }];
+  if (rows.length > MAX_FREEFORM_ANCHORS) throw new ProfileEditRefusal(`The ${plane} profile would have ${rows.length} anchors; a Custom profile supports at most ${MAX_FREEFORM_ANCHORS} including the throat and mouth.`);
+  return rows;
+}
+
 export interface PasteChoice {
   target: Plane | 'both';
   adoptLength: boolean;
@@ -489,11 +502,7 @@ export function applyPastedProfile(design: DesignDocument, pasted: PastedProfile
   const notes: string[] = [];
   const replace = (plane: Plane, imported: FreeformPoint[]) => {
     const current = profileOf(design, plane).points;
-    const sorted = structuredClone(imported).sort((left, right) => left.t - right.t);
-    const throat = sorted[0]?.t === 0 ? sorted.shift()! : structuredClone(current[0]);
-    const mouth = sorted.at(-1)?.t === 1 ? sorted.pop()! : structuredClone(current.at(-1)!);
-    const rows = [{ ...throat, t: 0 }, ...sorted.filter((point) => point.t > 0 && point.t < 1), { ...mouth, t: 1 }];
-    if (rows.length > MAX_FREEFORM_ANCHORS) throw new ProfileEditRefusal(`The ${plane} profile would have ${rows.length} anchors; a Custom profile supports at most ${MAX_FREEFORM_ANCHORS} including the throat and mouth.`);
+    const rows = normalizedImportedPoints(imported, current, plane);
     const points = rows.map((point) => {
       const row: FreeformPoint = { t: point.t, r: point.r };
       if (present(point.angle_deg)) row.angle_deg = point.angle_deg;
@@ -701,6 +710,44 @@ export function useProfileEdit({ fetcher = fetch }: ProfileEditFetchers = {}) {
 export function previewAcceptable(preview: ProfileEditPreview): boolean {
   return preview.status === 'ready' && preview.validation.status === 'ready'
     && preview.curve.status === 'ready' && preview.generated.status === 'ready' && isCurrentOrigin(preview.origin);
+}
+
+interface CurvesState { origin: EditOrigin; curves?: CurvesResponse; error?: string }
+let sharedCurves: { origin: EditOrigin; promise: Promise<CurvesResponse> } | null = null;
+
+/** One keyed curve query per document revision, shared by every table that shows it. */
+function curvesFor(design: DesignDocument, origin: EditOrigin, fetcher: typeof fetch): Promise<CurvesResponse> {
+  const same = sharedCurves && sharedCurves.origin.load === origin.load && sharedCurves.origin.generation === origin.generation && sharedCurves.origin.revision === origin.revision;
+  if (!same || fetcher !== fetch) sharedCurves = { origin, promise: queryFreeformCurves(design, profileRequestKey(origin, design), undefined, fetcher) };
+  return sharedCurves!.promise;
+}
+
+/**
+ * The resolved curves of the design on screen (debounced). A previous answer
+ * stays visible, marked stale, until the current revision's answer arrives;
+ * answers and refusals for an older revision or another document are dropped.
+ */
+export function useCurrentProfileCurves(fetcher: typeof fetch = fetch): { curves?: CurvesResponse; error?: string; stale: boolean } {
+  const design = useDesignStore((state) => state.design);
+  const revision = useDesignStore((state) => state.designRevision);
+  const generation = useDesignStore((state) => state.loadGeneration);
+  const [state, setState] = useState<CurvesState | null>(null);
+  useEffect(() => {
+    if (design.formula !== 'FREEFORM') return undefined;
+    const origin = currentEditOrigin();
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      curvesFor(design, origin, fetcher).then((curves) => {
+        if (!cancelled && isCurrentOrigin(origin)) setState({ origin, curves });
+      }, (reason: unknown) => {
+        if (!cancelled && isCurrentOrigin(origin) && !(reason instanceof StaleFreeformResponse)) setState((previous) => ({ origin, curves: previous?.origin.generation === generation ? previous.curves : undefined, error: messageOf(reason) }));
+      });
+    }, 250);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [design, revision, generation, fetcher]);
+  const sameDocument = state?.origin.generation === generation;
+  const current = sameDocument && state?.origin.revision === revision;
+  return { curves: sameDocument ? state?.curves : undefined, error: current ? state?.error : undefined, stale: !current };
 }
 
 /** Exact (default) or refit insertion through the server's insertion route. */

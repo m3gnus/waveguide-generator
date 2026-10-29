@@ -566,14 +566,15 @@ function freeformSummary(design: DesignDocument, plane: 'H' | 'V'): string {
       return point.t === other.t && point.r === other.r && point.angle_deg === other.angle_deg;
     })) return 'matches horizontal';
   const points = (plane === 'H' ? h : v).points;
-  return `${points.at(-1)!.r} mm · ${points.length - 2} points`;
+  return `${points.at(-1)!.r} mm · ${points.length} anchors${plane === 'H' && design.shared_profile ? ' · both planes' : ''}`;
 }
 const freeformOnly = (design: DesignDocument) => design.formula === 'FREEFORM';
 const PROFILE_GROUPS: readonly ParameterGroupDefinition[] = [
   ICW_ADVANCED_GROUP,
   { title: 'Throat and length', visibleWhen: freeformOnly },
   { title: 'Horizontal profile', visibleWhen: freeformOnly, summary: (design) => freeformSummary(design, 'H') },
-  { title: 'Vertical profile', visibleWhen: freeformOnly, summary: (design) => freeformSummary(design, 'V') },
+  // A shared Custom profile keeps V stored but inactive; Separate vertical profile reveals it.
+  { title: 'Vertical profile', visibleWhen: (design) => freeformOnly(design) && !design.shared_profile, summary: (design) => freeformSummary(design, 'V') },
   { title: 'Cross-section', visibleWhen: freeformOnly },
   FREEFORM_IMPORT_GROUP,
   { title: 'Generated profile', visibleWhen: freeformOnly, fieldOrder: ['control.freeformInspection'], description: 'Generated bore profile — scaling, morph and supported extensions applied. Inspection only.' },
@@ -598,7 +599,7 @@ const parametricFields: ParameterDefinition[] = LEGACY_PARAMETER_REGISTRY.map((f
 });
 
 export const PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[] = [
-  { title: 'Profile', groups: PROFILE_GROUPS, descriptionWhen: (design) => freeformOnly(design) ? 'Horizontal and vertical spline profiles with a shared circular throat, length and cross-section stations.' : undefined, fieldOrder: [...parametricFields.filter((field) => field.section === 'Profile' && field.group !== 'Advanced ICW').map((field) => field.id), ...ICW_ADVANCED_FIELD_IDS, 'control.freeformImport', 'control.freeformInspection'], tab: 'geometry', description: 'Primary dimensions for the selected horn family. OSSE and R-OSSE labels carry their ATH formula symbol in parentheses.', visibleWhen: waveguideDefinitionOnly },
+  { title: 'Profile', groups: PROFILE_GROUPS, descriptionWhen: (design) => freeformOnly(design) ? 'Custom profile: an anchor table (one for both planes, or separate horizontal and vertical tables) with a shared circular throat, length and cross-section stations.' : undefined, fieldOrder: [...parametricFields.filter((field) => field.section === 'Profile' && field.group !== 'Advanced ICW').map((field) => field.id), ...ICW_ADVANCED_FIELD_IDS, 'control.freeformImport', 'control.freeformInspection'], tab: 'geometry', description: 'Primary dimensions for the selected horn family. OSSE and R-OSSE labels carry their ATH formula symbol in parentheses.', visibleWhen: waveguideDefinitionOnly },
   { title: 'Throat', fieldOrder: ['common.s1', 'common.s2', 'common.throat_ext_angle', 'common.throat_ext_length', 'common.slot_length', 'common.length_mode', 'source.shape', 'source.radius', 'source.curvature'], tab: 'geometry', description: 'Throat stretch, extension, straight slot and source surface cap.', visibleWhen: waveguideDefinitionOnly },
   { title: 'Mouth', fieldOrder: ['morph.target_shape', 'morph.target_width', 'morph.target_height', 'morph.target_exponent', 'morph.corner_radius', 'morph.rate', 'morph.fixed_part', 'morph.allow_shrinkage', 'mesh.ath_roundover', 'mesh.ath_roundover.radius', 'mesh.ath_roundover.segments'], tab: 'geometry', description: CAD_PARAMETER_SECTION_DEFINITIONS.find((section) => section.title === 'Morph Target')!.description, visibleWhen: waveguideDefinitionOnly },
   { title: 'Cross-section', tab: 'geometry', description: 'Base cross-section shape and OSSE guiding-curve controls.', visibleWhen: waveguideDefinitionOnly },
