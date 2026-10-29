@@ -325,6 +325,66 @@ describe('Viewport preview errors', () => {
     useMeshFreshnessStore.setState({ jobs: {} });
   });
 
+  it.each(['exterior', 'fem'] as const)('withdraws fallback %s artifacts when their delayed freshness check becomes pending/stale', async source => {
+    const historical = { ...unreadable } as unknown as JobItem;
+    const response = deferred<Response>();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input);
+      if (url.endsWith('/mesh-freshness')) return response.promise;
+      if (url.endsWith('/fem-field')) return new Response(JSON.stringify(femFieldFixture()));
+      return new Response('', { status: 404 });
+    });
+    vi.spyOn(canvasModule, 'canRenderWebGL').mockReturnValue(true);
+    const canvas = vi.spyOn(canvasModule.ViewportCanvas as unknown as { type: (props: { children: import('react').ReactNode; spatialResultId: string | null }) => import('react').ReactNode }, 'type')
+      .mockImplementation(({ children }) => <>{children}</>);
+    vi.spyOn(femSceneModule, 'FemFieldScene').mockImplementation(() => <div data-testid="fem-scene"/>);
+    let fallback!: JobItem;
+    act(() => {
+      selectJob(historical);
+      // Editing after pinning the unreadable run removes its standalone-chart
+      // exception. The selection stays A while the shown model resolves to B.
+      useDesignStore.getState().setFamily('OSSE-ARC');
+      fallback = { ...completeJob(`fallback-${source}`, source === 'exterior'),
+        has_fem_field_artifact: source === 'fem',
+        provenance: { mesher_version: '1', geometry_hash: 'sha256:fallback' } };
+      useMeshFreshnessStore.setState({ jobs: { [fallback.id]: 'current' } });
+      publishJobs([historical, fallback]);
+    });
+    // The viewport itself must check B, rather than the pinned legacy run A.
+    expect(fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/mesh-freshness'))
+      .map(([url]) => String(url))).toEqual([`/api/jobs/${fallback.id}/mesh-freshness`]);
+    expect(useMeshFreshnessStore.getState().jobs[fallback.id]).toBe('pending');
+    await act(async () => { response.resolve(new Response(JSON.stringify({ freshness: 'current' }))); });
+    expect(useMeshFreshnessStore.getState().jobs[fallback.id]).toBe('current');
+    act(() => useFieldPlaneStore.setState({ enabled: true, source, jobId: fallback.id, plane: fieldPlane, status: 'ready' }));
+    await act(async () => { await Promise.resolve(); });
+    const overlay = source === 'fem' ? 'FEM interior field overlay' : 'Acoustic field plane overlay';
+    expect(host.querySelector(`[aria-label="${overlay}"]`)).not.toBeNull();
+    expect(canvas.mock.calls.at(-1)![0].spatialResultId).toBe(fallback.id);
+
+    const staleResponse = deferred<Response>();
+    fetchSpy.mockImplementation(async input => String(input).endsWith('/mesh-freshness')
+      ? staleResponse.promise : new Response('', { status: 404 }));
+    act(() => useMeshFreshnessStore.getState().check(fallback, true, 1));
+    const assertWithdrawn = () => {
+      expect(compareSelection.getSnapshot().primary).toBe(historical.id);
+      expect(shownResult(currentModel(), compareSelection.getSnapshot(), [historical, fallback]))
+        .toMatchObject({ job: fallback, canRender: true });
+      expect(spatialResult(currentModel(), compareSelection.getSnapshot(), [historical, fallback])).toBeNull();
+      expect(host.querySelector('[aria-label="Acoustic field plane overlay"]')).toBeNull();
+      expect(host.querySelector('[aria-label="FEM field controls"]')).toBeNull();
+      expect(host.querySelector('[data-testid="fem-scene"]')).toBeNull();
+      expect(canvas.mock.calls.at(-1)![0].spatialResultId).toBeNull();
+    };
+    expect(useMeshFreshnessStore.getState().jobs[fallback.id]).toBe('pending');
+    assertWithdrawn();
+    await act(async () => { staleResponse.resolve(new Response(JSON.stringify({ freshness: 'stale' }))); });
+    expect(useMeshFreshnessStore.getState().jobs[fallback.id]).toBe('stale');
+    assertWithdrawn();
+    expect(useFieldPlaneStore.getState().enabled).toBe(false);
+    act(() => useMeshFreshnessStore.setState({ jobs: {} }));
+  });
+
   it('preserves field clipping while a current mesh is rechecked', async () => {
     const job = { ...completeJob('freshness-clip', true), provenance: { mesher_version: '1', geometry_hash: 'sha256:mesh' } };
     let finish!: (response: Response) => void;

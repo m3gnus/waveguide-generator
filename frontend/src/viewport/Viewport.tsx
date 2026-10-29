@@ -10,7 +10,7 @@ import type { DecodedFrame } from '../api/frame';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
 import { compareSelection, provisionalResults } from '../api/results';
-import { currentModel, currentModelScene, currentCadScenes, spatialResult, useCurrentModel, type CurrentModel } from '../model/currentModel';
+import { currentModel, currentModelScene, currentCadScenes, shownResult, spatialResult, useCurrentModel, type CurrentModel } from '../model/currentModel';
 import { postSymmetry, toSolveDesign } from '../jobs/actions';
 import { planAdjustmentNotice } from '../jobs/planAdjustments';
 import { hasMeshProvenance, useMeshFreshnessStore } from '../jobs/meshFreshness';
@@ -393,15 +393,17 @@ export function Viewport() {
   const solveRunningOrQueued = jobs.some((job) => isActiveJobStatus(job.status));
   const cadEmpty = cadViewportEmptyCopy(cad);
   const resultSelection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
-  const recordedFreshness = useMeshFreshnessStore(state => resultSelection.primary ? state.jobs[resultSelection.primary] : undefined);
-  const selectedJob = jobs.find(candidate => candidate.id === resultSelection.primary);
-  const meshFreshness = hasMeshProvenance(selectedJob) ? recordedFreshness : undefined;
-  useEffect(() => {
-    const job = jobs.find(candidate => candidate.id === resultSelection.primary);
-    if (job) useMeshFreshnessStore.getState().check(job, false, jobsSnapshot.epoch);
-  }, [jobs, resultSelection.primary, jobsSnapshot.epoch]);
   const coherenceContext = useCurrentModel();
   const provisional = useSyncExternalStore(provisionalResults.subscribe, provisionalResults.getSnapshot, provisionalResults.getSnapshot);
+  // Resolve before checking freshness: a pinned history selection can fall back
+  // to the run matching the displayed model. Keep following that run even while
+  // pending/stale freshness temporarily makes its spatial artifacts ineligible.
+  const shownJob = shownResult(coherenceContext, resultSelection, jobs, provisional.entries).job;
+  const recordedFreshness = useMeshFreshnessStore(state => shownJob ? state.jobs[shownJob.id] : undefined);
+  const meshFreshness = hasMeshProvenance(shownJob) ? recordedFreshness : undefined;
+  useEffect(() => {
+    if (shownJob) useMeshFreshnessStore.getState().check(shownJob, false, jobsSnapshot.epoch);
+  }, [shownJob, jobsSnapshot.epoch]);
   const availableFieldJob = useMemo(
     () => fieldPlaneJob(jobs, resultSelection.primary, coherenceContext, provisional.entries),
     [coherenceContext.key, coherenceContext.lineage, coherenceContext.kind, coherenceContext.viewportShowing, jobs, resultSelection.primary, provisional.entries, meshFreshness],
