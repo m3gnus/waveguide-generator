@@ -338,41 +338,64 @@ def available_engines() -> dict[str, str]:
 
 
 def result_findings(results: Mapping[str, Any], *, channel_ids: Sequence[str], driver_ids: Sequence[str],
-                    combined_id: str | None) -> list[str]:
+                    combined_id: str | None, frequencies_hz: Sequence[float] = FREQUENCIES_HZ,
+                    polar_axes: Sequence[str] = ("horizontal", "vertical"), angle_count: int | None = None) -> list[str]:
     """What is wrong with one finished job's results, as sentences."""
 
-    findings = []
+    findings: list[str] = []
+    expected = np.asarray(frequencies_hz, dtype=float)
+
+    def finite(value: Any, shape: tuple[int, ...]) -> bool:
+        try:
+            array = np.asarray(value, dtype=object)
+            return (array.shape == shape and array.size > 0
+                    and all(type(item) in {float, int} and math.isfinite(item) for item in array.flat))
+        except (TypeError, ValueError):
+            return False
+
+    def axis(block: Mapping[str, Any]) -> bool:
+        values = block.get("frequencies")
+        return finite(values, expected.shape) and np.allclose(values, expected, rtol=0, atol=1e-8)
+
     channels = results.get("channels") if isinstance(results.get("channels"), Mapping) else {}
     for channel_id in [*channel_ids, *([combined_id] if combined_id else [])]:
         if channel_id not in channels:
             findings.append(f"channel {channel_id} is missing from the results")
             continue
-        values = _numbers(channels[channel_id])
-        if not values or not all(math.isfinite(value) for value in values):
-            findings.append(f"channel {channel_id} has no finite values")
+        channel = channels[channel_id] if isinstance(channels[channel_id], Mapping) else {}
+        spl = channel.get("spl_on_axis")
+        if (not isinstance(spl, Mapping) or not axis(channel) or not axis(spl)
+                or not finite(spl.get("spl"), expected.shape) or not finite(spl.get("phase_degrees"), expected.shape)):
+            findings.append(f"channel {channel_id} lacks finite SPL/phase at every requested frequency")
+        patterns = channel.get("directivity")
+        phases = channel.get("directivity_phase")
+        for plane in polar_axes:
+            for label, block in (("directivity", patterns), ("directivity phase", phases)):
+                values = block.get(plane) if isinstance(block, Mapping) else None
+                try:
+                    points = angle_count if angle_count is not None else len(values[0])
+                except (TypeError, IndexError):
+                    points = 0
+                if not finite(values, (len(expected), points, 2)):
+                    findings.append(f"channel {channel_id} lacks finite {plane} {label} with the requested dimensions")
+        metadata = channel.get("metadata")
+        if isinstance(metadata, Mapping) and (metadata.get("failures") or metadata.get("failure_count")
+                                              or metadata.get("partial_success")):
+            findings.append(f"channel {channel_id} reports solve/postprocessing failures")
+    metadata = results.get("metadata")
+    if isinstance(metadata, Mapping) and (metadata.get("failures") or metadata.get("failure_count") or metadata.get("partial_success")):
+        findings.append("the result envelope reports solve/postprocessing failures")
     for driver_id in driver_ids:
         channel = channels.get(driver_id) if isinstance(channels.get(driver_id), Mapping) else {}
-        if not any("impedance" in str(key) for key in _keys(channel)):
-            findings.append(f"driver channel {driver_id} reports no electrical impedance")
+        impedance = channel.get("impedance")
+        metadata = channel.get("metadata") if isinstance(channel.get("metadata"), Mapping) else {}
+        if (not isinstance(impedance, Mapping) or not axis(impedance)
+                or not finite(impedance.get("real"), expected.shape)
+                or not finite(impedance.get("imaginary"), expected.shape)
+                or metadata.get("impedance_quantity") != "electrical_input_impedance"
+                or metadata.get("impedance_units") != "ohms"):
+            findings.append(f"driver channel {driver_id} lacks finite electrical impedance at every requested frequency")
     return findings
-
-
-def _keys(value: Any) -> list[str]:
-    if isinstance(value, Mapping):
-        return [str(key) for key in value] + [key for item in value.values() for key in _keys(item)]
-    return []
-
-
-def _numbers(value: Any) -> list[float]:
-    if isinstance(value, bool):
-        return []
-    if isinstance(value, (int, float)):
-        return [float(value)]
-    if isinstance(value, Mapping):
-        return [number for item in value.values() for number in _numbers(item)]
-    if isinstance(value, (list, tuple)):
-        return [number for item in value for number in _numbers(item)]
-    return []
 
 
 async def _solve(data_dir: Path, report: Mapping[str, Any], engines: Sequence[str], timeout_s: float) -> dict[str, Any]:
@@ -393,25 +416,40 @@ async def _solve(data_dir: Path, report: Mapping[str, Any], engines: Sequence[st
                 summary = entry["requests"][engine]
                 request = summary["request"]
                 started = time.monotonic()
-                job_id = await runtime.submit(request)
-                job = await runtime.get_job(job_id)
-                while job["status"] not in {"complete", "error", "cancelled"}:
-                    if time.monotonic() - started > timeout_s:
-                        await runtime.stop(job_id)
-                        break
-                    await asyncio.sleep(0.5)
+                outcome: dict[str, Any] = {"status": "failed", "notice": summary["notice"], "findings": []}
+                try:
+                    # The same read-only capability/admission owner as the app.
+                    # Installed modules alone do not establish support for this case.
+                    plan = await runtime.plan_imported(request)
+                    if plan["engine"] != engine:
+                        outcome.update(status="not-applicable", reason=plan["reason"], code=plan.get("code"))
+                        solved[f"{name}/{engine}"] = outcome
+                        continue
+                    job_id = await runtime.submit(request)
                     job = await runtime.get_job(job_id)
-                outcome: dict[str, Any] = {"status": job["status"], "wall_seconds": round(time.monotonic() - started, 2),
-                                           "notice": summary["notice"]}
-                if job["status"] == "complete":
-                    combine = request.geometry.combine
-                    outcome["findings"] = result_findings(
-                        await runtime.get_results(job_id),
-                        channel_ids=[channel.id for channel in request.geometry.drive_channels],
-                        driver_ids=summary["transducer_channels"],
-                        combined_id=getattr(combine, "id", None) if combine is not None else None)
-                else:
-                    outcome["findings"] = [f"the job ended {job['status']}: {job.get('error') or ''}".strip()]
+                    while job["status"] not in {"complete", "error", "cancelled"}:
+                        if time.monotonic() - started > timeout_s:
+                            await runtime.stop(job_id)
+                            outcome["findings"] = ["the solve exceeded its qualification timeout"]
+                            break
+                        await asyncio.sleep(0.5)
+                        job = await runtime.get_job(job_id)
+                    outcome["status"] = job["status"]
+                    if job["status"] == "complete":
+                        combine = request.geometry.combine
+                        polar = request.options.polar_config
+                        outcome["findings"] = result_findings(
+                            await runtime.get_results(job_id),
+                            channel_ids=[channel.id for channel in request.geometry.drive_channels],
+                            driver_ids=summary["transducer_channels"],
+                            combined_id=getattr(combine, "id", None) if combine is not None else None,
+                            frequencies_hz=request.options.frequencies_hz, polar_axes=polar.enabled_axes,
+                            angle_count=polar.angle_range[2])
+                    elif not outcome["findings"]:
+                        outcome["findings"] = [f"the job ended {job['status']}: {job.get('error') or ''}".strip()]
+                except Exception as exc:
+                    outcome["findings"] = [f"{type(exc).__name__}: {exc}"]
+                outcome["wall_seconds"] = round(time.monotonic() - started, 2)
                 solved[f"{name}/{engine}"] = outcome
     finally:
         await runtime.shutdown()
@@ -451,7 +489,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--json", type=Path, help="write the evidence here")
     args = parser.parse_args(argv)
 
-    with tempfile.TemporaryDirectory(prefix="wg-qualify-assembly-") as folder:
+    from server.platform.temp_session import TemporarySession
+
+    session = TemporarySession.create()
+    session.activate()
+    try:
+        return _run(args, session.path)
+    finally:
+        session.close(remove=True)
+
+
+def _run(args: argparse.Namespace, session_path: Path) -> int:
+    with tempfile.TemporaryDirectory(prefix="wg-qualify-assembly-", dir=session_path) as folder:
         data_dir = Path(folder)
         report = geometry_phase(data_dir)
         failures = geometry_verdicts(report)
@@ -462,6 +511,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             failures += [f"{engine} is required but {status.get(engine, 'not detected')}" for engine in missing]
             engines = [engine for engine in QUALIFIED_ENGINES if status.get(engine) == "available"]
             solved = asyncio.run(_solve(data_dir, report, engines, args.timeout)) if engines else {}
+            for name in report["cases"]:
+                for engine in QUALIFIED_ENGINES:
+                    key = f"{name}/{engine}"
+                    if key not in solved:
+                        solved[key] = {"status": "unavailable", "reason": status.get(engine, "not detected"), "findings": []}
+                    if engine in args.require and solved[key]["status"] != "complete":
+                        failures.append(f"{key}: required engine did not complete this case ({solved[key]['status']})")
             failures += [f"{key}: {finding}" for key, outcome in solved.items() for finding in outcome["findings"]]
         evidence = public_report(report, solved, failures)
     text = json.dumps(evidence, indent=2, sort_keys=True)

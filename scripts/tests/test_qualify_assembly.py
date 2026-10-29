@@ -14,6 +14,8 @@ Metal runtimes and takes minutes.
 from __future__ import annotations
 
 import copy
+import asyncio
+import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -109,22 +111,135 @@ def test_each_geometry_verdict_can_fail(report, change, expected):
     assert any(expected in failure for failure in failures), failures
 
 
-def test_the_result_check_sees_a_missing_channel_a_non_finite_value_and_a_silent_driver():
-    good = {"channels": {"horn-throat": {"spl": [80.0, 81.0]}, qual.W1: {"spl": [70.0], "impedance": {"real": [6.0]}},
-                         "combined": {"spl": [82.0]}}}
-    assert qual.result_findings(good, channel_ids=["horn-throat", qual.W1], driver_ids=[qual.W1], combined_id="combined") == []
-    missing = copy.deepcopy(good)
+def good_results():
+    f = list(qual.FREQUENCIES_HZ)
+    channel = {"frequencies": f, "spl_on_axis": {"frequencies": f, "spl": [80.0] * len(f), "phase_degrees": [0.0] * len(f)},
+               "directivity": {plane: [[[-180.0, -30.0], [0.0, 0.0], [180.0, -30.0]]] * len(f) for plane in ("horizontal", "vertical")},
+               "directivity_phase": {plane: [[[-180.0, 10.0], [0.0, 0.0], [180.0, -10.0]]] * len(f) for plane in ("horizontal", "vertical")},
+               "impedance": {"frequencies": f, "real": [6.0] * len(f), "imaginary": [1.0] * len(f)},
+               "metadata": {"impedance_units": "ohms", "impedance_quantity": "electrical_input_impedance"}}
+    return {"channels": {name: copy.deepcopy(channel) for name in ("horn-throat", qual.W1, "combined")}}
+
+
+def findings(results):
+    return qual.result_findings(results, channel_ids=["horn-throat", qual.W1], driver_ids=[qual.W1], combined_id="combined", angle_count=3)
+
+
+def test_the_result_check_accepts_complete_physical_outputs():
+    assert findings(good_results()) == []
+
+
+@pytest.mark.parametrize("change", [
+    lambda c: c.update(spl_on_axis=None),
+    lambda c: c["spl_on_axis"].update(spl=[]),
+    lambda c: c["spl_on_axis"].update(spl=[None] * 4),
+    lambda c: c["spl_on_axis"].update(spl=[80.0, float("nan"), 80.0, 80.0]),
+    lambda c: c["spl_on_axis"].update(phase_degrees=[None] * 4),
+    lambda c: c["spl_on_axis"].update(frequencies=[200.0, 500.0, 1000.0, 3000.0]),
+    lambda c: c.update(frequencies=[200.0]),
+    lambda c: c.update(directivity={}),
+    lambda c: c["directivity"].update(horizontal=[[[0.0, 0.0]]]),
+    lambda c: c["directivity_phase"].update(vertical=[[[0.0, None]]] * 4),
+    lambda c: c.update(impedance=None),
+    lambda c: c["impedance"].update(real=[]),
+    lambda c: c["impedance"].update(imaginary=[None] * 4),
+    lambda c: c["impedance"].update(real=[6.0, float("inf"), 6.0, 6.0]),
+    lambda c: c["impedance"].update(frequencies=[200.0, 500.0, 1000.0, 3000.0]),
+    lambda c: c["metadata"].update(impedance_quantity="specific_acoustic_impedance"),
+    lambda c: c["metadata"].update(failure_count=1),
+    lambda c: c["metadata"].update(failures=[{"stage": "postprocess", "code": "missing_output"}]),
+    lambda c: c["metadata"].update(partial_success=True),
+])
+def test_empty_null_nonfinite_wrong_shape_missing_frequency_and_postprocessing_outputs_fail(change):
+    results = good_results()
+    change(results["channels"][qual.W1])
+    assert findings(results)
+
+
+def test_frequency_axes_and_metadata_are_never_acoustic_evidence():
+    results = {"channels": {"horn-throat": {"frequencies": [200.0], "spl_onaxis": [None]},
+                           qual.W1: {"frequencies": [200.0], "impedance": {"real": [None], "imag": [None]}}}}
+    assert findings(results)
+    missing = good_results()
     del missing["channels"]["combined"]
-    assert qual.result_findings(missing, channel_ids=["horn-throat"], driver_ids=[], combined_id="combined") == [
-        "channel combined is missing from the results"]
-    nan = copy.deepcopy(good)
-    nan["channels"]["horn-throat"]["spl"][1] = float("nan")
-    assert qual.result_findings(nan, channel_ids=["horn-throat"], driver_ids=[], combined_id=None) == [
-        "channel horn-throat has no finite values"]
-    silent = copy.deepcopy(good)
-    del silent["channels"][qual.W1]["impedance"]
-    assert qual.result_findings(silent, channel_ids=[qual.W1], driver_ids=[qual.W1], combined_id=None) == [
-        f"driver channel {qual.W1} reports no electrical impedance"]
+    assert "channel combined is missing from the results" in findings(missing)
+    envelope = good_results()
+    envelope["metadata"] = {"failure_count": 1}
+    assert "the result envelope reports solve/postprocessing failures" in findings(envelope)
+
+
+def test_case_planning_skips_unsupported_engines_and_retains_real_solve_failures(tmp_path, monkeypatch):
+    from server.jobs import runtime as runtime_module
+
+    calls = []
+
+    class Runtime:
+        def __init__(self, store, **kwargs):
+            self.store = store
+
+        async def start(self):
+            calls.append("start")
+
+        async def shutdown(self):
+            calls.append("shutdown")
+
+        async def plan_imported(self, request):
+            engine = request.options.engine
+            return {"engine": None if engine == "bempp" else engine,
+                    "reason": "imported geometry is unsupported", "code": "geometry_unsupported"}
+
+        async def submit(self, request):
+            calls.append(request.options.engine)
+            if request.options.engine == "metal":
+                raise RuntimeError("real submission failure")
+            return "job"
+
+        async def get_job(self, job_id):
+            return {"status": "complete"}
+
+        async def get_results(self, job_id):
+            return good_results()
+
+    engines = ["beat-cpu", "metal", "bempp"]
+    entries = {engine: {"notice": None, "transducer_channels": [], "request": SimpleNamespace(
+        geometry=SimpleNamespace(drive_channels=[SimpleNamespace(id="horn-throat")], combine=None),
+        options=SimpleNamespace(engine=engine, frequencies_hz=list(qual.FREQUENCIES_HZ),
+            polar_config=SimpleNamespace(enabled_axes=["horizontal", "vertical"], angle_range=[-180, 180, 3])))} for engine in engines}
+    monkeypatch.setattr(runtime_module, "JobRuntime", Runtime)
+    solved = asyncio.run(qual._solve(tmp_path, {"cases": {"one": {"requests": entries}}}, engines, 2))
+    assert solved["one/beat-cpu"]["status"] == "complete" and solved["one/beat-cpu"]["findings"] == []
+    assert solved["one/bempp"]["status"] == "not-applicable"
+    assert solved["one/bempp"]["reason"] == "imported geometry is unsupported"
+    assert solved["one/metal"]["status"] == "failed"
+    assert "real submission failure" in solved["one/metal"]["findings"][0]
+    assert calls == ["start", "beat-cpu", "metal", "shutdown"]
+
+
+@pytest.mark.parametrize("status", ["not-applicable", "unavailable", "failed"])
+def test_required_engine_must_complete_every_case_and_program_owns_the_temporary_session(tmp_path, monkeypatch, status):
+    from server.platform.temp_session import temporary_directory_root
+
+    roots = []
+
+    def inventory():
+        roots.append(Path(temporary_directory_root()))
+        assert roots[-1].is_dir()
+        return {"beat-cpu": "available", "metal": "available"}
+
+    async def solve(*args):
+        return {"one/beat-cpu": {"status": "complete", "findings": []},
+                "one/metal": {"status": status, "findings": []}}
+
+    monkeypatch.setattr(qual, "geometry_phase", lambda path: {"cases": {"one": {"inventory": {}, "requests": {}}}})
+    monkeypatch.setattr(qual, "geometry_verdicts", lambda report: [])
+    monkeypatch.setattr(qual, "available_engines", inventory)
+    monkeypatch.setattr(qual, "_solve", solve)
+    output = tmp_path / "evidence.json"
+    assert qual.main(["--solve", "--require", "beat-cpu", "--require", "metal", "--json", str(output)]) == 1
+    evidence = json.loads(output.read_text())
+    assert evidence["verdict"] == "fail" and any("one/metal" in failure for failure in evidence["failures"])
+    assert evidence["solves"]["one/metal"]["status"] == status
+    assert not roots[0].exists()
 
 
 def test_the_public_evidence_has_no_local_paths(report):
