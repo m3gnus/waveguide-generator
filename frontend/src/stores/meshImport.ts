@@ -1,10 +1,11 @@
-import { fileSimulationSetup, importedDriverLabel, reconcileFileChannels, seedFileSimulation } from './importedSimulationSetup';
+import { fileSimulationSetup, retainedAssemblySimulationSetup, importedDriverLabel, reconcileFileChannels, seedFileSimulation } from './importedSimulationSetup';
+import type { CompiledAssembly } from '../api/assembly';
 import { driverGroupsFromWire, driverGroupsToWire } from './importedDriverGroups';
 import { combineWire } from './cadReturn';
 import { savedChannelDrivers } from './cadSetupRestore';
 import type { CadSetup } from '../api/jobsSocket';
 import type { SimulationData } from './cadReturn';
-import { crossoverBandBlocker, exteriorModeBlocker, importedSweepRangeInvalid, incompleteDriverBlocker, simulationGeometry, simulationDriverReferences } from '../jobs/importedSubmission';
+import { crossoverBandBlocker, exteriorModeBlocker, importedSweepRangeInvalid, incompleteDriverBlocker, resolveAssemblySetup, simulationGeometry, simulationDriverReferences } from '../jobs/importedSubmission';
 import { create } from 'zustand';
 import {
   inspectMesh, inspectMeshModel, prepareMeshModel, registerMesh, type MeshSummary, type RegisteredMesh,
@@ -316,24 +317,25 @@ function setupForPreparedFile(retained: ImportedSetup, record: RegisteredMesh, p
 
 export function fileMeshSubmission(): ImportedSolveSubmission {
   const setup = fileMeshSetup();
-  return bindImportedSetup(registeredMesh()!, setup);
+  return bindImportedSetup(useImportedModelStore.getState().prepared!, setup);
 }
 
 /** The same effective setup Save records and Solve submits. */
 export function fileMeshSetup(): ImportedSetup {
   const state = useMeshImportStore.getState();
-  const record = registeredMesh();
+  const input = workspaceModeStore.getSnapshot().importedInput === 'assembly' ? 'assembly' : 'file';
+  const record = input === 'assembly' ? useImportedModelStore.getState().prepared : registeredMesh();
   const viewport = importedMeshStore.getSnapshot();
-  const opening = importedModelBlocker('file');
+  const opening = importedModelBlocker(input);
   if (opening) throw new Error(opening);
-  if (state.busy) throw new Error('Wait for mesh preparation to finish.');
+  if (input === 'file' && state.busy) throw new Error('Wait for mesh preparation to finish.');
   if (!record || viewport.showing !== 'file' || viewport.file?.ingestId !== record.ingest_id) {
     throw new Error('Choose units and surface roles in Geometry before solving.');
   }
   let controls: ImportedSetup | undefined;
-  const setup = effectiveImportedSetup('file', record.ingest_id, () => (controls = fileSetupControls()));
+  const setup = effectiveImportedSetup(input, record.ingest_id, () => (controls = readyMeshSetupControls(input)));
   const model = useImportedModelStore.getState();
-  if (!model.setup && model.fileSimulation?.persistDriverGroups && controls) {
+  if (input === 'file' && !model.setup && model.fileSimulation?.persistDriverGroups && controls) {
     // A role edit may split a group before the next control edit. The edit
     // baseline already sees that split, while the retained setup does not.
     const groups = driverGroupsToWire(fileSimulationSetup.get().driverGroups);
@@ -349,11 +351,23 @@ export function fileMeshSetup(): ImportedSetup {
 }
 
 export function fileSetupControls(): ImportedSetup {
+  return readyMeshSetupControls('file');
+}
+
+function readyMeshSetupControls(input: 'file' | 'assembly'): ImportedSetup {
   // Every option, the sweep range and count included, is the imported
   // instance's; this view only adds the mesh's geometry and source motions.
   const selected = useImportedSolveOptionsStore.getState();
   const options = selected.options() as ImportedSolveSubmission['options'];
-  const simulation = fileSimulationSetup.get();
+  const simulation = (input === 'assembly' ? retainedAssemblySimulationSetup : fileSimulationSetup).get();
+  if (simulation.input === 'assembly') {
+    const model = useImportedModelStore.getState();
+    const retained = model.setup ?? model.setupEditBase?.retained;
+    const signal_groups = (retained?.geometry.driver_groups ?? []).map(group => ({ id: group.id,
+      members: group.channel_ids.map(radiator_id => ({ radiator_id, ...group.member_processing?.[radiator_id] })) }));
+    return resolveAssemblySetup(simulation, { signal_groups }, options,
+      { f1: simulation.frequencyStartHz, f2: simulation.frequencyEndHz, num_frequencies: simulation.frequencyCount }).setup;
+  }
   if (selected.frequencyMode === 'range') {
     if (importedSweepRangeInvalid(simulation, 2)) {
       throw new Error('Enter an increasing frequency range and 2–401 frequencies.');
@@ -400,6 +414,7 @@ export function fileSetupForSave(setup: ImportedSetup): ImportedSetup {
   return { ...setup, geometry: { ...setup.geometry, driver_groups: driverGroupsToWire(groups) } };
 }
 registerImportedSetupControls('file', fileSetupControls);
+registerImportedSetupControls('assembly', () => readyMeshSetupControls('assembly'));
 
 function preparedFileScene(record: RegisteredMesh) {
   return createImportedMeshScene(record.source_file.filename, parseMSH(record.msh_text), 'file', record.ingest_id,
@@ -469,6 +484,31 @@ export const fileImportedView: ImportedView = {
   },
 };
 registerImportedView('file', fileImportedView);
+
+/** Compiled assemblies reopen through the same model/setup lifecycle, as ready meshes. */
+registerImportedView('assembly', {
+  begin({ generation }) {
+    workspaceModeStore.setMode('cad');
+    const current = () => isCurrentOpen(generation);
+    return {
+      current,
+      async fill(opened) {
+        const record = opened.prepared as CompiledAssembly;
+        if (record.producer !== 'design-assembly' || !opened.setup || typeof record.msh_text !== 'string'
+          || !record.excitations?.length) throw new Error('This assembly’s retained mesh or solve settings are unavailable.');
+        if (!current()) return null;
+        const scene = createImportedMeshScene(opened.model?.display_name || record.design.name || 'Assembly',
+          parseMSH(record.msh_text), 'file', record.ingest_id, [], {
+            rolesByTag: Object.fromEntries(record.sources.map(source => [record.source_tags[source.id], source.role])),
+          });
+        if (!importedMeshStore.setFile(scene, generation)) return null;
+        seedFileOptions(opened.setup);
+        return record;
+      },
+      fail() { /* The shared imported model owns this open's error and Solve blocker. */ },
+    };
+  },
+});
 
 /** A replay's exact setup is what an unedited Solve sends, until a setup control changes. */
 export async function loadMeshReplay(text: string, fetcher: typeof fetch = fetch,

@@ -6,7 +6,7 @@ import { messageBlocker, type SolveReadinessState } from '../jobs/solveReadiness
 import { currentModel, useCurrentModel } from '../model/currentModel';
 import { importedModelBlocker, importedModelId, unchangedSetup, useImportedModelStore } from '../stores/importedModel';
 import { nativeSymmetryLimitation } from '../design/nativeFamilies';
-import { fileMeshSetup, fileMeshSubmission, registeredMesh, useMeshImportStore } from '../stores/meshImport';
+import { fileMeshSetup, fileMeshSubmission, useMeshImportStore } from '../stores/meshImport';
 import type { ExportFormat } from '../prefs/preferences';
 import { ownedAutoExport } from '../jobs/autoExportOwner';
 import { exportRunAutomatically } from '../jobs/autoExportRun';
@@ -422,7 +422,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   // Mode owns solve intent. The viewport CAD slot is evidence for the mismatch
   // guard only; an empty slot must still route to the imported blocker so CAD
   // mode can truthfully say that an ingest is required.
-  const fileGeometryActive = model.kind === 'file';
+  const fileGeometryActive = model.kind === 'file' || model.kind === 'assembly';
   const cadGeometryActive = model.kind === 'cad';
   const crossoverDraftError = useCrossoverDraftError();
   useMeshImportStore();
@@ -587,25 +587,26 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     let asked = false;
     const jobId = await acceptSubmission(async () => {
       const setup = fileMeshSetup();
-      const record = registeredMesh()!;
+      const model = useImportedModelStore.getState();
+      const record = model.prepared!;
       const choiceInputs = captureSolveInputs();
-      designName = useMeshImportStore.getState().filename;
+      designName = model.input === 'assembly' ? model.model?.display_name || 'Assembly' : useMeshImportStore.getState().filename;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
       // An unedited reopened model keeps the setup it was opened with.
-      const unchanged = unchangedSetup('file', record.ingest_id);
+      const unchanged = unchangedSetup(model.input === 'assembly' ? 'assembly' : 'file', record.ingest_id);
       const press: ModelSolvePress = {
         prepared_id: record.ingest_id, client_request_id: `mesh-${crypto.randomUUID()}`, label,
         ...(unchanged ?? { setup: { schema_version: 1, ...setup } as unknown as ModelSolvePress['setup'] }),
       };
       if (!beforePost(continuation)) return null;
       try {
-        return await solveModel(record.model_id, press);
+        return await solveModel(model.modelId!, press);
       } catch (error) {
         if (error instanceof SolveSubmissionRefused && error.code === 'mesh_too_large'
           && typeof error.details?.triangles === 'number' && typeof error.details.limit === 'number') {
           asked = true;
           askMeshSolveChoice(designName, error.details.triangles, error.details.limit, () => solveCancellationReason(choiceInputs) === null, async () => {
-            await acceptSubmission(() => solveModel(record.model_id, { ...press, mesh_limit_override: true }),
+            await acceptSubmission(() => solveModel(model.modelId!, { ...press, mesh_limit_override: true }),
               { onAccepted: () => acceptSubmittedLabel(designName), arm: true });
           });
           return null;

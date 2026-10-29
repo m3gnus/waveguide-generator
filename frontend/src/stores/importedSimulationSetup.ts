@@ -175,7 +175,7 @@ export function reconcileFileChannels<T extends CadDriveChannel>(record: Registe
 }
 
 /** New files share a driver card per role, with a channel per source patch. */
-export function seedFileSimulation(record: RegisteredMesh | null, setup: ImportedSetup | null, previous?: SimulationData | null): SimulationData {
+export function seedFileSimulation(record: RegisteredMesh | import('../api/assembly').CompiledAssembly | null, setup: ImportedSetup | null, previous?: SimulationData | null): SimulationData {
   const sources = fileSources(record);
   let driveChannels = setup ? structuredClone(setup.geometry.drive_channels).map(channel => {
       const { driver, ...base } = channel;
@@ -191,7 +191,7 @@ export function seedFileSimulation(record: RegisteredMesh | null, setup: Importe
   // unfinished driver which has no wire setup yet.
   let previousDrivers = previous?.channelDrivers;
   let previousGroups = previous?.driverGroups;
-  if (previous && record) {
+  if (previous && record?.producer === 'mesh-file') {
     const extended = reconcileFileChannels(record, previous.driveChannels, previous.channelDrivers, setup?.geometry.skipped_source_ids ?? [], previous.driverGroups);
     previousDrivers = { ...retainedChannelDrivers(previous, extended.channels) };
     for (const [id, source] of Object.entries(extended.from)) {
@@ -210,7 +210,8 @@ export function seedFileSimulation(record: RegisteredMesh | null, setup: Importe
   const channelDrivers = previous && previousDrivers
     ? retainedChannelDrivers({ driveChannels, channelDrivers: previousDrivers }, driveChannels)
     : savedChannelDrivers(geometry, driveChannels, setup?.driver_references);
-  let groups = resolveDriverGroups(sources, driveChannels, channelDrivers, previousGroups ?? savedGroups ?? initialGroups);
+  let groups = resolveDriverGroups(sources, driveChannels, channelDrivers, previousGroups ?? savedGroups ?? initialGroups,
+    record?.producer !== 'design-assembly');
   if (setup && !savedGroups) {
     // Legacy requests may have independent crossover branches or generator
     // resistance. Their encoded IDs must not imply an invalid shared branch.
@@ -232,7 +233,7 @@ export function seedFileSimulation(record: RegisteredMesh | null, setup: Importe
   };
 }
 
-function fileSources(record: RegisteredMesh | null): RoleSource[] {
+function fileSources(record: Pick<RegisteredMesh, 'sources' | 'source_tags'> | null): RoleSource[] {
   // Older retained file records predate sources[]. Their source tags were HF.
   return record?.sources ? record.sources.map(({ id, role }) => ({ id, role }))
     : Object.keys(record?.source_tags ?? {}).map(id => ({ id, role: 'HF' }));
@@ -365,8 +366,9 @@ const cadSimulationSetup = createImportedSimulationSetup({
   cadActions: () => useCadReturnStore.getState(),
 });
 
-export const fileSimulationSetup = createImportedSimulationSetup({
-  input: 'file', read: () => {
+function readyMeshSimulationSetup(input: 'file' | 'assembly') {
+  return createImportedSimulationSetup({
+  input, read: () => {
     const data = fileData();
     const options = useImportedSolveOptionsStore.getState();
     return { ...data, frequencyStartHz: options.sweepStartHz, frequencyEndHz: options.sweepEndHz, frequencyCount: options.sweepCount };
@@ -395,11 +397,15 @@ export const fileSimulationSetup = createImportedSimulationSetup({
   }),
   signal: actions => withEditSignals(() => useImportedModelStore.getState() as unknown as typeof actions,
     actions, Object.keys(actions).filter(name => name !== 'refreshChannelDriverBases') as (keyof typeof actions)[], 'meshImport'),
-});
+  });
+}
+export const fileSimulationSetup = readyMeshSimulationSetup('file');
+export const retainedAssemblySimulationSetup = readyMeshSimulationSetup('assembly');
 
 /** One interface for the shared imported Simulation sections and their children. */
 export function importedSimulationSetup(): ImportedSimulationSetup {
-  return (workspaceModeStore.getSnapshot().importedInput === 'cad' ? cadSimulationSetup : fileSimulationSetup).get();
+  const input = workspaceModeStore.getSnapshot().importedInput;
+  return (input === 'cad' ? cadSimulationSetup : input === 'assembly' ? retainedAssemblySimulationSetup : fileSimulationSetup).get();
 }
 
 export function useImportedSimulationSetup(): ImportedSimulationSetup {

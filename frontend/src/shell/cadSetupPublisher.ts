@@ -280,12 +280,13 @@ export function startCadSetupPublisher(
   let fileSelection: string | null = null;
   const onFileChange = () => {
     const model = useImportedModelStore.getState();
-    const key = model.input === 'file' ? model.modelId : null;
+    const key = model.input === 'file' || model.input === 'assembly' ? model.modelId : null;
     if (key !== fileSelection) { flush(); fileSelection = key; fileDirty = false; }
-    const prepared = model.input === 'file' ? model.prepared?.ingest_id ?? null : null;
-    if (prepared && prepared !== filePrepared && useMeshImportStore.getState().original) fileDirty = true;
+    const prepared = model.input === 'file' || model.input === 'assembly' ? model.prepared?.ingest_id ?? null : null;
+    if (model.input === 'file' && prepared && prepared !== filePrepared && useMeshImportStore.getState().original) fileDirty = true;
     filePrepared = prepared;
-    if (workspaceModeStore.getSnapshot().importedInput !== 'file' || model.input !== 'file') return;
+    if (!['file', 'assembly'].includes(workspaceModeStore.getSnapshot().importedInput)
+      || (model.input !== 'file' && model.input !== 'assembly')) return;
     if (!fileDirty) return;
     try {
       const setup = fileSetupForSave(fileMeshSetup());
@@ -382,7 +383,7 @@ export function startCadSetupPublisher(
     }),
     subscribeSolveSettingsEdits(edit => {
       if (edit?.source === 'solveOptions') return;
-      if (workspaceModeStore.getSnapshot().importedInput === 'file') {
+      if (['file', 'assembly'].includes(workspaceModeStore.getSnapshot().importedInput)) {
         if (edit?.source === 'meshImport' || edit?.source === 'importedSolveOptions') fileDirty = true;
         onFileChange();
       }

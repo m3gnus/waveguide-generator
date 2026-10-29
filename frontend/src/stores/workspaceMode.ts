@@ -6,13 +6,17 @@ type Listener = () => void;
 
 export interface WorkspaceModeState {
   mode: WorkspaceMode;
-  importedInput: 'cad' | 'file';
+  importedInput: 'cad' | 'file' | 'assembly';
   inputRevision: number;
 }
 
 const storage = namespaceStorage('workspaceMode');
 const STORAGE_KEY = 'mode';
 const inputStorage = namespaceStorage('importedInput');
+const storedInput = (): WorkspaceModeState['importedInput'] => {
+  const input = inputStorage.getItem('input');
+  return input === 'file' || input === 'assembly' ? input : 'cad';
+};
 
 function storedMode(): WorkspaceMode {
   return storage.getItem(STORAGE_KEY) === 'cad' ? 'cad' : 'parametric';
@@ -24,7 +28,7 @@ function storedMode(): WorkspaceMode {
  * load and a CAD-only project can be reopened from its archive, so starting
  * over was the dishonest option. */
 class WorkspaceModeStore {
-  private value: WorkspaceModeState = { mode: storedMode(), importedInput: inputStorage.getItem('input') === 'file' ? 'file' : 'cad', inputRevision: 0 };
+  private value: WorkspaceModeState = { mode: storedMode(), importedInput: storedInput(), inputRevision: 0 };
   private listeners = new Set<Listener>();
 
   constructor() {
@@ -32,7 +36,7 @@ class WorkspaceModeStore {
     // never sees the restored mode with the previous imported input.
     const adopt = () => queueMicrotask(() => {
       const mode = storedMode();
-      const importedInput = inputStorage.getItem('input') === 'file' ? 'file' : 'cad';
+      const importedInput = storedInput();
       if (mode === this.value.mode && importedInput === this.value.importedInput) return;
       this.value = { mode, importedInput,
         inputRevision: this.value.inputRevision + (importedInput !== this.value.importedInput ? 1 : 0) };
@@ -50,7 +54,7 @@ class WorkspaceModeStore {
   getSnapshot = (): WorkspaceModeState => this.value;
 
   /** Explicit input intent survives pending/failed loads and workspace switches. */
-  setImportedInput = (importedInput: 'cad' | 'file'): void => {
+  setImportedInput = (importedInput: WorkspaceModeState['importedInput']): void => {
     this.value = { ...this.value, importedInput, inputRevision: this.value.inputRevision + 1 };
     inputStorage.setItem('input', importedInput);
     this.listeners.forEach(listener => listener());

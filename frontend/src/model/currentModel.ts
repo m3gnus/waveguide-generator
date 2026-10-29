@@ -17,7 +17,7 @@ import { hasMeshProvenance, useMeshFreshnessStore } from '../jobs/meshFreshness'
  * (legacy ingestion fallback). It does not identify the complete solve request;
  * separate solver options, polar sampling and imported setup are outside it. */
 export interface CurrentModel {
-  kind: 'parametric' | 'file' | 'cad';
+  kind: 'parametric' | 'file' | 'cad' | 'assembly';
   key: string | null;
   lineage: string | null;
   label: string;
@@ -57,7 +57,8 @@ export function showUnreadableRun(job: JobItem): void {
 export function modelKindForRun(job: Partial<Pick<JobItem, 'config_summary' | 'cad_state' | 'cad_intent' | 'cad_return' | 'design_availability'>>): CurrentModel['kind'] {
   const imported = job.config_summary?.geometry_type === 'imported' || job.config_summary?.formula_type === 'cad-import' || job.config_summary?.import_origin === 'mesh-file'
     || job.design_availability?.source === 'cad-import' || !!job.cad_state || !!job.cad_intent || !!job.cad_return;
-  return imported ? job.config_summary?.import_origin === 'mesh-file' ? 'file' : 'cad' : 'parametric';
+  return imported ? job.config_summary?.import_origin === 'design-assembly' ? 'assembly'
+    : job.config_summary?.import_origin === 'mesh-file' ? 'file' : 'cad' : 'parametric';
 }
 
 /** The identity of the saved model, also used for exports explicitly scoped to a run. */
@@ -87,7 +88,7 @@ export function currentCadScenes(model: CurrentModel, viewport: ImportedMeshStat
 
 /** The scene representing the current model; null uses the parametric preview. */
 export function currentModelScene(model: CurrentModel, viewport: ImportedMeshState = importedMeshStore.getSnapshot()) {
-  if (model.kind === 'file') return viewport.file && (!model.ingestId || viewport.file.ingestId === model.ingestId) ? viewport.file : null;
+  if (model.kind === 'file' || model.kind === 'assembly') return viewport.file && (!model.ingestId || viewport.file.ingestId === model.ingestId) ? viewport.file : null;
   if (model.kind === 'parametric') return viewport.showing === 'solver' ? viewport.solver : null;
   const { cad, solver } = currentCadScenes(model, viewport);
   return viewport.showing === 'cadSolver' ? solver ?? cad : cad;
@@ -117,16 +118,17 @@ export function currentModel(): CurrentModel {
       ? viewport.solver.modelKey === parametricKey : previewShowing, unloadedRunId,
   };
   const file = workspace.importedInput === 'file';
+  const assembly = workspace.importedInput === 'assembly';
   const cad = cadModelSelection();
-  const record = file ? imported.input === 'file' ? imported.prepared : null : cad.record;
+  const record = file || assembly ? imported.input === workspace.importedInput ? imported.prepared : null : cad.record;
   const ingestId = record?.ingest_id ?? null;
   const sha = (record as { solve_model_sha256?: string } | null)?.solve_model_sha256;
   const registered = record?.model_id || (imported.input === workspace.importedInput && imported.prepared?.ingest_id === ingestId ? imported.modelId : null);
   const modelId = registered === 'unfiled' ? null : registered;
-  const model: CurrentModel = { kind: file ? 'file' : 'cad', key: sha || ingestId, lineage: modelId || ingestId,
-    label: file ? 'Mesh file' : cad.label, modelId, ingestId, unloadedRunId,
-    requestId: file ? null : cad.bundle?.requestId,
-    returnId: file ? null : cad.bundle?.returnId,
+  const model: CurrentModel = { kind: assembly ? 'assembly' : file ? 'file' : 'cad', key: sha || ingestId, lineage: modelId || ingestId,
+    label: assembly ? imported.model?.display_name || 'Assembly' : file ? 'Mesh file' : cad.label, modelId, ingestId, unloadedRunId,
+    requestId: file || assembly ? null : cad.bundle?.requestId,
+    returnId: file || assembly ? null : cad.bundle?.returnId,
     manifestSha256: record?.manifest_sha256,
     viewportShowing: false };
   return { ...model, viewportShowing: !!ingestId && currentModelScene(model, viewport) !== null };

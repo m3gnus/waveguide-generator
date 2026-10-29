@@ -9,7 +9,7 @@ import { namespaceStorage } from './durableSettings';
  * project's lineage. Both named a model, so the first start after an upgrade
  * migrates whichever exists into this pointer and drops them.
  */
-export type LastModelInput = 'file' | 'cad';
+export type LastModelInput = 'file' | 'cad' | 'assembly';
 export interface LastModel { model_id: string; input: LastModelInput }
 
 const storage = namespaceStorage('lastModel');
@@ -28,11 +28,11 @@ function parseStored(raw: string | null): Stored {
   const out: Stored = { pointers: {}, failed: {} };
   if (!raw) return out;
   try {
-    const value = JSON.parse(raw) as { model_id?: unknown; input?: unknown; file?: unknown; cad?: unknown; failed?: Record<string, unknown> } | null;
+    const value = JSON.parse(raw) as { model_id?: unknown; input?: unknown; file?: unknown; cad?: unknown; assembly?: unknown; failed?: Record<string, unknown> } | null;
     const take = (input: LastModelInput, id: unknown) => { if (typeof id === 'string' && id.trim()) out.pointers[input] = id.trim(); };
-    take('file', value?.file); take('cad', value?.cad);
-    if (value?.input === 'file' || value?.input === 'cad') take(value.input, value.model_id);
-    for (const input of ['file', 'cad'] as const) {
+    take('file', value?.file); take('cad', value?.cad); take('assembly', value?.assembly);
+    if (value?.input === 'file' || value?.input === 'cad' || value?.input === 'assembly') take(value.input, value.model_id);
+    for (const input of ['file', 'cad', 'assembly'] as const) {
       const count = value?.failed?.[input];
       if (out.pointers[input] && typeof count === 'number' && count > 0) out.failed[input] = Math.floor(count);
     }
@@ -43,8 +43,8 @@ function parseStored(raw: string | null): Stored {
 const parse = (raw: string | null): Pointers => parseStored(raw).pointers;
 
 function writeStored({ pointers, failed }: Stored): void {
-  if (!pointers.file && !pointers.cad) { storage.removeItem(KEY); return; }
-  const kept = Object.fromEntries((['file', 'cad'] as const).filter((input) => pointers[input] && failed[input]).map((input) => [input, failed[input]]));
+  if (!pointers.file && !pointers.cad && !pointers.assembly) { storage.removeItem(KEY); return; }
+  const kept = Object.fromEntries((['file', 'cad', 'assembly'] as const).filter((input) => pointers[input] && failed[input]).map((input) => [input, failed[input]]));
   storage.setItem(KEY, JSON.stringify({ ...pointers, ...(Object.keys(kept).length ? { failed: kept } : {}) }));
 }
 

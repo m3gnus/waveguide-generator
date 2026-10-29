@@ -16,6 +16,8 @@ import '../shell/cadlink/restores';
 import { resetSolveOptionsStore, restoreEnginePreference, useImportedSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
 import { workspaceModeStore } from './workspaceMode';
 import { durableSettings, SETTINGS_NAMESPACES } from './durableSettings';
+import { importedSimulationSetup } from './importedSimulationSetup';
+import { currentModel, modelForRun, runVerdict } from '../model/currentModel';
 
 const MSH = new TextDecoder().decode(readFileSync('../server/tests/fixtures/mesh_import/tetra.msh'));
 const mesh: RegisteredMesh = { ingest_id: 'wgi_file', model_id: 'mesh-file:sha256:artifact', producer: 'mesh-file',
@@ -47,6 +49,49 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('openImported', () => {
+  it('reopens an assembly run through the third shared adapter, with its exact setup and no CAD sizing', async () => {
+    const id = '00000000-0000-4000-8000-0000000000aa';
+    const modelId = 'design-assembly:wgu_saved';
+    const channels = [{ id: 'horn-throat', source_ids: ['horn-throat'], motion: 'normal' },
+      { id, source_ids: [`${id}/cone`, `${id}/cap`], motion: 'axial' }];
+    const saved = { ...setup, geometry: { required_features: ['wg-design-assembly-v1'], drive_channels: channels,
+      skipped_source_ids: [], driver_groups: [{ id: 'lf', channel_ids: [id], label: 'LF',
+        member_processing: { [id]: { weight: 0.8, delay_ms: 0.25, invert: true } } }] } };
+    const prepared = { ingest_id: 'wgi_assembly', model_id: modelId, producer: 'design-assembly',
+      manifest_sha256: 'sha256:manifest', artifact_sha256: 'sha256:artifact', msh_text: MSH,
+      design: { name: 'Saved assembly' }, excitations: channels,
+      sources: channels.flatMap(channel => channel.source_ids.map(source => ({ id: source, role: channel.id === id ? 'LF' : 'HF' }))),
+      source_tags: { 'horn-throat': 2, [`${id}/cone`]: 3, [`${id}/cap`]: 4 } };
+    const job = { ...run('assembly-run'), config_summary: { geometry_type: 'imported', import_origin: 'design-assembly' },
+      cad_source: { ingest_id: prepared.ingest_id, model_id: modelId } } as unknown as JobItem;
+    const beforeCad = useCadReturnStore.getState();
+    const fetcher = vi.fn<typeof fetch>(async () => json(workspace({ prepared, original_available: false,
+      model: { model_id: modelId, producer: 'design-assembly', display_name: 'Saved assembly' },
+      setup: { revision_id: 'wgs_assembly', content: saved } })));
+    expect(await openImported({ kind: 'run', job }, fetcher)).toBe(true);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(useCadReturnStore.getState()).toBe(beforeCad);
+    expect(useImportedModelStore.getState()).toMatchObject({ input: 'assembly', phase: 'ready',
+      modelId, prepared, originalAvailable: false, restoredRevisionId: 'wgs_assembly', setup: saved });
+    expect(unchangedSetup('assembly', prepared.ingest_id)).toEqual({ setup_revision_id: 'wgs_assembly' });
+    expect(importedSimulationSetup()).toMatchObject({ input: 'assembly', driveChannels: channels,
+      driverGroups: [{ id: expect.any(String), channelIds: ['horn-throat'] }, { id: 'lf', channelIds: [id], label: 'LF' }] });
+    expect(currentModel().kind).toBe('assembly');
+    expect(modelForRun(job).kind).toBe('assembly');
+    expect(runVerdict(job, currentModel())).toBe('current');
+    expect(fileMeshSetup().geometry).toEqual(saved.geometry);
+    useImportedSolveOptionsStore.getState().setFrequencySpacing('log');
+    expect(unchangedSetup('assembly', prepared.ingest_id)).toBeNull();
+    const edited = fileMeshSetup();
+    expect(edited.geometry.required_features).toEqual(['wg-design-assembly-v1']);
+    expect(edited.geometry.drive_channels).toEqual(channels);
+    expect(edited.geometry.driver_groups?.find(group => group.id === 'lf')?.member_processing?.[id]).toEqual({ weight: 0.8, delay_ms: 0.25, invert: true });
+    expect(edited.geometry.mesh).toBeUndefined();
+    workspaceModeStore.setImportedInput('file');
+    workspaceModeStore.setImportedInput('assembly');
+    expect(useImportedModelStore.getState()).toMatchObject({ input: 'assembly', phase: 'ready', modelId });
+  });
+
   it('opens a run from its workspace alone: model, prepared mesh, original, draft and setup revision', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => json(workspace()));
     const opening = openImported({ kind: 'run', job: run() }, fetcher);

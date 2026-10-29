@@ -32,7 +32,7 @@ import { workspaceModeStore } from './workspaceMode';
  * it was opened with (`restoredRevisionId`), which the server solves exactly.
  */
 
-export type ImportedInput = 'file' | 'cad';
+export type ImportedInput = 'file' | 'cad' | 'assembly';
 export type ImportedPhase = 'empty' | 'loading' | 'ready' | 'failed';
 /** How a file's original becomes its solver mesh; preparing it again makes a new prepared mesh. */
 export interface FileDraft {
@@ -184,7 +184,7 @@ function fileDraftOf(prepared: Extract<ImportedSource, { kind: 'file' }>['prepar
 }
 
 function inputOf(producer: string | null | undefined): ImportedInput {
-  return producer === 'mesh-file' ? 'file' : 'cad';
+  return producer === 'design-assembly' ? 'assembly' : producer === 'mesh-file' ? 'file' : 'cad';
 }
 
 /** A synchronous source: the store describes it at once. */
@@ -292,8 +292,8 @@ export async function openImported(source: ImportedSource, fetcher: typeof fetch
   // An unnumbered CAD preparation is not an archived run.
   if (source.kind === 'run' && (source.job.config_summary.geometry_type !== 'imported' || source.job.run_number === null)) return false;
   const input: ImportedInput = source.kind === 'cad-preparation' ? 'cad' : source.kind === 'run'
-    ? (source.job.config_summary.import_origin === 'mesh-file' ? 'file' : 'cad')
-    : (source.modelId.startsWith('mesh-file:') ? 'file' : 'cad');
+    ? inputOf(source.job.config_summary.import_origin as string | undefined)
+    : (source.modelId.startsWith('design-assembly:') ? 'assembly' : source.modelId.startsWith('mesh-file:') ? 'file' : 'cad');
   const view = views[input];
   if (!view) throw new Error('This model cannot be shown here.');
   const display = source.display ?? {};
@@ -337,7 +337,7 @@ export async function openImported(source: ImportedSource, fetcher: typeof fetch
       setup: opened.setup && opened.exact ? structuredClone(opened.setup) : null,
       restoredRevisionId: opened.setup && opened.exact ? opened.revisionId : null,
       setupEditBase: null,
-      fileSimulation: input === 'file' ? seedFileSimulation(prepared as RegisteredMesh, opened.setup) : null,
+      fileSimulation: input !== 'cad' ? seedFileSimulation(prepared as RegisteredMesh, opened.setup) : null,
       fileDraft: input === 'file' ? fileDraftOf(opened.prepared) : useImportedModelStore.getState().fileDraft,
       phase: 'ready', error: null, followEnginePreference: source.kind === 'model' && source.useEnginePreference === true,
     });
@@ -533,7 +533,7 @@ export function effectiveImportedSetup(input: ImportedInput, preparedId: string 
 // the edit is not silently replaced by what arrives.
 /** Which input's setup an edit changed: the file rail's, the CAD rail's, or the options on screen. */
 function editedInput(source: string | undefined): ImportedInput {
-  if (source === 'meshImport') return 'file';
+  if (source === 'meshImport') return workspaceModeStore.getSnapshot().importedInput === 'assembly' ? 'assembly' : 'file';
   if (source === 'importedSolveOptions') return workspaceModeStore.getSnapshot().importedInput;
   // cadReturn announces their setters without a source.
   return 'cad';
@@ -625,7 +625,7 @@ export function discardParkedCadModel(): void {
 
 /** The imported options were reset: neither input keeps parked options. */
 export function resetParkedImportedOptions(): void {
-  for (const input of ['cad', 'file'] as const) if (parked[input]) parked[input] = { ...parked[input]!, options: null };
+  for (const input of ['cad', 'file', 'assembly'] as const) if (parked[input]) parked[input] = { ...parked[input]!, options: null };
   activeInput = workspaceModeStore.getSnapshot().importedInput;
 }
 
@@ -644,6 +644,7 @@ export function endOpenedSetup(input: ImportedInput): void {
 export function resetImportedModelStore(): void {
   delete parked.cad;
   delete parked.file;
+  delete parked.assembly;
   activeInput = workspaceModeStore.getSnapshot().importedInput;
   useImportedModelStore.setState({ ...emptyState(activeInput), generation: 0 });
 }

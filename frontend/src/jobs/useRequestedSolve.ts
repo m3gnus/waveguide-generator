@@ -53,7 +53,7 @@ function solveInputs() {
   // Reuse the submission builders: setup identity includes retained physics,
   // not just the subset of settings the current controls can express.
   try {
-    setup = model.kind === 'file' ? fileMeshSetup()
+    setup = model.kind === 'file' || model.kind === 'assembly' ? fileMeshSetup()
       : model.kind === 'cad' ? buildImportedSubmission(useCadReturnStore.getState()) : null;
   } catch { /* An incomplete edit is also caught by the control snapshot/edit signal. */ }
   const frame = model.kind === 'cad' && model.ingestId ? useCadSolverFrameStore.getState().frames[model.ingestId] : null;
