@@ -148,6 +148,7 @@ export async function loadMeshFile(filename: string, text: string, fetcher: type
     editFileDraft({ roles, units: preparation?.units ?? summary.suggested_units ?? '',
       forward: preparation?.forward ?? '+z', up: preparation?.up ?? '+y',
       domainPlanes: preparation?.domain_planes ?? summary.detected_planes ?? [],
+      autoCut: preparation ? preparation.auto_cut ?? false : !(summary.detected_planes?.length),
       reflectPlanes: preparation?.reflect_planes ?? null, removeLidPlanes: preparation?.remove_lid_planes ?? [] });
     if (previous?.setup) {
       seedFileOptions(previous.setup);
@@ -177,7 +178,8 @@ export function subscribePreparedFileSetup(listener: (setup: PreparedFileSetup) 
 }
 let preparationPromise: Promise<void> | null = null;
 let preparationIntent = 0;
-registerImportedPreparationFlush(async () => { await preparationPromise; });
+let preparationController: AbortController | null = null;
+registerImportedPreparationFlush(async () => { await preparationPromise; }, () => preparationController?.abort());
 
 /** Prepare the file as the rail is set: from the original in hand, or the one the server retained. */
 export function prepareMeshFile(fetcher: typeof fetch = fetch, inspectFrame = false): Promise<void> {
@@ -193,7 +195,11 @@ async function prepareMeshFileIntent(fetcher: typeof fetch, inspectFrame: boolea
   const model = useImportedModelStore.getState();
   let draft = model.fileDraft;
   const modelId = model.input === 'file' ? model.modelId : null;
+  preparationController?.abort();
+  preparationController = null;
   if (model.input !== 'file' || meshImportChoice(draft) || (!state.original && !(modelId && model.originalAvailable))) return;
+  const controller = new AbortController();
+  preparationController = controller;
   const generation = importedMeshStore.beginIntent();
   const request = ++requestNumber;
   useMeshImportStore.setState({ busy: true, error: null, request });
@@ -221,20 +227,21 @@ async function prepareMeshFileIntent(fetcher: typeof fetch, inspectFrame: boolea
       if (!importedMeshStore.isCurrentGeneration(generation)
         || JSON.stringify(useImportedModelStore.getState().fileDraft) !== JSON.stringify(draft)) return;
       useMeshImportStore.setState({ summary, frameDirty: false });
-      if (inspectFrame || state.frameDirty) editFileDraft({ domainPlanes: summary.detected_planes ?? [], reflectPlanes: null, removeLidPlanes: [] });
+      if (inspectFrame || state.frameDirty) editFileDraft({ domainPlanes: summary.detected_planes ?? [], autoCut: draft.autoCut ?? !(summary.detected_planes?.length), reflectPlanes: null, removeLidPlanes: [] });
       draft = useImportedModelStore.getState().fileDraft;
     }
     const preparation = { units: draft.units, forward: draft.forward, up: draft.up,
       roles: Object.fromEntries(Object.entries(draft.roles ?? Object.fromEntries(draft.selected.map(tag => [tag, 'HF'])))
         .map(([tag, role]) => [tag, role ?? 'RIGID'])),
+      ...(draft.autoCut ? { auto_cut: true } : {}),
       domain_planes: draft.domainPlanes ?? [], reflect_planes: draft.reflectPlanes ?? null,
       remove_lid_planes: draft.removeLidPlanes ?? [] };
 
     // The same file prepared the same way is the same retained mesh. Without
     // the original in hand (a restored file), the server prepares its own copy.
     const record = state.original
-      ? await registerMesh({ filename: state.filename, msh_text: state.original, ...preparation }, fetcher)
-      : await prepareMeshModel(modelId!, preparation, fetcher);
+      ? await registerMesh({ filename: state.filename, msh_text: state.original, ...preparation }, fetcher, controller.signal)
+      : await prepareMeshModel(modelId!, preparation, fetcher, controller.signal);
     if (!importedMeshStore.isCurrentGeneration(generation)) {
       if (intent === preparationIntent && retained) {
         const setup = setupForPreparedFile(retained, record, simulation);
@@ -259,6 +266,7 @@ async function prepareMeshFileIntent(fetcher: typeof fetch, inspectFrame: boolea
     }
   } finally {
     unsubscribe();
+    if (preparationController === controller) preparationController = null;
     if (useMeshImportStore.getState().request === request) useMeshImportStore.setState({ busy: false });
   }
 }
@@ -455,6 +463,7 @@ function fillFileRail(record: RegisteredMesh, setup: ImportedSetup | null, gener
       ...Object.fromEntries((record.symmetry?.reflected_planes ?? []).map(plane => [plane, 'negative' as const])),
     } },
     request: useMeshImportStore.getState().request,
+    notice: record.source_file.transform.symmetry_report?.note ?? null,
   });
   return true;
 }
@@ -474,7 +483,7 @@ export const fileImportedView: ImportedView = {
         assertFileRecord(record, opened.setup, opened.prepared.ingest_id);
         if (!current()) return null;
         if (!fillFileRail(record, opened.setup, generation)) return null;
-        if (opened.note) useMeshImportStore.setState({ notice: opened.note });
+        if (opened.note) useMeshImportStore.setState(state => ({ notice: [state.notice, opened.note].filter(Boolean).join(' · ') }));
         return record;
       },
       fail(message) {

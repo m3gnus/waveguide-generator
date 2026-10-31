@@ -1,5 +1,5 @@
 import type { ImportedSetup } from '../jobs/importedSetup';
-import { requestImportedModel } from './importedModels';
+import { importedPreparationHeaders, requestImportedModel } from './importedModels';
 
 export interface MeshSummary {
   known_model?: { model_id: string; latest_prepared_id: string };
@@ -25,7 +25,7 @@ export interface RegisteredMesh {
   producer: 'mesh-file';
   manifest_sha256: string;
   artifact_sha256: string;
-  source_file: { filename: string; transform: { units: string; forward: string; up: string; removed_lids?: Record<string, { triangle_count: number; groups: Array<{ tag: number; triangle_count: number }> }> }; source_tags: number[]; roles?: Record<string, string>; domain_planes?: string[]; reflect_planes?: string[] | null; remove_lid_planes?: string[] };
+  source_file: { filename: string; transform: { units: string; forward: string; up: string; symmetry_report?: { note?: string }; removed_lids?: Record<string, { triangle_count: number; groups: Array<{ tag: number; triangle_count: number }> }> }; source_tags: number[]; auto_cut?: boolean; roles?: Record<string, string>; domain_planes?: string[]; reflect_planes?: string[] | null; remove_lid_planes?: string[] };
   source_tags: Record<string, number>;
   summary: MeshSummary;
   sources?: Array<{ id: string; role: string; name?: string }>;
@@ -38,15 +38,16 @@ export interface FilePreparation {
   source_tags?: number[];
   roles?: Record<string, string>;
   domain_planes?: string[];
+  auto_cut?: boolean;
   remove_lid_planes?: string[];
   reflect_planes?: string[] | null;
 }
 
 const modelPath = (modelId: string) => `/api/models/${encodeURIComponent(modelId)}`;
 
-function request<T>(url: string, body?: unknown, fetcher: typeof fetch = fetch): Promise<T> {
+function request<T>(url: string, body?: unknown, fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<T> {
   return requestImportedModel(url, fetcher, 'Mesh import', body === undefined ? undefined : {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...importedPreparationHeaders() }, body: JSON.stringify(body), signal,
   });
 }
 
@@ -56,11 +57,11 @@ export const inspectMesh = (filename: string, msh_text: string, fetcher?: typeof
 export const inspectMeshModel = (model_id: string, frame: { units: string; forward: string; up: string }, fetcher?: typeof fetch) =>
   request<MeshSummary>('/api/models/files/inspect', { model_id, ...frame }, fetcher);
 /** Import a file as its model and prepare it; the same file and preparation is the same mesh. */
-export const registerMesh = async (body: FilePreparation & { filename: string; msh_text: string }, fetcher?: typeof fetch) =>
-  (await request<{ prepared: RegisteredMesh }>('/api/models/files', body, fetcher)).prepared;
+export const registerMesh = async (body: FilePreparation & { filename: string; msh_text: string }, fetcher?: typeof fetch, signal?: AbortSignal) =>
+  (await request<{ prepared: RegisteredMesh }>('/api/models/files', body, fetcher, signal)).prepared;
 /** Prepare a file model again from the original the server retained. */
-export const prepareMeshModel = async (modelId: string, body: FilePreparation, fetcher?: typeof fetch) =>
-  (await request<{ prepared: RegisteredMesh }>(`${modelPath(modelId)}/prepare`, body, fetcher)).prepared;
+export const prepareMeshModel = async (modelId: string, body: FilePreparation, fetcher?: typeof fetch, signal?: AbortSignal) =>
+  (await request<{ prepared: RegisteredMesh }>(`${modelPath(modelId)}/prepare`, body, fetcher, signal)).prepared;
 /** The model a prepared mesh is filed under, or null when the server has none for it. */
 export async function findPreparedModel(preparedId: string, fetcher: typeof fetch = fetch):
   Promise<{ model_id: string; prepared_id: string } | null> {

@@ -5897,6 +5897,11 @@
         "additionalProperties": false,
         "description": "How a file is turned into a solver mesh: its units, frame and sources.",
         "properties": {
+          "auto_cut": {
+            "default": false,
+            "title": "Auto Cut",
+            "type": "boolean"
+          },
           "domain_planes": {
             "items": {
               "type": "string"
@@ -9849,6 +9854,11 @@
       "MeshRegistration": {
         "additionalProperties": false,
         "properties": {
+          "auto_cut": {
+            "default": false,
+            "title": "Auto Cut",
+            "type": "boolean"
+          },
           "domain_planes": {
             "items": {
               "type": "string"

@@ -16,6 +16,11 @@ export const isModelGone = (error: unknown): boolean =>
 
 const setupWriter = globalThis.crypto?.randomUUID?.() ?? `w${Date.now()}${Math.random()}`;
 let setupSequence = 0;
+let preparationSequence = 0;
+/** Shared order for file preparations and reopening the model that supersedes them. */
+export const importedPreparationHeaders = (): Record<string, string> => ({
+  'X-WG-Preparation-Session': setupWriter, 'X-WG-Preparation-Seq': String(++preparationSequence),
+});
 /** One ordered setup write for both imported inputs, including a page's final edit. */
 export async function writeImportedSetup(modelId: string,
   body: { setup: unknown; prepared_id?: string; inventory?: CadSourceInventoryEntry[] },
@@ -86,7 +91,7 @@ export const readRunWorkspace = (jobId: string, fetcher: typeof fetch = fetch): 
 export const readImportedModel = (modelId: string, preparedId: string | null, fetcher: typeof fetch = fetch):
   Promise<{ model: ImportedModelSummary; latest_prepared: PreparedSummary | null; prepared?: PreparedSummary; original_available: boolean }> =>
   requestImportedModel(`/api/models/${encodeURIComponent(modelId)}${preparedId ? `?prepared_id=${encodeURIComponent(preparedId)}` : ''}`,
-    fetcher, 'This model');
+    fetcher, 'This model', modelId.startsWith('mesh-file:') ? { headers: importedPreparationHeaders() } : undefined);
 
 /** A CAD return can read its setup before its mesh is prepared. Same inventory key as reopen. */
 export const readCadInventorySetup = (modelId: string, inventory: CadSourceInventoryEntry[], fetcher: typeof fetch = fetch):

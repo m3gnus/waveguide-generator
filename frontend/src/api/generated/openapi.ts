@@ -4715,6 +4715,11 @@ export interface components {
          * @description How a file is turned into a solver mesh: its units, frame and sources.
          */
         FilePreparation: {
+            /**
+             * Auto Cut
+             * @default false
+             */
+            auto_cut?: boolean;
             /** Domain Planes */
             domain_planes?: string[];
             /**
@@ -5801,6 +5806,11 @@ export interface components {
         };
         /** MeshRegistration */
         MeshRegistration: {
+            /**
+             * Auto Cut
+             * @default false
+             */
+            auto_cut?: boolean;
             /** Domain Planes */
             domain_planes?: string[];
             /** Filename */

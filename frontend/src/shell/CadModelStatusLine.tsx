@@ -55,8 +55,8 @@ export function useFileModelView(): FileModelView {
   return { input: 'file', label: state.filename,
     reading: state.busy && !summary, preparing: state.busy && !!summary,
     choice: summary ? meshImportChoice(draft) : null, failureMessage: state.error ?? saveError,
-    canPrepare: editable && !!summary && !saveError, prepared: !!registered, triangles: summary?.triangle_count ?? null,
-    symmetryLabel: fileSymmetryLabel(draft.domainPlanes ?? [], false), notice: state.notice,
+    canPrepare: editable && !!summary && !saveError, prepared: !!registered, triangles: registered?.summary.triangle_count ?? summary?.triangle_count ?? null,
+    symmetryLabel: fileSymmetryLabel(registered?.symmetry?.domain_planes ?? draft.domainPlanes ?? [], false), notice: state.notice,
   };
 }
 

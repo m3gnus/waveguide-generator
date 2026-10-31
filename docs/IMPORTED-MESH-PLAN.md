@@ -39,10 +39,13 @@ The earlier restriction to selecting existing labels as sources has been lifted:
 group can be assigned a different role. WG does not paint faces or rename the file's
 group names.
 
-Automatic cutting of a full symmetric file mesh to a half or quarter is not
-available. Export a half or quarter from the meshing tool before import when you
-want to solve a reduced model. This is separate from the 22,000-triangle solve
-choice. File meshes now use the shared **Crossover** and **Passive cardioid**
+For full file meshes, **Auto · cut for speed** checks geometry and source-group
+symmetry and cuts to a half or quarter when verified. **Change** offers explicit
+half/quarter choices and **Full model** to keep the whole mesh. Cutting supports
+up to **5,000 input triangles**; a larger mesh or an unverified cut keeps the valid
+full mesh ready to solve, with a status note. Export the half or quarter to solve
+faster. This cut bound is separate from the 22,000-triangle solve choice. File meshes
+now use the shared **Crossover** and **Passive cardioid**
 controls in the Simulation tab. Coupled Passive cardioid requires an MF driver
 and a port topology, and it cannot be combined with Crossover.
 

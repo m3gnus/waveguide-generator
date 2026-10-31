@@ -19,6 +19,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
+import uuid
 from typing import Any, Literal
 
 from fastapi import APIRouter, FastAPI, Query, Request
@@ -30,7 +31,7 @@ from server.cadlink.identity import mint_id, utc_now
 from server.cadlink.operations import REASON_UPDATE_RESTART_PENDING
 from server.cadlink.roles import inventory_sha256, normalize_source_role, prepared_inventory_sha256
 from server.cadlink.intake.design_assembly import AssemblySuperseded, compile_design_assembly
-from server.cadlink.store import FILE_MODEL_PREFIX, UNFILED_MODEL_ID, design_model_id, file_model_id
+from server.cadlink.store import FILE_MODEL_PREFIX, UNFILED_MODEL_ID, StaleAttempt, design_model_id, file_model_id
 from server.cadlink.wglink_protocol import SOURCE_ROLES
 from server.contracts.geometry import SYMMETRY_PLANE_AXIS, imported_symmetry_from_cut_planes
 from server.contracts import JobModel
@@ -43,6 +44,7 @@ from server.jobs.imported_setup import (
     solve_request_for,
     validate_setup,
 )
+from server.jobs.request_cancellation import ClientDisconnected, RequestCancellation
 from server.jobs.model_solve import ModelSolveRefusal, ModelSolveRequest, solve_model
 from server.jobs.models import SolveAccepted
 from server.jobs.runtime import ImportedSolveRefusal
@@ -50,10 +52,11 @@ from server.mesh.artifact import read_verified_import_mesh
 from server.design.schema import DesignConfig
 from server.design.uid import DesignUid
 from server.mesh.builder import _enforce_dense_solver_memory_ceiling, assembly_front_context
-from server.mesh.child import MesherChildError, MesherCrashError
+from server.mesh.child import MesherChildError, MesherCrashError, run_mesh_build
 from server.mesh.errors import SolverMemoryTooLarge
-from server.mesh.file_import import MAX_MESH_BYTES, file_mesh_integrity, inspect_file_mesh, mesh_text, parse_file_mesh, prepare_file_mesh, solve_group_tags, validate_file_symmetry, validate_remove_lid_planes
+from server.mesh.file_import import MAX_MESH_BYTES, FileMesh, file_mesh_integrity, inspect_file_mesh, mesh_text, parse_file_mesh, prepare_file_mesh, prepare_file_mesh_options, solve_group_tags, validate_file_symmetry, validate_remove_lid_planes
 from server.mesh.imported import polar_grid_from_symmetry
+from server.mesh.preparation_fence import PreparationFence, PreparationSuperseded
 from server.mesh.prepared_gc import prepared_mesh_use
 from server.mesh.prepared_record import seal_prepared_record
 from server.platform.staging import publish_staging_directory
@@ -93,6 +96,7 @@ class FilePreparation(JobModel):
     source_tags: list[int] = Field(default_factory=list, max_length=128)
     roles: dict[int, str] | None = Field(default=None, max_length=256)
     domain_planes: list[str] = Field(default_factory=list, max_length=2)
+    auto_cut: bool = False
     reflect_planes: list[str] | None = Field(default=None, max_length=2)
     remove_lid_planes: list[str] = Field(
         default_factory=list, max_length=2,
@@ -207,12 +211,25 @@ def _intact(record: dict[str, Any], source_bytes: bytes, solver_text: str) -> bo
         return False
 
 
+def _file_original(body: MeshRegistration) -> FileMesh:
+    original = parse_file_mesh(body.msh_text)
+    if len(set(body.source_tags)) != len(body.source_tags) or set(body.source_tags) - set(
+        original.tags.tolist()
+    ):
+        raise ValueError("Select unique driven groups that exist in this mesh.")
+    if body.roles is not None and set(body.roles) - set(original.tags.tolist()):
+        raise ValueError("Assign roles only to groups that exist in this mesh.")
+    return original
+
+
 def register_mesh(
     store: Any,
     data_dir: Path,
     body: MeshRegistration,
     *,
     validate_record: Any = None,
+    prepared: tuple[FileMesh, dict[str, Any]] | None = None,
+    commit_guard: Any = None,
 ) -> dict[str, Any]:
     """Prepare a file once per (original, preparation): the same inputs are one ingest.
 
@@ -225,7 +242,7 @@ def register_mesh(
     """
 
     with prepared_mesh_use():
-        return _register_mesh(store, data_dir, body, validate_record=validate_record)
+        return _register_mesh(store, data_dir, body, validate_record=validate_record, prepared=prepared, commit_guard=commit_guard)
 
 
 def _register_mesh(
@@ -234,20 +251,17 @@ def _register_mesh(
     body: MeshRegistration,
     *,
     validate_record: Any = None,
+    prepared: tuple[FileMesh, dict[str, Any]] | None = None,
+    commit_guard: Any = None,
 ) -> dict[str, Any]:
-    original = parse_file_mesh(body.msh_text)
-    if len(set(body.source_tags)) != len(body.source_tags) or set(body.source_tags) - set(
-        original.tags.tolist()
-    ):
-        raise ValueError("Select unique driven groups that exist in this mesh.")
-    if body.roles is not None and set(body.roles) - set(original.tags.tolist()):
-        raise ValueError("Assign roles only to groups that exist in this mesh.")
+    original = _file_original(body)
     roles = body.driven_roles()
-    mesh, transform = prepare_file_mesh(original, body.units, body.forward, body.up,
+    mesh, transform = prepared if prepared is not None else prepare_file_mesh(original, body.units, body.forward, body.up,
                                       domain_planes=body.domain_planes, reflect_planes=body.reflect_planes,
-                                      remove_lid_planes=body.remove_lid_planes, roles=roles)
+                                      remove_lid_planes=body.remove_lid_planes, roles=roles, auto_cut=body.auto_cut)
+    effective_planes = transform.get("domain_planes", body.domain_planes)
     _enforce_dense_solver_memory_ceiling(
-        mesh.triangles, imported_symmetry_from_cut_planes(body.domain_planes).quadrants,
+        mesh.triangles, imported_symmetry_from_cut_planes(effective_planes).quadrants,
         tags=mesh.tags,
     )
     if not roles:
@@ -274,6 +288,8 @@ def _register_mesh(
         spec["reflect_planes"] = body.reflect_planes
     if body.remove_lid_planes:
         spec["remove_lid_planes"] = body.remove_lid_planes
+    if body.auto_cut:
+        spec["auto_cut"] = True
     spec_digest = _sha256(canonical_utf8_strict_json(spec).encode())
     model_id = file_model_id(original_digest)
 
@@ -285,7 +301,7 @@ def _register_mesh(
         if _intact(existing, source_bytes, solver_text):
             if validate_record is not None:
                 validate_record(dict(existing))
-            store.touch_ingest(str(existing["ingest_id"]))
+            store.select_model_ingest(model_id, str(existing["ingest_id"]), commit_guard=commit_guard)
             return existing
 
     parent = data_dir / "imports" / "files"
@@ -331,16 +347,16 @@ def _register_mesh(
         "skipped_source_ids": [],
         "acoustic_domain": "free-space",
         "normalisation": {"assembly_frame_is_solver_frame": True},
-        "symmetry": {"domain_planes": body.domain_planes, "cut_planes": [],
+        "symmetry": {"domain_planes": effective_planes, "cut_planes": transform.get("cut_planes", []),
                      "reflected_planes": transform.get("reflected_planes", [])},
         "polar_grid_derivation": polar_grid_from_symmetry({
-            "domain_planes": body.domain_planes,
-            "planes": {plane: {"accepted": plane in body.domain_planes} for plane in SYMMETRY_PLANE_AXIS},
+            "domain_planes": effective_planes,
+            "planes": {plane: {"accepted": plane in effective_planes} for plane in SYMMETRY_PLANE_AXIS},
         }),
         "evidence": {"fem_regions": [], "fem_air_volumes": []},
         "mesh": {
             "stats": {"triangle_count": len(mesh.triangles), "node_count": len(mesh.points)},
-            "integrity": file_mesh_integrity(mesh, body.domain_planes),
+            "integrity": file_mesh_integrity(mesh, effective_planes),
             "metadata": {},
         },
         "summary": {
@@ -368,6 +384,7 @@ def _register_mesh(
             artifact_sha256=original_digest,
             record_json=seal_prepared_record(record, producer="mesh-file"),
             known_ingest_ids=[candidate["ingest_id"] for candidate in candidates],
+            commit_guard=commit_guard,
         )
     except BaseException:
         shutil.rmtree(destination, ignore_errors=True)
@@ -375,7 +392,47 @@ def _register_mesh(
     if not created:
         # A concurrent preparation of the same file and spec committed first.
         shutil.rmtree(destination, ignore_errors=True)
+        store.select_model_ingest(model_id, row["ingest_id"], commit_guard=commit_guard)
     return json.loads(row["record_json"])
+
+
+async def prepare_registration(body: MeshRegistration, cancel_cb: Any = None) -> tuple[FileMesh, dict[str, Any]]:
+    """Compute in the owned killable mesh child, without stores or publication."""
+    if cancel_cb is not None:
+        cancel_cb()
+    original = await asyncio.to_thread(_file_original, body)
+    options = {"units": body.units, "forward": body.forward, "up": body.up,
+               "domain_planes": body.domain_planes, "reflect_planes": body.reflect_planes,
+               "remove_lid_planes": body.remove_lid_planes, "roles": body.driven_roles(), "auto_cut": body.auto_cut}
+    # Keep legacy validation free of native imports. Only requests that may
+    # cut need a Gmsh session; that session belongs to the existing child.
+    from server.mesh.file_cut import MAX_FILE_CUT_TRIANGLES
+    if (body.auto_cut or body.domain_planes) and len(original.triangles) <= MAX_FILE_CUT_TRIANGLES:
+        try:
+            return await run_mesh_build(prepare_file_mesh_options, original, options, cancel_cb=cancel_cb)
+        except MesherCrashError as exc:
+            sides = inspect_file_mesh(original, body.units, body.forward, body.up)["kept_sides"]
+            if (body.auto_cut and not body.domain_planes) or any(sides.get(plane) == "both" for plane in body.domain_planes):
+                raise ValueError(
+                    "Cutting this mesh stopped before it finished. Choose Full model in the symmetry settings and try again."
+                ) from exc
+            raise
+    return await asyncio.to_thread(prepare_file_mesh_options, original, options)
+
+
+async def register_mesh_async(
+    store: Any, data_dir: Path, body: MeshRegistration, *, commit_guard: Any = None, cancel_cb: Any = None,
+) -> dict[str, Any]:
+    attempt = RequestCancellation(None, commit_guard=commit_guard, cancel_cb=cancel_cb)
+    try:
+        prepared = await prepare_registration(body, attempt.check)
+        attempt.check()
+        # The collection hold lives in the publication thread until its final
+        # store transaction settles, even if the awaiting HTTP task leaves.
+        return await asyncio.to_thread(register_mesh, store, data_dir, body,
+                                       prepared=prepared, commit_guard=attempt.current)
+    finally:
+        attempt.close()
 
 
 def read_original(store: Any, model_id: str) -> tuple[str, str]:
@@ -399,13 +456,16 @@ def read_original(store: Any, model_id: str) -> tuple[str, str]:
     )
 
 
+def retained_registration(store: Any, model_id: str, body: FilePreparation) -> MeshRegistration:
+    with prepared_mesh_use():
+        if store.get_model(model_id) is None:
+            raise ModelRefusal(404, "model_not_found", "Imported model not found. Import the file again.")
+        filename, text = read_original(store, model_id)
+        return MeshRegistration(filename=filename, msh_text=text, **body.model_dump())
+
+
 def prepare_model(store: Any, data_dir: Path, model_id: str, body: FilePreparation) -> dict[str, Any]:
-    if store.get_model(model_id) is None:
-        raise ModelRefusal(404, "model_not_found", "Imported model not found. Import the file again.")
-    filename, text = read_original(store, model_id)
-    return register_mesh(
-        store, data_dir, MeshRegistration(filename=filename, msh_text=text, **body.model_dump())
-    )
+    return register_mesh(store, data_dir, retained_registration(store, model_id, body))
 
 
 def _model_summary(model: dict[str, Any]) -> dict[str, Any]:
@@ -642,10 +702,12 @@ def _file_import_memory(
         preparation = {
             "units": transform["units"], "forward": transform["forward"], "up": transform["up"],
             "roles": matching_roles,
-            "domain_planes": file.get("domain_planes", record.get("symmetry", {}).get("domain_planes", [])),
+            "domain_planes": file.get("domain_planes", [] if file.get("auto_cut") else record.get("symmetry", {}).get("domain_planes", [])),
             "reflect_planes": file.get("reflect_planes"),
             "remove_lid_planes": file.get("remove_lid_planes", list(transform.get("removed_lids", {}))),
         }
+        if file.get("auto_cut"):
+            preparation["auto_cut"] = True
         saved = read_setup(store, previous_id, record["ingest_id"])
         sources = {f"group_{old_tag}": f"group_{current_names[name]}" for name, old_tag in previous_names.items()}
         setup_row = store.get_model_setup(previous_id, prepared_inventory_sha256(record))
@@ -655,6 +717,20 @@ def _file_import_memory(
         }
         return answer
     return answer
+
+
+def begin_file_preparation(application: FastAPI, model_id: str, request: Request, fingerprint: str = "") -> Any:
+    """Share request ordering with file registration, replay and reopening."""
+    if not hasattr(application.state, "file_preparation_fence"):
+        application.state.file_preparation_fence = PreparationFence()
+    fence = application.state.file_preparation_fence
+    session = request.headers.get("X-WG-Preparation-Session", fingerprint or str(uuid.uuid4()))
+    try:
+        sequence = int(request.headers.get("X-WG-Preparation-Seq", "0"))
+    except ValueError as exc:
+        raise ValueError("Invalid mesh preparation sequence.") from exc
+    token = fence.begin(model_id, sequence, session)
+    return lambda _conn: fence.current(token)
 
 
 def mount_models_api(application: FastAPI) -> None:
@@ -693,7 +769,13 @@ def mount_models_api(application: FastAPI) -> None:
         """Run a preparation: a ValueError is the mesh or its choices being refused."""
 
         try:
-            return await asyncio.to_thread(call, *args)
+            return await call(*args) if asyncio.iscoroutinefunction(call) else await asyncio.to_thread(call, *args)
+        except ClientDisconnected:
+            return _refusal(499, "client_disconnected", "Mesh preparation was cancelled.")
+        except (StaleAttempt, PreparationSuperseded):
+            return _refusal(409, "preparation_superseded", "A newer mesh preparation is already selected.")
+        except (MesherChildError, MesherCrashError) as exc:
+            return _refusal(422, "mesh_refused", str(exc))
         except ModelRefusal as exc:
             return _refusal(exc.status, exc.code, str(exc))
         except SolverMemoryTooLarge as exc:
@@ -727,18 +809,23 @@ def mount_models_api(application: FastAPI) -> None:
         return await answer(summary)
 
     @router.post("/files", responses=refused)
-    async def register(body: MeshRegistration) -> Any:
+    async def register(body: MeshRegistration, http_request: Request) -> Any:
         """Import a file as a model and prepare it; the same inputs find the same mesh."""
 
         if (blocked := restart_pending()) is not None:
             return blocked
 
-        def run() -> dict[str, Any]:
-            record = register_mesh(store, data_dir, body)
+        async def run() -> dict[str, Any]:
+            guard = begin_file_preparation(application, file_model_id(_sha256(body.msh_text.encode("utf-8"))), http_request, _sha256(body.model_dump_json(exclude={"msh_text", "filename"}).encode()))
+            cancellation = RequestCancellation(http_request.is_disconnected)
+            try:
+                record = await register_mesh_async(store, data_dir, body, commit_guard=guard, cancel_cb=cancellation.check)
+            finally:
+                cancellation.close()
             model_id = file_model_id(record["artifact_sha256"])
             return {
                 "model": _model_summary(store.get_model(model_id)),
-                "prepared": _prepared_with_mesh(record, model_id),
+                "prepared": await asyncio.to_thread(_prepared_with_mesh, record, model_id),
             }
 
         return await answer(run)
@@ -801,15 +888,21 @@ def mount_models_api(application: FastAPI) -> None:
         return await read(published)
 
     @router.post("/{model_id}/prepare", responses=refused)
-    async def prepare(model_id: str, body: FilePreparation) -> Any:
+    async def prepare(model_id: str, body: FilePreparation, http_request: Request) -> Any:
         """Prepare a file model again from its retained original, however it is now set."""
 
         if (blocked := restart_pending()) is not None:
             return blocked
 
-        def run() -> dict[str, Any]:
-            record = prepare_model(store, data_dir, model_id, body)
-            return {"prepared": _prepared_with_mesh(record, model_id)}
+        async def run() -> dict[str, Any]:
+            guard = begin_file_preparation(application, model_id, http_request, _sha256(body.model_dump_json(exclude={"msh_text", "filename"}).encode()))
+            registration = await asyncio.to_thread(retained_registration, store, model_id, body)
+            cancellation = RequestCancellation(http_request.is_disconnected)
+            try:
+                record = await register_mesh_async(store, data_dir, registration, commit_guard=guard, cancel_cb=cancellation.check)
+            finally:
+                cancellation.close()
+            return {"prepared": await asyncio.to_thread(_prepared_with_mesh, record, model_id)}
 
         return await answer(run)
 
@@ -820,9 +913,14 @@ def mount_models_api(application: FastAPI) -> None:
         return await read(model_of_prepared, store, prepared_id)
 
     @router.get("/{model_id}", responses=readable)
-    async def get_model(model_id: str, prepared_id: str | None = Query(default=None)) -> Any:
+    async def get_model(model_id: str, http_request: Request, prepared_id: str | None = Query(default=None)) -> Any:
         """A model, its latest preparation, and one named preparation with its mesh."""
 
+        if model_id.startswith(FILE_MODEL_PREFIX) and http_request.headers.get("X-WG-Preparation-Session"):
+            try:
+                begin_file_preparation(application, model_id, http_request)
+            except (ValueError, PreparationSuperseded):
+                return _refusal(409, "preparation_superseded", "A newer mesh preparation is already selected.")
         return await read(read_model, store, model_id, prepared_id)
 
     @router.get("/{model_id}/setup", responses=readable)

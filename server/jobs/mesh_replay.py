@@ -13,18 +13,21 @@ from pathlib import Path
 import threading
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from pydantic import Field, JsonValue
 
 from server.contracts import JobModel
 from server.contracts.canonical import canonical_utf8_strict_json
-from server.jobs.models_api import MeshRegistration, public_record, register_mesh
-from server.cadlink.store import file_model_id
+from server.jobs.models_api import MeshRegistration, begin_file_preparation, prepare_registration, public_record, register_mesh
+from server.cadlink.store import StaleAttempt, file_model_id
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.jobs.runtime.core import _solved_under_legacy_axial
 from server.jobs.runtime.cad_lane import _imported_symmetry_metadata
 from server.mesh.artifact import read_verified_import_mesh
-from server.mesh.file_import import MAX_MESH_BYTES, mesh_text, parse_file_mesh, prepare_file_mesh
+from server.mesh.file_import import FileMesh, MAX_MESH_BYTES, mesh_text, parse_file_mesh, prepare_file_mesh
+from server.jobs.request_cancellation import ClientDisconnected, RequestCancellation
+from server.mesh.preparation_fence import PreparationSuperseded
+from server.mesh.child import MesherChildError, MesherCrashError
 from server.mesh.prepared_gc import prepared_mesh_use
 from server.mesh.records import get_prepared_mesh
 from server.solver.imported import AXIAL_CONTRACT_VERSION
@@ -60,7 +63,7 @@ def _inputs(package: MeshReplayInputs) -> dict[str, Any]:
     # New optional preparation fields must not alter historical package checksums.
     if payload["registration"]["roles"] is None:
         payload["registration"].pop("roles")
-    for field, default in (("domain_planes", []), ("reflect_planes", None), ("remove_lid_planes", [])):
+    for field, default in (("domain_planes", []), ("reflect_planes", None), ("remove_lid_planes", []), ("auto_cut", False)):
         if payload["registration"][field] == default:
             payload["registration"].pop(field)
     return payload
@@ -81,7 +84,7 @@ def _validate_file_request(request: SolveRequest, record: dict[str, Any] | None 
         _imported_symmetry_metadata(record, requested=request.options.symmetry)
 
 
-def build_mesh_replay(runtime: Any, store: Any, job_id: str) -> dict[str, Any]:
+def build_mesh_replay(runtime: Any, store: Any, job_id: str, *, prepared: tuple[FileMesh, dict[str, Any]] | None = None, registration_only: bool = False) -> Any:
     snapshot = runtime.store.get_archive_snapshot(job_id)
     if snapshot is None:
         raise LookupError("Run not found.")
@@ -117,14 +120,16 @@ def build_mesh_replay(runtime: Any, store: Any, job_id: str) -> dict[str, Any]:
         filename=source["filename"], msh_text=original_text,
         units=source["transform"]["units"], forward=source["transform"]["forward"],
         up=source["transform"]["up"], source_tags=source["source_tags"],
-        roles=source.get("roles"),
+        roles=source.get("roles"), auto_cut=source.get("auto_cut", False),
         domain_planes=source.get("domain_planes", []), reflect_planes=source.get("reflect_planes"),
         remove_lid_planes=source.get("remove_lid_planes", []),
     )
-    mesh, _ = prepare_file_mesh(parse_file_mesh(original_text), source["transform"]["units"],
+    if registration_only:
+        return registration
+    mesh, _ = prepared if prepared is not None else prepare_file_mesh(parse_file_mesh(original_text), source["transform"]["units"],
                                 source["transform"]["forward"], source["transform"]["up"],
                                 domain_planes=source.get("domain_planes", []), reflect_planes=source.get("reflect_planes"),
-                                remove_lid_planes=source.get("remove_lid_planes", []), roles=registration.driven_roles())
+                                remove_lid_planes=source.get("remove_lid_planes", []), roles=registration.driven_roles(), auto_cut=registration.auto_cut)
     if mesh_text(mesh) != solver_text:
         raise ValueError("The original mesh no longer reconstructs the run's solver mesh.")
     # Remove local job ancestry and a spent submission key, keeping the entire
@@ -147,9 +152,7 @@ def build_mesh_replay(runtime: Any, store: Any, job_id: str) -> dict[str, Any]:
     return {**payload, "content_sha256": _digest(content)}
 
 
-def restore_mesh_replay(
-    runtime: Any, store: Any, data_dir: Path, package: MeshReplayPackage, lock: Any,
-) -> dict[str, Any]:
+def _checked_registration(package: MeshReplayPackage) -> MeshRegistration:
     content = canonical_utf8_strict_json(_inputs(package))
     if len(content.encode("utf-8")) + 100 > MAX_REPLAY_BYTES:
         raise ValueError("The mesh replay package exceeds the 64 MiB limit.")
@@ -161,9 +164,17 @@ def restore_mesh_replay(
     body = package.registration
     if _digest(body.msh_text) != package.original_sha256:
         raise ValueError("The original mesh checksum does not match the replay package.")
-    mesh, _ = prepare_file_mesh(parse_file_mesh(body.msh_text), body.units, body.forward, body.up,
+    return body
+
+
+def restore_mesh_replay(
+    runtime: Any, store: Any, data_dir: Path, package: MeshReplayPackage, lock: Any, *,
+    prepared: tuple[FileMesh, dict[str, Any]] | None = None, commit_guard: Any = None,
+) -> dict[str, Any]:
+    body = _checked_registration(package)
+    mesh, _ = prepared if prepared is not None else prepare_file_mesh(parse_file_mesh(body.msh_text), body.units, body.forward, body.up,
                                 domain_planes=body.domain_planes, reflect_planes=body.reflect_planes,
-                                remove_lid_planes=body.remove_lid_planes, roles=body.driven_roles())
+                                remove_lid_planes=body.remove_lid_planes, roles=body.driven_roles(), auto_cut=body.auto_cut)
     # Reconstruct, do not trust a packaged solver mesh or a transform matrix.
     reconstructed = mesh_text(mesh)
     if (_digest(package.solver_msh_text) != package.solver_sha256
@@ -183,7 +194,7 @@ def restore_mesh_replay(
     # backend owns this data directory; the lock keeps the two opens in order.
     # A replay in progress holds off prepared-mesh collection until it answers.
     with lock, prepared_mesh_use():
-        record = register_mesh(store, data_dir, body, validate_record=validate_record)
+        record = register_mesh(store, data_dir, body, validate_record=validate_record, prepared=(mesh, prepared[1]) if prepared is not None else None, commit_guard=commit_guard)
         request = package.request.model_copy(deep=True)
         request.geometry.ingest_id = record["ingest_id"]
         request.geometry.manifest_sha256 = record["manifest_sha256"]
@@ -209,21 +220,38 @@ def mount_mesh_replay(application: FastAPI) -> None:
     @router.get("/api/jobs/{job_id}/mesh-replay")
     async def export_package(job_id: str) -> dict[str, Any]:
         try:
-            return await asyncio.to_thread(build_mesh_replay, runtime, store, job_id)
+            registration = await asyncio.to_thread(build_mesh_replay, runtime, store, job_id, registration_only=True)
+            prepared = await prepare_registration(registration)
+            return await asyncio.to_thread(build_mesh_replay, runtime, store, job_id, prepared=prepared)
         except LookupError as exc:
             raise HTTPException(404, str(exc)) from exc
         except (OSError, UnicodeError, ValueError) as exc:
             raise HTTPException(409, f"Mesh replay unavailable: {exc}") from exc
 
     @router.post("/api/mesh-replay")
-    async def open_package(body: MeshReplayPackage) -> dict[str, Any]:
+    async def open_package(body: MeshReplayPackage, http_request: Request) -> dict[str, Any]:
         if runtime._restart_pending():
             raise HTTPException(409, "An update restart is pending. Open replay after restart.")
+        cancellation = RequestCancellation(http_request.is_disconnected)
         try:
+            registration = await asyncio.to_thread(_checked_registration, body)
+            guard = begin_file_preparation(application, file_model_id(body.original_sha256), http_request, body.content_sha256)
+            cancellation.commit_guard = guard
+            prepared = await prepare_registration(registration, cancellation.check)
+            cancellation.check()
             return await asyncio.to_thread(
                 restore_mesh_replay, runtime, store, Path(application.state.data_dir), body, lock,
+                prepared=prepared, commit_guard=cancellation.current,
             )
+        except ClientDisconnected as exc:
+            raise HTTPException(499, "Mesh replay cancelled.") from exc
+        except (StaleAttempt, PreparationSuperseded) as exc:
+            raise HTTPException(409, "A newer mesh preparation is already selected.") from exc
+        except (MesherChildError, MesherCrashError) as exc:
+            raise HTTPException(422, str(exc)) from exc
         except (OSError, UnicodeError, ValueError) as exc:
             raise HTTPException(422, f"Mesh replay refused: {exc}") from exc
+        finally:
+            cancellation.close()
 
     application.include_router(router)

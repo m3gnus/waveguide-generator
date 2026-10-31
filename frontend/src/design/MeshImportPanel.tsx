@@ -29,6 +29,7 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
   const [sizeOpen, setSizeOpen] = useState(false);
   const [axesOpen, setAxesOpen] = useState(false);
   const planes = draft.domainPlanes ?? [];
+  const effectivePlanes = registered?.symmetry?.domain_planes ?? planes;
   const summary = state.summary ?? registered?.summary ?? null;
   const scale = ({ mm: 1, cm: 10, m: 1000, in: 25.4 } as Record<string, number>)[draft.units];
   const rawDimensions = summary?.dimensions ?? [];
@@ -37,7 +38,7 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
   const rightIndex = [0, 1, 2].find(index => index !== forwardIndex && index !== upIndex) ?? 0;
   const dimensions = registered?.summary.dimensions_mm ?? summary?.dimensions_mm
     ?? [rightIndex, upIndex, forwardIndex].map(index => rawDimensions[index] * scale);
-  const size = dimensions.map((value, index) => Number((value * (planes.includes(index === 0 ? 'x0' : index === 1 ? 'y0' : '') ? 2 : 1)).toPrecision(4))).join(' × ');
+  const size = dimensions.map((value, index) => Number((value * (effectivePlanes.includes(index === 0 ? 'x0' : index === 1 ? 'y0' : '') ? 2 : 1)).toPrecision(4))).join(' × ');
   const negativePlanes = planes.filter(plane => summary?.kept_sides?.[plane] === 'negative'
     || registered?.symmetry?.reflected_planes?.includes(plane));
   const mirrored = negativePlanes.length > 0 && (draft.reflectPlanes === undefined || draft.reflectPlanes === null
@@ -78,14 +79,14 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
         </fieldset>
         {!editable && <p className="section-note">Import the original mesh to change its settings.</p>}
         <div className="cad-domain">
-          <p className="cad-domain-line"><b>Symmetry</b> <span>{fileSymmetryLabel(planes)}{negativePlanes.length > 0
+          <p className="cad-domain-line"><b>Symmetry</b> <span>{fileSymmetryLabel(effectivePlanes)}{negativePlanes.length > 0
             ? mirrored ? ' · mirrored from the negative side' : ' · kept on the negative side' : ''}</span> <button className="link-button" disabled={!editable}
               aria-label="Change symmetry" aria-expanded={symmetryOpen} onClick={() => setSymmetryOpen(!symmetryOpen)}>Change</button></p>
           {symmetryOpen && <fieldset disabled={!editable}>
-            <label className="field-row">Symmetry<select aria-label="Mesh symmetry" value={planes.join(',')}
-              onChange={e => void editMeshImport({ domainPlanes: e.target.value ? e.target.value.split(',') : [], reflectPlanes: null,
+            <label className="field-row">Symmetry<select aria-label="Mesh symmetry" value={draft.autoCut ? 'auto' : planes.join(',')}
+              onChange={e => void editMeshImport({ domainPlanes: e.target.value && e.target.value !== 'auto' ? e.target.value.split(',') : [], autoCut: e.target.value === 'auto', reflectPlanes: null,
                 removeLidPlanes: (draft.removeLidPlanes ?? []).filter(plane => e.target.value.split(',').includes(plane)) })}>
-              <option value="">Full model</option><option value="x0">Half x = 0</option><option value="y0">Half y = 0</option><option value="x0,y0">Quarter</option>
+              <option value="auto">Auto · cut for speed</option><option value="">Full model</option><option value="x0">Half x = 0</option><option value="y0">Half y = 0</option><option value="x0,y0">Quarter</option>
             </select></label>
             <p className="section-note">Symmetry planes must be x = 0 or y = 0 after axes are applied.</p>
             {planes.filter(plane => summary?.lids?.[plane]?.candidate || draft.removeLidPlanes?.includes(plane)).map(plane => <label className="field-row" key={plane}>

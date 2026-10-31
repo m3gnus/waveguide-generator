@@ -911,3 +911,90 @@ it('previews a role edit immediately while keeping the prepared snapshot immutab
   await editing;
   expect(importedMeshStore.getSnapshot().file).toBe(preview);
 });
+
+it('requests automatic full-mesh cutting, restores its intent, and retains explicit full opt-out', async () => {
+  const guessed = { ...summary, suggested_units: 'mm', detected_planes: [],
+    groups: summary.groups.map(group => ({ ...group, suggested_role: group.tag === 2 ? 'HF' : 'RIGID' })) };
+  const cut = { ...record, source_file: { ...record.source_file, auto_cut: true },
+    symmetry: { domain_planes: ['x0', 'y0'], cut_planes: ['x0', 'y0'] } };
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect') ? response(guessed) : prepared(cut));
+  await loadMeshFile('speaker.msh', MSH, fetcher);
+  expect(JSON.parse(fetcher.mock.calls[1][1]?.body as string)).toMatchObject({ auto_cut: true, domain_planes: [] });
+  expect(useImportedModelStore.getState().fileDraft).toMatchObject({ autoCut: true, domainPlanes: [] });
+  expect(registeredMesh()?.symmetry?.domain_planes).toEqual(['x0', 'y0']);
+  const full = { ...record, ingest_id: 'wgi_full', symmetry: { domain_planes: [], cut_planes: [] } };
+  const optOut = vi.fn<typeof fetch>(async () => prepared(full));
+  await editMeshImport({ autoCut: false, domainPlanes: [] }, optOut);
+  expect(JSON.parse(optOut.mock.calls[0][1]?.body as string)).not.toHaveProperty('auto_cut');
+  expect(useImportedModelStore.getState().fileDraft.autoCut).toBe(false);
+  expect(registeredMesh()?.symmetry?.domain_planes).toEqual([]);
+  expect(fileMeshSubmission().options.symmetry).toBe('auto');
+});
+
+it('keeps the native cut refusal note with the valid full mesh across restore', async () => {
+  const note = 'This mesh has 5,001 triangles; cutting is available up to 5,000. Export the half or quarter to solve faster.';
+  const full = { ...record, source_file: { ...record.source_file, auto_cut: true,
+    transform: { ...record.source_file.transform, symmetry_report: { note } } },
+    symmetry: { domain_planes: [], cut_planes: [] } };
+  const setup = setupOf({ engine: 'metal', frequencies_hz: [100, 200], symmetry: 'auto' });
+  await openImported({ kind: 'run', job: fileJob() }, workspaceFetcher(setup, full));
+  expect(registeredMesh()?.ingest_id).toBe(record.ingest_id);
+  expect(useMeshImportStore.getState().notice).toBe(note);
+  expect(useImportedModelStore.getState().fileDraft).toMatchObject({ autoCut: true, domainPlanes: [] });
+  expect(fileMeshSubmission().options.frequencies_hz).toEqual([100, 200]);
+});
+
+it('aborts a file preparation when a newer model load begins and numbers both requests in one session', async () => {
+  showPrepared();
+  const waiting = deferred<Response>();
+  const prepareFetcher = vi.fn<typeof fetch>(() => waiting.promise);
+  const changing = editMeshImport({ autoCut: true }, prepareFetcher);
+  const init = prepareFetcher.mock.calls[0][1]!;
+  expect(init.signal?.aborted).toBe(false);
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).includes('/setup?')
+    ? response({ setup: setupOf({ engine: 'metal', frequencies_hz: [100, 200] }) }) : prepared(record));
+  const loading = openImported({ kind: 'model', modelId: record.model_id, preparedId: record.ingest_id }, fetcher);
+  expect(init.signal?.aborted).toBe(true);
+  const before = init.headers as Record<string, string>;
+  const after = fetcher.mock.calls[0][1]?.headers as Record<string, string>;
+  expect(after['X-WG-Preparation-Session']).toBe(before['X-WG-Preparation-Session']);
+  expect(Number(after['X-WG-Preparation-Seq'])).toBeGreaterThan(Number(before['X-WG-Preparation-Seq']));
+  await loading;
+  waiting.resolve(prepared({ ...record, ingest_id: 'wgi_abandoned' }));
+  await changing;
+  expect(registeredMesh()?.ingest_id).toBe(record.ingest_id);
+});
+
+it('aborts the old preparation when a newer incomplete role choice cannot be sent yet', async () => {
+  showPrepared();
+  const waiting = deferred<Response>();
+  const fetcher = vi.fn<typeof fetch>(() => waiting.promise);
+  const changing = editMeshImport({ autoCut: true }, fetcher);
+  const signal = fetcher.mock.calls[0][1]?.signal;
+  expect(signal?.aborted).toBe(false);
+  await editMeshImport({ roles: { 1: 'RIGID', 2: null } }, fetcher);
+  expect(signal?.aborted).toBe(true);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  waiting.resolve(prepared(record));
+  await changing;
+  expect(registeredMesh()).toBeNull();
+  expect(useImportedModelStore.getState().fileDraft.roles?.[2]).toBeNull();
+});
+
+it('keeps explicit Full on a changed-file reimport and an axis edit', async () => {
+  const previous = { filename: 'earlier.msh', updated_at: '2026-10-31T08:00:00Z',
+    preparation: { units: 'mm', forward: '+z', up: '+y', roles: { 1: 'RIGID', 2: 'HF' }, domain_planes: [] }, setup: null };
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect')
+    ? response({ ...summary, suggested_units: 'mm', detected_planes: [], previous_setup: previous }) : prepared(record));
+  await loadMeshFile('speaker.msh', MSH, fetcher);
+  expect(JSON.parse(fetcher.mock.calls[1][1]?.body as string)).not.toHaveProperty('auto_cut');
+  expect(useImportedModelStore.getState().fileDraft.autoCut).toBe(false);
+  const reframed = { ...record, source_file: { ...record.source_file, transform: { ...record.source_file.transform, up: '+x' } } };
+  const change = vi.fn<typeof fetch>(async url => String(url).endsWith('/inspect')
+    ? response({ ...summary, detected_planes: [] }) : prepared(reframed));
+  await editMeshImport({ up: '+x' }, change);
+  expect(change).toHaveBeenCalledTimes(2);
+  expect(JSON.parse(change.mock.calls[1][1]?.body as string)).toMatchObject({ up: '+x', domain_planes: [] });
+  expect(JSON.parse(change.mock.calls[1][1]?.body as string)).not.toHaveProperty('auto_cut');
+  expect(useImportedModelStore.getState().fileDraft.autoCut).toBe(false);
+});

@@ -336,10 +336,46 @@ def prepare_file_mesh(
     reflect_planes: tuple[str, ...] | list[str] | None = None,
     remove_lid_planes: tuple[str, ...] | list[str] = (),
     roles: Mapping[int, str] | None = None,
+    auto_cut: bool = False,
 ) -> tuple[FileMesh, dict[str, Any]]:
     planes, reflect_planes = validate_file_symmetry(domain_planes, reflect_planes)
     remove_lid_planes = validate_remove_lid_planes(remove_lid_planes, planes)
     mesh, transform = transform_file_mesh(mesh, units, forward, up)
+    # A requested plane can describe an existing open cut, or ask WG to cut
+    # a full mesh. Validate the immutable input before attempting optimisation.
+    sides = _symmetry_evidence(mesh, ())[1]["detection"]["plane_vertex_side_counts"]
+    crossing = tuple(plane for plane in planes if sides[plane]["positive"] and sides[plane]["negative"])
+    declared = tuple(plane for plane in planes if plane not in crossing)
+    if crossing and file_mesh_integrity(mesh, declared)["off_plane_open_edge_count"]:
+        raise ValueError(f"The mesh crosses {_plane_labels(list(crossing))} and has an opening away from its declared planes. Close it in the meshing tool.")
+    reflections = None if reflect_planes is None else tuple(plane for plane in reflect_planes if plane in declared)
+    mesh, transform = _prepare_transformed_file_mesh(
+        mesh, transform, declared, reflections, remove_lid_planes, roles or {},
+    )
+    candidates = crossing or (tuple(SYMMETRY_PLANE_AXIS) if auto_cut and not planes else ())
+    if not candidates:
+        return mesh, transform
+    from server.mesh.file_cut import cut_file_mesh
+
+    reduced, cut = cut_file_mesh(mesh, candidates, roles or {})
+    effective = tuple(plane for plane in SYMMETRY_PLANE_AXIS if plane in (*declared, *cut["cut_planes"]))
+    if cut["cut_planes"]:
+        try:
+            reduced, _ = _prepare_transformed_file_mesh(reduced, {}, effective, (), (), roles or {})
+        except ValueError:
+            # The optimisation never changes a valid full/reduced input.
+            reduced = mesh
+            cut = {"cut_planes": [], "note": "The cut mesh could not be verified. Export the half or quarter to solve faster."}
+            effective = declared
+    transform.update(domain_planes=list(effective), cut_planes=cut["cut_planes"], symmetry_report=cut)
+    return reduced, transform
+
+
+def _prepare_transformed_file_mesh(
+    mesh: FileMesh, transform: dict[str, Any], planes: tuple[str, ...],
+    reflect_planes: tuple[str, ...] | None, remove_lid_planes: tuple[str, ...],
+    roles: Mapping[int, str],
+) -> tuple[FileMesh, dict[str, Any]]:
     report, verification = _symmetry_evidence(mesh, planes)
     if remove_lid_planes:
         mesh, removed = _remove_lids(mesh, remove_lid_planes, verification, roles or {})
@@ -439,3 +475,13 @@ def mesh_text(mesh: FileMesh) -> str:
         for i, (triangle, tag) in enumerate(zip(mesh.triangles, mesh.tags), 1)
     )
     return "\n".join([*lines, "$EndElements", ""])
+
+
+def prepare_file_mesh_options(mesh: FileMesh, options: dict[str, Any], *, cancel_cb: Any = None) -> tuple[FileMesh, dict[str, Any]]:
+    """Picklable entry point for the existing mesh-child session owner."""
+    if cancel_cb is not None:
+        cancel_cb()
+    prepared = prepare_file_mesh(mesh, **options)
+    if cancel_cb is not None:
+        cancel_cb()
+    return prepared

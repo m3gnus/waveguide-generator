@@ -41,6 +41,7 @@ export interface FileDraft {
   selected: number[];
   roles?: Record<string, string | null>;
   domainPlanes?: string[];
+  autoCut?: boolean;
   removeLidPlanes?: string[];
   /** null lets preparation mirror a negative-side model automatically. */
   reflectPlanes?: string[] | null;
@@ -152,9 +153,11 @@ export function registerImportedSetupFlush(flush: () => Promise<void>): () => vo
   return () => { if (setupFlush === flush) setupFlush = null; };
 }
 let preparationFlush: (() => Promise<void>) | null = null;
+let preparationCancel: (() => void) | undefined;
 /** File preparation can finish after its rail leaves; its owner still records pending edits. */
-export function registerImportedPreparationFlush(flush: () => Promise<void>): void {
+export function registerImportedPreparationFlush(flush: () => Promise<void>, cancel?: () => void): void {
   preparationFlush = flush;
+  preparationCancel = cancel;
 }
 export async function flushImportedSetupWrites(): Promise<void> {
   const publishing = setupFlush?.();
@@ -177,7 +180,8 @@ function fileDraftOf(prepared: Extract<ImportedSource, { kind: 'file' }>['prepar
   return {
     units: file?.transform?.units ?? '', forward: file?.transform?.forward ?? '+z', up: file?.transform?.up ?? '+y',
     selected: Object.entries(roles).filter(([, role]) => role !== 'RIGID').map(([tag]) => Number(tag)),
-    roles, domainPlanes: file?.domain_planes ?? record?.symmetry?.domain_planes ?? [],
+    roles, domainPlanes: file?.domain_planes ?? (file?.auto_cut ? [] : record?.symmetry?.domain_planes) ?? [],
+    autoCut: file?.auto_cut ?? false,
     reflectPlanes: file?.reflect_planes ?? null,
     removeLidPlanes: file?.remove_lid_planes ?? Object.keys(file?.transform?.removed_lids ?? {}),
   };
@@ -288,6 +292,7 @@ const LOADING_BLOCKER = 'Wait for this run’s retained setup to finish loading.
  * a newer choice took over; rejects with the reason it cannot be opened.
  */
 export async function openImported(source: ImportedSource, fetcher: typeof fetch = fetch): Promise<boolean> {
+  preparationCancel?.();
   if (source.kind === 'file' || source.kind === 'cad') { openKnown(source); return true; }
   // An unnumbered CAD preparation is not an archived run.
   if (source.kind === 'run' && (source.job.config_summary.geometry_type !== 'imported' || source.job.run_number === null)) return false;
