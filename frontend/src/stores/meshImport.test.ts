@@ -1,4 +1,5 @@
 import { saveImportedSetup } from '../api/importedModels';
+import { solveModel } from '../jobs/actions';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createImportedMeshScene } from '../viewport/importedMesh';
@@ -372,6 +373,27 @@ describe('a reopened file run', () => {
     expect(JSON.parse(fetcher.mock.calls[0][1]?.body as string)).toEqual({ units: 'cm', forward: '+z', up: '+y', roles: { 2: 'HF' }, domain_planes: [], reflect_planes: null, remove_lid_planes: [] });
     expect(useImportedModelStore.getState()).toMatchObject({ prepared: again, modelId: record.model_id });
     expect(fileMeshSubmission().geometry.ingest_id).toBe('wgi_again');
+  });
+
+  it.each(['beat-cuda', 'beat-rocm', 'bempp'])('saves and submits a file edit with the supported %s accuracy', async (engine) => {
+    await openImported({ kind: 'run', job: fileJob() }, workspaceFetcher(setupOf({})));
+    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
+    useImportedSolveOptionsStore.getState().setEngine(engine);
+    expect(unchangedSetup('file', record.ingest_id)).toBeNull();
+    const save = vi.fn<typeof fetch>(async () => response({ revision_id: 'wgs_intent' }));
+    await saveImportedSetup(record.model_id, record.ingest_id, fileMeshSetup(), save);
+    const saved = JSON.parse(save.mock.calls[0][1]?.body as string).setup;
+    let submitted: { setup: ImportedSetup } | undefined;
+    const setup = fileMeshSetup();
+    await solveModel(record.model_id, { prepared_id: record.ingest_id, client_request_id: 'file-intent',
+      setup: { schema_version: 1, geometry: { ...setup.geometry }, options: { ...setup.options } } }, async (input, init) => {
+      expect(String(input)).toBe(`/api/models/${encodeURIComponent(record.model_id)}/solve`);
+      submitted = JSON.parse(String(init?.body));
+      return response({ job_id: 'file-intent' });
+    });
+    expect(submitted?.setup).toEqual(saved);
+    expect(submitted?.setup.options.engine).toBe(engine);
+    expect(submitted?.setup.options.accuracy).toBe(engine === 'bempp' ? undefined : 'accurate');
   });
 
   it('opens generated sweep, axial motion and solver settings without borrowing the open design', async () => {

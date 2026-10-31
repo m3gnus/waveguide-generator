@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { hydrateDesignDocument } from '../api/designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
-import type { SolveOptions } from '../stores/solveOptions';
+import { createImportedSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 import { fetchSymmetry, formatApiDetail, getCapabilities, planSolveDesign, postSolvePlan, postImportedSolvePlan, postSymmetry, solveModel, SolveSubmissionRefused, submitDesign, toSolveDesign } from './actions';
 
 describe('API validation errors', () => {
@@ -39,6 +39,24 @@ describe('solve submission', () => {
     expect(body?.options).toEqual(options);
     expect(body).toMatchObject({ label: 'atomic', design_revision: 19, design_snapshot: { version: 1 } });
     expect((body?.design_snapshot as { design: unknown }).design).toEqual(body?.design);
+  });
+
+  it.each(['beat-cpu', 'beat-metal', 'beat-cuda', 'beat-rocm', 'bempp', 'metal'])('submits the selected %s and its supported accuracy after planning', async (engine) => {
+    const store = createImportedSolveOptionsStore();
+    store.getState().setAccuracy('accurate');
+    store.getState().setEngine(engine);
+    const calls: Array<{ path: string; options: SolveOptions }> = [];
+    const fetcher: typeof fetch = async (input, init) => {
+      calls.push({ path: String(input), options: JSON.parse(String(init?.body)).options });
+      return Response.json({ engine, formulation: 'full-3d', reason: 'explicit', eligibility_reasons: [], job_id: 'job-intent' });
+    };
+    const design = designForFamily('R-OSSE');
+    await planSolveDesign(design, store.getState().options(), fetcher);
+    await submitDesign(design, store.getState().options(), fetcher);
+    expect(calls.map(call => call.path)).toEqual(['/api/solve/plan', '/api/solve']);
+    expect(calls[0].options).toEqual(calls[1].options);
+    expect(calls[1].options.engine).toBe(engine);
+    expect(calls[1].options.accuracy).toBe(engine.startsWith('beat-') ? 'accurate' : undefined);
   });
 
   it('propagates a refused parametric submission for the coordinator to report', async () => {

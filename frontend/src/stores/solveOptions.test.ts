@@ -40,6 +40,18 @@ describe('engine selection preference', () => {
     expect(createImportedSolveOptionsStore().getState().engine).toBe('beat-cpu');
   });
 
+  it.each(['beat', 'beat-cpu', 'beat-metal', 'beat-cuda', 'beat-rocm'])('restores explicit Accurate %s with the existing preference owner', async (engine) => {
+    localStorage.clear();
+    resetSolveOptionsStore();
+    useSolveOptionsStore.getState().setAccuracy('accurate');
+    useSolveOptionsStore.getState().setEngine(engine);
+    const restarted = createPersistedSolveOptionsStore();
+    await restarted.persist.rehydrate();
+    expect(restarted.getState()).toMatchObject({ engine, accuracy: 'accurate' });
+    expect(restarted.getState().options()).toMatchObject({ engine, accuracy: 'accurate' });
+    expect(JSON.parse(durableSettings.get('enginePreference')!)).toEqual({ engine });
+  });
+
   it('keeps engine selection usable when background prewarm fails', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
     try {
@@ -160,6 +172,30 @@ describe('solve and directivity options', () => {
     expect(useSolveOptionsStore.getState()).toMatchObject({ engine: 'bempp', accuracy: 'fast' });
     useSolveOptionsStore.getState().setEngine('beat-metal');
     expect(useSolveOptionsStore.getState()).toMatchObject({ engine: 'beat-metal', accuracy: 'fast' });
+  });
+
+  describe.each([
+    ['parametric', useSolveOptionsStore], ['imported', useImportedSolveOptionsStore],
+  ] as const)('%s engine accuracy intent', (_mode, store) => {
+    it.each(['auto', 'beat', 'beat-cpu', 'beat-metal', 'beat-cuda', 'beat-rocm'])('preserves both choices for %s, including legacy family migration', (engine) => {
+      for (const accuracy of ['fast', 'accurate'] as const) {
+        store.getState().setAccuracy(accuracy);
+        if (engine.startsWith('beat-')) store.getState().setEngine('beat');
+        store.getState().setEngine(engine);
+        expect(store.getState()).toMatchObject({ engine, accuracy });
+        expect(store.getState().options().accuracy).toBe(accuracy === 'accurate' ? 'accurate' : undefined);
+      }
+    });
+
+    it.each(['bempp', 'metal', 'dryrun'])('keeps explicit %s precedence and returns to Auto on an accuracy edit', (engine) => {
+      store.getState().setAccuracy('accurate');
+      store.getState().setEngine(engine);
+      expect(store.getState()).toMatchObject({ engine, accuracy: 'fast' });
+      expect(store.getState().options().accuracy).toBeUndefined();
+      store.getState().setAccuracy('accurate');
+      expect(store.getState()).toMatchObject({ engine: 'auto', accuracy: 'accurate' });
+      expect(JSON.parse(durableSettings.get('enginePreference')!)).toEqual({ engine: 'auto' });
+    });
   });
 
   it('migrates legacy BEAT CPU and Axisymmetric settings to Fast Full 3D', async () => {

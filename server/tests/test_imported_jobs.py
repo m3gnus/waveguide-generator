@@ -3993,16 +3993,19 @@ def test_explicit_beat_cuda_or_rocm_fast_is_refused_with_the_real_way_forward(gp
     assert caught.value.details["capable_engines"] == ["beat-metal", "metal"]
 
 
-def test_explicit_beat_cuda_accurate_is_still_accepted() -> None:
+@pytest.mark.parametrize("gpu", ["beat-metal", "beat-cuda", "beat-rocm"])
+def test_explicit_beat_gpu_accurate_is_still_accepted(gpu: str) -> None:
     from server.jobs.runtime.core import resolve_imported_submission
 
     request = _request("wgi_" + "0" * 26)
-    request.options.engine = "beat-cuda"
+    request.options.engine = gpu
     request.options.accuracy = "accurate"
     resolved = asyncio.run(
-        resolve_imported_submission(request, _AlwaysDeclaredRegistry(_metal(), _fast_gpu("beat-cuda")))
+        resolve_imported_submission(request, _AlwaysDeclaredRegistry(_metal(), _fast_gpu(gpu)))
     )
-    assert resolved.engine_name == "beat-cuda"
+    assert resolved.engine_name == gpu
+    assert resolved.request.options.engine == gpu
+    assert resolved.request.options.accuracy == "accurate"
 
 
 def test_fast_auto_never_resolves_to_beat_metal_when_metal_is_absent() -> None:

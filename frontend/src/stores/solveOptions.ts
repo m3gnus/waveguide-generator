@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { isBeatBackendEngine, LEGACY_BEAT_ENGINE } from '../jobs/engineIdentity';
 import { withEditSignals } from './solveSettingsEdits';
 import { resetParkedImportedOptions, applyImportedEnginePreference } from './importedModel';
 import { createJSONStorage, persist } from 'zustand/middleware';
@@ -424,7 +425,10 @@ function solveOptionsState(
     sweepCount: count ?? state.sweepCount,
   })),
   setEngine: (engine) => {
-    set({ engine, ...(engine === 'auto' ? {} : { accuracy: 'fast' }) });
+    // Match runtime/core._explicit_accuracy: BEAT supports both choices.
+    // Non-BEAT overrides select their own formulation and take precedence.
+    const followsAccuracy = engine === 'auto' || engine === LEGACY_BEAT_ENGINE || isBeatBackendEngine(engine);
+    set({ engine, ...(followsAccuracy ? {} : { accuracy: 'fast' }) });
     rememberEngine(engine);
   },
   setAccuracy: (accuracy) => {

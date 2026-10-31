@@ -6,14 +6,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import guidance from '../../../shared/opencl-driver-guidance.v1.json';
 import type { OpenClGuidanceReason } from '../shell/OpenClGuidance';
 import type { CadReturnIngestRecord } from '../api/cadlink';
-import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
+import { CAPABILITIES_QUERY_KEY, useLegacyBeatEngineMigration } from '../jobs/useCapabilities';
 import type { SolvePlanSnapshot } from '../jobs/useSolvePlan';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDesignStore } from '../stores/design';
 import type { ImportedSolvePlan } from '../jobs/actions';
 import type { ImportedSolvePlanSnapshot } from '../jobs/useImportedSolvePlan';
-import { defaultPolarUi, polarConfigFromUi, resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { defaultPolarUi, polarConfigFromUi, resetSolveOptionsStore, useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { useDesignStore } from '../stores/design';
+import { SolveOptionsStoreProvider } from '../stores/solveOptionsContext';
 import { accuracyExplainer, AdaptiveFrequencyControls, MeshValidationControl, DirectivityMapControls, effectiveGridView, FrequencySweepControls, runPolarFromJob, polarSummary, solveOptionsSummary, SolveOptionsControls } from './SolveOptionsSections';
 
 const parametricPlan = vi.hoisted(() => ({
@@ -373,6 +374,28 @@ describe('solve and directivity control help', () => {
       const row = control.closest('.select-row, .toggle-row')!;
       expect(hoverText(row).length, `${id} has no hover help`).toBeGreaterThan(40);
     }
+  });
+
+  it.each(['parametric', 'cad'] as const)('retains Accurate when the %s picker selects a BEAT backend and migrates the legacy family', (mode) => {
+    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
+      engines: [{ name: 'beat-cpu', available: true, geometry_sources: ['parametric', 'imported'], fast_paths: [] }],
+      cpuPreparationInFlight: false,
+    });
+    const store = mode === 'cad' ? useImportedSolveOptionsStore : useSolveOptionsStore;
+    importedPlan.current = { plan: { ingest_id: 'wgi_test', requested: 'beat', engine: 'beat-cpu', code: null,
+      reason: 'Legacy family', domain: 'full', engines: [] }, error: null, isPending: false };
+    render(<SolveOptionsStoreProvider mode={mode}><SolveOptionsControls mode={mode} /></SolveOptionsStoreProvider>);
+    const accuracy = host.querySelector<HTMLSelectElement>('#solve-accuracy')!;
+    act(() => { accuracy.value = 'accurate'; accuracy.dispatchEvent(new Event('change', { bubbles: true })); });
+    const engine = host.querySelector<HTMLSelectElement>(mode === 'cad' ? '#cad-solve-engine' : '#solve-engine')!;
+    act(() => { engine.value = 'beat-cpu'; engine.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(accuracy.value).toBe('accurate');
+    expect(store.getState().options()).toMatchObject({ engine: 'beat-cpu', accuracy: 'accurate' });
+    act(() => store.getState().setEngine('beat'));
+    function Migrate() { useLegacyBeatEngineMigration(); return null; }
+    render(<SolveOptionsStoreProvider mode={mode}><SolveOptionsControls mode={mode}/><Migrate/></SolveOptionsStoreProvider>);
+    expect(store.getState().options()).toMatchObject({ engine: 'beat-cpu', accuracy: 'accurate' });
+    expect(host.querySelector<HTMLSelectElement>('#solve-accuracy')!.value).toBe('accurate');
   });
 
   it('uses one accuracy control and store in parametric and CAD Link modes', () => {

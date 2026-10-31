@@ -3,6 +3,7 @@ import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { expandLegacy, toWire, withChannel, withDelayMode } from '../results/crossoverSpec';
 import { combineSpecEffective, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetSolveOptionsStore, useImportedSolveOptionsStore } from '../stores/solveOptions';
+import { solveModel } from './actions';
 import { buildImportedSubmission, importedSubmissionBlocker, importedSubmissionNotices, undrivenChannels, importedPolarFromPlan } from './importedSubmission';
 
 const bundle = {
@@ -25,6 +26,25 @@ const record = {
 
 describe('imported solve submission wire', () => {
   beforeEach(() => { resetCadReturnStore(); resetSolveOptionsStore(); });
+
+  it.each(['beat-metal', 'beat-cuda', 'beat-rocm', 'bempp'])('sends the displayed %s accuracy in the actual model Solve press', async (engine) => {
+    useCadReturnStore.setState({ selectedBundle: bundle, ingestRecord: record, needsIngest: false,
+      driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }] });
+    useImportedSolveOptionsStore.getState().setAccuracy('accurate');
+    useImportedSolveOptionsStore.getState().setEngine(engine);
+    const submission = buildImportedSubmission();
+    let body: Record<string, unknown> | undefined;
+    const fetcher: typeof fetch = async (input, init) => {
+      expect(String(input)).toBe('/api/models/cad-model/solve');
+      body = JSON.parse(String(init?.body));
+      return Response.json({ job_id: 'job-intent' });
+    };
+    await solveModel('cad-model', { prepared_id: record.ingest_id, client_request_id: 'intent',
+      setup: { schema_version: 1, geometry: { ...submission.geometry }, options: { ...submission.options } } }, fetcher);
+    expect(body).toMatchObject({ setup: { options: { engine } } });
+    expect((body?.setup as { options: { accuracy?: string } }).options.accuracy)
+      .toBe(engine === 'bempp' ? undefined : 'accurate');
+  });
 
   it.each([false, true])('blocks unverified evidence even with exterior-only=%s', (exteriorOnly) => {
     useCadReturnStore.setState({
