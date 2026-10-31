@@ -7,8 +7,7 @@ import math
 from typing import Any, Mapping, Sequence
 
 from server.contracts.canonical import canonical_ascii_json
-
-from server.jobs.models import PolarConfig
+from server.contracts.observations import PolarConfig
 from server.solver.acoustics import solver_sound_speed_m_per_s
 from server.solver.beam_shape import beam_shape_summary
 from server.solver.contract import build_directivity_metadata

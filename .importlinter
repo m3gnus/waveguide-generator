@@ -47,9 +47,6 @@ ignore_imports =
     # design -> jobs: existing upward dependency.
     # Legacy use: SolveOptions.
     server.design.solve_block -> server.jobs.models
-    # engines -> jobs: existing upward dependency.
-    # Legacy use: PolarConfig.
-    server.engines.dryrun -> server.jobs.models
     # integration -> jobs: existing upward dependency.
     # Legacy use: SolveRequest.
     server.integration.provenance -> server.jobs.models
@@ -86,8 +83,6 @@ ignore_imports =
     server.solver.bempp_imported -> server.jobs.models
     # Legacy use: ImportedGeometrySource, PolarConfig, SolveRequest.
     server.solver.context -> server.jobs.models
-    # Legacy use: FieldPlaneRequest, FieldPlaneSpec.
-    server.solver.field_plane -> server.jobs.models
     # Legacy use: JobStore.
     server.solver.field_plane -> server.jobs.store
     # Legacy use: ImportedGeometrySource.

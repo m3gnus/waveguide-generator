@@ -23,8 +23,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from server.contracts.canonical import canonical_ascii_strict_json
-
-from server.jobs.models import FieldPlaneRequest, FieldPlaneSpec
+from server.contracts.observations import FieldPlaneRequest, FieldPlaneSpec
 from server.jobs.store import JobStore
 from server.mesh.artifact import mesh_text_sha256
 from server.platform.temp_session import temporary_directory_root
