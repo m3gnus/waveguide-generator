@@ -222,8 +222,9 @@ def test_exact_insert_whole_curve_survives_json_and_text_reload(client, design):
 
 
 @pytest.mark.parametrize('shared', [None, True])
-def test_length_expression_keeps_curves_handles_and_omissions_after_edit(client, design, shared):
-    design['length'] = '60 * 2'
+@pytest.mark.parametrize('length_raw', ['60 * 2', '60*log(100)', '60*ln(e**2)'])
+def test_length_expression_keeps_curves_handles_and_omissions_after_edit(client, design, shared, length_raw):
+    design['length'] = length_raw
     design['shared_profile'] = shared
     for profile in ('profile_h', 'profile_v'):
         design[profile]['throat_angle_deg'] = None
@@ -232,7 +233,7 @@ def test_length_expression_keeps_curves_handles_and_omissions_after_edit(client,
         design['profile_v']['points'][0]['r'] = 13
     authored = DesignConfig.model_validate(design)
     first = parse(serialize(authored)).design
-    assert first.root.length.raw == '60 * 2'
+    assert first.root.length.raw == length_raw
     assert first.root.shared_profile is shared
     for before, after in zip((authored.root.profile_h, authored.root.profile_v),
                              (first.root.profile_h, first.root.profile_v)):

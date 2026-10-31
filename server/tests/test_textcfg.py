@@ -634,6 +634,31 @@ def test_freeform_endpoint_expressions_survive_reopen_and_edit(
     assert original.root.length.constant_value() == reopened.design.root.length.constant_value()
 
 
+@pytest.mark.parametrize("raw", ["log(100)", "ln(e**2)"])
+def test_saved_freeform_wg_log_length_preserves_interior_physical_positions(raw: str) -> None:
+    source = FREEFORM_SOURCE.replace("Freeform.Length = 100", "Freeform.Length = 2").replace(
+        "Freeform.V = {", "Freeform.H.Points = {\n1 20\n}\nFreeform.V = {"
+    )
+    authored = parse(source).design
+    authored.root.length = Expr.model_validate(raw, context={"expression_dialect": "wg-v1"})
+    emitted = serialize(authored)
+    assert f"Freeform.Length = {raw}\n" in emitted
+    assert "1 20\n" in emitted
+    reopened = parse(emitted)
+    assert reopened.design.root.length.raw == raw
+    assert reopened.design.root.length.dialect == "wg-v1"
+    assert reopened.design.root.length.constant_value() == pytest.approx(2)
+    assert reopened.design.root.profile_h.points[1].t.constant_value() == pytest.approx(0.5)
+    expected = design_to_mesher_config(authored)
+    assert expected["profile"]["profileH"]["points"][1][0] == pytest.approx(1)
+    assert design_to_mesher_config(reopened.design) == expected
+    reopened.design.root.extra_keys["Future.Key"] = "edited"
+    rewritten = parse(serialize(reopened)).design
+    assert rewritten.root.length.raw == raw
+    assert rewritten.extra_keys["Future.Key"] == "edited"
+    assert design_to_mesher_config(rewritten) == expected
+
+
 @pytest.mark.parametrize("key", ["Freeform.Length", "Freeform.ThroatRadius", "MouthRadius"])
 @pytest.mark.parametrize("invalid", ["1/0", "2*p", "nan", "sqrt(-1)", "unknown(2)", "0", "-2"])
 def test_freeform_endpoint_expression_controls_remain_invalid(key: str, invalid: str) -> None:
@@ -688,6 +713,8 @@ def test_freeform_single_token_row_expressions_keep_source_and_domain_checks(row
     ("literal", "expression"),
     [
         ("Freeform.Length = 100", "Freeform.Length = 50*2"),
+        ("Freeform.Length = 100", "Freeform.Length = 50*log(100)"),
+        ("Freeform.Length = 100", "Freeform.Length = 50*ln(e**2)"),
         ("Freeform.ThroatRadius = 10", "Freeform.ThroatRadius = 20/2"),
         ("MouthRadius = 50", "MouthRadius = 25*2"),
         ("MouthRadius = 40", "MouthRadius = 20+20"),

@@ -607,7 +607,10 @@ def _finite_expression(raw: str, location: str) -> float:
     """Resolve a scalar for grammar checks without replacing its authored source."""
 
     try:
-        value = Expr.model_validate(raw).constant_value()
+        # CFG FREEFORM has no text_import_version: DesignConfig interprets its
+        # numeric sources as WG expressions (base-10 log, natural ln). Resolve
+        # with that same Expr context before converting physical z to t.
+        value = Expr.model_validate(raw, context={"expression_dialect": "wg-v1"}).constant_value()
     except (OverflowError, TypeError, ValueError) as exc:
         raise TextConfigError(f"{location} must be a finite scalar expression") from exc
     if value is None:
