@@ -318,12 +318,6 @@ def dense_solver_memory_limit() -> DenseSolverMemoryLimit:
     return limit
 
 
-def _dense_solver_memory_limit_bytes() -> int:
-    """The ceiling in bytes, resolved afresh (uncached)."""
-
-    return resolve_dense_solver_memory_limit().bytes
-
-
 def _dense_solver_memory_limit_stats(limit: DenseSolverMemoryLimit) -> dict[str, Any]:
     """The applied ceiling and its provenance, as mesh ``stats`` fields."""
 

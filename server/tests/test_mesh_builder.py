@@ -549,7 +549,7 @@ def test_windows_32gb_host_gets_half_its_ram(memory_env: pytest.MonkeyPatch) -> 
     # Windows host, whatever its RAM.
     _simulate_windows_host(memory_env, 32 * GIB)
 
-    assert mesh_builder._dense_solver_memory_limit_bytes() == 16 * GIB
+    assert mesh_builder.resolve_dense_solver_memory_limit().bytes == 16 * GIB
     limit = mesh_builder.resolve_dense_solver_memory_limit()
     assert limit.source == "physical-memory"
     assert limit.physical.source == "GlobalMemoryStatusEx"
@@ -560,13 +560,13 @@ def test_small_host_is_not_lifted_above_its_safe_half(memory_env: pytest.MonkeyP
     # The old 8 GiB floor handed an 8 GB host all of its RAM.
     _simulate_posix_host(memory_env, 8 * GIB)
 
-    assert mesh_builder._dense_solver_memory_limit_bytes() == 4 * GIB
+    assert mesh_builder.resolve_dense_solver_memory_limit().bytes == 4 * GIB
 
 
 def test_large_host_is_capped_at_64_gib(memory_env: pytest.MonkeyPatch) -> None:
     _simulate_posix_host(memory_env, 256 * GIB)
 
-    assert mesh_builder._dense_solver_memory_limit_bytes() == 64 * GIB
+    assert mesh_builder.resolve_dense_solver_memory_limit().bytes == 64 * GIB
     assert mesh_builder.resolve_dense_solver_memory_limit().source == "physical-memory-capped"
 
 
@@ -580,7 +580,7 @@ def test_failing_memory_probe_is_unknown_and_conservative(
         _simulate_posix_host(memory_env, None)
 
     with caplog.at_level("WARNING", logger="server.mesh.builder"):
-        assert mesh_builder._dense_solver_memory_limit_bytes() == 4 * GIB
+        assert mesh_builder.resolve_dense_solver_memory_limit().bytes == 4 * GIB
         limit = mesh_builder.resolve_dense_solver_memory_limit()
     assert limit.bytes == 4 * GIB
     assert limit.source == "unknown-memory-default"
@@ -599,7 +599,7 @@ def test_malformed_override_is_refused_and_reported(
     memory_env.setenv(_OVERRIDE, value)
 
     with caplog.at_level("WARNING", logger="server.mesh.builder"):
-        assert mesh_builder._dense_solver_memory_limit_bytes() == 8 * GIB
+        assert mesh_builder.resolve_dense_solver_memory_limit().bytes == 8 * GIB
         limit = mesh_builder.resolve_dense_solver_memory_limit()
     assert limit.source == "physical-memory"
     assert _OVERRIDE in caplog.text
@@ -613,7 +613,7 @@ def test_override_within_ram_is_used_exactly_not_clamped(
     _simulate_posix_host(memory_env, 256 * GIB)
     memory_env.setenv(_OVERRIDE, str(100 * GIB))
 
-    assert mesh_builder._dense_solver_memory_limit_bytes() == 100 * GIB
+    assert mesh_builder.resolve_dense_solver_memory_limit().bytes == 100 * GIB
     limit = mesh_builder.resolve_dense_solver_memory_limit()
     assert limit.source == "override"
     assert limit.physical.bytes == 256 * GIB
@@ -629,7 +629,7 @@ def test_override_above_ram_without_the_unsafe_flag_is_refused(
         memory_env.setenv(_UNSAFE, flag)
 
     with caplog.at_level("WARNING", logger="server.mesh.builder"):
-        assert mesh_builder._dense_solver_memory_limit_bytes() == 8 * GIB
+        assert mesh_builder.resolve_dense_solver_memory_limit().bytes == 8 * GIB
         limit = mesh_builder.resolve_dense_solver_memory_limit()
     assert limit.source == "physical-memory"
     assert _UNSAFE in caplog.text
@@ -643,7 +643,7 @@ def test_override_above_ram_with_the_unsafe_flag_is_used_and_marked(
     memory_env.setenv(_UNSAFE, "1")
 
     with caplog.at_level("WARNING", logger="server.mesh.builder"):
-        assert mesh_builder._dense_solver_memory_limit_bytes() == 32 * GIB
+        assert mesh_builder.resolve_dense_solver_memory_limit().bytes == 32 * GIB
         limit = mesh_builder.resolve_dense_solver_memory_limit()
     assert limit.source == "unsafe-override"
     assert "exceeds" in caplog.text
@@ -655,7 +655,7 @@ def test_lowering_override_on_a_host_of_unknown_memory_is_used_and_marked_unveri
     _simulate_posix_host(memory_env, None)
     memory_env.setenv(_OVERRIDE, str(3 * GIB))
 
-    assert mesh_builder._dense_solver_memory_limit_bytes() == 3 * GIB
+    assert mesh_builder.resolve_dense_solver_memory_limit().bytes == 3 * GIB
     limit = mesh_builder.resolve_dense_solver_memory_limit()
     assert limit.source == "override"
     assert limit.physical.known is False
@@ -671,7 +671,7 @@ def test_unverifiable_override_above_the_default_needs_the_unsafe_flag(
     memory_env.setenv(_OVERRIDE, str(6 * GIB))
 
     with caplog.at_level("WARNING", logger="server.mesh.builder"):
-        assert mesh_builder._dense_solver_memory_limit_bytes() == 4 * GIB
+        assert mesh_builder.resolve_dense_solver_memory_limit().bytes == 4 * GIB
         refused = mesh_builder.resolve_dense_solver_memory_limit()
     assert refused.source == "unknown-memory-default"
     assert _UNSAFE in caplog.text
