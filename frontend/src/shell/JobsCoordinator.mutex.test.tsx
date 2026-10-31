@@ -291,6 +291,15 @@ function EngineSelect() {
 }
 
 describe('solve invocation mutex', () => {
+  const fileSummary: RegisteredMesh['summary'] = {
+    node_count: 4, triangle_count: 4, dimensions: [1, 1, 1],
+    groups: [{ tag: 2, name: 'HF', triangle_count: 4 }],
+  };
+  const preparedFileFields = (filename: string) => ({
+    summary: fileSummary,
+    source_file: { filename, transform: { units: 'm', forward: '+z', up: '+y' },
+      source_tags: [2], roles: { 2: 'HF' } },
+  } satisfies Pick<RegisteredMesh, 'summary' | 'source_file'>);
   let host: HTMLDivElement;
   let root: Root;
 
@@ -419,7 +428,7 @@ describe('solve invocation mutex', () => {
         useMeshImportStore.setState({ busy: false, filename: 'round-trip.msh' });
         void openImported({ kind: 'file', prepared: { ingest_id: 'round-trip-file', model_id: 'mesh-file:round-trip',
           solve_model_sha256: 'round-trip-sha', manifest_sha256: 'sha256:mesh', artifact_sha256: 'sha256:file',
-          source_tags: { group_2: 2 } } as unknown as RegisteredMesh });
+          source_tags: { group_2: 2 }, ...preparedFileFields('round-trip.msh') } as unknown as RegisteredMesh });
         importedMeshStore.setFile({ name: 'round-trip.msh', source: 'file', ingestId: 'round-trip-file' } as ImportedMeshScene);
       }
     });
@@ -501,6 +510,7 @@ describe('solve invocation mutex', () => {
         void openImported({ kind: 'file', prepared: {
           ingest_id: 'wgi_file', model_id: 'mesh-file:surface',
           manifest_sha256: 'sha256:mesh', artifact_sha256: 'sha256:surface', source_tags: { group_2: 2 },
+          ...preparedFileFields('surface.msh'),
         } as unknown as RegisteredMesh });
         importedMeshStore.setFile({ name: 'surface.msh', source: 'file', ingestId: 'wgi_file' } as ImportedMeshScene);
       }
