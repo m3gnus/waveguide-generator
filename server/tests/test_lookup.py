@@ -14,7 +14,7 @@ from hornlab_mesher.profile_formulas import lookup_profile_array
 from pydantic import ValidationError
 
 from server.cadlink.store import CadLinkStore
-from server.exports.api import WgLinkExportRequest, _export_wglink_sync
+from server.exports.wglink_service import WgLinkExportRequest, export_wglink_sync
 from server.design.schema import DesignConfig
 from server.design.textcfg import TextConfigError, parse, serialize
 from server.design_io.api import open_design, save_design, serialize_design
@@ -167,7 +167,7 @@ def test_custom_sampling_and_solve_domain():
 
 def test_cad_cfg_transport_refused_before_writing(tmp_path):
     with pytest.raises(HTTPException, match="ATH has no LOOKUP profile"):
-        _export_wglink_sync(WgLinkExportRequest(design=design(), designRevision=1), CadLinkStore(":memory:"), tmp_path, "lookup")
+        export_wglink_sync(WgLinkExportRequest(design=design(), designRevision=1), CadLinkStore(":memory:"), tmp_path, "lookup")
     assert not list(tmp_path.iterdir())
 
 

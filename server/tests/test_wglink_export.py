@@ -17,7 +17,7 @@ from server.cadlink.identity import SaveIdentity, design_hash
 from server.cadlink.store import CadLinkStore
 from server.design.schema import DesignConfig
 from server.design.textcfg import serialize
-from server.exports import api
+from server.exports import wglink_service as service
 
 pytestmark = pytest.mark.usefixtures("in_process_mesher")
 
@@ -44,9 +44,9 @@ def _design_count(store: CadLinkStore) -> int:
 
 def _request(
     saved, design: DesignConfig | None = None, base_name: str = "demo horn.cfg"
-) -> api.WgLinkExportRequest:
+) -> service.WgLinkExportRequest:
     identity = saved["identity"]
-    return api.WgLinkExportRequest.model_validate({
+    return service.WgLinkExportRequest.model_validate({
         "design": (design or _design()).model_dump(mode="json"),
         "designRevision": 3,
         "baseName": base_name,
@@ -113,14 +113,14 @@ def test_wglink_refuses_flush_but_keeps_previously_valid_zero_margin(
 
     if refused:
         with pytest.raises(HTTPException) as error:
-            api._export_wglink_sync(_request(saved, design), store, workspace, "flush")
+            service.export_wglink_sync(_request(saved, design), store, workspace, "flush")
         assert error.value.status_code == 422
         assert "Flush enclosures cannot be sent to Fusion" in error.value.detail
         assert not writes
         assert not (workspace / "wglink").exists()
         assert store.find_export_by_idempotency_key("flush") is None
     else:
-        result = api._export_wglink_sync(_request(saved, design), store, workspace, "fractional")
+        result = service.export_wglink_sync(_request(saved, design), store, workspace, "fractional")
         assert Path(result["bundlePath"]).is_dir()
         assert len(writes) == 1
 
@@ -164,7 +164,7 @@ def test_the_cad_bundle_is_built_without_the_export_sizing_planners(
     workspace.mkdir()
     _install_fake_write(monkeypatch)
 
-    row = api._export_wglink_sync(_request(saved), store, workspace, "no-planner")
+    row = service.export_wglink_sync(_request(saved), store, workspace, "no-planner")
 
     assert row["artifactSha256"] == "sha256:" + hashlib.sha256(b"STEP").hexdigest()
     manifest = json.loads((Path(row["bundlePath"]) / "wglink.json").read_text())
@@ -185,14 +185,14 @@ def test_wglink_export_writes_identity_hashes_and_retries_without_rebuilding(
     workspace.mkdir()
     writes = _install_fake_write(monkeypatch)
 
-    first = api._export_wglink_sync(_request(saved), store, workspace, "attempt-1")
-    retry = api._export_wglink_sync(_request(saved), store, workspace, "attempt-1")
+    first = service.export_wglink_sync(_request(saved), store, workspace, "attempt-1")
+    retry = service.export_wglink_sync(_request(saved), store, workspace, "attempt-1")
     other_workspace = tmp_path / "other-workspace"
     other_workspace.mkdir()
-    retry_from_other_workspace = api._export_wglink_sync(
+    retry_from_other_workspace = service.export_wglink_sync(
         _request(saved), store, other_workspace, "attempt-1"
     )
-    second = api._export_wglink_sync(_request(saved), store, workspace, "attempt-2")
+    second = service.export_wglink_sync(_request(saved), store, workspace, "attempt-2")
     original_identity = saved["identity"]
     store.save(
         requested=SaveIdentity.model_validate({
@@ -204,7 +204,7 @@ def test_wglink_export_writes_identity_hashes_and_retries_without_rebuilding(
         filename="demo-horn.cfg",
         snapshot_builder=lambda identity: serialize(design, cadlink=identity),
     )
-    stale_retry = api._export_wglink_sync(_request(saved), store, workspace, "attempt-1")
+    stale_retry = service.export_wglink_sync(_request(saved), store, workspace, "attempt-1")
 
     assert stale_retry["exportId"] == first["exportId"]
     locator = json.loads((workspace / "wglink" / f'{first["identity"]["designId"]}.latest.json').read_text())
@@ -268,13 +268,13 @@ def test_wglink_export_commits_an_unsaved_or_edited_design(
     workspace.mkdir()
     _install_fake_write(monkeypatch)
 
-    never_saved = api.WgLinkExportRequest.model_validate({
+    never_saved = service.WgLinkExportRequest.model_validate({
         "design": _design().model_dump(mode="json"),
         "designRevision": 0,
         "baseName": "demo horn.cfg",
         "identity": None,
     })
-    minted = api._export_wglink_sync(never_saved, store, workspace, "unsaved")
+    minted = service.export_wglink_sync(never_saved, store, workspace, "unsaved")
     assert minted["sequence"] == 1
     assert minted["identity"]["baseEditVersion"] == 1
     assert minted["designHash"] == design_hash(_design())
@@ -285,7 +285,7 @@ def test_wglink_export_commits_an_unsaved_or_edited_design(
 
     saved = _saved(store, _design())
     changed = DesignConfig.model_validate({"formula": "OSSE", "L": 121, "a": 45})
-    exported = api._export_wglink_sync(
+    exported = service.export_wglink_sync(
         _request(saved, changed, "edited horn.cfg"), store, workspace, "changed"
     )
     identity = saved["identity"]
@@ -328,7 +328,7 @@ def test_wglink_export_reuses_commit_left_by_failed_export(
     )
 
     with pytest.raises(HTTPException, match="simulated geometry failure"):
-        api._export_wglink_sync(request, store, workspace, "failed-attempt")
+        service.export_wglink_sync(request, store, workspace, "failed-attempt")
 
     original_identity = saved["identity"]
     head_after_failure = store.get_design(original_identity.design_id)
@@ -337,7 +337,7 @@ def test_wglink_export_reuses_commit_left_by_failed_export(
     assert head_after_failure["design_hash"] == design_hash(edited)
     assert _design_count(store) == 1
 
-    retried = api._export_wglink_sync(request, store, workspace, "retry-attempt")
+    retried = service.export_wglink_sync(request, store, workspace, "retry-attempt")
 
     assert retried["identity"] == {
         "designId": original_identity.design_id,
@@ -363,7 +363,7 @@ def test_wglink_idempotent_retry_omits_identity_after_head_advanced(
     _install_fake_write(monkeypatch)
     request = _request(saved, base_name="demo-horn.cfg")
 
-    first = api._export_wglink_sync(request, store, workspace, "same-attempt")
+    first = service.export_wglink_sync(request, store, workspace, "same-attempt")
     original_identity = saved["identity"]
     advanced = DesignConfig.model_validate({"formula": "OSSE", "L": 121, "a": 45})
     store.save(
@@ -377,7 +377,7 @@ def test_wglink_idempotent_retry_omits_identity_after_head_advanced(
         snapshot_builder=lambda identity: serialize(advanced, cadlink=identity),
     )
 
-    retry = api._export_wglink_sync(request, store, workspace, "same-attempt")
+    retry = service.export_wglink_sync(request, store, workspace, "same-attempt")
 
     assert "identity" in first
     assert "identity" not in retry
@@ -393,8 +393,8 @@ def test_wglink_idempotent_retry_keeps_identity_while_head_is_unchanged(
     _install_fake_write(monkeypatch)
     request = _request(saved, base_name="demo-horn.cfg")
 
-    first = api._export_wglink_sync(request, store, workspace, "same-attempt")
-    retry = api._export_wglink_sync(request, store, workspace, "same-attempt")
+    first = service.export_wglink_sync(request, store, workspace, "same-attempt")
+    retry = service.export_wglink_sync(request, store, workspace, "same-attempt")
 
     assert retry["identity"] == first["identity"]
 
@@ -411,8 +411,8 @@ def test_wglink_sequential_identical_edits_reuse_the_advanced_head(
     _install_fake_write(monkeypatch)
     stale_request = _request(saved, edited, "demo-horn.cfg")
 
-    first = api._export_wglink_sync(stale_request, store, workspace, "first-send")
-    second = api._export_wglink_sync(stale_request, store, workspace, "second-send")
+    first = service.export_wglink_sync(stale_request, store, workspace, "first-send")
+    second = service.export_wglink_sync(stale_request, store, workspace, "second-send")
 
     original_identity = saved["identity"]
     assert first["identity"] == second["identity"] == {
@@ -433,7 +433,7 @@ def test_wglink_identical_content_with_renamed_design_bumps_filename(
     workspace.mkdir()
     _install_fake_write(monkeypatch)
 
-    exported = api._export_wglink_sync(
+    exported = service.export_wglink_sync(
         _request(saved, base_name="renamed horn.cfg"),
         store,
         workspace,
@@ -474,8 +474,8 @@ def test_parameter_namespace_survives_a_rename_with_new_bundle(
     workspace.mkdir()
     writes = _install_fake_write(monkeypatch)
 
-    first = api._export_wglink_sync(_request(saved), store, workspace, "first-send")
-    renamed = api._export_wglink_sync(
+    first = service.export_wglink_sync(_request(saved), store, workspace, "first-send")
+    renamed = service.export_wglink_sync(
         _request(saved, base_name="tritonia.cfg"), store, workspace, "renamed-send"
     )
 
@@ -506,7 +506,7 @@ def test_stale_copy_cannot_silently_fork_the_linked_cad_project(
     workspace.mkdir()
     writes = _install_fake_write(monkeypatch)
 
-    original = api._export_wglink_sync(_request(saved), store, workspace, "original")
+    original = service.export_wglink_sync(_request(saved), store, workspace, "original")
     advanced = DesignConfig.model_validate({"formula": "OSSE", "L": 122, "a": 45})
     store.save(
         requested=SaveIdentity.model_validate({
@@ -520,7 +520,7 @@ def test_stale_copy_cannot_silently_fork_the_linked_cad_project(
     )
 
     with pytest.raises(HTTPException, match="older CAD-link registry version") as stale:
-        api._export_wglink_sync(
+        service.export_wglink_sync(
             _request(saved, base_name="tritonia.cfg"), store, workspace, "stale"
         )
 
@@ -538,13 +538,13 @@ def test_a_fresh_lineage_mints_its_namespace_from_the_current_name(
     workspace.mkdir()
     writes = _install_fake_write(monkeypatch)
 
-    first = api._export_wglink_sync(
+    first = service.export_wglink_sync(
         _request(_saved(store, _design()), base_name="demo horn.cfg"),
         store,
         workspace,
         "first-lineage",
     )
-    second = api._export_wglink_sync(
+    second = service.export_wglink_sync(
         _request(_saved(store, _design()), base_name="tritonia mk2.cfg"),
         store,
         workspace,
@@ -570,11 +570,11 @@ def test_a_lineage_linked_before_the_registry_recovers_its_namespace(
     workspace.mkdir()
     _install_fake_write(monkeypatch)
 
-    first = api._export_wglink_sync(_request(saved), store, workspace, "before")
+    first = service.export_wglink_sync(_request(saved), store, workspace, "before")
     with store._lock, store._transaction() as conn:
         conn.execute("DELETE FROM lineage_cad_names")
 
-    renamed = api._export_wglink_sync(
+    renamed = service.export_wglink_sync(
         _request(saved, base_name="tritonia.cfg"), store, workspace, "after"
     )
 
@@ -609,7 +609,7 @@ def test_wglink_export_refuses_a_stale_identity_and_adopts_an_unknown_one(
     # Exporting from an older copy must not silently orphan the existing CAD
     # document by assigning this editor a second design ID in the lineage.
     with pytest.raises(HTTPException, match="CAD-linked designs") as stale:
-        api._export_wglink_sync(_request(saved), store, workspace, "stale")
+        service.export_wglink_sync(_request(saved), store, workspace, "stale")
     assert stale.value.status_code == 409
 
     unknown = _request(saved, base_name="adopted horn.cfg")
@@ -618,7 +618,7 @@ def test_wglink_export_refuses_a_stale_identity_and_adopts_an_unknown_one(
         "lineageId": original_identity.lineage_id,
         "baseEditVersion": original_identity.edit_version,
     })
-    adopted = api._export_wglink_sync(unknown, store, workspace, "unknown")
+    adopted = service.export_wglink_sync(unknown, store, workspace, "unknown")
     assert adopted["identity"] == {
         "designId": "wgd_01K00000000000000000000099",
         "lineageId": original_identity.lineage_id,
@@ -657,7 +657,7 @@ def test_concurrent_designs_cannot_claim_the_same_bundle_name(
     def export(args):
         saved, key = args
         try:
-            return api._export_wglink_sync(_request(saved), store, workspace, key)
+            return service.export_wglink_sync(_request(saved), store, workspace, key)
         except HTTPException as exc:
             return exc
 
@@ -676,7 +676,7 @@ def test_wglink_export_rejects_a_stale_workspace_path(tmp_path: Path) -> None:
     workspace = tmp_path / "removed-workspace"
 
     with pytest.raises(HTTPException, match="workspace folder is unavailable") as caught:
-        api._export_wglink_sync(_request(saved), store, workspace, "stale-workspace")
+        service.export_wglink_sync(_request(saved), store, workspace, "stale-workspace")
 
     assert caught.value.status_code == 409
     assert not workspace.exists()
@@ -691,13 +691,13 @@ def test_ath_cad_link_refusal_is_422_before_identity_or_geometry_work(tmp_path, 
         'formula': 'OSSE', 'L': 80, 'text_import_version': 'ath-2026-09a-v2', 'mesh': mesh,
     })
     store = CadLinkStore(tmp_path / 'cadlink.sqlite3')
-    request = api.WgLinkExportRequest(design=design, designRevision=1)
+    request = service.WgLinkExportRequest(design=design, designRevision=1)
     def unexpected(*args, **kwargs):
         pytest.fail('a refused CAD link must not commit or build geometry')
-    monkeypatch.setattr(api, '_commit_design_for_export', unexpected)
+    monkeypatch.setattr(service, '_commit_design_for_export', unexpected)
     monkeypatch.setattr('hornlab_mesher.config_builder.resolve_geometry', unexpected)
     with pytest.raises(HTTPException) as caught:
-        api._export_wglink_sync(request, store, tmp_path, 'ath-refused')
+        service.export_wglink_sync(request, store, tmp_path, 'ath-refused')
     assert caught.value.status_code == 422
     assert 'STEP export of Mesh.Roundover / Mesh.RearShape = 3' in caught.value.detail
     assert not (tmp_path / 'cadlink.sqlite3').exists()

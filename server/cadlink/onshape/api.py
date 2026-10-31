@@ -27,6 +27,11 @@ from server.cadlink.identity import SaveIdentity, design_hash
 from server.cadlink.intake.ingest import IngestRefusal
 from server.cadlink.store import CadLinkStore
 from server.design.schema import DesignConfig
+from server.exports.wglink_service import (
+    WgLinkExportRequest,
+    export_wglink_sync,
+    normalize_base_name,
+)
 from server.mesh.errors import MeshTooLarge
 
 from .adapter import (
@@ -474,15 +479,6 @@ async def send(
 ) -> dict[str, Any]:
     """Export the design as a wglink bundle and materialise it in Onshape."""
 
-    # Imported here rather than at module scope: server.exports.api imports the
-    # CAD-link store, and importing it back at module scope would make the two
-    # packages import-circular.
-    from server.exports.api import (
-        WgLinkExportRequest,
-        _base_name,
-        _export_wglink_sync,
-    )
-
     store: CadLinkStore = request.app.state.cadlink_store
     # Onshape has no local client, so the bundle belongs to WG rather than to a
     # user-selected workspace folder. This keeps a durable, checksummed artifact
@@ -503,7 +499,7 @@ async def send(
         identity=payload.identity,
     )
     export = await asyncio.to_thread(
-        _export_wglink_sync,
+        export_wglink_sync,
         export_request,
         store,
         bundle_root,
@@ -528,7 +524,7 @@ async def send(
                 status_code=409,
                 detail="The export did not commit a design identity, so it cannot be linked to an Onshape document.",
             )
-    document_name = _base_name(payload.base_name)
+    document_name = normalize_base_name(payload.base_name)
     try:
         pushed = await asyncio.to_thread(
             _push,

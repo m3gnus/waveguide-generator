@@ -9,7 +9,7 @@ from fastapi import HTTPException
 
 from server.platform import json_file
 from server.cadlink.store import CadLinkStore
-from server.exports import api, cad_handoff, wglink_publication as publication
+from server.exports import api, wglink_service as service, cad_handoff, wglink_publication as publication
 from test_wglink_export import _design, _saved, _request, _install_fake_write
 
 pytestmark = pytest.mark.usefixtures("in_process_mesher")
@@ -30,24 +30,24 @@ def locator(result):
 
 def test_bundle_without_row_recovers_original_reservation_after_b(monkeypatch, tmp_path):
     store, saved, workspace, writes = setup(monkeypatch, tmp_path)
-    real_publish = api.publish_bundle
+    real_publish = service.publish_bundle
 
     def crash(*args, **kwargs):
         real_publish(*args, **kwargs)
         raise OSError("crash after bundle")
 
-    monkeypatch.setattr(api, "publish_bundle", crash)
+    monkeypatch.setattr(service, "publish_bundle", crash)
     with pytest.raises(HTTPException):
-        api._export_wglink_sync(_request(saved), store, workspace, "A")
+        service.export_wglink_sync(_request(saved), store, workspace, "A")
     reservation = store.publication_reservation_for_key("A")
     assert store.get_export(reservation["export_id"]) is None
-    monkeypatch.setattr(api, "publish_bundle", real_publish)
-    b = api._export_wglink_sync(_request(saved), store, workspace, "B")
+    monkeypatch.setattr(service, "publish_bundle", real_publish)
+    b = service.export_wglink_sync(_request(saved), store, workspace, "B")
     assert b["sequence"] == 2
     # A new store simulates process startup; no geometry is rebuilt.
     recovered = CadLinkStore(store.db_path)
     assert publication.recover_publications(recovered) == []
-    a = api._export_wglink_sync(_request(saved), recovered, workspace, "A")
+    a = service.export_wglink_sync(_request(saved), recovered, workspace, "A")
     assert a["sequence"] == 1
     assert a["exportId"] == reservation["export_id"]
     assert len(writes) == 2
@@ -66,13 +66,13 @@ def test_row_without_locator_recovers_on_retry(monkeypatch, tmp_path):
 
     monkeypatch.setattr(publication, "atomic_json", fail)
     with pytest.raises(HTTPException) as error:
-        api._export_wglink_sync(_request(saved), store, workspace, "A")
+        service.export_wglink_sync(_request(saved), store, workspace, "A")
     assert error.value.status_code == 503
     row = store.find_export_by_idempotency_key("A")
     assert row and Path(row["bundle_path"]).is_dir()
     assert not list((workspace / "wglink").glob("*.latest.json"))
     monkeypatch.setattr(publication, "atomic_json", real_atomic)
-    a = api._export_wglink_sync(_request(saved), store, workspace, "A")
+    a = service.export_wglink_sync(_request(saved), store, workspace, "A")
     assert json.loads(locator(a).read_text())["exportId"] == a["exportId"]
     assert len(writes) == 1
 
@@ -86,7 +86,7 @@ def test_restart_defers_handoff_until_live_same_key_retry(monkeypatch, tmp_path)
 
     monkeypatch.setattr(cad_handoff, "publish_fusion_handoff", crash)
     with pytest.raises(HTTPException) as error:
-        api._export_wglink_sync(
+        service.export_wglink_sync(
             _request(saved),
             store,
             workspace,
@@ -108,7 +108,7 @@ def test_restart_defers_handoff_until_live_same_key_retry(monkeypatch, tmp_path)
     assert not list(folder.glob("*.json"))
     journal = publication._journal_folder(recovered) / f"{row['export_id']}.json"
     assert json.loads(journal.read_text())["handoffState"] == "not_delivered"
-    retry = api._export_wglink_sync(_request(saved), recovered, workspace, "A")
+    retry = service.export_wglink_sync(_request(saved), recovered, workspace, "A")
     assert retry["cadHandoff"] == "published"
     handoffs = list(folder.glob("*.json"))
     assert len(handoffs) == 1
@@ -124,8 +124,8 @@ def test_restart_defers_handoff_until_live_same_key_retry(monkeypatch, tmp_path)
 
 def test_locator_contention_never_regresses_and_is_exact(monkeypatch, tmp_path):
     store, saved, workspace, _ = setup(monkeypatch, tmp_path)
-    a = api._export_wglink_sync(_request(saved), store, workspace, "A")
-    b = api._export_wglink_sync(_request(saved), store, workspace, "B")
+    a = service.export_wglink_sync(_request(saved), store, workspace, "A")
+    b = service.export_wglink_sync(_request(saved), store, workspace, "B")
     rows = [store.get_export(a["exportId"]), store.get_export(b["exportId"])] * 10
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda row: publication.publish_locator(store, row), rows))
@@ -167,7 +167,7 @@ def test_windows_replace_failure_keeps_old_locator(monkeypatch, tmp_path, winerr
 @pytest.mark.parametrize("damage", ["missing", "content", "identity"])
 def test_original_missing_or_corrupt_is_409_without_rebuild(monkeypatch, tmp_path, damage):
     store, saved, workspace, writes = setup(monkeypatch, tmp_path)
-    a = api._export_wglink_sync(_request(saved), store, workspace, "A")
+    a = service.export_wglink_sync(_request(saved), store, workspace, "A")
     path = Path(a["bundlePath"])
     if damage == "missing":
         (path / "waveguide.step").unlink()
@@ -178,15 +178,15 @@ def test_original_missing_or_corrupt_is_409_without_rebuild(monkeypatch, tmp_pat
         manifest["export"]["id"] = "other"
         (path / "wglink.json").write_text(json.dumps(manifest))
     with pytest.raises(HTTPException) as error:
-        api._export_wglink_sync(_request(saved), store, workspace, "A")
+        service.export_wglink_sync(_request(saved), store, workspace, "A")
     assert error.value.status_code == 409
     assert len(writes) == 1
 
 
 def test_retention_keeps_registered_legacy_and_unknown_orphans(monkeypatch, tmp_path):
     store, saved, workspace, _ = setup(monkeypatch, tmp_path)
-    a = api._export_wglink_sync(_request(saved), store, workspace, "A")
-    b = api._export_wglink_sync(_request(saved), store, workspace, "B")
+    a = service.export_wglink_sync(_request(saved), store, workspace, "A")
+    b = service.export_wglink_sync(_request(saved), store, workspace, "B")
     root = workspace / "wglink"
     for name in ("legacy.wglink", "unregistered.wglink", ".wg2-wglink-unknown"):
         (root / name).mkdir()
@@ -199,13 +199,13 @@ def test_retention_keeps_registered_legacy_and_unknown_orphans(monkeypatch, tmp_
 
 def test_idempotency_identity_conflict_is_409(monkeypatch, tmp_path):
     store, saved, workspace, writes = setup(monkeypatch, tmp_path)
-    api._export_wglink_sync(_request(saved), store, workspace, "A")
+    service.export_wglink_sync(_request(saved), store, workspace, "A")
     changed = _request(saved)
     changed.design = _design().model_copy(deep=True)
     changed.base_name = "another-name"
     changed.identity = _request(_saved(store, _design())).identity
     with pytest.raises(HTTPException) as error:
-        api._export_wglink_sync(changed, store, workspace, "A")
+        service.export_wglink_sync(changed, store, workspace, "A")
     assert error.value.status_code == 409
     assert len(writes) == 1
 
@@ -238,7 +238,7 @@ def test_publication_order_is_durable_bundle_row_locator_handoff(monkeypatch, tm
     monkeypatch.setattr(store, "make_durable", durable)
     monkeypatch.setattr(publication, "atomic_json", atomic)
     monkeypatch.setattr(cad_handoff, "publish_fusion_handoff", handoff)
-    api._export_wglink_sync(
+    service.export_wglink_sync(
         _request(saved), store, workspace, "A", handoff={"dataDir": str(tmp_path / "data")}
     )
     assert events.index("locator") < events.index("handoff")
@@ -246,7 +246,7 @@ def test_publication_order_is_durable_bundle_row_locator_handoff(monkeypatch, tm
 
 def test_geometry_is_submitted_to_the_killable_child(monkeypatch, tmp_path):
     store, saved, workspace, _ = setup(monkeypatch, tmp_path)
-    real_run = api.run_mesh_build
+    real_run = service.run_mesh_build
     submissions = []
 
     async def run(fn, *args):
@@ -258,8 +258,8 @@ def test_geometry_is_submitted_to_the_killable_child(monkeypatch, tmp_path):
         submissions.append(fn)
         return await real_run(fn, *args)
 
-    monkeypatch.setattr(api, "run_mesh_build", run)
-    api._export_wglink_sync(_request(saved), store, workspace, "A")
+    monkeypatch.setattr(service, "run_mesh_build", run)
+    service.export_wglink_sync(_request(saved), store, workspace, "A")
     assert len(submissions) == 1
 
 
@@ -282,7 +282,7 @@ def test_checkpoint_failure_keeps_locator_retryable(monkeypatch, tmp_path):
     import sqlite3
 
     store, saved, workspace, _ = setup(monkeypatch, tmp_path)
-    a = api._export_wglink_sync(_request(saved), store, workspace, "A")
+    a = service.export_wglink_sync(_request(saved), store, workspace, "A")
     before = locator(a).read_bytes()
     real = store.make_durable
 
@@ -291,21 +291,21 @@ def test_checkpoint_failure_keeps_locator_retryable(monkeypatch, tmp_path):
 
     monkeypatch.setattr(store, "make_durable", busy)
     with pytest.raises(HTTPException) as error:
-        api._export_wglink_sync(_request(saved), store, workspace, "B")
+        service.export_wglink_sync(_request(saved), store, workspace, "B")
     assert error.value.status_code == 503
     assert locator(a).read_bytes() == before
     monkeypatch.setattr(store, "make_durable", real)
-    b = api._export_wglink_sync(_request(saved), store, workspace, "B")
+    b = service.export_wglink_sync(_request(saved), store, workspace, "B")
     assert b["sequence"] == 2
 
 
 @pytest.mark.parametrize("value", [[], {}, {"designId": "wrong"}])
 def test_malformed_original_manifest_is_409(monkeypatch, tmp_path, value):
     store, saved, workspace, _ = setup(monkeypatch, tmp_path)
-    a = api._export_wglink_sync(_request(saved), store, workspace, "A")
+    a = service.export_wglink_sync(_request(saved), store, workspace, "A")
     (Path(a["bundlePath"]) / "wglink.json").write_text(json.dumps(value))
     with pytest.raises(HTTPException) as error:
-        api._export_wglink_sync(_request(saved), store, workspace, "A")
+        service.export_wglink_sync(_request(saved), store, workspace, "A")
     assert error.value.status_code == 409
 
 
@@ -320,7 +320,7 @@ def test_crash_after_handoff_does_not_republish_consumed_operation(monkeypatch, 
 
     monkeypatch.setattr(publication, "atomic_json", fail_done)
     with pytest.raises(HTTPException) as error:
-        api._export_wglink_sync(
+        service.export_wglink_sync(
             _request(saved), store, workspace, "A", handoff={"dataDir": str(tmp_path / "data")}
         )
     assert error.value.status_code == 503
@@ -351,17 +351,17 @@ def test_failed_handoff_restart_and_retry_after_newer_export_are_superseded(monk
 
     monkeypatch.setattr(cad_handoff, "publish_fusion_handoff", fail)
     with pytest.raises(HTTPException) as error:
-        api._export_wglink_sync(_request(saved), store, workspace, "A", handoff=handoff)
+        service.export_wglink_sync(_request(saved), store, workspace, "A", handoff=handoff)
     assert error.value.status_code == 503
     a = store.find_export_by_idempotency_key("A")
     recovered = CadLinkStore(store.db_path)
     assert publication.recover_publications(recovered) == []
     assert len(calls) == 1  # Startup must not even attempt a handoff.
     monkeypatch.setattr(cad_handoff, "publish_fusion_handoff", real_handoff)
-    b = api._export_wglink_sync(_request(saved), recovered, workspace, "B", handoff=handoff)
+    b = service.export_wglink_sync(_request(saved), recovered, workspace, "B", handoff=handoff)
     folder = tmp_path / "data" / "ipc" / "wglink" / ".fusion-handoffs"
     before = {p.name: p.read_bytes() for p in folder.iterdir()}
-    retry = api._export_wglink_sync(_request(saved), recovered, workspace, "A", handoff=handoff)
+    retry = service.export_wglink_sync(_request(saved), recovered, workspace, "A", handoff=handoff)
     assert retry["exportId"] == a["export_id"]
     assert retry["cadHandoff"] == "failed"
     assert retry["cadHandoffReason"] == "superseded"
@@ -378,7 +378,7 @@ def test_journalless_or_onshape_retry_reports_no_handoff(monkeypatch, tmp_path, 
     from types import SimpleNamespace
 
     store, saved, workspace, writes = setup(monkeypatch, tmp_path)
-    original = api._export_wglink_sync(_request(saved), store, workspace, "A")
+    original = service.export_wglink_sync(_request(saved), store, workspace, "A")
     if journal == "missing":
         (publication._journal_folder(store) / f"{original['exportId']}.json").unlink()
     app = SimpleNamespace(state=SimpleNamespace(
@@ -438,7 +438,7 @@ def test_a_crash_between_accept_and_file_is_reissued_only_by_a_live_retry(monkey
 
     monkeypatch.setattr(fusion_delivery.os, "replace", crash)
     with pytest.raises(Crash):
-        api._export_wglink_sync(_request(saved), store, workspace, "A", handoff={"dataDir": str(data)})
+        service.export_wglink_sync(_request(saved), store, workspace, "A", handoff={"dataDir": str(data)})
     row = store.find_export_by_idempotency_key("A")
     journal = publication._journal_folder(store) / f"{row['export_id']}.json"
     old_id = json.loads(journal.read_text())["requestId"]
@@ -453,13 +453,13 @@ def test_a_crash_between_accept_and_file_is_reissued_only_by_a_live_retry(monkey
     assert len(writes) == 1
     # A live same-key retry re-issues the never-published handoff with a fresh
     # id, as every retry did before immutable bundles, and never a dead one.
-    retry = api._export_wglink_sync(_request(saved), recovered, workspace, "A")
+    retry = service.export_wglink_sync(_request(saved), recovered, workspace, "A")
     assert retry["exportId"] == row["export_id"]
     assert retry["cadHandoff"] == "published"
     new_id = retry["cadHandoffRequestId"]
     assert new_id != old_id
     assert (handoffs / f"{new_id}.json").exists()
     assert recovered.get_operation(old_id)["reason"] == "publication_failed"
-    again = api._export_wglink_sync(_request(saved), recovered, workspace, "A")
+    again = service.export_wglink_sync(_request(saved), recovered, workspace, "A")
     assert again["cadHandoffRequestId"] == new_id
     assert len(writes) == 1

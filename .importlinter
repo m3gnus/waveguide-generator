@@ -39,8 +39,8 @@ unmatched_ignore_imports_alerting = error
 # Remove an edge when its dependency is extracted into a lower layer.
 ignore_imports =
     # cadlink -> exports: existing upward dependency.
-    # Legacy use: WgLinkExportRequest, _base_name, _export_wglink_sync.
-    server.cadlink.onshape.api -> server.exports.api
+    # Shared outbound operation; publication recovery still reaches Fusion.
+    server.cadlink.onshape.api -> server.exports.wglink_service
     # design -> cadlink: existing upward dependency.
     # Legacy use: CadLink.
     server.design.textcfg -> server.cadlink.identity
@@ -101,7 +101,7 @@ ignore_imports =
 
 # CAD Link lanes (S7-1). Highest to lowest; docs/architecture/CAD-OPERATIONS.md, "Server layout".
 # onshape sits above joblane|fusion and identity above interpretation only because of existing
-# indirect chains through other server packages (onshape.api -> exports.api -> fusion_status;
+# indirect chains through other server packages (onshape.api -> exports.wglink_service -> wglink_publication -> fusion.delivery;
 # identity -> design.textcfg -> ... -> jobs.models -> interpretation.solver_frame).
 [importlinter:contract:cadlink-lanes]
 name = CAD Link lanes

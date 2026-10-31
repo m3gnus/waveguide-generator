@@ -12,6 +12,7 @@ import pytest
 from server.design.schema import DesignConfig
 from server.exports import api
 from server.exports.api import ExportRequest
+from server.exports.wglink_service import normalize_base_name
 from server.exports.core import (
     _build_stl_mesh_sync,
     _inner_grid,
@@ -90,10 +91,10 @@ def test_binary_stl_rejects_values_outside_float32_range() -> None:
 
 
 def test_base_name_only_strips_known_design_extensions() -> None:
-    assert api._base_name("horn.cfg") == "horn"
-    assert api._base_name("horn.TXT") == "horn"
-    assert api._base_name("horn.mwg") == "horn"
-    assert api._base_name("horn.v1") == "horn.v1"
+    assert normalize_base_name("horn.cfg") == "horn"
+    assert normalize_base_name("horn.TXT") == "horn"
+    assert normalize_base_name("horn.mwg") == "horn"
+    assert normalize_base_name("horn.v1") == "horn.v1"
 
 
 @pytest.mark.skipif(

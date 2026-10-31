@@ -19,7 +19,7 @@ from server.design.native import NATIVE_FORMULAS
 from server.design.schema import DesignConfig, Expr
 from server.design.textcfg import TextConfigError, parse, serialize
 from server.design_io.api import open_design, save_design
-from server.exports.api import WgLinkExportRequest, _export_wglink_sync
+from server.exports.wglink_service import WgLinkExportRequest, export_wglink_sync
 from server.cadlink.store import CadLinkStore
 from server.exports.core import _build_step_solid_sync, _build_stl_mesh_sync, build_profiles
 from server.mesh.builder import (
@@ -203,7 +203,7 @@ def test_native_cad_link_and_profiles_refuse_complete_recipe_loss(formula: str, 
     with pytest.raises(ValueError, match="cannot export profile CSVs"):
         build_profiles(design, "profiles")
     with pytest.raises(HTTPException, match="cannot be sent to CAD Link") as caught:
-        _export_wglink_sync(WgLinkExportRequest(design=design, designRevision=1), CadLinkStore(":memory:"), tmp_path, "native")
+        export_wglink_sync(WgLinkExportRequest(design=design, designRevision=1), CadLinkStore(":memory:"), tmp_path, "native")
     assert caught.value.status_code == 422
     assert not list(tmp_path.iterdir())
 
