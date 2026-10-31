@@ -1,4 +1,5 @@
-import { formatApiDetail, type ImportedSolveSubmission } from '../jobs/actions';
+import type { ImportedSolveSubmission } from '../jobs/actions';
+import { formatApiDetail } from './httpError';
 import type { RegisteredMesh } from './meshImport';
 
 export const MAX_MESH_REPLAY_BYTES = 64 * 1024 * 1024;

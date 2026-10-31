@@ -1,4 +1,5 @@
-import { formatApiDetail, toSolveDesign } from '../jobs/actions';
+import { toSolveDesign } from '../jobs/actions';
+import { formatApiDetail } from './httpError';
 import type { DesignDocument } from '../stores/design';
 import type { SolveOptionsStore } from '../stores/solveOptions';
 import { createImportedMeshScene, type ImportedMeshScene } from '../viewport/importedMesh';

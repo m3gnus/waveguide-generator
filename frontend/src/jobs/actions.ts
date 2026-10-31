@@ -1,3 +1,4 @@
+import { formatApiDetail } from '../api/httpError';
 import type { CadMeshSizes } from '../api/cadlink';
 import type { components } from '../api/generated/openapi';
 import type { CadSolveSetup } from '../api/cadOperations';
@@ -6,6 +7,8 @@ import type { ExteriorTransducerForm } from '../stores/exteriorTransducer';
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import { serializeSolveDesign, type DesignDocument } from '../stores/design';
 import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
+
+export { formatApiDetail } from '../api/httpError';
 
 export type OpenclUnavailableReason = 'no_device' | 'inventory_timeout' | 'smoke_test_failed' | 'smoke_test_timeout' | 'pocl_windows' | 'probe_error';
 
@@ -170,26 +173,6 @@ export interface SymmetryResolution {
 
 export function toSolveDesign(design: DesignDocument): Record<string, unknown> {
   return serializeSolveDesign(design);
-}
-
-export function formatApiDetail(value: unknown): string | null {
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value)) {
-    const items = value.map((item) => formatApiDetail(item)).filter((item): item is string => Boolean(item));
-    return items.length ? items.join('; ') : null;
-  }
-  if (value && typeof value === 'object') {
-    const record = value as Record<string, unknown>;
-    const message = typeof record.msg === 'string' ? record.msg : typeof record.message === 'string' ? record.message : null;
-    const location = Array.isArray(record.loc) ? record.loc.map(String).join('.') : null;
-    if (message) return location ? `${location}: ${message}` : message;
-    const entries = Object.entries(record).flatMap(([key, item]) => {
-      const formatted = formatApiDetail(item);
-      return formatted ? [`${key}: ${formatted}`] : [];
-    });
-    return entries.length ? entries.join('; ') : null;
-  }
-  return value === null || value === undefined ? null : String(value);
 }
 
 async function detail(response: Response): Promise<string> {

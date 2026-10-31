@@ -1,4 +1,4 @@
-import { httpErrorMessage } from './httpError';
+import { formatApiDetail, httpErrorMessage } from './httpError';
 import { profileSamples, profileSections, type ProfileSample } from './profileSamples';
 import { deadlineFetch } from './deadlineFetch';
 import {
@@ -21,7 +21,6 @@ import { useDocumentStore, type CadLinkClassification, type DesignIdentity } fro
 import { writeToOutputFolder, type OutputFolderWrite } from './workspace';
 import type { ConfirmReplacements } from './exportDestination';
 import { solveAttention } from '../shell/solveAttention';
-import { formatApiDetail } from '../jobs/actions';
 
 export interface MigrationApplication {
   name: string;

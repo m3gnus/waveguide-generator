@@ -1,5 +1,5 @@
 import type { CadSourceInventoryEntry } from './cadOperations';
-import { formatApiDetail } from '../jobs/actions';
+import { formatApiDetail } from './httpError';
 import type { ImportedSetup } from '../jobs/importedSetup';
 
 /** A refused read, with the status and code the server gave so a caller can tell a gone model from a failed one. */

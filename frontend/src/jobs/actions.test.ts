@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { formatApiDetail as ownedFormatApiDetail } from '../api/httpError';
 import { hydrateDesignDocument } from '../api/designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
 import { createImportedSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 import { fetchSymmetry, formatApiDetail, getCapabilities, planSolveDesign, postSolvePlan, postImportedSolvePlan, postSymmetry, solveModel, SolveSubmissionRefused, submitDesign, toSolveDesign } from './actions';
 
 describe('API validation errors', () => {
+  it('retains the compatibility export from the single HTTP formatter owner', () => {
+    expect(formatApiDetail).toBe(ownedFormatApiDetail);
+  });
   it('surfaces nested solve request validation instead of the generic envelope', async () => {
     const fetcher = async () => new Response(JSON.stringify({
       detail: 'Solve request body is invalid',
