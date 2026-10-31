@@ -279,15 +279,20 @@ def validate_remove_lid_planes(remove_lid_planes: list[str] | tuple[str, ...], d
     return tuple(plane for plane in domain_planes if plane in remove_lid_planes)
 
 
+def _check_lid_crossing(planes: tuple[str, ...], straddling: tuple[str, ...] | list[str]) -> None:
+    for plane in planes:
+        if plane in straddling:
+            raise ValueError(f"The mesh crosses {_plane_labels([plane])}. Choose the correct symmetry or change the mesh so it stays on one side.")
+
+
 def _remove_lids(mesh: FileMesh, planes: tuple[str, ...], verification: dict[str, Any], roles: Mapping[int, str]) -> tuple[FileMesh, dict[str, Any]]:
     """Drop only in-plane triangles; requesting a plane without a lid is an error."""
+    _check_lid_crossing(planes, verification.get("straddling_planes", []))
     lids = _lid_evidence(mesh, verification)
     keep = np.ones(len(mesh.triangles), dtype=bool)
     removed = {}
     surface_names = {group["tag"]: group["display_name"] for group in mesh.summary()["groups"]}
     for plane in planes:
-        if plane in verification.get("straddling_planes", []):
-            raise ValueError(f"The mesh crosses {_plane_labels([plane])}. Choose the correct symmetry or change the mesh so it stays on one side.")
         lid = lids.get(plane)
         if lid is None or not lid["candidate"]:
             raise ValueError(f"The mesh has no closed face to remove on {_plane_labels([plane])}. Turn off removal for that plane.")
@@ -382,6 +387,7 @@ def prepare_file_mesh_input(
     # a full mesh. Validate the immutable input before attempting optimisation.
     sides = _symmetry_evidence(mesh, ())[1]["detection"]["plane_vertex_side_counts"]
     crossing = tuple(plane for plane in planes if sides[plane]["positive"] and sides[plane]["negative"])
+    _check_lid_crossing(remove_lid_planes, crossing)
     declared = tuple(plane for plane in planes if plane not in crossing)
     if crossing and file_mesh_integrity(mesh, declared)["off_plane_open_edge_count"]:
         raise ValueError(f"The mesh crosses {_plane_labels(list(crossing))} and has an opening away from its declared planes. Close it in the meshing tool.")
