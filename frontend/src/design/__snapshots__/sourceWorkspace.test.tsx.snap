@@ -1255,14 +1255,14 @@ exports[`W0 workspace DOM at 77c641c8 > HF contour 1`] = `
 <div class="sketch-toolbar-group" role="group" aria-label="Navigate">
 <span class="sketch-group-caption">Navigate</span>
 <div class="sketch-tool-segment">
-<button type="button" aria-label="Select (Esc)" title="Select (Esc)" aria-pressed="true">
+<button class="btn" type="button" aria-label="Select (Esc)" title="Select (Esc)" aria-pressed="true">
 <svg aria-hidden="true" viewBox="0 0 16 16">
 <path d="M4 2 13 10 8 10 6 14Z">
 </path>
 </svg>
 <span class="sketch-tool-label">Select</span>
 </button>
-<button type="button" aria-label="Pan (hold Space)" title="Pan (hold Space)" aria-pressed="false">
+<button class="btn" type="button" aria-label="Pan (hold Space)" title="Pan (hold Space)" aria-pressed="false">
 <svg aria-hidden="true" viewBox="0 0 16 16">
 <path d="M5 8V3a1 1 0 0 1 2 0v4-5a1 1 0 0 1 2 0v5-4a1 1 0 0 1 2 0v4-2a1 1 0 0 1 2 0v5q0 5-4 5H8q-2 0-3-2L2 8q1-2 3 0Z">
 </path>
@@ -1342,19 +1342,19 @@ exports[`W0 workspace DOM at 77c641c8 > HF contour 1`] = `
 </button>
 </div>
 </div>
-<button type="button">Undo</button>
-<button type="button">Redo</button>
+<button class="btn" type="button">Undo</button>
+<button class="btn" type="button">Redo</button>
 <div class="sketch-view-tools" role="group" aria-label="View">
 <span class="sketch-group-caption">View</span>
-<button type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>
-<button type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>
-<button type="button" title="Fit (F)">Fit (F)</button>
-<button type="button" title="Fit all (Shift+F)">Fit all (Shift+F)</button>
-<button type="button" aria-pressed="true">Dimensions</button>
-<button type="button" aria-pressed="false">Names</button>
-<button type="button" aria-pressed="true">Constraints</button>
+<button class="btn" type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>
+<button class="btn" type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>
+<button class="btn" type="button" title="Fit (F)">Fit (F)</button>
+<button class="btn" type="button" title="Fit all (Shift+F)">Fit all (Shift+F)</button>
+<button class="btn" type="button" aria-pressed="true">Dimensions</button>
+<button class="btn" type="button" aria-pressed="false">Names</button>
+<button class="btn" type="button" aria-pressed="true">Constraints</button>
 <div class="sketch-menu-anchor">
-<button type="button" aria-label="Line styles" title="Line styles" aria-expanded="false">?</button>
+<button class="btn" type="button" aria-label="Line styles" title="Line styles" aria-expanded="false">?</button>
 </div>
 </div>
 </div>",
@@ -1665,14 +1665,14 @@ exports[`W0 workspace DOM at 77c641c8 > conflict state 1`] = `
 <div class="sketch-toolbar-group" role="group" aria-label="Navigate">
 <span class="sketch-group-caption">Navigate</span>
 <div class="sketch-tool-segment">
-<button type="button" aria-label="Select (Esc)" title="Select (Esc)" aria-pressed="true">
+<button class="btn" type="button" aria-label="Select (Esc)" title="Select (Esc)" aria-pressed="true">
 <svg aria-hidden="true" viewBox="0 0 16 16">
 <path d="M4 2 13 10 8 10 6 14Z">
 </path>
 </svg>
 <span class="sketch-tool-label">Select</span>
 </button>
-<button type="button" aria-label="Pan (hold Space)" title="Pan (hold Space)" aria-pressed="false">
+<button class="btn" type="button" aria-label="Pan (hold Space)" title="Pan (hold Space)" aria-pressed="false">
 <svg aria-hidden="true" viewBox="0 0 16 16">
 <path d="M5 8V3a1 1 0 0 1 2 0v4-5a1 1 0 0 1 2 0v5-4a1 1 0 0 1 2 0v4-2a1 1 0 0 1 2 0v5q0 5-4 5H8q-2 0-3-2L2 8q1-2 3 0Z">
 </path>
@@ -1752,19 +1752,19 @@ exports[`W0 workspace DOM at 77c641c8 > conflict state 1`] = `
 </button>
 </div>
 </div>
-<button type="button">Undo</button>
-<button type="button">Redo</button>
+<button class="btn" type="button">Undo</button>
+<button class="btn" type="button">Redo</button>
 <div class="sketch-view-tools" role="group" aria-label="View">
 <span class="sketch-group-caption">View</span>
-<button type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>
-<button type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>
-<button type="button" title="Fit (F)">Fit (F)</button>
-<button type="button" title="Fit all (Shift+F)">Fit all (Shift+F)</button>
-<button type="button" aria-pressed="true">Dimensions</button>
-<button type="button" aria-pressed="false">Names</button>
-<button type="button" aria-pressed="true">Constraints</button>
+<button class="btn" type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>
+<button class="btn" type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>
+<button class="btn" type="button" title="Fit (F)">Fit (F)</button>
+<button class="btn" type="button" title="Fit all (Shift+F)">Fit all (Shift+F)</button>
+<button class="btn" type="button" aria-pressed="true">Dimensions</button>
+<button class="btn" type="button" aria-pressed="false">Names</button>
+<button class="btn" type="button" aria-pressed="true">Constraints</button>
 <div class="sketch-menu-anchor">
-<button type="button" aria-label="Line styles" title="Line styles" aria-expanded="false">?</button>
+<button class="btn" type="button" aria-label="Line styles" title="Line styles" aria-expanded="false">?</button>
 </div>
 </div>
 </div>",
@@ -2147,14 +2147,14 @@ exports[`W0 workspace DOM at 77c641c8 > dimension editing with the value box ope
 <div class="sketch-toolbar-group" role="group" aria-label="Navigate">
 <span class="sketch-group-caption">Navigate</span>
 <div class="sketch-tool-segment">
-<button type="button" aria-label="Select (Esc)" title="Select (Esc)" aria-pressed="false">
+<button class="btn" type="button" aria-label="Select (Esc)" title="Select (Esc)" aria-pressed="false">
 <svg aria-hidden="true" viewBox="0 0 16 16">
 <path d="M4 2 13 10 8 10 6 14Z">
 </path>
 </svg>
 <span class="sketch-tool-label">Select</span>
 </button>
-<button type="button" aria-label="Pan (hold Space)" title="Pan (hold Space)" aria-pressed="false">
+<button class="btn" type="button" aria-label="Pan (hold Space)" title="Pan (hold Space)" aria-pressed="false">
 <svg aria-hidden="true" viewBox="0 0 16 16">
 <path d="M5 8V3a1 1 0 0 1 2 0v4-5a1 1 0 0 1 2 0v5-4a1 1 0 0 1 2 0v4-2a1 1 0 0 1 2 0v5q0 5-4 5H8q-2 0-3-2L2 8q1-2 3 0Z">
 </path>
@@ -2234,19 +2234,19 @@ exports[`W0 workspace DOM at 77c641c8 > dimension editing with the value box ope
 </button>
 </div>
 </div>
-<button type="button">Undo</button>
-<button type="button">Redo</button>
+<button class="btn" type="button">Undo</button>
+<button class="btn" type="button">Redo</button>
 <div class="sketch-view-tools" role="group" aria-label="View">
 <span class="sketch-group-caption">View</span>
-<button type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>
-<button type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>
-<button type="button" title="Fit (F)">Fit (F)</button>
-<button type="button" title="Fit all (Shift+F)">Fit all (Shift+F)</button>
-<button type="button" aria-pressed="true">Dimensions</button>
-<button type="button" aria-pressed="false">Names</button>
-<button type="button" aria-pressed="true">Constraints</button>
+<button class="btn" type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>
+<button class="btn" type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>
+<button class="btn" type="button" title="Fit (F)">Fit (F)</button>
+<button class="btn" type="button" title="Fit all (Shift+F)">Fit all (Shift+F)</button>
+<button class="btn" type="button" aria-pressed="true">Dimensions</button>
+<button class="btn" type="button" aria-pressed="false">Names</button>
+<button class="btn" type="button" aria-pressed="true">Constraints</button>
 <div class="sketch-menu-anchor">
-<button type="button" aria-label="Line styles" title="Line styles" aria-expanded="false">?</button>
+<button class="btn" type="button" aria-label="Line styles" title="Line styles" aria-expanded="false">?</button>
 </div>
 </div>
 </div>",
@@ -2657,14 +2657,14 @@ exports[`W0 workspace DOM at 77c641c8 > woofer with aperture context 1`] = `
 <div class="sketch-toolbar-group" role="group" aria-label="Navigate">
 <span class="sketch-group-caption">Navigate</span>
 <div class="sketch-tool-segment">
-<button type="button" aria-label="Select (Esc)" title="Select (Esc)" aria-pressed="true">
+<button class="btn" type="button" aria-label="Select (Esc)" title="Select (Esc)" aria-pressed="true">
 <svg aria-hidden="true" viewBox="0 0 16 16">
 <path d="M4 2 13 10 8 10 6 14Z">
 </path>
 </svg>
 <span class="sketch-tool-label">Select</span>
 </button>
-<button type="button" aria-label="Pan (hold Space)" title="Pan (hold Space)" aria-pressed="false">
+<button class="btn" type="button" aria-label="Pan (hold Space)" title="Pan (hold Space)" aria-pressed="false">
 <svg aria-hidden="true" viewBox="0 0 16 16">
 <path d="M5 8V3a1 1 0 0 1 2 0v4-5a1 1 0 0 1 2 0v5-4a1 1 0 0 1 2 0v4-2a1 1 0 0 1 2 0v5q0 5-4 5H8q-2 0-3-2L2 8q1-2 3 0Z">
 </path>
@@ -2744,19 +2744,19 @@ exports[`W0 workspace DOM at 77c641c8 > woofer with aperture context 1`] = `
 </button>
 </div>
 </div>
-<button type="button">Undo</button>
-<button type="button">Redo</button>
+<button class="btn" type="button">Undo</button>
+<button class="btn" type="button">Redo</button>
 <div class="sketch-view-tools" role="group" aria-label="View">
 <span class="sketch-group-caption">View</span>
-<button type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>
-<button type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>
-<button type="button" title="Fit (F)">Fit (F)</button>
-<button type="button" title="Fit all (Shift+F)">Fit all (Shift+F)</button>
-<button type="button" aria-pressed="true">Dimensions</button>
-<button type="button" aria-pressed="false">Names</button>
-<button type="button" aria-pressed="true">Constraints</button>
+<button class="btn" type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>
+<button class="btn" type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>
+<button class="btn" type="button" title="Fit (F)">Fit (F)</button>
+<button class="btn" type="button" title="Fit all (Shift+F)">Fit all (Shift+F)</button>
+<button class="btn" type="button" aria-pressed="true">Dimensions</button>
+<button class="btn" type="button" aria-pressed="false">Names</button>
+<button class="btn" type="button" aria-pressed="true">Constraints</button>
 <div class="sketch-menu-anchor">
-<button type="button" aria-label="Line styles" title="Line styles" aria-expanded="false">?</button>
+<button class="btn" type="button" aria-label="Line styles" title="Line styles" aria-expanded="false">?</button>
 </div>
 </div>
 </div>",
