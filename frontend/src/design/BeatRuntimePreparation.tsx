@@ -22,7 +22,7 @@ export function BeatRuntimePreparation({ engines, selected, refreshCapabilities 
         <p>{starting === engine.name ? 'Starting runtime preparation…' : engine.reason}</p>
         {state === 'preparing'
           ? <p>Preparation can take several minutes. This runtime becomes selectable when ready.</p>
-          : engine.runtime_preparable && <button type="button" disabled={running}
+          : engine.runtime_preparable && <button className="btn" type="button" disabled={running}
               onClick={() => { void prepare(engine.name); }}>
               {state === 'failed' ? 'Retry' : 'Prepare'} {engine.label || engine.name}
             </button>}

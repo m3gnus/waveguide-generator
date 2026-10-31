@@ -160,7 +160,7 @@ function SettingsLine({ record, sweep }: { record: CadReturnIngestRecord; sweep:
   return <p className={`cad-solve-settings${sweep.broken ? ' cad-solve-settings-broken' : ''}`} data-solve-settings="">
     <span>{[sweep.text, engineWords, estimate].filter(Boolean).join(' · ')}</span>
     {' '}<button
-      className="link-button"
+      className="btn-link link-button"
       data-action="open-settings"
       title="Drivers, crossover, sweep, directivity and the solver live in the Simulation tab."
       onClick={() => workspaceNavigation.navigate('simulation')}

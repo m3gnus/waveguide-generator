@@ -26,7 +26,7 @@ button:disabled { cursor: default; }
 .spacer { flex: 1 1 auto; min-width: 0; }
 .sr-only { position: absolute; width: 1px; height: 1px; clip: rect(0 0 0 0); overflow: hidden; white-space: nowrap; }
 
-.app-shell { width: 100%; height: 100%; display: grid; grid-template-rows: 44px minmax(0, 1fr) 24px; }
+.app-shell { width: 100%; height: 100%; display: grid; grid-template-rows: 48px minmax(0, 1fr) 28px; }
 
 /* top rail */
 .topbar { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 8px 0 12px; border-bottom: 1px solid var(--hair); background: var(--topbar-grad); box-shadow: 0 1px 0 var(--edge-hi) inset; }
@@ -72,7 +72,7 @@ button:disabled { cursor: default; }
 .file-chip em { color: var(--fg3); font-style: normal; font-weight: 400; }
 .file-chip .chev { color: var(--fg3); font-size: var(--text-micro); }
 .button-group { display: flex; gap: 1px; padding: 2px; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--ov1); }
-.icon-button { display: grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: var(--r2); background: transparent; color: var(--fg2); transition: background-color .12s, color .12s; }
+.icon-button { display: grid; place-items: center; width: var(--control-h); height: var(--control-h); flex: none; border-radius: var(--r2); background: transparent; color: var(--fg2); transition: background-color .12s, color .12s; }
 .icon-button:hover:not(:disabled) { background: var(--ov3); color: var(--fg); }
 .icon-button:disabled { color: var(--fg4); opacity: .55; }
 .icon-button svg { width: 15px; height: 15px; }
@@ -218,7 +218,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
    own search bar is sticky for the same reason. */
 .panel-meta { display: flex; align-items: center; gap: 6px; min-height: 27px; padding: 0 8px; border-bottom: 1px solid var(--hair-soft); background: var(--surface-panel); color: var(--fg3); font: var(--text-micro) var(--mono); }
 .panel-meta-warn { color: var(--amber); }
-.pill { padding: 2px 4px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg2); font: var(--text-micro) var(--mono); letter-spacing: .04em; }
+.pill { padding: 2px 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg2); font: var(--text-micro) var(--mono); letter-spacing: .04em; }
 .pill.accent { border-color: rgba(var(--acc-rgb), .28); background: rgba(var(--acc-rgb), .1); color: var(--acc); }
 .pill.result-power-check { flex: none; border-color: rgba(var(--amber-rgb), .38); background: rgba(var(--amber-rgb), .1); color: var(--amber); letter-spacing: 0; text-transform: none; white-space: nowrap; }
 .panel-text-action { min-height: 26px; padding-inline: 6px; border-radius: var(--r3); background: transparent; color: var(--fg2); font-size: var(--text-micro); }
@@ -424,8 +424,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .result-new-run i { width: 5px; height: 5px; flex: none; border-radius: 50%; background: var(--acc); box-shadow: 0 0 0 2px rgba(var(--acc-rgb), .18); }
 .panel-preferences-popover.result-coherence-popover { display: grid; gap: 5px; width: max-content; max-width: min(300px, calc(100vw - 16px)); padding: 8px; }
 .result-coherence-popover p { margin: 0; color: var(--fg2); font-size: var(--text-micro); }
-.result-coherence-popover button { height: 22px; padding: 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font-size: var(--text-micro); text-align: left; }
-.result-coherence-popover button:hover { border-color: var(--hair-hi); background: var(--ov3); color: var(--fg); }
+.result-coherence-popover button { height: 22px; padding: 0 8px; font-size: var(--text-micro); text-align: left; }
 /* The comparison chips and the compare picker are the elastic items: they
    shrink and ellipsize so the controls on the right are never clipped off a
    narrow dock. Everything else holds its size — note the chips are buttons, so
@@ -543,9 +542,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .result-grid-empty { align-items: center; justify-content: center; flex: 1; min-height: 120px; text-align: center; }
 .chart-placeholder { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: var(--chart-bg); cursor: crosshair; }
 .chart-stub { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 8px; padding: 24px 16px 16px; color: var(--fg3); font-size: var(--text-micro); text-align: center; }
-.chart-stub button { padding: 4px 8px; border: 1px solid rgba(var(--acc-rgb), .38); border-radius: var(--r3); background: rgba(var(--acc-rgb), .1); color: var(--acc); cursor: pointer; }
-.chart-stub button:hover:not(:disabled) { border-color: rgba(var(--acc-rgb), .65); background: rgba(var(--acc-rgb), .17); }
-.chart-stub button:disabled { opacity: .55; cursor: wait; }
+.chart-stub button { padding: 4px 8px; cursor: pointer; }
 .chart-placeholder svg { position: absolute; inset: 4px 0; width: 100%; height: calc(100% - 8px); }
 .chart-placeholder path { fill: none; stroke: var(--acc); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 /* Hovering the value labels rules a straightedge across the plot, so a level
@@ -614,7 +611,6 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 /* Bounded by a hairline of its own hue rather than by a thick left tab: the
    tinted ground already says "warning", and the 2px side rule is the same
    device the run cards use for run state, where it actually carries meaning. */
-.job-warning { margin: 2px 0; padding: 4px 6px; border: 1px solid rgba(var(--amber-rgb), .38); border-radius: var(--r3); background: rgba(var(--amber-rgb), .09); color: var(--fg2); font-size: var(--text-micro); line-height: 1.4; }
 .run-name-field { display: grid; gap: 3px; padding: 6px; border-bottom: 1px solid var(--hair); }
 .jobs-history-actions { position: sticky; top: 0; z-index: 6; display: flex; justify-content: flex-end; align-items: center; gap: 4px; padding: 4px 6px; background: var(--surface-panel); }
 .run-name-field .ui-field { margin: 0; }
@@ -637,7 +633,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .jobs-kept-toggle { display: grid; place-items: center; width: 23px; height: 23px; flex: none; border-radius: var(--r3); background: transparent; color: var(--fg4); font-size: var(--text-base); }
 .jobs-kept-toggle:hover { background: var(--ov3); color: var(--amber); }
 .jobs-kept-toggle.on { background: color-mix(in srgb, var(--amber) 13%, transparent); color: var(--amber); }
-.job-card { position: relative; margin: 6px 6px 0; padding: 8px 8px 8px 8px; border: 1px solid var(--hair); border-radius: var(--r2); background: var(--ov1); }
+.job-card { position: relative; margin: 8px 8px 0; padding: 8px 12px 8px 12px; border: 1px solid var(--hair); border-radius: var(--r2); background: var(--surface-raised); }
 .job-card::before { content: ""; position: absolute; top: 9px; bottom: 9px; left: 0; width: 2px; background: var(--fg4); }
 .job-card.running::before { background: var(--acc); }.job-card.complete::before { background: var(--green); }.job-card.failed::before { background: var(--red); }.job-card.cancelled::before { background: var(--fg4); }
 .job-card header { display: flex; align-items: center; gap: 6px; }
@@ -715,7 +711,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 /* Unselected finished runs are a single line: name, stars if rated, time. The
    selected one keeps the full card, so the rail reads as one open run in a
    list of names rather than a stack of competing cards. */
-.job-card.collapsed { margin-top: 2px; padding-top: 3px; padding-bottom: 3px; border-color: transparent; background: transparent; }
+.job-card.collapsed { border-color: transparent; background: transparent; margin-block: 1px 0; padding-block: 4px; }
 .job-card.collapsed::before { top: 4px; bottom: 4px; opacity: .5; }
 .job-card.collapsed header b { color: var(--fg2); font-weight: 400; }
 .job-card.collapsed:hover { border-color: var(--hair-soft); background: var(--ov1); }
@@ -761,11 +757,11 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 }
 .log-dialog { height: min(680px, calc(100dvh - 32px)); }
 .settings-scroll.log-dialog-body { display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 10px; padding: 12px 16px 16px; }
-.log-dialog-actions { display: flex; align-items: center; gap: 6px; }.log-dialog-actions :is(button, a) { display: inline-flex; align-items: center; min-height: 30px; padding: 4px 10px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); text-decoration: none; }.log-dialog-actions span { color: var(--fg3); font-size: var(--text-micro); }
+.log-dialog-actions { display: flex; align-items: center; gap: 6px; }.log-dialog-actions :is(button, a) { display: inline-flex; align-items: center; min-height: 30px; padding: 4px 10px; }.log-dialog-actions span { color: var(--fg3); font-size: var(--text-micro); }
 .log-dialog-messages:empty { display: none; }.log-dialog-messages p { margin: 0; }.log-dialog-limit { color: var(--amber); font-size: var(--text-micro); }
 .job-log-content { grid-row: 3; min-height: 0; margin: 0; overflow: auto; padding: 12px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--surface-panel); color: var(--fg2); font: var(--text-micro) var(--mono); line-height: 1.5; white-space: pre-wrap; }
-.settings-theme { padding: 12px 16px; border-bottom: 1px solid var(--hair-soft); }.settings-theme h3 { margin: 0 0 6px; color: var(--fg2); font-size: var(--text-micro); font-weight: 600; text-transform: uppercase; }.settings-theme-options { display: flex; gap: 6px; }.settings-theme-options button { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg2); }.settings-theme-options button.on { border-color: rgba(var(--acc-rgb), .45); color: var(--acc); }.settings-theme-options svg { width: 13px; }
-.workspace-settings-path { overflow: hidden; margin: 0 0 8px; color: var(--fg); font-family: var(--mono); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }.workspace-settings-error { margin: 6px 0 0; color: var(--red); font-size: var(--text-micro); }
+.settings-theme { padding: 12px 16px; border-bottom: 1px solid var(--hair-soft); }.settings-theme h3 { margin: 0 0 6px; color: var(--fg2); font-size: var(--text-micro); font-weight: 600; text-transform: uppercase; }.settings-theme-options { display: flex; gap: 6px; }.settings-theme-options button { display: flex; align-items: center; gap: 6px; padding: 4px 8px; }.settings-theme-options button.on { border-color: rgba(var(--acc-rgb), .45); color: var(--acc); }.settings-theme-options svg { width: 13px; }
+.workspace-settings-path { overflow: hidden; margin: 0 0 8px; color: var(--fg); font-family: var(--mono); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }
 .cad-settings .ui-field { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(200px, 1fr); align-items: center; gap: 12px; color: var(--fg2); }
 .cad-settings-note { margin: 7px 0 0; color: var(--fg3); font-size: var(--text-micro); }
 .workspace-settings-path.not-selected { color: var(--amber); font-family: var(--ui); }
@@ -847,12 +843,6 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 /* A note carries its state in its border and its heading, not in a tinted
    ground. The tint was what pushed both the heading and the body text under
    4.5:1 in Console -- measured 4.13 and 3.84 at the 12% wash this replaces. */
-.update-note { display: grid; gap: var(--space-2); padding: var(--space-8) var(--space-12); border: 1px solid var(--hair); border-radius: var(--r); background: transparent; color: var(--fg2); font-size: var(--text-micro); line-height: 1.45; }
-.update-note b { color: var(--fg1); font-weight: 600; }
-.update-note.warn { border-color: rgba(var(--amber-rgb), .5); }
-.update-note.warn b { color: var(--amber); }
-.update-note.error { border-color: rgba(var(--red-rgb), .5); }
-.update-note.error b { color: var(--red); }
 
 .update-install { display: grid; gap: var(--space-8); padding: var(--space-12); border: 1px solid var(--hair); border-radius: var(--r); background: var(--surface-raised); }
 .update-install h3 { margin: 0; color: var(--fg); font-size: var(--text-title); font-weight: 600; }
@@ -873,10 +863,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .update-dialog > footer { flex-wrap: wrap; }
 .update-dialog > footer button,
 .export-dialog > footer button,
-.update-install-actions button { display: inline-flex; align-items: center; gap: var(--space-6); min-height: var(--control-h); padding: 0 var(--space-12); border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-base); }
-.update-dialog > footer button:hover:not(:disabled),
-.export-dialog > footer button:hover:not(:disabled),
-.update-install-actions button:hover:not(:disabled) { border-color: var(--hair-hi); background: var(--ctl-grad-h); color: var(--fg); }
+.update-install-actions button { display: inline-flex; align-items: center; gap: var(--space-6); min-height: var(--control-h); padding: 0 var(--space-12); font-size: var(--text-base); }
 .update-install-actions button svg { width: 13px; height: 13px; }
 .update-release-link { color: var(--acc-text); font-size: var(--text-micro); text-decoration: none; }
 .update-release-link:hover { text-decoration: underline; }
@@ -943,7 +930,6 @@ input:disabled,
 select:disabled,
 textarea:disabled { opacity: .48; }
 
-.app-shell { grid-template-rows: 48px minmax(0, 1fr) 28px; }
 .topbar { --topbar-pad-inline: var(--space-12); gap: var(--space-8); padding-inline: var(--topbar-pad-inline); background: var(--surface-panel); box-shadow: none; }
 .brand { gap: var(--space-8); }
 .brand-mark { width: 24px; height: 24px; }
@@ -954,7 +940,7 @@ textarea:disabled { opacity: .48; }
 .solve-button { height: var(--control-h); border-radius: var(--r2); }
 .file-chip { padding-inline: 8px; background: var(--surface-raised); }
 .button-group { gap: 2px; padding: 2px; border-radius: var(--r); background: transparent; }
-.icon-button { width: var(--control-h); height: var(--control-h); }
+
 .theme-toggle { height: var(--control-h); align-items: center; padding: 2px; border-radius: var(--r); background: var(--surface-raised); }
 .theme-toggle button { width: 26px; height: 24px; }
 .workspace-mode-toggle button { width: auto; height: 24px; }
@@ -1028,7 +1014,7 @@ textarea:disabled { opacity: .48; }
   padding-inline: 8px;
   font-size: var(--text-micro);
 }
-.pill { padding: 2px 6px; border-radius: var(--r3); font-size: var(--text-micro); }
+
 .panel-preferences-trigger { width: var(--control-h-sm); height: var(--control-h-sm); border-radius: var(--r3); }
 .panel-preferences-trigger svg { width: 15px; height: 15px; }
 .panel-preferences-popover {
@@ -1093,8 +1079,6 @@ textarea:disabled { opacity: .48; }
 .panel-preferences-popover > header button svg { width: 14px; height: 14px; }
 .chart-placeholder { background: var(--surface-panel); }
 
-.job-card { margin: 8px 8px 0; padding: 8px 12px 8px 12px; border-radius: var(--r2); background: var(--surface-raised); }
-.job-card header b { font-size: var(--text-base); }
 .job-secondary time,
 .job-card > p { font-size: var(--text-micro); }
 .job-actions button { min-height: 27px; padding: 4px 8px; border-radius: var(--r3); font-size: var(--text-micro); }
@@ -1108,7 +1092,7 @@ textarea:disabled { opacity: .48; }
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
 }
-.job-card.collapsed { margin-block: 1px 0; padding-block: 4px; }
+
 .job-remove { width: 24px; height: 24px; }
 
 .statusbar { padding-inline: 12px; background: var(--surface-panel); font-size: var(--text-micro); }
@@ -1319,7 +1303,7 @@ textarea:disabled { opacity: .48; }
 .driver-manual-link { height: 16px; padding: 0; border: 0; background: transparent; color: var(--acc); font-size: var(--text-micro); }
 .driver-manual-link:hover { text-decoration: underline; }
 .driver-variants { display: flex; gap: 4px; }
-.driver-variants button { height: 22px; padding: 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg2); font-size: var(--text-micro); }
+.driver-variants button { height: 22px; padding: 0 8px; font-size: var(--text-micro); }
 .driver-variants button.on { border-color: rgba(var(--acc-rgb), .45); background: rgba(var(--acc-rgb), .12); color: var(--acc); }
 .driver-sheet-grid { padding: 0; }
 .cad-driver-field.edited input { border-color: rgba(var(--acc-rgb), .55); box-shadow: 0 0 0 2px rgba(var(--acc-rgb), .12); }
@@ -1328,9 +1312,7 @@ textarea:disabled { opacity: .48; }
 .driver-derived-row span { color: var(--fg3); }
 .driver-derived-row b { color: var(--fg1); font: var(--text-micro) var(--mono); white-space: nowrap; }
 .driver-sheet-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; padding: 6px 0 0; border-top: 1px solid var(--hair); }
-.driver-sheet-actions button { height: 20px; padding: 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg2); font-size: var(--text-micro); }
-.driver-sheet-actions button:hover:not(:disabled) { border-color: var(--hair-hi); color: var(--fg1); }
-.driver-sheet-actions button:disabled { opacity: .45; }
+.driver-sheet-actions button { height: 20px; padding: 0 8px; font-size: var(--text-micro); }
 .driver-library-counts { display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: baseline; }
 /* The split by driver type, on its own line under the totals: it is the number
    the note beneath is about, so it reads before the explanation, not inside it. */
@@ -1353,8 +1335,7 @@ textarea:disabled { opacity: .48; }
    section past the rail (the dockview container clips overflow). */
 .crossover-advanced-inline { display: grid; gap: 6px; min-width: 0; margin: 2px 0; }
 .crossover-advanced-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; min-width: 0; }
-.crossover-advanced-head button { height: 21px; padding: 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font-size: var(--text-micro); }
-.crossover-advanced-head button:hover { border-color: var(--hair-hi); background: var(--ov3); color: var(--fg); }
+.crossover-advanced-head button { height: 21px; padding: 0 8px; font-size: var(--text-micro); }
 .crossover-reference { display: flex; flex: 1 1 auto; align-items: center; gap: 5px; min-width: 0; color: var(--fg2); font-size: var(--text-micro); }
 .crossover-reference select { flex: 1 1 60px; min-width: 0; height: 21px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-micro); }
 .crossover-advanced-note { margin: 0; color: var(--fg4); font-size: var(--text-micro); line-height: 1.35; }
@@ -1392,7 +1373,7 @@ textarea:disabled { opacity: .48; }
 .report-summary h3 { margin: 0; color: var(--fg1); font-size: var(--text-base); }
 .report-summary pre { max-height: 180px; margin: 0; padding: 8px 10px; overflow: auto; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg2); font-size: var(--text-micro); line-height: 1.45; white-space: pre-wrap; }
 .report-dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.report-dialog-actions :is(button, a) { display: inline-flex; align-items: center; min-height: 32px; padding: 6px 12px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); text-decoration: none; }
+.report-dialog-actions :is(button, a) { display: inline-flex; align-items: center; min-height: 32px; padding: 6px 12px; }
 
 /* The shared header lets identity and an arbitrary number of bands use the
    available left space, while chart actions retain their intrinsic widths. */
@@ -1430,8 +1411,7 @@ textarea:disabled { opacity: .48; }
 .mesh-import-panel .field-row:has(input[type="checkbox"]) { justify-content: flex-start; }
 .mesh-import-panel select, .mesh-import-panel input[type="number"] { padding: 4px 6px; border: 1px solid var(--hair); border-radius: var(--r2); background: var(--surface-raised); max-width: 55%; }
 .mesh-import-panel input[type="checkbox"] { flex: none; }
-.mesh-import-panel button { padding: 5px 8px; border: 1px solid var(--hair); border-radius: var(--r2); }
-.mesh-import-panel button:disabled { opacity: .5; }
+.mesh-import-panel button { padding: 5px 8px; }
 .imported-workspace { padding: 8px; }
 .imported-workspace h3, .imported-workspace h4 { margin-bottom: 8px; font-weight: 600; }
 .imported-workspace .imported-input-toggle { width: fit-content; }
@@ -1463,21 +1443,13 @@ textarea:disabled { opacity: .48; }
   text-decoration: none;
 }
 .btn:hover:not(:disabled) { border-color: var(--hair-hi); background: var(--ctl-grad-h); }
-.btn-primary,
-.update-dialog .primary,
-.export-dialog .primary,
-.driver-sheet-actions button.primary,
-.report-dialog-actions a.primary {
+.btn-primary {
   border-color: rgba(var(--acc-rgb), .45);
   background: rgba(var(--acc-rgb), .12);
   color: var(--btn-primary-fg);
   font-weight: 550;
 }
-.btn-primary:hover:not(:disabled),
-.update-dialog .primary:hover:not(:disabled),
-.export-dialog .primary:hover:not(:disabled),
-.driver-sheet-actions button.primary:hover:not(:disabled),
-.report-dialog-actions a.primary:hover {
+.btn-primary:hover:not(:disabled) {
   border-color: var(--acc);
   background: rgba(var(--acc-rgb), .2);
   color: var(--btn-primary-fg);
@@ -1491,6 +1463,7 @@ textarea:disabled { opacity: .48; }
 .notice-title { margin-bottom: var(--space-4); color: var(--fg1); font-weight: 600; }
 .notice-detail { color: var(--fg2); }
 .notice-actions { display: flex; flex-wrap: wrap; gap: var(--space-6); margin-top: var(--space-6); }
+.notice-actions :is(.btn, .btn-primary) { height: auto; min-height: var(--control-h-xs); max-width: 100%; padding-block: var(--space-4); white-space: normal; }
 .notice-warning { border-color: var(--amber); background: color-mix(in srgb, var(--amber) 8%, transparent); }
 .notice-error { border-color: var(--red); background: color-mix(in srgb, var(--red) 8%, transparent); }
 

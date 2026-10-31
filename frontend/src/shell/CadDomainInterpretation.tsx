@@ -1,3 +1,4 @@
+import { Notice } from './Notice';
 import { useEffect, useRef, useState } from 'react';
 import {
   changeDomainReading,
@@ -168,13 +169,13 @@ export function CadDomainInterpretation({ ingestId, interpretation, decision = n
     <p className={concluded?.refused ? 'cad-domain-line cad-domain-refused' : 'cad-domain-line'}>
       <span>{text}</span>
       {change && <>{' · '}<button
-        className="link-button"
+        className="btn-link link-button"
         data-action="change-domain"
         title="Read this model another way. Solve prepares it again; runs already solved keep their domain."
         onClick={() => setChanging(!changing)}
       >Change</button></>}
     </p>
-    {concluded?.refused && concluded.refusal && <p className="cad-detail cad-domain-refusal" role="alert">{concluded.refusal}</p>}
+    {concluded?.refused && concluded.refusal && <Notice tone="error" className="cad-domain-refusal" role="alert">{concluded.refusal}</Notice>}
     {concluded?.refused && concluded.failed.length > 0 && <ul className="cad-detail cad-domain-failed" aria-label="Why it cannot be mirrored">
       {concluded.failed.map((item) => <li key={item}>{item}</li>)}
     </ul>}
@@ -182,17 +183,17 @@ export function CadDomainInterpretation({ ingestId, interpretation, decision = n
     {changing && <div className="cad-domain-choices" role="group" aria-label="Solve this model as">
       {choices.map((reading) => <button
         key={readingWords(reading)}
-        className="link-button"
+        className="btn-link link-button"
         data-action="choose-domain"
         disabled={saving}
         aria-pressed={sameReading(pending, reading)}
         onClick={() => choose(reading)}
       >{readingWords(reading)}</button>)}
     </div>}
-    {pending && <p className="cad-detail cad-domain-pending" role="status">
+    {pending && <Notice tone="info" className="cad-domain-pending" role="status">
       Solve prepares it again: {readingWords(pending).replace(/^Solve it /, '').toLowerCase()}.
       {decision ? ' WG decides its domain afresh then; the reading above is no longer used.' : ''}
-    </p>}
-    {error && <p className="cad-domain-error" role="alert">Could not change how this model is read: {error}</p>}
+    </Notice>}
+    {error && <Notice tone="error" role="alert">Could not change how this model is read: {error}</Notice>}
   </div>;
 }

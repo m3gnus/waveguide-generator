@@ -1,3 +1,4 @@
+import { Notice } from './Notice';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   bundleUrl,
@@ -154,16 +155,16 @@ export function ReportDialog({ open, jobs, onClose }: {
 
         <section className="report-summary" aria-labelledby="report-summary-title">
           <h3 id="report-summary-title">What this report says about your machine</h3>
-          {error && <p className="workspace-settings-error" role="status">{error}</p>}
+          {error && <Notice tone="error" role="status">{error}</Notice>}
           <pre tabIndex={0}>{report?.text ?? (error ? 'Unavailable.' : 'Collecting…')}</pre>
           <p className="cad-settings-note report-summary-scope">This text is exactly what Copy summary puts on the clipboard. WG replaces the names and ids of the models it knows in it; read it before you paste it anywhere. The GitHub issue starts with only the build, the platform and what you write above.</p>
           <p className="cad-settings-note report-file-scope">The saved file adds the application log, the selected run&rsquo;s log, WG&rsquo;s records of its own recent internal problems (what failed, the versions, run and request ids, error stacks, and the last lines of the logs of the runs they name), and a <code>manifest.json</code> listing everything in it. Model and part names may appear in it. Your user name is rewritten out of every path.</p>
         </section>
 
         <div className="report-dialog-actions">
-          <a className="primary" href={downloadUrl} download>Save report</a>
-          <button onClick={() => void copySummary()}>Copy summary</button>
-          <button onClick={() => void openFolder()}>Open logs folder</button>
+          <a className="btn-primary primary" href={downloadUrl} download>Save report</a>
+          <button className="btn" onClick={() => void copySummary()}>Copy summary</button>
+          <button className="btn" onClick={() => void openFolder()}>Open logs folder</button>
           <a href={issueUrl(report?.summary, details)} target="_blank" rel="noreferrer">Open a GitHub issue</a>
         </div>
         <p className="cad-settings-note">Save the report first, then drag it into the issue. Suggestions go in the same place — an issue that says what you would like WG to do.</p>

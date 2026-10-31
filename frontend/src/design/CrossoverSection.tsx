@@ -1,3 +1,4 @@
+import { Notice } from '../shell/Notice';
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { namespaceStorage } from '../stores/durableSettings';
 import { CAD_CONTROLS } from './cadControlRegistry';
@@ -148,8 +149,8 @@ function PairRow({ pair, spec, preset, onChange, file }: {
     </div>
     {linked
       ? <p className="section-note">{combinePairHint(pair)}</p>
-      : <p className="section-note warning" role="status">{specPair ? unlinkedPairNote(specPair) : 'This pair is not symmetric; edit it in Advanced.'}</p>}
-    {xoNote && <p className="section-note warning" role="status">{xoNote}</p>}
+      : <Notice tone="warning" role="status">{specPair ? unlinkedPairNote(specPair) : 'This pair is not symmetric; edit it in Advanced.'}</Notice>}
+    {xoNote && <Notice tone="warning" role="status">{xoNote}</Notice>}
   </Fragment>;
 }
 
@@ -301,34 +302,34 @@ function LiveNote({ shown, live, busy, error, members, outside, file }: {
     void solve?.solve();
   }, [sweepSolve, solve]);
   if (!live) {
-    return <p className="section-note warning" role="status" aria-live="polite">
+    return <Notice tone="warning" role="status" aria-live="polite" actions={<>{shown.recall && <> <button type="button" className="btn" onClick={shown.recall}>Load this run's model</button></>}</>}>
       {shown.blockedReason ?? 'Crossover changes cannot be applied to the shown run.'}
-      {shown.recall && <> <button type="button" className="btn" onClick={shown.recall}>Load this run's model</button></>}
-    </p>;
+
+    </Notice>;
   }
   if (!members) {
     const branches = shown.combine.members.map((id, index) => ({ id,
       role: shown.combine.member_labels?.[index] ?? shown.combine.member_roles?.[index] }));
     const names = file ? branches.map(branch => roleChannelLabel(branch.id, branches, 'number')) : shown.combine.members;
-    return <p className="section-note warning" role="status" aria-live="polite">
+    return <Notice tone="warning" role="status" aria-live="polite">
       The shown run combines {names.join(' + ') || 'other channels'}, not the channels above, so these settings are not its crossover. Solve this return to combine it this way.
-    </p>;
+    </Notice>;
   }
   if (outside !== null && outside !== undefined && shown.solvedBandHz) {
     const [start, end] = shown.solvedBandHz;
-    return <div className="section-note warning" role="status" aria-live="polite">
-      The {outside} Hz crossover is outside the solved band [{start}, {end}] Hz. The combined response cannot update until that frequency is solved.{' '}
-      <button type="button" className="btn" disabled={!solve || solve.disabled} title={solve?.title ?? 'Solve is not available here.'} onClick={() => {
+    return <Notice tone="warning" role="status" aria-live="polite" actions={<><button type="button" className="btn" disabled={!solve || solve.disabled} title={solve?.title ?? 'Solve is not available here.'} onClick={() => {
         importedSimulationSetup().setSweep(outside < start ? { frequencyStartHz: outside } : { frequencyEndHz: outside });
         useImportedSolveOptionsStore.getState().setFrequencyMode('range');
         // Render the changed sweep first; Solve retains the intent while its plan refreshes.
         setSweepSolve(true);
-      }}>Re-solve with sweep {outside < start ? 'from' : 'to'} {outside} Hz</button>
-    </div>;
+      }}>Re-solve with sweep {outside < start ? 'from' : 'to'} {outside} Hz</button></>}>
+      The {outside} Hz crossover is outside the solved band [{start}, {end}] Hz. The combined response cannot update until that frequency is solved.{' '}
+
+    </Notice>;
   }
-  return <p className={error ? 'section-note warning' : 'section-note'} role="status" aria-live="polite">
+  return <Notice tone={error ? 'warning' : 'info'} role="status" aria-live="polite">
     {error ?? (busy ? 'Updating the shown run…' : 'Changes apply to the shown combined result immediately — no new solve is needed.')}
-  </p>;
+  </Notice>;
 }
 
 export function CadCrossover() {

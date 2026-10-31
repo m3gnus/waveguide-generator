@@ -282,7 +282,7 @@ export function CadProjectHeader() {
       </div>
       <ProjectOverflowMenu project={project} onNotice={setNotice} onError={setError}/>
     </header>
-    {notice && <div className="cad-status-strip" role="status">{notice}</div>}
+    {notice && <Notice tone="info" role="status">{notice}</Notice>}
     {error && <Notice tone="error">{error}</Notice>}
   </section>;
 }

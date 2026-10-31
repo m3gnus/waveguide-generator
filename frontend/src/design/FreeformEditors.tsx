@@ -154,16 +154,16 @@ export function EditableLookupTable({ field, points }: { field: ParameterDefinit
           formatRangeError={() => LOOKUP_ORDER_MESSAGE}
           validate={(value) => positionError(index, value)} onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => write(index, 0, value)} /></td>
         <td><NumberField label={`Lookup point ${index + 1} radius`} value={r} step={.1} precision={4} unit="mm" onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => write(index, 1, value)} /></td>
-        <td><button type="button" aria-label={`Remove lookup point ${index + 1}`} disabled={points.length <= 2} onClick={() => updateValue('lookup_profile', points.filter((_point, item) => item !== index))}>−</button></td>
+        <td><button className="icon-button" type="button" aria-label={`Remove lookup point ${index + 1}`} disabled={points.length <= 2} onClick={() => updateValue('lookup_profile', points.filter((_point, item) => item !== index))}>−</button></td>
       </tr>)}
     </tbody></table>
     {tableWarning && <div className="field-warning" role="status">{tableWarning}</div>}
-    <button type="button" onClick={add} disabled={points.length < 2}>Add point</button>
+    <button className="btn" type="button" onClick={add} disabled={points.length < 2}>Add point</button>
     <div className="point-paste">
       <textarea aria-label="Paste lookup points" rows={4} value={text} onChange={(event) => setText(event.target.value)} placeholder={'z_mm,r_mm\n0,12.7\n120,140'} />
       {parsed instanceof Error && <div className="field-error" role="alert">{parsed.message}</div>}
       {pasteWarning && <div className="field-warning" role="status">{pasteWarning}</div>}
-      <button type="button" disabled={!parsed || parsed instanceof Error} onClick={() => {
+      <button className="btn" type="button" disabled={!parsed || parsed instanceof Error} onClick={() => {
         if (parsed && !(parsed instanceof Error)) updateValue('lookup_profile', parsed.map(({ z, r }): [number, number] => [z, r]));
       }}>Import points</button>
     </div>
@@ -307,9 +307,9 @@ function SeparateVerticalControl({ edit }: { edit: ProfileEdit }) {
     {shared && choosing && <div className="family-switch-choice" role="group" aria-label="Separate the vertical profile">
       <span>A different vertical profile is stored with this design.</span>
       <div>
-        <button type="button" disabled={Boolean(blocker)} title={blocker} onClick={() => { setChoosing(false); edit.propose('Restore the stored vertical profile', (current) => setSeparateVertical(current, true)); }}>Restore stored vertical profile</button>
-        <button type="button" onClick={seed}>Start from horizontal</button>
-        <button type="button" onClick={() => setChoosing(false)}>Cancel</button>
+        <button className="btn" type="button" disabled={Boolean(blocker)} title={blocker} onClick={() => { setChoosing(false); edit.propose('Restore the stored vertical profile', (current) => setSeparateVertical(current, true)); }}>Restore stored vertical profile</button>
+        <button className="btn" type="button" onClick={seed}>Start from horizontal</button>
+        <button className="btn" type="button" onClick={() => setChoosing(false)}>Cancel</button>
       </div>
       {blocker && <p className="field-warning" role="status">{blocker}{' '}
         <button type="button" className="btn" onClick={() => { setChoosing(false); edit.propose('Use H throat for V', horizontalThroatForVertical); }}>Use H throat for V</button>
@@ -393,7 +393,7 @@ export function CustomProfileTable({ plane }: { field: ParameterDefinition; plan
             </select></td>
             <td>{angleCell('in', inField)}</td>
             <td>{angleCell('out', outField)}</td>
-            <td>{!endpoint && <button type="button" aria-label={`Delete ${plane} ${label(index)}`}
+            <td>{!endpoint && <button className="icon-button" type="button" aria-label={`Delete ${plane} ${label(index)}`}
               onClick={() => edit.propose(`Delete ${plane} ${label(index)}`, (current) => deleteAnchor(current, plane, index))}>−</button>}</td>
           </tr>
           <tr className="anchor-state-row"><td colSpan={6} className="anchor-state">{anchorState(point, index, points.length, anchor, aligned?.spans[index])}</td></tr></Fragment>;
@@ -462,7 +462,7 @@ export function CustomProfilePaste() {
       <label className="ui-check"><input type="radio" name={`${id}-length`} checked={!adoptLength} onChange={() => setAdoptLength(false)} />Keep {currentLength} mm and stretch the pasted points to fit</label>
     </fieldset>}
     {disabledReason && <div id={`${id}-reason`} className={error ? 'field-error' : 'disabled-reason'} role={error ? 'alert' : undefined}>{disabledReason}</div>}
-    <button type="button" disabled={Boolean(disabledReason)} aria-describedby={disabledReason ? `${id}-reason` : undefined}
+    <button className="btn" type="button" disabled={Boolean(disabledReason)} aria-describedby={disabledReason ? `${id}-reason` : undefined}
       onClick={() => valid && edit.propose(`Import into ${targetLabel}`, pasteBuilder(valid, { target: effectiveTarget, adoptLength, join }))}>Import into {targetLabel}</button>
     <ProfileEditPreviewPanel edit={edit} />
   </div>;
@@ -484,9 +484,9 @@ export function CustomProfileLengthField({ field, serverError }: { field: Parame
       <b>Length {formatMm(length)} → {formatMm(pending)} mm</b>
       <span>Stretch profile scales every anchor, handle and station along z; Move mouth keeps interior positions in mm and moves only the mouth.</span>
       <div>
-        <button type="button" onClick={() => edit.propose(`Stretch profile to ${formatMm(pending)} mm`, stretchLengthBuilder(pending))}>Stretch profile</button>
-        <button type="button" onClick={() => edit.propose(`Move mouth to ${formatMm(pending)} mm`, moveMouthBuilder(pending))}>Move mouth</button>
-        <button type="button" onClick={() => { edit.cancel(); setPending(undefined); }}>Cancel</button>
+        <button className="btn" type="button" onClick={() => edit.propose(`Stretch profile to ${formatMm(pending)} mm`, stretchLengthBuilder(pending))}>Stretch profile</button>
+        <button className="btn" type="button" onClick={() => edit.propose(`Move mouth to ${formatMm(pending)} mm`, moveMouthBuilder(pending))}>Move mouth</button>
+        <button className="btn" type="button" onClick={() => { edit.cancel(); setPending(undefined); }}>Cancel</button>
       </div>
     </div>}
     <ProfileEditPreviewPanel edit={edit} />
@@ -569,9 +569,9 @@ export function EditableStationTable({ field, stations }: { field: ParameterDefi
             default exponent, or an empty required corner radius, which it has no
             default for and rejects the station without. */}
         <td>{station.shape === 'superellipse' ? <NumberField label={`Station ${index + 1} exponent`} value={station.exponent ?? MESHER_SUPERELLIPSE_EXPONENT} min={2} max={16} step={.1} precision={2} onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => update(index, { exponent: value })} /> : station.shape === 'rounded_rectangle' ? <NumberField label={`Station ${index + 1} corner radius`} value={station.corner_radius_mm} min={1} step={1} precision={2} unit="mm" onBeginDrag={beginDrag} onEndDrag={endDrag} onCommit={(value) => update(index, { corner_radius_mm: value })} /> : '—'}</td>
-        <td><button type="button" aria-label={`Remove station ${index + 1}`} disabled={stations.length <= 2 || index === 0 || index === stations.length - 1} onClick={() => updateValue('cross_sections', stations.filter((_station, item) => item !== index))}>−</button></td>
+        <td><button className="btn" type="button" aria-label={`Remove station ${index + 1}`} disabled={stations.length <= 2 || index === 0 || index === stations.length - 1} onClick={() => updateValue('cross_sections', stations.filter((_station, item) => item !== index))}>−</button></td>
       </tr>)}
     </tbody></table>
-    <button type="button" disabled={stations.length >= 32} onClick={add}>Add station</button>
+    <button className="btn" type="button" disabled={stations.length >= 32} onClick={add}>Add station</button>
   </div>;
 }

@@ -1,7 +1,7 @@
 .parameter-search { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--hair-soft); background: var(--surface-panel); }
 .parameter-search input { width: 100%; height: 24px; padding: 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--surface-raised); color: var(--fg); font: var(--text-micro) var(--mono); }
 .parameter-search input:focus { border-color: rgba(var(--acc-rgb), .5); outline: 0; box-shadow: 0 0 0 2px rgba(var(--acc-rgb), .08); }
-.parameter-search button { width: 23px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--surface-raised); color: var(--fg2); }
+.parameter-search button { width: 23px; }
 .osse-features { min-inline-size: 0; margin: 4px 0; padding: 0; border: 0; }
 .osse-features legend { padding: 0; color: var(--fg2); font-size: var(--text-micro); font-weight: 600; }
 .family-row { margin: 2px 0 6px; padding-bottom: 5px; border-bottom: 1px solid var(--hair-soft); }
@@ -48,7 +48,7 @@
 .readonly-parameter-table p, .filter-note { margin: 4px 6px; color: var(--fg4); font-size: var(--text-micro); line-height: 1.35; }
 .schema-gap { display: grid; grid-template-columns: 1fr auto; gap: 2px 6px; padding: 4px 0; opacity: .68; }
 .schema-gap > span { color: var(--fg1); font-size: var(--text-base); }
-.schema-gap button { min-width: 78px; padding: 2px 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg3); font-size: var(--text-micro); }
+.schema-gap button { min-width: 78px; padding: 2px 6px; font-size: var(--text-micro); }
 .schema-gap small { grid-column: 1 / -1; color: var(--fg4); font-size: var(--text-micro); line-height: 1.35; }
 .passthrough-row { display: flex; justify-content: space-between; min-height: 23px; align-items: center; gap: 8px; color: var(--fg1); font-size: var(--text-base); }
 .passthrough-row b { color: var(--green); font: var(--text-micro) var(--mono); font-weight: 500; }
@@ -63,10 +63,9 @@
 .toggle-row input, .axis-toggles input, .point-paste input { accent-color: var(--acc); }
 .axis-toggles { display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 4px 0; padding: 6px; border: 1px solid var(--hair-soft); border-radius: var(--r3); color: var(--fg2); font-size: var(--text-micro); text-transform: capitalize; }
 .section-note, .paste-meta { margin: 4px 0; color: var(--fg4); font-size: var(--text-micro); line-height: 1.35; }
-.realized-dimensions-empty, .realized-dimensions-warning { display: grid; gap: 3px; padding: 9px; border: 1px solid var(--hair-soft); background: var(--ov1); }
-.realized-dimensions-empty b, .realized-dimensions-warning b { color: var(--fg1); font-size: var(--text-base); }
-.realized-dimensions-empty span, .realized-dimensions-warning span { color: var(--fg3); font-size: var(--text-micro); line-height: 1.4; }
-.realized-dimensions-warning { border-color: color-mix(in srgb, var(--amber) 55%, var(--hair)); border-left: 3px solid var(--amber); background: color-mix(in srgb, var(--amber) 6%, var(--surface-panel)); }
+.realized-dimensions-empty { display: grid; gap: 3px; padding: 9px; border: 1px solid var(--hair-soft); background: var(--ov1); }
+.realized-dimensions-empty b { color: var(--fg1); font-size: var(--text-base); }
+.realized-dimensions-empty span { color: var(--fg3); font-size: var(--text-micro); line-height: 1.4; }
 .realized-dimensions-intro { margin: 0 0 6px; color: var(--fg3); font-size: var(--text-micro); line-height: 1.45; }
 .realized-dimensions-meta { display: block; margin: 0 0 6px; color: var(--fg4); font-size: var(--text-micro); }
 .realized-dimensions-meta code { color: var(--fg3); font-family: var(--mono); }
@@ -117,8 +116,7 @@
 .family-switch-choice > b { color: var(--fg1); font-size: var(--text-micro); }
 .family-switch-choice > span { margin: 2px 0 6px; color: var(--fg3); font-size: var(--text-micro); }
 .conversion-notice { margin: 2px 0 6px; }
-.conversion-notice button { margin-left: 4px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg2); font-size: var(--text-micro); }
-.family-switch-choice button, .editable-parameter-table > button, .point-paste button { margin: 2px 2px 2px 0; padding: 2px 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg2); font-size: var(--text-micro); }
+.family-switch-choice button, .editable-parameter-table > button, .point-paste button { margin: 2px 2px 2px 0; padding: 2px 6px; font-size: var(--text-micro); }
 .editable-parameter-table { margin: 4px 0 8px; overflow: hidden; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--ov1); }
 .editable-parameter-table table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .editable-parameter-table th { padding: 2px 2px; color: var(--fg4); font: var(--text-micro) var(--mono); text-align: left; }
@@ -150,7 +148,7 @@
    readable engineering UI baseline. */
 .parameter-search { gap: 6px; padding: 8px 8px; }
 .parameter-search input { height: var(--field-h); padding-inline: 8px; border-radius: var(--r3); font-size: var(--text-base); }
-.parameter-search button { width: var(--field-h); height: var(--field-h); border-radius: var(--r3); }
+.parameter-search button { width: var(--field-h); height: var(--field-h); }
 .section-description { margin: 4px 0 8px; font-size: var(--text-base); line-height: 1.45; }
 .disabled-reason,
 .lambda-hint,
@@ -212,12 +210,12 @@
   .section-body > .solve-domain-control,
   .section-body > .resolved-mode,
   .section-body > .section-note,
+  .section-body > .notice,
   .section-body > .opencl-guidance,
   .section-body > .filter-note,
   .section-body > .parameter-empty,
   .section-body > .field-error,
   .section-body > .realized-dimensions-empty,
-  .section-body > .realized-dimensions-warning,
   .section-body > .realized-dimensions-intro,
   .section-body > .realized-dimensions-meta,
   .section-body > .realized-dimension-list,
@@ -246,7 +244,6 @@
 .crossover-mode-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; color: var(--fg1); font-size: var(--text-base); }
 .crossover-view-row { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
 .crossover-advanced-flag { color: var(--amber); font-size: var(--text-micro); }
-.section-note.warning { color: var(--amber); }
 
 /* "What's the difference?" under Solve accuracy: collapsed by default, and the
    native <summary> keeps it reachable and toggleable from the keyboard. */

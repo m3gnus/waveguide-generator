@@ -49,7 +49,7 @@ export function closeFrontWorkspace(): void { visibility.set(false); }
 export function FrontWorkspaceLauncher() {
   if (!frontWorkspaceEnabled()) return null;
   return <div className="source-editor-launch" data-control-reveal-id="front-workspace-launch">
-    <button type="button" aria-haspopup="dialog" onClick={openFrontWorkspace}>Sources and baffle…</button>
+    <button className="btn" type="button" aria-haspopup="dialog" onClick={openFrontWorkspace}>Sources and baffle…</button>
     <ExperimentalBadge/>
     <small>Woofers on the enclosure's front baffle, solved with the horn.</small>
   </div>;
@@ -110,12 +110,12 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
   return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Sources and baffle" className="source-editor front-workspace">
     <header className="source-editor-toolbar">
       <h2>Sources and baffle <ExperimentalBadge/></h2>
-      <button type="button" onClick={onClose}>Close</button>
+      <button className="btn" type="button" onClick={onClose}>Close</button>
     </header>
     <Workspace adapter={adapter} state={state} session={controller} selection={selection} onSelectionChange={setSelection}/>
     <footer className="source-editor-toolbar">
-      <button type="button" disabled={build.status === 'building'} onClick={() => { void requestAssemblyBuild(fetcher).catch(() => {}); }}>Build</button>
-      <button type="button" disabled={!solveControl?.solveAssembly || solveControl.submitting} onClick={solve}>Solve</button>
+      <button className="btn" type="button" disabled={build.status === 'building'} onClick={() => { void requestAssemblyBuild(fetcher).catch(() => {}); }}>Build</button>
+      <button className="btn" type="button" disabled={!solveControl?.solveAssembly || solveControl.submitting} onClick={solve}>Solve</button>
       <span role="status">{error || build.refusal || notice || (build.status === 'building' ? 'Building the assembly…' : build.status === 'published' ? 'Assembly built.' : '')}</span>
     </footer>
   </div></div>;

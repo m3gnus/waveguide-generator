@@ -244,7 +244,7 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, confirmOnDone 
             ? <span>Radiates along <b>{notAllowed.axis}</b></span>
             : <span>WG works out which way {label} radiates when it solves</span>}
         {' · '}<button
-          className="link-button"
+          className="btn-link link-button"
           data-action="change-solver-frame"
           title="Choose another axis. Solve uses the one shown; runs already solved keep their frame."
           onClick={openChooser}
@@ -281,7 +281,7 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, confirmOnDone 
           <p className="cad-detail">Solver frame: model {axis} → solver +Z (blue arrow). Drive sources are shown in orange. {view.picked ? (confirmPick ? 'Done keeps it for this project.' : 'Solve keeps it for this project.') : ''}</p>
         </>
         : <p className="cad-detail">Pick the model axis that points out of the mouth; the preview shows it as the solver +Z.</p>}
-      <button className="link-button" data-action="done-solver-frame" onClick={done}>Done</button>
+      <button className="btn-link link-button" data-action="done-solver-frame" onClick={done}>Done</button>
     </>}
     {view.changedFrom && axis && <Notice tone="warning" className="cad-solver-frame-changed">
       This project’s solver frame was changed elsewhere to {axis}; Model details showed {view.changedFrom}. Solve now solves along {axis}.

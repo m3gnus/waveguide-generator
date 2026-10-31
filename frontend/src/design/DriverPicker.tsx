@@ -784,19 +784,19 @@ function DriverSheet({ channel, form, onClose, displayName }: {
     <footer className="driver-sheet-actions">
       {/* Nothing to reset to: a hand-entered driver has no database row
           behind it, so the button is absent rather than permanently dead. */}
-      {!manual && <button
+      {!manual && <button className="btn"
         type="button"
         disabled={!preset || edited.length === 0}
         onClick={() => state.clearChannelDriverOverrides(channel.id)}
       >Reset to database values</button>}
-      {inMyDrivers && <button type="button" onClick={forget}>Remove from My drivers</button>}
+      {inMyDrivers && <button className="btn" type="button" onClick={forget}>Remove from My drivers</button>}
       <button
         type="button"
-        className={saved ? '' : 'primary'}
+        className={saved ? 'btn' : 'btn-primary primary'}
         disabled={!preset || saved}
         onClick={saveToMine}
       >{saved ? 'Saved' : 'Save to My drivers'}</button>
-      <button type="button" onClick={onClose}>Done</button>
+      <button className="btn" type="button" onClick={onClose}>Done</button>
     </footer>
   </div>;
 }

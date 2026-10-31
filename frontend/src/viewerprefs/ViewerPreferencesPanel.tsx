@@ -33,7 +33,7 @@ interface ViewerPreferencesPanelProps {
 export function ViewerPreferencesPanel({ preferences, showEnclosure, showStats, onShowEnclosure, onShowStats, onClose }: ViewerPreferencesPanelProps) {
   const setProjection = (startupCameraMode: CameraProjection) => viewerPreferences.update({ startupCameraMode });
   return <section className="viewer-preferences" aria-label="Viewer preferences">
-    <header><b>Viewer preferences</b><button type="button" aria-label="Close viewer preferences" onClick={onClose}><Icon name="close"/></button></header>
+    <header><b>Viewer preferences</b><button className="icon-button" type="button" aria-label="Close viewer preferences" onClick={onClose}><Icon name="close"/></button></header>
     <div className="viewer-pref-scroll">
       <h3>Orbit controls</h3>
       <RangePreference label="Rotate speed" field="rotateSpeed" value={preferences.rotateSpeed} min={0.1} max={5} step={0.1} />
@@ -60,6 +60,6 @@ export function ViewerPreferencesPanel({ preferences, showEnclosure, showStats, 
         <label><input type="radio" name="startup-camera" checked={preferences.startupCameraMode === 'orthographic'} onChange={() => setProjection('orthographic')} />Orthographic</label>
       </fieldset>
     </div>
-    <footer><button type="button" onClick={() => viewerPreferences.update({ ...DEFAULT_VIEWER_PREFERENCES })}>Reset defaults</button></footer>
+    <footer><button className="btn" type="button" onClick={() => viewerPreferences.update({ ...DEFAULT_VIEWER_PREFERENCES })}>Reset defaults</button></footer>
   </section>;
 }

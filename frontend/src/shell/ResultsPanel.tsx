@@ -2238,7 +2238,7 @@ function MeasuredOverlayRow({ overlay }: { overlay: MeasuredOverlay }) {
       />
       <span>dB</span>
     </label>
-    <button type="button" aria-label={`Remove ${overlay.label} overlay`} title="Remove this overlay" onClick={() => store.getState().remove(overlay.id)}>×</button>
+    <button className="btn" type="button" aria-label={`Remove ${overlay.label} overlay`} title="Remove this overlay" onClick={() => store.getState().remove(overlay.id)}>×</button>
   </span>;
 }
 
@@ -2727,9 +2727,9 @@ export function ResultsPanel() {
     >
       <p>{RUN_VERDICT_SENTENCE[primaryVerdict]}</p>
       {primaryVerdict === 'earlier-version' && modelForRun(primaryJob).kind === 'parametric'
-        ? <button type="button" onClick={() => { setCoherenceOpen(false); showPrimaryModel(); }}>Restore this run&apos;s design</button>
-        : <><button type="button" onClick={() => { setCoherenceOpen(false); showPrimaryModel(); }} disabled={modelLoad === 'loading'}>{modelLoad === 'loading' ? 'Loading…' : 'Show this model'}</button><button type="button" onClick={() => { setCoherenceOpen(false); compareSelection.followLatest(latest?.id ?? null); }}>Show newest run</button></>}
-      <button type="button" disabled={!solve || solve.disabled} title={solve?.title ?? 'Solve is not available here.'} onClick={() => { setCoherenceOpen(false); void solve?.solve(); }}>Solve this version</button>
+        ? <button className="btn" type="button" onClick={() => { setCoherenceOpen(false); showPrimaryModel(); }}>Restore this run&apos;s design</button>
+        : <><button className="btn" type="button" onClick={() => { setCoherenceOpen(false); showPrimaryModel(); }} disabled={modelLoad === 'loading'}>{modelLoad === 'loading' ? 'Loading…' : 'Show this model'}</button><button className="btn" type="button" onClick={() => { setCoherenceOpen(false); compareSelection.followLatest(latest?.id ?? null); }}>Show newest run</button></>}
+      <button className="btn" type="button" disabled={!solve || solve.disabled} title={solve?.title ?? 'Solve is not available here.'} onClick={() => { setCoherenceOpen(false); void solve?.solve(); }}>Solve this version</button>
     </AnchoredPanel>}
     {(measuredOverlays.length > 0 || measuredError) && <div className="results-toolbar result-measured">
       <span className="result-measured-caption">Measured</span>
@@ -2739,7 +2739,7 @@ export function ResultsPanel() {
     {preferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}
     {error && <Notice tone="error" actions={<button type="button" className="btn" onClick={() => { setFetchError(null); setFetchAttempt((value) => value + 1); }}>Retry</button>}>{error}</Notice>}
     {staleMeshes.map(job => <Notice key={job.id} tone="warning">The mesh for {runDisplayName(job)} may differ from the one used to solve it. The mesher or resolved geometry has changed; solve again to update these results.</Notice>)}
-    {showingPrevious && <div className="job-warning" role="status" style={{ margin: 7 }}>Showing previous results while fetching the selected run…</div>}
+    {showingPrevious && <Notice tone="info" role="status" style={{ margin: 7 }}>Showing previous results while fetching the selected run…</Notice>}
     {/* Three different empty docks, said apart: a failed fetch, a fetch still
         in flight, and nothing selected at all. The last used to claim it was
         loading, which is how a dock with no selection looked like a hang. */}

@@ -1,3 +1,4 @@
+import { Notice } from '../shell/Notice';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { sourceEditorApi, type AssemblyValidation, type SourceAssemblyDocument, type SourceDocument } from '../api/sourceEditor';
@@ -117,7 +118,7 @@ const visibility = { open: false, listeners: new Set<() => void>(), getSnapshot:
   subscribe: (listener: () => void) => { visibility.listeners.add(listener); return () => { visibility.listeners.delete(listener); }; },
   set(open: boolean) { visibility.open = open; visibility.listeners.forEach((listener) => listener()); } };
 export function SourceAssemblyLauncher({ row = false }: { row?: boolean } = {}) {
-  return <div className="source-editor-launch" data-control-reveal-id="assembly-launch">{row && <span className="experimental-launch-label"><span>Horn + woofer assembly</span><ExperimentalBadge /></span>}<button type="button" aria-haspopup="dialog" onClick={() => visibility.set(true)}>Edit horn + woofer assembly…</button>{!row && <ExperimentalBadge/>}<small>Shared enclosure, source contours and phase-plug passages.</small></div>;
+  return <div className="source-editor-launch" data-control-reveal-id="assembly-launch">{row && <span className="experimental-launch-label"><span>Horn + woofer assembly</span><ExperimentalBadge /></span>}<button className="btn" type="button" aria-haspopup="dialog" onClick={() => visibility.set(true)}>Edit horn + woofer assembly…</button>{!row && <ExperimentalBadge/>}<small>Shared enclosure, source contours and phase-plug passages.</small></div>;
 }
 export function SourceAssemblyDialog() {
   const open = useSyncExternalStore(visibility.subscribe, visibility.getSnapshot, visibility.getSnapshot);
@@ -230,10 +231,10 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
   const span = Math.max(1, dimensions.horn_length_mm - minZ);
   const sectionPath = (points: [number, number][]) => points.map(([r,z], i) => `${i ? 'L' : 'M'}${25 + (z - minZ) / span * 550},${210 - r / maxR * 175}`).join(' ');
   return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Horn and woofer assembly editor" className="source-editor" onFocusCapture={(e) => { if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) seedAllowed.current = false; }}>
-    <header><div><h2>Horn + woofer assembly</h2><ExperimentalBadge/><p>{EXPERIMENTAL_NOTE}</p><p>Shared enclosure · dimensions in mm · parallel +Z axes</p></div><button type="button" disabled={busy} onClick={close}>Close</button></header>
+    <header><div><h2>Horn + woofer assembly</h2><ExperimentalBadge/><p>{EXPERIMENTAL_NOTE}</p><p>Shared enclosure · dimensions in mm · parallel +Z axes</p></div><button className="btn" type="button" disabled={busy} onClick={close}>Close</button></header>
     <fieldset disabled={busy}><div className="source-editor-columns"><div>
       <h3>Sources</h3><p>Each diaphragm keeps one physical identity and drive channel, including its patch weights.</p>
-      <div className="source-editor-toolbar"><button type="button" onClick={() => editSource('horn')}>Edit horn contour…</button>{draft.woofer && <button type="button" onClick={() => editSource('woofer')}>Edit woofer contour…</button>}</div>
+      <div className="source-editor-toolbar"><button className="btn" type="button" onClick={() => editSource('horn')}>Edit horn contour…</button>{draft.woofer && <button className="btn" type="button" onClick={() => editSource('woofer')}>Edit woofer contour…</button>}</div>
       <p>Horn: {draft.horn.contour.physical_source_id} · {draft.horn.drive.channel_id}. {draft.woofer ? <>Woofer: {draft.woofer.contour.physical_source_id} · {draft.woofer.drive.channel_id}.</> : "Horn only."}</p>
       <label className="source-toggle-row"><span>Include woofer</span><input type="checkbox" checked={!!draft.woofer} onChange={(e) => {
         if (!e.target.checked && draft.woofer) disabledWoofer.current = { document: draft.woofer, xy: draft.dimensions.woofer_xy_mm, aperture: draft.dimensions.aperture_radius_mm };
@@ -243,7 +244,7 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
         if (e.target.checked) disabledWoofer.current = undefined;
       }}/></label>
       <h3>Horn profile</h3>
-      <button type="button" onClick={() => void run(async () => {
+      <button className="btn" type="button" onClick={() => void run(async () => {
         const profile = await sourceEditorApi.hornProfile(serializeDesign(useDesignStore.getState().design));
         setHornText(JSON.stringify(profile.horn_config, null, 2));
         setResolvedThroat({ config: JSON.stringify(profile.horn_config), radius: profile.throat_radius_mm });
@@ -259,7 +260,7 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
       }}/></label>
       {draft.horn_config && <details><summary>Advanced horn configuration</summary><p>Paste a native bare horn configuration. Circular OSSE, R-OSSE, ICW and FREEFORM profiles retain their nonlinear wall. The source rim must match its throat. Length and mouth radius come from the profile.</p>
         <label>Horn configuration<textarea aria-label="Horn configuration" rows={8} value={hornText} onChange={(e) => setHornText(e.target.value)}/></label>
-        <button type="button" onClick={() => { try { const config: unknown = JSON.parse(hornText); if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Horn configuration must be an object.'); change({ ...draft, horn_config: config as Record<string, unknown> }); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } }}>Apply horn configuration</button>
+        <button className="btn" type="button" onClick={() => { try { const config: unknown = JSON.parse(hornText); if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Horn configuration must be an object.'); change({ ...draft, horn_config: config as Record<string, unknown> }); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } }}>Apply horn configuration</button>
       </details>}
       <h3>Front layout</h3><svg aria-label="Assembly front layout" viewBox={`${-dimensions.width_mm/2-8} ${-dimensions.height_mm/2-8} ${Math.max(1, dimensions.width_mm)+16} ${Math.max(1,dimensions.height_mm)+16}`} className="assembly-preview">
         <rect x={-dimensions.width_mm/2} y={-dimensions.height_mm/2} width={Math.max(0,dimensions.width_mm)} height={Math.max(0,dimensions.height_mm)} fill="none" stroke="currentColor" strokeWidth=".4"/>
@@ -273,15 +274,15 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
       <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (valid ? 'Valid assembly · passive bodies and source roles checked' : 'Validating assembly…')}</div>
       {valid && accepted!.value.passage_contract && <p>{accepted!.value.passage_contract.open_passage_count} open passages · minimum analytical clearance {Math.min(...Object.values(accepted!.value.passage_contract.clearances_mm)).toFixed(3)} mm.</p>}
       <h3>Phase plug and annular vanes</h3><p>Rigid, full circular bodies with independently tapered radii. All bodies share inlet and outlet planes.</p>
-      <div className="source-editor-toolbar"><button type="button" disabled={draft.phase_plugs.length >= 8 || draft.phase_plugs.some((p) => p.inner0_mm === 0)} onClick={() => {
+      <div className="source-editor-toolbar"><button className="btn" type="button" disabled={draft.phase_plugs.length >= 8 || draft.phase_plugs.some((p) => p.inner0_mm === 0)} onClick={() => {
         const first = draft.phase_plugs[0]; change({ ...draft, phase_plugs: [{ id: `core-${crypto.randomUUID()}`, z0_mm: first?.z0_mm ?? 2, z1_mm: first?.z1_mm ?? 6, inner0_mm: 0, inner1_mm: 0, outer0_mm: first ? first.inner0_mm / 2 : 1, outer1_mm: first ? first.inner1_mm / 2 : 1.4 }, ...draft.phase_plugs] });
-      }}>Add central plug</button><button type="button" disabled={draft.phase_plugs.length >= 8} onClick={() => {
+      }}>Add central plug</button><button className="btn" type="button" disabled={draft.phase_plugs.length >= 8} onClick={() => {
         const last = draft.phase_plugs.at(-1); const inner0 = last ? last.outer0_mm + 1 : 2; const inner1 = last ? last.outer1_mm + 1 : 2.4;
         change({ ...draft, phase_plugs: [...draft.phase_plugs, { id: `vane-${crypto.randomUUID()}`, z0_mm: last?.z0_mm ?? 2, z1_mm: last?.z1_mm ?? 6, inner0_mm: inner0, outer0_mm: inner0 + .5, inner1_mm: inner1, outer1_mm: inner1 + .5 }] });
       }}>Add annular vane</button></div>
       {!!draft.phase_plugs.length && <div className="source-fields">{(['z0_mm','z1_mm'] as const).map((field) => <NumberField key={field} label={field === 'z0_mm' ? 'Plug inlet Z' : 'Plug outlet Z'} value={draft.phase_plugs[0][field]} unit="mm" precision={6} displayPrecision={2} step={.1} onCommit={(v) => change({ ...draft, phase_plugs: draft.phase_plugs.map((p) => ({ ...p, [field]: v })) })}/>)}</div>}
       {draft.phase_plugs.map((plug, i) => <section key={i}>
-        <div className="source-fields">{(['inner0_mm','outer0_mm','inner1_mm','outer1_mm'] as const).map((field) => <NumberField key={field} label={`Body ${i+1} ${field.startsWith('inner') ? 'inner' : 'outer'} ${field.includes('0') ? 'inlet' : 'outlet'} radius`} value={plug[field]} unit="mm" precision={6} displayPrecision={2} step={.1} onCommit={(v) => change({ ...draft, phase_plugs: draft.phase_plugs.map((p,j) => j === i ? { ...p, [field]: v } : p) })}/>)}</div><button type="button" onClick={() => change({ ...draft, phase_plugs: draft.phase_plugs.filter((_,j) => j !== i) })}>Remove body {i+1}</button></section>)}
+        <div className="source-fields">{(['inner0_mm','outer0_mm','inner1_mm','outer1_mm'] as const).map((field) => <NumberField key={field} label={`Body ${i+1} ${field.startsWith('inner') ? 'inner' : 'outer'} ${field.includes('0') ? 'inlet' : 'outlet'} radius`} value={plug[field]} unit="mm" precision={6} displayPrecision={2} step={.1} onCommit={(v) => change({ ...draft, phase_plugs: draft.phase_plugs.map((p,j) => j === i ? { ...p, [field]: v } : p) })}/>)}</div><button className="btn" type="button" onClick={() => change({ ...draft, phase_plugs: draft.phase_plugs.filter((_,j) => j !== i) })}>Remove body {i+1}</button></section>)}
       {!!draft.phase_plugs.length && <details className="source-identifiers" open={identifiersOpen} onToggle={(e) => setIdentifiersOpen(e.currentTarget.open)}><summary>Identifiers</summary>
         {draft.phase_plugs.map((plug, i) => <label key={i}>Passive body {i+1} ID<input aria-label={`Passive body ${i+1} ID`} value={plug.id} onChange={(e) => change({ ...draft, phase_plugs: draft.phase_plugs.map((p,j) => j === i ? { ...p, id:e.target.value } : p) })}/></label>)}
       </details>}
@@ -292,11 +293,11 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
       <label>Passage refinement<select aria-label="Passage refinement" value={draft.passage_refinement} onChange={(e) => change({ ...draft, passage_refinement:Number(e.target.value) as 1|2|4 })}><option value="1">Standard</option><option value="2">2× finer</option><option value="4">4× finer</option></select></label>
     </div>{draft.horn_config && <p>Resolved horn length: {dimensions.horn_length_mm.toFixed(2)} mm. Mouth radius: {dimensions.mouth_radius_mm.toFixed(2)} mm.</p>}
     <p>Passages refine locally to preserve clearance. Smaller enclosure mesh sizes and finer passages use more triangles.</p>
-      <button type="button" disabled={!valid} onClick={() => void run(async () => { const record = await prepareNativeAssembly(() => sourceEditorApi.ingestAssembly(draft)); storage.setItem('', JSON.stringify(draft)); setNotice(`Prepared ${record.mesh?.stats.triangle_count ?? ''} triangles. The imported workspace now uses this assembly and its physical source channels.`); })}>Prepare assembly in WG</button>
-      <button type="button" disabled={!valid} onClick={() => void run(async () => { download(await sourceEditorApi.exportAssembly(draft), 'native-assembly.zip'); storage.setItem('', JSON.stringify(draft)); setNotice('Exported shared STEP shell, preview mesh and source recipe.'); })}>Export assembly STEP + mesh</button>
-      <button type="button" disabled={!valid} onClick={() => download(new Blob([JSON.stringify(assemblyDraftFile(draft),null,2)], { type:'application/json' }), 'source-assembly.json')}>Save assembly draft</button>
+      <button className="btn" type="button" disabled={!valid} onClick={() => void run(async () => { const record = await prepareNativeAssembly(() => sourceEditorApi.ingestAssembly(draft)); storage.setItem('', JSON.stringify(draft)); setNotice(`Prepared ${record.mesh?.stats.triangle_count ?? ''} triangles. The imported workspace now uses this assembly and its physical source channels.`); })}>Prepare assembly in WG</button>
+      <button className="btn" type="button" disabled={!valid} onClick={() => void run(async () => { download(await sourceEditorApi.exportAssembly(draft), 'native-assembly.zip'); storage.setItem('', JSON.stringify(draft)); setNotice('Exported shared STEP shell, preview mesh and source recipe.'); })}>Export assembly STEP + mesh</button>
+      <button className="btn" type="button" disabled={!valid} onClick={() => download(new Blob([JSON.stringify(assemblyDraftFile(draft),null,2)], { type:'application/json' }), 'source-assembly.json')}>Save assembly draft</button>
       <label>Load assembly draft<input aria-label="Load assembly draft" type="file" accept=".json,application/json" onChange={(e) => { const file = e.target.files?.[0]; if (!file) return; void run(async () => { if (file.size > 2*1024*1024) throw new Error('Assembly draft exceeds 2 MiB.'); const loaded = loadAssemblyDraftFile(await file.text()); disabledWoofer.current = undefined; setHornText(JSON.stringify(loaded.horn_config ?? {}, null, 2)); change(loaded); }); e.target.value=''; }}/></label>
       <p>Source editing includes drawing, arcs and the saved source-preset library. Assembly drafts also retain placement, passive bodies and density.</p>
-    </aside></div></fieldset><footer>{busy && <p role="status">Preparing geometry…</p>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}<small>Draft changes are remembered. Preparing selects the immutable mesh and Metal, the supported native contour consumer.</small></footer>
+    </aside></div></fieldset><footer>{busy && <p role="status">Preparing geometry…</p>}{error && <Notice tone="error" role="alert">{error}</Notice>}{notice && <Notice tone="info" role="status">{notice}</Notice>}<small>Draft changes are remembered. Preparing selects the immutable mesh and Metal, the supported native contour consumer.</small></footer>
   </div></div>;
 }

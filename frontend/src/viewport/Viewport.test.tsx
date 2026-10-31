@@ -1015,7 +1015,7 @@ describe('Viewport preview errors', () => {
     expect(host.querySelector('.viewport-title span')?.textContent).toBe('');
     const empty = host.querySelector('.viewport-empty')!;
     expect(empty.querySelector('b')?.textContent).toBe('Speaker CAD');
-    expect(empty.querySelector('span')?.textContent).toBe('Its status and next step are in Results.');
+    expect(empty.querySelector('.empty-state-detail')?.textContent).toBe('Its status and next step are in Results.');
     expect(host.textContent).not.toMatch(/Preparing|Ready to solve|needs your choice|not prepared/);
     const navigate = vi.spyOn(workspaceNavigation, 'navigate').mockReturnValue(true);
     act(() => empty.querySelector<HTMLButtonElement>('button.btn')!.click());

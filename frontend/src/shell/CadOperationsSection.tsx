@@ -1,3 +1,4 @@
+import { Notice } from './Notice';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { getIngest, listReturns, type CadReturnFinding, type CadReturnIngestRecord } from '../api/cadlink';
@@ -314,9 +315,31 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
   const header = solve
     ? manual ? waiting ? operation.attention === 'ready' ? 'Your solve is ready' : 'Your solve is waiting' : 'Your solve is in progress' : 'Fusion asked for a solve'
     : `CAD request`;
-  return <div className="cad-direction-alert cad-operation" data-operation-id={operation.operationId} data-request-id={job.id} tabIndex={-1}>
-    <div>
-      <b>{header}{documentName ? ` · ${documentName}` : ''}</b>
+  return <Notice tone="warning" role={null} className="cad-operation" data-operation-id={operation.operationId} data-request-id={job.id} tabIndex={-1} title={<>{header}{documentName ? ` · ${documentName}` : ''}</>} actions={<div className="cad-confirm-actions">
+      {waiting && !active && <button className="btn"
+        disabled={heldAction === 'dismiss'}
+        aria-label={`Dismiss: ${label}`}
+        title="Dismiss this request. Fusion will not offer it again."
+        onClick={() => ask('dismiss', () => dismissCadJob(job))}
+      >Dismiss</button>}
+      {active && operation.state !== 'cancel_requested' && <button className="btn"
+        disabled={heldAction === 'stop'}
+        aria-label={`Stop: ${label}`}
+        onClick={() => ask('stop', () => jobsSocket.stopJob(job.id))}
+      >Stop</button>}
+      {review.error && operation.reason === 'findings_need_review' && <button className="btn" aria-label={`Retry reading the findings for ${label}`} onClick={review.retry}>Retry</button>}
+      {waiting && help.action === 'approve' && reviewedPreparation && <>
+        {approvalUnavailable && <span role="status">{approvalUnavailable}</span>}
+        <button
+        className="btn-primary primary"
+        disabled={heldAction === 'approve' || approvalUnavailable !== null}
+        aria-label={`Approve and solve: ${label}`}
+        onClick={() => ask('approve', () => jobsCoordinatorBridge.getSnapshot().continueRun(job.id, {
+          approvals: { preparation_id: reviewedPreparation, finding_ids: review.findingIds },
+        }))}
+      >Approve and solve</button></>}
+    </div>}>
+
       {showStatus && <span role="status">{status}</span>}
       {message && <span>{message}</span>}
       {ladder.length > 0 && <ol className="cad-operation-ladder" aria-label="What this solve still needs">
@@ -343,32 +366,7 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
       {/* What the request holds -- its snapshot, preparation, settings and
           engine, and the backend's own report -- is developer detail. */}
       {developer && <CadSolveInputs operationId={operation.operationId} job={job} engineSource="setup-revision"/>}
-    </div>
-    <div className="cad-confirm-actions">
-      {waiting && !active && <button
-        disabled={heldAction === 'dismiss'}
-        aria-label={`Dismiss: ${label}`}
-        title="Dismiss this request. Fusion will not offer it again."
-        onClick={() => ask('dismiss', () => dismissCadJob(job))}
-      >Dismiss</button>}
-      {active && operation.state !== 'cancel_requested' && <button
-        disabled={heldAction === 'stop'}
-        aria-label={`Stop: ${label}`}
-        onClick={() => ask('stop', () => jobsSocket.stopJob(job.id))}
-      >Stop</button>}
-      {review.error && operation.reason === 'findings_need_review' && <button aria-label={`Retry reading the findings for ${label}`} onClick={review.retry}>Retry</button>}
-      {waiting && help.action === 'approve' && reviewedPreparation && <>
-        {approvalUnavailable && <span role="status">{approvalUnavailable}</span>}
-        <button
-        className="primary"
-        disabled={heldAction === 'approve' || approvalUnavailable !== null}
-        aria-label={`Approve and solve: ${label}`}
-        onClick={() => ask('approve', () => jobsCoordinatorBridge.getSnapshot().continueRun(job.id, {
-          approvals: { preparation_id: reviewedPreparation, finding_ids: review.findingIds },
-        }))}
-      >Approve and solve</button></>}
-    </div>
-  </div>;
+    </Notice>;
 }
 
 /** Request feedback stays with the rows, including outside CAD input. */
@@ -398,15 +396,8 @@ function RecoveryOperationCard({ request, requestActions }: { request: CadReques
   const { busy, error, ask } = useRequestAction();
   const documentName = operation.snapshot?.documentName ?? coordinator.fusionStatus?.documentName ?? null;
   const label = documentName ?? 'the Fusion document';
-  return <div className="cad-direction-alert cad-operation cad-operation-recovery" data-operation-id={operation.operationId} data-request-id={request.id} tabIndex={-1}>
-    <div>
-      <b>Update interrupted — recovery required{documentName ? ` · ${documentName}` : ''}</b>
-      <span>Fusion has no transaction covering these edits. Use Undo in Fusion to recover the document, or repair the link; do not continue modelling on a partially failed rebuild.</span>
-      <span>Dismissing this card does not repair Fusion, and the Waveguide Generator add-in in Fusion will not repeat the update.</span>
-      {error && <span role="alert">{error}</span>}
-    </div>
-    <div className="cad-confirm-actions">
-      <button
+  return <Notice tone="warning" role={null} className="cad-operation cad-operation-recovery" data-operation-id={operation.operationId} data-request-id={request.id} tabIndex={-1} title={<>Update interrupted — recovery required{documentName ? ` · ${documentName}` : ''}</>} actions={<div className="cad-confirm-actions">
+      <button className="btn"
         disabled={busy}
         aria-label={`Dismiss recovery notice: ${label}`}
         onClick={() => ask(async () => {
@@ -415,7 +406,7 @@ function RecoveryOperationCard({ request, requestActions }: { request: CadReques
         })}
       >Dismiss</button>
       <button
-        className="primary"
+        className="btn-primary primary"
         disabled={busy}
         aria-label={`Check Fusion again: ${label}`}
         onClick={() => ask(async () => {
@@ -424,8 +415,12 @@ function RecoveryOperationCard({ request, requestActions }: { request: CadReques
           coordinator.reportStatus('Checked Fusion recovery notices. Use Undo in Fusion or repair the link if its warning remains.');
         })}
       >Check Fusion again</button>
-    </div>
-  </div>;
+    </div>}>
+
+      <span>Fusion has no transaction covering these edits. Use Undo in Fusion to recover the document, or repair the link; do not continue modelling on a partially failed rebuild.</span>
+      <span>Dismissing this card does not repair Fusion, and the Waveguide Generator add-in in Fusion will not repeat the update.</span>
+      {error && <span role="alert">{error}</span>}
+    </Notice>;
 }
 
 /** What a request about another model was, in a few quiet words. */
@@ -453,13 +448,13 @@ function EarlierRequests({ requests, requestActions }: { requests: CadRequest[];
           {operation.reason && <span>{operationReasonWords(operation.reason)}</span>}
           {operation.message && <span>{operation.message}</span>}
           {request.openable && <button
-            className="link-button"
+            className="btn-link link-button"
             disabled={busy}
             aria-label={`Open ${name ?? 'the project'} to review ${operation.reason === 'frame_confirmation_required' ? 'its solver frame' : 'its solve settings'}`}
             onClick={() => ask(() => requestActions.open(request))}
           >Open {name ?? 'its project'}</button>}
           <button
-            className="link-button"
+            className="btn-link link-button"
             disabled={busy}
             aria-label={`Dismiss: ${label}`}
             onClick={() => ask(async () => {
@@ -471,7 +466,7 @@ function EarlierRequests({ requests, requestActions }: { requests: CadRequest[];
       })}
     </ul>
     <button
-      className="link-button"
+      className="btn-link link-button"
       disabled={busy}
       onClick={() => ask(() => requestActions.clearAll(requests))}
     >Clear all</button>

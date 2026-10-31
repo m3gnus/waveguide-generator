@@ -40,3 +40,22 @@ it('renders a sentence-case empty state with separate detail and one action', ()
   expect(host.querySelectorAll('.empty-state-action button')).toHaveLength(1);
   expect(host.textContent).toBe('No charts open\nAdd a chart.\n+ Add chart');
 });
+
+it('preserves explicit live-region roles and card focus/data attributes', () => {
+  act(() => root.render(<Notice tone="warning" role={null} tabIndex={-1} data-operation-id="held">Waiting</Notice>));
+  const card = host.querySelector('.notice')!;
+  expect(card.getAttribute('role')).toBeNull();
+  expect(card.getAttribute('tabindex')).toBe('-1');
+  expect(card.getAttribute('data-operation-id')).toBe('held');
+  act(() => root.render(<Notice tone="warning" role="alert" aria-live="assertive">Restart will stop a solve.</Notice>));
+  expect(host.querySelector('.notice')?.getAttribute('role')).toBe('alert');
+  expect(host.querySelector('.notice')?.getAttribute('aria-live')).toBe('assertive');
+});
+
+it('composes an empty viewport mark before the shared title and preserves its live region', () => {
+  act(() => root.render(<EmptyState title="Waiting for geometry" detail="Enable live updates." aria-live="polite">
+    <i className="viewport-empty-mark" aria-hidden="true" />
+  </EmptyState>));
+  expect(host.querySelector('.empty-state')?.firstElementChild?.className).toBe('viewport-empty-mark');
+  expect(host.querySelector('.empty-state')?.getAttribute('aria-live')).toBe('polite');
+});

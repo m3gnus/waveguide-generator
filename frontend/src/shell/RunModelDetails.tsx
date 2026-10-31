@@ -54,7 +54,7 @@ export function RunModelDetails({ job }: { job: JobItem }) {
   else attachment = <>
     <p><a className="cad-model-download" href={projectDocumentUrl(lineage, hash)}
       title="Download the Fusion model this run was solved from.">Fusion file</a>
-      {' · '}<button type="button" disabled={currentAction?.pending} onClick={() => { void openDocument(); }}>
+      {' · '}<button className="btn" type="button" disabled={currentAction?.pending} onClick={() => { void openDocument(); }}>
         {currentAction?.pending ? 'Opening…' : current.launchDisabled
           ? `Show in ${current.fileManager || 'file manager'}` : 'Open in Fusion'}
       </button>

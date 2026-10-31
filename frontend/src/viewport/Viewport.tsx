@@ -1,3 +1,5 @@
+import { EmptyState } from '../shell/EmptyState';
+import { Notice } from '../shell/Notice';
 import { SOURCE_ROLE_LABELS } from '../model/cadLabels';
 import { useCadModelStatusLine } from '../shell/CadModelStatusLine';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
@@ -1085,18 +1087,19 @@ export function Viewport() {
       </div>
     </div>
 
-    {!activeScene && <div className="viewport-empty" role="status" aria-live="polite">
-      <i className="viewport-empty-mark"><i /></i>
-      <b>{fileInputActive ? 'Import a mesh file' : workspaceMode === 'cad' ? cadEmpty.title : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</b>
-      <span>{fileInputActive ? 'Use Import mesh above, then choose Radiating surfaces in Geometry.' : workspaceMode === 'cad' ? cadEmpty.detail : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</span>
-      {workspaceMode === 'cad' && !fileInputActive && !workspaceNavigation.isVisible('results')
-        && <button type="button" className="btn viewport-retry" onClick={() => workspaceNavigation.navigate('results')}>Show Results</button>}
-    </div>}
+    {!activeScene && <EmptyState className="viewport-empty" aria-live="polite" title={<>{fileInputActive ? 'Import a mesh file' : workspaceMode === 'cad' ? cadEmpty.title : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</>} detail={<>{fileInputActive ? 'Use Import mesh above, then choose Radiating surfaces in Geometry.' : workspaceMode === 'cad' ? cadEmpty.detail : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</>} action={workspaceMode === 'cad' && !fileInputActive && !workspaceNavigation.isVisible('results')
+        && <button type="button" className="btn viewport-retry" onClick={() => workspaceNavigation.navigate('results')}>Show Results</button> || undefined}>
+      <i className="viewport-empty-mark" aria-hidden="true"><i /></i>
+    </EmptyState>}
     <div className="viewport-notices">
-      {(showNoticeRefresh || showConnectionNotice) && <div
+      {(showNoticeRefresh || showConnectionNotice) && <Notice tone={showPreviewError || (showSolverMeshNotice && solverMeshState.error) || showCadSolverError ? 'error' : 'warning'}
         className={`viewport-connection-banner${showPreviewError ? ' viewport-error-banner' : ''}${showSolverMeshNotice || showCadSolverError ? ' solver-mesh-banner' : ''}`}
         role={showPreviewError || (showSolverMeshNotice && solverMeshState.error) || showCadSolverError ? 'alert' : 'status'}
-      >
+       actions={<>        {showNoticeRefresh && <button type="button" className="btn"
+          disabled={(showPreviewError || showStalledPreview) && refreshRequestedAt !== null
+            || showSolverMeshNotice && solverMeshState.building || showCadSolverError && cadSolverLoading}
+          onClick={refreshNotice}>Refresh</button>}
+        {showPreviewError && <button type="button" className="icon-button" aria-label="Dismiss preview error" title="Dismiss preview error" onClick={() => setDismissedPreviewError(preview.error)}><Icon name="close"/></button>}</>}>
         <div className="viewport-notice-messages">
           {showSolverMeshNotice && <>
             <span>{solverMeshState.error ? 'Mesh build failed' : 'Mesh out of date'}</span>
@@ -1112,12 +1115,7 @@ export function Viewport() {
           </span>}
           {showCadSolverError && <><span>Solve mesh unavailable</span><b>{cadSolverError}</b></>}
         </div>
-        {showNoticeRefresh && <button type="button" className="btn"
-          disabled={(showPreviewError || showStalledPreview) && refreshRequestedAt !== null
-            || showSolverMeshNotice && solverMeshState.building || showCadSolverError && cadSolverLoading}
-          onClick={refreshNotice}>Refresh</button>}
-        {showPreviewError && <button type="button" aria-label="Dismiss preview error" title="Dismiss preview error" onClick={() => setDismissedPreviewError(preview.error)}><Icon name="close"/></button>}
-      </div>}
+      </Notice>}
       {solverViewSelected && planAdjustments.flatMap((adjustment) => {
         const notice = planAdjustmentNotice(adjustment);
         return notice === null ? [] : [notice];
@@ -1135,25 +1133,16 @@ export function Viewport() {
         <summary aria-label={`${geometryWarnings.length} geometry warning${geometryWarnings.length === 1 ? '' : 's'}`}>
           <i />{geometryWarnings.length} warning{geometryWarnings.length === 1 ? '' : 's'}
         </summary>
-        <div className="viewport-warning-details">
-          <b>Geometry warning{geometryWarnings.length === 1 ? '' : 's'}</b>
+        <Notice tone="warning" className="viewport-warning-details" title={<>Geometry warning{geometryWarnings.length === 1 ? '' : 's'}</>}>
           <ul>{geometryWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
-        </div>
+        </Notice>
       </details>}
     </div>
-    {activeScene && hasSurfaces && !webgl && !renderFailure && <div className="viewport-empty"><b>WebGL unavailable</b><span>The geometry is valid, but this environment cannot create a WebGL2 context.</span></div>}
-    {activeScene && !hasSurfaces && <div className="viewport-empty" role="status"><b>No geometry surfaces</b><span>The scene is valid but contains no renderable surfaces.</span></div>}
-    {activeScene && renderFailure && <div className="viewport-empty" role="status">
-      <b>WebGL renderer stopped</b>
-      <span>{renderFailure}. Retry to rebuild the viewport; if it stops again, check that graphics acceleration is enabled.</span>
-      <button type="button" className="btn viewport-retry" onClick={retryRenderer}><Icon name="reset"/>Retry</button>
-    </div>}
-    {activeScene && mode === 'curvature' && !activeScene.hasCurvature && <div className="viewport-mode-empty">
-      <b>Curvature heatmap unavailable</b><span>This frame has no analytic curvature section. Neutral geometry remains visible while inspection data is requested.</span>
-    </div>}
-    {activeScene && mode === 'edges' && edgeModeUnavailable && <div className="viewport-mode-empty">
-      <b>Edge inspection unavailable</b><span>This frame exceeds the {MAX_EDGE_TRIANGLES.toLocaleString()}-triangle edge limit. Filled geometry remains visible while edge extraction is skipped.</span>
-    </div>}
+    {activeScene && hasSurfaces && !webgl && !renderFailure && <EmptyState className="viewport-empty" title={<>WebGL unavailable</>} detail={<>The geometry is valid, but this environment cannot create a WebGL2 context.</>}/>}
+    {activeScene && !hasSurfaces && <EmptyState className="viewport-empty" title={<>No geometry surfaces</>} detail={<>The scene is valid but contains no renderable surfaces.</>}/>}
+    {activeScene && renderFailure && <EmptyState className="viewport-empty" title={<>WebGL renderer stopped</>} detail={<>{renderFailure}. Retry to rebuild the viewport; if it stops again, check that graphics acceleration is enabled.</>} action={<button type="button" className="btn viewport-retry" onClick={retryRenderer}><Icon name="reset"/>Retry</button>}/>}
+    {activeScene && mode === 'curvature' && !activeScene.hasCurvature && <EmptyState className="viewport-mode-empty" title={<>Curvature heatmap unavailable</>} detail={<>This frame has no analytic curvature section. Neutral geometry remains visible while inspection data is requested.</>}/>}
+    {activeScene && mode === 'edges' && edgeModeUnavailable && <EmptyState className="viewport-mode-empty" title={<>Edge inspection unavailable</>} detail={<>This frame exceeds the {MAX_EDGE_TRIANGLES.toLocaleString()}-triangle edge limit. Filled geometry remains visible while edge extraction is skipped.</>}/>}
     {showStats && <div className="frame-stat-card wg2-stats">
       <span>latest displayed binary frame</span>
       <dl>
@@ -1189,9 +1178,9 @@ export function Viewport() {
       }}
       manualWindow={femManualWindow} setManualWindow={setFemManualWindow} rendering={femRendering} setRendering={setFemRendering} sequential={fieldColormap}>
       <div className="field-plane-presets" role="group" aria-label="FEM field plane presets">
-        <button type="button" onClick={() => applyFieldPlanePreset('h')}>H-plane</button>
-        <button type="button" onClick={() => applyFieldPlanePreset('v')}>V-plane</button>
-        <button type="button" onClick={() => applyFieldPlanePreset('mouth')}>Mouth</button>
+        <button className="btn" type="button" onClick={() => applyFieldPlanePreset('h')}>H-plane</button>
+        <button className="btn" type="button" onClick={() => applyFieldPlanePreset('v')}>V-plane</button>
+        <button className="btn" type="button" onClick={() => applyFieldPlanePreset('mouth')}>Mouth</button>
       </div>
       <FieldPlaneTransformInputs/>
     </FemFieldControls>}
@@ -1275,7 +1264,7 @@ export function Viewport() {
         </label>
         <button
           type="button"
-          className={fieldAnimating ? 'on' : ''}
+          className={fieldAnimating ? 'btn on' : 'btn'}
           aria-label={fieldAnimating ? 'Pause field phase animation' : 'Play field phase animation'}
           aria-pressed={fieldAnimating}
           title={fieldAnimating ? 'Pause phase animation' : 'Animate instantaneous pressure'}
@@ -1287,7 +1276,7 @@ export function Viewport() {
         <span>{fieldPlaneWindowReadout(fieldDisplayMode, fieldWindow)}</span>
         <button
           type="button"
-          className={fieldRangeLocked ? 'on' : ''}
+          className={fieldRangeLocked ? 'btn on' : 'btn'}
           aria-label={fieldRangeLocked ? 'Unlock field plane range' : 'Lock field plane range'}
           aria-pressed={fieldRangeLocked}
           onClick={() => useFieldPlaneStore.getState().setRangeLocked(!fieldRangeLocked)}
@@ -1300,7 +1289,7 @@ export function Viewport() {
       <div className="field-plane-render-controls">
         <button
           type="button"
-          className={fieldIsolines ? 'on' : ''}
+          className={fieldIsolines ? 'btn on' : 'btn'}
           aria-label="Toggle 6 dB field plane isolines"
           aria-pressed={fieldIsolines}
           disabled={fieldDisplayMode === 'phase' || fieldDisplayMode === 'instantaneous'}
@@ -1321,9 +1310,9 @@ export function Viewport() {
         </label>}
       </div>
       <div className="field-plane-presets" role="group" aria-label="Field plane presets">
-        <button type="button" onClick={() => applyFieldPlanePreset('h')}>H-plane</button>
-        <button type="button" onClick={() => applyFieldPlanePreset('v')}>V-plane</button>
-        <button type="button" onClick={() => applyFieldPlanePreset('mouth')}>Mouth</button>
+        <button className="btn" type="button" onClick={() => applyFieldPlanePreset('h')}>H-plane</button>
+        <button className="btn" type="button" onClick={() => applyFieldPlanePreset('v')}>V-plane</button>
+        <button className="btn" type="button" onClick={() => applyFieldPlanePreset('mouth')}>Mouth</button>
       </div>
       <FieldPlaneTransformInputs />
       {maskMatchesGeometry(fieldMaskState, fieldJobId, fieldGeometrySha256)

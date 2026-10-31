@@ -448,8 +448,8 @@ export function CadWorkspaceOwners() {
         <p>Sending rebuilds only the linked waveguide from WG. Separate cabinet and mid-woofer bodies stay in Fusion, but direct edits to the linked waveguide are replaced.</p>
         <p>To keep the Fusion edits instead, cancel and bring the Fusion geometry into WG first.</p>
         <div className="update-dialog-actions">
-          <button data-cad-conflict-cancel onClick={state.cancelFusionConflict}>Cancel</button>
-          <button className="primary" disabled={state.sendingToFusion} onClick={() => { void state.sendWgToFusion({ confirmed: true }).catch(() => undefined); }}>Continue: send WG changes</button>
+          <button className="btn" data-cad-conflict-cancel onClick={state.cancelFusionConflict}>Cancel</button>
+          <button className="btn-primary primary" disabled={state.sendingToFusion} onClick={() => { void state.sendWgToFusion({ confirmed: true }).catch(() => undefined); }}>Continue: send WG changes</button>
         </div>
       </div>
     </div>

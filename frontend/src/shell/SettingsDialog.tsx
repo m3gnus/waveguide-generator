@@ -1,3 +1,4 @@
+import { Notice } from './Notice';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getOnshapeConnection, type OnshapeConnection } from '../api/onshape';
 import { getAclRepairStatus, type AclRepairRootStatus } from '../api/aclRepair';
@@ -59,9 +60,9 @@ function DriverLibrarySettings() {
     </div>
     {indexed > drivable && <p className="cad-settings-note">The other {(indexed - drivable).toLocaleString()} are catalogue entries: without Sd, Bl, Re, a mass and a compliance they cannot drive a channel, so <b>Drivers</b> does not offer them. Type such a driver&rsquo;s values in by hand there instead.</p>}
     <div className="settings-theme-options">
-      <button disabled={status === 'loading'} onClick={() => void rescan()}>{status === 'loading' ? 'Rescanning…' : 'Rescan'}</button>
+      <button className="btn" disabled={status === 'loading'} onClick={() => void rescan()}>{status === 'loading' ? 'Rescanning…' : 'Rescan'}</button>
     </div>
-    {error && <p className="workspace-settings-error" role="status">{error}</p>}
+    {error && <Notice tone="error" role="status">{error}</Notice>}
   </section>;
 }
 
@@ -215,7 +216,7 @@ function CadFolderSettings() {
         <span><b>{label}</b><small>{detail}</small></span>
       </label>)}
     </fieldset>
-    {error && <p className="workspace-settings-error" role="status">{error}</p>}
+    {error && <Notice tone="error" role="status">{error}</Notice>}
   </div>;
 }
 
@@ -246,7 +247,7 @@ function OnshapeConnectionStatus({ onConnection }: {
   useEffect(() => { void check(false); }, [check]);
 
   if (checking && connection === null) return <p className="cad-settings-note">Checking the Onshape connection…</p>;
-  if (error) return <p className="workspace-settings-error" role="status">{error}</p>;
+  if (error) return <Notice tone="error" role="status">{error}</Notice>;
   if (!connection) return null;
 
   return <div className="cad-settings-connection">
@@ -259,17 +260,17 @@ function OnshapeConnectionStatus({ onConnection }: {
               ? ' — this plan makes every document public, so anyone with the link can view designs you send.'
               : ''}
           </p>
-        : <p className="workspace-settings-error" role="status">{connection.detail ?? 'Onshape could not be reached with the stored key pair.'}</p>
+        : <Notice tone="warning" role="status">{connection.detail ?? 'Onshape could not be reached with the stored key pair.'}</Notice>
       : <p className="cad-settings-note">
           No API key pair yet. In Onshape, open <b>My account → Developer → API keys</b>, create one, and save the two values to <code>{connection.credentialsPath}</code> as
           {' '}<code>ONSHAPE_ACCESS_KEY</code> and <code>ONSHAPE_SECRET_KEY</code>. WG reads that file; it never asks you to type a key here.
         </p>}
     {connection.configured && <p className="cad-settings-note">Credential file: <code>{connection.credentialsPath}</code>. Environment variables with the same names take precedence.</p>}
-    {connection.insecureKeyFile && <p className="workspace-settings-error" role="status">
+    {connection.insecureKeyFile && <Notice tone="warning" role="status">
       That key file is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.
-    </p>}
+    </Notice>}
     <div className="settings-theme-options">
-      <button disabled={checking} onClick={() => void check(true)}>{checking ? 'Checking…' : 'Check connection'}</button>
+      <button className="btn" disabled={checking} onClick={() => void check(true)}>{checking ? 'Checking…' : 'Check connection'}</button>
     </div>
   </div>;
 }

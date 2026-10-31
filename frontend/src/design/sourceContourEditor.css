@@ -11,9 +11,9 @@
 .source-editor p { color: var(--fg3); margin: 6px 0 10px; }
 .source-editor fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .source-sketch-editor > fieldset { flex: 1; min-height: 0; overflow: hidden; }
-.source-editor button, .source-editor select, .source-editor input { font: inherit; color: inherit; background: var(--surface-field); border: 1px solid var(--border-control); border-radius: 4px; padding: 5px 8px; }
-.source-editor button { cursor: pointer; background: var(--ctl-grad); }
-.source-editor button:hover:enabled { background: var(--ctl-grad-h); }
+.source-editor .sketch-toolbar button, .source-editor select, .source-editor input { font: inherit; color: inherit; background: var(--surface-field); border: 1px solid var(--border-control); border-radius: 4px; padding: 5px 8px; }
+.source-editor .sketch-toolbar button { cursor: pointer; background: var(--ctl-grad); }
+.source-editor .sketch-toolbar button:hover:enabled { background: var(--ctl-grad-h); }
 .source-editor :is(button, input, select):focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .source-editor button:disabled { opacity: .45; cursor: default; }
 .source-editor input { width: 100%; min-width: 75px; box-sizing: border-box; }
@@ -85,3 +85,5 @@
 
 .source-dimensions { margin: 12px 0; }
 .source-table td:nth-child(2) > button { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.source-editor :is(.btn, .btn-primary) { height: auto; padding: 5px 8px; font: inherit; }

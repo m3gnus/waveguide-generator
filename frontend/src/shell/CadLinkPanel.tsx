@@ -369,7 +369,7 @@ export function CadLinkPanel() {
   const solveCard = model.preparation === 'prepared';
   const onshapeActionLabel = workflow.action === 'update' ? 'Send WG changes to Onshape' : `Create ${shownName} in Onshape`;
   const unlinkButton = <button
-    className="link-button cad-onshape-unlink"
+    className="btn-link link-button cad-onshape-unlink"
     disabled={unlinkingOnshape || sendingToOnshape}
     title="Forget this link. The Onshape document is left as it is; the next send creates a new document."
     onClick={() => setConfirmUnlink(true)}
@@ -386,14 +386,14 @@ export function CadLinkPanel() {
 
   const linkActions = onshape
     ? <>
-      <button className="link-button" disabled={sendingToOnshape || Boolean(cadLimitation)} title={cadLimitation} onClick={() => void sendToOnshape()}>Send to Onshape</button>
-      {linkedDocument && <button className="link-button" disabled={ingesting} title="Export the linked Part Studio to STEP, verify its source evidence, and prepare it for the viewport and solver." onClick={() => { void cadWorkspaceView.returnFromOnshape().catch(() => undefined); }}>Bring geometry into WG</button>}
-      {linkedDocument?.documentUrl && <a className="link-button" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open in Onshape</a>}
+      <button className="btn-link link-button" disabled={sendingToOnshape || Boolean(cadLimitation)} title={cadLimitation} onClick={() => void sendToOnshape()}>Send to Onshape</button>
+      {linkedDocument && <button className="btn-link link-button" disabled={ingesting} title="Export the linked Part Studio to STEP, verify its source evidence, and prepare it for the viewport and solver." onClick={() => { void cadWorkspaceView.returnFromOnshape().catch(() => undefined); }}>Bring geometry into WG</button>}
+      {linkedDocument?.documentUrl && <a className="btn-link link-button" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open in Onshape</a>}
       {linkedDocument && unlinkButton}
     </>
     : <>
-      <button className="link-button" disabled={sendingToFusion || Boolean(cadLimitation)} title={cadLimitation ?? "Rebuild the linked Fusion waveguide from the current WG design."} onClick={sendToFusion}>Send to Fusion</button>
-      <button className="link-button" disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} title="Ask Fusion for the active document's current geometry and source tags." onClick={() => void bringFromFusion()}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring geometry into WG'}</button>
+      <button className="btn-link link-button" disabled={sendingToFusion || Boolean(cadLimitation)} title={cadLimitation ?? "Rebuild the linked Fusion waveguide from the current WG design."} onClick={sendToFusion}>Send to Fusion</button>
+      <button className="btn-link link-button" disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} title="Ask Fusion for the active document's current geometry and source tags." onClick={() => void bringFromFusion()}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring geometry into WG'}</button>
     </>;
 
   // 2 · CAD Link: is CAD in sync with WG? One card, both directions. Install
@@ -413,7 +413,7 @@ export function CadLinkPanel() {
           <CadCoordinationNote/>
           <div className="cad-link-actions">
             {!unlinkedOnScreen && linkActions}
-            <button className="link-button cad-link-settings" onClick={() => requestSettings('cad')}>Settings</button>
+            <button className="btn-link link-button cad-link-settings" onClick={() => requestSettings('cad')}>Settings</button>
           </div>
         </div>
       </details>
@@ -421,7 +421,7 @@ export function CadLinkPanel() {
         <div className={`cad-connection cad-connection-${workflow.state}`}>
           <span className="cad-connection-dot" aria-hidden="true"/>
           <div><h4 title={addinVersion}>{workflow.headline}</h4>{workflowDetail}<CadCoordinationNote/></div>
-          <button className="link-button cad-link-settings" onClick={() => requestSettings('cad')}>Settings</button>
+          <button className="btn-link link-button cad-link-settings" onClick={() => requestSettings('cad')}>Settings</button>
         </div>
         {onshape && matchingOnshapeLinks.length > 1 && <label className="field-row linked-instance-selection">
           <span>Managed Onshape link</span>
@@ -439,20 +439,20 @@ export function CadLinkPanel() {
         </label>}
         {/* Fusion: the actions that resolve the out-of-sync state, and only those. */}
         {!onshape && workflow.state === 'not-configured' && fusionStatus?.cadFolderMissingPath && <RootFolderControls cadlinkOnly showPath={false}/>}
-        {!onshape && workflow.state === 'not-configured' && !fusionStatus?.cadFolderMissingPath && <button className="primary cad-primary-action" onClick={() => requestSettings('cad')}>Set up Fusion connection</button>}
-        {!onshape && !unlinkedOnScreen && workflow.action === 'open' && <button className="primary cad-primary-action" disabled={sendingToFusion || Boolean(cadLimitation)} title={cadLimitation} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Open in Fusion 360'}</button>}
+        {!onshape && workflow.state === 'not-configured' && !fusionStatus?.cadFolderMissingPath && <button className="btn-primary primary cad-primary-action" onClick={() => requestSettings('cad')}>Set up Fusion connection</button>}
+        {!onshape && !unlinkedOnScreen && workflow.action === 'open' && <button className="btn-primary primary cad-primary-action" disabled={sendingToFusion || Boolean(cadLimitation)} title={cadLimitation} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Open in Fusion 360'}</button>}
         {!onshape && fusionStatus?.fusionChangesAvailable && !fusionStatus.wgChangesAvailable && <div className="cad-confirm-actions">
-          <button disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} onClick={() => void bringFromFusion()}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring in'}</button>
-          <button className="primary" disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} title="Bring the current Fusion geometry into WG, prepare it, and start the solve." onClick={() => { void cadWorkspaceView.pullAndSolve(); }}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring in & solve'}</button>
+          <button className="btn" disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} onClick={() => void bringFromFusion()}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring in'}</button>
+          <button className="btn-primary primary" disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} title="Bring the current Fusion geometry into WG, prepare it, and start the solve." onClick={() => { void cadWorkspaceView.pullAndSolve(); }}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring in & solve'}</button>
         </div>}
         {!onshape && !unlinkedOnScreen && workflow.action === 'update' && <div className={fusionBothChanged ? 'cad-confirm-actions' : undefined}>
-          {fusionBothChanged && <button disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} title="Keep the Fusion edits: bring the Fusion geometry into WG instead of overwriting it." onClick={() => void bringFromFusion()}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring Fusion changes in'}</button>}
-          <button className="primary cad-primary-action" disabled={sendingToFusion || Boolean(cadLimitation)} title={cadLimitation} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Send WG changes to Fusion'}</button>
+          {fusionBothChanged && <button className="btn" disabled={!canRequestFusionReturn || cadWorkspaceView.pullingFromFusion} title="Keep the Fusion edits: bring the Fusion geometry into WG instead of overwriting it." onClick={() => void bringFromFusion()}>{cadWorkspaceView.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring Fusion changes in'}</button>}
+          <button className="btn-primary primary cad-primary-action" disabled={sendingToFusion || Boolean(cadLimitation)} title={cadLimitation} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Send WG changes to Fusion'}</button>
         </div>}
         {/* Onshape: the same card carries its send/return pair. */}
-        {onshape && workflow.state !== 'not-configured' && !confirmPublicDocument && workflow.action && <button className="primary cad-primary-action" disabled={sendingToOnshape || Boolean(cadLimitation)} title={cadLimitation} onClick={() => void sendToOnshape()}>{sendingToOnshape ? (workflow.action === 'update' ? 'Updating…' : 'Creating…') : onshapeActionLabel}</button>}
-        {onshape && linkedDocument && workflow.state !== 'not-configured' && <button className="cad-secondary-action" disabled={ingesting} onClick={() => { void cadWorkspaceView.returnFromOnshape().catch(() => undefined); }}>{ingesting ? 'Receiving & preparing…' : 'Bring Onshape geometry into WG'}</button>}
-        {onshape && linkedDocument?.documentUrl && <a className="link-button cad-onshape-open" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open {linkedDocument.documentName} in Onshape</a>}
+        {onshape && workflow.state !== 'not-configured' && !confirmPublicDocument && workflow.action && <button className="btn-primary primary cad-primary-action" disabled={sendingToOnshape || Boolean(cadLimitation)} title={cadLimitation} onClick={() => void sendToOnshape()}>{sendingToOnshape ? (workflow.action === 'update' ? 'Updating…' : 'Creating…') : onshapeActionLabel}</button>}
+        {onshape && linkedDocument && workflow.state !== 'not-configured' && <button className="btn cad-secondary-action" disabled={ingesting} onClick={() => { void cadWorkspaceView.returnFromOnshape().catch(() => undefined); }}>{ingesting ? 'Receiving & preparing…' : 'Bring Onshape geometry into WG'}</button>}
+        {onshape && linkedDocument?.documentUrl && <a className="btn-link link-button cad-onshape-open" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open {linkedDocument.documentName} in Onshape</a>}
         {onshape && linkedDocument && workflow.state !== 'not-configured' && unlinkButton}
       </>}
     {!onshape && matchingFusionLinks.length > 1 && <label className="field-row linked-instance-selection">
@@ -475,10 +475,10 @@ export function CadLinkPanel() {
     {cadLimitation && <p className="section-note">{cadLimitation}</p>}
     {onshape && publicOnly && !confirmPublicDocument && <Notice tone="warning" title="This Onshape plan creates public documents.">{onshapeConnection?.plan?.name ?? 'The Free plan'} makes every document world-readable — anyone with the link can view this waveguide. Confidential designs belong in Fusion 360 or on a paid Onshape plan.</Notice>}
     {onshape && onshapeConnection?.insecureKeyFile && <Notice tone="error">The Onshape key file at {onshapeConnection.credentialsPath} is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.</Notice>}
-    {onshape && confirmPublicDocument && <div className="cad-direction-alert" role="alert"><div><b>This document will be public</b><span>{confirmPublicDocument}</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmPublicDocument(null)}>Cancel</button><button className="primary" disabled={sendingToOnshape || Boolean(cadLimitation)} title={cadLimitation} onClick={() => void sendToOnshape(true)}>Continue: create a public document</button></div></div>}
-    {onshape && confirmUnlink && linkedDocument && <div className="cad-direction-alert" role="alert"><div><b>Unlink {linkedDocument.documentName}?</b><span>WG forgets this link. The Onshape document is left exactly as it is, and the next send creates a new document.</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmUnlink(false)}>Cancel</button><button className="primary" disabled={unlinkingOnshape} onClick={() => void unlinkFromOnshape()}>Unlink {linkedDocument.documentName}</button></div></div>}
+    {onshape && confirmPublicDocument && <Notice tone="warning" role="alert" title={<>This document will be public</>} actions={<div className="cad-confirm-actions"><button className="btn" onClick={() => setConfirmPublicDocument(null)}>Cancel</button><button className="btn-primary primary" disabled={sendingToOnshape || Boolean(cadLimitation)} title={cadLimitation} onClick={() => void sendToOnshape(true)}>Continue: create a public document</button></div>}><span>{confirmPublicDocument}</span></Notice>}
+    {onshape && confirmUnlink && linkedDocument && <Notice tone="warning" role="alert" title={<>Unlink {linkedDocument.documentName}?</>} actions={<div className="cad-confirm-actions"><button className="btn" onClick={() => setConfirmUnlink(false)}>Cancel</button><button className="btn-primary primary" disabled={unlinkingOnshape} onClick={() => void unlinkFromOnshape()}>Unlink {linkedDocument.documentName}</button></div>}><span>WG forgets this link. The Onshape document is left exactly as it is, and the next send creates a new document.</span></Notice>}
     {!onshape && (fusionAddinNeedsInstall(fusionStatus) || installingAddin || addinNotice) && <div className="cad-link-actions cad-addin-install">
-      <button className="link-button" disabled={installingAddin} onClick={() => void installAddin()}
+      <button className="btn-link link-button" disabled={installingAddin} onClick={() => void installAddin()}
         title="Install or repair the Waveguide Generator add-in in Fusion. WG keeps it up to date after you choose this.">
         {installingAddin ? 'Installing…' : 'Install add-in'}
       </button>
@@ -503,7 +503,7 @@ export function CadLinkPanel() {
         <p className="cad-detail">{errorDiagnostics.detail}</p>
       </DeveloperDetails>}
     </Notice>}
-    {status && <div className="cad-status-strip" role="status">{status}</div>}
+    {status && <Notice tone="info" className="cad-status-strip" role="status">{status}</Notice>}
 
     {/* 1 · Project: what am I working on? */}
     <CadProjectHeader/>
@@ -518,7 +518,7 @@ export function CadLinkPanel() {
         <span className="cad-card-label">Model</span>
         <span className="spacer"/>
         <button
-          className="cad-icon-button"
+          className="icon-button cad-icon-button"
           disabled={loading || ingesting}
           title="Refresh the CAD model list"
           aria-label="Refresh CAD models"

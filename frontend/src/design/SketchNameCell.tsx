@@ -6,7 +6,7 @@ export function SketchNameCell({ value, label, id, maxLength, disabled, onCommit
 }) {
   const [draft, setDraft] = useState<string>();
   const cancel = useRef(false);
-  if (draft === undefined) return <button type="button" title={`${id} · Double-click or F2 to rename`} aria-label={`${label}: ${value} (${id})`} disabled={disabled}
+  if (draft === undefined) return <button className="btn" type="button" title={`${id} · Double-click or F2 to rename`} aria-label={`${label}: ${value} (${id})`} disabled={disabled}
     onDoubleClick={() => setDraft(value)} onKeyDown={event => {
       if (event.key === 'F2') { event.preventDefault(); event.stopPropagation(); setDraft(value); }
     }}>{value}</button>;

@@ -1,3 +1,4 @@
+import { Notice } from './Notice';
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getUpdateChannel, getUpdateDiagnostics, getUpdateStatus, installApplicationUpdate, setUpdateChannel,
@@ -249,32 +250,32 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
               className={choice === next ? 'on' : ''} disabled={choice === undefined || busy || installing || mismatch}
               onClick={() => choose(next)}>{next === 'stable' ? 'Stable' : 'Beta'}</button>)}</div>
           <p>{choice === 'beta' ? 'Includes pre-release builds. Returning to Stable waits for a newer stable version.' : 'Finished releases only.'}</p></section>
-        {channelPending && <p role="status" className="update-note">Check the selected channel before installing.</p>}
-        {presentation.detail && <p role={presentation.stale ? 'status' : 'alert'} className="update-note error">{presentation.detail}</p>}
-        {data?.checkout.reason && <p className="update-note">{data.checkout.reason}</p>}
-        {outcome && <p role={outcome.result === 'installed' ? 'status' : 'alert'} className="update-note">
+        {channelPending && <Notice tone="info" role="status">Check the selected channel before installing.</Notice>}
+        {presentation.detail && <Notice tone="error" role={presentation.stale ? 'status' : 'alert'}>{presentation.detail}</Notice>}
+        {data?.checkout.reason && <Notice tone="info">{data.checkout.reason}</Notice>}
+        {outcome && <Notice tone={outcome.result === 'installed' ? 'info' : 'error'} role={outcome.result === 'installed' ? 'status' : 'alert'}>
           {outcome.result === 'installed' ? `Updated to v${outcome.to}.` : outcome.result === 'rollback_incomplete'
             ? 'The update failed and recovery is incomplete. Review the installation log before changing the installation.'
             : outcome.previousKept === true ? 'Update failed. The previous version was kept.' : 'Update failed. Review the installation log.'}
           {outcome.backupPath && <> Recovery location: <code>{outcome.backupPath}</code>.</>}
-          {outcome.result !== 'installed' && <> Log: <code>{outcome.log}</code>.</>}</p>}
-        {confirmRestart && <p role="alert" className="update-note warn">{activeJobs} active solve{activeJobs === 1 ? '' : 's'} will be stopped when WG restarts.</p>}
-        {installable && <p className="update-note">WG verifies the download, closes, installs the update, and restarts. Your saved data stays in place.</p>}
+          {outcome.result !== 'installed' && <> Log: <code>{outcome.log}</code>.</>}</Notice>}
+        {confirmRestart && <Notice tone="warning" role="alert">{activeJobs} active solve{activeJobs === 1 ? '' : 's'} will be stopped when WG restarts.</Notice>}
+        {installable && <Notice tone="info" >WG verifies the download, closes, installs the update, and restarts. Your saved data stays in place.</Notice>}
         {(active(state) || state === 'ready') && <div role="status" className="update-install">
           <p>{state === 'verifying' ? 'Verifying the download…' : state === 'ready' ? 'Restarting WG to install the update…'
             : `${megabytes(downloaded)} of ${megabytes(total)}`}</p>
           {state === 'downloading' && <progress aria-label="Update download" value={downloaded} max={total || 1}/>}</div>}
-        {error && <p role="alert" className="update-note error">{error}</p>}
-        {state === 'failed' && <p className="update-note">{mismatch ? 'Reload WG before trying the update again.'
+        {error && <Notice tone="error" role="alert">{error}</Notice>}
+        {state === 'failed' && <Notice tone="info" >{mismatch ? 'Reload WG before trying the update again.'
           : installable ? 'Choose Install and restart to download and verify the installer again.'
-            : 'Check again for an installable update before trying the download again.'}</p>}
-        {feedback && <p role="status" className="update-note">{feedback}</p>}
+            : 'Check again for an installable update before trying the download again.'}</Notice>}
+        {feedback && <Notice tone="info" role="status">{feedback}</Notice>}
         {data?.release?.notes && <section className="update-release-notes"><h3>Release notes</h3><p style={{ whiteSpace: 'pre-wrap' }}>{data.release.notes}</p></section>}
         {data?.release && <a href={data.release.url} target="_blank" rel="noreferrer">View release</a>}
       </div>
-      <footer>{mismatch ? <button data-autofocus onClick={() => window.location.reload()}>Reload WG</button>
-        : installable ? <button data-autofocus disabled={busy || installing} onClick={install}>{busy ? 'Starting…' : actionLabel}</button>
-          : <button data-autofocus disabled={busy || installing || data?.checking} onClick={() => void perform(async () => {
+      <footer>{mismatch ? <button className="btn-primary" data-autofocus onClick={() => window.location.reload()}>Reload WG</button>
+        : installable ? <button className="btn-primary" data-autofocus disabled={busy || installing} onClick={install}>{busy ? 'Starting…' : actionLabel}</button>
+          : <button className="btn-primary" data-autofocus disabled={busy || installing || data?.checking} onClick={() => void perform(async () => {
             const operation = generation.current;
             const refreshed = await onRefresh();
             if (operation === generation.current) {
@@ -283,8 +284,8 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
             }
           })}>
             {busy || data?.checking ? 'Checking…' : 'Check again'}</button>}
-        <button disabled={copying} onClick={copyDiagnostics}>{copying ? 'Copying…' : 'Copy update diagnostics'}</button>
-        <button onClick={close}>Close</button></footer>
+        <button className="btn" disabled={copying} onClick={copyDiagnostics}>{copying ? 'Copying…' : 'Copy update diagnostics'}</button>
+        <button className="btn" onClick={close}>Close</button></footer>
     </div>
   </div>;
 }

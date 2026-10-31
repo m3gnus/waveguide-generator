@@ -1830,7 +1830,7 @@ describe('CadLinkPanel', () => {
       await Promise.resolve(); await Promise.resolve();
     });
     expect(allowPublic).toBe(false);
-    const confirm = host.querySelector<HTMLElement>('.cad-direction-alert')!;
+    const confirm = host.querySelector<HTMLElement>('.notice-warning[role="alert"]')!;
     expect(confirm.textContent).toContain('This document will be public');
     // Nothing is created until the user actually confirms.
     expect(host.querySelector('.cad-status-strip')).toBeNull();
@@ -1936,7 +1936,7 @@ describe('CadLinkPanel', () => {
       .find((button) => button.textContent === 'Unlink')!;
     expect(unlink.title).toContain('left as it is');
     // Two steps, like creating a public document: the first only asks.
-    const question = () => [...host.querySelectorAll<HTMLElement>('.cad-direction-alert[role="alert"]')]
+    const question = () => [...host.querySelectorAll<HTMLElement>('.notice-warning[role="alert"]')]
       .find((alert) => alert.textContent?.includes('Unlink Tritonia?'));
     await act(async () => { unlink.click(); });
     expect(question()).toBeDefined();

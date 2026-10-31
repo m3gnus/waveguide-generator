@@ -20,9 +20,9 @@ export function SharedDesignIdDialog({ question }: { question: SharedDesignQuest
         <p>This looks like a copy of {question.name}. Keep it with the original's runs, or start it as a new design?</p>
       </div>
       <footer>
-        <button onClick={() => question.settle(null)}>Cancel</button>
-        <button onClick={() => question.settle('keep')}>Keep with original</button>
-        <button onClick={() => question.settle('new')}>New design</button>
+        <button className="btn" onClick={() => question.settle(null)}>Cancel</button>
+        <button className="btn" onClick={() => question.settle('keep')}>Keep with original</button>
+        <button className="btn" onClick={() => question.settle('new')}>New design</button>
       </footer>
     </div>
   </div>, document.body);

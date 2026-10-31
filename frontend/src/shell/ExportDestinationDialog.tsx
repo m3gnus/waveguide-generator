@@ -1,3 +1,4 @@
+import { Notice } from './Notice';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   chooseExportDestination,
@@ -182,8 +183,8 @@ export function ExportDestinationDialog() {
 
         <footer>
           <span className="spacer"/>
-          <button onClick={() => answerReplace(false)}>Cancel</button>
-          <button className="primary" data-autofocus onClick={() => answerReplace(true)}>Replace</button>
+          <button className="btn" onClick={() => answerReplace(false)}>Cancel</button>
+          <button className="btn-primary primary" data-autofocus onClick={() => answerReplace(true)}>Replace</button>
         </footer>
       </div>
     </div>;
@@ -243,7 +244,7 @@ export function ExportDestinationDialog() {
           ? 'Where your last export went.'
           : 'The Runs folder, until an export goes somewhere else.'}</p>
         <div className="settings-theme-options">
-          <button disabled={busy} onClick={() => void choose()}><Icon name="folder"/>Choose folder…</button>
+          <button className="btn" disabled={busy} onClick={() => void choose()}><Icon name="folder"/>Choose folder…</button>
         </div>
         <details className="cad-folder-manual">
           <summary>Enter a folder path instead</summary>
@@ -253,19 +254,19 @@ export function ExportDestinationDialog() {
             onChange={(event) => setTypedPath(event.target.value)}
             placeholder="/path/to/folder"
           /></label>
-          <button
+          <button className="btn"
             disabled={!typedPath.trim() || busy}
             onClick={() => void choose(typedPath.trim())}
           >Use this path</button>
         </details>
-        {error && <p className="workspace-settings-error" role="status">{error}</p>}
+        {error && <Notice tone="error" role="status">{error}</Notice>}
       </div>
 
       <footer>
         <span className="spacer"/>
-        <button onClick={cancel}>Cancel</button>
+        <button className="btn" onClick={cancel}>Cancel</button>
         <button
-          className="primary"
+          className="btn-primary primary"
           data-autofocus
           disabled={busy || !destination?.token}
           onClick={confirm}

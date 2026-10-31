@@ -80,7 +80,7 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
         {!editable && <p className="section-note">Import the original mesh to change its settings.</p>}
         <div className="cad-domain">
           <p className="cad-domain-line"><b>Symmetry</b> <span>{fileSymmetryLabel(effectivePlanes)}{negativePlanes.length > 0
-            ? mirrored ? ' · mirrored from the negative side' : ' · kept on the negative side' : ''}</span> <button className="link-button" disabled={!editable}
+            ? mirrored ? ' · mirrored from the negative side' : ' · kept on the negative side' : ''}</span> <button className="btn-link link-button" disabled={!editable}
               aria-label="Change symmetry" aria-expanded={symmetryOpen} onClick={() => setSymmetryOpen(!symmetryOpen)}>Change</button></p>
           {symmetryOpen && <fieldset disabled={!editable}>
             <label className="field-row">Symmetry<select aria-label="Mesh symmetry" value={draft.autoCut ? 'auto' : planes.join(',')}
@@ -100,7 +100,7 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
           </fieldset>}
         </div>
         <div className="cad-domain">
-          <p className="cad-domain-line"><b>Size</b> <span>{draft.units ? `${size} mm · file in ${draft.units === 'm' ? 'metres' : draft.units === 'mm' ? 'millimetres' : draft.units === 'cm' ? 'centimetres' : 'inches'}` : "Choose the file's units."}</span> <button className="link-button" disabled={!editable}
+          <p className="cad-domain-line"><b>Size</b> <span>{draft.units ? `${size} mm · file in ${draft.units === 'm' ? 'metres' : draft.units === 'mm' ? 'millimetres' : draft.units === 'cm' ? 'centimetres' : 'inches'}` : "Choose the file's units."}</span> <button className="btn-link link-button" disabled={!editable}
             aria-label="Change size" aria-expanded={sizeOpen || !draft.units} onClick={() => setSizeOpen(!sizeOpen)}>Change</button></p>
           {(sizeOpen || !draft.units) && <label className="field-row">File units<select aria-label="Mesh units" aria-invalid={!draft.units || undefined} disabled={!editable} value={draft.units}
             onChange={e => void editMeshImport({ units: e.target.value })}>
@@ -108,7 +108,7 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
           </select></label>}
         </div>
         <FileModelDetails record={registered} summary={summary} setup={replay} axes={<>
-          <p className="cad-domain-line">Faces {draft.forward} · up {draft.up} <button className="link-button" disabled={!editable}
+          <p className="cad-domain-line">Faces {draft.forward} · up {draft.up} <button className="btn-link link-button" disabled={!editable}
             aria-label="Change axes" aria-expanded={axesOpen} onClick={() => setAxesOpen(!axesOpen)}>Change</button></p>
           {axesOpen && <fieldset disabled={!editable}>
             {(['forward', 'up'] as const).map(axis => <label className="field-row" key={axis}>{axis === 'forward' ? 'Forward axis' : 'Up axis'}
@@ -135,7 +135,7 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
     </fieldset>
     </>}
     {tab === 'simulation' && state.error && <p className="field-error" role="alert">{state.error}</p>}
-    {tab === 'geometry' && <button onClick={() => {
+    {tab === 'geometry' && <button className="btn" onClick={() => {
       noteExplicitNavigation(); restoreParametricWorkingDesign(); workspaceModeStore.setMode('parametric');
     }}>Back to parametric design</button>}
   </div></SolveOptionsStoreProvider>;

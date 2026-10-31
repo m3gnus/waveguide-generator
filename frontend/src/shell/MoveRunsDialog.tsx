@@ -1,3 +1,4 @@
+import { Notice } from './Notice';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { executeRunMove, previewRunMove, recoverRunMoves, runMoveStatus, undoRunMove, type MoveTarget, type RunMove } from '../api/runMoves';
@@ -13,7 +14,7 @@ export function MoveRunsButton({ target, children = 'Move earlier runs…', role
   target: MoveTarget; children?: React.ReactNode; role?: 'menuitem';
 }) {
   const [open, setOpen] = useState(false);
-  return <><button type="button" role={role} onClick={() => setOpen(true)}>{children}</button>
+  return <><button className="btn" type="button" role={role} onClick={() => setOpen(true)}>{children}</button>
     {open && <MoveRunsDialog target={target} onClose={() => setOpen(false)}/>}</>;
 }
 
@@ -62,12 +63,12 @@ export function MoveRunsDialog({ target, onClose }: { target: MoveTarget; onClos
   const operations = plan?.operations ?? [];
   return createPortal(<div className="modal-backdrop">
     <div ref={dialog} className="update-dialog export-dialog move-runs-dialog" role="dialog" aria-modal="true" aria-labelledby="move-runs-title" aria-busy={busy}>
-      <header><h2 id="move-runs-title">Move earlier runs…</h2><button aria-label="Close move tool" disabled={acting.current} onClick={close}>×</button></header>
+      <header><h2 id="move-runs-title">Move earlier runs…</h2><button className="icon-button" aria-label="Close move tool" disabled={acting.current} onClick={close}>×</button></header>
       <div className="update-dialog-body">
         <p>Bring earlier runs into {target.name}. Check the folders below, then confirm the move.</p>
         <p>On another drive, WG copies and verifies every file in the whole move before removing the originals. A failed verification keeps the originals and reports the problem.</p>
         {busy && <p role="status">{acting.current ? 'Moving files — keep WG open…' : 'Checking folders…'}</p>}
-        {error && <p role="alert">{error}</p>}
+        {error && <Notice tone="error" role="alert">{error}</Notice>}
         {!report && <>
           <label><input type="checkbox" checked={gather} disabled={busy} onChange={event => {
             setGather(event.target.checked); void refresh({ selected, gather: event.target.checked, rename });
@@ -95,21 +96,21 @@ export function MoveRunsDialog({ target, onClose }: { target: MoveTarget; onClos
         </>}
         {latest && <section aria-label="Move report">
           <h3>{latest.phase === 'done' ? (latest.leftovers?.length ? 'Move complete with leftovers' : 'Move complete') : latest.phase === 'undone' ? 'Move undone' : 'Move needs attention'}</h3>
-          {latest.error && <p role="alert">{latest.error}</p>}
+          {latest.error && <Notice tone="error" role="alert">{latest.error}</Notice>}
           {!!latest.leftovers?.length && <ul aria-label="Preserved leftovers">{latest.leftovers.map(item => <li key={item.path}>{item.path} · {item.reason}</li>)}</ul>}
           <ul>{latest.operations.map((op, index) => <li key={index}>{op.src} → {op.dst} · {latest.phase === 'undone' ? 'Restored' : op.state === 'removed' ? (op.kind === 'run' || op.kind === 'rename' ? 'Moved' : 'Gathered') : op.state === 'published' ? 'At destination; finishing move' : 'Not moved'}</li>)}</ul>
-          {latest.phase !== 'done' && latest.phase !== 'undone' && <button disabled={busy} onClick={() => void act(async () => {
+          {latest.phase !== 'done' && latest.phase !== 'undone' && <button className="btn" disabled={busy} onClick={() => void act(async () => {
             const recovered = await recoverRunMoves();
             const item = recovered.reports.find(item => item.id === latest.id);
             if (!item) throw new Error('No pending move found. Reopen the tool to refresh its status.');
             return item;
           })}>Retry recovery</button>}
-          {undoable && <button disabled={busy} onClick={() => void act(() => undoRunMove(latest.id))}>Undo this move</button>}
+          {undoable && <button className="btn" disabled={busy} onClick={() => void act(() => undoRunMove(latest.id))}>Undo this move</button>}
           {latest.operations.some(op => op.method === 'copy_verify_remove') && <p>{latest.phase === 'done' ? 'Moves from another drive cannot be undone here. Originals were removed after the whole move verified.' : 'No original is removed until every file in the whole move verifies. Close open files or reconnect the drive, then retry recovery.'}</p>}
         </section>}
       </div>
-      <footer><button disabled={acting.current} onClick={close}>{report ? 'Close' : 'Cancel'}</button>
-        {!report && <button className="primary" disabled={busy || !plan || operations.length === 0} onClick={() => {
+      <footer><button className="btn" disabled={acting.current} onClick={close}>{report ? 'Close' : 'Cancel'}</button>
+        {!report && <button className="btn-primary primary" disabled={busy || !plan || operations.length === 0} onClick={() => {
           if (plan && !busy) void act(() => executeRunMove(plan.id));
         }}>{(plan?.summary.runs ?? 0) > 0 ? `Move ${plan!.summary.runs} ${plan!.summary.runs === 1 ? 'run' : 'runs'}` : 'Apply folder changes'}</button>}
       </footer>
@@ -129,7 +130,7 @@ export function RunMoveRecoveryNotice() {
   if (!recovered.length) return null;
   return <><div role="status">{recovered.some(item => item.error)
     ? 'An earlier-runs move needs attention.' : `Recovered ${recovered.length} earlier-runs move(s).`}
-    {recovered.map(item => <button key={item.id} onClick={() => setReview(item)}>Review move into {item.target}</button>)}
-    <button aria-label="Dismiss move recovery notice" onClick={() => setRecovered([])}>×</button>
+    {recovered.map(item => <button className="btn" key={item.id} onClick={() => setReview(item)}>Review move into {item.target}</button>)}
+    <button className="btn" aria-label="Dismiss move recovery notice" onClick={() => setRecovered([])}>×</button>
   </div>{review && <MoveRunsDialog target={{ key: review.key, name: review.name }} onClose={() => setReview(null)}/>}</>;
 }

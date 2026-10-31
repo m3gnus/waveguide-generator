@@ -1,3 +1,4 @@
+import { Notice } from '../shell/Notice';
 /**
  * The front view's properties: add woofers on their anchors, and edit the
  * selected woofer's aperture, placement, spacing relation, drive and its
@@ -110,16 +111,16 @@ function AssemblyProperties({ assembly, session, resolved, select }: { assembly:
   };
   return <>
     <div className="button-row">
-      <button type="button" onClick={() => add('above')}>Add woofer above</button>
-      <button type="button" onClick={() => add('below')}>Add woofer below</button>
-      <button type="button" onClick={() => add('free')}>Add free woofer</button>
+      <button className="btn" type="button" onClick={() => add('above')}>Add woofer above</button>
+      <button className="btn" type="button" onClick={() => add('below')}>Add woofer below</button>
+      <button className="btn" type="button" onClick={() => add('free')}>Add free woofer</button>
     </div>
     <ul className="front-woofer-list">
       {(assembly.woofers ?? []).map(woofer => <li key={woofer.id}>
-        <button type="button" onClick={() => select([woofer.id])}>{woofer.label}{woofer.enabled === false ? ' (disabled)' : ''}</button>
+        <button className="btn" type="button" onClick={() => select([woofer.id])}>{woofer.label}{woofer.enabled === false ? ' (disabled)' : ''}</button>
       </li>)}
     </ul>
-    {resolved?.context.refusal && <p className="section-note" role="alert">{resolved.context.refusal}</p>}
+    {resolved?.context.refusal && <Notice tone="error"  role="alert">{resolved.context.refusal}</Notice>}
   </>;
 }
 

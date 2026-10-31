@@ -1,3 +1,4 @@
+import { Notice } from '../shell/Notice';
 import { useEffect, useId, useState, type RefObject } from 'react';
 import { nextRunLabel, type RunNameDateFormat, type RunNameDatePosition, type RunNameNumberFormat, type RunNameNumberPosition } from '../jobs/runNaming';
 import { useRunNameSource } from '../jobs/runNameSource';
@@ -112,7 +113,7 @@ function ResultsPreferencesContent({ showFolders = true }: { showFolders?: boole
       <p id={autoFormatsNoteId} className="preferences-section-copy">{preferences.autoExportOnComplete
         ? 'Used for automatic export.'
         : 'Auto-export is off, so these formats are not used. Turn on “Auto-export completed jobs” to choose them.'}{preferences.archiveRunsOnComplete ? ' Archived runs get their own set of files, independent of these choices.' : ' Run archiving is off.'}</p>
-      {preferences.autoExportOnComplete && !preferences.autoExportFormats.length && <p className="job-warning" role="alert">Choose at least one automatic format. Auto-export is enabled but will not write any files.</p>}
+      {preferences.autoExportOnComplete && !preferences.autoExportFormats.length && <Notice tone="error" role="alert">Choose at least one automatic format. Auto-export is enabled but will not write any files.</Notice>}
       {EXPORT_FORMATS.map(({ id, label }) => <label key={id} className="ui-check"><input type="checkbox" aria-label={`Automatic export: ${label}`} aria-describedby={autoFormatsNoteId} disabled={!preferences.autoExportOnComplete} checked={preferences.autoExportFormats.includes(id)} onChange={() => preferencesStore.toggleAutoExportFormat(id)}/>{label}</label>)}
     </fieldset>
   </section>;
@@ -120,7 +121,7 @@ function ResultsPreferencesContent({ showFolders = true }: { showFolders?: boole
 
 export function ResultsPreferencesSurface({ expanded = false, popover = false, onClose, anchorRef, showFolders = true }: PreferencesSurfaceProps & { showFolders?: boolean }) {
   if (popover) return <AnchoredPanel anchorRef={anchorRef ?? NO_ANCHOR} onClose={onClose} className="results-preferences-popover" label="Results and export preferences">
-    <header><b>Results & export preferences</b><button type="button" aria-label="Close results preferences" onClick={onClose}><Icon name="close"/></button></header>
+    <header><b>Results & export preferences</b><button className="icon-button" type="button" aria-label="Close results preferences" onClick={onClose}><Icon name="close"/></button></header>
     <div className="panel-preferences-scroll"><ResultsPreferencesContent showFolders={showFolders}/></div>
   </AnchoredPanel>;
   return <details open={expanded || undefined} className="preferences-surface">
@@ -155,7 +156,7 @@ function JobsPreferencesContent({ now = new Date() }: { now?: Date }) {
 
 export function JobsPreferencesSurface({ expanded = false, popover = false, onClose, anchorRef, now }: PreferencesSurfaceProps & { now?: Date }) {
   if (popover) return <AnchoredPanel anchorRef={anchorRef ?? NO_ANCHOR} onClose={onClose} className="jobs-preferences-popover" label="Job preferences">
-    <header><b>Job preferences</b><button type="button" aria-label="Close job preferences" onClick={onClose}><Icon name="close"/></button></header>
+    <header><b>Job preferences</b><button className="icon-button" type="button" aria-label="Close job preferences" onClick={onClose}><Icon name="close"/></button></header>
     <div className="panel-preferences-scroll"><JobsPreferencesContent now={now}/></div>
   </AnchoredPanel>;
   return <details open={expanded || undefined} className="preferences-surface">

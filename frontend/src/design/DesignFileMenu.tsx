@@ -593,7 +593,7 @@ export function DesignFileMenu() {
     </div>}
     {(message || adoptionCandidate) && <div role="status" className="design-menu-status" onClick={() => { setMessage(null); setAdoptionCandidate(null); }}>
       {message}
-      {adoptionCandidate && <button
+      {adoptionCandidate && <button className="btn"
         type="button"
         onClick={(event) => { event.stopPropagation(); adoptCandidate(); }}
         style={{ marginLeft: 10, padding: '3px 6px', border: '1px solid var(--hair)', borderRadius: 4, background: 'var(--ctl-grad)' }}

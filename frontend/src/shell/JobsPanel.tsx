@@ -86,7 +86,7 @@ export const canLoadDesign = canLoadJobDesign;
 function Rating({ job, onError }: { job: JobItem; onError: (message: string) => void }) {
   const rating = job.rating ?? 0;
   return <div className="score" aria-label={`Rating ${rating} of 5`}>
-    <span>{[1, 2, 3, 4, 5].map((star) => <button
+    <span>{[1, 2, 3, 4, 5].map((star) => <button className="btn-link"
       key={star}
       aria-label={`Rate ${star} stars`}
       title={`Rate ${star} stars`}
@@ -306,12 +306,12 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
       {/* The mesh diagnoses that used to end the solve. The run finished, so
           these are advice about why it was slow or what it approximated --
           neither an error nor, as they were until now, silence. */}
-      {meshWarnings(job).map((warning) => <div key={warning} className="job-warning" title={warning}>{warning}</div>)}
-      {Object.values(job.auto_export_formats).some((format) => format.status === 'blocked') && <div className="job-warning" role="status">
+      {meshWarnings(job).map((warning) => <Notice tone="warning" key={warning}>{warning}</Notice>)}
+      {Object.values(job.auto_export_formats).some((format) => format.status === 'blocked') && <Notice tone="warning" role="status" actions={<><button type="button" className="btn" onClick={() => { void retryBlockedExport(job.id).catch((error) => onError(error instanceof Error ? error.message : String(error))); }}>Retry automatic export</button></>}>
         Automatic export blocked: {[...new Set(Object.values(job.auto_export_formats).filter((format) => format.status === 'blocked').map((format) => format.reason))].join(' ')}
         <p>Choose another WG folder or resolve the existing files, then retry. Retry preserves existing files and does not overwrite them.</p>
-        <button type="button" className="btn" onClick={() => { void retryBlockedExport(job.id).catch((error) => onError(error instanceof Error ? error.message : String(error))); }}>Retry automatic export</button>
-      </div>}
+
+      </Notice>}
       <Rating job={job} onError={onError}/>
       {/* Selecting the run already loaded its design and results, so the only
           action left is running it again -- unless this job came from v1

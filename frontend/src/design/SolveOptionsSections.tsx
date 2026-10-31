@@ -209,7 +209,7 @@ export function MeshValidationControl({ mode = 'parametric' }: { mode?: Workspac
   // policy is a developer control.
   if (mode === 'cad' && !developer) return store.meshValidationMode === 'warn' ? null : <p className="section-note" role="status">
     Mesh checks: {store.meshValidationMode === 'off' ? 'off' : 'strict'}.{' '}
-    <button type="button" onClick={() => store.setMeshValidationMode('warn')}>Use recommended mesh checks</button>
+    <button className="btn" type="button" onClick={() => store.setMeshValidationMode('warn')}>Use recommended mesh checks</button>
   </p>;
   return <>
     <SelectRow revealId="mesh-validation-mode" text="What happens when the solver mesh fails its topology check. Warn solves anyway and reports the problem; Strict refuses to solve a mesh that is not watertight; Off hides the warning entirely. Results from an invalid mesh cannot be trusted, so leave this on Warn unless you know why."><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></SelectRow>
@@ -290,8 +290,8 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
         ? <p className="cad-solve-fact"><b>Prepared domain</b><span>{fileRecord ? fileSymmetryLabel(fileRecord.symmetry?.domain_planes ?? [], false) : 'Waiting for preparation'}</span></p>
         : <p className="cad-solve-fact"><b>Prepared cut planes</b><span>{ingestRecord?.symmetry.cut_planes?.length ? ingestRecord.symmetry.cut_planes.join(', ') : 'none · full domain'}</span></p>)}
     </>}
-    {error ? <span className="section-note" role="status">Capability refresh failed. Check the backend connection. <button type="button" onClick={refreshCapabilities}>Refresh</button></span> : qualificationRefreshNeeded
-      ? <span className="section-note" role="status">BEMPP · <button type="button" onClick={refreshCapabilities}>Refresh</button></span>
+    {error ? <span className="section-note" role="status">Capability refresh failed. Check the backend connection. <button className="btn" type="button" onClick={refreshCapabilities}>Refresh</button></span> : qualificationRefreshNeeded
+      ? <span className="section-note" role="status">BEMPP · <button className="btn" type="button" onClick={refreshCapabilities}>Refresh</button></span>
       : engines.some((engine) => engine.name === 'bempp' && engine.qualification === 'pending')
       && <span className="section-note" role="status">BEMPP · checking OpenCL…</span>}
     {showOpenclGuidance && <OpenclUnavailableHook platform={hostPlatform}

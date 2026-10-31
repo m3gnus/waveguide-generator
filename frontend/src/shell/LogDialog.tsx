@@ -1,3 +1,4 @@
+import { Notice } from './Notice';
 import { deadlineFetch } from '../api/deadlineFetch';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -134,13 +135,13 @@ export function LogDialog({ jobId, onClose }: { jobId: string; onClose: () => vo
       <header><div><h2 id="job-log-title">Job log</h2><p>Preview of this run's output, up to 1.0 MB.</p></div><button className="dialog-close" aria-label="Close job log" onClick={close}><Icon name="close"/></button></header>
       <div className="settings-scroll log-dialog-body">
         <div className="log-dialog-actions">
-          <button disabled={loading} onClick={() => void refresh()}>Refresh</button>
-          <button disabled={loading || !contents} onClick={() => void copy()}>Copy preview</button>
+          <button className="btn" disabled={loading} onClick={() => void refresh()}>Refresh</button>
+          <button className="btn" disabled={loading || !contents} onClick={() => void copy()}>Copy preview</button>
           <a href={logUrl} download>Download complete log</a>
           {copyStatus && <span role="status">{copyStatus}</span>}
         </div>
         <div className="log-dialog-messages">
-          {error && <p className="workspace-settings-error" role="alert">{error}</p>}
+          {error && <Notice tone="error" role="alert">{error}</Notice>}
           {truncated && <p className="log-dialog-limit" role="status">Showing the first 1.0 MB only. Download the complete log to view the rest.</p>}
         </div>
         <pre className="job-log-content" role="region" aria-label="Job log preview" aria-busy={loading} tabIndex={0}>{visibleContents}</pre>

@@ -1,3 +1,4 @@
+import { Notice } from './Notice';
 import { useEffect, useRef, useState } from 'react';
 import { getFolderRoot, openFolderRoot, selectFolderRoot, useRootFolder, type FolderRoot } from '../api/folders';
 import { openCadWorkspace } from '../api/cadWorkspace';
@@ -59,22 +60,22 @@ export function RootFolderControls({ cadlinkOnly = false, showPath = true }: { c
         {!cadlinkOnly && <dt>{name === 'cadlink' ? 'WGLink folder' : 'Runs folder'}</dt>}
         {(!cadlinkOnly || folder.overrides?.[name]) && <dd>
           {folder.overrides?.[name] ? <><small>Separate folder from an earlier setup: {folder[name]}</small>{' '}
-            <button disabled={busy || folder.readOnly} onClick={() => void run(name)}>Use the WG folder instead</button></> : folder[name]}
+            <button className="btn" disabled={busy || folder.readOnly} onClick={() => void run(name)}>Use the WG folder instead</button></> : folder[name]}
         </dd>}
       </div>)}
     </dl>}
     {folder?.rootNote && <p role="status">{folder.rootNote}</p>}
     {folder?.notice && <p role="status">{folder.notice}</p>}
     <div className="settings-theme-options">
-      {missing && !folder?.overrides?.cadlink && <button disabled={busy || folder?.readOnly} onClick={() => void run('cadlink')}>Create it</button>}
-      <button disabled={busy || (cadlinkOnly ? !folder?.cadlink || missing : !folder?.path)} onClick={() => void run('open')}>{cadlinkOnly ? 'Open WGLink folder' : 'Open WG folder'}</button>
-      <button disabled={busy || folder?.readOnly} onClick={() => void run('select')}>Choose WG folder…</button>
+      {missing && !folder?.overrides?.cadlink && <button className="btn" disabled={busy || folder?.readOnly} onClick={() => void run('cadlink')}>Create it</button>}
+      <button className="btn" disabled={busy || (cadlinkOnly ? !folder?.cadlink || missing : !folder?.path)} onClick={() => void run('open')}>{cadlinkOnly ? 'Open WGLink folder' : 'Open WG folder'}</button>
+      <button className="btn" disabled={busy || folder?.readOnly} onClick={() => void run('select')}>Choose WG folder…</button>
     </div>
     <details className="cad-folder-manual">
       <summary>Enter a folder path instead</summary>
       <label>WG folder path<input value={typed} onChange={event => setTyped(event.target.value)}/></label>
       <button disabled={busy || !typed.trim() || folder?.readOnly} onClick={() => void run('select', typed.trim())}>Use this path</button>
     </details>
-    {error && <p role="status" className="workspace-settings-error">{error}</p>}
+    {error && <Notice tone="error" role="status">{error}</Notice>}
   </div>;
 }

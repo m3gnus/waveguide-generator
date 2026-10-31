@@ -1,3 +1,4 @@
+import { Notice } from './Notice';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { dismissCadJob, isCadChoiceJob, latestCadJobs, useCadJobs } from '../jobs/cadSolve';
@@ -184,15 +185,15 @@ export function HeldCadRequestDialog() {
       </div></header>
       <div className="update-dialog-body">
         <p>{changingNow ? ceilingQuestion!.changeInFusion : ceilingQuestion ? ceilingQuestion.body : nextStep}</p>
-        {error?.id === id && <p role="alert">{error.message}</p>}
+        {error?.id === id && <Notice tone="error" role="alert">{error.message}</Notice>}
       </div>
       {changingNow ? <footer>
-        <button disabled={busy !== null} onClick={() => setChanging(null)}>Back</button>
-        <button className="primary" disabled={busy !== null} onClick={() => void choose('change_in_fusion')}>OK</button>
+        <button className="btn" disabled={busy !== null} onClick={() => setChanging(null)}>Back</button>
+        <button className="btn-primary primary" disabled={busy !== null} onClick={() => void choose('change_in_fusion')}>OK</button>
       </footer> : <footer>
-        <button disabled={busy !== null} onClick={close}>Later</button>
+        <button className="btn" disabled={busy !== null} onClick={close}>Later</button>
         {options.map(option => <button key={option.id} disabled={busy !== null}
-          className={option.id === 'solve_anyway' ? 'primary' : undefined}
+          className={option.id === 'solve_anyway' ? 'btn-primary primary' : 'btn'}
           onClick={() => option.id === 'change_in_fusion' ? setChanging(id) : void choose(option.id)}>{option.label}</button>)}
       </footer>}
     </div>

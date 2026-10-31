@@ -8,16 +8,11 @@
    and everything below the answer folds away until asked for. */
 .cad-workflow { margin-bottom: 8px; padding: 8px; border: 1px solid var(--hair); background: var(--surface-panel); }
 .cad-card-label { color: var(--fg3); font-size: var(--text-micro); letter-spacing: .08em; text-transform: uppercase; }
-.cad-icon-button { display: inline-flex; align-items: center; padding: 2px 5px; border: 1px solid transparent; background: transparent; color: var(--fg3); }
-.cad-icon-button:hover { border-color: var(--border-control); background: var(--ov1); color: var(--fg1); }
+.cad-icon-button { display: inline-flex; align-items: center; width: auto; height: auto; padding: 2px 5px; }
 .cad-icon-button svg { width: 13px; height: 13px; }
 .spacer { flex: 1; }
 
-.cad-direction-alert { display: grid; gap: 8px; margin-top: 8px; padding: 8px; border-left: 3px solid var(--amber); background: color-mix(in srgb, var(--amber) 8%, transparent); }
-.cad-direction-alert div { display: grid; min-width: 0; }
-.cad-direction-alert span { color: var(--fg3); font-size: var(--text-base); overflow-wrap: anywhere; }
-.cad-direction-alert button, .cad-secondary-action { justify-content: center; width: 100%; }
-.cad-confirm-actions { display: grid; grid-template-columns: 1fr 1.7fr; gap: 6px; margin-top: 8px; }
+.cad-confirm-actions { width: 100%; display: grid; grid-template-columns: 1fr 1.7fr; gap: 6px; margin-top: 8px; }
 .cad-solver-frame { display: grid; gap: 6px; margin-top: 6px; }
 .cad-solver-frame fieldset { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 0; padding: 4px 6px; border: 1px solid var(--border-default); }
 .cad-solver-frame fieldset label { display: inline-flex; align-items: center; gap: 3px; font-family: var(--font-mono); }
@@ -25,11 +20,10 @@
 .cad-frame-view { margin: 0; display: grid; gap: 2px; }
 .cad-frame-view canvas { max-width: 100%; height: auto; border: 1px solid var(--border-subtle); }
 .cad-frame-view figcaption { color: var(--fg3); font-size: var(--text-micro); }
-.cad-direction-alert span.cad-solver-frame-error { color: var(--red); }
-.cad-secondary-action { margin-top: 8px; }
+.cad-secondary-action { justify-content: center; width: 100%; margin-top: 8px; }
 
 /* One notice channel at the top of the rail. */
-.cad-status-strip { margin: 7px 0; padding: 6px 7px; border: 1px solid var(--hair); overflow-wrap: anywhere; background: var(--ov1); color: var(--fg2); }
+
 /* The evidence behind a refusal, one chevron away from its sentence. */
 .cad-alert-diagnostics { margin-top: 5px; }
 .cad-alert-diagnostics > summary { cursor: pointer; color: var(--fg3); font-size: var(--text-micro); }
@@ -195,6 +189,7 @@ details.cad-check[open] > summary .cad-check-chevron { transform: rotate(90deg);
 .cad-settings-capture small { color: var(--fg3); font-size: var(--text-micro); }
 
 /* CAD operations: solves Fusion sent, which the backend prepares. */
+.cad-operation .notice-detail { display: grid; min-width: 0; }
 .cad-operation .cad-confirm-actions { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
 .cad-operation-findings { margin: 0; padding-left: 16px; color: var(--fg3); font-size: var(--text-base); }
 /* Every step still between a waiting solve and its job; the current one leads. */
@@ -216,7 +211,7 @@ details.cad-check[open] > summary .cad-check-chevron { transform: rotate(90deg);
 .cad-domain-line { margin: 0; }
 .cad-domain-choices { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; margin: 2px 0 0 12px; }
 .cad-domain-choices button[aria-pressed="true"] { font-weight: 600; }
-.cad-domain-error { margin: 2px 0 0; color: var(--red); }
+
 .cad-domain-refused { color: var(--red); }
 .cad-domain-refusal { margin: 2px 0 0; }
 .cad-domain-failed { margin: 2px 0 0 12px; padding-left: 12px; }

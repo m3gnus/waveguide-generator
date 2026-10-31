@@ -1,3 +1,4 @@
+import { Notice } from '../shell/Notice';
 import { importedDriverLabel, useImportedSimulationSetup } from '../stores/importedSimulationSetup';
 import { sourceRoleLabel } from '../model/cadLabels';
 import { useDeveloperDetails } from '../prefs/preferences';
@@ -539,7 +540,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
   if (field.id === 'freeform.length' && design.formula === 'FREEFORM') return <CustomProfileLengthField field={field} serverError={serverError} />;
   if (field.disabledReason && !field.path) {
     return <div className="schema-gap" title={field.disabledReason}>
-      <span>{field.label}</span><button disabled>{field.kind === 'toggle' ? 'Off' : 'Unavailable'}</button><small>{field.disabledReason}</small>
+      <span>{field.label}</span><button className="btn" disabled>{field.kind === 'toggle' ? 'Off' : 'Unavailable'}</button><small>{field.disabledReason}</small>
     </div>;
   }
   if (field.kind === 'select' || field.kind === 'toggle') {
@@ -879,7 +880,7 @@ export function RealizedDimensionsSection({ snapshot, driftedParameters = [], fo
   >
     {!snapshot && <div className="realized-dimensions-empty" role="status"><b>Checking linked export…</b><span>WG is resolving the active Fusion instance and its published parameter table.</span></div>}
     {empty && <div className="realized-dimensions-empty" role="status"><b>{empty.title}</b><span>{empty.detail}</span></div>}
-    {valuesAvailable && snapshot.state === 'stale' && <div className="realized-dimensions-warning" role="status"><b>From an older CAD export</b><span>These values were published before the design now on screen changed. They are historical, not current dimensions.</span></div>}
+    {valuesAvailable && snapshot.state === 'stale' && <Notice tone="warning" role="status" title={<>From an older CAD export</>}><span>These values were published before the design now on screen changed. They are historical, not current dimensions.</span></Notice>}
     {valuesAvailable && <>
       <p className="realized-dimensions-intro">These read-only facts are the values WG published to CAD and the cabinet references. Change the formula parameters above, then rebuild in Fusion, to produce new values.</p>
       {developer && <small className="realized-dimensions-meta">Instance <code>{snapshot.instanceId ?? 'unknown'}</code> · export <code>{snapshot.exportId ?? 'unknown'}</code></small>}
@@ -1134,7 +1135,7 @@ function CadMeshDetail() {
   const { editable, driftSourceIds: driftSources, hasFem, sources, available } = cadMeshDetailContent(state);
   if (!available && !error && !cadWorkspaceView.status) return null;
   return <div className="cad-mesh-controls" data-control-reveal-id={CAD_CONTROLS.meshDetail.reveal.id} tabIndex={-1}>
-    {editable && <div className="cad-mesh-intro"><p>Smaller values are finer. Curved CAD faces receive bounded extra refinement automatically.</p><button className="primary" disabled={cadWorkspaceView.ingesting || !state.selectedBundle?.readable} onClick={() => void cadWorkspaceView.ingest()}>{cadWorkspaceView.ingesting ? 'Preparing…' : 'Rebuild mesh'}</button></div>}
+    {editable && <div className="cad-mesh-intro"><p>Smaller values are finer. Curved CAD faces receive bounded extra refinement automatically.</p><button className="btn-primary primary" disabled={cadWorkspaceView.ingesting || !state.selectedBundle?.readable} onClick={() => void cadWorkspaceView.ingest()}>{cadWorkspaceView.ingesting ? 'Preparing…' : 'Rebuild mesh'}</button></div>}
     {editable && <>
       <ToggleRow id="cad-force-full-domain" label="Force full domain" help="Disable automatic x=0/y=0 cutting for this preparation. Use this when a symmetry verdict is doubtful; it costs more memory and solve time but cannot remove a geometric half. WG cannot use a model already cut in CAD with this setting: the other half is not in the file." checked={state.symmetryMode === 'full'} onChange={(enabled) => {
         state.setSymmetryMode(enabled ? 'full' : 'auto');
@@ -1289,7 +1290,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
 
   const renderField = (field: ParameterDefinition) => <div className="parameter-entry" data-parameter-id={field.id} data-parameter-key={field.legacyKey} tabIndex={field.kind === 'indicator' ? -1 : undefined} key={field.id}>
     <FieldControl field={field} design={design} serverError={previewErrorForParameter(field, currentPreviewFields)} />
-    {freeformAngleOverride(field, design) && <p className="section-note warning">{freeformAngleOverride(field, design)}</p>}
+    {freeformAngleOverride(field, design) && <p className="field-warning">{freeformAngleOverride(field, design)}</p>}
     {field.kind !== 'number' && previewErrorForParameter(field, currentPreviewFields) && <div className="field-error" role="alert">{previewErrorForParameter(field, currentPreviewFields)}</div>}
   </div>;
 
@@ -1390,12 +1391,10 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
     </SelectRow>
     {osseFeatures(design.formula) && <OsseFeatureChoices design={design} onChanged={() => setConversionNotice(OSSE_SWITCH_NOTICE)} />}
     {design.formula === 'LOOKUP' && <><ExperimentalBadge /><p className="section-note">A saved LOOKUP table: linear between its z, r samples, with its own morph, mouth, source-cap and sampling rules. It is not converted to a Custom profile.</p></>}
-    {conversionNotice && <div className="field-warning conversion-notice" role="status">
-      {conversionNotice} <button onClick={() => setConversionNotice(null)}>Dismiss</button>
-    </div>}
+    {conversionNotice && <Notice tone="warning" className="conversion-notice" actions={<button className="btn" onClick={() => setConversionNotice(null)}>Dismiss</button>}>{conversionNotice}</Notice>}
     {freeformChoice && <div className="family-switch-choice" role="group" aria-label="Start a Custom profile">
       <b>Start a Custom profile</b><span>It starts blank, with one anchor table shaping both planes. Converting the current design is not available yet: an equivalence check of the generated wall, mouth and source cap is still to come.</span>
-      <div><button onClick={() => { setFamily('FREEFORM'); rememberUnseparatedVertical(useDesignStore.getState().design); setConversionNotice(sectionResetNotice('FREEFORM')); setFreeformChoice(false); }}>Start blank</button><button onClick={() => setFreeformChoice(false)}>Cancel</button></div>
+      <div><button className="btn" onClick={() => { setFamily('FREEFORM'); rememberUnseparatedVertical(useDesignStore.getState().design); setConversionNotice(sectionResetNotice('FREEFORM')); setFreeformChoice(false); }}>Start blank</button><button className="btn" onClick={() => setFreeformChoice(false)}>Cancel</button></div>
     </div>}
   </Section>;
 
@@ -1414,7 +1413,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
       {(workspaceMode !== 'cad' || tab !== 'geometry' || waveguideLinked) && <div className="parameter-search">
         <label className="sr-only" htmlFor={`parameter-filter-${tab}`}>Filter {tab} parameters</label>
         <input id={`parameter-filter-${tab}`} type="search" value={query} placeholder="Filter labels or keys…" onChange={(event) => setQuery(event.target.value)} />
-        {query && <button aria-label="Clear parameter filter" onClick={() => setQuery('')}>×</button>}
+        {query && <button className="btn" aria-label="Clear parameter filter" onClick={() => setQuery('')}>×</button>}
         <button
           className={`parameter-help-toggle${helpVisible ? ' on' : ''}`}
           aria-label="Show section descriptions"

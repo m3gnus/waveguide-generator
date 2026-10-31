@@ -1,3 +1,4 @@
+import { Notice } from '../shell/Notice';
 import { useEffect, useId, useState } from 'react';
 import {
   driverXoMinNote,
@@ -353,7 +354,7 @@ export function CrossoverAdvanced({
           onChange={(event) => onChange(withReference(spec, event.target.value))}
         >{spec.members.map((member) => <option key={member} value={member}>{memberLabel(member)}</option>)}</select>
       </label>
-      <button
+      <button className="btn"
         type="button"
         title="Make every pair symmetric again, taking each crossover from the lower channel's low-pass"
         onClick={() => onChange(relinkPairs(spec))}
@@ -378,7 +379,7 @@ export function CrossoverAdvanced({
           section={channel.hp}
           onChange={(hp) => onChange(withChannel(spec, member, { hp }))}
         />
-        {hpXoNote && <p className="section-note warning" role="status">{hpXoNote}</p>}
+        {hpXoNote && <Notice tone="warning" role="status">{hpXoNote}</Notice>}
         <SectionEditor
           label="Low-pass"
           section={channel.lp}

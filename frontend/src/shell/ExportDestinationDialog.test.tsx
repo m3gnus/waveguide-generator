@@ -181,7 +181,7 @@ describe('the export destination dialog', () => {
 
     await act(async () => { button('Choose folder…').click(); });
 
-    expect(document.querySelector('.workspace-settings-error')?.textContent)
+    expect(document.querySelector('.notice-error')?.textContent)
       .toContain('not a directory');
     expect(document.querySelector('.export-dialog')).not.toBeNull();
   });

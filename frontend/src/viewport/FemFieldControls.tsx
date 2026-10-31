@@ -71,7 +71,7 @@ export function FemFieldControls({ field, rendering, setRendering, sequential, c
         {FIELD_PLANE_DISPLAY_MODES.map(({ value, label }) => <option key={value} value={value} disabled={quantity !== 'pressure' && value === 'spl'}>{label}</option>)}
         <option value="real">Real</option><option value="imaginary">Imaginary</option>
       </select></label>
-      <button type="button" aria-label={animating ? 'Pause FEM phase animation' : 'Play FEM phase animation'}
+      <button className="btn" type="button" aria-label={animating ? 'Pause FEM phase animation' : 'Play FEM phase animation'}
         aria-pressed={animating} onClick={() => { if (!animating) setDisplayMode('instantaneous'); useFieldPlaneStore.getState().setAnimating(!animating); }}>{animating ? 'Ⅱ' : '▶'}</button>
     </div>
     <div className="field-plane-mode-row"><label>Rendering<select aria-label="FEM field rendering" value={rendering} disabled={quantity !== 'pressure' || scope === 'exterior'}

@@ -131,8 +131,8 @@ describe('the needs_user_input ladder', () => {
       state: 'processing', stage: 'preparing-mesh', reason: null,
     }) } });
     await act(async () => root.render(<CadOperationsSection record={onScreen}/>));
-    expect(host.querySelector('.cad-operation b')?.textContent).toContain('Your solve is in progress');
-    expect(host.querySelector('.cad-operation b')?.textContent).not.toContain('waiting');
+    expect(host.querySelector('.cad-operation .notice-title')?.textContent).toContain('Your solve is in progress');
+    expect(host.querySelector('.cad-operation .notice-title')?.textContent).not.toContain('waiting');
     expect(host.querySelector('.cad-operation-in-flight')?.textContent).toContain('Preparing your solve');
   });
 
