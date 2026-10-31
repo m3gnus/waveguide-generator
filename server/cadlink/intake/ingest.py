@@ -33,7 +33,7 @@ from server.cadlink.limits import MAX_WGRETURN_JSON_BYTES
 from server.cadlink.store import CadLinkStore
 from server.cadlink.snapshot_mesh import SnapshotMesh, snapshot_mesh
 from server.design.textcfg import parse
-from server.exports.geometry_identity import geometry_hash_for_design
+from server.preview.geometry_identity import geometry_hash_for_design
 from server.mesh.imported import (
     ImportedMeshDependencyError,
     RoleResolutionError,
