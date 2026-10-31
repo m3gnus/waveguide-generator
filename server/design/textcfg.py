@@ -603,6 +603,18 @@ def _finite(raw: str, location: str) -> float:
     return value
 
 
+def _finite_expression(raw: str, location: str) -> float:
+    """Resolve a scalar for grammar checks without replacing its authored source."""
+
+    try:
+        value = Expr.model_validate(raw).constant_value()
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise TextConfigError(f"{location} must be a finite scalar expression") from exc
+    if value is None:
+        raise TextConfigError(f"{location} must be a finite scalar expression")
+    return value
+
+
 def _validate_block_items(block_name: str, block: _RawBlock, allowed: frozenset[str]) -> None:
     unknown = next((key for key in block.items if key not in allowed), None)
     if unknown is not None:
@@ -638,7 +650,7 @@ def _point(raw: str, block_name: str, row: int, length: float) -> dict[str, Any]
                 if name in {"hin", "hout"}:
                     value = _handle(raw_value, f"{block_name} row {row} {name}")
                 else:
-                    angle = _finite(raw_value, f"{block_name} row {row} {name}")
+                    angle = _finite_expression(raw_value, f"{block_name} row {row} {name}")
                     if not -90 < angle < 90:
                         raise TextConfigError(f"{block_name} row {row}: angle must be between -90 and 90")
                     value = raw_value
@@ -650,7 +662,10 @@ def _point(raw: str, block_name: str, row: int, length: float) -> dict[str, Any]
         return result
     if len(parts) not in (2, 3, 4):
         raise TextConfigError(f"{block_name} row {row}: expected 2, 3, or 4 numeric values")
-    values = [_finite(part, f"{block_name} row {row} column {index + 1}") for index, part in enumerate(parts)]
+    values = [
+        (_finite if index == 0 else _finite_expression)(part, f"{block_name} row {row} column {index + 1}")
+        for index, part in enumerate(parts)
+    ]
     if not 0 < values[0] < length:
         raise TextConfigError(f"{block_name} row {row}: z must be strictly between 0 and {length:g}")
     if values[1] <= 0:
@@ -672,8 +687,8 @@ def _freeform_payload(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) 
     throat_radius = flat.get("Freeform.ThroatRadius")
     if length is None or throat_radius is None:
         raise TextConfigError("FREEFORM requires Freeform.Length and Freeform.ThroatRadius")
-    length_value = _finite(length, "Freeform.Length")
-    throat_radius_value = _finite(throat_radius, "Freeform.ThroatRadius")
+    length_value = _finite_expression(length, "Freeform.Length")
+    throat_radius_value = _finite_expression(throat_radius, "Freeform.ThroatRadius")
     if length_value <= 0:
         raise TextConfigError("Freeform.Length must be greater than 0")
     if throat_radius_value <= 0:
@@ -691,7 +706,7 @@ def _freeform_payload(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) 
         _validate_block_items(block_name, info, _FREEFORM_PROFILE_ITEMS)
         if axis == "H" and "Inactive" in info.items:
             raise TextConfigError("Freeform.H.Inactive is not supported; shared profiles use H")
-        mouth_radius = _finite(info.items["MouthRadius"], f"{block_name}.MouthRadius")
+        mouth_radius = _finite_expression(info.items["MouthRadius"], f"{block_name}.MouthRadius")
         if mouth_radius <= 0:
             raise TextConfigError(f"{block_name}.MouthRadius must be greater than 0")
         points_block_name = f"{block_name}.Points"
@@ -740,7 +755,7 @@ def _freeform_payload(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) 
         parts = row.split()
         if len(parts) not in (2, 3):
             raise TextConfigError(f"Freeform.CrossSections row {index + 1}: expected 2 or 3 values")
-        t_value = _finite(parts[0], f"Freeform.CrossSections row {index + 1} column 1")
+        t_value = _finite_expression(parts[0], f"Freeform.CrossSections row {index + 1} column 1")
         if not 0 <= t_value <= 1:
             raise TextConfigError(f"Freeform.CrossSections row {index + 1}: t must be between 0 and 1")
         if parts[1] not in _FREEFORM_STATION_SHAPES:
@@ -750,16 +765,16 @@ def _freeform_payload(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) 
         station: dict[str, Any] = {"t": parts[0], "shape": parts[1]}
         if len(parts) == 3:
             if parts[2].startswith("ratio:"):
-                _finite(
+                _finite_expression(
                     parts[2].split(":", 1)[1],
                     f"Freeform.CrossSections row {index + 1} corner ratio",
                 )
                 station["corner_ratio"] = parts[2].split(":", 1)[1]
             elif parts[1] == "superellipse":
-                _finite(parts[2], f"Freeform.CrossSections row {index + 1} exponent")
+                _finite_expression(parts[2], f"Freeform.CrossSections row {index + 1} exponent")
                 station["exponent"] = parts[2]
             elif parts[1] == "rounded_rectangle":
-                _finite(parts[2], f"Freeform.CrossSections row {index + 1} corner radius")
+                _finite_expression(parts[2], f"Freeform.CrossSections row {index + 1} corner radius")
                 station["corner_radius_mm"] = parts[2]
             else:
                 raise TextConfigError(
@@ -796,6 +811,36 @@ def _freeform_payload(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) 
         result["shared_profile"] = True
     if "Freeform.OvershootPolicy" in flat:
         result["overshoot_policy"] = flat["Freeform.OvershootPolicy"]
+    if any("corner_ratio" in station for station in stations):
+        # Migration 001 samples the historical literal-only meridians. Its
+        # numeric fallback cannot resolve Expr source; refuse that combination
+        # before it can silently convert a ratio using a different geometry.
+        def literal(value: str | None, location: str) -> None:
+            if value is None:
+                return
+            try:
+                _finite(value, location)
+            except TextConfigError as exc:
+                raise TextConfigError(
+                    f"{location}: legacy corner-ratio conversion requires literal numbers"
+                ) from exc
+
+        literal(length, "Freeform.Length")
+        for axis in ("H", "V"):
+            meridian = result[f"profile_{axis.lower()}"]
+            for index, point in enumerate(meridian["points"]):
+                literal(point["r"], f"Freeform.{axis} point {index + 1} radius")
+                if point.get("angle_deg") is not None:
+                    literal(point["angle_deg"], f"Freeform.{axis} point {index + 1} angle")
+                    literal(point.get("strength"), f"Freeform.{axis} point {index + 1} strength")
+            for prefix, point in (("throat", meridian["points"][0]), ("mouth", meridian["points"][-1])):
+                if point.get("angle_deg") is None:
+                    for suffix in ("angle_deg", "tangent_scale"):
+                        literal(meridian.get(f"{prefix}_{suffix}"), f"Freeform.{axis}.{prefix}_{suffix}")
+        for index, station in enumerate(stations):
+            if "corner_ratio" in station:
+                literal(station["t"], f"Freeform.CrossSections row {index + 1} t")
+                literal(station["corner_ratio"], f"Freeform.CrossSections row {index + 1} corner ratio")
     return result
 
 

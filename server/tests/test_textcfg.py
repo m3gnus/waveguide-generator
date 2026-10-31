@@ -597,6 +597,131 @@ def test_freeform_mm_point_rows_round_trip_without_noise_or_drops() -> None:
     assert reopened.profile_v == design.profile_v  # type: ignore[union-attr]
 
 
+@pytest.mark.parametrize(
+    ("literal", "expression"),
+    [
+        ("Freeform.Length = 100", "Freeform.Length = 50 * 2"),
+        ("Freeform.ThroatRadius = 10", "Freeform.ThroatRadius = 20 / 2"),
+        ("MouthRadius = 50", "MouthRadius = 25 + 25"),
+    ],
+)
+def test_freeform_endpoint_expressions_survive_reopen_and_edit(
+    literal: str, expression: str
+) -> None:
+    original = parse(FREEFORM_SOURCE).design
+    # Start with the schema-wire Expr state the editor can already save.
+    authored = parse(FREEFORM_SOURCE).design
+    if literal.startswith("Freeform.Length"):
+        authored.root.length = Expr.model_validate("50 * 2")
+    elif literal.startswith("Freeform.ThroatRadius"):
+        for profile in (authored.root.profile_h, authored.root.profile_v):
+            profile.points[0].r = Expr.model_validate("20 / 2")
+    else:
+        authored.root.profile_h.points[-1].r = Expr.model_validate("25 + 25")
+    emitted = serialize(authored)
+    assert expression in emitted
+    reopened = parse(emitted)
+    assert design_to_mesher_config(reopened.design) == design_to_mesher_config(authored)
+    assert reopened.design == parse(FREEFORM_SOURCE.replace(literal, expression)).design
+    assert reopened.design.root.shared_profile is None
+    assert reopened.design.root.profile_h.throat_angle_deg is None
+    assert reopened.design.root.profile_h.points[0].handle_out is None
+    # A subsequent unrelated edit forces the writer past its pristine-byte path.
+    reopened.design.root.extra_keys["Future.Key"] = "edited"
+    rewritten = serialize(reopened)
+    assert expression in rewritten
+    assert parse(rewritten).design == reopened.design
+    assert original.root.length.constant_value() == reopened.design.root.length.constant_value()
+
+
+@pytest.mark.parametrize("key", ["Freeform.Length", "Freeform.ThroatRadius", "MouthRadius"])
+@pytest.mark.parametrize("invalid", ["1/0", "2*p", "nan", "sqrt(-1)", "unknown(2)", "0", "-2"])
+def test_freeform_endpoint_expression_controls_remain_invalid(key: str, invalid: str) -> None:
+    literal = {"Freeform.Length": "100", "Freeform.ThroatRadius": "10", "MouthRadius": "50"}[key]
+    with pytest.raises(TextConfigError, match=key.replace(".", r"\.")):
+        parse(FREEFORM_SOURCE.replace(f"{key} = {literal}", f"{key} = {invalid}"))
+
+
+def test_freeform_inactive_v_radius_expression_and_endpoint_handles_remain_authored() -> None:
+    authored = parse(FREEFORM_SOURCE).design
+    authored.root.shared_profile = True
+    authored.root.length = Expr.model_validate("50 * 2")
+    for profile in (authored.root.profile_h, authored.root.profile_v):
+        profile.points[0].r = Expr.model_validate("20 / 2")
+        profile.points[0].handle_out = (5.25, 1.75)
+        profile.points[-1].handle_in = (-10.0, -15.0)
+    authored.root.profile_v.points[0].r = Expr.model_validate("22 / 2")
+    first = parse(serialize(authored))
+    assert first.design == authored
+    first.design.root.extra_keys["Future.Key"] = "edited"
+    emitted = serialize(first)
+    assert "Freeform.ThroatRadius = 20 / 2" in emitted
+    assert "ThroatRadius = 22 / 2" in emitted
+    assert parse(emitted).design == first.design
+    assert design_to_mesher_config(parse(emitted).design) == design_to_mesher_config(first.design)
+
+
+@pytest.mark.parametrize("row", ["50 5*5 10+10", "50 5*5 a=10+10 aout=30+10 corner hin=-2,-3 hout=4,5"])
+def test_freeform_single_token_row_expressions_keep_source_and_domain_checks(row: str) -> None:
+    source = FREEFORM_SOURCE.replace("Freeform.V = {", f"Freeform.H.Points = {{\n{row}\n}}\nFreeform.V = {{")
+    source = source.replace("1 ellipse", "1/2 superellipse 2*2\n1 rounded_rectangle 2*5")
+    parsed = parse(source)
+    point = parsed.design.root.profile_h.points[1]
+    assert point.r.raw == "5*5"
+    assert point.angle_deg.raw == "10+10"
+    emitted = serialize(parsed.design)
+    assert row.split(" hin=")[0] in emitted
+    assert "1/2 superellipse 2*2" in emitted
+    assert "1 rounded_rectangle 2*5" in emitted
+    assert parse(emitted).design == parsed.design
+    with pytest.raises(TextConfigError, match="angle must be between"):
+        parse(source.replace("10+10", "45*2"))
+    with pytest.raises(TextConfigError, match="radius must be greater"):
+        parse(source.replace("5*5", "0*5"))
+    with pytest.raises(TextConfigError, match="finite scalar expression"):
+        parse(source.replace("5*5", "5*p"))
+    with pytest.raises(TextConfigError, match="finite scalar expression"):
+        parse(source.replace("1/2 superellipse", "p/2 superellipse"))
+
+
+@pytest.mark.parametrize(
+    ("literal", "expression"),
+    [
+        ("Freeform.Length = 100", "Freeform.Length = 50*2"),
+        ("Freeform.ThroatRadius = 10", "Freeform.ThroatRadius = 20/2"),
+        ("MouthRadius = 50", "MouthRadius = 25*2"),
+        ("MouthRadius = 40", "MouthRadius = 20+20"),
+        ("0.5 rounded_rectangle", "1/2 rounded_rectangle"),
+        ("ratio:0.2", "ratio:1/5"),
+        ("MouthRadius = 50", "MouthRadius = 50\nThroatAngle = 10+5"),
+        ("MouthRadius = 50", "MouthRadius = 50\nMouthTangentScale = 1+0"),
+        ("Freeform.V = {", "Freeform.H.Points = {\n50 10*2\n}\nFreeform.V = {"),
+        ("Freeform.V = {", "Freeform.H.Points = {\n50 20 10+10\n}\nFreeform.V = {"),
+        ("Freeform.V = {", "Freeform.H.Points = {\n50 20 20 1+0\n}\nFreeform.V = {"),
+        ("Freeform.V = {", "Freeform.Shared = 1\nFreeform.V = {\nThroatRadius = 20/2"),
+    ],
+)
+def test_freeform_legacy_ratio_refuses_expressions_in_sampled_geometry(
+    literal: str, expression: str
+) -> None:
+    source = FREEFORM_SOURCE.replace("1 ellipse", "0.5 rounded_rectangle ratio:0.2\n1 ellipse")
+    # Historical literal conversion remains at its frozen local H/V radius.
+    assert parse(source).design.root.cross_sections[1].corner_radius_mm.value == 5
+    with pytest.raises(TextConfigError, match="legacy corner-ratio conversion requires literal numbers"):
+        parse(source.replace(literal, expression))
+
+
+def test_freeform_legacy_ratio_does_not_consume_unrelated_station_expressions() -> None:
+    source = FREEFORM_SOURCE.replace(
+        "1 ellipse", "0.25 superellipse 2*2\n0.5 rounded_rectangle ratio:0.2\n1 rounded_rectangle 2*5"
+    ).replace("0.25 superellipse", "1/4 superellipse")
+    parsed = parse(source)
+    assert parsed.design.root.cross_sections[2].corner_radius_mm.value == 5
+    assert parsed.design.root.cross_sections[1].t.raw == "1/4"
+    assert parsed.design.root.cross_sections[1].exponent.raw == "2*2"
+    assert parsed.design.root.cross_sections[3].corner_radius_mm.raw == "2*5"
+
+
 def test_modified_design_preserves_duplicate_extra_assignments_and_token_order() -> None:
     source = SOURCE + """Ordered = {
 first row

@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 from scipy.optimize import brentq
 
-from server.design.schema import DesignConfig
+from server.design.schema import DesignConfig, Expr
 from server.design.textcfg import TextConfigError, parse, serialize
 from server.preview.freeform import mount_freeform
 from server.preview.translate import design_to_mesher_config
@@ -219,6 +219,62 @@ def test_exact_insert_whole_curve_survives_json_and_text_reload(client, design):
         report = post(client, 'compare', before=design, after=reloaded)
         assert report['H']['curve_deviation_mm'] < 1e-9
         assert report['V']['curve_deviation_mm'] == 0
+
+
+@pytest.mark.parametrize('shared', [None, True])
+def test_length_expression_keeps_curves_handles_and_omissions_after_edit(client, design, shared):
+    design['length'] = '60 * 2'
+    design['shared_profile'] = shared
+    for profile in ('profile_h', 'profile_v'):
+        design[profile]['throat_angle_deg'] = None
+        design[profile]['mouth_angle_deg'] = None
+    if shared:
+        design['profile_v']['points'][0]['r'] = 13
+    authored = DesignConfig.model_validate(design)
+    first = parse(serialize(authored)).design
+    assert first.root.length.raw == '60 * 2'
+    assert first.root.shared_profile is shared
+    for before, after in zip((authored.root.profile_h, authored.root.profile_v),
+                             (first.root.profile_h, first.root.profile_v)):
+        assert after.points[0].r.constant_value() == before.points[0].r.constant_value()
+        assert after.points[-1].r.constant_value() == before.points[-1].r.constant_value()
+        assert after.throat_angle_deg is before.throat_angle_deg is None
+        assert after.mouth_angle_deg is before.mouth_angle_deg is None
+    before_curve = post(client, 'curves', design=design)
+    inserted = post(client, 'insert', design=first.model_dump(mode='json'), plane='H', z_mm=21.407)
+    edited = DesignConfig.model_validate(inserted['design'])
+    # A further authored expression edit must remain executable source on disk.
+    edited.root.length = Expr.model_validate('40 * 3')
+    restored = parse(serialize(edited)).design
+    assert restored.root.length.raw == '40 * 3'
+    assert restored.root.shared_profile is shared
+    for source, saved in zip(edited.root.profile_h.points, restored.root.profile_h.points):
+        assert saved.handle_in == source.handle_in
+        assert saved.handle_out == source.handle_out
+        assert (saved.join or 'smooth') == (source.join or 'smooth')
+    after_curve = post(client, 'curves', design=restored.model_dump(mode='json'))
+    for axis in ('H', 'V'):
+        np.testing.assert_allclose(
+            independent_radii(before_curve[axis], np.linspace(0, 120, 401)),
+            independent_radii(after_curve[axis], np.linspace(0, 120, 401)), atol=1e-9, rtol=0)
+
+
+@pytest.mark.parametrize(('index', 'raw'), [(0, '25.4 / 2'), (-1, '70 * 2')])
+def test_radius_expression_mesher_refusal_is_unchanged_by_cfg_round_trip(client, design, index, raw):
+    # The mesher currently requires literal radii. Saving must neither erase the
+    # formula to make it executable nor introduce a different geometry request.
+    authored = parse(serialize(DesignConfig.model_validate(design))).design
+    for profile in (authored.root.profile_h, authored.root.profile_v):
+        profile.points[index].r = Expr.model_validate(raw)
+    reopened = parse(serialize(authored)).design
+    assert design_to_mesher_config(reopened) == design_to_mesher_config(authored)
+    refusals = [client.post('/api/design/freeform/curves', json={
+        'content_key': 'revision-7', 'design': item.model_dump(mode='json'),
+    }) for item in (authored, reopened)]
+    for response in refusals:
+        assert response.status_code == 422
+        assert raw in response.json()['detail']
+    assert refusals[0].json() == refusals[1].json()
 
 
 def test_repeated_precise_inserts_survive_text_round_trip(client, design):
