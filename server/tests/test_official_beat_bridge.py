@@ -981,3 +981,42 @@ def test_runtime_admission_and_execution_agree_on_the_same_request(runtime, case
         assert verdict.reason == f"BEAT cannot read this return's solve inputs: {caught.value}"
         assert not runtime.requests
     assert verdict.solves == (case in {"normal", "axial"})
+
+
+@pytest.mark.parametrize("adaptive", [False, True])
+@pytest.mark.parametrize("axial", [False, True])
+def test_imported_execution_resolves_axial_mesh_once(runtime, monkeypatch, adaptive, axial):
+    from server.solver import imported
+    from server.solver.beat_adapter import request as adapter
+
+    request = cad._axial_request("source-a") if axial else cad._request()
+    if adaptive:
+        request.options.adaptive_frequency_sampling = True
+        request.options.frequency_range = [100., 1000.]
+        request.options.frequencies_hz = None
+        request.options.num_frequencies = 24
+    msh = cad.MESH_Z if axial else cad.MESH
+    record = cad._record(msh_text=msh)
+    _, expected_identity = imported.prepare_axial_drive(record, msh, request.geometry.drive_channels)
+    calls = {"prepare": 0, "resolve": 0, "parse": 0}
+
+    def instrument(owner, name, key):
+        original = getattr(owner, name)
+
+        def counted(*args, **kwargs):
+            calls[key] += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(owner, name, counted)
+
+    # Instrument invoked bindings and the underlying resolver/parser. An alias
+    # in an adapter cannot hide a second mesh resolution from these counters.
+    instrument(adapter, "prepare_axial_drive", "prepare")
+    instrument(imported, "resolve_source_axes", "resolve")
+    instrument(imported, "_msh_triangles", "parse")
+    result = beat_imported.solve_imported_beat_from_msh_text(msh, request, record, backend="cpu")
+    assert calls == {"prepare": 1, "resolve": int(axial), "parse": int(axial)}
+    for channel_id, identity in expected_identity.items():
+        metadata = result["channels"][channel_id]["metadata"]
+        for key, value in identity.items():
+            assert metadata[key] == value

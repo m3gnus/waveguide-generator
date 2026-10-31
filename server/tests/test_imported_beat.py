@@ -432,3 +432,36 @@ def test_full_request_admission_and_execution_share_compiler_refusals(monkeypatc
     with pytest.raises(beat.BeatUnavailable) as caught:
         beat_imported.solve_imported_beat_from_msh_text(MESH, request, record, backend="cpu")
     assert str(caught.value) == refusal
+
+
+@pytest.mark.parametrize("route", ["compile", "build", "mixed_bases"])
+@pytest.mark.parametrize("axial", [False, True])
+def test_direct_imported_preparation_resolves_once(monkeypatch, route, axial):
+    from server.solver import imported
+    from server.solver.beat_adapter import request as adapter
+
+    request = _axial_request("source-a") if axial else _request()
+    msh = MESH_Z if axial else MESH
+    record = _record(msh_text=msh)
+    calls = []
+    resolve = imported.resolve_source_axes
+
+    def counted(*args, **kwargs):
+        calls.append(args)
+        return resolve(*args, **kwargs)
+
+    monkeypatch.setattr(imported, "resolve_source_axes", counted)
+    if route == "compile":
+        prepared = beat_imported.compile_imported_beat(record, msh, request=request)
+    elif route == "build":
+        context = SolverContext.from_imported_request(request, quadrants=1234, source_motion="normal")
+        prepared = adapter.build_imported_request(msh, context, record, request.geometry.drive_channels)
+    else:
+        bases, channels = adapter.imported_source_bases(record, msh, request.geometry.drive_channels)
+        assert len(bases) == 3
+        assert list(channels) == [channel.id for channel in request.geometry.drive_channels]
+        prepared = None
+    assert len(calls) == int(axial)
+    if prepared is not None:
+        assert bool(prepared.axial_identity) is axial
+        assert "axial_identity" not in prepared.wire

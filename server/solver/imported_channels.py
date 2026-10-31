@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from dataclasses import dataclass
+from typing import Any, Mapping, cast
 from types import SimpleNamespace
 
 import numpy as np
 
 from server.cadlink.roles import normalize_source_role
-from server.jobs.models import ImportedGeometrySource
+from server.jobs.models import ImportedGeometrySource, SolveRequest
 
+from .context import SolverContext
 from .driver_lem import channel_drive_scaling
+from .field_traces_store import field_trace_retention_plan
+from .frequency_sweep import live_execution_frequencies
 from .imported import mesh_frequency_validation
 from .result_mapping import json_safe_native_value
 
@@ -18,6 +22,58 @@ from .result_mapping import json_safe_native_value
 # Keep this ranking in sync with ROLE_BAND_RANK in frontend/src/stores/cadReturn.ts.
 _BAND_ROLE_RANK = {"LF": 0, "MF": 1, "HF": 2}
 _BAND_ROLES = frozenset(_BAND_ROLE_RANK)
+
+
+@dataclass(frozen=True)
+class ImportedSolveFacts:
+    """Validated common inputs, prepared at each adapter's existing setup boundary.
+
+    The context remains the existing solver value; this frozen holder never
+    changes it. Backend availability, capabilities and native lifetime stay
+    with the adapter.
+    """
+
+    context: SolverContext
+    motions: frozenset[str]
+    mesh_stats: Mapping[str, Any] | None
+    frequencies_hz: tuple[float, ...]
+    field_plane_enabled: bool
+    channel_count: int
+
+    def trace_retention_plan(
+        self, msh_text: str, *, supported: bool, cap_bytes: int | None,
+        unsupported_reason: str = "unsupported_solve_mode",
+    ) -> tuple[bool, str | None, int | None, int]:
+        return field_trace_retention_plan(
+            msh_text, mesh_stats=self.mesh_stats,
+            frequency_count=len(self.frequencies_hz), channel_count=self.channel_count,
+            enabled=self.field_plane_enabled, supported=supported, cap_bytes=cap_bytes,
+            unsupported_reason=unsupported_reason,
+        )
+
+
+def prepare_imported_solve_facts(
+    request: SolveRequest, record: Mapping[str, Any], *, quadrants: int,
+) -> ImportedSolveFacts:
+    """Resolve facts after the adapter has verified imported geometry."""
+
+    geometry = cast(ImportedGeometrySource, request.geometry)
+    motions = frozenset(channel.motion for channel in geometry.drive_channels)
+    config_motion = next(iter(motions)) if len(motions) == 1 else "normal"
+    context = SolverContext.from_imported_request(
+        request, quadrants=quadrants, source_motion=config_motion,
+    )
+    context.validate()
+    mesh = record.get("mesh")
+    mesh = mesh if isinstance(mesh, Mapping) else {}
+    stats = mesh.get("stats")
+    return ImportedSolveFacts(
+        context=context, motions=motions,
+        mesh_stats=stats if isinstance(stats, Mapping) else None,
+        frequencies_hz=tuple(live_execution_frequencies(context).tolist()),
+        field_plane_enabled=getattr(context, "polar_config", {}).get("field_plane", True) is True,
+        channel_count=len(geometry.drive_channels),
+    )
 
 
 def imported_validity_metadata(record: Mapping[str, Any]) -> dict[str, Any]:

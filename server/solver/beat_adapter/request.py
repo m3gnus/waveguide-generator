@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -18,7 +18,7 @@ from server.solver.beat_runtime.paths import PROVIDER_ID
 from server.solver.context import SolverContext
 from server.solver.frequency_sweep import live_execution_frequencies
 from server.solver.ground_plane import GroundPlane
-from server.solver.imported import imported_anchor_frame, prepare_axial_drive
+from server.solver.imported import imported_anchor_frame, imported_record_symmetry, prepare_axial_drive
 from server.solver.result_mapping import native_observation_frame
 
 from .driver_loading import BoundaryLoading
@@ -52,6 +52,8 @@ class CompiledRequest:
     frame: Mapping[str, Any]
     engine_id: str
     surface_traces: bool
+    # Application metadata from the exact source preparation; never sent on the wire.
+    axial_identity: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
 
 def validate_imported_request(compiled: CompiledRequest, native_plane: str | None) -> None:
@@ -335,6 +337,14 @@ def build_parametric_request(
 def imported_source_bases(
     record: Mapping[str, Any], msh_text: str, drive_channels: Sequence[DriveChannel],
 ) -> tuple[list[SourceBasis], dict[str, list[str]]]:
+    """Each prescribed channel's ideal-source bases and the ports that drive it."""
+    sources, channels, _ = _prepare_imported_sources(record, msh_text, drive_channels)
+    return sources, channels
+
+
+def _prepare_imported_sources(
+    record: Mapping[str, Any], msh_text: str, drive_channels: Sequence[DriveChannel],
+) -> tuple[list[SourceBasis], dict[str, list[str]], dict[str, dict[str, Any]]]:
     """Each prescribed channel's ideal-source bases and the ports that drive it.
 
     One basis per source and motion, with the record's tags and the resolved
@@ -344,7 +354,7 @@ def imported_source_bases(
     tags = record.get("source_tags")
     if not isinstance(tags, Mapping):
         raise ValueError("Ingestion record requires source_tags")
-    axes, _ = prepare_axial_drive(record, msh_text, drive_channels)
+    axes, axial_identity = prepare_axial_drive(record, msh_text, drive_channels)
     sources, channels, by_key = [], {}, {}
     for channel in drive_channels:
         if channel.id in channels:
@@ -363,7 +373,7 @@ def imported_source_bases(
                 by_key[key] = source.port_id
             members.append(by_key[key])
         channels[channel.id] = members
-    return sources, channels
+    return sources, channels, axial_identity
 
 
 def build_imported_request(
@@ -372,18 +382,17 @@ def build_imported_request(
     precision: str = "float32", **options: Any,
 ) -> CompiledRequest:
     """Retain CAD source IDs, axes, channels and anchor frame in solver coordinates."""
-    from server.solver.imported import imported_domain_planes, imported_symmetry_from_cut_planes
-
     context.validate()
     if context.sim_type != 2:
         raise ValueError("Imported adapter requires an exterior radiation problem")
-    symmetry = imported_symmetry_from_cut_planes(imported_domain_planes(record))
+    symmetry = imported_record_symmetry(record)
     if symmetry.quadrants != context.quadrants:
         raise ValueError("Stored context and ingestion record disagree on symmetry")
-    sources, channels = imported_source_bases(record, msh_text, drive_channels)
+    sources, channels, axial_identity = _prepare_imported_sources(record, msh_text, drive_channels)
     frame = imported_anchor_frame(record)
-    return build_request(
+    compiled = build_request(
         msh_text, sources=sources, channel_ports=channels, frame=frame,
         layout=_layout(context, frame, precision), precision=precision,
         frequencies_hz=live_execution_frequencies(context) if frequencies_hz is None else frequencies_hz,
         symmetry=symmetry.native_plane or "full", ground=context.ground_plane, **options)
+    return replace(compiled, axial_identity=axial_identity)

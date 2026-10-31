@@ -75,8 +75,7 @@ from .formulation import (
 from .infinite_baffle import require_coupled_aperture_tag
 from .imported import (
     imported_anchor_frame,
-    imported_domain_planes,
-    imported_symmetry_from_cut_planes,
+    imported_record_symmetry,
     config_supports_source_axes,
     has_axial_channel,
     mesh_frequency_validation,
@@ -91,6 +90,7 @@ from .imported_channels import (
     channel_basis_metadata,
     channel_source_identity,
     imported_validity_metadata,
+    prepare_imported_solve_facts,
     record_source_area_m2,
 )
 from .result_mapping import (
@@ -1540,8 +1540,8 @@ def solve_imported_metal_from_msh_text(
     if not status["available"]:
         raise MetalUnavailable(status["reason"])
 
-    domain_planes = imported_domain_planes(record)
-    imported_symmetry = imported_symmetry_from_cut_planes(domain_planes)
+    imported_symmetry = imported_record_symmetry(record)
+    domain_planes = imported_symmetry.cut_planes
     quadrants = imported_symmetry.quadrants
     source_tags = record.get("source_tags")
     if not isinstance(source_tags, Mapping):
@@ -1552,30 +1552,13 @@ def solve_imported_metal_from_msh_text(
     if stage_callback:
         stage_callback("setup", 0.0, "Configuring imported multi-source Metal BEM solve")
 
-    motions = {channel.motion for channel in geometry.drive_channels}
-    config_motion = next(iter(motions)) if len(motions) == 1 else "normal"
-    context = SolverContext.from_imported_request(
-        request, quadrants=quadrants, source_motion=config_motion
-    )
-    context.validate()
-    mesh_record = record.get("mesh")
-    mesh_record = mesh_record if isinstance(mesh_record, Mapping) else {}
-    imported_mesh_stats = mesh_record.get("stats")
-    imported_mesh_stats = (
-        imported_mesh_stats if isinstance(imported_mesh_stats, Mapping) else None
-    )
-    field_plane_enabled = (
-        getattr(context, "polar_config", {}).get("field_plane", True) is True
-    )
+    facts = prepare_imported_solve_facts(request, record, quadrants=quadrants)
+    context = facts.context
+    config_motion = context.source_motion
+    motions = facts.motions
     retain_traces, trace_reason, trace_estimated_bytes, trace_cap_bytes = (
-        field_trace_retention_plan(
-            msh_text,
-            mesh_stats=imported_mesh_stats,
-            frequency_count=len(live_execution_frequencies(context)),
-            channel_count=len(geometry.drive_channels),
-            enabled=field_plane_enabled,
-            supported=True,
-            cap_bytes=field_trace_cap_bytes,
+        facts.trace_retention_plan(
+            msh_text, supported=True, cap_bytes=field_trace_cap_bytes,
         )
     )
 

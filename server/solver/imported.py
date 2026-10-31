@@ -44,6 +44,12 @@ def imported_domain_planes(record: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(str(plane) for plane in planes)
 
 
+def imported_record_symmetry(record: Mapping[str, Any]) -> ImportedSymmetry:
+    """Resolve the record's domain once, retaining its ordered mirror planes."""
+
+    return imported_symmetry_from_cut_planes(imported_domain_planes(record))
+
+
 def imported_anchor_frame(record: Mapping[str, Any]) -> dict[str, np.ndarray]:
     """The observation frame an ingestion record's solve is measured in.
 
@@ -495,6 +501,7 @@ __all__ = [
     "ImportedMeshArtifactError",
     "imported_anchor_frame",
     "imported_domain_planes",
+    "imported_record_symmetry",
     "imported_symmetry_from_cut_planes",
     "mesh_frequency_validation",
     "mesh_text_sha256",

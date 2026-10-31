@@ -58,16 +58,14 @@ from .context import SolverContext
 from .field_traces_store import (
     BEMPP_FIELD_TRACE_BACKEND,
     build_field_trace_artifact,
-    field_trace_retention_plan,
 )
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
-from .frequency_sweep import live_execution_frequencies, sort_native_result_frequencies
+from .frequency_sweep import sort_native_result_frequencies
 from .imported import (
     imported_anchor_frame,
-    imported_domain_planes,
+    imported_record_symmetry,
     config_supports_source_axes,
     has_axial_channel,
-    imported_symmetry_from_cut_planes,
     prepare_axial_drive,
 )
 from .imported_channels import (
@@ -75,6 +73,7 @@ from .imported_channels import (
     channel_basis_metadata,
     channel_source_identity,
     imported_validity_metadata,
+    prepare_imported_solve_facts,
 )
 from .result_mapping import (
     build_provisional_frequency_response,
@@ -296,8 +295,8 @@ def solve_imported_bempp_from_msh_text(
     if refusal is not None:
         raise BemppUnavailable(f"BEMPP cannot solve this CAD return: {refusal}")
 
-    domain_planes = imported_domain_planes(record)
-    imported_symmetry = imported_symmetry_from_cut_planes(domain_planes)
+    imported_symmetry = imported_record_symmetry(record)
+    domain_planes = imported_symmetry.cut_planes
     quadrants = imported_symmetry.quadrants
     native_plane = imported_symmetry.native_plane
     source_tags = record.get("source_tags")
@@ -317,33 +316,16 @@ def solve_imported_bempp_from_msh_text(
     if stage_callback:
         stage_callback("setup", 0.0, f"Configuring imported BEMPP BEM solve ({backend})")
 
-    motions = {channel.motion for channel in geometry.drive_channels}
-    config_motion = next(iter(motions)) if len(motions) == 1 else "normal"
-    context = SolverContext.from_imported_request(
-        request, quadrants=quadrants, source_motion=config_motion
-    )
-    context.validate()
-    mesh_record = record.get("mesh")
-    mesh_record = mesh_record if isinstance(mesh_record, Mapping) else {}
-    imported_mesh_stats = mesh_record.get("stats")
-    imported_mesh_stats = (
-        imported_mesh_stats if isinstance(imported_mesh_stats, Mapping) else None
-    )
-    frequencies = live_execution_frequencies(context).tolist()
-    field_plane_enabled = (
-        getattr(context, "polar_config", {}).get("field_plane", True) is True
-    )
+    facts = prepare_imported_solve_facts(request, record, quadrants=quadrants)
+    context = facts.context
+    config_motion = context.source_motion
+    frequencies = list(facts.frequencies_hz)
     retain_traces, trace_reason, trace_estimated_bytes, trace_cap_bytes = (
-        field_trace_retention_plan(
-            msh_text,
-            mesh_stats=imported_mesh_stats,
-            frequency_count=len(frequencies),
-            channel_count=len(geometry.drive_channels),
-            enabled=field_plane_enabled,
-            supported=True,
-            cap_bytes=field_trace_cap_bytes,
+        facts.trace_retention_plan(
+            msh_text, supported=True, cap_bytes=field_trace_cap_bytes,
         )
     )
+
     try:
         source_axes, axial_identity = prepare_axial_drive(
             record, msh_text, geometry.drive_channels
