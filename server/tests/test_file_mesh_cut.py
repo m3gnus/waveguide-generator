@@ -386,20 +386,6 @@ def test_native_cut_exports_and_restores_through_shared_replay_and_solve(tmp_pat
     asyncio.run(scenario())
 
 
-def test_oversize_request_does_not_start_native_child(monkeypatch):
-    import server.jobs.models_api as api
-    mesh = full_mesh()
-    mesh.triangles = np.resize(mesh.triangles, (5001, 3))
-    mesh.tags = np.resize(mesh.tags, 5001)
-    monkeypatch.setattr(api, "_file_original", lambda _body: mesh)
-    monkeypatch.setattr(api, "prepare_file_mesh_options", lambda original, _options: (original, {}))
-    async def unexpected(*_args, **_kwargs):
-        pytest.fail("the file-cut bound must precede native child entry")
-    monkeypatch.setattr(api, "run_mesh_build", unexpected)
-    result, _ = asyncio.run(api.prepare_registration(cutting_registration(auto_cut=True)))
-    assert result is mesh
-
-
 def test_refused_requested_cut_uses_full_memory_and_polar_domain(tmp_path, monkeypatch):
     import server.jobs.models_api as api
     seen = []
@@ -445,3 +431,139 @@ def test_native_cut_crash_has_a_working_full_model_remedy(tmp_path, monkeypatch,
             await runtime.shutdown()
             store.close()
     asyncio.run(scenario())
+
+
+def capped_half_mesh(input_count=48):
+    """Refine only the rigid x lid, preserving its boundary and winding."""
+    from collections import deque
+    from test_file_mesh_roles_symmetry import box_mesh
+
+    mesh = box_mesh()
+    mesh.points[:, 1] -= .1
+    mesh.tags[mesh.tags == 102] = 101
+    mesh.names = {1: "Walls", 101: "HF"}
+    lid = np.all(mesh.points[mesh.triangles, 0] == 0, axis=1)
+    queue = deque(mesh.triangles[lid].tolist())
+    points = mesh.points.tolist()
+    for _ in range((input_count - len(mesh.triangles)) // 2):
+        a, b, c = queue.popleft()
+        centre = len(points)
+        points.append(np.asarray([points[a], points[b], points[c]]).mean(axis=0).tolist())
+        queue.extend([[a, b, centre], [b, c, centre], [c, a, centre]])
+    triangles = np.vstack((mesh.triangles[~lid], np.asarray(queue)))
+    tags = np.r_[mesh.tags[~lid], np.ones(len(queue), dtype=int)]
+    from server.mesh.file_import import FileMesh
+    result = FileMesh(np.asarray(points), triangles, tags, mesh.names)
+    assert len(result.triangles) == input_count
+    return result
+
+
+@pytest.mark.parametrize("count,limit", [(48, 40), (5002, 5000)])
+def test_original_cut_admission_survives_lid_removal_without_native_entry(tmp_path, monkeypatch, count, limit):
+    import gmsh
+    import server.jobs.models_api as api
+    from server.mesh import file_cut
+    from server.mesh.file_import import prepare_file_mesh_input
+    from test_models_api import app_for, call
+
+    original = capped_half_mesh(count)
+    snapshots = [array.copy() for array in (original.points, original.triangles, original.tags)]
+    monkeypatch.setattr(file_cut, "MAX_FILE_CUT_TRIANGLES", limit)
+    def native_entry(*_args, **_kwargs):
+        pytest.fail("above-bound original must never enter Gmsh/OCC after lid removal")
+    async def native_child(*_args, **_kwargs):
+        pytest.fail("above-bound original must not dispatch a native child")
+    monkeypatch.setattr(gmsh.model, "getCurrent", native_entry)
+    monkeypatch.setattr(file_cut, "_load_model", native_entry)
+    monkeypatch.setattr(api, "run_mesh_build", native_child)
+    body = MeshRegistration(filename="capped-half.msh", msh_text=mesh_text(original), units="m",
+                            forward="+z", up="+y", roles={101: "HF"},
+                            domain_planes=["x0", "y0"], remove_lid_planes=["x0"])
+    preparation = prepare_file_mesh_input(original, "m", "+z", "+y", roles=body.driven_roles(),
+                                          domain_planes=body.domain_planes, remove_lid_planes=body.remove_lid_planes)
+    assert preparation.input_triangle_count == count
+    assert len(preparation.mesh.triangles) == 40
+    assert preparation.declared_planes == ("x0",)
+    assert preparation.candidate_planes == ("y0",)
+    assert not preparation.needs_native_cut
+    async def scenario():
+        result, transform = await api.prepare_registration(body)
+        np.testing.assert_array_equal(result.points, preparation.mesh.points)
+        np.testing.assert_array_equal(result.triangles, preparation.mesh.triangles)
+        np.testing.assert_array_equal(result.tags, preparation.mesh.tags)
+        assert transform["domain_planes"] == ["x0"] and transform["cut_planes"] == []
+        note = transform["symmetry_report"]["note"]
+        assert f"{count:,} triangles" in note and f"up to {limit:,}" in note
+        assert "Export the half or quarter" in note
+        store = CadLinkStore.for_data_dir(tmp_path)
+        app, runtime = app_for(tmp_path, store)
+        try:
+            record = (await call(app, "POST", "/api/models/files", body.model_dump(mode="json")))["prepared"]
+            assert record["symmetry"]["domain_planes"] == ["x0"]
+            assert record["symmetry"]["cut_planes"] == []
+            assert record["source_file"]["domain_planes"] == ["x0", "y0"]
+            assert record["source_file"]["remove_lid_planes"] == ["x0"]
+            assert record["source_file"]["transform"]["symmetry_report"]["note"] == note
+            assert record["summary"]["triangle_count"] == 40
+            assert record["source_tags"] == {"group_101": 101}
+            assert record["sources"][0]["role"] == "HF"
+            assert record["sources"][0]["observed"]["total_area_mm2"] == pytest.approx(40000)
+            assert record["polar_grid_derivation"]["axes"]["horizontal"]["minimum_deg"] == 0
+            assert record["polar_grid_derivation"]["axes"]["vertical"]["minimum_deg"] == -180
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())
+    for array, saved in zip((original.points, original.triangles, original.tags), snapshots):
+        np.testing.assert_array_equal(array, saved)
+
+
+@pytest.mark.parametrize("planes", [("x0",), ("x0", "y0")])
+@pytest.mark.parametrize("auto_cut", [False, True])
+@pytest.mark.parametrize("failure", ["startup", "shutdown"])
+def test_reduced_registration_and_api_need_no_native_child(tmp_path, monkeypatch, planes, auto_cut, failure):
+    import gmsh
+    import server.jobs.models_api as api
+    from server.mesh.child import MesherChildError, MesherShuttingDownError
+    from test_file_mesh_roles_symmetry import box_mesh
+    from test_models_api import app_for, call
+
+    # Decisions are made in the transformed solver frame, including negative
+    # side normalization, rather than assuming the file's raw x/y axes.
+    mesh = box_mesh(planes=planes, negative=("x0",))
+    rotation = np.asarray([[0, 1, 0], [0, 0, 1], [1, 0, 0]])
+    mesh.points = mesh.points @ rotation * 1000
+    body = MeshRegistration(filename="reduced.msh", msh_text=mesh_text(mesh), units="mm",
+                            forward="+x", up="+z", roles={101: "HF", 102: "MF"},
+                            domain_planes=list(planes), auto_cut=auto_cut)
+    expected, transform = prepare_file_mesh(mesh, "mm", "+x", "+z", domain_planes=planes,
+                                            auto_cut=auto_cut, roles=body.driven_roles())
+    calls = []
+    async def unavailable(*_args, **_kwargs):
+        calls.append(failure)
+        error = MesherChildError if failure == "startup" else MesherShuttingDownError
+        raise error("native child must not be needed for an existing reduced mesh")
+    monkeypatch.setattr(api, "run_mesh_build", unavailable)
+    monkeypatch.setattr(gmsh.model, "getCurrent", lambda: pytest.fail("reduced import touched Gmsh"))
+    async def scenario():
+        result, actual = await api.prepare_registration(body)
+        np.testing.assert_array_equal(result.points, expected.points)
+        np.testing.assert_array_equal(result.triangles, expected.triangles)
+        np.testing.assert_array_equal(result.tags, expected.tags)
+        assert actual == transform
+        store = CadLinkStore.for_data_dir(tmp_path)
+        app, runtime = app_for(tmp_path, store)
+        try:
+            first = (await call(app, "POST", "/api/models/files", body.model_dump(mode="json")))["prepared"]
+            assert first["symmetry"]["domain_planes"] == list(planes)
+            assert first["symmetry"]["cut_planes"] == []
+            assert first["symmetry"]["reflected_planes"] == ["x0"]
+            assert first["source_tags"] == {"group_101": 101, "group_102": 102}
+            settings = body.model_dump(mode="json", exclude={"filename", "msh_text"})
+            again = (await call(app, "POST", f'/api/models/{first["model_id"]}/prepare', settings))["prepared"]
+            assert again["ingest_id"] == first["ingest_id"]
+        finally:
+            await runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())
+    assert calls == []

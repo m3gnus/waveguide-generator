@@ -17,12 +17,25 @@ if TYPE_CHECKING:
 MAX_FILE_CUT_TRIANGLES = 5_000
 
 
-def cut_file_mesh(mesh: FileMesh, planes: tuple[str, ...], roles: Mapping[int, str]) -> tuple[FileMesh, dict[str, Any]]:
-    if len(mesh.triangles) > MAX_FILE_CUT_TRIANGLES:
-        return mesh, {"cut_planes": [], "note": (
-            f"This mesh has {len(mesh.triangles):,} triangles; cutting is available up to "
+def file_cut_limit_note(input_triangle_count: int) -> str | None:
+    """The one file-CUT admission rule always reads the original input count."""
+    if input_triangle_count > MAX_FILE_CUT_TRIANGLES:
+        return (
+            f"This mesh has {input_triangle_count:,} triangles; cutting is available up to "
             f"{MAX_FILE_CUT_TRIANGLES:,}. Export the half or quarter to solve faster."
-        )}
+        )
+    return None
+
+
+def cut_file_mesh(
+    mesh: FileMesh, planes: tuple[str, ...], roles: Mapping[int, str], *,
+    input_triangle_count: int | None = None,
+) -> tuple[FileMesh, dict[str, Any]]:
+    # Lid removal cannot re-admit an over-bound original. Direct primitive
+    # callers default to their own input and cannot understate that count.
+    count = max(len(mesh.triangles), input_triangle_count or 0)
+    if (note := file_cut_limit_note(count)) is not None:
+        return mesh, {"cut_planes": [], "note": note}
 
     import gmsh
     from hornlab_mesher.step_prepare import TriangleCutRefused, auto_cut_occ_geometry

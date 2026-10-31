@@ -338,6 +338,43 @@ def prepare_file_mesh(
     roles: Mapping[int, str] | None = None,
     auto_cut: bool = False,
 ) -> tuple[FileMesh, dict[str, Any]]:
+    preparation = prepare_file_mesh_input(
+        mesh, units, forward, up, domain_planes=domain_planes, reflect_planes=reflect_planes,
+        remove_lid_planes=remove_lid_planes, roles=roles, auto_cut=auto_cut,
+    )
+    return finish_file_mesh_preparation(preparation)
+
+
+@dataclass(frozen=True)
+class FileMeshPreparation:
+    """Validated pure input and original-count admission for the owned cutter."""
+
+    mesh: FileMesh
+    transform: dict[str, Any]
+    declared_planes: tuple[str, ...]
+    candidate_planes: tuple[str, ...]
+    roles: dict[int, str]
+    input_triangle_count: int
+
+    @property
+    def needs_native_cut(self) -> bool:
+        if not self.candidate_planes:
+            return False
+        from server.mesh.file_cut import file_cut_limit_note
+
+        return file_cut_limit_note(self.input_triangle_count) is None
+
+
+def prepare_file_mesh_input(
+    mesh: FileMesh, units: str, forward: str, up: str, *,
+    domain_planes: tuple[str, ...] | list[str] = (),
+    reflect_planes: tuple[str, ...] | list[str] | None = None,
+    remove_lid_planes: tuple[str, ...] | list[str] = (),
+    roles: Mapping[int, str] | None = None,
+    auto_cut: bool = False,
+) -> FileMeshPreparation:
+    """Transform, remove lids and verify without importing or starting Gmsh."""
+    input_triangle_count = len(mesh.triangles)
     planes, reflect_planes = validate_file_symmetry(domain_planes, reflect_planes)
     remove_lid_planes = validate_remove_lid_planes(remove_lid_planes, planes)
     mesh, transform = transform_file_mesh(mesh, units, forward, up)
@@ -353,11 +390,24 @@ def prepare_file_mesh(
         mesh, transform, declared, reflections, remove_lid_planes, roles or {},
     )
     candidates = crossing or (tuple(SYMMETRY_PLANE_AXIS) if auto_cut and not planes else ())
+    return FileMeshPreparation(mesh, transform, declared, candidates, dict(roles or {}), input_triangle_count)
+
+
+def finish_file_mesh_preparation(
+    preparation: FileMeshPreparation, *, cancel_cb: Any = None,
+) -> tuple[FileMesh, dict[str, Any]]:
+    """Picklable child entry; non-admitted inputs finish without native calls."""
+    if cancel_cb is not None:
+        cancel_cb()
+    mesh, transform = preparation.mesh, preparation.transform
+    declared, candidates, roles = preparation.declared_planes, preparation.candidate_planes, preparation.roles
     if not candidates:
+        if cancel_cb is not None:
+            cancel_cb()
         return mesh, transform
     from server.mesh.file_cut import cut_file_mesh
 
-    reduced, cut = cut_file_mesh(mesh, candidates, roles or {})
+    reduced, cut = cut_file_mesh(mesh, candidates, roles, input_triangle_count=preparation.input_triangle_count)
     effective = tuple(plane for plane in SYMMETRY_PLANE_AXIS if plane in (*declared, *cut["cut_planes"]))
     if cut["cut_planes"]:
         try:
@@ -368,6 +418,8 @@ def prepare_file_mesh(
             cut = {"cut_planes": [], "note": "The cut mesh could not be verified. Export the half or quarter to solve faster."}
             effective = declared
     transform.update(domain_planes=list(effective), cut_planes=cut["cut_planes"], symmetry_report=cut)
+    if cancel_cb is not None:
+        cancel_cb()
     return reduced, transform
 
 
@@ -475,13 +527,3 @@ def mesh_text(mesh: FileMesh) -> str:
         for i, (triangle, tag) in enumerate(zip(mesh.triangles, mesh.tags), 1)
     )
     return "\n".join([*lines, "$EndElements", ""])
-
-
-def prepare_file_mesh_options(mesh: FileMesh, options: dict[str, Any], *, cancel_cb: Any = None) -> tuple[FileMesh, dict[str, Any]]:
-    """Picklable entry point for the existing mesh-child session owner."""
-    if cancel_cb is not None:
-        cancel_cb()
-    prepared = prepare_file_mesh(mesh, **options)
-    if cancel_cb is not None:
-        cancel_cb()
-    return prepared

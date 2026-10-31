@@ -54,7 +54,7 @@ from server.design.uid import DesignUid
 from server.mesh.builder import _enforce_dense_solver_memory_ceiling, assembly_front_context
 from server.mesh.child import MesherChildError, MesherCrashError, run_mesh_build
 from server.mesh.errors import SolverMemoryTooLarge
-from server.mesh.file_import import MAX_MESH_BYTES, FileMesh, file_mesh_integrity, inspect_file_mesh, mesh_text, parse_file_mesh, prepare_file_mesh, prepare_file_mesh_options, solve_group_tags, validate_file_symmetry, validate_remove_lid_planes
+from server.mesh.file_import import MAX_MESH_BYTES, FileMesh, file_mesh_integrity, inspect_file_mesh, mesh_text, parse_file_mesh, prepare_file_mesh, prepare_file_mesh_input, finish_file_mesh_preparation, solve_group_tags, validate_file_symmetry, validate_remove_lid_planes
 from server.mesh.imported import polar_grid_from_symmetry
 from server.mesh.preparation_fence import PreparationFence, PreparationSuperseded
 from server.mesh.prepared_gc import prepared_mesh_use
@@ -404,20 +404,18 @@ async def prepare_registration(body: MeshRegistration, cancel_cb: Any = None) ->
     options = {"units": body.units, "forward": body.forward, "up": body.up,
                "domain_planes": body.domain_planes, "reflect_planes": body.reflect_planes,
                "remove_lid_planes": body.remove_lid_planes, "roles": body.driven_roles(), "auto_cut": body.auto_cut}
-    # Keep legacy validation free of native imports. Only requests that may
-    # cut need a Gmsh session; that session belongs to the existing child.
-    from server.mesh.file_cut import MAX_FILE_CUT_TRIANGLES
-    if (body.auto_cut or body.domain_planes) and len(original.triangles) <= MAX_FILE_CUT_TRIANGLES:
+    # Pure preparation owns the transformed straddling decision and retains
+    # the original count through lid removal. Only an admitted actual cut
+    # starts native work; existing reduced inputs retain their old pure path.
+    preparation = await asyncio.to_thread(prepare_file_mesh_input, original, **options)
+    if preparation.needs_native_cut:
         try:
-            return await run_mesh_build(prepare_file_mesh_options, original, options, cancel_cb=cancel_cb)
+            return await run_mesh_build(finish_file_mesh_preparation, preparation, cancel_cb=cancel_cb)
         except MesherCrashError as exc:
-            sides = inspect_file_mesh(original, body.units, body.forward, body.up)["kept_sides"]
-            if (body.auto_cut and not body.domain_planes) or any(sides.get(plane) == "both" for plane in body.domain_planes):
-                raise ValueError(
-                    "Cutting this mesh stopped before it finished. Choose Full model in the symmetry settings and try again."
-                ) from exc
-            raise
-    return await asyncio.to_thread(prepare_file_mesh_options, original, options)
+            raise ValueError(
+                "Cutting this mesh stopped before it finished. Choose Full model in the symmetry settings and try again."
+            ) from exc
+    return await asyncio.to_thread(finish_file_mesh_preparation, preparation, cancel_cb=cancel_cb)
 
 
 async def register_mesh_async(
