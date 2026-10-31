@@ -603,9 +603,9 @@ export function SketchKit({ presentation, slots, workflow, scaleToFit, context, 
       {contextStale && <p role="status" className="sketch-context-stale">Context out of date</p>}
     {(rejected || conflictConstraints.length > 0) && <div role="alert" className="sketch-conflict-banner">
       <span>{rejected?.reason || `Conflicting constraints: ${conflictNames}${diagnosis?.reason ? `. ${diagnosis.reason}` : ''}`}</span>
-      {scaleToFit && rejected?.reason.startsWith('The new throat conflicts with:') && <button type="button" onClick={scaleToFit}>Scale to fit throat</button>}
-      <button type="button" onClick={() => { setShowConflict(true); setSelection(conflicts.filter(id => sketch.constraints.some(c => c.id === id))); svg.current?.focus({ preventScroll: true }); }}>Show</button>
-      <button type="button" onClick={() => { session?.dismissRejection?.(); setRejected(undefined); setDismissedDiagnosis(diagnosis); setMessage(''); setPickReason(''); }}>Dismiss</button>
+      {scaleToFit && rejected?.reason.startsWith('The new throat conflicts with:') && <button className="btn" type="button" onClick={scaleToFit}>Scale to fit throat</button>}
+      <button className="btn" type="button" onClick={() => { setShowConflict(true); setSelection(conflicts.filter(id => sketch.constraints.some(c => c.id === id))); svg.current?.focus({ preventScroll: true }); }}>Show</button>
+      <button className="btn" type="button" onClick={() => { session?.dismissRejection?.(); setRejected(undefined); setDismissedDiagnosis(diagnosis); setMessage(''); setPickReason(''); }}>Dismiss</button>
     </div>}
 </>}
     properties={<>{tool !== 'select' && <p className="sketch-command-step" role="status">{arcHint}</p>}{selection.length > 0 && tool !== 'dimension' && tool !== 'constraint' && tool !== 'hand' && <div role="toolbar" aria-label="Selection actions" className="sketch-context sketch-selection-context">
@@ -617,7 +617,7 @@ export function SketchKit({ presentation, slots, workflow, scaleToFit, context, 
       {limitEditing !== undefined && <form className="sketch-inline" aria-label="Edit limit" onSubmit={event => {
         event.preventDefault(); const value = Number(limitEditing);
         if (Number.isFinite(value) && value > 0) { onLimitChange?.(value); setLimitEditing(undefined); }
-      }}><label>Limit radius<input aria-label="Limit radius" autoFocus type="number" min="0.001" step="any" value={limitEditing} onChange={e => setLimitEditing(e.target.value)} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Escape') setLimitEditing(undefined); }}/></label><button type="submit">Apply limit</button></form>}
+      }}><label>Limit radius<input aria-label="Limit radius" autoFocus type="number" min="0.001" step="any" value={limitEditing} onChange={e => setLimitEditing(e.target.value)} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Escape') setLimitEditing(undefined); }}/></label><button className="btn" type="submit">Apply limit</button></form>}
       {typed && <div className="sketch-inline" style={{ left: Math.min(preview.x + 12, size.width - 170), top: Math.min(preview.y + 12, size.height - 80) }}>
         {(['length', 'angle'] as const).map(field => <label key={field} className={typed[field].trim() ? 'locked' : undefined}>{field === 'length' ? 'Length (mm)' : 'Angle (°)'}<input aria-label={`Line ${field}`} autoFocus={field === 'length'} data-locked={!!typed[field].trim()} title={typed[field].trim() ? 'Locked; clear to unlock' : 'Unlocked'} value={typed[field]} onChange={event => setTyped({ ...typed, [field]: event.target.value })} onKeyDown={event => {
           event.stopPropagation();
@@ -629,14 +629,14 @@ export function SketchKit({ presentation, slots, workflow, scaleToFit, context, 
       </div>}
       {dimensionPrompt && <div role="dialog" aria-label="Over-constrained dimension" className="sketch-inline sketch-dimension-prompt" style={boxAt(draftLayout?.at, 260, 150)}>
         <p>This dimension would over-constrain the sketch.</p>
-        <button type="button" disabled={pending} onClick={() => placeDimension(dimensionPrompt, true)}>Make it a reference (driven) dimension</button>
-        <button type="button" disabled={pending} onClick={() => { setDimensionPrompt(undefined); setSelection([]); svg.current?.focus({ preventScroll: true }); }}>Cancel</button>
+        <button className="btn" type="button" disabled={pending} onClick={() => placeDimension(dimensionPrompt, true)}>Make it a reference (driven) dimension</button>
+        <button className="btn" type="button" disabled={pending} onClick={() => { setDimensionPrompt(undefined); setSelection([]); svg.current?.focus({ preventScroll: true }); }}>Cancel</button>
       </div>}
       {editing && editingDimension && !editingDimension.driving && <div role="dialog" aria-label="Reference dimension readout" data-dimension-dialog data-workspace-own-keys className="sketch-inline" style={boxAt(editingAt)} onKeyDown={event => {
         if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setEditing(undefined); svg.current?.focus({ preventScroll: true }); }
       }}>
         <p>Reference dimension: {dimensionLabel(editingDimension)}</p>
-        <button type="button" disabled={!session || pending} onClick={() => void run(async () => {
+        <button className="btn" type="button" disabled={!session || pending} onClick={() => void run(async () => {
           const after = await session!.command({ kind: 'setDriving', id: editing.id, driving: true });
           const c = after.constraints.find(c => c.id === editing.id);
           if (c && 'value' in c && c.driving) editDimension(c);
@@ -666,11 +666,11 @@ export function SketchKit({ presentation, slots, workflow, scaleToFit, context, 
             if (alive.current) { setEditing({ ...editing, reason: reason instanceof Error ? reason.message : String(reason) }); setRefusals(v => v + 1); }
           } finally { dimensionApplying.current = false; }
         });
-      }}><label>Dimension value<input ref={dimensionInput} aria-label="Dimension value" value={editing.value} onChange={event => setEditing({ ...editing, value: event.target.value })} onKeyDown={event => { if (event.key !== 'Tab') event.stopPropagation(); if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setEditing(undefined); svg.current?.focus({ preventScroll: true }); } }}/></label><button type="submit" disabled={pending}>Apply dimension value</button><button type="button" onClick={() => { setEditing(undefined); svg.current?.focus({ preventScroll: true }); }}>Cancel</button>{editing.reason && <span role="alert">{editing.reason}</span>}</form>}
+      }}><label>Dimension value<input ref={dimensionInput} aria-label="Dimension value" value={editing.value} onChange={event => setEditing({ ...editing, value: event.target.value })} onKeyDown={event => { if (event.key !== 'Tab') event.stopPropagation(); if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setEditing(undefined); svg.current?.focus({ preventScroll: true }); } }}/></label><button className="btn" type="submit" disabled={pending}>Apply dimension value</button><button className="btn" type="button" onClick={() => { setEditing(undefined); svg.current?.focus({ preventScroll: true }); }}>Cancel</button>{editing.reason && <span role="alert">{editing.reason}</span>}</form>}
 </>}
     status={<div role="status" className="sketch-status"><span className={`sketch-dof ${fullyConstrained ? 'complete' : ''}`}>{fullyConstrained ? 'Fully constrained' : `${diagnosis?.dof ?? '…'} DOF`}</span>{` · Solve: ${diagnosis?.status ?? 'pending'}`}{workflow && ` · ${workflow.state}`} {problems.length > 0 && workflow?.state !== 'unfinished' && ` · ${problems.length} problem${problems.length === 1 ? '' : 's'}`}  · {presentation.axes.x.label} {cursor.x.toFixed(2)}, {presentation.axes.y.label} {cursor.y.toFixed(2)} {presentation.axes.x.unit} · Snap: {previewSnap?.glyph ?? 'none'} · {message || (tool === 'select' ? workflow?.hint : undefined) || arcHint}<span> · Constraint state shown for sketches up to {DETERMINATION_ENTITY_LIMIT} entities</span></div>}
     footer={<>{diagnosis && sketch.constraints.some(c => diagnosis.constraintStates[c.id] === 'redundant') && <p>Implied: {sketch.constraints.filter(c => diagnosis.constraintStates[c.id] === 'redundant').map(c => c.id).join(', ')}</p>}
-    {problems.map((problem, i) => { const action = problemAction?.(problem); return <div className={`sketch-domain-problem ${workflow?.state === 'unfinished' ? 'unfinished' : problem.severity === 'warning' ? 'warning' : 'invalid'}`} key={`${problem.code}${i}`}>{problem.message}{problem.ids.filter(id => { const data = sketch.entities.find(e => e.id === id)?.data; return data && typeof data === 'object' && !Array.isArray(data) && typeof data.name === 'string' && data.name.trim(); }).map(id => ` · ${nameFor?.(id) ?? displayName(sketch, id)}`)}{action && <button type="button" disabled={!session} onClick={() => void run(() => session!.constraint(action.constraint))}>{action.label}</button>}</div>; })}</>}>
+    {problems.map((problem, i) => { const action = problemAction?.(problem); return <div className={`sketch-domain-problem ${workflow?.state === 'unfinished' ? 'unfinished' : problem.severity === 'warning' ? 'warning' : 'invalid'}`} key={`${problem.code}${i}`}>{problem.message}{problem.ids.filter(id => { const data = sketch.entities.find(e => e.id === id)?.data; return data && typeof data === 'object' && !Array.isArray(data) && typeof data.name === 'string' && data.name.trim(); }).map(id => ` · ${nameFor?.(id) ?? displayName(sketch, id)}`)}{action && <button className="btn" type="button" disabled={!session} onClick={() => void run(() => session!.constraint(action.constraint))}>{action.label}</button>}</div>; })}</>}>
         <ContextLayer names={viewOptions.names} cursor={contextPointer} contour={contourPoints} viewport={size} canPick={canPickContext} validTargets={constraintContext} isPanning={() => space.current || tool === 'hand'} sketch={sketch} reserved={dimensionBoxes} items={contextItems} hoveredId={tool === 'constraint' ? constraintHover : tool === 'dimension' ? dimensionHover : hoverId} highlighted={highlighted} stale={contextStale} view={view} onPick={pickContext}
           onEditLimit={radius => setLimitEditing(String(radius))} canEditLimit={!!onLimitChange}/>
         <WorkspaceItems items={display.items.filter(item => item.kind === 'polyline' || item.kind === 'arc')} view={view} render={(item, d) => {

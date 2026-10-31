@@ -581,7 +581,7 @@ export function SolvedWithReadout() {
     <b>{runDisplayName(job, 'short')} was solved with</b>
     <span>{polarSummary(runPolar)}</span>
     <small>Differs from the settings above in {differences.join(', ')}. The charts show the run; these fields describe the next solve.</small>
-    <button type="button" onClick={() => updatePolar(runPolar)}>Use the run’s settings</button>
+    <button className="btn" type="button" onClick={() => updatePolar(runPolar)}>Use the run’s settings</button>
   </div>;
 }
 

@@ -74,7 +74,7 @@ export function RootFolderControls({ cadlinkOnly = false, showPath = true }: { c
     <details className="cad-folder-manual">
       <summary>Enter a folder path instead</summary>
       <label>WG folder path<input value={typed} onChange={event => setTyped(event.target.value)}/></label>
-      <button disabled={busy || !typed.trim() || folder?.readOnly} onClick={() => void run('select', typed.trim())}>Use this path</button>
+      <button className="btn" disabled={busy || !typed.trim() || folder?.readOnly} onClick={() => void run('select', typed.trim())}>Use this path</button>
     </details>
     {error && <Notice tone="error" role="status">{error}</Notice>}
   </div>;

@@ -70,9 +70,24 @@ type Node = { type: string; start: number; end: number; [key: string]: any };
 function presentationViolations(source: string, ownedSelectors: string[], file = ''): string[] {
   const failures: string[] = [];
   const syntax = parseAst(source, { lang: 'tsx' }) as unknown as Node;
+  // Null means a runtime class value; known blank branches still need a CSS owner.
+  function classBranches(value?: Node): Array<string | null> {
+    if (!value) return [''];
+    if (value.type === 'Literal') return [typeof value.value === 'string' ? value.value : ''];
+    if (value.type === 'Identifier' && value.name === 'undefined' || value.type === 'UnaryExpression' && value.operator === 'void') return [''];
+    if (value.type === 'ConditionalExpression') return [...classBranches(value.consequent), ...classBranches(value.alternate)];
+    if (value.type === 'LogicalExpression') return [...(value.operator === '&&' ? [''] : classBranches(value.left)), ...classBranches(value.right)];
+    if (value.type === 'TemplateLiteral') {
+      const fixed = value.quasis.map((part: Node) => part.value.cooked).join(' ');
+      if (fixed.trim() || value.expressions.length === 0) return [fixed];
+      const branches = value.expressions.map((expression: Node) => classBranches(expression));
+      return branches.every((items: Array<string | null>) => items.every(item => item === '')) ? [''] : [null];
+    }
+    return [null];
+  }
   function visit(node: Node, parent: HTMLElement) {
     if (node.type === 'JSXElement') {
-      const element = opening(node.openingElement, parent);
+      const element = opening(node.openingElement, parent, node);
       for (const child of node.children) visit(child, element);
       return;
     }
@@ -83,21 +98,45 @@ function presentationViolations(source: string, ownedSelectors: string[], file =
       } else if (value && typeof value === 'object' && 'type' in value) visit(value as Node, parent);
     }
   }
-  function opening(node: Node, parent: HTMLElement): HTMLElement {
+  function opening(node: Node, parent: HTMLElement, jsx?: Node): HTMLElement {
     const attr = (name: string) => node.attributes.find((item: Node) => item.name?.name === name)?.value;
     const tag = node.name.name;
+    // Attributes can contain entire action trees, including on components whose
+    // children are absent (EmptyState) or rendered in a separate row (Notice).
+    for (const item of node.attributes) if (item.value?.expression) visit(item.value.expression, parent);
     let element = parent;
     if (tag && /^[a-z]/.test(tag)) {
       element = document.createElement(tag);
-      const classes = attr('className');
-      if (classes?.type === 'Literal') element.className = classes.value;
-      else if (classes) element.className = [...source.slice(classes.expression.start, classes.expression.end)
-        .matchAll(/['"`]([\w -]+)['"`]/g)].map(match => match[1]).join(' ');
+      for (const item of node.attributes) if (item.type === 'JSXAttribute' && item.value?.type === 'Literal'
+        && typeof item.value.value === 'string' && item.name.name !== 'className') element.setAttribute(item.name.name, item.value.value);
       parent.append(element);
-      const hasClass = classes?.type === 'Literal' ? Boolean(classes.value.trim()) : Boolean(classes);
-      if (tag === 'button' && !hasClass && !(file === '../App.tsx' && attr('style')) && !ownedSelectors.some(selector => {
-        try { return element.matches(selector); } catch { return false; }
+      const style = attr('style')?.expression;
+      const styleValue = (key: string) => style?.properties?.find((item: Node) => item.key?.name === key)?.value?.value;
+      // Only the real, self-contained emergency boundary owns its literal palette.
+      if (file === '../App.tsx' && tag === 'div' && attr('role')?.value === 'alert'
+        && styleValue('background') === '#16181d' && styleValue('color') === '#e6e8ec'
+        && jsx && source.slice(jsx.start, jsx.end).includes('Waveguide Generator hit a rendering error'))
+        element.dataset.guardEmergencyFallback = 'true';
+      const emergencyReload = file === '../App.tsx' && tag === 'button'
+        && parent.closest('[data-guard-emergency-fallback]') !== null
+        && (jsx?.children ?? []).some((child: Node) => child.type === 'JSXText' && child.value.trim() === 'Reload')
+        && source.slice(attr('onClick')?.expression?.start, attr('onClick')?.expression?.end).replace(/\s/g, '') === '()=>window.location.reload()'
+        && styleValue('border') === '1px solid #3a3f4a' && styleValue('background') === '#242832';
+      // TopBar's workspace-mode radio helper is declared outside its actual
+      // .theme-toggle.workspace-mode-toggle parent; that parent owns its skin.
+      const workspaceRadio = file === '../shell/TopBar.tsx' && attr('role')?.value === 'radio'
+        && source.slice(attr('onClick')?.expression?.start, attr('onClick')?.expression?.end).replace(/\s/g, '') === '()=>activateWorkspaceMode(value)'
+        && source.slice(attr('aria-checked')?.expression?.start, attr('aria-checked')?.expression?.end).replace(/\s/g, '') === 'mode===value';
+      const classes = attr('className');
+      const branches = classBranches(classes?.type === 'JSXExpressionContainer' ? classes.expression : classes);
+      if (tag === 'button' && !emergencyReload && !workspaceRadio && branches.some(value => {
+        element.className = value ?? '';
+        return value !== null && !value.trim() && !ownedSelectors.some(selector => {
+          try { return element.matches(selector); } catch { return false; }
+        });
       })) failures.push(`Unstyled button at ${node.start}`);
+      // Descendants retain class candidates for legitimate inherited owners.
+      element.className = branches.filter((value): value is string => value !== null).join(' ');
     }
     // The retired primary alias is semantic only; dynamic branches must also
     // name its shared appearance owner.
@@ -116,7 +155,7 @@ function presentationViolations(source: string, ownedSelectors: string[], file =
         && !(colorValue.includes('var(') && !/#|(?:rgb|hsl)a?\(\s*[\d.#]/i.test(colorValue.replace(/var\([^)]*\)/g, '')))) {
         // The last-resort error boundary must render even if application CSS fails.
         const fallbackColors = ['#16181d', '#e6e8ec', '#a9adb6', '1px solid #3a3f4a', '#242832', '#8ab4f8'];
-        if (file !== '../App.tsx' || !fallbackColors.includes(colorValue))
+        if (!element.closest('[data-guard-emergency-fallback]') || !fallbackColors.includes(colorValue))
           failures.push(`Literal style color at ${item.start}: ${colorValue}`);
       }
     }
@@ -127,11 +166,25 @@ function presentationViolations(source: string, ownedSelectors: string[], file =
   const hosts: Record<string, string> = {
     '../sketch/SelectionProperties.tsx': 'sketch-context',
     '../sketch/kit/SketchTools.tsx': 'sketch-toolbar',
+    '../results/ResultViewSwitch.tsx': 'results-toolbar',
   };
+  const consumer = document.createElement('div');
+  consumer.className = 'source-editor';
   const host = document.createElement('div');
+  if (hosts[file] && file.startsWith('../sketch/')) consumer.append(host);
   host.className = hosts[file] ?? '';
   visit(syntax, host);
   return failures;
+}
+
+function appearanceSelectors(css: string): string[] {
+  return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap(match => {
+    // Layout, focus and disabled-state rules cannot own a normal button skin.
+    if (!/(?:^|;)\s*(?:background(?:-color|-image)?|border(?:-(?:color|style|width|top|right|bottom|left))?|box-shadow)\s*:/.test(match[2])) return [];
+    const selectors = match[1].split(/,(?![^()]*\))/).map(selector => selector.trim());
+    return selectors.filter(selector => /\.[\w-]+/.test(selector)
+      && !/:(?:hover|focus[\w-]*|disabled|enabled|active)\b/.test(selector));
+  });
 }
 
 it('guards JSX button ownership and literal inline colors without scanning runtime values', () => {
@@ -139,8 +192,7 @@ it('guards JSX button ownership and literal inline colors without scanning runti
   // global resets and focus styles never make a new bare action styled.
   const css = Object.keys(import.meta.glob('../**/*.css')).map(path =>
     new TextDecoder().decode(readFileSync(`src/styles/${path}`)).replace(/\/\*[\s\S]*?\*\//g, '')).join('\n');
-  const selectors = [...css.matchAll(/([^{}]+)\{[^{}]*\}/g)].flatMap(match => match[1].split(','))
-    .map(selector => selector.trim()).filter(selector => /\.[\w-]+/.test(selector) && /\bbutton\b/.test(selector));
+  const selectors = appearanceSelectors(css);
   const failures = Object.keys(import.meta.glob('../**/*.tsx')).filter(path => !/\.test\.tsx$/.test(path))
     .flatMap(path => presentationViolations(new TextDecoder().decode(readFileSync(`src/styles/${path}`)), selectors, path).map(message => `${path}: ${message}`));
   expect(failures).toEqual([]);
@@ -149,11 +201,29 @@ it('guards JSX button ownership and literal inline colors without scanning runti
 it('detects bare controls and colors, accepting multiline classes, variables and dynamic chart colors', () => {
   expect(presentationViolations('<button\n disabled>New action</button>', [])).toHaveLength(1);
   expect(presentationViolations('<button {...props}>New action</button>', [])).toHaveLength(1);
-  expect(presentationViolations('<button className={saved ? "" : "primary"}>Save</button>', [])).toHaveLength(1);
+  expect(presentationViolations('<button className={saved ? "" : "primary"}>Save</button>', [])).toHaveLength(2);
   expect(presentationViolations('<button className="" style={{margin: 2}}>Action</button>', [])).toHaveLength(1);
   expect(presentationViolations('<div style={{border: "1px solid var(--hair)", background: "rgba(var(--acc-rgb), .2)"}}/>', [])).toEqual([]);
   expect(presentationViolations('<button className={busy ? "btn" : "btn-primary"} style={{ color: "var(--fg)", backgroundColor: chartColor }}>Action</button>', [])).toEqual([]);
   expect(presentationViolations('<div style={{color: "#ffffff"}}/>', [])).toHaveLength(1);
   expect(presentationViolations('<div style={{backgroundImage: `linear-gradient(#fff, #000)`}}/>', [])).toHaveLength(1);
   expect(presentationViolations('<div className="segments"><button>One</button></div>', ['.segments button'])).toEqual([]);
+});
+
+
+it('guards migrated action props and bounds every legacy exception', () => {
+  expect(presentationViolations('<Notice actions={<button style={{color:"#ff0000"}}>Retry</button>}>Oops</Notice>', [])).toHaveLength(2);
+  expect(presentationViolations('<EmptyState action={<button>Retry</button>}/>', [])).toHaveLength(1);
+  const layout = appearanceSelectors('.settings-theme-options button { display:flex; padding:6px 12px; }');
+  expect(layout).toEqual([]);
+  expect(presentationViolations('<div className="settings-theme-options"><button>Retry</button></div>', layout)).toHaveLength(1);
+  expect(appearanceSelectors('.x button:focus-visible { border:1px solid red; } .x button:disabled { background:red; }')).toEqual([]);
+  expect(presentationViolations('<button className={busy ? "" : ""}>Retry</button>', [])).toHaveLength(1);
+  expect(presentationViolations('<button className={busy ? "btn" : ""}>Retry</button>', [])).toHaveLength(1);
+  expect(presentationViolations('<button className={busy ? "btn" : undefined}>Retry</button>', [])).toHaveLength(1);
+  expect(presentationViolations('<button className={`${busy ? "" : ""}`}>Retry</button>', [])).toHaveLength(1);
+  expect(presentationViolations('<button style={{margin:2}}>Retry</button>', [], '../App.tsx')).toHaveLength(1);
+  expect(presentationViolations('<button style={{background:"#242832"}}>Retry</button>', [], '../App.tsx')).toHaveLength(2);
+  expect(presentationViolations('<Notice actions={<button className="btn" style={{color:"var(--fg)"}}>Retry</button>}>Oops</Notice>', [])).toEqual([]);
+  expect(presentationViolations('<div className="segments"><button className={busy ? "on" : ""}>One</button></div>', appearanceSelectors('.segments button { background:transparent; border:1px solid var(--hair); }'))).toEqual([]);
 });

@@ -2692,7 +2692,7 @@ export function ResultsPanel() {
           void loadMeasured(files);
         }}
       />
-      <button
+      <button className="btn"
         disabled={measuredOverlays.length >= MAX_MEASURED_OVERLAYS}
         title={measuredOverlays.length >= MAX_MEASURED_OVERLAYS
           ? `At most ${MAX_MEASURED_OVERLAYS} measurement overlays fit on the SPL chart. Remove one first.`
@@ -2707,7 +2707,7 @@ export function ResultsPanel() {
           : !cadResultMatchesViewport && primaryVerdict !== 'current' ? "Show this run's model to export its results"
             : !primary || !cadResultMatchesViewport ? 'Select a run with results to export' : undefined}
         onOpenExportSettings={() => setPreferencesOpen(true)}
-      /> : <button disabled title="Select a run to export">Export</button>}
+      /> : <button className="btn" disabled title="Select a run to export">Export</button>}
       <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
     </>}/>
     {powerFlags && cadResultMatchesViewport && <div className="result-diagnostics">

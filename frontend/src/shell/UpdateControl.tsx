@@ -247,7 +247,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
         <section className="update-channel" aria-label="Update channel"><h3>Update channel</h3>
           <div className="settings-theme-options" role="group" aria-label="Update channel">
             {(['stable', 'beta'] as const).map((next) => <button key={next} aria-pressed={choice === next}
-              className={choice === next ? 'on' : ''} disabled={choice === undefined || busy || installing || mismatch}
+              className={choice === next ? 'btn on' : 'btn'} disabled={choice === undefined || busy || installing || mismatch}
               onClick={() => choose(next)}>{next === 'stable' ? 'Stable' : 'Beta'}</button>)}</div>
           <p>{choice === 'beta' ? 'Includes pre-release builds. Returning to Stable waits for a newer stable version.' : 'Finished releases only.'}</p></section>
         {channelPending && <Notice tone="info" role="status">Check the selected channel before installing.</Notice>}

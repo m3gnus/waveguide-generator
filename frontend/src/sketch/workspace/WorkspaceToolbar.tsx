@@ -8,7 +8,7 @@ export const drawingIcons = { select: 'M4 2 13 10 8 10 6 14Z', hand: 'M5 8V3a1 1
 export function NavigateTools({ tool, choose }: { tool: string; choose(tool: 'select' | 'hand'): void }) {
   return <div className="sketch-toolbar-group" role="group" aria-label="Navigate"><span className="sketch-group-caption">Navigate</span><div className="sketch-tool-segment">{(['select', 'hand'] as const).map(t => {
     const label = t === 'select' ? 'Select (Esc)' : 'Pan (hold Space)';
-    return <Fragment key={t}><button type="button" aria-label={label} title={label} aria-pressed={tool === t} onClick={() => choose(t)}><svg aria-hidden="true" viewBox="0 0 16 16"><path d={drawingIcons[t]}/></svg><span className="sketch-tool-label">{t[0].toUpperCase() + t.slice(1)}</span></button></Fragment>;
+    return <Fragment key={t}><button className="btn" type="button" aria-label={label} title={label} aria-pressed={tool === t} onClick={() => choose(t)}><svg aria-hidden="true" viewBox="0 0 16 16"><path d={drawingIcons[t]}/></svg><span className="sketch-tool-label">{t[0].toUpperCase() + t.slice(1)}</span></button></Fragment>;
   })}</div></div>;
 }
 interface Props {
@@ -27,12 +27,12 @@ export function WorkspaceToolbar({ tool, enabled, viewOptions, navigation, child
   return <div role="toolbar" aria-label={label} className="sketch-toolbar" onKeyDown={event => { if (event.key === 'Escape') { onEscape?.(); setLegend(false); } }}>
     {navigation}
     {children}
-    <button type="button" disabled={!enabled || !canUndo} onClick={() => undo()}>Undo</button><button type="button" disabled={!enabled || !canRedo} onClick={() => undo(true)}>Redo</button>
+    <button className="btn" type="button" disabled={!enabled || !canUndo} onClick={() => undo()}>Undo</button><button className="btn" type="button" disabled={!enabled || !canRedo} onClick={() => undo(true)}>Redo</button>
     <div className="sketch-view-tools" role="group" aria-label="View"><span className="sketch-group-caption">View</span>
-      <button type="button" aria-label="Zoom out" title="Zoom out (−)" onClick={() => zoom(1 / 1.25)}>−</button><button type="button" aria-label="Zoom in" title="Zoom in (+)" onClick={() => zoom(1.25)}>+</button>
-      <button type="button" title="Fit (F)" onClick={() => fit()}>Fit (F)</button><button type="button" title="Fit all (Shift+F)" onClick={() => fit(true)}>Fit all (Shift+F)</button>
-      {(['dimensions', 'names', 'constraints'] as const).filter(key => solver || key !== 'constraints').map(key => <button type="button" key={key} aria-pressed={viewOptions[key]} onClick={() => toggle(key)}>{key[0].toUpperCase() + key.slice(1)}</button>)}
-      <div className="sketch-menu-anchor"><button type="button" aria-label="Line styles" title="Line styles" aria-expanded={legend} onClick={() => setLegend(!legend)}>?</button>
+      <button className="btn" type="button" aria-label="Zoom out" title="Zoom out (−)" onClick={() => zoom(1 / 1.25)}>−</button><button className="btn" type="button" aria-label="Zoom in" title="Zoom in (+)" onClick={() => zoom(1.25)}>+</button>
+      <button className="btn" type="button" title="Fit (F)" onClick={() => fit()}>Fit (F)</button><button className="btn" type="button" title="Fit all (Shift+F)" onClick={() => fit(true)}>Fit all (Shift+F)</button>
+      {(['dimensions', 'names', 'constraints'] as const).filter(key => solver || key !== 'constraints').map(key => <button className="btn" type="button" key={key} aria-pressed={viewOptions[key]} onClick={() => toggle(key)}>{key[0].toUpperCase() + key.slice(1)}</button>)}
+      <div className="sketch-menu-anchor"><button className="btn" type="button" aria-label="Line styles" title="Line styles" aria-expanded={legend} onClick={() => setLegend(!legend)}>?</button>
         {legend && <div className="sketch-menu sketch-line-legend" role="dialog" aria-label="Line styles legend"><strong>Line styles</strong>{[
           ['not-analysed', 'Constraint state not analysed'], ['under', 'Profile: under-constrained'], ['determined', 'Profile: fully constrained'], ['construction', 'Construction'], ['projected', 'Projected context'], ['conflicting', 'Conflict'], ['under moving', 'Moving patch (2 px)'], ['under rigid', 'Rigid patch (3.5 px)'],
         ].filter(([style]) => solver || style === 'construction' || style === 'projected').map(([style, label]) => <div key={label}><svg aria-hidden="true" viewBox="0 0 40 12"><path d="M0 6H40" className={`sketch-entity ${style}`}/></svg><span>{label}</span></div>)}</div>}

@@ -165,7 +165,7 @@ export interface ChartStubAction {
 export function ChartStub({ reason, action }: { reason: string; action?: ChartStubAction }) {
   return <div className="chart-stub" role="status">
     <span>{reason}</span>
-    {action && <button
+    {action && <button className="btn"
       type="button"
       disabled={action.disabled}
       aria-busy={action.busy}

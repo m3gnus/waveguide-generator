@@ -340,8 +340,8 @@ export function SettingsDialog({ open, theme, focusSection, onThemeChange, onClo
         <section className="settings-theme" aria-labelledby="settings-theme-title">
           <h3 id="settings-theme-title">Theme</h3>
           <div className="settings-theme-options">
-            <button className={theme === 'dark' ? 'on' : ''} aria-pressed={theme === 'dark'} onClick={() => onThemeChange('dark')}><Icon name="moon"/>Dark</button>
-            <button className={theme === 'light' ? 'on' : ''} aria-pressed={theme === 'light'} onClick={() => onThemeChange('light')}><Icon name="sun"/>Light</button>
+            <button className={theme === 'dark' ? 'btn on' : 'btn'} aria-pressed={theme === 'dark'} onClick={() => onThemeChange('dark')}><Icon name="moon"/>Dark</button>
+            <button className={theme === 'light' ? 'btn on' : 'btn'} aria-pressed={theme === 'light'} onClick={() => onThemeChange('light')}><Icon name="sun"/>Light</button>
           </div>
         </section>
         <CadSettings/>

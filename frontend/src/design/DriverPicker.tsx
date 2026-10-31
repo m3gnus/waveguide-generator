@@ -732,7 +732,7 @@ function DriverSheet({ channel, form, onClose, displayName }: {
         {variants.map((variant) => <button
           key={variant.id}
           type="button"
-          className={variant.id === preset?.id ? 'on' : ''}
+          className={variant.id === preset?.id ? 'btn on' : 'btn'}
           aria-pressed={variant.id === preset?.id}
           onClick={() => void chooseVariant(variant.id)}
         >{impedanceText(variant.z_ohm) ?? 'unknown Ω'}</button>)}
