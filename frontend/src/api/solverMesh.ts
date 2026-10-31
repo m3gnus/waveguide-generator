@@ -1,9 +1,6 @@
-import { toSolveDesign } from '../jobs/actions';
 import { formatApiDetail } from './httpError';
-import type { DesignDocument } from '../stores/design';
+import { serializeSolveDesign, type DesignDocument } from '../stores/design';
 import type { SolveOptionsStore } from '../stores/solveOptions';
-import { createImportedMeshScene, type ImportedMeshScene } from '../viewport/importedMesh';
-import { parseMSH } from '../viewport/mshParser';
 import type { components } from './generated/openapi';
 
 /** Trimmed build statistics the solver-mesh endpoint reports alongside the
@@ -35,7 +32,7 @@ export function solverMeshOptions(state: SolveOptionsStore) {
 
 /** Design sampling is consumed after meshing, just like option sampling. */
 export function solverMeshDesignKey(design: DesignDocument): string {
-  const wire = toSolveDesign(design);
+  const wire = serializeSolveDesign(design);
   const simulation = { ...(wire.simulation as Record<string, unknown>) };
   delete simulation.f1;
   delete simulation.f2;
@@ -108,21 +105,4 @@ export async function postSolverMesh(
  * key so an unchanged artifact can be recognised without re-parsing it. */
 export function solverMeshArtifactToken(meshCacheKey: string): string {
   return `solver:${meshCacheKey}`;
-}
-
-/** Parse the artifact and reconstruct the full physical model for display.
- * The reduced solve domain keeps its `solvedDomain` mark; mirrored copies are
- * display-only, exactly as CAD-return artifacts are treated. */
-export function solverMeshScene(name: string, result: SolverMeshResult): ImportedMeshScene {
-  return createImportedMeshScene(
-    name,
-    parseMSH(result.msh_text),
-    'solver',
-    null,
-    result.cut_planes,
-    {
-      solvedTriangleCount: result.stats.triangle_count,
-      artifactToken: solverMeshArtifactToken(result.stats.mesh_cache_key),
-    },
-  );
 }

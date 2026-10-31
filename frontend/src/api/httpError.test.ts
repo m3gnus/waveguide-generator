@@ -40,10 +40,24 @@ describe('httpErrorMessage', () => {
 describe('HTTP detail helper ownership', () => {
   it('keeps the formatter owner free of runtime dependencies', () => {
     expect(imports('./httpError.ts')).toEqual([]);
+    expect(source('./httpError.ts')).not.toMatch(/\b(?:import|require)\s*\(/);
   });
 
   it.each(['designIo', 'importedModels', 'meshReplay', 'solverMesh'])('%s imports the formatter from its HTTP owner', name => {
     const formatterImports = imports(`./${name}.ts`).filter(({ bindings }) => /\bformatApiDetail\b/.test(bindings));
     expect(formatterImports.map(({ owner }) => owner)).toEqual(['./httpError']);
+    expect(imports(`./${name}.ts`).filter(({ bindings, owner }) =>
+      owner === '../jobs/actions' && !bindings.startsWith('type '))).toEqual([]);
+  });
+});
+
+describe('solver mesh transport boundary', () => {
+  it('keeps only the HTTP helper and existing design serializer as runtime imports', () => {
+    // Serialization still depends on the design store. This guard removes the
+    // jobs hop and viewport construction; it does not claim store independence.
+    const runtimeImports = imports('./solverMesh.ts').filter(({ bindings }) => !bindings.startsWith('type '));
+    expect(runtimeImports.map(({ owner }) => owner).sort()).toEqual(['../stores/design', './httpError']);
+    expect(source('./solverMesh.ts')).not.toMatch(/\bsolverMeshScene\b|\bparseMSH\b|\bcreateImportedMeshScene\b/);
+    expect(source('./solverMesh.ts')).not.toMatch(/\b(?:import|require)\s*\(/);
   });
 });

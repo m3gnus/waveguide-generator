@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
-import { postSolverMesh, SolverMeshTooLarge, solverMeshArtifactToken, solverMeshScene, type SolverMeshResult } from './solverMesh';
+import { designForFamily } from '../stores/design';
+import { postSolverMesh, SolverMeshTooLarge, solverMeshDesignKey, type SolverMeshResult } from './solverMesh';
 
 const result: SolverMeshResult = {
   plan: { engine: 'metal', formulation: 'full-3d', reason: 'test', eligibility_reasons: [] },
-  msh_text: meshFixture,
+  msh_text: 'transport artifact',
   stats: {
     triangle_count: 12,
     vertex_count: 9,
@@ -34,10 +34,12 @@ describe('postSolverMesh', () => {
         ok: true, status: 200, statusText: 'OK', json: async () => result,
       } as Response;
     };
-    const received = await postSolverMesh('{"design":{}}', fetcher);
+    const controller = new AbortController();
+    const received = await postSolverMesh('{"design":{}}', fetcher, controller.signal);
     expect(received.stats.mesh_cache_key).toBe('abc123');
     expect(sent?.method).toBe('POST');
     expect(sent?.body).toBe('{"design":{}}');
+    expect(sent?.signal).toBe(controller.signal);
   });
 
   it('rejects a malformed payload rather than rendering from it', async () => {
@@ -52,6 +54,23 @@ describe('postSolverMesh', () => {
     )).rejects.toThrow('Solver mesh exceeds the ceiling');
   });
 
+  it('retains a structured non-ceiling 409 detail after checking a cloned body', async () => {
+    const response = Response.json({ detail: [{ loc: ['body', 'design'], msg: 'Value error, refused' }] }, { status: 409 });
+    await expect(postSolverMesh('{}', async () => response)).rejects.toThrow('body.design: Value error, refused');
+    expect(response.bodyUsed).toBe(true);
+  });
+
+  it('keeps the status fallback when a refusal body is unreadable', async () => {
+    const response = new Response('unreadable', { status: 422, statusText: 'Unprocessable Entity' });
+    await expect(postSolverMesh('{}', async () => response)).rejects.toThrow('422 Unprocessable Entity');
+    expect(response.bodyUsed).toBe(true);
+  });
+
+  it('propagates a fetch abort without replacing its identity', async () => {
+    const error = new DOMException('Cancelled', 'AbortError');
+    await expect(postSolverMesh('{}', async () => { throw error; })).rejects.toBe(error);
+  });
+
   it('keeps the measured triangle limit for the shared solve choice', async () => {
     const fetcher: typeof fetch = async () => new Response(JSON.stringify({ detail: {
       code: 'mesh_too_large', triangles: 22001, limit: 22000, mesh_cache_key: 'a'.repeat(64),
@@ -62,21 +81,17 @@ describe('postSolverMesh', () => {
   });
 });
 
-describe('solverMeshScene', () => {
-  it('parses the artifact and reconstructs the full model across the cut planes', () => {
-    const scene = solverMeshScene('Simulation mesh', result);
-    expect(scene.source).toBe('solver');
-    expect(scene.artifactToken).toBe(solverMeshArtifactToken('abc123'));
-    expect(scene.solvedTriangleCount).toBe(12);
-    // Two origin cuts mirror the reduced domain up to fourfold; triangles on a
-    // cut plane are not duplicated, so the display count lies in between.
-    expect(scene.triangleCount).toBeGreaterThan(0);
-    const parsedTriangles = scene.scene.surfaces
-      .filter((surface) => surface.solvedDomain)
-      .reduce((count, surface) => count + surface.indices.length / 3, 0);
-    expect(scene.triangleCount).toBeGreaterThanOrEqual(parsedTriangles);
-    // The solver's reduced domain stays marked; mirrored copies are display-only.
-    expect(scene.scene.surfaces.some((surface) => surface.solvedDomain)).toBe(true);
-    expect(scene.scene.surfaces.some((surface) => !surface.solvedDomain)).toBe(true);
+describe('solverMeshDesignKey', () => {
+  it('ignores sampling edits while retaining geometry and non-polar extra blocks', () => {
+    const design = designForFamily('OSSE');
+    const key = solverMeshDesignKey(design);
+    Object.assign(design.simulation, { f1: 50, f2: 20_000, num_frequencies: 80 });
+    design.extra_blocks['ABEC.Polars:test'] = { items: {}, lines: ['sampling'] };
+    expect(solverMeshDesignKey(design)).toBe(key);
+    design.extra_blocks['Report'] = { items: { Title: 'mesh' }, lines: [] };
+    expect(solverMeshDesignKey(design)).not.toBe(key);
+    delete design.extra_blocks['Report'];
+    design.mesh.throat_resolution *= 2;
+    expect(solverMeshDesignKey(design)).not.toBe(key);
   });
 });
