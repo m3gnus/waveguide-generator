@@ -35,7 +35,7 @@ class DomainReadingRequest(BaseModel):
     @model_validator(mode="after")
     def _one_snapshot(self) -> DomainReadingRequest:
         if (self.operation_id is None) == (self.ingest_id is None):
-            raise ValueError("name exactly one of operationId or ingestId")
+            raise ValueError("WG could not tell which model this is. Select the model again.")
         if (self.reading == "reduced") != bool(self.planes):
             raise ValueError("a reduced reading names its planes, and only a reduced reading does")
         return self

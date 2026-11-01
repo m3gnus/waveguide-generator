@@ -89,7 +89,7 @@ def _imported_record_sources(record: Mapping[str, Any]) -> list[dict[str, Any]]:
     ):
         raise ImportedSolveRefusal(
             "ingest_record_incomplete",
-            "the ingestion record has no authoritative source inventory; re-ingest the CAD return",
+            "WG could not read its saved copy of this model. Send it again from Fusion.",
         )
     return [dict(source) for source in sources]
 
@@ -111,13 +111,13 @@ def _cad_identity_provenance(
     if not isinstance(raw_identity, Mapping):
         raise ImportedSolveRefusal(
             "cad_identity_invalid",
-            "the ingestion record's CAD identity graph is unreadable; re-ingest the CAD return",
+            "WG could not read its saved copy of this model. Send it again from Fusion.",
         )
     version = raw_identity.get("schema_version")
     if version not in {None, 1}:
         raise ImportedSolveRefusal(
             "cad_identity_unsupported",
-            f"the ingestion record uses unsupported CAD identity schema {version!r}; upgrade WG",
+            "This model was sent by a newer version of WG. Update WG to open it.",
         )
     raw_instances = raw_identity.get("instances")
     if not isinstance(raw_instances, list) or not all(
@@ -125,14 +125,14 @@ def _cad_identity_provenance(
     ):
         raise ImportedSolveRefusal(
             "cad_identity_invalid",
-            "the ingestion record has no authoritative CAD instance inventory; re-ingest the CAD return",
+            "WG could not read its saved copy of this model. Send it again from Fusion.",
         )
 
     instance_ids = [str(instance.get("instance_id") or "") for instance in raw_instances]
     if any(not instance_id for instance_id in instance_ids) or len(set(instance_ids)) != len(instance_ids):
         raise ImportedSolveRefusal(
             "cad_identity_invalid",
-            "the ingestion record's CAD instance IDs are empty or duplicated; re-ingest the CAD return",
+            "WG could not read its saved copy of this model. Send it again from Fusion.",
         )
     known_instances = set(instance_ids)
     for address in ("selected_instance_id", "solver_anchor_instance_id"):
@@ -140,7 +140,7 @@ def _cad_identity_provenance(
         if value is not None and str(value) not in known_instances:
             raise ImportedSolveRefusal(
                 "cad_identity_invalid",
-                f"the ingestion record's {address} does not address one retained instance; re-ingest the CAD return",
+                "WG could not read its saved copy of this model. Send it again from Fusion.",
             )
 
     sources = _imported_record_sources(record)
@@ -152,14 +152,14 @@ def _cad_identity_provenance(
         if not isinstance(inventory_sources, list):
             raise ImportedSolveRefusal(
                 "cad_identity_invalid",
-                "the ingestion record's CAD source inventory is unreadable; re-ingest the CAD return",
+                "WG could not read its saved copy of this model. Send it again from Fusion.",
             )
         for raw_source_id in inventory_sources:
             source_id = str(raw_source_id)
             if source_id not in source_by_id or source_id in inventory_owner:
                 raise ImportedSolveRefusal(
                     "cad_identity_invalid",
-                    "the ingestion record's CAD sources are unknown or assigned to multiple instances; re-ingest the CAD return",
+                    "WG could not read its saved copy of this model. Send it again from Fusion.",
                 )
             inventory_owner[source_id] = instance_id
 
@@ -174,14 +174,14 @@ def _cad_identity_provenance(
             if declared_owner is not None and declared_owner not in known_instances:
                 raise ImportedSolveRefusal(
                     "cad_identity_invalid",
-                    f"source {source_id!r} names unknown CAD instance {declared_owner!r}; re-ingest the CAD return",
+                    "WG could not read its saved copy of this model. Send it again from Fusion.",
                 )
             if declared_owner != inventory_instance and (
                 declared_owner is not None or inventory_instance is not None
             ):
                 raise ImportedSolveRefusal(
                     "cad_identity_invalid",
-                    f"source {source_id!r} contradicts the retained CAD instance inventory; re-ingest the CAD return",
+                    "WG could not read its saved copy of this model. Send it again from Fusion.",
                 )
             owner = inventory_instance
             if owner is not None:
@@ -207,7 +207,7 @@ def _cad_identity_provenance(
     except Exception as exc:
         raise ImportedSolveRefusal(
             "cad_identity_invalid",
-            "the ingestion record's CAD identity graph is incomplete; re-ingest the CAD return",
+            "WG could not read its saved copy of this model. Send it again from Fusion.",
             details={"validation_error": str(exc)},
         ) from exc
 
@@ -339,7 +339,7 @@ def _validate_imported_polar_grid(
     }:
         raise ImportedSolveRefusal(
             "ingest_record_incomplete",
-            "ingestion polar derivation must contain horizontal, vertical, and diagonal axes; re-ingest the CAD return",
+            "WG could not read its saved copy of this model. Send it again from Fusion.",
         )
     requested_start, requested_end, _count = request.options.polar_config.angle_range
     enabled_axes = set(request.options.polar_config.enabled_axes)
@@ -347,7 +347,7 @@ def _validate_imported_polar_grid(
         if not isinstance(raw_axis, Mapping):
             raise ImportedSolveRefusal(
                 "ingest_record_incomplete",
-                f"ingestion polar derivation axis {axis_name!r} is invalid; re-ingest the CAD return",
+                "WG could not read its saved copy of this model. Send it again from Fusion.",
             )
         minimum = float(raw_axis.get("minimum_deg", -180.0))
         maximum = float(raw_axis.get("maximum_deg", 180.0))
@@ -355,7 +355,8 @@ def _validate_imported_polar_grid(
         if pinned and axis_name not in enabled_axes:
             raise ImportedSolveRefusal(
                 "polar_grid_narrowing",
-                f"polar request disables pinned axis {axis_name!r}; ingestion requires it enabled over [-180, 180] degrees",
+                f"This model needs the {axis_name} polar plane from −180° to 180°. "
+                "Turn it on under Directivity map, then press Solve.",
                 details={
                     "axis": str(axis_name),
                     "required": [minimum, maximum],
@@ -365,9 +366,8 @@ def _validate_imported_polar_grid(
         if requested_start > minimum or requested_end < maximum:
             raise ImportedSolveRefusal(
                 "polar_grid_narrowing",
-                f"polar request narrows pinned axis {axis_name!r}: ingestion requires "
-                f"[{minimum:g}, {maximum:g}] degrees but request gives "
-                f"[{requested_start:g}, {requested_end:g}]",
+                f"This model needs the {axis_name} polar plane from {minimum:g}° to {maximum:g}°, "
+                f"not {requested_start:g}° to {requested_end:g}°. Change it under Directivity map, then press Solve.",
                 details={
                     "axis": str(axis_name),
                     "required": [minimum, maximum],

@@ -7,6 +7,7 @@ Geometry stays in the child; publication/recovery stays in wglink_publication.
 
 from __future__ import annotations
 
+import logging
 import asyncio
 import json
 from pathlib import Path
@@ -32,6 +33,8 @@ from .core import _refuse_ath_step
 from .wglink_geometry import build_bundle
 from .wglink_publication import (BUNDLE_LAYOUT, PublicationConflict, bundle_products,
     row_facts, publish_bundle, finish_publication, recover_reserved_export)
+
+logger = logging.getLogger(__name__)
 
 
 class ExportRequest(BaseModel):
@@ -141,7 +144,8 @@ def export_error(exc: Exception, design: DesignConfig | None = None) -> HTTPExce
         return HTTPException(status_code=422, detail=detail)
     if isinstance(exc, (ImportError, RuntimeError, sqlite3.OperationalError)):
         return HTTPException(status_code=503, detail=detail)
-    return HTTPException(status_code=500, detail=f"Export failed: {detail}")
+    logger.warning("Request failed: %s", detail)
+    return HTTPException(status_code=500, detail="WG could not export this design. Try again.")
 
 
 def _app_version() -> str:
@@ -212,9 +216,8 @@ def _commit_design_for_export(
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "This design is based on an older CAD-link registry version. "
-                    "Open its current head from File → CAD-linked designs before "
-                    "sending it to CAD."
+                    "This is an older copy of a linked design. Open the current one from "
+                    "File → CAD-linked designs, then send it."
                 ),
             )
         if str(head["filename"]) == filename and (design_uid is None or parse(str(head["snapshot_text"])).design_uid == design_uid):
@@ -256,7 +259,7 @@ def _wglink_response(
     if not stored_path:
         raise HTTPException(
             status_code=409,
-            detail="This older CAD export has no stored destination. Send it to CAD again.",
+            detail="WG no longer knows where this export went. Send it to CAD again.",
         )
     bundle_path = Path(str(stored_path))
     try:
@@ -269,7 +272,7 @@ def _wglink_response(
     except (OSError, AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(
             status_code=409,
-            detail="The original CAD-link bundle is no longer available. Export it again.",
+            detail="The files WG sent to CAD are gone. Send the design to CAD again.",
         ) from exc
     if (
         manifest_bundle_id != str(row["bundle_id"])
@@ -279,7 +282,7 @@ def _wglink_response(
     ):
         raise HTTPException(
             status_code=409,
-            detail="The original CAD-link bundle was replaced or changed. Export it again.",
+            detail="The files WG sent to CAD have changed. Send the design to CAD again.",
         )
     if bundle_path.name == f'{row["export_id"]}.wglink':
         try:
@@ -333,7 +336,7 @@ def export_wglink_sync(
     if request.design.formula == "LOOKUP":
         raise HTTPException(status_code=422, detail="LOOKUP cannot be sent to CAD Link as ATH .cfg: ATH has no LOOKUP profile. Export STEP instead.")
     if request.design.formula in NATIVE_FORMULAS:
-        raise HTTPException(status_code=422, detail=f"{request.design.formula} cannot be sent to CAD Link: native recipe transport is not supported. Export STEP instead.")
+        raise HTTPException(status_code=422, detail=f"{request.design.formula} cannot be sent to CAD Link. Export STEP instead.")
 
     try:
         _refuse_ath_step(request.design)
@@ -353,7 +356,7 @@ def export_wglink_sync(
         raise HTTPException(status_code=409, detail=unavailable_detail)
     wglink_root = (workspace_root / "wglink").resolve()
     if workspace_root != wglink_root and workspace_root not in wglink_root.parents:
-        raise HTTPException(status_code=422, detail="CAD-link destination resolves outside the selected workspace")
+        raise HTTPException(status_code=422, detail="This design’s folder is outside the WGLink folder. Choose the WGLink folder in Settings, then send again.")
     try:
         retry = store.find_export_by_idempotency_key(idempotency_key) or recover_reserved_export(store, idempotency_key)
     except PublicationConflict as exc:
@@ -362,7 +365,7 @@ def export_wglink_sync(
         if design_hash(request.design) != retry["design_hash"] or (
             request.identity is not None and request.identity.design_id != retry["design_id"]
         ):
-            raise HTTPException(status_code=409, detail="Idempotency key names a different CAD export identity.")
+            raise HTTPException(status_code=409, detail="WG could not match this send to the design. Send it again.")
         result = _wglink_response(retry, _identity_for_export(store, retry))
         result.update(_finish_publication(store, retry))
         return result
@@ -425,4 +428,4 @@ def _finish_publication(store: CadLinkStore, row: Mapping[str, Any]) -> dict[str
     except PublicationConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (OSError, ValueError, TypeError, sqlite3.OperationalError) as exc:
-        raise HTTPException(status_code=503, detail="CAD-link publication is incomplete. Retry this Send.") from exc
+        raise HTTPException(status_code=503, detail="WG did not finish sending this design. Send it again.") from exc

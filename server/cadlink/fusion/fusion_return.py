@@ -175,5 +175,5 @@ async def get_return_request(request_id: str, request: Request) -> dict[str, Any
     result = await asyncio.to_thread(read_return_request, Path(state.data_dir), state.cadlink_store, request_id,
                                     workspace_root=workspace.selected_path() if workspace is not None else None)
     if result is None:
-        raise HTTPException(status_code=404, detail="Unknown Fusion return request")
+        raise HTTPException(status_code=404, detail="WG cannot find this Fusion request. Send it again from Fusion.")
     return result

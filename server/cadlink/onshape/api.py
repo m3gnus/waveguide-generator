@@ -122,6 +122,7 @@ def _client(request: Request) -> OnshapeClient:
     try:
         credentials = load_credentials()
     except OnshapeCredentialsError as exc:
+        logger.warning("Request failed: %s", exc)
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     transport = getattr(request.app.state, "onshape_transport", None)
     return OnshapeClient(credentials, transport=transport)
@@ -151,7 +152,7 @@ def _onshape_error(exc: Exception) -> HTTPException:
     if isinstance(exc, OnshapeError):
         return HTTPException(status_code=504, detail=str(exc))
     return exc if isinstance(exc, HTTPException) else HTTPException(
-        status_code=500, detail=f"The Onshape send failed: {exc}"
+        status_code=500, detail="WG could not send this design to Onshape. Try again."
     )
 
 
@@ -487,9 +488,10 @@ async def send(
     try:
         bundle_root.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
+        logger.warning("Request failed: %s", exc)
         raise HTTPException(
             status_code=409,
-            detail=f"WG could not create its Onshape bundle folder at {bundle_root}: {exc}",
+            detail="WG could not write to the WGLink folder. Choose a folder you can write to, then send again.",
         ) from exc
 
     export_request = WgLinkExportRequest(
@@ -522,7 +524,7 @@ async def send(
         if not design_id:
             raise HTTPException(
                 status_code=409,
-                detail="The export did not commit a design identity, so it cannot be linked to an Onshape document.",
+                detail="WG could not link this design to Onshape. Send it again.",
             )
     document_name = normalize_base_name(payload.base_name)
     try:

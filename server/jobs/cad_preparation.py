@@ -695,7 +695,7 @@ def prepare_job_sync(
         # snapshot may need.
         return run.refuse(
             "return_unavailable",
-            "WG could not read its retained copy of this return.",
+            "WG could not read its saved copy of this model. Send it again from Fusion.",
         )
     # They are the model's settings from now on, as if chosen in WG; a
     # first-time model is named only once its ingest files it (below).

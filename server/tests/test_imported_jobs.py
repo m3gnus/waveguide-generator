@@ -1217,7 +1217,7 @@ def test_submission_refuses_a_contradictory_cad_source_owner(tmp_path: Path) -> 
             with pytest.raises(ImportedSolveRefusal) as caught:
                 await runtime.submit(_request(ingest_id))
             assert caught.value.reason_code == "cad_identity_invalid"
-            assert "contradicts" in str(caught.value)
+            assert "saved copy of this model" in str(caught.value)
             assert runtime.store.list_jobs()[1] == 0
         finally:
             await runtime.shutdown()

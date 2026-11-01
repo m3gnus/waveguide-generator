@@ -192,10 +192,10 @@ def create_diagnostics_router(
         if job:
             store = _store()
             if store is None:
-                raise HTTPException(status_code=404, detail="This build has no job store.")
+                raise HTTPException(status_code=404, detail="This copy of WG cannot include runs in a report.")
             job_log, job_request = await asyncio.to_thread(_read_job, store, job)
             if job_log is None:
-                raise HTTPException(status_code=404, detail=f"No run {job!r}.")
+                raise HTTPException(status_code=404, detail="This run no longer exists. Choose another run for the report.")
 
         envelope = await asyncio.to_thread(_settings_envelope)
         draft = None
@@ -243,7 +243,7 @@ def create_diagnostics_router(
             subprocess.Popen(open_folder_command(paths.logs), **background_process_kwargs())
         except Exception as exc:
             raise HTTPException(
-                status_code=500, detail=f"Failed to open the logs folder: {exc}"
+                status_code=500, detail="WG could not open the logs folder. Download a problem report instead."
             ) from exc
         return {"status": "opened"}
 
@@ -253,7 +253,7 @@ def create_diagnostics_router(
             raise HTTPException(status_code=400, detail="Expected an object.")
         message = str(entry.get("message") or "").strip()
         if not message:
-            raise HTTPException(status_code=400, detail="An error report needs a message.")
+            raise HTTPException(status_code=400, detail="Describe the problem, then send the report.")
         record = {
             "message": message[:MAX_CLIENT_ERROR_BYTES],
             "stack": str(entry.get("stack") or "")[:MAX_CLIENT_ERROR_BYTES] or None,

@@ -105,7 +105,7 @@ def native_assembly(body: AssemblyRequest):
         from hornlab_mesher.phase_plug import PhasePlug as NativePlug
     except ImportError as exc:
         raise HTTPException(
-            503, "This mesher does not support the assembly editor's passage contract. Update the mesher."
+            503, "This version of WG cannot build this assembly. Update WG."
         ) from exc
     horn, hf = native(body.horn)
     woofer, lf = native(body.woofer) if body.woofer is not None else (None, None)
@@ -129,7 +129,7 @@ def native_assembly(body: AssemblyRequest):
             model = SourceAssembly(horn, woofer, **body.dimensions.model_dump())
         return model, drives, assembly_channels(model, drives)
     except ImportError as exc:
-        raise HTTPException(503, "This mesher does not support general horn attachment. Update the mesher.") from exc
+        raise HTTPException(503, "This version of WG cannot attach a horn here. Update WG.") from exc
     except (TypeError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -139,7 +139,7 @@ def native(document: SourceDocument):
     try:
         from hornlab_mesher.source_contour import ContourDrive, SourceContour
     except ImportError as exc:
-        raise HTTPException(503, "This mesher does not support native source contours.") from exc
+        raise HTTPException(503, "This version of WG cannot edit source contours. Update WG.") from exc
     try:
         contour = SourceContour.from_dict(document.contour.model_dump())
         drive = ContourDrive(
@@ -190,7 +190,7 @@ def expand(body: ExpandRequest) -> dict[str, Any]:
     try:
         from hornlab_mesher.source_contour import ContourDrive, cone, dome, flat
     except ImportError as exc:
-        raise HTTPException(503, "This mesher does not support native source contours.") from exc
+        raise HTTPException(503, "This version of WG cannot edit source contours. Update WG.") from exc
     try:
         contour = {"flat": flat, "dome": dome, "cone": cone}[body.kind](
             **body.dimensions, physical_source_id=body.physical_source_id, rim_id=body.rim_id
@@ -214,7 +214,7 @@ def split(body: SplitRequest) -> dict[str, Any]:
     contour, drive = native(body.document)
     index = body.segment_index
     if index >= len(contour.segments) or len(contour.segments) == 256:
-        raise HTTPException(422, "Choose an existing patch; at most 256 patches are supported.")
+        raise HTTPException(422, "Choose a patch from the list.")
     recipe = canonical_document(contour, drive)
     r, z = contour.evaluate(index, 0.5)
     point_id, patch_id = "point." + uuid4().hex, "patch." + uuid4().hex
@@ -270,9 +270,9 @@ class PresetStore:
                     write_json_atomic(self.authoring_path, previous, durable_directory=True)
             self.recovery_path.unlink()
         except (ValueError, TypeError, KeyError) as exc:
-            raise HTTPException(500, "Source preset recovery is unreadable; recover it before editing.") from exc
+            raise HTTPException(500, "WG could not read the source preset library. Close WG, restore the library file, then reopen WG.") from exc
         except OSError as exc:
-            raise HTTPException(503, "Source preset recovery needs storage access. Try again after restoring it.") from exc
+            raise HTTPException(503, "WG cannot reach the source preset library. Reconnect its drive, then try again.") from exc
 
     def _read(self):
         self._recover()
@@ -298,7 +298,7 @@ class PresetStore:
             return value["presets"]
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise HTTPException(
-                500, "Source preset library is unreadable; recover it before editing."
+                500, "WG could not read the source preset library. Close WG, restore the library file, then reopen WG."
             ) from exc
 
     # The companion is optional, untrusted authoring data. It cannot make a
@@ -323,11 +323,11 @@ class PresetStore:
     def _write(self, presets, authoring):
         library = json.dumps({"version": 1, "presets": presets}, allow_nan=False).encode()
         if len(library) > 8 * 1024 * 1024:
-            raise HTTPException(422, "Source preset library exceeds 8 MiB.")
+            raise HTTPException(422, "The source preset library is full. Delete a preset, then save again.")
         authoring = {key: entry for key, entry in authoring.items()
                      if key in presets and entry["revision"] == presets[key]["revision"]}
         if len(authoring) > self.MAX_ENTRIES:
-            raise HTTPException(422, "At most 128 source authoring entries are supported.")
+            raise HTTPException(422, "The source preset library is full. Delete a preset, then save again.")
         try:
             self._recover()
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -356,7 +356,7 @@ class PresetStore:
             self._recover()
             raise HTTPException(
                 503,
-                "Source preset could not be persisted. Previous preset retained; try again after restoring storage access.",
+                "WG could not save this preset and kept the previous one. Check that the disk has space, then try again.",
             ) from exc
 
     def list(self):
@@ -381,9 +381,9 @@ class PresetStore:
                 if body.expected_revision != previous["revision"]:
                     raise HTTPException(409, "Preset changed. Reload it before replacing.")
             elif body.expected_revision is not None:
-                raise HTTPException(422, "A new preset cannot replace a revision.")
+                raise HTTPException(422, "This preset already exists. Save it under another name.")
             elif len(values) >= self.MAX_ENTRIES:
-                raise HTTPException(422, "At most 128 saved source presets are supported.")
+                raise HTTPException(422, "The source preset library is full. Delete a preset, then save again.")
             preset_id = preset_id or uuid4().hex
             item = {
                 "id": preset_id,
@@ -398,9 +398,9 @@ class PresetStore:
                 try:
                     entry_size = len(json.dumps(entry, allow_nan=False).encode())
                 except (ValueError, TypeError, RecursionError) as exc:
-                    raise HTTPException(422, "Source authoring must be finite JSON.") from exc
+                    raise HTTPException(422, "WG could not read this sketch. Undo your last change, then save again.") from exc
                 if entry_size > self.AUTHORING_ENTRY_BYTES:
-                    raise HTTPException(422, "Source preset authoring exceeds 256 KiB.")
+                    raise HTTPException(422, "This preset is too large to save. Simplify the sketch, then save again.")
                 authoring[preset_id] = entry
             self._write(values, authoring)
             return {**item, **({"authoring": body.authoring} if preset_id in authoring else {})}
@@ -436,7 +436,7 @@ def export_bundle(body: ExportRequest, root: Path) -> bytes:
         from hornlab_mesher.front_baffle import FrontBaffle
         from hornlab_mesher.woofer_artifact import export_woofer
     except ImportError as exc:
-        raise HTTPException(503, "This mesher does not support native source attachments.") from exc
+        raise HTTPException(503, "This version of WG cannot attach sources here. Update WG.") from exc
     root.mkdir(parents=True, exist_ok=True)
     try:
         with tempfile.TemporaryDirectory(dir=root, prefix="source-editor-") as stage:
@@ -492,7 +492,7 @@ def resolve_horn_wall(config=None, *, wall=None, samples=257, design=None):
             "wall_max_radius_mm": max(pole[0] for pole in wall.poles_mm),
         }
     except ImportError as exc:
-        raise HTTPException(503, "This mesher does not support general horn attachment. Update the mesher.") from exc
+        raise HTTPException(503, "This version of WG cannot attach a horn here. Update WG.") from exc
     except (TypeError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -514,8 +514,8 @@ def create_router(data_dir: Path) -> APIRouter:
 
         if design.formula in NATIVE_FORMULAS:
             raise HTTPException(
-                422, f"{design.formula} cannot be attached to a source assembly "
-                "as a general horn profile. Use a legacy horn formula."
+                422, f"{design.formula} cannot be attached to a source assembly. "
+                "Choose OSSE, R-OSSE, ICW or Custom profile."
             )
         return resolve_horn_wall(design=design, samples=0)
 
@@ -564,7 +564,7 @@ def create_router(data_dir: Path) -> APIRouter:
             from hornlab_mesher.assembly_artifact import export_assembly
         except ImportError as exc:
             raise HTTPException(
-                503, "This mesher does not support native assembly export."
+                503, "This version of WG cannot export assemblies. Update WG."
             ) from exc
         if not export_lock.acquire(blocking=False):
             raise HTTPException(
@@ -609,7 +609,7 @@ def create_router(data_dir: Path) -> APIRouter:
             from server.cadlink.intake.native_source import ingest_native_source
         except ImportError as exc:
             raise HTTPException(
-                503, "This mesher does not support shared horn and woofer geometry."
+                503, "This version of WG cannot build shared horn and woofer geometry. Update WG."
             ) from exc
         if not export_lock.acquire(blocking=False):
             raise HTTPException(

@@ -142,7 +142,7 @@ def dismiss_recovery_notice(store: CadLinkStore, notice_id: str) -> RecoveryDism
         conn.execute(RECOVERY_NOTICE_SCHEMA)
         operation = conn.execute("SELECT kind FROM cad_operations WHERE operation_id = ?", (notice_id,)).fetchone()
         if operation is None or operation["kind"] not in {"insert_link", "update_link"}:
-            raise HTTPException(status_code=404, detail="Fusion mutation operation not found")
+            raise HTTPException(status_code=404, detail="WG cannot find this Fusion change. Refresh CAD Link.")
         # Binding may follow dismissal of an accepted mutation; acceptance
         # already supplies the identity, so arbitrary pre-acceptance ids are refused.
         conn.execute("INSERT INTO cad_recovery_notices(notice_id, dismissed_at) VALUES (?, ?) "

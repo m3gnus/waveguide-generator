@@ -59,7 +59,7 @@ class AutoExportOwner:
             or self.owner.deadline <= self.clock()
         ):
             raise HTTPException(
-                409, "Automatic export ownership expired; retry the blocked export."
+                409, "Automatic export timed out. Press Retry on the run."
             )
         return self.owner
 
@@ -71,9 +71,9 @@ class AutoExportOwner:
             try:
                 job = await self.runtime.get_job(job_id)
             except JobNotFoundError as exc:
-                raise HTTPException(404, "Job not found") from exc
+                raise HTTPException(404, "This run no longer exists. Select another run.") from exc
             if job["status"] != "complete" or not job["has_results"]:
-                raise HTTPException(409, "Only completed jobs with results can be exported.")
+                raise HTTPException(409, "Only a finished run with results can be exported. Wait for it to finish.")
             if formats == ["run_archive"] and job.get("archived_at"):
                 return {"claimed": False, "busy": False}
             statuses = job.get("auto_export_formats", {})
@@ -130,7 +130,7 @@ class AutoExportOwner:
         async with self.lock:
             owner = self._require(token)
             if owner.active:
-                raise HTTPException(409, "Export requests are still running.")
+                raise HTTPException(409, "Exports are still running. Wait for them to finish.")
             statuses = body.get("formats", {})
             if not isinstance(statuses, dict) or set(statuses) != set(owner.formats):
                 raise HTTPException(422, "Finish must account for every reserved format.")
@@ -186,11 +186,11 @@ class AutoExportOwner:
         async with self.lock:
             self._expire()
             if self.owner and self.owner.job_id == job_id:
-                raise HTTPException(409, "This export is still running. Wait before retrying.")
+                raise HTTPException(409, "This export is still running. Wait for it to finish.")
             try:
                 job = await self.runtime.get_job(job_id)
             except JobNotFoundError as exc:
-                raise HTTPException(404, "Job not found") from exc
+                raise HTTPException(404, "This run no longer exists. Select another run.") from exc
             statuses = {
                 f: {**value, "status": "failed", "reason": "Explicit retry requested."}
                 for f, value in job.get("auto_export_formats", {}).items()
@@ -206,7 +206,7 @@ class AutoExportOwner:
             # Expiry while a previous request runs retains exclusivity but does
             # not authorize another request from the abandoned owner.
             if owner.deadline <= self.clock():
-                raise HTTPException(409, "Automatic export ownership expired.")
+                raise HTTPException(409, "Automatic export timed out. Press Retry on the run.")
             owner.active += 1
             return owner
 

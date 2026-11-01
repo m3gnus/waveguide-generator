@@ -701,7 +701,7 @@ async def get_design(design_id: str, request: Request) -> dict[str, Any]:
     store: CadLinkStore = request.app.state.cadlink_store
     row = await asyncio.to_thread(store.get_design, design_id)
     if row is None:
-        raise HTTPException(status_code=404, detail="CAD-linked design not found")
+        raise HTTPException(status_code=404, detail="WG cannot find this CAD-linked design. Open it from File → CAD-linked designs.")
     return {
         "designId": str(row["design_id"]),
         "lineageId": str(row["lineage_id"]),
@@ -1276,11 +1276,11 @@ async def _archive_cad_document(
 @router.get("/ingest/{ingest_id}")
 async def get_ingest(ingest_id: str, request: Request) -> dict[str, Any]:
     if _INGEST_ID.fullmatch(ingest_id) is None:
-        raise HTTPException(status_code=422, detail="ingest_id must be a wgi_ ULID")
+        raise HTTPException(status_code=422, detail="WG cannot find this model. Send it again from Fusion.")
     store: CadLinkStore = request.app.state.cadlink_store
     record = await asyncio.to_thread(get_ingestion_record, store, ingest_id)
     if record is None:
-        raise HTTPException(status_code=404, detail=f"Unknown ingestion record {ingest_id}")
+        raise HTTPException(status_code=404, detail="WG cannot find this model. Send it again from Fusion.")
     record = await _with_model(store, record)
     try:
         evidence = await asyncio.to_thread(current_fem_evidence, record)
@@ -1295,11 +1295,11 @@ async def get_ingest_mesh(ingest_id: str, request: Request) -> PlainTextResponse
     """Serve the exact ingested solve mesh for diagnostics and fallback."""
 
     if _INGEST_ID.fullmatch(ingest_id) is None:
-        raise HTTPException(status_code=422, detail="ingest_id must be a wgi_ ULID")
+        raise HTTPException(status_code=422, detail="WG cannot find this model. Send it again from Fusion.")
     store: CadLinkStore = request.app.state.cadlink_store
     record = await asyncio.to_thread(get_ingestion_record, store, ingest_id)
     if record is None:
-        raise HTTPException(status_code=404, detail=f"Unknown ingestion record {ingest_id}")
+        raise HTTPException(status_code=404, detail="WG cannot find this model. Send it again from Fusion.")
     try:
         msh_text = await asyncio.to_thread(read_verified_import_mesh, record)
     except ImportedMeshArtifactError as exc:
@@ -1314,11 +1314,11 @@ async def get_ingest_viewport_mesh(
     """Serve the independently tessellated full-domain CAD display artifact."""
 
     if _INGEST_ID.fullmatch(ingest_id) is None:
-        raise HTTPException(status_code=422, detail="ingest_id must be a wgi_ ULID")
+        raise HTTPException(status_code=422, detail="WG cannot find this model. Send it again from Fusion.")
     store: CadLinkStore = request.app.state.cadlink_store
     record = await asyncio.to_thread(get_ingestion_record, store, ingest_id)
     if record is None:
-        raise HTTPException(status_code=404, detail=f"Unknown ingestion record {ingest_id}")
+        raise HTTPException(status_code=404, detail="WG cannot find this model. Send it again from Fusion.")
     record = current_viewport_record(record)
     viewport = record.get("viewport_mesh")
     if isinstance(viewport, dict) and viewport.get("available") is True:
@@ -1349,7 +1349,7 @@ async def get_ingest_viewport_mesh(
 
     raise HTTPException(
         status_code=404,
-        detail="This ingestion record has no independent CAD viewport artifact",
+        detail="This model has no smoother view. WG shows its solve mesh.",
     )
 
 
@@ -1370,7 +1370,7 @@ def _project_archive_stem(store: CadLinkStore, lineage_id: str, filename: str) -
 def _runs_root(request: Request, *, for_protection: bool = False) -> Path:
     runs: WorkspaceState | None = getattr(request.app.state, "workspace", None)
     if runs is None:
-        raise HTTPException(status_code=409, detail="No run archive folder is available.")
+        raise HTTPException(status_code=409, detail="This run has no archive folder. Choose the WG folder in Settings, then solve again.")
     try:
         return runs.path()
     except Exception as exc:
@@ -1395,7 +1395,7 @@ async def _project_folder(request: Request, lineage_id: str) -> tuple[Path, str]
         names = store.get_lineage_cad_names(lineage_id)
         stem = _project_archive_stem(store, lineage_id, "") if names else ""
         if not stem:
-            raise HTTPException(status_code=404, detail="CAD-linked project not found")
+            raise HTTPException(status_code=404, detail="WG cannot find this CAD project. Send it from Fusion.")
         return stem
 
     stem = await asyncio.to_thread(resolve)
@@ -1403,11 +1403,11 @@ async def _project_folder(request: Request, lineage_id: str) -> tuple[Path, str]
     folder = design_archive_folder(root, stem)
     try:
         if path_has_reparse_point(folder, root=root):
-            raise HTTPException(status_code=422, detail="Project archive folder must not be a symbolic link or junction.")
+            raise HTTPException(status_code=422, detail="This project’s archive folder is a link. Replace it with a real folder, then try again.")
     except FileNotFoundError:
         pass  # A project without an archive still has an empty document listing.
     except OSError as exc:
-        raise HTTPException(status_code=422, detail="Project archive folder could not be checked for links.") from exc
+        raise HTTPException(status_code=422, detail="WG could not read this project’s archive folder. Check that it still exists, then try again.") from exc
     root = root.resolve()
     folder = folder.resolve()
     try:
@@ -1554,7 +1554,7 @@ async def _resolve_project_document(
     """One validated, archive-only lookup for download and desktop opening."""
 
     if _RETURN_STATE_HASH.fullmatch(return_state_hash) is None:
-        raise HTTPException(status_code=422, detail="Malformed return state hash")
+        raise HTTPException(status_code=422, detail="WG could not read this model’s saved state. Send it again from Fusion.")
     folder, stem = await _project_folder(request, lineage_id)
     archived = await asyncio.to_thread(_archived_project_runs, request, lineage_id)
     document = await asyncio.to_thread(
@@ -1589,7 +1589,7 @@ def _verified_document_copy(request: Request, lineage_id: str, digest: str, docu
         destination = copy.open("x+b")
         checksum: list[str] = []
         if not _verified_run_document(request, lineage_id, digest, document, copy_to=destination, checksum_out=checksum):
-            raise HTTPException(status_code=404, detail="The archived Fusion file could not be verified.")
+            raise HTTPException(status_code=404, detail="This run’s Fusion file changed after it was saved, so WG will not open it.")
         destination.flush()
         destination.seek(0)
         return copy, destination, checksum[0]
@@ -1734,7 +1734,8 @@ async def reveal_project_folder(lineage_id: str, request: Request) -> dict[str, 
     try:
         subprocess.Popen(open_folder_command(folder), **background_process_kwargs())
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to open folder: {exc}") from exc
+        logger.warning("Request failed: %s", exc)
+        raise HTTPException(status_code=500, detail="WG could not open this folder. Open it from your file browser.") from exc
     return {"status": "opened", "path": str(folder)}
 
 
@@ -1755,7 +1756,7 @@ async def archive_run_document(
     jobs = request.app.state.jobs_runtime
     row = await asyncio.to_thread(jobs.store.get_job_row, payload.jobId)
     if row is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.")
     source = jobs._serialize_job(row, cadlink_store=request.app.state.cadlink_store).get('cad_source') or {}
     location = job_archive_location(row, source)
     digest = str(source.get('return_state_hash') or '')
@@ -2076,7 +2077,7 @@ async def get_setup_revision(revision_id: str, request: Request) -> dict[str, An
     store: CadLinkStore = request.app.state.cadlink_store
     row = await asyncio.to_thread(store.get_setup_revision, revision_id)
     if row is None:
-        raise HTTPException(status_code=404, detail=f"Unknown setup revision {revision_id}")
+        raise HTTPException(status_code=404, detail="WG cannot find these saved settings. Change a setting, then press Solve.")
     return {
         "revisionId": row["revision_id"],
         "contentSha256": row["content_sha256"],
@@ -2142,7 +2143,7 @@ async def get_cad_operation(operation_id: str, request: Request) -> dict[str, An
     store: CadLinkStore = request.app.state.cadlink_store
     row = await asyncio.to_thread(store.get_operation, operation_id)
     if row is None:
-        raise HTTPException(status_code=404, detail=f"Unknown CAD operation {operation_id}")
+        raise HTTPException(status_code=404, detail="WG cannot find this CAD request. Send it again from Fusion.")
     ctx = _preparation_context(request.app.state)
     await ctx.runtime.start()
     return await asyncio.to_thread(_operation_detail, store, row, ctx)
@@ -2167,7 +2168,7 @@ async def post_reconcile_cad_operation(
             content=error_envelope(
                 code="unknown_operation",
                 stage="reconciliation",
-                message=f"Unknown CAD operation {operation_id}",
+                message="WG cannot find this CAD request. Send it again from Fusion.",
                 retryable=False,
             ),
         )

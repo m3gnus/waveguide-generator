@@ -73,8 +73,7 @@ class ExportCollision(Exception):
         self.directory = directory
         self.paths = [str(path) for path in paths]
         super().__init__(
-            f"{len(self.paths)} file(s) in {directory} would be replaced with "
-            "different content"
+            f"{len(self.paths)} file(s) in {directory} would be replaced. Choose another folder, or confirm."
         )
 
 
@@ -141,7 +140,7 @@ class WriteExportRequest(BaseModel):
     @model_validator(mode="after")
     def subdirectory_or_destination(self) -> "WriteExportRequest":
         if not self.subdirectory and self.destination is None:
-            raise ValueError("subdirectory is required")
+            raise ValueError("Choose a folder, then export again.")
         return self
 
 
@@ -278,7 +277,7 @@ async def _decode_multipart_export_request(
     if destination is not None and not isinstance(destination, str):
         raise ValueError("destination must be an export-destination handle")
     if not isinstance(subdirectory, str) or (not subdirectory and destination is None):
-        raise ValueError("subdirectory is required")
+        raise ValueError("Choose a folder, then export again.")
     if existing not in EXISTING_FILE_POLICIES:
         raise ValueError(
             "existing must be one of " + ", ".join(sorted(EXISTING_FILE_POLICIES))
@@ -924,7 +923,7 @@ def create_cad_workspace_router(state: CadWorkspaceState) -> APIRouter:
         if mode is None:
             if payload.enabled is None:
                 raise HTTPException(
-                    status_code=422, detail="Provide a capture mode."
+                    status_code=422, detail="Choose how WG captures runs, then try again."
                 )
             mode = "run" if payload.enabled else "off"
         try:
@@ -932,8 +931,9 @@ def create_cad_workspace_router(state: CadWorkspaceState) -> APIRouter:
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except OSError as exc:
+            logger.warning("Request failed: %s", exc)
             raise HTTPException(
-                status_code=500, detail=f"Could not save the setting: {exc}"
+                status_code=500, detail="WG could not save this setting. Check that the disk has space, then try again."
             ) from exc
         return {
             "captureDocument": state.capture_document,
@@ -960,9 +960,10 @@ def create_cad_workspace_router(state: CadWorkspaceState) -> APIRouter:
             try:
                 state.create_proposed_if_requested(Path(selected))
             except OSError as exc:
+                logger.warning("Request failed: %s", exc)
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Could not create the WGLink folder: {exc}",
+                    detail="WG could not create the WGLink folder. Choose a folder you can write to.",
                 ) from exc
         if not selected:
             current = state.selected_path()
@@ -985,8 +986,9 @@ def create_cad_workspace_router(state: CadWorkspaceState) -> APIRouter:
         try:
             subprocess.Popen(open_folder_command(path), **background_process_kwargs())
         except Exception as exc:
+            logger.warning("Request failed: %s", exc)
             raise HTTPException(
-                status_code=500, detail=f"Failed to open folder: {exc}"
+                status_code=500, detail="WG could not open this folder. Open it from your file browser."
             ) from exc
         return {"status": "opened", "path": str(path)}
 
@@ -1064,13 +1066,13 @@ def _write_export_unlocked(
     export_exists = export_directory.exists() or export_directory.is_symlink()
     if export_exists and existing == "reject":
         raise HTTPException(
-            status_code=409, detail=f"Export directory already exists: {export_directory}"
+            status_code=409, detail=f"This export folder already exists: {export_directory}. Choose another name."
         )
     if export_exists:
         if export_directory.is_symlink() or not export_directory.is_dir():
             raise HTTPException(
                 status_code=409,
-                detail=f"Export path is not a directory: {export_directory}",
+                detail=f"A file is in the way of the export folder {export_directory}. Move it, or choose another folder.",
             )
 
     pending = prepared
@@ -1088,7 +1090,7 @@ def _write_export_unlocked(
             if existing == "confirm" and destination.is_dir() and not destination.is_symlink():
                 raise HTTPException(
                     status_code=409,
-                    detail=f"Export path is a directory, not a file: {destination}",
+                    detail=f"A folder is in the way of the file {destination}. Move it, or choose another folder.",
                 )
             try:
                 identical = _retry_after_acl_repair(
@@ -1105,8 +1107,7 @@ def _write_export_unlocked(
                 raise HTTPException(
                     status_code=409,
                     detail=(
-                        f"Cannot read the existing export file {destination} "
-                        f"({exc.strerror or exc}); refusing to merge into it."
+                        f"WG cannot read the file already at {destination}. Move it, or choose another folder."
                     ),
                 ) from exc
             if not identical:
@@ -1117,8 +1118,7 @@ def _write_export_unlocked(
                 raise HTTPException(
                     status_code=409,
                     detail=(
-                        "Export file already exists with different content: "
-                        f"{destination}"
+                        f"A different file already exists at {destination}. Move it, or choose another folder."
                     ),
                 )
         if differing:
@@ -1132,7 +1132,7 @@ def _write_export_unlocked(
             if destination.is_dir() and not destination.is_symlink():
                 raise HTTPException(
                     status_code=409,
-                    detail=f"Export path is a directory, not a file: {destination}",
+                    detail=f"A folder is in the way of the file {destination}. Move it, or choose another folder.",
                 )
 
     response = {
@@ -1177,8 +1177,9 @@ def _write_export_unlocked(
             shutil.rmtree(staging_directory, ignore_errors=True)
     except Exception as exc:
         shutil.rmtree(staging_directory, ignore_errors=True)
+        logger.warning("Request failed: %s", exc)
         raise HTTPException(
-            status_code=500, detail=f"Failed to write export set: {exc}"
+            status_code=500, detail="WG could not write these files. Check that the disk has space and the folder is writable, then export again."
         ) from exc
 
     return response
@@ -1290,7 +1291,8 @@ def create_workspace_router(
         try:
             subprocess.Popen(open_folder_command(path), **background_process_kwargs())
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to open folder: {exc}") from exc
+            logger.warning("Request failed: %s", exc)
+            raise HTTPException(status_code=500, detail="WG could not open this folder. Open it from your file browser.") from exc
         return {"status": "opened", "path": str(path)}
 
     def destination_offer(selected: bool, *, with_token: bool = True) -> dict[str, Any]:
@@ -1413,12 +1415,12 @@ def create_workspace_router(
             jobs = request.app.state.jobs_runtime
             row = await asyncio.to_thread(jobs.store.get_job_row, job_id)
             if row is None:
-                raise HTTPException(status_code=404, detail="Run not found")
+                raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.")
             source = jobs._serialize_job(row, cadlink_store=request.app.state.cadlink_store).get("cad_source") or {}
             location = archive_identity.job_archive_location(row, source)
             prefix = f"{location.folder}/{location.run}"
             if subdirectory not in (prefix, prefix + "/exports"):
-                raise HTTPException(status_code=422, detail="Run export must use its assigned folder")
+                raise HTTPException(status_code=422, detail="WG could not write outside this run’s folder. Export again from the run.")
             suffix = subdirectory[len(prefix):]
             try:
                 path = await asyncio.to_thread(
@@ -1436,7 +1438,7 @@ def create_workspace_router(
             if isinstance(root, JSONResponse):
                 return root
             if not subdirectory:
-                raise HTTPException(status_code=422, detail="subdirectory is required")
+                raise HTTPException(status_code=422, detail="Choose a folder, then export again.")
         else:
             try:
                 root = export_destinations.resolve(destination)

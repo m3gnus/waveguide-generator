@@ -318,8 +318,8 @@ def test_assembly_horn_profile_refuses_native_formulas_explicitly(client, formul
     response = client.post("/api/source-editor/assembly/horn-profile", json=design_payload(formula))
     assert response.status_code == 422
     assert response.json()["detail"] == (
-        f"{formula} cannot be attached to a source assembly as a general horn profile. "
-        "Use a legacy horn formula."
+        f"{formula} cannot be attached to a source assembly. "
+        "Choose OSSE, R-OSSE, ICW or Custom profile."
     )
 
 

@@ -921,7 +921,7 @@ class ImportedGeometrySource(JobModel):
     @classmethod
     def validate_ingest_id(cls, value: str) -> str:
         if _INGEST_ID.fullmatch(value) is None:
-            raise ValueError("ingest_id must be a wgi_ ULID")
+            raise ValueError("WG cannot find this model. Send it again from Fusion.")
         return value
 
     @field_validator("manifest_sha256", "artifact_sha256")

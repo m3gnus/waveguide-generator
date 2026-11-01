@@ -391,17 +391,17 @@ def _model_and_record(store: Any, model_id: str, prepared_id: str) -> tuple[dict
     row = store.get_ingest(prepared_id)
     if row is None:
         raise ModelSolveRefusal(
-            404, "prepared_unavailable", "This prepared mesh is no longer retained. Prepare it again."
+            404, "prepared_unavailable", "This model’s mesh is gone. Prepare it again, then press Solve."
         )
     filed = row.get("model_id") or ""
     record = json.loads(row["record_json"])
     if model_id == UNFILED_MODEL_ID and not filed:
         return {"model_id": UNFILED_MODEL_ID, "producer": record.get("producer") or "cad"}, record
     if filed != model_id:
-        raise ModelSolveRefusal(409, "model_mismatch", "This prepared mesh belongs to another model.")
+        raise ModelSolveRefusal(409, "model_mismatch", "This mesh belongs to another model. Open that model, then press Solve.")
     model = store.get_model(model_id)
     if model is None:
-        raise ModelSolveRefusal(404, "model_not_found", "Imported model not found.")
+        raise ModelSolveRefusal(404, "model_not_found", "WG cannot find this model. Import it again.")
     return model, record
 
 

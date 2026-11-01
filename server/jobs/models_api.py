@@ -519,17 +519,17 @@ def _prepared_row(store: Any, model_id: str, prepared_id: str) -> tuple[dict[str
     row = store.get_ingest(prepared_id)
     if row is None:
         raise ModelRefusal(
-            404, "prepared_unavailable", "This prepared mesh is no longer retained. Prepare it again."
+            404, "prepared_unavailable", "This model’s mesh is gone. Prepare it again, then press Solve."
         )
     if row.get("model_id") != model_id:
-        raise ModelRefusal(409, "model_mismatch", "This prepared mesh belongs to another model.")
+        raise ModelRefusal(409, "model_mismatch", "This mesh belongs to another model. Open that model, then press Solve.")
     return row, json.loads(row["record_json"])
 
 
 def read_model(store: Any, model_id: str, prepared_id: str | None) -> dict[str, Any]:
     model = store.get_model(model_id)
     if model is None:
-        raise ModelRefusal(404, "model_not_found", "Imported model not found.")
+        raise ModelRefusal(404, "model_not_found", "WG cannot find this model. Import it again.")
     latest = store.get_ingest(model["latest_ingest_id"]) if model["latest_ingest_id"] else None
     if model["producer"] == "mesh-file":
         try:
@@ -576,7 +576,7 @@ def _setup_inventory(store: Any, model_id: str, prepared_id: str | None) -> tupl
         model = store.get_model(model_id)
         prepared_id = (model or {}).get("latest_ingest_id")
         if not prepared_id:
-            raise ModelRefusal(404, "model_not_found", "Imported model not found.")
+            raise ModelRefusal(404, "model_not_found", "WG cannot find this model. Import it again.")
     _row, record = _prepared_row(store, model_id, prepared_id)
     return prepared_inventory_sha256(record), record
 
@@ -759,7 +759,7 @@ def mount_models_api(application: FastAPI) -> None:
         if application.state.jobs_runtime._restart_pending():
             return _refusal(
                 409, REASON_UPDATE_RESTART_PENDING,
-                "An update restart is pending. Try again after restart.",
+                "WG is about to restart for an update. Try again after the restart.",
             )
         return None
 
@@ -769,9 +769,9 @@ def mount_models_api(application: FastAPI) -> None:
         try:
             return await call(*args) if asyncio.iscoroutinefunction(call) else await asyncio.to_thread(call, *args)
         except ClientDisconnected:
-            return _refusal(499, "client_disconnected", "Mesh preparation was cancelled.")
+            return _refusal(499, "client_disconnected", "Mesh preparation was cancelled. Import the mesh again.")
         except (StaleAttempt, PreparationSuperseded):
-            return _refusal(409, "preparation_superseded", "A newer mesh preparation is already selected.")
+            return _refusal(409, "preparation_superseded", "A newer mesh is already on screen.")
         except (MesherChildError, MesherCrashError) as exc:
             return _refusal(422, "mesh_refused", str(exc))
         except ModelRefusal as exc:
@@ -918,7 +918,7 @@ def mount_models_api(application: FastAPI) -> None:
             try:
                 begin_file_preparation(application, model_id, http_request)
             except (ValueError, PreparationSuperseded):
-                return _refusal(409, "preparation_superseded", "A newer mesh preparation is already selected.")
+                return _refusal(409, "preparation_superseded", "A newer mesh is already on screen.")
         return await read(read_model, store, model_id, prepared_id)
 
     @router.get("/{model_id}/setup", responses=readable)
@@ -931,7 +931,7 @@ def mount_models_api(application: FastAPI) -> None:
         if inventory is None:
             return await read(read_setup, store, model_id, prepared_id)
         if prepared_id is not None or model_id.startswith(FILE_MODEL_PREFIX):
-            return _refusal(422, "setup_refused", "A CAD inventory read names no prepared mesh.")
+            return _refusal(422, "setup_refused", "WG cannot find this model’s mesh. Send it again from Fusion.")
         try:
             sources = TypeAdapter(list[SourceInventoryItem]).validate_json(inventory)
             if not sources or len({item.id for item in sources}) != len(sources):
@@ -946,14 +946,14 @@ def mount_models_api(application: FastAPI) -> None:
 
         runtime = application.state.jobs_runtime
         if model_id == UNFILED_MODEL_ID:
-            return _refusal(404, "model_not_found", "No model has this id: it names a mesh filed under none.")
+            return _refusal(404, "model_not_found", "WG cannot find this model. Import it again.")
         try:
             setup = validate_setup(body.setup.model_dump(mode="json"))
         except ValueError as exc:
             return _refusal(422, "setup_refused", str(exc))
         if body.inventory is not None:
             if model_id.startswith(FILE_MODEL_PREFIX):
-                return _refusal(422, "setup_refused", "A file setup names its prepared mesh.")
+                return _refusal(422, "setup_refused", "WG could not save this setup. Import the mesh again.")
             # Before anything is prepared, the project is a lineage this
             # workspace knows (a saved design's, or a CAD document's): a setup
             # is never filed under an id nothing else names.
@@ -961,7 +961,7 @@ def mount_models_api(application: FastAPI) -> None:
                 await asyncio.to_thread(store.lineage_known, model_id)
             )
             if not known:
-                return _refusal(404, "model_not_found", "No model or project has this id here.")
+                return _refusal(404, "model_not_found", "WG cannot find this model. Import it again.")
             inventory = inventory_sha256([item.model_dump() for item in body.inventory])
         else:
             try:
@@ -1002,7 +1002,7 @@ def mount_models_api(application: FastAPI) -> None:
         try:
             sequence = int(sequence_header) if sequence_header is not None else 0
         except ValueError:
-            return _refusal(422, "setup_refused", "Invalid setup write sequence.")
+            return _refusal(422, "setup_refused", "WG could not save this setup. Change a setting to save it again.")
         async with setup_writes:
             key = (model_id, inventory, writer or "")
             if writer and sequence <= accepted_setup_writes.get(key, -1):

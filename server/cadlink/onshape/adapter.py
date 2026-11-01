@@ -125,10 +125,8 @@ def _require_feature_regeneration_ok(body: object, *, operation: str) -> None:
         state.get("featureStatus")
     )
     if status != "OK":
-        reported = repr(status) if status is not None else "a missing status"
         raise OnshapeAdapterError(
-            f"Onshape returned HTTP success while {operation}, but reported "
-            f"{reported} instead of featureStatus 'OK'."
+            f"Onshape reported a problem while {operation}. Open the document in Onshape to see it, then send again."
         )
 
 
@@ -896,18 +894,16 @@ def read_bundle(bundle_path: str | Path) -> tuple[dict[str, Any], bytes]:
     step_path = root / "waveguide.step"
     if not manifest_path.is_file() or not step_path.is_file():
         raise OnshapeAdapterError(
-            "The CAD-link bundle is missing its manifest or STEP body. "
-            "Send the design to CAD again."
+            "WG could not read the design it saved for CAD. Send the design to CAD again."
         )
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise OnshapeAdapterError(
-            "The CAD-link bundle manifest could not be read. Send the design "
-            "to CAD again."
+            "WG could not read the design it saved for CAD. Send the design to CAD again."
         ) from exc
     if not isinstance(manifest, Mapping):
-        raise OnshapeAdapterError("The CAD-link bundle manifest is not an object.")
+        raise OnshapeAdapterError("WG could not read the design it saved for CAD. Send the design to CAD again.")
     return dict(manifest), step_path.read_bytes()
 
 
@@ -917,14 +913,13 @@ def _read_point_grid(bundle_path: str | Path) -> dict[str, Any]:
     path = Path(bundle_path) / "point-grid.json"
     if not path.is_file():
         raise OnshapeAdapterError(
-            "The CAD-link bundle is missing point-grid.json, so it cannot be "
-            "built from native Onshape features. Send the design to CAD again."
+            "WG could not read the design it saved for CAD. Send the design to CAD again."
         )
     try:
         grid = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise OnshapeAdapterError(
-            "The CAD-link point grid could not be read. Send the design to CAD again."
+            "WG could not read the design it saved for CAD. Send the design to CAD again."
         ) from exc
     if not isinstance(grid, Mapping):
         raise OnshapeAdapterError("The CAD-link point grid is not an object.")

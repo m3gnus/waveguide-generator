@@ -400,7 +400,7 @@ def test_f2_job_solve_again_captures_the_first_press_and_continues_a_refused_job
         await harness.runtime.wait_cad_preparations()
         assert harness.jobs_store.get_job_row(child["job_id"])["status"] == "queued"
         status, refused = await _post_job(app, f"/api/jobs/{child['job_id']}/solve-again", {})
-        assert status == 409 and "retry it instead" in refused["detail"]
+        assert status == 409 and "Use Retry on the run" in refused["detail"]
     harness._loop.run(flow())
 
 
@@ -408,7 +408,7 @@ def test_f2_job_solve_again_captures_the_first_press_and_continues_a_refused_job
 def test_f2_job_cad_actions_refuse_an_unknown_job(harness, route):
     body = {} if route == "solve-again" else {"preparation_id": "prep", "finding_ids": ["finding"]}
     status, result = harness._loop.run(_post_job(_jobs_app(harness), f"/api/jobs/gone/{route}", body))
-    assert status == 404 and result["detail"] == "Job not found"
+    assert status == 404 and result["detail"] == "This run no longer exists. Select another run."
 
 
 @pytest.mark.parametrize("problem, expected", [("restart", 409), ("setup", 404)])
@@ -424,7 +424,7 @@ def test_f2_job_solve_again_maps_restart_and_unknown_setup(harness, problem, exp
     if problem == "restart":
         assert result["error"]["code"] == "update_restart_pending"
     else:
-        assert result["detail"] == "Unknown setup revision gone"
+        assert result["detail"] == "WG cannot find these saved settings. Change a setting, then press Solve."
     assert harness.jobs_store.get_job_row(job_id)["task_metadata"]["cad"]["manual_waiting"]
 
 

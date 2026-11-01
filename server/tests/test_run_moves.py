@@ -279,7 +279,7 @@ def test_move_and_export_are_mutually_exclusive(tmp_path):
             manager.execute(plan["id"], confirmed=True)
     def inspect(phase):
         if phase == "prepared":
-            with pytest.raises(MoveRefused, match="Runs are being moved"):
+            with pytest.raises(MoveRefused, match="WG is already moving runs"):
                 with archive_write(source):
                     pass
     manager.after_step = inspect
@@ -663,7 +663,7 @@ def test_route_confirmation_write_lock_events_and_startup_order(tmp_path):
     manager._block(plan)
     with pytest.raises(HTTPException) as locked:
         asyncio.run(write(WriteExportRequest(subdirectory=f"{source.parent.name}/{source.name}", members=[{"relative_path":"one.csv", "text":"x"}])))
-    assert locked.value.status_code == 409 and locked.value.detail == "Runs are being moved"
+    assert locked.value.status_code == 409 and locked.value.detail == "WG is already moving runs. Wait for it to finish."
     asyncio.run(write(WriteExportRequest(subdirectory="any/run", members=[{"relative_path":"one.csv", "text":"x"}])))
     assert (root / "any/run/one.csv").read_text() == "x"
     result = asyncio.run(endpoint('/{move_id}/execute')(plan["id"], ConfirmRunMove(confirmed=True)))
@@ -1184,7 +1184,7 @@ def test_submissions_return_during_rename_and_reconcile_at_publication(tmp_path,
                 with archive_write(root / "Original"):
                     pass
             else:
-                with pytest.raises(MoveRefused, match="Runs are being moved"):
+                with pytest.raises(MoveRefused, match="WG is already moving runs"):
                     identity.claim_run_write_path(jobs, jobs.get_job_row(job_ids[0]), lambda: root)
             assert identity.claim_run_write_path(jobs, other_row, lambda: root).parent == root / "Other"
             with archive_write(root / "Other"):
@@ -1341,7 +1341,7 @@ def test_first_write_checks_fresh_project_after_reference_reconciliation(tmp_pat
     plan = manager.preview(KEY, "Renamed", rename=True)
     assert manager.execute(plan["id"], confirmed=True)["phase"] == "done"
     moves_module._BLOCKED["another-move"] = [root / "Renamed"]
-    with pytest.raises(MoveRefused, match="Runs are being moved"):
+    with pytest.raises(MoveRefused, match="WG is already moving runs"):
         identity.claim_run_write_path(jobs, stale_row, lambda: root)
 
 

@@ -411,7 +411,7 @@ def test_merge_refuses_to_overwrite_a_different_existing_export(tmp_path: Path) 
         members=[{"relative_path": "horn_1.csv", "text": "replacement"}],
     )
 
-    with pytest.raises(HTTPException, match="different content") as caught:
+    with pytest.raises(HTTPException, match="different file already exists") as caught:
         call(state, conflicting)
 
     assert caught.value.status_code == 409
@@ -528,7 +528,7 @@ def test_overwrite_refuses_to_replace_a_directory_with_a_file(tmp_path: Path) ->
     state, workspace = selected_state(tmp_path)
     (workspace / "horn_1/horn_1.json").mkdir(parents=True)
 
-    with pytest.raises(HTTPException, match="is a directory") as caught:
+    with pytest.raises(HTTPException, match="folder is in the way") as caught:
         call(
             state,
             workspace_api.WriteExportRequest(
@@ -1157,11 +1157,11 @@ def test_an_unreadable_export_file_is_refused_as_unreadable_not_as_different(
 
     assert caught.value.status_code == 409
     detail = str(caught.value.detail)
-    assert "Cannot read" in detail
+    assert "cannot read" in detail
     # The old message, and the reason this was misdiagnosed for so long.
     assert "different content" not in detail
     assert str(published) in detail
-    assert "Permission denied" in detail
+    assert "Move it, or choose another folder" in detail
 
     # Still a refusal, and the file is untouched: the guard was always right.
     monkeypatch.undo()
@@ -1557,7 +1557,7 @@ def test_confirm_refuses_a_directory_in_the_way_rather_than_listing_it(
         )
 
     assert caught.value.status_code == 409
-    assert "not a file" in caught.value.detail
+    assert "folder is in the way" in caught.value.detail
     assert (elsewhere / "one.txt").is_dir()
 
 
@@ -1595,7 +1595,7 @@ def test_the_automatic_policy_still_refuses_on_the_first_difference(
         ),
     )
 
-    with pytest.raises(HTTPException, match="different content"):
+    with pytest.raises(HTTPException, match="different file already exists"):
         call(
             state,
             workspace_api.WriteExportRequest(

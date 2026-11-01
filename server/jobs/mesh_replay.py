@@ -6,6 +6,7 @@ CAD identity or producer declaration can cross this boundary.
 
 from __future__ import annotations
 
+import logging
 import asyncio
 import hashlib
 import json
@@ -31,6 +32,8 @@ from server.mesh.child import MesherChildError, MesherCrashError
 from server.mesh.prepared_gc import prepared_mesh_use
 from server.mesh.records import get_prepared_mesh
 from server.solver.imported import AXIAL_CONTRACT_VERSION
+
+logger = logging.getLogger(__name__)
 
 MAX_REPLAY_BYTES = 64 * 1024 * 1024
 Digest = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
@@ -226,12 +229,13 @@ def mount_mesh_replay(application: FastAPI) -> None:
         except LookupError as exc:
             raise HTTPException(404, str(exc)) from exc
         except (OSError, UnicodeError, ValueError) as exc:
-            raise HTTPException(409, f"Mesh replay unavailable: {exc}") from exc
+            logger.warning("Request failed: %s", exc)
+            raise HTTPException(409, "WG could not reopen this mesh. Solve the design again.") from exc
 
     @router.post("/api/mesh-replay")
     async def open_package(body: MeshReplayPackage, http_request: Request) -> dict[str, Any]:
         if runtime._restart_pending():
-            raise HTTPException(409, "An update restart is pending. Open replay after restart.")
+            raise HTTPException(409, "WG is about to restart for an update. Open this run after the restart.")
         cancellation = RequestCancellation(http_request.is_disconnected)
         try:
             registration = await asyncio.to_thread(_checked_registration, body)
@@ -244,13 +248,14 @@ def mount_mesh_replay(application: FastAPI) -> None:
                 prepared=prepared, commit_guard=cancellation.current,
             )
         except ClientDisconnected as exc:
-            raise HTTPException(499, "Mesh replay cancelled.") from exc
+            raise HTTPException(499, "Opening this mesh was cancelled. Select the run again.") from exc
         except (StaleAttempt, PreparationSuperseded) as exc:
-            raise HTTPException(409, "A newer mesh preparation is already selected.") from exc
+            raise HTTPException(409, "A newer mesh is already on screen.") from exc
         except (MesherChildError, MesherCrashError) as exc:
             raise HTTPException(422, str(exc)) from exc
         except (OSError, UnicodeError, ValueError) as exc:
-            raise HTTPException(422, f"Mesh replay refused: {exc}") from exc
+            logger.warning("Request failed: %s", exc)
+            raise HTTPException(422, "WG could not reopen this mesh. Solve the design again.") from exc
         finally:
             cancellation.close()
 

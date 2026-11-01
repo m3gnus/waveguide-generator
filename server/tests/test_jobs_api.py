@@ -429,7 +429,7 @@ def test_delete_protection_bypass_is_explicit_preserves_files_and_keeps_active_g
                 if status == "complete":
                     assert detail == {"code": "model_protection_failed", "message": "Conflicting file: example.pinned.f3d"}
                 else:
-                    assert detail == "Cannot delete active job"
+                    assert detail == "This run is still going. Stop it, then remove it."
                 assert runtime.store.get_job_row("protected") is not None
             code, raw = await _request(api, "DELETE", "/api/jobs/protected", query="skip_model_protection=true")
             if status == "complete":
@@ -524,7 +524,7 @@ def test_dryrun_http_lifecycle_metadata_results_and_delete(
         assert "x-wg2-mesher-version" not in headers
         status, raw = await _request(app, "GET", "/api/mesh-artifact/unknown-job")
         assert status == 404
-        assert json.loads(raw)["detail"] == "Job not found"
+        assert json.loads(raw)["detail"] == "This run no longer exists. Select another run."
         status, raw = await _request(
             app,
             "PATCH",

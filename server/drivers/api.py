@@ -53,7 +53,7 @@ def create_drivers_router(library: DriverLibrary) -> APIRouter:
     ) -> dict[str, object]:
         record = library.get(driver_id, complete=complete)
         if record is None:
-            raise HTTPException(status_code=404, detail=f"Unknown driver id {driver_id!r}")
+            raise HTTPException(status_code=404, detail="This driver is no longer in the library. Choose another driver.")
         return record
 
     return router

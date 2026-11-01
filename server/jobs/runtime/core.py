@@ -158,7 +158,9 @@ CANCELLED_MESSAGE = "Simulation cancelled by user"
 #: A failed job's error when its exception said nothing at all. A bare
 #: ``EOFError`` from a dead solver child has an empty ``str()``, and an empty
 #: error message reads as no reason given.
-FAILED_WITHOUT_DETAIL_MESSAGE = "The simulation failed without reporting a reason."
+FAILED_WITHOUT_DETAIL_MESSAGE = (
+    "The solve stopped before it finished and WG has recorded the problem. Press Solve to try again."
+)
 #: What a job that Quit interrupted reads as. That covers a job stopped at a
 #: checkpoint during shutdown, and one the shutdown budget cut off and the next
 #: start recovered. It is distinct from the crash reason an unmarked orphan
@@ -300,6 +302,7 @@ def _failure_message(exc: BaseException) -> str:
     """A failed job's error message: the exception's text, never empty."""
 
     from server.mesh.errors import MesherEstimateUnavailable, SolverMemoryTooLarge
+    from server.solver.beat_runtime.client import HostError
 
     if isinstance(exc, SolverMemoryTooLarge):
         logger.warning("Solver memory admission refused a mesh: %s", exc)
@@ -307,10 +310,9 @@ def _failure_message(exc: BaseException) -> str:
     if isinstance(exc, MesherEstimateUnavailable):
         logger.error("Cannot check mesh memory before generation: %s", exc)
         return MesherEstimateUnavailable.USER_MESSAGE
-    text = str(exc).strip()
-    if text:
-        return text
-    return f"The simulation failed without reporting a reason ({type(exc).__name__})."
+    if isinstance(exc, HostError):
+        return "The solver engine stopped before the solve finished. Press Solve to try again."
+    return str(exc).strip() or FAILED_WITHOUT_DETAIL_MESSAGE
 
 
 def _now_iso() -> str:
@@ -453,7 +455,7 @@ def _replay_request(row: Mapping[str, Any]) -> SolveRequest:
         # A CAD solve that was never bound holds its intent, not a SolveRequest;
         # the request exists only once the job is bound and queued.
         raise JobConflictError(
-            "This solve is still being prepared and has no solve request yet"
+            "This solve is still being prepared. Wait for it to finish."
             if row.get("status") == "preparing"
             else "This solve ended before it had a solve request. Solve it again "
             "from CAD Link."
@@ -1316,7 +1318,7 @@ class _RuntimeOwnershipLock:
         except BlockingIOError:
             os.close(descriptor)
             raise JobConflictError(
-                "Another job runtime already owns this Waveguide Generator database"
+                "Another copy of WG is using this data folder. Close it, then try again."
             ) from None
         except BaseException:
             os.close(descriptor)
@@ -1942,19 +1944,19 @@ class JobRuntime:
         if unknown_skips:
             raise ImportedSolveRefusal(
                 "unknown_skipped_source",
-                f"skipped_source_ids names unknown record sources {sorted(unknown_skips)}",
+                "The driver surfaces changed since this model was prepared. Prepare it again, then press Solve.",
             )
         if required_skips:
             raise ImportedSolveRefusal(
                 "required_source_skipped",
-                f"required sources cannot be skipped: {required_skips}",
+                "A required driver surface cannot be left out. Turn it back on under Drivers, then press Solve.",
                 details={"source_ids": required_skips},
             )
         recorded_skips = set(record.get("skipped_source_ids") or [])
         if recorded_skips != requested_skips:
             raise ImportedSolveRefusal(
                 "skipped_sources_mismatch",
-                "request skipped_source_ids must match the sources excluded by ingestion",
+                "The driver surfaces changed since this model was prepared. Prepare it again, then press Solve.",
                 details={
                     "request": sorted(requested_skips),
                     "record": sorted(recorded_skips),
@@ -1962,7 +1964,7 @@ class JobRuntime:
             )
         active_sources = set(source_by_id) - requested_skips
         if not active_sources and not (record.get("fem_regions") and not geometry.exterior_only):
-            raise ImportedSolveRefusal("drive_source_coverage", "The return has no driven exterior source")
+            raise ImportedSolveRefusal("drive_source_coverage", "This model has no driver surface. Mark one in Fusion, then send it again.")
         for channel in geometry.drive_channels:
             if channel.driver is None:
                 continue
@@ -1973,8 +1975,7 @@ class JobRuntime:
             if not isinstance(area, (int, float)) or float(area) <= 0.0:
                 raise ImportedSolveRefusal(
                     "driver_source_area_unavailable",
-                    f"channel {channel.id!r} carries a driver model but its "
-                    "source has no recorded positive area; re-ingest the return",
+                    "WG could not read its saved copy of this model. Send it again from Fusion.",
                     details={"channel_id": channel.id},
                 )
         driven_sources = {
@@ -1985,7 +1986,7 @@ class JobRuntime:
         if driven_sources != active_sources:
             raise ImportedSolveRefusal(
                 "drive_source_coverage",
-                "drive channels must cover every non-skipped ingestion source exactly once",
+                "Every driver surface needs one drive channel. Assign each one under Drivers, then press Solve.",
                 details={
                     "missing": sorted(active_sources - driven_sources),
                     "extra": sorted(driven_sources - active_sources),
@@ -1998,12 +1999,12 @@ class JobRuntime:
         if not file_mesh and not isinstance(recorded_sizes, Mapping):
             raise ImportedSolveRefusal(
                 "ingest_record_incomplete",
-                "the ingestion record has no authoritative mesh sizes; re-ingest the CAD return",
+                "WG could not read its saved copy of this model. Send it again from Fusion.",
             )
         if not file_mesh and (geometry.mesh is None or geometry.mesh.model_dump(mode="json") != dict(recorded_sizes)):
             raise ImportedSolveRefusal(
                 "mesh_sizes_mismatch",
-                "request mesh sizes do not match the sizes used to create the ingestion artifact",
+                "The mesh sizes changed since this model was prepared. Prepare it again, then press Solve.",
             )
 
 
@@ -2018,7 +2019,7 @@ class JobRuntime:
         if self.cadlink_store is None:
             raise ImportedSolveRefusal(
                 "ingest_registry_unavailable",
-                "the prepared-mesh registry is unavailable to this job runtime",
+                "WG could not reach its saved models. Reopen WG, then press Solve.",
             )
         record = await asyncio.to_thread(
             get_ingestion_record, self.cadlink_store, geometry.ingest_id
@@ -2026,7 +2027,7 @@ class JobRuntime:
         if record is None:
             raise ImportedSolveRefusal(
                 "ingest_not_found",
-                f"ingestion record {geometry.ingest_id!r} does not exist",
+                "WG cannot find this model. Send it again from Fusion.",
                 details={"ingest_id": geometry.ingest_id},
             )
         mismatches = {
@@ -2037,7 +2038,7 @@ class JobRuntime:
         if mismatches:
             raise ImportedSolveRefusal(
                 "ingest_sha_mismatch",
-                "request hashes do not match the immutable ingestion record",
+                "This model changed since it was prepared. Prepare it again, then press Solve.",
                 details=mismatches,
             )
         from server.contracts.source_contour import validate_contour_request
@@ -2046,7 +2047,7 @@ class JobRuntime:
         except ValueError as exc:
             raise ImportedSolveRefusal("native_source_contract", str(exc)) from exc
         if record.get("native_source") is not None and request.options.engine != "metal":
-            raise ImportedSolveRefusal("native_source_engine", "native source contours currently require the Metal consumer")
+            raise ImportedSolveRefusal("native_source_engine", "Source contours need the Metal engine. Choose Metal under Solver, then press Solve.")
         return record
 
     async def validate_submission(
@@ -2141,7 +2142,7 @@ class JobRuntime:
         if missing_findings:
             raise ImportedSolveRefusal(
                 "unacknowledged_findings",
-                f"blocking ingestion findings require current report acknowledgements: {missing_findings}",
+                "Review this model's findings in CAD Link, then press Solve.",
                 details={
                     "report_sha256": report_sha,
                     "missing_finding_ids": missing_findings,
@@ -2158,7 +2159,7 @@ class JobRuntime:
         }:
             raise ImportedSolveRefusal(
                 "imported_infinite_baffle_unsupported",
-                "imported geometry supports free-space solves only; infinite baffle is unavailable",
+                "An imported model solves in free space only. Turn off the infinite baffle, then press Solve.",
             )
         record = {
             **record,
@@ -2176,8 +2177,7 @@ class JobRuntime:
         ):
             raise ImportedSolveRefusal(
                 "imported_diagonal_inclination_unsupported",
-                "Phase 2 imported solves support diagonal observation only at the "
-                "default 45-degree inclination; set the diagonal plane angle to 45",
+                "An imported model needs the diagonal plane at 45°. Set it under Directivity map, then press Solve.",
                 details={"inclination": polar.inclination},
             )
         try:
@@ -2309,7 +2309,7 @@ class JobRuntime:
 
     def _require_cad_host(self) -> CadPreparationHost:
         if self._cad_host is None or self.cadlink_store is None:
-            raise JobConflictError("CAD solves cannot be prepared: no CAD preparation is configured")
+            raise JobConflictError("This copy of WG cannot prepare CAD models. Reinstall WG.")
         return self._cad_host
 
     def _preparing_record(self, intent: CadSolveIntent) -> dict[str, Any]:
@@ -2567,14 +2567,14 @@ class JobRuntime:
         existing_child_message = "This solve already has a continuing job; use that job instead"
         while True:
             if intent_of(row) is None:
-                raise JobConflictError("This solve already has a solve request; retry it instead")
+                raise JobConflictError("This solve has already started. Use Retry on the run.")
             if row["status"] in ACTIVE_STATUSES:
-                raise JobConflictError("This solve is still being prepared and has no solve request yet")
+                raise JobConflictError("This solve is still being prepared. Wait for it to finish.")
             self._require_cad_host()
             cad = (row.get("task_metadata") or {}).get("cad") or {}
             refusal = cad.get("refusal") if isinstance(cad.get("refusal"), Mapping) else None
             if refusal is not None and CAD_REASON_STATES.get(str(refusal.get("code"))) == CAD_REJECTED:
-                raise JobConflictError(str(refusal.get("message") or "WG rejected this return"))
+                raise JobConflictError(str(refusal.get("message") or "WG could not accept this model. Send it again from Fusion."))
             continuation_key = f"cad-solve-again:{row['id']}"
             existing = await asyncio.to_thread(self.store.job_for_submission_key, continuation_key)
             if existing is None:
@@ -2788,7 +2788,7 @@ class JobRuntime:
         row = self._require_job(job_id)
         status = row["status"]
         if status not in ACTIVE_STATUSES:
-            raise JobConflictError(f"Cannot stop job with status: {status}")
+            raise JobConflictError("This run has already finished, so there is nothing to stop.")
         if status in {"preparing", "queued"}:
             await self._flush_runtime_update(job_id, forget=True)
             self._remove_from_queue(job_id)
@@ -2837,7 +2837,7 @@ class JobRuntime:
         if event is None:
             current = self._require_job(job_id)
             if current.get("status") != "running":
-                raise JobConflictError(f"Cannot stop job with status: {current['status']}")
+                raise JobConflictError("This run has already finished, so there is nothing to stop.")
             return {
                 "message": f"Cancellation already requested for job {job_id}",
                 "status": "cancelling",
@@ -3020,10 +3020,10 @@ class JobRuntime:
         await self.start()
         row = self._require_job(job_id)
         if row["status"] != "complete":
-            raise JobConflictError(f"Job not complete. Current status: {row['status']}")
+            raise JobConflictError("This run has not finished. Wait for it, then try again.")
         payload = await asyncio.to_thread(self.store.get_results_payload, job_id)
         if payload is None:
-            raise JobResourceUnavailableError("Results not available")
+            raise JobResourceUnavailableError("This run’s results are gone. Solve the design again.")
         return payload
 
     async def get_archive_snapshot(self, job_id: str) -> dict[str, Any]:
@@ -3047,15 +3047,15 @@ class JobRuntime:
             raise JobNotFoundError(job_id)
         job = snapshot["job"]
         if job["status"] != "complete":
-            raise JobConflictError(f"Job not complete. Current status: {job['status']}")
+            raise JobConflictError("This run has not finished. Wait for it, then try again.")
         results_text = snapshot["results_text"]
         if results_text is None:
-            raise JobResourceUnavailableError("Results not available")
+            raise JobResourceUnavailableError("This run’s results are gone. Solve the design again.")
         try:
             results = json.loads(results_text)
         except json.JSONDecodeError as exc:
             raise JobResourceUnavailableError(
-                "Stored results are not readable JSON"
+                "WG could not read this run’s results. Solve the design again."
             ) from exc
 
         pressure_bases: list[dict[str, str]] = []
@@ -3078,7 +3078,7 @@ class JobRuntime:
                     )
             except (KeyError, TypeError, ValueError) as exc:
                 raise JobResourceUnavailableError(
-                    f"Pressure-basis artifact could not be read: {exc}"
+                    "WG could not read this run’s saved response. Solve the design again."
                 ) from exc
 
         radiation: dict[str, Any] | None = None
@@ -3088,7 +3088,7 @@ class JobRuntime:
                 presentation = radiation_impedance_presentation(radiation_npz)
             except ValueError as exc:
                 raise JobResourceUnavailableError(
-                    f"Radiation-impedance artifact could not be read: {exc}"
+                    "WG could not read this run’s port data. Solve the design again."
                 ) from exc
             radiation = {
                 "content_base64": base64.b64encode(radiation_npz).decode("ascii"),
@@ -3110,13 +3110,13 @@ class JobRuntime:
         await self.start()
         row = self._require_job(job_id)
         if row["status"] != "complete":
-            raise JobConflictError(f"Job not complete. Current status: {row['status']}")
+            raise JobConflictError("This run has not finished. Wait for it, then try again.")
         artifact = await asyncio.to_thread(
             self.store.get_radiation_impedance, job_id
         )
         if artifact is None:
             raise JobResourceUnavailableError(
-                "This job has no passive-cardioid radiation-impedance artifact"
+                "This run has no port data. Solve a passive cardioid design to get it."
             )
         return artifact
 
@@ -3130,16 +3130,15 @@ class JobRuntime:
         await self.start()
         row = self._require_job(job_id)
         if row["status"] != "complete":
-            raise JobConflictError(f"Job not complete. Current status: {row['status']}")
+            raise JobConflictError("This run has not finished. Wait for it, then try again.")
         bases = await asyncio.to_thread(self.store.get_channel_bases, job_id)
         if bases is None:
             raise JobResourceUnavailableError(
-                "This job has no retained pressure basis; re-solve an imported "
-                "Metal run to create one"
+                "This run cannot be recombined. Solve the model again with Metal."
             )
         results_text = await asyncio.to_thread(self.store.get_results_text, job_id)
         if results_text is None:
-            raise JobResourceUnavailableError("Results not available")
+            raise JobResourceUnavailableError("This run’s results are gone. Solve the design again.")
         motions = _request_motions(row)
         try:
             return await asyncio.to_thread(
@@ -3166,7 +3165,7 @@ class JobRuntime:
             )
         except ValueError as exc:
             raise JobResourceUnavailableError(
-                f"Radiation-impedance artifact could not be read: {exc}"
+                "WG could not read this run’s port data. Solve the design again."
             ) from exc
 
     @asynccontextmanager
@@ -3207,18 +3206,17 @@ class JobRuntime:
             row = self._require_job(job_id)
             if row["status"] != "complete":
                 raise JobConflictError(
-                    f"Job not complete. Current status: {row['status']}"
+                    "This run has not finished. Wait for it, then try again."
                 )
             results_text = await asyncio.to_thread(
                 self.store.get_results_text, job_id
             )
             if results_text is None:
-                raise JobResourceUnavailableError("Results not available")
+                raise JobResourceUnavailableError("This run’s results are gone. Solve the design again.")
             bases = await asyncio.to_thread(self.store.get_channel_bases, job_id)
             if bases is None:
                 raise JobResourceUnavailableError(
-                    "This job has no stored channel bases; re-solve to enable "
-                    "crossover changes without a new solve"
+                    "This run did not keep what crossover changes need. Solve the design again."
                 )
             request = _replay_request(row)
             results = json.loads(results_text)
@@ -3243,7 +3241,7 @@ class JobRuntime:
         self._require_job(job_id)
         item = self._partial_results.get(job_id)
         if item is None:
-            raise JobResourceUnavailableError("Partial results not available")
+            raise JobResourceUnavailableError("This run has no results to show yet.")
         return copy.deepcopy(item)
 
     def partial_result_messages(self) -> list[dict[str, Any]]:
@@ -3273,7 +3271,7 @@ class JobRuntime:
         metadata = row.get("task_metadata")
         metadata = metadata if isinstance(metadata, Mapping) else {}
         if not metadata.get("mesh_discarded_at"):
-            raise JobResourceUnavailableError("No mesh artifact is available for this job")
+            raise JobResourceUnavailableError("This run did not keep its mesh. Solve the design again.")
 
         config = row.get("config_json")
         config = config if isinstance(config, Mapping) else {}
@@ -3411,7 +3409,7 @@ class JobRuntime:
         await self.start()
         row = self._require_job(job_id)
         if row["status"] in ACTIVE_STATUSES:
-            raise JobConflictError("Cannot delete active job")
+            raise JobConflictError("This run is still going. Stop it, then remove it.")
         # Legacy runs have no pin receipt, but archive completion already made
         # the protection decision before releasing their retention reference.
         archived = (row.get("task_metadata") or {}).get("archived_at")
@@ -3574,7 +3572,7 @@ class JobRuntime:
                 if self.cadlink_store is None:
                     raise ImportedSolveRefusal(
                         "ingest_registry_unavailable",
-                        "the CAD ingestion registry is unavailable during execution",
+                        "WG could not reach its saved models. Reopen WG, then press Solve.",
                     )
                 imported_record = await asyncio.to_thread(
                     get_ingestion_record,
@@ -3584,7 +3582,7 @@ class JobRuntime:
                 if imported_record is None:
                     raise ImportedSolveRefusal(
                         "ingest_not_found",
-                        f"ingestion record {request.geometry.ingest_id!r} disappeared before execution",
+                        "WG cannot find this model. Send it again from Fusion.",
                     )
                 imported_record = {
                     **imported_record,
@@ -3823,7 +3821,7 @@ class JobRuntime:
                 logger.error("Persistence error for job %s: %s", job_id, exc)
                 await self._fail_job(
                     job_id,
-                    "Results could not be saved. The simulation completed but persistence failed.",
+                    "The solve finished but WG could not save its results (persistence failed). Check that the disk has space, then press Solve.",
                 )
                 return
             if event is None:
@@ -4319,7 +4317,7 @@ class JobRuntime:
             logger.error("Persistence error for job %s: %s", job_id, exc)
             await self._fail_job(
                 job_id,
-                "Results could not be saved. The simulation completed but persistence failed.",
+                "The solve finished but WG could not save its results (persistence failed). Check that the disk has space, then press Solve.",
             )
             return
         if event is not None:

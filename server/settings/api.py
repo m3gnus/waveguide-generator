@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, FastAPI, Header, HTTPException
 
 from server.settings.store import SettingsError, SettingsStore, StaleWriteError
+
+logger = logging.getLogger(__name__)
 
 
 #: A page can have two writes for one namespace in flight at once, because
@@ -47,8 +50,9 @@ def create_settings_router(store: SettingsStore) -> APIRouter:
         except SettingsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except OSError as exc:
+            logger.warning("Request failed: %s", exc)
             raise HTTPException(
-                status_code=500, detail=f"Could not persist settings: {exc}"
+                status_code=500, detail="WG could not save this setting. Check that the disk has space, then try again."
             ) from exc
 
     @router.delete("/{namespace}", responses=STALE_WRITE_RESPONSE)
@@ -62,8 +66,9 @@ def create_settings_router(store: SettingsStore) -> APIRouter:
         except StaleWriteError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except OSError as exc:
+            logger.warning("Request failed: %s", exc)
             raise HTTPException(
-                status_code=500, detail=f"Could not persist settings: {exc}"
+                status_code=500, detail="WG could not save this setting. Check that the disk has space, then try again."
             ) from exc
 
     return router

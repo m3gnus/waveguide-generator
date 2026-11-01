@@ -47,7 +47,7 @@ def archive_write(path: Path) -> Iterator[None]:
     token = uuid.uuid4().hex
     with _GATE:
         if any(_overlap(path, blocked) for paths in _BLOCKED.values() for blocked in paths):
-            raise MoveRefused("Runs are being moved")
+            raise MoveRefused("WG is already moving runs. Wait for it to finish.")
         _WRITERS[token] = path
     try:
         yield
@@ -162,7 +162,7 @@ def _remove_members(path: Path, manifest: dict) -> None:
             directory.rmdir()  # Unexpected contents are preserved and reported.
             _sync_dir(directory.parent)
     if path.exists():
-        raise MoveRefused(f"Unjournaled partial contents were kept: {path}")
+        raise MoveRefused(f"WG kept a partly copied folder at {path}. Delete it, then try again.")
 
 
 @contextmanager
@@ -207,14 +207,14 @@ class RunMoves:
 
     def _journal_path(self, move_id: str) -> Path:
         if not re.fullmatch(r"[a-f0-9]{32}", move_id):
-            raise MoveRefused("Unknown move.")
+            raise MoveRefused("WG cannot find this move. Reopen this tool.")
         return self.directory / f"{move_id}.json"
 
     def read(self, move_id: str) -> dict:
         try:
             return json.loads(self._journal_path(move_id).read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
-            raise MoveRefused("Move plan is unavailable. Preview it again.") from exc
+            raise MoveRefused("WG lost this move plan. Preview the move again.") from exc
 
     def _step(self, record: dict, phase: str) -> None:
         record["phase"] = phase
@@ -314,7 +314,7 @@ class RunMoves:
         inventory(folder)
         pointer = folder / "design.json"
         if not pointer.is_file():
-            raise MoveRefused("Only a model/design folder created by WG can be renamed.")
+            raise MoveRefused("WG can only rename a design folder it created.")
         record = json.loads(pointer.read_text(encoding="utf-8"))
         aliases = {str(r[0]) for r in self.cad._connect().execute(
             "SELECT owner_key FROM archive_folders WHERE folder=? COLLATE NOCASE", (folder.name,))}
@@ -603,7 +603,7 @@ class RunMoves:
             later = row["id"] not in original_jobs
             if location.key in change["keys"] and (before.parent == source_folder or later):
                 if later and before.parent != destination_folder and before.exists():
-                    raise MoveRefused("A later run has written an archive outside the final folder. Originals were kept.")
+                    raise MoveRefused("A later run saved files outside this folder, so WG kept the originals. Move that run first.")
                 after = destination_folder / location.run
             for op in record["operations"]:
                 if op["kind"] in {"rename", "run"}:
@@ -633,7 +633,7 @@ class RunMoves:
             if any(_overlap(path, writer) for path in paths for writer in _WRITERS.values()):
                 raise MoveRefused("A run in these folders is exporting. Wait for it to finish.")
             if any(_overlap(path, other) for token, blocked in _BLOCKED.items() if token != record["id"] for path in paths for other in blocked):
-                raise MoveRefused("Runs are being moved")
+                raise MoveRefused("WG is already moving runs. Wait for it to finish.")
             _BLOCKED[record["id"]] = paths
 
     def execute(self, move_id: str, *, confirmed: bool = False) -> dict:
@@ -760,7 +760,7 @@ class RunMoves:
         _verify(src, op["manifest"])
         if partial.exists():
             if not op.get("created") or "partial_manifest" not in op:
-                raise MoveRefused(f"Unjournaled partial contents were kept: {partial}")
+                raise MoveRefused(f"WG kept a partly copied folder at {partial}. Delete it, then try again.")
             _remove_members(partial, op["partial_manifest"])
         op["created"] = True
         self._write_partial(record, op, partial, src, manifest, content=content)
@@ -818,7 +818,7 @@ class RunMoves:
                         path = Path(transform["dst"])
                         evidence = transform.get("destination_manifest", transform["manifest"])["files"]["."]
                 if path in expected and expected[path] != evidence:
-                    raise MoveRefused("The plan contains conflicting Fusion evidence. Preview it again.")
+                    raise MoveRefused("WG found conflicting Fusion files. Preview the move again.")
                 expected[path] = evidence
         return expected
 
@@ -1201,7 +1201,7 @@ class RunMoves:
                     _verify(dst, op.get("destination_manifest", op["manifest"]))
                     if partial.exists():
                         if not op.get("undo_created") or "undo_partial" not in op:
-                            raise MoveRefused(f"Unjournaled partial contents were kept: {partial}")
+                            raise MoveRefused(f"WG kept a partly copied folder at {partial}. Delete it, then try again.")
                         _remove_members(partial, op["undo_partial"]["partial_manifest"])
                     op["undo_created"] = True
                     owner = op["undo_partial"] = {}

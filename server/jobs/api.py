@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import asyncio
 from collections.abc import Awaitable, Callable, Collection, Iterator, Mapping
 import json
@@ -80,6 +81,8 @@ from server.mesh.prepared_gc import PreparedMeshCollector
 from server.engines.registry import EngineRegistry
 from server.platform.origin import websocket_request_allowed
 from server.updates.restart import UPDATE_RESTART_PENDING, RestartApproval
+
+logger = logging.getLogger(__name__)
 
 
 def _json_tokens(value: Any) -> Iterator[str]:
@@ -602,7 +605,7 @@ def create_jobs_router(
 
     async def check_cad_setup(revision_id: str | None) -> None:
         if revision_id and await asyncio.to_thread(runtime.cadlink_store.get_setup_revision, revision_id) is None:
-            raise HTTPException(status_code=404, detail=f"Unknown setup revision {revision_id}")
+            raise HTTPException(status_code=404, detail="WG cannot find these saved settings. Change a setting, then press Solve.")
 
     @router.post(
         "/api/jobs/{job_id}/solve-again", response_model=SolveAccepted,
@@ -616,7 +619,7 @@ def create_jobs_router(
             if replay is not None:
                 return SolveAccepted(job_id=replay)
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         refused = restart_refusal()
         if refused is not None:
             return refused
@@ -624,10 +627,10 @@ def create_jobs_router(
         try:
             job = await runtime.get_job(job_id)
             if job.get("cad_intent") is None:
-                raise JobConflictError("This solve already has a solve request; retry it instead")
+                raise JobConflictError("This solve has already started. Use Retry on the run.")
             return SolveAccepted(job_id=await runtime.prepare_cad_solve(job_id, **body.press()))
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except JobConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -640,7 +643,7 @@ def create_jobs_router(
             await asyncio.to_thread(runtime.store.approve_cad_preparation, job_id, body.preparation_id, body.finding_ids)
             return JobStatusResponse.model_validate(await runtime.get_job(job_id))
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -658,10 +661,10 @@ def create_jobs_router(
             job = await runtime.get_job(job_id)
             intent = job.get("cad_intent")
             if intent is None or not intent.get("operation_id"):
-                raise JobConflictError("Only a CAD solve that was never bound can be dismissed")
+                raise JobConflictError("This solve has started, so it cannot be dismissed. Use Stop.")
             await runtime.dismiss_cad_solve(str(intent["operation_id"]))
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except JobConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if after_delete is not None:
@@ -673,7 +676,7 @@ def create_jobs_router(
         try:
             return StopResponse.model_validate(await runtime.stop(job_id))
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except JobConflictError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -700,7 +703,7 @@ def create_jobs_router(
         try:
             return SolveAccepted(job_id=await runtime.retry(job_id))
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except JobConflictError as exc:
             # A job with no solve request to replay (one still being prepared, or a
             # run with no stored design): the message says which.
@@ -726,7 +729,7 @@ def create_jobs_router(
         try:
             return JobStatusResponse.model_validate(await runtime.get_job(job_id))
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
 
     @router.get("/api/jobs/{job_id}/mesh-freshness", response_model=MeshFreshnessResponse)
     async def job_mesh_freshness(job_id: str, response: Response) -> MeshFreshnessResponse:
@@ -735,7 +738,7 @@ def create_jobs_router(
             response.headers["Cache-Control"] = "no-store"
             return MeshFreshnessResponse(freshness=freshness)
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
 
     @router.get("/api/jobs/{job_id}/requests", response_model=JobRequestsResponse)
     async def job_requests(job_id: str) -> Response:
@@ -743,7 +746,7 @@ def create_jobs_router(
             effective = await runtime.get_effective_request(job_id)
             execution = await runtime.get_execution_request(job_id)
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except JobConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return JSONResponse(
@@ -797,7 +800,7 @@ def create_jobs_router(
                 },
             )
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except JobConflictError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except JobResourceUnavailableError as exc:
@@ -810,7 +813,7 @@ def create_jobs_router(
         try:
             snapshot = await runtime.get_archive_snapshot(job_id)
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except JobConflictError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except JobResourceUnavailableError as exc:
@@ -831,7 +834,7 @@ def create_jobs_router(
         try:
             updated = await runtime.recombine_results(job_id, body)
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except JobConflictError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except JobResourceUnavailableError as exc:
@@ -866,15 +869,16 @@ def create_jobs_router(
         try:
             evaluated = await runtime.evaluate_field_plane(job_id, body)
         except FieldPlaneJobNotFound as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except FieldPlaneJobIncomplete as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ArtifactMissing as exc:
             raise HTTPException(status_code=410, detail=str(exc)) from exc
         except ArtifactCorrupt as exc:
+            logger.warning("Request failed: %s", exc)
             raise HTTPException(
                 status_code=410,
-                detail=f"Field-trace artifact is corrupt: {exc}",
+                detail="WG could not read this run’s field data. Solve the design again.",
             ) from exc
         except FieldPlaneUnsupported as exc:
             # Any refusal that names both a code and a remedy gets the full
@@ -932,7 +936,7 @@ def create_jobs_router(
         try:
             partial = await runtime.get_partial_results(job_id)
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except JobResourceUnavailableError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return Response(
@@ -946,7 +950,7 @@ def create_jobs_router(
         try:
             artifact = await runtime.get_mesh_artifact_download(job_id)
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except JobMeshDiscardedError as exc:
             raise HTTPException(status_code=410, detail=str(exc)) from exc
         except JobResourceUnavailableError as exc:
@@ -975,12 +979,12 @@ def create_jobs_router(
         The view contains every FEM region, with rebased topology indices.
         """
         if not fem_regions_enabled():
-            raise HTTPException(status_code=404, detail="FEM fields are turned off")
+            raise HTTPException(status_code=404, detail="This copy of WG does not show FEM fields.")
         row = await asyncio.to_thread(runtime.store.get_job_row, job_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="Job not found")
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.")
         if row["status"] != "complete":
-            raise HTTPException(status_code=404, detail="No completed FEM field for this job")
+            raise HTTPException(status_code=404, detail="This run has no FEM field yet. Wait for it to finish.")
         try:
             payload = await asyncio.to_thread(runtime.store.load_fem_field, job_id, frequency, channel)
         except FemFieldCorrupt as exc:
@@ -988,7 +992,7 @@ def create_jobs_router(
         except FemFieldInvalidSelection as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if payload is None:
-            raise HTTPException(status_code=404, detail="No retained FEM field for this job")
+            raise HTTPException(status_code=404, detail="This run has no saved FEM field. Solve the design again.")
         return StreamingResponse(_json_chunks(payload), media_type="application/json",
                                  headers={"Cache-Control": "no-store"})
 
@@ -1002,10 +1006,10 @@ def create_jobs_router(
         from server.jobs.coupled_field import evaluate_coupled_plane_async
 
         if not fem_regions_enabled():
-            raise HTTPException(status_code=404, detail="FEM fields are turned off")
+            raise HTTPException(status_code=404, detail="This copy of WG does not show FEM fields.")
         row = await asyncio.to_thread(runtime.store.get_job_row, job_id)
         if row is None or row["status"] != "complete":
-            raise HTTPException(status_code=404, detail="No completed FEM field for this job")
+            raise HTTPException(status_code=404, detail="This run has no FEM field yet. Wait for it to finish.")
         try:
             payload = await evaluate_coupled_plane_async(runtime.store, job_id, selection, runtime.field_plane_service)
         except (FieldEvaluationBusy, FieldEvaluationSuperseded) as exc:
@@ -1017,11 +1021,12 @@ def create_jobs_router(
         except FieldPlaneTimedOut as exc:
             raise HTTPException(status_code=504, detail=str(exc)) from exc
         except (ArtifactCorrupt, FemFieldCorrupt) as exc:
-            raise HTTPException(status_code=410, detail=f"Field-trace artifact is corrupt: {exc}") from exc
+            logger.warning("Request failed: %s", exc)
+            raise HTTPException(status_code=410, detail="WG could not read this run’s field data. Solve the design again.") from exc
         except FieldPlaneEvaluationFailed as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         if payload is None:
-            raise HTTPException(status_code=404, detail="No retained FEM field for this job")
+            raise HTTPException(status_code=404, detail="This run has no saved FEM field. Solve the design again.")
         return StreamingResponse(_json_chunks(payload), media_type="application/json",
                                  headers={"Cache-Control": "no-store"})
 
@@ -1030,7 +1035,7 @@ def create_jobs_router(
         try:
             content = await runtime.get_radiation_impedance(job_id)
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except JobConflictError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except JobResourceUnavailableError as exc:
@@ -1052,7 +1057,7 @@ def create_jobs_router(
         try:
             artifact = await runtime.get_pressure_basis(job_id, channel_id)
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except JobConflictError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except JobResourceUnavailableError as exc:
@@ -1081,7 +1086,7 @@ def create_jobs_router(
         try:
             presentation = await runtime.get_radiation_impedance_presentation(job_id)
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except JobConflictError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except JobResourceUnavailableError as exc:
@@ -1093,7 +1098,7 @@ def create_jobs_router(
         try:
             content = await runtime.get_log(job_id)
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         return PlainTextResponse(content=content, media_type="text/plain")
 
     @router.get("/api/jobs", response_model=JobListResponse)
@@ -1122,7 +1127,7 @@ def create_jobs_router(
         except JobConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except OSError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
@@ -1151,7 +1156,7 @@ def create_jobs_router(
         try:
             await runtime.delete(job_id, skip_model_protection=skip_model_protection)
         except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+            raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except JobProtectionError as exc:
             raise HTTPException(status_code=409, detail={
                 "code": "model_protection_failed", "message": str(exc),

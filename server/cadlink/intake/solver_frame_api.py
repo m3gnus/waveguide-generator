@@ -35,7 +35,7 @@ class SolverFrameConfirmationRequest(BaseModel):
     @model_validator(mode="after")
     def _one_snapshot(self) -> SolverFrameConfirmationRequest:
         if (self.operation_id is None) == (self.ingest_id is None):
-            raise ValueError("name exactly one of operationId or ingestId")
+            raise ValueError("WG could not tell which model this is. Select the model again.")
         return self
 
 
@@ -54,11 +54,11 @@ def snapshot_record(
     """The ingestion record a request names, directly or through an operation."""
 
     if (operation_id is None) == (ingest_id is None):
-        raise HTTPException(status_code=422, detail="name exactly one of operationId or ingestId")
+        raise HTTPException(status_code=422, detail="WG could not tell which model this is. Select the model again.")
     if operation_id is not None:
         operation = store.get_operation(operation_id)
         if operation is None:
-            raise HTTPException(status_code=404, detail=f"Unknown CAD operation {operation_id}")
+            raise HTTPException(status_code=404, detail="WG cannot find this CAD request. Send it again from Fusion.")
         job = job_store.latest_cad_job(operation_id, operation.get("job_id")) if job_store else None
         cad = (job.get("task_metadata") or {}).get("cad") if job else None
         job_prep = cad.get("preparation") if cad else None
@@ -75,7 +75,7 @@ def snapshot_record(
     assert ingest_id is not None
     record = get_ingestion_record(store, ingest_id)
     if record is None:
-        raise HTTPException(status_code=404, detail=f"Unknown CAD ingestion {ingest_id}")
+        raise HTTPException(status_code=404, detail="WG cannot find this model. Send it again from Fusion.")
     return record
 
 

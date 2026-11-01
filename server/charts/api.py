@@ -346,7 +346,7 @@ async def render_charts(request: ChartsRenderRequest) -> dict[str, Any]:
 @router.post("/api/render-directivity")
 async def render_directivity(request: DirectivityRenderRequest) -> dict[str, str]:
     if not request.frequencies or not request.directivity:
-        raise HTTPException(status_code=422, detail="Missing frequencies or directivity data")
+        raise HTTPException(status_code=422, detail="This run has no directivity to draw. Turn on a polar plane under Directivity map, then solve again.")
     payload = request.model_dump(mode="json")
     key = _key("directivity", payload)
     cached = _cached(key)
@@ -359,7 +359,7 @@ async def render_directivity(request: DirectivityRenderRequest) -> dict[str, str
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if rendered is None:
-        raise HTTPException(status_code=400, detail="No directivity patterns to render")
+        raise HTTPException(status_code=400, detail="This run has no directivity to draw. Turn on a polar plane under Directivity map, then solve again.")
     image = f"data:image/png;base64,{rendered}"
     _store(key, image)
     return {"image": image}
