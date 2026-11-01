@@ -2547,7 +2547,7 @@ def test_a_stored_reduced_record_wound_inside_out_is_refused_before_a_job_exists
             )
         )
     assert caught.value.reason_code == "imported_reduced_mesh_inverted"
-    assert "Re-import this return" in str(caught.value)
+    assert "Send it again from Fusion" in str(caught.value)
 
     async def plan() -> dict[str, Any]:
         (tmp_path / "plan").mkdir()
@@ -2639,7 +2639,7 @@ def test_a_job_queued_with_an_inverted_reduced_mesh_never_reaches_an_engine(
 
     assert row["status"] == "error"
     assert "imported_reduced_mesh_inverted" in row["error_message"]
-    assert "Re-import this return" in row["error_message"]
+    assert "Send it again from Fusion" in row["error_message"]
     assert calls == []
 
 

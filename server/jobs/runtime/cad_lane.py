@@ -282,8 +282,7 @@ def _imported_symmetry_metadata(
     if requested not in {"auto", resolved.mode}:
         raise ImportedSolveRefusal(
             "imported_symmetry_mismatch",
-            f"requested symmetry {requested!r} does not match the ingestion artifact's "
-            f"actual cut planes {cut_planes} ({resolved.mode})",
+            "This model was prepared with different symmetry. Prepare it again, then press Solve.",
             details={"requested": requested, "resolved": resolved.mode, "cut_planes": cut_planes},
         )
     # A reduced mesh is cut *on* its mirror plane and touches it; a model above

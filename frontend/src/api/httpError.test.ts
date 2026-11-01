@@ -48,6 +48,11 @@ describe('refusalText', () => {
     nameFieldsWith(() => null);
   });
 
+  it('drops a wire code from the front of a sentence it can show', () => {
+    expect(refusalText('polar_grid_narrowing: Turn it on under Directivity map.', 'test')).toBe('Turn it on under Directivity map.');
+    expect(failureWords(new Error('imported_axial_legacy_retry: Start a new solve.'))).toBe('Start a new solve.');
+  });
+
   it('treats a server sentence with internal words as the program\'s, and keeps the original', () => {
     const kept: string[] = [];
     keepRefusalOriginals(({ message }) => kept.push(message));

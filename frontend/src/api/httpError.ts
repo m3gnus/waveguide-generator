@@ -112,6 +112,10 @@ export function readsPlain(text: string): boolean {
   return Boolean(words) && !FRAMEWORK_SENTENCE.test(words) && !NOT_FOR_USERS.some(pattern => pattern.test(sentence));
 }
 
+/** A wire code at the front of a sentence: classification reads it, the user does not. */
+const WIRE_CODE_PREFIX = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+: (?=[A-Z])/;
+const withoutCode = (text: string) => text.replace(WIRE_CODE_PREFIX, '');
+
 const LOST_TRANSPORT = /^(?:Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?|The network connection was lost\.?)$/i;
 
 function shown(original: string, operation: string, fallback: string): string {
@@ -126,7 +130,7 @@ function shown(original: string, operation: string, fallback: string): string {
  * reaches the screen goes through here.
  */
 export function failureWords(reason: unknown, fallback = PLAIN_REQUEST_FAILURE, operation = 'caught failure'): string {
-  const text = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : String(reason ?? '');
+  const text = withoutCode(reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : String(reason ?? ''));
   if (reason instanceof DOMException && reason.name === 'AbortError') return fallback;
   if (LOST_TRANSPORT.test(text.trim())) return LOST_CONTACT;
   if (reason instanceof ProgramFault || !readsPlain(text)) return shown(text, operation, fallback);
@@ -142,7 +146,8 @@ const isValidationItem = (item: unknown) => !!item && typeof item === 'object' &
  * problem reports.
  */
 export function refusalText(detail: unknown, operation: string, fallback = PLAIN_REQUEST_FAILURE): string {
-  const raw = formatApiDetail(detail);
+  const formatted = formatApiDetail(detail);
+  const raw = formatted && withoutCode(formatted);
   if (Array.isArray(detail) && detail.some(isValidationItem)) {
     const words = detail.flatMap(item => {
       if (!isValidationItem(item)) return [];

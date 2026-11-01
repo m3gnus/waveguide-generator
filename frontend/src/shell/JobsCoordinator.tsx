@@ -49,7 +49,7 @@ import { getCrossoverDraftError, useCrossoverDraftError } from '../design/crosso
 import { solveAttention, useJobAttention, useRecoveryNoticeAttention } from './solveAttention';
 import { navigationGeneration, workspaceNavigation } from './workspaceNavigation';
 import { solvedCadModels } from './cadlink/solvedModel';
-import { failureWords, ProgramFault } from '../api/httpError';
+import { failureWords, ProgramFault, refusalText } from '../api/httpError';
 
 /** Reveal an action failure only while the user's click still owns attention.
  * Editing, a drag, or later navigation suppresses this reveal permanently;
@@ -272,16 +272,17 @@ const RESTORED_INPUT_HINTS: Readonly<Record<string, string>> = {
 
 /** A refused Solve, in the words the user acts on; "no engine here" stays its own kind.
  * The envelope's code stays on the error (`code`), never at the front of its words. */
-function importedSolveError(error: unknown, restored = false): unknown {
+export function importedSolveError(error: unknown, restored = false): unknown {
   if (error instanceof SolveSubmissionRefused && error.code !== null) {
     const prefix = `${error.code}: `;
     const words = error.message.startsWith(prefix) ? error.message.slice(prefix.length) : error.message;
-    if (IMPORTED_CAPABILITY_CODES.has(error.code)) return new SolveEngineUnavailableError(words);
+    if (IMPORTED_CAPABILITY_CODES.has(error.code)) return new SolveEngineUnavailableError(refusalText(words, 'solve submission'));
     if (restored && RESTORED_INPUT_HINTS[error.code]) {
       return new SolveSubmissionRefused(RESTORED_INPUT_HINTS[error.code], error.status, error.code, error.details);
     }
     const explained = explainImportedRefusal(`${prefix}${words}`);
-    return new SolveSubmissionRefused(explained === `${prefix}${words}` ? words : explained, error.status, error.code, error.details);
+    // The matchers above need the server's own words; only the result is filtered.
+    return new SolveSubmissionRefused(refusalText(explained === `${prefix}${words}` ? words : explained, 'solve submission'), error.status, error.code, error.details);
   }
   return error instanceof Error ? new Error(explainImportedRefusal(error.message)) : error;
 }

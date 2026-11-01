@@ -644,11 +644,7 @@ def _refuse_inverted_reduced_mesh(record: Mapping[str, Any], msh_text: str) -> N
     if inverted:
         raise ImportedSolveRefusal(
             "imported_reduced_mesh_inverted",
-            f"{inverted} of {orientation['component_count']} component(s) of this "
-            "CAD return's reduced mesh are wound against the model they mirror, "
-            "so every engine would solve it inside out. An earlier WG build "
-            "prepared it. Re-import this return: WG prepares it again and checks "
-            "its winding.",
+            "An earlier WG build prepared this model inside out. Send it again from Fusion.",
             details={
                 "cut_planes": list(planes),
                 "inverted_component_count": inverted,

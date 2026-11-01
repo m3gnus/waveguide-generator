@@ -524,7 +524,10 @@ async function submissionRefusal(response: Response): Promise<SolveSubmissionRef
   let details: Record<string, unknown> | null = null;
   try {
     const body = await response.json() as { detail?: unknown; error?: { code?: unknown; details?: { blocker?: { message?: string } } } | null };
-    message = body.error?.details?.blocker?.message || refusalText(body.detail, 'solve submission');
+    // Kept as the server wrote it: the code and the words are what classification
+    // reads. `importedSolveError` and `failureWords` decide what is shown.
+    message = body.error?.details?.blocker?.message
+      || (typeof body.detail === 'string' ? body.detail : refusalText(body.detail, 'solve submission'));
     code = typeof body.error?.code === 'string' ? body.error.code : null;
     details = body.error?.details ?? null;
   } catch { /* fall through */ }
