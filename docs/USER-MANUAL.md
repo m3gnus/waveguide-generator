@@ -62,8 +62,8 @@ Keep only one **WGLink** entry in Fusion's add-in list.
 ## 2. Design a waveguide in WG and solve it
 
 1. At the top of the window, choose **Parametric**.
-2. Click the design name at the top left to open the design menu. Choose
-   **New** for a fresh design, or **Open…** to open a saved `.cfg` file.
+2. Click **File** at the top left. Choose
+   **New design** for a fresh design, or **Open…** to open a saved `.cfg` file.
 3. On the **Geometry** tab, open **Model Type** and choose a **Family**, for
    example R-OSSE or OSSE.
 4. For OSSE, open **OSSE features** to choose a throat adapter, mouth end and
@@ -79,14 +79,13 @@ Keep only one **WGLink** entry in Fusion's add-in list.
 8. The run appears in the **Jobs** panel with its progress. When it finishes,
    the charts appear in **Results**.
 
-To save your design, click the design name and choose **Export a copy**.
+To save your design, choose **File → Export a copy**.
 Every solved run also keeps a copy of its design.
 
 ## 3. Import and solve a mesh file
 
-1. Choose **Imported mesh** at the top of WG, then click **Import mesh…**.
-   Choose an ASCII Gmsh 2.2 file containing a triangular surface mesh. STL,
-   OBJ, binary and volume meshes are not supported.
+1. Choose **File → Import mesh…** at the top left of WG. Choose an ASCII
+   Gmsh 2.2 file containing a triangular surface mesh. STL, OBJ, binary and volume meshes are not supported.
 2. In **Geometry → Surfaces**, check each file group and assign its role:
    **HF driver**, **MF driver**, **LF driver**, **Port or passive opening**,
    or **Rigid wall**. WG suggests roles from group names; check them before
@@ -120,7 +119,7 @@ Fusion.
 
 ### Optional: send a WG waveguide to Fusion first
 
-1. In WG, click the design name, then **Export → Send to CAD**.
+1. In WG, choose **File → Export → Send to CAD**.
 2. Fusion opens and inserts the waveguide. If it does not, use **Manage
    Link… → Insert** in Fusion's **Waveguide Generator** panel.
 3. Save and name the Fusion document. WG uses that name for your runs.

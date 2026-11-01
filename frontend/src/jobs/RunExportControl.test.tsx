@@ -188,13 +188,13 @@ describe('RunExportControl', () => {
     preferencesStore.update({ exportFormats: ['csv', 'stl'] });
     render(completeJob({ config_summary: { geometry_type: 'imported', import_origin: 'mesh-file' }, script_snapshot: null }));
     openMenu();
-    expect(menuItem('Mesh replay').getAttribute('aria-disabled')).toBeNull();
+    expect(menuItem('Solve setup').getAttribute('aria-disabled')).toBeNull();
     expect(menuItem('STEP solid').textContent).toContain('imported mesh models');
     expect(menuItem('STL mesh').getAttribute('aria-disabled')).toBe('true');
-    expect(menuItem('STL mesh').textContent).toContain('Use Mesh replay');
+    expect(menuItem('STL mesh').textContent).toContain('Use Solve setup');
     expect(document.querySelector('[role="menu"]')?.textContent).not.toContain('Send to CAD');
     await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await settle(); });
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Use Mesh replay');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Use Solve setup');
     expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['csv'], 'confirm');
   });
 
@@ -776,7 +776,7 @@ describe('RunExportControl', () => {
     vi.stubGlobal('fetch', fetcher);
     render(job);
     openMenu();
-    const item = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent?.includes('Mesh replay'))!;
+    const item = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent?.includes('Solve setup'))!;
     await act(async () => { item.click(); });
     await vi.waitFor(() => expect(useRunExportStore.getState().jobs[job.id]?.busy).toBe(false));
     expect(useRunExportStore.getState().jobs[job.id]?.lastError).toBeNull();
@@ -793,7 +793,7 @@ describe('RunExportControl', () => {
   it('never offers file replay for a CAD imported job', () => {
     render(completeJob({ config_summary: { geometry_type: 'imported' }, script_snapshot: null }));
     openMenu();
-    expect(document.querySelector('[role="menu"]')?.textContent).not.toContain('Mesh replay');
+    expect(document.querySelector('[role="menu"]')?.textContent).not.toContain('Solve setup');
   });
 
 });

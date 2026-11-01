@@ -47,7 +47,7 @@ export function parameterExportReason(model: Pick<CurrentModel, 'kind'>, format:
   const reasons: Partial<Record<ExportFormat, string>> = {
     step: 'STEP export is not available for imported models.',
     stl: 'STL export is not available for imported models.',
-    mwg_config: 'Imported models have no WG parameter config to export.',
+    mwg_config: 'Imported models have no WG parameter config to export. Switch to Parametric to export a copy of the design.',
     fusion_csv: 'Imported models have no WG profiles to export.',
   };
   return reasons[format];

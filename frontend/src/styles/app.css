@@ -68,15 +68,13 @@ button:disabled { cursor: default; }
 .v-separator { width: 1px; height: 20px; flex: none; background: var(--hair); margin: 0 2px; }
 .file-chip { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px 0 6px; border: 1px solid var(--hair); border-radius: var(--r2); background: var(--ctl-grad); color: var(--fg); font-weight: 520; white-space: nowrap; }
 .file-chip:hover { border-color: var(--hair-hi); background: var(--ctl-grad-h); }
-.file-chip svg { width: 12px; color: var(--fg3); }
-.file-chip em { color: var(--fg3); font-style: normal; font-weight: 400; }
 .file-chip .chev { color: var(--fg3); font-size: var(--text-micro); }
 .button-group { display: flex; gap: 1px; padding: 2px; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--ov1); }
 .icon-button { display: grid; place-items: center; width: var(--control-h); height: var(--control-h); flex: none; border-radius: var(--r2); background: transparent; color: var(--fg2); transition: background-color .12s, color .12s; }
 .icon-button:hover:not(:disabled) { background: var(--ov3); color: var(--fg); }
 .icon-button:disabled { color: var(--fg4); opacity: .55; }
 .icon-button svg { width: 15px; height: 15px; }
-.command-affordance { display: flex; align-items: center; gap: 8px; width: min(400px, 29vw); min-width: 110px; height: 27px; margin: 0 auto; padding: 0 6px 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--cmd-grad); color: var(--fg3); }
+.command-affordance { display: flex; flex-shrink: 10; align-items: center; gap: 8px; width: min(400px, 29vw); min-width: 110px; height: 27px; margin: 0 auto; padding: 0 6px 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--cmd-grad); color: var(--fg3); }
 .command-affordance:hover { border-color: var(--cmd-bd-h); box-shadow: 0 0 0 3px rgba(var(--acc-rgb), .07); }
 .command-affordance svg { width: 13px; height: 13px; flex: none; }
 .command-affordance span { flex: 1; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
@@ -110,13 +108,17 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .workspace-mode-toggle button.on { background: rgba(var(--acc-rgb), .2); box-shadow: none; color: var(--acc); opacity: 1; }
 .workspace-mode-toggle button:disabled { opacity: .32; }
 .revision-chip { color: var(--fg4); font: var(--text-micro) var(--mono); }
-.design-file-menu { position: relative; flex: none; display: flex; gap: 8px; }
+.design-file-menu { position: relative; flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.document-name { display: flex; align-items: baseline; gap: 6px; min-width: 0; max-width: 260px; color: var(--fg2); font-weight: 520; white-space: nowrap; }
+.document-name > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.document-name em { color: var(--fg3); font-style: normal; font-weight: 400; }
+.document-name .cadlink-badge { flex: none; color: var(--fg3); font-size: var(--text-micro); font-weight: 500; letter-spacing: .02em; }
 .design-menu-popover {
   position: absolute;
   top: 38px;
   left: 0;
   z-index: 1000;
-  width: 220px;
+  width: 260px;
   padding: 4px;
   border: 1px solid var(--border-strong);
   border-radius: var(--r);
@@ -929,7 +931,6 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
   .brand-name { max-width: 76px; overflow: hidden; }
   .command-affordance span { display: none; }
   .command-affordance { width: auto; min-width: 58px; }
-  .file-chip { max-width: 150px; overflow: hidden; }
 }
 
 /* ── Cohesive precision-instrument UI ────────────────────────── */
@@ -1188,7 +1189,6 @@ textarea:disabled { opacity: .48; }
   .app-shell { grid-template-rows: 48px minmax(0, 1fr) 28px; }
   .brand-name { display: none; }
   .topbar-history { display: none; }
-  .file-chip { max-width: 132px; }
   .command-affordance span,
   .command-affordance kbd,
   .solve-button kbd { display: none; }

@@ -105,7 +105,7 @@ function unavailableFormatReason(
   const modelKind = modelKindForRun(job);
   const provenanceReason = parameterExportReason({ kind: modelKind }, item.format);
   if (provenanceReason) return modelKind === 'file' && item.format === 'stl'
-    ? `${provenanceReason} Use Mesh replay to save the solve mesh and settings.` : provenanceReason;
+    ? `${provenanceReason} Use Solve setup to save the solve mesh and settings.` : provenanceReason;
   if (item.id === 'polar_frd' && Object.keys(job.polar_grid ?? {}).length === 0) {
     return 'This run has no directivity data for a polar FRD set.';
   }
@@ -254,14 +254,14 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
   };
 
   const exportReplay = () => execute(job.id, [], async (): Promise<RunExportOutcome> => {
-    const destination = await askForExportDestination({ title: 'Export mesh replay', detail: `Exact mesh and solve settings from run ${jobName(job)}.` });
+    const destination = await askForExportDestination({ title: 'Export solve setup', detail: `Exact mesh and solve settings from run ${jobName(job)}.` });
     if (!destination) return { notice: EXPORT_CANCELLED_MESSAGE };
     const result = await declinable(async () => writeToOutputFolder(exportSubdirectoryForJob(job), [{
       filename: `${exportStemForJob(job)}.wgreplay`, blob: await fetchMeshReplay(job.id),
     }], fetch, 'confirm', destination.token, askToReplaceExports, job.id));
     if (!result) return { notice: EXPORT_CANCELLED_MESSAGE };
     await recordFiles(result.files);
-    return { notice: workspaceNotice('Mesh replay', result) };
+    return { notice: workspaceNotice('Solve setup', result) };
   });
 
   const sendRunToCad = () => execute(job.id, [], async (): Promise<RunExportOutcome> => {
@@ -286,7 +286,7 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
 
   const items: ActionMenuItem[] = [
     ...(job.status === 'complete' && job.config_summary.import_origin === 'mesh-file' ? [{
-      id: 'mesh-replay', label: 'Mesh replay', trailing: '.wgreplay', group: 'Geometry & design',
+      id: 'mesh-replay', label: 'Solve setup', trailing: '.wgreplay', group: 'Geometry & design',
       disabled: operation.busy, onSelect: async () => { await exportReplay(); },
     }] : []),
     ...(!importedRun ? [{

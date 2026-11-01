@@ -17,7 +17,6 @@ export interface DocumentState {
   legacyDesignName?: string;
   setLegacyDesignName: (name: string | undefined) => void;
   setDesignUid: (uid: string) => void;
-  duplicateAsNewDesign: () => void;
   /**
    * The design's one name, as the user typed it.
    *
@@ -66,10 +65,6 @@ export const useDocumentStore = create<DocumentState>((set) => ({
   designUid: mintDesignUid(),
   setDesignUid: (designUid) => set({ designUid }),
   setLegacyDesignName: (legacyDesignName) => set({ legacyDesignName }),
-  duplicateAsNewDesign: () => {
-    set({ designUid: mintDesignUid(), legacyDesignName: undefined, identity: null, classification: null, openedContentKey: null });
-    advanceEditorMutation();
-  },
   designName: '',
   filename: '',
   openedContentKey: null,

@@ -154,8 +154,8 @@ describe('design file export menu', () => {
       act(() => item.click());
     }
     expect(container.textContent).toContain('Imported models');
-    expect(container.querySelector('.file-chip')?.textContent).not.toContain('Parked A');
-    expect(container.querySelector('.file-chip .cadlink-badge')).toBeNull();
+    expect(container.querySelector('.design-file-menu')?.textContent).not.toContain('Parked A');
+    expect(container.querySelector('.cadlink-badge')).toBeNull();
     expect(fetcher).not.toHaveBeenCalled();
     expect(useDocumentStore.getState().designName).toBe('Parked A');
   });
@@ -867,7 +867,8 @@ describe('design file export menu', () => {
     act(() => useDesignStore.getState().updateField('R', 321));
     act(() => useDocumentStore.getState().setDesignName('renamed horn'));
 
-    expect(container.querySelector('button.file-chip')?.textContent).toContain('renamed horn');
+    expect(container.querySelector('button.file-chip')?.textContent).toBe('File⌄');
+    expect(container.querySelector('.document-name')?.textContent).toBe('renamed horn.cfg');
     expect(container.querySelector('.unsaved-dot')).toBeNull();
     expect(container.querySelector('[aria-label="Unsaved changes"]')).toBeNull();
   });
@@ -1107,7 +1108,7 @@ describe('replacing the design on screen', () => {
     act(() => useDesignStore.getState().undo());
     expect(useDesignStore.getState().design.R).toBe(OPENED_R);
 
-    await chooseMenuItem('New');
+    await chooseMenuItem('New design');
 
     expect(confirm).not.toHaveBeenCalled();
     expect(useDocumentStore.getState().designName).toBe('');
@@ -1121,7 +1122,7 @@ describe('replacing the design on screen', () => {
     await openLocalDesign();
     expect(useDesignStore.getState().design.R).toBe(OPENED_R);
 
-    await chooseMenuItem('New');
+    await chooseMenuItem('New design');
     expect(useDesignStore.getState().design.R).toBe(140);
     act(() => useDesignStore.getState().undo());
 
@@ -1151,7 +1152,7 @@ describe('replacing the design on screen', () => {
     act(() => useDesignStore.getState().updateField('R', 999));
     act(() => useDesignStore.getState().updateField('R', OPENED_R));
 
-    await chooseMenuItem('New');
+    await chooseMenuItem('New design');
 
     expect(confirm).not.toHaveBeenCalled();
     expect(useDocumentStore.getState().designName).toBe('');
@@ -1168,7 +1169,7 @@ describe('replacing the design on screen', () => {
     } as unknown as JobsSnapshot);
     act(() => root.render(<DesignFileMenu/>));
 
-    await chooseMenuItem('New');
+    await chooseMenuItem('New design');
 
     expect(confirm).not.toHaveBeenCalled();
     expect(useDesignStore.getState().design.R).toBe(140);
@@ -1181,7 +1182,7 @@ describe('replacing the design on screen', () => {
     await openLocalDesign();
     act(() => useDocumentStore.getState().setDesignName('Renamed horn'));
 
-    await chooseMenuItem('New');
+    await chooseMenuItem('New design');
 
     expect(confirm).not.toHaveBeenCalled();
     expect(useDocumentStore.getState().designName).toBe('');
@@ -1194,7 +1195,7 @@ describe('replacing the design on screen', () => {
     await openLocalDesign();
     act(() => useDesignStore.getState().updateField('R', 321));
 
-    await chooseMenuItem('New');
+    await chooseMenuItem('New design');
 
     expect(confirm).toHaveBeenCalledTimes(1);
     const message = String(confirm.mock.calls[0][0]);
@@ -1222,13 +1223,13 @@ describe('replacing the design on screen', () => {
     // Exporting is one of the two things the question tells the user to do.
     await chooseMenuItem('Export a copy');
     expect(container.querySelector('[role="status"]')?.textContent).toContain('Exported a copy as horn.cfg');
-    await chooseMenuItem('New');
+    await chooseMenuItem('New design');
     expect(confirm).not.toHaveBeenCalled();
     expect(useDocumentStore.getState().designName).toBe('');
 
     // A new edit is not in that file.
     act(() => useDesignStore.getState().updateField('R', 322));
-    await chooseMenuItem('New');
+    await chooseMenuItem('New design');
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(useDesignStore.getState().design.R).toBe(322);
   });
@@ -1240,7 +1241,7 @@ describe('replacing the design on screen', () => {
     await openLocalDesign();
     act(() => useSolveOptionsStore.setState((state) => ({ polar: { ...state.polar, angleStep: 0 } })));
 
-    await chooseMenuItem('New');
+    await chooseMenuItem('New design');
 
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(useDocumentStore.getState().designName).toBe('horn');
@@ -1288,7 +1289,7 @@ describe('replacing the design on screen', () => {
     act(() => root.render(<DesignFileMenu/>));
     act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
     const create = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-      .find((button) => button.querySelector('span')?.textContent === 'New')!;
+      .find((button) => button.querySelector('span')?.textContent === 'New design')!;
 
     await act(async () => {
       create.click();
@@ -1494,7 +1495,7 @@ it.each(NATIVE_FAMILIES)('disables Send to CAD with the reason for %s', (family)
 
 it('guards the replay size before reading and captures its generation before file.text', async () => {
   act(() => root.render(<DesignFileMenu/>));
-  const input = container.querySelector<HTMLInputElement>('[aria-label="Open mesh replay file"]')!;
+  const input = container.querySelector<HTMLInputElement>('[aria-label="Open solve setup file"]')!;
   const oversized = new File(['{}'], 'large.wgreplay');
   Object.defineProperty(oversized, 'size', { value: 64 * 1024 * 1024 + 1 });
   const readLarge = vi.spyOn(oversized, 'text');
@@ -1516,14 +1517,74 @@ it('guards the replay size before reading and captures its generation before fil
 });
 
 
-it('exposes Import mesh without opening the file menu in Imported mesh mode', () => {
-  workspaceModeStore.setMode('cad');
+it.each(['parametric', 'cad'] as const)('offers Import mesh only inside the File menu in %s mode', (mode) => {
+  workspaceModeStore.setMode(mode);
   const host = document.createElement('div'); const root = createRoot(host);
   act(() => root.render(<DesignFileMenu/>));
-  expect(host.querySelector('button.import-mesh-action')?.textContent).toContain('Import mesh');
+  // The menu button is the only control the closed menu leaves in the top bar.
+  expect([...host.querySelectorAll('button')].map(button => button.textContent)).toEqual(['File⌄']);
+  const picker = vi.spyOn(host.querySelector<HTMLInputElement>('[aria-label="Import Gmsh mesh file"]')!, 'click').mockImplementation(() => undefined);
+  act(() => host.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+  const item = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent === 'Import mesh…msh')!;
+  act(() => item.click());
+  expect(picker).toHaveBeenCalledTimes(1);
   expect(host.querySelector('[role="menu"]')).toBeNull();
   act(() => root.unmount());
   workspaceModeStore.setMode('parametric');
+});
+
+it('imports a mesh into Imported mesh from Parametric without touching the design', async () => {
+  const design = structuredClone(useDesignStore.getState().design);
+  workspaceModeStore.setMode('parametric');
+  const host = document.createElement('div'); const root = createRoot(host);
+  act(() => root.render(<DesignFileMenu/>));
+  const input = host.querySelector<HTMLInputElement>('[aria-label="Import Gmsh mesh file"]')!;
+  Object.defineProperty(input, 'files', { configurable: true, value: [{ name: 'horn.msh', size: 100, text: async () => meshFixture }] });
+  await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
+  expect(workspaceModeStore.getSnapshot()).toMatchObject({ mode: 'cad', importedInput: 'file' });
+  expect(useDesignStore.getState().design).toEqual(design);
+  expect(host.querySelector('.document-name')?.textContent).toBe('horn.msh');
+  act(() => root.unmount());
+  workspaceModeStore.setMode('parametric');
+});
+
+it('groups the menu as new and open, import, export, and has no duplicate command', () => {
+  act(() => root.render(<DesignFileMenu/>));
+  act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+  const rows = [...container.querySelector('[role="menu"]')!.children].map(row => (
+    row.className === 'design-menu-divider' ? '|' : row.querySelector('span')?.textContent));
+  expect(rows).toEqual([
+    'New design', 'Open…', 'CAD-linked designs', '|',
+    'Import mesh…', 'Open solve setup…', '|',
+    'Export a copy', 'Export', '|',
+    'Move earlier runs…',
+  ]);
+});
+
+it('shows Check a design file only with developer details on', async () => {
+  const label = () => [...container.querySelectorAll('[role="menuitem"]')].some(item => item.textContent?.startsWith('Check a design file'));
+  act(() => root.render(<DesignFileMenu/>));
+  act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+  expect(label()).toBe(false);
+  act(() => preferencesStore.update({ showDeveloperDetails: true }));
+  expect(label()).toBe(true);
+  act(() => preferencesStore.update({ showDeveloperDetails: false }));
+});
+
+it('keeps the Move earlier runs dialog open through clicks inside it', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 503 })));
+  act(() => root.render(<DesignFileMenu/>));
+  act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+  const item = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent === 'Move earlier runs…')!;
+  await act(async () => { item.click(); });
+  const dialog = document.querySelector('.move-runs-dialog')!;
+  expect(container.querySelector('[role="menu"]')).toBeNull();
+  await act(async () => { dialog.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); });
+  expect(document.querySelector('.move-runs-dialog')).not.toBeNull();
+  // The server refuses an empty name, so an untitled design is named for it.
+  const preview = vi.mocked(fetch).mock.calls.find(([path]) => String(path).endsWith('/preview'))!;
+  expect(JSON.parse(preview[1]!.body as string).name).toBe('Untitled');
+  await act(async () => { document.querySelector<HTMLButtonElement>('[aria-label="Close move tool"]')!.click(); });
 });
 
 
@@ -1554,18 +1615,6 @@ describe('permanent design id lifecycle in the File menu', () => {
     applyOpenedDocument(openedResponse(150) as never, 'legacy.cfg');
     expect(useDocumentStore.getState().designUid).not.toBe(uid);
     expect(useDocumentStore.getState().designUid).toMatch(/^wgu_/);
-  });
-
-  it('duplicates the design without changing geometry and clears the CAD edit identity', async () => {
-    const before = structuredClone(useDesignStore.getState().design);
-    const original = useDocumentStore.getState().designUid;
-    useDocumentStore.getState().setCadLink({ designId: 'wgd_test', lineageId: 'wgl_test', baseEditVersion: 1 }, 'current');
-    act(() => root.render(<DesignFileMenu/>));
-    const buttons = open();
-    await act(async () => { buttons.find((button) => button.textContent === 'Duplicate as new design')!.click(); });
-    expect(useDesignStore.getState().design).toEqual(before);
-    expect(useDocumentStore.getState().designUid).not.toBe(original);
-    expect(useDocumentStore.getState().identity).toBeNull();
   });
 
   it.each(['Keep with original', 'New design'])('asks again for a browser copy after choosing %s', async (answer) => {

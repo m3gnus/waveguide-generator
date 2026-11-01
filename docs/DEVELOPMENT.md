@@ -665,8 +665,8 @@ The real-mesher server regression skips until the dependency pin supplies C2.
 
 ### Moving earlier run archives
 
-Use **Move earlier runs…** from a CAD project’s folder menu, **Earlier runs of
-this design…** from Design, or **From an earlier version · Move into …** in Run
+Use **Move earlier runs…** from a CAD project’s folder menu, **Move earlier
+runs…** from File, or **From an earlier version · Move into …** in Run
 details. Opening the tool only saves a preview. Identity matches are checked;
 name-only matches and every Untitled match require selection. Changing selection,
 **Gather Fusion files into cad/** (initially checked), or **Rename folder to

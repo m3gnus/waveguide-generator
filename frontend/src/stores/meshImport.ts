@@ -524,7 +524,7 @@ registerImportedView('assembly', {
 export async function loadMeshReplay(text: string, fetcher: typeof fetch = fetch,
   generation = importedMeshStore.beginIntent()): Promise<boolean> {
   if (!importedMeshStore.isCurrentGeneration(generation)) return false;
-  beginMeshFileImport('Opening mesh replay…');
+  beginMeshFileImport('Opening solve setup…');
   const requestNumberAtStart = ++requestNumber;
   useMeshImportStore.setState({ busy: true, error: null, request: requestNumberAtStart });
   try {
@@ -538,7 +538,7 @@ export async function loadMeshReplay(text: string, fetcher: typeof fetch = fetch
     }
     if (!fillFileRail(opened.record, setup, generation)) return false;
     await openImported({ kind: 'file', prepared: opened.record, setup });
-    useMeshImportStore.setState({ notice: 'Mesh replay opened. Solve keeps its settings. Edits keep the other settings.' });
+    useMeshImportStore.setState({ notice: 'Solve setup opened. Solve keeps its settings. Edits keep the other settings.' });
     return true;
   } catch (error) {
     if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ error: failureWords(error) });
