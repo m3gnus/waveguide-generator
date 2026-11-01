@@ -15,6 +15,9 @@
 .param-section[data-section="Element size"] .param-text-row > label { flex: 1 1 0; min-width: 0; }
 .param-section[data-section="Element size"] .param-text-row > input { flex: none; width: 132px; text-align: right; }
 .param-section[data-section="Element size"] .param-text-row > small { flex-basis: 100%; }
+/* An estimate, not a resolved fact: neutral, and it never reads as a verdict. */
+.mesh-estimate b { color: var(--fg1); white-space: nowrap; }
+.mesh-estimate small { color: var(--fg3); }
 .resolved-mode.override { border: 1px solid rgba(var(--acc-rgb), .25); }
 .resolved-mode.override b, .resolved-mode.override small { color: var(--acc); }
 .parameter-entry + .parameter-entry { border-top: 1px solid transparent; }
