@@ -8,6 +8,9 @@ const DEFAULT_ENCLOSURE_DEPTH_MM = 280;
  * a load starts afresh and Undo across a load gets the earlier document's back.
  */
 const retainedDepth = new WeakMap<DesignDocument, number>();
+const startingDepth = (design: DesignDocument) => design.enclosure.depth > 0 ? design.enclosure.depth : DEFAULT_ENCLOSURE_DEPTH_MM;
+// The first snapshot never passes through the subscription, and Undo can return to it.
+retainedDepth.set(useDesignStore.getState().design, startingDepth(useDesignStore.getState().design));
 useDesignStore.subscribe((state, previous) => {
   const { design } = state;
   if (design === previous.design || retainedDepth.has(design)) return;
