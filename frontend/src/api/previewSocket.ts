@@ -1,3 +1,4 @@
+import { validationSentence } from './httpError';
 import { decodeFrame, type DecodedFrame, type FrameHeader } from './frame';
 import { selectPreferredFrame } from '../viewport/lodPolicy';
 import {
@@ -9,6 +10,8 @@ import {
   type DesignDocument,
   type RevisionEvent,
 } from '../stores/design';
+
+const PLAIN_PREVIEW_FAILURE = 'WG could not update the preview and has recorded the problem.';
 
 export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 
@@ -34,6 +37,8 @@ export interface PreviewSnapshot {
   stale: boolean;
   dropped: number;
   error: string | null;
+  /** The original failure when `error` is plain words, for the developer disclosure only. */
+  errorDetail?: string | null;
   /** Validated server field paths for the current preview error. */
   errorFields: Readonly<Record<string, string>> | null;
   /** Design revision the current error belongs to, so the UI can say so. */
@@ -134,7 +139,7 @@ export class PreviewSocketManager {
   private unregisterTimer: (() => void) | null = null;
   private snapshot: PreviewSnapshot = {
     connection: 'idle', epoch: null, frame: null, displayedRevision: null,
-    lastValidRevision: null, stale: true, dropped: 0, error: null, errorFields: null, errorRevision: null,
+    lastValidRevision: null, stale: true, dropped: 0, error: null, errorDetail: null, errorFields: null, errorRevision: null,
   };
 
   constructor(
@@ -241,7 +246,7 @@ export class PreviewSocketManager {
 
   private connect(reconnecting: boolean): void {
     if (this.stopped) return;
-    this.update({ connection: reconnecting ? 'reconnecting' : 'connecting', error: null, errorFields: null, errorRevision: null });
+    this.update({ connection: reconnecting ? 'reconnecting' : 'connecting', error: null, errorDetail: null, errorFields: null, errorRevision: null });
     const socket = this.factory(this.url);
     this.socket = socket;
     this.armHeartbeat();
@@ -287,7 +292,7 @@ export class PreviewSocketManager {
       this.reconnectAttempt = 0;
       this.heartbeatMs = Math.max(250, message.heartbeatSec * 2_000);
       this.maxFrameBytes = message.limits?.maxFrameBytes;
-      this.update({ connection: 'connected', epoch: message.epoch, error: null, errorFields: null, errorRevision: null });
+      this.update({ connection: 'connected', epoch: message.epoch, error: null, errorDetail: null, errorFields: null, errorRevision: null });
       this.armHeartbeat();
       this.sendProgressive();
       return;
@@ -312,16 +317,19 @@ export class PreviewSocketManager {
       if ((!supported || this.snapshot.frame?.documentLoad === this.documentLoad) && errorRevision !== null && errorRevision < (this.snapshot.lastValidRevision ?? 0)) return;
       if ((!supported || this.errorDocumentLoad === this.documentLoad) && errorRevision !== null && errorRevision < (this.snapshot.errorRevision ?? 0)) return;
       if (errorSeq !== null && errorSeq < this.latestOutcomeSeq) return;
-      const detail = (typeof message.message === 'string' && message.message.trim())
+      const original = (typeof message.message === 'string' && message.message.trim())
         || Object.values(fields ?? {})[0]
         || (typeof message.code === 'string' && message.code.trim())
         || 'Preview request failed';
+      // An internal failure's text is for developers; a field's own sentence is for the user.
+      const detail = message.code === 'internal' ? PLAIN_PREVIEW_FAILURE
+        : validationSentence(original) ?? 'This design has a value WG cannot use. Check its parameters.';
       if (errorSeq !== null) this.latestOutcomeSeq = Math.max(this.latestOutcomeSeq, errorSeq);
       this.errorDocumentLoad = this.documentLoad;
       const documentFailed = supported && this.snapshot.awaitingDocumentFrame
         && errorSeq !== null && errorSeq >= this.loadFloorSeq
         && errorRevision === useDesignStore.getState().designRevision;
-      this.update({ error: detail, errorFields: fields, errorRevision, stale: true,
+      this.update({ error: detail, errorDetail: detail === original ? null : original, errorFields: fields, errorRevision, stale: true,
         ...(documentFailed ? { awaitingDocumentFrame: false, dimensionsUnavailable: true } : {}) });
     }
   }
@@ -399,7 +407,7 @@ export class PreviewSocketManager {
       displayedRevision: frameRevision,
       lastValidRevision: frameRevision,
       stale: frameRevision !== revision,
-      ...(clearsError ? { error: null, errorFields: null, errorRevision: null } : {}),
+      ...(clearsError ? { error: null, errorDetail: null, errorFields: null, errorRevision: null } : {}),
     });
   }
 
@@ -443,7 +451,7 @@ export class PreviewSocketManager {
           lastCanonicalDimensions: null, awaitingDocumentFrame: true,
           dimensionsFrame: null, dimensionsUnavailable: false,
           displayedRevision: null, lastValidRevision: null,
-          error: null, errorFields: null, errorRevision: null,
+          error: null, errorDetail: null, errorFields: null, errorRevision: null,
         });
       } else if (event.revision < (this.snapshot.displayedRevision ?? 0)) {
         // Absent keys preserve shared error/badge fields and notifications.

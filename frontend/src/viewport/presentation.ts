@@ -30,7 +30,7 @@ export function previewErrorMessage(
   // say which edit it came from rather than implying the current one failed.
   const superseded = errorRevision !== null && currentRevision !== null && errorRevision !== currentRevision;
   const attempt = superseded ? `Preview failed at revision r${errorRevision}` : 'Preview failed';
-  return `${attempt}: ${error}. Displayed geometry is not the current design.`;
+  return `${attempt}: ${error.replace(/\.$/, '')}. Displayed geometry is not the current design.`;
 }
 
 /** Why the viewport is not showing the current design, in one plain sentence. */

@@ -1,5 +1,5 @@
 import type { CadSourceInventoryEntry } from './cadOperations';
-import { formatApiDetail } from './httpError';
+import { refusalText } from './httpError';
 import type { ImportedSetup } from '../jobs/importedSetup';
 
 /** A refused read, with the status and code the server gave so a caller can tell a gone model from a failed one. */
@@ -76,8 +76,8 @@ export async function requestImportedModel<T>(path: string, fetcher: typeof fetc
   const response = await fetcher(path, init);
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: { message?: unknown; code?: unknown }; detail?: unknown } | null;
-    const message = typeof body?.error?.message === 'string' ? body.error.message : formatApiDetail(body?.detail);
-    throw new ImportedModelApiError(message ?? `${what} unavailable (${response.status}).`, response.status,
+    const message = typeof body?.error?.message === 'string' ? body.error.message : refusalText(body?.detail, what, `${what} could not be read. Try again.`);
+    throw new ImportedModelApiError(message, response.status,
       typeof body?.error?.code === 'string' ? body.error.code : null);
   }
   return response.json() as Promise<T>;

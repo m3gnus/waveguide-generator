@@ -1,4 +1,4 @@
-import { formatApiDetail } from './httpError';
+import { refusalText } from './httpError';
 import { serializeSolveDesign, type DesignDocument } from '../stores/design';
 import type { SolveOptionsStore } from '../stores/solveOptions';
 import type { components } from './generated/openapi';
@@ -48,10 +48,9 @@ export function solverMeshDesignKey(design: DesignDocument): string {
 async function detail(response: Response): Promise<string> {
   try {
     const body = await response.json() as { detail?: unknown };
-    const formatted = formatApiDetail(body.detail);
-    if (formatted) return formatted;
+    return refusalText(body.detail, 'solver mesh');
   } catch { /* fall through */ }
-  return `${response.status} ${response.statusText}`.trim();
+  return refusalText(null, 'solver mesh');
 }
 
 /**

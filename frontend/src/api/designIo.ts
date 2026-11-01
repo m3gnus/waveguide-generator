@@ -1,4 +1,4 @@
-import { formatApiDetail, httpErrorMessage } from './httpError';
+import { httpErrorMessage, refusalText } from './httpError';
 import { profileSamples, profileSections, type ProfileSample } from './profileSamples';
 import { deadlineFetch } from './deadlineFetch';
 import {
@@ -94,10 +94,9 @@ export interface WgLinkExportResponse {
 async function errorMessage(response: Response): Promise<string> {
   try {
     const body = await response.json() as { detail?: unknown };
-    const formatted = formatApiDetail(body.detail);
-    if (formatted) return formatted.replace(/Value error,\s*/g, '');
-  } catch { /* the status text remains useful */ }
-  return `Request failed: ${response.status} ${response.statusText}`.trim();
+    return refusalText(body.detail, 'design request');
+  } catch { /* a body that is not JSON has no words for the user */ }
+  return refusalText(null, 'design request');
 }
 
 async function postText<T>(path: string, text: string, fetcher: typeof fetch): Promise<T> {

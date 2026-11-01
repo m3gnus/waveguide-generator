@@ -69,6 +69,7 @@ import { SolverMeshRefreshController, type SolverMeshRefreshState } from './solv
 import type { CameraDirection } from './cameraMath';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
+import { DeveloperDetails } from '../shell/DeveloperDetails';
 import { previewBadge, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
 import { markParametricSolvedDomain, quadrantsForSolveMode, solvedDomainLabel, type DisplayQuadrants } from './symmetryScene';
 import { ROLE_MATERIAL_FAMILY, SOURCE_ROLES } from './types';
@@ -1111,6 +1112,7 @@ export function Viewport() {
             {solverMeshState.staleReason === 'build-slow' && <b>auto-rebuild paused — the last build was slow</b>}
           </>}
           {showPreviewError && <span>{previewError}</span>}
+          {showPreviewError && preview.errorDetail && <DeveloperDetails><pre>{preview.errorDetail}</pre></DeveloperDetails>}
           {showStalledPreview && <span>{staleReason(preferences.liveUpdate, preview.connection, preview.error)}</span>}
           {showConnectionNotice && <span>
             {preview.connection === 'reconnecting' ? 'Reconnecting to preview engine' : 'Preview connection interrupted'}. Last valid geometry retained.
