@@ -359,7 +359,7 @@ export function CustomProfileTable({ plane }: { field: ParameterDefinition; plan
     <div className="readonly-table-head"><HelpTipHeading title={title} text={CUSTOM_PROFILE_TABLE_HELP}>{title}</HelpTipHeading><span>{points.length} / {MAX_FREEFORM_ANCHORS} anchors</span></div>
     {plane === 'H' && <SeparateVerticalControl edit={edit} />}
     <div className="custom-profile-scroll">
-      <table><thead><tr><th>z (mm)</th><th>r (mm)</th><th>Join</th><th>In (°)</th><th>Out (°)</th><th /></tr></thead>
+      <table><thead><tr><th>z mm</th><th>r mm</th><th>Join</th><th>In °</th><th>Out °</th><th /></tr></thead>
         <tbody>{points.map((point, index) => {
           const endpoint = index === 0 || index === points.length - 1;
           const inField = angleField(point, index, points.length, 'in');
@@ -373,18 +373,18 @@ export function CustomProfileTable({ plane }: { field: ParameterDefinition; plan
               : side === 'out' && outShared ? 'A smooth anchor has one tangent: edit In (°).' : undefined;
             const stored = key ? point[key] : undefined;
             return <NumberField label={`${plane} ${label(index)} angle ${side}`} value={reason ? undefined : stored} min={endpoint ? -90 : -89.9999} max={endpoint ? 90 : 89.9999} step={.1} precision={6} displayPrecision={2} optional
-              placeholder={reason ? '—' : side === 'out' && key === 'angle_out_deg' && point.angle_deg != null ? '= in' : resolved != null ? `auto ${resolved.toFixed(1)}` : 'auto'}
+              placeholder={reason ? '—' : side === 'out' && key === 'angle_out_deg' && point.angle_deg != null ? '= in' : resolved != null ? resolved.toFixed(1) : 'auto'}
               disabled={Boolean(reason)} disabledReason={reason}
               validate={(value) => check(() => setAnchorAngle(design, plane, index, side, value))}
               onClear={() => edit.propose(`Clear ${plane} ${label(index)} angle`, (current) => setAnchorAngle(current, plane, index, side, undefined))}
               onCommit={(value) => edit.propose(`Set ${plane} ${label(index)} ${side === 'in' ? 'incoming' : 'outgoing'} angle`, (current) => setAnchorAngle(current, plane, index, side, value))} />;
           };
           return <Fragment key={index}><tr data-anchor-index={index}>
-            <td><NumberField label={`${plane} ${label(index)} z`} value={positionMm(point.t, length)} step={.1} precision={12} displayPrecision={4}
+            <td><NumberField label={`${plane} ${label(index)} z`} value={positionMm(point.t, length)} step={.1} precision={12} displayPrecision={2}
               disabled={endpoint} disabledReason={index === 0 ? 'The throat is at z = 0.' : endpoint ? 'The mouth is at Length; change Length to move it.' : undefined}
               validate={endpoint ? undefined : (value) => check(() => setAnchorValue(design, plane, index, 'z', value))}
               onCommit={(value) => edit.propose(`Move ${plane} ${label(index)}`, (current) => setAnchorValue(current, plane, index, 'z', value))} /></td>
-            <td><NumberField label={`${plane} ${label(index)} radius`} value={point.r} step={.1} precision={12} displayPrecision={4}
+            <td><NumberField label={`${plane} ${label(index)} radius`} value={point.r} step={.1} precision={12} displayPrecision={2}
               validate={(value) => check(() => setAnchorValue(design, plane, index, 'r', value))}
               onCommit={(value) => edit.propose(`Set ${plane} ${label(index)} radius`, (current) => setAnchorValue(current, plane, index, 'r', value))} /></td>
             <td><select aria-label={`${plane} ${label(index)} join`} value={point.join ?? 'smooth'}
@@ -396,7 +396,7 @@ export function CustomProfileTable({ plane }: { field: ParameterDefinition; plan
             <td>{!endpoint && <button className="icon-button" type="button" aria-label={`Delete ${plane} ${label(index)}`}
               onClick={() => edit.propose(`Delete ${plane} ${label(index)}`, (current) => deleteAnchor(current, plane, index))}>−</button>}</td>
           </tr>
-          <tr className="anchor-state-row"><td colSpan={6} className="anchor-state">{anchorState(point, index, points.length, anchor, aligned?.spans[index])}</td></tr></Fragment>;
+          <tr className="anchor-state-row"><td colSpan={6} className="anchor-state"><b>{label(index)}</b> {anchorState(point, index, points.length, anchor, aligned?.spans[index])}</td></tr></Fragment>;
         })}</tbody>
       </table>
     </div>

@@ -3,33 +3,36 @@
  *
  * The workspace edits the open design's `assembly` through project history:
  * one control action or one drag is one Undo step, and Undo, Redo, New and
- * Open rehydrate it. Opening a design without an assembly closes it. The
- * server supplies the live context (outlines, mouth edges, resolved woofer
- * centres) for each assembly revision on screen.
+ * Open rehydrate it. Looking changes nothing: a design without an assembly
+ * shows a horn-only one held here, and only the first real edit writes it.
+ * Loading a design without an assembly closes the workspace. The server
+ * supplies the live context (outlines, mouth edges, resolved woofer centres)
+ * for each assembly revision on screen.
  *
- * The launcher is hidden: it renders only with `?assembly=1` in the address.
+ * The launcher lives with the design's wall and enclosure controls.
  */
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
-import { fetchAssemblyContext } from '../api/assembly';
+import { assemblyProblemText, fetchAssemblyContext } from '../api/assembly';
+import { DeveloperDetails } from '../shell/DeveloperDetails';
 import { useModalDialogFocus } from '../shell/dialogFocus';
+import { EmptyState } from '../shell/EmptyState';
 import { useOptionalSolveControl } from '../shell/JobsCoordinator';
-import { frontViewAdapter, frontViewBinding, type FrontCommand, type FrontViewContext } from '../sketch/adapters/frontView';
+import { Notice } from '../shell/Notice';
+import { frontViewAdapter, frontViewBinding, placementProblems, type FrontCommand, type FrontViewContext } from '../sketch/adapters/frontView';
 import { PlainController } from '../sketch/workspace/plainController';
 import { ProjectHistoryAuthority } from '../sketch/workspace/projectHistoryAuthority';
 import { Workspace } from '../sketch/workspace/Workspace';
-import { commitAssembly, emptyAssembly, type DesignAssembly } from '../stores/assembly';
-import { requestAssemblyBuild, useAssemblyBuildStore } from '../stores/assemblyBuild';
-import { serializeDesign, useDesignStore } from '../stores/design';
+import { emptyAssembly, type DesignAssembly } from '../stores/assembly';
+import { assemblyBuildCurrent, requestAssemblyBuild, useAssemblyBuildStore, type AssemblyBuildState } from '../stores/assemblyBuild';
+import { serializeDesign, subscribeRevision, useDesignStore } from '../stores/design';
 import { ExperimentalBadge } from './ExperimentalBadge';
 import { frontViewProperties } from './FrontProperties';
+import './frontWorkspace.css';
 import './sourceContourEditor.css';
 
 /** How long the design must rest before the front context is refreshed. */
 export const FRONT_CONTEXT_DELAY_MS = 150;
-
-export const frontWorkspaceEnabled = () => typeof window !== 'undefined'
-  && new URLSearchParams(window.location.search).get('assembly') === '1';
 
 const visibility = {
   open: false, listeners: new Set<() => void>(),
@@ -38,20 +41,20 @@ const visibility = {
   set(open: boolean) { visibility.open = open; visibility.listeners.forEach(listener => listener()); },
 };
 
-/** Open the front workspace, giving a design without an assembly a horn-only one (one step). */
-export function openFrontWorkspace(): void {
-  if (!useDesignStore.getState().design.assembly) commitAssembly(emptyAssembly());
-  visibility.set(true);
-}
+/** Open the front workspace. The design itself is left exactly as it is. */
+export function openFrontWorkspace(): void { visibility.set(true); }
 
 export function closeFrontWorkspace(): void { visibility.set(false); }
 
 export function FrontWorkspaceLauncher() {
-  if (!frontWorkspaceEnabled()) return null;
-  return <div className="source-editor-launch" data-control-reveal-id="front-workspace-launch">
-    <button className="btn" type="button" aria-haspopup="dialog" onClick={openFrontWorkspace}>Sources and baffle…</button>
-    <ExperimentalBadge/>
-    <small>Woofers on the enclosure's front baffle, solved with the horn.</small>
+  const woofers = useDesignStore(state => state.design.assembly?.woofers?.length ?? 0);
+  return <div className="front-launch" data-control-reveal-id="front-workspace-launch">
+    <div className="front-launch-action">
+      <button className="btn-primary" type="button" aria-haspopup="dialog" onClick={openFrontWorkspace}>Sources and baffle…</button>
+      <ExperimentalBadge/>
+    </div>
+    <small>{woofers > 0 ? `${woofers} ${woofers === 1 ? 'woofer' : 'woofers'} on the front baffle, solved with the horn from Sources and baffle.`
+      : "Woofers on the enclosure's front baffle, solved with the horn."}</small>
   </div>;
 }
 
@@ -60,63 +63,117 @@ export function FrontWorkspaceDialog() {
   return open ? createPortal(<FrontWorkspace onClose={closeFrontWorkspace}/>, document.body) : null;
 }
 
+interface FrontContextState { resolved: FrontViewContext | undefined; failure: { text: string; detail: string } | null; retry(): void }
+
 /** The latest front context for the design on screen, refreshed when the design rests. */
-function useFrontContext(fetcher: typeof fetch): { resolved: FrontViewContext | undefined; error: string } {
+function useFrontContext(blank: DesignAssembly, fetcher: typeof fetch): FrontContextState {
   const design = useDesignStore(state => state.design);
   const dragging = useDesignStore(state => !!state.dragSnapshot);
   const [resolved, setResolved] = useState<FrontViewContext>();
-  const [error, setError] = useState('');
+  const [failure, setFailure] = useState<FrontContextState['failure']>(null);
+  const [attempt, setAttempt] = useState(0);
   const latest = useRef(0);
   useEffect(() => {
-    if (dragging || !design.assembly) return;
+    if (dragging) return;
     const ask = ++latest.current;
-    const assembly = structuredClone(design.assembly);
+    const assembly = structuredClone(design.assembly ?? blank);
     const timer = setTimeout(() => {
-      fetchAssemblyContext(serializeDesign(design), fetcher).then(context => {
-        if (ask === latest.current) { setResolved({ context, assembly }); setError(''); }
-      }, (reason: unknown) => { if (ask === latest.current) setError(reason instanceof Error ? reason.message : String(reason)); });
+      fetchAssemblyContext(serializeDesign({ ...design, assembly }), fetcher).then(context => {
+        if (ask === latest.current) { setResolved({ context, assembly }); setFailure(null); }
+      }, (reason: unknown) => {
+        if (ask !== latest.current) return;
+        setFailure({ text: assemblyProblemText(reason, 'WG could not update the front view and has recorded the problem.'),
+          detail: reason instanceof Error ? reason.message : String(reason) });
+      });
     }, FRONT_CONTEXT_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [design, dragging, fetcher]);
-  return { resolved, error };
+  }, [design, dragging, fetcher, attempt]);
+  return { resolved, failure, retry: () => setAttempt(value => value + 1) };
+}
+
+function buildLine(hasAssembly: boolean, status: AssemblyBuildState['status'], published: boolean, current: boolean): string {
+  if (!hasAssembly) return 'Add a woofer to build or solve.';
+  if (status === 'building') return 'Building the mesh…';
+  if (status === 'refused') return current ? 'The last build still matches this design.' : 'Not built.';
+  if (current) return 'Built. Ready to solve.';
+  return published ? 'Changed since the last build. Solve builds it again.' : 'Not built yet. Solve builds it first.';
 }
 
 export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => void; fetcher?: typeof fetch }) {
   const dialog = useModalDialogFocus<HTMLDivElement>({ open: true, onClose });
-  const { resolved, error } = useFrontContext(fetcher);
+  const [blank] = useState(() => emptyAssembly());
+  const { resolved, failure, retry } = useFrontContext(blank, fetcher);
   const context = useRef(resolved); context.current = resolved;
-  const adapter = useMemo(() => frontViewAdapter(() => context.current, frontViewProperties(() => context.current)), []);
-  const [state, setState] = useState<DesignAssembly | undefined>(() => useDesignStore.getState().design.assembly ?? undefined);
+  const adapter = useMemo(() => frontViewAdapter(() => context.current,
+    frontViewProperties(() => context.current, () => !!useDesignStore.getState().design.assembly)), []);
+  const [state, setState] = useState<DesignAssembly>(() => useDesignStore.getState().design.assembly ?? blank);
   const controller = useMemo(() => {
-    if (!useDesignStore.getState().design.assembly) return undefined;
-    const authority = new ProjectHistoryAuthority(frontViewBinding(onClose));
+    const authority = new ProjectHistoryAuthority(frontViewBinding(blank));
     return new PlainController<DesignAssembly, DesignAssembly, FrontCommand>({
       initial: authority.current, adapter, authority, changed: setState, preview: setState,
     });
   }, []);
-  useEffect(() => () => controller?.destroy(), [controller]);
-  useEffect(() => { if (!controller) onClose(); }, [controller]);
+  // Strict Mode remounts this effect at once; only a real unmount ends the session.
+  const retiring = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => {
+    clearTimeout(retiring.current);
+    return () => { retiring.current = setTimeout(() => controller.destroy()); };
+  }, [controller]);
+  useEffect(() => subscribeRevision(event => {
+    if (event.reason === 'load' && !useDesignStore.getState().design.assembly) onClose();
+  }), [onClose]);
+  const design = useDesignStore(store => store.design);
+  const hasAssembly = !!design.assembly;
+  const shown = hasAssembly ? state : blank;
   const build = useAssemblyBuildStore();
   const solveControl = useOptionalSolveControl();
   const [notice, setNotice] = useState('');
   const [selection, setSelection] = useState<string[]>([]);
-  if (!controller || !state) return null;
+  const [panel, setPanel] = useState<HTMLElement | null>(null);
+  // Refit when the drawing's extent changes, never while a woofer is being placed.
+  const extent = JSON.stringify([resolved?.context.baffle ?? null, resolved?.context.mouth_top_mm, resolved?.context.mouth_bottom_mm, resolved?.context.woofers?.length]);
+  const fits = useRef({ extent: '', count: 0 });
+  if (resolved && fits.current.extent !== extent) fits.current = { extent, count: fits.current.count + 1 };
   const solve = () => {
     setNotice('');
     // The jobs coordinator owns every submission; it reports a refusal itself.
-    solveControl?.solveAssembly?.().then(result => setNotice(result.jobId ? result.notice ?? 'Solve submitted.' : ''),
-      (reason: unknown) => setNotice(reason instanceof Error ? reason.message : String(reason)));
+    solveControl?.solveAssembly?.().then(result => setNotice(result.jobId ? result.notice ?? 'Solve submitted. Close this window to follow it in Results.' : ''),
+      (reason: unknown) => { if (useAssemblyBuildStore.getState().status !== 'refused') setNotice(reason instanceof Error ? reason.message : String(reason)); });
   };
-  return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Sources and baffle" className="source-editor front-workspace">
-    <header className="source-editor-toolbar">
-      <h2>Sources and baffle <ExperimentalBadge/></h2>
+  const building = build.status === 'building';
+  const refusal = resolved?.context.refusal;
+  const problems = [...placementProblems(shown, resolved).values()].flat();
+  return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Sources and baffle" className="front-workspace">
+    <header className="front-header">
+      <h2>Sources and baffle</h2><ExperimentalBadge/>
       <button className="btn" type="button" onClick={onClose}>Close</button>
     </header>
-    <Workspace adapter={adapter} state={state} session={controller} selection={selection} onSelectionChange={setSelection}/>
-    <footer className="source-editor-toolbar">
-      <button className="btn" type="button" disabled={build.status === 'building'} onClick={() => { void requestAssemblyBuild(fetcher).catch(() => {}); }}>Build</button>
-      <button className="btn" type="button" disabled={!solveControl?.solveAssembly || solveControl.submitting} onClick={solve}>Solve</button>
-      <span role="status">{error || build.refusal || notice || (build.status === 'building' ? 'Building the assembly…' : build.status === 'published' ? 'Assembly built.' : '')}</span>
+    <div className="front-body">
+      <div className="front-canvas">
+        {panel && <Workspace adapter={adapter} state={shown} session={controller} selection={selection} onSelectionChange={setSelection}
+          slots={{ properties: panel }} fitRequest={fits.current.count}/>}
+        {!resolved && failure && <EmptyState className="front-canvas-empty" title="The front view is not available" detail={failure.text}
+          action={<button className="btn-primary" type="button" onClick={retry}>Try again</button>}/>}
+      </div>
+      <aside className="front-panel" aria-label="Sources and baffle properties">
+        <div className="front-messages">
+          {resolved && failure && <Notice tone="warning" title="This view may be out of date" actions={<button className="btn" type="button" onClick={retry}>Try again</button>}>{failure.text}</Notice>}
+          {refusal && <Notice tone="error">{refusal}</Notice>}
+          {!refusal && problems.length > 0 && <Notice tone="warning" title="Does not fit yet">{problems.map(problem => <div key={problem}>{problem}</div>)}</Notice>}
+          {build.refusal && <Notice tone="error" title="Could not build">{build.refusal}
+            {build.failureDetail && <DeveloperDetails><pre>{build.failureDetail}</pre></DeveloperDetails>}</Notice>}
+          {failure && <DeveloperDetails><pre>{failure.detail}</pre></DeveloperDetails>}
+          {notice && <Notice tone="info">{notice}</Notice>}
+        </div>
+        <div ref={setPanel}/>
+      </aside>
+    </div>
+    <footer className="front-footer">
+      <p role="status">{buildLine(hasAssembly, build.status, !!build.published, assemblyBuildCurrent(build, design))}</p>
+      <div className="front-actions">
+        <button className="btn" type="button" disabled={!hasAssembly || building} onClick={() => { void requestAssemblyBuild(fetcher).catch(() => {}); }}>Build</button>
+        <button className="btn-primary" type="button" disabled={!hasAssembly || building || !solveControl?.solveAssembly || solveControl.submitting} onClick={solve}>Solve</button>
+      </div>
     </footer>
   </div></div>;
 }

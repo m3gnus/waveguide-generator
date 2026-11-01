@@ -12,7 +12,7 @@ import type { DecodedFrame } from '../api/frame';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
 import { compareSelection, provisionalResults } from '../api/results';
-import { currentModel, currentModelScene, currentCadScenes, shownResult, spatialResult, useCurrentModel, type CurrentModel } from '../model/currentModel';
+import { currentModel, currentModelScene, currentCadScenes, shownResult, showsRetainedMesh, spatialResult, useCurrentModel, type CurrentModel } from '../model/currentModel';
 import { postSymmetry, toSolveDesign } from '../jobs/actions';
 import { planAdjustmentNotice } from '../jobs/planAdjustments';
 import { hasMeshProvenance, useMeshFreshnessStore } from '../jobs/meshFreshness';
@@ -69,7 +69,8 @@ import { SolverMeshRefreshController, type SolverMeshRefreshState } from './solv
 import type { CameraDirection } from './cameraMath';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
-import { previewBadge, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
+import { DeveloperDetails } from '../shell/DeveloperDetails';
+import { previewBadge, previewErrorKey, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
 import { markParametricSolvedDomain, quadrantsForSolveMode, solvedDomainLabel, type DisplayQuadrants } from './symmetryScene';
 import { ROLE_MATERIAL_FAMILY, SOURCE_ROLES } from './types';
 import type { DisplayMode, SourceRole, ViewportTheme } from './types';
@@ -519,7 +520,8 @@ export function Viewport() {
   const cadSolverMesh = currentCadScenes(coherenceContext, importedMeshState).solver;
   const solverViewSelected = workspaceMode === 'parametric' && importedMeshState.showing === 'solver';
   const cadSolverViewSelected = workspaceMode === 'cad' && importedMeshState.showing === 'cadSolver';
-  const fileInputActive = coherenceContext.kind === 'file';
+  const fileInputActive = showsRetainedMesh(coherenceContext.kind);
+  const assemblyInputActive = coherenceContext.kind === 'assembly';
   const importedMesh = currentModelScene(coherenceContext, importedMeshState);
   const importedMeshDetail = importedMesh
     ? `${importedMesh.triangleCount.toLocaleString()} display triangles${importedMesh.triangleCount !== importedMesh.solvedTriangleCount ? ` · ${importedMesh.solvedTriangleCount.toLocaleString()} solved` : ''} · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
@@ -690,7 +692,7 @@ export function Viewport() {
   const connectionInterrupted = preferences.liveUpdate && preview.connection !== 'connected';
   const badge = previewBadge(preferences.liveUpdate, preview.connection, preview.error, preview.stale);
   const previewError = preview.error ? previewErrorMessage(preview.error, preview.errorRevision, designRevision) : null;
-  const showPreviewError = workspaceMode === 'parametric' && previewError !== null && dismissedPreviewError !== preview.error;
+  const showPreviewError = workspaceMode === 'parametric' && previewError !== null && dismissedPreviewError !== previewErrorKey(preview);
   // Geometry that builds but is not what was asked for. An unreachable guiding
   // curve is the motivating case: the coverage solver clamps, the mouth quietly
   // leaves the guide shape, and from the rail it looks like the parameters
@@ -1053,13 +1055,13 @@ export function Viewport() {
       <div className="viewport-title">
         <b>{importedMesh?.source === 'solver'
           ? designName || 'Untitled design'
-          : importedMesh?.name ?? (fileInputActive ? 'Imported mesh' : workspaceMode === 'cad' ? cadName : designName || 'Untitled design')}</b>
+          : importedMesh?.name ?? (assemblyInputActive ? 'Assembly' : fileInputActive ? 'Imported mesh' : workspaceMode === 'cad' ? cadName : designName || 'Untitled design')}</b>
         {/* A CAD model's subtitle is its solved triangle count; the display
             mesh's own counts are one hover away. Without a mesh it has none:
             the model's status line lives in Results. */}
         <span title={importedMeshDetail ?? undefined}>{importedMesh
           ? cadMeshShown ? `${importedMesh.solvedTriangleCount.toLocaleString()} triangles` : importedMeshDetail
-          : fileInputActive ? 'Mesh file · configure in Geometry' : workspaceMode === 'cad' ? null : viewportSubtitle(design, nativeOpening)}</span>
+          : assemblyInputActive ? 'Retained mesh of a run' : fileInputActive ? 'Mesh file · configure in Geometry' : workspaceMode === 'cad' ? null : viewportSubtitle(design, nativeOpening)}</span>
       </div>
       <div className="viewport-live">
         {workspaceMode === 'parametric' && <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>}
@@ -1083,12 +1085,12 @@ export function Viewport() {
             ? <span>{cadSolverLoading
               ? 'loading solve mesh…'
               : cadSolverMesh ? 'prepared solve mesh' : 'solve mesh unavailable'}</span>
-            : <span>{fileInputActive ? 'Mesh file' : 'CAD Link'} workspace</span>}
+            : <span>{assemblyInputActive ? 'Assembly' : fileInputActive ? 'Mesh file' : 'CAD Link'} workspace</span>}
         {workspaceMode === 'parametric' && <LiveDimensions />}
       </div>
     </div>
 
-    {!activeScene && <EmptyState className="viewport-empty" aria-live="polite" title={<>{fileInputActive ? 'Import a mesh file' : workspaceMode === 'cad' ? cadEmpty.title : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</>} detail={<>{fileInputActive ? 'Use Import mesh above, then choose Radiating surfaces in Geometry.' : workspaceMode === 'cad' ? cadEmpty.detail : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</>} action={workspaceMode === 'cad' && !fileInputActive && !workspaceNavigation.isVisible('results')
+    {!activeScene && <EmptyState className="viewport-empty" aria-live="polite" title={<>{assemblyInputActive ? 'Opening this run’s model' : fileInputActive ? 'Import a mesh file' : workspaceMode === 'cad' ? cadEmpty.title : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</>} detail={<>{assemblyInputActive ? 'Its retained mesh appears here.' : fileInputActive ? 'Use Import mesh above, then choose Radiating surfaces in Geometry.' : workspaceMode === 'cad' ? cadEmpty.detail : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</>} action={workspaceMode === 'cad' && !fileInputActive && !workspaceNavigation.isVisible('results')
         && <button type="button" className="btn viewport-retry" onClick={() => workspaceNavigation.navigate('results')}>Show Results</button> || undefined}>
       <i className="viewport-empty-mark" aria-hidden="true"><i /></i>
     </EmptyState>}
@@ -1100,7 +1102,7 @@ export function Viewport() {
           disabled={(showPreviewError || showStalledPreview) && refreshRequestedAt !== null
             || showSolverMeshNotice && solverMeshState.building || showCadSolverError && cadSolverLoading}
           onClick={refreshNotice}>Refresh</button>}
-        {showPreviewError && <button type="button" className="icon-button" aria-label="Dismiss preview error" title="Dismiss preview error" onClick={() => setDismissedPreviewError(preview.error)}><Icon name="close"/></button>}</>}>
+        {showPreviewError && <button type="button" className="icon-button" aria-label="Dismiss preview error" title="Dismiss preview error" onClick={() => setDismissedPreviewError(previewErrorKey(preview))}><Icon name="close"/></button>}</>}>
         <div className="viewport-notice-messages">
           {showSolverMeshNotice && <>
             <span>{solverMeshState.error ? 'Mesh build failed' : 'Mesh out of date'}</span>
@@ -1110,6 +1112,7 @@ export function Viewport() {
             {solverMeshState.staleReason === 'build-slow' && <b>auto-rebuild paused — the last build was slow</b>}
           </>}
           {showPreviewError && <span>{previewError}</span>}
+          {showPreviewError && preview.errorDetail && <DeveloperDetails><pre>{preview.errorDetail}</pre></DeveloperDetails>}
           {showStalledPreview && <span>{staleReason(preferences.liveUpdate, preview.connection, preview.error)}</span>}
           {showConnectionNotice && <span>
             {preview.connection === 'reconnecting' ? 'Reconnecting to preview engine' : 'Preview connection interrupted'}. Last valid geometry retained.

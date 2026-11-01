@@ -34,14 +34,17 @@ export interface CurrentModel {
   unloadedRunId?: string;
 }
 export type RunVerdict = 'current' | 'earlier-version' | 'other-model' | 'model-not-shown';
+/** An assembly is shown as a retained mesh, the way a file model is. */
+export const showsRetainedMesh = (kind: CurrentModel['kind']): boolean => kind === 'file' || kind === 'assembly';
+
 export const RUN_VERDICT_MARKER = {
   'earlier-version': 'edited since',
-  'other-model': 'Different CAD model',
+  'other-model': 'Different model',
   'model-not-shown': 'Run model not loaded',
 };
 export const RUN_VERDICT_SENTENCE = {
   'earlier-version': 'The design has been edited since this run was solved.',
-  'other-model': "This run's CAD model differs from the one in the viewport.",
+  'other-model': "This run's model differs from the one in the viewport.",
   'model-not-shown': "This run's model is not loaded in the viewport.",
 };
 
@@ -88,7 +91,7 @@ export function currentCadScenes(model: CurrentModel, viewport: ImportedMeshStat
 
 /** The scene representing the current model; null uses the parametric preview. */
 export function currentModelScene(model: CurrentModel, viewport: ImportedMeshState = importedMeshStore.getSnapshot()) {
-  if (model.kind === 'file' || model.kind === 'assembly') return viewport.file && (!model.ingestId || viewport.file.ingestId === model.ingestId) ? viewport.file : null;
+  if (showsRetainedMesh(model.kind)) return viewport.file && (!model.ingestId || viewport.file.ingestId === model.ingestId) ? viewport.file : null;
   if (model.kind === 'parametric') return viewport.showing === 'solver' ? viewport.solver : null;
   const { cad, solver } = currentCadScenes(model, viewport);
   return viewport.showing === 'cadSolver' ? solver ?? cad : cad;
@@ -246,6 +249,7 @@ export function useCurrentModelStatus(record?: CadReturnIngestRecord) {
 
 export function runProvenanceMarker(job: Pick<JobItem, 'config_summary'>, mode: WorkspaceMode): string | null {
   if (job.config_summary.import_origin === 'mesh-file') return 'Mesh';
+  if (job.config_summary.import_origin === 'design-assembly') return 'Assembly';
   if (job.config_summary.geometry_type === 'imported') return mode === 'cad' ? null : 'CAD';
   return mode === 'cad' ? 'Parametric' : null;
 }

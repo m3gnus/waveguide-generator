@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { formatApiDetail, httpErrorMessage } from './httpError';
+import { formatApiDetail, httpErrorMessage, fieldSentence, keepRefusalOriginals, PLAIN_REQUEST_FAILURE, PLAIN_VALIDATION_FAILURE, refusalText, validationSentence } from './httpError';
 
 const source = (path: string) => readFileSync(new URL(path, import.meta.url).pathname).toString();
 const imports = (path: string) => [...source(path).matchAll(/^import\s+([\s\S]+?)\s+from\s+['"](.+?)['"];?$/gm)]
@@ -20,6 +20,36 @@ describe('formatApiDetail', () => {
     [[], null],
   ])('preserves detail %j as %j', (detail, message) => {
     expect(formatApiDetail(detail)).toBe(message);
+  });
+});
+
+describe('refusalText', () => {
+  it('keeps a sentence the server worded', () => {
+    expect(refusalText('Close the opening.', 'test')).toBe('Close the opening.');
+    expect(refusalText([{ loc: ['body', 'design'], msg: 'Value error, Solve it from Sources and baffle.' }], 'test')).toBe('Solve it from Sources and baffle.');
+  });
+
+  it('turns framework validation and bare failures into one plain message, and keeps the original', () => {
+    const kept: string[] = [];
+    keepRefusalOriginals(({ message }) => kept.push(message));
+    expect(refusalText([{ loc: ['body'], msg: 'Field required' }], 'test')).toBe(PLAIN_VALIDATION_FAILURE);
+    expect(refusalText(null, 'test')).toBe(PLAIN_REQUEST_FAILURE);
+    expect(kept[0]).toBe('body: Field required');
+    keepRefusalOriginals(() => {});
+  });
+
+  it('keeps the field and the bound the server gave', () => {
+    expect(refusalText([{ loc: ['design', 'a'], msg: 'Input should be less than 80' }], 'test')).toBe('a should be less than 80.');
+    expect(refusalText([{ loc: ['body', 'design', 'mesh', 'q'], msg: 'Input should be greater than or equal to 0.5' }], 'test')).toBe('mesh.q should be greater than or equal to 0.5.');
+    expect(refusalText([{ loc: ['body', 'design', 'a'], msg: 'Field required' }], 'test')).toBe('a is missing.');
+    expect(refusalText([{ loc: ['design', 'a'], msg: 'Input should be a valid number' }], 'test')).toBe('a has a value WG cannot use.');
+  });
+
+  it('tells a validator sentence from the framework', () => {
+    expect(validationSentence('Value error, must be finite')).toBe('must be finite');
+    expect(validationSentence('Input should be less than 10')).toBeNull();
+    expect(validationSentence('Self-intersecting mouth.')).toBe('Self-intersecting mouth.');
+    expect(fieldSentence(['body'], 'Input should be less than 10')).toBeNull();
   });
 });
 
@@ -44,7 +74,7 @@ describe('HTTP detail helper ownership', () => {
   });
 
   it.each(['designIo', 'importedModels', 'meshReplay', 'solverMesh'])('%s imports the formatter from its HTTP owner', name => {
-    const formatterImports = imports(`./${name}.ts`).filter(({ bindings }) => /\bformatApiDetail\b/.test(bindings));
+    const formatterImports = imports(`./${name}.ts`).filter(({ bindings }) => /\b(?:formatApiDetail|refusalText)\b/.test(bindings));
     expect(formatterImports.map(({ owner }) => owner)).toEqual(['./httpError']);
     expect(imports(`./${name}.ts`).filter(({ bindings, owner }) =>
       owner === '../jobs/actions' && !bindings.startsWith('type '))).toEqual([]);

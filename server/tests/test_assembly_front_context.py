@@ -20,7 +20,8 @@ from pathlib import Path
 
 import pytest
 
-from server.mesh.builder import _assembly_front_context_sync
+from server.design.schema import DesignConfig
+from server.mesh.builder import AssemblyRefusal, _assembly_front_context_sync, _build_assembly_sync, assembly_mesher_config
 
 FIXTURE = Path(__file__).resolve().parents[2] / "frontend/src/sketch/adapters/frontView.fixture.json"
 HORN = {
@@ -94,3 +95,40 @@ def test_the_front_view_fixture_is_the_placement_owners_answer():
             assert got["radiator_id"] == want["radiator_id"]
             assert (got["x_mm"], got["y_mm"]) == pytest.approx((want["x_mm"], want["y_mm"]), abs=1e-9)
     assert actual["before"]["context"]["mouth_top_mm"] == pytest.approx(expected["before"]["context"]["mouth_top_mm"], abs=1e-9)
+
+
+@pytest.mark.parametrize("depth", [0, 200])
+@pytest.mark.parametrize("with_woofer", [False, True])
+def test_infinite_baffle_assembly_is_refused_before_build_and_in_context(depth, with_woofer):
+    dump = {**copy.deepcopy(HORN), "simulation": {"sim_type": "infinite-baffle"},
+            "assembly": assembly(*(BEFORE["woofers"][:1] if with_woofer else []))}
+    dump["enclosure"]["depth"] = depth
+    config = DesignConfig.model_validate(dump)
+    with pytest.raises(AssemblyRefusal, match="infinite baffle.*Mounting") as refused:
+        assembly_mesher_config(config)
+    assert "Set an enclosure depth" not in str(refused.value)
+    assert _assembly_front_context_sync(dump) == {"refusal": str(refused.value)}
+    with pytest.raises(AssemblyRefusal, match="infinite baffle.*Mounting"):
+        _build_assembly_sync(dump)
+
+
+def test_native_woofer_refusal_does_not_suggest_an_unsupported_depth():
+    dump = {"formula": "OSSE-ROUNDOVER", "mesh": {"mouth_roundover_radius_mm": 25},
+            "assembly": assembly(BEFORE["woofers"][0])}
+    with pytest.raises(AssemblyRefusal, match="OSSE-ROUNDOVER.*enclosure.*Disable the woofers") as refused:
+        assembly_mesher_config(DesignConfig.model_validate(dump))
+    assert "Set an enclosure depth" not in str(refused.value)
+    assert _assembly_front_context_sync(dump) == {"refusal": str(refused.value)}
+
+    dump["assembly"]["woofers"][0]["enabled"] = False
+    assert "refusal" not in _assembly_front_context_sync(dump)
+
+
+@pytest.mark.parametrize("with_woofer", [False, True])
+def test_standalone_source_assembly_has_a_clear_refusal(with_woofer):
+    dump = {"formula": "SOURCE-DISK",
+            "assembly": assembly(*(BEFORE["woofers"][:1] if with_woofer else []))}
+    with pytest.raises(AssemblyRefusal, match="SOURCE-DISK.*standalone source") as refused:
+        assembly_mesher_config(DesignConfig.model_validate(dump))
+    assert "inner_points" not in str(refused.value)
+    assert _assembly_front_context_sync(dump) == {"refusal": str(refused.value)}

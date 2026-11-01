@@ -329,7 +329,7 @@ describe('Custom profile table, insertion, paste and Length', () => {
     load(design);
     act(() => root.render(<CustomProfileTable field={hField} plane="H" />));
     await vi.waitFor(async () => { await settle(); expect(host.querySelector('[data-anchor-index="1"] + .anchor-state-row')?.textContent).toContain('pinned out'); });
-    expect([...host.querySelectorAll('th')].map((th) => th.textContent)).toEqual(['z (mm)', 'r (mm)', 'Join', 'In (°)', 'Out (°)', '']);
+    expect([...host.querySelectorAll('th')].map((th) => th.textContent)).toEqual(['z mm', 'r mm', 'Join', 'In °', 'Out °', '']);
     expect(host.querySelectorAll('tbody tr[data-anchor-index]')).toHaveLength(3);
     expect(inputWithLabel(host, 'H throat z').disabled).toBe(true);
     // Fixed endpoint positions are not validation errors (they would mark the whole panel invalid).
@@ -337,7 +337,7 @@ describe('Custom profile table, insertion, paste and Length', () => {
     expect(inputWithLabel(host, 'H mouth z').disabled).toBe(true);
     expect(inputWithLabel(host, 'H throat angle in').disabled).toBe(true);
     expect(inputWithLabel(host, 'H mouth angle out').disabled).toBe(true);
-    expect(inputWithLabel(host, 'H point 1 z').value).toBe('60.0000');
+    expect(inputWithLabel(host, 'H point 1 z').value).toBe('60.00');
     expect(inputWithLabel(host, 'H point 1 angle in').value).toBe('25.00');
     expect(inputWithLabel(host, 'H point 1 angle out').placeholder).toBe('= in');
     expect(host.querySelector<HTMLSelectElement>('select[aria-label="H point 1 join"]')!.value).toBe('corner');

@@ -1,10 +1,20 @@
 # 0.3.7 — unreleased draft
 
-Draft based on Waveguide Generator `cb0aea323c4c8044020601a1fb8f2c236680f24b`.
+Draft checked against the 0.3.7 additions source, based on Waveguide Generator
+`b05750ce8`, including the Sources and baffle launcher change.
 This is not a release announcement or a statement of platform qualification.
 
 ## Added
 
+- Open **Sources and baffle…** from the parametric enclosure controls without
+  a special URL. Add and edit front-baffle woofers alongside the current horn,
+  keep them with the design and in Undo history, and build or solve the
+  assembly from that workspace. Opening it changes nothing until the first edit. It retains its **Experimental** badge:
+  results are geometry-checked only and not yet acoustically qualified.
+- Edit **Custom profile** (FREEFORM) using the app's anchor table, including
+  throat and mouth, smooth/corner joins, angles, point import and a separate
+  vertical profile. Edits preview curve deviation and generated-profile change
+  before applying.
 - Import supported Gmsh surface meshes directly in the **Imported mesh**
   workspace. Assign a role to each surface group, set units and axes, and use
   full, half or quarter symmetry settings.
@@ -48,6 +58,14 @@ This is not a release announcement or a statement of platform qualification.
 - Flush enclosure construction has geometry guards; zero margin does not make
   every horn shape supported. Fusion and other CAD export routes keep their own
   stated capability limits.
+- Solve a design assembly from **Sources and baffle**, rather than ordinary
+  toolbar Solve. Remove the assembly to return to ordinary Solve. Assembly solves
+  were checked to complete at 200, 500, 1,000 and 2,000 Hz on BEAT CPU and
+  Metal-BEM; BEAT Metal was not run. BEMPP cannot solve these compiled assembly
+  meshes. Drivers and crossovers cannot be set in this workspace. STEP solid, STL
+  and Send to CAD carry the horn and enclosure only, and say so at the export.
+  Assembly geometry export, wiring, boxes and arrays are not part of this first
+  phase.
 
 The solve Mesh section includes an optional **Max surface deviation** control and
 live triangle estimate. New horn designs start **Off**. An explicit setting or
@@ -57,6 +75,6 @@ warning. Explicit minimum sizes take precedence. CAD keeps its existing rule.
 
 ## Pending and excluded from these notes
 
-Custom-profile server support does not expose a profile table or canvas in the
-app, and cloud assembly launchers remain hidden. Hard maximum surface deviation
-guarantees are not claimed.
+The Custom profile drawing canvas and conversion from an existing horn remain
+later work. Other experimental source-assembly launchers keep their existing
+availability. Hard maximum surface deviation guarantees are not claimed.

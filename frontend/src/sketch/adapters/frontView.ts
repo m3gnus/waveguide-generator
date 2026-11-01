@@ -19,7 +19,8 @@ import {
 } from '../../stores/assembly';
 import type { EmbeddedDesignUpdates } from '../../stores/designEdit';
 import type { XY } from '../solver/types';
-import type { Bounds } from '../view';
+import { linearDimension } from '../dimensionGraphics';
+import { worldToScreen, type Bounds, type View } from '../view';
 import type { ProjectBinding } from '../workspace/projectHistoryAuthority';
 import type { DisplayItem, DomainAdapter, HitCandidate, PropertiesSection } from '../workspace/types';
 
@@ -110,6 +111,75 @@ function rect(x0: number, x1: number, y0: number, y1: number): XY[] {
   return [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
 }
 
+/** One dimension between two world points, `px` screen pixels to the left of a to b. */
+function span(id: string, view: View, a: XY, b: XY, px: number, text: string): DisplayItem {
+  const p = worldToScreen(view, a), q = worldToScreen(view, b), length = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+  const t = { x: (q.x - p.x) / length, y: (q.y - p.y) / length };
+  const { text: middle, path, arrows } = linearDimension(p, q, t, { x: t.y, y: -t.x }, px, .5, 0);
+  const vertical = Math.abs(t.y) > Math.abs(t.x) && length > 48, sideways = Math.abs(t.y) > Math.abs(t.x) && !vertical;
+  // Clear of the line on the side away from the drawing; a dimension on the geometry sits just above it.
+  const at = { x: middle.x + (vertical ? 12 : sideways ? 30 : 0), y: middle.y + (vertical ? 0 : sideways ? 4 : px ? 15 : -5) };
+  return { id, kind: 'dimension', role: 'front-dimension', editable: false, driving: false, text, layout: {
+    at, rotation: vertical ? -90 : 0, placement: { offset: px, along: 0 }, path, arrows,
+  } };
+}
+
+/** Text on the drawing: a dimension with nothing to draw. */
+function caption(id: string, view: View, world: XY, dy: number, text: string, state: string[] = []): DisplayItem {
+  const at = worldToScreen(view, world);
+  return { id, kind: 'dimension', role: 'front-caption', editable: false, driving: true, text, state,
+    layout: { at: { x: at.x, y: at.y + dy }, rotation: 0, placement: { offset: 0, along: 0 }, path: '', arrows: '' } };
+}
+
+const number = (value: number) => String(Number(value.toFixed(1)));
+const mm = (value: number) => `${number(value)} mm`;
+
+function dimensionItems(state: DesignAssembly, resolved: FrontViewContext, view: View, selected: WooferView | undefined): DisplayItem[] {
+  const { baffle, mouth_outline_mm: outline } = resolved.context;
+  const items: DisplayItem[] = [];
+  if (baffle) {
+    const { x0_mm: x0, x1_mm: x1, y0_mm: y0, y1_mm: y1 } = baffle;
+    items.push(span('dimension:baffle-width', view, { x: x1, y: y0 }, { x: x0, y: y0 }, 24, mm(x1 - x0)));
+    items.push(span('dimension:baffle-height', view, { x: x1, y: y1 }, { x: x1, y: y0 }, 24, mm(y1 - y0)));
+  }
+  if (outline?.length) {
+    const xs = outline.map(([x]) => x), ys = outline.map(([, y]) => y);
+    items.push(caption('dimension:mouth', view, { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: Math.max(...ys) }, 22,
+      `Mouth ${number(Math.max(...xs) - Math.min(...xs))} × ${number(Math.max(...ys) - Math.min(...ys))} mm`));
+  }
+  if (selected?.center) {
+    const { center, radius } = selected;
+    items.push(span('dimension:woofer', view, { x: center.x - radius, y: center.y }, { x: center.x + radius, y: center.y }, 0, `⌀ ${mm(2 * radius)}`));
+    const placement = woofersOf(state).find(woofer => woofer.id === selected.id)?.placement, context = resolved.context;
+    if (placement && placement.anchor !== 'free' && !placement.spacing_to) {
+      const above = placement.anchor === 'above', edge = above ? context.mouth_top_mm : context.mouth_bottom_mm;
+      if (edge !== undefined) items.push(span('dimension:gap', view, { x: 0, y: edge }, { x: 0, y: center.y + (above ? -radius : radius) }, 0, mm(placement.gap_mm!)));
+    }
+  }
+  return items;
+}
+
+/** The clearances the server reports below its minimum, as what is wrong with each woofer. */
+export function placementProblems(state: DesignAssembly, resolved: FrontViewContext | undefined): Map<string, string[]> {
+  const context = resolved?.context, problems = new Map<string, string[]>();
+  const minimum = context?.minimum_clearance_mm ?? 0, labels = new Map(woofersOf(state).map(woofer => [woofer.id, woofer.label]));
+  for (const [id, clearance] of Object.entries(context?.clearances ?? {})) {
+    const label = labels.get(id);
+    if (label === undefined) continue;
+    const found: string[] = [];
+    const check = (distance: number | undefined, what: string) => {
+      if (distance !== undefined && distance < minimum) found.push(distance < 0 ? `${label} overlaps ${what} by ${Math.abs(distance).toFixed(1)} mm.` : `${label} is too close to ${what}.`);
+    };
+    check(clearance.mouth_mm, 'the mouth');
+    check(clearance.baffle_edge_mm, 'the baffle edge');
+    for (const [other, distance] of Object.entries(clearance.woofers)) {
+      if (id < other) check(distance, labels.get(other) ?? 'another woofer');
+    }
+    if (found.length) problems.set(id, found);
+  }
+  return problems;
+}
+
 function contextItems(resolved: FrontViewContext | undefined, stale: boolean): DisplayItem[] {
   const context = resolved?.context;
   if (!context) return [];
@@ -138,12 +208,14 @@ export function frontViewAdapter(resolved: () => FrontViewContext | undefined,
     id: 'assembly-front',
     axes: { x: { label: 'x', unit: 'mm' }, y: { label: 'y', unit: 'mm' } },
     labels: { drawing: 'Front view', tools: 'Front view tools' },
+    viewControls: { fitAll: false, legend: false },
+    statusLine: (state, cursor, message) => {
+      const hint = message || (woofersOf(state).length ? 'Drag a woofer to move it · Delete removes the selection' : '');
+      return `x ${cursor.x.toFixed(1)}, y ${cursor.y.toFixed(1)} mm${hint && ` · ${hint}`}`;
+    },
     seed: document => document,
     lower: state => ({ ok: true, document: state }),
-    status: () => {
-      const refusal = resolved()?.context.refusal;
-      return refusal ? { kind: 'invalid', problems: [{ code: 'assembly-refused', ids: [], message: refusal }] } : { kind: 'valid' };
-    },
+    status: () => ({ kind: 'valid' }),
     serializeAuthoring: () => undefined,
     apply: (state, command) => {
       try { return command.edit(state); } catch (reason) { return { error: reason instanceof Error ? reason.message : String(reason) }; }
@@ -154,14 +226,24 @@ export function frontViewAdapter(resolved: () => FrontViewContext | undefined,
       const current = resolved();
       const items = contextItems(current, !!current && !sameJson(current.assembly, state));
       items.push({ id: 'horn-throat', kind: 'point', role: 'front-hf', editable: false, glyph: 'centre', label: 'HF', at: { x: 0, y: 0 } });
-      for (const view of visible(state)) {
-        const selected = ui.selection.includes(view.id) ? ['selected'] : [];
-        const state = [...selected, ...(view.stale ? ['stale'] : [])];
-        items.push({ id: `${view.id}#aperture`, kind: 'circle', role: 'front-woofer', editable: false, state, center: view.center!, radius: view.radius });
-        items.push({ id: view.id, kind: 'point', role: 'front-woofer-centre', editable: true, glyph: 'centre', state, label: view.label, at: view.center! });
+      const problems = placementProblems(state, current), woofers = visible(state);
+      for (const view of woofers) {
+        const flags = [...ui.selection.includes(view.id) ? ['selected'] : [], ...view.stale ? ['stale'] : [], ...problems.has(view.id) ? ['problem'] : []];
+        items.push({ id: `${view.id}#aperture`, kind: 'circle', role: 'front-woofer', editable: false, state: flags, center: view.center!, radius: view.radius });
+        items.push({ id: view.id, kind: 'point', role: 'front-woofer-centre', editable: true, glyph: 'centre', state: flags, label: view.label, at: view.center! });
+      }
+      // Screen-placed marks need a view; the first fit is measured without them.
+      if (ui.view) {
+        const chosen = ui.selection.length === 1 ? woofers.find(view => view.id === ui.selection[0]) : undefined;
+        if (ui.dimensions && current) items.push(...dimensionItems(state, current, ui.view, chosen));
+        if (ui.names) items.push(caption('name:hf', ui.view, { x: 0, y: 0 }, -10, 'HF'));
+        for (const view of woofers) {
+          // Inside the rim, clear of the centre mark and the diameter on the centre line.
+          if (ui.names || view === chosen) items.push(caption(`name:${view.id}`, ui.view, { x: view.center!.x, y: view.center!.y + view.radius }, 18, view.label, ui.selection.includes(view.id) ? ['selected'] : []));
+        }
       }
       return {
-        items, context: [],
+        items, context: [], fitPadding: { top: 0, bottom: 0, right: 0, offsetX: 0, margin: 56 },
         bounds: () => {
           const points: XY[] = items.flatMap(item => item.kind === 'polyline' ? item.points
             : item.kind === 'circle' ? [{ x: item.center.x - item.radius, y: item.center.y - item.radius }, { x: item.center.x + item.radius, y: item.center.y + item.radius }]
@@ -197,12 +279,16 @@ export function frontViewAdapter(resolved: () => FrontViewContext | undefined,
   };
 }
 
-/** The workspace's binding to the design's `assembly`: absent closes the workspace. */
-export function frontViewBinding(onMissing: () => void): ProjectBinding<DesignAssembly> {
+/**
+ * The workspace's binding to the design's `assembly`; `blank` stands in while it
+ * has none. Deleting the last woofer leaves nothing an ordinary horn does not
+ * have, so the design goes back to having no assembly and to ordinary Solve.
+ */
+export function frontViewBinding(blank: DesignAssembly): ProjectBinding<DesignAssembly> {
   return {
-    paths: ['assembly'], onMissing,
-    read: values => (values.assembly as DesignAssembly | null | undefined) ?? undefined,
-    write: (state): EmbeddedDesignUpdates => ({ assembly: state }),
+    paths: ['assembly'], onMissing: () => {},
+    read: values => (values.assembly as DesignAssembly | null | undefined) ?? blank,
+    write: (state): EmbeddedDesignUpdates => ({ assembly: woofersOf(state).length ? state : undefined }),
   };
 }
 

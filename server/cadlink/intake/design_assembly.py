@@ -39,6 +39,7 @@ from server.contracts.assembly import (
 )
 from server.contracts.canonical import canonical_ascii_strict_bytes
 from server.design.schema import DesignConfig
+from server.design.source_motion import source_motion
 from server.integration.mesher_identity import mesher_identity
 from server.mesh.artifact import read_verified_import_mesh
 from server.mesh.builder import (
@@ -110,6 +111,9 @@ def compile_spec(design: DesignConfig) -> dict[str, Any]:
         "design_geometry_sha256": _digest(geometry_spec(design)),
         "mesher_identity": mesher_identity(),
         "solved_domain": "full",
+        # Invalidate earlier axial records that incorrectly prescribed normal
+        # motion, while retaining the established normal-record identity.
+        **({"hf_motion": "axial"} if source_motion(design.root.source) == "axial" else {}),
     }
 
 
@@ -137,9 +141,11 @@ def _radiators(design: DesignConfig, built: Mapping[str, Any], source_ids: list[
     patches = {patch["patch_id"]: patch for patch in (built["metadata"].get("assembly") or {}).get("patches", [])}
     radiators: list[dict[str, Any]] = [{
         "radiator_id": HF_RADIATOR_ID, "kind": assembly.hf_source.kind, "label": "HF",
-        "state": "compiled", "role": "HF", "motion": "normal",
+        "state": "compiled", "role": "HF", "motion": source_motion(design.root.source),
         "source_ids": [HF_RADIATOR_ID],
     }]
+    if radiators[0]["motion"] == "axial":
+        radiators[0]["motion_axis"] = [0.0, 0.0, 1.0]
     for woofer in assembly.woofers:
         ids = [source_id for source_id in source_ids if split_source_id(source_id)[0] == woofer.id]
         state = "disabled" if not woofer.enabled else "rigid" if woofer.drive == "rigid" else "compiled"

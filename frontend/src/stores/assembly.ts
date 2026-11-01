@@ -225,6 +225,11 @@ export function commitAssembly(next: DesignAssembly | null, mode: 'step' | 'drag
   useDesignStore.getState().commitEmbedded({ assembly: next ?? undefined }, mode);
 }
 
+/** Whether geometry exports, which carry the horn and enclosure only, leave woofers out. */
+export function designHasEnabledWoofers(design: DesignDocument): boolean {
+  return (design.assembly?.woofers ?? []).some(woofer => woofer.enabled !== false);
+}
+
 export function designAssembly(design: DesignDocument): DesignAssembly | undefined {
   return design.assembly ?? undefined;
 }

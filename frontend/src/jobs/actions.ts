@@ -1,4 +1,4 @@
-import { formatApiDetail } from '../api/httpError';
+import { refusalText } from '../api/httpError';
 import type { CadMeshSizes } from '../api/cadlink';
 import type { components } from '../api/generated/openapi';
 import type { CadSolveSetup } from '../api/cadOperations';
@@ -183,12 +183,9 @@ async function detail(response: Response): Promise<string> {
     };
     const blocker = body.error?.details?.blocker?.message;
     if (blocker) return blocker;
-    const validation = formatApiDetail(body.error?.details?.validation_errors);
-    if (validation) return validation;
-    const formatted = formatApiDetail(body.detail);
-    if (formatted) return formatted;
+    return refusalText(body.error?.details?.validation_errors ?? body.detail, 'solve request');
   } catch { /* fall through */ }
-  return `${response.status} ${response.statusText}`.trim();
+  return refusalText(null, 'solve request');
 }
 
 export async function getCapabilities(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<Capabilities> {
@@ -527,12 +524,12 @@ async function submissionRefusal(response: Response): Promise<SolveSubmissionRef
   let details: Record<string, unknown> | null = null;
   try {
     const body = await response.json() as { detail?: unknown; error?: { code?: unknown; details?: { blocker?: { message?: string } } } | null };
-    message = body.error?.details?.blocker?.message || formatApiDetail(body.detail);
+    message = body.error?.details?.blocker?.message || refusalText(body.detail, 'solve submission');
     code = typeof body.error?.code === 'string' ? body.error.code : null;
     details = body.error?.details ?? null;
   } catch { /* fall through */ }
   return new SolveSubmissionRefused(
-    message || `${response.status} ${response.statusText}`.trim(),
+    message || refusalText(null, 'solve submission'),
     response.status,
     code,
     details,

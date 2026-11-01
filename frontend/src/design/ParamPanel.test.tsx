@@ -1073,6 +1073,13 @@ describe('ParamPanel inventory UX', () => {
     }
   });
 
+  it('offers Sources and baffle in parametric Mounting with no URL flag', () => {
+    const launcher = host.querySelector('[data-control-reveal-id="front-workspace-launch"]');
+    expect(launcher).not.toBeNull();
+    expect(launcher!.closest('section')!.dataset.section).toBe('Mounting');
+    expect(launcher!.textContent).toContain('Experimental');
+  });
+
   it('names the family Custom profile, starts it blank and shared, and does not offer the approximate conversion', () => {
     const fetcher = vi.fn<typeof fetch>();
     vi.stubGlobal('fetch', fetcher);
@@ -2566,14 +2573,13 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('[data-parameter-id="enclosure.depth"] input')?.hasAttribute('disabled')).toBe(false);
   });
 
-  it.each(['parametric', 'cad'] as const)('hides unfinished launchers from the %s rail, search and palette', (mode) => {
+  it.each(['parametric', 'cad'] as const)('hides later-phase launchers from the %s rail, search and palette', (mode) => {
     act(() => {
       if (mode === 'cad') setCadReady();
       workspaceModeStore.setMode(mode);
     });
     const assertHidden = () => {
       expect(host.querySelector('[data-section="Experimental"]')).toBeNull();
-      expect(host.querySelector('.source-editor-launch')).toBeNull();
       expect(host.querySelector('[data-control-reveal-id="source-contour-launch"], [data-control-reveal-id="assembly-launch"]')).toBeNull();
       expect(host.textContent).not.toContain('Edit source contour');
       expect(host.textContent).not.toContain('Edit horn + woofer assembly');

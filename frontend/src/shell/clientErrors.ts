@@ -1,4 +1,5 @@
 import { reportClientError, type ClientErrorReport } from '../api/diagnostics';
+import { keepRefusalOriginals } from '../api/httpError';
 
 /**
  * Interface errors, reported to the backend so a problem report can carry them.
@@ -18,6 +19,8 @@ const SESSION_LIMIT = 20;
 
 const seen = new Set<string>();
 let sent = 0;
+
+keepRefusalOriginals(({ message, operation }) => { reportInterfaceError({ message, operation, source: 'request' }); });
 
 export function resetClientErrorReporting(): void {
   seen.clear();

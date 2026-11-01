@@ -39,6 +39,7 @@ export interface DisplayUI {
   viewport?: Viewport;
   view?: View;
   names?: boolean;
+  dimensions?: boolean;
   hiddenPoints?: string[];
 }
 export type WorkspaceViewState = Pick<DisplayUI, 'selection' | 'hover'>;
@@ -55,6 +56,8 @@ export interface ToolDescriptor<S, C> {
   pointer(event: ToolPointer, state: S, local: unknown): { local?: unknown; commands?: C[]; preview?: DisplayItem[]; done?: boolean };
   key?(event: KeyboardEvent, state: S, local: unknown): { local?: unknown; commands?: C[]; consumed: boolean };
 }
+/** View controls a domain has no use for; the sketch kit shows them all. */
+export interface ViewControls { fitAll?: boolean; legend?: boolean }
 export interface PropertiesSection { id: string; title: string; render(): ReactNode }
 export interface DomainAdapter<TDoc, S, C> {
   id: string; axes: WorkspaceAxes; labels?: WorkspaceLabels;
@@ -70,6 +73,9 @@ export interface DomainAdapter<TDoc, S, C> {
   marquee(state: S, box: Bounds, crossing: boolean, ui: WorkspaceViewState): string[];
   dragSet(state: S, selection: string[], hit: string): { ids: string[]; move(state: S, delta: XY, at: XY): C[] } | undefined;
   tools: ToolDescriptor<S, C>[];
+  viewControls?: ViewControls;
+  /** The status line under the drawing, when the domain's own words serve better. */
+  statusLine?(state: S, cursor: XY, message: string): string;
   properties(state: S, selection: string[], session: WorkspaceSession<S, C>, actions: PropertiesActions): PropertiesSection[];
   solver?: SolverBinding<S>;
 }

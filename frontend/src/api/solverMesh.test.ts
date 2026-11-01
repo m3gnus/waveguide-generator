@@ -56,13 +56,13 @@ describe('postSolverMesh', () => {
 
   it('retains a structured non-ceiling 409 detail after checking a cloned body', async () => {
     const response = Response.json({ detail: [{ loc: ['body', 'design'], msg: 'Value error, refused' }] }, { status: 409 });
-    await expect(postSolverMesh('{}', async () => response)).rejects.toThrow('body.design: Value error, refused');
+    await expect(postSolverMesh('{}', async () => response)).rejects.toThrow('refused');
     expect(response.bodyUsed).toBe(true);
   });
 
-  it('keeps the status fallback when a refusal body is unreadable', async () => {
+  it('says one plain thing when a refusal body is unreadable', async () => {
     const response = new Response('unreadable', { status: 422, statusText: 'Unprocessable Entity' });
-    await expect(postSolverMesh('{}', async () => response)).rejects.toThrow('422 Unprocessable Entity');
+    await expect(postSolverMesh('{}', async () => response)).rejects.toThrow('WG could not finish this request');
     expect(response.bodyUsed).toBe(true);
   });
 

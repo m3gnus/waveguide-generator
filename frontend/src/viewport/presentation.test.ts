@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { NATIVE_FAMILIES, designForFamily } from '../stores/design';
-import { previewBadge, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
+import { previewBadge, previewErrorKey, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
 
 describe('preview presentation', () => {
   it('applies badge precedence from paused through live', () => {
@@ -65,4 +65,11 @@ describe('viewport subtitle', () => {
     design.profile_v = undefined;
     expect(viewportSubtitle(design)).toBe('FREEFORM · quarter');
   });
+});
+
+it('keys a dismissal on the failure, not its shared plain words', () => {
+  const plain = 'WG could not update the preview and has recorded the problem.';
+  expect(previewErrorKey({ error: plain, errorDetail: 'first failure' })).not.toBe(previewErrorKey({ error: plain, errorDetail: 'second failure' }));
+  expect(previewErrorKey({ error: 'Self-intersecting mouth.', errorDetail: null })).toBe('Self-intersecting mouth.');
+  expect(previewErrorKey({ error: null })).toBeNull();
 });

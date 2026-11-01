@@ -1,15 +1,16 @@
-import { act } from 'react';
+import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fixture from '../sketch/adapters/frontView.fixture.json';
-import type { DesignAssembly } from '../stores/assembly';
-import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
+import { addWoofer, emptyAssembly, type DesignAssembly } from '../stores/assembly';
+import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { FRONT_CONTEXT_DELAY_MS, FrontWorkspace, FrontWorkspaceLauncher, openFrontWorkspace, closeFrontWorkspace } from './FrontWorkspace';
 
 const BEFORE = fixture.before.assembly as DesignAssembly;
 const [W1] = BEFORE.woofers!.map(woofer => woofer.id);
 let host: HTMLDivElement, root: Root, frames: Map<number, FrameRequestCallback>, frameId: number;
 let requests: Array<Record<string, unknown>>;
+const enclosed = () => { const design = designForFamily('R-OSSE'); design.enclosure.depth = 250; return design; };
 
 const fetcher = (async (_url: string, init?: RequestInit) => {
   requests.push(JSON.parse(String(init?.body)));
@@ -22,7 +23,7 @@ beforeEach(() => {
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
   vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
   resetDesignStore();
-  useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly: structuredClone(BEFORE) });
+  useDesignStore.getState().replaceDocument({ ...enclosed(), assembly: structuredClone(BEFORE) });
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
 });
 afterEach(() => {
@@ -41,6 +42,7 @@ const pointer = (element: Element, type: string, at: { x: number; y: number }) =
 });
 const flush = () => act(async () => { const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(0)); });
 const button = (label: string) => [...document.querySelectorAll('button')].find(item => item.textContent === label)!;
+const addWooferBelow = () => act(async () => { button('Add woofer').click(); });
 const assembly = () => useDesignStore.getState().design.assembly!;
 const steps = () => useDesignStore.temporal.getState().pastStates.length;
 
@@ -78,7 +80,7 @@ describe('front workspace', () => {
   it('makes every property action one step, keyed by identity', async () => {
     await mount();
     const before = steps();
-    await act(async () => { button('Add woofer below').click(); });
+    await addWooferBelow();
     await act(async () => { await vi.waitFor(() => expect(assembly().woofers).toHaveLength(5)); });
     expect(steps()).toBe(before + 1);
     const added = assembly().woofers![4];
@@ -92,23 +94,165 @@ describe('front workspace', () => {
     await act(async () => { useDesignStore.getState().replaceDocument(designForFamily('R-OSSE')); });
     expect(onClose).toHaveBeenCalled();
   });
+
+  it('removes an assembly as one step and returns the design to its plain content', async () => {
+    useDesignStore.getState().replaceDocument(enclosed());
+    const plain = JSON.stringify(serializeDesign(useDesignStore.getState().design));
+    useDesignStore.getState().replaceDocument({ ...enclosed(), assembly: structuredClone(BEFORE) });
+    const onClose = await mount();
+    const before = steps();
+    await act(async () => { button('Remove assembly').click(); });
+    expect(useDesignStore.getState().design.assembly).toBeUndefined();
+    expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(plain);
+    expect(steps()).toBe(before + 1);
+    expect(onClose).not.toHaveBeenCalled();
+    await act(async () => { useDesignStore.getState().undo(); });
+    expect(assembly()).toEqual(BEFORE);
+  });
+});
+
+describe('leaving an assembly', () => {
+  it('stays removed across a family switch', async () => {
+    await mount();
+    await act(async () => { button('Remove assembly').click(); });
+    await act(async () => { useDesignStore.getState().setFamily('OSSE'); });
+    expect(useDesignStore.getState().design.assembly).toBeUndefined();
+  });
+
+  it('goes back to no assembly when the last woofer is deleted, and Undo restores it', async () => {
+    useDesignStore.getState().replaceDocument(enclosed());
+    const plain = JSON.stringify(serializeDesign(useDesignStore.getState().design));
+    const one = addWoofer(emptyAssembly(), { anchor: 'below' });
+    useDesignStore.getState().replaceDocument({ ...enclosed(), assembly: one.assembly });
+    await act(async () => root.render(<FrontWorkspace onClose={vi.fn()} fetcher={fetcher}/>));
+    await act(() => new Promise(resolve => setTimeout(resolve, FRONT_CONTEXT_DELAY_MS + 50)));
+    await act(async () => { document.querySelector<HTMLButtonElement>('button.front-source')!.click(); });
+    await act(async () => { svg().focus(); svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true })); });
+    await act(async () => { await vi.waitFor(() => expect(useDesignStore.getState().design.assembly).toBeUndefined()); });
+    expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(plain);
+    await act(async () => { useDesignStore.getState().undo(); });
+    expect(assembly().woofers).toHaveLength(1);
+  });
+});
+
+describe('looking at a design without an assembly', () => {
+  const plainDesign = () => {
+    useDesignStore.getState().replaceDocument(enclosed());
+    const { designRevision, design } = useDesignStore.getState();
+    return { designRevision, content: JSON.stringify(serializeDesign(design)), past: steps() };
+  };
+  const unchanged = (before: ReturnType<typeof plainDesign>) => {
+    const { designRevision, design } = useDesignStore.getState();
+    expect(design.assembly).toBeUndefined();
+    expect(designRevision).toBe(before.designRevision);
+    expect(JSON.stringify(serializeDesign(design))).toBe(before.content);
+    expect(steps()).toBe(before.past);
+  };
+  const mountPlain = async () => {
+    await act(async () => root.render(<FrontWorkspace onClose={vi.fn()} fetcher={fetcher}/>));
+    await act(() => new Promise(resolve => setTimeout(resolve, FRONT_CONTEXT_DELAY_MS + 50)));
+  };
+
+  it('leaves the design untouched by opening and closing', async () => {
+    const before = plainDesign();
+    openFrontWorkspace();
+    await mountPlain();
+    closeFrontWorkspace();
+    await act(async () => root.render(null));
+    unchanged(before);
+  });
+
+  it('draws the front view from a horn-only assembly the design does not hold', async () => {
+    plainDesign();
+    await mountPlain();
+    expect((requests[0].design as { assembly: DesignAssembly }).assembly.woofers).toEqual([]);
+    expect(button('Build').disabled).toBe(true);
+    expect(button('Solve').disabled).toBe(true);
+  });
+
+  it('writes the assembly on the first real edit, and Undo takes it back out', async () => {
+    const before = plainDesign();
+    await mountPlain();
+    await addWooferBelow();
+    await act(async () => { await vi.waitFor(() => expect(assembly().woofers).toHaveLength(1)); });
+    expect(steps()).toBe(before.past + 1);
+    await act(async () => { useDesignStore.getState().undo(); });
+    expect(useDesignStore.getState().design.assembly).toBeUndefined();
+    expect(JSON.stringify(serializeDesign(useDesignStore.getState().design))).toBe(before.content);
+  });
+});
+
+describe('front workspace status', () => {
+  const failing = (status: number, body: unknown = {}) => (async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
+  const mountWith = async (with_fetcher: typeof fetch) => {
+    await act(async () => root.render(<FrontWorkspace onClose={vi.fn()} fetcher={with_fetcher}/>));
+    await act(() => new Promise(resolve => setTimeout(resolve, FRONT_CONTEXT_DELAY_MS + 50)));
+  };
+
+  it('never shows a transport failure as the message', async () => {
+    await mountWith(failing(502));
+    expect(document.body.textContent).toContain('The front view is not available');
+    expect(document.body.textContent).toContain('WG could not update the front view');
+    expect(document.body.textContent).not.toMatch(/502|unavailable \(/);
+  });
+
+  it('shows the words of a refusal the server gives', async () => {
+    await mountWith(failing(422, { error: { code: 'assembly_refused', message: 'Set an enclosure depth.' } }));
+    expect(document.body.textContent).toContain('Set an enclosure depth.');
+  });
+
+  it('retries the front view from its empty state', async () => {
+    let answers = 0;
+    await mountWith((async (url: string, init?: RequestInit) => ++answers === 1 ? new Response('', { status: 502 }) : fetcher(url, init)) as typeof fetch);
+    await act(async () => { button('Try again').click(); });
+    await act(() => new Promise(resolve => setTimeout(resolve, FRONT_CONTEXT_DELAY_MS + 50)));
+    expect(document.body.textContent).not.toContain('The front view is not available');
+    expect(centre(W1)).not.toBeNull();
+  });
+
+  it('says what a clearance problem is and marks the woofer in the list', async () => {
+    const context = { ...fixture.before.context, minimum_clearance_mm: 0.1, clearances: { [W1]: { mouth_mm: -3, woofers: {} } } };
+    await mountWith((async () => new Response(JSON.stringify(context), { status: 200 })) as unknown as typeof fetch);
+    expect(document.body.textContent).toContain('Woofer 1 overlaps the mouth by 3.0 mm.');
+    expect(document.querySelector('button.front-source.problem')?.textContent).toContain('Woofer 1');
+  });
+
+  it('survives a Strict Mode remount and keeps editing', async () => {
+    await act(async () => root.render(<StrictMode><FrontWorkspace onClose={vi.fn()} fetcher={fetcher}/></StrictMode>));
+    await act(() => new Promise(resolve => setTimeout(resolve, FRONT_CONTEXT_DELAY_MS + 50)));
+    await addWooferBelow();
+    await act(async () => { await vi.waitFor(() => expect(assembly().woofers).toHaveLength(5)); });
+  });
+
+  it('brings an enclosure back at the latest depth it had', async () => {
+    await mountWith(fetcher);
+    await act(async () => { useDesignStore.getState().updateValues({ 'enclosure.depth': 400 }); });
+    await act(async () => { useDesignStore.getState().updateValues({ 'enclosure.depth': 0 }); });
+    await act(async () => { button('Use an enclosure').click(); });
+    expect(useDesignStore.getState().design.enclosure.depth).toBe(400);
+  });
+
+  it('keeps Add woofer closed without an enclosure and offers one', async () => {
+    useDesignStore.getState().replaceDocument(designForFamily('R-OSSE'));
+    await mountWith(fetcher);
+    expect(document.querySelector<HTMLButtonElement>('.action-menu-primary')!.disabled).toBe(true);
+    await act(async () => { button('Use an enclosure').click(); });
+    expect(useDesignStore.getState().design.enclosure.depth).toBeGreaterThan(0);
+    expect(useDesignStore.getState().design.assembly).toBeUndefined();
+    expect(document.querySelector<HTMLButtonElement>('.action-menu-primary')!.disabled).toBe(false);
+  });
 });
 
 describe('front workspace launch', () => {
-  it('stays hidden unless asked for', async () => {
+  it('launches normally with its experimental badge and explanation', async () => {
     await act(async () => root.render(<FrontWorkspaceLauncher/>));
-    expect(host.textContent).toBe('');
-    window.history.replaceState(null, '', '/?assembly=1');
-    await act(async () => root.render(<FrontWorkspaceLauncher key="flagged"/>));
+    expect(host.textContent).toContain('4 woofers on the front baffle');
+    await act(async () => { useDesignStore.getState().replaceDocument(designForFamily('R-OSSE')); });
     expect(host.textContent).toContain('Sources and baffle');
-  });
-
-  it('gives a design without an assembly a horn-only one as one step', () => {
-    useDesignStore.getState().replaceDocument(designForFamily('R-OSSE'));
-    openFrontWorkspace();
-    expect(assembly().woofers).toEqual([]);
-    expect(assembly().signal_groups).toEqual([expect.objectContaining({ members: [{ radiator_id: 'horn-throat' }] })]);
-    useDesignStore.getState().undo();
+    expect(host.textContent).toContain('Experimental');
+    expect(host.textContent).toContain("Woofers on the enclosure's front baffle, solved with the horn.");
+    await act(async () => { button('Sources and baffle…').click(); });
     expect(useDesignStore.getState().design.assembly).toBeUndefined();
   });
+
 });

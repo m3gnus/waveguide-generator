@@ -3,7 +3,7 @@ import { usePrepareEngine } from '../jobs/usePrepareEngine';
 import { runtimeSetupText } from '../jobs/runtimeSetup';
 import { heldEngineSolveJob, useHeldSolvePreparation } from '../jobs/useHeldSolvePreparation';
 import { messageBlocker, type SolveReadinessState } from '../jobs/solveReadiness';
-import { currentModel, useCurrentModel } from '../model/currentModel';
+import { currentModel, showsRetainedMesh, useCurrentModel } from '../model/currentModel';
 import { importedModelBlocker, importedModelId, unchangedSetup, useImportedModelStore } from '../stores/importedModel';
 import { nativeSymmetryLimitation } from '../design/nativeFamilies';
 import { fileMeshSetup, fileMeshSubmission, useMeshImportStore } from '../stores/meshImport';
@@ -237,6 +237,8 @@ function acceptSubmittedLabel(designName: string): void {
 const CAD_VIEWPORT_MISMATCH =
   'The displayed CAD Link mesh does not match the selected model. Prepare or reselect it before solving.';
 
+const ASSEMBLY_SOLVE_ELSEWHERE = 'This design has a Sources and baffle assembly. Solve it from Sources and baffle so every enabled source is included.';
+
 /** The complete CAD-mode readiness rule, read from live store state so the
  * Solve button, the keyboard shortcut, and every automatic caller apply one
  * gate. The viewport check is evidence about what the user is looking at; the
@@ -422,7 +424,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   // Mode owns solve intent. The viewport CAD slot is evidence for the mismatch
   // guard only; an empty slot must still route to the imported blocker so CAD
   // mode can truthfully say that an ingest is required.
-  const fileGeometryActive = model.kind === 'file' || model.kind === 'assembly';
+  const fileGeometryActive = showsRetainedMesh(model.kind);
   const cadGeometryActive = model.kind === 'cad';
   const crossoverDraftError = useCrossoverDraftError();
   useMeshImportStore();
@@ -539,7 +541,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     let designName = '';
     const jobId = await acceptSubmission(async () => {
       if (nextDesign.assembly) {
-        throw new Error('This design includes a Sources and baffle assembly. Solve it from Sources and baffle so every enabled radiator is included.');
+        throw new Error(ASSEMBLY_SOLVE_ELSEWHERE);
       }
       // Solve leaves the live document alone. The server applies BEMPP's
       // closed-wall default to its own stored request, not the editor's design.
@@ -570,16 +572,35 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     return jobId === null ? 'pending' as const : 'submitted' as const;
   }, [acceptSubmission, now, revision]);
 
+  // One model press, asking Solve anyway or not when its mesh is over the limit.
+  const pressModelSolve = useCallback(async (modelId: string, press: ModelSolvePress, name: string,
+    acceptance: { onAccepted?: () => void; arm?: boolean }, { restored = false, onAsked = () => {} } = {}) => {
+    const choiceInputs = captureSolveInputs();
+    try {
+      return await solveModel(modelId, press);
+    } catch (error) {
+      if (error instanceof SolveSubmissionRefused && error.code === 'mesh_too_large'
+        && typeof error.details?.triangles === 'number' && typeof error.details.limit === 'number') {
+        onAsked();
+        askMeshSolveChoice(name, error.details.triangles, error.details.limit, () => solveCancellationReason(choiceInputs) === null, async () => {
+          await acceptSubmission(() => solveModel(modelId, { ...press, mesh_limit_override: true }), { ...acceptance, arm: true });
+        });
+        return null;
+      }
+      throw importedSolveError(error, restored);
+    }
+  }, [acceptSubmission]);
+
   // One press of a design assembly's Solve: one POST /api/models/{id}/solve.
   const solveDesignAssembly = useCallback(async () => {
     let notice: string | null = null;
     const jobId = await acceptSubmission(async () => {
-      const prepared = await prepareAssemblySolve();
+      const prepared = await prepareAssemblySolve().catch((error) => { throw importedSolveError(error); });
       notice = prepared.notice;
-      return solveModel(prepared.modelId, prepared.press);
+      return pressModelSolve(prepared.modelId, prepared.press, useDocumentStore.getState().designName, {});
     }, { arm: true });
     return { jobId, notice };
-  }, [acceptSubmission]);
+  }, [acceptSubmission, pressModelSolve]);
 
   // One press of a file model's Solve: one POST /api/models/{id}/solve.
   const solveFileModel = useCallback(async (continuation: ModelSolveContinuation | null = null) => {
@@ -589,7 +610,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       const setup = fileMeshSetup();
       const model = useImportedModelStore.getState();
       const record = model.prepared!;
-      const choiceInputs = captureSolveInputs();
       designName = model.input === 'assembly' ? model.model?.display_name || 'Assembly' : useMeshImportStore.getState().filename;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
       // An unedited reopened model keeps the setup it was opened with.
@@ -599,23 +619,11 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         ...(unchanged ?? { setup: { schema_version: 1, ...setup } as unknown as ModelSolvePress['setup'] }),
       };
       if (!beforePost(continuation)) return null;
-      try {
-        return await solveModel(model.modelId!, press);
-      } catch (error) {
-        if (error instanceof SolveSubmissionRefused && error.code === 'mesh_too_large'
-          && typeof error.details?.triangles === 'number' && typeof error.details.limit === 'number') {
-          asked = true;
-          askMeshSolveChoice(designName, error.details.triangles, error.details.limit, () => solveCancellationReason(choiceInputs) === null, async () => {
-            await acceptSubmission(() => solveModel(model.modelId!, { ...press, mesh_limit_override: true }),
-              { onAccepted: () => acceptSubmittedLabel(designName), arm: true });
-          });
-          return null;
-        }
-        throw importedSolveError(error, unchanged !== null);
-      }
+      return pressModelSolve(model.modelId!, press, designName, { onAccepted: () => acceptSubmittedLabel(designName) },
+        { restored: unchanged !== null, onAsked: () => { asked = true; } });
     }, { onAccepted: () => acceptSubmittedLabel(designName), attention: continuation?.attention });
     return jobId === null ? asked ? 'pending' as const : 'busy' as const : 'submitted' as const;
-  }, [acceptSubmission, now]);
+  }, [acceptSubmission, now, pressModelSolve]);
 
   // The CAD press captures the axis shown and the findings reviewed, then
   // makes one call; the server prepares, continues or answers the job in flight.
@@ -866,8 +874,10 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     }
     await requested.press(engine, false, attention);
   };
-  const readiness = solveBlocker || solveOptionsError
-    ? messageBlocker(solveBlocker || solveOptionsError!)
+  // The server's plan refuses an assembly too; the words here are the ones a user can act on.
+  const assemblyBlocker = workspaceMode === 'parametric' && design.assembly ? ASSEMBLY_SOLVE_ELSEWHERE : null;
+  const readiness = assemblyBlocker || solveBlocker || solveOptionsError
+    ? messageBlocker(assemblyBlocker || solveBlocker || solveOptionsError!)
     : serverReadiness ?? (planError ? messageBlocker(planError) : null);
   const control = useMemo<SolveControl>(() => ({
     readiness,

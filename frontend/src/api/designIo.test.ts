@@ -507,7 +507,7 @@ describe('design copy serialization requests', () => {
       { loc: ['design', 'a'], msg: 'Value error, Body coverage angle must be below 80 degrees' },
     ] }), { status: 422, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
     await expect(serializeDesignDocument(designForFamily('OSSE'), 'horn', fetcher))
-      .rejects.toThrow('a: Body coverage angle must be below 80 degrees');
+      .rejects.toThrow('Body coverage angle must be below 80 degrees');
   });
 
   it('uses the non-mutating endpoint without a CadLink identity', async () => {

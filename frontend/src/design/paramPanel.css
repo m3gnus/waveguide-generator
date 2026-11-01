@@ -125,10 +125,27 @@
 .editable-parameter-table td input, .editable-parameter-table td select { width: 100%; min-width: 0; height: 20px; padding: 0 2px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg); font: var(--text-micro) var(--mono); }
 .editable-parameter-table td .field-row { display: block; min-height: 0; }
 .editable-parameter-table td .field-row > .modified-dot { display: none; }
-.custom-profile-scroll { overflow-x: auto; }
-.custom-profile-table table { min-width: 280px; }
-.custom-profile-table th:nth-child(3) { width: 22%; }
-.custom-profile-table tr.anchor-state-row td { padding: 0 2px 3px; border-top: 0; color: var(--fg4); white-space: normal; overflow-wrap: anywhere; }
+/* Six columns in the rail: numbers right-aligned under their headings, each anchor's state as its own quiet line. */
+.custom-profile-table th:nth-child(1), .custom-profile-table th:nth-child(2) { width: 21%; }
+.custom-profile-table th:nth-child(3) { width: 21%; }
+.custom-profile-table th:nth-child(4), .custom-profile-table th:nth-child(5) { width: 15%; }
+.custom-profile-table th:nth-child(6) { width: 7%; }
+.custom-profile-table th:not(:nth-child(3)) { text-align: right; }
+.custom-profile-table th { padding-inline: 4px; }
+.custom-profile-table td { padding: 3px 1px 1px; }
+.custom-profile-table td input { font-variant-numeric: tabular-nums; text-align: right; }
+.custom-profile-table td input::placeholder { color: var(--fg4); opacity: 1; }
+.custom-profile-table td select { appearance: none; padding-inline: 3px; text-overflow: clip; }
+.custom-profile-table td .number-control:has(input:disabled) { border-color: transparent; background: transparent; }
+.custom-profile-table td .number-control input:disabled { color: var(--fg3); opacity: 1; }
+.custom-profile-table tr.anchor-state-row td { padding: 0 4px 4px; border-top: 0; color: var(--fg4); white-space: normal; overflow-wrap: anywhere; font-family: var(--ui); }
+.custom-profile-table .anchor-state b { display: inline-block; color: var(--fg3); font-weight: 600; }
+.custom-profile-table .anchor-state b::first-letter { text-transform: uppercase; }
+.custom-profile-table .anchor-state b::after { content: ' ·'; font-weight: 400; }
+.custom-profile-table td .number-control { display: flex; align-items: center; }
+.custom-profile-table td .number-control input { width: 100%; line-height: 18px; }
+.custom-profile-table td:last-child { width: auto; padding-right: 2px; }
+.custom-profile-table td .icon-button { display: block; width: 16px; margin-left: auto; }
 .custom-profile-insert { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px; border-top: 1px solid var(--hair-soft); }
 .custom-profile-insert > .field-row { flex: 1 1 140px; min-width: 0; }
 .profile-edit-preview, .profile-edit-notice { margin: 4px; }

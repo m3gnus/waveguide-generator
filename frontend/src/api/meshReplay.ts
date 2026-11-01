@@ -1,5 +1,5 @@
 import type { ImportedSolveSubmission } from '../jobs/actions';
-import { formatApiDetail } from './httpError';
+import { refusalText } from './httpError';
 import type { RegisteredMesh } from './meshImport';
 
 export const MAX_MESH_REPLAY_BYTES = 64 * 1024 * 1024;
@@ -15,7 +15,7 @@ export class MeshReplayRefusal extends Error {
 async function checked(response: Response): Promise<Response> {
   if (!response.ok) {
     const error = await response.json().catch(() => null) as { detail?: unknown } | null;
-    throw new MeshReplayRefusal(formatApiDetail(error?.detail) ?? `Mesh replay failed (${response.status}).`, response.status);
+    throw new MeshReplayRefusal(refusalText(error?.detail, 'mesh replay'), response.status);
   }
   return response;
 }

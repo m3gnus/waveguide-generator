@@ -200,6 +200,44 @@ def test_a_lower_woofer_compiles_with_roles_tags_evidence_and_full_domain(store,
     assert store.get_model(design_model_id(UID))["producer"] == "design-assembly"
 
 
+def test_a_curved_horn_preserves_axial_motion_and_replaces_a_cached_normal_record(store, tmp_path):
+    dump = design(assembly=assembly(), source={"shape": 1, "radius": 30, "velocity_convention": "normal"})
+    normal = compile_(store, tmp_path, dump)["record"]
+    dump["source"]["velocity_convention"] = "axial"
+    outcome = compile_(store, tmp_path, dump, revision=2)
+    record = outcome["record"]
+    assert record["excitations"] == [{
+        "id": "horn-throat", "source_ids": ["horn-throat"], "motion": "axial",
+        "motion_axis": [0.0, 0.0, 1.0], "patch_weights": {"horn-throat": 1.0},
+    }]
+    assert record["radiators"][0]["motion"] == "axial"
+    assert record["radiators"][0]["motion_axis"] == [0.0, 0.0, 1.0]
+    assert not outcome["reused"] and record["ingest_id"] != normal["ingest_id"]
+    assert record["manifest_sha256"] != normal["manifest_sha256"]
+    assert record["mesh_content_sha256"] == normal["mesh_content_sha256"]
+    assert design_assembly.compile_spec(DesignConfig.model_validate(dump))["hf_motion"] == "axial"
+    dump["source"]["velocity_convention"] = "normal"
+    assert "hf_motion" not in design_assembly.compile_spec(DesignConfig.model_validate(dump))
+
+
+@pytest.mark.parametrize(("source", "motion"), [
+    ({}, "normal"), ({"velocity": 2}, "axial"),
+    ({"velocity_convention": "legacy", "velocity": 2}, "axial"),
+    ({"velocity_convention": "normal", "velocity": 2}, "normal"),
+    ({"velocity_convention": "axial", "velocity": 1}, "axial"),
+])
+def test_horn_radiator_uses_the_design_source_motion(source, motion):
+    from server.jobs.models import SolveRequest
+    from server.solver.context import SolverContext
+
+    config = DesignConfig.model_validate(design(assembly=assembly(), source=source))
+    radiator = design_assembly._radiators(config, {"placement": {"woofers": []}, "metadata": {}}, ["horn-throat"])[0]
+    assert radiator["motion"] == motion
+    assert radiator.get("motion_axis") == ([0.0, 0.0, 1.0] if motion == "axial" else None)
+    request = SolveRequest.model_validate({"design": design(source=source)})
+    assert SolverContext.from_request(request, solver_mode="full_3d").source_motion == motion
+
+
 def test_rigid_woofers_cut_the_baffle_but_are_not_driven(store, tmp_path):
     record = compile_(store, tmp_path, design(assembly=assembly(woofer(drive="rigid"))))["record"]
     assert [s["id"] for s in record["sources"]] == ["horn-throat"]
@@ -254,7 +292,7 @@ def test_the_fence_is_checked_inside_the_publishing_transaction(store, tmp_path,
 
 @pytest.mark.parametrize(("dump", "message"), [
     (HORN, "no Sources and baffle assembly"),
-    ({**HORN, "enclosure": {"depth": 0}, "assembly": assembly(woofer())}, "Set an enclosure depth"),
+    ({**HORN, "enclosure": {"depth": 0}, "assembly": assembly(woofer())}, "Mounting to Waveguide in enclosure"),
     ({**HORN, "assembly": assembly(woofer(gap=-200))}, "greater than or equal"),
 ])
 def test_unsupported_assemblies_are_refused_precisely(store, tmp_path, dump, message):
@@ -342,6 +380,29 @@ def test_the_models_api_compiles_and_draws_an_assembly(store, tmp_path):
             bad = await call(app, "POST", "/api/models/assembly/compile",
                              {**body, "design_revision": 3, "design": HORN}, expected=422)
             assert bad["error"]["code"] == "assembly_refused"
+        finally:
+            await runtime.shutdown()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("dump", [
+    design(assembly=assembly(), simulation={"sim_type": "infinite-baffle"}),
+    {"formula": "OSSE-ROUNDOVER", "mesh": {"mouth_roundover_radius_mm": 25}, "assembly": assembly(woofer())},
+    {"formula": "SOURCE-DISK", "assembly": assembly()},
+])
+def test_assembly_api_context_and_compile_share_the_refusal(store, tmp_path, dump):
+    from test_models_api import app_for, call
+
+    async def scenario():
+        app, runtime = app_for(tmp_path, store)
+        try:
+            context = await call(app, "POST", "/api/models/assembly/context", {"design": dump})
+            compiled = await call(app, "POST", "/api/models/assembly/compile", {
+                "design": dump, "design_uid": UID, "design_name": "Unsupported assembly", "design_revision": 1,
+            }, expected=422)
+            assert compiled["error"]["code"] == "assembly_refused"
+            assert compiled["error"]["message"] == context["refusal"]
+            assert store.list_model_ingests(design_model_id(UID)) == []
         finally:
             await runtime.shutdown()
     asyncio.run(scenario())

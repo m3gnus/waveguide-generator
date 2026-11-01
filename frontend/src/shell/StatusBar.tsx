@@ -88,9 +88,12 @@ export function StatusBar() {
   const design = useDesignStore((state) => state.design);
   const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const file = useMeshImportStore();
-  const openedSetup = useImportedModelStore((state) => state.input === 'file' ? state.setup : null);
-  const fileRegistered = useImportedModelStore((state) => state.input === 'file' && state.prepared !== null);
-  const fileActive = mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'file';
+  const openedSetup = useImportedModelStore((state) => state.input !== 'cad' ? state.setup : null);
+  const fileRegistered = useImportedModelStore((state) => state.input !== 'cad' && state.prepared !== null);
+  const importedInput = workspaceModeStore.getSnapshot().importedInput;
+  const assemblyActive = mode === 'cad' && importedInput === 'assembly';
+  const fileActive = assemblyActive || (mode === 'cad' && importedInput === 'file');
+  const assemblyTriangles = useImportedModelStore((state) => state.input === 'assembly' ? (state.prepared as { summary?: { triangle_count?: number } } | null)?.summary?.triangle_count : undefined);
   const cadReturn = useCadReturnStore();
   const { model: cad, line: cadLine } = useCadModelStatusLine();
   const requestedEngine = useScopedSolveOptions(state => state.engine);
@@ -111,7 +114,7 @@ export function StatusBar() {
     : mode === 'cad'
     ? cadSolveSummary({ start: cadReturn.frequencyStartHz, end: cadReturn.frequencyEndHz, count: cadReturn.frequencyCount }, { frequencyMode, frequencyListText, smoothing: preferences.smoothing })
     : solveSummary(design, { frequencyMode, frequencyListText, smoothing: preferences.smoothing });
-  const document = fileActive ? file.filename || 'no mesh file' : mode === 'cad'
+  const document = assemblyActive ? 'assembly run' : fileActive ? file.filename || 'no mesh file' : mode === 'cad'
     ? cad.selected ? cad.label : 'no CAD model'
     : documentLabel(filename, design.formula);
   return <footer className="statusbar">
@@ -124,7 +127,7 @@ export function StatusBar() {
         The mesh metrics are recovered here from the decoded frame; the λ/6
         limit slot is gone until something computes it, because a readout that
         can only ever say "not calculated" is worse than no readout. */}
-    <div className="status-item status-drop-2">{fileActive ? <>Mesh <b>{file.summary?.triangle_count.toLocaleString() ?? 'not imported'}</b> tri</> : mode === 'cad'
+    <div className="status-item status-drop-2">{fileActive ? <>Mesh <b>{(assemblyActive ? assemblyTriangles : file.summary?.triangle_count)?.toLocaleString() ?? 'not imported'}</b> tri</> : mode === 'cad'
       // A question about the model stays one press away from every tab.
       ? cadLine.action === 'choose'
         ? <button type="button" className="statusbar-link" data-action="choose" onClick={() => runCadStatusAction(cadLine, undefined)}>CAD model · {cadLine.short} · Choose…</button>

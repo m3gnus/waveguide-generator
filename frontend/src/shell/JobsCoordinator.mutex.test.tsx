@@ -69,7 +69,9 @@ function SolveActions() {
   return <><div data-toolbar-solve><ToolbarSolveActions/></div><CurrentReadiness solveStatus/></>;
 }
 
+vi.mock('../jobs/assemblySolve', () => ({ prepareAssemblySolve: () => mocks.prepareAssemblySolve() }));
 const mocks = vi.hoisted(() => ({
+  prepareAssemblySolve: vi.fn(),
   capabilityGeneration: 1,
   lastCapabilityEngines: null as EngineCapability[] | null,
   refreshCapabilities: vi.fn(),
@@ -616,6 +618,36 @@ describe('solve invocation mutex', () => {
     expect(mocks.postSolverMesh).not.toHaveBeenCalled();
     expect(mocks.submitDesign).not.toHaveBeenCalled();
     expect(mocks.solveModel).not.toHaveBeenCalled();
+  });
+
+  it('asks Solve anyway when an assembly mesh is over the limit, and sends the override', async () => {
+    const press = { prepared_id: 'compiled', client_request_id: 'assembly-1', setup: { schema_version: 1 } };
+    mocks.prepareAssemblySolve.mockResolvedValue({ modelId: 'design-assembly:one', press, notice: null });
+    mocks.solveModel.mockRejectedValueOnce(new SolveSubmissionRefused('large', 409, 'mesh_too_large', { triangles: 22001, limit: 22000 }))
+      .mockResolvedValueOnce('job-1');
+    await act(async () => {
+      useDesignStore.getState().commitEmbedded({ assembly: addWoofer(emptyAssembly(), { anchor: 'below' }).assembly }, 'step');
+      root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    });
+    await act(async () => { await solveControlStore.getSnapshot()!.solveAssembly!(); });
+    expect(mocks.solveModel).toHaveBeenCalledTimes(1);
+    const choice = meshCeilingChoice.getSnapshot();
+    expect(choice?.meshLimit).toEqual({ triangles: 22001, limit: 22000 });
+    await act(async () => { await choice!.continueSolve!(); });
+    expect(mocks.solveModel).toHaveBeenLastCalledWith('design-assembly:one', { ...press, mesh_limit_override: true });
+  });
+
+  it('says a refused assembly solve in the imported model words, without a raw code', async () => {
+    mocks.prepareAssemblySolve.mockResolvedValue({ modelId: 'design-assembly:one', press: { prepared_id: 'compiled', client_request_id: 'assembly-2', setup: { schema_version: 1 } }, notice: null });
+    mocks.solveModel.mockRejectedValueOnce(new SolveSubmissionRefused('stale_prepared: The mesh moved on.', 409, 'stale_prepared'));
+    await act(async () => {
+      useDesignStore.getState().commitEmbedded({ assembly: addWoofer(emptyAssembly(), { anchor: 'below' }).assembly }, 'step');
+      root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>);
+    });
+    let shown = '';
+    await act(async () => { await solveControlStore.getSnapshot()!.solveAssembly!().catch((error: Error) => { shown = error.message; }); });
+    expect(`${shown} ${host.textContent}`).toContain('The mesh moved on.');
+    expect(`${shown} ${host.textContent}`).not.toContain('stale_prepared');
   });
 
   const blocker: SolveBlocker = { code: 'engine_unavailable', engine: 'beat-metal',

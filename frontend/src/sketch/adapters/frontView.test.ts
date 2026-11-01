@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AssemblyFrontContext } from '../../api/assembly';
 import type { DesignAssembly } from '../../stores/assembly';
-import { addWooferCommand, anchoredPlacement, draggedPlacement, frontViewAdapter, frontWoofers, type FrontViewContext } from './frontView';
+import { addWooferCommand, anchoredPlacement, draggedPlacement, frontViewAdapter, frontWoofers, placementProblems, type FrontViewContext } from './frontView';
 import fixture from './frontView.fixture.json';
 
 const before: FrontViewContext = { assembly: fixture.before.assembly as DesignAssembly, context: fixture.before.context as AssemblyFrontContext };
@@ -71,8 +71,33 @@ describe('front view edits', () => {
     expect(display.items.some(item => item.id === added)).toBe(false);
   });
 
-  it('reports a server refusal as the workspace status', () => {
-    const refused = frontViewAdapter(() => ({ ...before, context: { refusal: 'Woofers cut the front baffle.' } }));
-    expect(refused.status(before.assembly)).toMatchObject({ kind: 'invalid', problems: [{ message: 'Woofers cut the front baffle.' }] });
+  it('turns clearances below the minimum into what is wrong, and marks the woofer', () => {
+    const tight: FrontViewContext = { ...before, context: { ...before.context, minimum_clearance_mm: 0.1, clearances: {
+      [W1]: { mouth_mm: -4, baffle_edge_mm: 0.05, woofers: { [W2]: 30 } },
+      [W2]: { mouth_mm: 10, woofers: { [W1]: 30 } },
+    } } };
+    const problems = placementProblems(before.assembly, tight);
+    expect([...problems.keys()]).toEqual([W1]);
+    expect(problems.get(W1)).toEqual(['Woofer 1 overlaps the mouth by 4.0 mm.', 'Woofer 1 is too close to the baffle edge.']);
+    const display = frontViewAdapter(() => tight).display(before.assembly, { selection: [], scale: 1 });
+    expect(display.items.find(item => item.id === `${W1}#aperture`)!.state).toContain('problem');
+    expect(display.items.find(item => item.id === `${W2}#aperture`)!.state).not.toContain('problem');
+  });
+
+  it('names one overlap between two woofers once', () => {
+    const tight: FrontViewContext = { ...before, context: { ...before.context, minimum_clearance_mm: 0.1, clearances: {
+      [W1]: { mouth_mm: 10, woofers: { [W2]: -2 } }, [W2]: { mouth_mm: 10, woofers: { [W1]: -2 } },
+    } } };
+    expect([...placementProblems(before.assembly, tight).values()].flat()).toEqual(['Woofer 1 overlaps Woofer 2 by 2.0 mm.']);
+  });
+
+  it('draws dimensions only when asked, from the same server context', () => {
+    const adapter = frontViewAdapter(() => ({ ...before, context: { ...before.context, mouth_outline_mm: [[-100, 0], [100, 0], [0, 100], [0, -100]],
+      baffle: { x0_mm: -300, x1_mm: 300, y0_mm: -400, y1_mm: 400, edge_mm: 18 } } }));
+    const view = { scale: 1, offsetX: 500, offsetY: 500 };
+    const texts = (dimensions: boolean) => adapter.display(before.assembly, { selection: [W1], scale: 1, view, dimensions }).items
+      .flatMap(item => item.kind === 'dimension' ? [item.text] : []);
+    expect(texts(true)).toEqual(expect.arrayContaining(['600 mm', '800 mm', 'Mouth 200 × 200 mm', '⌀ 160 mm', '10 mm', 'Woofer 1']));
+    expect(texts(false)).toEqual(['Woofer 1']);
   });
 });

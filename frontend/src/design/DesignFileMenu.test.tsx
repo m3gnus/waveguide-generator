@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobsSnapshot } from '../api/jobsSocket';
 import { preferencesStore } from '../prefs/preferences';
 import { toSolveDesign } from '../jobs/actions';
+import { addWoofer, emptyAssembly } from '../stores/assembly';
 import { NATIVE_FAMILIES, resetDesignStore, useDesignStore, type DesignDocument } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
@@ -347,6 +348,31 @@ describe('design file export menu', () => {
     const item = itemNamed('STEP inner surface');
     await act(async () => { item.click(); });
     expect(requested.filter((path) => path.startsWith('/api/export/'))).toEqual(['/api/export/step?body=surface']);
+  });
+
+  it('says at a STEP export that enabled woofers are not in the file', async () => {
+    const assembly = addWoofer(emptyAssembly(), { anchor: 'below' }).assembly;
+    useDesignStore.getState().commitEmbedded({ assembly }, 'step');
+    const details: string[] = [];
+    provideExportDestinationPrompt(async request => { details.push(request.detail ?? ''); return null; });
+    const item = itemNamed('STEP solid');
+    await act(async () => { item.click(); });
+    expect(details).toEqual([expect.stringContaining('woofers and their baffle cutouts are not in it')]);
+  });
+
+  it('says nothing about woofers at an export when they are all disabled', async () => {
+    const assembly = addWoofer(emptyAssembly(), { anchor: 'below' }).assembly;
+    useDesignStore.getState().commitEmbedded({ assembly: { ...assembly, woofers: assembly.woofers!.map(woofer => ({ ...woofer, enabled: false })) } }, 'step');
+    const details: string[] = [];
+    provideExportDestinationPrompt(async request => { details.push(request.detail ?? ''); return null; });
+    const item = itemNamed('STEP solid');
+    await act(async () => { item.click(); });
+    expect(details[0]).not.toContain('woofers');
+  });
+
+  it.each(['STEP solid', 'STL'])('notes in the %s tooltip that enabled woofers are not in the file', label => {
+    useDesignStore.getState().commitEmbedded({ assembly: addWoofer(emptyAssembly(), { anchor: 'below' }).assembly }, 'step');
+    expect(itemNamed(label).title).toContain('woofers and their baffle cutouts are not in it');
   });
 
   it('asks where a STEP export goes, and writes nothing when that is cancelled', async () => {

@@ -24,7 +24,7 @@ describe('API validation errors', () => {
     const fetcher = async () => new Response(JSON.stringify({ detail }), {
       status: 422, headers: { 'Content-Type': 'application/json' },
     });
-    await expect(getCapabilities(fetcher as typeof fetch)).rejects.toThrow('body.design.simulation.f1: must be finite');
+    await expect(getCapabilities(fetcher as typeof fetch)).rejects.toThrow('must be finite');
   });
 });
 
@@ -132,7 +132,7 @@ describe('solve submission', () => {
     const opaque = async () => new Response('gateway down', { status: 502, statusText: 'Bad Gateway' });
     const bare = await solveModel('wgl_model', press, opaque as typeof fetch).catch((error: unknown) => error);
     expect(bare).toBeInstanceOf(SolveSubmissionRefused);
-    expect(bare).toMatchObject({ message: '502 Bad Gateway', status: 502, code: null });
+    expect(bare).toMatchObject({ message: 'WG could not finish this request and has recorded the problem. Try again.', status: 502, code: null });
   });
 
   it('submits the sweep displayed for an imported design whose sweep controls were absent', async () => {

@@ -321,6 +321,20 @@ describe('preview socket state machine', () => {
     manager.stop();
   });
 
+  it('never shows the framework validation sentence, and keeps it for developers', () => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    manager.start();
+    socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, code: 'validation', fields: { 'design.a': 'Field required' } }));
+    expect(manager.getSnapshot().error).toBe('a is missing.');
+    expect(manager.getSnapshot().errorDetail).toBe('Field required');
+    socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, code: 'validation', fields: { 'design.a': 'Input should be less than 80' } }));
+    expect(manager.getSnapshot().error).toBe('a should be less than 80.');
+    socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, code: 'validation', fields: { design: 'Unable to parse' } }));
+    expect(manager.getSnapshot().error).toBe('This design has a value WG cannot use. Check its parameters.');
+  });
+
   it('keeps an error raised for an edit the user has already moved past', () => {
     const socket = new MockSocket();
     const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
@@ -330,7 +344,8 @@ describe('preview socket state machine', () => {
     useDesignStore.setState({ designRevision: 58 });
     socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, designRevision: 57, code: 'internal', message: 'inconsistent local orientation' }));
     // Discarding this used to leave the viewport reading STALE with no reason.
-    expect(manager.getSnapshot().error).toBe('inconsistent local orientation');
+    expect(manager.getSnapshot().error).toBe('WG could not update the preview and has recorded the problem.');
+    expect(manager.getSnapshot().errorDetail).toBe('inconsistent local orientation');
     expect(manager.getSnapshot().errorFields).toBeNull();
     expect(manager.getSnapshot().errorRevision).toBe(57);
     expect(manager.getSnapshot().stale).toBe(true);

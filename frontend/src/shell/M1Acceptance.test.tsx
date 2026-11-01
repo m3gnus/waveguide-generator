@@ -412,7 +412,7 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
       expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(prepared.ingest_id);
       expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(prepared.ingest_id);
       expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'job-1', following: true });
-      expect(host.textContent).not.toContain('Different CAD model');
+      expect(host.textContent).not.toContain('Different model');
       expect(host.textContent).not.toContain('Not solved yet');
     } finally {
       stops.forEach((stop) => stop());

@@ -1,0 +1,84 @@
+/* The launcher in Geometry > Mounting. */
+.front-launch { display: grid; gap: var(--space-4); padding-bottom: var(--space-6); }
+.front-launch-action { display: flex; align-items: center; gap: var(--space-6); }
+.front-launch-action .experimental-badge { margin: 0; align-self: center; }
+.front-launch small { color: var(--fg3); line-height: 1.4; }
+
+/* The dialog: the drawing is the work surface, everything else serves it. */
+.front-workspace { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: min(1400px, 96vw); height: min(920px, 94vh); box-sizing: border-box; border: 1px solid var(--border-control); border-radius: var(--r2); background: var(--surface-panel); color: var(--fg); font-size: var(--text-base); box-shadow: var(--float-sh); overflow: hidden; }
+.front-header { display: flex; align-items: center; gap: var(--space-6); padding: var(--space-6) var(--space-8); border-bottom: 1px solid var(--hair); }
+.front-header h2 { margin: 0; font: 600 var(--text-head) var(--ui); color: var(--fg1); }
+.front-header .experimental-badge { margin: 0; align-self: center; }
+.front-header > .btn { margin-left: auto; }
+.front-body { display: grid; grid-template-columns: minmax(0, 1fr) 340px; min-height: 0; }
+
+.front-canvas { position: relative; user-select: none; display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: var(--space-4) var(--space-8) var(--space-2); }
+.front-canvas .sketch-canvas { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.front-canvas .sketch-toolbar { flex-wrap: wrap; margin: 0 0 var(--space-4); }
+.front-canvas .sketch-toolbar button[aria-pressed="true"] { border-color: rgba(var(--acc-rgb), .45); background: rgba(var(--acc-rgb), .12); color: var(--btn-primary-fg); }
+.front-canvas .sketch-surface { flex: 1; height: auto; min-height: 0; resize: none; background: var(--surface-canvas); }
+.front-canvas .sketch-status { min-height: 0; margin: var(--space-4) 0 0; font-variant-numeric: tabular-nums; }
+.front-canvas-empty { position: absolute; top: 50%; left: 50%; width: min(360px, 70%); margin: 0; transform: translate(-50%, -50%); background: var(--surface-panel); }
+
+/* The drawing. Baffle as a plate, mouth as an opening in it, woofers on top. */
+.front-canvas .front-baffle { fill: var(--surface-field); stroke: var(--fg3); stroke-width: 1.5; }
+.front-canvas .front-baffle-edge { stroke: var(--fg3); stroke-width: 1; stroke-dasharray: 4 4; opacity: .7; }
+.front-canvas .front-mouth { fill: var(--surface-canvas); stroke: var(--fg1); stroke-width: 1.5; }
+.front-canvas .front-woofer { fill: var(--ov4); stroke: var(--fg1); stroke-width: 1.5; }
+.front-canvas .front-woofer.selected { fill: rgba(var(--acc-rgb), .16); stroke: var(--acc); stroke-width: 2; }
+.front-canvas .front-woofer.problem { fill: rgba(var(--red-rgb), .14); stroke: var(--red); stroke-width: 2; }
+.front-canvas .front-woofer-centre { stroke: var(--fg1); }
+.front-canvas .front-woofer-centre.selected { stroke: var(--acc); }
+.front-canvas .front-woofer-centre.problem { stroke: var(--red); }
+.front-canvas .front-hf { stroke: var(--fg2); }
+.front-canvas .sketch-dimension-lines { stroke: var(--fg3); }
+.front-canvas .sketch-dimension .sketch-glyph { fill: var(--fg2); stroke: var(--surface-canvas); cursor: default; font: 11px var(--mono); }
+.front-canvas .front-caption .sketch-glyph { fill: var(--fg1); font: 12px var(--ui); pointer-events: none; }
+.front-canvas .front-caption.selected .sketch-glyph { fill: var(--acc-text); text-decoration: none; }
+
+/* The side panel, in the Geometry panel's own rows. */
+.front-panel { min-height: 0; overflow-y: auto; overscroll-behavior: contain; border-left: 1px solid var(--hair); padding: 0 var(--space-8) var(--space-8); }
+.front-panel section { padding-top: var(--space-6); }
+.front-panel section + section { margin-top: var(--space-6); border-top: 1px solid var(--hair); }
+.front-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-6); min-height: var(--control-h-xs); margin-bottom: var(--space-4); }
+.front-heading .section-note { margin: 0; }
+.front-panel h3 { margin: 0; overflow: hidden; color: var(--fg1); font: 600 var(--text-base) var(--ui); text-overflow: ellipsis; white-space: nowrap; }
+.front-panel h4 { margin: var(--space-8) 0 var(--space-2); color: var(--fg3); font: 600 var(--text-micro) var(--ui); letter-spacing: .08em; text-transform: uppercase; }
+.front-text-row { justify-content: space-between; }
+.front-text-row input { width: 60%; height: var(--control-h-xs); box-sizing: border-box; padding: 0 var(--space-4); border: 1px solid var(--hair); border-radius: var(--r3); background: var(--raise); color: var(--fg); font: inherit; }
+.front-sources { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.front-source { display: flex; align-items: center; gap: var(--space-4); width: 100%; min-height: 28px; box-sizing: border-box; padding: 0 var(--space-4); border: 1px solid transparent; border-radius: var(--r3); background: transparent; color: var(--fg1); font: inherit; text-align: left; }
+button.front-source:hover { background: var(--ov3); }
+button.front-source[aria-pressed="true"] { border-color: rgba(var(--acc-rgb), .45); background: rgba(var(--acc-rgb), .12); }
+.front-source small { margin-left: auto; color: var(--fg3); font: var(--text-micro) var(--mono); }
+.front-swatch { flex: none; width: 10px; height: 10px; box-sizing: border-box; border: 1.5px solid var(--fg1); border-radius: 50%; }
+.front-source.hf .front-swatch { border-radius: 2px; border-color: var(--fg3); }
+.front-source.problem .front-swatch { border-color: var(--red); background: rgba(var(--red-rgb), .3); }
+.front-panel .empty-state { margin: var(--space-4) 0 0; padding: var(--space-8); }
+.front-remove { display: block; margin-top: var(--space-6); font: var(--text-micro) var(--ui); }
+.front-clearances { display: grid; gap: var(--space-2); margin: var(--space-4) 0 0; padding: var(--space-4) 0 0; border-top: 1px solid var(--hair-soft); color: var(--fg3); font-size: var(--text-micro); }
+.front-clearances div { display: flex; justify-content: space-between; gap: var(--space-6); }
+.front-clearances dt::before { content: 'Clear of '; }
+.front-clearances dd { margin: 0; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.front-clearances .problem { color: var(--red); }
+
+/* Messages sit above the panel so the drawing keeps its size when one appears. */
+.front-messages { position: sticky; top: 0; z-index: 1; display: grid; gap: var(--space-4); background: var(--surface-panel); }
+.front-messages:not(:empty) { padding-top: var(--space-6); }
+.front-messages .notice { margin: 0; padding: var(--space-4) var(--space-6); }
+.front-messages .notice-title { margin-bottom: 0; }
+.front-panel .action-menu-split { border-color: rgba(var(--acc-rgb), .45); background: rgba(var(--acc-rgb), .12); }
+.front-panel .action-menu-primary { color: var(--btn-primary-fg); }
+
+/* One line of state beside the two actions. */
+.front-footer { display: flex; align-items: center; justify-content: space-between; gap: var(--space-8); padding: var(--space-6) var(--space-8); border-top: 1px solid var(--hair); }
+.front-footer p { margin: 0; color: var(--fg3); }
+.front-actions { display: flex; flex: none; gap: var(--space-4); }
+
+@media (max-width: 899px) {
+  .front-body { grid-template-columns: 1fr; grid-template-rows: minmax(280px, 1fr) minmax(200px, 40%); }
+  .front-panel { border-top: 1px solid var(--hair); border-left: 0; }
+}
+
+/* The add menu portals to the page; inside this dialog it has to clear the backdrop. */
+.action-menu-popover { z-index: 1210; }

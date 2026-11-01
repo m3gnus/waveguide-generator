@@ -9,6 +9,7 @@ import { registerParameterPanel } from './parameterPanelValidity';
 import { nativeSymmetryLimitation } from './nativeFamilies';
 import { EnclosureResolutionField } from './EnclosureResolutionField';
 import { FrontWorkspaceLauncher } from './FrontWorkspace';
+import { outerBodyUpdates } from './outerBodyUpdates';
 import { ExteriorDriverFields, ExteriorDriverOptions } from './ExteriorDriverOptions';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
@@ -35,7 +36,7 @@ import {
 import { ExteriorDriverLibraryPicker, ChannelDriverPicker } from './DriverPicker';
 import { useWaveguideDefinitionApplies } from '../stores/waveguideLink';
 import { useCadModelStatusLine } from '../shell/CadModelStatusLine';
-import { defaultWallThickness, getAtPath, isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
+import { getAtPath, isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
 import { athControlError, lipRadiusWallError, lipUnavailableReason, opusClampNote, opusMountingReason, rosseMorphNote } from './athImportControls';
 import { namespaceStorage } from '../stores/durableSettings';
 import type { SymmetryMode } from '../stores/solveOptions';
@@ -277,7 +278,6 @@ const outerModeLabels: Record<OuterBodyMode, string> = {
 function WallEnclosureModeControl({ design, mounting = false, serverError }: { design: DesignDocument; mounting?: boolean; serverError?: string }) {
   const updateValues = useDesignStore((state) => state.updateValues);
   const [lastWallThickness, setLastWallThickness] = useState<number | null>(null);
-  const [lastEnclosureDepth, setLastEnclosureDepth] = useState(() => design.enclosure.depth > 0 ? design.enclosure.depth : 280);
   const backend = useActiveBackendCapability();
   const backendPlan = usePlannedBackendCapabilities();
   const { engines, hostPlatform } = useCapabilities();
@@ -292,34 +292,13 @@ function WallEnclosureModeControl({ design, mounting = false, serverError }: { d
   useEffect(() => {
     if (design.mesh.wall_thickness > 0 && !design._absent?.includes('mesh.wall_thickness')) setLastWallThickness(design.mesh.wall_thickness);
   }, [design.mesh.wall_thickness, design._absent]);
-  useEffect(() => {
-    if (design.enclosure.depth > 0) setLastEnclosureDepth(design.enclosure.depth);
-  }, [design.enclosure.depth]);
 
   const chooseMode = (mode: OuterBodyMode) => {
-    if (mounting && mode === 'infinite-baffle') {
-      updateValues({ 'simulation.sim_type': 'infinite-baffle' });
+    if (mode === 'infinite-baffle') {
+      if (mounting) updateValues({ 'simulation.sim_type': 'infinite-baffle' });
       return;
     }
-    const updates = mode === 'bare'
-      ? { 'mesh.wall_thickness': 0, 'enclosure.depth': 0 }
-      : mode === 'freestanding'
-        ? { 'mesh.wall_thickness': lastWallThickness ?? defaultWallThickness(), 'enclosure.depth': 0 }
-        : { 'mesh.wall_thickness': 0, 'enclosure.depth': lastEnclosureDepth };
-    // Write only what changes. An import without Mesh.Enclosure keeps `enclosure`
-    // in _absent, and any write under it (even depth 0 over 0) would drop that
-    // marker and send a full object, which the mesher refuses with a lip or Opus.
-    // An unset wall is ATH's 5 mm (0 only while infinite baffle hides it), so a
-    // bare or enclosed body always needs an explicit 0, and a free-standing
-    // one keeps the unset wall. An unset enclosure stays unset at depth 0.
-    const wallUnset = Boolean(design._absent?.includes('mesh.wall_thickness'));
-    const enclosureUnset = Boolean(design._absent?.includes('enclosure'));
-    const changed: Record<string, number> = {};
-    const wall = updates['mesh.wall_thickness'];
-    if (wallUnset ? wall === 0 : design.mesh.wall_thickness !== wall) changed['mesh.wall_thickness'] = wall;
-    const depth = updates['enclosure.depth'];
-    if (enclosureUnset ? depth !== 0 : design.enclosure.depth !== depth) changed['enclosure.depth'] = depth;
-    updateValues({ ...changed, ...(mounting && design.simulation.sim_type === 'infinite-baffle' ? { 'simulation.sim_type': 'freestanding' } : {}) });
+    updateValues(outerBodyUpdates(design, mode, lastWallThickness, mounting));
   };
 
   return <div className="outer-body-mode" data-parameter-id={mounting ? 'simulation.sim_type' : undefined} data-control-reveal-id={mounting ? PARAMETRIC_CONTROLS.mounting.reveal.id : undefined}>
@@ -1322,7 +1301,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
       forceOpen={searching || (definition.title === 'Imported ATH values' && design.text_import_version === 'ath-2026-09a-v2')}
       revealId={workspaceMode === 'parametric' ? `parametric.section.${definition.title}` : undefined}
     >
-      {definition.title === 'Wall & Enclosure' && <FrontWorkspaceLauncher />}
+      {workspaceMode === 'parametric' && definition.title === 'Mounting' && <FrontWorkspaceLauncher />}
       {showOuterBodyMode && <WallEnclosureModeControl design={design} mounting={workspaceMode === 'parametric'} serverError={workspaceMode === 'parametric' ? previewErrorForParameter(PARAMETER_REGISTRY.find((field) => field.id === 'simulation.sim_type')!, currentPreviewFields) : undefined} />}
       {/* Domain is an execution option, not a saved design parameter. Keeping
           it independent of mesh.quadrants prevents the round-trip-only ATH
@@ -1405,7 +1384,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
   if (workspaceMode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'assembly') return <SolveOptionsStoreProvider mode="cad">
     <div className={`param-panel${embedded ? '' : ' panel-scroll'}`} data-param-tab={tab}>
       {tab === 'simulation' ? <CadSimulationSections searching={false} matches={() => true}/>
-        : <p className="section-note">This run uses its retained assembly mesh. Open the saved design to edit Sources and baffle.</p>}
+        : <p className="section-note">This run shows its retained assembly mesh. To change the assembly, return to Parametric with its design open.</p>}
     </div>
   </SolveOptionsStoreProvider>;
 
