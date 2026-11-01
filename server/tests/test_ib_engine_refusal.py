@@ -259,7 +259,7 @@ def test_a_non_planar_mouth_refusal_from_the_mesher_is_actionable() -> None:
     assert _infinite_baffle_geometry_refusal({"mode": "infinite-baffle"}, "boom") is None
 
 
-def test_the_real_mesher_flush_mouth_refusals_are_rewritten() -> None:
+def test_the_real_mesher_flush_mouth_refusals_are_rewritten(caplog) -> None:
     """The message contract against the mesher's own wording, not a copy of it.
 
     A hand-written string keeps passing after the mesher rewords its refusal;
@@ -285,4 +285,8 @@ def test_the_real_mesher_flush_mouth_refusals_are_rewritten() -> None:
         detail = str(caught.value)
         text = _infinite_baffle_geometry_refusal({"mode": "infinite-baffle"}, detail)
         assert text is not None, detail
-        assert "free-standing" in text and detail in text
+        assert "free-standing" in text and "Bare shell" in text
+        assert "rim varies" in text or "horn extends" in text
+        from server.preview.errors import mesher_error_message
+        assert mesher_error_message({"mode": "infinite-baffle"}, detail) == text
+        assert detail in caplog.text

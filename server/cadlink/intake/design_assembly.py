@@ -429,7 +429,7 @@ async def compile_design_assembly(
 
     design = DesignConfig.model_validate(dict(design_dump))
     if design.root.assembly is None:
-        raise AssemblyRefusal("This design has no Sources and baffle assembly.")
+        raise AssemblyRefusal(AssemblyRefusal.NO_ASSEMBLY)
     model_id = design_model_id(design_uid)
     if not model_id:
         raise AssemblyRefusal("Save the design before solving its assembly.")

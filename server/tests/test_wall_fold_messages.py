@@ -116,7 +116,8 @@ def test_real_preview_failure_maps_to_plain_message(caplog):
         with pytest.raises(ValueError, match="normal flip") as error:
             protocol._compute_frame(request)
         fields = _compute_value_error_fields(request, error.value)
-        assert fields["design"].startswith("The 5 mm wall is thicker")
+        assert fields["design"].startswith("The outer wall folds over itself")
+        assert "Reduce Wall thickness" in fields["design"]
         assert str(error.value) in caplog.text
     finally:
         asyncio.run(protocol._preview_service.shutdown())

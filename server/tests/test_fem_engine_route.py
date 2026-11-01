@@ -563,7 +563,7 @@ def test_imported_job_dispatch_stores_fields_and_keeps_exterior_only_route(runti
             row = job_runtime.store.get_job_row(first)
             if field_failure == "worker":
                 assert row["status"] == "error"
-                assert "assembly failed" in row["error_message"]
+                assert "WG could not finish this solve and has recorded the problem." in row["error_message"]
                 assert row["task_metadata"]["fem_execution"] == {
                     "engine": f"beat-{backend}", "backend": backend, "precision": precision,
                 }

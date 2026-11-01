@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 import math
 from typing import Any, Mapping
 
@@ -146,7 +147,8 @@ def has_closed_outer_body(root: Any) -> bool:
 def _scale_factor(value: Expr | None) -> float:
     scale = _structural_number(value, "scale", 1.0)
     if scale <= 0:
-        raise ValueError("scale must be greater than zero")
+        from hornlab_mesher.errors import control_refusal
+        raise control_refusal("scale must be greater than zero", "Transverse / uniform scale", "Enter a value above zero in Transverse / uniform scale.", message="The design scale is zero or negative.")
     return scale
 
 
@@ -219,12 +221,13 @@ def _scaled_icw_coeffs(coeffs: list[Any] | None, scale: float) -> list[Any] | No
 
 def enclosure_resolution(value: ResolutionExpr | None) -> float | str | None:
     """Keep quadrant values in the mesher's documented comma-list syntax."""
+    from hornlab_mesher.errors import control_refusal
     if value is None:
         return None
     values = value if isinstance(value, tuple) else (value,)
     numbers = [item.constant_value() for item in values]
     if any(number is None for number in numbers):
-        raise ValueError("Enclosure front/back resolutions require finite scalar numbers; replace expressions with one to four numbers before preview, solve or export")
+        raise control_refusal("Enclosure front/back resolutions require finite scalar numbers; replace expressions with one to four numbers before preview, solve or export", "Front baffle mesh resolution", "Replace expressions in Front baffle mesh resolution and Rear baffle mesh resolution with one to four finite numbers.", message="Enclosure mesh resolutions cannot use expressions.")
     return numbers[0] if len(numbers) == 1 else ",".join(format(number, ".15g") for number in numbers)
 
 
@@ -279,6 +282,7 @@ def _profile(
     design: OSSEConfig | ROSSEConfig | ICWConfig | FreeformConfig | LookupConfig, scale: float
 ) -> dict[str, Any]:
     """Port v1 ``mesher_adapter.py:200-310`` from typed v2 fields."""
+    from hornlab_mesher.errors import control_refusal
 
     if isinstance(design, LookupConfig):
         return _clean({
@@ -358,10 +362,9 @@ def _profile(
         )
     else:
         if design.icw_seed is not None and scale != 1.0:
-            raise ValueError(
-                "icw_seed holds unscaled OSSE/R-OSSE lengths, so Scale other than 1 is not "
-                "supported with an imported ICW seed; set Scale to 1 and size the seed directly"
-            )
+            raise control_refusal("icw_seed holds unscaled OSSE/R-OSSE lengths", "Scale",
+                                  "Set Scale to 1 and size the imported seed directly.",
+                                  message="An imported ICW seed cannot use a Scale other than 1.")
         # The mesher refuses coverage on a rollback termination; it only applies to a flat baffle.
         flat_baffle = design.termination in (None, "flat_baffle")
         coverage = _structural_number(design.coverage_angle, "coverage_angle") if flat_baffle else 0
@@ -418,11 +421,6 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
 
     scale = _scale_factor(root.scale)
     s1, s2 = getattr(root, "s1", None) or 0, getattr(root, "s2", None) or 0
-    if s1 != 0 or s2 != 0:
-        from server.design.throat_stretch import mesher_supports_stretch
-
-        if not mesher_supports_stretch():
-            raise ValueError("nonzero throat stretch s1/s2 needs mesher 0.2.4")
     current_import = root.text_import_version == "ath-2026-09a-v2"
     active_stretch = s1 != 0 and s2 != 0
     # ATH scales the finished profile, including implicit morph extents rounded

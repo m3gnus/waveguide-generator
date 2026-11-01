@@ -10,6 +10,7 @@ import numpy as np
 
 from server.contracts.geometry import SYMMETRY_PLANE_AXIS
 from server.mesh.imported import (
+    ImportedMeshError,
     SYMMETRY_SNAP_TOLERANCE_MM,
     _edge_connected_components,
     parse_source_physical_name,
@@ -18,6 +19,16 @@ from server.mesh.imported import (
     verify_symmetry_cut,
 )
 from server.mesh.integrity import mesh_integrity_report, mesh_self_intersection_report, on_coordinate_plane
+
+class FileMeshRefusal(ImportedMeshError):
+    """A file or import setting the user can repair in the meshing tool."""
+
+    def __init__(self, message: str):
+        self.diagnostic = message
+        if not any(word in message for word in ("Export", "Choose", "Change", "Turn", "Enable", "Remove", "Reverse", "Close", "Repair", "change", "close", "turn ", "export")):
+            message += " Repair the mesh in your meshing tool and export it as ASCII Gmsh 2.2, then import it again."
+        super().__init__(message)
+
 
 MAX_MESH_BYTES = 16 * 1024 * 1024
 MAX_NODES = 200_000
@@ -96,16 +107,16 @@ class FileMesh:
 
 def _integer(value: str, maximum: int = 2**31 - 1, minimum: int = 0) -> int:
     if not re.fullmatch(r"[0-9]+", value):
-        raise ValueError("Mesh IDs and counts must be non-negative integers.")
+        raise FileMeshRefusal("Mesh IDs and counts must be non-negative integers.")
     result = int(value)
     if not minimum <= result <= maximum:
-        raise ValueError("Mesh count or ID exceeds the supported limit.")
+        raise FileMeshRefusal("Mesh count or ID exceeds the supported limit.")
     return result
 
 
 def parse_file_mesh(text: str) -> FileMesh:
     if len(text.encode("utf-8")) > MAX_MESH_BYTES:
-        raise ValueError("Mesh exceeds the 16 MiB import limit.")
+        raise FileMeshRefusal("Mesh exceeds the 16 MiB import limit.")
     lines = iter(text.strip().splitlines())
     sections: dict[str, list[str]] = {}
     for line in lines:
@@ -116,7 +127,7 @@ def parse_file_mesh(text: str) -> FileMesh:
             marker not in {"$MeshFormat", "$PhysicalNames", "$Nodes", "$Elements"}
             or marker in sections
         ):
-            raise ValueError(f"Unsupported or repeated mesh section: {marker}.")
+            raise FileMeshRefusal(f"Unsupported or repeated mesh section: {marker}.")
         end = "$End" + marker[1:]
         rows = []
         for row in lines:
@@ -124,15 +135,15 @@ def parse_file_mesh(text: str) -> FileMesh:
                 break
             rows.append(row.strip())
         else:
-            raise ValueError(f"Missing {end}.")
+            raise FileMeshRefusal(f"Missing {end}.")
         sections[marker] = rows
     if sections.get("$MeshFormat") != ["2.2 0 8"]:
-        raise ValueError("Import requires an ASCII Gmsh 2.2 mesh (2.2 0 8).")
+        raise FileMeshRefusal("Import requires an ASCII Gmsh 2.2 mesh. Export ASCII Gmsh 2.2 format from your meshing tool, then import it again.")
 
     def counted(section: str, maximum: int) -> list[str]:
         rows = sections.get(section, [])
         if not rows or _integer(rows[0], maximum) != len(rows) - 1:
-            raise ValueError(f"Invalid or missing {section} count.")
+            raise FileMeshRefusal(f"Invalid or missing {section} count.")
         return rows[1:]
 
     names: dict[int, str] = {}
@@ -140,53 +151,53 @@ def parse_file_mesh(text: str) -> FileMesh:
         for line in counted("$PhysicalNames", MAX_ELEMENTS):
             match = re.fullmatch(r'(\d+)\s+(\d+)\s+"([^"\r\n]*)"', line)
             if not match:
-                raise ValueError("Invalid physical group name.")
+                raise FileMeshRefusal("Invalid physical group name.")
             if match[1] == "2":
                 tag = _integer(match[2])
                 if tag in names:
-                    raise ValueError("Repeated surface physical group ID.")
+                    raise FileMeshRefusal("Repeated surface physical group ID.")
                 names[tag] = match[3]
     points, ids = [], {}
     for line in counted("$Nodes", MAX_NODES):
         parts = line.split()
         if len(parts) != 4:
-            raise ValueError("Each mesh node must have exactly three coordinates.")
+            raise FileMeshRefusal("Each mesh node must have exactly three coordinates.")
         node = _integer(parts[0], minimum=1)
         if node in ids:
-            raise ValueError("Repeated mesh node ID.")
+            raise FileMeshRefusal("Repeated mesh node ID.")
         ids[node] = len(points)
         points.append([float(value) for value in parts[1:]])
     coordinates = np.asarray(points, dtype=np.float64)
     if not len(points) or not np.isfinite(coordinates).all():
-        raise ValueError("Mesh must contain finite node coordinates.")
+        raise FileMeshRefusal("Mesh must contain finite node coordinates.")
     triangles, tags, elements = [], [], set()
     for line in counted("$Elements", MAX_ELEMENTS):
         parts = line.split()
         if len(parts) < 3:
-            raise ValueError("Invalid mesh element.")
+            raise FileMeshRefusal("Invalid mesh element.")
         element, kind, count = (_integer(part) for part in parts[:3])
         if element == 0 or element in elements:
-            raise ValueError("Repeated or invalid mesh element ID.")
+            raise FileMeshRefusal("Repeated or invalid mesh element ID.")
         elements.add(element)
         expected_nodes = {15: 1, 1: 2, 2: 3}.get(kind)
         if expected_nodes is None:
-            raise ValueError(
+            raise FileMeshRefusal(
                 "Only linear triangular surfaces are supported; re-export without quadrilaterals, higher-order or volume elements."
             )
         if len(parts) != 3 + count + expected_nodes:
-            raise ValueError("Mesh element tag/node count does not match its type.")
+            raise FileMeshRefusal("Mesh element tag/node count does not match its type.")
         element_tags = [_integer(part) for part in parts[3 : 3 + count]]
         try:
             corners = [ids[_integer(part, minimum=1)] for part in parts[3 + count :]]
         except KeyError as exc:
-            raise ValueError("Mesh element references a missing node.") from exc
+            raise FileMeshRefusal("Mesh element references a missing node.") from exc
         if kind == 2:
             triangles.append(corners)
             tags.append(element_tags[0] if element_tags else 0)
     if not triangles:
-        raise ValueError("Mesh contains no linear triangles.")
+        raise FileMeshRefusal("Mesh contains no linear triangles.")
     if len(set(tags)) > 256:
-        raise ValueError("Mesh import supports at most 256 surface groups.")
+        raise FileMeshRefusal("Mesh import supports at most 256 surface groups.")
     if 0 in tags:
         names[0] = "Untagged surface"
     return FileMesh(coordinates, np.asarray(triangles, dtype=np.int64), np.asarray(tags), names)
@@ -198,11 +209,11 @@ def transform_file_mesh(
     """Apply the same SI/axis frame at inspection and preparation."""
     facing, vertical = np.asarray(AXES[forward]), np.asarray(AXES[up])
     if np.dot(facing, vertical):
-        raise ValueError("Forward and up must be perpendicular axes.")
+        raise FileMeshRefusal("Forward and up must be perpendicular axes. Choose different Forward and Up axes in the import settings.")
     rotation = np.asarray([np.cross(vertical, facing), vertical, facing])
     points = (mesh.points * UNIT_TO_METRES[units]) @ rotation.T
     if not np.isfinite(points).all():
-        raise ValueError("Scaled mesh coordinates must be finite.")
+        raise FileMeshRefusal("Scaled mesh coordinates must be finite.")
     return FileMesh(points, mesh.triangles, mesh.tags, mesh.names), {
         "units": units, "forward": forward, "up": up, "rotation": rotation.tolist(),
     }
@@ -275,14 +286,14 @@ def _lid_evidence(mesh: FileMesh, verification: dict[str, Any]) -> dict[str, Any
 
 def validate_remove_lid_planes(remove_lid_planes: list[str] | tuple[str, ...], domain_planes: list[str] | tuple[str, ...]) -> tuple[str, ...]:
     if len(set(remove_lid_planes)) != len(remove_lid_planes) or set(remove_lid_planes) - set(domain_planes):
-        raise ValueError("Remove a closed face only on a declared symmetry plane, once per plane.")
+        raise FileMeshRefusal("Remove a closed face only on a declared symmetry plane, once per plane. Turn off removal for other planes in the import settings.")
     return tuple(plane for plane in domain_planes if plane in remove_lid_planes)
 
 
 def _check_lid_crossing(planes: tuple[str, ...], straddling: tuple[str, ...] | list[str]) -> None:
     for plane in planes:
         if plane in straddling:
-            raise ValueError(f"The mesh crosses {_plane_labels([plane])}. Choose the correct symmetry or change the mesh so it stays on one side.")
+            raise FileMeshRefusal(f"The mesh crosses {_plane_labels([plane])}. Choose the correct symmetry or change the mesh so it stays on one side.")
 
 
 def _remove_lids(mesh: FileMesh, planes: tuple[str, ...], verification: dict[str, Any], roles: Mapping[int, str]) -> tuple[FileMesh, dict[str, Any]]:
@@ -295,15 +306,15 @@ def _remove_lids(mesh: FileMesh, planes: tuple[str, ...], verification: dict[str
     for plane in planes:
         lid = lids.get(plane)
         if lid is None or not lid["candidate"]:
-            raise ValueError(f"The mesh has no closed face to remove on {_plane_labels([plane])}. Turn off removal for that plane.")
+            raise FileMeshRefusal(f"The mesh has no closed face to remove on {_plane_labels([plane])}. Turn off removal for that plane.")
         for group in lid["groups"]:
             tag = group["tag"]
             if roles.get(tag, "RIGID") != "RIGID":
-                raise ValueError(f"Removing the closed face on {_plane_labels([plane])} would remove triangles from driver or port surface {surface_names[tag]!r}. Change the surface groups in the meshing tool.")
+                raise FileMeshRefusal(f"Removing the closed face on {_plane_labels([plane])} would remove triangles from driver or port surface {surface_names[tag]!r}. Change the surface groups in the meshing tool.")
         keep &= ~_plane_triangles(mesh, plane)
         removed[plane] = {key: lid[key] for key in ("triangle_count", "groups")}
     if not keep.any():
-        raise ValueError("Removing the closed face would leave the mesh with no triangles. Change the mesh in the meshing tool.")
+        raise FileMeshRefusal("Removing the closed face would leave the mesh with no triangles. Change the mesh in the meshing tool.")
     used, indices = np.unique(mesh.triangles[keep], return_inverse=True)
     kept_tags = set(mesh.tags[keep].tolist())
     names = {tag: name for tag, name in mesh.names.items() if tag in kept_tags}
@@ -326,12 +337,12 @@ def validate_file_symmetry(
 ) -> tuple[tuple[str, ...], tuple[str, ...] | None]:
     """Validate and order file symmetry choices for both API and direct callers."""
     if len(set(domain_planes)) != len(domain_planes) or set(domain_planes) - set(SYMMETRY_PLANE_AXIS):
-        raise ValueError("Symmetry planes must be x = 0 or y = 0 after axes are applied.")
+        raise FileMeshRefusal("Symmetry planes must be x = 0 or y = 0 after axes are applied. Choose one of those planes or change the Forward and Up axes.")
     planes = tuple(plane for plane in SYMMETRY_PLANE_AXIS if plane in domain_planes)
     if reflect_planes is None:
         return planes, None
     if len(set(reflect_planes)) != len(reflect_planes) or set(reflect_planes) - set(planes):
-        raise ValueError("Mirror only across a declared symmetry plane, once per plane.")
+        raise FileMeshRefusal("Mirror only across a declared symmetry plane, once per plane. Turn off other mirroring choices in the import settings.")
     return planes, tuple(plane for plane in planes if plane in reflect_planes)
 
 
@@ -390,7 +401,7 @@ def prepare_file_mesh_input(
     _check_lid_crossing(remove_lid_planes, crossing)
     declared = tuple(plane for plane in planes if plane not in crossing)
     if crossing and file_mesh_integrity(mesh, declared)["off_plane_open_edge_count"]:
-        raise ValueError(f"The mesh crosses {_plane_labels(list(crossing))} and has an opening away from its declared planes. Close it in the meshing tool.")
+        raise FileMeshRefusal(f"The mesh crosses {_plane_labels(list(crossing))} and has an opening away from its declared planes. Close it in the meshing tool.")
     reflections = None if reflect_planes is None else tuple(plane for plane in reflect_planes if plane in declared)
     mesh, transform = _prepare_transformed_file_mesh(
         mesh, transform, declared, reflections, remove_lid_planes, roles or {},
@@ -442,10 +453,10 @@ def _prepare_transformed_file_mesh(
     sides = verification["detection"]["plane_vertex_side_counts"]
     unreached = [plane for plane in planes if not sides[plane]["on_plane"]]
     if unreached:
-        raise ValueError(f"The mesh does not reach {_plane_labels(unreached)}. Choose the correct symmetry plane or change the mesh so it reaches that plane.")
+        raise FileMeshRefusal(f"The mesh does not reach {_plane_labels(unreached)}. Choose the correct symmetry plane or change the mesh so it reaches that plane.")
     unnecessary = [plane for plane in (reflect_planes or ()) if sides[plane]["positive"] and not sides[plane]["negative"]]
     if unnecessary:
-        raise ValueError(f"The mesh is already on the positive side of {_plane_labels(unnecessary)}; turn mirroring off.")
+        raise FileMeshRefusal(f"The mesh is already on the positive side of {_plane_labels(unnecessary)}; turn mirroring off.")
     reflections = list(reflect_planes) if reflect_planes is not None else [
         plane for plane in planes if sides[plane]["negative"] and not sides[plane]["positive"]
     ]
@@ -454,31 +465,31 @@ def _prepare_transformed_file_mesh(
         mesh = FileMesh(points, triangles, mesh.tags, mesh.names)
         report, verification = _symmetry_evidence(mesh, planes)
     if not report["valid"] or not report["orientation_valid"]:
-        raise ValueError(
+        raise FileMeshRefusal(
             "Solving requires a closed, consistently outward-oriented surface without degenerate, duplicate or nonmanifold triangles. Fix the mesh in its authoring tool; no repair was applied."
         )
     if planes:
         if not verification["verified"]:
             if verification["straddling_planes"]:
-                raise ValueError(f"The mesh crosses {_plane_labels(verification['straddling_planes'])}. Choose the correct symmetry or change the mesh so it stays on one side.")
+                raise FileMeshRefusal(f"The mesh crosses {_plane_labels(verification['straddling_planes'])}. Choose the correct symmetry or change the mesh so it stays on one side.")
             if verification["wrong_side_planes"]:
-                raise ValueError(f"The mesh is on the negative side of {_plane_labels(verification['wrong_side_planes'])}. Enable mirroring in the symmetry settings.")
+                raise FileMeshRefusal(f"The mesh is on the negative side of {_plane_labels(verification['wrong_side_planes'])}. Enable mirroring in the symmetry settings.")
             if verification["capped_planes"]:
-                raise ValueError(f"The mesh has a closed face on {_plane_labels(verification['capped_planes'])}. Remove it in the symmetry settings, or export the mesh open on the symmetry plane.")
-            raise ValueError(_opening_message(verification))
+                raise FileMeshRefusal(f"The mesh has a closed face on {_plane_labels(verification['capped_planes'])}. Remove it in the symmetry settings, or export the mesh open on the symmetry plane.")
+            raise FileMeshRefusal(_opening_message(verification))
         orientation = verify_reduced_orientation(mesh.points * 1000, mesh.triangles, cut_planes=planes)
         if orientation["inverted_component_count"] or orientation["unresolved_component_count"]:
-            raise ValueError("Each mirrored mesh shell must face outward. Reverse inward normals or repair the mesh in the meshing tool.")
+            raise FileMeshRefusal("Each mirrored mesh shell must face outward. Reverse inward normals or repair the mesh in the meshing tool.")
         transform.update(domain_planes=list(planes), reflected_planes=[plane for plane in planes if plane in reflections])
     elif report["open_edge_count"]:
         detected = [plane for plane in verification["detected_planes"] if plane in SYMMETRY_PLANE_AXIS]
         if detected:
-            raise ValueError(f"The mesh is open on {_plane_labels(detected)}. Choose half or quarter symmetry in the settings, or close the mesh in the meshing tool.")
-        raise ValueError(_opening_message(verification))
+            raise FileMeshRefusal(f"The mesh is open on {_plane_labels(detected)}. Choose half or quarter symmetry in the settings, or close the mesh in the meshing tool.")
+        raise FileMeshRefusal(_opening_message(verification))
     points = mesh.points
     intersections = mesh_self_intersection_report(points, mesh.triangles)
     if not intersections["checked"] or intersections["intersecting_triangle_count"]:
-        raise ValueError(
+        raise FileMeshRefusal(
             "The mesh intersects itself, or exceeds the bounded intersection check. Fix or simplify it in the authoring tool."
         )
     # Check each disconnected shell, not just the sum of its volumes: a small
@@ -490,7 +501,7 @@ def _prepare_transformed_file_mesh(
         np.column_stack((mesh.triangles.reshape(-1), np.repeat(labels, 3))), axis=0
     )
     if len(np.unique(vertex_shells[:, 0])) != len(vertex_shells):
-        raise ValueError(
+        raise FileMeshRefusal(
             "Mesh shells meet at a nonmanifold vertex. Separate or repair the touching shells in the authoring tool."
         )
     face_labels = labels
@@ -503,7 +514,7 @@ def _prepare_transformed_file_mesh(
         weights=np.einsum("ij,ij->i", corners[:, 0], np.cross(corners[:, 1], corners[:, 2])) / 6,
     )
     if not planes and (not np.isfinite(volumes[components]).all() or np.any(volumes[components] <= 0)):
-        raise ValueError(
+        raise FileMeshRefusal(
             "Each closed mesh shell must face outward. Reverse inward normals in the authoring tool."
         )
     return mesh, transform

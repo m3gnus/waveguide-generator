@@ -340,6 +340,11 @@ IMPORTED_VIEWPORT_COARSENING_FACTOR = 1.5
 class ImportedMeshError(ValueError):
     """A typed imported-geometry refusal."""
 
+    def __init__(self, message: str, *, diagnostic: str | None = None, user_action: bool = False):
+        self.diagnostic = diagnostic if diagnostic is not None else message
+        self.user_action = user_action
+        super().__init__(message)
+
 
 class SymmetryCutRefused(Exception):
     """The mesher's cutter refused to cut the model to its symmetry domain.
@@ -358,8 +363,11 @@ class RoleResolutionError(ImportedMeshError):
     """Source roles could not be resolved without guessing."""
 
     def __init__(
-        self, message: str, *, area_drift_sources: Iterable[str] = (), invalid_selector: bool = False
+        self, message: str, *, area_drift_sources: Iterable[str] = (), invalid_selector: bool = False,
+        user_message: str | None = None, next_step: str | None = None
     ) -> None:
+        self.user_message = user_message
+        self.next_step = next_step
         self.area_drift_sources = tuple(str(source_id) for source_id in area_drift_sources)
         # A checksum-bound identifier absent from its own STEP is an export/
         # mapping failure, not a source choice the user can repair in CAD.
@@ -369,6 +377,13 @@ class RoleResolutionError(ImportedMeshError):
 
 class ImportedMeshDependencyError(RuntimeError):
     """The native STEP/mesh engine is not installed or importable."""
+
+
+class ImportedSizeRefusal(ImportedMeshError):
+    """Only authored mesh-size choices qualify as user action here."""
+
+    def __init__(self, message: str, *, diagnostic: str | None = None):
+        super().__init__(message, diagnostic=diagnostic, user_action=True)
 
 
 def validate_imported_sizes(
@@ -386,11 +401,11 @@ def validate_imported_sizes(
     source_sizes = sizes.get("source_size_mm")
     for name, value in (("rigid_size_mm", rigid), ("transition_mm", transition)):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ImportedMeshError(f"mesh.{name} must be an explicit finite positive mm value")
+            raise ImportedSizeRefusal(f"{'Walls' if name == 'rigid_size_mm' else 'Transition'} must be a positive finite size. Enter it in Sources & Mesh….")
         if not math.isfinite(float(value)) or float(value) <= 0.0:
-            raise ImportedMeshError(f"mesh.{name} must be an explicit finite positive mm value")
+            raise ImportedSizeRefusal(f"{'Walls' if name == 'rigid_size_mm' else 'Transition'} must be a positive finite size. Enter it in Sources & Mesh….")
     if not isinstance(source_sizes, Mapping):
-        raise ImportedMeshError("mesh.source_size_mm must be an object keyed by source_id")
+        raise ImportedSizeRefusal("Driver mesh sizes are missing. Set a size for each driver in Sources & Mesh….")
     actual = {str(key) for key in source_sizes}
     if actual != expected:
         missing = sorted(expected - actual)
@@ -400,17 +415,17 @@ def validate_imported_sizes(
             details.append(f"missing {missing}")
         if extra:
             details.append(f"extra {extra}")
-        raise ImportedMeshError(
-            "mesh.source_size_mm must cover exactly every non-skipped source: "
-            + "; ".join(details)
+        raise ImportedSizeRefusal(
+            "Some driver mesh sizes are missing or belong to a different model. Open Sources & Mesh… and set a size for each current driver.",
+            diagnostic="Driver mesh sizes: " + "; ".join(details)
         )
     normalized: dict[str, float] = {}
     for source_id, value in source_sizes.items():
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ImportedMeshError(f"mesh.source_size_mm[{source_id!r}] must be finite and positive")
+            raise ImportedSizeRefusal("A driver mesh size is zero, negative or not finite. Enter a positive size for each driver in Sources & Mesh….")
         number = float(value)
         if not math.isfinite(number) or number <= 0.0:
-            raise ImportedMeshError(f"mesh.source_size_mm[{source_id!r}] must be finite and positive")
+            raise ImportedSizeRefusal("A driver mesh size is zero, negative or not finite. Enter a positive size for each driver in Sources & Mesh….")
         normalized[str(source_id)] = number
     return {
         "rigid_size_mm": float(rigid),
@@ -1045,12 +1060,12 @@ def resolve_instance_source(
         raise RoleResolutionError(
             f"role resolution: source {source_id!r} has no geometric throat candidate; "
             f"local_body_state={local_body_state!r}"
-        )
+        , user_message='The horn throat no longer matches a face in this model.', next_step='In Fusion, open Sources & Mesh…, select the throat face again, then send the model.')
     if len(matches) >= 2:
         faces = [int(item["face_id"]) for item in matches]
         raise RoleResolutionError(
             f"role resolution: source {source_id!r} has {len(matches)} geometric throat candidates {faces}"
-        )
+        , user_message='More than one face matches the horn throat.', next_step='In Fusion, open Sources & Mesh… and keep one throat face for this source, then send the model.')
     face = int(matches[0]["face_id"])
     extras = sorted(painted - {face})
     if extras:
@@ -1092,27 +1107,27 @@ def resolve_user_source(
             raise RoleResolutionError(
                 f"role resolution: required {selection_kind} {source_id!r} is missing. "
                 f"Available shell names: {shells}. Available style names: {styles}"
-            )
+            , user_message='A required driver has no selected faces in this model.', next_step='In Fusion, open Sources & Mesh…, select the driver faces again, then send the model.')
         return {"source_id": source_id, "skipped": True, "reason": "optional source selectors matched no faces"}
     sets = list(nonempty.values())
     if any(faces != sets[0] for faces in sets[1:]):
         detail = {name: sorted(faces) for name, faces in resolved.items()}
         raise RoleResolutionError(
             f"role resolution: {selection_kind} {source_id!r} selector mechanisms disagree: {detail}"
-        )
+        , user_message='The selected driver faces disagree with their saved selection.', next_step='In Fusion, open Sources & Mesh…, select the driver faces again, then send the model.')
     faces = sorted(sets[0])
     expected_components = int(source["expected_connected_components"])
     if connected_components != expected_components:
         raise RoleResolutionError(
             f"role resolution: {selection_kind} {source_id!r} has {connected_components} connected components; "
             f"expected {expected_components} for {source['patch_policy']}"
-        )
+        , user_message='The selected driver faces have a different number of separate pieces.', next_step='In Fusion, open Sources & Mesh… and reselect the intended driver faces, then send the model.')
     observed = source["observed"]
     if len(faces) != int(observed["face_count"]):
         raise RoleResolutionError(
             f"role resolution: {selection_kind} {source_id!r} face count changed from "
             f"{observed['face_count']} to {len(faces)}"
-        )
+        , user_message='The number of selected driver faces has changed.', next_step='In Fusion, open Sources & Mesh…, select the driver faces again, then send the model.')
     area = sum(float(face_areas_mm2[face]) for face in faces)
     expected_area = float(observed["total_area_mm2"])
     if not math.isfinite(expected_area) or expected_area <= 0:
@@ -1123,7 +1138,7 @@ def resolve_user_source(
             f"role resolution: {selection_kind} {source_id!r} area drift is {drift:.3%} "
             f"({expected_area:.9g} -> {area:.9g} mm^2), exceeding 1%",
             area_drift_sources=[source_id] if selection_kind == "source" else [],
-        )
+         user_message='The selected driver area differs from the saved area by more than 1%.', next_step='Reselect the driver faces in Sources & Mesh…, or enable Accept area drift for that driver and prepare again.')
     return {
         "source_id": source_id,
         "surfaces": faces,
@@ -1749,7 +1764,7 @@ def _lookup_faces(
                 "role resolution: case-insensitive STEP labels collide with "
                 "different face sets: "
                 f"{labels_by_folded[folded_label]}"
-            )
+            , user_message='Two source face groups have names that differ only by letter case.', next_step='Give those groups distinct names in CAD, then send the model again.')
         folded[folded_label] = faces
     label_values = tuple(labels)
     selected = {str(label).casefold() for label in label_values}
@@ -1807,7 +1822,7 @@ def _assert_disjoint_source_claims(
                 raise RoleResolutionError(
                     f"role resolution: sources {previous!r} and {source_id!r} "
                     f"both resolve STEP/OCC face {face}"
-                )
+                , user_message='Two sources claim the same face.', next_step='In Fusion, open Sources & Mesh… and select separate faces for each source, then send the model.')
             owner_by_face[face] = source_id
 
 
@@ -2610,14 +2625,14 @@ def _validated_surface_deviation(value: Any) -> float | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ImportedMeshError("mesh.surfaceDeviationMm must be a deviation in millimetres")
+        raise ImportedMeshError("Max surface deviation needs a size in millimetres. Enter a number in Max surface deviation.")
     number = float(value)
     if not math.isfinite(number):
-        raise ImportedMeshError("mesh.surfaceDeviationMm must be a finite deviation in millimetres")
+        raise ImportedMeshError("Max surface deviation is not finite. Enter a finite number in Max surface deviation.")
     if not IMPORTED_SURFACE_DEVIATION_MIN_MM <= number <= IMPORTED_SURFACE_DEVIATION_MAX_MM:
         raise ImportedMeshError(
-            "mesh.surfaceDeviationMm must be between "
-            f"{IMPORTED_SURFACE_DEVIATION_MIN_MM} and {IMPORTED_SURFACE_DEVIATION_MAX_MM} mm"
+            "Max surface deviation must be between "
+            f"{IMPORTED_SURFACE_DEVIATION_MIN_MM} and {IMPORTED_SURFACE_DEVIATION_MAX_MM} mm. Change Max surface deviation."
         )
     return number
 

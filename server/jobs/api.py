@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from server.preview.errors import public_error_message, user_error_message
+
 import logging
 import asyncio
 from collections.abc import Awaitable, Callable, Collection, Iterator, Mapping
@@ -358,7 +360,7 @@ class _JobsContractRoute(APIRoute):
                     422,
                     code="invalid_request",
                     stage="input",
-                    message="Solve request body is invalid",
+                    message=public_error_message(exc) or "Solve request body is invalid",
                     details={"validation_errors": jsonable_encoder(exc.errors())},
                     client_request_id=_recover_client_request_id(exc.body),
                 )
@@ -446,7 +448,7 @@ def create_jobs_router(
                 422,
                 code="invalid_solve_plan",
                 stage="planning",
-                message=str(exc),
+                message=str(exc) if isinstance(exc, SymmetryValidationError) else user_error_message(exc),
                 details=getattr(exc, "details", None),
                 client_request_id=body.client_request_id,
             )
@@ -505,7 +507,7 @@ def create_jobs_router(
                 422,
                 code="invalid_solve_plan",
                 stage="planning",
-                message=str(exc),
+                message=str(exc) if isinstance(exc, SymmetryValidationError) else user_error_message(exc),
                 details=getattr(exc, "details", None),
                 client_request_id=body.client_request_id,
             )
@@ -645,7 +647,7 @@ def create_jobs_router(
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="This run no longer exists. Select another run.") from exc
         except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            raise HTTPException(status_code=422, detail=user_error_message(exc)) from exc
 
     @router.post(
         "/api/jobs/{job_id}/dismiss", response_model=DeleteResponse,
@@ -1063,7 +1065,7 @@ def create_jobs_router(
         except JobResourceUnavailableError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            raise HTTPException(status_code=422, detail=user_error_message(exc)) from exc
         stem = re.sub(r"[^A-Za-z0-9._-]+", "-", artifact.channel_id).strip("-.")
         stem = stem or "channel"
         return Response(
@@ -1110,7 +1112,7 @@ def create_jobs_router(
         try:
             items, total = await runtime.list_jobs(status=status, limit=limit, offset=offset)
         except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            raise HTTPException(status_code=422, detail=user_error_message(exc)) from exc
         return JobListResponse(
             items=items, total=total, limit=limit, offset=offset
         )
@@ -1131,7 +1133,7 @@ def create_jobs_router(
         except OSError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            raise HTTPException(status_code=422, detail=user_error_message(exc, domain_values=False)) from exc
         return MetadataResponse(status="ok")
 
     @router.delete("/api/jobs/clear-failed", response_model=ClearFailedResponse)

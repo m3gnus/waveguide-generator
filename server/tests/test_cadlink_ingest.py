@@ -286,7 +286,7 @@ def test_ingest_refuses_repeated_design_without_exact_anchor_instance(
             tmp_path,
             expected_design_id="wgd_shared",
         )
-    with pytest.raises(IngestRefusal, match="not the return's solver anchor"):
+    with pytest.raises(IngestRefusal, match="not the model’s solve anchor.*Choose the anchor instance"):
         ingest_bundle(
             tmp_path,
             {},
@@ -867,7 +867,7 @@ def test_ingest_refuses_a_return_from_another_active_project(
 
 
 def test_ingest_refuses_a_design_owned_return_when_no_design_is_named(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog,
 ) -> None:
     """The reported defect: bundle names design A, the open model is not A.
 
@@ -897,7 +897,8 @@ def test_ingest_refuses_a_design_owned_return_when_no_design_is_named(
     message = str(refused.value)
     # Actionable: it names the design the geometry belongs to, says that this
     # workspace does not have it, and says what to do next.
-    assert "wgd_tritonia" in message
+    assert "wgd_tritonia" not in message
+    assert "wgd_tritonia" in caplog.text
     assert "not in this workspace" in message
     assert "CAD-linked designs" in message
 

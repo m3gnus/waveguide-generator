@@ -14,6 +14,7 @@ from server.design.throat_stretch import mesher_supports_stretch
 from server.design_io.api import open_design, serialize_design
 from server.integration.api import parameter_catalog
 from server.preview.translate import design_to_mesher_config
+from server.preview.errors import user_error_message
 from server.tests._ath_contract import assert_v2_refusal, saved_v1
 
 
@@ -57,11 +58,18 @@ def test_other_family_refuses_nonzero_stretch():
 
 
 @pytest.mark.parametrize("coefficients", [{"s1": .5}, {"s2": .2}, {"s1": .5, "s2": .2}])
-def test_old_pin_refuses_any_nonzero_coefficient(monkeypatch, coefficients):
+def test_pinned_translation_does_not_probe_old_capabilities(monkeypatch, coefficients):
     monkeypatch.setattr("server.design.throat_stretch.mesher_supports_stretch", lambda: False)
     design = DesignConfig.model_validate({"formula": "OSSE", **coefficients})
-    with pytest.raises(ValueError, match="needs mesher 0.2.4"):
-        design_to_mesher_config(design)
+    config = design_to_mesher_config(design)
+    if coefficients.get("s1", 0) and coefficients.get("s2", 0):
+        for key, value in coefficients.items():
+            assert config["profile"][key] == value
+    else:
+        # Inactive stretch retains its authored values but has canonical base geometry.
+        assert "s1" not in config["profile"] and "s2" not in config["profile"]
+    for key, value in coefficients.items():
+        assert getattr(design.root, key) == value
 
 
 @pytest.mark.parametrize("formula", ["OSSE", "R-OSSE"])
@@ -263,7 +271,7 @@ def test_ignored_top_level_coefficients_are_reported_to_the_user():
     with pytest.raises(HTTPException) as refusal:
         asyncio.run(open_design(text))
     assert refusal.value.status_code == 422
-    assert refusal.value.detail == {"type": "parse_error", "message": str(reference.value)}
+    assert refusal.value.detail == {"type": "parse_error", "message": user_error_message(reference.value)}
 
 
 @pytest.mark.parametrize("formula", ["OSSE", "R-OSSE"])
@@ -305,7 +313,7 @@ def test_active_ath_alias_precedence_is_independent_of_source_order(reverse, fam
             assert profile["L"] == root.L.constant_value()
 
 
-def test_old_pin_refusal_covers_preview_solve_and_export_helpers(monkeypatch):
+def test_pinned_consumers_do_not_probe_old_capabilities(monkeypatch):
     from server.exports.core import _bare_grid_config
     from server.mesh.builder import _solver_mesher_config
     from server.preview.core import _recentred_preview_config
@@ -313,8 +321,9 @@ def test_old_pin_refusal_covers_preview_solve_and_export_helpers(monkeypatch):
     monkeypatch.setattr("server.design.throat_stretch.mesher_supports_stretch", lambda: False)
     design = DesignConfig.model_validate({"formula": "OSSE", "L": 160, "s1": .5, "s2": .2})
     for consumer in (_recentred_preview_config, _solver_mesher_config, _bare_grid_config):
-        with pytest.raises(ValueError, match="needs mesher 0.2.4"):
-            consumer(design)
+        config = consumer(design)
+        assert config["profile"]["s1"] == .5
+        assert config["profile"]["s2"] == .2
 
 
 

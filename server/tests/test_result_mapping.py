@@ -50,7 +50,7 @@ def _result(*, angles: list[float]) -> SimpleNamespace:
 
 def test_polar_normalization_angle_must_be_inside_the_sampled_domain() -> None:
     for norm_angle in (9.0, 71.0):
-        with pytest.raises(ValidationError, match="norm_angle.*angle_range"):
+        with pytest.raises(ValidationError, match="Normalization angle must be between.*Change Normalization angle"):
             PolarConfig(angle_range=(10.0, 70.0, 7), norm_angle=norm_angle)
 
     # Off-axis-only grids remain legitimate when their normalization reference

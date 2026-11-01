@@ -95,6 +95,8 @@ def _reraise_typed(exc: ChildRefusal) -> None:
             exc.detail,
             area_drift_sources=[str(value) for value in drift] if isinstance(drift, list) else (),
             invalid_selector=exc.details.get("invalid_selector") is True,
+            user_message=exc.details.get("user_message") if isinstance(exc.details.get("user_message"), str) else None,
+            next_step=exc.details.get("next_step") if isinstance(exc.details.get("next_step"), str) else None,
         ) from exc
     if exc.error_type in {"ImportedMeshError", "StepTextError", "StepBudgetExceeded"}:
         raise ImportedMeshError(exc.detail) from exc

@@ -63,11 +63,10 @@ class GroundPlaneConfig(JobModel):
     @model_validator(mode="after")
     def validate_height(self) -> "GroundPlaneConfig":
         if not math.isfinite(self.height_m):
-            raise ValueError("ground_plane.height_m must be finite")
+            raise ValueError("Height above surface is not finite. Enter a finite Height above surface under Ground plane in Solve options.")
         if self.height_m < 0.0:
             raise ValueError(
-                "ground_plane.height_m must not be negative; the model's origin "
-                "cannot sit below the plane it stands on"
+                "Height above surface cannot be negative. Enter zero or a positive Height above surface under Ground plane in Solve options."
             )
         return self
 
@@ -133,7 +132,8 @@ class SolveOptions(JobModel):
     def normalize_named_option(cls, value: str, info: Any) -> str:
         normalized = value.strip().lower()
         if not normalized:
-            raise ValueError(f"{info.field_name} must not be empty")
+            from hornlab_mesher.controls import control_label
+            raise ValueError(f"{control_label('options.' + info.field_name)} is empty. Choose a value in Solve options.")
         if info.field_name == "symmetry" and normalized not in {
             "auto",
             "full",
@@ -142,14 +142,14 @@ class SolveOptions(JobModel):
             "quarter",
         }:
             raise ValueError(
-                "symmetry must be one of auto, full, half_xz, half_yz, or quarter"
+                "Symmetry is unavailable. Choose Automatic, Full model, a half model or Quarter in Solve options."
             )
         if info.field_name == "solver_mode" and normalized not in {
             "auto",
             "full_3d",
             "circsym",
         }:
-            raise ValueError("solver_mode must be one of auto, full_3d, or circsym")
+            raise ValueError("Solver mode is unavailable. Choose Full 3D in Solve options.")
         return normalized
 
     @field_validator(
@@ -164,12 +164,12 @@ class SolveOptions(JobModel):
         if self.frequency_range is None:
             return self
         if len(self.frequency_range) != 2:
-            raise ValueError("frequency_range must contain [start_hz, end_hz]")
+            raise ValueError("Frequency range needs a start and an end. Enter both in Solve options.")
         start, end = self.frequency_range
         if not math.isfinite(start) or not math.isfinite(end):
-            raise ValueError("frequency_range values must be finite")
+            raise ValueError("Frequency range contains a value WG cannot use. Enter finite start and end frequencies in Solve options.")
         if start <= 0 or end <= start:
-            raise ValueError("frequency_range must be positive and increasing")
+            raise ValueError("Frequency range must start above zero and end above the start. Change the start or end frequency in Solve options.")
         return self
 
     @model_validator(mode="after")
@@ -189,17 +189,17 @@ class SolveOptions(JobModel):
         ]
         if conflicts:
             raise ValueError(
-                "frequencies_hz replaces the generated grid and cannot be combined "
-                f"with {' or '.join(conflicts)}"
+                "Sweep points contains both an Explicit list and a Generated grid. "
+                "Choose one in Solve options and clear the other."
             )
         if not self.frequencies_hz:
-            raise ValueError("frequencies_hz must contain at least one frequency")
+            raise ValueError("Solver frequencies in Hz is empty. Enter at least one frequency in Solve options.")
         if len(self.frequencies_hz) > MAX_EXPLICIT_FREQUENCIES:
-            raise ValueError(f"frequencies_hz must contain at most {MAX_EXPLICIT_FREQUENCIES} frequencies")
+            raise ValueError(f"Solver frequencies in Hz has too many entries. Enter at most {MAX_EXPLICIT_FREQUENCIES} frequencies in Solve options.")
         if not all(math.isfinite(value) for value in self.frequencies_hz):
-            raise ValueError("frequencies_hz values must be finite")
+            raise ValueError("Solver frequencies in Hz contains a value WG cannot use. Enter finite frequencies in Solve options.")
         if any(value <= 0 for value in self.frequencies_hz):
-            raise ValueError("frequencies_hz values must be positive")
+            raise ValueError("Solver frequencies in Hz must be above zero. Enter positive frequencies in Solve options.")
         # Ascending order is a result-contract requirement, not solver taste: the
         # frequency axis is emitted verbatim and every chart and exporter reads it
         # as monotonic. Sorting silently would hide a mistyped list.
@@ -208,7 +208,7 @@ class SolveOptions(JobModel):
             for earlier, later in zip(self.frequencies_hz, self.frequencies_hz[1:])
         ):
             raise ValueError(
-                "frequencies_hz must be strictly ascending with no duplicates"
+                "Solver frequencies in Hz must increase without duplicates. Enter each frequency once, from lowest to highest, in Solve options."
             )
         return self
 

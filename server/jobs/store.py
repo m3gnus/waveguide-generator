@@ -1225,19 +1225,20 @@ class JobStore:
     def approve_cad_preparation(self, job_id: str, preparation_id: str, finding_ids: Sequence[str]) -> None:
         """Record approvals on the refused job's exact preparation, without solving."""
 
+        from hornlab_mesher.errors import UserRefusal
         with self._lock, self._transaction() as conn:
             row = conn.execute(
                 "SELECT config_json, task_metadata_json FROM simulation_jobs "
                 "WHERE id = ? AND status IN ('held', 'error')", (job_id,),
             ).fetchone()
             if row is None or json.loads(row["config_json"]).get("type") != "cad_intent":
-                raise ValueError("This solve is not waiting for preparation approvals.")
+                raise UserRefusal("Preparation approvals", "This solve is not waiting for preparation approvals.", "Open the current preparation and review its blocking findings.")
             metadata = json.loads(row["task_metadata_json"])
             prep = metadata.get("cad", {}).get("preparation", {})
             if prep.get("preparation_id") != preparation_id:
-                raise ValueError("These approvals name another preparation.")
+                raise UserRefusal("Preparation approvals", "These approvals name another preparation.", "Open the latest preparation and approve its current blocking findings.")
             if not set(finding_ids) <= set(prep.get("blocking_finding_ids") or []):
-                raise ValueError("Only blocking findings of this preparation may be approved.")
+                raise UserRefusal("Preparation approvals", "Only blocking findings of this preparation may be approved.", "Select only the blocking findings shown for the current preparation.")
             approved = {(a["preparation_id"], a["finding_id"]) for a in prep.get("approvals") or []}
             approved.update((preparation_id, finding) for finding in finding_ids)
             prep["approvals"] = [dict(preparation_id=p, finding_id=f) for p, f in sorted(approved)]

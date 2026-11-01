@@ -255,7 +255,7 @@ def test_valid_fem_checks_backend_capability_before_availability(monkeypatch, en
 
 def test_disabled_ingest_precedes_termination(monkeypatch):
     monkeypatch.setenv("WG2_FEM_REGIONS", "0")
-    with pytest.raises(ingest.IngestRefusal, match="FEM regions turned off"):
+    with pytest.raises(ingest.IngestRefusal, match="FEM regions.*turned off.*Remove the FEM regions"):
         ingest._refuse_fem_domain({"scope": {"fem_regions": [_termination_input().record]},
                                   "sources": [{"id": "source-a"}]}, {}, [])
 

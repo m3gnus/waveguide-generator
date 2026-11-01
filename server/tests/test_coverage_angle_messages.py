@@ -34,7 +34,7 @@ def test_preview_targets_the_offending_expression(field, detail):
 def test_unrelated_preview_failure_stays_global():
     detail = "the acoustic control grid needed for the requested mm resolution is too large"
     request = _Request(kind="preview", seq=1, design_revision=1, lod="fine", design=design())
-    assert _compute_value_error_fields(request, ValueError(detail)) == {"design": detail}
+    assert _compute_value_error_fields(request, ValueError(detail)) == {"design": "The requested mesh resolution needs too many surface samples. Increase Throat mesh resolution and Mouth mesh resolution to use a coarser mesh."}
 
 
 def test_point_grid_failure_does_not_target_a_design_field():

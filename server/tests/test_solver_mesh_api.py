@@ -268,7 +268,7 @@ def test_requested_domain_follows_the_solve_symmetry_mode(monkeypatch) -> None:
             "quarter",
         )
         assert refused["quadrants"] == 12
-        assert "Forced symmetry" in refused["plan"]["refusal"]
+        assert "model does not have the mirror planes" in refused["plan"]["refusal"]
         assert refused["msh_text"] == STUB_MSH
 
     try:
@@ -600,7 +600,7 @@ def test_validation_mode_rechecks_cached_mesh_without_rebuilding(monkeypatch):
         with pytest.raises(HTTPException) as refused:
             await _preview_response(_rosse(), "auto", options=SolveOptions(mesh_validation_mode="strict"))
         assert refused.value.status_code == 422
-        assert refused.value.detail == "Solver mesh failed strict topology integrity validation"
+        assert refused.value.detail == "WG could not finish this request and has recorded the problem."
         repeated = await _preview_response(_rosse(), "auto", options=SolveOptions(mesh_validation_mode="warn"))
         assert repeated["stats"]["mesh_cache_hit"] is True
         assert repeated["stats"]["mesh_cache_key"] == warned["stats"]["mesh_cache_key"]

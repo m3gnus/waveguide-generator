@@ -402,7 +402,7 @@ class MesherChildHost:
                 if abort.is_set():
                     raise asyncio.CancelledError()
                 if self._closed:
-                    raise MesherShuttingDownError("mesher child is shutting down; build abandoned")
+                    raise MesherShuttingDownError("WG is shutting down. Open WG again to prepare this mesh.")
                 if cancel_cb is not None:
                     cancel_cb()
             except BaseException:
@@ -417,7 +417,7 @@ class MesherChildHost:
             request_id = next(self._ids)
             with self._state:
                 if self._closing or self._closed:
-                    raise MesherShuttingDownError("mesher child is shutting down; submission rejected")
+                    raise MesherShuttingDownError("WG is shutting down. Open WG again to prepare this mesh.")
                 channel = self._ensure_locked()
                 try:
                     channel.connection.send(("run", request_id, fn, args))
@@ -428,7 +428,8 @@ class MesherChildHost:
                 if deadline is not None and time.monotonic() > deadline:
                     self._discard(channel)
                     raise MesherCrashError(
-                        f"The mesher did not finish within {timeout:g} s and was stopped."
+                        f"The mesher did not finish within {timeout:g} s and was stopped. "
+                        "Use a coarser mesh or simplify the profile before preparing it again."
                     )
                 checkpoint(channel)
                 try:
@@ -441,7 +442,7 @@ class MesherChildHost:
                     continue
                 if kind == "eof":
                     if self._closed:
-                        raise MesherShuttingDownError("mesher child is shutting down; build abandoned")
+                        raise MesherShuttingDownError("WG is shutting down. Open WG again to prepare this mesh.")
                     raise self._crashed(channel)
                 if kind == "badframe":
                     self._discard(channel)

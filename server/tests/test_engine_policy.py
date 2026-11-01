@@ -255,7 +255,7 @@ def test_invalid_geometry_precedes_engine_readiness_in_plan_and_solve(tmp_path):
         submitted = client.post("/api/solve", json=req.model_dump(mode="json"))
     assert planned.status_code == submitted.status_code == 422
     assert planned.json()["detail"] == submitted.json()["detail"]
-    assert "Forced symmetry mode 'quarter' is invalid" in planned.json()["detail"]
+    assert planned.json()["detail"] == "The model or ground plane does not allow the selected Symmetry. Choose Full model under Symmetry in Solve options."
 
 
 @pytest.mark.parametrize("case", ["unknown", "removed", "symmetry", "mounting", "unavailable", "accurate-auto"])

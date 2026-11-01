@@ -4,7 +4,7 @@ import type { WorkspaceMode } from '../stores/workspaceMode';
 import { backendSupports, hostLimitation, selectionLimitation, type BackendFeature, type BackendIdentity } from './backendSupport';
 import type { EngineCapability } from '../jobs/actions';
 import { isAthV2 } from './athImportControls';
-import { nameFieldsWith } from '../api/httpError';
+import { SOLVE_CONTROLS, nameFieldsWith } from '../api/httpError';
 
 export type ParameterSection =
   | 'Model Type' | 'Profile' | 'Throat' | 'Mouth' | 'Cross-section' | 'Mounting'
@@ -633,6 +633,7 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = PARAMETER_SECTION_DEFIN
 // A validation message names the control the user sees, not the key on the wire.
 const NAMED_CONTROLS = new Map([...PARAMETER_REGISTRY].reverse().flatMap(({ id, path, label, section }) =>
   [id, path].filter((key): key is string => Boolean(key)).map(key => [key, { label, place: `the ${section} section` }] as const)));
+
 nameFieldsWith(path => NAMED_CONTROLS.get(path) ?? null);
 
 export function parameterSectionIsVisible(
@@ -752,4 +753,15 @@ export function throatStretchError(key: 's1' | 's2', value: number): string | un
   if (Number.isFinite(value) && value < 0) return `throat stretch ${key} must not be negative, got ${value}: negative values are not supported (ATH accepts them, but they fold the profile back through the throat for all but very small magnitudes)`;
   if (!Number.isFinite(value) || value > 10) return `throat stretch ${key} must be finite and >= 0 and <= 10, got ${value}`;
   return undefined;
+}
+
+/** Exported metadata for backend remedies, including the source editor's own preset names. */
+export function refusalControlCatalog(presetLabels: Record<string, string> = {}, editorLabels: readonly string[] = []) {
+  return {
+    ...Object.fromEntries(PARAMETER_REGISTRY.map(({ id, path, legacyKey, label }) => [id, { path, legacyKey, label }])),
+    ...Object.fromEntries(PARAMETER_SECTION_DEFINITIONS.map(({ title }) => [`section.${title}`, { legacyKey: title, label: title }])),
+    ...Object.fromEntries(editorLabels.map(label => [`editor.${label}`, { legacyKey: label, label }])),
+    ...Object.fromEntries(Object.entries(SOLVE_CONTROLS).map(([key, control]) => [`options.${key}`, { legacyKey: key, label: control.label }])),
+    ...Object.fromEntries(Object.entries(presetLabels).map(([key, label]) => [`source.preset.${key}`, { legacyKey: key, label }])),
+  };
 }

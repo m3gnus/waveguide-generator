@@ -144,3 +144,28 @@ describe('solver mesh transport boundary', () => {
     expect(source('./solverMesh.ts')).not.toMatch(/\b(?:import|require)\s*\(/);
   });
 });
+
+
+describe('typed backend refusals', () => {
+  it('shows the diagnosed problem and next step without rendering the field key', () => {
+    expect(refusalText({ field: 'mesh.wall_thickness', user_message: 'The outer wall folds over itself at a tight bend.', next_step: 'Reduce Wall thickness.' }, 'mesh')).toBe('The outer wall folds over itself at a tight bend. Reduce Wall thickness.');
+    expect(refusalText({ field: 'ATH text', user_message: '“Mesh.Enclosure.Dim” needs four positive distances.', next_step: 'Correct “Mesh.Enclosure.Dim” and import again.' }, 'import')).toContain('four positive distances');
+    expect(refusalText({ field: 'mesh', user_message: 'stage 7 meshing: bad mesh', next_step: 'Retry.' }, 'mesh')).toBe(PLAIN_REQUEST_FAILURE);
+  });
+
+  it('names solve controls even before the parameter registry is loaded', () => {
+    expect(fieldSentence(['body', 'options', 'num_frequencies'], 'Input should be greater than or equal to 1')).toBe('Frequency samples must be greater than or equal to 1. Change it in Solve options.');
+    expect(fieldSentence(['options', 'frequencies_hz', 2], 'Input should be a valid number')).toBe('WG cannot use the value of Solver frequencies in Hz. Enter a new value in Solve options.');
+  });
+});
+
+it('names nested solve-option controls', () => {
+  expect(fieldSentence(['body', 'options', 'ground_plane', 'height_m'], 'Input should be a valid number')).toBe('WG cannot use the value of Height above surface. Enter a new value in Ground plane under Solve options.');
+  expect(fieldSentence(['options', 'polar_config', 'distance'], 'Input should be greater than or equal to 0.1')).toBe('Measurement distance must be greater than or equal to 0.1. Change it in Directivity map under Solve options.');
+});
+
+it('shows the typed remedy retained in a validation row context', () => {
+  expect(refusalText([{ loc: ['body', 'design', 'SOURCE-DISK'], msg: 'Value error, outer_radius_mm must exceed radius_mm', ctx: { error: {
+    field: 'Source body radius', user_message: 'The source rim is too small or too large.', next_step: 'Set Source body radius at least 0.1 mm above Source disk radius and no greater than 500 mm.',
+  } } }], 'mesh preview')).toBe('The source rim is too small or too large. Set Source body radius at least 0.1 mm above Source disk radius and no greater than 500 mm.');
+});
