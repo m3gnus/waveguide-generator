@@ -1,3 +1,4 @@
+import { EmptyState } from '../shell/EmptyState';
 import { planeWords } from '../api/domainDecision';
 import { useState } from 'react';
 import { useDeveloperDetails } from '../prefs/preferences';
@@ -8,9 +9,6 @@ import { useMeshFileEditable } from '../shell/CadModelStatusLine';
 import { FileModelDetails } from '../shell/CadModelDetails';
 import { useImportedModelStore } from '../stores/importedModel';
 import type { RegisteredMesh } from '../api/meshImport';
-import { workspaceModeStore } from '../stores/workspaceMode';
-import { restoreParametricWorkingDesign } from '../model/currentModel';
-import { noteExplicitNavigation } from '../shell/workspaceNavigation';
 import { SolveOptionsStoreProvider } from '../stores/solveOptionsContext';
 
 import '../shell/cadLinkPanel.css';
@@ -61,7 +59,9 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
     {tab === 'geometry' && <>
     <section className="cad-workflow cad-model-card">
       {/* Its status line and action live in Results, once. */}
-      <header className="cad-model-identity"><b className="cad-model-name">{state.filename || 'Mesh file'}</b></header>
+      {state.filename || summary
+        ? <header className="cad-model-identity"><b className="cad-model-name">{state.filename || 'Mesh file'}</b></header>
+        : <EmptyState title="No mesh file yet" detail="Use Import mesh… above. You set each surface here once it is in."/>}
       {summary && <>
         <fieldset className="mesh-surfaces" disabled={!editable}>
           <legend>Surfaces</legend>
@@ -135,8 +135,5 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
     </fieldset>
     </>}
     {tab === 'simulation' && state.error && <p className="field-error" role="alert">{state.error}</p>}
-    {tab === 'geometry' && <button className="btn" onClick={() => {
-      noteExplicitNavigation(); restoreParametricWorkingDesign(); workspaceModeStore.setMode('parametric');
-    }}>Back to parametric design</button>}
   </div></SolveOptionsStoreProvider>;
 }

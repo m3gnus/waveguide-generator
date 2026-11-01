@@ -144,7 +144,7 @@ describe('CAD viewport empty-state copy', () => {
     expect(cadViewportEmptyCopy({ selected: true, label: 'Tritonia' }))
       .toEqual({ title: 'Tritonia', detail: 'Its status and next step are in Results.' });
     expect(cadViewportEmptyCopy({ selected: false, label: '' }))
-      .toEqual({ title: 'No CAD model yet', detail: 'Results says how to send one.' });
+      .toEqual({ title: 'No CAD model yet', detail: 'Send a design from Fusion 360 or Onshape to see it here.' });
   });
 });
 

@@ -111,7 +111,6 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .workspace-mode-toggle button:disabled { opacity: .32; }
 .revision-chip { color: var(--fg4); font: var(--text-micro) var(--mono); }
 .design-file-menu { position: relative; flex: none; display: flex; gap: 8px; }
-.import-mesh-action { border-color: var(--acc); }
 .design-menu-popover {
   position: absolute;
   top: 38px;

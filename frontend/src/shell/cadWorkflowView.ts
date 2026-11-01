@@ -2,6 +2,12 @@ import type { FusionCadLink, FusionCadStatus, WgLinkRefreshReport } from '../api
 import type { OnshapeStatus } from '../api/onshape';
 
 /** A link's optional user label is distinct from its document and identity. */
+/** A folder path a rail can hold: its last two names. The Settings dialog has the whole path. */
+function lastFolders(path: string): string {
+  const names = path.split(/[\\/]+/).filter(Boolean);
+  return names.length > 2 ? `…/${names.slice(-2).join('/')}` : path;
+}
+
 export function fusionLinkDisplayName(link: FusionCadLink & { linkName?: string | null }): string | null {
   return link.linkName?.trim() || link.designName || null;
 }
@@ -257,7 +263,7 @@ function fusionConnectionView(status: FusionCadStatus | null): CadWorkflowView {
   if (status.cadFolderConfigured === false) return {
     state: 'not-configured',
     headline: 'Fusion connection needs a WGLink folder',
-    detail: status.cadFolderMissingPath ? `WG cannot find the WGLink folder ${status.cadFolderMissingPath}`
+    detail: status.cadFolderMissingPath ? `WG cannot find the WGLink folder ${lastFolders(status.cadFolderMissingPath)}. Create it, or choose another folder.`
       : 'Choose the WG folder in Settings → CAD Link. WG and Fusion use its WGLink folder.',
     action: null,
   };

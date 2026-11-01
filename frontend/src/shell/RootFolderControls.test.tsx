@@ -96,7 +96,7 @@ describe('WG folder', () => {
     vi.mocked(useRootFolder).mockResolvedValue({ ...folder, cadlinkExists: true });
     await act(async () => root.render(<RootFolderControls cadlinkOnly/>));
     expect(host.textContent).toContain('WG cannot find the WGLink folder /current/root/cadlink');
-    expect(button('Open WGLink folder').disabled).toBe(true);
+    expect(button('Open WGLink folder')).toBeUndefined();
     await act(async () => button('Create it').click());
     expect(useRootFolder).toHaveBeenCalledWith('cadlink', '/current/root/cadlink', '/current/root/cadlink');
     expect(selectFolderRoot).not.toHaveBeenCalled();

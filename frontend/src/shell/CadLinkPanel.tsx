@@ -506,15 +506,16 @@ export function CadLinkPanel() {
     </Notice>}
     {status && <Notice tone="info" className="cad-status-strip" role="status">{status}</Notice>}
 
+    {/* The connection leads while it needs the user: until it is sorted, nothing
+        else here can happen. Otherwise it is one quiet line below the runs. */}
+    {!quietLink && connectionCard}
+
     {/* 1 · Project: what am I working on? */}
     <CadProjectHeader/>
 
-    {/* The connection leads only while it needs the user; otherwise it is one
-        quiet line below the runs. */}
-    {!quietLink && connectionCard}
-
-    {/* 3 · Model: is the geometry sound? */}
-    <section className="cad-workflow cad-model-card">
+    {/* 3 · Model: is the geometry sound? With no WGLink folder and nothing
+        received, the card above is the next step and this one would repeat it. */}
+    {(onshape || bundle || record || bundles.length > 0 || workflow.state !== 'not-configured') && <section className="cad-workflow cad-model-card">
       <header className="cad-model-head">
         <span className="cad-card-label">Model</span>
         <span className="spacer"/>
@@ -565,7 +566,7 @@ export function CadLinkPanel() {
         selectedPath={bundle?.bundlePath ?? null}
         select={cadWorkspaceView.selectBundle}
       />
-    </section>
+    </section>}
 
     {/* 4 · Runs: what have I solved? */}
     <CadProjectHistory/>

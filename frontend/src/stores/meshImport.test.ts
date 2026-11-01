@@ -175,7 +175,7 @@ describe('standalone imported mesh', () => {
     const fetcher = vi.fn<typeof fetch>(async () => response(summary));
     await loadMeshFile('speaker.msh', MSH, fetcher);
     expect(JSON.parse(fetcher.mock.calls[0][1]?.body as string)).toEqual({ filename: 'speaker.msh', msh_text: MSH });
-    expect(() => fileMeshSubmission()).toThrow('Choose units');
+    expect(() => fileMeshSubmission()).toThrow('Choose File units');
     editFileDraft({ units: 'mm', selected: [2] });
     const register = vi.fn<typeof fetch>(async () => prepared(record));
     await prepareMeshFile(register);
@@ -193,7 +193,7 @@ describe('standalone imported mesh', () => {
     expect(body.options.polar_config.angle_range).toEqual([0, 180, 37]);
     expect(body.options.frequency_spacing).toBe('log');
     editFileDraft({ units: 'in' });
-    expect(() => fileMeshSubmission()).toThrow('Choose units');
+    expect(() => fileMeshSubmission()).toThrow('Choose File units');
   });
 
   it('solves with the imported options\' polar settings and frequency spacing, never the parametric ones', async () => {
@@ -332,13 +332,13 @@ describe('standalone imported mesh', () => {
     await pending;
     expect(registeredMesh()).toBeNull();
     expect(useMeshImportStore.getState().busy).toBe(false);
-    expect(() => fileMeshSubmission()).toThrow('Choose units');
+    expect(() => fileMeshSubmission()).toThrow('Choose File units');
   });
 
   it('does not submit a prepared record while a different file occupies the viewport', () => {
     showPrepared();
     importedMeshStore.setFile(createImportedMeshScene('different.msh', parseMSH(MSH), 'file', 'wgi_other'));
-    expect(() => fileMeshSubmission()).toThrow('Choose units');
+    expect(() => fileMeshSubmission()).toThrow('Choose File units');
   });
 });
 
@@ -490,7 +490,7 @@ describe('server-valid file setup edit contract', () => {
       if (!edit.selected.length) {
         expect(prepare).not.toHaveBeenCalled();
         expect(registeredMesh()).toBeNull();
-        expect(() => fileMeshSubmission()).toThrow('Choose units');
+        expect(() => fileMeshSubmission()).toThrow('Choose File units');
         return;
       }
     }
@@ -569,7 +569,7 @@ describe('portable mesh replay', () => {
     const request = exactRequest();
     await loadMeshReplay('{}', vi.fn(async () => response({ record: replayRecord, request })));
     editFileDraft({ forward: '+x', up: '+z' });
-    expect(() => fileMeshSubmission()).toThrow('Choose units');
+    expect(() => fileMeshSubmission()).toThrow('Choose File units');
     const next = { ...replayRecord, ingest_id: 'wgi_rotated',
       source_file: { ...replayRecord.source_file, transform: { units: 'mm', forward: '+x', up: '+z' } } };
     const wait = deferred<Response>();

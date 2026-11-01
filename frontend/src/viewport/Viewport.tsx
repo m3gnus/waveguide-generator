@@ -339,7 +339,7 @@ export function fieldPlaneUnavailableTooltip(jobs: readonly JobItem[]): string {
 export function cadViewportEmptyCopy(model: { selected: boolean; label: string }): { title: string; detail: string } {
   return model.selected
     ? { title: model.label, detail: 'Its status and next step are in Results.' }
-    : { title: 'No CAD model yet', detail: 'Results says how to send one.' };
+    : { title: 'No CAD model yet', detail: 'Send a design from Fusion 360 or Onshape to see it here.' };
 }
 
 /** Whether replacing one viewport scene with another should re-frame the camera.
@@ -1091,7 +1091,7 @@ export function Viewport() {
       </div>
     </div>
 
-    {!activeScene && <EmptyState className="viewport-empty" aria-live="polite" title={<>{assemblyInputActive ? 'Opening this run’s model' : fileInputActive ? 'Import a mesh file' : workspaceMode === 'cad' ? cadEmpty.title : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</>} detail={<>{assemblyInputActive ? 'Its retained mesh appears here.' : fileInputActive ? 'Use Import mesh above, then choose Radiating surfaces in Geometry.' : workspaceMode === 'cad' ? cadEmpty.detail : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</>} action={workspaceMode === 'cad' && !fileInputActive && !workspaceNavigation.isVisible('results')
+    {!activeScene && <EmptyState className="viewport-empty" aria-live="polite" title={<>{assemblyInputActive ? 'Opening this run’s model' : fileInputActive ? 'Import a mesh file' : workspaceMode === 'cad' ? cadEmpty.title : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</>} detail={<>{assemblyInputActive ? 'Its retained mesh appears here.' : fileInputActive ? 'Use Import mesh… above. WG reads ASCII Gmsh 2.2 surface meshes (.msh).' : workspaceMode === 'cad' ? cadEmpty.detail : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</>} action={workspaceMode === 'cad' && !fileInputActive && !workspaceNavigation.isVisible('results')
         && <button type="button" className="btn viewport-retry" onClick={() => workspaceNavigation.navigate('results')}>Show Results</button> || undefined}>
       <i className="viewport-empty-mark" aria-hidden="true"><i /></i>
     </EmptyState>}

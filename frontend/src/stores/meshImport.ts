@@ -339,7 +339,7 @@ export function fileMeshSetup(): ImportedSetup {
   if (opening) throw new Error(opening);
   if (input === 'file' && state.busy) throw new Error('Wait for mesh preparation to finish.');
   if (!record || viewport.showing !== 'file' || viewport.file?.ingestId !== record.ingest_id) {
-    throw new Error('Choose units and surface roles in Geometry before solving.');
+    throw new Error('Choose File units and each surface’s role in Imported mesh, then press Solve.');
   }
   let controls: ImportedSetup | undefined;
   const setup = effectiveImportedSetup(input, record.ingest_id, () => (controls = readyMeshSetupControls(input)));
