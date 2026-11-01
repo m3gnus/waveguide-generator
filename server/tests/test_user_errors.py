@@ -81,8 +81,9 @@ def test_solver_mesh_route_hides_program_fault(monkeypatch, caplog):
     from server.mesh import builder
     from server.jobs.mesh_preview import mount_solver_mesh
     from server.engines.registry import EngineRegistry
+    from hornlab_mesher.errors import InternalInvariantError
     async def crash(*a, **k):
-        raise RuntimeError("private mesher fault")
+        raise InternalInvariantError("private mesher fault")
     monkeypatch.setattr(builder, "build_solver_mesh", crash)
     app = FastAPI()
     mount_solver_mesh(app, EngineRegistry(detector=lambda: []))

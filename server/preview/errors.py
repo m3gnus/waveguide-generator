@@ -140,10 +140,28 @@ def _user_refusal(exc: BaseException):
     return None
 
 
+# Python/NumPy diagnostics have no user-authored refusal or remedy. Keep this
+# one list at the common owner, including in-process and worker solve callers.
+_LIBRARY_DIAGNOSTICS = (
+    "could not convert string to float", "math domain error",
+    "not enough values to unpack", "too many values to unpack",
+    "zero-size array to reduction", "iterable argument is empty", "arg is an empty sequence",
+    "operands could not be broadcast", "invalid literal for int",
+    "cannot reshape array", "setting an array element with a sequence",
+)
+
+
 def public_error_message(exc: BaseException, *, domain_values: bool = True) -> str | None:
     """Preserve the existing domain owners; arbitrary exceptions stay private."""
     if isinstance(exc, (TypeError, KeyError, AttributeError, AssertionError, IndexError, OSError)):
         return None
+    marker = getattr(sys.modules.get("hornlab_mesher.errors"), "InternalInvariantError", None)
+    cause, seen = exc, set()
+    while cause is not None and id(cause) not in seen:
+        if isinstance(marker, type) and isinstance(cause, marker):
+            return None
+        seen.add(id(cause))
+        cause = cause.__cause__
     refusal = _user_refusal(exc)
     if refusal is not None:
         return f"{refusal.user_message} {refusal.next_step}".strip()
@@ -180,20 +198,22 @@ def public_error_message(exc: BaseException, *, domain_values: bool = True) -> s
         ("pydantic", "ValidationError"), ("fastapi.exceptions", "RequestValidationError"))
         if isinstance(kind := getattr(sys.modules.get(module_name), name, None), type))
     if isinstance(exc, validation_types):
-        words = [public_error_message(cause) for row in exc.errors()
+        words = [public_error_message(cause, domain_values=domain_values) for row in exc.errors()
                  if isinstance(cause := row.get("ctx", {}).get("error"), BaseException)]
         if words and all(words):
             return " ".join(words)
+    if any(shape in str(exc).lower() for shape in _LIBRARY_DIAGNOSTICS):
+        return None
     if str(exc).startswith("the acoustic control grid needed for the requested mm resolution"):
         return "The requested mesh resolution needs too many surface samples. Increase Throat mesh resolution and Mouth mesh resolution to use a coarser mesh."
     # Historical geometry translations are explicit, diagnosed contracts.
     translated = mesher_error_message({"mode": "infinite-baffle"}, str(exc))
     if isinstance(translated, PublicMessage):
         return str(translated)
-    # Design validators historically use plain ValueError/ConfigError. Preserve
-    # their authored words; the client still rejects internal diagnostic text.
+    # ConfigError is mesher design validation, including during a job mesh stage.
+    # Plain ValueError needs a WG domain boundary; solver workers opt out.
     config_error = getattr(sys.modules.get("hornlab_mesher.errors"), "ConfigError", None)
-    if domain_values and (type(exc) is ValueError or (isinstance(config_error, type) and type(exc) is config_error)):
+    if (domain_values and type(exc) is ValueError) or (isinstance(config_error, type) and type(exc) is config_error):
         cause = exc.__cause__
         if cause is None or isinstance(cause, ValueError):
             return str(exc)

@@ -334,9 +334,10 @@ def _failure_message(exc: BaseException) -> str:
     logger.error("Solver failure [%s] (%s): %s", _solver_failure_code(exc), type(exc).__name__, exc,
                  exc_info=(type(exc), exc, exc.__traceback__))
     code = _solver_failure_code(exc)
-    from server.preview.errors import public_error_message, user_error_message
-    if public_error_message(exc) is not None:
-        return user_error_message(exc)
+    from server.preview.errors import public_error_message
+    words = public_error_message(exc, domain_values=False)
+    if words is not None:
+        return words
     return {
         "solver_engine_stopped": "The solver engine stopped before the solve finished. Press Solve to try again.",
         "solver_memory_exhausted": "The solver ran out of memory. Close other applications, then press Solve to try again.",

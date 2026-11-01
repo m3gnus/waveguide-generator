@@ -1,5 +1,6 @@
 import { presetLabels } from '../sketch/adapters/sourcePreset';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { refusalControlCatalog } from './parameterRegistry';
 
@@ -8,7 +9,7 @@ import { refusalControlCatalog } from './parameterRegistry';
 const editors = ['SourceContourEditor.tsx', 'SourceAssemblyEditor.tsx', 'FreeformEditors.tsx', 'FrontProperties.tsx', 'ParamPanel.tsx'];
 const labels = new Set<string>();
 for (const file of editors) {
-  const source = readFileSync(new URL(file, import.meta.url).pathname.replace(/^\/@fs/, '')).toString();
+  const source = readFileSync(fileURLToPath(new URL(file, import.meta.url)).replace(/^\/@fs/, '')).toString();
   for (const match of source.matchAll(/(?:label|aria-label)="([^"]+)"|<(?:h[23]|th|label|summary)[^>]*>([^<{}]+)</g)) { const label = (match[1] || match[2]).trim(); if (label) labels.add(label); }
   const scalars = /const scalarLabels = \{([^}]+)\}/.exec(source)?.[1] || '';
   for (const match of scalars.matchAll(/: '([^']+)'/g)) labels.add(match[1]);

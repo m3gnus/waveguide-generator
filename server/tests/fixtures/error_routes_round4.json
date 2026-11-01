@@ -1,0 +1,174 @@
+[
+  {
+    "label": "streamed result has invalid impedance",
+    "detail": "WG could not finish this solve and has recorded the problem.",
+    "expected": "WG could not finish this solve and has recorded the problem.",
+    "solve": true
+  },
+  {
+    "label": "streamed directivity shape does not match its planes/angles",
+    "detail": "WG could not finish this solve and has recorded the problem.",
+    "expected": "WG could not finish this solve and has recorded the problem.",
+    "solve": true
+  },
+  {
+    "label": "combine members do not share one observation grid",
+    "detail": "WG could not finish this solve and has recorded the problem.",
+    "expected": "WG could not finish this solve and has recorded the problem.",
+    "solve": true
+  },
+  {
+    "label": "mesher point grid contains invalid surface points",
+    "detail": "WG could not finish this solve and has recorded the problem.",
+    "expected": "WG could not finish this solve and has recorded the problem.",
+    "solve": true
+  },
+  {
+    "label": "operands could not be broadcast together with shapes (3,) (4,)",
+    "detail": "WG could not finish this solve and has recorded the problem.",
+    "expected": "WG could not finish this solve and has recorded the problem.",
+    "solve": true
+  },
+  {
+    "label": "math domain error",
+    "detail": "WG could not finish this solve and has recorded the problem.",
+    "expected": "WG could not finish this solve and has recorded the problem.",
+    "solve": true
+  },
+  {
+    "label": "persisted solve fault",
+    "detail": "WG could not finish this solve and has recorded the problem.",
+    "expected": "WG could not finish this solve and has recorded the problem.",
+    "solve": true
+  },
+  {
+    "label": "persisted mesh refusal",
+    "detail": "The source setting cannot be used. Enter a plain number in Source radius.",
+    "expected": "The source setting cannot be used. Enter a plain number in Source radius.",
+    "solve": true
+  },
+  {
+    "label": "could not convert string to float: '2*5'",
+    "detail": "WG could not finish this request and has recorded the problem.",
+    "expected": "WG could not finish this request and has recorded the problem.",
+    "solve": false
+  },
+  {
+    "label": "math domain error",
+    "detail": "WG could not finish this request and has recorded the problem.",
+    "expected": "WG could not finish this request and has recorded the problem.",
+    "solve": false
+  },
+  {
+    "label": "not enough values to unpack (expected 2, got 1)",
+    "detail": "WG could not finish this request and has recorded the problem.",
+    "expected": "WG could not finish this request and has recorded the problem.",
+    "solve": false
+  },
+  {
+    "label": "too many values to unpack (expected 2)",
+    "detail": "WG could not finish this request and has recorded the problem.",
+    "expected": "WG could not finish this request and has recorded the problem.",
+    "solve": false
+  },
+  {
+    "label": "zero-size array to reduction operation minimum which has no identity",
+    "detail": "WG could not finish this request and has recorded the problem.",
+    "expected": "WG could not finish this request and has recorded the problem.",
+    "solve": false
+  },
+  {
+    "label": "min() iterable argument is empty",
+    "detail": "WG could not finish this request and has recorded the problem.",
+    "expected": "WG could not finish this request and has recorded the problem.",
+    "solve": false
+  },
+  {
+    "label": "min() arg is an empty sequence",
+    "detail": "WG could not finish this request and has recorded the problem.",
+    "expected": "WG could not finish this request and has recorded the problem.",
+    "solve": false
+  },
+  {
+    "label": "operands could not be broadcast together with shapes (3,) (4,)",
+    "detail": "WG could not finish this request and has recorded the problem.",
+    "expected": "WG could not finish this request and has recorded the problem.",
+    "solve": false
+  },
+  {
+    "label": "invalid literal for int() with base 10: 'x'",
+    "detail": "WG could not finish this request and has recorded the problem.",
+    "expected": "WG could not finish this request and has recorded the problem.",
+    "solve": false
+  },
+  {
+    "label": "cannot reshape array of size 3 into shape (2,2)",
+    "detail": "WG could not finish this request and has recorded the problem.",
+    "expected": "WG could not finish this request and has recorded the problem.",
+    "solve": false
+  },
+  {
+    "label": "setting an array element with a sequence",
+    "detail": "WG could not finish this request and has recorded the problem.",
+    "expected": "WG could not finish this request and has recorded the problem.",
+    "solve": false
+  },
+  {
+    "label": "radius=2*5",
+    "detail": {
+      "field": "Source radius",
+      "user_message": "Source radius needs a plain number.",
+      "next_step": "Enter a plain number in Source radius."
+    },
+    "expected": "Source radius needs a plain number. Enter a plain number in Source radius.",
+    "solve": false
+  },
+  {
+    "label": "curvature=1/2",
+    "detail": {
+      "field": "Source curvature",
+      "user_message": "Source curvature needs a plain number.",
+      "next_step": "Enter a plain number in Source curvature."
+    },
+    "expected": "Source curvature needs a plain number. Enter a plain number in Source curvature.",
+    "solve": false
+  },
+  {
+    "label": "radius=10+2",
+    "detail": {
+      "field": "Source radius",
+      "user_message": "Source radius needs a plain number.",
+      "next_step": "Enter a plain number in Source radius."
+    },
+    "expected": "Source radius needs a plain number. Enter a plain number in Source radius.",
+    "solve": false
+  },
+  {
+    "label": "curvature=1/0",
+    "detail": {
+      "field": "Source curvature",
+      "user_message": "Source curvature needs a plain number.",
+      "next_step": "Enter a plain number in Source curvature."
+    },
+    "expected": "Source curvature needs a plain number. Enter a plain number in Source curvature.",
+    "solve": false
+  },
+  {
+    "label": "outer",
+    "detail": "WG could not finish this request and has recorded the problem.",
+    "expected": "WG could not finish this request and has recorded the problem.",
+    "solve": false
+  },
+  {
+    "label": "meridian",
+    "detail": "WG could not finish this request and has recorded the problem.",
+    "expected": "WG could not finish this request and has recorded the problem.",
+    "solve": false
+  },
+  {
+    "label": "passage",
+    "detail": "WG could not finish this request and has recorded the problem.",
+    "expected": "WG could not finish this request and has recorded the problem.",
+    "solve": false
+  }
+]
