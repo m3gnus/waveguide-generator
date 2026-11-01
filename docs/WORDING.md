@@ -1,3 +1,41 @@
+# Failure messages
+
+A message reaches the user only if the user can do something about it. Every
+message says what is wrong and what to do next, naming the control.
+
+| Class | Cause | What the user sees |
+| --- | --- | --- |
+| A | The user caused it and can change it. | What is wrong and how to fix it, naming the control. Better, disable the control and say why, or refuse before they commit. |
+| B | The program caused it. | Nothing that blames them. A short, calm note only if they must know; the detail goes to the developer record. |
+| C | An outside condition: no engine, memory, connection, disk, Fusion closed. | What happened and what to do next. |
+
+Never write "something went wrong", "check the values", a status code, framework
+text, a raw key, a developer term or an internal name. Say "run", not "job". Name
+a field by the label on its control and the section it sits in.
+
+## One owner
+
+`frontend/src/api/httpError.ts` owns what a failure says:
+
+| Use | For |
+| --- | --- |
+| `failureWords(reason, fallback)` | Every catch that reaches the screen. Plain sentences pass; anything else becomes the fallback and goes to the developer record. |
+| `throw new ProgramFault(text)` | A parser or invariant the user cannot cause. Its text never reaches the screen. |
+| `httpErrorMessage(response, sentence)` | A failed response. `sentence` is a whole sentence with its next step. |
+| `refusalText(detail, operation, sentence)` | A response body already read. |
+| `fieldSentence` / `rowSentence` | Validation away from, or beside, its control. |
+
+`model/currentModel.ts` `solveFailureWords` does the same for a failed run. Text
+another piece of code matches on stays raw in state and passes through
+`failureWords` at the point it is shown.
+
+Server text may be reworded freely, but wire codes may not. Exception text goes to
+the log. A mesher or solver exception that reaches a response is listed for a
+backend fix; the owner above keeps it off the screen until then.
+
+Woofers: `sketch/adapters/frontView.ts` owns the fit rule. Margins never grow by
+themselves. The user reads what is short and chooses the change.
+
 # Wording on CAD surfaces
 
 Lead with what happened to the user's model and give one next step. Put
