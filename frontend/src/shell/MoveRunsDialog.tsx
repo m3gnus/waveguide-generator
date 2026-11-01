@@ -15,7 +15,7 @@ export function MoveRunsButton({ target, children = 'Move earlier runs…', role
   target: MoveTarget; children?: React.ReactNode; role?: 'menuitem';
 }) {
   const [open, setOpen] = useState(false);
-  return <><button className="btn" type="button" role={role} onClick={() => setOpen(true)}>{children}</button>
+  return <><button className={role === 'menuitem' ? 'design-menu-item' : 'btn'} type="button" role={role} onClick={() => setOpen(true)}>{children}</button>
     {open && <MoveRunsDialog target={target} onClose={() => setOpen(false)}/>}</>;
 }
 

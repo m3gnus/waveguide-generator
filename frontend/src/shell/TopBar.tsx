@@ -536,7 +536,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       <button className="icon-button topbar-utility" onClick={() => setReportOpen(true)} title="Report a problem" aria-label="Report a problem"><Icon name="info"/></button>
       <button className="icon-button topbar-utility" onClick={showSettings} title="Settings" aria-label="Settings"><Icon name="settings"/></button>
       <button className="icon-button topbar-utility" onClick={onResetLayout} title="Reset layout" aria-label="Reset layout"><Icon name="layout"/></button>
-      <span className="revision-chip" title="Design revision">r{revision}</span>
+      {developerDetails && <span className="revision-chip" title="Design revision">r{revision}</span>}
     </div>
     <WindowControls side="trailing"/>
     <SettingsDialog open={settingsOpen} theme={theme} focusSection={settingsSection} onThemeChange={setTheme} onClose={closeSettings}/>

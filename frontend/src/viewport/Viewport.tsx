@@ -1143,9 +1143,9 @@ export function Viewport() {
         </Notice>
       </details>}
     </div>
-    {activeScene && hasSurfaces && !webgl && !renderFailure && <EmptyState className="viewport-empty" title={<>WebGL unavailable</>} detail={<>The geometry is fine, but this computer cannot draw the 3D view. Update its graphics driver, then reopen WG.</>}/>}
-    {activeScene && !hasSurfaces && <EmptyState className="viewport-empty" title={<>No geometry surfaces</>} detail={<>The scene is valid but contains no renderable surfaces.</>}/>}
-    {activeScene && renderFailure && <EmptyState className="viewport-empty" title={<>WebGL renderer stopped</>} detail={<>{renderFailure}. Retry to rebuild the viewport; if it stops again, check that graphics acceleration is enabled.</>} action={<button type="button" className="btn viewport-retry" onClick={retryRenderer}><Icon name="reset"/>Retry</button>}/>}
+    {activeScene && hasSurfaces && !webgl && !renderFailure && <EmptyState className="viewport-empty" title={<>The 3D view is not available</>} detail={<>The geometry is fine, but this computer cannot draw the 3D view. Update its graphics driver, then reopen WG.</>}/>}
+    {activeScene && !hasSurfaces && <EmptyState className="viewport-empty" title={<>Nothing to draw</>} detail={<>This model has no surfaces to draw. Change the design, or open another model.</>}/>}
+    {activeScene && renderFailure && <EmptyState className="viewport-empty" title={<>The 3D view stopped drawing</>} detail={<>Retry to rebuild the view. If it stops again, turn on graphics acceleration in your system settings.</>} action={<button type="button" className="btn viewport-retry" onClick={retryRenderer}><Icon name="reset"/>Retry</button>}/>}
     {activeScene && mode === 'curvature' && !activeScene.hasCurvature && <EmptyState className="viewport-mode-empty" title={<>Curvature heatmap unavailable</>} detail={<>This frame has no analytic curvature section. Neutral geometry remains visible while inspection data is requested.</>}/>}
     {activeScene && mode === 'edges' && edgeModeUnavailable && <EmptyState className="viewport-mode-empty" title={<>Edge inspection unavailable</>} detail={<>This frame exceeds the {MAX_EDGE_TRIANGLES.toLocaleString()}-triangle edge limit. Filled geometry remains visible while edge extraction is skipped.</>}/>}
     {(importedMesh?.tessellation || !importedMesh && selected?.header.previewMetadata?.tessellation?.['horn.inner']) && <div className="frame-stat-card mesh-quality-card" aria-label="Mesh">

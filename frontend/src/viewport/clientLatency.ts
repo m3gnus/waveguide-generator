@@ -55,5 +55,5 @@ export function formatClientLatency(milliseconds: number | null): string {
   // presented as a measurement: it sat beside a real reading, read as a fault
   // condition, and stayed identical however slow the frame actually was.
   if (milliseconds >= 1000) return `${(milliseconds / 1000).toFixed(milliseconds >= 10_000 ? 0 : 1)} s`;
-  return Math.max(0, milliseconds).toFixed(1);
+  return `${Math.max(0, milliseconds).toFixed(1)} ms`;
 }

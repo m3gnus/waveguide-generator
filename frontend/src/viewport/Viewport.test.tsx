@@ -187,7 +187,7 @@ describe('Viewport preview errors', () => {
   it('shows a dismissible alert while a retained scene is present', () => {
     const alert = host.querySelector<HTMLElement>('[role="alert"]');
     expect(alert?.textContent).toContain('The view still shows the last design that worked');
-    expect(host.textContent).toContain('WebGL unavailable');
+    expect(host.textContent).toContain('The 3D view is not available');
     expect(host.textContent).not.toContain('Waiting for geometry');
     expect(host.querySelector('.error-badge')?.textContent).toContain('ERROR');
     expect(host.querySelector('.viewport-title b')?.textContent).toBe('loaded-design');

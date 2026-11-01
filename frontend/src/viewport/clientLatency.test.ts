@@ -4,9 +4,9 @@ import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 describe('client latency', () => {
   it('formats finite request-to-paint timings and caps the chrome readout', () => {
     expect(formatClientLatency(null)).toBe('—');
-    expect(formatClientLatency(12.34)).toBe('12.3');
-    expect(formatClientLatency(-4)).toBe('0.0');
-    expect(formatClientLatency(999)).toBe('999.0');
+    expect(formatClientLatency(12.34)).toBe('12.3 ms');
+    expect(formatClientLatency(-4)).toBe('0.0 ms');
+    expect(formatClientLatency(999)).toBe('999.0 ms');
     expect(formatClientLatency(1_000)).toBe('1.0 s');
   });
 

@@ -315,9 +315,12 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 /* The domain names are the whole point of this select and none of them fit the
    fixed 132px every other select in the rail takes, so the label goes above it
    and the select gets the full width. */
-.stacked-select-row, .solve-domain-control > .select-row { flex-direction: column; align-items: stretch; gap: 4px; }
-.stacked-select-row label, .solve-domain-control > .select-row label { flex: none; }
-.stacked-select-row select, .solve-domain-control > .select-row select { width: 100%; min-width: 0; }
+.solve-domain-control > .select-row { flex-direction: column; align-items: stretch; gap: 4px; }
+.solve-domain-control > .select-row label { flex: none; }
+.solve-domain-control > .select-row select { width: 100%; min-width: 0; }
+/* A long option keeps the label beside it: the select takes what the row has left. */
+.stacked-select-row label { flex: 0 1 auto; max-width: 52%; }
+.stacked-select-row select { flex: 1 1 0; width: auto; min-width: 0; text-overflow: ellipsis; }
 .field-error { padding: 1px 0 2px; color: var(--red); font-size: var(--text-micro); }
 /* A value the active backend cannot solve. Not an error — the design is valid
    and portable, it just will not run here — so it takes the amber the rest of
@@ -1042,7 +1045,7 @@ textarea:disabled { opacity: .48; }
 .panel-preferences-popover > header button { width: var(--control-h-sm); height: var(--control-h-sm); }
 .panel-preferences-scroll { padding: 8px 12px 12px; }
 
-.section-head { height: 32px; padding-inline: 8px 8px; background: var(--ov1); }
+.section-head { height: 30px; padding-inline: 8px 8px; }
 .section-name { font-size: var(--text-micro); letter-spacing: .1em; }
 .section-summary { font-size: var(--text-micro); }
 .section-body { padding: 2px 8px 10px; }

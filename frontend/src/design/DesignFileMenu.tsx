@@ -567,12 +567,13 @@ export function DesignFileMenu() {
             <span>{project.filename}</span><span>v{project.editVersion} · {project.exportCount} export{project.exportCount === 1 ? '' : 's'} · {cadProjectReference(project)}</span>
           </button>)}
       </div>}
-      {!copyReason && <MoveRunsButton role="menuitem" target={{ key: moveIdentity?.lineageId ? `lineage:${moveIdentity.lineageId}` : `design:${designUid}`, name: designName }}>Earlier runs of this design…</MoveRunsButton>}
-      {copyReason && <div className="design-menu-item" role="note">{copyReason}</div>}
+      <div className="design-menu-divider"/>
       <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(copyReason)} title={copyReason} onClick={duplicateDesign}><span>Duplicate as new design</span></button>
       <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(copyReason)} title={copyReason} onClick={() => void exportCopy()}><span>Export a copy</span><kbd>{design.formula === 'LOOKUP' ? 'mwg' : 'cfg'}</kbd></button>
-      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => reportInput.current?.click()}><span>Import report…</span><span>›</span></button>
+      {!copyReason && <MoveRunsButton role="menuitem" target={{ key: moveIdentity?.lineageId ? `lineage:${moveIdentity.lineageId}` : `design:${designUid}`, name: designName }}>Earlier runs of this design…</MoveRunsButton>}
+      {copyReason && <div className="design-menu-item" role="note">{copyReason}</div>}
       <div className="design-menu-divider"/>
+      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => reportInput.current?.click()}><span>Import report…</span><span>›</span></button>
       <button
         role="menuitem"
         className="design-menu-item"
@@ -583,6 +584,7 @@ export function DesignFileMenu() {
       <button role="menuitem" className="design-menu-item" disabled={busy}
         title="Open the retained mesh and exact solve settings in Imported mesh"
         onClick={() => replayInput.current?.click()}><span>Open mesh replay…</span><kbd>wgreplay</kbd></button>
+      <div className="design-menu-divider"/>
       <button role="menuitem" aria-expanded={exportsOpen} className="design-menu-item" disabled={busy} onClick={() => setExportsOpen((value) => !value)}><span>Export</span><span>{exportsOpen ? '⌄' : '›'}</span></button>
       {exportsOpen && <div role="menu" aria-label="Export design" className="design-menu-nested">
         {geometryReason && <div className="design-menu-item" role="note">Geometry and profile exports are unavailable for imported models.</div>}
