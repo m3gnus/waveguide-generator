@@ -116,9 +116,10 @@ Press **Build** to compile a mesh, or **Solve** to build the current revision an
 solve all enabled, driven sources together, using the design's Simulation settings
 for the sweep and engine. BEMPP cannot solve these assembly meshes. If the mesh is
 over the limit, WG asks before solving it. Drivers and crossovers cannot be set in
-this workspace yet. Close the workspace to use **Results**, where a completed run
-shows its retained assembly mesh and channel results. Reopening a run restores its
-retained mesh and solve setup.
+this workspace yet. Close the workspace to use **Results**. Runs from this workspace
+are marked **Assembly**; selecting one shows its retained mesh and its HF and
+numbered LF channels, and restores its solve setup. To change the assembly, return
+to **Parametric** with the design open.
 
 Result curves and run archives use the normal export actions. Assembly
 geometry export (STEP/STL), wiring, boxes and arrays are later phases. Keep
