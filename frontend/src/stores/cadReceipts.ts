@@ -3,6 +3,7 @@ import { useStore } from 'zustand';
 import { jobsSocket, type JobsSocketManager } from '../api/jobsSocket';
 import type { CadInboxRefusal } from '../api/cadOperations';
 import { useCadDeliveryHealthStore } from './cadDeliveryHealth';
+import { failureWords, ProgramFault } from '../api/httpError';
 
 export type ReceiptOutcome = 'accepted' | 'refused' | 'missing_source' | 'unreadable' | 'retained_copy';
 export interface CadReceipt {
@@ -144,7 +145,7 @@ export function createCadReceiptsStore(storage = windowStorage(), now = Date.now
     retryDisplay: (id) => {
       const attempt = (get().displayRetries[id]?.attempt ?? 0) + 1;
       if (attempt > RETRY_MS.length) {
-        get().report(id, { outcome: 'display_failed', message: 'WG could not open this Send after repeated transport failures. Send it again from Fusion.' });
+        get().report(id, { outcome: 'display_failed', message: 'WG could not open this model. Send it again from Fusion.' });
         get().markFronted(id);
       } else set({ displayRetries: { ...get().displayRetries, [id]: { attempt, nextAt: Date.now() + RETRY_MS[attempt - 1] } } });
     },
@@ -158,7 +159,7 @@ export function createCadReceiptsStore(storage = windowStorage(), now = Date.now
       let timer: ReturnType<typeof setTimeout>;
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
-          reject(new Error('Send receipt feed timed out'));
+          reject(new ProgramFault('Send receipt feed timed out'));
           controller.abort();
         }, RECEIPT_READ_TIMEOUT_MS);
       });
@@ -168,22 +169,22 @@ export function createCadReceiptsStore(storage = windowStorage(), now = Date.now
           const after = get().cursor;
           const response = await fetcher(`/api/cadlink/receipts?after=${after}&limit=50`, { signal: controller.signal });
           controller.signal.throwIfAborted();
-          if (!response.ok) throw new Error(`Send receipt feed failed (${response.status})`);
+          if (!response.ok) throw new ProgramFault(`Send receipt feed failed (${response.status})`);
           const page = await response.json() as ReceiptPage;
           controller.signal.throwIfAborted();
           if (typeof page.feed_id !== 'string' || !page.feed_id
             || !Array.isArray(page.receipts) || !Number.isSafeInteger(page.cursor) || page.cursor < 0
-            || typeof page.has_more !== 'boolean') throw new Error('Invalid Send receipt page');
+            || typeof page.has_more !== 'boolean') throw new ProgramFault('Invalid Send receipt page');
           if (get().feedId && get().feedId !== page.feed_id) {
             set(initial(page.feed_id));
             continue; // That page used the previous database's cursor. Read this feed's cursor instead.
           }
-          if (page.cursor < after || (page.has_more && page.cursor <= after)) throw new Error('Invalid Send receipt page');
+          if (page.cursor < after || (page.has_more && page.cursor <= after)) throw new ProgramFault('Invalid Send receipt page');
           const valid: CadReceipt[] = [];
           page.receipts.forEach((item, index) => {
             if (isReceipt(item) && item.cursor <= page.cursor) valid.push(item);
             else get().report(`invalid:${page.feed_id}:${page.cursor}:${index}`, {
-              outcome: 'display_failed', message: 'WG skipped an invalid Send receipt in the feed.' });
+              outcome: 'display_failed', message: 'WG skipped a model it could not read. Send it again from Fusion.' });
           });
           get().merge({ ...page, receipts: valid.sort((a, b) => a.cursor - b.cursor) });
           if (!page.has_more) return;
@@ -281,7 +282,7 @@ export function connectCadReceiptDisplay(display: (receipt: CadReceipt) => Promi
             // The display action classifies API/transport errors. An unexpected
             // exception is a completed failure, never a poison queue entry.
             store.getState().report(next.receipt_id, { outcome: 'display_failed',
-              message: error instanceof Error ? error.message : String(error) });
+              message: failureWords(error) });
           }
         }
         if (active && enabled() && store.getState().feedId === feedId) {

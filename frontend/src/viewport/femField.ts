@@ -34,6 +34,7 @@ import {
   type FieldPlaneDisplayMode,
   type FieldPlaneValueWindow,
 } from './fieldPlaneColor';
+import { ProgramFault } from '../api/httpError';
 
 export type FemSurfaceKind = 'rigid' | 'moving' | 'interface' | 'plane-wave-termination';
 
@@ -104,7 +105,7 @@ export function femSurfaceKind(name: string): FemSurfaceKind {
 function signedDistances(points: Float32Array, plane: SlicePlane): Float64Array {
   const [nx, ny, nz] = plane.normal;
   const length = Math.hypot(nx, ny, nz);
-  if (!(length > 0)) throw new Error('A slice plane needs a non-zero normal');
+  if (!(length > 0)) throw new ProgramFault('A slice plane needs a non-zero normal');
   const [ox, oy, oz] = plane.origin;
   const count = points.length / 3;
   const distances = new Float64Array(count);
@@ -134,7 +135,7 @@ export function sliceFemField(domain: FemFieldDomain, values: ComplexNodal, plan
   const { points, tetrahedra } = domain;
   const vertexCount = points.length / 3;
   if (values.real.length !== vertexCount || values.imag.length !== vertexCount) {
-    throw new Error('Nodal values must have one complex value per FEM vertex');
+    throw new ProgramFault('Nodal values must have one complex value per FEM vertex');
   }
   const distance = signedDistances(points, plane);
   const positions: number[] = [];
@@ -325,7 +326,7 @@ function decode<T extends Float32Array | Uint32Array>(text: string, kind: 'f32' 
   const binary = atob(text);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  if (bytes.length % 4 !== 0) throw new Error('FEM field array is not 4-byte aligned');
+  if (bytes.length % 4 !== 0) throw new ProgramFault('FEM field array is not 4-byte aligned');
   const view = new DataView(bytes.buffer);
   const count = bytes.length / 4;
   const output = kind === 'f32' ? new Float32Array(count) : new Uint32Array(count);
@@ -336,27 +337,27 @@ function decode<T extends Float32Array | Uint32Array>(text: string, kind: 'f32' 
 }
 
 export function decodeFemFieldPayload(payload: FemFieldPayload): { domain: FemFieldDomain; values: ComplexNodal; frequencyHz: number } {
-  if (payload.schema !== 'wg-fem-field-v1') throw new Error(`Unsupported FEM field schema ${String(payload.schema)}`);
-  if (!Number.isFinite(payload.frequency_hz) || payload.frequency_hz <= 0) throw new Error('FEM field frequency must be positive and finite');
+  if (payload.schema !== 'wg-fem-field-v1') throw new ProgramFault(`Unsupported FEM field schema ${String(payload.schema)}`);
+  if (!Number.isFinite(payload.frequency_hz) || payload.frequency_hz <= 0) throw new ProgramFault('FEM field frequency must be positive and finite');
   const points = decode<Float32Array>(payload.points_mm, 'f32');
   const tetrahedra = decode<Uint32Array>(payload.tetrahedra, 'u32');
   const vertexCount = points.length / 3;
-  if (!Number.isInteger(vertexCount) || tetrahedra.length % 4 !== 0) throw new Error('FEM field arrays have the wrong shape');
-  for (const vertex of tetrahedra) if (vertex >= vertexCount) throw new Error('FEM tetrahedron references a missing vertex');
+  if (!Number.isInteger(vertexCount) || tetrahedra.length % 4 !== 0) throw new ProgramFault('FEM field arrays have the wrong shape');
+  for (const vertex of tetrahedra) if (vertex >= vertexCount) throw new ProgramFault('FEM tetrahedron references a missing vertex');
   const values = {
     real: decode<Float32Array>(payload.pressure_real, 'f32'),
     imag: decode<Float32Array>(payload.pressure_imag, 'f32'),
   };
   if (values.real.length !== vertexCount || values.imag.length !== vertexCount) {
-    throw new Error('FEM field pressure must have one value per vertex');
+    throw new ProgramFault('FEM field pressure must have one value per vertex');
   }
   if ([points, values.real, values.imag].some((array) => array.some((value) => !Number.isFinite(value)))) {
-    throw new Error('FEM field values must be finite');
+    throw new ProgramFault('FEM field values must be finite');
   }
   const surfaces = payload.surfaces.map((surface) => {
     const triangles = decode<Uint32Array>(surface.triangles, 'u32');
-    if (triangles.length % 3 !== 0) throw new Error(`FEM surface ${surface.name} is not made of triangles`);
-    for (const vertex of triangles) if (vertex >= vertexCount) throw new Error('FEM surface references a missing vertex');
+    if (triangles.length % 3 !== 0) throw new ProgramFault(`FEM surface ${surface.name} is not made of triangles`);
+    for (const vertex of triangles) if (vertex >= vertexCount) throw new ProgramFault('FEM surface references a missing vertex');
     return { name: surface.name, kind: femSurfaceKind(surface.name), triangles };
   });
   return { domain: { regionId: payload.region_id, points, tetrahedra, surfaces }, values, frequencyHz: payload.frequency_hz };
@@ -365,7 +366,7 @@ export function decodeFemFieldPayload(payload: FemFieldPayload): { domain: FemFi
 /** Exact P1 velocity, projected onto the plane normal in exp(-i omega t). */
 export function femNormalVelocitySlice(domain: FemFieldDomain, values: ComplexNodal,
   plane: SlicePlane, frequencyHz: number, density = 1.21): FemSlice {
-  if (!(frequencyHz > 0) || !(density > 0)) throw new Error('Velocity needs a positive frequency and density');
+  if (!(frequencyHz > 0) || !(density > 0)) throw new ProgramFault('Velocity needs a positive frequency and density');
   const cut = sliceFemField(domain, values, plane);
   const norm = Math.hypot(...plane.normal);
   const normal = plane.normal.map((v) => v / norm);

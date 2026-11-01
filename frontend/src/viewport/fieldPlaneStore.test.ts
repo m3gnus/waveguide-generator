@@ -753,10 +753,10 @@ describe('field-plane defaults and status copy', () => {
   });
 
   it('maps every server error class to actionable viewport copy', () => {
-    expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(404, 'missing'))).toBe('field-plane result was not found');
+    expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(404, 'missing'))).toBe('This run has no field data. Solve the design again to see it.');
     expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(409, 'stale'))).toContain('changed');
-    expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(410, 'pruned'))).toBe('re-solve to enable field planes');
-    expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(422, 'unsupported'))).toContain('unavailable');
+    expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(410, 'pruned'))).toBe('Solve the design again to see the field plane.');
+    expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(422, 'unsupported'))).toContain('Keep field plane data');
     expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(
       422,
       'Axisymmetric meridian solves do not retain exterior field traces.',
@@ -777,8 +777,8 @@ describe('field-plane defaults and status copy', () => {
       'Coupled infinite-baffle solves do not retain exterior field traces. '
       + 'Set Simulation type to Free-standing and re-solve with Metal or BEMPP.',
     );
-    expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(429, 'superseded'))).toContain('superseded');
-    expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(503, 'busy'))).toBe('waiting for solve to finish');
-    expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(504, 'timeout'))).toContain('timed out');
+    expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(429, 'superseded'))).toContain('newer field plane');
+    expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(503, 'busy'))).toBe('Waiting for the solve to finish.');
+    expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(504, 'timeout'))).toContain('took too long');
   });
 });

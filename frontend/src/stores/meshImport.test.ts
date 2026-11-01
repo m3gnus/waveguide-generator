@@ -594,7 +594,7 @@ describe('portable mesh replay', () => {
 
   it('rejects a response naming another retained mesh before changing the viewport', async () => {
     const request = exactRequest();
-    await expect(loadMeshReplay('{}', vi.fn(async () => response({ record: { ...record, ingest_id: 'other' }, request })))).rejects.toThrow('does not match');
+    await expect(loadMeshReplay('{}', vi.fn(async () => response({ record: { ...record, ingest_id: 'other' }, request })))).rejects.toThrow('could not match');
     expect(importedMeshStore.getSnapshot().file?.ingestId).toBe(record.ingest_id);
   });
 });

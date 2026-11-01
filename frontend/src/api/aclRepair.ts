@@ -1,4 +1,5 @@
 import { deadlineFetch } from './deadlineFetch';
+import { httpErrorMessage } from './httpError';
 export interface AclRepairRootStatus {
   scope: 'appData' | 'workspace';
   source: 'current' | 'previous';
@@ -21,7 +22,7 @@ function count(value: unknown): number {
 
 export async function getAclRepairStatus(fetcher: typeof fetch = fetch): Promise<AclRepairStatus> {
   const response = await deadlineFetch(fetcher, '/api/acl-repair/status');
-  if (!response.ok) throw new Error(`File access status request failed (${response.status})`);
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not check access to its folders. Try again.'));
   const payload = await response.json() as { platform?: unknown; roots?: unknown };
   if (payload.platform !== 'windows' || !Array.isArray(payload.roots)) {
     return { platform: 'other', roots: [] };

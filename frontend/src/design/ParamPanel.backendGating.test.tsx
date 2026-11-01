@@ -181,7 +181,7 @@ describe('solver-backend parameter gating', () => {
       .find((item) => item.textContent === 'Infinite baffle');
     expect(option?.disabled).toBe(true);
     const reason = warningsFor('simulation.sim_type').join(' ');
-    expect(reason).toContain('Metal is not available on this host');
+    expect(reason).toContain('Metal is not available on this computer');
     expect(reason).toMatch(/Switch the engine to AUTO, BEMPP/);
     expect(reason).not.toContain('cannot solve');
   });

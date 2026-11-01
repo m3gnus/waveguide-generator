@@ -4,6 +4,7 @@ import type { OnshapeConnection, OnshapeStatus } from '../api/onshape';
 import type { WgLinkExportResponse } from '../api/designIo';
 import type { DesignIdentity } from './document';
 import type { RefreshOptions } from '../shell/cadlink/arrivals';
+import { ProgramFault } from '../api/httpError';
 
 /** A report belonging to one error message: the protocol-level evidence a
  * surface puts behind a disclosure rather than in the sentence it shows.
@@ -70,7 +71,7 @@ export interface CadWorkspaceSnapshot {
   selectOnshapeInstance(instanceId: string): void;
 }
 
-const unavailable = async () => { throw new Error('CAD workspace is unavailable'); };
+const unavailable = async () => { throw new ProgramFault('CAD workspace is unavailable'); };
 const unavailableRefreshOnshape = async (_committed?: DesignIdentity) => unavailable();
 export const emptyCadWorkspace: CadWorkspaceSnapshot = {
   bundles: [],

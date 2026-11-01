@@ -80,7 +80,7 @@ describe('rerunWithPatch', () => {
     const f = vi.fn(async () => new Response(JSON.stringify({
       effective_request: { ...effective, geometry: { type: 'imported', ingest_id: 'i1' } },
     })));
-    await expect(rerunWithPatch('job-cad', {}, { fetcher: f as unknown as typeof fetch })).rejects.toThrow(/parametric/);
+    await expect(rerunWithPatch('job-cad', {}, { fetcher: f as unknown as typeof fetch })).rejects.toThrow(/imported model/);
     expect(f).toHaveBeenCalledTimes(1);
   });
 });

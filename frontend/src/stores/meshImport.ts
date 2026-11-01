@@ -29,6 +29,7 @@ import {
   registerImportedPreparationFlush, registerImportedSetupControls, registerImportedView, useImportedModelStore,
   type ImportedView, type FileDraft,
 } from './importedModel';
+import { failureWords } from '../api/httpError';
 
 /**
  * The file rail: a view of the imported-model store for a file mesh.
@@ -161,7 +162,7 @@ export async function loadMeshFile(filename: string, text: string, fetcher: type
     await prepareMeshFile(fetcher);
   } catch (error) {
     if (importedMeshStore.isCurrentGeneration(generation)) {
-      useMeshImportStore.setState({ busy: false, error: error instanceof Error ? error.message : String(error) });
+      useMeshImportStore.setState({ busy: false, error: failureWords(error) });
     }
     throw error;
   } finally {
@@ -262,7 +263,7 @@ async function prepareMeshFileIntent(fetcher: typeof fetch, inspectFrame: boolea
   } catch (error) {
     if (importedMeshStore.isCurrentGeneration(generation)
       && JSON.stringify(useImportedModelStore.getState().fileDraft) === JSON.stringify(draft)) {
-      useMeshImportStore.setState({ error: error instanceof Error ? error.message : String(error) });
+      useMeshImportStore.setState({ error: failureWords(error) });
     }
   } finally {
     unsubscribe();
@@ -439,7 +440,7 @@ function preparedFileScene(record: RegisteredMesh) {
 function assertFileRecord(record: RegisteredMesh, setup: ImportedSetup | null, preparedId: string): void {
   if (record.ingest_id !== preparedId || record.producer !== 'mesh-file' || typeof record.msh_text !== 'string'
     || (setup && !Array.isArray(setup.geometry?.drive_channels))) {
-    throw new Error('The retained mesh response does not match its run. Select the run again.');
+    throw new Error('WG could not match this mesh to its run. Select the run again.');
   }
 }
 
@@ -504,7 +505,7 @@ registerImportedView('assembly', {
       async fill(opened) {
         const record = opened.prepared as CompiledAssembly;
         if (record.producer !== 'design-assembly' || !opened.setup || typeof record.msh_text !== 'string'
-          || !record.excitations?.length) throw new Error('This assembly’s retained mesh or solve settings are unavailable.');
+          || !record.excitations?.length) throw new Error('This run’s mesh or solve settings are gone. Solve the design again.');
         if (!current()) return null;
         const scene = createImportedMeshScene(opened.model?.display_name || record.design.name || 'Assembly',
           parseMSH(record.msh_text), 'file', record.ingest_id, [], {
@@ -533,14 +534,14 @@ export async function loadMeshReplay(text: string, fetcher: typeof fetch = fetch
     assertFileRecord(opened.record, setup, opened.request.geometry.ingest_id);
     if (opened.request.geometry.manifest_sha256 !== opened.record.manifest_sha256
       || opened.request.geometry.artifact_sha256 !== opened.record.artifact_sha256) {
-      throw new Error('The mesh replay response does not match its retained mesh.');
+      throw new Error('WG could not open this mesh again. Select the run again.');
     }
     if (!fillFileRail(opened.record, setup, generation)) return false;
     await openImported({ kind: 'file', prepared: opened.record, setup });
     useMeshImportStore.setState({ notice: 'Mesh replay opened. Solve keeps its settings. Edits keep the other settings.' });
     return true;
   } catch (error) {
-    if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ error: error instanceof Error ? error.message : String(error) });
+    if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ error: failureWords(error) });
     throw error;
   } finally {
     if (useMeshImportStore.getState().request === requestNumberAtStart) useMeshImportStore.setState({ busy: false });

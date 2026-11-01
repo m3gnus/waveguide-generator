@@ -36,7 +36,7 @@ describe('spherical result renderers', () => {
     const result: ResultPayload = { frequencies: [], metadata: { balloon_sampling: { status: 'backend_unsupported' } } };
     expect(hasBalloonData(result)).toBe(false);
     expect(closestFrequencyIndex([250, 800, 1600])).toBe(1);
-    expect(balloonMissingReason(result, '3D Balloon')).toContain('backend');
+    expect(balloonMissingReason(result, '3D Balloon')).toContain('this engine');
   });
   it('builds a closed coloured 3D surface with a repeated azimuth seam', () => {
     const geometry = buildBalloonGeometry([0, 90, 180], [0, 120, 240], [[0, 0, 0], [-6, -12, -18], [-30, -30, -30]]);

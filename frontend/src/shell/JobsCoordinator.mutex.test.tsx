@@ -1579,8 +1579,8 @@ describe('solve invocation mutex', () => {
     await act(async () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>));
     expect(posts).toEqual(changed !== 'unchanged' ? [] : ['/api/jobs/job%3Aheld-fusion/solve-again']);
     expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe(changed === 'model changed'
-      ? 'Prepare and solve was cancelled because the model on screen changed.'
-      : changed === 'settings changed' ? 'Prepare and solve was cancelled because the solve setup changed.' : null);
+      ? 'Solve cancelled: the model on screen changed. Press Solve again.'
+      : changed === 'settings changed' ? 'Solve cancelled: the solve settings changed. Press Solve again.' : null);
     if (changed === 'unchanged') {
       const continuation = vi.mocked(fetch).mock.calls.find(([url]) => String(url).endsWith('/solve-again'))!;
       expect(JSON.parse(String(continuation[1]?.body))).toEqual({}); // inherit the held job’s setup, frame and identity
@@ -1623,7 +1623,7 @@ describe('solve invocation mutex', () => {
     expect(compareSelection.getSnapshot().awaiting).toBe(child.id);
     expect(solveControlStore.getSnapshot()!.submitting).toBe(false);
     expect(jobsCoordinatorBridge.getSnapshot().actionError).toBeNull();
-    expect(host.textContent).not.toContain('Prepare and solve was cancelled');
+    expect(host.textContent).not.toContain('Solve cancelled');
   });
 
   it.each(['engine change and return', 'setup change', 'frame pick', 'unmount', 'leave and return', 'model change and return', 'held job moves on', 'held job cancelled', 'preparation fails', 'unchanged'])(
@@ -1695,13 +1695,12 @@ describe('solve invocation mutex', () => {
       });
       await act(async () => { frame.resolve(json({ linked: true })); await frameRead; });
       expect(posts).toEqual(change === 'unchanged' ? ['/api/jobs/job%3Aheld-fusion/solve-again'] : []);
-      const reason = change === 'engine change and return' ? 'the selected engine changed'
-        : change === 'setup change' || change === 'frame pick' ? 'the solve setup changed'
-        : change === 'leave and return' ? 'the model left the viewport'
-        : change === 'model change and return' ? 'the model on screen changed'
-          : change.startsWith('held job') ? 'the waiting job changed'
-            : change === 'preparation fails' ? 'engine preparation failed' : null;
-      const notice = reason ? `Prepare and solve was cancelled because ${reason}.` : null;
+      const notice = change === 'engine change and return' ? 'Solve cancelled: the selected engine changed. Press Solve again.'
+        : change === 'setup change' || change === 'frame pick' ? 'Solve cancelled: the solve settings changed. Press Solve again.'
+        : change === 'leave and return' ? 'Solve cancelled: the model left the view. Open it, then press Solve.'
+        : change === 'model change and return' ? 'Solve cancelled: the model on screen changed. Press Solve again.'
+          : change.startsWith('held job') ? 'Solve cancelled: the waiting run changed. Press Solve again.'
+            : change === 'preparation fails' ? 'Solve cancelled: WG could not prepare the engine. Press Solve to try again.' : null;
       expect(notices).toEqual(notice ? [notice] : []);
       expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe(notice);
       if (notice) {
@@ -1722,13 +1721,13 @@ describe('solve invocation mutex', () => {
     await act(async () => host.querySelector<HTMLButtonElement>('.solve-readiness button')!.click());
     await act(async () => preparation.resolve(json({ detail: 'Preparation failed' }, 500)));
     expect(host.querySelector('.solve-readiness')?.textContent).toContain(
-      'Prepare and solve was cancelled because engine preparation failed.');
+      'Solve cancelled: WG could not prepare the engine. Press Solve to try again.');
     act(() => { mocks.capabilities.engines = [{ name: 'beat-metal', available: true, runtime_state: 'ready' } as EngineCapability]; });
     await act(async () => root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>));
     expect(fetcher.mock.calls.map(([url]) => String(url)).filter(url => url.endsWith('/solve-again'))).toEqual([]);
     expect(mocks.solveModel).not.toHaveBeenCalled();
     expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe(
-      'Prepare and solve was cancelled because engine preparation failed.');
+      'Solve cancelled: WG could not prepare the engine. Press Solve to try again.');
   });
 
   it.each([false, true])('the final held guard reports cancellation unless already aborted: %s', async aborted => {
@@ -1743,7 +1742,7 @@ describe('solve invocation mutex', () => {
     });
     expect(vi.mocked(fetch).mock.calls.filter(([url, init]) =>
       String(url).startsWith('/api/jobs/') || init?.method === 'POST')).toEqual([]);
-    const notice = 'Prepare and solve was cancelled because the model on screen changed.';
+    const notice = 'Solve cancelled: the model on screen changed. Press Solve again.';
     expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe(aborted ? null : notice);
     // The status surface must also render a notice without a readiness blocker.
     mocks.importedPlan.plan.readiness = null;

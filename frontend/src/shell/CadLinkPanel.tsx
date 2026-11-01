@@ -41,6 +41,7 @@ import './cadLinkPanel.css';
 // Kept as public panel helpers for existing callers; implementation lives next
 // to the two solve entry points so the global command can share it.
 import { importedSubmissionNotices } from '../jobs/importedSubmission';
+import { failureWords } from '../api/httpError';
 export { buildImportedSubmission } from '../jobs/importedSubmission';
 export { newestReturnArrival } from './cadlink/arrivals';
 export { showIngestedMeshInViewport } from './cadlink/artifactLoader';
@@ -294,7 +295,7 @@ export function CadLinkPanel() {
       if (reason instanceof OnshapePublicConsentRequired) {
         setConfirmPublicDocument(reason.message);
       } else {
-        cadWorkspaceView.reportError(reason instanceof Error ? reason.message : String(reason));
+        cadWorkspaceView.reportError(failureWords(reason));
       }
     } finally {
       if (request === onshapeSendGeneration.current) setSendingToOnshape(false);
@@ -327,7 +328,7 @@ export function CadLinkPanel() {
         : `${link.documentName} was already unlinked.`);
       await cadWorkspaceView.refreshOnshapeStatus();
     } catch (reason) {
-      cadWorkspaceView.reportError(reason instanceof Error ? reason.message : String(reason));
+      cadWorkspaceView.reportError(failureWords(reason));
     } finally {
       setUnlinkingOnshape(false);
       setConfirmUnlink(false);

@@ -32,7 +32,7 @@ describe('the app-level error boundary', () => {
     });
     const alert = container.querySelector('[role="alert"]');
     expect(alert).not.toBeNull();
-    expect(alert?.textContent).toContain('rendering error');
+    expect(alert?.textContent).toContain('could not draw this screen');
     expect(alert?.textContent).toContain('Directivity sweep end must be greater than its start.');
     expect(container.querySelector('button')?.textContent).toBe('Reload');
   });

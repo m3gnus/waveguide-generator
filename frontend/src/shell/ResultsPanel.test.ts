@@ -410,7 +410,7 @@ describe('driver-coupled chart stubs', () => {
   it('says a unit-acceleration solve has no drive, rather than implying a failure', () => {
     const acoustic = { frequencies: [100], metadata: { impedance_units: 'Z/(rho*c)' } } as ResultPayload;
     expect(driverChartMissingReason(acoustic, 'Power & Current Draw'))
-      .toContain('unit-acceleration');
+      .toContain('needs a driver');
     expect(drivePowerOption(acoustic, tokens, 'full').series).toEqual([]);
   });
 
@@ -432,7 +432,7 @@ describe('driver-coupled chart stubs', () => {
     } as ResultPayload;
     const reason = driverChartMissingReason(combined, 'Power & Current Draw');
     expect(reason).toContain('member drives differ');
-    expect(reason).not.toContain('unit-acceleration');
+    expect(reason).not.toContain('needs a driver');
   });
 
   it('does not claim excursion was derived from impedance samples', () => {
@@ -441,7 +441,7 @@ describe('driver-coupled chart stubs', () => {
       metadata: { impedance_units: 'ohms', drive: { voltage_v: 2.83 } },
     } as ResultPayload;
     expect(driverChartMissingReason(driven, 'Cone Excursion')).toBe(
-      'Cone Excursion needs samples this driver-coupled result did not record.',
+      'This run did not record the data for Cone Excursion. Solve again to get it.',
     );
   });
 });
@@ -456,24 +456,24 @@ describe('group delay stub names the refusal it actually hit', () => {
 
   it('says the phase block is missing when there is no phase at all', () => {
     expect(groupDelayMissingReason({ frequencies: sweep, spl_on_axis: { frequencies: sweep, spl: [] } } as ResultPayload))
-      .toContain('spl_on_axis phase samples');
+      .toContain('no on-axis phase');
   });
 
   it('names the missing observation metadata instead of blaming the sample count', () => {
     // The old stub sent the user off to rerun a longer solve for a metadata
     // field a longer solve would not add.
     const reason = groupDelayMissingReason(phased({ phase_time_convention: 'exp(+ikr)' }));
-    expect(reason).toContain('metadata.observation');
+    expect(reason).toContain('measurement distance');
     expect(reason).not.toContain('at least three');
   });
 
   it('names an unrecognised phase convention as the thing it cannot read', () => {
     const reason = groupDelayMissingReason(phased({
-      phase_time_convention: 'exp(+ikr) but sideways',
+      phase_time_convention: 'phase cannot be read',
       observation: { effective_distance_m: 1, sound_speed_m_per_s: 343 },
     }));
-    expect(reason).toContain('exp(+ikr) but sideways');
-    expect(reason).toContain('spatial sign');
+    expect(reason).toContain('phase cannot be read');
+    expect(reason).toContain('Solve again');
   });
 
   it('still asks for three samples when three is what is missing', () => {
@@ -501,7 +501,7 @@ describe('group delay stub names the refusal it actually hit', () => {
         observation: { effective_distance_m: 0, sound_speed_m_per_s: 343 },
       },
     } as ResultPayload);
-    expect(reason).toContain('finer frequency sweep');
+    expect(reason).toContain('finer sweep');
   });
 
   it('puts power and current on separate axes for a driver-coupled run', () => {
@@ -668,7 +668,7 @@ describe('results chart layouts', () => {
       tokens,
     })));
     expect(host.querySelector('.chart-stub')?.textContent).toContain(
-      'Power Response needs on-axis SPL and directivity index from a complete spherical field.',
+      'Power Response needs a complete spherical field. Choose an engine that provides one, then solve again.',
     );
   });
 
@@ -792,7 +792,7 @@ describe('results chart layouts', () => {
     for (let i = 0; i < 100 && !host.querySelector('.result-image-status'); i += 1) {
       await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 5); }); });
     }
-    expect(host.querySelector('.result-image-status')?.textContent).toBe('Copy failed');
+    expect(host.querySelector('.result-image-status')?.textContent).toBe('WG could not copy this chart. Try again.');
     expect(host.querySelector('.result-card')).not.toBeNull();
   });
 

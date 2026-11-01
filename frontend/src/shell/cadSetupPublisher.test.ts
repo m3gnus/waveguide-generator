@@ -771,7 +771,7 @@ describe('shell-owned CAD setup publisher', () => {
     act(() => { root.render(createElement(Feedback, { error: 'Action failed' })); });
     expect(host.textContent).toBe('Action failed');
     act(() => { root.render(createElement(Feedback)); useCadConnectionStore.setRecoveryError(null); cadReceiptsStore.setState({ recoveryError: 'offline' }); });
-    expect(host.textContent).toContain('could not check Fusion Sends (offline)');
+    expect(host.textContent).toContain('could not check what Fusion sent');
     act(() => { cadReceiptsStore.setState({ recoveryError: null }); });
     expect(host.textContent).toBe('');
   });

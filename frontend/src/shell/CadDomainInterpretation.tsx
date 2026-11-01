@@ -7,6 +7,7 @@ import {
   type DomainReading,
 } from '../api/domainInterpretation';
 import { decisionReading, joinPlanes, type DomainDecision } from '../api/domainDecision';
+import { failureWords } from '../api/httpError';
 
 /** What evidence made WG mirror a model already cut in CAD, in words. */
 function evidenceWords(interpretation: DomainInterpretation): string | null {
@@ -152,7 +153,7 @@ export function CadDomainInterpretation({ ingestId, interpretation, decision = n
       })
       .catch((reason: unknown) => {
         if (generation === requestGeneration.current) {
-          setError(reason instanceof Error ? reason.message : String(reason));
+          setError(failureWords(reason));
         }
       })
       .finally(() => {

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { ExportFormat } from '../prefs/preferences';
 import { reportCaughtError } from '../shell/clientErrors';
+import { failureWords } from '../api/httpError';
 
 export interface RunExportJobState {
   busy: boolean;
@@ -38,7 +39,7 @@ export const EMPTY_RUN_EXPORT_STATE: RunExportJobState = {
 };
 
 function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return failureWords(error);
 }
 
 function clearNoticeTimer(jobId: string): void {

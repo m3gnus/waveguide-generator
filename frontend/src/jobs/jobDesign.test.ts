@@ -104,14 +104,14 @@ describe('what a job says about its own design', () => {
     expect(hydrateJobDesign(job)).toBeNull();
     expect(canLoadJobDesign(job)).toBe(false);
     expect(replaceWithJobDesign(job)).toBe(false);
-    expect(jobRerunState(job).reason).toContain('this version of the interface');
+    expect(jobRerunState(job).reason).toContain('This version of WG');
   });
 
   it('falls back to the snapshot when the server sent no verdict at all', () => {
     expect(jobDesignAvailability({ script_snapshot: RECOVERED }).reopenable).toBe(true);
     const legacy = jobDesignAvailability({ script_snapshot: { params: { type: 'OSSE' } } });
     expect(legacy.reopenable).toBe(false);
-    expect(legacy.reason).toContain('cannot be reopened');
+    expect(legacy.reason).toContain('cannot be opened');
   });
 
   it('reruns an immutable CAD import without pretending it can be reopened', () => {

@@ -62,7 +62,7 @@ async function post<T extends { content_key: string }>(
       }
       throw new StaleFreeformResponse(`Discarded a response for another profile request (${response.status}).`);
     }
-    throw new FreeformRequestError(error.detail !== undefined ? errorText(error.detail) : `Profile request failed (${response.status})`, response.status);
+    throw new FreeformRequestError(error.detail !== undefined ? errorText(error.detail) : 'WG could not check this profile. Try again.', response.status);
   }
   const result = payload as T | undefined;
   if (!result || result.content_key !== contentKey) throw new StaleFreeformResponse('Discarded a response for another profile request.');

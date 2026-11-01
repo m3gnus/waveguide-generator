@@ -246,7 +246,7 @@ async function readOpened(source: Extract<ImportedSource, { kind: 'run' | 'model
     const record = await getIngest(source.preparedId, fetcher);
     const manifest = source.job.cad_state?.snapshot?.manifest_sha256;
     if (record.ingest_id !== source.preparedId || (manifest && record.manifest_sha256 !== manifest)) {
-      throw new Error('The prepared model does not match the Fusion request.');
+      throw new Error('This model is not the one Fusion asked for. Send it again from Fusion.');
     }
     const modelId = importedModelId(record);
     return { input: 'cad', model: null, modelId, prepared: { ...record, producer: 'cad', model_id: modelId },
@@ -300,7 +300,7 @@ export async function openImported(source: ImportedSource, fetcher: typeof fetch
     ? inputOf(source.job.config_summary.import_origin as string | undefined)
     : (source.modelId.startsWith('design-assembly:') ? 'assembly' : source.modelId.startsWith('mesh-file:') ? 'file' : 'cad');
   const view = views[input];
-  if (!view) throw new Error('This model cannot be shown here.');
+  if (!view) throw new Error('WG cannot show this model here. Open it from the run list.');
   const display = source.display ?? {};
   const generation = importedMeshStore.beginIntent();
   // Choosing the input first parks the other input's model and options.

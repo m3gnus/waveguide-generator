@@ -11,6 +11,7 @@ import type { JobItem, JobStatus } from '../api/jobsSocket';
 import { isHeldCadJob } from '../jobs/cadSolve';
 import { Icon } from './icons';
 import { useModalDialogFocus } from './dialogFocus';
+import { failureWords } from '../api/httpError';
 
 export interface ReportJob {
   id: string;
@@ -87,7 +88,7 @@ export function ReportDialog({ open, jobs, onClose }: {
     getDiagnosticsReport()
       .then((value) => { if (current) setReport(value); })
       .catch((reason: unknown) => {
-        if (current) setError(reason instanceof Error ? reason.message : String(reason));
+        if (current) setError(failureWords(reason));
       });
     return () => { current = false; };
   }, [open]);
@@ -112,7 +113,7 @@ export function ReportDialog({ open, jobs, onClose }: {
       await openLogsFolder();
       setFeedback('Opened the logs folder.');
     } catch (reason) {
-      setFeedback(reason instanceof Error ? reason.message : String(reason));
+      setFeedback(failureWords(reason));
     }
   }, []);
 

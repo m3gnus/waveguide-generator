@@ -16,6 +16,7 @@ import { designNameSlug } from '../../stores/designName';
 import { polarConfigFromUi, useSolveOptionsStore } from '../../stores/solveOptions';
 import { runGuardedFusionSend } from './send';
 import { reportCadAutomationError } from './caughtErrors';
+import { failureWords } from '../../api/httpError';
 
 export class OutboundSupersededError extends Error {}
 /** UI callers return quietly from their catch when true. */
@@ -100,7 +101,7 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
         chooseCadFolder: async () => {
           const choice = await chooseFolder();
           assertCurrent();
-          if (!choice.selected) throw new Error('Check the WGLink folder in Settings → CAD Link, then send again.');
+          if (!choice.selected) throw new Error('No WGLink folder is selected. Choose one in Settings → CAD Link, then send again.');
           evidence = await readStatus();
           assertCurrent();
           return evidence;
@@ -173,7 +174,7 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
         rememberSentCopy(null, exportedIdentity?.designId, current() && isCurrentDocumentLoad(load));
       }
       if (current() && !(reason instanceof OutboundSupersededError)) {
-        store.setState({ error: reason instanceof Error ? reason.message : String(reason) });
+        store.setState({ error: failureWords(reason) });
       }
       throw reason;
     } finally {

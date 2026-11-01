@@ -31,6 +31,7 @@ import { designContentKey, type DesignFileSettings } from '../stores/designConte
 import { wgSolveSettingsFromSolveOptions, wgSolveSettingsFromStore } from '../stores/designWire';
 import { useDocumentStore } from '../stores/document';
 import { useSolveOptionsStore } from '../stores/solveOptions';
+import { ProgramFault } from '../api/httpError';
 
 /** The one name every kept comparison keys both sides under. */
 const KEPT_NAME = '';
@@ -150,9 +151,9 @@ async function fetchRuns(fetcher: typeof fetch): Promise<void> {
     let offset = 0;
     for (let page = 0; page < 100; page += 1) {
       const response = await deadlineFetch(fetcher, `/api/jobs?limit=${pageSize}&offset=${offset}`);
-      if (!response.ok) throw new Error(`jobs list answered ${response.status}`);
+      if (!response.ok) throw new ProgramFault(`jobs list answered ${response.status}`);
       const body = await response.json() as unknown;
-      if (!isRecord(body) || !Array.isArray(body.items)) throw new Error('Invalid jobs list response');
+      if (!isRecord(body) || !Array.isArray(body.items)) throw new ProgramFault('Invalid jobs list response');
       runs.push(...body.items.filter((item): item is StoredRun => isRecord(item) && typeof item.id === 'string'));
       offset += body.items.length;
       if (!body.items.length || typeof body.total !== 'number' || offset >= body.total) break;

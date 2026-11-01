@@ -1,5 +1,6 @@
 import type { ImportedSetup } from '../jobs/importedSetup';
 import { importedPreparationHeaders, requestImportedModel } from './importedModels';
+import { httpErrorMessage } from './httpError';
 
 export interface MeshSummary {
   known_model?: { model_id: string; latest_prepared_id: string };
@@ -67,6 +68,6 @@ export async function findPreparedModel(preparedId: string, fetcher: typeof fetc
   Promise<{ model_id: string; prepared_id: string } | null> {
   const response = await fetcher(`/api/models?prepared_id=${encodeURIComponent(preparedId)}`);
   if (response.status === 404) return null;
-  if (!response.ok) throw new Error(`Saved mesh setup unavailable (${response.status}).`);
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not find this mesh setup. Import the mesh again.'));
   return response.json() as Promise<{ model_id: string; prepared_id: string }>;
 }

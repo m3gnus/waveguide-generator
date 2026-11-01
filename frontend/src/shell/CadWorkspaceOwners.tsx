@@ -31,6 +31,7 @@ import { solveControlStore } from './JobsCoordinator';
 import { solveAttention } from './solveAttention';
 import { jobIdFromLink } from '../jobs/jobDeepLink';
 import { useModalDialogFocus } from './dialogFocus';
+import { failureWords, ProgramFault } from '../api/httpError';
 
 /** Mount independent readers/commands and project their feedback for the UI.
  * Jobs own solves, receipts own Send display, and the waiter alone owns pulls. */
@@ -218,7 +219,7 @@ export function mountCadWorkspaceOwners(): () => void {
     }
     reportStatus('Prepared. Submitting the solve…');
     const control = solveControlStore.getSnapshot();
-    if (!control) throw new Error('Solve coordinator is unavailable');
+    if (!control) throw new ProgramFault('Solve coordinator is unavailable');
     // The same action continues: its token, never a new one after the wait.
     const outcome = await control.solve(attention);
     if (outcome === 'busy') {
@@ -252,7 +253,7 @@ export function mountCadWorkspaceOwners(): () => void {
       reportStatus(null);
       // Once the return arrived, a failed preparation already reported itself
       // on the model's status line; only a failed pull is said here.
-      if (!(bundlePath && error instanceof CadLinkApiError)) reportError(error instanceof Error ? error.message : String(error));
+      if (!(bundlePath && error instanceof CadLinkApiError)) reportError(failureWords(error));
       return useCadReturnStore.getState().ingestRecord ? 'blocked' : 'failed';
     }
   };
@@ -269,7 +270,7 @@ export function mountCadWorkspaceOwners(): () => void {
       if (ceilingStopped(error, bundlePath)) return 'blocked';
       reportStatus(null);
       // A failed preparation already reported itself in CAD Link.
-      if (!(error instanceof CadLinkApiError)) reportError(error instanceof Error ? error.message : String(error));
+      if (!(error instanceof CadLinkApiError)) reportError(failureWords(error));
       return useCadReturnStore.getState().ingestRecord ? 'blocked' : 'failed';
     }
   };

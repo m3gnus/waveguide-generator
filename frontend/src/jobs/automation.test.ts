@@ -16,7 +16,7 @@ describe('job completion automation', () => {
     const dependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted: vi.fn(), markExported: vi.fn(), archiveCompleted: vi.fn().mockRejectedValue(failure), markArchived: vi.fn(), reportError, reportMeshNotice: vi.fn(), reportDiagnostic };
     const preferences = { ...preferencesStore.getSnapshot(), autoDownloadMesh: false, autoExportOnComplete: false, archiveRunsOnComplete: true };
     await automation.process([job], preferences, dependencies);
-    expect(reportError).toHaveBeenCalledExactlyOnceWith('Run archive failed for abcdef: disk full');
+    expect(reportError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('disk full'));
     expect(reportDiagnostic).toHaveBeenCalledExactlyOnceWith('run-archive', failure, { job_id: job.id });
   });
 
@@ -162,7 +162,7 @@ describe('job completion automation', () => {
     await automation.process([job], preferences, dependencies);
     await automation.process([job], preferences, dependencies);
     expect(downloadMesh).toHaveBeenCalledTimes(1);
-    expect(dependencies.reportError).toHaveBeenCalledWith(expect.stringContaining('metadata offline'));
+    expect(dependencies.reportError).toHaveBeenCalledWith(expect.stringContaining('could not note it on the run'));
     await new JobAutomation().process([job], preferences, dependencies);
     expect(downloadMesh).toHaveBeenCalledTimes(2);
   });

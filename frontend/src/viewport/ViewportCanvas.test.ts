@@ -19,7 +19,7 @@ describe('viewport renderer guards', () => {
     const event = new Event('webglcontextlost', { cancelable: true });
     canvas.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
-    expect(failure).toHaveBeenCalledWith('WebGL2 context was lost');
+    expect(failure).toHaveBeenCalledWith('The 3D view stopped drawing. Reopen WG to bring it back.');
   });
 
   it('reports a second loss after the context has been restored', () => {

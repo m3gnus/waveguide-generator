@@ -14,6 +14,7 @@ import { identityProblem, INITIAL_SOURCE } from './sourceContourEditing';
 import { prepareNativeAssembly } from './nativeAssemblyPreparation';
 import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import './sourceContourEditor.css';
+import { failureWords } from '../api/httpError';
 
 const storage = namespaceStorage('sourceAssemblyDraft');
 const authoringStorage = namespaceStorage('sourceAssemblyAuthoring');
@@ -174,7 +175,7 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
     let current = true; setValidationError('');
     const timer = setTimeout(() => { void sourceEditorApi.validateAssembly(draft).then((value) => {
       if (current) setAccepted({ key, config: JSON.stringify(draft.horn_config), value });
-    }, (reason: unknown) => { if (current) setValidationError(reason instanceof Error ? reason.message : String(reason)); }); }, 180);
+    }, (reason: unknown) => { if (current) setValidationError(failureWords(reason)); }); }, 180);
     return () => { current = false; clearTimeout(timer); };
   }, [draft, key]);
   const configKey = JSON.stringify(draft.horn_config);
@@ -201,7 +202,7 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
   if (!draft.horn_config || wall?.config === configKey) lastHornContext.current = builtHornContext;
   const hornContext = lastHornContext.current;
   const wooferContext = useMemo(() => wooferAssemblyContext(draft.dimensions, draft.woofer?.contour.points.at(-1)?.r_mm), [draft.dimensions, draft.woofer?.contour.points.at(-1)?.r_mm]);
-  async function run(action: () => Promise<void>) { seedAllowed.current = false; setBusy(true); setError(''); setNotice(''); try { await action(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } finally { setBusy(false); } }
+  async function run(action: () => Promise<void>) { seedAllowed.current = false; setBusy(true); setError(''); setNotice(''); try { await action(); } catch (reason) { setError(failureWords(reason)); } finally { setBusy(false); } }
   const throat = draft.horn_config ? resolvedThroat?.config === JSON.stringify(draft.horn_config) ? resolvedThroat.radius
     : wall?.config === configKey ? wall.value.throat_radius_mm : undefined : undefined;
   function editSource(source: 'horn' | 'woofer') {
@@ -260,7 +261,7 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
       }}/></label>
       {draft.horn_config && <details><summary>Advanced horn configuration</summary><p>Paste a native bare horn configuration. Circular OSSE, R-OSSE, ICW and FREEFORM profiles retain their nonlinear wall. The source rim must match its throat. Length and mouth radius come from the profile.</p>
         <label>Horn configuration<textarea aria-label="Horn configuration" rows={8} value={hornText} onChange={(e) => setHornText(e.target.value)}/></label>
-        <button className="btn" type="button" onClick={() => { try { const config: unknown = JSON.parse(hornText); if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Horn configuration must be an object.'); change({ ...draft, horn_config: config as Record<string, unknown> }); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } }}>Apply horn configuration</button>
+        <button className="btn" type="button" onClick={() => { try { const config: unknown = JSON.parse(hornText); if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Paste a horn configuration in JSON form.'); change({ ...draft, horn_config: config as Record<string, unknown> }); } catch (reason) { setError(failureWords(reason)); } }}>Apply horn configuration</button>
       </details>}
       <h3>Front layout</h3><svg aria-label="Assembly front layout" viewBox={`${-dimensions.width_mm/2-8} ${-dimensions.height_mm/2-8} ${Math.max(1, dimensions.width_mm)+16} ${Math.max(1,dimensions.height_mm)+16}`} className="assembly-preview">
         <rect x={-dimensions.width_mm/2} y={-dimensions.height_mm/2} width={Math.max(0,dimensions.width_mm)} height={Math.max(0,dimensions.height_mm)} fill="none" stroke="currentColor" strokeWidth=".4"/>
@@ -296,7 +297,7 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
       <button className="btn" type="button" disabled={!valid} onClick={() => void run(async () => { const record = await prepareNativeAssembly(() => sourceEditorApi.ingestAssembly(draft)); storage.setItem('', JSON.stringify(draft)); setNotice(`Prepared ${record.mesh?.stats.triangle_count ?? ''} triangles. The imported workspace now uses this assembly and its physical source channels.`); })}>Prepare assembly in WG</button>
       <button className="btn" type="button" disabled={!valid} onClick={() => void run(async () => { download(await sourceEditorApi.exportAssembly(draft), 'native-assembly.zip'); storage.setItem('', JSON.stringify(draft)); setNotice('Exported shared STEP shell, preview mesh and source recipe.'); })}>Export assembly STEP + mesh</button>
       <button className="btn" type="button" disabled={!valid} onClick={() => download(new Blob([JSON.stringify(assemblyDraftFile(draft),null,2)], { type:'application/json' }), 'source-assembly.json')}>Save assembly draft</button>
-      <label>Load assembly draft<input aria-label="Load assembly draft" type="file" accept=".json,application/json" onChange={(e) => { const file = e.target.files?.[0]; if (!file) return; void run(async () => { if (file.size > 2*1024*1024) throw new Error('Assembly draft exceeds 2 MiB.'); const loaded = loadAssemblyDraftFile(await file.text()); disabledWoofer.current = undefined; setHornText(JSON.stringify(loaded.horn_config ?? {}, null, 2)); change(loaded); }); e.target.value=''; }}/></label>
+      <label>Load assembly draft<input aria-label="Load assembly draft" type="file" accept=".json,application/json" onChange={(e) => { const file = e.target.files?.[0]; if (!file) return; void run(async () => { if (file.size > 2*1024*1024) throw new Error('This file is larger than 2 MiB. Choose a smaller assembly draft.'); const loaded = loadAssemblyDraftFile(await file.text()); disabledWoofer.current = undefined; setHornText(JSON.stringify(loaded.horn_config ?? {}, null, 2)); change(loaded); }); e.target.value=''; }}/></label>
       <p>Source editing includes drawing, arcs and the saved source-preset library. Assembly drafts also retain placement, passive bodies and density.</p>
     </aside></div></fieldset><footer>{busy && <p role="status">Preparing geometry…</p>}{error && <Notice tone="error" role="alert">{error}</Notice>}{notice && <Notice tone="info" role="status">{notice}</Notice>}<small>Draft changes are remembered. Preparing selects the immutable mesh and Metal, the supported native contour consumer.</small></footer>
   </div></div>;

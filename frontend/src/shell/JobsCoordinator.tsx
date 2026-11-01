@@ -49,6 +49,7 @@ import { getCrossoverDraftError, useCrossoverDraftError } from '../design/crosso
 import { solveAttention, useJobAttention, useRecoveryNoticeAttention } from './solveAttention';
 import { navigationGeneration, workspaceNavigation } from './workspaceNavigation';
 import { solvedCadModels } from './cadlink/solvedModel';
+import { failureWords, ProgramFault } from '../api/httpError';
 
 /** Reveal an action failure only while the user's click still owns attention.
  * Editing, a drag, or later navigation suppresses this reveal permanently;
@@ -154,7 +155,7 @@ interface CoordinatorBridgeSnapshot {
   actionError: string | null;
 }
 
-const unavailableRun = async () => { throw new Error('Solve coordinator is unavailable'); };
+const unavailableRun = async () => { throw new ProgramFault('Solve coordinator is unavailable'); };
 let bridgeSnapshot: CoordinatorBridgeSnapshot = {
   available: false,
   continueRun: unavailableRun,
@@ -235,7 +236,7 @@ function acceptSubmittedLabel(designName: string): void {
 }
 
 const CAD_VIEWPORT_MISMATCH =
-  'The displayed CAD Link mesh does not match the selected model. Prepare or reselect it before solving.';
+  'The mesh on screen is not the selected model. Select the model again, then press Solve.';
 
 const ASSEMBLY_SOLVE_ELSEWHERE = 'This design has a Sources and baffle assembly. Solve it from Sources and baffle so every enabled source is included.';
 
@@ -410,7 +411,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       if (solveOptionsError) currentOptions = null;
     }
   } catch (error) {
-    solveOptionsError = error instanceof Error ? error.message : String(error);
+    solveOptionsError = failureWords(error);
   }
   const {
     plan: solvePlan,
@@ -432,7 +433,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   let fileBlocker: string | null = null;
   if (fileGeometryActive) {
     try { fileSubmission = fileMeshSubmission(); }
-    catch (error) { fileBlocker = error instanceof Error ? error.message : String(error); }
+    catch (error) { fileBlocker = failureWords(error); }
   }
   const cadGeometryMismatch = cadGeometryActive && model.key !== null && !model.viewportShowing;
   const cadSolveBlocker = cadGeometryMismatch
@@ -491,7 +492,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       return jobId;
     } catch (error) {
       solveAttention.releaseSolve();
-      if (!(error instanceof DOMException && error.name === 'AbortError')) reportError(error instanceof Error ? error.message : String(error), opts.attention);
+      if (!(error instanceof DOMException && error.name === 'AbortError')) reportError(failureWords(error), opts.attention);
       throw error;
     } finally {
       submissionInFlight.current = false;
@@ -642,7 +643,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     // The settings on screen, or the setup an unedited reopened run was opened with.
     const unchanged = unchangedSetup('cad', ingestId);
     const built = unchanged ? null : buildCadProjectSetup(cad, undefined, importedModelId(record));
-    if (!unchanged && !built) throw new Error('The CAD solve settings are incomplete. Review the Simulation settings and try again.');
+    if (!unchanged && !built) throw new Error('Some solve settings for this model are missing. Complete the Simulation tab, then press Solve.');
     const designName = currentRunNameSource().name;
     const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
     const clientRequestId = `cad-${crypto.randomUUID()}`;
@@ -723,7 +724,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
             // Unmount also aborts the token, and must stay silent.
             // What changed replaced the press's intention: indicated, never revealed.
             if (!patch.held.signal.aborted) reportRequestNotice(solveCancellationReason(patch.held)
-              ?? 'Prepare and solve was cancelled because the waiting job changed.', attention, true);
+              ?? 'Solve cancelled: the waiting run changed. Press Solve again.', attention, true);
             return null;
           }
           child = await solveCadAgain(jobId, { approvals, ...(patch.mesh_limit_override !== undefined ? { mesh_limit_override: patch.mesh_limit_override } : {}) });
@@ -817,7 +818,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
 
   const parametricUnavailable = solveOptionsError
     ?? solvePlanError
-    ?? (solvePlanPending ? 'Planning solve for the current design…' : 'Solve plan is unavailable');
+    ?? (solvePlanPending ? 'Planning solve for the current design…' : 'WG could not plan this solve. Change a setting, or press Solve to try again.');
   const requestCurrent = requested.state.active !== null;
   const performRequestedSolve = async (continuation: ModelSolveContinuation) => {
     if (fileGeometryActive) return solveFileModel(continuation);

@@ -59,7 +59,7 @@ export function FemPortsPanel({ result }: { result: ResultPayload }) {
   const data = femPortsOf(result);
   const [open, setOpen] = useState(false);
   if (!data) {
-    if (result.metadata?.fem_ports) return <p className="result-fem-ports-note">Port data is invalid.</p>;
+    if (result.metadata?.fem_ports) return <p className="result-fem-ports-note">WG could not read this port data. Select the run again.</p>;
     const fem = result.metadata?.fem as { interface_diagnostics?: { interfaces?: unknown[] } } | undefined;
     return result.metadata?.derived_from_channels && fem?.interface_diagnostics?.interfaces?.length
       ? <p className="result-fem-ports-note">Ports are available per drive channel. Select a drive channel to view them.</p> : null;

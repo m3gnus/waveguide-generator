@@ -1,5 +1,6 @@
 import { deadlineFetch } from './deadlineFetch';
 import { decodeFemFieldPayload, type FemFieldPayload } from '../viewport/femField';
+import { ProgramFault, httpErrorMessage } from './httpError';
 
 /** Additive selection metadata; the domain still uses the F5 wire format. */
 export interface FemFieldResponse extends FemFieldPayload {
@@ -20,7 +21,8 @@ export async function fetchFemField(jobId: string, frequency?: number, channel?:
   if (channel !== undefined) query.set('channel', channel);
   const response = await deadlineFetch(fetch, `/api/results/${encodeURIComponent(jobId)}/fem-field?${query}`, { signal });
   if (!response.ok) throw new Error(response.status === 404
-    ? 'No retained FEM field is available for this run.' : `FEM field request failed (${response.status}).`);
+    ? 'This run has no saved field. Solve the design again to see it.'
+    : await httpErrorMessage(response, 'WG could not load the field for this run. Select the run again.'));
   const payload: FemFieldResponse = await response.json();
   if (!Array.isArray(payload.frequencies_hz) || !payload.frequencies_hz.length
     || payload.frequencies_hz.some((hz) => !Number.isFinite(hz) || hz <= 0)
@@ -32,7 +34,7 @@ export async function fetchFemField(jobId: string, frequency?: number, channel?:
     || payload.phasor_convention !== 'exp(-i omega t)'
     || !['unit_acceleration_m_per_s2', 'unit_acceleration', 'voltage_rms'].includes(payload.drive_normalization)
     || (payload.drive_normalization === 'voltage_rms'
-      && (!Number.isFinite(payload.transducer_reference_voltage_v) || (payload.transducer_reference_voltage_v ?? 0) <= 0))) throw new Error('Invalid FEM field selection metadata');
+      && (!Number.isFinite(payload.transducer_reference_voltage_v) || (payload.transducer_reference_voltage_v ?? 0) <= 0))) throw new ProgramFault('Invalid FEM field selection metadata');
   return { ...decodeFemFieldPayload(payload), payload };
 }
 
@@ -61,7 +63,7 @@ export function decodeFemPlane(payload: {
   const bytes = (value: string) => Uint8Array.from(atob(value), (c) => c.charCodeAt(0));
   const floats = (value: string) => {
     const raw = bytes(value); const view = new DataView(raw.buffer);
-    if (raw.length % 4) throw new Error('Invalid coupled plane array');
+    if (raw.length % 4) throw new ProgramFault('Invalid coupled plane array');
     return Float32Array.from({ length: raw.length / 4 }, (_, i) => view.getFloat32(i * 4, true));
   };
   const points = floats(payload.points_mm), real = floats(payload.pressure_real), imag = floats(payload.pressure_imag);
@@ -75,7 +77,7 @@ export function decodeFemPlane(payload: {
     || reasons.length !== count || reasons.some((v, i) => v > 2 || (v === 0) !== (valid[i] === 1))
     || crosses.length !== (payload.nx - 1) * (payload.ny - 1) || crosses.some((v) => v > 1)
     || points.some((v) => !Number.isFinite(v)) || real.some((v) => !Number.isFinite(v)) || imag.some((v) => !Number.isFinite(v)))
-    throw new Error('Invalid coupled plane grid');
+    throw new ProgramFault('Invalid coupled plane grid');
   const indices: number[] = [];
   for (let j = 0; j < payload.ny - 1; j++) for (let i = 0; i < payload.nx - 1; i++) {
     const a = j * payload.nx + i, b = a + 1, c = a + payload.nx, d = c + 1;
@@ -100,11 +102,11 @@ export async function fetchFemPlane(jobId: string, plane: import('./fieldPlane')
   });
   if (!response.ok) {
     const error = await response.json().catch(() => null);
-    throw new Error(typeof error?.detail === 'string' ? error.detail : `Coupled field plane request failed (${response.status}).`);
+    throw new Error(typeof error?.detail === 'string' ? error.detail : 'WG could not load this plane. Select the run again.');
   }
   const payload = await response.json();
   if (payload.frequency_hz !== frequency || payload.channel_id !== channel || payload.scope !== scope
     || payload.quantity !== quantity || payload.phasor_convention !== 'exp(-i omega t)'
-    || payload.unit !== (quantity === 'pressure' ? 'Pa' : 'm/s')) throw new Error('Invalid coupled plane metadata');
+    || payload.unit !== (quantity === 'pressure' ? 'Pa' : 'm/s')) throw new ProgramFault('Invalid coupled plane metadata');
   return decodeFemPlane(payload);
 }

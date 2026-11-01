@@ -128,7 +128,7 @@ describe('full-installer update control', () => {
     else if (failure === 'clipboard') writeText.mockRejectedValue(new Error('Clipboard permission denied.'));
     fetch.mockResolvedValue(reply({ tailBytes: 32768, logs: { 'install.log': null } }));
     render(); await click('Copy update diagnostics');
-    expect(host.textContent).toContain(failure === 'clipboard' ? 'Clipboard permission denied.' : 'Clipboard access is unavailable');
+    expect(host.textContent).toContain(failure === 'clipboard' ? 'Clipboard permission denied.' : 'Copying is not available here');
     expect(host.textContent).not.toContain('Update diagnostics copied.');
     expect(button('Copy update diagnostics').disabled).toBe(false);
     if (failure !== 'clipboard') expect(writeText).not.toHaveBeenCalled();

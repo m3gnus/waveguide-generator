@@ -181,7 +181,7 @@ export class SolverMeshRefreshController {
           building: false,
           stale: true,
           staleReason: 'build-failed',
-          error: outcome.error ?? 'Solver mesh build failed',
+          error: outcome.error ?? 'WG could not build the mesh for this design and has recorded the problem. Press Rebuild to try again.',
         });
         // An edit may already have fixed the failing input while this request
         // was in flight. Retry that newer input once, without looping on failures.

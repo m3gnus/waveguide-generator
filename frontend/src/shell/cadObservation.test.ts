@@ -251,8 +251,8 @@ describe('CAD observation scheduler without the coordinator', () => {
 
   it('failed recovery stays retryable even after the pending feed forgets an awaited request', async () => {
     activity.requests = [{ id: 'return-exact', state: 'processing' }];
-    reloadReceipts.mockImplementationOnce(async () => { change({ requests: [] }); throw new Error('temporary'); });
-    await mount(); await reconnect(); expect(connection.getState().recoveryError).toContain('temporary');
+    reloadReceipts.mockImplementationOnce(async () => { change({ requests: [] }); throw new Error('could not check CAD work'); });
+    await mount(); await reconnect(); expect(connection.getState().recoveryError).toContain('could not check CAD work');
     await vi.advanceTimersByTimeAsync(4_999); expect(reloadReceipts).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1); expect(reloadReceipts.mock.calls[1][0]).toEqual(['return-exact']);
     expect(connection.getState().recoveryError).toBeNull();
@@ -271,16 +271,16 @@ describe('CAD observation scheduler without the coordinator', () => {
   });
 
   it('failed job reloads retry even when receipt recovery succeeded', async () => {
-    refreshJobs.mockRejectedValueOnce(new Error('jobs offline'));
-    await mount(); await reconnect(); expect(connection.getState().recoveryError).toContain('jobs offline');
+    refreshJobs.mockRejectedValueOnce(new Error('could not check CAD work'));
+    await mount(); await reconnect(); expect(connection.getState().recoveryError).toContain('could not check CAD work');
     await vi.advanceTimersByTimeAsync(5_000); expect(refreshJobs).toHaveBeenCalledTimes(2);
     expect(connection.getState().recoveryError).toBeNull();
   });
 
   it('the real jobs-client resolved error remains retryable, and explicit Refresh retries recovery', async () => {
-    refreshJobs.mockImplementationOnce(async () => { snapshot.error = 'jobs reload failed'; });
+    refreshJobs.mockImplementationOnce(async () => { snapshot.error = 'could not check CAD work'; });
     await mount(); await reconnect();
-    expect(connection.getState().recoveryError).toContain('jobs reload failed');
+    expect(connection.getState().recoveryError).toContain('could not check CAD work');
     refreshJobs.mockImplementation(async () => { snapshot.error = null; });
     stop!.refresh(); await vi.advanceTimersByTimeAsync(0);
     expect(refreshJobs).toHaveBeenCalledTimes(2);
@@ -311,9 +311,9 @@ describe('CAD observation scheduler without the coordinator', () => {
     let finish!: (ids: ReadonlySet<string>) => void;
     reloadReceipts.mockImplementationOnce(() => new Promise<ReadonlySet<string>>((resolve) => { finish = resolve; }));
     await mount(); await reconnect();
-    reloadReceipts.mockRejectedValueOnce(new Error('new recovery failure')); await reconnect();
+    reloadReceipts.mockRejectedValueOnce(new Error('could not check CAD work')); await reconnect();
     finish(new Set()); await vi.advanceTimersByTimeAsync(0);
-    expect(connection.getState().recoveryError).toContain('new recovery failure');
+    expect(connection.getState().recoveryError).toContain('could not check CAD work');
     await vi.advanceTimersByTimeAsync(5_000); expect(reloadReceipts).toHaveBeenCalledTimes(3);
   });
 

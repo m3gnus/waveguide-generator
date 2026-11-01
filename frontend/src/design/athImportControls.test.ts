@@ -22,7 +22,7 @@ describe('ATH import wall default and controls', () => {
   });
 
   it.each(['mesh.ath_roundover.radius', 'mesh.ath_roundover.segments', 'mesh.ath_rear_front_offset', 'mesh.ath_rear_step'])('rejects nonfinite %s', (path) => {
-    for (const value of [NaN, Infinity, -Infinity]) expect(athControlError(path, value)).toContain('finite');
+    for (const value of [NaN, Infinity, -Infinity]) expect(athControlError(path, value)).toMatch(/^Enter a/);
   });
 
   it('permits the inclusive offset and segment bounds and does not invent upper bounds', () => {
@@ -47,8 +47,8 @@ describe('ATH lip availability and radius/wall rule', () => {
   it('applies Radius > WallThickness only to a lip over a full rear on a free-standing wall', () => {
     const lip = { ath_roundover: { radius: 10, segments: 5 }, wall_thickness: 6 };
     expect(lipRadiusWallError(load({ mesh: lip }))).toBeUndefined();
-    expect(lipRadiusWallError(load({ mesh: lip }), { radius: 6 })).toContain('Radius > Mesh.WallThickness');
-    expect(lipRadiusWallError(load({ mesh: lip }), { wall: 10 })).toContain('Radius > Mesh.WallThickness');
+    expect(lipRadiusWallError(load({ mesh: lip }), { radius: 6 })).toContain('larger than the wall thickness');
+    expect(lipRadiusWallError(load({ mesh: lip }), { wall: 10 })).toContain('larger than the wall thickness');
     expect(lipRadiusWallError(load({ mesh: { ...lip, ath_rear_shape: 3 } }), { wall: 10 })).toBeUndefined();
     expect(lipRadiusWallError(load({ mesh: { ...lip, wall_thickness: 0 } }), { radius: 1 })).toBeUndefined();
     expect(lipRadiusWallError(load({ mesh: lip, simulation: { sim_type: 'infinite-baffle' } }), { wall: 10 })).toBeUndefined();

@@ -1,4 +1,5 @@
 import type { ResultPayload } from './types';
+import { ProgramFault } from '../api/httpError';
 
 export interface PortPhasor { real: number | null; imaginary: number | null }
 export interface PackedPortPressure {
@@ -36,11 +37,11 @@ function decodePressure(matrix: PackedPortPressure): DataView | null {
       || matrix.byte_order !== 'little' || matrix.order !== 'C'
       || !Array.isArray(matrix.shape) || matrix.shape.length !== 2
       || !matrix.shape.every(n => Number.isSafeInteger(n) && n >= 0)
-      || typeof matrix.content_base64 !== 'string') throw new Error('Unsupported port encoding');
+      || typeof matrix.content_base64 !== 'string') throw new ProgramFault('Unsupported port encoding');
     const expected = matrix.shape[0] * matrix.shape[1] * 16;
-    if (!Number.isSafeInteger(expected)) throw new Error('Invalid port shape');
+    if (!Number.isSafeInteger(expected)) throw new ProgramFault('Invalid port shape');
     const bytes = Uint8Array.from(atob(matrix.content_base64), c => c.charCodeAt(0));
-    if (bytes.byteLength !== expected) throw new Error('Invalid port byte length');
+    if (bytes.byteLength !== expected) throw new ProgramFault('Invalid port byte length');
     values = new DataView(bytes.buffer);
   } catch { /* A malformed packed matrix invalidates the complete ports block. */ }
   decodedPressure.set(matrix, values);

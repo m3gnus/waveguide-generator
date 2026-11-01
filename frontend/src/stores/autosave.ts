@@ -8,6 +8,7 @@ import {
   type CadLinkClassification,
   type DesignIdentity,
 } from './document';
+import { ProgramFault } from '../api/httpError';
 
 export const AUTOSAVE_KEY = 'wg2.autosave.v1';
 
@@ -142,7 +143,7 @@ export function restoreAutosave(storage: DraftStorage | null = defaultStorage())
   if (!raw) return false;
   try {
     const record: unknown = JSON.parse(raw);
-    if (!isRecord(record) || !hasValidCadLink(record)) throw new Error('Invalid autosave record');
+    if (!isRecord(record) || !hasValidCadLink(record)) throw new ProgramFault('Invalid autosave record');
     useDocumentStore.getState().restoreDocumentState({
       // A draft written before the rename unification only has the filename;
       // its stem is the same name, one slugging away.

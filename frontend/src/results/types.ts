@@ -1,4 +1,5 @@
 import type { NullableNumber, RadiationImpedancePresentation, ResultData } from '../api/results';
+import { ProgramFault } from '../api/httpError';
 
 export interface ObservationMetadata {
   requested_distance_m?: number;
@@ -265,12 +266,12 @@ export function resultChannelFileSuffixes(result: ResultPayload): ReadonlyMap<st
       break;
     }
     if (allocated === null) {
-      throw new Error(`Export bundle refused: no unique portable filename suffix could be allocated for channel ${id}.`);
+      throw new ProgramFault(`Export bundle refused: no unique portable filename suffix could be allocated for channel ${id}.`);
     }
     suffixes.set(id, allocated);
   });
   if (suffixes.size !== channels.length || used.size !== channels.length) {
-    throw new Error('Export bundle refused: channel filename suffixes are not portable and unique.');
+    throw new ProgramFault('Export bundle refused: channel filename suffixes are not portable and unique.');
   }
   return suffixes;
 }
@@ -280,7 +281,7 @@ export function resultChannelFileSuffix(result: ResultPayload, channelId?: strin
   if (!channelId) return '';
   const suffixes = resultChannelFileSuffixes(result);
   const suffix = suffixes.get(channelId);
-  if (suffix === undefined) throw new Error(`Drive channel ${channelId} is not present in this result.`);
+  if (suffix === undefined) throw new ProgramFault(`Drive channel ${channelId} is not present in this result.`);
   return suffix;
 }
 
@@ -290,8 +291,8 @@ export function scopeResultChannel(result: ResultPayload, channelId?: string): R
   const available = resultChannels(result).map(({ id }) => id);
   if (!available.length) return result;
   const selected = channelId ?? (available.length === 1 ? available[0] : null);
-  if (!selected) throw new Error('Choose a drive channel before exporting this CAD-import result.');
+  if (!selected) throw new Error('Choose a drive channel, then export.');
   const payload = result.channels[selected];
-  if (!payload) throw new Error(`Drive channel ${selected} is not present in this result.`);
+  if (!payload) throw new ProgramFault(`Drive channel ${selected} is not present in this result.`);
   return payload as ResultPayload;
 }

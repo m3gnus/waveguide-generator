@@ -91,6 +91,7 @@ import {
 import './paramPanel.css';
 import { RunNameField } from '../shell/RunNameField';
 import { MeshImportPanel } from './MeshImportPanel';
+import { failureWords, rowSentence } from '../api/httpError';
 
 interface SectionProps {
   title: string;
@@ -231,7 +232,7 @@ function Section({ title, summary, description, children, forceOpen, revealId, d
       <h3 className="section-heading">
         <button className="section-head" onClick={toggle} aria-expanded={shownOpen}>
           <span className="chevron" aria-hidden="true">⌄</span><span className="section-name">{title}</span><span className="spacer" />
-          {!shownOpen && invalid && <span className="field-error" aria-label="Contains invalid fields">!</span>}
+          {!shownOpen && invalid && <span className="field-error" aria-label="Has a value to fix">!</span>}
           {summary && <span className="section-summary">{summary}</span>}
         </button>
       </h3>
@@ -374,7 +375,7 @@ function passthroughStatus(field: ParameterDefinition, design: DesignDocument): 
 function validationMessage(field: ParameterDefinition, design: DesignDocument): string | undefined {
   if (field.id === 'icw.hold_end' && (design.hold_end ?? 0) <= (design.hold_start ?? 0)) return 'Must exceed coverage hold start.';
   if (field.id === 'simulation.f2' && design.simulation.f2 <= design.simulation.f1) return 'Must exceed sweep start.';
-  if (field.id === 'source.velocity' && design.source.velocity_convention === 'legacy' && ![1, 2].includes(design.source.velocity)) return 'Legacy velocity must be 1 (normal) or 2 (axial).';
+  if (field.id === 'source.velocity' && design.source.velocity_convention === 'legacy' && ![1, 2].includes(design.source.velocity)) return 'Enter 1 (normal) or 2 (axial).';
   if (field.id === 'mesh.ath_roundover.radius' || field.id === 'mesh.wall_thickness') return lipRadiusWallError(design);
   return undefined;
 }
@@ -383,8 +384,8 @@ function validationMessage(field: ParameterDefinition, design: DesignDocument): 
 function storedValueError(field: ParameterDefinition, design: DesignDocument): string | undefined {
   const value = getAtPath(design, field.path);
   if (field.kind !== 'number' || typeof value !== 'number' || design._expressions?.[field.path ?? '']) return undefined;
-  if (field.min !== undefined && (value < field.min || (field.exclusiveMin && value === field.min))) return 'Outside the allowed range.';
-  if (field.max !== undefined && value > field.max) return 'Outside the allowed range.';
+  if (field.min !== undefined && (value < field.min || (field.exclusiveMin && value === field.min))
+    || field.max !== undefined && value > field.max) return `Enter a value${field.min !== undefined ? ` ${field.exclusiveMin ? 'above' : 'from'} ${field.min}` : ''}${field.max !== undefined ? ` ${field.min !== undefined ? 'to' : 'up to'} ${field.max}` : ''}${field.unit ? ` ${field.unit}` : ''}.`;
   return undefined;
 }
 
@@ -398,7 +399,7 @@ function prospectiveValidation(field: ParameterDefinition, design: DesignDocumen
   if (field.id === 'mesh.wall_thickness') return lipRadiusWallError(design, { wall: value });
   if (field.id === 'simulation.f1' && value >= design.simulation.f2) return 'Must be below sweep end.';
   if (field.id === 'simulation.f2' && value <= design.simulation.f1) return 'Must exceed sweep start.';
-  if (field.id === 'source.velocity' && design.source.velocity_convention === 'legacy' && ![1, 2].includes(value)) return 'Legacy velocity must be 1 (normal) or 2 (axial).';
+  if (field.id === 'source.velocity' && design.source.velocity_convention === 'legacy' && ![1, 2].includes(value)) return 'Enter 1 (normal) or 2 (axial).';
   return undefined;
 }
 
@@ -437,7 +438,7 @@ export function previewErrorForParameter(
   }
   for (const path of paths) {
     const message = fields[path];
-    if (message) return message;
+    if (message) return rowSentence(message);
   }
   return undefined;
 }
@@ -673,7 +674,7 @@ function AutoSymmetryReadout({ design }: { design: DesignDocument }) {
     gcTime: SYMMETRY_GC_MS,
     retry: false,
   });
-  const error = queryError ? queryError instanceof Error ? queryError.message : String(queryError) : null;
+  const error = queryError ? failureWords(queryError) : null;
 
   if (error) return <div className="resolved-mode"><span>Auto resolves to</span><b>—</b><small>{error}</small></div>;
   if (!resolution) return <div className="resolved-mode"><span>Auto resolves to</span><b>{isPending ? 'resolving…' : '—'}</b></div>;
@@ -715,7 +716,7 @@ function SolveDomainControl({ design }: { design: DesignDocument }) {
     {nativeSymmetryLimitation(design.formula, symmetry) && <small className="field-error" role="alert">{nativeSymmetryLimitation(design.formula, symmetry)}</small>}
     {!native && symmetry === 'auto' && <AutoSymmetryReadout design={design} />}
     {!native && resolveOuterBodyMode(design) === 'enclosure' && <small>Unequal reflected front/back quadrant sizes prevent that symmetry reduction.</small>}
-    {native && <small>This native formula requires the full circular mesh domain.</small>}
+    {native && <small>This family always solves the whole model.</small>}
   </div>;
 }
 

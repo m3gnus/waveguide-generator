@@ -28,53 +28,145 @@ export function validationSentence(message: string): string | null {
 }
 
 const FRAMEWORK_BOUND = /^Input should be ((?:less|greater) than(?: or equal to)? -?[\d.]+(?:e[+-]?\d+)?)/;
-const WIRE_PATH = new Set(['body', 'design']);
+const WIRE_PATH = new Set(['body', 'design', 'root', 'options']);
+
+export interface NamedControl {
+  /** The word on the control. */
+  label: string;
+  /** Where the control lives, as the panel names it. */
+  place?: string;
+}
+
+let controlFor: (path: string) => NamedControl | null = () => null;
+/** Who can name a field. This owner stays free of runtime dependencies, so the parameter registry registers it. */
+export function nameFieldsWith(lookup: typeof controlFor): void { controlFor = lookup; }
+
+const fieldPath = (location: readonly unknown[]) => location.map(String).filter(part => !WIRE_PATH.has(part)).join('.');
 
 /**
- * The most a framework validation message can honestly say: the field's name and
- * any bound the server gave. Null when it names no field.
+ * A framework validation message beside the control it belongs to, where the
+ * label is already on screen: what to do to this value, and nothing else.
+ */
+export function rowSentence(message: string): string {
+  const own = validationSentence(message);
+  if (own) return own;
+  const bound = FRAMEWORK_BOUND.exec(message);
+  if (bound) return `Enter a value ${bound[1]}.`;
+  return message.startsWith('Field required') ? 'Enter a value.' : 'Enter a value WG can use here.';
+}
+
+/**
+ * The most a framework validation message can honestly say on its own: the
+ * control's name and any bound the server gave. Null when no control has that
+ * name, because a raw key means nothing to a user.
  */
 export function fieldSentence(location: readonly unknown[], message: string): string | null {
   const own = validationSentence(message);
   if (own) return own;
-  const name = location.map(String).filter(part => !WIRE_PATH.has(part)).join('.');
-  if (!name) return null;
+  const control = controlFor(fieldPath(location));
+  if (!control) return null;
+  const where = control.place ? ` in ${control.place}` : '';
   const bound = FRAMEWORK_BOUND.exec(message);
-  return bound ? `${name} should be ${bound[1]}.` : message.startsWith('Field required') ? `${name} is missing.` : `${name} has a value WG cannot use.`;
+  if (bound) return `${control.label} must be ${bound[1]}. Change it${where}.`;
+  return message.startsWith('Field required')
+    ? `${control.label} is empty. Enter a value${where}.`
+    : `WG cannot use the value of ${control.label}. Enter a new value${where}.`;
 }
 
 export const PLAIN_REQUEST_FAILURE = 'WG could not finish this request and has recorded the problem. Try again.';
-export const PLAIN_VALIDATION_FAILURE = 'WG could not use these settings. Check the values and try again.';
+export const PLAIN_VALIDATION_FAILURE = 'WG could not read a value in this design and has recorded the problem. Undo your last change, or open the design again.';
+export const PLAIN_CAD_LINK_FAILURE = 'WG could not reach CAD Link and has recorded the problem. Refresh CAD Link to try again.';
+export const LOST_CONTACT = 'WG is not responding. Close WG, open it again, then try again.';
 
 let reportOriginal: (entry: { message: string; operation: string }) => void = () => {};
 /** Where originals go. This owner stays free of runtime dependencies, so the shell registers it. */
 export function keepRefusalOriginals(report: typeof reportOriginal): void { reportOriginal = report; }
 
+/**
+ * A failure the program caused. Its message is for developers: it goes to the
+ * problem record and never to the screen, so a parser or an invariant can say
+ * exactly what it found.
+ */
+export class ProgramFault extends Error {
+  constructor(message: string, options?: ErrorOptions) { super(message, options); this.name = 'ProgramFault'; }
+}
+
+/** Text no user should read: engine, framework or transport words, wire keys and status codes. */
+const NOT_FOR_USERS = [
+  /\b(?:is not a function|is not iterable|is not defined|Cannot read propert|Cannot set propert|undefined is not|null is not|Unexpected token|Unexpected end of|Maximum call stack|Traceback|\[object Object\])/i,
+  /^(?:(?:Type|Reference|Syntax|Range|Assertion|Value|Key|Attribute|Runtime|OS|Timeout|Index)Error\b|Error:)/,
+  /\b(?:Request failed|request failed|HTTP \d{3}|status \d{3})\b|\(\d{3}\)\.?$|^\d{3}\b/,
+  /^(?:role resolution|symmetry|normalisation|normalization|meshing|viewport meshing|mesh sizing|tag allocation|healing gate|scope gate|STEP import \+ normalisation|stage \d+[^:]*):/i,
+  /\b[a-z][a-z0-9]*_[a-z0-9_]+\b/,
+  /\b[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*\[/,
+  /\b(?:design|mesh|options|simulation|source)\.[a-z_]+\b/,
+  /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i,
+];
+
+/** Whether a sentence can be shown as it is. */
+export function readsPlain(text: string): boolean {
+  const words = text.trim();
+  // A path, a file name or a quoted name is the user's own; only the sentence around it is judged.
+  const sentence = words.replace(/(?:[A-Za-z]:)?[\\/][^\s,;)]+|[^\s/\\]+\.(?:step|stp|stl|msh|mwg|cfg|f3d|json|csv|txt|frd|zma|png|svg|zip|wgreturn)\b|[“"'‘][^”"'’]*[”"'’]/g, ' ');
+  return Boolean(words) && !FRAMEWORK_SENTENCE.test(words) && !NOT_FOR_USERS.some(pattern => pattern.test(sentence));
+}
+
+const LOST_TRANSPORT = /^(?:Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?|The network connection was lost\.?)$/i;
+
+function shown(original: string, operation: string, fallback: string): string {
+  reportOriginal({ message: original || fallback, operation });
+  return fallback;
+}
+
+/**
+ * What a caught failure tells the user. A sentence that reads plainly is shown
+ * as it is. A lost connection says so. Anything the program caused becomes the
+ * fallback, and the original goes to the developer record. Every catch that
+ * reaches the screen goes through here.
+ */
+export function failureWords(reason: unknown, fallback = PLAIN_REQUEST_FAILURE, operation = 'caught failure'): string {
+  const text = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : String(reason ?? '');
+  if (reason instanceof DOMException && reason.name === 'AbortError') return fallback;
+  if (LOST_TRANSPORT.test(text.trim())) return LOST_CONTACT;
+  if (reason instanceof ProgramFault || !readsPlain(text)) return shown(text, operation, fallback);
+  return text;
+}
+
 const isValidationItem = (item: unknown) => !!item && typeof item === 'object' && 'loc' in item && 'msg' in item;
 
 /**
- * What a failed request tells the user. A sentence the server worded is shown as
- * it is; framework validation output and bare failures become one plain message,
- * and the original goes to the developer record behind problem reports.
+ * What a failed request tells the user. A sentence the server worded is shown
+ * as it is; framework validation output, internal text and bare failures become
+ * one plain message, and the original goes to the developer record behind
+ * problem reports.
  */
 export function refusalText(detail: unknown, operation: string, fallback = PLAIN_REQUEST_FAILURE): string {
   const raw = formatApiDetail(detail);
-  const words = Array.isArray(detail) && detail.some(isValidationItem)
-    ? detail.flatMap(item => {
+  if (Array.isArray(detail) && detail.some(isValidationItem)) {
+    const words = detail.flatMap(item => {
       if (!isValidationItem(item)) return [];
       const { loc, msg } = item as { loc: unknown; msg: unknown };
       const sentence = fieldSentence(Array.isArray(loc) ? loc : [], String(msg));
       return sentence ? [sentence] : [];
-    }).join('; ') || PLAIN_VALIDATION_FAILURE
-    : raw || fallback;
-  if (words !== raw) reportOriginal({ message: raw || fallback, operation });
-  return words;
+    }).join(' ') || PLAIN_VALIDATION_FAILURE;
+    if (words !== raw) reportOriginal({ message: raw || fallback, operation });
+    return words;
+  }
+  if (detail && typeof detail === 'object') {
+    const { message, next_step: next } = detail as { message?: unknown; next_step?: unknown };
+    if (typeof message === 'string' && message.trim()) {
+      const said = [message, typeof next === 'string' ? next : ''].filter(Boolean).join(' ');
+      return readsPlain(said) ? said : shown(said, operation, fallback);
+    }
+  }
+  return raw && readsPlain(raw) ? raw : shown(raw ?? '', operation, fallback);
 }
 
+/** The words of a failed response. `fallback` is a whole sentence with its next step; the status never reaches the user. */
 export async function httpErrorMessage(response: Response, fallback: string): Promise<string> {
   try {
     const body = await response.json() as { detail?: unknown };
-    if (typeof body.detail === 'string') return body.detail;
-  } catch { /* HTTP status remains useful. */ }
-  return `${fallback} (${response.status})`;
+    if (body.detail !== undefined && body.detail !== null) return refusalText(body.detail, `request ${response.status}`, fallback);
+  } catch { /* The response has no readable body; the original below records its status. */ }
+  return shown(`request failed with status ${response.status}`, 'request', fallback);
 }

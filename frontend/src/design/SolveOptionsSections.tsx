@@ -195,7 +195,7 @@ export function AdaptiveFrequencyControls({ mode = 'parametric' }: { mode?: Work
     : store.groundPlane.enabled ? 'Adaptive sampling requires the ground plane to be off.'
     : count < 24 ? 'Adaptive sampling requires at least 24 frequencies.'
     : adaptiveEngine && !adaptiveEngine.startsWith('beat-') && adaptiveEngine !== 'beat'
-      ? 'Adaptive sampling is BEAT only; choose a BEAT backend or Accurate.' : undefined;
+      ? 'Adaptive sampling needs a BEAT engine. Choose one under Solver, or turn this off.' : undefined;
   return <>
     <HelpTipRow revealId="adaptive-frequency-sampling" className="toggle-row" text="BEAT exterior sweeps with at least 24 frequencies. Fits unsolved points to a 0.1 dB equivalent disagreement target. Completed native acquisition has gaps no wider than 1/6 octave. Narrow resonances can be missed when narrower than the largest solved-frequency gap; this spacing bound does not guarantee interpolation accuracy."><label htmlFor="adaptive-frequency-sampling">Adaptive frequency sampling (experimental)</label><input id="adaptive-frequency-sampling" type="checkbox" checked={store.adaptiveFrequencySampling} disabled={Boolean(adaptiveReason) && !store.adaptiveFrequencySampling} aria-describedby={adaptiveReason ? 'adaptive-sampling-reason' : undefined} onChange={(event) => store.setAdaptiveFrequencySampling(event.target.checked)} /></HelpTipRow>
     {adaptiveReason && <p id="adaptive-sampling-reason" className="section-note">{adaptiveReason}</p>}
@@ -290,7 +290,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
         ? <p className="cad-solve-fact"><b>Prepared domain</b><span>{fileRecord ? fileSymmetryLabel(fileRecord.symmetry?.domain_planes ?? [], false) : 'Waiting for preparation'}</span></p>
         : <p className="cad-solve-fact"><b>Prepared cut planes</b><span>{ingestRecord?.symmetry.cut_planes?.length ? ingestRecord.symmetry.cut_planes.join(', ') : 'none · full domain'}</span></p>)}
     </>}
-    {error ? <span className="section-note" role="status">Capability refresh failed. Check the backend connection. <button className="btn" type="button" onClick={refreshCapabilities}>Refresh</button></span> : qualificationRefreshNeeded
+    {error ? <span className="section-note" role="status">WG could not check which engines are available. <button className="btn" type="button" onClick={refreshCapabilities}>Refresh</button></span> : qualificationRefreshNeeded
       ? <span className="section-note" role="status">BEMPP · <button className="btn" type="button" onClick={refreshCapabilities}>Refresh</button></span>
       : engines.some((engine) => engine.name === 'bempp' && engine.qualification === 'pending')
       && <span className="section-note" role="status">BEMPP · checking OpenCL…</span>}
@@ -300,7 +300,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
     {mode === 'parametric' && <GroundPlaneControls />}
     {includeSampling && <FrequencySweepControls idPrefix={mode === 'cad' ? 'cad-solve' : 'design-solve'} context={mode === 'cad' ? 'imported' : 'design'} />}
     {developer && <ToggleRow revealId="solve-verbose" id="solve-verbose" label="Verbose backend logging" help="Records the backend's own per-frequency diagnostics in the job log. Useful when a solve fails or looks wrong; it makes logs much longer." checked={store.verbose} onChange={store.setVerbose} />}
-    {error && <div className="field-error" role="alert">Capabilities unavailable: {error}</div>}
+    {error && <div className="field-error" role="alert">{error}</div>}
   </>;
 }
 

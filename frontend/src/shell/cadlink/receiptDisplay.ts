@@ -8,6 +8,7 @@ import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { createCadArrivalActions, SupersededError, returnBelongsToAnotherProject } from './arrivals';
 import type { SolvedModelDisplay } from './solvedModel';
 import { reportCadAutomationError } from './caughtErrors';
+import { failureWords } from '../../api/httpError';
 
 /** The existing artifact display path is supplied by the shell's display owner.
  * This action owns no parametric-document writes and never submits a solve.
@@ -155,7 +156,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
         });
       } catch (error) {
         if (changedSinceSend) {
-          report(receipt, 'unreadable', error instanceof Error ? error.message : String(error));
+          report(receipt, 'unreadable', failureWords(error));
           display.enterCadWorkspace();
           return true;
         }
@@ -174,7 +175,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
         || (error instanceof CadLinkApiError && (error.status === 408 || error.status === 429 || (error.status ?? 0) >= 500)));
       const refusal = progress.phase === 'ingest' && error instanceof CadLinkApiError && !transient;
       report(receipt, refusal ? 'refused' : 'display_failed',
-        `WG could not open ${name}: ${error instanceof Error ? error.message : String(error)}. ${transient ? 'CAD Link will retry.' : 'Send it again from Fusion.'}`);
+        `WG could not open ${name}: ${failureWords(error)}. ${transient ? 'CAD Link will retry.' : 'Send it again from Fusion.'}`);
       display.enterCadWorkspace();
       return !transient;
     }

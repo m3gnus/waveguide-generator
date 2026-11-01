@@ -1,4 +1,4 @@
-import { refusalText } from './httpError';
+import { refusalText, ProgramFault } from './httpError';
 import { serializeSolveDesign, type DesignDocument } from '../stores/design';
 import type { SolveOptionsStore } from '../stores/solveOptions';
 import type { components } from './generated/openapi';
@@ -95,7 +95,7 @@ export async function postSolverMesh(
     || typeof result.stats.triangle_count !== 'number'
     || !Array.isArray(result.cut_planes)
   ) {
-    throw new Error('Solver mesh response is invalid');
+    throw new ProgramFault('Solver mesh response is invalid');
   }
   return result as SolverMeshResult;
 }

@@ -210,7 +210,7 @@ export function installContextLossFallback(canvas: HTMLCanvasElement, onFailure:
   const onLost = (event: Event) => {
     // Preventing the default is what lets the browser restore the context.
     event.preventDefault();
-    onFailure('WebGL2 context was lost');
+    onFailure('The 3D view stopped drawing. Reopen WG to bring it back.');
   };
   canvas.addEventListener('webglcontextlost', onLost);
   return () => canvas.removeEventListener('webglcontextlost', onLost);
@@ -816,7 +816,7 @@ function Scene({ children, scene, sceneMarker, spatialResultId, mode, showEnclos
 class CanvasErrorBoundary extends Component<{ children: ReactNode; onError: (message: string) => void }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
-  componentDidCatch(error: Error, _info: ErrorInfo) { this.props.onError(error.message || 'WebGL renderer failed'); }
+  componentDidCatch(error: Error, _info: ErrorInfo) { this.props.onError(error.message || 'The 3D view stopped drawing. Reopen WG to bring it back.'); }
   render() { return this.state.failed ? null : this.props.children; }
 }
 

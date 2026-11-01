@@ -3,13 +3,13 @@ import type { DesignDocument } from '../stores/design';
 export const isAthV2 = (design: DesignDocument): boolean => design.text_import_version === 'ath-2026-09a-v2';
 
 export function athControlError(path: string | undefined, value: number): string | undefined {
-  if (path === 'mesh.ath_roundover.radius' && (!Number.isFinite(value) || value <= 0)) return 'Mesh.Roundover.Radius must be finite and > 0';
-  if (path === 'mesh.ath_roundover.segments' && (!Number.isFinite(value) || value < 1 || !Number.isInteger(value))) return 'Mesh.Roundover.Segments must be a finite integer >= 1';
+  if (path === 'mesh.ath_roundover.radius' && (!Number.isFinite(value) || value <= 0)) return 'Enter a radius greater than 0.';
+  if (path === 'mesh.ath_roundover.segments' && (!Number.isFinite(value) || value < 1 || !Number.isInteger(value))) return 'Enter a whole number of at least 1.';
   if (path === 'mesh.ath_rear_front_offset') {
-    if (!Number.isFinite(value)) return 'Mesh.RearShape.FrontOffset must be finite';
-    if (value < 0) return 'Mesh.RearShape.FrontOffset < 0 is unsupported: negative offsets have no qualified ATH ring fit';
+    if (!Number.isFinite(value)) return 'Enter a number.';
+    if (value < 0) return 'Enter 0 or more. WG cannot fit a negative front offset.';
   }
-  if (path === 'mesh.ath_rear_step' && (!Number.isFinite(value) || value <= 0)) return 'Mesh.RearShape.Step must be finite and > 0';
+  if (path === 'mesh.ath_rear_step' && (!Number.isFinite(value) || value <= 0)) return 'Enter a step greater than 0.';
   return undefined;
 }
 
@@ -81,6 +81,6 @@ export function lipRadiusWallError(design: DesignDocument, candidate: { radius?:
   if (design.simulation.sim_type === 'infinite-baffle' || design.enclosure.depth > 0) return undefined;
   const wall = candidate.wall ?? design.mesh.wall_thickness;
   const radius = candidate.radius ?? lip.radius;
-  if (wall > 0 && wall >= radius) return 'Mesh.Roundover with RearShape = 1 requires Radius > Mesh.WallThickness: the outer lip would collapse or fold';
+  if (wall > 0 && wall >= radius) return 'Make the radius larger than the wall thickness, or the outer lip folds over itself.';
   return undefined;
 }

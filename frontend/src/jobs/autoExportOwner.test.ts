@@ -70,7 +70,7 @@ it('records each format by its own outcome, and a refusal over a channel failure
       { format: 'json' as const, reason: 'Export file already exists with different content', blocked: true },
       { format: 'csv' as const, reason: 'Export file already exists with different content', blocked: true },
     ],
-  }))).rejects.toThrow('json');
+  }))).rejects.toThrow('already exists');
   const body = JSON.parse(fetcher.mock.calls.find(([path]) => path.endsWith('/finish'))![1]!.body as string);
   expect(body.formats.step.status).toBe('complete');
   expect(body.formats.json).toMatchObject({ status: 'blocked', reason: 'Export file already exists with different content' });

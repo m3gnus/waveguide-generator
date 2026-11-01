@@ -51,6 +51,7 @@ import type { FieldPlaneMaskRequest, FieldPlaneMaskResponse } from './fieldPlane
 import { maskMatchesGeometry, useFieldPlaneMaskStore, type AppliedFieldPlaneMask } from './fieldPlaneMaskStore';
 import { useFieldPlaneStore } from './fieldPlaneStore';
 import type { DemandRenderScheduler } from './demandRender';
+import { ProgramFault } from '../api/httpError';
 
 interface FieldPlaneProps {
   active: boolean;
@@ -89,7 +90,7 @@ interface ActiveFieldPlaneDrag {
 }
 
 function complexTexture(real: Float32Array, imag: Float32Array, width: number, height: number): DataTexture {
-  if (real.length !== imag.length) throw new Error('Complex field components must have equal lengths');
+  if (real.length !== imag.length) throw new ProgramFault('Complex field components must have equal lengths');
   const complex = new Float32Array(real.length * 2);
   for (let index = 0; index < real.length; index += 1) {
     complex[index * 2] = real[index];

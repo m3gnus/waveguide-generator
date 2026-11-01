@@ -30,7 +30,7 @@ describe('FEM result wire route', () => {
 
   it('reports an unavailable/flag-off field', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 404 }));
-    await expect(fetchFemField('ordinary')).rejects.toThrow('No retained FEM field');
+    await expect(fetchFemField('ordinary')).rejects.toThrow('no saved field');
   });
 
   it('refuses mismatched axes and non-finite decoded values', async () => {

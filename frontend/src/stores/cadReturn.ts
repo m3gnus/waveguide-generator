@@ -319,7 +319,7 @@ export function bundleIdentity(bundle: CadReturnBundle): string {
  * reason it can be wrong transiently -- a listing read during a server
  * restart is empty -- so it is the one reason that clears itself when the
  * identical bundle reappears. */
-export const LISTING_GONE_REASON = 'The prepared CAD model no longer appears in the workspace list.';
+export const LISTING_GONE_REASON = 'This CAD model is no longer in the WGLink folder. Send it again from Fusion.';
 
 /** Inputs shared by the preparation owner and the selected-model projection. */
 export type CadPreparationInputs = Pick<CadReturnState, 'selectedBundle'>
@@ -1226,7 +1226,7 @@ export function passiveCardioidBlocker(
   const missing = passiveCardioidMissingFields(form);
   if (missing.length) {
     return `Passive cardioid needs ${missing.map((field) => PASSIVE_CARDIOID_FIELD_LABELS[field]).join(', ')}. `
-      + 'The campaign inputs are submitted as one set or not at all.';
+      + 'Enter all of them, or turn Passive cardioid off.';
   }
   if (form.coupled && state.driveChannels.some((channel) => channel.id === PASSIVE_CARDIOID_CHANNEL_ID)) {
     return `A drive channel is already named "${PASSIVE_CARDIOID_CHANNEL_ID}", which the coupled solve reserves `

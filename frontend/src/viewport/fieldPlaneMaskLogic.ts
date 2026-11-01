@@ -8,6 +8,7 @@ import {
 } from 'three';
 import { MeshBVH, type HitPointInfo } from 'three-mesh-bvh';
 import type { FieldPlaneSpec, Vector3Tuple } from '../api/fieldPlane';
+import { ProgramFault } from '../api/httpError';
 
 const PARITY_DIRECTION = new Vector3(1, 0.3713906763541037, 0.6949718377497182).normalize();
 const MIN_RAY_DISTANCE_M = 1e-9;
@@ -57,7 +58,7 @@ function activeSymmetryAxes(symmetryPlane: string | null): CoordinateAxis[] {
     case 'xz': return [1];
     case 'xy': return [2];
     case 'yz+xz': return [0, 1];
-    default: throw new Error(`Unsupported field-plane mask symmetry: ${symmetryPlane}`);
+    default: throw new ProgramFault(`Unsupported field-plane mask symmetry: ${symmetryPlane}`);
   }
 }
 

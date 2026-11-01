@@ -17,7 +17,7 @@ import { selectJob } from '../jobs/selectJob';
 import { canExportRun, RunExportControl } from '../jobs/RunExportControl';
 import { applyJobPreferences, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
-import { runProvenanceMarker } from '../model/currentModel';
+import { runProvenanceMarker, solveFailureWords } from '../model/currentModel';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { navigationGeneration } from './workspaceNavigation';
@@ -28,8 +28,11 @@ import { cadJobOperationId } from '../jobs/cadSolve';
 import { CadSolveInputs } from './CadSolveInputs';
 import { runStatusWord, SolveProgressView, useSolveClock } from './solveProgress';
 import { useModalDialogFocus } from './dialogFocus';
+import { failureWords, ProgramFault } from '../api/httpError';
 
 /** Show the effective Runs folder and choose the shared WG folder. */
+const RUN_LIST_LOST = 'WG could not refresh the run list and keeps trying. If runs look out of date, reopen WG.';
+
 function OutputFolderBar() {
   const { path, busy, error, select, open } = useWorkspaceFolder();
   return <div className="jobs-output-folder">
@@ -89,7 +92,7 @@ function Rating({ job, onError }: { job: JobItem; onError: (message: string) => 
       key={star}
       aria-label={`Rate ${star} stars`}
       title={`Rate ${star} stars`}
-      onClick={() => void jobsSocket.patchRating(job.id, star === rating ? 0 : star).catch((error) => onError(String(error)))}
+      onClick={() => void jobsSocket.patchRating(job.id, star === rating ? 0 : star).catch((error) => onError(failureWords(error)))}
       style={{ color: star <= rating ? 'var(--amber)' : 'var(--fg4)', padding: 0, background: 'none' }}
     >★</button>)}</span>
   </div>;
@@ -182,7 +185,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
     } catch (error) {
       setTitleDraft(job.label ?? '');
       setEditing(false);
-      setRenameError(`Could not rename run: ${String(error)}`);
+      setRenameError(`WG could not rename this run. ${failureWords(error, 'Try again.')}`);
     }
   };
   // autoFocus alone only places the caret, and it lands after the existing
@@ -230,7 +233,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
     <header>
       {selectable
         ? <button className={`job-select${editing ? ' editing' : ''}`} aria-label={`Select ${displayName}`} aria-pressed={selected} title={selected ? 'Showing this run' : job.has_results ? 'Show this run in the viewport and charts' : cleanedUp ? 'Select this run (its results were cleaned up)' : 'Show this run design in the viewport'} onClick={() => selectJob(job, onError)}>{heading}</button>
-        : <span className={`job-select${editing ? ' editing' : ''}`} title={job.error_message ?? job.status}>{heading}</span>}
+        : <span className={`job-select${editing ? ' editing' : ''}`} title={job.status === 'error' ? solveFailureWords(job.error_message) : job.status}>{heading}</span>}
       {editing ? <input
         className="job-title-input"
         aria-label={job.run_number === null ? `Title for ${displayName}` : `Title for run #${job.run_number}`}
@@ -290,11 +293,11 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
       {job.log_tail.length > 0 && <p title={job.log_tail.at(-1)}>{job.log_tail.at(-1)}</p>}
       <footer><button className="btn" disabled={job.cancellation_requested} onClick={() => {
         const actionNavigation = navigationGeneration();
-        void jobsSocket.stopJob(job.id).catch((error) => onError(error instanceof Error ? error.message : String(error), actionNavigation));
+        void jobsSocket.stopJob(job.id).catch((error) => onError(failureWords(error), actionNavigation));
       }}>{job.cancellation_requested ? runStatusWord({ status: 'running', stage: 'cancelling' }) : 'Stop'}</button><button className="btn" onClick={() => setLogOpen(true)}>Log</button></footer>
     </> : failed ? <>
       <p>{statusWord} after {duration(secondsBetween(job.started_at ?? job.queued_at, job.completed_at, now))}{job.stage && job.stage !== 'error' ? ` · ${job.stage} stage` : ''}</p>
-      <div className="job-error" title={job.error_message ?? undefined}>{job.error_message ?? 'Simulation failed without a diagnostic.'}</div>
+      <div className="job-error" title={solveFailureWords(job.error_message)}>{solveFailureWords(job.error_message)}</div>
       <DesignAvailabilityNotice job={job}/>
       <footer><RerunButton job={job} onRerun={retry} label="Retry" className="btn"/><button className="btn" onClick={() => setLogOpen(true)}>Open log</button></footer>
     </> : cancelled ? <>
@@ -306,7 +309,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
           these are advice about why it was slow or what it approximated --
           neither an error nor, as they were until now, silence. */}
       {meshWarnings(job).map((warning) => <Notice tone="warning" key={warning}>{warning}</Notice>)}
-      {Object.values(job.auto_export_formats).some((format) => format.status === 'blocked') && <Notice tone="warning" role="status" actions={<><button type="button" className="btn" onClick={() => { void retryBlockedExport(job.id).catch((error) => onError(error instanceof Error ? error.message : String(error))); }}>Retry automatic export</button></>}>
+      {Object.values(job.auto_export_formats).some((format) => format.status === 'blocked') && <Notice tone="warning" role="status" actions={<><button type="button" className="btn" onClick={() => { void retryBlockedExport(job.id).catch((error) => onError(failureWords(error))); }}>Retry automatic export</button></>}>
         Automatic export blocked: {[...new Set(Object.values(job.auto_export_formats).filter((format) => format.status === 'blocked').map((format) => format.reason))].join(' ')}
         <p>Choose another WG folder or resolve the existing files, then retry. Retry preserves existing files and does not overwrite them.</p>
 
@@ -324,6 +327,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
 
 export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {}) {
   const snapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
+  useEffect(() => { if (snapshot.error) failureWords(new ProgramFault(snapshot.error), RUN_LIST_LOST, 'jobs connection'); }, [snapshot.error]);
   const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const coordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
   const preferences = usePreferences();
@@ -386,7 +390,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
     const actionNavigation = navigationGeneration();
     void jobsSocket.deleteJob(job.id).catch((error) => {
       if (error instanceof JobModelProtectionError) setBlockedDeletion({ job, reason: error.message });
-      else coordinator.reportError(error instanceof Error ? error.message : String(error), actionNavigation);
+      else coordinator.reportError(failureWords(error), actionNavigation);
     });
   }, [coordinator.reportError]);
   const deleteAnyway = async () => {
@@ -396,7 +400,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
       await jobsSocket.deleteJob(blockedDeletion.job.id, { skipModelProtection: true });
       setBlockedDeletion(null);
     } catch (error) {
-      coordinator.reportError(error instanceof Error ? error.message : String(error));
+      coordinator.reportError(failureWords(error));
     } finally {
       setDeletingAnyway(false);
     }
@@ -410,7 +414,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
     const hiddenCopy = hiddenFailed > 0 ? ` This includes ${hiddenFailed} failed run${hiddenFailed === 1 ? '' : 's'} hidden by the current filter.` : '';
     if (!window.confirm(`Remove all ${failedCount} failed run${failedCount === 1 ? '' : 's'} and their saved logs/designs?${hiddenCopy}`)) return;
     const actionNavigation = navigationGeneration();
-    void jobsSocket.clearFailed().catch((error) => coordinator.reportError(error instanceof Error ? error.message : String(error), actionNavigation));
+    void jobsSocket.clearFailed().catch((error) => coordinator.reportError(failureWords(error), actionNavigation));
   };
 
   return <div className="jobs-panel panel-scroll">
@@ -464,7 +468,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
       </select>
       {(source !== 'all' || project || model || query) && <button className="btn" onClick={() => useRunFilters.setState({ source: 'all', project: '', model: '', query: '' })}>Clear filters</button>}
     </div>
-    {snapshot.error && <Notice tone="error">{snapshot.error}</Notice>}
+    {snapshot.error && <Notice tone="warning" role="status">{RUN_LIST_LOST}</Notice>}
     {runJobs.length === 0 && snapshot.connection === 'connected' && <EmptyState title="No runs yet" detail={project
       ? 'Prepare the CAD model and press Solve to start this project’s first run.'
       : 'Solve the model on screen to start one. Every run is kept here with its results, so you can compare and re-run it later.'}/>}

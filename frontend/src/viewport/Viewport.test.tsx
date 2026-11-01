@@ -186,7 +186,7 @@ describe('Viewport preview errors', () => {
 
   it('shows a dismissible alert while a retained scene is present', () => {
     const alert = host.querySelector<HTMLElement>('[role="alert"]');
-    expect(alert?.textContent).toContain('Displayed geometry is not the current design');
+    expect(alert?.textContent).toContain('The view still shows the last design that worked');
     expect(host.textContent).toContain('WebGL unavailable');
     expect(host.textContent).not.toContain('Waiting for geometry');
     expect(host.querySelector('.error-badge')?.textContent).toContain('ERROR');
@@ -1463,9 +1463,9 @@ describe('solver-mesh refresh inputs and document loads', () => {
         expect(notices[0].textContent).toContain(wallFold);
         expect(notices[0].textContent?.split(wallFold)).toHaveLength(2);
         if (condition === 'different preview error') expect(notices[0].textContent).toContain(previewError);
-        if (condition === 'dismissed preview error') expect(notices[0].textContent).toContain('last preview attempt failed');
+        if (condition === 'dismissed preview error') expect(notices[0].textContent).toContain('could not show the latest edit');
         if (condition === 'reconnecting') expect(notices[0].textContent).toContain('Reconnecting to preview engine');
-        if (condition === 'stalled') expect(notices[0].textContent).toContain('Waiting for the preview engine');
+        if (condition === 'stalled') expect(notices[0].textContent).toContain('still drawing this design');
         const refreshes = [...host.querySelectorAll<HTMLButtonElement>('button')].filter((button) => button.textContent === 'Refresh');
         expect(refreshes).toHaveLength(1);
         await act(async () => refreshes[0].click());

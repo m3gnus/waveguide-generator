@@ -4,6 +4,7 @@ import type { WorkspaceMode } from '../stores/workspaceMode';
 import { backendSupports, hostLimitation, selectionLimitation, type BackendFeature, type BackendIdentity } from './backendSupport';
 import type { EngineCapability } from '../jobs/actions';
 import { isAthV2 } from './athImportControls';
+import { nameFieldsWith } from '../api/httpError';
 
 export type ParameterSection =
   | 'Model Type' | 'Profile' | 'Throat' | 'Mouth' | 'Cross-section' | 'Mounting'
@@ -628,6 +629,11 @@ export function orderSectionFields(fields: readonly ParameterDefinition[], defin
 // legacy registry, including its original help text and field order.
 export const PARAMETER_REGISTRY: ParameterDefinition[] = PARAMETER_SECTION_DEFINITIONS.flatMap((definition) =>
   orderSectionFields(parametricFields.filter((field) => field.section === definition.title), definition));
+
+// A validation message names the control the user sees, not the key on the wire.
+const NAMED_CONTROLS = new Map([...PARAMETER_REGISTRY].reverse().flatMap(({ id, path, label, section }) =>
+  [id, path].filter((key): key is string => Boolean(key)).map(key => [key, { label, place: `the ${section} section` }] as const)));
+nameFieldsWith(path => NAMED_CONTROLS.get(path) ?? null);
 
 export function parameterSectionIsVisible(
   definition: ParameterSectionDefinition,

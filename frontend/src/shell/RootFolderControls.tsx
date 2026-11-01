@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { getFolderRoot, openFolderRoot, selectFolderRoot, useRootFolder, type FolderRoot } from '../api/folders';
 import { openCadWorkspace } from '../api/cadWorkspace';
 import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
+import { failureWords } from '../api/httpError';
 
 /** One chooser and one explicit override action in Settings, setup and recovery. */
 export function RootFolderControls({ cadlinkOnly = false, showPath = true }: { cadlinkOnly?: boolean; showPath?: boolean }) {
@@ -40,7 +41,7 @@ export function RootFolderControls({ cadlinkOnly = false, showPath = true }: { c
         setTyped('');
       }
     } catch (reason) {
-      if (request === generation.current) setError(reason instanceof Error ? reason.message : String(reason));
+      if (request === generation.current) setError(failureWords(reason));
       const current = await getFolderRoot().catch(() => undefined);
       if (current && request === generation.current) setFolder(current);
     }
@@ -50,7 +51,7 @@ export function RootFolderControls({ cadlinkOnly = false, showPath = true }: { c
   const names = cadlinkOnly ? ['cadlink'] as const : ['cadlink', 'runs'] as const;
   return <div aria-busy={busy}>
     {cadlinkOnly
-      ? showPath && <p className="workspace-settings-path">{missing ? `WGLink folder not found: ${folder.cadlink}` : folder?.cadlink ?? 'WGLink folder unavailable'}</p>
+      ? showPath && <p className="workspace-settings-path">{missing ? `WG cannot find the WGLink folder ${folder.cadlink}. Choose another folder.` : folder?.cadlink ?? 'WG cannot read the WGLink folder. Choose another folder.'}</p>
       : <>
         <p className="workspace-settings-path" title={folder?.path ?? undefined}>{folder?.path ?? 'Loading…'}</p>
         <p className="cad-settings-note">WG saves the WGLink folder in <code>cadlink/</code> and the Runs folder in <code>runs/</code>. Changing the WG folder moves no files. One-off exports can go elsewhere.</p>

@@ -154,7 +154,7 @@ describe('useCapabilities', () => {
         manager.snapshot = { ...previous, connection: 'reconnecting' };
         manager.listeners.forEach((listener) => listener());
       });
-      expect(textOf('status')).toContain('Backend connection interrupted');
+      expect(textOf('status')).toContain('WG lost contact with its engines');
     } finally {
       await act(async () => {
         manager.snapshot = previous;
@@ -546,7 +546,7 @@ it('bounds a stuck capability request independently of slow export requests', as
       init!.signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
     }));
     const request = getCapabilities(fetcher as typeof fetch);
-    const assertion = expect(request).rejects.toThrow('Capability refresh timed out');
+    const assertion = expect(request).rejects.toThrow('WG could not check the engines in time');
     await vi.advanceTimersByTimeAsync(10_000);
     await assertion;
     expect(fetcher).toHaveBeenCalledOnce();

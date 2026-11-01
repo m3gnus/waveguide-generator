@@ -101,7 +101,7 @@ describe('SettingsDialog', () => {
       return new Response('not found', { status: 404 });
     }));
     await act(async () => { host.querySelector<HTMLButtonElement>('#open-settings')!.click(); });
-    expect(host.textContent).toContain('WGLink folder unavailable');
+    expect(host.textContent).toContain('WG cannot read the WGLink folder. Choose another folder.');
     expect(host.textContent).not.toContain('No WGLink folder selected');
   });
 

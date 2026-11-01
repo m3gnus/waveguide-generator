@@ -1,5 +1,6 @@
 import { useState, useSyncExternalStore } from 'react';
 import { prepareBeatRuntime, type EngineCapability } from './actions';
+import { failureWords } from '../api/httpError';
 
 // Shared across dock roots: repeated presses join the same preparation POST.
 const pending = new Map<string, Promise<void>>();
@@ -29,7 +30,7 @@ export function usePrepareEngine(engines: readonly EngineCapability[], refresh: 
     }
     try { await request; return true; }
     catch (reason) {
-      setFailure({ message: reason instanceof Error ? reason.message : String(reason), engine: engines.find(engine => engine.name === name) });
+      setFailure({ message: failureWords(reason), engine: engines.find(engine => engine.name === name) });
       return false;
     }
   };

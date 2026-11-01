@@ -28,6 +28,7 @@ import { fullTime, pluralized, relativeTime } from './cadTime';
 import { Icon } from './icons';
 import { middleEllipsis } from './ResultsPanel';
 import { useWorkspaceFolder } from './WorkspaceFolderControls';
+import { failureWords } from '../api/httpError';
 
 export { newestReturnForProject } from '../api/cadProjects';
 
@@ -150,7 +151,7 @@ function ProjectSwitcher({ current, label, onOpened, onError }: {
       const items = await listCadProjects();
       if (request === generation.current) setProjects(items);
     } catch (error) {
-      onError(error instanceof Error ? error.message : String(error));
+      onError(failureWords(error));
     }
   };
   useEffect(() => () => { generation.current += 1; }, []);
@@ -168,7 +169,7 @@ function ProjectSwitcher({ current, label, onOpened, onError }: {
       setOpen(false);
       onOpened(name);
     } catch (error) {
-      onError(error instanceof Error ? error.message : String(error));
+      onError(failureWords(error));
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -225,7 +226,7 @@ function ProjectOverflowMenu({ project, onNotice, onError }: {
     try {
       onNotice(`Opened ${await revealProjectFolder(project.lineageId)}`);
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : String(reason));
+      onError(failureWords(reason));
     }
   };
 

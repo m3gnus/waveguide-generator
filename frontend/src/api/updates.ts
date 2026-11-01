@@ -1,4 +1,5 @@
 import { deadlineFetch } from './deadlineFetch';
+import { ProgramFault, httpErrorMessage } from './httpError';
 /** Full-installer update contract: server/updates/installer_client.py. */
 export type UpdateChannel = 'stable' | 'beta';
 export type UpdateInstallState = 'idle' | 'downloading' | 'verifying' | 'ready' | 'failed';
@@ -99,49 +100,48 @@ function status(value: unknown): value is UpdateStatus {
 }
 async function responseError(response: Response, fallback: string): Promise<Error> {
   try {
-    const payload: unknown = await response.json();
-    if (record(payload) && typeof payload.detail === 'string') return new Error(payload.detail);
+    const payload: unknown = await response.clone().json();
     if (record(payload) && record(payload.error) && typeof payload.error.message === 'string') return new Error(payload.error.message);
-  } catch { /* Use the HTTP result when no JSON detail exists. */ }
-  return new Error(`${fallback} (${response.status})`);
+  } catch { /* The owner below says it in words. */ }
+  return new Error(await httpErrorMessage(response, fallback));
 }
 export async function getUpdateStatus(refresh = false, signal?: AbortSignal): Promise<UpdateStatus> {
   const response = await deadlineFetch(fetch, `/api/updates/status${refresh ? '?refresh=true' : ''}`, { signal });
-  if (!response.ok) throw await responseError(response, 'Update status request failed');
+  if (!response.ok) throw await responseError(response, 'WG could not check for updates. Try again.');
   const payload: unknown = await response.json();
-  if (!status(payload)) throw new Error('Update status response is invalid');
+  if (!status(payload)) throw new ProgramFault('Update status response is invalid');
   return payload;
 }
 export async function getUpdateChannel(signal?: AbortSignal): Promise<UpdateChannel> {
   const response = await deadlineFetch(fetch, '/api/updates/channel', { signal });
-  if (!response.ok) throw await responseError(response, 'Update channel request failed');
+  if (!response.ok) throw await responseError(response, 'WG could not read the update channel. Try again.');
   const payload: unknown = await response.json();
-  if (!record(payload) || !channel(payload.channel)) throw new Error('Update channel response is invalid');
+  if (!record(payload) || !channel(payload.channel)) throw new ProgramFault('Update channel response is invalid');
   return payload.channel;
 }
 export async function getUpdateDiagnostics(): Promise<UpdateDiagnostics> {
   const response = await deadlineFetch(fetch, '/api/updates/diagnostics');
-  if (!response.ok) throw await responseError(response, 'Update diagnostics request failed');
+  if (!response.ok) throw await responseError(response, 'WG could not collect the update log. Try again.');
   const payload: unknown = await response.json();
   if (!record(payload) || !bytes(payload.tailBytes) || !record(payload.logs)
-    || !Object.values(payload.logs).every(nullableString)) throw new Error('Update diagnostics response is invalid');
+    || !Object.values(payload.logs).every(nullableString)) throw new ProgramFault('Update diagnostics response is invalid');
   return payload as unknown as UpdateDiagnostics;
 }
 export async function setUpdateChannel(next: UpdateChannel): Promise<UpdateChannel> {
   const response = await fetch('/api/updates/channel', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channel: next }),
   });
-  if (!response.ok) throw await responseError(response, 'Update channel could not be saved');
+  if (!response.ok) throw await responseError(response, 'WG could not save the update channel. Try again.');
   const payload: unknown = await response.json();
-  if (!record(payload) || !channel(payload.channel)) throw new Error('Update channel response is invalid');
+  if (!record(payload) || !channel(payload.channel)) throw new ProgramFault('Update channel response is invalid');
   return payload.channel;
 }
 export async function installApplicationUpdate(): Promise<UpdateInstallAccepted> {
   const response = await fetch('/api/updates/install', { method: 'POST', headers: { 'X-WG-Update': 'install' } });
-  if (!response.ok) throw await responseError(response, 'Update installation request failed');
+  if (!response.ok) throw await responseError(response, 'WG could not start the update. Try again.');
   const payload: unknown = await response.json();
   if (!record(payload) || payload.accepted !== true || !version(payload.version) || !installState(payload.installState)
     || payload.activeVersion !== payload.version || !bytes(payload.downloadedBytes) || !bytes(payload.totalBytes)
-    || payload.downloadedBytes > payload.totalBytes || !nullableString(payload.error)) throw new Error('Update installation response is invalid');
+    || payload.downloadedBytes > payload.totalBytes || !nullableString(payload.error)) throw new ProgramFault('Update installation response is invalid');
   return payload as unknown as UpdateInstallAccepted;
 }

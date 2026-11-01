@@ -263,7 +263,7 @@ describe('CadLinkPanel', () => {
       return json(record);
     }));
     await act(async () => root.render(<CadLinkTestSurface/>));
-    await vi.waitFor(() => expect(host.textContent).toContain('WGLink folder not found: /chosen/cadlink'));
+    await vi.waitFor(() => expect(host.textContent).toContain('WG cannot find the WGLink folder /chosen/cadlink'));
     expect([...host.querySelectorAll('button')].some(button => button.textContent === 'Create it')).toBe(true);
     expect([...host.querySelectorAll('button')].some(button => button.textContent === 'Choose WG folder…')).toBe(true);
   });
@@ -801,7 +801,7 @@ describe('CadLinkPanel', () => {
     const approve = () => buttonIn(card(), 'Approve and solve')!;
     if (!withOwner) {
       expect(approve().disabled).toBe(true);
-      expect(card().textContent).toContain('Solve coordinator is unavailable.');
+      expect(card().textContent).toContain('WG cannot solve from this panel right now.');
       await act(async () => approve().click());
       expect(posted).toEqual([]);
       return;
@@ -1245,7 +1245,7 @@ describe('CadLinkPanel', () => {
     );
 
     expect(events[0]).toContain('/viewport-mesh');
-    expect(events[1]).toContain('failed verification');
+    expect(events[1]).toContain('smoother view');
     expect(events[2]).toContain(`/${record.ingest_id}/mesh`);
   });
 
@@ -1984,7 +1984,7 @@ describe('CadLinkPanel', () => {
   it('reports an Onshape send failure without claiming success', async () => {
     await renderOnshape(
       onshapeStatus(),
-      () => json({ detail: 'Onshape rate limit reached (429).' }, 429),
+      () => json({ detail: 'Onshape rate limit reached. Try again in a minute.' }, 429),
     );
     await act(async () => {
       host.querySelector<HTMLButtonElement>('.cad-primary-action')!.click();

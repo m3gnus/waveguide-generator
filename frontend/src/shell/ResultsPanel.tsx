@@ -58,6 +58,7 @@ import { powerAgreementHealth, powerCheckMessage } from '../results/radiatedPowe
 import { channelLabel } from '../results/channelLabel';
 import { unqualifiedMessage, channelQualificationSummary, chartUnqualifiedBands, powerChipLabel, powerQualificationDetail, powerQualificationOf, unqualifiedCaption, withUnqualifiedBands, type UnqualifiedBand } from '../results/powerQualification';
 import { solveAttention } from './solveAttention';
+import { failureWords } from '../api/httpError';
 
 export function newRunBadgeLabel(runNumber: number | null): string {
   return runNumber === null ? 'New' : `New · #${runNumber}`;
@@ -1433,7 +1434,7 @@ function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, nor
   if (!panels.some(({ hasData }) => hasData)) {
     const plane = directivityPlaneForChart(chartType);
     const planeLabel = plane === 'horizontal' ? 'H' : plane === 'vertical' ? 'V' : 'Diagonal';
-    return <ChartStub reason={plane ? `Directivity Map (${planeLabel}) needs the ${plane} polar plane in the result payload.` : 'Directivity Map needs at least one polar plane in the result payload.'}/>;
+    return <ChartStub reason={plane ? `Directivity Map (${planeLabel}) needs the ${plane} polar plane. Turn it on under Directivity map in Simulation, then solve again.` : 'Directivity Map needs a polar plane. Turn one on under Directivity map in Simulation, then solve again.'}/>;
   }
   if (panels.length === 1 && panels[0].hasData) {
     const panel = panels[0];
@@ -1467,7 +1468,7 @@ export function beamShapeMissingReason(result: ResultPayload): { reason: string;
   const sampling = result.metadata?.balloon_sampling;
   const status = sampling && typeof sampling === 'object' ? String((sampling as Record<string, unknown>).status ?? '') : '';
   if (status === 'backend_unsupported') return {
-    reason: 'Forward Beam Shape needs spherical sampling, but this solver backend did not configure a sphere grid.',
+    reason: 'Forward Beam Shape is not available from this engine. Choose an engine with 3D Balloon Sampling, then solve again.',
     canEnable: false,
   };
   if (status === 'missing_result') return {
@@ -1523,7 +1524,7 @@ function PolarResponseCard({ items, tokens, density, live }: { items: NamedResul
     () => drawnPlane ? polarOption(items, tokens, drawnPlane, frequencies[index] ?? 0, POLAR_FLOOR_DB, density) : null,
     [density, drawnPlane, frequencies, index, items, tokens],
   );
-  if (!drawnPlane || !option) return <ChartStub reason="Polar Response needs sampled horizontal or vertical directivity."/>;
+  if (!drawnPlane || !option) return <ChartStub reason="Polar Response needs the horizontal or vertical plane. Turn one on under Directivity map in Simulation, then solve again."/>;
   return <div className="frequency-canvas">
     <EChart option={option} label={`Interactive HornLab ${drawnPlane} polar response`} live={live}/>
     <label className="frequency-scrub">
@@ -1562,14 +1563,14 @@ export function driverChartMissingReason(result: ResultPayload, chart: string): 
     return `${chart} needs this channel's electrical impedance, which the solve did not produce -- ${omitted.trim()}.`;
   }
   if (!hasElectricalImpedance(result)) {
-    return `${chart} needs a driver-coupled solve. This result is unit-acceleration, so it has no drive voltage or electrical impedance.`;
+    return `${chart} needs a driver. Add one to this channel, then solve again.`;
   }
   if (!electricalDrive(result)) {
-    return `${chart} needs the drive voltage this result did not record alongside its electrical impedance.`;
+    return `This run did not record the drive voltage for ${chart}. Solve again to get it.`;
   }
   // Deliberately not "from this result's impedance samples": excursion shares
   // this branch and is read from the driver block, not derived from impedance.
-  return `${chart} needs samples this driver-coupled result did not record.`;
+  return `This run did not record the data for ${chart}. Solve again to get it.`;
 }
 
 /**
@@ -1586,24 +1587,24 @@ export function groupDelayMissingReason(result: ResultPayload): string {
     phaseDegrees: result.spl_on_axis?.phase_degrees ?? [],
   };
   if (!hasOnAxisPhase(samples.phaseDegrees)) {
-    return 'Group Delay needs the spl_on_axis phase samples from a completed solve.';
+    return 'This run has no on-axis phase, so Group Delay cannot be drawn. Solve again to get it.';
   }
   const reference = propagationReference(result);
   if (!reference) {
     const convention = result.metadata?.phase_time_convention;
     if (convention != null && phaseSpatialSign(convention) === null) {
-      return `Group Delay cannot read the phase convention "${String(convention)}": without a known spatial sign the flight time to the microphone cannot be removed, and what is left is not a delay.`;
+      return 'This run was saved by another version of WG and its phase cannot be read, so Group Delay cannot be drawn. Solve again to get it.';
     }
-    return 'Group Delay needs metadata.observation to carry a finite distance and sound speed, plus a recognised phase_time_convention. Without them the phase still holds the flight time to the microphone, which swamps the delay.';
+    return 'This run did not record its measurement distance and speed of sound, so Group Delay cannot be drawn. Solve again to get it.';
   }
   const phase = deEmbeddedPhaseRadians(samples, reference);
   if (phase.length < 3) {
-    return 'Group Delay needs at least three on-axis phase samples from a completed solve.';
+    return 'Group Delay needs at least three frequencies. Add frequencies to the sweep, then solve again.';
   }
   if (!phaseUnwrapIsResolved(phase, reference)) {
-    return 'Group Delay needs a finer frequency sweep: the phase turns more than half a cycle between adjacent samples, so the unwrap cannot pick a branch and any curve drawn from it would be invented.';
+    return 'Group Delay needs a finer sweep: the phase turns too far between frequencies. Add frequencies, then solve again.';
   }
-  return 'Group Delay could not be derived from this result.';
+  return 'WG could not work out Group Delay from this run. Solve again to get it.';
 }
 
 /**
@@ -1863,17 +1864,17 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
           ...(next.angles === undefined ? {} : { measurementAngles: next.angles }),
         })}/>
       </div>
-      : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
+      : <ChartStub reason="This run has no on-axis response yet. Wait for it to finish, or choose a completed run."/>;
     if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} normAngle={normAngle} angleGuideInterval={preferences.directivityGuideInterval} showContourNames={preferences.showContourNames} density={density} live={live}/>;
     if (chartType === 'directivity_index') {
       const option = mark(directivityIndexOption(overlays, tokens, preferences.smoothing, density));
-      return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab directivity index by frequency" live={live}/> : <ChartStub reason="Directivity Index needs a complete spherical field from a supported solve backend."/>;
+      return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab directivity index by frequency" live={live}/> : <ChartStub reason="Directivity Index needs a complete spherical field. Choose an engine that provides one, then solve again."/>;
     }
     if (chartType === 'power_response') {
       const option = mark(powerResponseOption(overlays, tokens, preferences.smoothing, density));
       return Array.isArray(option.series) && option.series.length
         ? <EChart option={option} label="Interactive HornLab spatially averaged power response from the solved spherical balloon" live={live}/>
-        : <ChartStub reason="Power Response needs on-axis SPL and directivity index from a complete spherical field."/>;
+        : <ChartStub reason="Power Response needs a complete spherical field. Choose an engine that provides one, then solve again."/>;
     }
     if (chartType === 'beam_shape') {
       if (result.beam_shape?.frequencies?.length) return <EChart option={mark(lineOption(beamShapeSeries(result), tokens, 'Beam width [°]', density))} label="Interactive HornLab horizontal and vertical forward beam width" live={live}/>;
@@ -1898,7 +1899,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
           ...(next.angles === undefined ? {} : { measurementAngles: next.angles }),
         })}/>
         </div>
-        : <ChartStub reason="Phase needs the directivity phase samples from a completed solve."/>;
+        : <ChartStub reason="This run has no directivity phase. Solve again to get it."/>;
     }
     if (chartType === 'group_delay') {
       const option = mark(groupDelayOption(overlays, tokens, density, preferences.groupDelayUnit));
@@ -1928,7 +1929,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         : excursionOption((overlays[0]?.result ?? result) as ResultPayload, tokens, density));
       return Array.isArray(option.series) && option.series.length
         ? <EChart option={option} label="Interactive HornLab cone excursion by frequency" live={live}/>
-        : <ChartStub reason={excursionSeries(result) ? 'Cone Excursion could not be read from this result.' : driverChartMissingReason(result, 'Cone Excursion')}/>;
+        : <ChartStub reason={excursionSeries(result) ? 'WG could not read Cone Excursion from this run. Solve again to get it.' : driverChartMissingReason(result, 'Cone Excursion')}/>;
     }
     if (chartType === 'max_output') {
       const option = mark(maxOutputOption(result, tokens, density, memberLabelOf(result)));
@@ -1945,16 +1946,16 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
       // them -- with no impedance block there is no unit to read -- so it uses
       // the card's own unit-neutral name.
       const { units } = impedanceComparable(overlays);
-      return Array.isArray(option.series) && option.series.length ? <EChart option={option} label={`Interactive HornLab ${units.spokenName} by frequency`} live={live}/> : <ChartStub reason="Impedance needs the optional impedance result block."/>;
+      return Array.isArray(option.series) && option.series.length ? <EChart option={option} label={`Interactive HornLab ${units.spokenName} by frequency`} live={live}/> : <ChartStub reason="This run has no impedance. Add a driver to a channel, then solve again."/>;
     }
     if (chartType === 'radiation_impedance') {
       const presentation = wrapper?.radiation_impedance ?? result.radiation_impedance;
       if (radiationArtifact?.status === 'failed') return <ChartStub
-        reason={`Could not load Radiation Matrix Load. ${radiationArtifact.message ?? 'The artifact request failed.'}`}
+        reason={`WG could not load Radiation Matrix Load. ${radiationArtifact.message ?? 'Select the run again.'}`}
         action={radiationArtifact.retry ? { label: 'Retry', onClick: radiationArtifact.retry } : undefined}
       />;
       if (radiationArtifact?.status === 'loading') return <ChartStub reason="Loading Radiation Matrix Load…"/>;
-      if (!presentation) return <ChartStub reason="Radiation Matrix Load needs a retained passive-cardioid radiation-impedance artifact."/>;
+      if (!presentation) return <ChartStub reason="Radiation Matrix Load needs a passive cardioid solve. Run one to see this chart."/>;
       const option = radiationImpedanceOption(presentation, tokens, density);
       return Array.isArray(option.series) && option.series.length
         ? <EChart option={option} label="Interactive HornLab engineering-convention passive-cardioid radiation load by frequency" live={live}/>
@@ -2113,7 +2114,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     } catch (reason) {
       setImageStatus(reason instanceof ExportCancelledError
         ? 'Export cancelled'
-        : operation === 'copy' ? 'Copy failed' : 'Export failed');
+        : operation === 'copy' ? 'WG could not copy this chart. Try again.' : 'WG could not export this chart. Try again.');
     } finally {
       setImageOperation(null);
       if (imageStatusTimer.current !== null) window.clearTimeout(imageStatusTimer.current);
@@ -2333,7 +2334,7 @@ export function ResultsPanel() {
           isProvisional: false,
           radiationArtifact: {
             status: 'failed' as const,
-            message: reason instanceof Error ? reason.message : String(reason),
+            message: failureWords(reason),
           },
         };
       }
@@ -2361,7 +2362,7 @@ export function ResultsPanel() {
         setDisplay(null);
         setFetchError({
           key: selectionKey,
-          message: reason instanceof Error ? reason.message : String(reason),
+          message: failureWords(reason),
         });
       });
     return () => { live = false; };
@@ -2485,7 +2486,7 @@ export function ResultsPanel() {
     workspaceNavigation.navigate('geometry');
     void showJobModel(primaryJob, coordinator.reportError)
       .then((ok) => setModelLoad(ok ? 'idle' : 'failed'))
-      .catch((reason) => { coordinator.reportError(String(reason)); setModelLoad('failed'); });
+      .catch((reason) => { coordinator.reportError(failureWords(reason)); setModelLoad('failed'); });
   }, [coordinator.reportError, primaryJob]);
   // Why the rail may not repaint this run. Stated from the dock because the
   // facts are the dock's -- run status, live preview, whose ingestion it is --
@@ -2568,7 +2569,7 @@ export function ResultsPanel() {
       })
       .catch((reason) => setRadiationArtifactLoads((current) => ({
         ...current,
-        [jobId]: { status: 'failed', message: reason instanceof Error ? reason.message : String(reason) },
+        [jobId]: { status: 'failed', message: failureWords(reason) },
       })));
   }, []);
   const radiationArtifact = selectedJob ? radiationArtifactLoads[selectedJob.id] : undefined;
@@ -2606,7 +2607,7 @@ export function ResultsPanel() {
           break;
         }
       } catch (reason) {
-        problems.push(reason instanceof Error ? reason.message : String(reason));
+        problems.push(failureWords(reason));
       }
     }
     setMeasuredError(problems.length ? problems.join(' ') : null);

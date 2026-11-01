@@ -1,4 +1,4 @@
-import { refusalText } from '../api/httpError';
+import { refusalText, ProgramFault } from '../api/httpError';
 import type { CadMeshSizes } from '../api/cadlink';
 import type { components } from '../api/generated/openapi';
 import type { CadSolveSetup } from '../api/cadOperations';
@@ -199,7 +199,7 @@ export async function getCapabilities(fetcher: typeof fetch = fetch, signal?: Ab
     if (!response.ok) throw new Error(await detail(response));
     return await response.json() as Capabilities;
   } catch (error) {
-    if (controller.signal.aborted) throw new Error('Capability refresh timed out or was cancelled. Check the backend connection and refresh.');
+    if (controller.signal.aborted) throw new Error('WG could not check the engines in time. Press Refresh to try again.');
     throw error;
   } finally {
     clearTimeout(timeout);
@@ -237,7 +237,7 @@ function engineModePlan(
   const requested = engine.trim().toLowerCase();
   const known = capabilities.engines.some((item) => item.name.toLowerCase() === requested);
   if (requested !== 'auto' && !known) {
-    throw new Error(`Unknown solve engine: ${requested || '(empty)'}`);
+    throw new ProgramFault(`Unknown solve engine: ${requested || '(empty)'}`);
   }
   const full3dOrder = capabilities.engineSelection?.full3dOrder.map((name) => name.toLowerCase())
     ?? capabilities.engines
@@ -380,7 +380,7 @@ export async function postSolvePlan(
     || !validSubstitution(plan.engine_substitution)
     || !validAdjustments(plan.adjustments)
   ) {
-    throw new Error('Solve plan response is invalid');
+    throw new ProgramFault('Solve plan response is invalid');
   }
   if (plan.readiness) throw new SolvePlanRefused(plan.readiness.message, 422, plan.readiness);
   return plan as SolvePlan;
@@ -447,7 +447,7 @@ export async function postImportedSolvePlan(
       && typeof entry.label === 'string'
       && typeof entry.solves === 'boolean')
   ) {
-    throw new Error('Imported solve plan response is invalid');
+    throw new ProgramFault('Imported solve plan response is invalid');
   }
   if (plan.readiness) plan.reason = plan.readiness.message;
   return plan as ImportedSolvePlan;

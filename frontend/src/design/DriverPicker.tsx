@@ -46,6 +46,7 @@ import {
   openingSearchKind,
   type DriverKindTally,
 } from './driverLibraryCounts';
+import { failureWords } from '../api/httpError';
 
 
 /**
@@ -379,7 +380,7 @@ function DriverSearch({ channel, roleHint, counts, onPick, displayName }: {
         setHits([]);
         setHiddenIncomplete(0);
         setMatchesByKind({});
-        setError(reason instanceof Error ? reason.message : String(reason));
+        setError(failureWords(reason));
       },
     );
     return () => { generation.current += 1; };

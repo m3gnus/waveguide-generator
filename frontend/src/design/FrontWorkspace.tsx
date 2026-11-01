@@ -30,6 +30,7 @@ import { ExperimentalBadge } from './ExperimentalBadge';
 import { frontViewProperties } from './FrontProperties';
 import './frontWorkspace.css';
 import './sourceContourEditor.css';
+import { failureWords } from '../api/httpError';
 
 /** How long the design must rest before the front context is refreshed. */
 export const FRONT_CONTEXT_DELAY_MS = 150;
@@ -138,7 +139,7 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
     setNotice('');
     // The jobs coordinator owns every submission; it reports a refusal itself.
     solveControl?.solveAssembly?.().then(result => setNotice(result.jobId ? result.notice ?? 'Solve submitted. Close this window to follow it in Results.' : ''),
-      (reason: unknown) => { if (useAssemblyBuildStore.getState().status !== 'refused') setNotice(reason instanceof Error ? reason.message : String(reason)); });
+      (reason: unknown) => { if (useAssemblyBuildStore.getState().status !== 'refused') setNotice(failureWords(reason)); });
   };
   const building = build.status === 'building';
   const refusal = resolved?.context.refusal;
@@ -152,7 +153,7 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
       <div className="front-canvas">
         {panel && <Workspace adapter={adapter} state={shown} session={controller} selection={selection} onSelectionChange={setSelection}
           slots={{ properties: panel }} fitRequest={fits.current.count}/>}
-        {!resolved && failure && <EmptyState className="front-canvas-empty" title="The front view is not available" detail={failure.text}
+        {!resolved && failure && <EmptyState className="front-canvas-empty" title="WG could not show the front view" detail={failure.text}
           action={<button className="btn-primary" type="button" onClick={retry}>Try again</button>}/>}
       </div>
       <aside className="front-panel" aria-label="Sources and baffle properties">

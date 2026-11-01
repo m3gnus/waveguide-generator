@@ -508,7 +508,7 @@ describe('jobs panel run list', () => {
     });
 
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
-    expect(reportStatus).toHaveBeenLastCalledWith(expect.stringContaining('Unknown ingestion record wgi_missing'));
+    expect(reportStatus).toHaveBeenLastCalledWith(expect.stringContaining('Cannot show Missing speaker'));
   });
 
   // Setting .value in a test replaces the whole string no matter where the

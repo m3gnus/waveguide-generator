@@ -9,6 +9,7 @@ import {
   currentDocumentLoad, getAtPath, serializeDesign, useDesignStore,
   type CrossSectionStation, type DesignDocument, type ExprNumber, type FreeformPoint, type FreeformProfile,
 } from '../stores/design';
+import { failureWords } from '../api/httpError';
 
 /**
  * The one owner of Custom profile (FREEFORM) edits.
@@ -299,7 +300,7 @@ export function setAnchorJoin(design: DesignDocument, plane: Plane, index: numbe
     if (pinned) {
       const incoming = sideDirection(target, 'in', resolved);
       const outgoing = sideDirection(target, 'out', resolved);
-      if (!incoming || !outgoing) throw new ProfileEditRefusal(`The resolved direction of ${label} is not available yet. Wait for the curve query, or fix the profile errors first.`);
+      if (!incoming || !outgoing) throw new ProfileEditRefusal(`The resolved direction of ${label} is not available yet. Wait for the curve check, or fix the marked profile values first.`);
       const sum: [number, number] = [Math.cos(incoming.angle) + Math.cos(outgoing.angle), Math.sin(incoming.angle) + Math.sin(outgoing.angle)];
       if (norm(sum) < 1e-9) throw new ProfileEditRefusal(`${label}'s incoming and outgoing directions are opposed, so there is no averaged smooth direction. Set an angle first.`);
       const average = degrees(Math.atan2(sum[1], sum[0]));
@@ -331,7 +332,7 @@ function storePoint(point: FreeformPoint): FreeformPoint {
 export function withInsertedProfile(design: DesignDocument, inserted: DesignDocument, plane: Plane): DesignDocument {
   const before = profileOf(design, plane).points;
   const points = profileOf(inserted, plane).points.map(storePoint);
-  if (points.length !== before.length + 1) throw new ProfileEditRefusal('The insertion did not return exactly one new anchor.');
+  if (points.length !== before.length + 1) throw new ProfileEditRefusal('WG could not add an anchor here. Choose a different position.');
   const index = points.findIndex((point, item) => item >= before.length || point.t !== before[item].t);
   const after = withPlane(design, plane, points);
   // Surviving points keep their authored expressions and omissions at their new indices.
@@ -730,7 +731,7 @@ export interface ProfileEditFetchers {
 }
 
 function messageOf(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason);
+  return failureWords(reason);
 }
 
 /** Preview, cancel and accept one edit at a time; stale results are dropped. */

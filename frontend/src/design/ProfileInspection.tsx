@@ -7,6 +7,7 @@ import { axes } from '../results/chartAxes';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { SelectRow } from './SelectRow';
 import { parameterPanelValidity } from './parameterPanelValidity';
+import { failureWords } from '../api/httpError';
 
 type Plane = 'both' | 'H' | 'V';
 
@@ -73,7 +74,7 @@ export function ProfileInspection({ design, identity, revision, invalidDraft = f
       void inspectProfileSamples(design, revision, controller.signal).then((samples) => {
         if (accepted()) { setResult({ key, identity, samples }); setFailure(undefined); }
       }).catch((reason: unknown) => {
-        if (accepted()) setFailure({ key, message: reason instanceof Error ? reason.message : String(reason) });
+        if (accepted()) setFailure({ key, message: failureWords(reason) });
       });
     }, 300);
     return () => { clearTimeout(timer); controller.abort(); };

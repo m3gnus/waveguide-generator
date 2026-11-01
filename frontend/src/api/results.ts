@@ -1,6 +1,7 @@
 import { deadlineFetch } from './deadlineFetch';
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import type { components } from './generated/openapi';
+import { httpErrorMessage, ProgramFault } from './httpError';
 export type NullableNumber = number | null;
 export type PolarSample = [number, NullableNumber | [number, number]];
 
@@ -109,7 +110,7 @@ function isResultProvenance(value: unknown): boolean {
 
 /** Validate the OpenAPI result union before a durable response can enter UI state. */
 export function parseFinalResultEnvelope(value: unknown): JobResults {
-  if (!isRecord(value)) throw new Error('invalid final result envelope');
+  if (!isRecord(value)) throw new ProgramFault('invalid final result envelope');
   if (!('result_contract_version' in value) && !('result_kind' in value) && !('channels' in value)) {
     // Results migrated from the original application predate the envelope
     // fields; their shape is the parametric v1 contract, so adopt that
@@ -118,21 +119,21 @@ export function parseFinalResultEnvelope(value: unknown): JobResults {
     // Top-level ``frequencies`` is the identity of that frequency-shaped
     // contract, so require it explicitly before adopting the payload.
     if (!Array.isArray(value.frequencies) || !isResultData(value)) {
-      throw new Error('invalid final result envelope');
+      throw new ProgramFault('invalid final result envelope');
     }
     return { ...value, result_kind: 'parametric', result_contract_version: 1 } as JobResults;
   }
   if (!('result_contract_version' in value)) {
-    throw new Error('final result is missing result_contract_version');
+    throw new ProgramFault('final result is missing result_contract_version');
   }
   const version = value.result_contract_version;
   if (version !== 1 && version !== 2) {
-    throw new Error(`unsupported result version ${String(version)}`);
+    throw new ProgramFault(`unsupported result version ${String(version)}`);
   }
-  if (!('result_kind' in value)) throw new Error('final result is missing result_kind');
+  if (!('result_kind' in value)) throw new ProgramFault('final result is missing result_kind');
   const supportedIdentity = (value.result_kind === 'parametric' && version === 1)
     || (value.result_kind === 'multi_channel' && version === 2);
-  if (!supportedIdentity) throw new Error(`unsupported result version ${String(version)}`);
+  if (!supportedIdentity) throw new ProgramFault(`unsupported result version ${String(version)}`);
   // Provenance and client fields are validated when present; results persisted
   // before a field existed are still readable, only the contract identity is
   // mandatory.
@@ -142,11 +143,11 @@ export function parseFinalResultEnvelope(value: unknown): JobResults {
     || ('client_metadata' in value && !(isRecord(value.client_metadata) && isSafeJson(value.client_metadata)))
     || !isRecord(value.metadata)
     || ('provenance' in value && value.provenance !== null && !isResultProvenance(value.provenance))) {
-    throw new Error('invalid final result envelope');
+    throw new ProgramFault('invalid final result envelope');
   }
   if (value.result_kind === 'multi_channel' && !(
     isRecord(value.channels) && Array.isArray(value.channel_order)
-  )) throw new Error('invalid final result envelope');
+  )) throw new ProgramFault('invalid final result envelope');
   return value as unknown as JobResults;
 }
 
@@ -375,12 +376,7 @@ export async function fetchJobResults(jobId: string, fetcher: typeof fetch = fet
   const request = (async () => {
     const response = await deadlineFetch(fetcher, `/api/results/${encodeURIComponent(jobId)}`);
     if (!response.ok) {
-      let detail = `Results request failed: ${response.status}`;
-      try {
-        const body = await response.json() as { detail?: string };
-        if (body.detail) detail = body.detail;
-      } catch { /* status is enough */ }
-      throw new Error(detail);
+      throw new Error(await httpErrorMessage(response, 'WG could not load this run’s results. Select the run again.'));
     }
     const result = parseFinalResultEnvelope(await response.json());
     resultsCache.set(jobId, result);
@@ -419,15 +415,10 @@ export async function fetchJobArchiveSnapshot(
 ): Promise<JobArchiveSnapshot> {
   const response = await deadlineFetch(fetcher, `/api/jobs/${encodeURIComponent(jobId)}/archive-snapshot`);
   if (!response.ok) {
-    let detail = `Archive snapshot request failed: ${response.status}`;
-    try {
-      const body = await response.json() as { detail?: string };
-      if (body.detail) detail = body.detail;
-    } catch { /* status is enough */ }
-    throw new Error(detail);
+    throw new Error(await httpErrorMessage(response, 'WG could not read this run’s saved copy. Select the run again.'));
   }
   const value = await response.json();
-  if (!isRecord(value)) throw new Error('invalid archive snapshot');
+  if (!isRecord(value)) throw new ProgramFault('invalid archive snapshot');
   const snapshot = { ...value, results: parseFinalResultEnvelope(value.results) } as unknown as JobArchiveSnapshot;
   resultsCache.set(jobId, snapshot.results);
   return snapshot;
@@ -443,12 +434,7 @@ export async function fetchRadiationImpedancePresentation(
   const response = await deadlineFetch(fetcher, `/api/radiation-impedance/${encodeURIComponent(jobId)}/presentation`);
   if (response.status === 404) return null;
   if (!response.ok) {
-    let detail = `Radiation-impedance request failed: ${response.status}`;
-    try {
-      const body = await response.json() as { detail?: string };
-      if (body.detail) detail = body.detail;
-    } catch { /* status is enough */ }
-    throw new Error(detail);
+    throw new Error(await httpErrorMessage(response, 'WG could not load this run’s port data. Select the run again.'));
   }
   return response.json() as Promise<RadiationImpedancePresentation>;
 }
@@ -518,12 +504,7 @@ export async function recombineJobResults(
       body: JSON.stringify(spec),
     });
     if (!response.ok) {
-      let detail = `Recombine request failed: ${response.status}`;
-      try {
-        const body = await response.json() as { detail?: string };
-        if (body.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
-      } catch { /* status is enough */ }
-      throw new Error(detail);
+      throw new Error(await httpErrorMessage(response, 'WG could not update the combined response. Change the crossover again.'));
     }
     result = parseFinalResultEnvelope(await response.json());
     return result;

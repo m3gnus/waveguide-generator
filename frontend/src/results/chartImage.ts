@@ -33,10 +33,10 @@ export function composeChartCanvases(
   createCanvas: () => HTMLCanvasElement = () => document.createElement('canvas'),
 ): HTMLCanvasElement {
   const layers = visibleCanvases(container);
-  if (!layers.length) throw new Error('This chart has no image to capture.');
+  if (!layers.length) throw new Error('This chart is empty, so there is no image to copy. Choose a chart with data.');
 
   const bounds = container.getBoundingClientRect();
-  if (!bounds.width || !bounds.height) throw new Error('This chart is not visible.');
+  if (!bounds.width || !bounds.height) throw new Error('Open this chart, then copy or export it.');
   const pixelRatio = Math.min(MAX_PIXEL_RATIO, Math.max(
     DEFAULT_PIXEL_RATIO,
     ...layers.map(layerPixelRatio).filter(Number.isFinite),
@@ -45,7 +45,7 @@ export function composeChartCanvases(
   output.width = Math.max(1, Math.round(bounds.width * pixelRatio));
   output.height = Math.max(1, Math.round(bounds.height * pixelRatio));
   const context = output.getContext('2d');
-  if (!context) throw new Error('Canvas image capture is unavailable.');
+  if (!context) throw new Error('WG could not make an image of this chart. Try again.');
 
   context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   context.fillStyle = background || getComputedStyle(container).backgroundColor || '#fff';
@@ -61,7 +61,7 @@ function pngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (blob) resolve(blob);
-      else reject(new Error('Chart PNG encoding failed.'));
+      else reject(new Error('WG could not make an image of this chart. Try again.'));
     }, 'image/png');
   });
 }
@@ -72,7 +72,7 @@ export async function chartPngBlob(container: HTMLElement, background?: string):
 
 export async function copyChartPng(container: HTMLElement, background?: string): Promise<void> {
   if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
-    throw new Error('Image clipboard access is unavailable.');
+    throw new Error('Copying images is not available here. Use Export PNG instead.');
   }
   const blob = await chartPngBlob(container, background);
   await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);

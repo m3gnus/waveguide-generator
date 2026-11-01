@@ -3,6 +3,7 @@ import { jobsSocket } from '../api/jobsSocket';
 import { dismissCadJob } from './cadSolve';
 import type { EngineCapability } from './actions';
 import type { RequestedSolveOwner } from './useRequestedSolve';
+import { failureWords } from '../api/httpError';
 
 /** The current Fusion request held by the selected engine gate. */
 export function heldEngineSolveJob() {
@@ -24,7 +25,7 @@ export function useHeldSolvePreparation(owner: RequestedSolveOwner, engines: rea
     const job = heldEngineSolveJob();
     owner.cancel();
     if (request?.jobId && owner.state.phase !== 'submitting' && job?.id === request.jobId) {
-      void dismissCadJob(job).catch(error => reportNotice(error instanceof Error ? error.message : String(error)));
+      void dismissCadJob(job).catch(error => reportNotice(failureWords(error)));
     }
   } };
 }

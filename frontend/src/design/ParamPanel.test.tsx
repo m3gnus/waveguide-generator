@@ -546,7 +546,7 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('requires the lip radius to exceed the wall for a full rear, on both fields', () => {
-    const message = 'Mesh.Roundover with RearShape = 1 requires Radius > Mesh.WallThickness';
+    const message = 'Make the radius larger than the wall thickness';
     const type = (id: string, draft: string) => {
       const input = host.querySelector<HTMLInputElement>(`[data-parameter-id="${id}"] input`)!;
       act(() => input.focus());
@@ -610,12 +610,12 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it.each([
-    ['mesh.ath_roundover.radius', '0', 'Mesh.Roundover.Radius must be finite and > 0'],
-    ['mesh.ath_roundover.radius', '-1', 'Mesh.Roundover.Radius must be finite and > 0'],
-    ['mesh.ath_roundover.segments', '1.5', 'Mesh.Roundover.Segments must be a finite integer >= 1'],
-    ['mesh.ath_roundover.segments', '0', 'Mesh.Roundover.Segments must be a finite integer >= 1'],
-    ['mesh.ath_rear_front_offset', '-1', 'negative offsets have no qualified ATH ring fit'],
-    ['mesh.ath_rear_step', '0', 'Mesh.RearShape.Step must be finite and > 0'],
+    ['mesh.ath_roundover.radius', '0', 'Enter a radius greater than 0.'],
+    ['mesh.ath_roundover.radius', '-1', 'Enter a radius greater than 0.'],
+    ['mesh.ath_roundover.segments', '1.5', 'Enter a whole number of at least 1.'],
+    ['mesh.ath_roundover.segments', '0', 'Enter a whole number of at least 1.'],
+    ['mesh.ath_rear_front_offset', '-1', 'WG cannot fit a negative front offset'],
+    ['mesh.ath_rear_step', '0', 'Enter a step greater than 0.'],
   ])('validates %s input %s with the mesher diagnostic', (id, draft, message) => {
     act(() => useDesignStore.getState().replaceDocument(hydrateDesignDocument({
       formula: 'OSSE', text_import_version: 'ath-2026-09a-v2', enclosure: null, mesh: { ath_rear_shape: 3, ath_roundover: { radius: 10, segments: 5 } },
@@ -852,7 +852,7 @@ describe('ParamPanel inventory UX', () => {
     expect([...domain.options].map((option) => option.value)).toEqual(['full']);
     expect(domain.value).toBe('full');
     expect(domain.options[0].disabled).toBe(false);
-    expect(host.textContent).toContain('This native formula requires the full circular mesh domain.');
+    expect(host.textContent).toContain('This family always solves the whole model.');
     expect(host.textContent).not.toContain('Auto resolves to');
     act(() => root.render(withQueryClient(<ParamPanel tab="geometry" />)));
     const selector = host.querySelector<HTMLSelectElement>('#family')!;
@@ -1028,7 +1028,7 @@ describe('ParamPanel inventory UX', () => {
       useDesignStore.getState().setFamily('OSSE-ARC');
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
-    expect(host.textContent).toContain('Select Full in Solve domain.');
+    expect(host.textContent).toContain('Set Solve domain to Full.');
     const domain = host.querySelector<HTMLSelectElement>('#solve-symmetry')!;
     expect(domain.value).toBe('');
     expect([...domain.options].filter((option) => !option.hidden).map((option) => option.value)).toEqual(['full']);
@@ -1037,7 +1037,7 @@ describe('ParamPanel inventory UX', () => {
       domain.dispatchEvent(new Event('change', { bubbles: true }));
     });
     expect(useSolveOptionsStore.getState().symmetry).toBe('full');
-    expect(host.textContent).not.toContain('Select Full in Solve domain.');
+    expect(host.textContent).not.toContain('Set Solve domain to Full.');
   });
 
   it('shows plain stretch controls for OSSE families and announces preview revisions on edits', () => {
@@ -1377,7 +1377,7 @@ describe('ParamPanel inventory UX', () => {
     await act(async () => useImportedSolveOptionsStore.getState().updatePolar({ angleStart: 90, angleEnd: -90 }));
     const directivity = host.querySelector('[data-section="Directivity"]')!;
     expect(directivity.querySelector('.section-head')?.getAttribute('aria-expanded')).toBe('false');
-    expect(directivity.querySelector('.section-head [aria-label="Contains invalid fields"]')).not.toBeNull();
+    expect(directivity.querySelector('.section-head [aria-label="Has a value to fix"]')).not.toBeNull();
   });
 
   it.each([false, true])('keeps a one-driver cardioid open without changing retained combined output (%s)', (developer) => {

@@ -210,7 +210,7 @@ export function selectionLimitation(
   // An engine that can run it in principle but is not installed or enabled here
   // is unavailable, not incapable; the remedy is the same but the reason is not.
   const problem = own && capabilitySupports(own, feature) && !own.available
-    ? `${engineDisplayName(selected)} is not available on this host`
+    ? `${engineDisplayName(selected)} is not available on this computer`
     : `${engineDisplayName(selected)} cannot solve ${FEATURE_LABELS[feature]}`;
   return `${problem}. Switch the engine to ${switchTo}.`;
 }

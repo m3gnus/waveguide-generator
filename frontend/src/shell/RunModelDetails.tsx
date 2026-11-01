@@ -6,6 +6,7 @@ import { modelForRun } from '../model/currentModel';
 import { useDeveloperDetails } from '../prefs/preferences';
 import type { JobItem } from '../api/jobsSocket';
 import { listProjectDocuments, openProjectDocument, projectDocumentUrl, type CadProjectDocument } from '../api/cadProjects';
+import { failureWords } from '../api/httpError';
 
 /** Optional CAD attachments decorate the shared run; their failure cannot hide it. */
 export function RunModelDetails({ job }: { job: JobItem }) {
@@ -25,7 +26,7 @@ export function RunModelDetails({ job }: { job: JobItem }) {
       if (current) setState({ key, document: items.find(item => item.returnStateHash === hash) ?? null, error: null,
         launchDisabled: listing.launchDisabled, fileManager: listing.fileManager });
     }, error => {
-      if (current) setState({ key, document: null, error: String(error) });
+      if (current) setState({ key, document: null, error: failureWords(error, 'Select the run again.') });
     });
     return () => { current = false; };
   }, [lineage, hash, key]);
@@ -40,7 +41,7 @@ export function RunModelDetails({ job }: { job: JobItem }) {
         ? { key, pending: false, message: result.message, error: false } : previous);
     } catch (error) {
       setAction(previous => previous?.key === key
-        ? { key, pending: false, message: error instanceof Error ? error.message : String(error), error: true } : previous);
+        ? { key, pending: false, message: failureWords(error), error: true } : previous);
     }
   };
   let attachment;

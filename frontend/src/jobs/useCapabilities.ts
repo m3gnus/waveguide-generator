@@ -13,6 +13,7 @@ import { useImportedSolveOptionsStore, useSolveOptionsStore } from '../stores/so
 import { useSolveControlBackend } from './useSolveControlBackend';
 import { activeBackendCapability, plannedBackendCapabilities } from '../design/backendSupport';
 import { useScopedSolveOptions } from '../stores/solveOptionsContext';
+import { failureWords } from '../api/httpError';
 
 /**
  * One shared capability query for the whole app.
@@ -176,8 +177,8 @@ export function useCapabilities(): CapabilitiesSnapshot {
     femRegionsOffered: data?.femRegions === true,
     engines: data?.engines ?? NO_ENGINES,
     engineSelection: data?.engineSelection ?? NO_ENGINE_SELECTION,
-    error: backendLost ? 'Backend connection interrupted. Reconnecting; refresh capabilities when it returns.'
-      : isError ? (error instanceof Error ? error.message : String(error)) : null,
+    error: backendLost ? 'WG lost contact with its engines and is reconnecting. Press Refresh when it is back.'
+      : isError ? (failureWords(error)) : null,
     isLoading: isPending,
     qualificationRefreshNeeded: pending && (ceilingReached || isError || backendLost),
     refreshCapabilities,

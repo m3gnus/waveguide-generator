@@ -9,6 +9,7 @@ import {
 import { cadJobSummary } from '../jobs/cadSolve';
 import { useDeveloperDetails } from '../prefs/preferences';
 import type { JobItem, CadProvenance } from '../api/jobsSocket';
+import { failureWords } from '../api/httpError';
 
 interface LoadState<T> {
   key: string;
@@ -19,7 +20,7 @@ interface LoadState<T> {
 const EMPTY_LOAD = { key: '', value: null, error: null };
 
 function message(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason);
+  return failureWords(reason);
 }
 
 /** What a run made with WG's default settings says about them: the

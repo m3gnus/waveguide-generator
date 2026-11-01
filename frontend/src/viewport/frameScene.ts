@@ -2,6 +2,7 @@ import { Box3, Vector3 } from 'three';
 import type { DecodedFrame, FrameArray, FrameSurface } from '../api/frame';
 import { ROLE_MATERIAL_FAMILY } from './types';
 import type { SceneSurface, SourceRole, SurfaceMaterialClass } from './types';
+import { ProgramFault } from '../api/httpError';
 
 export interface FrameScene {
   surfaces: SceneSurface[];
@@ -22,7 +23,7 @@ export function hasRenderableSurfaces(scene: FrameScene | null): boolean {
 
 function section<T extends FrameArray>(frame: DecodedFrame, name: string, constructor: { new (...args: never[]): T }): T {
   const value = frame.sections[name];
-  if (!(value instanceof constructor)) throw new Error(`Surface section ${name} has the wrong type`);
+  if (!(value instanceof constructor)) throw new ProgramFault(`Surface section ${name} has the wrong type`);
   return value;
 }
 

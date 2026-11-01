@@ -10,6 +10,7 @@ import {
   type FramePreviewProjection,
   type SolverFrameAxis,
 } from '../viewport/solverFrame';
+import { failureWords } from '../api/httpError';
 
 async function loadModel(ingestId: string, fetcher: typeof fetch): Promise<ParsedMSH> {
   // This thumbnail draws every triangle twice on a 220×150 canvas. The exact
@@ -107,7 +108,7 @@ function useFrameMesh(ingestId: string | null, fetcher: typeof fetch): { mesh: P
     void loadModel(ingestId, fetcher)
       .then((mesh) => { if (current) setState({ ingestId, mesh, error: null }); })
       .catch((reason: unknown) => {
-        if (current) setState({ ingestId, mesh: null, error: reason instanceof Error ? reason.message : String(reason) });
+        if (current) setState({ ingestId, mesh: null, error: failureWords(reason) });
       });
     return () => { current = false; };
   }, [fetcher, ingestId, state?.ingestId]);
@@ -220,7 +221,7 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, confirmOnDone 
     setSwitchError(null);
     void confirmSolverFrame({ ingestId }, target, fetcher)
       .then((answer) => apply(ingestId, answer))
-      .catch((reason: unknown) => setSwitchError(reason instanceof Error ? reason.message : String(reason)))
+      .catch((reason: unknown) => setSwitchError(failureWords(reason)))
       .finally(() => setSwitching(false));
   };
   const done = () => {

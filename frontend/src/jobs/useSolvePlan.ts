@@ -10,6 +10,7 @@ import {
   SOLVE_PLAN_GC_MS,
   SOLVE_PLAN_RECOVERY_MS,
 } from './planQueryPolicy';
+import { failureWords } from '../api/httpError';
 
 export {
   SOLVE_PLAN_DEBOUNCE_MS,
@@ -79,7 +80,7 @@ export function useSolvePlan(
     readiness: currentIsSettled && query.error instanceof SolvePlanRefused ? query.error.readiness : null,
     plan: currentIsSettled ? query.data ?? null : null,
     error: currentIsSettled && query.error
-      ? query.error instanceof Error ? query.error.message : String(query.error)
+      ? failureWords(query.error)
       : null,
     isPending: currentBody !== null && (!currentIsSettled || query.isPending),
   };

@@ -206,7 +206,7 @@ describe('the export destination dialog', () => {
 
   it('refuses to export when no dialog is mounted, rather than writing somewhere unasked', async () => {
     await expect(askForExportDestination({ title: 'Export STEP' })).rejects
-      .toThrow('not available');
+      .toThrow('could not open the folder chooser');
   });
 
   it('keeps the folder just chosen when a second picker is cancelled', async () => {

@@ -22,6 +22,7 @@ import {
   type FieldPlaneValueWindow,
 } from './fieldPlaneColor';
 import { fieldPlanePreset } from './fieldPlaneMath';
+import { ProgramFault } from '../api/httpError';
 
 export type FieldPlaneStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -206,7 +207,7 @@ export class FieldPlaneLruCache<Value> {
   private readonly entries = new Map<string, Value>();
 
   constructor(private readonly capacity = DEFAULT_CACHE_CAPACITY) {
-    if (!Number.isSafeInteger(capacity) || capacity < 1) throw new Error('Field-plane cache capacity must be positive');
+    if (!Number.isSafeInteger(capacity) || capacity < 1) throw new ProgramFault('Field-plane cache capacity must be positive');
   }
 
   get size(): number { return this.entries.size; }
@@ -336,25 +337,25 @@ export function defaultFieldPlane(scene: FrameScene): FieldPlaneSpec {
 export function fieldPlaneErrorMessage(reason: unknown): string {
   if (reason instanceof FieldPlaneHttpError) {
     switch (reason.status) {
-      case 404: return 'field-plane result was not found';
-      case 409: return 'field-plane result changed; select the completed run again';
-      case 410: return 're-solve to enable field planes';
+      case 404: return 'This run has no field data. Solve the design again to see it.';
+      case 409: return 'This run’s field data changed. Select the completed run again.';
+      case 410: return 'Solve the design again to see the field plane.';
       case 422: return reason.remedy
         ? `${reason.message} ${reason.remedy}`
-        : 'field planes are unavailable for this solve';
-      case 429: return 'field-plane request was superseded; try again';
-      case 503: return 'waiting for solve to finish';
-      case 504: return 'field-plane evaluation timed out';
+        : 'This solve has no field plane. Turn on Keep field plane data, then solve again.';
+      case 429: return 'WG is working on a newer field plane. Wait for it to appear.';
+      case 503: return 'Waiting for the solve to finish.';
+      case 504: return 'The field plane took too long to calculate. Try again.';
       default: return reason.status >= 400 && reason.status < 500
-        ? 'field-plane request was rejected'
-        : 'field-plane evaluation failed';
+        ? 'WG could not calculate this field plane and has recorded the problem. Select the run again.'
+        : 'WG could not calculate this field plane and has recorded the problem. Select the run again.';
     }
   }
   if (reason instanceof Error && reason.name === 'AbortError') return 'field-plane request cancelled';
   if (reason instanceof TypeError) return 'could not connect to the field-plane service';
   return reason instanceof Error && reason.message
     ? `field-plane response error: ${reason.message}`
-    : 'field-plane evaluation failed';
+    : 'WG could not calculate this field plane and has recorded the problem. Select the run again.';
 }
 
 export function createFieldPlaneStore(
@@ -413,7 +414,7 @@ export function createFieldPlaneStore(
             || field.header.response_id !== pending.responseId
             || field.header.nx !== pending.plane.nx
             || field.header.ny !== pending.plane.ny
-          ) throw new Error('response metadata does not match the field-plane request');
+          ) throw new ProgramFault('response metadata does not match the field-plane request');
 
           if (cacheGeometrySha256 !== null && cacheGeometrySha256 !== field.header.geometry_sha256) cache.clear();
           cacheGeometrySha256 = field.header.geometry_sha256;
@@ -607,7 +608,7 @@ export function createFieldPlaneStore(
         .then((results) => {
           const frequenciesHz = [...results.frequencies];
           if (!frequenciesHz.length || frequenciesHz.some((value) => !Number.isFinite(value) || value <= 0)) {
-            throw new Error('the selected result has no valid solved frequencies');
+            throw new ProgramFault('the selected result has no valid solved frequencies');
           }
           const current = get();
           if (generation !== activationGeneration || !current.enabled || current.jobId !== jobId) return;

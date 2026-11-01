@@ -253,7 +253,7 @@ describe('receipt review regressions', () => {
     await vi.advanceTimersByTimeAsync(5_000 + 30_000 + 120_000);
     expect(display.mock.calls.filter(([item]) => item.cursor === 1)).toHaveLength(4);
     expect(reload.getState().receipts).toEqual({});
-    expect(reload.getState().feedback['send:1'].message).toContain('repeated transport failures');
+    expect(reload.getState().feedback['send:1'].message).toContain('could not open this model');
     reload.getState().merge({ feed_id: 'feed-a', receipts: [receipt(1), receipt(2)], cursor: 2, has_more: false });
     await flush();
     expect(display).toHaveBeenCalledTimes(5);

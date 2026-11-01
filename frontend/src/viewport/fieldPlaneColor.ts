@@ -1,3 +1,4 @@
+import { ProgramFault } from '../api/httpError';
 export const REFERENCE_PRESSURE_PA = 2e-5;
 export const FIELD_PLANE_WINDOW_DB = 60;
 export const FIELD_PLANE_NORMALIZED_MIN_DB = -40;
@@ -103,12 +104,12 @@ export function windowNormalize(value: number, lo: number, hi: number): number {
 }
 
 export function lutIndex(normalized: number, size = FIELD_PLANE_LUT_SIZE): number {
-  if (!Number.isSafeInteger(size) || size < 1) throw new Error('LUT size must be a positive integer');
+  if (!Number.isSafeInteger(size) || size < 1) throw new ProgramFault('LUT size must be a positive integer');
   return Math.round(Math.max(0, Math.min(1, normalized)) * (size - 1));
 }
 
 export function sampleLut(lut: Uint8Array, normalized: number): { index: number; rgba: Rgba8 } {
-  if (lut.length === 0 || lut.length % 4 !== 0) throw new Error('LUT must contain RGBA texels');
+  if (lut.length === 0 || lut.length % 4 !== 0) throw new ProgramFault('LUT must contain RGBA texels');
   const index = lutIndex(normalized, lut.length / 4);
   const offset = index * 4;
   return { index, rgba: [lut[offset], lut[offset + 1], lut[offset + 2], lut[offset + 3]] };
@@ -119,7 +120,7 @@ function parseHexColor(value: string): Rgba8 {
   const expanded = hex.length === 3
     ? hex.split('').map((digit) => `${digit}${digit}`).join('')
     : hex;
-  if (!/^[0-9a-fA-F]{6}$/.test(expanded)) throw new Error(`Unsupported colormap colour: ${value}`);
+  if (!/^[0-9a-fA-F]{6}$/.test(expanded)) throw new ProgramFault(`Unsupported colormap colour: ${value}`);
   return [
     Number.parseInt(expanded.slice(0, 2), 16),
     Number.parseInt(expanded.slice(2, 4), 16),
@@ -130,8 +131,8 @@ function parseHexColor(value: string): Rgba8 {
 
 /** Expand colour stops to the 256 texels sampled by the shader. */
 export function buildLutRgba(colormap: readonly string[], size = FIELD_PLANE_LUT_SIZE): Uint8Array {
-  if (colormap.length === 0) throw new Error('Colormap must contain at least one colour');
-  if (!Number.isSafeInteger(size) || size < 2) throw new Error('LUT size must be an integer of at least 2');
+  if (colormap.length === 0) throw new ProgramFault('Colormap must contain at least one colour');
+  if (!Number.isSafeInteger(size) || size < 2) throw new ProgramFault('LUT size must be an integer of at least 2');
   const stops = colormap.map(parseHexColor);
   const output = new Uint8Array(size * 4);
   for (let index = 0; index < size; index += 1) {
@@ -158,7 +159,7 @@ export function fieldPlaneColormap(
 }
 
 export function maxFieldSplDb(real: Float32Array, imag: Float32Array): number {
-  if (real.length !== imag.length) throw new Error('Complex field components must have equal lengths');
+  if (real.length !== imag.length) throw new ProgramFault('Complex field components must have equal lengths');
   let maximum = -Infinity;
   for (let index = 0; index < real.length; index += 1) {
     const value = splDb(real[index], imag[index]);
@@ -168,7 +169,7 @@ export function maxFieldSplDb(real: Float32Array, imag: Float32Array): number {
 }
 
 export function maxFieldMagnitudePa(real: Float32Array, imag: Float32Array): number {
-  if (real.length !== imag.length) throw new Error('Complex field components must have equal lengths');
+  if (real.length !== imag.length) throw new ProgramFault('Complex field components must have equal lengths');
   let maximum = 0;
   for (let index = 0; index < real.length; index += 1) {
     const value = Math.hypot(real[index], imag[index]);
@@ -178,7 +179,7 @@ export function maxFieldMagnitudePa(real: Float32Array, imag: Float32Array): num
 }
 
 function instantaneousFieldLimitPa(real: Float32Array, imag: Float32Array): number {
-  if (real.length !== imag.length) throw new Error('Complex field components must have equal lengths');
+  if (real.length !== imag.length) throw new ProgramFault('Complex field components must have equal lengths');
   const magnitudes: number[] = [];
   let maximum = 0;
   for (let index = 0; index < real.length; index += 1) {

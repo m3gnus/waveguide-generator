@@ -528,7 +528,7 @@ describe('results run coherence', () => {
     }));
 
     await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); await Promise.resolve(); });
-    expect(host.textContent).toContain('Could not load Radiation Matrix Load');
+    expect(host.textContent).toContain('WG could not load Radiation Matrix Load');
     expect(host.textContent).toContain('matrix store temporarily unavailable');
     const retry = [...host.querySelectorAll<HTMLButtonElement>('.chart-stub button')]
       .find((button) => button.textContent === 'Retry')!;
@@ -537,7 +537,7 @@ describe('results run coherence', () => {
     await act(async () => { retry.click(); await Promise.resolve(); await Promise.resolve(); });
     expect(paths.filter((path) => path === '/api/results/cardioid')).toHaveLength(1);
     expect(paths.filter((path) => path === '/api/radiation-impedance/cardioid/presentation')).toHaveLength(2);
-    expect(host.textContent).not.toContain('Could not load Radiation Matrix Load');
+    expect(host.textContent).not.toContain('WG could not load Radiation Matrix Load');
     expect(host.textContent).not.toContain('needs a retained passive-cardioid');
   });
 });

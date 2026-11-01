@@ -26,6 +26,7 @@ import { cadHistorySetup } from '../../stores/cadSetupRestore';
 import { seedImportedSolveOptionsFromParametric } from '../../stores/solveOptions';
 import { DEFAULT_SWEEP } from '../../stores/solveDefaults';
 import { reportCadAutomationError } from './caughtErrors';
+import { failureWords } from '../../api/httpError';
 export { cadHistorySetup } from '../../stores/cadSetupRestore';
 
 export async function refreshChannelDriverBases(fetcher: typeof fetch = fetch, input: 'cad' | 'file' = 'cad'): Promise<string[]> {
@@ -331,7 +332,7 @@ export function observeLastModel({
       .then((opened) => { if (opened && active) reportStatus('Reopened the last model.'); })
       .catch((error: unknown) => {
         reportCadAutomationError('reopen-last-model', error);
-        if (active) reportError(error instanceof Error ? error.message : String(error));
+        if (active) reportError(failureWords(error));
       })
       .finally(() => { restorePending.current = false; if (active) onSettled(); });
   };

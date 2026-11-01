@@ -5,6 +5,7 @@ import {
   type SolverFrameState,
 } from '../api/solverFrame';
 import type { SolverFrameAxis } from '../viewport/solverFrame';
+import { failureWords } from '../api/httpError';
 
 /**
  * The solver frame of the CAD model on screen, as its Model details show it
@@ -112,7 +113,7 @@ export const useCadSolverFrameStore = create<CadSolverFrameStore>((set, get) => 
         set({ frames: { ...get().frames, [ingestId]: viewOf(ingestId, preview, get().frames[ingestId]) } });
       })
       .catch((reason: unknown) => {
-        const message = reason instanceof Error ? reason.message : String(reason);
+        const message = failureWords(reason);
         const current = get().frames[ingestId];
         set({ frames: { ...get().frames, [ingestId]: {
           ingestId, status: 'error', frame: current?.frame ?? null, linked: false,

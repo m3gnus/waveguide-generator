@@ -5,6 +5,7 @@ import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import type { components } from './generated/openapi';
 import { compareSelection, provisionalResults, type ResultData } from './results';
 import type { CadDeliveryStatus, CadInboxRefusal, CadOperationSummary } from './cadOperations';
+import { ProgramFault } from './httpError';
 
 /**
  * Reference-compares own properties. Nested values are compared by identity,
@@ -1336,10 +1337,10 @@ export class JobsSocketManager {
         if (!response.ok) throw await responseError(response);
         const body = await response.json() as unknown;
         if (!isRecord(body) || !Array.isArray(body.items) || !body.items.every(isJobItem)) {
-          throw new Error('Invalid jobs list response');
+          throw new ProgramFault('Invalid jobs list response');
         }
         if (hasOwn(body, 'total') && !isNonNegativeInteger(body.total)) {
-          throw new Error('Invalid jobs list total');
+          throw new ProgramFault('Invalid jobs list total');
         }
         if (generation !== this.refetchGeneration) return;
         body.items.forEach((job) => fetched.set(job.id, job));
@@ -1384,7 +1385,7 @@ export class JobsSocketManager {
       adopted.forEach((jobId) => { void this.refreshJob(jobId); });
     } catch (error) {
       if (generation !== this.refetchGeneration) return;
-      this.update({ error: error instanceof Error ? error.message : String(error) });
+      this.update({ error: (error instanceof Error ? error.message : String(error)) });
     }
   }
 
@@ -1428,10 +1429,10 @@ export class JobsSocketManager {
         ) {
           provisionalResults.apply(jobId, Number(body.revision), body.result, true);
         } else {
-          throw new Error('Invalid partial results response');
+          throw new ProgramFault('Invalid partial results response');
         }
       } catch (error) {
-        this.update({ error: error instanceof Error ? error.message : String(error) });
+        this.update({ error: (error instanceof Error ? error.message : String(error)) });
       }
     })();
     this.partialRefreshes.set(jobId, refresh);
@@ -1470,7 +1471,7 @@ export class JobsSocketManager {
         }
         if (!response.ok) throw await responseError(response);
         const job = await response.json() as unknown;
-        if (!isJobItem(job) || job.id !== jobId) throw new Error('Invalid job status response');
+        if (!isJobItem(job) || job.id !== jobId) throw new ProgramFault('Invalid job status response');
         if (this.jobGenerations.get(jobId) !== generation) return false;
         if (retry()) continue;
         const followUp = superseded();
@@ -1480,7 +1481,7 @@ export class JobsSocketManager {
         return followUp;
       } catch (error) {
         if (this.jobGenerations.get(jobId) !== generation) return false;
-        this.update({ error: error instanceof Error ? error.message : String(error) });
+        this.update({ error: (error instanceof Error ? error.message : String(error)) });
         return false;
       }
     }

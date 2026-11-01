@@ -204,7 +204,7 @@ describe('result exporters', () => {
       expect(saveText).not.toHaveBeenCalled();
       expect(bundle.files).toEqual([]);
       expect(bundle.failures).toEqual([
-        { format: 'polar_csv', reason: expect.stringMatching(/2 frame\(s\).*3 point\(s\)/) },
+        { format: 'polar_csv', reason: 'WG could not write this file. Try again.' },
       ]);
     });
   });
@@ -758,7 +758,7 @@ describe('result exporters', () => {
 
     expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual(['/api/workspace/path', '/api/folders/select']);
     expect(bundle).toEqual({
-      files: [], failures: [{ format: 'polar_frd', reason: 'Workspace selection was cancelled. No files were written.' }],
+      files: [], failures: [{ format: 'polar_frd', reason: 'Export cancelled. No files were written.' }],
     });
   });
 

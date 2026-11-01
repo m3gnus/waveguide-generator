@@ -25,7 +25,7 @@ export type JobDesignFields = Pick<JobItem, 'script_snapshot'> & {
 };
 
 const UNAVAILABLE_FALLBACK =
-  'This job has no design that Waveguide Generator can read back, so it cannot be reopened or rerun.';
+  'This run did not keep a design WG can read, so it cannot be opened or repeated.';
 
 export function jobDesignWire(job: Pick<JobItem, 'script_snapshot'>): Record<string, unknown> | null {
   const snapshot = job.script_snapshot;
@@ -95,7 +95,7 @@ export function jobDesignAvailability(job: JobDesignFields): DesignAvailability 
 }
 
 const CLIENT_UNREADABLE =
-  'This job’s stored design could not be read by this version of the interface, so it cannot be reopened or rerun.';
+  'This version of WG cannot read this run’s design. Update WG to open or repeat it.';
 
 /**
  * Whether this job's design can actually be put back on screen, and why not.

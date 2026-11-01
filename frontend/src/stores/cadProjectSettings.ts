@@ -12,6 +12,7 @@ import { applyCadOptions, cadOptionsSnapshot, endOpenedSetup, restoreCadImported
 import { readLegacySolveProfiles, parseSolveSettings, type PersistedSolveSettings } from './legacyCadProfiles';
 import { defaultSolveOptions, importedOptionsFromWire, normalizePersistedSolveOptions, type ImportedOptionsSnapshot } from './solveOptions';
 import { gateSolveSettingsEdits, subscribeSolveSettingsEdits } from './solveSettingsEdits';
+import { failureWords } from '../api/httpError';
 
 interface CadDraft {
   baseRevisionId: string | null;
@@ -299,7 +300,7 @@ export function loadCadProjectSettings(fetcher: typeof fetch = fetch): Promise<b
       return true;
     } catch (error) {
       if (current()) useCadReturnStore.setState({ setupLoading: false, needsIngest: true,
-        ingestStaleReason: `Could not load model settings: ${error instanceof Error ? error.message : String(error)}` });
+        ingestStaleReason: `Could not load model settings: ${failureWords(error)}` });
       if (request === readGeneration) releaseEdits(selection, false);
       return false;
     } finally {

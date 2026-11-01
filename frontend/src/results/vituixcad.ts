@@ -4,6 +4,7 @@ import { familyOrders, isFilterFamily, type FilterFamily } from './crossoverSpec
 import { buildOnAxisFrd } from './frd';
 import { normalizePhaseConvention, phaseSpatialSign, wrapPhaseDegrees } from './phaseConvention';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from './types';
+import { ProgramFault } from '../api/httpError';
 
 export interface VituixCadTextFile {
   filename: string;
@@ -16,7 +17,7 @@ function assertUniquePortableFilenames(files: readonly VituixCadTextFile[]): voi
   files.forEach(({ filename }) => {
     const key = filename.normalize('NFKC').toLocaleLowerCase();
     if (portable.has(key)) {
-      throw new Error(`VituixCAD project export refused: ${filename} aliases another bundle member on a portable filesystem.`);
+      throw new ProgramFault(`VituixCAD project export refused: ${filename} aliases another bundle member on a portable filesystem.`);
     }
     portable.add(key);
   });
@@ -90,19 +91,16 @@ function electricalImpedance(result: ResultPayload): NonNullable<ResultPayload['
   // Their numbers can look perfectly plausible as ohms, so shape inspection or
   // a conversion factor would manufacture a crossover curve without warning.
   if (result.metadata?.impedance_units !== 'ohms') {
-    throw new Error(
-      'ZMA export refused: this channel is not tagged with impedance_units "ohms". '
-      + 'Only a channel with a driver model has electrical input impedance; unit-drive acoustic impedance cannot be exported as ZMA.',
-    );
+    throw new Error('ZMA needs electrical impedance, which only a driven channel has. Add a driver to this channel, solve again, then export.');
   }
   if (result.metadata?.impedance_quantity !== 'electrical_input_impedance') {
-    throw new Error(
+    throw new ProgramFault(
       'ZMA export refused: this channel is not tagged with impedance_quantity "electrical_input_impedance". '
       + 'Ohmic units alone do not prove the impedance quantity or its phase convention.',
     );
   }
   if (!result.impedance) {
-    throw new Error('ZMA export refused: the driver-modelled channel has no electrical impedance samples.');
+    throw new ProgramFault('ZMA export refused: the driver-modelled channel has no electrical impedance samples.');
   }
   return result.impedance;
 }
@@ -130,7 +128,7 @@ function impedancePhaseRule(result: ResultPayload): { factor: 1 | -1; note: stri
         note: `converted to engineering exp(+jωt) from impedance tag ${String(explicit)}`,
       };
     }
-    throw new Error(`ZMA export refused: unsupported impedance phase convention ${String(explicit)}.`);
+    throw new ProgramFault(`ZMA export refused: unsupported impedance phase convention ${String(explicit)}.`);
   }
 
   // electricalImpedance has already required both the ohms unit and hornlab_sim's
@@ -158,7 +156,7 @@ export function buildZma(result: ResultPayload, channelId?: string): string {
       fixed(frequency, 6), fixed(magnitude, 6), fixed(phase, 4),
     ].join(DELIMITER) }];
   }).sort((left, right) => left.frequency - right.frequency);
-  if (!rows.length) throw new Error('ZMA export refused: the electrical impedance curve has no complete finite samples.');
+  if (!rows.length) throw new ProgramFault('ZMA export refused: the electrical impedance curve has no complete finite samples.');
   return `${[
     '* HornLab electrical input impedance',
     ...samplingNotes(result).map((note) => `* ${note}`),
@@ -547,9 +545,7 @@ export function buildVituixCadProjectFiles(
     }];
   const eligible = candidates.filter(({ result: channel }) => hasElectricalImpedance(channel));
   if (!eligible.length) {
-    throw new Error(
-      'VituixCAD project export refused: no channel has driver-modelled electrical impedance tagged with impedance_units "ohms" and impedance_quantity "electrical_input_impedance".',
-    );
+    throw new Error('A VituixCAD project needs electrical impedance, which only a driven channel has. Add a driver to a channel, solve again, then export.');
   }
 
   const drivers: ProjectDriver[] = eligible.map(({ id, channelId }) => {

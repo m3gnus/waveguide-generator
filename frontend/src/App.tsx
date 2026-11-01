@@ -5,6 +5,7 @@ import { Shell } from './shell/Shell';
 import { SourceContourDialog } from './design/SourceContourEditor';
 import { SourceAssemblyDialog } from './design/SourceAssemblyEditor';
 import { FrontWorkspaceDialog } from './design/FrontWorkspace';
+import { failureWords } from './api/httpError';
 
 /**
  * Last-resort boundary above the whole shell.
@@ -16,14 +17,16 @@ import { FrontWorkspaceDialog } from './design/FrontWorkspace';
  * recover -- it exists so a rendering failure is always *visible*, with the
  * message and a way to reload, instead of an empty window.
  */
+const RENDER_FAILURE = 'WG has recorded the problem. Reload to continue; your last autosaved design comes back.';
+
 export class AppErrorBoundary extends Component<{ children: ReactNode }, { message: string | null }> {
   state: { message: string | null } = { message: null };
 
   static getDerivedStateFromError(error: unknown): { message: string } {
     return {
       message: error instanceof Error && error.message
-        ? error.message
-        : 'The interface failed to render.',
+        ? failureWords(error, RENDER_FAILURE, 'render')
+        : RENDER_FAILURE,
     };
   }
 
@@ -59,7 +62,7 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, { messa
         }}
       >
         <h1 style={{ fontSize: '1.1rem', fontWeight: 600, margin: 0 }}>
-          Waveguide Generator hit a rendering error
+          WG could not draw this screen
         </h1>
         <p style={{ margin: 0, maxWidth: '36rem', color: '#a9adb6' }}>{this.state.message}</p>
         <button

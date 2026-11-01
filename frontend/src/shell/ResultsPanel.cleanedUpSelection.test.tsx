@@ -284,6 +284,6 @@ describe('selecting a run whose results were cleaned up', () => {
       expect(useDesignStore.getState().design.L).toBe(111);
     }
     await act(async () => { clickCard('legacy'); await flush(); });
-    expect(host.querySelector('.job-card.selected')?.textContent).toMatch(/cannot be reopened or rerun/);
+    expect(host.querySelector('.job-card.selected')?.textContent).toMatch(/cannot be opened or repeated/);
   });
 });

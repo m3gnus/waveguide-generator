@@ -257,7 +257,7 @@ function fusionConnectionView(status: FusionCadStatus | null): CadWorkflowView {
   if (status.cadFolderConfigured === false) return {
     state: 'not-configured',
     headline: 'Fusion connection needs a WGLink folder',
-    detail: status.cadFolderMissingPath ? `WGLink folder not found: ${status.cadFolderMissingPath}`
+    detail: status.cadFolderMissingPath ? `WG cannot find the WGLink folder ${status.cadFolderMissingPath}`
       : 'Choose the WG folder in Settings → CAD Link. WG and Fusion use its WGLink folder.',
     action: null,
   };

@@ -6,6 +6,7 @@ import { useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
+import { ProgramFault } from '../api/httpError';
 
 /** Publish only after the immutable solve mesh has been fetched and parsed.
  * Failed or superseded preparation leaves the prior selected geometry intact. */
@@ -19,14 +20,14 @@ export async function prepareNativeAssembly(
   const channels = record.native_source?.channels;
   if (!channels || ![1, 2].includes(channels.length)
       || (channels.length === 1 && !record.native_source?.required_features.includes('native-general-horn-attachment-v1')))
-    throw new Error('The prepared assembly has no verified physical source contract.');
+    throw new ProgramFault('The prepared assembly has no verified physical source contract.');
   const response = await deadlineFetch(fetcher, `/api/cadlink/ingest/${encodeURIComponent(record.ingest_id)}/mesh`);
-  if (!response.ok) throw new Error('The prepared mesh could not be verified. Previous geometry retained.');
+  if (!response.ok) throw new Error('WG could not prepare this mesh. The previous model is still on screen. Try again.');
   const mesh = parseMSH(await response.text());
   const current = useCadReturnStore.getState();
   if (!importedMeshStore.isCurrentGeneration(viewportGeneration)
       || current.selectedBundle !== previous.selectedBundle || current.ingestRecord !== previous.ingestRecord) {
-    throw new Error('A later geometry selection superseded this preparation.');
+    throw new Error('A newer model replaced this preparation.');
   }
   const bundle: CadReturnBundle = {
     name: channels.length === 1 ? 'Native horn' : 'Native horn and woofer', bundlePath: record.ingest_id, bundleOrigin: 'native',

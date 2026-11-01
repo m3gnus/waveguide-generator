@@ -9,6 +9,7 @@ import { createImportedMeshScene, type ImportedMeshScene } from '../../viewport/
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { parseMSH } from '../../viewport/mshParser';
 import { reportCadAutomationError } from './caughtErrors';
+import { failureWords } from '../../api/httpError';
 
 function cadTessellation(record: CadReturnIngestRecord): ImportedMeshScene['tessellation'] {
   const metadata = record.mesh?.metadata;
@@ -217,7 +218,7 @@ export async function showIngestedMeshInViewport(
       );
       return;
     } else if (result.status === 409) {
-      onNotice?.('The independent CAD viewport artifact failed verification. Showing the exact solver mesh instead.');
+      onNotice?.('WG could not load the smoother view of this model, so it is showing the solve mesh.');
     }
   } catch {
     // The independent display artifact is advisory; try the solver artifact.
@@ -292,13 +293,13 @@ export async function showIngestedSolverMeshInViewport(
     response = await deadlineFetch(fetcher, `/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
   } catch (error) {
     reportCadAutomationError('solver-mesh-read', error, { ingest_id: ingestId });
-    return current() ? (error instanceof Error ? error.message : String(error)) : null;
+    return current() ? (failureWords(error)) : null;
   }
   if (!current()) return null;
   if (!response.ok) {
     return response.status === 409
-      ? 'The prepared solve mesh failed verification and cannot be displayed.'
-      : `Could not read the prepared solve mesh (${response.status}).`;
+      ? 'This model’s saved mesh changed, so WG cannot show it. Prepare the model again.'
+      : 'WG could not load this model’s mesh. Prepare the model again.';
   }
   try {
     const meshText = await response.text();
@@ -319,6 +320,6 @@ export async function showIngestedSolverMeshInViewport(
     return null;
   } catch (error) {
     reportCadAutomationError('solver-mesh-display', error, { ingest_id: ingestId });
-    return current() ? (error instanceof Error ? error.message : String(error)) : null;
+    return current() ? (failureWords(error)) : null;
   }
 }

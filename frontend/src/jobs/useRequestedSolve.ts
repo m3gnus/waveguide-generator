@@ -16,6 +16,7 @@ import { subscribeSolveSettingsEdits } from '../stores/solveSettingsEdits';
 import { buildImportedSubmission } from './importedSubmission';
 import type { EngineCapability } from './actions';
 import { initialRequestedSolve, reduceRequestedSolve, type RequestedSolveEvent, type SolveRequest } from './requestedSolveMachine';
+import { failureWords } from '../api/httpError';
 
 export interface ModelSolveContinuation {
   model: CurrentModel;
@@ -70,15 +71,15 @@ export function solveCancellationReason(request: SolveInputs & { jobId?: string 
   const inputs = solveInputs();
   const model = inputs.model;
   if (model.key !== request.model.key || model.kind !== request.model.kind || model.ingestId !== request.model.ingestId
-    || inputs.mode !== request.mode) return 'Prepare and solve was cancelled because the model on screen changed.';
-  if (!model.viewportShowing) return 'Prepare and solve was cancelled because the model left the viewport.';
-  if (inputs.engine !== request.engine) return 'Prepare and solve was cancelled because the selected engine changed.';
-  if (inputs.setupRevision !== request.setupRevision) return 'Prepare and solve was cancelled because the solve setup changed.';
+    || inputs.mode !== request.mode) return 'Solve cancelled: the model on screen changed. Press Solve again.';
+  if (!model.viewportShowing) return 'Solve cancelled: the model left the view. Open it, then press Solve.';
+  if (inputs.engine !== request.engine) return 'Solve cancelled: the selected engine changed. Press Solve again.';
+  if (inputs.setupRevision !== request.setupRevision) return 'Solve cancelled: the solve settings changed. Press Solve again.';
   if (request.jobId) {
     const job = jobsSocket.getSnapshot().jobs.find(job => job.id === request.jobId);
     if (job?.id !== request.jobId || !isHeldCadJob(job) || job.cancellation_requested
       || job.cad_state?.state !== 'needs_user_input' || job.cad_state.reason !== 'engine_unavailable') {
-      return 'Prepare and solve was cancelled because the waiting job changed.';
+      return 'Solve cancelled: the waiting run changed. Press Solve again.';
     }
   }
   return null;
@@ -186,7 +187,7 @@ export function useRequestedSolve(refresh: () => void | Promise<void>, reportNot
               dispatch({ type: machine.current.active?.id === token.requestId && machine.current.phase === 'submitting' ? 'post-succeeded' : 'continuation-settled', id: token.requestId });
               return value;
             } catch (error) {
-              dispatch({ type: machine.current.active?.id === token.requestId && machine.current.phase === 'submitting' ? 'post-failed' : 'continuation-settled', id: token.requestId, message: error instanceof Error ? error.message : String(error) });
+              dispatch({ type: machine.current.active?.id === token.requestId && machine.current.phase === 'submitting' ? 'post-failed' : 'continuation-settled', id: token.requestId, message: failureWords(error) });
               return 'blocked';
             } finally {
               tasks.current.delete(token.requestId);
@@ -247,7 +248,7 @@ export function useRequestedSolve(refresh: () => void | Promise<void>, reportNot
         const requests = [...state.queue, ...(state.active && state.phase !== 'submitting' ? [state.active] : [])];
         const edited = requests.filter(request => (edit?.source === 'solveOptions') === (request.inputs.model.kind === 'parametric'));
         dispatch({ type: 'inputs-changed', ids: edited.map(request => request.id),
-          reason: edited.some(request => request.jobId) ? 'Prepare and solve was cancelled because the solve setup changed.' : undefined });
+          reason: edited.some(request => request.jobId) ? 'Solve cancelled: the solve settings changed. Press Solve again.' : undefined });
       })];
     validate();
     return () => {

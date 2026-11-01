@@ -1,6 +1,7 @@
 import type { JobItem } from '../api/jobsSocket';
 import type { ExportFormat } from '../prefs/preferences';
 import type { ExportBundleResult } from '../results/exporters';
+import { failureWords, httpErrorMessage } from '../api/httpError';
 
 async function post(path: string, body?: unknown): Promise<Record<string, unknown>> {
   const controller = new AbortController();
@@ -8,8 +9,7 @@ async function post(path: string, body?: unknown): Promise<Record<string, unknow
   try {
     const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal });
     if (!response.ok) {
-      const detail = await response.json().catch(() => null) as { detail?: string } | null;
-      throw new Error(detail?.detail ?? `Automatic export request failed (${response.status})`);
+      throw new Error(await httpErrorMessage(response, 'WG could not save this run’s automatic exports. Use Export on the run to save them.'));
     }
     return await response.json() as Record<string, unknown>;
   } finally { clearTimeout(timeout); }
@@ -63,7 +63,7 @@ export async function ownedAutoExport(
       if (lost) throw lost;
       const conflict = (error as { destinationConflict?: boolean }).destinationConflict === true
         || (error as { publicationUncertain?: boolean }).publicationUncertain === true;
-      result = { files: [], failures: pending.map((format) => ({ format, reason: error instanceof Error ? error.message : String(error), blocked: conflict })) };
+      result = { files: [], failures: pending.map((format) => ({ format, reason: failureWords(error), blocked: conflict })) };
     }
     if (lost) throw lost;
     const attemptedAt = new Date().toISOString();
@@ -80,7 +80,7 @@ export async function ownedAutoExport(
     const all = { ...freshJob.auto_export_formats, ...statuses };
     await post(`${base}/finish`, { files: result.files, formats: statuses,
       completed_at: selectedFormats.every((format) => all[format]?.status === 'complete') ? attemptedAt : null });
-    if (result.failures.length) throw new Error(`Automatic export ${job.id.slice(0, 6)}: ${result.failures.map(({ format, reason }) => `${format} (${reason})`).join(', ')}`);
+    if (result.failures.length) throw new Error([...new Set(result.failures.map(({ reason }) => reason))].join(' '));
     return null;
   } finally {
     clearInterval(heartbeat);

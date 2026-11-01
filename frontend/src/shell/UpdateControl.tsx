@@ -5,6 +5,7 @@ import { getUpdateChannel, getUpdateDiagnostics, getUpdateStatus, installApplica
   type UpdateChannel, type UpdateInstallAccepted, type UpdateStatus } from '../api/updates';
 import { Icon } from './icons';
 import { focusableSelector, useModalDialogFocus } from './dialogFocus';
+import { failureWords } from '../api/httpError';
 
 export const UPDATE_QUERY_KEY = ['application-update'] as const;
 const active = (state: string | undefined) => state === 'downloading' || state === 'verifying';
@@ -73,7 +74,7 @@ export function UpdateButton({ snapshot, open, onOpen, buttonRef }: {
 
 async function writePendingText(text: Promise<string>, isCurrent: () => boolean): Promise<void> {
   const clipboard = navigator.clipboard;
-  if (!clipboard) throw new Error('Clipboard access is unavailable');
+  if (!clipboard) throw new Error('Copying is not available here. Select the text and copy it yourself.');
   // WebKit needs the write inside the click gesture, before the fetch resolves.
   if (typeof ClipboardItem !== 'undefined' && typeof clipboard.write === 'function') {
     const blob = text.then((value) => new Blob([value], { type: 'text/plain' }));
@@ -84,7 +85,7 @@ async function writePendingText(text: Promise<string>, isCurrent: () => boolean)
       return;
     } catch { /* Try writeText where pending clipboard items are unsupported. */ }
   }
-  if (!clipboard.writeText) throw new Error('Clipboard access is unavailable');
+  if (!clipboard.writeText) throw new Error('Copying is not available here. Select the text and copy it yourself.');
   const value = await text;
   if (isCurrent()) await clipboard.writeText(value);
 }
@@ -134,7 +135,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
     if (data?.channel) { setChoice(data.channel); return; }
     const controller = new AbortController();
     void getUpdateChannel(controller.signal).then((next) => { if (!controller.signal.aborted) setChoice(next); }).catch((error: unknown) => {
-      if (!controller.signal.aborted) setFeedback(error instanceof Error ? error.message : String(error));
+      if (!controller.signal.aborted) setFeedback(failureWords(error));
     });
     return () => controller.abort();
   }, [open, data?.channel, choice]);
@@ -152,7 +153,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
         if (active(result.installState)) timer = window.setTimeout(() => void poll(), 400);
       } catch (error) {
         if (controller.signal.aborted) return;
-        setFeedback(`Could not read update progress: ${error instanceof Error ? error.message : String(error)}`);
+        setFeedback(`WG could not read the update’s progress. ${failureWords(error, 'Reopen this window to check it.')}`);
         timer = window.setTimeout(() => void poll(), 400);
       }
     };
@@ -165,7 +166,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
     const operation = ++generation.current;
     setBusy(true); setFeedback(undefined);
     try { await action(); }
-    catch (error) { if (operation === generation.current) setFeedback(error instanceof Error ? error.message : String(error)); }
+    catch (error) { if (operation === generation.current) setFeedback(failureWords(error)); }
     finally { if (operation === generation.current) setBusy(false); }
   };
   const install = () => {
@@ -194,7 +195,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
     void writePendingText(text, () => operation === copyGeneration.current).then(() => {
       if (operation === copyGeneration.current) setFeedback('Update diagnostics copied.');
     }).catch((error: unknown) => {
-      if (operation === copyGeneration.current) setFeedback(error instanceof Error ? error.message : String(error));
+      if (operation === copyGeneration.current) setFeedback(failureWords(error));
     }).finally(() => { if (operation === copyGeneration.current) setCopying(false); });
   };
   const choose = (next: UpdateChannel) => {

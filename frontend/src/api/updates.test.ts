@@ -34,7 +34,7 @@ describe('full-installer API', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(reply({ detail: 'Logs unavailable.' }, 503))
       .mockResolvedValueOnce(new Response('offline', { status: 502 })));
     await expect(getUpdateDiagnostics()).rejects.toThrow('Logs unavailable.');
-    await expect(getUpdateDiagnostics()).rejects.toThrow('Update diagnostics request failed (502)');
+    await expect(getUpdateDiagnostics()).rejects.toThrow('WG could not collect the update log. Try again.');
   });
   it('reads status, manual refresh and abort signals without requesting installation', async () => {
     const fetch = vi.fn(async () => reply(installerStatus())); vi.stubGlobal('fetch', fetch);
@@ -106,7 +106,7 @@ describe('full-installer API', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(reply({ error: { message: 'An update restart is pending.' } }, 409))
       .mockResolvedValueOnce(new Response('offline', { status: 503 })));
     await expect(installApplicationUpdate()).rejects.toThrow('restart is pending');
-    await expect(getUpdateStatus()).rejects.toThrow('(503)');
+    await expect(getUpdateStatus()).rejects.toThrow('WG could not check for updates');
   });
   it('saves the server channel and reports refusal', async () => {
     const fetch = vi.fn().mockResolvedValueOnce(reply({ channel: 'beta' })).mockResolvedValueOnce(reply({ channel: 'beta' }))

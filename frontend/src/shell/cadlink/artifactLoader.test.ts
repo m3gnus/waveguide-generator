@@ -170,7 +170,7 @@ describe('ingest-keyed artifact loading without the coordinator', () => {
 
   it('refuses a solver artifact that fails verification', async () => {
     expect(await showIngestedSolverMeshInViewport(record, 'Speaker',
-      (async () => new Response('', { status: 409 })) as typeof fetch)).toContain('failed verification');
+      (async () => new Response('', { status: 409 })) as typeof fetch)).toContain('saved mesh changed');
     expect(importedMeshStore.getSnapshot().cadSolver).toBeNull();
   });
 

@@ -191,7 +191,7 @@ describe('front workspace status', () => {
 
   it('never shows a transport failure as the message', async () => {
     await mountWith(failing(502));
-    expect(document.body.textContent).toContain('The front view is not available');
+    expect(document.body.textContent).toContain('WG could not show the front view');
     expect(document.body.textContent).toContain('WG could not update the front view');
     expect(document.body.textContent).not.toMatch(/502|unavailable \(/);
   });
@@ -206,7 +206,7 @@ describe('front workspace status', () => {
     await mountWith((async (url: string, init?: RequestInit) => ++answers === 1 ? new Response('', { status: 502 }) : fetcher(url, init)) as typeof fetch);
     await act(async () => { button('Try again').click(); });
     await act(() => new Promise(resolve => setTimeout(resolve, FRONT_CONTEXT_DELAY_MS + 50)));
-    expect(document.body.textContent).not.toContain('The front view is not available');
+    expect(document.body.textContent).not.toContain('WG could not show the front view');
     expect(centre(W1)).not.toBeNull();
   });
 

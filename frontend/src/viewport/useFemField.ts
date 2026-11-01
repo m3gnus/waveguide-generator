@@ -31,7 +31,7 @@ export function useFemField(jobId: string | null) {
       if (!controller.signal.aborted) { setLoaded({ jobId, field }); setLoading(false); }
     }).catch((reason: unknown) => {
       if (!controller.signal.aborted) {
-        setError(reason instanceof Error ? reason.message : 'FEM field could not be loaded');
+        setError(reason instanceof Error ? reason.message : 'WG could not load the field for this run. Select the run again.');
         setLoading(false);
       }
     });
@@ -85,7 +85,7 @@ export function useFemPlane(jobId: string | null, field: DecodedFemField | null,
       void fetchFemPlane(jobId, plane, field.frequencyHz, field.payload.channel_id, scope, quantity, controller.signal)
         .then((value) => { if (!controller.signal.aborted) { setLoaded({ key, value }); setLoading(false); } })
         .catch((reason: unknown) => { if (!controller.signal.aborted) {
-          setError(reason instanceof Error ? reason.message : 'Coupled plane could not be loaded'); setLoading(false);
+          setError(reason instanceof Error ? reason.message : 'WG could not load this plane. Select the run again.'); setLoading(false);
         } });
     }, SELECTION_IDLE_MS);
     return () => { window.clearTimeout(timer); controller.abort(); };

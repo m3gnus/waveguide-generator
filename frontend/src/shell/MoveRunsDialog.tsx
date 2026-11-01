@@ -3,11 +3,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { executeRunMove, previewRunMove, recoverRunMoves, runMoveStatus, undoRunMove, type MoveTarget, type RunMove } from '../api/runMoves';
 import { useModalDialogFocus } from './dialogFocus';
+import { failureWords } from '../api/httpError';
 
 function size(bytes: number) {
   return bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
 }
-const message = (error: unknown) => error instanceof Error ? error.message : String(error);
+const message = (error: unknown) => failureWords(error);
 
 /** Each entry point uses this one dialog and the same server-owned preview. */
 export function MoveRunsButton({ target, children = 'Move earlier runs…', role }: {

@@ -143,7 +143,7 @@ export function connectCadObservation(options: CadObservationOptions): CadObserv
       if (receipts.status === 'fulfilled') receipts.value.forEach((id) => unresolved.delete(id));
       const errors = [jobs, receipts].flatMap((result) => result.status === 'rejected' ? [String(result.reason)] : []);
       if (unresolved.size) errors.push('awaited CAD receipts could not all be reconciled');
-      connection.setRecoveryError(errors.length ? `WG could not check CAD work after reconnect (${errors.join('; ')}). Refresh to try again.` : null);
+      connection.setRecoveryError(errors.length ? 'WG could not check CAD work after reconnecting. Refresh CAD Link to try again.' : null);
       const wait = CAD_RECONNECT_RETRY_DELAYS_MS[attempt];
       if (errors.length && wait !== undefined) retryTimer = setTimeout(() => {
         retryTimer = null;

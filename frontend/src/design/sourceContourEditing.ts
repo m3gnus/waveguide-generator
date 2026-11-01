@@ -53,6 +53,7 @@ export function removePoint(document: SourceDocument, index: number): SourceDocu
 }
 
 /** True when a validation message names an identity, or an ID is empty or repeated. */
+/** Reads the server's own validation text, so the caller keeps it unfiltered. */
 export function identityProblem(message: string, ids: string[]): boolean {
   if (/identit|\bIDs?\b|\bunique\b|duplicate|_id\b/i.test(message)) return true;
   const trimmed = ids.map((value) => value.trim());

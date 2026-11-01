@@ -7,6 +7,7 @@ import { AUTOSAVE_KEY, restoreAutosaveWithLateRetry, writeAutosave } from '../st
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore } from '../stores/document';
 import { PreviewSocketManager, previewSocket, type WebSocketLike } from './previewSocket';
+import { PLAIN_VALIDATION_FAILURE } from './httpError';
 
 class MockSocket implements WebSocketLike {
   binaryType = '';
@@ -327,12 +328,12 @@ describe('preview socket state machine', () => {
     manager.start();
     socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
     socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, code: 'validation', fields: { 'design.a': 'Field required' } }));
-    expect(manager.getSnapshot().error).toBe('a is missing.');
+    expect(manager.getSnapshot().error).toContain('is empty. Enter a value in the');
     expect(manager.getSnapshot().errorDetail).toBe('Field required');
     socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, code: 'validation', fields: { 'design.a': 'Input should be less than 80' } }));
-    expect(manager.getSnapshot().error).toBe('a should be less than 80.');
+    expect(manager.getSnapshot().error).toContain('must be less than 80. Change it in the');
     socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, code: 'validation', fields: { design: 'Unable to parse' } }));
-    expect(manager.getSnapshot().error).toBe('This design has a value WG cannot use. Check its parameters.');
+    expect(manager.getSnapshot().error).toBe(PLAIN_VALIDATION_FAILURE);
   });
 
   it('keeps an error raised for an edit the user has already moved past', () => {

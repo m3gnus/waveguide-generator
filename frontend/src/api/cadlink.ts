@@ -3,6 +3,7 @@ import { deadlineFetch } from './deadlineFetch';
 import { serializeDesign, type DesignDocument } from '../stores/design';
 import { currentDesignWire } from '../stores/designWire';
 import type { DesignIdentity } from '../stores/document';
+import { failureWords, ProgramFault, PLAIN_CAD_LINK_FAILURE } from './httpError';
 
 export interface CadReturnSourceSummary {
   id: string;
@@ -530,8 +531,8 @@ async function responseError(response: Response): Promise<CadLinkApiError> {
         typeof detail.diagnostic === 'string' ? detail.diagnostic : null,
         typeof detail.retry === 'boolean' ? detail.retry : null);
     }
-  } catch { /* status remains useful */ }
-  return new CadLinkApiError(`Request failed: ${response.status} ${response.statusText}`.trim(), [], response.status);
+  } catch { /* the status goes to the developer record below */ }
+  return new CadLinkApiError(failureWords(new ProgramFault(`CAD Link request ${response.status} ${response.statusText}`), PLAIN_CAD_LINK_FAILURE), [], response.status);
 }
 
 export async function jsonRequest<T>(path: string, init: RequestInit | undefined, fetcher: typeof fetch): Promise<T> {

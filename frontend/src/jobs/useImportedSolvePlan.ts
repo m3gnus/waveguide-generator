@@ -22,6 +22,7 @@ import { fileMeshSubmission, useMeshImportStore } from '../stores/meshImport';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useImportedSolveOptionsStore } from '../stores/solveOptions';
 import { useImportedModelStore } from '../stores/importedModel';
+import { failureWords } from '../api/httpError';
 
 export interface ImportedSolvePlanSnapshot {
   plan: ImportedSolvePlan | null;
@@ -103,7 +104,7 @@ export function useImportedSolvePlan(enabled: boolean, preparedSubmission?: Impo
   return {
     plan: currentIsSettled ? query.data ?? null : null,
     error: currentIsSettled && query.error
-      ? query.error instanceof Error ? query.error.message : String(query.error)
+      ? failureWords(query.error)
       : null,
     isPending: currentBody !== null && (!currentIsSettled || query.isPending),
   };

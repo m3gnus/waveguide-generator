@@ -13,24 +13,24 @@ describe('preview presentation', () => {
 
   it('makes retained geometry explicit in preview errors', () => {
     expect(previewErrorMessage('unsupported expression')).toBe(
-      'Preview failed: unsupported expression. Displayed geometry is not the current design.',
+      'WG could not show this edit: unsupported expression. The view still shows the last design that worked.',
     );
   });
 
   it('names the revision when the failure belongs to an edit already moved past', () => {
     expect(previewErrorMessage('bad morph', 57, 58)).toBe(
-      'Preview failed at revision r57: bad morph. Displayed geometry is not the current design.',
+      'An earlier edit could not be shown: bad morph. The view still shows the last design that worked.',
     );
     expect(previewErrorMessage('bad morph', 58, 58)).toBe(
-      'Preview failed: bad morph. Displayed geometry is not the current design.',
+      'WG could not show this edit: bad morph. The view still shows the last design that worked.',
     );
   });
 
   it('explains a lagging viewport differently for each cause', () => {
     expect(staleReason(false, 'connected', null)).toContain('paused');
     expect(staleReason(true, 'reconnecting', null)).toContain('reconnecting');
-    expect(staleReason(true, 'connected', 'boom')).toContain('failed');
-    expect(staleReason(true, 'connected', null)).toContain('Waiting');
+    expect(staleReason(true, 'connected', 'boom')).toContain('could not show');
+    expect(staleReason(true, 'connected', null)).toContain('still drawing');
   });
 });
 

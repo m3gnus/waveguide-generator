@@ -62,7 +62,7 @@ describe('native assembly imported workspace handoff', () => {
   it('keeps previous valid geometry and solve state when fetching the new mesh fails', async () => {
     await prepareNativeAssembly(prepare, fetcher);
     const previous = useCadReturnStore.getState(); const scene = importedMeshStore.getSnapshot().cad;
-    await expect(prepareNativeAssembly(prepare, async () => new Response('',{status:409}))).rejects.toThrow('verified');
+    await expect(prepareNativeAssembly(prepare, async () => new Response('',{status:409}))).rejects.toThrow('could not prepare this mesh');
     expect(useCadReturnStore.getState()).toBe(previous);
     expect(importedMeshStore.getSnapshot().cad).toBe(scene);
     expect(importedSubmissionBlocker()).toBeNull();
@@ -73,7 +73,7 @@ describe('native assembly imported workspace handoff', () => {
     const pending = prepareNativeAssembly(() => new Promise((r) => { resolve = r; }), fetcher);
     importedMeshStore.showParametric();
     resolve({ ingestion:structuredClone(record) });
-    await expect(pending).rejects.toThrow('superseded');
+    await expect(pending).rejects.toThrow('newer model replaced');
     expect(useCadReturnStore.getState().ingestRecord).toBeNull();
     expect(importedMeshStore.getSnapshot().showing).toBe('parametric');
     expect(useImportedSolveOptionsStore.getState().engine).toBe('auto');

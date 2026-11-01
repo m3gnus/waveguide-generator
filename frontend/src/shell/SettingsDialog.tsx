@@ -15,6 +15,7 @@ import { Icon } from './icons';
 import { RootFolderControls } from './RootFolderControls';
 import type { SettingsSection } from './settingsNavigation';
 import { focusableSelector, useModalDialogFocus } from './dialogFocus';
+import { failureWords } from '../api/httpError';
 
 export type Theme = 'dark' | 'light';
 
@@ -167,7 +168,7 @@ function CadFolderSettings() {
           setCapture(mode);
         }
       },
-      (reason: unknown) => { if (request === requestGeneration.current) setError(String(reason)); },
+      (reason: unknown) => { if (request === requestGeneration.current) setError(failureWords(reason)); },
     );
     return () => {
       requestGeneration.current += 1;
@@ -195,7 +196,7 @@ function CadFolderSettings() {
     } catch (reason) {
       if (request === captureGeneration.current) {
         setCapture(confirmedCapture.current);
-        setError(reason instanceof Error ? reason.message : String(reason));
+        setError(failureWords(reason));
       }
     }
   };
@@ -241,7 +242,7 @@ function OnshapeConnectionStatus({ onConnection }: {
       setConnection(next);
       onConnection?.(next);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(failureWords(reason));
     } finally { setChecking(false); }
   }, [onConnection]);
   useEffect(() => { void check(false); }, [check]);

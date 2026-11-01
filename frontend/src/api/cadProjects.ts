@@ -2,6 +2,7 @@ import { deadlineFetch } from './deadlineFetch';
 import type { CadReturnBundle } from './cadlink';
 import type { JobItem } from './jobsSocket';
 import { listCadLinkedDesigns, type CadLinkedDesignSummary } from './cadlink';
+import { httpErrorMessage } from './httpError';
 
 /**
  * One captured CAD document: the model state a set of runs was solved from.
@@ -85,11 +86,7 @@ export function cadProjectReference(
 }
 
 async function failure(response: Response): Promise<Error> {
-  try {
-    const body = await response.json() as { detail?: unknown };
-    if (typeof body.detail === 'string') return new Error(body.detail);
-  } catch { /* the status is still worth reporting */ }
-  return new Error(`CAD project request failed (${response.status})`);
+  return new Error(await httpErrorMessage(response, 'WG could not read the CAD projects. Refresh CAD Link to try again.'));
 }
 
 export async function listCadProjects(fetcher: typeof fetch = fetch): Promise<CadProject[]> {

@@ -1,5 +1,6 @@
 import { Box3, Matrix4, Plane, Vector3 } from 'three';
 import type { FieldPlaneSpec } from '../api/fieldPlane';
+import { ProgramFault } from '../api/httpError';
 
 export type ModelClipMode = 'off' | 'section' | 'field-plane';
 
@@ -108,7 +109,7 @@ function capBasis(normal: Vector3, preferredAxisU?: Vector3): [Vector3, Vector3]
  * projected into that plane's local basis. */
 export function deriveCapQuad(plane: Plane, bounds: Box3, options: CapQuadOptions = {}): CapQuad {
   const normal = plane.normal.clone();
-  if (normal.lengthSq() < 1e-12) throw new Error('Cap plane normal must be non-zero');
+  if (normal.lengthSq() < 1e-12) throw new ProgramFault('Cap plane normal must be non-zero');
   normal.normalize();
   const [axisU, axisV] = capBasis(normal, options.preferredAxisU);
   const planeOrigin = plane.coplanarPoint(new Vector3());

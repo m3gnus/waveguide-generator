@@ -1,3 +1,4 @@
+import { ProgramFault } from './httpError';
 /** Mesher CSV coordinates are centimetres and already include global Scale. */
 export function profileSections(text: string): number[][][] {
   return text.split(/\r?\n\s*\r?\n/).map((section) => section.split(/\r?\n/).flatMap((line) => {
@@ -31,7 +32,7 @@ export interface ProfileSamples { H: ProfileSample[]; V: ProfileSample[] }
 /** Physical mm by default; conversion to authored anchors can explicitly remove scale. */
 export function profileSamples(text: string, scale = 1): ProfileSamples {
   const sections = profileSections(text);
-  if (sections.length < 2) throw new Error('Profile export did not contain horizontal and vertical meridians.');
+  if (sections.length < 2) throw new ProgramFault('Profile export did not contain horizontal and vertical meridians.');
   return {
     H: meridianSamples(axisSection(sections, 'H'), scale),
     V: meridianSamples(axisSection(sections, 'V'), scale),

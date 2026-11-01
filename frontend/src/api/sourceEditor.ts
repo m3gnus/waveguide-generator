@@ -1,5 +1,6 @@
 import { deadlineFetch } from './deadlineFetch';
 import type { CadReturnIngestRecord } from './cadlink';
+import { httpErrorMessage } from './httpError';
 
 export interface SourcePoint { id: string; r_mm: number; z_mm: number }
 export interface SourcePatch {
@@ -40,8 +41,7 @@ async function response(path: string, method = 'GET', body?: unknown): Promise<R
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!result.ok) {
-    const error = await result.json().catch(() => null) as { detail?: unknown } | null;
-    throw new Error(typeof error?.detail === 'string' ? error.detail : `Source editor request failed (${result.status}). Check all required fields.`);
+    throw new Error(await httpErrorMessage(result, 'WG could not use these source settings. Undo your last change, then try again.'));
   }
   return result;
 }

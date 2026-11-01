@@ -200,7 +200,7 @@ describe('solve and directivity control help', () => {
     parametricPlan.current.plan!.engine = engine;
     render(<SolveOptionsControls />);
     expect(host.querySelector<HTMLInputElement>('#adaptive-frequency-sampling')!.disabled).toBe(!engine.startsWith('beat-'));
-    if (!engine.startsWith('beat-')) expect(host.querySelector('#adaptive-sampling-reason')?.textContent).toContain('BEAT only');
+    if (!engine.startsWith('beat-')) expect(host.querySelector('#adaptive-sampling-reason')?.textContent).toContain('needs a BEAT engine');
   });
 
   it.each(['range', 'list'] as const)('enables a BEAT sweep at exactly 24 %s frequencies', (mode) => {
@@ -256,7 +256,7 @@ describe('solve and directivity control help', () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('Backend offline'); }));
     render(<SolveOptionsControls mode="cad" />);
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Capabilities unavailable: Backend offline');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Backend offline');
     expect(host.textContent).toContain('Refresh');
   });
 

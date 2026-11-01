@@ -77,6 +77,7 @@ import type { DisplayMode, SourceRole, ViewportTheme } from './types';
 import { canRenderWebGL, resetWebGLProbe, type CameraRequest, type ZoomRequest, ViewportCanvas } from './ViewportCanvas';
 import { cadMeshRecoveryNotice } from '../model/cadMeshRecovery';
 import './viewport.css';
+import { failureWords } from '../api/httpError';
 
 
 const modes: Array<{ mode: DisplayMode; title: string; icon?: 'clay' | 'wire' | 'xray' | 'zebra' | 'curve' | 'section'; glyph?: string }> = [
@@ -603,7 +604,7 @@ export function Viewport() {
           return {
             ok: false,
             durationMs: performance.now() - started,
-            error: error instanceof Error ? error.message : String(error),
+            error: failureWords(error),
           };
         }
       },
@@ -1142,7 +1143,7 @@ export function Viewport() {
         </Notice>
       </details>}
     </div>
-    {activeScene && hasSurfaces && !webgl && !renderFailure && <EmptyState className="viewport-empty" title={<>WebGL unavailable</>} detail={<>The geometry is valid, but this environment cannot create a WebGL2 context.</>}/>}
+    {activeScene && hasSurfaces && !webgl && !renderFailure && <EmptyState className="viewport-empty" title={<>WebGL unavailable</>} detail={<>The geometry is fine, but this computer cannot draw the 3D view. Update its graphics driver, then reopen WG.</>}/>}
     {activeScene && !hasSurfaces && <EmptyState className="viewport-empty" title={<>No geometry surfaces</>} detail={<>The scene is valid but contains no renderable surfaces.</>}/>}
     {activeScene && renderFailure && <EmptyState className="viewport-empty" title={<>WebGL renderer stopped</>} detail={<>{renderFailure}. Retry to rebuild the viewport; if it stops again, check that graphics acceleration is enabled.</>} action={<button type="button" className="btn viewport-retry" onClick={retryRenderer}><Icon name="reset"/>Retry</button>}/>}
     {activeScene && mode === 'curvature' && !activeScene.hasCurvature && <EmptyState className="viewport-mode-empty" title={<>Curvature heatmap unavailable</>} detail={<>This frame has no analytic curvature section. Neutral geometry remains visible while inspection data is requested.</>}/>}

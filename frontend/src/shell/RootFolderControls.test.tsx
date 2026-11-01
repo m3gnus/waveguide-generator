@@ -95,7 +95,7 @@ describe('WG folder', () => {
     vi.mocked(getFolderRoot).mockResolvedValue({ ...folder, cadlinkExists: false });
     vi.mocked(useRootFolder).mockResolvedValue({ ...folder, cadlinkExists: true });
     await act(async () => root.render(<RootFolderControls cadlinkOnly/>));
-    expect(host.textContent).toContain('WGLink folder not found: /current/root/cadlink');
+    expect(host.textContent).toContain('WG cannot find the WGLink folder /current/root/cadlink');
     expect(button('Open WGLink folder').disabled).toBe(true);
     await act(async () => button('Create it').click());
     expect(useRootFolder).toHaveBeenCalledWith('cadlink', '/current/root/cadlink', '/current/root/cadlink');
@@ -106,7 +106,7 @@ describe('WG folder', () => {
   it('offers explicit override removal for a missing earlier folder', async () => {
     vi.mocked(getFolderRoot).mockResolvedValue({ ...folder, cadlink: '/old/exchange', cadlinkExists: false, overrides: { cadlink: '/old/exchange' } });
     await act(async () => root.render(<RootFolderControls cadlinkOnly/>));
-    expect(host.textContent).toContain('WGLink folder not found: /old/exchange');
+    expect(host.textContent).toContain('WG cannot find the WGLink folder /old/exchange');
     expect(button('Create it')).toBeUndefined();
     expect(button('Use the WG folder instead')).toBeDefined();
     expect(button('Choose WG folder…')).toBeDefined();

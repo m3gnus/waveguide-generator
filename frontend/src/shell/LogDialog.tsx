@@ -4,12 +4,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './icons';
 import { trapDialogFocus } from './dialogFocus';
+import { failureWords, httpErrorMessage } from '../api/httpError';
 
 export const LOG_PREVIEW_BYTES = 1_000_000;
 
 async function readLogPreview(response: Response): Promise<{ contents: string; truncated: boolean }> {
   const reader = response.body?.getReader();
-  if (!reader) throw new Error('Streaming log previews are unavailable in this browser');
+  if (!reader) throw new Error('This window cannot show the log. Use Download instead.');
   const decoder = new TextDecoder();
   const fragments: string[] = [];
   let bytes = 0;
@@ -60,7 +61,7 @@ export function LogDialog({ jobId, onClose }: { jobId: string; onClose: () => vo
     setCopyStatus(undefined);
     try {
       const response = await deadlineFetch(fetch, logUrl, { signal: controller.signal });
-      if (!response.ok) throw new Error(`Log request failed (${response.status})`);
+      if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not load this log. Close this window and open the log again.'));
       const preview = await readLogPreview(response);
       if (request === requestGeneration.current) {
         setContents(preview.contents);
@@ -68,7 +69,7 @@ export function LogDialog({ jobId, onClose }: { jobId: string; onClose: () => vo
       }
     } catch (reason) {
       if (request === requestGeneration.current && !controller.signal.aborted) {
-        setError(reason instanceof Error ? reason.message : String(reason));
+        setError(failureWords(reason));
       }
     } finally {
       if (request === requestGeneration.current) setLoading(false);
@@ -112,11 +113,11 @@ export function LogDialog({ jobId, onClose }: { jobId: string; onClose: () => vo
   const copy = async () => {
     setCopyStatus(undefined);
     try {
-      if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable');
+      if (!navigator.clipboard?.writeText) throw new Error('Copying is not available here. Use Download instead.');
       await navigator.clipboard.writeText(contents);
       setCopyStatus('Copied');
     } catch (reason) {
-      setCopyStatus(reason instanceof Error ? reason.message : String(reason));
+      setCopyStatus(failureWords(reason));
     }
   };
 
@@ -127,7 +128,7 @@ export function LogDialog({ jobId, onClose }: { jobId: string; onClose: () => vo
   const visibleContents = loading && !contents
     ? 'Loading log…'
     : !contents
-      ? error ? 'Log preview unavailable.' : 'This log is empty.'
+      ? error ? 'WG could not load this log.' : 'This log is empty.'
       : contents;
 
   return createPortal(<div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>

@@ -9,6 +9,7 @@ import { useMeshFreshnessStore } from './meshFreshness';
 // The rails a reopened imported run is shown in: the file and the CAD rail.
 import '../stores/meshImport';
 import '../shell/cadlink/restores';
+import { failureWords } from '../api/httpError';
 
 /** Put the model represented by a history run back into its owning workspace. */
 export async function showJobModel(
@@ -27,13 +28,13 @@ export async function showJobModel(
         reportViewportNotice: cadWorkspace.getSnapshot().reportViewportNotice,
       } });
     } catch (error) {
-      onError(error instanceof Error ? error.message : String(error));
+      onError(failureWords(error));
       return false;
     }
   }
   if (!replaceWithJobDesign(job, { keepHistory: true })) {
     showUnreadableRun(job);
-    onError('This result has no readable design snapshot, so its model cannot be shown.');
+    onError('This run did not keep a design WG can read, so its model cannot be shown.');
     return false;
   }
   useMeshFreshnessStore.getState().check(job, true, jobsSocket.getSnapshot().epoch);

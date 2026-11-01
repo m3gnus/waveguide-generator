@@ -52,7 +52,7 @@ export type RequestedSolveEffect<T> =
    * only be indicated, never move the dock. */
   | { type: 'notice'; message: string | null; attention?: number; indicate?: boolean }
   | { type: 'release' | 'observe-start' | 'observe-stop' };
-export const PREPARATION_FAILED = 'Prepare and solve was cancelled because engine preparation failed.';
+export const PREPARATION_FAILED = 'Solve cancelled: WG could not prepare the engine. Press Solve to try again.';
 export function initialRequestedSolve<T>(): RequestedSolveState<T> {
   return { phase: 'idle', active: null, queue: [], nextId: 1, mounted: true,
     plan: { capabilityGeneration: 0, ordinary: 'pending', warmingEngine: null, engines: [], error: null, busy: false } };

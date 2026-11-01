@@ -13,6 +13,7 @@ import type { ParameterDefinition } from './parameterRegistry';
 import { HelpTipHeading } from './HelpTip';
 import { formatBound, NumberField } from './NumberField';
 import { numericRowCells, parseNumericRow } from './decimalInput';
+import { failureWords } from '../api/httpError';
 
 function numericCells(line: string, index: number): number[] {
   return parseNumericRow(line).map((cell) => {
@@ -54,7 +55,7 @@ export function parsePointPaste(text: string): ParsedPointPaste {
     });
     points.sort((left, right) => left.z - right.z);
     if (points.some((point, index) => index > 0 && point.z <= points[index - 1].z)) {
-      throw new Error('Profile z values must be strictly increasing; duplicate positions are not allowed.');
+      throw new Error('Each z must be larger than the one before it. Change or remove the repeated row.');
     }
     if (points.length > 64) throw new Error('A Custom profile supports at most 64 anchors including the throat and mouth. Larger straight-line tables stay in legacy LOOKUP designs.');
   };
@@ -104,7 +105,7 @@ export function parseLookupPasteRows(text: string): { pairs: { z: number; r: num
     .map((raw, index) => ({ text: raw.trim(), line: index + 1 }))
     .filter((row) => row.text && !row.text.startsWith('#'));
   if (rows.length && isHeaderRow(rows[0].text)) rows.shift();
-  if (rows.length < 2) throw new Error('lookupProfile must be an array of at least two [z, r] pairs');
+  if (rows.length < 2) throw new Error('Enter at least two rows of z and r in mm.');
   const pairs = rows.map((row) => {
     const values = numericCells(row.text, row.line - 1);
     if (values.length !== 2) throw new Error(`Line ${row.line} must contain exactly z and r in mm.`);
@@ -257,7 +258,7 @@ export function ProfileEditPreviewPanel({ edit }: { edit: ProfileEdit }) {
   const scale = after.scale;
   const blocked = preview.validation.status === 'error' ? 'The edited profile is not valid, so the current design is kept.'
     : preview.validation.status === 'pending' || preview.curve.status === 'pending' || preview.generated.status === 'pending' ? 'Waiting for the curve and generated-profile measurements.'
-      : preview.curve.status === 'error' || preview.generated.status === 'error' ? 'A required measurement is unavailable, so the edit cannot be accepted yet.' : undefined;
+      : preview.curve.status === 'error' || preview.generated.status === 'error' ? 'WG is still measuring this change. Wait a moment, then accept it.' : undefined;
   return <Notice tone={preview.validation.status === 'error' ? 'error' : 'info'} title={`Preview: ${preview.label}`} className="profile-edit-preview"
     actions={<>
       <button type="button" className="btn" disabled={!previewAcceptable(preview)} title={blocked} onClick={edit.accept}>Accept</button>
@@ -349,7 +350,7 @@ export function CustomProfileTable({ plane }: { field: ParameterDefinition; plan
   const plan = curves?.[plane];
   const aligned = plan && plan.anchors.length === points.length ? plan : undefined;
   const label = (index: number) => index === 0 ? 'throat' : index === points.length - 1 ? 'mouth' : `point ${index}`;
-  const check = (build: () => unknown) => { try { build(); return undefined; } catch (reason) { return reason instanceof Error ? reason.message : String(reason); } };
+  const check = (build: () => unknown) => { try { build(); return undefined; } catch (reason) { return failureWords(reason); } };
   const title = shared && plane === 'H' ? 'Profile anchors (both planes)' : `${plane === 'H' ? 'Horizontal' : 'Vertical'} profile anchors`;
   const insertReason = insertZ === undefined ? 'Enter the z position to insert at.'
     : !(insertZ > 0 && insertZ < length) ? `Insert z must be strictly between 0 and ${formatMm(length)} mm.`

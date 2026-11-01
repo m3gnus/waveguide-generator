@@ -66,7 +66,7 @@ export function askForExportDestination(
 ): Promise<ExportDestinationChoice | null> {
   if (!prompt) {
     return Promise.reject(new Error(
-      'The export destination dialog is not available, so no folder could be chosen.',
+      'WG could not open the folder chooser. Reopen WG, then export again.',
     ));
   }
   return prompt(request);

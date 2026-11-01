@@ -3,6 +3,7 @@
  * Only the named keys change; nested objects (`polar_config`) merge one level.
  */
 import { postSolverMesh } from '../api/solverMesh';
+import { httpErrorMessage } from '../api/httpError';
 
 export type RerunPatch = { options?: Record<string, unknown> };
 
@@ -17,11 +18,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 async function failure(response: Response): Promise<Error> {
-  try {
-    const body = await response.json() as { detail?: unknown };
-    if (typeof body.detail === 'string' && body.detail) return new Error(body.detail);
-  } catch { /* fall through */ }
-  return new Error(`${response.status} ${response.statusText}`.trim());
+  return new Error(await httpErrorMessage(response, 'WG could not start this run again. Press Solve to run it from the current design.'));
 }
 
 /**
@@ -46,11 +43,11 @@ export async function rerunWithPatch(
   if (!stored.ok) throw await failure(stored);
   const effective = (await stored.json() as { effective_request?: unknown }).effective_request;
   if (!isRecord(effective) || !isRecord(effective.options)) {
-    throw new Error('This result has no readable request, so it cannot be rerun.');
+    throw new Error('This run did not keep its solve settings, so WG cannot repeat it. Open its design, then press Solve.');
   }
   const geometry = effective.geometry;
   if (!isRecord(geometry) || geometry.type !== 'parametric') {
-    throw new Error('Only parametric results can be rerun with a changed setting.');
+    throw new Error('An imported model cannot be repeated with a changed setting here. Open the model, change the setting, then press Solve.');
   }
   const options: Record<string, unknown> = { ...effective.options };
   for (const [key, value] of Object.entries(patch.options ?? {})) {

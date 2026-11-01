@@ -35,7 +35,7 @@ export type ExteriorTransducerForm = Partial<Record<ExteriorKey, number>> & {
 };
 
 export function exteriorTransducerError(form: ExteriorTransducerForm): string | null {
-  if (![1, 2].includes(form.version) || (form.version === 1 && (form.semi_inductance || form.lumped_sealed_rear_chamber || form.sd_m2 !== undefined || form.power_w !== undefined || form.xmax_mm !== undefined))) return 'Unsupported exterior driver version. Clear and re-enter the driver.';
+  if (![1, 2].includes(form.version) || (form.version === 1 && (form.semi_inductance || form.lumped_sealed_rear_chamber || form.sd_m2 !== undefined || form.power_w !== undefined || form.xmax_mm !== undefined))) return 'WG cannot read this driver’s saved values. Clear the driver and enter it again.';
   for (const [key, label] of EXTERIOR_FIELDS) {
     const value = form[key];
     if (typeof value !== 'number' || !Number.isFinite(value) || (key === 'le_h' ? value < 0 : value <= 0)) {

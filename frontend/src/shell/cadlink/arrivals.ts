@@ -22,6 +22,7 @@ import { resolvePreparationTarget } from './preparationTarget';
 import { meshCeilingChoice } from '../../stores/meshCeilingChoice';
 import type { CadIngestFailure } from '../../stores/cadWorkspace';
 import { reportCadAutomationError } from './caughtErrors';
+import { failureWords } from '../../api/httpError';
 
 export interface RefreshOptions {
   background?: boolean;
@@ -274,7 +275,7 @@ export async function refreshCadReturnArrivals(
         projectOpenPending.current = false;
         setStatus('Project design loaded, but its CAD models could not be read. Refresh CAD Link to try again.');
       }
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(failureWords(reason));
     }
   } finally {
     if (request === returnListRequest.current) setLoading(false);
@@ -436,7 +437,7 @@ export function createCadArrivalActions(
         if (request === ingestRequest.current && mounted.current) setStatus(superseded);
         throw new SupersededError(superseded);
       }
-      const message = reason instanceof Error ? reason.message : String(reason);
+      const message = failureWords(reason);
       reportCadAutomationError('prepare', reason);
       if (reason instanceof CadLinkApiError && reason.code === 'mesh_too_large' && request === ingestRequest.current) {
         // A choice, not a failure: the same pop-up as a held Fusion request.
@@ -705,7 +706,7 @@ export function createCadArrivalActions(
         && onshapeInstanceId() === instanceId
         && useDocumentStore.getState().identity?.designId === identity.designId
         && useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) {
-        setError(reason instanceof Error ? reason.message : String(reason));
+        setError(failureWords(reason));
       }
       throw reason;
     } finally {

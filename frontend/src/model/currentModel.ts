@@ -12,6 +12,7 @@ import { useImportedModelStore } from '../stores/importedModel';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
 import { importedMeshStore, type ImportedMeshState } from '../viewport/importedMeshStore';
 import { hasMeshProvenance, useMeshFreshnessStore } from '../jobs/meshFreshness';
+import { failureWords, ProgramFault, readsPlain } from '../api/httpError';
 
 /** D4 MODEL identity: parametric design content or imported solve geometry SHA
  * (legacy ingestion fallback). It does not identify the complete solve request;
@@ -51,6 +52,13 @@ export const RUN_VERDICT_SENTENCE = {
 // Explicitly opening an unreadable archive keeps its results accessible. Any
 // workspace edit/navigation invalidates this exception by its store identities.
 let unloaded: { id: string; design: DesignDocument; workspace: unknown; imported: unknown } | null = null;
+const SOLVE_STOPPED = 'The solve stopped before it finished and WG has recorded the problem. Press Solve to try again; Open log shows how far it got.';
+
+/** What a failed run tells the user. An exception's text stays with the run's log and the developer record. */
+export function solveFailureWords(message: string | null | undefined): string {
+  return message && readsPlain(message) ? message : failureWords(new ProgramFault(message || 'solve failed with no message'), SOLVE_STOPPED, 'solve failed');
+}
+
 export function showUnreadableRun(job: JobItem): void {
   unloaded = { id: job.id, design: useDesignStore.getState().design,
     workspace: workspaceModeStore.getSnapshot(), imported: useImportedModelStore.getState() };
@@ -226,14 +234,14 @@ export function currentModelStatus(model: CurrentModel, jobs: readonly JobItem[]
   // operations.preparation_failure), never as a refusal.
   if (job && isFailedCadPreparation(job)) return {
     kind: 'prepare-failed' as const, job,
-    message: [state?.message, state?.next_step].filter(Boolean).join(' ') || job.error_message || '',
+    message: [state?.message, state?.next_step].filter(Boolean).join(' ') || (job.error_message ? solveFailureWords(job.error_message) : ''),
   };
   if (state?.state === 'rejected' || state?.state === 'needs_user_input') return {
-    kind: 'refused' as const, job, message: state.message || state.reason || job?.error_message || 'WG could not start this solve. Check the model settings.',
+    kind: 'refused' as const, job, message: state.message || (state.reason && readsPlain(state.reason) ? state.reason : null) || (job?.error_message ? solveFailureWords(job.error_message) : null) || 'WG could not start this solve and has recorded the problem. Press Solve to try again.',
   };
   if (job?.status === 'preparing') return { kind: 'preparing' as const, job, message: job.stage_message || 'Preparing this model…' };
   if (job && isActiveJobStatus(job.status)) return { kind: 'running' as const, job, message: job.stage_message || 'Solving this model…' };
-  if (job?.status === 'error') return { kind: 'failed' as const, job, message: job.error_message || 'The solve failed.' };
+  if (job?.status === 'error') return { kind: 'failed' as const, job, message: solveFailureWords(job.error_message) };
   if (job?.status === 'complete' && job.has_results) return { kind: 'solved' as const, job, message: 'Loading results…' };
   return { kind: 'never-solved' as const, job, message: readiness || 'This version of the model has not been solved.' };
 }

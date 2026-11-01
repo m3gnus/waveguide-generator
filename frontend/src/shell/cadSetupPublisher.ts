@@ -456,7 +456,7 @@ export function useCadFeedbackError(actionError: string | null): string | null {
   const modelId = useCadReturnStore(projectLineage);
   const saveError = useImportedSetupSaveError('cad', modelId);
   return actionError ?? reconnectError
-    ?? (receiptError ? `WG could not check Fusion Sends (${receiptError}). Refresh CAD Link to try again.` : null) ?? saveError;
+    ?? (receiptError ? 'WG could not check what Fusion sent. Refresh CAD Link to try again.' : null) ?? saveError;
 }
 
 export function CadSetupPublisher() {

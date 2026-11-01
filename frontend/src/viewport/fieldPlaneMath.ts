@@ -1,4 +1,5 @@
 import type { FieldPlaneSpec, Vector3Tuple } from '../api/fieldPlane';
+import { ProgramFault } from '../api/httpError';
 
 export type FieldPlanePreset = 'h' | 'v' | 'mouth';
 export type FieldPlaneRotationAxis = 'u' | 'v';
@@ -63,7 +64,7 @@ function cross(a: Vector3Tuple, b: Vector3Tuple): Vector3Tuple {
 
 function normalize(vector: Vector3Tuple): Vector3Tuple {
   const length = Math.hypot(...vector);
-  if (length < EPSILON) throw new Error('Field-plane direction must be non-zero');
+  if (length < EPSILON) throw new ProgramFault('Field-plane direction must be non-zero');
   return scale(vector, 1 / length);
 }
 

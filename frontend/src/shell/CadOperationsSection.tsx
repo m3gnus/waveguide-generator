@@ -21,13 +21,14 @@ import { operationReasonWords, operationStageWord } from './solveProgress';
 import { findingName, findingSentence } from './cadFindingWords';
 import { CadSolveInputs } from './CadSolveInputs';
 import { useDeveloperDetails } from '../prefs/preferences';
+import { failureWords } from '../api/httpError';
 
 const RECOVERY_DISMISSED = 'Dismissed this recovery notice. Fusion still needs Undo or repair before you continue modelling.';
 
 const makeRequestActions = () => createCadRequestActions({
   openProject: async (lineage) => {
     const project = (await listCadProjects()).find((item) => item.lineageId === lineage);
-    if (!project) throw new Error('This copy of WG does not hold that project.');
+    if (!project) throw new Error('This computer does not have that project. Send it from Fusion on this computer.');
     await openCadProject(project);
   },
   openPrepared: async (job, preparedId) => {
@@ -110,7 +111,7 @@ function useFindingReview(operation: CadOperationSummary): FindingReview & { ret
         });
       }
     })().catch((reason: unknown) => {
-      if (current) setReview({ ...NO_REVIEW, error: reason instanceof Error ? reason.message : String(reason) });
+      if (current) setReview({ ...NO_REVIEW, error: failureWords(reason) });
     });
     return () => { current = false; };
   }, [wanted, operation.operationId, operation.preparationId, operation.attemptGeneration, operation.reason, job, attempt]);
@@ -253,7 +254,7 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
   const jobs = useCadJobs();
   const developer = useDeveloperDetails();
   const owner = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
-  const approvalUnavailable = owner.available ? null : 'Solve coordinator is unavailable. Reopen this workspace to approve and solve.';
+  const approvalUnavailable = owner.available ? null : 'WG cannot solve from this panel right now. Reopen CAD Link, then press Solve.';
   const job = jobs.find((item) => item.id === operation.jobId)!;
   // The action asked for, and the operation as it stood then. The answer is
   // the row as it was before the backend claimed it, so that action stays held
@@ -298,7 +299,7 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
       if (result === null) release();
     }).catch((reason: unknown) => {
       release();
-      jobsCoordinatorBridge.getSnapshot().reportError(reason instanceof Error ? reason.message : String(reason));
+      jobsCoordinatorBridge.getSnapshot().reportError(failureWords(reason));
     });
   };
   // The stage is the backend's bookkeeping ("validating"); the state and the
@@ -380,7 +381,7 @@ function useRequestAction() {
     setBusy(true);
     setError(null);
     void action().catch((reason: unknown) => {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(failureWords(reason));
     }).finally(() => { busyRef.current = false; setBusy(false); });
   };
   return { busy, error, ask };

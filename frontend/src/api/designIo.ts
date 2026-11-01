@@ -1,4 +1,4 @@
-import { httpErrorMessage, refusalText } from './httpError';
+import { httpErrorMessage, refusalText, ProgramFault } from './httpError';
 import { profileSamples, profileSections, type ProfileSample } from './profileSamples';
 import { deadlineFetch } from './deadlineFetch';
 import {
@@ -196,7 +196,7 @@ export async function sendDesignToCad(
   const workspace = await pathResponse.json() as { selected?: boolean; path?: string };
   assertCurrent?.();
   if (!workspace.selected) {
-    throw new Error('Check the WGLink folder in Settings → CAD Link before sending to Fusion.');
+    throw new Error('No WGLink folder is selected. Choose one in Settings → CAD Link, then send again.');
   }
 
   const response = await fetcher('/api/export/wglink', {
@@ -266,14 +266,14 @@ function merge<T>(base: T, incoming: unknown): T {
 /** Convert schema-wire Expr objects into the store's evaluated document shape. */
 export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocument {
   if (wire.text_import_version != null && !['ath-2026-08c-v1', 'ath-2026-09a-v2'].includes(String(wire.text_import_version))) {
-    throw new Error(`Unsupported text import geometry version: ${String(wire.text_import_version)}`);
+    throw new Error('This design was saved by a newer version of WG. Update WG to open it.');
   }
   const expressions: Record<string, ExprNumber> = {};
   const absent: string[] = [];
   const unwrapped = unwrapExpressions(wire, '', expressions, absent) as Record<string, unknown>;
   const formula = unwrapped.formula as DesignFamily;
   if (!['OSSE', 'R-OSSE', 'ICW', 'FREEFORM', 'LOOKUP', ...NATIVE_FAMILIES].includes(formula)) {
-    throw new Error(`Unsupported design formula: ${String(unwrapped.formula)}`);
+    throw new Error(`This file uses a horn family WG does not know (${String(unwrapped.formula)}). Update WG, or open another file.`);
   }
   const document = merge(designForFamily(formula), unwrapped);
   // The accuracy default belongs to newly created designs only.
@@ -639,7 +639,7 @@ export function freeformFromProfileCsv(text: string, source: DesignDocument): Fr
   const { H: horizontal, V: vertical } = profileSamples(text, scale);
   const unfoldedH = unfoldedSamples(horizontal);
   const unfoldedV = unfoldedSamples(vertical);
-  if (unfoldedH.points.length < 2 || unfoldedV.points.length < 2) throw new Error('Profile export did not contain usable meridians.');
+  if (unfoldedH.points.length < 2 || unfoldedV.points.length < 2) throw new ProgramFault('Profile export did not contain usable meridians.');
   const length = Math.min(unfoldedH.points.at(-1)!.z, unfoldedV.points.at(-1)!.z);
   const crop = (points: ProfileSample[]) => {
     const inside = points.filter((point) => point.z < length);

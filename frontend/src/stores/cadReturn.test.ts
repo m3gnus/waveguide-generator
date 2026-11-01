@@ -728,7 +728,7 @@ describe('listing-gone staleness self-heals', () => {
     store.applyIngest(record(), store.beginIngestIntent());
     useCadReturnStore.getState().refreshSelectedBundle(null);
     expect(useCadReturnStore.getState().needsIngest).toBe(true);
-    expect(useCadReturnStore.getState().ingestStaleReason).toContain('no longer appears');
+    expect(useCadReturnStore.getState().ingestStaleReason).toContain('no longer in the WGLink folder');
 
     useCadReturnStore.getState().refreshSelectedBundle(bundle);
     expect(useCadReturnStore.getState().needsIngest).toBe(false);

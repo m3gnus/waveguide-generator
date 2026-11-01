@@ -23,8 +23,8 @@ export function hasBalloonData(result: ResultPayload): boolean {
 export function balloonMissingReason(result: ResultPayload, label: string): string {
   const sampling = result.metadata?.balloon_sampling;
   const status = sampling && typeof sampling === 'object' ? String((sampling as Record<string, unknown>).status ?? '') : '';
-  if (status === 'backend_unsupported') return `${label} needs spherical sampling, but the solver backend did not configure a sphere grid.`;
-  if (status === 'missing_result') return `${label} was requested, but this solve returned no spherical result data.`;
+  if (status === 'backend_unsupported') return `${label} is not available from this engine. Choose an engine with 3D Balloon Sampling, then solve again.`;
+  if (status === 'missing_result') return `This solve returned no ${label} data. Solve again to get it.`;
   return `${label} requires “3D Balloon Sampling”; enable it and run a new solve.`;
 }
 

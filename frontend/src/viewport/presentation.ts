@@ -29,8 +29,8 @@ export function previewErrorMessage(
   // showing — it explains why the viewport stopped following them — but it must
   // say which edit it came from rather than implying the current one failed.
   const superseded = errorRevision !== null && currentRevision !== null && errorRevision !== currentRevision;
-  const attempt = superseded ? `Preview failed at revision r${errorRevision}` : 'Preview failed';
-  return `${attempt}: ${error.replace(/\.$/, '')}. Displayed geometry is not the current design.`;
+  const attempt = superseded ? 'An earlier edit could not be shown' : 'WG could not show this edit';
+  return `${attempt}: ${error.replace(/\.$/, '')}. The view still shows the last design that worked.`;
 }
 
 /** What a dismissal names: the failure itself, since different ones can share plain words. */
@@ -45,9 +45,9 @@ export function staleReason(
   error: string | null,
 ): string {
   if (!liveUpdate) return 'Live updates are paused. Refresh to request this design once.';
-  if (connection !== 'connected') return `Preview engine ${connection}. The viewport resumes on reconnect.`;
-  if (error) return 'The last preview attempt failed. Refresh to try this design again.';
-  return 'Waiting for the preview engine to return this design. Refresh to ask again.';
+  if (connection !== 'connected') return 'WG is reconnecting to the preview. The view follows your edits again once it is back.';
+  if (error) return 'WG could not show the latest edit. Refresh to try this design again.';
+  return 'WG is still drawing this design. Refresh to ask again.';
 }
 
 function finitePositive(value: number | undefined): value is number {

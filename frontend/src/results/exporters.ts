@@ -30,6 +30,7 @@ import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type Resul
 import { buildRunReportHtml } from './runReport';
 import { buildVituixCadProjectFiles, buildZma, hasElectricalImpedance } from './vituixcad';
 import { reportCaughtError } from '../shell/clientErrors';
+import { failureWords, ProgramFault } from '../api/httpError';
 
 export interface ExportContext {
   result?: ResultPayload;
@@ -240,16 +241,16 @@ function patternDb(value: unknown): number | null {
  */
 function requireAlignedFrames(frequencies: number[], frameCount: number, label: string): void {
   if (!frequencies.length || !frequencies.every((frequency) => Number.isFinite(frequency))) {
-    throw new Error(`${label}: the frequency axis is missing or contains a non-finite value.`);
+    throw new ProgramFault(`${label}: the frequency axis is missing or contains a non-finite value.`);
   }
   if (frameCount !== frequencies.length) {
-    throw new Error(`${label}: has ${frameCount} frame(s) but the frequency axis has ${frequencies.length} point(s); refusing to mislabel a frame with the wrong frequency.`);
+    throw new ProgramFault(`${label}: has ${frameCount} frame(s) but the frequency axis has ${frequencies.length} point(s); refusing to mislabel a frame with the wrong frequency.`);
   }
 }
 
 function requireFiniteAngles(pattern: ReadonlyArray<readonly [unknown, unknown]>, label: string): void {
   if (pattern.some(([angle]) => !Number.isFinite(angle))) {
-    throw new Error(`${label}: contains a non-finite angle.`);
+    throw new ProgramFault(`${label}: contains a non-finite angle.`);
   }
 }
 
@@ -443,7 +444,7 @@ export async function writeWorkspaceFiles(
 }
 
 async function fetchGeometry(context: ExportContext, kind: 'step' | 'stl' | 'profiles', filename: string, profileKind?: 'profiles' | 'slices'): Promise<GeometryDownload> {
-  if (!context.design) throw new Error('This export requires a saved design snapshot.');
+  if (!context.design) throw new Error('This run did not keep its design, so WG cannot export it. Open the design, solve it, then export.');
   const fetcher = context.fetcher ?? fetch;
   const baseName = context.jobStem;
   const query = kind === 'profiles' ? `?kind=${profileKind ?? 'profiles'}` : '';
@@ -459,7 +460,7 @@ async function postGeometry(context: ExportContext, kind: 'step' | 'stl' | 'prof
 }
 
 function requireArtifactJob(context: ExportContext): string {
-  if (!context.jobId) throw new Error('This export requires a completed job artifact.');
+  if (!context.jobId) throw new Error('This run has no saved results yet. Wait for it to finish, or choose a completed run.');
   if (context.hasRadiationImpedanceArtifact === false) {
     throw new Error('This run has no retained radiation-impedance matrix.');
   }
@@ -497,7 +498,7 @@ async function radiationImpedanceNpz(context: ExportContext): Promise<string[]> 
 }
 
 function requireResult(context: ExportContext): ResultPayload {
-  if (!context.result) throw new Error('This export requires completed result data.');
+  if (!context.result) throw new Error('This run has no results to export yet. Wait for it to finish, or choose a completed run.');
   return scopeResultChannel(context.result, context.channelId);
 }
 
@@ -517,12 +518,12 @@ async function chartPng(context: ExportContext): Promise<string[]> {
   });
   if (!directivityResponse.ok) throw await responseError(directivityResponse);
   const directivityBody = await directivityResponse.json() as { image?: string };
-  if (!directivityBody.image) throw new Error('HornLab plots returned no directivity image.');
+  if (!directivityBody.image) throw new ProgramFault('HornLab plots returned no directivity image.');
   const response = await fetcher('/api/render-charts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildChartRenderPayload(result, context.preferences)) });
   if (!response.ok) throw await responseError(response);
   const body = await response.json() as { charts?: Record<string, string> };
   const entries = Object.entries(body.charts ?? {});
-  if (!entries.length) throw new Error('Chart renderer returned no images.');
+  if (!entries.length) throw new ProgramFault('Chart renderer returned no images.');
   const baseName = exportContextBaseName(context);
   const files = entries.map(([chart, data]) => {
     const encoded = data.includes(',') ? data.slice(data.indexOf(',') + 1) : data;
@@ -657,7 +658,7 @@ async function writeManualPolarFrd(
     const selectResponse = await fetcher('/api/folders/select', { method: 'POST' });
     if (!selectResponse.ok) throw await responseError(selectResponse);
     workspace = await selectResponse.json() as { selected?: boolean };
-    if (!workspace.selected) throw new Error('Workspace selection was cancelled. No files were written.');
+    if (!workspace.selected) throw new Error('Export cancelled. No files were written.');
   }
   const written = await writeWorkspaceFiles(
     workspaceSubdirectory(context),
@@ -680,7 +681,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
   const saveText = context.saveText ?? downloadText;
   const now = context.now ?? new Date();
   if (format === 'mwg_config') {
-    if (!context.design) throw new Error('This export requires a saved design snapshot.');
+    if (!context.design) throw new Error('This run did not keep its design, so WG cannot export it. Open the design, solve it, then export.');
     const configName = `${baseName}_config.${designFileExtension(context.design.formula)}`;
     const response = await (context.fetcher ?? fetch)('/api/design/serialize', {
       method: 'POST',
@@ -732,7 +733,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     if (context.archiveSnapshot) {
       throw new Error('This archive snapshot has no retained pressure basis for the selected channel.');
     }
-    if (!context.jobId) throw new Error('This export requires the completed job identity.');
+    if (!context.jobId) throw new Error('This run has no saved results yet. Wait for it to finish, or choose a completed run.');
     const query = context.channelId
       ? `?channel_id=${encodeURIComponent(context.channelId)}`
       : '';
@@ -774,7 +775,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     return files.map(({ filename }) => filename);
   }
   if (format === 'html_report') {
-    if (!context.result) throw new Error('This export requires completed result data.');
+    if (!context.result) throw new Error('This run has no results to export yet. Wait for it to finish, or choose a completed run.');
     const filename = `${context.jobStem}_report.html`;
     saveText(buildRunReportHtml(context.result, {
       title: context.designName ?? context.jobStem,
@@ -790,7 +791,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     return [filename];
   }
   if (format === 'polar_frd') {
-    if (!context.result) throw new Error('This export requires completed result data.');
+    if (!context.result) throw new Error('This run has no results to export yet. Wait for it to finish, or choose a completed run.');
     const channels = resultChannels(context.result);
     const channelIds = context.channelId
       ? [context.channelId]
@@ -804,7 +805,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     return files.map(({ filename }) => filename);
   }
   if (format === 'vxp') {
-    if (!context.result) throw new Error('This export requires completed result data.');
+    if (!context.result) throw new Error('This run has no results to export yet. Wait for it to finish, or choose a completed run.');
     // Build every member before saving the first. A malformed project must not
     // leave orphaned support files in Downloads or in the automatic staging set.
     const files = buildVituixCadProjectFiles(context.result, context.preferences, context.jobStem);
@@ -904,7 +905,7 @@ async function runAttributedExportBundle(inputContext: ExportContext, formats: r
       }
       catch (error) {
         reportCaughtError('export-build', error, { job_id: context.jobId ?? null, format });
-        failures.push({ format, reason: error instanceof Error ? error.message : String(error) });
+        failures.push({ format, reason: failureWords(error, 'WG could not write this file. Try again.') });
       }
     }
   }
@@ -1011,7 +1012,7 @@ export async function runAutomaticWorkspaceExport(
       if (flags.destinationConflict !== true) reportCaughtError('export-write', error, { job_id: context.jobId ?? null, format });
       failures.push({
         format,
-        reason: error instanceof Error ? error.message : String(error),
+        reason: failureWords(error),
         // A refused or unanswered write is not regenerated automatically;
         // anything else failed before publication and stays retryable.
         blocked: flags.destinationConflict === true || flags.publicationUncertain === true,
@@ -1047,9 +1048,9 @@ export async function saveMeshArtifactToWorkspace(
   let prepared: WorkspaceFile | null = null;
   let notice: string | undefined;
   await downloadMeshArtifact(job, (message) => { notice = message; }, fetcher, (blob, filename) => { prepared = { blob, filename }; });
-  if (!prepared) throw new Error('Mesh artifact returned no file.');
+  if (!prepared) throw new ProgramFault('Mesh artifact returned no file.');
   const written = await writeWorkspaceFiles(exportSubdirectoryForJob(job), [prepared], fetcher, 'merge_identical', undefined, undefined, job.id);
-  if (!written.files[0]) throw new Error('Workspace returned no saved mesh path.');
+  if (!written.files[0]) throw new ProgramFault('Workspace returned no saved mesh path.');
   if (notice) reportNotice(notice);
   return written.files[0];
 }
@@ -1197,7 +1198,7 @@ export async function archiveRunToWorkspace(
     now: new Date(job.completed_at ?? job.created_at),
   }, formats);
   if (bundle.failures.length) {
-    throw new Error(bundle.failures.map(({ format, reason }) => `${format} (${reason})`).join(', '));
+    throw new Error([...new Set(bundle.failures.map(({ reason }) => reason))].join(' '));
   }
   let replay: { filename: string | null; reason?: string } | undefined;
   if (job.config_summary.import_origin === 'mesh-file') {

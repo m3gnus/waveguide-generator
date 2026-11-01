@@ -130,7 +130,7 @@ describe('useSolvePlan', () => {
   });
 
   it('retries a fault once, without the design changing', async () => {
-    fetchMock.mockImplementationOnce(async () => { throw new TypeError('Failed to fetch'); });
+    fetchMock.mockImplementationOnce(async () => { throw new TypeError('WG is not responding'); });
     await mount();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     // The default retry delay, as useCapabilities relies on it too.
@@ -144,12 +144,12 @@ describe('useSolvePlan', () => {
     // The reported failure: the window stays open, the socket never reconnects
     // to trigger `useCapabilityRefreshOnReconnect`, and Solve used to stay grey
     // for the rest of the session because nothing here ever asked again.
-    fetchMock.mockImplementation(async () => { throw new TypeError('Failed to fetch'); });
+    fetchMock.mockImplementation(async () => { throw new TypeError('WG is not responding'); });
     await mount();
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
     await flushReact();
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(text()).toContain('Failed to fetch');
+    expect(text()).toContain('WG is not responding');
 
     await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_RECOVERY_MS); });
     await flushReact();

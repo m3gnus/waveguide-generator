@@ -9,6 +9,7 @@
  */
 import type { components } from '../api/generated/openapi';
 import { useDesignStore, type DesignDocument } from './design';
+import { ProgramFault } from '../api/httpError';
 
 type Schemas = components['schemas'];
 export type DesignAssembly = Schemas['AssemblyConfig'];
@@ -29,7 +30,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export function newRadiatorId(random: () => string = () => globalThis.crypto.randomUUID()): string {
   const id = random().toLowerCase();
-  if (!UUID.test(id)) throw new Error('A radiator identity must be a canonical UUID.');
+  if (!UUID.test(id)) throw new ProgramFault('A radiator identity must be a canonical UUID.');
   return id;
 }
 
@@ -89,7 +90,7 @@ export function setWooferEnabled(assembly: DesignAssembly, id: string, enabled: 
 export type WooferPatch = Partial<Pick<AssemblyWoofer, 'label' | 'enabled' | 'radius_mm' | 'shape' | 'resolution_mm' | 'drive'>>;
 
 export function updateWoofer(assembly: DesignAssembly, id: string, patch: WooferPatch): DesignAssembly {
-  if (!wooferById(assembly, id)) throw new Error('Unknown woofer.');
+  if (!wooferById(assembly, id)) throw new ProgramFault('Unknown woofer.');
   const next = structuredClone(assembly);
   next.woofers = woofers(next).map(woofer => {
     if (woofer.id !== id) return woofer;
@@ -103,13 +104,13 @@ export function updateWoofer(assembly: DesignAssembly, id: string, patch: Woofer
 
 /** Replace a woofer's placement. A free placement drops any centring relation. */
 export function setPlacement(assembly: DesignAssembly, id: string, placement: AssemblyPlacement): DesignAssembly {
-  if (!wooferById(assembly, id)) throw new Error('Unknown woofer.');
+  if (!wooferById(assembly, id)) throw new ProgramFault('Unknown woofer.');
   if (placement.spacing_to && (placement.spacing_to.radiator_id === id || !wooferById(assembly, placement.spacing_to.radiator_id))) {
-    throw new Error('A spacing relation names another woofer of this assembly.');
+    throw new ProgramFault('A spacing relation names another woofer of this assembly.');
   }
   const next = structuredClone(assembly);
   next.woofers = woofers(next).map(woofer => woofer.id === id ? { ...woofer, placement: structuredClone(placement) } : woofer);
-  if (spacingCycle(next)) throw new Error('Spacing relations must not form a cycle.');
+  if (spacingCycle(next)) throw new ProgramFault('Spacing relations must not form a cycle.');
   return next;
 }
 
@@ -132,7 +133,7 @@ function spacingCycle(assembly: DesignAssembly): boolean {
  * woofers' spacing relations to it. Undo restores all of it in one step.
  */
 export function deleteWoofer(assembly: DesignAssembly, id: string): DesignAssembly {
-  if (!wooferById(assembly, id)) throw new Error('Unknown woofer.');
+  if (!wooferById(assembly, id)) throw new ProgramFault('Unknown woofer.');
   const next = structuredClone(assembly);
   next.woofers = woofers(next).filter(woofer => woofer.id !== id).map(woofer => {
     if (woofer.placement.spacing_to?.radiator_id !== id) return woofer;
@@ -167,7 +168,7 @@ function withoutCrossoverMembers(assembly: DesignAssembly, removed: ReadonlySet<
 
 /** Bind (or clear) a T/S driver to a radiator identity. */
 export function setDriver(assembly: DesignAssembly, id: string, driver: AssemblyDriver | null): DesignAssembly {
-  if (!wooferById(assembly, id)) throw new Error('Drivers bind to a woofer of this assembly.');
+  if (!wooferById(assembly, id)) throw new ProgramFault('Drivers bind to a woofer of this assembly.');
   const next = structuredClone(assembly);
   const drivers = { ...(next.drivers ?? {}) };
   if (driver) drivers[id] = structuredClone(driver); else delete drivers[id];
@@ -190,7 +191,7 @@ export function setMemberProcessing(assembly: DesignAssembly, radiatorId: string
     if (!updated.invert) delete updated.invert;
     return updated;
   }) }));
-  if (!found) throw new Error('Unknown radiator.');
+  if (!found) throw new ProgramFault('Unknown radiator.');
   return next;
 }
 
@@ -198,9 +199,9 @@ export function setMemberProcessing(assembly: DesignAssembly, radiatorId: string
 export function moveToGroup(assembly: DesignAssembly, radiatorId: string, groupId: string | null,
   newId: () => string = newRadiatorId): DesignAssembly {
   const source = groups(assembly).find(group => group.members.some(member => member.radiator_id === radiatorId));
-  if (!source) throw new Error('Unknown radiator.');
+  if (!source) throw new ProgramFault('Unknown radiator.');
   if (groupId === source.id) return structuredClone(assembly);
-  if (groupId !== null && !groups(assembly).some(group => group.id === groupId)) throw new Error('Unknown signal group.');
+  if (groupId !== null && !groups(assembly).some(group => group.id === groupId)) throw new ProgramFault('Unknown signal group.');
   const next = structuredClone(assembly);
   const member = source.members.find(item => item.radiator_id === radiatorId)!;
   const removed = new Set<string>();

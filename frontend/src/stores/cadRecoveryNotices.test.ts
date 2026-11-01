@@ -52,9 +52,9 @@ describe('recovery notices without the coordinator', () => {
   it('keeps unresolved notices and owns delivery-health recoveryError until a successful retry', async () => {
     const store = createCadRecoveryNoticesStore();
     await store.getState().load(async () => json({ notices: [notice()] }));
-    await expect(store.getState().load(async () => { throw new Error('disconnected'); })).rejects.toThrow();
+    await expect(store.getState().load(async () => { throw new Error('could not check interrupted Fusion requests'); })).rejects.toThrow();
     expect(store.getState().notices.mutation).toBeDefined();
-    expect(store.getState().recoveryError).toContain('disconnected');
+    expect(store.getState().recoveryError).toContain('could not check interrupted Fusion requests');
     expect(useCadDeliveryHealthStore.getState().recoveryError).toBe(store.getState().recoveryError);
     await store.getState().load(async () => json({ notices: [notice()] }));
     expect(useCadDeliveryHealthStore.getState().recoveryError).toBeNull();

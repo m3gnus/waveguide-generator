@@ -1,4 +1,4 @@
-import { fieldSentence, validationSentence } from './httpError';
+import { fieldSentence, validationSentence, failureWords, PLAIN_VALIDATION_FAILURE } from './httpError';
 import { decodeFrame, type DecodedFrame, type FrameHeader } from './frame';
 import { selectPreferredFrame } from '../viewport/lodPolicy';
 import {
@@ -258,7 +258,7 @@ export class PreviewSocketManager {
     socket.binaryType = 'arraybuffer';
     socket.onopen = () => { if (this.socket === socket) this.armHeartbeat(); };
     socket.onmessage = (event) => this.onMessage(socket, event.data);
-    socket.onerror = () => this.update({ error: 'Preview connection error', errorFields: null, errorRevision: null });
+    socket.onerror = () => this.update({ error: 'WG lost the preview connection and is reconnecting.', errorFields: null, errorRevision: null });
     socket.onclose = () => {
       if (this.socket !== socket) return;
       this.socket = null;
@@ -325,7 +325,7 @@ export class PreviewSocketManager {
       // An internal failure's text is for developers; a field's own sentence is for the user.
       const detail = message.code === 'internal' ? PLAIN_PREVIEW_FAILURE
         : (firstField && original === firstField[1] ? fieldSentence(firstField[0].split('.'), original) : validationSentence(original))
-          ?? 'This design has a value WG cannot use. Check its parameters.';
+          ?? PLAIN_VALIDATION_FAILURE;
       if (errorSeq !== null) this.latestOutcomeSeq = Math.max(this.latestOutcomeSeq, errorSeq);
       this.errorDocumentLoad = this.documentLoad;
       const documentFailed = supported && this.snapshot.awaitingDocumentFrame
@@ -363,7 +363,7 @@ export class PreviewSocketManager {
     try {
       frame = decodeFrame(buffer, this.maxFrameBytes);
     } catch (error) {
-      this.update({ error: error instanceof Error ? error.message : String(error), errorFields: null, errorRevision: null });
+      this.update({ error: failureWords(error), errorFields: null, errorRevision: null });
       return;
     }
     const { header } = frame;

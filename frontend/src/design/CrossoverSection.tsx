@@ -45,6 +45,7 @@ import {
   type CombinePair,
   type DriverPreset,
 } from '../stores/cadReturn';
+import { failureWords } from '../api/httpError';
 
 /** The bands a pair joins, in the words a designer uses for them. Unroled ends
  * fall back to the authored channel ids, which is all the return says. */
@@ -265,7 +266,7 @@ function useLiveRecombine(
           // one and the two states converge there.
           if (current()) at.onApplied(at.jobId, updated);
         } catch (reason) {
-          if (current()) setError(reason instanceof Error ? reason.message : String(reason));
+          if (current()) setError(failureWords(reason));
         } finally {
           pending.current -= 1;
           if (pending.current === 0) setBusy(false);

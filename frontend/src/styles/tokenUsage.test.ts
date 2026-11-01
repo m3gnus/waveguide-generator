@@ -115,7 +115,7 @@ function presentationViolations(source: string, ownedSelectors: string[], file =
       // Only the real, self-contained emergency boundary owns its literal palette.
       if (file === '../App.tsx' && tag === 'div' && attr('role')?.value === 'alert'
         && styleValue('background') === '#16181d' && styleValue('color') === '#e6e8ec'
-        && jsx && source.slice(jsx.start, jsx.end).includes('Waveguide Generator hit a rendering error'))
+        && jsx && source.slice(jsx.start, jsx.end).includes('WG could not draw this screen'))
         element.dataset.guardEmergencyFallback = 'true';
       const emergencyReload = file === '../App.tsx' && tag === 'button'
         && parent.closest('[data-guard-emergency-fallback]') !== null

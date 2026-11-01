@@ -1,8 +1,8 @@
 import type { JobItem } from '../api/jobsSocket';
-import type { Preferences } from '../prefs/preferences';
-import type { ExportFormat } from '../prefs/preferences';
+import { runDisplayName, type ExportFormat, type Preferences } from '../prefs/preferences';
 import { needsArchiving } from './runArchive';
 import { reportCaughtError } from '../shell/clientErrors';
+import { failureWords } from '../api/httpError';
 
 export interface AutomationDependencies {
   downloadMesh(job: JobItem, reportNotice: (message: string) => void): Promise<string>;
@@ -50,7 +50,7 @@ export class JobAutomation {
           // Nothing was saved, so a later job update may safely retry.
           this.meshStarted.delete(job.id);
           diagnose('mesh-auto-save', job, error);
-          dependencies.reportError(`Mesh auto-save failed for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
+          dependencies.reportError(`WG could not save the mesh of ${runDisplayName(job)}. ${failureWords(error, 'Use Export on the run to save it.')}`);
           return;
         }
         try {
@@ -60,7 +60,7 @@ export class JobAutomation {
           // metadata write cannot duplicate it; an unmarked job retries after
           // an app restart, when this in-memory guard intentionally resets.
           diagnose('mesh-auto-save-record', job, error);
-          dependencies.reportError(`Could not record mesh auto-save for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
+          dependencies.reportError(`WG saved the mesh of ${runDisplayName(job)} but could not note it on the run. It may save it again next time.`);
         }
       }));
     });
@@ -91,14 +91,14 @@ export class JobAutomation {
         });
         const allSelectedComplete = preferences.autoExportFormats.every((format) => formatStatus[format]?.status === 'complete');
         await dependencies.markExported(job, result.files, formatStatus, allSelectedComplete ? attemptedAt : null);
-        if (result.failures.length) dependencies.reportError(`Auto-export for ${job.id.slice(0, 6)} completed with ${result.failures.length} failure${result.failures.length === 1 ? '' : 's'}: ${result.failures.map(({ format, reason }) => `${format} (${reason})`).join(', ')}`);
+        if (result.failures.length) dependencies.reportError(`WG exported ${runDisplayName(job)} but some files are missing. ${[...new Set(result.failures.map(({ reason }) => reason))].join(' ')}`);
       }).catch((error) => {
         // Whether export preparation or its metadata patch failed, retrying on
         // the next jobs event can duplicate work. Keep one attempt
         // per job per app session; persisted null/failed state remains eligible
         // when a fresh JobAutomation is created after restart.
         diagnose('auto-export', job, error);
-        dependencies.reportError(`Auto-export failed for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
+        dependencies.reportError(`WG could not export ${runDisplayName(job)}. ${failureWords(error, 'Use Export on the run to save it.')}`);
       }));
     });
     // Archiving is deliberately independent of auto-export: it writes the run
@@ -115,7 +115,7 @@ export class JobAutomation {
           // Nothing durable was written, so a later job event may retry.
           this.archiveStarted.delete(job.id);
           diagnose('run-archive', job, error);
-          dependencies.reportError(`Run archive failed for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
+          dependencies.reportError(`WG could not archive ${runDisplayName(job)}. ${failureWords(error, 'Use Export on the run to keep a copy.')}`);
           return;
         }
         try {
@@ -125,7 +125,7 @@ export class JobAutomation {
           // write cannot archive twice; an unmarked job retries after a
           // restart, when this in-memory guard intentionally resets.
           diagnose('run-archive-record', job, error);
-          dependencies.reportError(`Could not record the run archive for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
+          dependencies.reportError(`WG archived ${runDisplayName(job)} but could not note it on the run. It may archive it again next time.`);
         }
       }));
     });

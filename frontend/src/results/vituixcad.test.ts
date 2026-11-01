@@ -75,7 +75,7 @@ describe('VituixCAD exports', () => {
       frequencies: [100],
       impedance: { frequencies: [100], real: [1], imaginary: [2] },
       metadata: { impedance_units: 'Z/(rho*c)', phase_time_convention: 'exp(+ikr)' },
-    })).toThrow('Only a channel with a driver model has electrical input impedance');
+    })).toThrow('only a driven channel has');
   });
 
   it.each([undefined, 'acoustic_input_impedance'])('refuses tag-absent ohmic impedance without the electrical-input quantity (%s)', (quantity) => {

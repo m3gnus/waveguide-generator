@@ -5,6 +5,7 @@ import type { WgSolveSettings } from '../stores/wgSolveBlock';
 import type { DesignIdentity } from '../stores/document';
 import type { WgLinkExportResponse } from './designIo';
 import type { CadReturnBundleOrigin, CadReturnIngestRecord } from './cadlink';
+import { httpErrorMessage } from './httpError';
 
 export type OnshapeState = 'not_configured' | 'not_linked' | 'instance_selection_required' | 'current' | 'stale';
 
@@ -89,12 +90,7 @@ export interface OnshapeReturnResult {
 export class OnshapePublicConsentRequired extends Error {}
 
 async function errorMessage(response: Response): Promise<string> {
-  try {
-    const body = await response.json() as { detail?: string | { message?: string } };
-    if (typeof body.detail === 'string') return body.detail;
-    if (body.detail?.message) return body.detail.message;
-  } catch { /* the status text remains useful */ }
-  return `Request failed: ${response.status} ${response.statusText}`.trim();
+  return httpErrorMessage(response, 'WG could not finish this Onshape request. Check the Onshape connection in Settings, then try again.');
 }
 
 export async function getOnshapeConnection(

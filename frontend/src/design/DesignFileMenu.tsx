@@ -57,6 +57,7 @@ import {
   takeDesignOpenTicket,
 } from './openCadProject';
 import { sentToCadMessage } from './useSendToCad';
+import { failureWords } from '../api/httpError';
 
 // Extensions only. The macOS desktop window (pywebview on WKWebView) filters its
 // open panel by the MIME types in `accept` and ignores the extensions, so a MIME
@@ -75,7 +76,7 @@ const CLASSIFICATION_DISPLAY: Record<CadLinkClassification, { label: string; det
   current: { label: 'current', detail: 'Current: this file matches the latest saved version in this machine’s CAD-link registry.' },
   stale_copy: { label: 'stale copy', detail: 'Stale copy: this is an older saved version. Open the current head under CAD-linked designs before sending it to CAD.' },
   externally_edited: { label: 'edited elsewhere', detail: 'Edited elsewhere: the design text changed outside this Waveguide Generator session.' },
-  foreign: { label: 'foreign', detail: 'Foreign: this identity is not yet known to this machine’s CAD-link registry.' },
+  foreign: { label: 'foreign', detail: 'From another computer: this computer has no CAD link for this design yet. Send it to CAD to create one.' },
   missing: { label: 'unlinked', detail: 'Unlinked: this file has no CAD-link identity yet. Its first CAD-linked export will create one.' },
 };
 
@@ -145,7 +146,7 @@ export async function exportProfileArtifacts(
   const failed = kinds.flatMap((kind, index) => {
     const result = results[index];
     return result.status === 'rejected'
-      ? [`${kind}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`]
+      ? [`${kind}: ${failureWords(result.reason)}`]
       : [];
   });
   // Whatever built is written first, so a reported failure never also loses the
@@ -207,7 +208,7 @@ export function DesignFileMenu() {
     setAdoptionCandidate(null);
     try { await operation(); } catch (error) {
       if (isOutboundSupersededError(error)) return;
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(failureWords(error));
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -332,7 +333,7 @@ export function DesignFileMenu() {
       setProjects((await listCadLinkedDesigns()).items.filter((item) => item.designId));
       setProjectsOpen(true);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(failureWords(error));
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -375,12 +376,12 @@ export function DesignFileMenu() {
     if (!file || busyRef.current) return;
     await act(async () => {
       requireExtension(file.name, MESH_ACCEPT, 'a Gmsh mesh');
-      if (file.size > 16 * 1024 * 1024) throw new Error('Mesh exceeds the 16 MiB import limit.');
+      if (file.size > 16 * 1024 * 1024) throw new Error('This mesh file is larger than the 16 MiB WG can import. Export a coarser mesh, then import it.');
       const generation = importedMeshStore.beginIntent();
       const readRequest = beginMeshFileImport(file.name);
       try { await loadMeshFile(file.name, await file.text(), fetch, generation); }
       catch (error) {
-        if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ busy: false, error: error instanceof Error ? error.message : String(error) });
+        if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ busy: false, error: failureWords(error) });
         throw error;
       } finally {
         if (useMeshImportStore.getState().request === readRequest) useMeshImportStore.setState({ busy: false });
@@ -395,7 +396,7 @@ export function DesignFileMenu() {
     if (!file || busyRef.current) return;
     await act(async () => {
       requireExtension(file.name, REPLAY_ACCEPT, 'a mesh replay');
-      if (file.size > MAX_MESH_REPLAY_BYTES) throw new Error('Mesh replay exceeds the 64 MiB import limit.');
+      if (file.size > MAX_MESH_REPLAY_BYTES) throw new Error('This file is larger than the 64 MiB WG can open. Choose a smaller file.');
       const generation = importedMeshStore.beginIntent();
       const readRequest = beginMeshFileImport(file.name);
       let restored = false;

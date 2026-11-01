@@ -43,7 +43,7 @@ export function createCadRecoveryNoticesStore(): CadRecoveryNoticesStore {
         get().setRecoveryError(null);
       } catch (error) {
         if (started !== generation) return;
-        get().setRecoveryError(`WG could not check interrupted Fusion requests (${error instanceof Error ? error.message : String(error)}). Refresh CAD Link to try again.`);
+        get().setRecoveryError('WG could not check interrupted Fusion requests. Refresh CAD Link to try again.');
         throw error;
       }
     },
@@ -60,7 +60,7 @@ export function createCadRecoveryNoticesStore(): CadRecoveryNoticesStore {
           set({ notices });
           get().setRecoveryError(null);
         } catch (error) {
-          get().setRecoveryError(`WG could not dismiss this recovery notice (${error instanceof Error ? error.message : String(error)}).`);
+          get().setRecoveryError('WG could not dismiss this recovery notice. Refresh CAD Link, then try again.');
           throw error;
         } finally { pending.delete(id); }
       })();

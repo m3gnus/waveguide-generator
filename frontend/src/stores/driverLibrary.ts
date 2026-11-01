@@ -7,6 +7,7 @@ import {
 } from '../api/drivers';
 import { durableSettings, namespaceStorage } from './durableSettings';
 import { DRIVER_FIELD_KEYS, type DriverFieldKey, type DriverPreset } from './cadReturn';
+import { failureWords } from '../api/httpError';
 
 /**
  * A driver the user saved from the T/S sheet.
@@ -151,7 +152,7 @@ export const useDriverLibraryStore = create<DriverLibraryState>((set, get) => ({
         // A library that cannot be reached is not a failure the rail reports
         // as an error: it is the same situation as an empty folder, and the
         // card falls back to the manual fields.
-        set({ status: 'unavailable', info: null, error: reason instanceof Error ? reason.message : String(reason) });
+        set({ status: 'unavailable', info: null, error: failureWords(reason) });
       }
     })().finally(() => { inFlight = null; });
     inFlight = request;
@@ -162,7 +163,7 @@ export const useDriverLibraryStore = create<DriverLibraryState>((set, get) => ({
     try {
       set({ status: 'ready', info: await rescanDriverLibrary(fetcher ?? fetch), error: null });
     } catch (reason) {
-      set({ status: 'unavailable', info: null, error: reason instanceof Error ? reason.message : String(reason) });
+      set({ status: 'unavailable', info: null, error: failureWords(reason) });
     }
   },
   save: (driver) => {

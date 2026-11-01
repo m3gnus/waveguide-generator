@@ -5,6 +5,7 @@ import {
   selectWorkspaceFolder,
   type WorkspaceFolder,
 } from '../api/workspace';
+import { failureWords } from '../api/httpError';
 
 /** Effective Runs folder shared by the run list and CAD project menu.
  * Selecting changes the root while keeping migrated overrides in place.
@@ -26,7 +27,7 @@ let generation = 0;
 let loading: Promise<void> | null = null;
 
 function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return failureWords(error);
 }
 
 export const useWorkspaceFolderStore = create<WorkspaceFolderStore>((set) => ({

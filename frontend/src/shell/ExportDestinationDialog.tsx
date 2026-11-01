@@ -14,6 +14,7 @@ import {
   type ExportDestinationChoice,
   type ExportDestinationRequest,
 } from './exportDestinationPrompt';
+import { failureWords } from '../api/httpError';
 
 interface DestinationQuestion {
   kind: 'destination';
@@ -30,7 +31,7 @@ interface ReplaceQuestion {
 type Question = DestinationQuestion | ReplaceQuestion;
 
 function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return failureWords(error);
 }
 
 /** The first few, then a count: a folder of forty is not a list to read. */

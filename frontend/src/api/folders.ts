@@ -1,6 +1,7 @@
 import { deadlineFetch } from './deadlineFetch';
 import { applyWorkspaceFolderChoice } from '../stores/workspaceFolder';
 import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
+import { httpErrorMessage } from './httpError';
 export interface FolderRoot {
   path: string | null;
   selected: boolean;
@@ -19,8 +20,8 @@ async function request(action: 'path' | 'open' | 'select', payload?: { path: str
     method: 'POST',
     ...(payload ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) } : {}),
   });
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not change this folder. Choose it again in Settings.'));
   const body = await response.json();
-  if (!response.ok) throw new Error(typeof body.detail === 'string' ? body.detail : 'Folder request failed');
   if (action === 'select' && body.selected) {
     if (typeof body.runs === 'string') applyWorkspaceFolderChoice({ path: body.runs, selected: body.runsSelected !== false });
     cadWorkspaceSelection.noteSelection(body.cadlinkExists !== false);

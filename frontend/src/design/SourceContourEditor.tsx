@@ -26,6 +26,7 @@ import type { Diagnosis } from '../sketch/session';
 import { arcGeometry } from '../sketch/geometry';
 import { installSketchTest, registerSketchLoader, sketchPerfEnabled } from './sketchTestHarness';
 import './sourceContourEditor.css';
+import { failureWords } from '../api/httpError';
 
 const storage = namespaceStorage('sourceContourDraft');
 const id = () => globalThis.crypto.randomUUID();
@@ -65,7 +66,7 @@ export function readSourceDraft(): SourceDocument {
       || !c.points.every((p) => typeof p.id === 'string' && Number.isFinite(p.r_mm) && Number.isFinite(p.z_mm))
       || !c.segments.every((s) => [s.id, s.start, s.end].every((v) => typeof v === 'string') && ['line', 'arc'].includes(s.kind) && ['moving', 'rigid'].includes(s.role) && ['cw', 'ccw'].includes(s.direction) && (s.kind === 'line' && s.center_mm === null || Array.isArray(s.center_mm) && s.center_mm.length === 2 && s.center_mm.every(Number.isFinite)))
       || typeof d.channel_id !== 'string' || !['normal', 'axial'].includes(d.motion)
-      || !d.weights || typeof d.weights !== 'object' || Array.isArray(d.weights) || !Object.values(d.weights).every(Number.isFinite)) throw new Error('Invalid draft');
+      || !d.weights || typeof d.weights !== 'object' || Array.isArray(d.weights) || !Object.values(d.weights).every(Number.isFinite)) throw new Error('This file is not a source contour draft. Choose a draft saved from this screen.');
     return value;
   } catch { return structuredClone(INITIAL_SOURCE); }
 }
@@ -257,7 +258,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLim
       authorRef.current = state; setAuthor(state); setPreview(undefined);
       commitAuthoring(state);
       setNotice(next.notice ?? ''); setError('');
-    }, failed: reason => { if (current) setError(reason instanceof Error ? reason.message : String(reason)); }, activity: active => { if (current) { editingIntent.current = active; setSketchPending(active); if (!active && deferredHydration.current) { deferredHydration.current = false; hydrateRef.current(); } } }, preview: (state, result) => { if (current) { setPreview(state === authorRef.current ? undefined : state); setDiagnosis(result); } }, dimensionProblem: (state, id, value) => presetDimensionProblem(state.sketch, state.meta, id, value), historyNavigation: clearLoadOffer });
+    }, failed: reason => { if (current) setError(failureWords(reason)); }, activity: active => { if (current) { editingIntent.current = active; setSketchPending(active); if (!active && deferredHydration.current) { deferredHydration.current = false; hydrateRef.current(); } } }, preview: (state, result) => { if (current) { setPreview(state === authorRef.current ? undefined : state); setDiagnosis(result); } }, dimensionProblem: (state, id, value) => presetDimensionProblem(state.sketch, state.meta, id, value), historyNavigation: clearLoadOffer });
     controller.current = next;
     // Initialization errors are reported by queued operations as well.
     return () => { current = false; next.destroy(); controller.current = undefined; };
@@ -284,7 +285,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLim
       ? `Throat changed ${oldThroat.toFixed(2)} → ${limit.radius.toFixed(2)} mm; dimensions kept` : usedContext ? 'Reference context changed; contour updated' : undefined;
     installedContext.current = context.fingerprint;
     try { void controller.current.replaceContext(state => withSourceContext(withSourceLimit(state, limit), context), notice, limit.hard ? 'The new throat conflicts with: ' : undefined).catch(reason => { if (!isConstraintConflict(reason)) setError(String(reason)); }); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    catch (reason) { setError(failureWords(reason)); }
   }, [limit.kind, limit.radius, limit.hard, context.fingerprint, classic, generation]);
   function scaleToFitThroat(fromLoad = false) {
     void run(async () => {
@@ -330,7 +331,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLim
     authorRef.current = next; setAuthor(next); setPreview(undefined); setGeneration(v => v + 1); setDiagnosis(undefined); setCanvasSelection([]);
   }
   function sketchCommand(command: Command | ((state: Authoring<SourceMeta>) => Command)) {
-    void controller.current?.command(command).catch(reason => { if (!isConstraintConflict(reason)) setError(reason instanceof Error ? reason.message : String(reason)); });
+    void controller.current?.command(command).catch(reason => { if (!isConstraintConflict(reason)) setError(failureWords(reason)); });
   }
   useEffect(() => {
     let current = true;
@@ -353,7 +354,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLim
   }
   async function run(action: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('');
-    try { await action(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    try { await action(); } catch (reason) { setError(failureWords(reason)); }
     finally { setBusy(false); }
   }
   function completeLoad(load: ContourLoad, next: Authoring<SourceMeta>) {
@@ -466,7 +467,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, limit: hostLim
                 })}/></td>
               <td><NumberField label={`Dimension ${c.id} value`} value={c.kind === 'angle' ? c.value * 180 / Math.PI : c.value} unit={c.kind === 'angle' ? '°' : 'mm'}
                 precision={9} displayPrecision={2} step={.1} disabled={!sketchReady || !c.driving} disabledReason={!c.driving ? 'Reference dimension' : undefined}
-                onCommit={value => void controller.current?.dimension(c.id, value * (c.kind === 'angle' ? Math.PI / 180 : 1)).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))}/></td>
+                onCommit={value => void controller.current?.dimension(c.id, value * (c.kind === 'angle' ? Math.PI / 180 : 1)).catch(reason => setError(failureWords(reason)))}/></td>
               <td><button className="btn" type="button" aria-label={`${c.driving ? 'Make reference' : 'Make driving'} ${dimensionName(c)}`} disabled={!sketchReady || sketchPending} onClick={() => sketchCommand({ kind: 'setDriving', id: c.id, driving: !c.driving })}>{c.driving ? 'Make reference' : 'Make driving'}</button></td>
             </tr>;
   const patchRow = (patch: SourcePatch, i: number) => <tr key={patch.id} data-row-id={patch.id} aria-selected={canvasSelection.includes(patch.id)} className={hoverId === patch.id ? 'hovered' : ''}
