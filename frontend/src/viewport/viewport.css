@@ -249,8 +249,8 @@
 /* The report owns the top-left corner; notices carry a Refresh button and centre in what is left. */
 .wg2-viewport:has(.mesh-quality-card) .viewport-notices { left: 272px; }
 /* A narrow viewport keeps the numbers; their meaning is in the user guide and on a wider one. */
-@container viewport (max-width: 640px) {
-  .wg2-viewport .mesh-quality-card { width: 188px; }
+@container viewport (max-width: 720px) {
+  .wg2-viewport .mesh-quality-card { width: 212px; }
   .mesh-quality-card p { display: none; }
-  .wg2-viewport:has(.mesh-quality-card) .viewport-notices { left: 212px; }
+  .wg2-viewport:has(.mesh-quality-card) .viewport-notices { left: 236px; }
 }
