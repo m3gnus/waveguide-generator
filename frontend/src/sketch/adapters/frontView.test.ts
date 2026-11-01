@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { emptyAssembly } from '../../stores/assembly';
 import type { AssemblyFrontContext } from '../../api/assembly';
 import type { DesignAssembly } from '../../stores/assembly';
-import { addWooferCommand, anchoredPlacement, draggedPlacement, frontViewAdapter, frontWoofers, noRoomForWoofer, placementProblems, radiusProblem, type FrontViewContext } from './frontView';
+import { addWooferCommand, anchoredPlacement, draggedPlacement, frontViewAdapter, freePlacementClosed, frontWoofers, noRoomForWoofer, placementProblems, radiusProblem, type FrontViewContext } from './frontView';
 import fixture from './frontView.fixture.json';
 
 const before: FrontViewContext = { assembly: fixture.before.assembly as DesignAssembly, context: fixture.before.context as AssemblyFrontContext };
@@ -90,8 +90,12 @@ describe('front view edits', () => {
     const woofers = [[1, 1], [1, -1], [-1, 1], [-1, -1]].map(([x, y], index) => ({ radiator_id: `w${index}`, x_mm: 310 * x, y_mm: 95 * y, radius_mm: 50 }));
     const crowded: FrontViewContext = { ...before, context: { ...before.context, woofers, clearances: {}, mouth_outline_mm: ring, mouth_top_mm: 140, mouth_bottom_mm: -140,
       minimum_clearance_mm: 0.1, baffle: { x0_mm: -400, x1_mm: 400, y0_mm: -165, y1_mm: 165, edge_mm: 18 } } };
-    // A radius 80 woofer fits at (220.2, 0), a place the search does not land on.
-    expect(noRoomForWoofer('free', crowded, () => 25)).toBeNull();
+    // A radius 80 woofer fits at (220.2, 0), a place the search does not land on:
+    // the guidance stays, and Free position stays open for the user to find it.
+    const guidance = noRoomForWoofer('free', crowded, () => 25);
+    expect(guidance?.reason).toContain('or use Free position to place it yourself');
+    expect(guidance?.reason).not.toContain('does not fit anywhere');
+    expect(freePlacementClosed(crowded)).toBe(false);
   });
 
   it('starts a free woofer where it fits, and refuses only a woofer larger than the baffle', () => {
@@ -113,6 +117,7 @@ describe('front view edits', () => {
     // Only a baffle smaller than the woofer closes free placement.
     const small: FrontViewContext = { ...wide, context: { ...wide.context, baffle: { x0_mm: -400, x1_mm: 400, y0_mm: -90, y1_mm: 90, edge_mm: 18 } } };
     expect(noRoomForWoofer('free', small, margin)?.reason).toContain('taller than');
+    expect(freePlacementClosed(small)).toBe(true);
   });
 
   it('says why a new woofer has no room, what to change, and never changes it', () => {
@@ -125,7 +130,15 @@ describe('front view edits', () => {
     expect(full).toMatchObject({ updates: { 'enclosure.space_b': 189 }, action: 'Set Bottom margin to 189 mm' });
     expect(full.reason).toBe('A 160 mm woofer needs 170.1 mm below the mouth, and this enclosure has 7 mm. Raise Bottom margin to 189 mm under Baffle, or use Free position.');
     expect(noRoomForWoofer('above', tight, margin)?.updates).toHaveProperty(['enclosure.space_t']);
-    expect(noRoomForWoofer('free', tight, margin)).toBeNull();
+    expect(noRoomForWoofer('free', tight, margin)).toMatchObject({ updates: { 'enclosure.space_b': 189 }, action: 'Set Bottom margin to 189 mm' });
+    expect(freePlacementClosed(tight)).toBe(false);
+    // Nowhere found: a free woofer starts on the baffle, as clear as it can get, not at the unfit place below the mouth.
+    const start = addWooferCommand('free', tight).edit(emptyAssembly()).woofers!.at(-1)!.placement;
+    expect(Math.abs(start.x_mm!)).toBeCloseTo(67, 0);
+    expect(Math.abs(start.y_mm!)).toBeCloseTo(67, 0);
+    // Another woofer in the anchored place: margins would not help, so no margin is offered.
+    const roomyBelow: FrontViewContext = { ...tight, context: { ...tight.context, baffle: { ...tight.context.baffle!, y0_mm: -340 }, woofers: [{ radiator_id: 'w', x_mm: 0, y_mm: -230, radius_mm: 80 }] } };
+    expect(noRoomForWoofer('below', roomyBelow, margin)).toMatchObject({ updates: {}, action: null });
     // A baffle too narrow for the woofer needs its width too, or the offer would not work.
     const narrow: FrontViewContext = { ...tight, context: { ...tight.context, baffle: { x0_mm: -70, x1_mm: 70, y0_mm: -165, y1_mm: 165, edge_mm: 18 } } };
     expect(noRoomForWoofer('free', narrow, margin)).toMatchObject({ updates: { 'enclosure.space_b': 189, 'enclosure.space_l': 54, 'enclosure.space_r': 54 } });

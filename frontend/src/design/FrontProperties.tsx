@@ -11,7 +11,7 @@ import {
   type AssemblyAnchor, type AssemblyPlacement, type AssemblyWoofer, type DesignAssembly,
 } from '../stores/assembly';
 import { isNativeFamily, useDesignStore, type DesignDocument } from '../stores/design';
-import { addWooferCommand, anchoredPlacement, clears, noRoomForWoofer, placementProblems, radiusProblem, type FrontCommand, type FrontViewContext } from '../sketch/adapters/frontView';
+import { addWooferCommand, anchoredPlacement, clears, freePlacementClosed, noRoomForWoofer, placementProblems, radiusProblem, type FrontCommand, type FrontViewContext } from '../sketch/adapters/frontView';
 import type { DomainAdapter, PropertiesSection, WorkspaceSession } from '../sketch/workspace/types';
 import { ActionMenu } from './ActionMenu';
 import { NumberField } from './NumberField';
@@ -150,18 +150,21 @@ function SourcesProperties({ assembly, session, resolved, selection, select, has
   const blocked = mountingBlock(design);
   const noRoom = (anchor: AssemblyAnchor) => noRoomForWoofer(anchor, resolved, field => design.enclosure[field.split('.')[1] as 'space_b' | 'space_t' | 'space_l' | 'space_r']);
   const full = noRoom('free');
-  const menu = <ActionMenu menuLabel="Where to add the woofer" triggerLabel="Add woofer" triggerTitle={blocked ? 'Woofers need an enclosure.' : full?.reason ?? 'Add a woofer below the mouth'} chevronLabel="Choose where to add it" onPrimary={() => add('below')} placement="below" disabled={!!blocked}
+  // The plain Add only ever makes a woofer that fits; with no such place it opens the choices.
+  const primary = (['below', 'above'] as const).find(anchor => !noRoom(anchor)) ?? (full ? undefined : 'free');
+  const menu = <ActionMenu menuLabel="Where to add the woofer" triggerLabel="Add woofer" triggerTitle={blocked ? 'Woofers need an enclosure.' : full?.reason ?? 'Add a woofer'} chevronLabel="Choose where to add it" onPrimary={primary ? () => add(primary) : undefined} placement="below" disabled={!!blocked}
     items={ANCHORS.map(([anchor, label]) => {
       const room = noRoom(anchor);
-      return { id: anchor, label, disabled: !!room, disabledReason: room?.reason, onSelect: () => add(anchor) };
+      const closed = anchor === 'free' ? freePlacementClosed(resolved) : !!room;
+      return { id: anchor, label, disabled: closed, disabledReason: closed ? room?.reason : undefined, onSelect: () => add(anchor) };
     })}/>;
   return <>
     <div className="front-heading"><h3>Sources</h3>{woofers.length > 0 && menu}</div>
     <div className="front-source hf"><span className="front-swatch" aria-hidden="true"/><span>HF</span><small>Horn throat</small></div>
     {woofers.length === 0
       ? full && !blocked
-        ? <Notice tone="info" role={null} title="No room for a woofer yet" actions={<button className="btn-primary" type="button"
-          onClick={() => updateValues(full.updates)}>{full.action}</button>}>{full.reason}</Notice>
+        ? <Notice tone="info" role={null} title="No room for a woofer yet" actions={<>{full.action && <button className="btn-primary" type="button"
+          onClick={() => updateValues(full.updates)}>{full.action}</button>}{menu}</>}>{full.reason}</Notice>
         : <EmptyState title="No woofers yet" detail="Add one on the front baffle. It is solved together with the horn." action={menu}/>
       : <ul className="front-sources">
         {woofers.map(woofer => <li key={woofer.id}>
