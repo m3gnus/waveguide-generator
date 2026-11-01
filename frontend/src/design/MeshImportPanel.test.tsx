@@ -75,7 +75,7 @@ it('shows actual replay frequencies and physics, with full resolved settings ins
       source_file: { filename: 'speaker.msh', transform: { units: 'mm', forward: '+z', up: '+y' }, source_tags: [2] },
       msh_text: '', source_tags: { source: 2 }, summary: { node_count: 4, triangle_count: 4, dimensions: [1, 1, 1], groups: [] } } as RegisteredMesh });
   act(() => root.render(panel()));
-  const summary = host.querySelector('[aria-label="Exact mesh replay"]')!;
+  const summary = host.querySelector('[aria-label="Saved solve setup"]')!;
   expect(summary.textContent).toContain('3 explicit frequencies: 137, 211, 3987 Hz');
   expect(summary.textContent).toContain('vertical polars · 10° steps · 3.7 m');
   expect(summary.textContent).toContain('Engine: metal · Accuracy: accurate');
@@ -88,7 +88,7 @@ it('shows actual replay frequencies and physics, with full resolved settings ins
   expect(summary.textContent).toContain('the setup revision this mesh was opened with');
   expect(host.querySelectorAll('.cad-channel-list')).toHaveLength(1);
   act(() => useImportedSolveOptionsStore.getState().setSweep({ count: 29 }));
-  expect(host.querySelector('[aria-label="Exact mesh replay"]')).toBeNull();
+  expect(host.querySelector('[aria-label="Saved solve setup"]')).toBeNull();
   expect(useImportedModelStore.getState().restoredRevisionId).toBeNull();
   expect(host.textContent).not.toContain('Full domain, free space');
   preferencesStore.update({ showDeveloperDetails: false });
@@ -502,8 +502,8 @@ it('keeps a file restore note visible when Results hides quiet readiness', () =>
   geometry({ prepared: true });
   renderGeometry(true);
   expect(host.querySelector('.cad-status-line')).toBeNull();
-  act(() => useMeshImportStore.setState({ notice: 'Mesh replay opened. Solve keeps its settings.' }));
-  expect(host.querySelector('.cad-status-line')?.textContent).toContain('Mesh replay opened. Solve keeps its settings.');
+  act(() => useMeshImportStore.setState({ notice: 'Solve setup opened. Solve keeps its settings.' }));
+  expect(host.querySelector('.cad-status-line')?.textContent).toContain('Solve setup opened. Solve keeps its settings.');
   expect(host.querySelector('.cad-status-line')?.textContent).toContain('Ready to solve');
 });
 

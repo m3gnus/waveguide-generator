@@ -174,8 +174,8 @@ be overridden this way and needs a coarser mesh. See the
 
 ### Import and solve a mesh
 
-Select **Imported mesh**, then press **Import mesh…** in the top bar. The design
-file menu also offers import and replay. No CAD application, add-in or WGLink
+Choose **File → Import mesh…**. This works from either mode; WG switches to
+**Imported mesh** when the file is in. No CAD application, add-in or WGLink
 folder is needed. WG accepts ASCII Gmsh 2.2 linear triangular surface meshes
 up to 16 MiB; STL, OBJ, binary and volume meshes are not supported.
 
@@ -252,20 +252,20 @@ reload, WG restores that same import; pressing Solve recovers the original
 request before a later deliberate press starts a new run. Run archives include
 source mappings and transforms.
 
-For a completed file-mesh run, choose **Export → Mesh replay** to write a
-`.wgreplay` package to your chosen folder. **Open mesh replay…** in the design
-file menu restores its retained mesh and exact solve settings, including explicit
-frequency lists and directivity settings, without the original job database or
-mesh file. Packages up to 64 MiB are accepted. Press **Solve** for a new run using
+To solve a finished file-mesh run again later or on another computer, choose
+**Export → Solve setup** on the run. This writes a `.wgreplay` file to your chosen
+folder. **File → Open solve setup…** restores its mesh and exact solve settings,
+including explicit frequency lists and directivity settings, without the original
+run or mesh file. Files up to 64 MiB are accepted. Press **Solve** for a new run using
 those settings. The panel shows the actual frequencies, polars, engine and
 accuracy. With developer details enabled, **Full resolved setup** shows the
 complete settings.
-Automatic settings restoration and parametric solve options do not change replay. Editing a mesh setup
-control or one of the mesh's solve options ends exact replay and starts a new setup from what the controls show; the exact-replay summary then disappears.
-Run archives also include the replay package when its inputs remain available.
-If an old run cannot supply those inputs, its archive record explains why replay
-is unavailable while keeping the result exports. CAD runs keep their existing
-workflows and do not use mesh replay packages. See the [replay format and limits](reference/MESH-REPLAY.md).
+Automatic settings restoration and parametric solve options do not change a solve setup. Editing a mesh setup
+control or one of the mesh's solve options starts a new setup from what the controls show; the **Saved solve settings** summary then disappears.
+Run archives also include the solve setup when its inputs remain available.
+If an old run cannot supply those inputs, its archive record explains why the solve
+setup is unavailable while keeping the result exports. CAD runs keep their existing
+workflows and do not use solve setup files. See the [replay format and limits](reference/MESH-REPLAY.md).
 
 ### Parameter tabs and size readout
 
@@ -684,8 +684,8 @@ memory than the computer can provide, make the mesh coarser before solving.
 ### The design name
 
 A design has one name, typed in the **Design name** field above the run list. It is
-the only place a name is edited, and everything follows it: the title bar, the file
-chip, the viewport heading, the `.cfg` filename used by **Export a copy**, the
+the only place a name is edited, and everything follows it: the title bar, the label
+beside the **File** menu, the viewport heading, the `.cfg` filename used by **Export a copy**, the
 `Report.Title` written at the top of that file, the label each solve is stored under,
 and every export stem. Renaming alone never makes WG ask before replacing the design:
 the name is left out when WG checks whether a design exists anywhere else.
@@ -733,12 +733,20 @@ The folder picker opens on the machine running WG. When that machine has no
 desktop session to open it on — a tunnelled or headless install — type the path
 under *Enter a folder path instead*.
 
-**Export a copy** in the design menu serializes the current parameters and solve
+**File → Export a copy** serializes the current parameters and solve
 settings to a `.cfg` and writes it to the folder you choose. It is a portable
 copy: it does not create or advance a CAD-link identity or update the CAD-link
 registry.
 
-Nothing marks the design as changed. Instead, **New**, **Open…**, opening a CAD-linked design
+To branch a design, export a copy and open that file. When WG recognises it as a
+copy of a file you opened before, it asks whether to keep it with the original's
+runs or start a new design.
+
+**File → Move earlier runs…** brings runs of this design from older folders into
+its current run folder. It shows every folder, count and size first, and nothing
+moves until you confirm.
+
+Nothing marks the design as changed. Instead, **New design**, **Open…**, opening a CAD-linked design
 and a Fusion project switch ask before replacing the design on screen only when it
 exists nowhere else: no stored run matches it, and it is not what WG last opened,
 exported or sent to CAD. To keep a design, solve it or export a copy; either one
@@ -764,7 +772,7 @@ radiation-matrix CSV and the lossless NPZ. The CSV uses Pa·s/m³ and engineerin
 matrix for exact downstream work. **Send to CAD** is the first action in this menu
 and sends that same stored snapshot. Failed formats are reported individually so
 successful files are not hidden. The current parametric design can also be sent from
-the top-left design menu under **Export → Send to CAD**.
+the **File** menu under **Export → Send to CAD**.
 
 ZMA and VituixCAD project exports require driver-modelled electrical impedance.
 The `.vxp` export includes the FRD and ZMA files its project references.

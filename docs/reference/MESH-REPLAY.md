@@ -1,8 +1,8 @@
 # Portable mesh replay v1
 
 `.wgreplay` is a UTF-8 JSON input package for a completed standalone file-mesh
-run. Runs offers **Mesh replay** under Export; permanent file-run archives also
-include it. **Open mesh replay…** prepares the model in another workspace.
+run. Runs offers **Solve setup** under Export; permanent file-run archives also
+include it. **File → Open solve setup…** prepares the model in another workspace.
 The user presses Solve explicitly. Opening creates no job and does not restore
 an old completed job or results into the new database.
 

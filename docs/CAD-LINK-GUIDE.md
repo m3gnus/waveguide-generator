@@ -51,8 +51,8 @@ missing **Run on Startup**; fix those in Fusion's add-in list.
 
 ## 2. Send a WG waveguide to Fusion
 
-1. Finish the basic waveguide in WG. Open the design menu (the design name at
-   the top left) and choose **Export → Send to CAD**. On the **CAD Link**
+1. Finish the basic waveguide in WG. Choose **File → Export → Send to
+   CAD** at the top left. On the **CAD Link**
    panel, **Open in Fusion 360** does the same. A completed parametric run's
    export menu also has **Send to CAD**.
 2. WG writes the design and starts or raises Fusion, and the add-in inserts
@@ -408,7 +408,7 @@ Fusion.
 
 WG has no direct STEP import. To solve a STEP model, open it in Fusion, pick
 its drivers with Sources & Mesh…, save the document, and Send or Solve as
-above. **Import mesh…** in WG's design menu is a separate route for Gmsh
+above. **File → Import mesh…** in WG is a separate route for Gmsh
 surface meshes; see [Import and solve a mesh](USER-GUIDE.md#import-and-solve-a-mesh).
 
 Onshape is disabled in release builds. Developers can find its setup in the

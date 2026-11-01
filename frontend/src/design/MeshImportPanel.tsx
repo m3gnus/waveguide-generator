@@ -61,7 +61,7 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
       {/* Its status line and action live in Results, once. */}
       {state.filename || summary
         ? <header className="cad-model-identity"><b className="cad-model-name">{state.filename || 'Mesh file'}</b></header>
-        : <EmptyState title="No mesh file yet" detail="Use Import mesh… above. You set each surface here once it is in."/>}
+        : <EmptyState title="No mesh file yet" detail="Use File → Import mesh…. You set each surface here once it is in."/>}
       {summary && <>
         <fieldset className="mesh-surfaces" disabled={!editable}>
           <legend>Surfaces</legend>
@@ -122,8 +122,8 @@ export function MeshImportPanel({ tab, embedded = false }: { tab: 'geometry' | '
     </section>
     </>}
     {tab === 'simulation' && <>
-    {replay && replayOptions && <section aria-label="Exact mesh replay">
-      <h4>Exact replay settings</h4>
+    {replay && replayOptions && <section aria-label="Saved solve setup">
+      <h4>Saved solve settings</h4>
       <p>{frequencySummary}</p>
       <p>{replayOptions.polar_config.enabled_axes.join(', ')} polars · {replayAngleStep}° steps · {replayOptions.polar_config.distance} m</p>
       <p>Engine: {replayOptions.engine} · Accuracy: {replayOptions.accuracy ?? 'fast'}</p>

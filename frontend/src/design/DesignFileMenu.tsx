@@ -1,4 +1,4 @@
-import { MoveRunsButton } from '../shell/MoveRunsDialog';
+import { MoveRunsDialog } from '../shell/MoveRunsDialog';
 import { mintDesignUid } from '../stores/designUid';
 import { inspectDesignFile, rememberDesignFile, designFileSource } from './designFiles';
 import { SharedDesignIdDialog, type SharedDesignQuestion } from './SharedDesignIdDialog';
@@ -6,7 +6,7 @@ import { useCurrentModel } from '../model/currentModel';
 import { assertCurrentModelExport, parameterExportReason } from '../results/exportContext';
 import { noteExplicitNavigation } from '../shell/workspaceNavigation';
 import { nativeCadLimitation } from './nativeFamilies';
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   buildGeometryExport,
   chooseDesignFile,
@@ -37,9 +37,8 @@ import {
   rememberWrittenCopy,
   replacingWouldLose,
 } from './replacementCheck';
-import { designNameSlug, designNameFromFilename } from '../stores/designName';
+import { designNameSlug, designNameFromFilename, UNTITLED_DESIGN } from '../stores/designName';
 import { usePreferences } from '../prefs/preferences';
-import { Icon } from '../shell/icons';
 import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
 import { MAX_MESH_REPLAY_BYTES } from '../api/meshReplay';
 import { beginMeshFileImport, loadMeshFile, loadMeshReplay, useMeshImportStore } from '../stores/meshImport';
@@ -170,15 +169,16 @@ export function DesignFileMenu() {
   const revision = useDesignStore((state) => state.designRevision);
   const designName = useDocumentStore((state) => state.designName);
   const moveIdentity = useDocumentStore((state) => state.identity);
+  const meshFilename = useMeshImportStore((state) => state.filename);
   const designUid = useDocumentStore((state) => state.designUid);
   const classification = useDocumentStore((state) => state.classification);
   const setCadLink = useDocumentStore((state) => state.setCadLink);
-  const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const { cadApplication, showDeveloperDetails } = usePreferences();
   const [open, setOpen] = useState(false);
   const [exportsOpen, setExportsOpen] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(false);
   const [projects, setProjects] = useState<CadLinkedDesignSummary[]>([]);
+  const [moveRunsOpen, setMoveRunsOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [adoptionCandidate, setAdoptionCandidate] = useState<CadLinkOpenState['adoptionCandidate']>(null);
   const [sharedQuestion, setSharedQuestion] = useState<SharedDesignQuestion | null>(null);
@@ -395,19 +395,19 @@ export function DesignFileMenu() {
     input.value = '';
     if (!file || busyRef.current) return;
     await act(async () => {
-      requireExtension(file.name, REPLAY_ACCEPT, 'a mesh replay');
+      requireExtension(file.name, REPLAY_ACCEPT, 'a solve setup');
       if (file.size > MAX_MESH_REPLAY_BYTES) throw new Error('This file is larger than the 64 MiB WG can open. Choose a smaller file.');
       const generation = importedMeshStore.beginIntent();
       const readRequest = beginMeshFileImport(file.name);
       let restored = false;
       try { restored = await loadMeshReplay(await file.text(), fetch, generation); }
       catch (error) {
-        if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ busy: false, error: String(error) });
+        if (importedMeshStore.isCurrentGeneration(generation)) useMeshImportStore.setState({ busy: false, error: failureWords(error) });
         throw error;
       } finally {
         if (useMeshImportStore.getState().request === readRequest) useMeshImportStore.setState({ busy: false });
       }
-      if (restored) setMessage(`Opened ${file.name}. Solve preserves the replay settings; editing starts a new setup.`);
+      if (restored) setMessage(`Opened ${file.name}. Solve uses its saved settings; editing starts a new setup.`);
     });
   }
 
@@ -457,14 +457,6 @@ export function DesignFileMenu() {
     resetDocumentStore();
     workspaceModeStore.setMode('parametric');
     setMessage('New design');
-    setAdoptionCandidate(null);
-    setOpen(false);
-  }
-
-  function duplicateDesign() {
-    useDesignStore.getState().replaceDocument(design);
-    useDocumentStore.getState().duplicateAsNewDesign();
-    setMessage('Duplicated as new design');
     setAdoptionCandidate(null);
     setOpen(false);
   }
@@ -526,6 +518,12 @@ export function DesignFileMenu() {
     });
   }
 
+  /** The file picker takes over from here, so a cancelled pick leaves no menu behind. */
+  function pickFile(input: HTMLInputElement | null) {
+    setOpen(false);
+    input?.click();
+  }
+
   async function sendToCad() {
     await act(async () => {
       assertCurrentModelExport(model, 'step');
@@ -536,28 +534,33 @@ export function DesignFileMenu() {
     });
   }
 
+  const documentName = model.kind === 'file' && meshFilename ? meshFilename : model.label;
+  const cadLink = model.kind === 'parametric' && classification ? CLASSIFICATION_DISPLAY[classification] : null;
+  const fileExtension = design.formula === 'LOOKUP' ? '.mwg' : '.cfg';
+  const cadSendLimit = nativeCadLimitation(design.formula);
+
   return <div ref={root} className="design-file-menu">
-    <button className="file-chip" title={model.kind === 'parametric' && classification ? CLASSIFICATION_DISPLAY[classification].detail : 'Design file menu'} onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-      <Icon name="folder"/><span>{model.kind !== 'parametric' ? model.label : designName ? <>{designName}<em>{design.formula === 'LOOKUP' ? '.mwg' : '.cfg'}</em></> : <em>Untitled</em>}</span>
-      {model.kind === 'parametric' && classification && <small
-        className="cadlink-badge"
-        aria-label={`CAD link: ${CLASSIFICATION_DISPLAY[classification].label}`}
-        title={CLASSIFICATION_DISPLAY[classification].detail}
-        style={{ color: 'var(--fg3)', fontSize: 'var(--text-micro)', fontWeight: 500, letterSpacing: '.02em' }}
-      >{CLASSIFICATION_DISPLAY[classification].label}</small>}
-      <span className="chev">⌄</span>
+    <button className="file-chip" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+      <span>File</span><span className="chev">⌄</span>
     </button>
-    {workspaceMode === 'cad' && <button type="button" className="file-chip import-mesh-action" disabled={busy}
-      title="Import an ASCII Gmsh 2.2 surface mesh" onClick={() => meshInput.current?.click()}>
-      <Icon name="folder"/>Import mesh…
-    </button>}
+    {/* The document's name is a label, not a control: the design is renamed in Geometry. */}
+    <span className="document-name" title={model.kind !== 'parametric' ? documentName : designName ? `${designName}${fileExtension}` : UNTITLED_DESIGN}>
+      <span>{model.kind !== 'parametric' ? documentName : designName ? <>{designName}<em>{fileExtension}</em></> : <em>{UNTITLED_DESIGN}</em>}</span>
+      {cadLink && <small className="cadlink-badge" aria-label={`CAD link: ${cadLink.label}`} title={cadLink.detail}>{cadLink.label}</small>}
+    </span>
     <input ref={openInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, false)}/>
-    <input ref={reportInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, true)}/>
+    <input ref={reportInput} hidden tabIndex={-1} type="file" accept={ACCEPT} aria-label="Check design file" onChange={(event) => void readSelected(event.currentTarget, true)}/>
     <input ref={meshInput} hidden tabIndex={-1} type="file" accept={MESH_ACCEPT} aria-label="Import Gmsh mesh file" onChange={(event) => void readMesh(event.currentTarget)}/>
-    <input ref={replayInput} hidden tabIndex={-1} type="file" accept={REPLAY_ACCEPT} aria-label="Open mesh replay file" onChange={(event) => void readReplay(event.currentTarget)}/>
+    <input ref={replayInput} hidden tabIndex={-1} type="file" accept={REPLAY_ACCEPT} aria-label="Open solve setup file" onChange={(event) => void readReplay(event.currentTarget)}/>
     <SharedDesignIdDialog question={sharedQuestion}/>
-    {open && <div role="menu" aria-label="Design file menu" className="design-menu-popover">
-      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void newDesign()}><span>New</span><kbd>cfg</kbd></button>
+    {/* Beside the menu, not in it: the menu closes on any click outside itself,
+        and this dialog is outside it. */}
+    {moveRunsOpen && <MoveRunsDialog
+      target={{ key: moveIdentity?.lineageId ? `lineage:${moveIdentity.lineageId}` : `design:${designUid}`, name: designName || UNTITLED_DESIGN }}
+      onClose={() => setMoveRunsOpen(false)}
+    />}
+    {open && <div role="menu" aria-label="File" className="design-menu-popover">
+      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void newDesign()}><span>New design</span></button>
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void chooseLocalDesign()}><span>Open…</span><kbd>cfg</kbd></button>
       <button role="menuitem" aria-expanded={projectsOpen} className="design-menu-item" disabled={busy} onClick={() => void toggleProjects()}><span>CAD-linked designs</span><span>{projectsOpen ? '⌄' : '›'}</span></button>
       {projectsOpen && <div role="menu" aria-label="CAD-linked designs" className="design-menu-nested">
@@ -568,34 +571,40 @@ export function DesignFileMenu() {
           </button>)}
       </div>}
       <div className="design-menu-divider"/>
-      <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(copyReason)} title={copyReason} onClick={duplicateDesign}><span>Duplicate as new design</span></button>
-      <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(copyReason)} title={copyReason} onClick={() => void exportCopy()}><span>Export a copy</span><kbd>{design.formula === 'LOOKUP' ? 'mwg' : 'cfg'}</kbd></button>
-      {!copyReason && <MoveRunsButton role="menuitem" target={{ key: moveIdentity?.lineageId ? `lineage:${moveIdentity.lineageId}` : `design:${designUid}`, name: designName }}>Earlier runs of this design…</MoveRunsButton>}
-      {copyReason && <div className="design-menu-item" role="note">{copyReason}</div>}
-      <div className="design-menu-divider"/>
-      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => reportInput.current?.click()}><span>Import report…</span><span>›</span></button>
       <button
         role="menuitem"
         className="design-menu-item"
         disabled={busy}
         title="Import an ASCII Gmsh 2.2 triangular surface mesh into Imported mesh"
-        onClick={() => meshInput.current?.click()}
+        onClick={() => pickFile(meshInput.current)}
       ><span>Import mesh…</span><kbd>msh</kbd></button>
       <button role="menuitem" className="design-menu-item" disabled={busy}
-        title="Open a saved mesh and its exact solve settings in Imported mesh"
-        onClick={() => replayInput.current?.click()}><span>Open mesh replay…</span><kbd>wgreplay</kbd></button>
+        title="Open the mesh and solve settings saved from a finished mesh run, to solve them again here or on another computer"
+        onClick={() => pickFile(replayInput.current)}><span>Open solve setup…</span><kbd>wgreplay</kbd></button>
+      {showDeveloperDetails && <button role="menuitem" className="design-menu-item" disabled={busy}
+        title="Read a design file without opening it, and show how WG parsed it"
+        onClick={() => pickFile(reportInput.current)}><span>Check a design file…</span><kbd>cfg</kbd></button>}
       <div className="design-menu-divider"/>
+      <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(copyReason)} title={copyReason} onClick={() => void exportCopy()}><span>Export a copy</span><kbd>{design.formula === 'LOOKUP' ? 'mwg' : 'cfg'}</kbd></button>
+      {copyReason && <div className="design-menu-item" role="note">{copyReason}</div>}
       <button role="menuitem" aria-expanded={exportsOpen} className="design-menu-item" disabled={busy} onClick={() => setExportsOpen((value) => !value)}><span>Export</span><span>{exportsOpen ? '⌄' : '›'}</span></button>
       {exportsOpen && <div role="menu" aria-label="Export design" className="design-menu-nested">
-        {geometryReason && <div className="design-menu-item" role="note">Imported models cannot export geometry or profiles. Open a parametric design to export them.</div>}
+        {geometryReason && <div className="design-menu-item" role="note">Imported models cannot export geometry or profiles. Switch to Parametric to export them.</div>}
         {/* The .wglink bundle and its handoff are Fusion's transport; Onshape
             sends live in the CAD Link panel and go through its own adapter. */}
-        {cadApplication === 'fusion360' && <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason) || Boolean(nativeCadLimitation(design.formula))} onClick={() => void sendToCad()} title={geometryReason ?? nativeCadLimitation(design.formula) ?? `Save this CAD model (.wglink) in the selected workspace.${omitsWoofers}`}><span>Send to CAD</span><span>.wglink</span></button>}
+        {cadApplication === 'fusion360' && <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason) || Boolean(cadSendLimit)} onClick={() => void sendToCad()} title={geometryReason ?? cadSendLimit ?? `Save this CAD model (.wglink) in the selected workspace.${omitsWoofers}`}><span>Send to CAD</span><span>.wglink</span></button>}
+        {cadApplication === 'fusion360' && !geometryReason && cadSendLimit && <div className="design-menu-item" role="note">{cadSendLimit}</div>}
         <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason)} onClick={() => void exportOne('step')} title={geometryReason ?? `Closed solid with walls and enclosure — imports straight into Fusion 360 or Onshape.${omitsWoofers}`}><span>STEP solid</span><span>.step</span></button>
         <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason)} onClick={() => void exportOne('step', 'surface')} title={geometryReason ?? 'Inner acoustic surface only, for thickening or lofting yourself'}><span>STEP inner surface</span><span>.step</span></button>
         <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason)} title={parameterExportReason(model, 'stl') ?? (omitsWoofers.trim() || undefined)} onClick={() => void exportOne('stl')}><span>STL</span><span>.stl</span></button>
         <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason)} title={parameterExportReason(model, 'fusion_csv')} onClick={() => void exportProfiles()}><span>Profiles CSV</span><span>2 files</span></button>
       </div>}
+      {!copyReason && <>
+        <div className="design-menu-divider"/>
+        <button role="menuitem" className="design-menu-item" disabled={busy}
+          title="Bring runs of this design from older folders into its run folder"
+          onClick={() => { setOpen(false); setMoveRunsOpen(true); }}><span>Move earlier runs…</span></button>
+      </>}
     </div>}
     {(message || adoptionCandidate) && <div role="status" className="design-menu-status" onClick={() => { setMessage(null); setAdoptionCandidate(null); }}>
       {message}
