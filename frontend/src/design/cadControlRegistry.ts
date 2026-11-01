@@ -203,6 +203,10 @@ export const CAD_CONTROLS = {
     'cad.mesh.rigid-size', 'Walls', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
     ['rigid CAD surfaces', 'mesh size', 'rigidSizeMm'], 'onshape-return', 'cad.mesh-detail',
   ),
+  surfaceDeviation: control(
+    'cad.mesh.surface-deviation', 'Max surface deviation', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
+    ['curvature', 'accuracy', 'chord', 'surfaceDeviationMm'], 'onshape-return', 'cad.mesh-detail',
+  ),
   transitionSize: control(
     'cad.mesh.transition', 'Grading distance', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',
     ['mesh regions', 'transitionMm'], 'onshape-return', 'cad.mesh-detail',

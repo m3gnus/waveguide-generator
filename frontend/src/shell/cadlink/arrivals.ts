@@ -389,6 +389,7 @@ export function createCadArrivalActions(
         },
         skippedSourceIds: current.skippedSourceIds,
         areaDriftOverrides: current.areaDriftOverrides,
+        ...(current.surfaceDeviationMm != null ? { surfaceDeviationMm: current.surfaceDeviationMm } : {}),
         expectedDesignId: useDocumentStore.getState().identity?.designId ?? null,
         expectedInstanceId: resolvePreparationTarget(current.selectedBundle),
         symmetryMode: useCadReturnStore.getState().symmetryMode,

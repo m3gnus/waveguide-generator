@@ -5,10 +5,19 @@ import { jobsSocket } from '../../api/jobsSocket';
 import { displaySymmetry, recordDomainDecision } from '../../api/domainDecision';
 import { useCadReturnStore } from '../../stores/cadReturn';
 import { workspaceModeStore } from '../../stores/workspaceMode';
-import { createImportedMeshScene } from '../../viewport/importedMesh';
+import { createImportedMeshScene, type ImportedMeshScene } from '../../viewport/importedMesh';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
 import { parseMSH } from '../../viewport/mshParser';
 import { reportCadAutomationError } from './caughtErrors';
+
+function cadTessellation(record: CadReturnIngestRecord): ImportedMeshScene['tessellation'] {
+  const metadata = record.mesh?.metadata;
+  if (!metadata?.surface_deviation && !metadata?.element_shape) return undefined;
+  return {
+    surface_deviation: metadata.surface_deviation as NonNullable<ImportedMeshScene['tessellation']>['surface_deviation'],
+    element_shape: metadata.element_shape as NonNullable<ImportedMeshScene['tessellation']>['element_shape'],
+  };
+}
 
 interface FetchedMesh {
   ok: boolean;
@@ -231,6 +240,7 @@ export async function showIngestedMeshInViewport(
           domainKnown: !recordDomainDecision(record)?.refusal,
           solvedTriangleCount: record.mesh?.stats.triangle_count,
           artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
+          tessellation: cadTessellation(record),
         },
       ), generation, workspaceModeStore.getSnapshot().mode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'cad');
       if (displayPending) upgradeToDisplayMesh(record, name, fetcher);
@@ -303,6 +313,7 @@ export async function showIngestedSolverMeshInViewport(
         domainKnown: !recordDomainDecision(record)?.refusal,
         solvedTriangleCount: record.mesh?.stats.triangle_count,
         artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
+          tessellation: cadTessellation(record),
       },
     ), generation, importedMeshStore.getSnapshot().showing === 'cadSolver');
     return null;

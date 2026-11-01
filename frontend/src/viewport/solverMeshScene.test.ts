@@ -18,6 +18,20 @@ const result: SolverMeshResult = {
 };
 
 describe('solverMeshScene', () => {
+  it('retains the artifact measurements for the Mesh card', () => {
+    const scene = solverMeshScene('Measured mesh', { ...result, stats: { ...result.stats,
+      surface_deviation: { peak_mm: 0.34, triangle_count: 12, sampled_triangle_count: 12 },
+      element_shape: { p1_radius_ratio: 0.72 },
+    } });
+    expect(scene.tessellation?.surface_deviation?.peak_mm).toBe(0.34);
+    expect(scene.tessellation?.element_shape?.p1_radius_ratio).toBe(0.72);
+  });
+  it('retains the native upper-bound distinction', () => {
+    const scene = solverMeshScene('Certified mesh', { ...result, stats: { ...result.stats,
+      surface_deviation: { peak_mm: 0.004, peak_is_upper_bound: true, triangle_count: 12, sampled_triangle_count: 0 },
+    } });
+    expect(scene.tessellation?.surface_deviation?.peak_is_upper_bound).toBe(true);
+  });
   it('parses the artifact and reconstructs the full model across the cut planes', () => {
     const scene = solverMeshScene('Simulation mesh', result);
     expect(scene.source).toBe('solver');

@@ -2618,7 +2618,7 @@ describe('ParamPanel inventory UX', () => {
     const mesh = host.querySelector('[data-section="Mesh"]')!;
     expect([...mesh.querySelectorAll('[data-parameter-id]')].map((entry) => entry.getAttribute('data-parameter-id'))).toEqual([
       'mesh.angular_segments', 'mesh.length_segments', 'mesh.corner_segments', 'mesh.sampling_mode',
-      'mesh.throat_resolution', 'mesh.mouth_resolution', 'mesh.rear_resolution',
+      'mesh.throat_resolution', 'mesh.mouth_resolution', 'mesh.surface_deviation_mm', 'mesh.rear_resolution',
       'enclosure.front_resolution', 'enclosure.back_resolution', 'schema-gap.max_edge', 'mesh.max_triangles',
     ]);
     act(() => useDesignStore.getState().setFamily('FREEFORM'));

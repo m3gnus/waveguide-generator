@@ -118,7 +118,7 @@ export function useCadModelSelection(request: CadModelRequest | null = null) {
     projectLineageId: s.projectLineageId, captureIngestIntent: s.captureIngestIntent,
     ingestStaleReason: s.ingestStaleReason, attemptedPreparationKey: s.attemptedPreparationKey,
     captureModelChoice: s.captureModelChoice, modelChoice: s.captureModelChoice(),
-    meshSizes: s.meshSizes, skippedSourceIds: s.skippedSourceIds, areaDriftOverrides: s.areaDriftOverrides, symmetryMode: s.symmetryMode,
+    meshSizes: s.meshSizes, skippedSourceIds: s.skippedSourceIds, areaDriftOverrides: s.areaDriftOverrides, symmetryMode: s.symmetryMode, surfaceDeviationMm: s.surfaceDeviationMm,
     // The ingest intent is a counter inside the store's closure; its
     // generation changes with the state the store publishes for it.
     ingestGeneration: s.captureIngestIntent(),

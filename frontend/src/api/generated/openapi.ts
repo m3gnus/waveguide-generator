@@ -1563,6 +1563,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/mesh-estimate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mesh Estimate */
+        post: operations["mesh_estimate_api_mesh_estimate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/mesh-replay": {
         parameters: {
             query?: never;
@@ -4296,6 +4313,17 @@ export interface components {
             /** Z Ohm */
             z_ohm?: number | null;
         };
+        /** ElementShapeStats */
+        ElementShapeStats: {
+            /** Min Angle Deg */
+            min_angle_deg?: number | null;
+            /** P1 Angle Deg */
+            p1_angle_deg?: number | null;
+            /** P1 Radius Ratio */
+            p1_radius_ratio?: number | null;
+            /** Sliver Fraction */
+            sliver_fraction?: number | null;
+        };
         /** EnclosureConfig */
         EnclosureConfig: {
             /** Back Resolution */
@@ -5767,6 +5795,11 @@ export interface components {
              * @description SOURCE-DISK uniform finished-mm mesh target, capped at source radius / 8
              */
             size_mm?: number | null;
+            /**
+             * Surface Deviation Mm
+             * @description Max surface deviation in finished mm; absent or null keeps the existing mesh rule
+             */
+            surface_deviation_mm?: number | null;
             throat_resolution?: components["schemas"]["Expr"] | null;
             throat_segments?: components["schemas"]["Expr"] | null;
             throat_slice_density?: components["schemas"]["Expr"] | null;
@@ -5774,6 +5807,17 @@ export interface components {
             wall_thickness?: components["schemas"]["Expr"] | null;
             /** Z Map Points */
             z_map_points?: string | null;
+        };
+        /** MeshEstimateRequest */
+        MeshEstimateRequest: {
+            design: components["schemas"]["DesignConfig"];
+        };
+        /** MeshEstimateResponse */
+        MeshEstimateResponse: {
+            /** Surface Deviation Mm */
+            surface_deviation_mm: number | null;
+            /** Triangle Count */
+            triangle_count: number;
         };
         /** MeshFreshnessResponse */
         MeshFreshnessResponse: {
@@ -7180,10 +7224,14 @@ export interface components {
         };
         /** SolverMeshStats */
         SolverMeshStats: {
+            element_shape?: components["schemas"]["ElementShapeStats"] | null;
             /** Mesh Cache Hit */
             mesh_cache_hit: boolean;
             /** Mesh Cache Key */
             mesh_cache_key: string;
+            surface_deviation?: components["schemas"]["SurfaceDeviationStats"] | null;
+            /** Surface Deviation Mm */
+            surface_deviation_mm?: number | null;
             /** Triangle Count */
             triangle_count: number;
             /** Vertex Count */
@@ -7304,6 +7352,30 @@ export interface components {
              * @enum {string}
              */
             status: "cancelled" | "cancelling";
+        };
+        /** SurfaceDeviationStats */
+        SurfaceDeviationStats: {
+            /** P95 Mm */
+            p95_mm?: number | null;
+            /**
+             * Peak Is Upper Bound
+             * @default false
+             */
+            peak_is_upper_bound?: boolean;
+            /** Peak Mm */
+            peak_mm?: number | null;
+            /** Rms Mm */
+            rms_mm?: number | null;
+            /**
+             * Sampled Triangle Count
+             * @default 0
+             */
+            sampled_triangle_count?: number;
+            /**
+             * Triangle Count
+             * @default 0
+             */
+            triangle_count?: number;
         };
         /** TerminatingArc */
         TerminatingArc: {
@@ -10170,6 +10242,39 @@ export interface operations {
                 };
                 content: {
                     "text/plain": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mesh_estimate_api_mesh_estimate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MeshEstimateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeshEstimateResponse"];
                 };
             };
             /** @description Validation Error */

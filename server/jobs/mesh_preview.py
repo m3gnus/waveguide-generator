@@ -40,12 +40,40 @@ class SolverMeshRequest(BaseModel):
     options: SolveOptions = Field(default_factory=SolveOptions)
 
 
+class SurfaceDeviationStats(BaseModel):
+    peak_is_upper_bound: bool = False
+    peak_mm: float | None = None
+    p95_mm: float | None = None
+    rms_mm: float | None = None
+    triangle_count: int = 0
+    sampled_triangle_count: int = 0
+
+
+class ElementShapeStats(BaseModel):
+    p1_radius_ratio: float | None = None
+    p1_angle_deg: float | None = None
+    min_angle_deg: float | None = None
+    sliver_fraction: float | None = None
+
+
 class SolverMeshStats(BaseModel):
     triangle_count: int
     vertex_count: int
     warnings: list[str]
     mesh_cache_key: str
     mesh_cache_hit: bool
+    surface_deviation_mm: float | None = None
+    surface_deviation: SurfaceDeviationStats | None = None
+    element_shape: ElementShapeStats | None = None
+
+
+class MeshEstimateRequest(BaseModel):
+    design: DesignConfig
+
+
+class MeshEstimateResponse(BaseModel):
+    triangle_count: int
+    surface_deviation_mm: float | None
 
 
 class SolverMeshResponse(BaseModel):
@@ -131,6 +159,9 @@ async def solver_mesh_response(
             "warnings": [str(warning) for warning in stats.get("warnings", [])],
             "mesh_cache_key": str(stats["mesh_cache_key"]),
             "mesh_cache_hit": bool(stats["mesh_cache_hit"]),
+            "surface_deviation_mm": result.get("metadata", {}).get("surface_deviation_mm"),
+            "surface_deviation": result.get("metadata", {}).get("surface_deviation"),
+            "element_shape": result.get("metadata", {}).get("quality", {}).get("element_shape"),
         },
         "cut_planes": list(CUT_PLANES_BY_QUADRANTS[quadrants]),
         "quadrants": quadrants,
@@ -139,6 +170,21 @@ async def solver_mesh_response(
 
 
 def mount_solver_mesh(application: FastAPI, engine_registry: EngineRegistry) -> None:
+    @application.post("/api/mesh-estimate", response_model=MeshEstimateResponse)
+    async def mesh_estimate(request: Request, body: MeshEstimateRequest) -> dict[str, Any]:
+        from server.mesh.builder import estimate_solver_mesh
+        from hornlab_mesher.mesher import MesherError
+
+        cancellation = RequestCancellation(request.is_disconnected)
+        try:
+            return await estimate_solver_mesh(body.design, cancel_cb=cancellation.check)
+        except ClientDisconnected as exc:
+            raise HTTPException(status_code=499, detail=str(exc)) from exc
+        except (RuntimeError, ValueError, MesherError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        finally:
+            cancellation.close()
+
     @application.post("/api/solver-mesh", response_model=SolverMeshResponse)
     async def solver_mesh(request: Request, body: SolverMeshRequest) -> dict[str, Any]:
         return await solver_mesh_response(

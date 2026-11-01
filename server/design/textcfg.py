@@ -1783,7 +1783,7 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
             raise TextConfigError("WG.Geometry requires a stamped WG design and exactly one JSON Payload")
         try:
             controls = json.loads(geometry_controls.items["Payload"])
-            if not isinstance(controls, dict) or set(controls) - {"cross_section", "depth_margin_mm", "icw", "assembly"}:
+            if not isinstance(controls, dict) or set(controls) - {"cross_section", "depth_margin_mm", "icw", "assembly", "surface_deviation_mm"}:
                 raise ValueError("unknown WG.Geometry controls")
             if "icw" in controls:
                 advanced = controls["icw"]
@@ -1798,6 +1798,8 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
                 payload.setdefault("enclosure", {})["depth_margin_mm"] = controls["depth_margin_mm"]
             if "assembly" in controls:
                 payload["assembly"] = controls["assembly"]
+            if "surface_deviation_mm" in controls:
+                payload.setdefault("mesh", {})["surface_deviation_mm"] = controls["surface_deviation_mm"]
             payload["extra_blocks"].pop("WG.Geometry", None)
         except (ValueError, TypeError) as exc:
             raise TextConfigError(f"invalid WG.Geometry controls: {exc}") from exc
@@ -2089,6 +2091,8 @@ def _serialize_canonical(
         _block(lines, "WG.NativeDesign", [("Payload", encoded.replace(";", "\\u003b"))])
         return _with_design_uid_stamp("\n".join(lines) + "\n", design_uid)
     controls: dict[str, Any] = {}
+    if config.mesh.surface_deviation_mm is not None:
+        controls["surface_deviation_mm"] = config.mesh.surface_deviation_mm
     if config.cross_section.exponent != 2 or config.cross_section.aspect_ratio != 1:
         controls["cross_section"] = config.cross_section.model_dump()
     if config.enclosure is not None and config.enclosure.depth_margin_mm is not None:

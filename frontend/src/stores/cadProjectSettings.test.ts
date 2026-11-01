@@ -494,3 +494,16 @@ it('marks the restored model stale when its setup prepares another mesh than the
     expect(useCadReturnStore.getState().needsIngest).toBe(stale);
   }
 });
+
+it('retains the CAD surface deviation in preparation and on reopen', async () => {
+  const setup = { ...saved, preparation: { ...saved.preparation, surface_deviation_mm: 0.25 } };
+  const fetcher = server(setup);
+  vi.stubGlobal('fetch', fetcher);
+  expect(await openImported({ kind: 'model', modelId: model }, fetcher)).toBe(true);
+  expect(useCadReturnStore.getState().surfaceDeviationMm).toBe(0.25);
+  expect(buildCadProjectSetup()?.setup.preparation?.surface_deviation_mm).toBe(0.25);
+  expect(useCadReturnStore.getState().needsIngest).toBe(true);
+  useCadReturnStore.setState({ selectedBundle: { ...useCadReturnStore.getState().selectedBundle!, bundleOrigin: 'onshape' } });
+  useCadReturnStore.getState().setSurfaceDeviation(0.2);
+  expect(buildCadProjectSetup()?.setup.preparation?.surface_deviation_mm).toBe(0.2);
+});

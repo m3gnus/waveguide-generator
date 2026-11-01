@@ -628,6 +628,10 @@ class AthRoundoverConfig(StrictModel):
 
 
 class MeshConfig(StrictModel):
+    surface_deviation_mm: Annotated[float, Field(strict=True, allow_inf_nan=False)] | None = Field(
+        default=None, gt=0, exclude_if=lambda value: value is None,
+        description="Max surface deviation in finished mm; absent or null keeps the existing mesh rule",
+    )
     ath_roundover: AthRoundoverConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     ath_rear_shape: Literal[1, 3] | None = Field(default=None, exclude_if=lambda value: value is None)
     ath_rear_front_offset: float | None = Field(default=None, ge=0, allow_inf_nan=False, exclude_if=lambda value: value is None)

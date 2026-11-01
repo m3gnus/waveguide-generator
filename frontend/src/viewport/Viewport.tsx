@@ -1144,6 +1144,19 @@ export function Viewport() {
     {activeScene && renderFailure && <EmptyState className="viewport-empty" title={<>WebGL renderer stopped</>} detail={<>{renderFailure}. Retry to rebuild the viewport; if it stops again, check that graphics acceleration is enabled.</>} action={<button type="button" className="btn viewport-retry" onClick={retryRenderer}><Icon name="reset"/>Retry</button>}/>}
     {activeScene && mode === 'curvature' && !activeScene.hasCurvature && <EmptyState className="viewport-mode-empty" title={<>Curvature heatmap unavailable</>} detail={<>This frame has no analytic curvature section. Neutral geometry remains visible while inspection data is requested.</>}/>}
     {activeScene && mode === 'edges' && edgeModeUnavailable && <EmptyState className="viewport-mode-empty" title={<>Edge inspection unavailable</>} detail={<>This frame exceeds the {MAX_EDGE_TRIANGLES.toLocaleString()}-triangle edge limit. Filled geometry remains visible while edge extraction is skipped.</>}/>}
+    {(importedMesh?.tessellation || !importedMesh && selected?.header.previewMetadata?.tessellation?.['horn.inner']) && <div className="frame-stat-card mesh-quality-card" aria-label="Mesh">
+      <b>Mesh</b>
+      {(() => {
+        const certificate = importedMesh?.tessellation ?? selected?.header.previewMetadata?.tessellation?.['horn.inner'];
+        const deviation = certificate?.surface_deviation?.peak_mm;
+        const shape = certificate?.element_shape?.p1_radius_ratio ?? importedMesh?.tessellation?.element_shape?.min_radius_ratio;
+        const sampled = importedMesh?.tessellation?.surface_deviation;
+        return <dl>
+          <div title={sampled ? `Maximum over ${sampled.sampled_triangle_count ?? '—'} sampled facets of ${sampled.triangle_count ?? '—'}` : 'Measured preview master-surface chord bound'}><dt>{sampled?.peak_is_upper_bound ? 'deviation bound' : 'max deviation'}</dt><dd>{deviation != null ? `${deviation.toFixed(3)} mm${sampled && !sampled.peak_is_upper_bound && (sampled.sampled_triangle_count ?? 0) < (sampled.triangle_count ?? 0) ? ' (sampled)' : ''}` : 'unavailable'}</dd></div>
+          <div><dt>shape ({certificate?.element_shape?.p1_radius_ratio != null ? 'p1' : 'min'} radius ratio)</dt><dd>{shape != null ? shape.toFixed(3) : 'unavailable'}</dd></div>
+        </dl>;
+      })()}
+    </div>}
     {showStats && <div className="frame-stat-card wg2-stats">
       <span>latest displayed binary frame</span>
       <dl>

@@ -21,7 +21,7 @@ describe('native formula editing and persistence', () => {
       expect(fieldAcceptsExpression(field)).toBe(false);
     }
     expect(PARAMETER_REGISTRY.filter((field) => !field.id.startsWith('native.') && fieldIsVisible(field, design))
-      .every((field) => field.id.startsWith('simulation.') || field.kind === 'indicator')).toBe(true);
+      .every((field) => field.id.startsWith('simulation.') || field.id === 'mesh.surface_deviation_mm' || field.kind === 'indicator')).toBe(true);
     expect(wire).not.toHaveProperty('guiding_curve');
     expect(wire).not.toHaveProperty('text_import_version');
     expect(design).not.toHaveProperty('cross_section');

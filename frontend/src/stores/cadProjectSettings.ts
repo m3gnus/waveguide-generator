@@ -18,7 +18,7 @@ interface CadDraft {
   updatedAt: number;
   settings: PersistedSolveSettings;
   options: ImportedOptionsSnapshot;
-  preparation: { symmetryMode: 'auto' | 'full'; areaDriftOverrides: string[] };
+  preparation: { symmetryMode: 'auto' | 'full'; areaDriftOverrides: string[]; surfaceDeviationMm?: number | null };
   /** Legacy entries are considered only after checking that the server has no setup. */
   legacy?: boolean;
 }
@@ -75,7 +75,7 @@ export function retainCadDraft(): { key: string; raw: string } | null {
       sourceSizesMm: state.meshSizes.source_size_mm, rigidSizeMm: state.meshSizes.rigid_size_mm,
       transitionMm: state.meshSizes.transition_mm } as PersistedSolveSettings,
     options,
-    preparation: { symmetryMode: state.symmetryMode, areaDriftOverrides: state.areaDriftOverrides },
+    preparation: { symmetryMode: state.symmetryMode, areaDriftOverrides: state.areaDriftOverrides, surfaceDeviationMm: state.surfaceDeviationMm },
   });
   writeDrafts({ ...drafts(), [key]: draft });
   return { key, raw: JSON.stringify(draft) };
@@ -186,6 +186,7 @@ export function restoreCadProjectSettings(saved: ImportedSetup | null, record: C
       exteriorOnlyRegionIds: Array.isArray(setup.geometry.exterior_only_region_ids)
         ? setup.geometry.exterior_only_region_ids as string[] : null,
       areaDriftOverrides: setup.preparation?.area_drift_overrides ?? [],
+      surfaceDeviationMm: setup.preparation?.surface_deviation_mm ?? null,
     });
     const options = cadOptionsSnapshot() ?? { ...defaultSolveOptions(), sweepStartHz: 50, sweepEndHz: 20_000, sweepCount: 36 };
     applyCadOptions(importedOptionsFromWire(saved.options, options));
@@ -194,7 +195,7 @@ export function restoreCadProjectSettings(saved: ImportedSetup | null, record: C
     const { sourceSizesMm, rigidSizeMm, transitionMm, ...settings } = draft.settings;
     useCadReturnStore.setState({ ...settings, meshSizes: {
       source_size_mm: sourceSizesMm, rigid_size_mm: rigidSizeMm, transition_mm: transitionMm,
-    }, symmetryMode: draft.preparation.symmetryMode, areaDriftOverrides: draft.preparation.areaDriftOverrides });
+    }, symmetryMode: draft.preparation.symmetryMode, areaDriftOverrides: draft.preparation.areaDriftOverrides, surfaceDeviationMm: draft.preparation.surfaceDeviationMm ?? null });
     applyCadOptions(draft.options);
     endOpenedSetup('cad');
     // The publisher is the only writer, and resumes unsent valid edits too.
@@ -215,6 +216,7 @@ export function restoreCadProjectSettings(saved: ImportedSetup | null, record: C
   if (state.ingestRecord && (JSON.stringify(current.meshSizes.source_size_mm) !== JSON.stringify(record.mesh_sizes.source_size_mm)
     || current.meshSizes.rigid_size_mm !== record.mesh_sizes.rigid_size_mm || current.meshSizes.transition_mm !== record.mesh_sizes.transition_mm
     || JSON.stringify(current.skippedSourceIds) !== JSON.stringify(record.skipped_source_ids)
+    || (current.surfaceDeviationMm ?? 0.15) !== (record.preparation_options?.surface_deviation_mm ?? 0.15)
     || (prepared.symmetryMode !== null && current.symmetryMode !== prepared.symmetryMode)
     || (prepared.areaDriftOverrides !== null
       && JSON.stringify([...new Set(current.areaDriftOverrides)].sort()) !== JSON.stringify(prepared.areaDriftOverrides)))) {

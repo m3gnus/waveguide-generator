@@ -470,6 +470,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                 ),
                 "throatResolution": _scaled_expr(mesh.throat_resolution, mesh_scale),
                 "mouthResolution": _scaled_expr(mesh.mouth_resolution, mesh_scale),
+                "surface_deviation_mm": mesh.surface_deviation_mm,
                 "rearResolution": _scaled_expr(mesh.rear_resolution, mesh_scale),
                 "apertureResolutionScale": _expr(mesh.aperture_resolution_scale),
                 "maxTriangles": _expr(mesh.max_triangles),

@@ -82,6 +82,8 @@ def native_mesher_config(root: Any) -> dict[str, Any]:
             "scale_to_metres": True,
         },
     }
+    if mesh.surface_deviation_mm is not None:
+        config["mesh"]["surface_deviation_mm"] = mesh.surface_deviation_mm
     if root.formula == "SOURCE-DISK":
         if root.scale is not None:
             inactive(root.scale, "scale", 1)

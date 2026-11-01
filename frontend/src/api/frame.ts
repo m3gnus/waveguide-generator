@@ -42,6 +42,10 @@ export interface FrameHeader {
    */
   previewMetadata?: {
     warnings?: string[];
+    tessellation?: Record<string, {
+      surface_deviation?: { peak_mm?: number | null; measurement_complete?: boolean } | null;
+      element_shape?: { p1_radius_ratio?: number | null } | null;
+    }>;
     dimensions_mm?: {
       mouth_opening?: [number, number];
       horn_overall?: [number, number, number];

@@ -212,6 +212,7 @@ export interface DesignDocument {
     max_triangles: number;
     allow_large_mesh: number;
     max_edge?: number | null;
+    surface_deviation_mm?: number | null;
   };
   simulation: {
     f1: number;
@@ -292,6 +293,7 @@ const common = {
     // see hornlab_mesher/config_parser.py's ATH-defaults note.
     vertical_offset: 0, quadrants: 1234, wall_thickness: 5, rear_resolution: 40,
     aperture_resolution_scale: 1, max_triangles: 50_000, allow_large_mesh: 0,
+    surface_deviation_mm: 0.3,
   },
   simulation: {
     f1: DEFAULT_SWEEP.startHz, f2: 16_000, num_frequencies: 32,
@@ -327,6 +329,7 @@ export function designForFamily(family: DesignFamily): DesignDocument {
     };
     normalizeNativeCrossSection(native);
     if (family === 'SOURCE-DISK') {
+      delete native.mesh.surface_deviation_mm;
       native.source_body = { radius_mm: 18, outer_radius_mm: 22, depth_mm: 8 };
       native.mesh.size_mm = 3;
       return native;
@@ -647,6 +650,7 @@ export function mergeDesignForFamily(current: DesignDocument, family: DesignFami
       // retrievable in the store's existing complete-document undo snapshot.
       if (current.formula === 'OSSE') next.s = 0;
       if (options?.preserveOsseBody && current.axial_scale === undefined && next.axial_scale !== undefined) next.axial_scale = current.scale;
+      next.mesh.surface_deviation_mm = current.mesh.surface_deviation_mm;
       for (const key of OSSE_MESH_FIELDS) {
         next.mesh[key] = current.mesh[key];
       }
