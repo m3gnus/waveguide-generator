@@ -281,7 +281,7 @@ def test_create_rejects_http_success_with_failed_feature_state() -> None:
         _feature_response(status="ERROR"),
     )
 
-    with pytest.raises(OnshapeAdapterError, match="featureStatus 'OK'"):
+    with pytest.raises(OnshapeAdapterError, match="^Onshape reported a problem while adding the WG datum feature[.] Open the document in Onshape to see it, then send again[.]$"):
         _adapter(transport).add_datum_feature("DID", "WID", "PART", "datum::new")
 
 
@@ -309,7 +309,7 @@ def test_update_rolls_back_http_success_with_failed_feature_state() -> None:
         [(200, _feature_response(status="ERROR")), (200, _feature_response())],
     )
 
-    with pytest.raises(OnshapeAdapterError, match="featureStatus 'OK'"):
+    with pytest.raises(OnshapeAdapterError, match="^Onshape reported a problem while updating the WG datum feature[.] Open the document in Onshape to see it, then send again[.]$"):
         _adapter(transport).materialize_datums(
             "DID",
             "WID",

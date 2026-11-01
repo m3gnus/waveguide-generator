@@ -131,7 +131,7 @@ def test_old_mesher_has_actionable_refusal(client, monkeypatch, action):
     monkeypatch.setattr(builtins, "__import__", old_mesher)
     result = client.post("/api/source-editor/assembly/" + action, json=document())
     assert result.status_code == 503
-    assert "Update the mesher" in result.json()["detail"]
+    assert result.json()["detail"] == "This version of WG cannot build this assembly. Update WG."
 
 
 @pytest.mark.parametrize("action", ["export", "ingest"])

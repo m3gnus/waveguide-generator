@@ -147,7 +147,7 @@ def test_presentation_endpoint_reads_the_retained_artifact_and_404s_when_absent(
         with pytest.raises(HTTPException) as absent:
             await endpoint("ordinary")
         assert absent.value.status_code == 404
-        assert "no passive-cardioid" in str(absent.value.detail)
+        assert absent.value.detail == "This run has no port data. Solve a passive cardioid design to get it."
         await runtime.shutdown()
 
     asyncio.run(scenario())

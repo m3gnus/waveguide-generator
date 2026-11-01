@@ -357,7 +357,7 @@ def test_bem_publication_requires_the_original_fem_marker(stored, monkeypatch, a
     assert not store._bem_traces_path("field").exists()
 
 
-def test_corrupt_evaluator_artifact_returns_gone(stored, monkeypatch):
+def test_corrupt_evaluator_artifact_returns_gone(stored, monkeypatch, caplog):
     from server.solver.field_traces_store import ArtifactCorrupt
     store, _, _, _, _ = stored
     def corrupt(*a, **k):
@@ -368,7 +368,8 @@ def test_corrupt_evaluator_artifact_returns_gone(stored, monkeypatch):
     status, body, _ = asyncio.run(_request_with_headers(app, "POST", "/api/results/field/fem-field/plane",
         body=plane_request("exterior").model_dump(mode="json")))
     assert status == 410
-    assert "invalid runtime field artifact" in json.loads(body)["detail"]
+    assert json.loads(body)["detail"] == "WG could not read this run’s field data. Solve the design again."
+    assert "invalid runtime field artifact" in caplog.text
 
 
 def test_indexed_192_plane_20k_skin_with_symmetry_scales_by_local_faces():
@@ -870,7 +871,7 @@ def test_adaptive_dense_feature_bins_bound_memory_and_local_scaling(symmetry):
     assert distance_counts[1] < distance_counts[0] * 2
 
 
-def test_corrupt_retained_bem_trace_route_returns_gone(stored):
+def test_corrupt_retained_bem_trace_route_returns_gone(stored, caplog):
     store, _, _, _, arrays = stored
     store.store_bem_trace_arrays("field", {**arrays, "neumann": np.full(arrays["neumann"].shape, np.nan, complex)})
     app = FastAPI()
@@ -878,7 +879,8 @@ def test_corrupt_retained_bem_trace_route_returns_gone(stored):
     status, body, _ = asyncio.run(_request_with_headers(app, "POST", "/api/results/field/fem-field/plane",
         body=plane_request("exterior").model_dump(mode="json")))
     assert status == 410
-    assert "corrupt" in json.loads(body)["detail"]
+    assert json.loads(body)["detail"] == "WG could not read this run’s field data. Solve the design again."
+    assert "FEM pressure is not finite" in caplog.text
 
 
 @pytest.mark.parametrize('fault', ['nan', 'shape'])
