@@ -302,7 +302,9 @@ def _solver_failure_code(exc: BaseException) -> str:
     """Diagnostic classification only: never a status or retry decision."""
     from server.solver.beat_runtime.client import HostError
     from server.solver.bempp_process import BemppWorkerError
-    if isinstance(exc, (HostError, BemppWorkerError)):
+    if isinstance(exc, BemppWorkerError):
+        return exc.failure_code
+    if isinstance(exc, HostError):
         return "solver_engine_stopped"
     if isinstance(exc, MemoryError):
         return "solver_memory_exhausted"
@@ -332,14 +334,14 @@ def _failure_message(exc: BaseException) -> str:
     logger.error("Solver failure [%s] (%s): %s", _solver_failure_code(exc), type(exc).__name__, exc,
                  exc_info=(type(exc), exc, exc.__traceback__))
     code = _solver_failure_code(exc)
-    from server.preview.errors import _user_refusal, user_error_message
-    if _user_refusal(exc) is not None:
+    from server.preview.errors import public_error_message, user_error_message
+    if public_error_message(exc) is not None:
         return user_error_message(exc)
     return {
         "solver_engine_stopped": "The solver engine stopped before the solve finished. Press Solve to try again.",
         "solver_memory_exhausted": "The solver ran out of memory. Close other applications, then press Solve to try again.",
         "solver_connection_lost": "WG lost contact with the solver engine. Restart WG, then press Solve to try again.",
-        "solver_failed": "WG could not finish this solve and has recorded the problem. Press Solve to try again.",
+        "solver_failed": "WG could not finish this solve and has recorded the problem.",
     }[code]
 
 

@@ -1685,7 +1685,7 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
     except TextConfigError as exc:
         if (isinstance(text, str) and not _PRIVATE_BLOCK_START.search(text)
                 and getattr(exc, "user_refusal", None) is None):
-            raise _text_syntax_refusal(str(exc)) from exc
+            exc.user_refusal = _text_syntax_refusal(str(exc)).user_refusal
         raise
 
 

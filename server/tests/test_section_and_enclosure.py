@@ -49,7 +49,7 @@ def test_freeform_and_native_sections_refuse_nondefault():
     freeform = {'formula':'FREEFORM', 'length':60, 'profile_h':{'points':[[0,12.7],[1,40]]}, 'profile_v':{'points':[[0,12.7],[1,40]]}, 'cross_sections':[{'t':0,'shape':'ellipse'},{'t':1,'shape':'ellipse'}], 'cross_section':{'exponent':4}}
     with pytest.raises(ValidationError, match='stations own the outline'):
         DesignConfig.model_validate(freeform)
-    with pytest.raises(ValidationError, match='Aspect ratio is unavailable.*Reset Aspect ratio to 1'):
+    with pytest.raises(ValidationError, match='SOURCE-DISK does not support cross_section.aspect_ratio'):
         DesignConfig.model_validate({'formula':'SOURCE-DISK','source_body':{'radius_mm':12.7,'outer_radius_mm':30,'depth_mm':5},'cross_section':{'aspect_ratio':2}})
 
 

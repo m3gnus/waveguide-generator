@@ -77,7 +77,7 @@ def _number(value: Expr | None, fallback: float) -> float:
         if number is not None and math.isfinite(number):
             return float(number)
         from hornlab_mesher.errors import UserRefusal
-        raise UserRefusal("Export mesh controls", "Export mesh controls need finite numbers.", "Enter finite numbers in Angular segments, Length segments and Corner segments.", diagnostic="export mesh controls must be finite scalar expressions")
+        raise UserRefusal("Export mesh controls", "Export mesh controls need finite numbers.", "Enter finite numbers in Surface angular samples, Surface length samples and Surface corner samples.", diagnostic="export mesh controls must be finite scalar expressions")
     return fallback
 
 
@@ -85,7 +85,8 @@ def _segment_number(value: Expr | None, fallback: float, field: str) -> float:
     number = _number(value, fallback)
     if abs(number) > MAX_EXPORT_SEGMENT_INPUT:
         from hornlab_mesher.errors import UserRefusal
-        label = {"mesh.angular_segments": "Angular segments", "mesh.length_segments": "Length segments", "mesh.corner_segments": "Corner segments"}.get(field, "Export mesh controls")
+        from hornlab_mesher.controls import control_label
+        label = control_label(field)
         raise UserRefusal(label, f"{label} is outside the supported export range of ±{int(MAX_EXPORT_SEGMENT_INPUT)}.", f"Reduce {label} before exporting.", diagnostic=f"{field} is outside the supported export range of ±{int(MAX_EXPORT_SEGMENT_INPUT)}")
     return number
 

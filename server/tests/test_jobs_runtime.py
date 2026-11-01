@@ -2271,7 +2271,7 @@ def test_runtime_refuses_non_normalized_solver_result(tmp_path):
             await runtime.wait_idle()
             row = await runtime.get_job(job_id)
             assert row["status"] == "error"
-            assert "WG could not finish this solve and has recorded the problem. Press Solve to try again." in row["error_message"]
+            assert "WG could not finish this solve and has recorded the problem." in row["error_message"]
         finally:
             await runtime.shutdown()
 

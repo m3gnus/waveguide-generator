@@ -512,12 +512,15 @@ def encode_preview_geometry(
 
 def _validation_fields(error: ValidationError, *, prefix: str | None = None) -> dict[str, str]:
     fields: dict[str, str] = {}
-    for item in error.errors(include_url=False, include_context=False, include_input=False):
+    for item in error.errors(include_url=False, include_context=True, include_input=False):
         location = [str(part) for part in item.get("loc", ())]
         if prefix is not None:
             location.insert(0, prefix)
         path = ".".join(location) or prefix or "message"
-        fields[path] = str(item.get("msg", "Invalid value"))
+        from server.preview.errors import public_error_message
+        cause = item.get("ctx", {}).get("error")
+        words = public_error_message(cause) if isinstance(cause, BaseException) else None
+        fields[path] = words or str(item.get("msg", "Invalid value"))
     return fields
 
 

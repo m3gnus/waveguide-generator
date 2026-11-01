@@ -340,6 +340,11 @@ IMPORTED_VIEWPORT_COARSENING_FACTOR = 1.5
 class ImportedMeshError(ValueError):
     """A typed imported-geometry refusal."""
 
+    def __init__(self, message: str, *, diagnostic: str | None = None, user_action: bool = False):
+        self.diagnostic = diagnostic if diagnostic is not None else message
+        self.user_action = user_action
+        super().__init__(message)
+
 
 class SymmetryCutRefused(Exception):
     """The mesher's cutter refused to cut the model to its symmetry domain.
@@ -374,6 +379,13 @@ class ImportedMeshDependencyError(RuntimeError):
     """The native STEP/mesh engine is not installed or importable."""
 
 
+class ImportedSizeRefusal(ImportedMeshError):
+    """Only authored mesh-size choices qualify as user action here."""
+
+    def __init__(self, message: str, *, diagnostic: str | None = None):
+        super().__init__(message, diagnostic=diagnostic, user_action=True)
+
+
 def validate_imported_sizes(
     sources: Iterable[Mapping[str, Any]],
     sizes: Mapping[str, Any],
@@ -389,11 +401,11 @@ def validate_imported_sizes(
     source_sizes = sizes.get("source_size_mm")
     for name, value in (("rigid_size_mm", rigid), ("transition_mm", transition)):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ImportedMeshError(f"{'Walls' if name == 'rigid_size_mm' else 'Transition'} must be a positive finite size. Enter it in Sources & Mesh….")
+            raise ImportedSizeRefusal(f"{'Walls' if name == 'rigid_size_mm' else 'Transition'} must be a positive finite size. Enter it in Sources & Mesh….")
         if not math.isfinite(float(value)) or float(value) <= 0.0:
-            raise ImportedMeshError(f"{'Walls' if name == 'rigid_size_mm' else 'Transition'} must be a positive finite size. Enter it in Sources & Mesh….")
+            raise ImportedSizeRefusal(f"{'Walls' if name == 'rigid_size_mm' else 'Transition'} must be a positive finite size. Enter it in Sources & Mesh….")
     if not isinstance(source_sizes, Mapping):
-        raise ImportedMeshError("Driver mesh sizes are missing. Set a size for each driver in Sources & Mesh….")
+        raise ImportedSizeRefusal("Driver mesh sizes are missing. Set a size for each driver in Sources & Mesh….")
     actual = {str(key) for key in source_sizes}
     if actual != expected:
         missing = sorted(expected - actual)
@@ -403,16 +415,17 @@ def validate_imported_sizes(
             details.append(f"missing {missing}")
         if extra:
             details.append(f"extra {extra}")
-        raise ImportedMeshError(
-            "Some driver mesh sizes are missing or belong to a different model. Open Sources & Mesh… and set a size for each current driver."
+        raise ImportedSizeRefusal(
+            "Some driver mesh sizes are missing or belong to a different model. Open Sources & Mesh… and set a size for each current driver.",
+            diagnostic="Driver mesh sizes: " + "; ".join(details)
         )
     normalized: dict[str, float] = {}
     for source_id, value in source_sizes.items():
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ImportedMeshError("A driver mesh size is zero, negative or not finite. Enter a positive size for each driver in Sources & Mesh….")
+            raise ImportedSizeRefusal("A driver mesh size is zero, negative or not finite. Enter a positive size for each driver in Sources & Mesh….")
         number = float(value)
         if not math.isfinite(number) or number <= 0.0:
-            raise ImportedMeshError("A driver mesh size is zero, negative or not finite. Enter a positive size for each driver in Sources & Mesh….")
+            raise ImportedSizeRefusal("A driver mesh size is zero, negative or not finite. Enter a positive size for each driver in Sources & Mesh….")
         normalized[str(source_id)] = number
     return {
         "rigid_size_mm": float(rigid),
@@ -2612,14 +2625,14 @@ def _validated_surface_deviation(value: Any) -> float | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ImportedMeshError("Surface deviation needs a size in millimetres. Enter a number in Surface deviation.")
+        raise ImportedMeshError("Max surface deviation needs a size in millimetres. Enter a number in Max surface deviation.")
     number = float(value)
     if not math.isfinite(number):
-        raise ImportedMeshError("Surface deviation is not finite. Enter a finite number in Surface deviation.")
+        raise ImportedMeshError("Max surface deviation is not finite. Enter a finite number in Max surface deviation.")
     if not IMPORTED_SURFACE_DEVIATION_MIN_MM <= number <= IMPORTED_SURFACE_DEVIATION_MAX_MM:
         raise ImportedMeshError(
-            "Surface deviation must be between "
-            f"{IMPORTED_SURFACE_DEVIATION_MIN_MM} and {IMPORTED_SURFACE_DEVIATION_MAX_MM} mm. Change Surface deviation."
+            "Max surface deviation must be between "
+            f"{IMPORTED_SURFACE_DEVIATION_MIN_MM} and {IMPORTED_SURFACE_DEVIATION_MAX_MM} mm. Change Max surface deviation."
         )
     return number
 

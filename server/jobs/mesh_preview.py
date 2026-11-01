@@ -135,7 +135,7 @@ async def solver_mesh_response(
         # status and keeps the abandoned build out of the error logs.
         raise HTTPException(status_code=499, detail="Mesh preparation was cancelled.") from exc
     except MesherShuttingDownError as exc:
-        raise HTTPException(status_code=503, detail="WG is closing. Open WG again to prepare this mesh.") from exc
+        raise HTTPException(status_code=503, detail="WG is shutting down. Open WG again to prepare this mesh.") from exc
     except MeshTooLarge as exc:
         raise HTTPException(status_code=409, detail={
             "code": "mesh_too_large", "message": str(exc),

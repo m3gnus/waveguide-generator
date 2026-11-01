@@ -11,7 +11,7 @@ derives which saved setup applies from the prepared mesh's source inventory.
 from __future__ import annotations
 
 import asyncio
-from server.preview.errors import user_error_message
+from server.preview.errors import public_error_message, user_error_message
 
 from collections import OrderedDict
 from copy import deepcopy
@@ -27,7 +27,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, FastAPI, Query, Request
 from fastapi.responses import JSONResponse
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, TypeAdapter, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, TypeAdapter, ValidationError, model_validator
 
 from server.cadlink.identity import mint_id, utc_now
 from server.cadlink.operations import REASON_UPDATE_RESTART_PENDING
@@ -845,8 +845,12 @@ def mount_models_api(application: FastAPI) -> None:
             return await assembly_front_context(design)
         except AssemblyRefusal as exc:
             return _refusal(422, "assembly_refused", str(exc))
-        except Exception as exc:
+        except ValidationError as exc:
             return _refusal(422, "assembly_refused", user_error_message(exc))
+        except Exception as exc:
+            if public_error_message(exc) is not None:
+                return _refusal(422, "assembly_refused", user_error_message(exc))
+            return _refusal(500, "assembly_failed", user_error_message(exc))
 
     @router.post("/assembly/compile", responses=refused)
     async def assembly_compile(body: AssemblyCompileRequest) -> Any:
@@ -871,8 +875,12 @@ def mount_models_api(application: FastAPI) -> None:
             return _refusal(422, "solver_memory_exceeded", SolverMemoryTooLarge.USER_MESSAGE)
         except AssemblyRefusal as exc:
             return _refusal(422, "assembly_refused", str(exc))
-        except Exception as exc:
+        except ValidationError as exc:
             return _refusal(422, "assembly_refused", user_error_message(exc))
+        except Exception as exc:
+            if public_error_message(exc) is not None:
+                return _refusal(422, "assembly_refused", user_error_message(exc))
+            return _refusal(500, "assembly_failed", user_error_message(exc))
         if outcome["status"] != "published":
             return {"status": outcome["status"]}
         record = outcome["record"]

@@ -1,0 +1,915 @@
+{
+  "native.L": {
+    "path": "L",
+    "legacyKey": "L",
+    "label": "Body length"
+  },
+  "native.r0": {
+    "path": "r0",
+    "legacyKey": "r0",
+    "label": "Body throat radius"
+  },
+  "native.a": {
+    "path": "a",
+    "legacyKey": "a",
+    "label": "Body coverage half-angle"
+  },
+  "native.a0": {
+    "path": "a0",
+    "legacyKey": "a0",
+    "label": "Body throat half-angle"
+  },
+  "native.k": {
+    "path": "k",
+    "legacyKey": "k",
+    "label": "Body flare constant"
+  },
+  "native.scale": {
+    "path": "scale",
+    "legacyKey": "scale",
+    "label": "Transverse / uniform scale"
+  },
+  "native.axial_scale": {
+    "path": "axial_scale",
+    "legacyKey": "axial_scale",
+    "label": "Absolute axial scale"
+  },
+  "native.adapter.driver_exit_diameter_mm": {
+    "path": "throat_adapter.driver_exit_diameter_mm",
+    "legacyKey": "throat_adapter.driver_exit_diameter_mm",
+    "label": "Driver exit diameter"
+  },
+  "native.adapter.exit_half_angle_deg": {
+    "path": "throat_adapter.exit_half_angle_deg",
+    "legacyKey": "throat_adapter.exit_half_angle_deg",
+    "label": "Driver exit half-angle"
+  },
+  "native.adapter.length_mm": {
+    "path": "throat_adapter.length_mm",
+    "legacyKey": "throat_adapter.length_mm",
+    "label": "Adapter length"
+  },
+  "native.adapter.join_t": {
+    "path": "throat_adapter.join_t",
+    "legacyKey": "throat_adapter.join_t",
+    "label": "Retained body start"
+  },
+  "native.adapter.driver_handle_mm": {
+    "path": "throat_adapter.driver_handle_mm",
+    "legacyKey": "throat_adapter.driver_handle_mm",
+    "label": "Driver handle length"
+  },
+  "native.adapter.body_handle_mm": {
+    "path": "throat_adapter.body_handle_mm",
+    "legacyKey": "throat_adapter.body_handle_mm",
+    "label": "Body handle length"
+  },
+  "native.controls.0.0": {
+    "path": "throat_adapter.control_points_mm.0.0",
+    "legacyKey": "throat_adapter.control_points_mm.0.0",
+    "label": "Cubic P0 Z"
+  },
+  "native.controls.0.1": {
+    "path": "throat_adapter.control_points_mm.0.1",
+    "legacyKey": "throat_adapter.control_points_mm.0.1",
+    "label": "Cubic P0 radius"
+  },
+  "native.controls.1.0": {
+    "path": "throat_adapter.control_points_mm.1.0",
+    "legacyKey": "throat_adapter.control_points_mm.1.0",
+    "label": "Cubic P1 Z"
+  },
+  "native.controls.1.1": {
+    "path": "throat_adapter.control_points_mm.1.1",
+    "legacyKey": "throat_adapter.control_points_mm.1.1",
+    "label": "Cubic P1 radius"
+  },
+  "native.controls.2.0": {
+    "path": "throat_adapter.control_points_mm.2.0",
+    "legacyKey": "throat_adapter.control_points_mm.2.0",
+    "label": "Cubic P2 Z"
+  },
+  "native.controls.2.1": {
+    "path": "throat_adapter.control_points_mm.2.1",
+    "legacyKey": "throat_adapter.control_points_mm.2.1",
+    "label": "Cubic P2 radius"
+  },
+  "native.arc.join_t": {
+    "path": "terminating_arc.join_t",
+    "legacyKey": "terminating_arc.join_t",
+    "label": "Arc attachment"
+  },
+  "native.arc.end_tangent_deg": {
+    "path": "terminating_arc.end_tangent_deg",
+    "legacyKey": "terminating_arc.end_tangent_deg",
+    "label": "Arc end tangent"
+  },
+  "native.source.radius_mm": {
+    "path": "source_body.radius_mm",
+    "legacyKey": "source_body.radius_mm",
+    "label": "Source disk radius"
+  },
+  "native.source.outer_radius_mm": {
+    "path": "source_body.outer_radius_mm",
+    "legacyKey": "source_body.outer_radius_mm",
+    "label": "Source body radius"
+  },
+  "native.source.depth_mm": {
+    "path": "source_body.depth_mm",
+    "legacyKey": "source_body.depth_mm",
+    "label": "Source body depth"
+  },
+  "common.scale": {
+    "path": "scale",
+    "legacyKey": "scale",
+    "label": "Scale"
+  },
+  "rosse.R": {
+    "path": "R",
+    "legacyKey": "R",
+    "label": "Mouth radius"
+  },
+  "rosse.a": {
+    "path": "a",
+    "legacyKey": "a",
+    "label": "Mouth coverage angle"
+  },
+  "rosse.a0": {
+    "path": "a0",
+    "legacyKey": "a0",
+    "label": "Throat coverage angle"
+  },
+  "rosse.r0": {
+    "path": "r0",
+    "legacyKey": "r0",
+    "label": "Throat radius"
+  },
+  "rosse.k": {
+    "path": "k",
+    "legacyKey": "k",
+    "label": "Throat rounding"
+  },
+  "rosse.m": {
+    "path": "m",
+    "legacyKey": "m",
+    "label": "Apex shift"
+  },
+  "rosse.b": {
+    "path": "b",
+    "legacyKey": "b",
+    "label": "Bending"
+  },
+  "rosse.r": {
+    "path": "r",
+    "legacyKey": "r",
+    "label": "Apex radius"
+  },
+  "rosse.q": {
+    "path": "q",
+    "legacyKey": "q",
+    "label": "Shape factor"
+  },
+  "rosse.tmax": {
+    "path": "tmax",
+    "legacyKey": "tmax",
+    "label": "Truncation limit"
+  },
+  "osse.L": {
+    "path": "L",
+    "legacyKey": "L",
+    "label": "Horn length"
+  },
+  "osse.a": {
+    "path": "a",
+    "legacyKey": "a",
+    "label": "Mouth coverage angle"
+  },
+  "osse.a0": {
+    "path": "a0",
+    "legacyKey": "a0",
+    "label": "Throat coverage angle"
+  },
+  "osse.r0": {
+    "path": "r0",
+    "legacyKey": "r0",
+    "label": "Throat radius"
+  },
+  "osse.k": {
+    "path": "k",
+    "legacyKey": "k",
+    "label": "Flare constant"
+  },
+  "osse.s": {
+    "path": "s",
+    "legacyKey": "s",
+    "label": "Termination shape"
+  },
+  "osse.n": {
+    "path": "n",
+    "legacyKey": "n",
+    "label": "Termination curvature"
+  },
+  "osse.q": {
+    "path": "q",
+    "legacyKey": "q",
+    "label": "Termination smoothness"
+  },
+  "osse.h": {
+    "path": "h",
+    "legacyKey": "h",
+    "label": "Shape factor"
+  },
+  "icw.r0": {
+    "path": "r0",
+    "legacyKey": "r0",
+    "label": "Throat radius"
+  },
+  "icw.a0": {
+    "path": "a0",
+    "legacyKey": "a0",
+    "label": "Throat half-angle"
+  },
+  "icw.L": {
+    "path": "L",
+    "legacyKey": "L",
+    "label": "Horn length"
+  },
+  "icw.R": {
+    "path": "R",
+    "legacyKey": "R",
+    "label": "Mouth radius"
+  },
+  "icw.coverage_angle": {
+    "path": "coverage_angle",
+    "legacyKey": "coverage_angle",
+    "label": "Coverage angle"
+  },
+  "icw.hold_start": {
+    "path": "hold_start",
+    "legacyKey": "hold_start",
+    "label": "Coverage hold start"
+  },
+  "icw.hold_end": {
+    "path": "hold_end",
+    "legacyKey": "hold_end",
+    "label": "Coverage hold end"
+  },
+  "icw.n_coeff": {
+    "path": "n_coeff",
+    "legacyKey": "n_coeff",
+    "label": "Curvature coefficients"
+  },
+  "icw.termination": {
+    "path": "termination",
+    "legacyKey": "termination",
+    "label": "Termination"
+  },
+  "icw.theta1_deg": {
+    "path": "theta1_deg",
+    "legacyKey": "theta1_deg",
+    "label": "Rollback curl angle"
+  },
+  "icw.depth": {
+    "path": "depth",
+    "legacyKey": "depth",
+    "label": "Rollback depth"
+  },
+  "lookup.profile": {
+    "path": "lookup_profile",
+    "legacyKey": "lookupProfile",
+    "label": "Lookup profile points"
+  },
+  "lookup.a0": {
+    "path": "a0",
+    "legacyKey": "lookupSourceAngle",
+    "label": "Automatic source-cap angle"
+  },
+  "freeform.length": {
+    "path": "length",
+    "legacyKey": "length",
+    "label": "Length"
+  },
+  "freeform.throatRadius": {
+    "path": "profile_h.points.0.r",
+    "legacyKey": "throatRadius",
+    "label": "Throat radius"
+  },
+  "freeform.throatAngle": {
+    "path": "profile_h.throat_angle_deg",
+    "legacyKey": "throatAngle",
+    "label": "Throat angle"
+  },
+  "freeform.mouthRadiusH": {
+    "path": "profile_h.points.$last.r",
+    "legacyKey": "mouthRadiusH",
+    "label": "Horizontal mouth radius"
+  },
+  "freeform.mouthAngleH": {
+    "path": "profile_h.mouth_angle_deg",
+    "legacyKey": "mouthAngleH",
+    "label": "Horizontal mouth angle"
+  },
+  "freeform.interiorH": {
+    "path": "profile_h.points",
+    "legacyKey": "interiorH",
+    "label": "Horizontal spline points"
+  },
+  "freeform.mouthRadiusV": {
+    "path": "profile_v.points.$last.r",
+    "legacyKey": "mouthRadiusV",
+    "label": "Vertical mouth radius"
+  },
+  "freeform.mouthAngleV": {
+    "path": "profile_v.mouth_angle_deg",
+    "legacyKey": "mouthAngleV",
+    "label": "Vertical mouth angle"
+  },
+  "freeform.interiorV": {
+    "path": "profile_v.points",
+    "legacyKey": "interiorV",
+    "label": "Vertical spline points"
+  },
+  "freeform.crossSections": {
+    "path": "cross_sections",
+    "legacyKey": "crossSections",
+    "label": "Cross-section stations"
+  },
+  "icw.r_aperture": {
+    "path": "r_aperture",
+    "legacyKey": "r_aperture",
+    "label": "Aperture radius"
+  },
+  "icw.x_aperture": {
+    "path": "x_aperture",
+    "legacyKey": "x_aperture",
+    "label": "Aperture axial position"
+  },
+  "icw.x_setback": {
+    "path": "x_setback",
+    "legacyKey": "x_setback",
+    "label": "Tip setback"
+  },
+  "icw.kappa0": {
+    "path": "kappa0",
+    "legacyKey": "kappa0",
+    "label": "Throat curvature"
+  },
+  "icw.kappa_abs_max": {
+    "path": "kappa_abs_max",
+    "legacyKey": "kappa_abs_max",
+    "label": "Maximum absolute curvature"
+  },
+  "icw.dkappa_ds_abs_max": {
+    "path": "dkappa_ds_abs_max",
+    "legacyKey": "dkappa_ds_abs_max",
+    "label": "Maximum curvature slope"
+  },
+  "icw.theta_max_deg": {
+    "path": "theta_max_deg",
+    "legacyKey": "theta_max_deg",
+    "label": "Maximum wall angle"
+  },
+  "icw.pin_mouth_radius": {
+    "path": "pin_mouth_radius",
+    "legacyKey": "pin_mouth_radius",
+    "label": "Pin mouth radius"
+  },
+  "icw.icw_S": {
+    "path": "icw_S",
+    "legacyKey": "icw_S",
+    "label": "Direct curve arc length"
+  },
+  "icw.icw_seed": {
+    "path": "icw_seed",
+    "legacyKey": "icw_seed",
+    "label": "Imported ICW seed"
+  },
+  "icw.icw_coeffs": {
+    "path": "icw_coeffs",
+    "legacyKey": "icw_coeffs",
+    "label": "Imported ICW coefficients"
+  },
+  "common.s1": {
+    "path": "s1",
+    "legacyKey": "s1",
+    "label": "Throat stretch amount"
+  },
+  "common.s2": {
+    "path": "s2",
+    "legacyKey": "s2",
+    "label": "Throat stretch sharpness"
+  },
+  "common.throat_ext_angle": {
+    "path": "throat_ext_angle",
+    "legacyKey": "throatExtAngle",
+    "label": "Throat extension angle"
+  },
+  "common.throat_ext_length": {
+    "path": "throat_ext_length",
+    "legacyKey": "throatExtLength",
+    "label": "Throat extension length"
+  },
+  "common.slot_length": {
+    "path": "slot_length",
+    "legacyKey": "slotLength",
+    "label": "Straight slot length"
+  },
+  "common.length_mode": {
+    "path": "length_mode",
+    "legacyKey": "lengthMode",
+    "label": "Length mode"
+  },
+  "source.shape": {
+    "path": "source.shape",
+    "legacyKey": "sourceShape",
+    "label": "Source surface"
+  },
+  "source.radius": {
+    "path": "source.radius",
+    "legacyKey": "sourceRadius",
+    "label": "Source radius"
+  },
+  "source.curvature": {
+    "path": "source.curvature",
+    "legacyKey": "sourceCurv",
+    "label": "Source curvature"
+  },
+  "morph.target_shape": {
+    "path": "morph.target_shape",
+    "legacyKey": "morphTarget",
+    "label": "Morph target"
+  },
+  "morph.target_width": {
+    "path": "morph.target_width",
+    "legacyKey": "morphWidth",
+    "label": "Target width"
+  },
+  "morph.target_height": {
+    "path": "morph.target_height",
+    "legacyKey": "morphHeight",
+    "label": "Target height"
+  },
+  "morph.target_exponent": {
+    "path": "morph.target_exponent",
+    "legacyKey": "morphExponent",
+    "label": "Target exponent"
+  },
+  "morph.corner_radius": {
+    "path": "morph.corner_radius",
+    "legacyKey": "morphCorner",
+    "label": "Corner radius"
+  },
+  "morph.rate": {
+    "path": "morph.rate",
+    "legacyKey": "morphRate",
+    "label": "Morph rate"
+  },
+  "morph.fixed_part": {
+    "path": "morph.fixed_part",
+    "legacyKey": "morphFixed",
+    "label": "Fixed part"
+  },
+  "morph.allow_shrinkage": {
+    "path": "morph.allow_shrinkage",
+    "legacyKey": "morphAllowShrinkage",
+    "label": "Allow shrinkage"
+  },
+  "mesh.ath_roundover": {
+    "path": "mesh.ath_roundover",
+    "legacyKey": "Mesh.Roundover",
+    "label": "ATH mouth lip"
+  },
+  "mesh.ath_roundover.radius": {
+    "path": "mesh.ath_roundover.radius",
+    "legacyKey": "Mesh.Roundover.Radius",
+    "label": "ATH lip radius"
+  },
+  "mesh.ath_roundover.segments": {
+    "path": "mesh.ath_roundover.segments",
+    "legacyKey": "Mesh.Roundover.Segments",
+    "label": "ATH lip segments"
+  },
+  "osse.throat_profile": {
+    "path": "throat_profile",
+    "legacyKey": "throatProfile",
+    "label": "Throat profile"
+  },
+  "osse.rotation": {
+    "path": "rotation",
+    "legacyKey": "rot",
+    "label": "Profile rotation"
+  },
+  "guide.curve_type": {
+    "path": "guiding_curve.curve_type",
+    "legacyKey": "gcurveType",
+    "label": "Guiding curve mode"
+  },
+  "guide.distance": {
+    "path": "guiding_curve.distance",
+    "legacyKey": "gcurveDist",
+    "label": "Guiding curve distance"
+  },
+  "guide.width": {
+    "path": "guiding_curve.width",
+    "legacyKey": "gcurveWidth",
+    "label": "Guiding curve width"
+  },
+  "guide.aspect_ratio": {
+    "path": "guiding_curve.aspect_ratio",
+    "legacyKey": "gcurveAspectRatio",
+    "label": "Guiding curve aspect ratio"
+  },
+  "guide.superellipse_n": {
+    "path": "guiding_curve.superellipse_n",
+    "legacyKey": "gcurveSeN",
+    "label": "Guiding superellipse exponent"
+  },
+  "guide.superformula": {
+    "path": "guiding_curve.superformula",
+    "legacyKey": "gcurveSf",
+    "label": "Superformula tuple"
+  },
+  "guide.sf_a": {
+    "path": "guiding_curve.sf_a",
+    "legacyKey": "gcurveSfA",
+    "label": "Superformula a"
+  },
+  "guide.sf_b": {
+    "path": "guiding_curve.sf_b",
+    "legacyKey": "gcurveSfB",
+    "label": "Superformula b"
+  },
+  "guide.sf_m1": {
+    "path": "guiding_curve.sf_m1",
+    "legacyKey": "gcurveSfM1",
+    "label": "Superformula m1"
+  },
+  "guide.sf_m2": {
+    "path": "guiding_curve.sf_m2",
+    "legacyKey": "gcurveSfM2",
+    "label": "Superformula m2"
+  },
+  "guide.sf_n1": {
+    "path": "guiding_curve.sf_n1",
+    "legacyKey": "gcurveSfN1",
+    "label": "Superformula n1"
+  },
+  "guide.sf_n2": {
+    "path": "guiding_curve.sf_n2",
+    "legacyKey": "gcurveSfN2",
+    "label": "Superformula n2"
+  },
+  "guide.sf_n3": {
+    "path": "guiding_curve.sf_n3",
+    "legacyKey": "gcurveSfN3",
+    "label": "Superformula n3"
+  },
+  "guide.rotation": {
+    "path": "guiding_curve.rotation",
+    "legacyKey": "gcurveRot",
+    "label": "Guiding curve rotation"
+  },
+  "osse.circ_arc_term_angle": {
+    "path": "circ_arc_term_angle",
+    "legacyKey": "circArcTermAngle",
+    "label": "Circular arc terminal angle"
+  },
+  "osse.circ_arc_radius": {
+    "path": "circ_arc_radius",
+    "legacyKey": "circArcRadius",
+    "label": "Circular arc radius override"
+  },
+  "cross_section.exponent": {
+    "path": "cross_section.exponent",
+    "legacyKey": "cross_section.exponent",
+    "label": "Cross-section exponent"
+  },
+  "cross_section.aspect_ratio": {
+    "path": "cross_section.aspect_ratio",
+    "legacyKey": "cross_section.aspect_ratio",
+    "label": "Cross-section aspect ratio"
+  },
+  "simulation.sim_type": {
+    "path": "simulation.sim_type",
+    "legacyKey": "simType",
+    "label": "Mounting"
+  },
+  "mesh.wall_thickness": {
+    "path": "mesh.wall_thickness",
+    "legacyKey": "wallThickness",
+    "label": "Wall thickness"
+  },
+  "mesh.ath_rear_shape": {
+    "path": "mesh.ath_rear_shape",
+    "legacyKey": "Mesh.RearShape",
+    "label": "ATH rear shape"
+  },
+  "mesh.ath_rear_front_offset": {
+    "path": "mesh.ath_rear_front_offset",
+    "legacyKey": "Mesh.RearShape.FrontOffset",
+    "label": "Opus front offset"
+  },
+  "mesh.ath_rear_step": {
+    "path": "mesh.ath_rear_step",
+    "legacyKey": "Mesh.RearShape.Step",
+    "label": "Opus rear step"
+  },
+  "native.lip.radius": {
+    "path": "mesh.mouth_roundover_radius_mm",
+    "legacyKey": "mesh.mouth_roundover_radius_mm",
+    "label": "Mouth roundover radius"
+  },
+  "native.lip.wall": {
+    "path": "mesh.wall_thickness",
+    "legacyKey": "mesh.wall_thickness",
+    "label": "Wall thickness"
+  },
+  "enclosure.depth": {
+    "path": "enclosure.depth",
+    "legacyKey": "encDepth",
+    "label": "Enclosure depth"
+  },
+  "enclosure.depth_margin_mm": {
+    "path": "enclosure.depth_margin_mm",
+    "legacyKey": "enclosure.depth_margin_mm",
+    "label": "Rear clearance"
+  },
+  "enclosure.edge_radius": {
+    "path": "enclosure.edge_radius",
+    "legacyKey": "encEdge",
+    "label": "Edge radius"
+  },
+  "enclosure.edge_type": {
+    "path": "enclosure.edge_type",
+    "legacyKey": "encEdgeType",
+    "label": "Edge finish"
+  },
+  "enclosure.space_l": {
+    "path": "enclosure.space_l",
+    "legacyKey": "encSpaceL",
+    "label": "Left margin"
+  },
+  "enclosure.space_t": {
+    "path": "enclosure.space_t",
+    "legacyKey": "encSpaceT",
+    "label": "Top margin"
+  },
+  "enclosure.space_r": {
+    "path": "enclosure.space_r",
+    "legacyKey": "encSpaceR",
+    "label": "Right margin"
+  },
+  "enclosure.space_b": {
+    "path": "enclosure.space_b",
+    "legacyKey": "encSpaceB",
+    "label": "Bottom margin"
+  },
+  "icw.a": {
+    "path": "a",
+    "legacyKey": "a",
+    "label": "Legacy coverage coefficient"
+  },
+  "icw.k": {
+    "path": "k",
+    "legacyKey": "k",
+    "label": "Legacy flare coefficient"
+  },
+  "icw.q": {
+    "path": "q",
+    "legacyKey": "q",
+    "label": "Legacy smoothness coefficient"
+  },
+  "icw.curl": {
+    "path": "curl",
+    "legacyKey": "curl",
+    "label": "Curl"
+  },
+  "common.coverage_mode": {
+    "path": "coverage_mode",
+    "legacyKey": "coverageMode",
+    "label": "Coverage mode"
+  },
+  "source.contours": {
+    "path": "source.contours",
+    "legacyKey": "sourceContours",
+    "label": "Source contours"
+  },
+  "simulation.f1": {
+    "path": "simulation.f1",
+    "legacyKey": "freqStart",
+    "label": "Sweep start"
+  },
+  "simulation.f2": {
+    "path": "simulation.f2",
+    "legacyKey": "freqEnd",
+    "label": "Sweep end"
+  },
+  "simulation.num_frequencies": {
+    "path": "simulation.num_frequencies",
+    "legacyKey": "numFreqs",
+    "label": "Frequency samples"
+  },
+  "source.velocity_convention": {
+    "path": "source.velocity_convention",
+    "legacyKey": "sourceVelocity",
+    "label": "Velocity convention"
+  },
+  "source.velocity": {
+    "path": "source.velocity",
+    "legacyKey": "sourceAmplitude",
+    "label": "Source amplitude"
+  },
+  "mesh.angular_segments": {
+    "path": "mesh.angular_segments",
+    "legacyKey": "angularSegments",
+    "label": "Surface angular samples"
+  },
+  "mesh.length_segments": {
+    "path": "mesh.length_segments",
+    "legacyKey": "lengthSegments",
+    "label": "Surface length samples"
+  },
+  "mesh.corner_segments": {
+    "path": "mesh.corner_segments",
+    "legacyKey": "cornerSegments",
+    "label": "Surface corner samples"
+  },
+  "mesh.sampling_mode": {
+    "path": "mesh.sampling_mode",
+    "legacyKey": "samplingMode",
+    "label": "Z-map sampling mode"
+  },
+  "mesh.z_map_points": {
+    "path": "mesh.z_map_points",
+    "legacyKey": "zMapPoints",
+    "label": "Z-map points"
+  },
+  "mesh.throat_resolution": {
+    "path": "mesh.throat_resolution",
+    "legacyKey": "throatResolution",
+    "label": "Throat mesh resolution"
+  },
+  "mesh.mouth_resolution": {
+    "path": "mesh.mouth_resolution",
+    "legacyKey": "mouthResolution",
+    "label": "Mouth mesh resolution"
+  },
+  "mesh.surface_deviation_mm": {
+    "path": "mesh.surface_deviation_mm",
+    "legacyKey": "surface_deviation_mm",
+    "label": "Max surface deviation"
+  },
+  "mesh.rear_resolution": {
+    "path": "mesh.rear_resolution",
+    "legacyKey": "rearResolution",
+    "label": "Rear mesh resolution"
+  },
+  "enclosure.front_resolution": {
+    "path": "enclosure.front_resolution",
+    "legacyKey": "encFrontResolution",
+    "label": "Front baffle mesh resolution"
+  },
+  "enclosure.back_resolution": {
+    "path": "enclosure.back_resolution",
+    "legacyKey": "encBackResolution",
+    "label": "Rear baffle mesh resolution"
+  },
+  "mesh.aperture_resolution_scale": {
+    "path": "mesh.aperture_resolution_scale",
+    "legacyKey": "apertureResolutionScale",
+    "label": "Aperture mesh scale"
+  },
+  "schema-gap.max_edge": {
+    "path": "mesh.max_edge",
+    "legacyKey": "maxEdge",
+    "label": "Maximum edge guard"
+  },
+  "mesh.max_triangles": {
+    "path": "mesh.max_triangles",
+    "legacyKey": "maxTriangles",
+    "label": "Triangle warning threshold"
+  },
+  "mesh.allow_large_mesh": {
+    "path": "mesh.allow_large_mesh",
+    "legacyKey": "allowLargeMesh",
+    "label": "Legacy large-mesh approval"
+  },
+  "freeform.inflectionPolicy": {
+    "path": "inflection_policy",
+    "legacyKey": "inflectionPolicy",
+    "label": "Curve direction"
+  },
+  "native.source.size": {
+    "path": "mesh.size_mm",
+    "legacyKey": "mesh.size_mm",
+    "label": "Uniform source mesh size"
+  },
+  "native.mesh.throat": {
+    "path": "mesh.throat_resolution",
+    "legacyKey": "mesh.throat_resolution",
+    "label": "Throat mesh resolution"
+  },
+  "native.mesh.mouth": {
+    "path": "mesh.mouth_resolution",
+    "legacyKey": "mesh.mouth_resolution",
+    "label": "Mouth mesh resolution"
+  },
+  "native.mesh.rear": {
+    "path": "mesh.rear_resolution",
+    "legacyKey": "mesh.rear_resolution",
+    "label": "Rear mesh resolution"
+  },
+  "native.mesh.budget": {
+    "path": "mesh.max_triangles",
+    "legacyKey": "mesh.max_triangles",
+    "label": "Native mesh triangle budget"
+  },
+  "native.mesh.allow_large": {
+    "path": "mesh.allow_large_mesh",
+    "legacyKey": "allow_large_mesh",
+    "label": "Allow larger native exports"
+  },
+  "mesh.vertical_offset": {
+    "path": "mesh.vertical_offset",
+    "legacyKey": "verticalOffset",
+    "label": "Export vertical offset"
+  },
+  "native.mesh.offset": {
+    "path": "mesh.vertical_offset",
+    "legacyKey": "mesh.vertical_offset",
+    "label": "Export vertical offset"
+  },
+  "mesh.quadrants": {
+    "path": "mesh.quadrants",
+    "legacyKey": "quadrants",
+    "label": "Stored ATH Mesh.Quadrants"
+  },
+  "mesh.throat_segments": {
+    "path": "mesh.throat_segments",
+    "legacyKey": "throatSegments",
+    "label": "ATH throat slice samples"
+  },
+  "mesh.throat_slice_density": {
+    "path": "mesh.throat_slice_density",
+    "legacyKey": "throatSliceDensity",
+    "label": "ATH throat slice density"
+  },
+  "output.stl": {
+    "path": "output.stl",
+    "legacyKey": "outputSTL",
+    "label": "STL output flag"
+  },
+  "output.msh": {
+    "path": "output.msh",
+    "legacyKey": "outputMSH",
+    "label": "MSH output flag"
+  },
+  "passthrough.abec": {
+    "legacyKey": "ABEC",
+    "label": "Other ABEC passthrough blocks"
+  },
+  "passthrough.report": {
+    "legacyKey": "Report",
+    "label": "Report passthrough block"
+  },
+  "passthrough.extra": {
+    "legacyKey": "extraBlocks",
+    "label": "Other passthrough blocks"
+  },
+  "passthrough.keys": {
+    "legacyKey": "extraKeys",
+    "label": "Unknown flat keys"
+  },
+  "source.preset.radius_mm": {
+    "legacyKey": "radius_mm",
+    "label": "Radius"
+  },
+  "source.preset.height_mm": {
+    "legacyKey": "height_mm",
+    "label": "Dome height"
+  },
+  "source.preset.depth_mm": {
+    "legacyKey": "depth_mm",
+    "label": "Cone depth"
+  },
+  "source.preset.cap_radius_mm": {
+    "legacyKey": "cap_radius_mm",
+    "label": "Dust-cap radius"
+  },
+  "source.preset.cap_height_mm": {
+    "legacyKey": "cap_height_mm",
+    "label": "Dust-cap height"
+  },
+  "source.preset.surround_width_mm": {
+    "legacyKey": "surround_width_mm",
+    "label": "Surround width"
+  },
+  "source.preset.surround_depth_mm": {
+    "legacyKey": "surround_depth_mm",
+    "label": "Surround depth"
+  },
+  "source.preset.land_width_mm": {
+    "legacyKey": "land_width_mm",
+    "label": "Rigid land width"
+  }
+}

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from server.preview.errors import user_error_message
+from server.preview.errors import public_error_message, user_error_message
 
 import logging
 import asyncio
@@ -360,7 +360,7 @@ class _JobsContractRoute(APIRoute):
                     422,
                     code="invalid_request",
                     stage="input",
-                    message="Solve request body is invalid",
+                    message=public_error_message(exc) or "Solve request body is invalid",
                     details={"validation_errors": jsonable_encoder(exc.errors())},
                     client_request_id=_recover_client_request_id(exc.body),
                 )

@@ -53,6 +53,11 @@ _ENGINE_SCALAR_FUNCTIONS = frozenset({
 })
 
 
+def _profile_family_refusal(diagnostic: str):
+    from hornlab_mesher.errors import family_refusal
+    return family_refusal(diagnostic)
+
+
 class _ScalarFunctions(Mapping):
     """Validate names locally and resolve implementations only on evaluation."""
 
@@ -1027,11 +1032,17 @@ class DesignCommon(StrictModel):
         section = self.cross_section
         circular = math.isclose(section.exponent, 2, rel_tol=0, abs_tol=1e-12) and math.isclose(section.aspect_ratio, 1, rel_tol=0, abs_tol=1e-12)
         if not circular and self.formula == "FREEFORM":
-            raise ValueError("FREEFORM requires cross_section exponent=2 and aspect_ratio=1; cross_sections stations own the outline")
+            from hornlab_mesher.errors import control_refusal
+            raise control_refusal("FREEFORM requires cross_section exponent=2 and aspect_ratio=1; cross_sections stations own the outline",
+                                  "Cross-section stations", "Import the profile without a separate base cross-section, or start a new Custom profile design. Use Cross-section stations to shape its outline.",
+                                  message="A Custom profile cannot use a separate base cross-section.")
         guide = getattr(self, "guiding_curve", None)
         if not circular and guide is not None and guide.curve_type is not None and guide.width is not None:
             if guide.curve_type.constant_value() != 0 and guide.width.constant_value() != 0:
-                raise ValueError("Active guiding curves require cross_section exponent=2 and aspect_ratio=1")
+                from hornlab_mesher.errors import control_refusal
+                raise control_refusal("Active guiding curves require cross_section exponent=2 and aspect_ratio=1",
+                                      "Guiding curve mode", "Set Cross-section exponent to 2 and Cross-section aspect ratio to 1, or disable Guiding curve mode.",
+                                      message="Guiding curves need a circular base cross-section.")
         return self
 
 
@@ -1229,7 +1240,7 @@ class LookupConfig(DesignCommon):
     def _refuse_coefficients(cls, value: Any) -> Any:
         if isinstance(value, Mapping):
             if value.get("guiding_curve") is not None or value.get("guidingCurve") is not None:
-                raise ValueError(
+                raise _profile_family_refusal(
                     "formula LOOKUP does not support guiding_curve: the lookupProfile defines "
                     "the whole meridian; build the guiding shape into the lookupProfile instead"
                 )
@@ -1237,10 +1248,10 @@ class LookupConfig(DesignCommon):
                 "L", "L_mm", "R", "R_mm", "n", "s", "s1", "s2", "rotation", "rot",
                 "rot_deg", "tmax", "m", "r", "b",
             )):
-                raise ValueError("formula LOOKUP does not accept OSSE/R-OSSE profile keys")
+                raise _profile_family_refusal("formula LOOKUP does not accept OSSE/R-OSSE profile keys")
             ignored = [key for key in ("a", "a_deg", "k", "q", "h", "throat_adapter") if value.get(key) is not None]
             if ignored:
-                raise ValueError("formula LOOKUP does not support " + ", ".join(ignored)
+                raise _profile_family_refusal("formula LOOKUP does not support " + ", ".join(ignored)
                                  + ": the lookupProfile defines the whole meridian; build the extension or adapter into the lookupProfile instead")
         return value
 
@@ -1260,6 +1271,9 @@ class LookupConfig(DesignCommon):
         try:
             return lookup_profile_array({"lookupProfile": value}).tolist()
         except (ValueError, TypeError) as exc:
+            from hornlab_mesher.errors import UserRefusal
+            if isinstance(exc, UserRefusal):
+                raise
             raise ValueError(str(exc)) from exc
 
     @model_validator(mode="after")
@@ -1267,7 +1281,7 @@ class LookupConfig(DesignCommon):
         for field in ("throat_ext_angle", "throat_ext_length", "slot_length"):
             value = getattr(self, field)
             if value is not None and value.constant_value() != 0:
-                raise ValueError(
+                raise _profile_family_refusal(
                     f"formula LOOKUP does not support {field}: the lookupProfile defines "
                     "the whole meridian; build the extension or adapter into the lookupProfile instead"
                 )
@@ -1277,7 +1291,7 @@ class LookupConfig(DesignCommon):
             or self.ath_nac is not None
             or self.ath_axial_sampling_rule is not None
         ):
-            raise ValueError("LOOKUP does not accept imported ATH geometry")
+            raise _profile_family_refusal("LOOKUP does not accept imported ATH geometry")
         return self
 
 
@@ -1466,8 +1480,8 @@ class NativeDesignCommon(DesignCommon):
         # cubic validity as well as the scalar ranges advertised in OpenAPI.
         try:
             build_geometry_params(native_mesher_config(self))
-        except ConfigError as exc:
-            raise ValueError(str(exc)) from exc
+        except ConfigError:
+            raise
         return self
 
 
@@ -1530,7 +1544,7 @@ class DesignConfig(RootModel[DesignVariant]):
                 if key not in migrated:
                     continue
                 if migrated.get("formula") == "LOOKUP" and migrated[key] is not None:
-                    raise ValueError("formula LOOKUP does not accept OSSE/R-OSSE profile keys")
+                    raise _profile_family_refusal("formula LOOKUP does not accept OSSE/R-OSSE profile keys")
                 number = coefficient(migrated[key], key) if migrated[key] is not None else 0
                 if number != 0:
                     formula = migrated.get("formula")

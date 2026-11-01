@@ -25,7 +25,8 @@ def enclosure_design():
 
 
 def _assert_roundover_message(message):
-    assert "Enclosure depth is unavailable for this horn family. Reset Enclosure depth to 0" in message
+    assert "Enclosure depth is unavailable for this horn family." in message
+    assert "Reset Enclosure depth to 0" in message
     assert "Could not create line" not in message
 
 
@@ -232,7 +233,8 @@ def test_source_disk_active_enclosure_remains_unsupported(tmp_path, monkeypatch)
             status, raw = await http_request(app, "POST", path, body=body)
             payload = json.loads(raw)
             assert status == 422, payload
-            assert "Enclosure depth is unavailable for this horn family. Reset Enclosure depth to 0" in raw.decode()
+            assert "Enclosure depth is unavailable for this horn family." in raw.decode()
+            assert "Reset Enclosure depth to 0" in raw.decode()
         assert runtime.store.list_jobs() == ([], 0)
 
     asyncio.run(scenario())

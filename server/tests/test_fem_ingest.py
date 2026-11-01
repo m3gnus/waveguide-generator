@@ -427,6 +427,7 @@ def test_one_total_budget_covers_all_regions_and_publication(tmp_path, monkeypat
         values = iter([0.0, 0.0, 1.0, 2.0, 11.0])
         monkeypatch.setattr(ingest.time, "monotonic", lambda: next(values))
     label = "Rear chamber" if exhaustion == "during-publish" else "Front chamber"
-    with pytest.raises(ingest.IngestRefusal, match=f"{label}.*total FEM regions wall-clock budget"):
+    with pytest.raises(ingest.IngestRefusal, match=f"{label}.*preparing the FEM regions took too long") as refusal:
         ingest._mesh_fem_regions(bundle, tmp_path)
+    assert "Simplify these regions in CAD, then send the model again." in str(refusal.value)
     assert called == ([10.0, 10.0] if exhaustion == "during-child" else [10.0])

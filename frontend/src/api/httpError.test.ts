@@ -163,3 +163,9 @@ it('names nested solve-option controls', () => {
   expect(fieldSentence(['body', 'options', 'ground_plane', 'height_m'], 'Input should be a valid number')).toBe('WG cannot use the value of Height above surface. Enter a new value in Ground plane under Solve options.');
   expect(fieldSentence(['options', 'polar_config', 'distance'], 'Input should be greater than or equal to 0.1')).toBe('Measurement distance must be greater than or equal to 0.1. Change it in Directivity map under Solve options.');
 });
+
+it('shows the typed remedy retained in a validation row context', () => {
+  expect(refusalText([{ loc: ['body', 'design', 'SOURCE-DISK'], msg: 'Value error, outer_radius_mm must exceed radius_mm', ctx: { error: {
+    field: 'Source body radius', user_message: 'The source rim is too small or too large.', next_step: 'Set Source body radius at least 0.1 mm above Source disk radius and no greater than 500 mm.',
+  } } }], 'mesh preview')).toBe('The source rim is too small or too large. Set Source body radius at least 0.1 mm above Source disk radius and no greater than 500 mm.');
+});

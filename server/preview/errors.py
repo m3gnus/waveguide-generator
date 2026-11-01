@@ -71,11 +71,15 @@ def _infinite_baffle_geometry_refusal(
         return None
     if _BAFFLE_GEOMETRY_MARKER not in detail:
         return None
+    span = re.search(r"mouth z spans ([0-9.eE+-]+) mm", detail)
+    protrusion = re.search(r"to z=([0-9.eE+-]+) mm", detail)
+    context = (f"The rim varies by {span[1]} mm in depth. " if span else
+               f"The horn extends {protrusion[1]} mm in front of the baffle. " if protrusion else "")
     return (
         "This horn cannot be mounted in an infinite baffle: its mouth is not a "
         "flat rim lying in the baffle plane, with the whole horn behind it. "
-        "Use a planar, front-most mouth, or set the simulation type to "
-        f"free-standing. Mesher detail: {detail}"
+        + context + "Use a planar, front-most mouth, or choose Bare shell "
+        "(free-standing) in Mounting."
     )
 
 
@@ -84,6 +88,17 @@ def mesher_error_message(
     config: Mapping[str, Any] | Callable[[], Mapping[str, Any]], detail: str
 ) -> str:
     """Translate once, and keep the original technical diagnostic in the log."""
+    corner = re.search(r"FREEFORM corner z=([^:]+) mm: unsafe offset mitre", detail)
+    if corner is not None:
+        logger.warning("Mesher corner diagnostic: %s", detail)
+        return PublicMessage(
+            f"The outer wall cannot fit around the sharp profile corner at {corner[1]} mm. "
+            "Soften this profile corner, or choose Bare shell in Mounting.")
+    # Compatibility for public diagnostics emitted by older mesher workers.
+    if detail.startswith(("Mouth coverage angle (a) reaches ", "Throat angle (a0) reaches ",
+                          "Mouth coverage angle (a):", "Throat angle (a0):",
+                          "The enclosure leaves ")):
+        return PublicMessage(detail)
     message = offset_degeneracy_message(detail)
     if message is None:
         if not _WALL_FOLD.match(detail) and _BAFFLE_GEOMETRY_MARKER not in detail:
@@ -94,10 +109,14 @@ def mesher_error_message(
     if message is None:
         return detail
     logger.warning("Mesher geometry diagnostic: %s", detail)
-    return message
+    return PublicMessage(message)
 
 
-PROGRAM_FAILURE = "WG could not finish this request and has recorded the problem. Try again."
+class PublicMessage(str):
+    """Words produced by this owner, retained by legacy exception wrappers."""
+
+
+PROGRAM_FAILURE = "WG could not finish this request and has recorded the problem."
 
 
 def _user_refusal(exc: BaseException):
@@ -121,16 +140,63 @@ def _user_refusal(exc: BaseException):
     return None
 
 
-def user_error_message(exc: BaseException, *, fallback: str = PROGRAM_FAILURE) -> str:
-    """One public boundary: only typed user remedies leave the server.
-
-    Keep status and wire codes at the caller. Never infer user responsibility
-    from the spelling or apparent readability of an arbitrary exception.
-    """
+def public_error_message(exc: BaseException) -> str | None:
+    """Preserve the existing domain owners; arbitrary exceptions stay private."""
     refusal = _user_refusal(exc)
     if refusal is not None:
-        logger.warning("User refusal (%s): %s", refusal.field, getattr(refusal, "diagnostic", str(exc)))
         return f"{refusal.user_message} {refusal.next_step}".strip()
+    forwarded = getattr(exc, "public_message", None)
+    if isinstance(forwarded, str) and forwarded:
+        return forwarded
+    if exc.args and isinstance(exc.args[0], PublicMessage):
+        return str(exc.args[0])
+    public_types = {
+        "server.mesh.imported": ("ImportedMeshError",),
+        "server.mesh.builder": ("AssemblyRefusal",),
+        "server.solver.ground_plane": ("GroundPlaneClearance",),
+        "server.solver.driver_lem": ("DriverMassLimitError",),
+        "server.solver.imported": ("SourceAxisError",),
+        "server.solver.beat_imported": ("ImportedBeatRefusal",),
+        "server.solver.bempp": ("BemppUnavailable",),
+        "server.solver.metal": ("MetalUnavailable",),
+        "server.solver.beat": ("BeatUnavailable",),
+        "server.jobs.runtime.engine_policy": ("EngineUnavailableError",),
+        "server.mesh.child": ("MesherCrashError", "MesherShuttingDownError"),
+    }
+    for module_name, names in public_types.items():
+        module = sys.modules.get(module_name)
+        kinds = tuple(kind for name in names if isinstance(kind := getattr(module, name, None), type))
+        if isinstance(exc, kinds):
+            message, step = getattr(exc, "user_message", None), getattr(exc, "next_step", None)
+            return f"{message} {step}".strip() if isinstance(message, str) and isinstance(step, str) else str(exc)
+    module = sys.modules.get("server.cadlink.intake.ingest")
+    kind = getattr(module, "IngestRefusal", None)
+    if isinstance(kind, type) and isinstance(exc, kind) and exc.user_worded:
+        return str(exc)
+    # ValidationError retains the original ValueError in each row's context.
+    validation_types = tuple(kind for module_name, name in (
+        ("pydantic", "ValidationError"), ("fastapi.exceptions", "RequestValidationError"))
+        if isinstance(kind := getattr(sys.modules.get(module_name), name, None), type))
+    if isinstance(exc, validation_types):
+        words = [public_error_message(cause) for row in exc.errors()
+                 if isinstance(cause := row.get("ctx", {}).get("error"), BaseException)]
+        if words and all(words):
+            return " ".join(words)
+    if str(exc).startswith("the acoustic control grid needed for the requested mm resolution"):
+        return "The requested mesh resolution needs too many surface samples. Increase Throat mesh resolution and Mouth mesh resolution to use a coarser mesh."
+    # Historical geometry translations are explicit, diagnosed contracts.
+    translated = mesher_error_message({"mode": "infinite-baffle"}, str(exc))
+    if isinstance(translated, PublicMessage):
+        return str(translated)
+    return None
+
+
+def user_error_message(exc: BaseException, *, fallback: str = PROGRAM_FAILURE) -> str:
+    """Show the domain owner's remedy, with original diagnostics in the log."""
+    words = public_error_message(exc)
+    if words is not None:
+        logger.warning("Public refusal (%s): %s", type(exc).__name__, getattr(exc, "diagnostic", str(exc)))
+        return words
     logger.error("Program failure: %s", exc, exc_info=(type(exc), exc, exc.__traceback__))
     return fallback
 
@@ -151,4 +217,6 @@ def user_error_as(exc: BaseException, error_type: type[ValueError]) -> ValueErro
     refusal = _user_refusal(exc)
     if refusal is not None:
         wrapped.user_refusal = refusal
+    if (words := public_error_message(exc)) is not None:
+        wrapped.public_message = words
     return wrapped

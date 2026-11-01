@@ -1310,7 +1310,7 @@ def _admit_return(
         if expected_design_id is None:
             raise IngestRefusal(
                 "stage 2 project gate",
-                "This CAD return belongs to the WG design it was exported from "
+                "This model belongs to the WG design it was exported from "
                 f"({_design_target_hint(store, returned_design_ids)}). Open its workspace and choose that "
                 "design from File → CAD-linked designs before preparing it",
                 user_worded=True,
@@ -1318,7 +1318,7 @@ def _admit_return(
         if expected_design_id not in returned_design_ids:
             raise IngestRefusal(
                 "stage 2 project gate",
-                "The selected CAD return belongs to another CAD-linked project "
+                "The selected model belongs to another CAD-linked project "
                 f"({_design_target_hint(store, returned_design_ids)}); "
                 "open that project from File → CAD-linked designs before preparing it",
                 user_worded=True,

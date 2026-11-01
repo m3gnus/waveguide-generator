@@ -1,3 +1,100 @@
+// BEGIN GENERATED SOLVE CONTROL LABELS (parameterRegistry.ts)
+const solveControlLabels: Record<string, NamedControl> = {
+  "engine": {
+    "label": "Solver",
+    "place": "Solve options"
+  },
+  "accuracy": {
+    "label": "Accuracy",
+    "place": "Solve options"
+  },
+  "symmetry": {
+    "label": "Symmetry",
+    "place": "Solve options"
+  },
+  "solver_mode": {
+    "label": "Solver mode",
+    "place": "Solve options"
+  },
+  "frequency_range": {
+    "label": "Frequency range",
+    "place": "Solve options"
+  },
+  "num_frequencies": {
+    "label": "Frequency samples",
+    "place": "Solve options"
+  },
+  "frequencies_hz": {
+    "label": "Solver frequencies in Hz",
+    "place": "Solve options"
+  },
+  "frequency_spacing": {
+    "label": "Sweep spacing",
+    "place": "Solve options"
+  },
+  "adaptive_frequency_sampling": {
+    "label": "Adaptive frequency sampling (experimental)",
+    "place": "Solve options"
+  },
+  "mesh_ladder": {
+    "label": "Per-band mesh ladder",
+    "place": "Solve options"
+  },
+  "mesh_validation_mode": {
+    "label": "Mesh validation",
+    "place": "Solve options"
+  },
+  "ground_plane.enabled": {
+    "label": "Ground plane",
+    "place": "Solve options"
+  },
+  "ground_plane.axis": {
+    "label": "Reflecting surface",
+    "place": "Ground plane under Solve options"
+  },
+  "ground_plane.height_m": {
+    "label": "Height above surface",
+    "place": "Ground plane under Solve options"
+  },
+  "polar_config.angle_range": {
+    "label": "Angle range",
+    "place": "Directivity map under Solve options"
+  },
+  "polar_config.angle_step": {
+    "label": "Angular step",
+    "place": "Directivity map under Solve options"
+  },
+  "polar_config.distance": {
+    "label": "Measurement distance",
+    "place": "Directivity map under Solve options"
+  },
+  "polar_config.norm_angle": {
+    "label": "Normalization angle",
+    "place": "Directivity map under Solve options"
+  },
+  "polar_config.inclination": {
+    "label": "Diagonal plane angle",
+    "place": "Directivity map under Solve options"
+  },
+  "polar_config.enabled_axes": {
+    "label": "Directivity planes",
+    "place": "Directivity map under Solve options"
+  },
+  "polar_config.observation_origin": {
+    "label": "Measurement origin",
+    "place": "Directivity map under Solve options"
+  },
+  "polar_config.spherical_sampling": {
+    "label": "Keep 3D balloon result",
+    "place": "Directivity map under Solve options"
+  },
+  "polar_config.field_plane": {
+    "label": "Keep field plane data",
+    "place": "Directivity map under Solve options"
+  }
+};
+// END GENERATED SOLVE CONTROL LABELS
+
 export function formatApiDetail(value: unknown): string | null {
   if (typeof value === 'string') return value;
   if (Array.isArray(value)) {
@@ -37,31 +134,6 @@ export interface NamedControl {
   place?: string;
 }
 
-const SOLVE_CONTROLS: Record<string, NamedControl> = {
-  engine: { label: 'Solver', place: 'Solve options' },
-  accuracy: { label: 'Accuracy', place: 'Solve options' },
-  symmetry: { label: 'Symmetry', place: 'Solve options' },
-  solver_mode: { label: 'Solver mode', place: 'Solve options' },
-  frequency_range: { label: 'Frequency range', place: 'Solve options' },
-  num_frequencies: { label: 'Frequency samples', place: 'Solve options' },
-  frequencies_hz: { label: 'Solver frequencies in Hz', place: 'Solve options' },
-  frequency_spacing: { label: 'Sweep spacing', place: 'Solve options' },
-  adaptive_frequency_sampling: { label: 'Adaptive frequency sampling (experimental)', place: 'Solve options' },
-  mesh_ladder: { label: 'Per-band mesh ladder', place: 'Solve options' },
-  mesh_validation_mode: { label: 'Mesh validation', place: 'Solve options' },
-  'ground_plane.enabled': { label: 'Ground plane', place: 'Solve options' },
-  'ground_plane.axis': { label: 'Reflecting surface', place: 'Ground plane under Solve options' },
-  'ground_plane.height_m': { label: 'Height above surface', place: 'Ground plane under Solve options' },
-  'polar_config.angle_range': { label: 'Angle range', place: 'Directivity map under Solve options' },
-  'polar_config.angle_step': { label: 'Angular step', place: 'Directivity map under Solve options' },
-  'polar_config.distance': { label: 'Measurement distance', place: 'Directivity map under Solve options' },
-  'polar_config.norm_angle': { label: 'Normalization angle', place: 'Directivity map under Solve options' },
-  'polar_config.inclination': { label: 'Diagonal plane angle', place: 'Directivity map under Solve options' },
-  'polar_config.enabled_axes': { label: 'Directivity planes', place: 'Directivity map under Solve options' },
-  'polar_config.observation_origin': { label: 'Measurement origin', place: 'Directivity map under Solve options' },
-  'polar_config.spherical_sampling': { label: 'Keep 3D balloon result', place: 'Directivity map under Solve options' },
-  'polar_config.field_plane': { label: 'Keep field plane data', place: 'Directivity map under Solve options' },
-};
 
 let controlFor: (path: string) => NamedControl | null = () => null;
 /** Who can name a field. This owner stays free of runtime dependencies, so the parameter registry registers it. */
@@ -90,7 +162,7 @@ export function fieldSentence(location: readonly unknown[], message: string): st
   const own = validationSentence(message);
   if (own) return own;
   const path = fieldPath(location);
-  const control = location.includes('options') ? SOLVE_CONTROLS[path.replace(/\.\d+/g, '')] ?? controlFor(path) : controlFor(path);
+  const control = location.includes('options') ? (solveControlLabels as Record<string, NamedControl>)[path.replace(/\.\d+/g, '')] ?? controlFor(path) : controlFor(path);
   if (!control) return null;
   const where = control.place ? ` in ${control.place}` : '';
   const bound = FRAMEWORK_BOUND.exec(message);
@@ -100,7 +172,7 @@ export function fieldSentence(location: readonly unknown[], message: string): st
     : `WG cannot use the value of ${control.label}. Enter a new value${where}.`;
 }
 
-export const PLAIN_REQUEST_FAILURE = 'WG could not finish this request and has recorded the problem. Try again.';
+export const PLAIN_REQUEST_FAILURE = 'WG could not finish this request and has recorded the problem.';
 export const PLAIN_VALIDATION_FAILURE = 'WG could not read a value in this design and has recorded the problem. Undo your last change, or open the design again.';
 export const PLAIN_CAD_LINK_FAILURE = 'WG could not reach CAD Link and has recorded the problem. Refresh CAD Link to try again.';
 export const LOST_CONTACT = 'WG is not responding. Close WG, open it again, then try again.';
@@ -178,7 +250,11 @@ export function refusalText(detail: unknown, operation: string, fallback = PLAIN
   if (Array.isArray(detail) && detail.some(isValidationItem)) {
     const words = detail.flatMap(item => {
       if (!isValidationItem(item)) return [];
-      const { loc, msg } = item as { loc: unknown; msg: unknown };
+      const { loc, msg, ctx } = item as { loc: unknown; msg: unknown; ctx?: { error?: unknown } };
+      const typed = ctx?.error as { user_message?: unknown; next_step?: unknown } | undefined;
+      if (typeof typed?.user_message === 'string' && typeof typed.next_step === 'string') {
+        return [refusalText(ctx?.error, operation, fallback)];
+      }
       const sentence = fieldSentence(Array.isArray(loc) ? loc : [], String(msg));
       return sentence ? [sentence] : [];
     }).join(' ') || PLAIN_VALIDATION_FAILURE;

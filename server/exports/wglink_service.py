@@ -138,8 +138,12 @@ def _instance_slug(store: CadLinkStore, lineage_id: str, design_name: str) -> st
 
 
 def export_error(exc: Exception, design: DesignConfig | None = None) -> HTTPException:
-    from server.preview.errors import user_error_message
+    from server.preview.errors import PublicMessage, mesher_error_message, public_error_message, user_error_message
     detail = user_error_message(exc)
+    if public_error_message(exc) is not None and design is not None:
+        translated = mesher_error_message(lambda: design_to_mesher_config(design), str(exc))
+        if isinstance(translated, PublicMessage):
+            detail = str(translated)
     if isinstance(exc, (ValueError, TypeError)):
         return HTTPException(status_code=422, detail=detail)
     if isinstance(exc, (ImportError, RuntimeError, sqlite3.OperationalError)):

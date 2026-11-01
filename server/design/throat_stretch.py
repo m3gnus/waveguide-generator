@@ -6,28 +6,13 @@ also validates saved designs when the installed mesher predates the feature.
 from __future__ import annotations
 
 import math
-from numbers import Real
 from typing import Any, Mapping
 
 
 def coefficient(value: Any, key: str) -> float:
-    if not isinstance(value, Real) or isinstance(value, bool):
-        raise ValueError(
-            f"per-azimuth throat stretch is not supported yet; {key} must be a plain finite number"
-        )
-    try:
-        number = float(value)
-    except (ValueError, OverflowError) as exc:
-        raise ValueError(f"throat stretch {key} must be finite and >= 0 and <= 10") from exc
-    if math.isfinite(number) and number < 0:
-        raise ValueError(
-            f"throat stretch {key} must not be negative, got {value!r}: negative values "
-            "are not supported (ATH accepts them, but they fold the profile back "
-            "through the throat for all but very small magnitudes)"
-        )
-    if not math.isfinite(number) or not 0 <= number <= 10:
-        raise ValueError(f"throat stretch {key} must be finite and >= 0 and <= 10, got {value!r}")
-    return number
+    from hornlab_mesher.throat_stretch import stretch_coefficients
+    values = stretch_coefficients({key: value})
+    return values[0 if key == "s1" else 1]
 
 
 def text_number(value: str) -> Any:
@@ -56,27 +41,14 @@ GUIDE_COMPOSITION = {
 
 
 def validate_composition(params: Mapping[str, Any], formula: str, *, length_supplied: bool = False) -> None:
+    from hornlab_mesher.throat_stretch import (
+        COMPOSITION_PROFILE_KEYS, COMPOSITION_GUIDE_KEYS, validate_stretch_composition,
+    )
     if params.get("s1", 0) == 0 or params.get("s2", 0) == 0:
         return
-    for name in (*PROFILE_COMPOSITION.values(), *GUIDE_COMPOSITION.values()):
-        if name not in params:
-            continue
-        value = params[name]
-        if not isinstance(value, Real) or isinstance(value, bool):
-            raise ValueError(f"throat stretch does not support per-azimuth {name} yet; must be a plain finite number")
-        if not math.isfinite(value):
-            raise ValueError(f"throat stretch {name} must be a plain finite number")
-    prefix = any(params.get(k, 0) != 0 for k in ("Throat.Ext.Length", "Slot.Length"))
-    rotation = params.get("Rot", 0) != 0
-    guide = all(params.get(k, 0) != 0 for k in ("GCurve.Type", "GCurve.Width"))
-    if rotation and (formula == "R-OSSE" or prefix):
-        raise ValueError("throat stretch with Rot and a prefix (or R-OSSE Rot) is unverified and not supported")
-    if formula == "OSSE" and params.get("Slot.Length", 0) != 0:
-        raise ValueError("throat stretch with OSSE Slot.Length is unverified and not supported")
-    if guide and (prefix or rotation):
-        raise ValueError("throat stretch with GCurve and a prefix or Rot is unverified and not supported")
-    if formula == "R-OSSE" and length_supplied:
-        raise ValueError("throat stretch with R-OSSE top-level Length is unverified and not supported")
+    keys = {name: key for key, (name, _) in {**COMPOSITION_PROFILE_KEYS, **COMPOSITION_GUIDE_KEYS}.items()}
+    validate_stretch_composition({keys.get(key, key): value for key, value in params.items()},
+                                 formula, length_supplied=length_supplied)
 
 
 def mesher_supports_stretch() -> bool:

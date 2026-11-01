@@ -10,8 +10,7 @@ from server.design.schema import DesignConfig
 from server.exports import api as exports_api
 from server.mesh import builder
 from server.preview.core import PreviewProtocol, _Request, _compute_value_error_fields
-from server.preview.errors import mesher_error_message, user_error_message
-from hornlab_mesher.errors import UserRefusal
+from server.preview.errors import mesher_error_message
 from server.preview import wall_check
 from server.preview.translate import design_to_mesher_config
 
@@ -128,10 +127,10 @@ def test_real_preview_failure_maps_to_plain_message(caplog):
 @pytest.mark.parametrize("route", ["export_step", "export_stl", "export_profiles"])
 def test_export_failures_use_shared_message(route, diagnostic, expected, monkeypatch, caplog):
     async def fail(*args, **kwargs):
-        raise UserRefusal("Wall thickness", expected + ".", "Adjust the local profile or Wall thickness.", diagnostic=diagnostic)
+        raise ValueError(diagnostic)
 
     def fail_sync(*args, **kwargs):
-        raise UserRefusal("Wall thickness", expected + ".", "Adjust the local profile or Wall thickness.", diagnostic=diagnostic)
+        raise ValueError(diagnostic)
 
     monkeypatch.setattr(exports_api, "build_step_solid", fail)
     monkeypatch.setattr(exports_api, "build_stl", fail)
@@ -151,13 +150,12 @@ def test_solver_build_refusal_uses_shared_message(diagnostic, expected, monkeypa
     import hornlab_mesher.config_builder
 
     def fail(*args, **kwargs):
-        raise UserRefusal("Wall thickness", expected + ".", "Adjust the local profile or Wall thickness.", diagnostic=diagnostic)
+        raise ValueError(diagnostic)
 
     monkeypatch.setattr(hornlab_mesher.config_builder, "build_from_config", fail)
-    with pytest.raises(UserRefusal) as error:
+    with pytest.raises(RuntimeError, match=expected) as error:
         builder._build_sync(design().model_dump(mode="json"))
-    assert str(error.value) == diagnostic
-    assert user_error_message(error.value).startswith(expected)
+    assert str(error.value.__cause__) == diagnostic
     assert diagnostic in caplog.text
 
 

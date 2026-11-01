@@ -31,7 +31,7 @@ import errno
 
 from server.cadlink.intake.ingest import IngestRefusal
 from server.cadlink.wgreturn import SnapshotUnavailable, WgReturnChanged, WgReturnError, WgReturnUnsupported
-from server.mesh.imported import RoleResolutionError
+from server.mesh.imported import ImportedMeshError, RoleResolutionError
 
 #: A refusal that states what the user can change, in their terms.
 USER_WORDED = None
@@ -69,6 +69,8 @@ def return_failure_code(exc: BaseException, *, folder_selected: bool = True) -> 
 def preparation_failure_code(exc: BaseException) -> str | None:
     """The reason preparing a return failed, or :data:`USER_WORDED`."""
 
+    if isinstance(exc, ImportedMeshError) and exc.user_action:
+        return USER_WORDED
     if isinstance(exc, IngestRefusal):
         if exc.corruption:
             return "snapshot_invalid"

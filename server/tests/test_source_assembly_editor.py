@@ -131,7 +131,7 @@ def test_missing_pinned_capability_is_a_program_failure(client, monkeypatch, act
     monkeypatch.setattr(builtins, "__import__", old_mesher)
     result = client.post("/api/source-editor/assembly/" + action, json=document())
     assert result.status_code == 503
-    assert result.json()["detail"] == "WG could not finish this request and has recorded the problem. Try again."
+    assert result.json()["detail"] == "WG could not finish this request and has recorded the problem."
     assert "older installed mesher" in caplog.text
 
 
@@ -211,7 +211,7 @@ def test_horn_profile_uses_shared_errors_without_sampling(client, monkeypatch):
     monkeypatch.setattr(GeneralHornWall, "from_config", invalid)
     response = client.post("/api/source-editor/assembly/horn-profile", json=design)
     assert response.status_code == 422, response.text
-    assert response.json()["detail"] == "WG could not finish this request and has recorded the problem. Try again."
+    assert response.json()["detail"] == "WG could not finish this request and has recorded the problem."
 
     original = builtins.__import__
 

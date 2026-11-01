@@ -98,7 +98,27 @@ _PARENT_GONE_EXIT_CODE = 3
 
 
 class BemppWorkerError(RuntimeError):
-    """A native BEMPP worker failed or exited without a result."""
+    """Transport diagnostics and their presentation category, without retry policy."""
+
+    def __init__(self, message: str, *, failure_code: str = "solver_failed", public_message: str | None = None):
+        self.failure_code = failure_code
+        self.public_message = public_message
+        super().__init__(message)
+
+
+def _exception_payload(exc: BaseException) -> dict[str, Any]:
+    from server.preview.errors import public_error_message
+    return {"type": type(exc).__name__, "message": str(exc),
+            "traceback": traceback.format_exc(),
+            "failure_code": "solver_memory_exhausted" if isinstance(exc, MemoryError) else "solver_failed",
+            "public_message": public_error_message(exc)}
+
+
+def _worker_exception(value: dict[str, Any]) -> BemppWorkerError:
+    return BemppWorkerError(
+        f"Native BEMPP worker failed ({value['type']}): {value['message']}\n{value['traceback']}",
+        failure_code=value.get("failure_code", "solver_memory_exhausted" if value.get("type") == "MemoryError" else "solver_failed"),
+        public_message=value.get("public_message"))
 
 
 UNCONTAINED_MESSAGE = (
@@ -240,7 +260,8 @@ def _worker_death_error(
 
     exitcode = child_process.worker_exitcode(process, join_seconds=_DEATH_JOIN_SECONDS)
     excerpt = stderr.excerpt() if stderr is not None else ""
-    return BemppWorkerError(_worker_death_message(exitcode, excerpt))
+    return BemppWorkerError(_worker_death_message(exitcode, excerpt),
+                            failure_code="solver_memory_exhausted" if exitcode is not None and exitcode & 0xFFFFFFFF == 0xC0000017 else "solver_engine_stopped")
 
 
 def _warm_this_process() -> dict[str, Any]:
@@ -376,11 +397,7 @@ def _bempp_worker_main(connection: Connection) -> None:
                     (
                         "error",
                         job_id,
-                        {
-                            "type": type(exc).__name__,
-                            "message": str(exc),
-                            "traceback": traceback.format_exc(),
-                        },
+                        _exception_payload(exc),
                     )
                 )
             else:
@@ -741,10 +758,7 @@ class BemppProcessHost:
                 elif kind == "done":
                     return value
                 elif kind == "error":
-                    raise BemppWorkerError(
-                        f"Native BEMPP worker failed ({value['type']}): "
-                        f"{value['message']}\n{value['traceback']}"
-                    )
+                    raise _worker_exception(value)
                 else:
                     raise BemppWorkerError(
                         f"Native BEMPP worker returned unknown event {kind!r}"

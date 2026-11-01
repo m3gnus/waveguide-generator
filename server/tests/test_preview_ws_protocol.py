@@ -656,7 +656,7 @@ def test_runtime_error_carries_revision_and_internal_message() -> None:
             "code": "internal",
             "seq": 6,
             "designRevision": 27,
-            "message": "WG could not finish this request and has recorded the problem. Try again.",
+            "message": "WG could not finish this request and has recorded the problem.",
         }
 
     asyncio.run(scenario())

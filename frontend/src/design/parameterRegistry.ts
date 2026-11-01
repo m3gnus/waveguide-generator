@@ -4,7 +4,7 @@ import type { WorkspaceMode } from '../stores/workspaceMode';
 import { backendSupports, hostLimitation, selectionLimitation, type BackendFeature, type BackendIdentity } from './backendSupport';
 import type { EngineCapability } from '../jobs/actions';
 import { isAthV2 } from './athImportControls';
-import { nameFieldsWith } from '../api/httpError';
+import { nameFieldsWith, type NamedControl } from '../api/httpError';
 
 export type ParameterSection =
   | 'Model Type' | 'Profile' | 'Throat' | 'Mouth' | 'Cross-section' | 'Mounting'
@@ -633,7 +633,35 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = PARAMETER_SECTION_DEFIN
 // A validation message names the control the user sees, not the key on the wire.
 const NAMED_CONTROLS = new Map([...PARAMETER_REGISTRY].reverse().flatMap(({ id, path, label, section }) =>
   [id, path].filter((key): key is string => Boolean(key)).map(key => [key, { label, place: `the ${section} section` }] as const)));
-nameFieldsWith(path => NAMED_CONTROLS.get(path) ?? null);
+export const SOLVE_CONTROLS: Record<string, NamedControl> = {
+  engine: { label: 'Solver', place: 'Solve options' },
+  accuracy: { label: 'Accuracy', place: 'Solve options' },
+  symmetry: { label: 'Symmetry', place: 'Solve options' },
+  solver_mode: { label: 'Solver mode', place: 'Solve options' },
+  frequency_range: { label: 'Frequency range', place: 'Solve options' },
+  num_frequencies: { label: 'Frequency samples', place: 'Solve options' },
+  frequencies_hz: { label: 'Solver frequencies in Hz', place: 'Solve options' },
+  frequency_spacing: { label: 'Sweep spacing', place: 'Solve options' },
+  adaptive_frequency_sampling: { label: 'Adaptive frequency sampling (experimental)', place: 'Solve options' },
+  mesh_ladder: { label: 'Per-band mesh ladder', place: 'Solve options' },
+  mesh_validation_mode: { label: 'Mesh validation', place: 'Solve options' },
+  'ground_plane.enabled': { label: 'Ground plane', place: 'Solve options' },
+  'ground_plane.axis': { label: 'Reflecting surface', place: 'Ground plane under Solve options' },
+  'ground_plane.height_m': { label: 'Height above surface', place: 'Ground plane under Solve options' },
+  'polar_config.angle_range': { label: 'Angle range', place: 'Directivity map under Solve options' },
+  'polar_config.angle_step': { label: 'Angular step', place: 'Directivity map under Solve options' },
+  'polar_config.distance': { label: 'Measurement distance', place: 'Directivity map under Solve options' },
+  'polar_config.norm_angle': { label: 'Normalization angle', place: 'Directivity map under Solve options' },
+  'polar_config.inclination': { label: 'Diagonal plane angle', place: 'Directivity map under Solve options' },
+  'polar_config.enabled_axes': { label: 'Directivity planes', place: 'Directivity map under Solve options' },
+  'polar_config.observation_origin': { label: 'Measurement origin', place: 'Directivity map under Solve options' },
+  'polar_config.spherical_sampling': { label: 'Keep 3D balloon result', place: 'Directivity map under Solve options' },
+  'polar_config.field_plane': { label: 'Keep field plane data', place: 'Directivity map under Solve options' },
+};
+
+nameFieldsWith(path => path.startsWith('options.')
+  ? SOLVE_CONTROLS[path.slice(8)] ?? NAMED_CONTROLS.get(path.slice(8)) ?? null
+  : NAMED_CONTROLS.get(path) ?? null);
 
 export function parameterSectionIsVisible(
   definition: ParameterSectionDefinition,
@@ -752,4 +780,12 @@ export function throatStretchError(key: 's1' | 's2', value: number): string | un
   if (Number.isFinite(value) && value < 0) return `throat stretch ${key} must not be negative, got ${value}: negative values are not supported (ATH accepts them, but they fold the profile back through the throat for all but very small magnitudes)`;
   if (!Number.isFinite(value) || value > 10) return `throat stretch ${key} must be finite and >= 0 and <= 10, got ${value}`;
   return undefined;
+}
+
+/** Exported metadata for backend remedies, including the source editor's own preset names. */
+export function refusalControlCatalog(presetLabels: Record<string, string> = {}) {
+  return {
+    ...Object.fromEntries(PARAMETER_REGISTRY.map(({ id, path, legacyKey, label }) => [id, { path, legacyKey, label }])),
+    ...Object.fromEntries(Object.entries(presetLabels).map(([key, label]) => [`source.preset.${key}`, { legacyKey: key, label }])),
+  };
 }

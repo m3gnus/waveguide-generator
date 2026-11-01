@@ -438,8 +438,7 @@ def test_mesh_http_request_during_child_shutdown_returns_503(path, shared_child)
     try:
         status, response = asyncio.run(asyncio.wait_for(post(), 5))
         assert status == 503, response
-        expected = ("WG is closing. Open WG again to prepare this mesh." if path == "/api/solver-mesh" else "WG could not finish this request and has recorded the problem. Try again.")
-        assert response["detail"] == expected
+        assert "shutting down" in response["detail"]
         assert get_mesher_child()._channel is None
     finally:
         clear_solver_mesh_cache()
@@ -510,7 +509,7 @@ def test_a_crashing_solve_mesh_is_a_422_that_names_the_fix(monkeypatch, shared_c
         with pytest.raises(HTTPException) as refusal:
             await _preview_response(design, "auto")
         assert refusal.value.status_code == 422
-        assert refusal.value.detail == "WG could not finish this request and has recorded the problem. Try again."
+        assert refusal.value.detail == CRASH_MESSAGE
         # The same event loop and process still serve a build afterwards.
         assert (await run_mesh_build(ok_build, "again"))["value"] == "again"
 

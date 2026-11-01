@@ -1103,7 +1103,9 @@ def assembly_mesher_config(design: DesignConfig) -> tuple[dict[str, Any], dict[s
         resolved = resolve_woofer_placements(rows, mouth_bottom_mm=bottom, mouth_top_mm=top)
     except UserRefusal as exc:
         from server.preview.errors import user_error_message
-        raise AssemblyRefusal(user_error_message(exc)) from exc
+        raise AssemblyRefusal(f"Woofer placement: {user_error_message(exc)}") from exc
+    except ValueError as exc:
+        raise AssemblyRefusal(f"Woofer placement: {exc}. Remove and add the affected woofer again in Sources and baffle.") from exc
     if resolved:
         if config.get("mode") != "enclosure" or not isinstance(config.get("enclosure"), Mapping):
             raise AssemblyRefusal(

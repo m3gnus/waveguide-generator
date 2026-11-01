@@ -145,7 +145,7 @@ class InsertResponse(StrictModel):
 def _root(design: DesignConfig) -> FreeformConfig:
     if not isinstance(design.root, FreeformConfig):
         from hornlab_mesher.errors import UserRefusal
-        raise UserRefusal("Horn family", "Profile editing needs a FREEFORM design.", "Choose FREEFORM under Horn family.")
+        raise UserRefusal("Family", "Profile editing needs a FREEFORM design.", "Choose FREEFORM under Family.")
     return design.root
 
 

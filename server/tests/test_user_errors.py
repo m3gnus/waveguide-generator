@@ -29,7 +29,7 @@ def test_solver_failure_keeps_code_and_original(caplog):
     assert _failure_message(HostError("engine traceback")) == "The solver engine stopped before the solve finished. Press Solve to try again."
     assert _solver_failure_code(HostError("engine traceback")) == "solver_engine_stopped"
     assert "engine traceback" in caplog.text
-    assert _failure_message(RuntimeError("gmres diverged")) == "WG could not finish this solve and has recorded the problem. Press Solve to try again."
+    assert _failure_message(RuntimeError("gmres diverged")) == "WG could not finish this solve and has recorded the problem."
 
 
 def test_assembly_geometry_crash_is_not_a_refusal(monkeypatch):
@@ -100,16 +100,22 @@ def user_words(reason):
 
 
 @pytest.mark.parametrize("family", ["beat", "metal", "bempp"])
-def test_all_solver_families_keep_diagnostics_and_offer_retry(family, caplog):
+def test_solver_transport_and_availability_keep_their_own_contract(family, caplog):
     from server.jobs.runtime.core import _failure_message
     from server.solver.beat_runtime.client import HostError
     from server.solver.metal import MetalUnavailable
     from server.solver.bempp_process import BemppWorkerError
-    errors = {"beat": HostError, "metal": MetalUnavailable, "bempp": BemppWorkerError}
-    words = _failure_message(errors[family](f"{family} private diagnostic"))
-    assert "Press Solve" in words
-    assert "private diagnostic" not in words
-    assert f"{family} private diagnostic" in caplog.text
+    errors = {"beat": HostError("beat private diagnostic"),
+              "metal": MetalUnavailable("Metal cannot run on this host. Choose another Solver."),
+              "bempp": BemppWorkerError("bempp private diagnostic")}
+    words = _failure_message(errors[family])
+    if family == "metal":
+        assert words == str(errors[family])
+    elif family == "beat":
+        assert "Press Solve" in words and "private diagnostic" not in words
+    else:
+        assert "recorded" in words and "try again" not in words.lower()
+    assert str(errors[family]) in caplog.text
 
 
 def test_imported_size_refusal_names_the_cad_control():
@@ -232,7 +238,8 @@ def test_program_failure_reporting_does_not_import_the_mesher(monkeypatch, caplo
     assert "recorded" in user_error_message(ValueError("program fault"))
     assert "program fault" in caplog.text
     from server.jobs.runtime.core import _failure_message
-    assert "Press Solve" in _failure_message(RuntimeError("program solve fault"))
+    assert "recorded" in _failure_message(RuntimeError("program solve fault"))
+    assert "try again" not in _failure_message(RuntimeError("program solve fault")).lower()
 
 
 def test_missing_assembly_names_where_to_add_it():
