@@ -8,6 +8,7 @@ construction handoff; they must all run when that handoff is installed.
 from __future__ import annotations
 
 import copy
+import sys
 from pathlib import Path
 
 import hornlab_mesher.config_builder as native
@@ -178,3 +179,9 @@ def test_old_native_without_handoff_keeps_its_existing_config(monkeypatch):
     monkeypatch.delattr(native, "retain_ath_import_construction", raising=False)
     config = design_to_mesher_config(_design())
     assert retain_mesher_construction(config) == config
+
+
+@pytest.fixture(params=['ath-2026-09a-v2', 'ath-2026-09a-v3'], autouse=True)
+def import_version(request, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], 'CFG',
+                        f'; Waveguide Generator geometry-interpretation: {request.param}\n' + CFG)

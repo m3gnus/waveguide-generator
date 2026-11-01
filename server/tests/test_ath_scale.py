@@ -140,7 +140,7 @@ def test_ath_v2026_09a_scale_multiplies_finished_export():
                for base, scaled in zip(*values)) <= Decimal('8e-7')
 
 
-@pytest.mark.parametrize('version', [None, 'ath-2026-08c-v1', 'ath-2026-09a-v2'])
+@pytest.mark.parametrize('version', [None, 'ath-2026-08c-v1', 'ath-2026-09a-v2', 'ath-2026-09a-v3'])
 @pytest.mark.parametrize('scale,edge_mm', [(.7, 6), (2, 12)])
 def test_realized_edge_guard_keeps_v2_millimetres_and_legacy_scaling(monkeypatch, version, scale, edge_mm):
     # A fixed artifact isolates guard units from mesher sizing. Its longest
@@ -151,7 +151,7 @@ def test_realized_edge_guard_keeps_v2_millimetres_and_legacy_scaling(monkeypatch
         cell_data={'gmsh:physical': [np.array([2])]})
 
     def build(config, path, **kwargs):
-        expected_guard = 8 if version == 'ath-2026-09a-v2' else 8 * scale
+        expected_guard = 8 if version in ('ath-2026-09a-v2', 'ath-2026-09a-v3') else 8 * scale
         assert float(config['mesh']['maxEdge']) == expected_guard
         path.write_text('$MeshFormat\n')
         return SimpleNamespace(metadata={}, units='m')
@@ -162,7 +162,7 @@ def test_realized_edge_guard_keeps_v2_millimetres_and_legacy_scaling(monkeypatch
     design.root.text_import_version = version
     design.root.scale = Expr(value=scale)
     design.root.mesh.max_edge = Expr(value=8)
-    guard = 8 if version == 'ath-2026-09a-v2' else 8 * scale
+    guard = 8 if version in ('ath-2026-09a-v2', 'ath-2026-09a-v3') else 8 * scale
     if edge_mm > guard:
         with pytest.raises(RuntimeError, match='exceeded mesh.max_edge guard'):
             mesh_builder._build_sync(design.model_dump(mode='json'))

@@ -1,6 +1,7 @@
+import { usesCurrentAthImport } from './athImportVersion';
 import type { DesignDocument } from '../stores/design';
 
-export const isAthV2 = (design: DesignDocument): boolean => design.text_import_version === 'ath-2026-09a-v2';
+export const isCurrentAthImport = (design: DesignDocument): boolean => usesCurrentAthImport(design.text_import_version);
 
 export function athControlError(path: string | undefined, value: number): string | undefined {
   if (path === 'mesh.ath_roundover.radius' && (!Number.isFinite(value) || value <= 0)) return 'Enter a radius greater than 0.';
@@ -64,7 +65,7 @@ const ROSSE_DEPTH_TERMS = ['R', 'a', 'a0', 'r0', 'k', 'r', 'b', 'm', 'tmax'];
  * (Magnus, 2026-10-26), so say once that the shape differs from ATH's.
  */
 export function rosseMorphNote(design: DesignDocument): string | undefined {
-  if (!isAthV2(design) || design.formula !== 'R-OSSE') return undefined;
+  if (!isCurrentAthImport(design) || design.formula !== 'R-OSSE') return undefined;
   if (design.morph.target_shape === 3) return 'ATH builds no Superellipse morph on R-OSSE; Waveguide Generator uses its own R-OSSE morph.';
   if (design.morph.target_shape !== 1) return undefined;
   const varies = ROSSE_DEPTH_TERMS.some((path) => /\bp\b/.test(design._expressions?.[path]?.raw ?? ''));
@@ -77,7 +78,7 @@ export function rosseMorphNote(design: DesignDocument): string | undefined {
  */
 export function lipRadiusWallError(design: DesignDocument, candidate: { radius?: number; wall?: number } = {}): string | undefined {
   const lip = design.mesh.ath_roundover;
-  if (!isAthV2(design) || !lip || design.mesh.ath_rear_shape === 3) return undefined;
+  if (!isCurrentAthImport(design) || !lip || design.mesh.ath_rear_shape === 3) return undefined;
   if (design.simulation.sim_type === 'infinite-baffle' || design.enclosure.depth > 0) return undefined;
   const wall = candidate.wall ?? design.mesh.wall_thickness;
   const radius = candidate.radius ?? lip.radius;

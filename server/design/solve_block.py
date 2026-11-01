@@ -13,6 +13,8 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from server.design.text_import import uses_current_ath_import
+
 from server.jobs.models import SolveOptions
 
 from .schema import DesignCommon, DesignConfig
@@ -232,7 +234,7 @@ def solve_options_from_blocks(
         # Counterpart of athPolars.athPolarObservationOrigin in the frontend:
         # v2 imported polars use the throat unless the simulation is a baffle.
         root = design.root if isinstance(design, DesignConfig) else design
-        if root is not None and root.text_import_version == "ath-2026-09a-v2":
+        if root is not None and uses_current_ath_import(root.text_import_version):
             polar["observation_origin"] = (
                 "mouth" if root.simulation.sim_type == "infinite-baffle" else "throat"
             )

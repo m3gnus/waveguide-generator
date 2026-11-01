@@ -246,7 +246,7 @@ def test_import_scale_keeps_wall_and_resolutions_in_millimetres(explicit_wall: b
 
 @pytest.mark.parametrize('stamp,wall,origin', [
     ('native-v1', 7.5, 'mouth'), ('ath-2026-08c-v1', 7.5, 'mouth'),
-    ('ath-2026-09a-v2', 5, 'throat'), (None, 5, 'throat'),
+    ('ath-2026-09a-v2', 5, 'throat'), ('ath-2026-09a-v3', 5, 'throat'), (None, 5, 'throat'),
 ])
 def test_v2_defaults_compose_without_changing_native_or_saved_v1(stamp, wall, origin):
     text = _text('osse_scale')
@@ -260,7 +260,7 @@ def test_v2_defaults_compose_without_changing_native_or_saved_v1(stamp, wall, or
                    DesignConfig.model_validate_json(parsed.design.model_dump_json())):
         config = design_to_mesher_config(design)
         assert float(config['profile']['L']) * config.get('scale', 1) == 180
-        if stamp in (None, 'ath-2026-09a-v2'):
+        if stamp in (None, 'ath-2026-09a-v2', 'ath-2026-09a-v3'):
             assert float(config['profile']['L']) == 120
             assert config['scale'] == 1.5
         else:

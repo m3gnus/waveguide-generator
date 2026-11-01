@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from server.design.text_import import uses_current_ath_import
+
 
 def retain_mesher_construction(config: Mapping[str, Any]) -> dict[str, Any]:
     """Retain the authored ATH wall through the native construction owner.
@@ -13,7 +15,7 @@ def retain_mesher_construction(config: Mapping[str, Any]) -> dict[str, Any]:
     coupled native pin lands. Other geometry interpretations stay unchanged.
     """
 
-    if config.get("_textImportVersion") != "ath-2026-09a-v2":
+    if not uses_current_ath_import(config.get("_textImportVersion")):
         return dict(config)
     from hornlab_mesher import config_builder
 

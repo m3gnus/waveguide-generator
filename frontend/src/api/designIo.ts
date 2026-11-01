@@ -1,3 +1,4 @@
+import { usesCurrentAthImport, isAthImportVersion } from '../design/athImportVersion';
 import { httpErrorMessage, refusalText, ProgramFault } from './httpError';
 import { profileSamples, profileSections, type ProfileSample } from './profileSamples';
 import { deadlineFetch } from './deadlineFetch';
@@ -265,7 +266,7 @@ function merge<T>(base: T, incoming: unknown): T {
 
 /** Convert schema-wire Expr objects into the store's evaluated document shape. */
 export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocument {
-  if (wire.text_import_version != null && !['ath-2026-08c-v1', 'ath-2026-09a-v2'].includes(String(wire.text_import_version))) {
+  if (wire.text_import_version != null && !isAthImportVersion(wire.text_import_version)) {
     throw new Error('This design was saved by a newer version of WG. Update WG to open it.');
   }
   const expressions: Record<string, ExprNumber> = {};
@@ -290,7 +291,7 @@ export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocu
       if ((wire.mesh as Record<string, unknown> | undefined)?.wall_thickness == null) document.mesh.wall_thickness = 0;
     }
   }
-  if (document.text_import_version === 'ath-2026-09a-v2' && (wire.mesh as Record<string, unknown> | undefined)?.wall_thickness == null) absent.push('mesh.wall_thickness');
+  if (usesCurrentAthImport(document.text_import_version) && (wire.mesh as Record<string, unknown> | undefined)?.wall_thickness == null) absent.push('mesh.wall_thickness');
   normalizeNativeCrossSection(document);
   // R is optional on ICW: an absent rollback R enables r_aperture fallback.
   // Do not substitute the new-design default for a file that deliberately omits it.
@@ -707,7 +708,7 @@ function preserveSharedForFreeform(converted: DesignDocument, source: DesignDocu
   if (Object.keys(expressions).length) converted._expressions = expressions;
   let absent = (source._absent ?? []).filter(keep);
   const scale = source.scale;
-  if (source.text_import_version === 'ath-2026-09a-v2' && Number.isFinite(scale) && scale !== 1) {
+  if (usesCurrentAthImport(source.text_import_version) && Number.isFinite(scale) && scale !== 1) {
     // Native FREEFORM scales these dimensions; ATH imports keep them in mm.
     for (const key of ['wall_thickness', 'throat_resolution', 'mouth_resolution', 'rear_resolution'] as const) {
       const path = `mesh.${key}`;

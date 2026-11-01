@@ -4799,6 +4799,8 @@ export interface components {
             assembly?: components["schemas"]["AssemblyConfig"] | null;
             /** Ath Axial Sampling Rule */
             ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
+            /** Ath Axial Scale */
+            ath_axial_scale?: number | null;
             /** Ath Nac */
             ath_nac?: number | null;
             /** Ath Nac Present */
@@ -4841,7 +4843,7 @@ export interface components {
             slot_length?: components["schemas"]["Expr"] | null;
             source?: components["schemas"]["SourceConfig"];
             /** Text Import Version */
-            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2") | null;
+            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2" | "ath-2026-09a-v3") | null;
             throat_ext_angle?: components["schemas"]["Expr"] | null;
             throat_ext_length?: components["schemas"]["Expr"] | null;
         };
@@ -5018,6 +5020,8 @@ export interface components {
             assembly?: components["schemas"]["AssemblyConfig"] | null;
             /** Ath Axial Sampling Rule */
             ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
+            /** Ath Axial Scale */
+            ath_axial_scale?: number | null;
             /** Ath Nac */
             ath_nac?: number | null;
             /** Ath Nac Present */
@@ -5073,7 +5077,7 @@ export interface components {
             /** Termination */
             termination?: ("flat_baffle" | "rollback") | null;
             /** Text Import Version */
-            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2") | null;
+            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2" | "ath-2026-09a-v3") | null;
             theta1_deg?: components["schemas"]["Expr"] | null;
             theta_max_deg?: components["schemas"]["Expr"] | null;
             throat_ext_angle?: components["schemas"]["Expr"] | null;
@@ -5680,6 +5684,8 @@ export interface components {
             assembly?: components["schemas"]["AssemblyConfig"] | null;
             /** Ath Axial Sampling Rule */
             ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
+            /** Ath Axial Scale */
+            ath_axial_scale?: number | null;
             /** Ath Nac */
             ath_nac?: number | null;
             /** Ath Nac Present */
@@ -5719,7 +5725,7 @@ export interface components {
             slot_length?: components["schemas"]["Expr"] | null;
             source?: components["schemas"]["SourceConfig"];
             /** Text Import Version */
-            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2") | null;
+            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2" | "ath-2026-09a-v3") | null;
             throat_ext_angle?: components["schemas"]["Expr"] | null;
             throat_ext_length?: components["schemas"]["Expr"] | null;
         };
@@ -5776,6 +5782,8 @@ export interface components {
             /** Ath Rear Step */
             ath_rear_step?: number | null;
             ath_roundover?: components["schemas"]["AthRoundoverConfig"] | null;
+            /** Ath Throat Ext Segments */
+            ath_throat_ext_segments?: number | null;
             corner_segments?: components["schemas"]["Expr"] | null;
             length_segments?: components["schemas"]["Expr"] | null;
             max_edge?: components["schemas"]["Expr"] | null;
@@ -6064,6 +6072,8 @@ export interface components {
             assembly?: components["schemas"]["AssemblyConfig"] | null;
             /** Ath Axial Sampling Rule */
             ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
+            /** Ath Axial Scale */
+            ath_axial_scale?: number | null;
             /** Ath Nac */
             ath_nac?: number | null;
             /** Ath Nac Present */
@@ -6118,7 +6128,7 @@ export interface components {
             source?: components["schemas"]["SourceConfig"];
             terminating_arc?: components["schemas"]["TerminatingArc"] | null;
             /** Text Import Version */
-            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2") | null;
+            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2" | "ath-2026-09a-v3") | null;
             /** Throat Adapter */
             throat_adapter?: (components["schemas"]["AuthoredThroatAdapter"] | components["schemas"]["ControlThroatAdapter"]) | null;
             throat_ext_angle?: components["schemas"]["Expr"] | null;
@@ -6132,6 +6142,8 @@ export interface components {
             assembly?: components["schemas"]["AssemblyConfig"] | null;
             /** Ath Axial Sampling Rule */
             ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
+            /** Ath Axial Scale */
+            ath_axial_scale?: number | null;
             /** Ath Nac */
             ath_nac?: number | null;
             /** Ath Nac Present */
@@ -6177,7 +6189,7 @@ export interface components {
             slot_length?: components["schemas"]["Expr"] | null;
             source?: components["schemas"]["SourceConfig"];
             /** Text Import Version */
-            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2") | null;
+            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2" | "ath-2026-09a-v3") | null;
             throat_ext_angle?: components["schemas"]["Expr"] | null;
             throat_ext_length?: components["schemas"]["Expr"] | null;
             throat_profile?: components["schemas"]["Expr"] | null;
@@ -6541,6 +6553,8 @@ export interface components {
             assembly?: components["schemas"]["AssemblyConfig"] | null;
             /** Ath Axial Sampling Rule */
             ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
+            /** Ath Axial Scale */
+            ath_axial_scale?: number | null;
             /** Ath Nac */
             ath_nac?: number | null;
             /** Ath Nac Present */
@@ -6573,6 +6587,7 @@ export interface components {
             q?: components["schemas"]["Expr"] | null;
             r?: components["schemas"]["Expr"] | null;
             r0?: components["schemas"]["Expr"] | null;
+            rotation?: components["schemas"]["Expr"] | null;
             /** S1 */
             s1?: number | null;
             /** S2 */
@@ -6582,7 +6597,7 @@ export interface components {
             slot_length?: components["schemas"]["Expr"] | null;
             source?: components["schemas"]["SourceConfig"];
             /** Text Import Version */
-            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2") | null;
+            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2" | "ath-2026-09a-v3") | null;
             throat_ext_angle?: components["schemas"]["Expr"] | null;
             throat_ext_length?: components["schemas"]["Expr"] | null;
             tmax?: components["schemas"]["Expr"] | null;
@@ -7284,6 +7299,8 @@ export interface components {
             assembly?: components["schemas"]["AssemblyConfig"] | null;
             /** Ath Axial Sampling Rule */
             ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
+            /** Ath Axial Scale */
+            ath_axial_scale?: number | null;
             /** Ath Nac */
             ath_nac?: number | null;
             /** Ath Nac Present */
@@ -7316,7 +7333,7 @@ export interface components {
             source?: components["schemas"]["SourceConfig"];
             source_body?: components["schemas"]["SourceBody"];
             /** Text Import Version */
-            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2") | null;
+            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2" | "ath-2026-09a-v3") | null;
             throat_ext_angle?: components["schemas"]["Expr"] | null;
             throat_ext_length?: components["schemas"]["Expr"] | null;
         };

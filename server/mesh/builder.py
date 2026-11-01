@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from server.design.text_import import uses_current_ath_import
+
 from server.contracts.canonical import canonical_ascii_strict_json
 
 from server.design.schema import DesignConfig, Expr
@@ -1370,7 +1372,7 @@ def _build_design_artifact(
         _strict_scalar(root_scale, 1.0, "scale")
         if (
             (root_scale := design.root.scale)
-            and design.root.text_import_version != "ath-2026-09a-v2"
+            and not uses_current_ath_import(design.root.text_import_version)
         )
         else 1.0
     )

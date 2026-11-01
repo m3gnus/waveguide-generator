@@ -30,6 +30,11 @@ from pydantic import (
 )
 
 
+from server.design.text_import import (
+    ATH_AXIAL_SURFACE_MESSAGE, ATH_EXTENSION_SAMPLING_MESSAGE,
+    TextImportVersion, ath_extension_segments, uses_current_ath_import, uses_ath_v3_import,
+)
+
 _NUMBER = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 _CONFIG_BLOCK_START = re.compile(r"^[\w.:-]+\s*=\s*\{$")
 _LINE_BREAK = re.compile(r"[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
@@ -635,6 +640,7 @@ class MeshConfig(StrictModel):
     ath_roundover: AthRoundoverConfig | None = Field(default=None, exclude_if=lambda value: value is None)
     ath_rear_shape: Literal[1, 3] | None = Field(default=None, exclude_if=lambda value: value is None)
     ath_rear_front_offset: float | None = Field(default=None, ge=0, allow_inf_nan=False, exclude_if=lambda value: value is None)
+    ath_throat_ext_segments: int | None = Field(default=None, ge=1, le=4096, exclude_if=lambda value: value is None)
     ath_rear_step: float | None = Field(default=None, gt=0, allow_inf_nan=False, exclude_if=lambda value: value is None)
     angular_segments: Expr | None = None
     corner_segments: Expr | None = None
@@ -658,6 +664,13 @@ class MeshConfig(StrictModel):
     # controls remain authoritative; this rejects a mesh whose realized
     # longest triangle edge exceeds the configured ceiling.
     max_edge: Expr | None = None
+
+    @field_validator("ath_throat_ext_segments", mode="before")
+    @classmethod
+    def _ath_extension_count(cls, value: Any) -> int | None:
+        if value is None:
+            return None
+        return ath_extension_segments(value)
 
 
 class SourceConfig(StrictModel):
@@ -971,12 +984,13 @@ class DesignCommon(StrictModel):
     """Fields shared by all formula families and all v1 export sections."""
 
     formula: str
-    text_import_version: Literal["ath-2026-08c-v1", "ath-2026-09a-v2"] | None = Field(
+    text_import_version: TextImportVersion | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     ath_axial_sampling_rule: Literal["ath-v2025-06", "ath-v2025-12+"] | None = Field(default=None, exclude_if=lambda value: value is None)
     ath_nac_present: bool | None = Field(default=None, exclude_if=lambda value: value is None)
     ath_nac: int | None = Field(default=None, exclude_if=lambda value: value is None)
+    ath_axial_scale: float | None = Field(default=None, gt=0, allow_inf_nan=False, exclude_if=lambda value: value is None)
     scale: Expr | None = None
     throat_ext_angle: Expr | None = None
     throat_ext_length: Expr | None = None
@@ -1005,9 +1019,18 @@ class DesignCommon(StrictModel):
             if self.ath_nac_present is None:
                 object.__setattr__(self, "ath_nac_present", True)
         mesh = self.mesh
+        if self.ath_axial_scale is not None or mesh.ath_throat_ext_segments is not None or (self.formula == "R-OSSE" and getattr(self, "rotation", None) is not None):
+            if not uses_ath_v3_import(self.text_import_version):
+                raise ValueError("These ATH controls need a fresh import. Re-import a copy of the original file to use them.")
+            if self.formula not in {"OSSE", "R-OSSE"}:
+                raise ValueError("These ATH controls need an OSSE or R-OSSE horn. Remove them from this file.")
+            if mesh.ath_throat_ext_segments is not None and self.formula == "OSSE" and self.ath_axial_sampling_rule == "ath-v2025-06":
+                raise ValueError(ATH_EXTENSION_SAMPLING_MESSAGE)
+            if self.ath_axial_scale is not None and (mesh.ath_roundover is not None or mesh.ath_rear_shape == 3):
+                raise ValueError(ATH_AXIAL_SURFACE_MESSAGE)
         if mesh.ath_roundover is not None or mesh.ath_rear_shape == 3:
-            if self.text_import_version != "ath-2026-09a-v2":
-                raise ValueError("Mesh.Roundover / Mesh.RearShape = 3 require ath-2026-09a-v2")
+            if not uses_current_ath_import(self.text_import_version):
+                raise ValueError("The ATH mouth lip and Opus rear need a current ATH import. Re-import a copy of the original file to use them.")
         if mesh.ath_rear_shape != 3 and (mesh.ath_rear_front_offset is not None or mesh.ath_rear_step is not None):
             raise ValueError("Mesh.RearShape.FrontOffset/Step require Mesh.RearShape = 3")
         return self
@@ -1064,8 +1087,8 @@ class StretchDesign(DesignCommon):
                 value = getattr(guide, key)
                 if value is not None:
                     params[name] = plain(value)
-        # R-OSSE cannot store Rot or Length as profile fields. Imported extras
-        # still participate in refusal, even though inactive designs preserve them.
+        # Older R-OSSE imports kept Rot in extras; Length remains passthrough.
+        # Keep those saved values in composition validation too.
         for name in ("Rot", "Length", *GUIDE_COMPOSITION.values()):
             if name in self.extra_keys and name not in params:
                 params[name] = text_number(self.extra_keys[name])
@@ -1105,6 +1128,7 @@ class ROSSEConfig(StretchDesign):
     r: Expr | None = None
     r0: Expr | None = None
     tmax: Expr | None = None
+    rotation: Expr | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 ICW_ADVANCED_KEYS = (

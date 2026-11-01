@@ -1,3 +1,4 @@
+import { usesCurrentAthImport } from './athImportVersion';
 import { Notice } from '../shell/Notice';
 import { importedDriverLabel, useImportedSimulationSetup } from '../stores/importedSimulationSetup';
 import { sourceRoleLabel } from '../model/cadLabels';
@@ -1277,7 +1278,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
     {field.kind !== 'number' && previewErrorForParameter(field, currentPreviewFields) && <div className="field-error" role="alert">{previewErrorForParameter(field, currentPreviewFields)}</div>}
   </div>;
 
-  const importedAthValues = design.text_import_version === 'ath-2026-09a-v2' ? <>
+  const importedAthValues = usesCurrentAthImport(design.text_import_version) ? <>
         {design.ath_nac_present && <div className="passthrough-row"><span>NAC</span><b>{design.ath_nac ?? 'Present'} · preserves angular samples</b></div>}
   </> : null;
 
@@ -1294,12 +1295,12 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
       : definition.title === 'Frequency sweep' ? <><FrequencySweepControls idPrefix="design-solve" context="design" /><AdaptiveFrequencyControls /></>
       : null : null;
     const slots = definition.fieldOrder ?? fields.map((field) => field.id);
-    if (fields.length === 0 && !hasCustomMode && !custom && !(definition.title === 'Imported ATH values' && design.text_import_version === 'ath-2026-09a-v2')) return null;
+    if (fields.length === 0 && !hasCustomMode && !custom && !(definition.title === 'Imported ATH values' && usesCurrentAthImport(design.text_import_version))) return null;
     return <Section
       key={definition.title}
       title={definition.title}
       description={definition.descriptionWhen?.(design) ?? definition.description}
-      forceOpen={searching || (definition.title === 'Imported ATH values' && design.text_import_version === 'ath-2026-09a-v2')}
+      forceOpen={searching || (definition.title === 'Imported ATH values' && usesCurrentAthImport(design.text_import_version))}
       revealId={workspaceMode === 'parametric' ? `parametric.section.${definition.title}` : undefined}
     >
       {workspaceMode === 'parametric' && definition.title === 'Mounting' && <FrontWorkspaceLauncher />}

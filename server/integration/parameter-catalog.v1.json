@@ -66,9 +66,19 @@
       ],
       "description": "Append an ATH mouth lip to the imported profile. Off removes Mesh.Roundover. Requires the supported ATH import combinations; preview reports incompatible shapes.",
       "visible_when": {
-        "path": "text_import_version",
-        "operator": "equals",
-        "value": "ath-2026-09a-v2"
+        "operator": "any",
+        "conditions": [
+          {
+            "path": "text_import_version",
+            "operator": "equals",
+            "value": "ath-2026-09a-v2"
+          },
+          {
+            "path": "text_import_version",
+            "operator": "equals",
+            "value": "ath-2026-09a-v3"
+          }
+        ]
       }
     },
     {
@@ -100,9 +110,19 @@
         "operator": "all",
         "conditions": [
           {
-            "path": "text_import_version",
-            "operator": "equals",
-            "value": "ath-2026-09a-v2"
+            "operator": "any",
+            "conditions": [
+              {
+                "path": "text_import_version",
+                "operator": "equals",
+                "value": "ath-2026-09a-v2"
+              },
+              {
+                "path": "text_import_version",
+                "operator": "equals",
+                "value": "ath-2026-09a-v3"
+              }
+            ]
           },
           {
             "path": "mesh.ath_roundover.radius",
@@ -141,9 +161,19 @@
         "operator": "all",
         "conditions": [
           {
-            "path": "text_import_version",
-            "operator": "equals",
-            "value": "ath-2026-09a-v2"
+            "operator": "any",
+            "conditions": [
+              {
+                "path": "text_import_version",
+                "operator": "equals",
+                "value": "ath-2026-09a-v2"
+              },
+              {
+                "path": "text_import_version",
+                "operator": "equals",
+                "value": "ath-2026-09a-v3"
+              }
+            ]
           },
           {
             "path": "mesh.ath_roundover.radius",
@@ -204,9 +234,19 @@
       ],
       "description": "Full rear follows the offset profile. Opus uses an independent rear loft and requires a free-standing wall.",
       "visible_when": {
-        "path": "text_import_version",
-        "operator": "equals",
-        "value": "ath-2026-09a-v2"
+        "operator": "any",
+        "conditions": [
+          {
+            "path": "text_import_version",
+            "operator": "equals",
+            "value": "ath-2026-09a-v2"
+          },
+          {
+            "path": "text_import_version",
+            "operator": "equals",
+            "value": "ath-2026-09a-v3"
+          }
+        ]
       }
     },
     {
@@ -238,9 +278,19 @@
         "operator": "all",
         "conditions": [
           {
-            "path": "text_import_version",
-            "operator": "equals",
-            "value": "ath-2026-09a-v2"
+            "operator": "any",
+            "conditions": [
+              {
+                "path": "text_import_version",
+                "operator": "equals",
+                "value": "ath-2026-09a-v2"
+              },
+              {
+                "path": "text_import_version",
+                "operator": "equals",
+                "value": "ath-2026-09a-v3"
+              }
+            ]
           },
           {
             "path": "mesh.ath_rear_shape",
@@ -279,9 +329,19 @@
         "operator": "all",
         "conditions": [
           {
-            "path": "text_import_version",
-            "operator": "equals",
-            "value": "ath-2026-09a-v2"
+            "operator": "any",
+            "conditions": [
+              {
+                "path": "text_import_version",
+                "operator": "equals",
+                "value": "ath-2026-09a-v2"
+              },
+              {
+                "path": "text_import_version",
+                "operator": "equals",
+                "value": "ath-2026-09a-v3"
+              }
+            ]
           },
           {
             "path": "mesh.ath_rear_shape",

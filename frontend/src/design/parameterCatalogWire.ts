@@ -1,3 +1,4 @@
+import { CURRENT_ATH_IMPORT_VERSIONS } from './athImportVersion';
 import {
   COMPOSITE_SLOT_DISABLED_REASON,
   LEGACY_PARAMETER_REGISTRY,
@@ -49,23 +50,27 @@ const CROSS_SECTION_CONDITIONS: FieldConditions = {
   disabled_reason: 'Active guiding curves require cross-section exponent 2 and aspect ratio 1.',
 };
 
+const CURRENT_ATH_IMPORT: Condition = { operator: 'any', conditions:
+  CURRENT_ATH_IMPORT_VERSIONS.map((value) => ({ path: 'text_import_version', operator: 'equals', value })),
+};
+
 const FIELD_CONDITIONS: Record<string, FieldConditions> = {
-  'mesh.ath_roundover': { visible_when: { path: 'text_import_version', operator: 'equals', value: 'ath-2026-09a-v2' } },
+  'mesh.ath_roundover': { visible_when: CURRENT_ATH_IMPORT },
   'mesh.ath_roundover.radius': { visible_when: { operator: 'all', conditions: [
-    { path: 'text_import_version', operator: 'equals', value: 'ath-2026-09a-v2' },
+    CURRENT_ATH_IMPORT,
     { path: 'mesh.ath_roundover.radius', operator: 'greater_than', value: 0 },
   ] } },
   'mesh.ath_roundover.segments': { visible_when: { operator: 'all', conditions: [
-    { path: 'text_import_version', operator: 'equals', value: 'ath-2026-09a-v2' },
+    CURRENT_ATH_IMPORT,
     { path: 'mesh.ath_roundover.radius', operator: 'greater_than', value: 0 },
   ] } },
-  'mesh.ath_rear_shape': { visible_when: { path: 'text_import_version', operator: 'equals', value: 'ath-2026-09a-v2' } },
+  'mesh.ath_rear_shape': { visible_when: CURRENT_ATH_IMPORT },
   'mesh.ath_rear_front_offset': { visible_when: { operator: 'all', conditions: [
-    { path: 'text_import_version', operator: 'equals', value: 'ath-2026-09a-v2' },
+    CURRENT_ATH_IMPORT,
     { path: 'mesh.ath_rear_shape', operator: 'equals', value: 3 },
   ] } },
   'mesh.ath_rear_step': { visible_when: { operator: 'all', conditions: [
-    { path: 'text_import_version', operator: 'equals', value: 'ath-2026-09a-v2' },
+    CURRENT_ATH_IMPORT,
     { path: 'mesh.ath_rear_shape', operator: 'equals', value: 3 },
   ] } },
   'cross_section.exponent': CROSS_SECTION_CONDITIONS,

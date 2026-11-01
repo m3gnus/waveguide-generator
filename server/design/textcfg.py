@@ -23,7 +23,11 @@ from server.contracts.canonical import canonical_ascii_json
 from .uid import validate_design_uid
 from .ath_import_defaults import apply_ath_import_defaults
 from .migrate import MigrationApplication, apply_migrations
-from .text_import import TEXT_IMPORT_VERSION, TEXT_IMPORT_VERSIONS, NATIVE_GEOMETRY_VERSION, GEOMETRY_STAMP_LABEL
+from .text_import import (
+    ATH_AXIAL_SURFACE_MESSAGE, ATH_EXTENSION_SAMPLING_MESSAGE,
+    GEOMETRY_STAMP_LABEL, NATIVE_GEOMETRY_VERSION, TEXT_IMPORT_VERSION, TEXT_IMPORT_VERSIONS,
+    ath_extension_segments, uses_current_ath_import, uses_ath_v3_import,
+)
 from .schema import (
     ConfigBlock,
     DesignConfig,
@@ -977,6 +981,7 @@ def _refuse_unsupported_ath_items(
     *,
     formula: str,
     block_name: str | None,
+    v3: bool = False,
 ) -> None:
     """Refuse ATH items that change ATH's model and that WG would drop.
 
@@ -1020,6 +1025,8 @@ def _refuse_unsupported_ath_items(
             for key, value in blocks[section].items.items():
                 dotted.setdefault(f"{section}.{key}", value)
     for key, value in dotted.items():
+        if v3 and key in {"Scale.Z", "Mesh.ThroatExtSegments"}:
+            continue
         if inactive_rollback(key):
             continue
         reason = _ath_unsupported_reason(key)
@@ -1198,6 +1205,7 @@ def _build_payload(
     ignored_profile: list[IgnoredSetting],
     refuse_unsupported: bool = False,
     v2: bool = False,
+    v3: bool = False,
 ) -> dict[str, Any]:
     from .throat_stretch import coefficient, text_number, validate_composition
 
@@ -1255,13 +1263,13 @@ def _build_payload(
     if rollback and not _ath_rollback_disabled(flat, fresh=refuse_unsupported):
         raise TextConfigError(f"Rollback is not supported by this mesher (saw {', '.join(rollback)})")
     if dialect == "ath" and refuse_unsupported:
-        _refuse_unsupported_ath_items(flat, blocks, formula=formula, block_name=block_name)
+        _refuse_unsupported_ath_items(flat, blocks, formula=formula, block_name=block_name, v3=v3)
     composition = {**stretch}
     for key in ("Throat.Ext.Length", "Throat.Ext.Angle", "Slot.Length"):
         if key in flat:
             composition[key] = text_number(flat[key])
-    # V1/native retain block Rot precedence. V2 ignores it. R-OSSE top-level
-    # Rot participates in refusal even though it is not a profile field.
+    # V1/native retain block Rot precedence. Current imports ignore it.
+    # Top-level rotation also participates in stretch composition validation.
     if "Rot" in selected and formula == "OSSE" and not v2:
         composition["Rot"] = text_number(selected["Rot"])
     elif "Rot" in flat:
@@ -1341,10 +1349,12 @@ def _build_payload(
                 # Active ATH profiles consume only the mesher's profile keys.
                 # Global Scale is top-level; R-OSSE Rot/Length are ignored in
                 # the block, even though their top-level copies can refuse.
-                if dialect == "ath" and active_stretch and (
-                    key == "Scale" or (formula == "R-OSSE" and key not in {
-                        *active_aliases, "s1", "s2", "Throat.Diameter", "Throat.Profile",
-                    })
+                if dialect == "ath" and (
+                    (active_stretch and (
+                        key == "Scale" or (formula == "R-OSSE" and key not in {
+                            *active_aliases, "s1", "s2", "Throat.Diameter", "Throat.Profile",
+                        })
+                    )) or (v3 and formula == "R-OSSE" and key == "Rot")
                 ):
                     note = f"ATH ignores {key} inside the {block_name} profile block. "
                     note += ("Global Scale is read only at top level." if key == "Scale" else
@@ -1507,6 +1517,23 @@ def _build_payload(
             mesh.setdefault("ath_rear_front_offset", 40)
             mesh.setdefault("ath_rear_step", 25)
 
+    if v3:
+        if "Scale.Z" in flat:
+            value = _ath_number(flat["Scale.Z"])
+            if _references_azimuth(flat["Scale.Z"]) or value is None or value <= 0:
+                raise TextConfigError("Axial scale must be a positive finite constant. Set Scale.Z to a number greater than 0 without p.")
+            payload["ath_axial_scale"] = value
+            consumed_keys.add("Scale.Z")
+        if "Mesh.ThroatExtSegments" in flat:
+            try:
+                payload.setdefault("mesh", {})["ath_throat_ext_segments"] = ath_extension_segments(flat["Mesh.ThroatExtSegments"])
+            except ValueError as exc:
+                raise TextConfigError(str(exc)) from exc
+            consumed_keys.add("Mesh.ThroatExtSegments")
+        if formula == "R-OSSE" and "Rot" in flat:
+            payload["rotation"] = flat["Rot"]
+            consumed_keys.add("Rot")
+
     for key, target in (("_athAxialSamplingRule", "ath_axial_sampling_rule"), ("_athNacPresent", "ath_nac_present")):
         if key in flat:
             payload[target] = flat[key]
@@ -1623,7 +1650,7 @@ def _mesher_validation_text(
                 continue
             if rollback_off and (name == "Rollback" or name.startswith("Rollback.")):
                 continue
-            if _ath_is_noop(name, value, fresh=False):
+            if _ath_is_noop(name, value, fresh=False) and not (name == "Scale.Z" and uses_ath_v3_import(payload.get("text_import_version"))):
                 continue
             if name in {"Mesh.RearShape", "Throat.Profile", "OSSE.Throat.Profile"}:
                 number = _ath_number(value)
@@ -1775,7 +1802,8 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
     payload = _build_payload(
         flat, blocks, dialect=geometry_dialect, ignored_profile=ignored_profile,
         refuse_unsupported=dialect == "ath" and version is None,
-        v2=import_version == TEXT_IMPORT_VERSION,
+        v2=uses_current_ath_import(import_version),
+        v3=uses_ath_v3_import(import_version),
     )
     geometry_controls = blocks.get("WG.Geometry")
     if geometry_controls is not None:
@@ -1808,7 +1836,7 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         payload["text_import_version"] = import_version
         if fresh_ath:
             ignored_profile.extend(IgnoredSetting(*entry) for entry in apply_ath_import_defaults(payload))
-    if payload.get("text_import_version") == TEXT_IMPORT_VERSION:
+    if uses_current_ath_import(payload.get("text_import_version")):
         from hornlab_mesher.text_import import ath_axial_sampling_rule
         try:
             rule, _echo = ath_axial_sampling_rule(text)
@@ -1834,7 +1862,14 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
             mesher_config = parse_text_config(validation_text)
             build_geometry_params(mesher_config)
         except (ConfigError, ValueError) as exc:
-            raise TextConfigError(str(exc)) from exc
+            message = str(exc)
+            if message.startswith("Mesh.ThroatExtSegments requires the current"):
+                message = ATH_EXTENSION_SAMPLING_MESSAGE
+            elif message.startswith("Scale.Z with Mesh.Roundover"):
+                message = ATH_AXIAL_SURFACE_MESSAGE
+            elif uses_ath_v3_import(import_version) and message.startswith("Rot must be finite"):
+                message = "R-OSSE rotation must be a finite angle. Set Rot to a finite number or a valid expression."
+            raise TextConfigError(message) from exc
         if fresh_ath:
             _apply_ath_lf_sources(payload, _ath_enclosure_items(flat, blocks),
                                   flat.get("Mesh.Quadrants"), mesher_config, ignored_profile)
@@ -2118,6 +2153,10 @@ def _serialize_canonical(
     if report is not None:
         _emit_block(lines, _REPORT_BLOCK, report)
     _line(lines, "Scale", config.scale)
+    if config.ath_axial_scale is not None:
+        _line(lines, "Scale.Z", str(config.ath_axial_scale))
+    if isinstance(config, ROSSEConfig):
+        _line(lines, "Rot", config.rotation)
     _line(lines, "_athAxialSamplingRule", config.ath_axial_sampling_rule)
     if config.ath_nac_present is not None:
         _line(lines, "_athNacPresent", "1" if config.ath_nac_present else "0")
@@ -2233,9 +2272,11 @@ def _serialize_canonical(
         ("Morph.AllowShrinkage", morph.allow_shrinkage),
     ):
         _line(lines, key, value)
-    _serialize_enclosure(lines, config.enclosure, v2=config.text_import_version == TEXT_IMPORT_VERSION)
+    _serialize_enclosure(lines, config.enclosure, v2=uses_current_ath_import(config.text_import_version))
 
     mesh = config.mesh
+    if mesh.ath_throat_ext_segments is not None:
+        _line(lines, "Mesh.ThroatExtSegments", str(mesh.ath_throat_ext_segments))
     if mesh.ath_roundover is not None:
         _block(lines, "Mesh.Roundover", [("Radius", str(mesh.ath_roundover.radius)), ("Segments", str(mesh.ath_roundover.segments))])
     for key, value in (("Mesh.RearShape", mesh.ath_rear_shape),
