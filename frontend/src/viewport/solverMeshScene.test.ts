@@ -24,6 +24,7 @@ describe('solverMeshScene', () => {
       element_shape: { p1_radius_ratio: 0.72 },
     } });
     expect(scene.tessellation?.surface_deviation?.peak_mm).toBe(0.34);
+    expect(scene.tessellation?.surface_deviation_mm).toBeNull();
     expect(scene.tessellation?.element_shape?.p1_radius_ratio).toBe(0.72);
   });
   it('retains the native upper-bound distinction', () => {

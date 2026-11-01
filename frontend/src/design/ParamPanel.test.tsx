@@ -730,7 +730,7 @@ describe('ParamPanel inventory UX', () => {
     act(() => useDesignStore.getState().updateValue('enclosure.depth', 90));
     expect(resolution()).toBeNull();
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    expect(resolution()?.closest('[data-section]')?.getAttribute('data-section')).toBe('Mesh');
+    expect(resolution()?.closest('[data-section]')?.getAttribute('data-section')).toBe('Element size');
     act(() => root.render(withQueryClient(<ParamPanel tab="geometry" />)));
     const input = host.querySelector<HTMLInputElement>('[data-parameter-id="enclosure.depth_margin_mm"] input')!;
     expect(Number(input.value)).toBe(1);
@@ -1158,7 +1158,7 @@ describe('ParamPanel inventory UX', () => {
     expect(titles()).toEqual(['Model Type', 'Profile', 'Throat', 'Mouth', 'Cross-section', 'Mounting']);
     expect(host.querySelector('[data-section="Realized dimensions"]')).toBeNull();
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    expect(titles()).toEqual(['Frequency sweep', 'Directivity map', 'Source excitation', 'Solver', 'Mesh', 'Export']);
+    expect(titles()).toEqual(['Frequency sweep', 'Directivity map', 'Source excitation', 'Solver', 'Mesh', 'Element size', 'Surface accuracy', 'Surface sampling', 'Limits and checks', 'Export']);
     expect(host.querySelector('#solve-engine')).not.toBeNull();
     expect(host.querySelector('#solve-symmetry')).not.toBeNull();
   });
@@ -1207,7 +1207,7 @@ describe('ParamPanel inventory UX', () => {
     const solveMesh = sections.find((section) => section.dataset.section === 'Mesh')!;
     const passthrough = sections.find((section) => section.dataset.section === 'Export')!;
     expect(sections.map((section) => section.dataset.section)).toEqual([
-      'Frequency sweep', 'Directivity map', 'Source excitation', 'Solver', 'Mesh', 'Export',
+      'Frequency sweep', 'Directivity map', 'Source excitation', 'Solver', 'Mesh', 'Element size', 'Surface accuracy', 'Surface sampling', 'Limits and checks', 'Export',
     ]);
     expect(passthrough.classList.contains('closed')).toBe(true);
     act(() => passthrough.querySelector<HTMLButtonElement>('.section-head')!.click());
@@ -2630,7 +2630,7 @@ describe('ParamPanel inventory UX', () => {
     for (const [id, section] of [
       ['design-solve-frequency-mode', 'Frequency sweep'], ['design-solve-frequency-spacing', 'Frequency sweep'],
       ['adaptive-frequency-sampling', 'Frequency sweep'], ['solve-accuracy', 'Solver'], ['solve-engine', 'Solver'],
-      ['solve-ground-plane', 'Solver'], ['solve-verbose', 'Solver'], ['mesh-validation-mode', 'Mesh'],
+      ['solve-ground-plane', 'Solver'], ['solve-verbose', 'Solver'], ['mesh-validation-mode', 'Limits and checks'],
     ]) expect(host.querySelector(`#${id}`)?.closest('[data-section]')?.getAttribute('data-section'), id).toBe(section);
     for (const id of ['source.velocity_convention', 'source.velocity'])
       expect(host.querySelector(`[data-parameter-id="${id}"]`)?.closest('[data-section]')?.getAttribute('data-section')).toBe('Source excitation');
@@ -2638,12 +2638,24 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('label[for="polar-angle-end"]')?.textContent).toBe('End angle');
     const mesh = host.querySelector('[data-section="Mesh"]')!;
     expect([...mesh.querySelectorAll('[data-parameter-id]')].map((entry) => entry.getAttribute('data-parameter-id'))).toEqual([
+      'mesh.throat_resolution', 'mesh.mouth_resolution', 'mesh.rear_resolution', 'enclosure.front_resolution', 'enclosure.back_resolution',
+      'mesh.surface_deviation_mm',
       'mesh.angular_segments', 'mesh.length_segments', 'mesh.corner_segments', 'mesh.sampling_mode',
-      'mesh.throat_resolution', 'mesh.mouth_resolution', 'mesh.surface_deviation_mm', 'mesh.rear_resolution',
-      'enclosure.front_resolution', 'enclosure.back_resolution', 'schema-gap.max_edge', 'mesh.max_triangles',
+      'schema-gap.max_edge', 'mesh.max_triangles',
     ]);
+    expect(host.querySelectorAll('#mesh-validation-mode')).toHaveLength(1);
     act(() => useDesignStore.getState().setFamily('FREEFORM'));
-    expect(host.querySelector('[data-parameter-id="freeform.inflectionPolicy"]')?.closest('[data-section]')?.getAttribute('data-section')).toBe('Mesh');
+    expect(host.querySelector('[data-parameter-id="freeform.inflectionPolicy"]')?.closest('[data-section]')?.getAttribute('data-section')).toBe('Limits and checks');
+  });
+
+  it('reveals a mesh control inside a group someone collapsed', async () => {
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    const head = () => host.querySelector<HTMLButtonElement>('[data-section="Surface accuracy"] .section-head')!;
+    act(() => head().click());
+    expect(host.querySelector('[data-parameter-id="mesh.surface_deviation_mm"]')).toBeNull();
+    requestParameterReveal({ id: 'mesh.surface_deviation_mm', tab: 'simulation', query: 'Max surface deviation' });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    expect(document.activeElement).toBe(host.querySelector('[data-parameter-id="mesh.surface_deviation_mm"] input'));
   });
 
   it('searches and reveals moved source cap fields and sweep controls under their new sections', async () => {

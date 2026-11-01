@@ -9,6 +9,8 @@ let nextArtifactToken = 1;
 
 export interface ImportedMeshScene {
   tessellation?: {
+    /** The target this mesh was built to: null is Off, undefined is not recorded. */
+    surface_deviation_mm?: number | null;
     surface_deviation?: { peak_is_upper_bound?: boolean; peak_mm?: number | null; triangle_count?: number; sampled_triangle_count?: number } | null;
     element_shape?: { p1_radius_ratio?: number | null; min_radius_ratio?: number | null } | null;
   };

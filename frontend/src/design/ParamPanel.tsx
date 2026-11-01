@@ -1311,14 +1311,13 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
           section remains hidden wholesale in CAD mode. */}
       {slots.map((id) => {
         if (id === 'control.solveDomain') return showSolveDomain ? <SolveDomainControl key={id} design={design} /> : null;
-        if (id === 'control.meshValidation') return showCustom ? <MeshValidationControl key={id} /> : null;
         const field = fields.find((candidate) => candidate.id === id);
         return field && !parameterGroup(field, design) && (workspaceMode === 'cad' || id !== 'simulation.sim_type') ? <Fragment key={id}>{renderField(field)}</Fragment> : null;
       })}
       {definition.groups?.filter((group) => !group.visibleWhen || group.visibleWhen(design)).map((group) => {
         const groupFields = fields.filter((field) => parameterGroup(field, design) === group.title);
         const groupSlots = group.fieldOrder ?? groupFields.map((field) => field.id);
-        const hasCustomSlot = (showCustom || (workspaceMode === 'cad' && !searching)) && groupSlots.some((id) => id.startsWith('control.freeform'));
+        const hasCustomSlot = (showCustom || (workspaceMode === 'cad' && !searching)) && groupSlots.some((id) => id.startsWith('control.freeform') || id === 'control.meshValidation');
         if (groupFields.length === 0 && !hasCustomSlot) return null;
         // Search and errors reveal grouped inputs through the same mechanism
         // used for the optional ICW controls.
@@ -1326,6 +1325,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
           || validationMessage(field, design) || storedValueError(field, design)));
         return <Section key={group.title} title={group.title} summary={group.summary?.(design)} description={group.description} forceOpen={searching || hasError}>
           {groupSlots.map((id) => {
+            if (id === 'control.meshValidation') return hasCustomSlot ? <MeshValidationControl key={id} /> : null;
             if (id === 'control.freeformImport') return hasCustomSlot ? <CustomProfilePaste key={id} /> : null;
             if (id === 'control.freeformInspection') return hasCustomSlot ? <FreeformProfileInspection key={id} /> : null;
             const field = groupFields.find((candidate) => candidate.id === id);

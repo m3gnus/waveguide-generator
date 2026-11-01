@@ -18,6 +18,7 @@ export function solverMeshScene(name: string, result: SolverMeshResult): Importe
     },
   );
   scene.tessellation = {
+    surface_deviation_mm: result.stats.surface_deviation_mm ?? null,
     surface_deviation: result.stats.surface_deviation,
     element_shape: result.stats.element_shape,
   };

@@ -64,6 +64,7 @@ import type { FemFieldRendering, FemDisplayMode } from './FemFieldView';
 import { useFemField, useFemPlane } from './useFemField';
 import type { FieldPlaneResponseId } from '../api/fieldPlane';
 import type { ImportedMeshScene } from './importedMesh';
+import { MeshReportCard, previewSurfaceNote } from './MeshReport';
 import { importedMeshStore, type ImportedMeshShowing } from './importedMeshStore';
 import { SolverMeshRefreshController, type SolverMeshRefreshState } from './solverMeshRefresh';
 import type { CameraDirection } from './cameraMath';
@@ -652,6 +653,7 @@ export function Viewport() {
       : `${selected?.header.epoch ?? 0}:${selected?.header.seq ?? 0}:${selected?.header.designRevision ?? 0}:${selected?.header.lod ?? ''}:${preferences.tintSolvedRegion ? solvedQuadrants : 'same'}`;
   const surfaces = activeScene?.surfaces ?? [];
   const domainLabel = activeScene ? solvedDomainLabel(activeScene) : null;
+  const previewNote = workspaceMode === 'parametric' && !importedMesh ? previewSurfaceNote(selected?.header.previewMetadata?.tessellation?.['horn.inner']) : null;
   const recoveryNotice = coherenceContext.kind === 'cad' && importedMesh
     ? cadMeshRecoveryNotice(cadRecord, resultRun?.status === 'complete') : null;
 
@@ -1133,6 +1135,7 @@ export function Viewport() {
       {activeScene && domainLabel && <div className="viewport-domain-note" role="note" aria-label="Solved domain">
         Solve domain: {domainLabel}
       </div>}
+      {activeScene && previewNote && <div className="viewport-domain-note" role="note" aria-label="Preview surface">{previewNote}</div>}
       {recoveryNotice && <div className="viewport-domain-note" role="note">{recoveryNotice}</div>}
       {activeScene && geometryWarnings.length > 0 && <details className="viewport-warning" role="status">
         <summary aria-label={`${geometryWarnings.length} geometry warning${geometryWarnings.length === 1 ? '' : 's'}`}>
@@ -1148,19 +1151,7 @@ export function Viewport() {
     {activeScene && renderFailure && <EmptyState className="viewport-empty" title={<>The 3D view stopped drawing</>} detail={<>Retry to rebuild the view. If it stops again, turn on graphics acceleration in your system settings.</>} action={<button type="button" className="btn viewport-retry" onClick={retryRenderer}><Icon name="reset"/>Retry</button>}/>}
     {activeScene && mode === 'curvature' && !activeScene.hasCurvature && <EmptyState className="viewport-mode-empty" title={<>Curvature heatmap unavailable</>} detail={<>This frame has no analytic curvature section. Neutral geometry remains visible while inspection data is requested.</>}/>}
     {activeScene && mode === 'edges' && edgeModeUnavailable && <EmptyState className="viewport-mode-empty" title={<>Edge inspection unavailable</>} detail={<>This frame exceeds the {MAX_EDGE_TRIANGLES.toLocaleString()}-triangle edge limit. Filled geometry remains visible while edge extraction is skipped.</>}/>}
-    {(importedMesh?.tessellation || !importedMesh && selected?.header.previewMetadata?.tessellation?.['horn.inner']) && <div className="frame-stat-card mesh-quality-card" aria-label="Mesh">
-      <b>Mesh</b>
-      {(() => {
-        const certificate = importedMesh?.tessellation ?? selected?.header.previewMetadata?.tessellation?.['horn.inner'];
-        const deviation = certificate?.surface_deviation?.peak_mm;
-        const shape = certificate?.element_shape?.p1_radius_ratio ?? importedMesh?.tessellation?.element_shape?.min_radius_ratio;
-        const sampled = importedMesh?.tessellation?.surface_deviation;
-        return <dl>
-          <div title={sampled ? `Maximum over ${sampled.sampled_triangle_count ?? '—'} sampled facets of ${sampled.triangle_count ?? '—'}` : 'Measured preview master-surface chord bound'}><dt>{sampled?.peak_is_upper_bound ? 'deviation bound' : 'max deviation'}</dt><dd>{deviation != null ? `${deviation.toFixed(3)} mm${sampled && !sampled.peak_is_upper_bound && (sampled.sampled_triangle_count ?? 0) < (sampled.triangle_count ?? 0) ? ' (sampled)' : ''}` : 'unavailable'}</dd></div>
-          <div><dt>shape ({certificate?.element_shape?.p1_radius_ratio != null ? 'p1' : 'min'} radius ratio)</dt><dd>{shape != null ? shape.toFixed(3) : 'unavailable'}</dd></div>
-        </dl>;
-      })()}
-    </div>}
+    {importedMesh?.tessellation && <MeshReportCard mesh={importedMesh} status={solverViewSelected && solverMeshState.building ? 'building' : solverViewSelected && solverMeshState.stale ? 'stale' : 'current'} />}
     {showStats && <div className="frame-stat-card wg2-stats">
       <span>latest displayed binary frame</span>
       <dl>

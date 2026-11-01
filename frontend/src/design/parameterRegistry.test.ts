@@ -68,6 +68,23 @@ describe('complete parameter registry', () => {
     expect(() => orderSectionFields(fields, omitted)).toThrow(`missing presentation order for ${fields[0].id}`);
   });
 
+  it('places every Mesh field in a declared group, in the order people work', () => {
+    const section = PARAMETER_SECTION_DEFINITIONS.find((item) => item.title === 'Mesh')!;
+    expect(section.groups!.map((group) => group.title)).toEqual(['Element size', 'Surface accuracy', 'Surface sampling', 'Limits and checks']);
+    for (const field of PARAMETER_REGISTRY.filter((candidate) => candidate.section === 'Mesh')) {
+      expect(section.groups!.map((group) => group.title), field.id).toContain(field.group);
+    }
+    expect(section.fieldOrder![0]).toBe('control.solveDomain');
+    expect(section.groups!.find((group) => group.title === 'Limits and checks')!.fieldOrder).toContain('control.meshValidation');
+  });
+
+  it('says what the deviation target is measured against', () => {
+    const field = PARAMETER_REGISTRY.find((candidate) => candidate.id === 'mesh.surface_deviation_mm')!;
+    expect(field.description).toContain('CAD surface');
+    expect(field.description).not.toContain('designed surface');
+    expect(field.description).toContain('not a guarantee');
+  });
+
   it('uses Frequency sweep help in parametric mode and preserves legacy catalog help', () => {
     for (const id of ['simulation.f1', 'simulation.f2', 'simulation.num_frequencies']) {
       const editor = PARAMETER_REGISTRY.find((field) => field.id === id)!;
