@@ -11,10 +11,10 @@ export const PICKUP_WAIT_MS = 10_000;
 export interface FusionDeliveryWords { tone: 'status' | 'error'; text: string }
 
 export interface FusionDeliveryFacts {
-  operation?: Pick<CadOperationSummary, 'kind' | 'fusionDelivery' | 'message'> | null;
+  operation?: Pick<CadOperationSummary, 'kind' | 'fusionDelivery'> | null;
   /** Until the operation arrives: this send updates a model already in Fusion. */
   update?: boolean;
-  fusion?: { processRunning?: boolean; wgRequestPickup?: number | null } | null;
+  fusion?: { processRunning?: boolean; addinDeliveryVersion?: number | null; wgRequestPickup?: number | null } | null;
   /** WG's own remedy for an add-in it knows cannot take the request. */
   waitingRemedy?: string | null;
   waited?: boolean;
@@ -22,27 +22,29 @@ export interface FusionDeliveryFacts {
 
 /** One wording for every Send to CAD surface: what happened to the user's
  * model, and the next step when it needs one (docs/WORDING.md). */
-export function fusionDeliveryWords(facts: FusionDeliveryFacts): FusionDeliveryWords | null {
+export function fusionDeliveryWords(facts: FusionDeliveryFacts): FusionDeliveryWords {
   const { operation, fusion, waitingRemedy, waited } = facts;
   const update = operation ? operation.kind === 'update_link' : Boolean(facts.update);
   const verb = update ? 'update' : 'open';
   switch (operation?.fusionDelivery ?? 'waiting') {
     case 'claimed': return { tone: 'status', text: `Fusion is ${update ? 'updating' : 'opening'} this model.` };
     case 'applied': return { tone: 'status', text: update ? 'Updated in Fusion.' : 'Opened in Fusion.' };
-    case 'refused': return { tone: 'error', text: failureWords(operation?.message ?? null,
-      `Fusion could not ${verb} this model. Send it again from WG.`) };
+    // Fusion shows its own reason beside the model; the add-in's text stays there.
+    case 'refused': return { tone: 'error', text: `Fusion could not ${verb} this model. Read the reason in Fusion, then send it again from WG.` };
     case 'expired': return { tone: 'error', text: `Fusion did not ${verb} this model in time. Open Fusion, then send it again.` };
     case 'uncertain': return { tone: 'error', text: 'WG cannot tell whether Fusion finished this model. Check it in Fusion before you send it again.' };
-    case 'cancelled': return null;
+    case 'cancelled': return { tone: 'status', text: 'This send was replaced or is no longer needed. Nothing changed in Fusion.' };
     default:
   }
   if (waitingRemedy) return { tone: 'status', text: failureWords(waitingRemedy, 'Restart Fusion to update WGLink, then send the model again.') };
   if (fusion?.processRunning === false) return { tone: 'status', text: 'Fusion is closed. Open Fusion and this model will arrive.' };
   if (!waited) return { tone: 'status', text: `Waiting for Fusion to ${verb} this model.` };
-  if (fusion?.processRunning && !fusion.wgRequestPickup) {
+  if (fusion?.wgRequestPickup) return { tone: 'status', text: 'Fusion has not started on this model. Finish any open command in Fusion.' };
+  // Only an add-in that has answered can be judged; silence may be a slow start.
+  if (fusion?.processRunning && fusion.addinDeliveryVersion) {
     return { tone: 'status', text: 'WGLink in Fusion cannot take this model. Restart Fusion to update WGLink, then send the model again.' };
   }
-  return { tone: 'status', text: `Fusion has not started on this model. Finish any open command in Fusion and it will ${verb}.` };
+  return { tone: 'status', text: 'Fusion has not started on this model. Check that Fusion has finished starting and WGLink is running.' };
 }
 
 export interface FusionSend { requestId: string; update?: boolean; waitingRemedy?: string | null }
@@ -56,10 +58,12 @@ export function fusionSendOf(result: WgLinkExportResponse, update = false): Fusi
 export function watchFusionDelivery(send: FusionSend, report: (words: FusionDeliveryWords) => void): () => void {
   let waited = false;
   let last: string | null = null;
+  // The health store forgets finished operations; the answer they gave stands.
+  let operation: CadOperationSummary | undefined;
   const read = () => {
-    const operation = useCadDeliveryHealthStore.getState().outboundOperations[send.requestId];
+    operation = useCadDeliveryHealthStore.getState().outboundOperations[send.requestId] ?? operation;
     const words = fusionDeliveryWords({ ...send, operation, waited, fusion: useCadConnectionStore.getState().fusionStatus });
-    if (!words || words.text === last) return;
+    if (words.text === last) return;
     last = words.text;
     report(words);
   };
@@ -73,7 +77,7 @@ export function watchFusionDelivery(send: FusionSend, report: (words: FusionDeli
 export function sentToCadMessage(result: WgLinkExportResponse): string {
   const send = fusionSendOf(result);
   return send
-    ? fusionDeliveryWords(send)?.text ?? ''
+    ? fusionDeliveryWords(send).text
     : 'The model is ready. In Fusion, choose WGLink → Advanced → Insert.';
 }
 

@@ -5,8 +5,7 @@ import { useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { fusionDeliveryWords, PICKUP_WAIT_MS, sentToCadMessage, watchFusionDelivery, type FusionDeliveryFacts } from './useSendToCad';
 
-const operation = (fusionDelivery: CadOperationSummary['fusionDelivery'], kind = 'insert_link', message: string | null = null) =>
-  ({ kind, fusionDelivery, message });
+const operation = (fusionDelivery: CadOperationSummary['fusionDelivery'], kind = 'insert_link') => ({ kind, fusionDelivery });
 
 describe('fusionDeliveryWords', () => {
   it.each<[string, FusionDeliveryFacts, string]>([
@@ -17,30 +16,31 @@ describe('fusionDeliveryWords', () => {
     ['applied update', { operation: operation('applied', 'update_link') }, 'Updated in Fusion.'],
     ['closed', { fusion: { processRunning: false } }, 'Fusion is closed. Open Fusion and this model will arrive.'],
     ['busy', { waited: true, fusion: { processRunning: true, wgRequestPickup: 1 } },
-      'Fusion has not started on this model. Finish any open command in Fusion and it will open.'],
-    ['old add-in', { waited: true, fusion: { processRunning: true, wgRequestPickup: null } },
+      'Fusion has not started on this model. Finish any open command in Fusion.'],
+    ['old add-in', { waited: true, fusion: { processRunning: true, addinDeliveryVersion: 3, wgRequestPickup: null } },
       'WGLink in Fusion cannot take this model. Restart Fusion to update WGLink, then send the model again.'],
+    ['no report yet', { waited: true, fusion: { processRunning: true } },
+      'Fusion has not started on this model. Check that Fusion has finished starting and WGLink is running.'],
+    ['no status', { waited: true }, 'Fusion has not started on this model. Check that Fusion has finished starting and WGLink is running.'],
+    ['cancelled', { operation: operation('cancelled') }, 'This send was replaced or is no longer needed. Nothing changed in Fusion.'],
     ['remedy', { waitingRemedy: 'Restart Fusion to install the WGLink update.' }, 'Restart Fusion to install the WGLink update.'],
   ])('%s', (_name, facts, text) => {
     expect(fusionDeliveryWords(facts)).toEqual({ tone: 'status', text });
   });
 
-  it('never shows raw add-in text for a refusal', () => {
-    const raw = fusionDeliveryWords({ operation: operation('refused', 'insert_link', 'KeyError: entity_token in options[0]') });
-    expect(raw).toEqual({ tone: 'error', text: 'Fusion could not open this model. Send it again from WG.' });
-    const plain = 'This model is already in the open document. Update it instead.';
-    expect(fusionDeliveryWords({ operation: operation('refused', 'insert_link', plain) })?.text).toBe(plain);
+  it('points at Fusion for a refusal, never repeating its text', () => {
+    expect(fusionDeliveryWords({ operation: operation('refused') })).toEqual({
+      tone: 'error', text: 'Fusion could not open this model. Read the reason in Fusion, then send it again from WG.' });
   });
 
-  it('treats expiry and an unknown result as something to act on, and stays quiet when replaced', () => {
-    expect(fusionDeliveryWords({ operation: operation('expired') })?.tone).toBe('error');
-    expect(fusionDeliveryWords({ operation: operation('uncertain') })?.tone).toBe('error');
-    expect(fusionDeliveryWords({ operation: operation('cancelled') })).toBeNull();
+  it('treats expiry and an unknown result as something to act on', () => {
+    expect(fusionDeliveryWords({ operation: operation('expired') }).tone).toBe('error');
+    expect(fusionDeliveryWords({ operation: operation('uncertain') }).tone).toBe('error');
   });
 
   it('keeps every line plain', () => {
     for (const delivery of ['waiting', 'claimed', 'applied', 'refused', 'expired', 'uncertain'] as const) {
-      expect(readsPlain(fusionDeliveryWords({ operation: operation(delivery) })!.text)).toBe(true);
+      expect(readsPlain(fusionDeliveryWords({ operation: operation(delivery) }).text)).toBe(true);
     }
   });
 
@@ -65,8 +65,18 @@ describe('watchFusionDelivery', () => {
     useCadDeliveryHealthStore.setState({ outboundOperations: {} });
     expect(seen).toEqual([
       'Waiting for Fusion to open this model.',
-      'Fusion has not started on this model. Finish any open command in Fusion and it will open.',
+      'Fusion has not started on this model. Finish any open command in Fusion.',
       'Opened in Fusion.',
     ]);
+  });
+
+  it('keeps a finished answer after the health store forgets the operation', () => {
+    useCadDeliveryHealthStore.setState({ outboundOperations: { r2: operation('applied') as CadOperationSummary } });
+    const seen: string[] = [];
+    const stop = watchFusionDelivery({ requestId: 'r2' }, (words) => seen.push(words.text));
+    useCadDeliveryHealthStore.setState({ outboundOperations: {} });
+    vi.advanceTimersByTime(PICKUP_WAIT_MS);
+    stop();
+    expect(seen).toEqual(['Opened in Fusion.']);
   });
 });

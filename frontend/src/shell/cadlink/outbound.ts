@@ -92,6 +92,8 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
       }
       assertCurrentModelExport(model, 'step');
     };
+    stopWatching?.();
+    stopWatching = null;
     store.setState({ sendingToFusion: true, error: null, status: null });
     options.noteCadActivity?.();
     let evidence: CadConnectionStatus | null = null;
@@ -163,7 +165,6 @@ export function createCadOutboundController(options: CadOutboundOptions = {}) {
             ? ' It replaced an earlier update Fusion had not started yet.' : '';
           const send = fusionSendOf(result, Boolean(target));
           if (send) {
-            stopWatching?.();
             stopWatching = watchFusionDelivery(send, ({ tone, text }) => store.setState(tone === 'error'
               ? { error: text, status: null } : { status: `${text}${superseded}` }));
           } else store.setState({ status: sentToCadMessage(result) });

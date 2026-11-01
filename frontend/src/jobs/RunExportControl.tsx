@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { modelKindForRun } from '../model/currentModel';
 import { runNormalizationAngle } from '../results/normalization';
 import { solveOptionsStoreForJob } from '../stores/solveOptionsContext';
@@ -159,6 +159,8 @@ export function RunExportControl({ job, compact = false, disabledReason, result,
   const execute = useRunExportStore((state) => state.execute);
   const [fusionSend, setFusionSend] = useState<FusionSend | null>(null);
   const delivery = useFusionDelivery(fusionSend);
+  // Another export's own outcome replaces the earlier send's line.
+  useEffect(() => { if (operation.busy) setFusionSend(null); }, [operation.busy]);
   const designState = jobRerunState(job);
   const designExportable = canLoadJobDesign(job);
   const family = hydrateJobDesign(job)?.formula ?? '';
