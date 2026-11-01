@@ -18,10 +18,26 @@ export interface DimensionLayout {
   at: XY; path: string; arrows: string; rotation: number; placement: DimensionPlacement;
 }
 const segment = (p: XY, q: XY) => `M${p.x},${p.y} L${q.x},${q.y}`;
-export const arrow = (p: XY, angle: number) => {
+const arrow = (p: XY, angle: number) => {
   const wing = (offset: number) => ({ x: p.x + 6 * Math.cos(angle + offset), y: p.y + 6 * Math.sin(angle + offset) });
   return `${segment(wing(.45), p)} ${segment(p, wing(-.45))}`;
 };
+/**
+ * The drawn parts of a straight dimension between two screen points: `offset`
+ * pixels along `normal`, its lines reaching `overshoot` pixels past the line.
+ * `text` is where the label anchors, at `along` of the way from a to b.
+ */
+export function linearDimension(a: XY, b: XY, tangent: XY, normal: XY, offset: number, along = .5, overshoot = 6) {
+  const middle = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  const base = { x: middle.x + normal.x * offset, y: middle.y + normal.y * offset };
+  const span = (b.x - a.x) * tangent.x + (b.y - a.y) * tangent.y;
+  const onLine = (at: number) => ({ x: base.x + tangent.x * span * (at - .5), y: base.y + tangent.y * span * (at - .5) });
+  const p = onLine(0), q = onLine(1), sign = Math.sign(offset) || 1;
+  const extend = (end: XY) => ({ x: end.x + normal.x * sign * overshoot, y: end.y + normal.y * sign * overshoot });
+  return { text: onLine(along),
+    path: `${segment(a, extend(p))} ${segment(b, extend(q))} ${segment(onLine(Math.min(0, along)), onLine(Math.max(1, along)))}`,
+    arrows: `${arrow(p, Math.atan2(tangent.y, tangent.x))} ${arrow(q, Math.atan2(-tangent.y, -tangent.x))}` };
+}
 export function dimensionLabelBox(layout: DimensionLayout, label: string): LabelBox {
   const width = label.length * 6.4 + 12;
   return layout.rotation === -90
@@ -104,16 +120,9 @@ export function dimensionLayout(sketch: Sketch, c: Constraint, xy: (id: string) 
     normal = { x: tangent.y, y: -tangent.x }; offset = (24 + lane * 32) / scale;
   }
   const placement = c.placement && 'along' in c.placement ? c.placement : { offset, along: .5 };
-  const base = { x: middle.x + normal.x * placement.offset * scale, y: middle.y + normal.y * placement.offset * scale };
-  const span = (b.x - a.x) * tangent.x + (b.y - a.y) * tangent.y;
-  const onLine = (along: number) => ({ x: base.x + tangent.x * span * (along - .5), y: base.y + tangent.y * span * (along - .5) });
-  const p = onLine(0), q = onLine(1), text = onLine(placement.along);
-  const sign = Math.sign(placement.offset) || 1;
+  const { text, path, arrows } = linearDimension(a, b, tangent, normal, placement.offset * scale, placement.along);
   const at = c.kind === 'distanceY' ? { x: text.x - 10, y: text.y } : { x: text.x, y: text.y - 6 };
-  const extend = (p: XY) => ({ x: p.x + normal.x * sign * 6, y: p.y + normal.y * sign * 6 });
-  return { at, placement, rotation: c.kind === 'distanceY' ? -90 : 0,
-    path: `${segment(a, extend(p))} ${segment(b, extend(q))} ${segment(onLine(Math.min(0, placement.along)), onLine(Math.max(1, placement.along)))}`,
-    arrows: `${arrow(p, Math.atan2(tangent.y, tangent.x))} ${arrow(q, Math.atan2(-tangent.y, -tangent.x))}` };
+  return { at, placement, rotation: c.kind === 'distanceY' ? -90 : 0, path, arrows };
 }
 export function dimensionLayouts(sketch: Sketch, xy: (id: string) => XY, bounds: DimensionBounds, scale: number, label: (c: Constraint & { value: number; driving: boolean }) => string) {
   const result = new Map<string, DimensionLayout>(), boxes: LabelBox[] = [];

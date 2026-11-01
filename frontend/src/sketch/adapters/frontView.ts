@@ -19,7 +19,7 @@ import {
 } from '../../stores/assembly';
 import type { EmbeddedDesignUpdates } from '../../stores/designEdit';
 import type { XY } from '../solver/types';
-import { arrow } from '../dimensionGraphics';
+import { linearDimension } from '../dimensionGraphics';
 import { worldToScreen, type Bounds, type View } from '../view';
 import type { ProjectBinding } from '../workspace/projectHistoryAuthority';
 import type { DisplayItem, DomainAdapter, HitCandidate, PropertiesSection } from '../workspace/types';
@@ -114,16 +114,13 @@ function rect(x0: number, x1: number, y0: number, y1: number): XY[] {
 /** One dimension between two world points, `px` screen pixels to the left of a to b. */
 function span(id: string, view: View, a: XY, b: XY, px: number, text: string): DisplayItem {
   const p = worldToScreen(view, a), q = worldToScreen(view, b), length = Math.hypot(q.x - p.x, q.y - p.y) || 1;
-  const t = { x: (q.x - p.x) / length, y: (q.y - p.y) / length }, n = { x: t.y, y: -t.x };
-  const from = { x: p.x + n.x * px, y: p.y + n.y * px }, to = { x: q.x + n.x * px, y: q.y + n.y * px };
-  const extension = px ? `M${p.x},${p.y} L${from.x},${from.y} M${q.x},${q.y} L${to.x},${to.y} ` : '';
+  const t = { x: (q.x - p.x) / length, y: (q.y - p.y) / length };
+  const { text: middle, path, arrows } = linearDimension(p, q, t, { x: t.y, y: -t.x }, px, .5, 0);
   const vertical = Math.abs(t.y) > Math.abs(t.x) && length > 48, sideways = Math.abs(t.y) > Math.abs(t.x) && !vertical;
   // Clear of the line on the side away from the drawing; a dimension on the geometry sits just above it.
-  const at = { x: (from.x + to.x) / 2 + (vertical ? 12 : sideways ? 30 : 0), y: (from.y + to.y) / 2 + (vertical ? 0 : sideways ? 4 : px ? 15 : -5) };
+  const at = { x: middle.x + (vertical ? 12 : sideways ? 30 : 0), y: middle.y + (vertical ? 0 : sideways ? 4 : px ? 15 : -5) };
   return { id, kind: 'dimension', role: 'front-dimension', editable: false, driving: false, text, layout: {
-    at, rotation: vertical ? -90 : 0, placement: { offset: px, along: 0 },
-    path: `${extension}M${from.x},${from.y} L${to.x},${to.y}`,
-    arrows: `${arrow(from, Math.atan2(t.y, t.x))} ${arrow(to, Math.atan2(-t.y, -t.x))}`,
+    at, rotation: vertical ? -90 : 0, placement: { offset: px, along: 0 }, path, arrows,
   } };
 }
 
