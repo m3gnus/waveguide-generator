@@ -291,7 +291,7 @@ def test_azimuth_dependent_no_op_values_are_refused_by_name(text: str, key: str)
         parse(text)
     assert key in str(caught.value)
     if key == "Scale.Z":
-        assert "Scale.Z must be a positive finite constant" in str(caught.value)
+        assert "“Scale.Z” must be a positive finite constant" in str(caught.value)
         assert "Change or remove" in str(caught.value)
     elif key == "OSSE.Scale.Z":
         from hornlab_mesher.config_parser import ConfigError, parse_text_config
@@ -583,7 +583,7 @@ def test_every_gap_study_key_has_transport_or_a_named_refusal(family: str, base:
     if key == "Mesh.Enclosure.Dim":
         # Dim is read through the design mesher's contract (test_ath_lfsource.py):
         # four positive distances, or this named refusal.
-        with pytest.raises(TextConfigError, match="Mesh.Enclosure.Dim must contain four"):
+        with pytest.raises(TextConfigError, match="“Mesh.Enclosure.Dim” must contain four"):
             parse(base + GAP_STUDY_KEYS[key])
         return
     if key in {"Scale.Z", "Mesh.ThroatExtSegments"}:
@@ -602,7 +602,7 @@ def test_every_gap_study_key_has_transport_or_a_named_refusal(family: str, base:
     # payloads here; the unsupported family composition still refuses by name.
     if key in {"NAC", "Mesh.RearShape", "Mesh.Roundover"}:
         if key == "Mesh.Roundover" and family == "R-OSSE":
-            with pytest.raises(TextConfigError, match="Mesh.Roundover must be used with a supported horn shape"):
+            with pytest.raises(TextConfigError, match="“Mesh.Roundover” must be used with a supported horn shape"):
                 parse(base + GAP_STUDY_KEYS[key])
             return
         config = design_to_mesher_config(parse(base + GAP_STUDY_KEYS[key]).design)

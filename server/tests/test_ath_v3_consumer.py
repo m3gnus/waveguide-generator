@@ -247,7 +247,7 @@ def test_saved_v3_keeps_inert_wg_metadata(kind):
 def test_saved_sampling_metadata_reaches_the_native_composition_check():
     text = ('; Parameter config\n; Waveguide Generator geometry-interpretation: ' + V3 + '\n'
             'OSSE = {\nL=80\n}\n_athAxialSamplingRule=ath-v2025-06\nMesh.ThroatExtSegments=4\n')
-    with pytest.raises(TextConfigError, match='Mesh.ThroatExtSegments must be an integer.*Change or remove'):
+    with pytest.raises(TextConfigError, match='“Mesh.ThroatExtSegments” must be an integer.*Change or remove'):
         parse(text)
 
 

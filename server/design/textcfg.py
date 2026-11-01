@@ -76,6 +76,10 @@ _GEOMETRY_STAMP = re.compile(r"^;\s*Waveguide Generator geometry-interpretation:
 class TextConfigError(ValueError):
     """A source-located syntax or design validation failure."""
 
+    # Preserve the same explicit guidance marker without broadening which
+    # exception types the native-validation catches handle.
+    public_message = AthImportError.public_message
+
 
 @dataclass
 class _RawBlock:
@@ -548,7 +552,7 @@ def _enclosure(
         try:
             result["dim_mm"] = list(ath_enclosure_dim(block.items["Dim"]))
         except ConfigError as exc:
-            raise TextConfigError(str(exc)) from exc
+            raise TextConfigError(ath_import_failure(exc)) from exc
     if "Spacing" in block.items:
         parts = [part.strip() for part in block.items["Spacing"].split(",")]
         if v2 and len(parts) != 4:
@@ -1574,7 +1578,7 @@ def _apply_ath_lf_sources(
     try:
         rows, notes, override = ath_enclosure_sources(enclosure_items, quadrants=quadrants)
     except ConfigError as exc:
-        raise TextConfigError(str(exc)) from exc
+        raise TextConfigError(ath_import_failure(exc)) from exc
     ignored.extend(IgnoredSetting(key=key, value=value, note=note) for key, value, note in notes)
     if not rows:
         return
@@ -1831,7 +1835,7 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         try:
             rule, _echo = ath_axial_sampling_rule(text)
         except ValueError as exc:
-            raise TextConfigError(str(exc)) from exc
+            raise TextConfigError(ath_import_failure(exc, setting="ATH version comments")) from exc
         payload.setdefault("ath_axial_sampling_rule", rule)
         payload.setdefault("ath_nac_present", False)
     applications: list[MigrationApplication] = []
@@ -1866,7 +1870,7 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
                     mesher_config["athAxialScale"] = eval_param(flat["Scale.Z"])
             validate_ath_mesher_config(mesher_config)
         except AthImportError as exc:
-            raise TextConfigError(str(exc)) from exc
+            raise TextConfigError(exc.args[0]) from exc
         except (ConfigError, ValueError) as exc:
             raise TextConfigError(ath_import_failure(exc)) from exc
         if uses_ath_v3_import(import_version):

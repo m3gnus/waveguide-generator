@@ -1,0 +1,20 @@
+[
+  {
+    "name": "legacy sampling with explicit extension segments",
+    "text": "; Ath version V2025-06\nOSSE = {\nL=80\n}\nMesh.ThroatExtSegments=4\n",
+    "message": "“Mesh.ThroatExtSegments” must be an integer from 1 to 4096 and used with current ATH sampling. Change or remove “Mesh.ThroatExtSegments” in the source file, then re-import it.",
+    "diagnostic": "Mesh.ThroatExtSegments requires the current ATH OSSE sampling rule"
+  },
+  {
+    "name": "conflicting ATH version comments",
+    "text": "; Ath version V2025-06\n; Ath version V2026-09a\nOSSE = {\nL=80\n}\n",
+    "message": "The ATH version comments disagree. Keep one comment for the version that wrote this file, then re-import it.",
+    "diagnostic": "conflicting ATH version echoes"
+  },
+  {
+    "name": "unsupported source contours",
+    "text": "OSSE = {\nL=80\n}\nSource.Contours=1\n",
+    "message": "“Source.Contours” cannot be imported. Use a single cap or disc throat source. Change or remove “Source.Contours” in the source file, then re-import it.",
+    "diagnostic": "Source.Contours"
+  }
+]
