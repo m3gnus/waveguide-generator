@@ -166,56 +166,122 @@ const SIDE_ROOM = {
 } as const;
 type Side = keyof typeof SIDE_ROOM;
 
-/** What a woofer of this radius needs beside the mouth, and what the baffle has there. */
-function roomBeside(side: Side, radiusMm: number, gapMm: number, context: FrontViewContext['context']) {
-  const { baffle, mouth_bottom_mm: bottom, mouth_top_mm: top, minimum_clearance_mm: minimum = 0 } = context;
-  if (!baffle || bottom === undefined || top === undefined) return null;
-  const have = side === 'below' ? bottom - (baffle.y0_mm + baffle.edge_mm) : (baffle.y1_mm - baffle.edge_mm) - top;
-  return { have, need: 2 * radiusMm + gapMm + minimum, longest: Math.max(0, (have - gapMm - minimum) / 2) };
+type Context = FrontViewContext['context'];
+type Centre = { x: number; y: number };
+
+/**
+ * Whether a woofer of this radius clears the baffle edge, the mouth and the given
+ * neighbours at this centre. The one fit decision on the client, measured as
+ * `_assembly_front_context_sync` measures it; the build certifies it exactly.
+ */
+function fitsAt(centre: Centre, radius: number, context: Context, neighbours: NonNullable<Context['woofers']>): boolean {
+  const { baffle, mouth_outline_mm: ring, minimum_clearance_mm: minimum = 0 } = context;
+  if (!baffle) return true;
+  const inset = baffle.edge_mm;
+  const edge = Math.min(centre.x - (baffle.x0_mm + inset), (baffle.x1_mm - inset) - centre.x,
+    centre.y - (baffle.y0_mm + inset), (baffle.y1_mm - inset) - centre.y) - radius;
+  if (edge < minimum) return false;
+  if (ring?.length) {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i], [xj, yj] = ring[j];
+      if ((yi > centre.y) !== (yj > centre.y) && centre.x < (xj - xi) * (centre.y - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    if (inside || ring.some(([x, y]) => Math.hypot(x - centre.x, y - centre.y) - radius < minimum)) return false;
+  }
+  return neighbours.every(other => Math.hypot(other.x_mm - centre.x, other.y_mm - centre.y) - radius - other.radius_mm >= minimum);
+}
+
+/** Where the mesher puts an anchored woofer (`resolve_woofer_placements`), or null with no mouth edges. */
+function anchoredCentre(side: Side, radius: number, gap: number, context: Context): Centre | null {
+  const { mouth_bottom_mm: bottom, mouth_top_mm: top } = context;
+  if (bottom === undefined || top === undefined) return null;
+  return { x: 0, y: side === 'below' ? bottom - gap - radius : top + gap + radius };
+}
+
+/**
+ * A centre where a new woofer really fits, or null when none does: beside the
+ * mouth by preference, otherwise anywhere it can be placed freely. Without the
+ * mouth's outline only the anchored places can be judged.
+ */
+function freeSpot(radius: number, context: Context): Centre | null {
+  const taken = context.woofers ?? [];
+  for (const side of ['below', 'above'] as const) {
+    const centre = anchoredCentre(side, radius, DEFAULT_WOOFER_GAP_MM, context);
+    if (centre && fitsAt(centre, radius, context, taken)) return centre;
+  }
+  const { baffle, mouth_outline_mm: ring, minimum_clearance_mm: minimum = 0 } = context;
+  if (!baffle || !ring?.length) return null;
+  const reach = baffle.edge_mm + radius + minimum;
+  const axis = (low: number, high: number) => {
+    const [from, to] = [low + reach, high - reach];
+    if (from > to) return [];
+    const step = Math.max(5, (to - from) / 120);
+    return [...Array.from({ length: Math.floor((to - from) / step) + 1 }, (_, index) => from + index * step), to];
+  };
+  const xs = axis(baffle.x0_mm, baffle.x1_mm), ys = axis(baffle.y0_mm, baffle.y1_mm);
+  const spots = xs.flatMap(x => ys.map(y => ({ x, y }))).sort((a, b) => Math.hypot(a.x, a.y) - Math.hypot(b.x, b.y));
+  return spots.find(centre => fitsAt(centre, radius, context, taken)) ?? null;
 }
 
 export interface NoRoomForWoofer {
   /** What is wrong and how to fix it, naming the control. */
   reason: string;
-  field: string;
-  /** The value that makes room; the user applies it. */
-  value: number;
+  /** The margins that make room; the user applies them. */
+  updates: Record<string, number>;
   action: string;
 }
 
 /**
- * Why a new default woofer cannot go here, or null when it fits. Margins never
+ * Why a new default woofer cannot go here, or null when it can. Margins never
  * grow by themselves: the user reads what is short and decides.
  */
 export function noRoomForWoofer(anchor: AssemblyAnchor, resolved: FrontViewContext | undefined, marginOf: (field: string) => number): NoRoomForWoofer | null {
   const context = resolved?.context;
   if (!context?.baffle) return null;
-  const sides: Side[] = anchor === 'free' ? ['below', 'above'] : [anchor];
-  const rooms = sides.flatMap(side => {
-    const room = roomBeside(side, DEFAULT_WOOFER_RADIUS_MM, DEFAULT_WOOFER_GAP_MM, context);
-    return room ? [{ side, ...room }] : [];
-  });
-  if (!rooms.length || rooms.some(({ have, need }) => have >= need)) return null;
-  const { side, have, need } = rooms[0];
+  const size = mm(2 * DEFAULT_WOOFER_RADIUS_MM);
+  const side: Side = anchor === 'above' ? 'above' : 'below';
+  const centre = anchoredCentre(side, DEFAULT_WOOFER_RADIUS_MM, DEFAULT_WOOFER_GAP_MM, context);
+  if (!centre) return null;
+  // An anchored place answers for the baffle and the mouth; a neighbour there can still be moved.
+  if (anchor === 'free' ? freeSpot(DEFAULT_WOOFER_RADIUS_MM, context) || !context.mouth_outline_mm?.length : fitsAt(centre, DEFAULT_WOOFER_RADIUS_MM, context, [])) return null;
+  const { baffle, mouth_bottom_mm: bottom, mouth_top_mm: top, minimum_clearance_mm: minimum = 0 } = context;
+  const have = side === 'below' ? bottom! - (baffle.y0_mm + baffle.edge_mm) : (baffle.y1_mm - baffle.edge_mm) - top!;
+  const need = 2 * DEFAULT_WOOFER_RADIUS_MM + DEFAULT_WOOFER_GAP_MM + minimum;
   const { field, label, mouth } = SIDE_ROOM[side];
-  const value = Math.ceil(marginOf(field) + need - have);
-  return { field, value, action: `Set ${label} to ${value} mm`,
-    reason: `A ${mm(2 * DEFAULT_WOOFER_RADIUS_MM)} woofer needs ${mm(need)} ${mouth}, and this enclosure has ${mm(Math.max(0, have))}. Raise ${label} to ${value} mm under Baffle.` };
+  const value = Math.ceil(marginOf(field) + Math.max(0, need - have));
+  const width = baffle.x1_mm - baffle.x0_mm - 2 * baffle.edge_mm;
+  const narrow = width < 2 * (DEFAULT_WOOFER_RADIUS_MM + minimum);
+  const sideMargin = (name: string) => Math.ceil(marginOf(name) + (2 * (DEFAULT_WOOFER_RADIUS_MM + minimum) - width) / 2);
+  const updates = { ...need > have ? { [field]: value } : {},
+    ...narrow ? { 'enclosure.space_l': sideMargin('enclosure.space_l'), 'enclosure.space_r': sideMargin('enclosure.space_r') } : {} };
+  const change = [...need > have ? [`${label} to ${value} mm`] : [], ...narrow ? [`Left margin and Right margin to ${sideMargin('enclosure.space_l')} mm`] : []].join(' and ');
+  const short = narrow ? `A ${size} woofer is wider than this enclosure's ${mm(Math.max(0, width))} baffle.`
+    : anchor === 'free' ? `A ${size} woofer does not fit anywhere on this enclosure.`
+    : `A ${size} woofer needs ${mm(need)} ${mouth}, and this enclosure has ${mm(Math.max(0, have))}.`;
+  return { updates, action: `Set ${change}`, reason: `${short} Raise ${change} under Baffle${anchor === 'free' ? '' : ', or use Free position'}.` };
 }
 
 /**
  * Why a woofer cannot take this radius at its placement, or undefined when it
- * can. Only the baffle is judged here: the server's clearances report the rest
- * once the edit is on the drawing.
+ * can. A woofer spaced from another moves with it, so the server's clearances
+ * judge that one once the edit is on the drawing.
  */
 export function radiusProblem(assembly: DesignAssembly, id: string, radiusMm: number, resolved: FrontViewContext | undefined): string | undefined {
   const context = resolved?.context;
   const woofer = woofersOf(assembly).find(item => item.id === id);
-  if (!context?.baffle || !woofer || woofer.placement.anchor === 'free' || woofer.placement.spacing_to) return undefined;
-  const side = woofer.placement.anchor;
-  const room = roomBeside(side, radiusMm, woofer.placement.gap_mm ?? 0, context);
-  if (!room || room.have >= room.need) return undefined;
-  return `Too large for this enclosure: at most ${mm(room.longest)} here. Reduce Radius, or raise ${SIDE_ROOM[side].label} under Baffle.`;
+  if (!context?.baffle || !woofer || woofer.placement.spacing_to) return undefined;
+  const { anchor } = woofer.placement, gap = woofer.placement.gap_mm ?? 0;
+  const placed = context.woofers?.find(row => row.radiator_id === id);
+  const centreOf = (radius: number) => anchor === 'free'
+    ? placed ? { x: placed.x_mm, y: placed.y_mm } : null : anchoredCentre(anchor, radius, gap, context);
+  const others = (context.woofers ?? []).filter(row => row.radiator_id !== id);
+  const fits = (radius: number) => { const centre = centreOf(radius); return !centre || fitsAt(centre, radius, context, others); };
+  if (fits(radiusMm)) return undefined;
+  let low = 0, high = radiusMm;
+  for (let step = 0; step < 40; step += 1) { const middle = (low + high) / 2; if (fits(middle)) low = middle; else high = middle; }
+  const room = anchor === 'free' ? 'the margins' : SIDE_ROOM[anchor].label;
+  return `Too large for this enclosure: at most ${mm(Math.floor(low * 10) / 10)} here. Reduce Radius, or raise ${room} under Baffle.`;
 }
 
 /** The clearances the server reports below its minimum, as what is wrong with each woofer and what to do. */
@@ -354,15 +420,13 @@ export function frontViewBinding(blank: DesignAssembly): ProjectBinding<DesignAs
 /** Add a woofer on its anchor in its own signal group; `added` learns its identity. */
 export function addWooferCommand(anchor: AssemblyAnchor, resolved: FrontViewContext | undefined,
   added: (id: string) => void = () => {}): FrontCommand {
+  // A free woofer starts where it really fits, then moves freely.
+  const spot = resolved ? freeSpot(DEFAULT_WOOFER_RADIUS_MM, resolved.context) : null;
   const bottom = resolved?.context.mouth_bottom_mm;
-  const top = resolved?.context.mouth_top_mm;
-  // A free woofer starts where a new one fits, below the mouth by preference, then moves freely.
-  const room = resolved ? roomBeside('below', DEFAULT_WOOFER_RADIUS_MM, DEFAULT_WOOFER_GAP_MM, resolved.context) : null;
-  const above = !!room && room.have < room.need && top !== undefined;
-  const y = above ? round(top + DEFAULT_WOOFER_GAP_MM + DEFAULT_WOOFER_RADIUS_MM)
-    : bottom !== undefined ? round(bottom - DEFAULT_WOOFER_GAP_MM - DEFAULT_WOOFER_RADIUS_MM) : -200;
+  const x = spot ? round(spot.x) : 0;
+  const y = spot ? round(spot.y) : bottom !== undefined ? round(bottom - DEFAULT_WOOFER_GAP_MM - DEFAULT_WOOFER_RADIUS_MM) : -200;
   return { label: 'Add woofer', edit: assembly => {
-    const next = addWoofer(assembly, anchor === 'free' ? { anchor, xMm: 0, yMm: y } : { anchor });
+    const next = addWoofer(assembly, anchor === 'free' ? { anchor, xMm: x, yMm: y } : { anchor });
     added(next.id);
     return next.assembly;
   } };

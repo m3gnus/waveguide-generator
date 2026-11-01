@@ -252,6 +252,7 @@ describe('front workspace status', () => {
   it('offers the margin that makes room for a first woofer, and only applies it when asked', async () => {
     useDesignStore.getState().replaceDocument({ ...enclosed() });
     const context = { ...fixture.before.context, woofers: [], clearances: {}, minimum_clearance_mm: 0.1, mouth_top_mm: 140, mouth_bottom_mm: -140,
+      mouth_outline_mm: Array.from({ length: 64 }, (_, index) => [140 * Math.cos(index / 32 * Math.PI), 140 * Math.sin(index / 32 * Math.PI)]),
       baffle: { x0_mm: -165, x1_mm: 165, y0_mm: -165, y1_mm: 165, edge_mm: 18 } };
     await mountWith((async () => new Response(JSON.stringify(context), { status: 200 })) as unknown as typeof fetch);
     expect(document.body.textContent).toContain('No room for a woofer yet');

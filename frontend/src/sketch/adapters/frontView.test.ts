@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { emptyAssembly } from '../../stores/assembly';
 import type { AssemblyFrontContext } from '../../api/assembly';
 import type { DesignAssembly } from '../../stores/assembly';
 import { addWooferCommand, anchoredPlacement, draggedPlacement, frontViewAdapter, frontWoofers, noRoomForWoofer, placementProblems, radiusProblem, type FrontViewContext } from './frontView';
@@ -84,16 +85,46 @@ describe('front view edits', () => {
     expect(display.items.find(item => item.id === `${W2}#aperture`)!.state).not.toContain('problem');
   });
 
+  it('offers a free woofer any place it really fits, and refuses only when there is none', () => {
+    const circle = Array.from({ length: 64 }, (_, index) => {
+      const angle = index / 64 * 2 * Math.PI;
+      return [140 * Math.cos(angle), 140 * Math.sin(angle)] as [number, number];
+    });
+    const context = { ...before.context, woofers: [], clearances: {}, mouth_outline_mm: circle, mouth_top_mm: 140, mouth_bottom_mm: -140, minimum_clearance_mm: 0.1 };
+    const wide: FrontViewContext = { ...before, context: { ...context, baffle: { x0_mm: -400, x1_mm: 400, y0_mm: -165, y1_mm: 165, edge_mm: 18 } } };
+    const margin = () => 25;
+    // Beside the mouth: no room above or below, yet (260, 0) clears everything.
+    expect(noRoomForWoofer('free', wide, margin)).toBeNull();
+    expect(noRoomForWoofer('below', wide, margin)).not.toBeNull();
+    const added = addWooferCommand('free', wide).edit(emptyAssembly()).woofers!.at(-1)!;
+    const { x_mm: x, y_mm: y } = added.placement;
+    expect(Math.hypot(x!, y!)).toBeGreaterThanOrEqual(140 + 80 + 0.1);
+    expect(Math.abs(x!)).toBeLessThanOrEqual(400 - 18 - 80 - 0.1);
+    expect(Math.abs(y!)).toBeLessThanOrEqual(165 - 18 - 80 - 0.1);
+    // A woofer already standing in that gap on both sides leaves nowhere.
+    const taken = (side: number) => ({ radiator_id: `w${side}`, x_mm: 300 * side, y_mm: 0, radius_mm: 100 });
+    const full: FrontViewContext = { ...wide, context: { ...wide.context, woofers: [taken(1), taken(-1)] } };
+    expect(noRoomForWoofer('free', full, margin)?.reason).toContain('does not fit anywhere');
+    // Too narrow everywhere.
+    const small: FrontViewContext = { ...wide, context: { ...wide.context, baffle: { x0_mm: -165, x1_mm: 165, y0_mm: -165, y1_mm: 165, edge_mm: 18 } } };
+    expect(noRoomForWoofer('free', small, margin)?.reason).toContain('does not fit anywhere');
+  });
+
   it('says why a new woofer has no room, what to change, and never changes it', () => {
-    const roomy = { baffle: { x0_mm: -165, x1_mm: 165, y0_mm: -340, y1_mm: 165, edge_mm: 18 }, mouth_top_mm: 140, mouth_bottom_mm: -140, minimum_clearance_mm: 0.1 };
+    const ring = Array.from({ length: 64 }, (_, index): [number, number] => [140 * Math.cos(index / 64 * 2 * Math.PI), 140 * Math.sin(index / 64 * 2 * Math.PI)]);
+    const roomy = { baffle: { x0_mm: -165, x1_mm: 165, y0_mm: -340, y1_mm: 165, edge_mm: 18 }, mouth_outline_mm: ring, woofers: [], clearances: {}, mouth_top_mm: 140, mouth_bottom_mm: -140, minimum_clearance_mm: 0.1 };
     const tight: FrontViewContext = { ...before, context: { ...before.context, ...roomy, baffle: { ...roomy.baffle, y0_mm: -165 } } };
     const margin = () => 25;
     expect(noRoomForWoofer('below', { ...before, context: { ...before.context, ...roomy } }, margin)).toBeNull();
     const full = noRoomForWoofer('below', tight, margin)!;
-    expect(full).toMatchObject({ field: 'enclosure.space_b', value: 189, action: 'Set Bottom margin to 189 mm' });
-    expect(full.reason).toBe('A 160 mm woofer needs 170.1 mm below the mouth, and this enclosure has 7 mm. Raise Bottom margin to 189 mm under Baffle.');
-    expect(noRoomForWoofer('above', tight, margin)).toMatchObject({ field: 'enclosure.space_t' });
-    expect(noRoomForWoofer('free', tight, margin)).toMatchObject({ field: 'enclosure.space_b' });
+    expect(full).toMatchObject({ updates: { 'enclosure.space_b': 189 }, action: 'Set Bottom margin to 189 mm' });
+    expect(full.reason).toBe('A 160 mm woofer needs 170.1 mm below the mouth, and this enclosure has 7 mm. Raise Bottom margin to 189 mm under Baffle, or use Free position.');
+    expect(noRoomForWoofer('above', tight, margin)?.updates).toHaveProperty(['enclosure.space_t']);
+    expect(noRoomForWoofer('free', tight, margin)).toMatchObject({ updates: { 'enclosure.space_b': 189 } });
+    // A baffle too narrow for the woofer needs its width too, or the offer would not work.
+    const narrow: FrontViewContext = { ...tight, context: { ...tight.context, baffle: { x0_mm: -70, x1_mm: 70, y0_mm: -165, y1_mm: 165, edge_mm: 18 } } };
+    expect(noRoomForWoofer('free', narrow, margin)).toMatchObject({ updates: { 'enclosure.space_b': 189, 'enclosure.space_l': 54, 'enclosure.space_r': 54 } });
+    expect(noRoomForWoofer('free', narrow, margin)?.reason).toContain('wider than');
     // Room above is enough for a free woofer, and it starts there.
     const above: FrontViewContext = { ...tight, context: { ...tight.context, baffle: { ...roomy.baffle, y0_mm: -165, y1_mm: 340 } } };
     expect(noRoomForWoofer('free', above, margin)).toBeNull();
@@ -110,9 +141,13 @@ describe('front view edits', () => {
     const gap = below.placement.gap_mm ?? 0;
     const longest = (182 - gap - 0.1) / 2;
     expect(radiusProblem(before.assembly, below.id, longest, fitted)).toBeUndefined();
-    expect(radiusProblem(before.assembly, below.id, longest + 1, fitted)).toBe(`Too large for this enclosure: at most ${Number(longest.toFixed(1))} mm here. Reduce Radius, or raise Bottom margin under Baffle.`);
-    const free = before.assembly.woofers!.find(woofer => woofer.placement.anchor === 'free' || woofer.placement.spacing_to);
-    if (free) expect(radiusProblem(before.assembly, free.id, 500, fitted)).toBeUndefined();
+    expect(radiusProblem(before.assembly, below.id, longest + 1, fitted)).toBe(`Too large for this enclosure: at most ${Math.floor(longest * 10) / 10} mm here. Reduce Radius, or raise Bottom margin under Baffle.`);
+    const spaced = before.assembly.woofers!.find(woofer => woofer.placement.spacing_to);
+    if (spaced) expect(radiusProblem(before.assembly, spaced.id, 900, fitted)).toBeUndefined();
+    const lone = emptyAssembly();
+    const placed = addWooferCommand('free', fitted).edit(lone).woofers!.at(-1)!;
+    const atOrigin: FrontViewContext = { ...fitted, context: { ...fitted.context, woofers: [{ radiator_id: placed.id, x_mm: 0, y_mm: -230, radius_mm: 80 }] } };
+    expect(radiusProblem({ ...lone, woofers: [placed] }, placed.id, 500, atOrigin)).toContain('raise the margins under Baffle');
   });
 
   it('names one overlap between two woofers once', () => {

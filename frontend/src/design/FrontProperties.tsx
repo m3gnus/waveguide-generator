@@ -148,7 +148,7 @@ function SourcesProperties({ assembly, session, resolved, selection, select, has
   const design = useDesignStore(state => state.design);
   const updateValues = useDesignStore(state => state.updateValues);
   const blocked = mountingBlock(design);
-  const noRoom = (anchor: AssemblyAnchor) => noRoomForWoofer(anchor, resolved, field => design.enclosure[field.split('.')[1] as 'space_b' | 'space_t']);
+  const noRoom = (anchor: AssemblyAnchor) => noRoomForWoofer(anchor, resolved, field => design.enclosure[field.split('.')[1] as 'space_b' | 'space_t' | 'space_l' | 'space_r']);
   const full = noRoom('free');
   const menu = <ActionMenu menuLabel="Where to add the woofer" triggerLabel="Add woofer" triggerTitle={blocked ? 'Woofers need an enclosure.' : full?.reason ?? 'Add a woofer below the mouth'} chevronLabel="Choose where to add it" onPrimary={() => add('below')} placement="below" disabled={!!blocked}
     items={ANCHORS.map(([anchor, label]) => {
@@ -161,7 +161,7 @@ function SourcesProperties({ assembly, session, resolved, selection, select, has
     {woofers.length === 0
       ? full && !blocked
         ? <Notice tone="info" role={null} title="No room for a woofer yet" actions={<button className="btn-primary" type="button"
-          onClick={() => updateValues({ [full.field]: full.value })}>{full.action}</button>}>{full.reason}</Notice>
+          onClick={() => updateValues(full.updates)}>{full.action}</button>}>{full.reason}</Notice>
         : <EmptyState title="No woofers yet" detail="Add one on the front baffle. It is solved together with the horn." action={menu}/>
       : <ul className="front-sources">
         {woofers.map(woofer => <li key={woofer.id}>
