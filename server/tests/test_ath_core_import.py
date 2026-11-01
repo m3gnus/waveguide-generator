@@ -284,7 +284,7 @@ def test_step_api_returns_named_refusal_without_attempting_a_cad_build(body):
     with pytest.raises(HTTPException) as caught:
         asyncio.run(export_step(request, body=body))
     assert caught.value.status_code == 422
-    assert 'STEP export of Mesh.Roundover / Mesh.RearShape = 3' in caught.value.detail
+    assert 'STEP export of ATH' in caught.value.detail
 
 
 def test_core_stl_retains_authored_patches_and_existing_axis_mapping(monkeypatch):

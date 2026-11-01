@@ -58,7 +58,7 @@ def test_step_child_failure_is_a_clear_error_and_parent_survives(
         assert refused.value.status_code == 503
         assert marker.exists(), "the geometry function never entered the child"
         assert int(marker.read_text()) != os.getpid()
-        expected = child.CRASH_MESSAGE if failure == "crash" else "did not finish within 15 s"
+        expected = "WG could not finish this request and has recorded the problem. Try again."
         assert expected in refused.value.detail
         # A fresh child can answer in the same surviving server process.
         monkeypatch.setenv(child.TIMEOUT_ENV, "30")

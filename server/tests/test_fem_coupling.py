@@ -327,7 +327,7 @@ def test_ingest_domain_check_uses_only_received_domain_evidence(tmp_path):
 
     _bundle, manifest, _region_record = _coupling_bundle(tmp_path / "returns")
     assert "Rear chamber" in ingest._refuse_fem_domain(manifest, {}, [])
-    with pytest.raises(ingest.IngestRefusal, match="Rear chamber.*Port.*FEM symmetry supports"):
+    with pytest.raises(ingest.IngestRefusal, match="Rear chamber.*Port.*cannot use this symmetry cut.*Send the whole model"):
         ingest._refuse_fem_domain(manifest, {}, ["x"])
 
 
@@ -391,7 +391,7 @@ def test_reduced_domain_refuses_before_starting_a_region_child(tmp_path, monkeyp
         pytest.fail("a reduced domain must refuse before coupled meshing")
 
     monkeypatch.setattr(ingest, "build_coupled_mesh_isolated", unexpected)
-    with pytest.raises(ingest.IngestRefusal, match="Rear chamber.*Port.*FEM symmetry supports"):
+    with pytest.raises(ingest.IngestRefusal, match="Rear chamber.*Port.*cannot use this symmetry cut.*Send the whole model"):
         ingest._mesh_coupled_regions(bundle, tmp_path, {}, SIZES, {}, ["x"])
 
 
@@ -765,7 +765,7 @@ def test_coupled_and_independent_regions_share_publication_budget(
 
         monkeypatch.setattr(ingest, "_write_cache", publish)
     if exhaustion != "independent-child":
-        with pytest.raises(ingest.IngestRefusal, match="Rear chamber.*wall-clock budget"):
+        with pytest.raises(ingest.IngestRefusal, match="Rear chamber.*took too long.*Simplify"):
             ingest._mesh_coupled_regions(bundle, tmp_path, exterior, SIZES, {}, [], deadline=deadline)
         assert deadlines == [deadline]
         return
@@ -784,7 +784,7 @@ def test_coupled_and_independent_regions_share_publication_budget(
         return {"msh_text": "mesh", "stats": {}, "physical_names": {}}
 
     monkeypatch.setattr(ingest, "build_fem_region_mesh_isolated", independent)
-    with pytest.raises(ingest.IngestRefusal, match="Front chamber.*wall-clock budget"):
+    with pytest.raises(ingest.IngestRefusal, match="Front chamber.*took too long.*Simplify these regions in CAD"):
         ingest._mesh_fem_regions(bundle, tmp_path, coupled, deadline=deadline)
     assert deadlines == [deadline, deadline]
     assert now[0] == 11.0
@@ -1327,7 +1327,7 @@ def test_flag_off_uses_f6_wording_before_coupled_meshing(tmp_path, monkeypatch):
         pytest.fail("flag-off FEM must refuse before coupled meshing")
 
     monkeypatch.setattr(ingest, "build_coupled_mesh_isolated", unexpected)
-    with pytest.raises(ingest.IngestRefusal, match="This return declares FEM regions; this Waveguide Generator has FEM regions turned off\\."):
+    with pytest.raises(ingest.IngestRefusal, match="This model contains FEM regions.*Remove the FEM regions in CAD"):
         ingest._mesh_coupled_regions(bundle, tmp_path, {}, SIZES, {}, [])
 
 

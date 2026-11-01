@@ -67,7 +67,7 @@ def test_in_band_surface_deviation_is_accepted(value):
     ],
 )
 def test_out_of_band_surface_deviation_is_refused(value):
-    with pytest.raises(ImportedMeshError, match="surfaceDeviationMm"):
+    with pytest.raises(ImportedMeshError, match="Surface deviation.*(Enter|Change).*Surface deviation"):
         _validated_surface_deviation(value)
 
 

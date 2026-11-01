@@ -656,7 +656,7 @@ def test_runtime_error_carries_revision_and_internal_message() -> None:
             "code": "internal",
             "seq": 6,
             "designRevision": 27,
-            "message": "mesher unavailable",
+            "message": "WG could not finish this request and has recorded the problem. Try again.",
         }
 
     asyncio.run(scenario())
@@ -683,7 +683,8 @@ def test_convexity_errors_are_routed_only_to_the_actionable_field(
 ) -> None:
     async def scenario() -> None:
         def broken_builder(*_args: Any) -> Any:
-            raise ValueError(diagnostic)
+            from hornlab_mesher.errors import UserRefusal
+            raise UserRefusal("Cross sections", "The profile cannot form a convex outline.", "Change Corner radius or the cross sections.", diagnostic=diagnostic)
 
         transport = FakeTransport()
         protocol = PreviewProtocol(epoch=32, preview_builder=broken_builder)
@@ -694,7 +695,7 @@ def test_convexity_errors_are_routed_only_to_the_actionable_field(
         await transport.incoming.put(None)
         await task
 
-        assert transport.json[1]["fields"] == {field: diagnostic}
+        assert transport.json[1]["fields"] == {field: "The profile cannot form a convex outline. Change Corner radius or the cross sections."}
         assert transport.json[1]["designRevision"] == 28
 
     asyncio.run(scenario())

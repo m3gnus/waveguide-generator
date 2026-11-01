@@ -45,13 +45,13 @@ class PolarConfig(JobModel):
         if isinstance(raw_range, (list, tuple)) and len(raw_range) == 2:
             if raw_step is None:
                 raise ValueError(
-                    "polar_config.angle_step is required when angle_range contains only start/end"
+                    "Angular step is missing. Enter Angular step in Directivity map when setting a start and end angle."
                 )
             try:
                 start, end, step = float(raw_range[0]), float(raw_range[1]), float(raw_step)
                 count = int(round((end - start) / step)) + 1
             except (OverflowError, TypeError, ValueError, ZeroDivisionError) as exc:
-                raise ValueError("polar_config angle range/step must be finite numbers") from exc
+                raise ValueError("The directivity angle range or Angular step is not finite. Enter finite angles and a positive Angular step in Directivity map.") from exc
             result["angle_range"] = (start, end, count)
         return result
 
@@ -72,18 +72,18 @@ class PolarConfig(JobModel):
         start, end, count = self.angle_range
         finite_values = (start, end, self.distance, self.norm_angle, self.inclination)
         if not all(math.isfinite(value) for value in finite_values):
-            raise ValueError("polar_config numeric values must be finite")
+            raise ValueError("A Directivity map value is not finite. Enter finite angles and Measurement distance in Directivity map.")
         if end <= start:
-            raise ValueError("polar_config.angle_range must be increasing")
+            raise ValueError("The directivity angle range ends at or before its start. Increase the end angle or reduce the start angle in Directivity map.")
         if not 2 <= count <= 721:
-            raise ValueError("polar_config angle sample count must be between 2 and 721")
+            raise ValueError("The directivity angle range and Angular step must give 2 to 721 angles. Adjust the range or Angular step in Directivity map.")
         if not start <= self.norm_angle <= end:
             raise ValueError(
-                "polar_config.norm_angle must lie within polar_config.angle_range"
+                f"Normalization angle must be between {start:g}° and {end:g}°. Change Normalization angle in Directivity map."
             )
         if self.angle_step is not None:
             if not math.isfinite(self.angle_step):
-                raise ValueError("polar_config.angle_step must be finite")
+                raise ValueError("Angular step is not finite. Enter a finite Angular step in Directivity map.")
         return self
 
     def resolved_grid(self) -> dict[str, float | int | None]:

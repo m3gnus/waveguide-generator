@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from server.preview.errors import user_error_message
+
 from bisect import bisect_left
 from typing import Any, Literal
 
@@ -142,7 +144,8 @@ class InsertResponse(StrictModel):
 
 def _root(design: DesignConfig) -> FreeformConfig:
     if not isinstance(design.root, FreeformConfig):
-        raise ValueError("FREEFORM curve operations require a FREEFORM design")
+        from hornlab_mesher.errors import UserRefusal
+        raise UserRefusal("Horn family", "Profile editing needs a FREEFORM design.", "Choose FREEFORM under Horn family.")
     return design.root
 
 
@@ -183,14 +186,14 @@ def curves(request: CurvesRequest) -> CurvesResponse:
     try:
         return CurvesResponse(content_key=request.content_key, **_curves(request.design))
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=user_error_message(exc)) from exc
 
 
 def compare(request: CompareRequest) -> CompareResponse:
     try:
         return CompareResponse(content_key=request.content_key, **_compare(request.before, request.after))
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=user_error_message(exc)) from exc
 
 
 def insert(request: InsertRequest) -> InsertResponse:
@@ -207,9 +210,11 @@ def insert(request: InsertRequest) -> InsertResponse:
         length = float(root.length.constant_value())
         z = request.z_mm
         if not 0 < z < length or any(z == a["z"] for a in before[plane]["anchors"]):
-            raise ValueError(f"FREEFORM profile{plane} insert z must be strictly inside a span, not on an anchor")
+            from hornlab_mesher.errors import UserRefusal
+            raise UserRefusal("Insert anchor", f"{'Horizontal' if plane == 'H' else 'Vertical'} profile: the insertion point lies outside a span or on an existing anchor.", "Choose a point between two existing anchors.")
         if len(profile.points) >= 64:
-            raise ValueError(f"FREEFORM profile{plane} insertion would exceed 64 anchors")
+            from hornlab_mesher.errors import UserRefusal
+            raise UserRefusal("Profile anchors", f"{'Horizontal' if plane == 'H' else 'Vertical'} profile already has 64 anchors.", "Remove an anchor before inserting another.")
         params = _params(request.design)
         index = bisect_left([a["z"] for a in before[plane]["anchors"]], z)
         if request.mode == "exact":
@@ -217,6 +222,9 @@ def insert(request: InsertRequest) -> InsertResponse:
                 resolved = freeform_insert_anchor(params[f"profile{plane}"], z=z,
                     default_throat_angle_deg=params.get("a0", 15.5))
             except ValueError as exc:
+                from hornlab_mesher.errors import UserRefusal
+                if isinstance(exc, UserRefusal):
+                    raise
                 raise ValueError(str(exc).replace("profileH", f"profile{plane}")) from exc
             points = []
             for row_index, row in enumerate(resolved["points"]):
@@ -243,7 +251,7 @@ def insert(request: InsertRequest) -> InsertResponse:
         deviation = _compare(request.design, updated)[plane]
         return InsertResponse(content_key=request.content_key, design=updated, deviation=deviation)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=user_error_message(exc)) from exc
 
 
 def mount_freeform(application: FastAPI) -> None:

@@ -10,7 +10,8 @@ from server.design.schema import DesignConfig
 from server.exports import api as exports_api
 from server.mesh import builder
 from server.preview.core import PreviewProtocol, _Request, _compute_value_error_fields
-from server.preview.errors import mesher_error_message
+from server.preview.errors import mesher_error_message, user_error_message
+from hornlab_mesher.errors import UserRefusal
 from server.preview import wall_check
 from server.preview.translate import design_to_mesher_config
 
@@ -116,7 +117,8 @@ def test_real_preview_failure_maps_to_plain_message(caplog):
         with pytest.raises(ValueError, match="normal flip") as error:
             protocol._compute_frame(request)
         fields = _compute_value_error_fields(request, error.value)
-        assert fields["design"].startswith("The 5 mm wall is thicker")
+        assert fields["design"].startswith("The outer wall folds over itself")
+        assert "Reduce Wall thickness" in fields["design"]
         assert str(error.value) in caplog.text
     finally:
         asyncio.run(protocol._preview_service.shutdown())
@@ -126,10 +128,10 @@ def test_real_preview_failure_maps_to_plain_message(caplog):
 @pytest.mark.parametrize("route", ["export_step", "export_stl", "export_profiles"])
 def test_export_failures_use_shared_message(route, diagnostic, expected, monkeypatch, caplog):
     async def fail(*args, **kwargs):
-        raise ValueError(diagnostic)
+        raise UserRefusal("Wall thickness", expected + ".", "Adjust the local profile or Wall thickness.", diagnostic=diagnostic)
 
     def fail_sync(*args, **kwargs):
-        raise ValueError(diagnostic)
+        raise UserRefusal("Wall thickness", expected + ".", "Adjust the local profile or Wall thickness.", diagnostic=diagnostic)
 
     monkeypatch.setattr(exports_api, "build_step_solid", fail)
     monkeypatch.setattr(exports_api, "build_stl", fail)
@@ -149,12 +151,13 @@ def test_solver_build_refusal_uses_shared_message(diagnostic, expected, monkeypa
     import hornlab_mesher.config_builder
 
     def fail(*args, **kwargs):
-        raise ValueError(diagnostic)
+        raise UserRefusal("Wall thickness", expected + ".", "Adjust the local profile or Wall thickness.", diagnostic=diagnostic)
 
     monkeypatch.setattr(hornlab_mesher.config_builder, "build_from_config", fail)
-    with pytest.raises(RuntimeError, match=expected) as error:
+    with pytest.raises(UserRefusal) as error:
         builder._build_sync(design().model_dump(mode="json"))
-    assert str(error.value.__cause__) == diagnostic
+    assert str(error.value) == diagnostic
+    assert user_error_message(error.value).startswith(expected)
     assert diagnostic in caplog.text
 
 

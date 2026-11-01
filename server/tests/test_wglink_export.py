@@ -327,7 +327,7 @@ def test_wglink_export_reuses_commit_left_by_failed_export(
         "hornlab_mesher.config_builder.resolve_geometry", fail_once
     )
 
-    with pytest.raises(HTTPException, match="simulated geometry failure"):
+    with pytest.raises(HTTPException, match="WG could not finish this request.*Try again"):
         service.export_wglink_sync(request, store, workspace, "failed-attempt")
 
     original_identity = saved["identity"]
@@ -699,6 +699,6 @@ def test_ath_cad_link_refusal_is_422_before_identity_or_geometry_work(tmp_path, 
     with pytest.raises(HTTPException) as caught:
         service.export_wglink_sync(request, store, tmp_path, 'ath-refused')
     assert caught.value.status_code == 422
-    assert 'STEP export of Mesh.Roundover / Mesh.RearShape = 3' in caught.value.detail
+    assert 'STEP export of ATH' in caught.value.detail
     assert not (tmp_path / 'cadlink.sqlite3').exists()
     assert not (tmp_path / 'wglink').exists()

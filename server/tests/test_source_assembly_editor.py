@@ -120,7 +120,7 @@ def test_actual_export_and_ingestion_envelope(client, tmp_path, with_vane):
 
 
 @pytest.mark.parametrize("action", ["validate", "export", "ingest"])
-def test_old_mesher_has_actionable_refusal(client, monkeypatch, action):
+def test_missing_pinned_capability_is_a_program_failure(client, monkeypatch, action, caplog):
     original = builtins.__import__
 
     def old_mesher(name, *args, **kwargs):
@@ -131,7 +131,8 @@ def test_old_mesher_has_actionable_refusal(client, monkeypatch, action):
     monkeypatch.setattr(builtins, "__import__", old_mesher)
     result = client.post("/api/source-editor/assembly/" + action, json=document())
     assert result.status_code == 503
-    assert result.json()["detail"] == "This version of WG cannot build this assembly. Update WG."
+    assert result.json()["detail"] == "WG could not finish this request and has recorded the problem. Try again."
+    assert "older installed mesher" in caplog.text
 
 
 @pytest.mark.parametrize("action", ["export", "ingest"])
@@ -210,7 +211,7 @@ def test_horn_profile_uses_shared_errors_without_sampling(client, monkeypatch):
     monkeypatch.setattr(GeneralHornWall, "from_config", invalid)
     response = client.post("/api/source-editor/assembly/horn-profile", json=design)
     assert response.status_code == 422, response.text
-    assert response.json()["detail"] == "bad wall"
+    assert response.json()["detail"] == "WG could not finish this request and has recorded the problem. Try again."
 
     original = builtins.__import__
 

@@ -12,6 +12,7 @@ from server.design.textcfg import parse, serialize
 from server.design.throat_stretch import mesher_supports_stretch
 from server.design_io.api import open_design
 from server.preview.translate import design_to_mesher_config
+from server.preview.errors import user_error_message
 
 _REAL_C4 = pytest.mark.skipif(not mesher_supports_stretch(), reason="needs real C4 mesher")
 
@@ -73,7 +74,7 @@ def test_active_ath_top_refusals_match_mesher(family, top):
     with pytest.raises(HTTPException) as opened_error:
         asyncio.run(open_design(source))
     assert opened_error.value.status_code == 422
-    assert opened_error.value.detail["message"] == str(error.value)
+    assert opened_error.value.detail["message"] == user_error_message(error.value)
 
 
 @pytest.mark.parametrize("family", ["OSSE", "R-OSSE", "ROSSE"])
@@ -196,7 +197,7 @@ def test_raw_ath_invalid_diameter_matches_reader_and_api_even_with_radius(
     with pytest.raises(HTTPException) as opened_error:
         asyncio.run(open_design(source))
     assert opened_error.value.status_code == 422
-    assert opened_error.value.detail["message"] == str(error.value)
+    assert opened_error.value.detail["message"] == user_error_message(error.value)
 
 
 @pytest.mark.parametrize("marker", ["; MWG config", "; Waveguide Generator geometry-interpretation: native-v1"])
@@ -238,7 +239,7 @@ def test_ath_extension_inside_profile_still_refused_by_reader_wg_and_api(family,
     with pytest.raises(HTTPException) as opened_error:
         asyncio.run(open_design(source))
     assert opened_error.value.status_code == 422
-    assert opened_error.value.detail["message"] == str(error.value)
+    assert opened_error.value.detail["message"] == user_error_message(error.value)
 
 
 def test_populated_ath_profile_still_reports_ignored_flat_coefficients():

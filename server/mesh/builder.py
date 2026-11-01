@@ -1018,6 +1018,8 @@ def _build_sync(
 class AssemblyRefusal(ValueError):
     """A design assembly the design mesher cannot build, in the user's words."""
 
+    NO_ASSEMBLY = 'This design has no Sources and baffle assembly. Open Sources and baffle under Mounting to add sources.'
+
 
 def assembly_woofer_rows(design: DesignConfig) -> list[dict[str, Any]]:
     """The design mesher's placement rows of every woofer, enabled or not.
@@ -1066,11 +1068,12 @@ def assembly_mesher_config(design: DesignConfig) -> tuple[dict[str, Any], dict[s
     """
 
     from hornlab_mesher.config_builder import resolve_geometry
+    from hornlab_mesher.errors import UserRefusal
     from hornlab_mesher.enclosure_woofers import mouth_y_edges, resolve_woofer_placements
     from server.design.native import NATIVE_FORMULAS
 
     if design.root.assembly is None:
-        raise AssemblyRefusal("This design has no Sources and baffle assembly.")
+        raise AssemblyRefusal(AssemblyRefusal.NO_ASSEMBLY)
     if design.root.simulation.sim_type == "infinite-baffle":
         raise AssemblyRefusal(
             "Sources and baffle assemblies do not support infinite baffles. "
@@ -1079,7 +1082,7 @@ def assembly_mesher_config(design: DesignConfig) -> tuple[dict[str, Any], dict[s
         )
     if design.root.formula == "SOURCE-DISK":
         raise AssemblyRefusal(
-            "SOURCE-DISK is a standalone source and cannot be built as a Sources and baffle assembly."
+            "SOURCE-DISK is a standalone source and cannot be built as a Sources and baffle assembly. Choose a horn family, or solve the standalone source on its own."
         )
     rows = assembly_woofer_rows(design)
     if design.root.formula in NATIVE_FORMULAS and any(row["enabled"] for row in rows):
@@ -1093,12 +1096,14 @@ def assembly_mesher_config(design: DesignConfig) -> tuple[dict[str, Any], dict[s
     try:
         geometry = resolve_geometry(probe).geometry
         bottom, top = mouth_y_edges(geometry.inner_points)
-    except Exception as exc:
-        raise AssemblyRefusal(f"WG cannot place woofers on this horn: {mesher_error_message(probe, str(exc))}") from exc
+    except UserRefusal as exc:
+        from server.preview.errors import user_error_message
+        raise AssemblyRefusal(user_error_message(exc)) from exc
     try:
         resolved = resolve_woofer_placements(rows, mouth_bottom_mm=bottom, mouth_top_mm=top)
-    except ValueError as exc:
-        raise AssemblyRefusal(f"Woofer placement: {exc}.") from exc
+    except UserRefusal as exc:
+        from server.preview.errors import user_error_message
+        raise AssemblyRefusal(user_error_message(exc)) from exc
     if resolved:
         if config.get("mode") != "enclosure" or not isinstance(config.get("enclosure"), Mapping):
             raise AssemblyRefusal(
@@ -1230,6 +1235,7 @@ def _build_design_artifact(
 ) -> dict[str, Any]:
     try:
         from hornlab_mesher import TriangleBudgetExceeded
+        from hornlab_mesher.errors import UserRefusal
         from hornlab_mesher.config_builder import build_from_config
     except ImportError as exc:
         raise RuntimeError(
@@ -1255,7 +1261,7 @@ def _build_design_artifact(
             result = _build_with_memory_stop(
                 config, mesh_path, limit=memory_limit, build_from_config=build_from_config,
             )
-        except (SolverMemoryTooLarge, MesherEstimateUnavailable):
+        except (UserRefusal, SolverMemoryTooLarge, MesherEstimateUnavailable):
             raise
         except TriangleBudgetExceeded as exc:
             raise RuntimeError(mesher_error_message(config, str(exc))) from exc

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 from typing import Any, Callable, Mapping
 
 from server.design.schema import Expr
@@ -94,3 +95,60 @@ def mesher_error_message(
         return detail
     logger.warning("Mesher geometry diagnostic: %s", detail)
     return message
+
+
+PROGRAM_FAILURE = "WG could not finish this request and has recorded the problem. Try again."
+
+
+def _user_refusal(exc: BaseException):
+    # A typed object can exist only after its defining module was loaded.
+    # Reporting an unrelated program fault must not import the native stack.
+    module = sys.modules.get("hornlab_mesher.errors")
+    refusal_type = getattr(module, "UserRefusal", None)
+    if not isinstance(refusal_type, type):
+        return None
+    if isinstance(exc, refusal_type):
+        return exc
+    forwarded = getattr(exc, "user_refusal", None)
+    if isinstance(forwarded, refusal_type):
+        return forwarded
+    # The text parser keeps its historical public wrapper. Only the explicit
+    # native refusal underneath it is user-actionable.
+    text_module = sys.modules.get("server.design.textcfg")
+    text_error = getattr(text_module, "TextConfigError", None)
+    if isinstance(text_error, type) and isinstance(exc, text_error) and isinstance(exc.__cause__, refusal_type):
+        return exc.__cause__
+    return None
+
+
+def user_error_message(exc: BaseException, *, fallback: str = PROGRAM_FAILURE) -> str:
+    """One public boundary: only typed user remedies leave the server.
+
+    Keep status and wire codes at the caller. Never infer user responsibility
+    from the spelling or apparent readability of an arbitrary exception.
+    """
+    refusal = _user_refusal(exc)
+    if refusal is not None:
+        logger.warning("User refusal (%s): %s", refusal.field, getattr(refusal, "diagnostic", str(exc)))
+        return f"{refusal.user_message} {refusal.next_step}".strip()
+    logger.error("Program failure: %s", exc, exc_info=(type(exc), exc, exc.__traceback__))
+    return fallback
+
+
+def user_error_detail(exc: BaseException) -> str | dict[str, str]:
+    """Typed HTTP detail for clients that can mark the named control."""
+    refusal = _user_refusal(exc)
+    if refusal is None:
+        return user_error_message(exc)
+    user_error_message(exc)  # Keep the original diagnostic in the log.
+    return {"field": refusal.field, "user_message": refusal.user_message, "next_step": refusal.next_step}
+
+
+
+def user_error_as(exc: BaseException, error_type: type[ValueError]) -> ValueError:
+    """Keep a typed refusal through an established server exception wrapper."""
+    wrapped = error_type(user_error_message(exc))
+    refusal = _user_refusal(exc)
+    if refusal is not None:
+        wrapped.user_refusal = refusal
+    return wrapped

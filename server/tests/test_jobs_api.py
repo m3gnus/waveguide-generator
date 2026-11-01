@@ -833,7 +833,7 @@ def test_metadata_patch_maps_malformed_stored_merge_shape_to_422(tmp_path: Path)
 
         assert status == 422
         assert json.loads(raw) == {
-            "detail": "Stored exported_files metadata must be a list of strings"
+            "detail": "WG could not finish this request and has recorded the problem. Try again."
         }
         await app.state.jobs_runtime.shutdown()
 

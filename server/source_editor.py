@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from server.preview.errors import user_error_message
+
 from io import BytesIO
 import json
 from pathlib import Path
@@ -104,15 +106,12 @@ def native_assembly(body: AssemblyRequest):
         from hornlab_mesher.source_assembly import SourceAssembly, assembly_channels
         from hornlab_mesher.phase_plug import PhasePlug as NativePlug
     except ImportError as exc:
-        raise HTTPException(
-            503, "This version of WG cannot build this assembly. Update WG."
-        ) from exc
+        raise HTTPException(503, user_error_message(exc)) from exc
     horn, hf = native(body.horn)
     woofer, lf = native(body.woofer) if body.woofer is not None else (None, None)
     drives = [hf] + ([lf] if lf is not None else [])
     try:
         if body.horn_config is not None:
-            from hornlab_mesher.general_horn import GeneralHornWall  # noqa: F401 - availability probe: an older mesher answers 503
             dimensions = body.dimensions.model_dump()
             if dimensions.pop("horn_length_mm") is not None or dimensions.pop("mouth_radius_mm") is not None:
                 raise ValueError("general horn length and mouth radius derive from the resolved profile; omit both dimensions")
@@ -128,18 +127,15 @@ def native_assembly(body: AssemblyRequest):
         else:
             model = SourceAssembly(horn, woofer, **body.dimensions.model_dump())
         return model, drives, assembly_channels(model, drives)
-    except ImportError as exc:
-        raise HTTPException(503, "This version of WG cannot attach a horn here. Update WG.") from exc
     except (TypeError, ValueError) as exc:
-        raise HTTPException(422, str(exc)) from exc
+        raise HTTPException(422, user_error_message(exc)) from exc
 
 
 def native(document: SourceDocument):
-    # Lazy imports keep an older installed mesher from breaking app startup.
     try:
         from hornlab_mesher.source_contour import ContourDrive, SourceContour
     except ImportError as exc:
-        raise HTTPException(503, "This version of WG cannot edit source contours. Update WG.") from exc
+        raise HTTPException(503, user_error_message(exc)) from exc
     try:
         contour = SourceContour.from_dict(document.contour.model_dump())
         drive = ContourDrive(
@@ -150,7 +146,7 @@ def native(document: SourceDocument):
         drive.validate(contour)
         return contour, drive
     except (TypeError, ValueError) as exc:
-        raise HTTPException(422, str(exc)) from exc
+        raise HTTPException(422, user_error_message(exc)) from exc
 
 
 def canonical_document(contour, drive) -> dict[str, Any]:
@@ -187,10 +183,7 @@ class ExpandRequest(WireModel):
 
 
 def expand(body: ExpandRequest) -> dict[str, Any]:
-    try:
-        from hornlab_mesher.source_contour import ContourDrive, cone, dome, flat
-    except ImportError as exc:
-        raise HTTPException(503, "This version of WG cannot edit source contours. Update WG.") from exc
+    from hornlab_mesher.source_contour import ContourDrive, cone, dome, flat
     try:
         contour = {"flat": flat, "dome": dome, "cone": cone}[body.kind](
             **body.dimensions, physical_source_id=body.physical_source_id, rim_id=body.rim_id
@@ -202,7 +195,7 @@ def expand(body: ExpandRequest) -> dict[str, Any]:
         )
         return validated(SourceDocument.model_validate(canonical_document(contour, drive)))
     except (TypeError, ValueError) as exc:
-        raise HTTPException(422, str(exc)) from exc
+        raise HTTPException(422, user_error_message(exc)) from exc
 
 
 class SplitRequest(WireModel):
@@ -431,12 +424,9 @@ class ExportRequest(WireModel):
 
 def export_bundle(body: ExportRequest, root: Path) -> bytes:
     contour, drive = native(body.document)
-    try:
-        from hornlab_mesher.contour_artifact import export_contour
-        from hornlab_mesher.front_baffle import FrontBaffle
-        from hornlab_mesher.woofer_artifact import export_woofer
-    except ImportError as exc:
-        raise HTTPException(503, "This version of WG cannot attach sources here. Update WG.") from exc
+    from hornlab_mesher.contour_artifact import export_contour
+    from hornlab_mesher.front_baffle import FrontBaffle
+    from hornlab_mesher.woofer_artifact import export_woofer
     root.mkdir(parents=True, exist_ok=True)
     try:
         with tempfile.TemporaryDirectory(dir=root, prefix="source-editor-") as stage:
@@ -459,10 +449,7 @@ def export_bundle(body: ExportRequest, root: Path) -> bytes:
             return result.getvalue()
     except (TypeError, ValueError) as exc:
         # Native subprocess diagnostics may include temporary host paths.
-        detail = str(exc)
-        if "export failed" in detail:
-            detail = "Native geometry export failed. Check the contour and attachment clearances."
-        raise HTTPException(422, detail) from exc
+        raise HTTPException(422, user_error_message(exc)) from exc
 
 
 class HornWallRequest(WireModel):
@@ -492,9 +479,9 @@ def resolve_horn_wall(config=None, *, wall=None, samples=257, design=None):
             "wall_max_radius_mm": max(pole[0] for pole in wall.poles_mm),
         }
     except ImportError as exc:
-        raise HTTPException(503, "This version of WG cannot attach a horn here. Update WG.") from exc
+        raise HTTPException(503, user_error_message(exc)) from exc
     except (TypeError, ValueError) as exc:
-        raise HTTPException(422, str(exc)) from exc
+        raise HTTPException(422, user_error_message(exc)) from exc
 
 
 def create_router(data_dir: Path) -> APIRouter:
@@ -560,12 +547,7 @@ def create_router(data_dir: Path) -> APIRouter:
     )
     def assembly_export_endpoint(body: AssemblyRequest) -> Response:
         model, drives, _ = native_assembly(body)
-        try:
-            from hornlab_mesher.assembly_artifact import export_assembly
-        except ImportError as exc:
-            raise HTTPException(
-                503, "This version of WG cannot export assemblies. Update WG."
-            ) from exc
+        from hornlab_mesher.assembly_artifact import export_assembly
         if not export_lock.acquire(blocking=False):
             raise HTTPException(
                 409, "A source export is already running. Try again when it finishes."
@@ -592,11 +574,7 @@ def create_router(data_dir: Path) -> APIRouter:
                     headers={"Content-Disposition": 'attachment; filename="native-assembly.zip"'},
                 )
         except (TypeError, ValueError) as exc:
-            detail = (
-                "Native assembly could not be exported. Check clearances, density and resource limits."
-                if "export failed" in str(exc)
-                else str(exc)
-            )
+            detail = user_error_message(exc)
             raise HTTPException(422, detail) from exc
         finally:
             export_lock.release()
@@ -604,13 +582,8 @@ def create_router(data_dir: Path) -> APIRouter:
     @router.post("/assembly/ingest")
     def assembly_ingest_endpoint(body: AssemblyRequest, request: Request) -> dict[str, Any]:
         model, drives, _ = native_assembly(body)
-        try:
-            from hornlab_mesher.assembly_artifact import export_assembly
-            from server.cadlink.intake.native_source import ingest_native_source
-        except ImportError as exc:
-            raise HTTPException(
-                503, "This version of WG cannot build shared horn and woofer geometry. Update WG."
-            ) from exc
+        from hornlab_mesher.assembly_artifact import export_assembly
+        from server.cadlink.intake.native_source import ingest_native_source
         if not export_lock.acquire(blocking=False):
             raise HTTPException(
                 409, "A source export is already running. Try again when it finishes."
@@ -697,9 +670,7 @@ def create_router(data_dir: Path) -> APIRouter:
             )
             raise HTTPException(422, SolverMemoryTooLarge.USER_MESSAGE) from exc
         except (TypeError, ValueError) as exc:
-            detail = str(exc)
-            if "export failed" in detail or "ingestion failed" in detail:
-                detail = "Native assembly could not be built. Check source clearances, mesh size and resource limits."
+            detail = user_error_message(exc)
             raise HTTPException(422, detail) from exc
         finally:
             export_lock.release()

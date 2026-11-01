@@ -270,7 +270,7 @@ def test_native_fixture_fits_a_7_gib_runner_dense_solver_ceiling(formula: str, t
 
 
 @pytest.mark.parametrize("formula, updates, message", [
-    ("OSSE-ADAPTER", {"throat_adapter": None}, "requires throat_adapter"),
+    ("OSSE-ADAPTER", {"throat_adapter": None}, "needs a throat adapter"),
     ("OSSE-ADAPTER", {"throat_adapter": {**ADAPTER, "body_handle_mm": 1000}}, "adapter"),
     ("OSSE-ADAPTER-CONTROLS", {"throat_adapter": {"mode": "controls", "control_points_mm": [[0, 1]]}}, "control_points_mm"),
     ("OSSE-AXIAL", {"axial_scale": .01}, "axial_scale/scale"),
@@ -279,10 +279,10 @@ def test_native_fixture_fits_a_7_gib_runner_dense_solver_ceiling(formula: str, t
     ("SOURCE-DISK", {"source_body": {"radius_mm": 18, "outer_radius_mm": 18, "depth_mm": 8}}, "radius"),
     ("SOURCE-DISK", {"mesh": {"size_mm": True}}, "size_mm"),
     ("OSSE-AXIAL", {"a": "40 + p"}, "a"),
-    ("OSSE-ADAPTER", {"source": {"shape": 1}}, "source.shape"),
-    ("OSSE-ARC", {"morph": {"target_shape": 2}}, "morph.target_shape"),
-    ("SOURCE-DISK", {"mesh": {"quadrants": 12}}, "mesh.quadrants"),
-    ("OSSE-AXIAL", {"simulation": {"sim_type": "infinite-baffle"}}, "infinite baffles"),
+    ("OSSE-ADAPTER", {"source": {"shape": 1}}, "Source shape"),
+    ("OSSE-ARC", {"morph": {"target_shape": 2}}, "Target shape"),
+    ("SOURCE-DISK", {"mesh": {"quadrants": 12}}, "Symmetry"),
+    ("OSSE-AXIAL", {"simulation": {"sim_type": "infinite-baffle"}}, "infinite baffle"),
 ])
 def test_invalid_native_compositions_fail_at_schema(formula: str, updates: dict, message: str) -> None:
     payload = design_payload(formula)
@@ -308,7 +308,8 @@ def test_frontend_family_defaults_validate_and_round_trip(formula: str) -> None:
 @pytest.mark.parametrize("formula", FAMILIES)
 @pytest.mark.parametrize("section", [{"exponent": 4}, {"aspect_ratio": 1.5}])
 def test_native_formulas_refuse_nondefault_cross_sections(formula: str, section: dict) -> None:
-    with pytest.raises(ValidationError, match=f"{formula} does not support cross_section"):
+    label = "Cross-section exponent" if "exponent" in section else "Aspect ratio"
+    with pytest.raises(ValidationError, match=f"{label} is unavailable.*Reset {label}"):
         DesignConfig.model_validate({**design_payload(formula), "cross_section": section})
 
 

@@ -243,12 +243,12 @@ def test_ground_plane_is_off_by_default_so_existing_solves_are_unchanged():
 
 
 def test_a_negative_height_is_refused():
-    with pytest.raises(ValueError, match="must not be negative"):
+    with pytest.raises(ValueError, match="Height above surface cannot be negative.*Enter zero or a positive"):
         GroundPlaneConfig(enabled=True, axis="y", height_m=-0.1)
 
 
 def test_a_non_finite_height_is_refused():
-    with pytest.raises(ValueError, match="must be finite"):
+    with pytest.raises(ValueError, match="Height above surface is not finite.*Enter a finite"):
         GroundPlaneConfig(enabled=True, axis="y", height_m=float("inf"))
 
 

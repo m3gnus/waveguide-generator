@@ -27,7 +27,7 @@ from server.platform.gmsh_openmp import pin_gmsh_openmp_initial_thread
 from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES, FrameError, encode
 from server.preview.construction import retain_mesher_construction
 from server.preview.translate import design_to_mesher_config
-from server.preview.errors import mesher_error_message
+from server.preview.errors import user_error_message
 from server.preview import wall_check
 
 
@@ -530,17 +530,16 @@ def _compute_value_error_fields(request: _Request, error: ValueError) -> dict[st
     ``ValueError`` at the global design/points target.
     """
 
-    message = str(error)
-    if request.design is not None:
-        message = mesher_error_message(lambda: design_to_mesher_config(request.design), message)
+    message = user_error_message(error)
+    diagnostic = str(error)
     if request.kind == "preview":
         # The shared mesher validates coverage before building any grid. Attach
         # its actionable refusal to the authored expression without evaluating
         # it again here or changing the message used by solve and export.
         for prefix, field in (("Mouth coverage angle (a)", "a"), ("Throat angle (a0)", "a0")):
-            if message.startswith((prefix + " reaches ", prefix + ":")):
+            if diagnostic.startswith((prefix + " reaches ", prefix + ":")):
                 return {field: message}
-    if request.kind == "preview" and message.startswith(
+    if request.kind == "preview" and diagnostic.startswith(
         "FREEFORM morph to the rectangle target produces a non-convex outline"
     ):
         return {"morph.corner_radius": message}
@@ -842,7 +841,7 @@ class PreviewProtocol:
                     current.seq,
                     current.design_revision,
                     "internal",
-                    message=str(exc),
+                    message=user_error_message(exc),
                 )
             else:
                 if len(frame) > self.max_frame_bytes:

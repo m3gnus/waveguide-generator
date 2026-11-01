@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 _BLOCK_START = re.compile(r"^([\w.:-]+)\s*=\s*\{$")
 _MWG_SNIFF = re.compile(r";\s*(?:Parameter|MWG) config", re.IGNORECASE)
+_PRIVATE_BLOCK_START = re.compile(r"(?m)^\s*(?:WG\.(?:NativeDesign|Geometry|Solve)|CadLink)\s*=\s*\{")
 _LINE_BREAK = re.compile(r"[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 _DESIGN_FORMAT = 2
 # ATH's report block, which carries the design's name in its ``Title``.
@@ -71,6 +72,19 @@ _GEOMETRY_STAMP = re.compile(r"^;\s*Waveguide Generator geometry-interpretation:
 
 class TextConfigError(ValueError):
     """A source-located syntax or design validation failure."""
+
+
+def _text_syntax_refusal(message: str, *, program_owned: bool = False) -> TextConfigError:
+    error = TextConfigError(message)
+    if program_owned:
+        return error
+    from hornlab_mesher.errors import ath_refusal
+    error.user_refusal = ath_refusal(message)
+    if message.startswith("unterminated block "):
+        block = message.removeprefix("unterminated block ").removesuffix(" at end of file")
+        error.user_refusal.user_message = f"The ATH block {block} is not closed."
+    return error
+
 
 
 @dataclass
@@ -298,7 +312,7 @@ def _lex(text: str, repeats: list[tuple[str, _RawBlock]] | None = None) -> tuple
         match = _BLOCK_START.fullmatch(line)
         if match:
             if current is not None:
-                raise TextConfigError(f"nested block {match.group(1)!r} inside {current!r}")
+                raise _text_syntax_refusal(f"nested block {match.group(1)!r} inside {current!r}", program_owned=bool(_PRIVATE_BLOCK_START.search(text)))
             current = match.group(1)
             if current in blocks and not current.startswith("_") and repeats is not None:
                 repeats.append((current, blocks[current]))
@@ -306,7 +320,7 @@ def _lex(text: str, repeats: list[tuple[str, _RawBlock]] | None = None) -> tuple
             continue
         if line == "}":
             if current is None:
-                raise TextConfigError("unexpected block terminator")
+                raise _text_syntax_refusal("unexpected block terminator", program_owned=bool(_PRIVATE_BLOCK_START.search(text)))
             current = None
             continue
         if current is not None:
@@ -331,7 +345,7 @@ def _lex(text: str, repeats: list[tuple[str, _RawBlock]] | None = None) -> tuple
         if current is not None:
             blocks[current].lines.append(line)
     if current is not None:
-        raise TextConfigError(f"unterminated block {current!r} at end of file")
+        raise _text_syntax_refusal(f"unterminated block {current!r} at end of file", program_owned=bool(_PRIVATE_BLOCK_START.search(text)))
     return flat, blocks, comments, raw_values
 
 
@@ -1665,6 +1679,17 @@ def _mesher_validation_text(
 
 
 def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
+    """Keep authored ATH refusal metadata through the existing text wrapper."""
+    try:
+        return _parse(text, migrate=migrate)
+    except TextConfigError as exc:
+        if (isinstance(text, str) and not _PRIVATE_BLOCK_START.search(text)
+                and getattr(exc, "user_refusal", None) is None):
+            raise _text_syntax_refusal(str(exc)) from exc
+        raise
+
+
+def _parse(text: str, *, migrate: bool = True) -> ParsedDesign:
     """Parse and validate a v1 text design, preserving raw expressions/extras.
 
     Dialect sniffing exactly mirrors ``src/geometry/params.js:65-67`` as called

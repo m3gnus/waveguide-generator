@@ -76,17 +76,17 @@ def _number(value: Expr | None, fallback: float) -> float:
         number = value.constant_value()
         if number is not None and math.isfinite(number):
             return float(number)
-        raise ValueError("export mesh controls must be finite scalar expressions")
+        from hornlab_mesher.errors import UserRefusal
+        raise UserRefusal("Export mesh controls", "Export mesh controls need finite numbers.", "Enter finite numbers in Angular segments, Length segments and Corner segments.", diagnostic="export mesh controls must be finite scalar expressions")
     return fallback
 
 
 def _segment_number(value: Expr | None, fallback: float, field: str) -> float:
     number = _number(value, fallback)
     if abs(number) > MAX_EXPORT_SEGMENT_INPUT:
-        raise ValueError(
-            f"{field} is outside the supported export range of "
-            f"±{int(MAX_EXPORT_SEGMENT_INPUT)}"
-        )
+        from hornlab_mesher.errors import UserRefusal
+        label = {"mesh.angular_segments": "Angular segments", "mesh.length_segments": "Length segments", "mesh.corner_segments": "Corner segments"}.get(field, "Export mesh controls")
+        raise UserRefusal(label, f"{label} is outside the supported export range of ±{int(MAX_EXPORT_SEGMENT_INPUT)}.", f"Reduce {label} before exporting.", diagnostic=f"{field} is outside the supported export range of ±{int(MAX_EXPORT_SEGMENT_INPUT)}")
     return number
 
 
@@ -719,7 +719,8 @@ def _surface_grid_plan(design: DesignConfig) -> GridPlan:
 def _refuse_ath_step(design: DesignConfig) -> None:
     mesh = design.root.mesh
     if mesh.ath_roundover is not None or mesh.ath_rear_shape == 3:
-        raise ValueError(
+        from hornlab_mesher.errors import UserRefusal
+        raise UserRefusal("Export format", "STEP export of ATH “Mesh.Roundover” / “Mesh.RearShape = 3” imports is unavailable.", "Export STL to retain the imported shape, or remove those settings from the ATH text before importing again.", diagnostic=
             "STEP export of Mesh.Roundover / Mesh.RearShape = 3 imports is unsupported: "
             "GEO spline/Coons patches cannot be exported by the OCC STEP writer; "
             "faithful OCC ring patches, rear fan and shared-seam solid sewing are not implemented"
@@ -1160,7 +1161,10 @@ def build_profiles(design: DesignConfig, kind: str) -> str:
     """Rebuild the bare, uniform-ring inner surface without vertical offset."""
 
     if design.formula in NATIVE_FORMULAS:
-        raise ValueError(f"{design.formula} cannot export profile CSVs: the ring-grid format cannot represent the complete native construction. Export STEP instead.")
+        from hornlab_mesher.errors import UserRefusal
+        raise UserRefusal("Export format", "Profile CSV cannot represent this horn's complete shape.",
+                          "Choose STEP in Export format.",
+                          diagnostic=f"{design.formula} cannot export profile CSVs: the ring-grid format cannot represent the complete native construction. Export STEP instead.")
     return profile_csv(
         _inner_grid(design, profile_sampling=True),
         kind,

@@ -760,8 +760,8 @@ def test_jobs_solver_path_keeps_digit_list_1234_not_bitmask_15() -> None:
     "frequencies, match",
     [
         ([], "at least one"),
-        ([500.0, 500.0], "strictly ascending"),
-        ([1000.0, 500.0], "strictly ascending"),
+        ([500.0, 500.0], "Solver frequencies in Hz must increase without duplicates.*Enter"),
+        ([1000.0, 500.0], "Solver frequencies in Hz must increase without duplicates.*Enter"),
         ([0.0, 500.0], "positive"),
         ([-1.0], "positive"),
         ([float("nan")], "finite"),
@@ -778,7 +778,7 @@ def test_explicit_frequencies_reject_unusable_lists(frequencies, match: str) -> 
     "extra", [{"num_frequencies": 8}, {"frequency_range": [200.0, 20_000.0]}]
 )
 def test_explicit_frequencies_refuse_to_coexist_with_a_generated_grid(extra) -> None:
-    with pytest.raises(ValidationError, match="cannot be combined"):
+    with pytest.raises(ValidationError, match="Sweep points.*Choose one in Solve options"):
         SolveOptions(frequencies_hz=[500.0, 1000.0], **extra)
 
 

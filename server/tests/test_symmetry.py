@@ -139,7 +139,7 @@ def test_forced_absent_plane_is_rejected_without_mutating_design(
                 factory=lambda _name: DryRunEngine(),
             ),
         )
-        with pytest.raises(SymmetryValidationError, match="xz plane: sampled horn surface"):
+        with pytest.raises(SymmetryValidationError, match="model does not have the mirror planes.*Choose Full model"):
             await runtime.submit(request)
         await runtime.shutdown()
 

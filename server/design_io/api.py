@@ -49,7 +49,8 @@ def _design_filename(value: object, design: DesignConfig) -> str:
 
 
 def _parse_detail(exc: Exception) -> dict[str, str]:
-    return {"type": "parse_error", "message": str(exc)}
+    from server.preview.errors import user_error_message
+    return {"type": "parse_error", "message": user_error_message(exc)}
 
 
 def _report(parsed: ParsedDesign) -> dict[str, Any]:

@@ -994,7 +994,7 @@ def test_a_declared_half_with_a_side_identified_source_is_refused(tmp_path: Path
             _faces_near(_half_disc_centre(0.0, 15.0, 10.0, 1, 0)), sources=[source], domain=("x0",),
         )
 
-    with pytest.raises(IngestRefusal, match="declares it was already cut on x0, but source woofer-left is identified as the left one"):
+    with pytest.raises(IngestRefusal, match="driver marked for only one side.*Send the whole model"):
         _ingest(bundle("declared-left", "woofer-left"), tmp_path / "data")
     # Control: the same declaration of an unsided source is mirrored.
     declared = _ingest(bundle("declared-woofer", "woofer"), tmp_path / "data-control")

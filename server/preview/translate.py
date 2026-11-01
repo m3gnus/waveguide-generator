@@ -418,11 +418,6 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
 
     scale = _scale_factor(root.scale)
     s1, s2 = getattr(root, "s1", None) or 0, getattr(root, "s2", None) or 0
-    if s1 != 0 or s2 != 0:
-        from server.design.throat_stretch import mesher_supports_stretch
-
-        if not mesher_supports_stretch():
-            raise ValueError("nonzero throat stretch s1/s2 needs mesher 0.2.4")
     current_import = root.text_import_version == "ath-2026-09a-v2"
     active_stretch = s1 != 0 and s2 != 0
     # ATH scales the finished profile, including implicit morph extents rounded

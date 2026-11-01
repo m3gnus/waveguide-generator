@@ -25,7 +25,6 @@ from server.design.textcfg import serialize
 from server.design.uid import DesignUid
 from server.mesh.child import run_mesh_build
 from server.platform.paths import app_root
-from server.preview.errors import mesher_error_message
 from server.preview.translate import design_to_mesher_config
 from server.workspace.archive_identity import bind_design_lineage
 
@@ -139,13 +138,14 @@ def _instance_slug(store: CadLinkStore, lineage_id: str, design_name: str) -> st
 
 
 def export_error(exc: Exception, design: DesignConfig | None = None) -> HTTPException:
-    detail = str(exc) if design is None else mesher_error_message(lambda: design_to_mesher_config(design), str(exc))
+    from server.preview.errors import user_error_message
+    detail = user_error_message(exc)
     if isinstance(exc, (ValueError, TypeError)):
         return HTTPException(status_code=422, detail=detail)
     if isinstance(exc, (ImportError, RuntimeError, sqlite3.OperationalError)):
         return HTTPException(status_code=503, detail=detail)
     logger.warning("Request failed: %s", detail)
-    return HTTPException(status_code=500, detail="WG could not export this design. Try again.")
+    return HTTPException(status_code=500, detail=detail)
 
 
 def _app_version() -> str:
@@ -345,10 +345,8 @@ def export_wglink_sync(
         config = design_to_mesher_config(request.design)
         enclosure = resolve_enclosure_bounds(config) if config.get("mode") == "enclosure" else None
         if enclosure is not None and enclosure.get("flush_mount"):
-            raise ValueError(
-                "Flush enclosures cannot be sent to Fusion or exported as a "
-                "WGLink bundle yet. Add an enclosure margin or export STEP."
-            )
+            from hornlab_mesher.errors import UserRefusal
+            raise UserRefusal("Enclosure margins", "Flush enclosures cannot be sent to Fusion or exported as a WGLink bundle yet.", "Add an enclosure margin or export STEP.")
     except ValueError as exc:
         raise export_error(exc, request.design) from exc
     workspace_root = workspace_root.resolve()

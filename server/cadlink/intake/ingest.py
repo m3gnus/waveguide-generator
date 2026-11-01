@@ -195,7 +195,7 @@ class IngestRefusal(ValueError):
         self.reason_code = reason_code
         self.corruption = corruption
         self.area_drift_sources = tuple(area_drift_sources)
-        super().__init__(f"{stage}: {message}")
+        super().__init__(message if user_worded else f"{stage}: {message}")
 
 
 def _fem_rule(exc: BaseException) -> bool:
@@ -1175,10 +1175,8 @@ def _design_target_hint(store: CadLinkStore, design_ids: set[str]) -> str:
             row = None
         if isinstance(row, Mapping):
             filename = str(row.get("filename") or "").strip()
-        described.append(
-            f"{filename} · {design_id}" if filename
-            else f"{design_id}, which is not in this workspace"
-        )
+        logger.warning("CAD return design target: %s (%s)", design_id, filename or "not in this workspace")
+        described.append(f"“{filename}”" if filename else "a design that is not in this workspace")
     return "; ".join(described)
 
 
@@ -1312,16 +1310,18 @@ def _admit_return(
         if expected_design_id is None:
             raise IngestRefusal(
                 "stage 2 project gate",
-                "this CAD return belongs to the WG design it was exported from "
-                f"({_design_target_hint(store, returned_design_ids)}); open that "
+                "This CAD return belongs to the WG design it was exported from "
+                f"({_design_target_hint(store, returned_design_ids)}). Open its workspace and choose that "
                 "design from File → CAD-linked designs before preparing it",
+                user_worded=True,
             )
         if expected_design_id not in returned_design_ids:
             raise IngestRefusal(
                 "stage 2 project gate",
-                "the selected CAD return belongs to another CAD-linked project "
+                "The selected CAD return belongs to another CAD-linked project "
                 f"({_design_target_hint(store, returned_design_ids)}); "
                 "open that project from File → CAD-linked designs before preparing it",
+                user_worded=True,
             )
     matching_design_instances = [
         instance
@@ -1332,8 +1332,9 @@ def _admit_return(
     if expected_instance_id is None and len(matching_design_instances) > 1:
         raise IngestRefusal(
             "stage 2 instance gate",
-            "the selected CAD return contains more than one instance of this "
+            "The selected CAD return contains more than one instance of this "
             "design; choose the linked instance before preparing it",
+            user_worded=True,
         )
     resolved_instance_id = expected_instance_id
     if resolved_instance_id is None and len(matching_design_instances) == 1:
@@ -1353,7 +1354,8 @@ def _admit_return(
         if len(selected_instances) != 1:
             raise IngestRefusal(
                 "stage 2 instance gate",
-                f"selected instance {resolved_instance_id!r} is not present exactly once",
+                "The selected CAD instance is missing or appears more than once. Choose one current instance in CAD Link, then prepare it again.",
+                user_worded=True,
             )
         selected_instance = selected_instances[0]
         if (
@@ -1362,16 +1364,19 @@ def _admit_return(
         ):
             raise IngestRefusal(
                 "stage 2 instance gate",
-                f"selected instance {resolved_instance_id!r} belongs to another design",
+                "The selected CAD instance belongs to another design. Open that design in CAD Link, or choose this design’s instance.",
+                user_worded=True,
             )
         anchor_instance_id = manifest["coordinate_system"].get(
             "solver_anchor_instance_id"
         )
         if anchor_instance_id is not None and anchor_instance_id != resolved_instance_id:
+            logger.warning("Selected CAD instance %r is not the return's solver anchor %r", resolved_instance_id, anchor_instance_id)
             raise IngestRefusal(
                 "stage 2 instance gate",
-                f"selected instance {resolved_instance_id!r} is not the return's "
-                f"solver anchor {anchor_instance_id!r}",
+                "The selected instance is not this CAD return’s solve anchor. "
+                "Choose the anchor instance in CAD Link, or send a return for this instance.",
+                user_worded=True,
             )
     return resolved_instance_id
 
@@ -1648,9 +1653,14 @@ def _ingest_bundle(
                     if marker in message:
                         stage = labelled
                         break
+                user_worded = isinstance(exc, RoleResolutionError) and bool(exc.user_message and exc.next_step)
+                if user_worded:
+                    logger.warning("Source selection diagnostic: %s", exc)
+                    message = f"{exc.user_message} {exc.next_step}"
                 raise IngestRefusal(
                     stage,
                     message,
+                    user_worded=user_worded,
                     area_drift_sources=(
                         exc.area_drift_sources
                         if isinstance(exc, RoleResolutionError)
@@ -1747,12 +1757,13 @@ def _ingest_bundle(
         # than its paint, so the paint check that guards evidence is not asked.)
         identity = _side_identity_problem(manifest)
         if identity is not None:
+            logger.warning("Declared cut source identity diagnostic: %s", identity)
             raise IngestRefusal(
                 "stage 6 symmetry",
-                "symmetry: this return declares it was already cut on "
-                + ", ".join(declared_domain_planes(manifest))
-                + f", but {identity}. Send the whole model, or rename the source if it is not "
-                "one side's own driver.",
+                "This cut model has a driver marked for only one side. "
+                "Send the whole model, or change that driver's name in Sources & Mesh… "
+                "if it should be mirrored.",
+                user_worded=True,
             )
     # Stage 3: a model already cut in CAD that no evidence mirrored. Solved as
     # shown it would be part of a speaker in free space, so it is recovered as
@@ -1817,7 +1828,7 @@ def _ingest_bundle(
                          if verdict.get("reflected"))
         if manifest["scope"].get("fem_regions") and reflected:
             raise IngestRefusal("stage 6 symmetry", "The author-cut model keeps the negative side; "
-                                "FEM regions need the positive side. Export the positive side instead.")
+                                "FEM regions need the positive side. Export the positive side instead.", user_worded=True)
         try:
             coupled_exterior, coupled_regions = _mesh_coupled_regions(
                 bundle, imports_root, built, normalized_mesh, options, applied_planes, deadline=fem_deadline,
@@ -2323,6 +2334,7 @@ def _record_mesh_recovery_diagnostic(record: Mapping[str, Any]) -> None:
 # One aggregate budget for all region children, queueing, staging and publication.
 # Density and region count remain entirely user-selected.
 FEM_REGIONS_WALL_TIME_S = MESH_BUDGET.wall_time_s
+_FEM_TIMEOUT_MESSAGE = "preparing the FEM regions took too long. Simplify these regions in CAD, then send the model again."
 
 
 def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], planes: Any, *,
@@ -2334,7 +2346,7 @@ def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], 
     if not fem_regions_enabled():
         raise IngestRefusal(
             "stage 7 meshing",
-            "This return declares FEM regions; this Waveguide Generator has FEM regions turned off.",
+            "This model contains FEM regions, which are turned off in WG. Remove the FEM regions in CAD before sending the model again.",
             user_worded=True,
         )
     from server.solver.coupled_admission import fem_group_options_problem
@@ -2342,7 +2354,7 @@ def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], 
     problem = fem_group_options_problem(regions)
     if problem:
         code, message = problem
-        raise IngestRefusal("stage 2 scope gate", message, reason_code=code)
+        raise IngestRefusal("stage 2 scope gate", message, reason_code=code, user_worded=True)
     # Shared moving groups are retained here: the CAD declaration does not
     # carry WG's driver spec. Admission checks multi-region channels against
     # the chosen electrodynamic drivers before any solve can start.
@@ -2353,11 +2365,11 @@ def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], 
         ) for region in regions
     )
     if any(p not in {"x0", "y0"} for p in planes):
-        raise IngestRefusal("stage 7 meshing", f"{labels}: FEM symmetry supports only x0 and y0.", user_worded=True)
+        raise IngestRefusal("stage 7 meshing", f"{labels}: FEM regions cannot use this symmetry cut. Send the whole model, or cut it only on the horizontal or vertical centre plane.", user_worded=True)
     if final_domain and set(planes) == {"y0"}:
         raise IngestRefusal("stage 6 symmetry", f"{labels}: y0-only FEM returns cannot be solved "
                             "by BEAT. Export without the y0 cut, or keep the x0 cut "
-                            "along with y0 when preparing the return.", symmetry_plane="y0")
+                            "along with y0 when preparing the return.", symmetry_plane="y0", user_worded=True)
     return labels
 
 
@@ -2387,7 +2399,7 @@ def _mesh_coupled_regions(
     def check_deadline() -> None:
         if time.monotonic() >= deadline:
             raise IngestRefusal(
-                "stage 7 meshing", f"{labels}: the total FEM regions wall-clock budget was exhausted.",
+                "stage 7 meshing", f"{labels}: {_FEM_TIMEOUT_MESSAGE}",
                 user_worded=True,
             )
 
@@ -2475,7 +2487,7 @@ def _mesh_fem_regions(
     if not fem_regions_enabled():
         raise IngestRefusal(
             "stage 7 meshing",
-            "This return declares FEM regions; this Waveguide Generator has FEM regions turned off.",
+            "This model contains FEM regions, which are turned off in WG. Remove the FEM regions in CAD before sending the model again.",
             user_worded=True,
         )
     records = []
@@ -2485,8 +2497,7 @@ def _mesh_fem_regions(
     def check_deadline(region: Mapping[str, Any]) -> None:
         if time.monotonic() >= deadline:
             raise IngestRefusal(
-                "stage 7 meshing", f"FEM region {region['name']!r}: the total FEM regions "
-                "wall-clock budget was exhausted.",
+                "stage 7 meshing", f"FEM region {region['name']!r}: {_FEM_TIMEOUT_MESSAGE}",
                 user_worded=True,
             )
     for region in regions:

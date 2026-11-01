@@ -48,7 +48,7 @@ STUB_MSH = "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n"
 
 
 @pytest.mark.parametrize("error_type", ["ConfigError", "MesherError"])
-def test_mesher_refusals_return_422_with_the_readable_message(monkeypatch, error_type):
+def test_untyped_mesher_errors_return_422_without_raw_diagnostics(monkeypatch, error_type):
     from hornlab_mesher.config_parser import ConfigError
     from hornlab_mesher.mesher import MesherError
 
@@ -64,7 +64,7 @@ def test_mesher_refusals_return_422_with_the_readable_message(monkeypatch, error
     with TestClient(app) as client:
         response = client.post("/api/solver-mesh", json={"design": _rosse().model_dump(mode="json")})
     assert response.status_code == 422
-    assert response.json()["detail"] == message
+    assert response.json()["detail"] == "WG could not finish this request and has recorded the problem. Try again."
 
 
 def _stub_worker(calls: list[int]):
@@ -268,7 +268,7 @@ def test_requested_domain_follows_the_solve_symmetry_mode(monkeypatch) -> None:
             "quarter",
         )
         assert refused["quadrants"] == 12
-        assert "Forced symmetry" in refused["plan"]["refusal"]
+        assert "model does not have the mirror planes" in refused["plan"]["refusal"]
         assert refused["msh_text"] == STUB_MSH
 
     try:
@@ -600,7 +600,7 @@ def test_validation_mode_rechecks_cached_mesh_without_rebuilding(monkeypatch):
         with pytest.raises(HTTPException) as refused:
             await _preview_response(_rosse(), "auto", options=SolveOptions(mesh_validation_mode="strict"))
         assert refused.value.status_code == 422
-        assert refused.value.detail == "Solver mesh failed strict topology integrity validation"
+        assert refused.value.detail == "WG could not finish this request and has recorded the problem. Try again."
         repeated = await _preview_response(_rosse(), "auto", options=SolveOptions(mesh_validation_mode="warn"))
         assert repeated["stats"]["mesh_cache_hit"] is True
         assert repeated["stats"]["mesh_cache_key"] == warned["stats"]["mesh_cache_key"]

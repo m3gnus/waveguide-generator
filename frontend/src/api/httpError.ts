@@ -37,6 +37,32 @@ export interface NamedControl {
   place?: string;
 }
 
+const SOLVE_CONTROLS: Record<string, NamedControl> = {
+  engine: { label: 'Solver', place: 'Solve options' },
+  accuracy: { label: 'Accuracy', place: 'Solve options' },
+  symmetry: { label: 'Symmetry', place: 'Solve options' },
+  solver_mode: { label: 'Solver mode', place: 'Solve options' },
+  frequency_range: { label: 'Frequency range', place: 'Solve options' },
+  num_frequencies: { label: 'Frequency samples', place: 'Solve options' },
+  frequencies_hz: { label: 'Solver frequencies in Hz', place: 'Solve options' },
+  frequency_spacing: { label: 'Sweep spacing', place: 'Solve options' },
+  adaptive_frequency_sampling: { label: 'Adaptive frequency sampling (experimental)', place: 'Solve options' },
+  mesh_ladder: { label: 'Per-band mesh ladder', place: 'Solve options' },
+  mesh_validation_mode: { label: 'Mesh validation', place: 'Solve options' },
+  'ground_plane.enabled': { label: 'Ground plane', place: 'Solve options' },
+  'ground_plane.axis': { label: 'Reflecting surface', place: 'Ground plane under Solve options' },
+  'ground_plane.height_m': { label: 'Height above surface', place: 'Ground plane under Solve options' },
+  'polar_config.angle_range': { label: 'Angle range', place: 'Directivity map under Solve options' },
+  'polar_config.angle_step': { label: 'Angular step', place: 'Directivity map under Solve options' },
+  'polar_config.distance': { label: 'Measurement distance', place: 'Directivity map under Solve options' },
+  'polar_config.norm_angle': { label: 'Normalization angle', place: 'Directivity map under Solve options' },
+  'polar_config.inclination': { label: 'Diagonal plane angle', place: 'Directivity map under Solve options' },
+  'polar_config.enabled_axes': { label: 'Directivity planes', place: 'Directivity map under Solve options' },
+  'polar_config.observation_origin': { label: 'Measurement origin', place: 'Directivity map under Solve options' },
+  'polar_config.spherical_sampling': { label: 'Keep 3D balloon result', place: 'Directivity map under Solve options' },
+  'polar_config.field_plane': { label: 'Keep field plane data', place: 'Directivity map under Solve options' },
+};
+
 let controlFor: (path: string) => NamedControl | null = () => null;
 /** Who can name a field. This owner stays free of runtime dependencies, so the parameter registry registers it. */
 export function nameFieldsWith(lookup: typeof controlFor): void { controlFor = lookup; }
@@ -63,7 +89,8 @@ export function rowSentence(message: string): string {
 export function fieldSentence(location: readonly unknown[], message: string): string | null {
   const own = validationSentence(message);
   if (own) return own;
-  const control = controlFor(fieldPath(location));
+  const path = fieldPath(location);
+  const control = location.includes('options') ? SOLVE_CONTROLS[path.replace(/\.\d+/g, '')] ?? controlFor(path) : controlFor(path);
   if (!control) return null;
   const where = control.place ? ` in ${control.place}` : '';
   const bound = FRAMEWORK_BOUND.exec(message);
@@ -159,6 +186,11 @@ export function refusalText(detail: unknown, operation: string, fallback = PLAIN
     return words;
   }
   if (detail && typeof detail === 'object') {
+    const typed = detail as { field?: unknown; user_message?: unknown; next_step?: unknown };
+    if (typeof typed.field === 'string' && typeof typed.user_message === 'string' && typeof typed.next_step === 'string') {
+      const said = `${typed.user_message} ${typed.next_step}`.trim();
+      return readsPlain(said) ? said : shown(said, operation, fallback);
+    }
     const { message, next_step: next } = detail as { message?: unknown; next_step?: unknown };
     if (typeof message === 'string' && message.trim()) {
       const said = [message, typeof next === 'string' ? next : ''].filter(Boolean).join(' ');

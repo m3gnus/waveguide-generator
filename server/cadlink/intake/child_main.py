@@ -538,6 +538,10 @@ def main(argv: list[str] | None = None) -> int:
         # ``RoleResolutionError`` carries the sources whose area drifted, and
         # ingestion turns that list into an actionable override prompt. It has
         # to survive the boundary or the refusal loses its remedy.
+        from server.mesh.imported import RoleResolutionError
+        if isinstance(exc, RoleResolutionError) and exc.user_message and exc.next_step:
+            error["user_message"] = exc.user_message
+            error["next_step"] = exc.next_step
         drift = getattr(exc, "area_drift_sources", None)
         if isinstance(drift, (list, tuple)):
             error["area_drift_sources"] = [str(value) for value in drift]

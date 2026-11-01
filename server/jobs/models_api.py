@@ -11,6 +11,8 @@ derives which saved setup applies from the prepared mesh's source inventory.
 from __future__ import annotations
 
 import asyncio
+from server.preview.errors import user_error_message
+
 from collections import OrderedDict
 from copy import deepcopy
 import hashlib
@@ -51,7 +53,7 @@ from server.jobs.runtime import ImportedSolveRefusal
 from server.mesh.artifact import read_verified_import_mesh
 from server.design.schema import DesignConfig
 from server.design.uid import DesignUid
-from server.mesh.builder import _enforce_dense_solver_memory_ceiling, assembly_front_context
+from server.mesh.builder import AssemblyRefusal, _enforce_dense_solver_memory_ceiling, assembly_front_context
 from server.mesh.child import MesherChildError, MesherCrashError, run_mesh_build
 from server.mesh.errors import SolverMemoryTooLarge
 from server.mesh.file_import import MAX_MESH_BYTES, FileMesh, file_mesh_integrity, inspect_file_mesh, mesh_text, parse_file_mesh, prepare_file_mesh, prepare_file_mesh_input, finish_file_mesh_preparation, solve_group_tags, validate_file_symmetry, validate_remove_lid_planes
@@ -216,9 +218,11 @@ def _file_original(body: MeshRegistration) -> FileMesh:
     if len(set(body.source_tags)) != len(body.source_tags) or set(body.source_tags) - set(
         original.tags.tolist()
     ):
-        raise ValueError("Select unique driven groups that exist in this mesh.")
+        from hornlab_mesher.errors import UserRefusal
+        raise UserRefusal("Driven groups", "Select unique driven groups that exist in this mesh.", "Choose each current driver surface once in Sources & Mesh….")
     if body.roles is not None and set(body.roles) - set(original.tags.tolist()):
-        raise ValueError("Assign roles only to groups that exist in this mesh.")
+        from hornlab_mesher.errors import UserRefusal
+        raise UserRefusal("Surface roles", "A surface role refers to a group outside this mesh.", "Assign roles only to current groups in Sources & Mesh….")
     return original
 
 
@@ -412,9 +416,8 @@ async def prepare_registration(body: MeshRegistration, cancel_cb: Any = None) ->
         try:
             return await run_mesh_build(finish_file_mesh_preparation, preparation, cancel_cb=cancel_cb)
         except MesherCrashError as exc:
-            raise ValueError(
-                "Cutting this mesh stopped before it finished. Choose Full model in the symmetry settings and try again."
-            ) from exc
+            from hornlab_mesher.errors import UserRefusal
+            raise UserRefusal("Symmetry", "Cutting this mesh stopped before it finished.", "Choose Full model in the symmetry settings and try again.") from exc
     return await asyncio.to_thread(finish_file_mesh_preparation, preparation, cancel_cb=cancel_cb)
 
 
@@ -773,14 +776,14 @@ def mount_models_api(application: FastAPI) -> None:
         except (StaleAttempt, PreparationSuperseded):
             return _refusal(409, "preparation_superseded", "A newer mesh is already on screen.")
         except (MesherChildError, MesherCrashError) as exc:
-            return _refusal(422, "mesh_refused", str(exc))
+            return _refusal(422, "mesh_refused", user_error_message(exc))
         except ModelRefusal as exc:
             return _refusal(exc.status, exc.code, str(exc))
         except SolverMemoryTooLarge as exc:
             logger.warning("Solver memory admission refused a mesh: %s", exc)
             return _refusal(422, "solver_memory_exceeded", SolverMemoryTooLarge.USER_MESSAGE)
         except ValueError as exc:
-            return _refusal(422, "mesh_refused", str(exc))
+            return _refusal(422, "mesh_refused", user_error_message(exc))
 
     async def read(call: Any, *args: Any) -> Any:
         """Run a read: it takes no input to refuse, so a failure is a damaged record."""
@@ -840,10 +843,10 @@ def mount_models_api(application: FastAPI) -> None:
         try:
             design = DesignConfig.model_validate(body.design)
             return await assembly_front_context(design)
-        except (MesherChildError, MesherCrashError) as exc:
+        except AssemblyRefusal as exc:
             return _refusal(422, "assembly_refused", str(exc))
-        except ValueError as exc:
-            return _refusal(422, "assembly_refused", str(exc))
+        except Exception as exc:
+            return _refusal(422, "assembly_refused", user_error_message(exc))
 
     @router.post("/assembly/compile", responses=refused)
     async def assembly_compile(body: AssemblyCompileRequest) -> Any:
@@ -866,10 +869,10 @@ def mount_models_api(application: FastAPI) -> None:
         except SolverMemoryTooLarge as exc:
             logger.warning("Solver memory admission refused an assembly: %s", exc)
             return _refusal(422, "solver_memory_exceeded", SolverMemoryTooLarge.USER_MESSAGE)
-        except (MesherChildError, MesherCrashError) as exc:
+        except AssemblyRefusal as exc:
             return _refusal(422, "assembly_refused", str(exc))
-        except ValueError as exc:
-            return _refusal(422, "assembly_refused", str(exc))
+        except Exception as exc:
+            return _refusal(422, "assembly_refused", user_error_message(exc))
         if outcome["status"] != "published":
             return {"status": outcome["status"]}
         record = outcome["record"]

@@ -298,11 +298,23 @@ def _solver_plan_adjustments(
     return [item for item in adjustments if isinstance(item, Mapping)]
 
 
+def _solver_failure_code(exc: BaseException) -> str:
+    """Diagnostic classification only: never a status or retry decision."""
+    from server.solver.beat_runtime.client import HostError
+    from server.solver.bempp_process import BemppWorkerError
+    if isinstance(exc, (HostError, BemppWorkerError)):
+        return "solver_engine_stopped"
+    if isinstance(exc, MemoryError):
+        return "solver_memory_exhausted"
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return "solver_connection_lost"
+    return "solver_failed"
+
+
 def _failure_message(exc: BaseException) -> str:
-    """A failed job's error message: the exception's text, never empty."""
+    """Classify public failure words without changing run or retry behaviour."""
 
     from server.mesh.errors import MesherEstimateUnavailable, SolverMemoryTooLarge
-    from server.solver.beat_runtime.client import HostError
 
     if isinstance(exc, SolverMemoryTooLarge):
         logger.warning("Solver memory admission refused a mesh: %s", exc)
@@ -310,9 +322,26 @@ def _failure_message(exc: BaseException) -> str:
     if isinstance(exc, MesherEstimateUnavailable):
         logger.error("Cannot check mesh memory before generation: %s", exc)
         return MesherEstimateUnavailable.USER_MESSAGE
-    if isinstance(exc, HostError):
-        return "The solver engine stopped before the solve finished. Press Solve to try again."
-    return str(exc).strip() or FAILED_WITHOUT_DETAIL_MESSAGE
+    if isinstance(exc, (ImportedSolveRefusal, RemovedSolverError)):
+        # These existing domain types carry stable reason codes used by run
+        # classification and already own their public remedy.
+        logger.warning("Solve refusal: %s", exc)
+        return str(exc)
+    # This affects presentation only. The caller still owns status, retry and
+    # engine fallback decisions; originals stay in its developer log.
+    logger.error("Solver failure [%s] (%s): %s", _solver_failure_code(exc), type(exc).__name__, exc,
+                 exc_info=(type(exc), exc, exc.__traceback__))
+    code = _solver_failure_code(exc)
+    from server.preview.errors import _user_refusal, user_error_message
+    if _user_refusal(exc) is not None:
+        return user_error_message(exc)
+    return {
+        "solver_engine_stopped": "The solver engine stopped before the solve finished. Press Solve to try again.",
+        "solver_memory_exhausted": "The solver ran out of memory. Close other applications, then press Solve to try again.",
+        "solver_connection_lost": "WG lost contact with the solver engine. Restart WG, then press Solve to try again.",
+        "solver_failed": "WG could not finish this solve and has recorded the problem. Press Solve to try again.",
+    }[code]
+
 
 
 def _now_iso() -> str:
@@ -871,7 +900,11 @@ async def resolve_submission(
             request.options.symmetry, resolution
         )
     except ValueError as exc:
-        refuse(SymmetryValidationError(str(exc)))
+        from hornlab_mesher.errors import UserRefusal
+        from server.preview.errors import user_error_as
+        problem = ("The model or ground plane does not allow the selected Symmetry." if request.options.ground_plane.enabled else "The model does not have the mirror planes needed for the selected Symmetry.")
+        refusal_error = UserRefusal("Symmetry", problem, "Choose Full model under Symmetry in Solve options.", diagnostic=str(exc))
+        refuse(user_error_as(refusal_error, SymmetryValidationError))
         resolved_quadrants = resolution.quadrants
     symmetry_metadata = {
         "requested": request.options.symmetry,
@@ -966,7 +999,8 @@ async def resolve_submission(
             if enclosure is not None:
                 await asyncio.to_thread(resolve_enclosure_bounds, config, warn_prefix=None)
         except ValueError as exc:
-            raise SymmetryValidationError(str(exc)) from exc
+            from server.preview.errors import user_error_as
+            raise user_error_as(exc, SymmetryValidationError) from exc
     if refusal is not None:
         symmetry_metadata["solver_plan"]["refusal"] = refusal
     return SubmissionResolution(

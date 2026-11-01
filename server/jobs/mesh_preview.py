@@ -11,6 +11,8 @@ execution transforms are shared with the solve pipeline.
 from __future__ import annotations
 
 import logging
+from server.preview.errors import user_error_detail
+
 from typing import Any, Awaitable, Callable, Literal
 
 from fastapi import FastAPI, HTTPException, Request
@@ -118,7 +120,7 @@ async def solver_mesh_response(
         quadrants = int(resolved.symmetry_metadata["resolved_quadrants"])
         execution = _execution_request(resolved.request, resolved_quadrants=quadrants)
     except (ValueError, MesherError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=user_error_detail(exc)) from exc
 
     cancellation = RequestCancellation(is_disconnected)
 
@@ -131,9 +133,9 @@ async def solver_mesh_response(
     except ClientDisconnected as exc:
         # Nobody is listening; 499 mirrors the conventional client-closed
         # status and keeps the abandoned build out of the error logs.
-        raise HTTPException(status_code=499, detail=str(exc)) from exc
+        raise HTTPException(status_code=499, detail="Mesh preparation was cancelled.") from exc
     except MesherShuttingDownError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail="WG is closing. Open WG again to prepare this mesh.") from exc
     except MeshTooLarge as exc:
         raise HTTPException(status_code=409, detail={
             "code": "mesh_too_large", "message": str(exc),
@@ -146,7 +148,7 @@ async def solver_mesh_response(
         logger.exception("Cannot check mesh memory before generation")
         raise HTTPException(status_code=422, detail=MesherEstimateUnavailable.USER_MESSAGE) from exc
     except (RuntimeError, ValueError, MesherError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=user_error_detail(exc)) from exc
     finally:
         cancellation.close()
 
@@ -179,9 +181,9 @@ def mount_solver_mesh(application: FastAPI, engine_registry: EngineRegistry) -> 
         try:
             return await estimate_solver_mesh(body.design, cancel_cb=cancellation.check)
         except ClientDisconnected as exc:
-            raise HTTPException(status_code=499, detail=str(exc)) from exc
+            raise HTTPException(status_code=499, detail="Mesh preparation was cancelled.") from exc
         except (RuntimeError, ValueError, MesherError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            raise HTTPException(status_code=422, detail=user_error_detail(exc)) from exc
         finally:
             cancellation.close()
 
