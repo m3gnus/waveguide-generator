@@ -1,8 +1,19 @@
 import { defaultWallThickness, useDesignStore, type DesignDocument } from '../stores/design';
 
-/** The depth an enclosure comes back with: the latest positive one, whichever control set it. */
-let lastEnclosureDepth = 280;
-useDesignStore.subscribe(({ design }) => { if (design.enclosure.depth > 0) lastEnclosureDepth = design.enclosure.depth; });
+const DEFAULT_ENCLOSURE_DEPTH_MM = 280;
+
+/**
+ * The depth an enclosure comes back with: the latest positive one in this
+ * document, whichever control set it. Each design snapshot carries its own, so
+ * a load starts afresh and Undo across a load gets the earlier document's back.
+ */
+const retainedDepth = new WeakMap<DesignDocument, number>();
+useDesignStore.subscribe((state, previous) => {
+  const { design } = state;
+  if (design === previous.design || retainedDepth.has(design)) return;
+  const carried = state.loadGeneration === previous.loadGeneration ? retainedDepth.get(previous.design) ?? previous.design.enclosure.depth : 0;
+  retainedDepth.set(design, design.enclosure.depth > 0 ? design.enclosure.depth : carried > 0 ? carried : DEFAULT_ENCLOSURE_DEPTH_MM);
+});
 
 /** The design writes that select a horn's outer body, shared by every control that offers it. */
 export function outerBodyUpdates(design: DesignDocument, mode: 'bare' | 'freestanding' | 'enclosure',
@@ -11,7 +22,7 @@ export function outerBodyUpdates(design: DesignDocument, mode: 'bare' | 'freesta
     ? { 'mesh.wall_thickness': 0, 'enclosure.depth': 0 }
     : mode === 'freestanding'
       ? { 'mesh.wall_thickness': lastWallThickness ?? defaultWallThickness(), 'enclosure.depth': 0 }
-      : { 'mesh.wall_thickness': 0, 'enclosure.depth': lastEnclosureDepth };
+      : { 'mesh.wall_thickness': 0, 'enclosure.depth': retainedDepth.get(design) ?? (design.enclosure.depth || DEFAULT_ENCLOSURE_DEPTH_MM) };
   // Write only what changes. An import without Mesh.Enclosure keeps `enclosure`
   // in _absent, and any write under it (even depth 0 over 0) would drop that
   // marker and send a full object, which the mesher refuses with a lip or Opus.
