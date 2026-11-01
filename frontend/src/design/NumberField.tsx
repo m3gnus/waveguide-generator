@@ -266,6 +266,14 @@ export function NumberField({
    * step, and stepping would overwrite the expression with a plain number.
    */
   // The lowest value an exclusive minimum can step or drag to.
+  // A stepped or dragged value is already committed. While the field has focus it
+  // shows that exact value and treats it as unedited, so a value rounded for
+  // display can never reach a commit: only typing changes what blur saves.
+  const showCommitted = (rounded: number) => {
+    const text = editing && shown < precision ? String(rounded) : rounded.toFixed(shown);
+    if (editing) editBaseline.current = text;
+    setDraft(text);
+  };
   const floorAt = (candidate: number) => (exclusiveMin && candidate <= min ? min + 10 ** -precision : Math.max(min, candidate));
   const stepBy = (multiplier: number) => {
     if (formulaLayout) return false;
@@ -274,7 +282,7 @@ export function NumberField({
     const next = Math.min(max, floorAt(base + step * multiplier));
     const rounded = Number(next.toFixed(precision));
     if (validate?.(rounded)) return false;
-    setDraft(rounded.toFixed(shown));
+    showCommitted(rounded);
     if (rounded !== value) onCommit(rounded);
     return true;
   };
@@ -320,7 +328,7 @@ export function NumberField({
     const next = Math.min(max, floorAt(drag.current.value + delta * step));
     const rounded = Number(next.toFixed(precision));
     if (validate?.(rounded)) return;
-    setDraft(rounded.toFixed(shown));
+    showCommitted(rounded);
     setDragDelta(rounded - drag.current.value);
     pendingDragValue.current = rounded;
     if (dragFrame.current === null) {

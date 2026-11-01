@@ -1,4 +1,4 @@
-import { act } from 'react';
+import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NumberField } from './NumberField';
@@ -15,6 +15,60 @@ describe('NumberField', () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
+  });
+
+  describe('a field shown coarser than it stores', () => {
+    const field = (onCommit: (value: number) => void) => {
+      function Field() {
+        const [value, setValue] = useState(12.3456);
+        return <NumberField label="Radius" value={value} step={.1} precision={12} displayPrecision={2} onCommit={next => { onCommit(next); setValue(next); }}/>;
+      }
+      act(() => root.render(<Field/>));
+      return host.querySelector('input') as HTMLInputElement;
+    };
+    const key = (input: HTMLInputElement, name: string) => act(() => { input.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true })); });
+    const type = (input: HTMLInputElement, text: string) => act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, text);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    it('keeps the stored value after a step and blur', () => {
+      const commits: number[] = [];
+      const input = field(value => commits.push(value));
+      act(() => input.focus());
+      key(input, 'ArrowUp');
+      act(() => input.blur());
+      expect(commits).toEqual([12.4456]);
+      expect(input.value).toBe('12.45');
+    });
+
+    it('commits nothing for focus then blur with no edit', () => {
+      const commits: number[] = [];
+      const input = field(value => commits.push(value));
+      act(() => input.focus());
+      act(() => input.blur());
+      expect(commits).toEqual([]);
+      expect(input.value).toBe('12.35');
+    });
+
+    it('commits a value the user typed, even the rounded one on screen', () => {
+      const commits: number[] = [];
+      const input = field(value => commits.push(value));
+      act(() => input.focus());
+      type(input, '12.35');
+      act(() => input.blur());
+      expect(commits).toEqual([12.35]);
+    });
+
+    it('lets typing after a step commit what was typed', () => {
+      const commits: number[] = [];
+      const input = field(value => commits.push(value));
+      act(() => input.focus());
+      key(input, 'ArrowUp');
+      type(input, '20');
+      act(() => input.blur());
+      expect(commits).toEqual([12.4456, 20]);
+    });
   });
 
   it('renders a stored null as an empty field instead of crashing', () => {
