@@ -1,3 +1,4 @@
+import { keepRefusalOriginals, LOST_CONTACT, ProgramFault } from '../api/httpError';
 import { Box3, Vector3 } from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -750,6 +751,17 @@ describe('field-plane defaults and status copy', () => {
       ny: 192,
     });
     expect(nearestFieldPlaneFrequencyIndex([100, 900, 1_500])).toBe(1);
+  });
+
+  it('keeps a program fault off the screen and in the developer record', () => {
+    const kept: string[] = [];
+    keepRefusalOriginals(({ message }) => kept.push(message));
+    const words = fieldPlaneErrorMessage(new ProgramFault('response metadata does not match the field-plane request'));
+    keepRefusalOriginals(() => {});
+    expect(words).not.toContain('metadata');
+    expect(words).toContain('Select the run again');
+    expect(kept).toEqual(['response metadata does not match the field-plane request']);
+    expect(fieldPlaneErrorMessage(new TypeError('Failed to fetch'))).toBe(LOST_CONTACT);
   });
 
   it('maps every server error class to actionable viewport copy', () => {

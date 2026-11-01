@@ -22,7 +22,7 @@ import {
   type FieldPlaneValueWindow,
 } from './fieldPlaneColor';
 import { fieldPlanePreset } from './fieldPlaneMath';
-import { ProgramFault } from '../api/httpError';
+import { ProgramFault, failureWords } from '../api/httpError';
 
 export type FieldPlaneStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -352,10 +352,7 @@ export function fieldPlaneErrorMessage(reason: unknown): string {
     }
   }
   if (reason instanceof Error && reason.name === 'AbortError') return 'field-plane request cancelled';
-  if (reason instanceof TypeError) return 'could not connect to the field-plane service';
-  return reason instanceof Error && reason.message
-    ? `field-plane response error: ${reason.message}`
-    : 'WG could not calculate this field plane and has recorded the problem. Select the run again.';
+  return failureWords(reason, 'WG could not calculate this field plane and has recorded the problem. Select the run again.', 'field plane');
 }
 
 export function createFieldPlaneStore(
