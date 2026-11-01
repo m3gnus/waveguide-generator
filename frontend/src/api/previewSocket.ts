@@ -1,4 +1,4 @@
-import { validationSentence } from './httpError';
+import { fieldSentence, validationSentence } from './httpError';
 import { decodeFrame, type DecodedFrame, type FrameHeader } from './frame';
 import { selectPreferredFrame } from '../viewport/lodPolicy';
 import {
@@ -317,13 +317,15 @@ export class PreviewSocketManager {
       if ((!supported || this.snapshot.frame?.documentLoad === this.documentLoad) && errorRevision !== null && errorRevision < (this.snapshot.lastValidRevision ?? 0)) return;
       if ((!supported || this.errorDocumentLoad === this.documentLoad) && errorRevision !== null && errorRevision < (this.snapshot.errorRevision ?? 0)) return;
       if (errorSeq !== null && errorSeq < this.latestOutcomeSeq) return;
+      const firstField = Object.entries(fields ?? {})[0];
       const original = (typeof message.message === 'string' && message.message.trim())
         || Object.values(fields ?? {})[0]
         || (typeof message.code === 'string' && message.code.trim())
         || 'Preview request failed';
       // An internal failure's text is for developers; a field's own sentence is for the user.
       const detail = message.code === 'internal' ? PLAIN_PREVIEW_FAILURE
-        : validationSentence(original) ?? 'This design has a value WG cannot use. Check its parameters.';
+        : (firstField && original === firstField[1] ? fieldSentence(firstField[0].split('.'), original) : validationSentence(original))
+          ?? 'This design has a value WG cannot use. Check its parameters.';
       if (errorSeq !== null) this.latestOutcomeSeq = Math.max(this.latestOutcomeSeq, errorSeq);
       this.errorDocumentLoad = this.documentLoad;
       const documentFailed = supported && this.snapshot.awaitingDocumentFrame

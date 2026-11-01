@@ -27,6 +27,22 @@ export function validationSentence(message: string): string | null {
   return FRAMEWORK_SENTENCE.test(message) ? null : message;
 }
 
+const FRAMEWORK_BOUND = /^Input should be ((?:less|greater) than(?: or equal to)? -?[\d.]+(?:e[+-]?\d+)?)/;
+const WIRE_PATH = new Set(['body', 'design']);
+
+/**
+ * The most a framework validation message can honestly say: the field's name and
+ * any bound the server gave. Null when it names no field.
+ */
+export function fieldSentence(location: readonly unknown[], message: string): string | null {
+  const own = validationSentence(message);
+  if (own) return own;
+  const name = location.map(String).filter(part => !WIRE_PATH.has(part)).join('.');
+  if (!name) return null;
+  const bound = FRAMEWORK_BOUND.exec(message);
+  return bound ? `${name} should be ${bound[1]}.` : message.startsWith('Field required') ? `${name} is missing.` : `${name} has a value WG cannot use.`;
+}
+
 export const PLAIN_REQUEST_FAILURE = 'WG could not finish this request and has recorded the problem. Try again.';
 export const PLAIN_VALIDATION_FAILURE = 'WG could not use these settings. Check the values and try again.';
 
@@ -44,7 +60,12 @@ const isValidationItem = (item: unknown) => !!item && typeof item === 'object' &
 export function refusalText(detail: unknown, operation: string, fallback = PLAIN_REQUEST_FAILURE): string {
   const raw = formatApiDetail(detail);
   const words = Array.isArray(detail) && detail.some(isValidationItem)
-    ? detail.flatMap(item => { const sentence = isValidationItem(item) ? validationSentence(String((item as { msg: unknown }).msg)) : null; return sentence ? [sentence] : []; }).join('; ') || PLAIN_VALIDATION_FAILURE
+    ? detail.flatMap(item => {
+      if (!isValidationItem(item)) return [];
+      const { loc, msg } = item as { loc: unknown; msg: unknown };
+      const sentence = fieldSentence(Array.isArray(loc) ? loc : [], String(msg));
+      return sentence ? [sentence] : [];
+    }).join('; ') || PLAIN_VALIDATION_FAILURE
     : raw || fallback;
   if (words !== raw) reportOriginal({ message: raw || fallback, operation });
   return words;
