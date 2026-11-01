@@ -186,7 +186,8 @@ def test_real_mesher_dimensions_pass_through_preview_frame_unchanged() -> None:
         header, _ = decode(encode_preview_geometry(
             geometry, epoch=7, seq=11, design_revision=19, lod=lod, eval_ms=4.2,
         ))
-        assert header["previewMetadata"] == geometry.metadata
+        # Supplemental shape reports contain tuples; FRAME-SPEC carries JSON.
+        assert header["previewMetadata"] == json.loads(json.dumps(geometry.metadata, allow_nan=False))
 
 
 @pytest.mark.parametrize("formula", ["OSSE", "R-OSSE"])
@@ -222,7 +223,7 @@ def test_real_mesher_throat_stretch_passes_through_preview_frame(formula) -> Non
             geometry, epoch=7, seq=11, design_revision=19, lod=lod, eval_ms=4.2,
         ))
         assert header["designRevision"] == 19
-        assert header["previewMetadata"] == geometry.metadata
+        assert header["previewMetadata"] == json.loads(json.dumps(geometry.metadata, allow_nan=False))
         horn = next(surface for surface in header["surfaces"] if surface["role"] == "horn.inner")
         np.testing.assert_array_equal(arrays[horn["positions"]], inner.positions.astype("<f4").reshape(-1, 3))
 
