@@ -50,7 +50,7 @@ export function updatePresentation(snapshot: Pick<UpdateSnapshot, 'data' | 'erro
   else if (data?.availability === 'current') label = 'Up to date';
   else if (data?.checking || snapshot.isPending) { state = 'checking'; label = 'Checking…'; }
   else if (data?.checkout.kind === 'source') { state = 'development'; label = 'Development build'; }
-  else { state = 'failed'; label = 'Check failed'; }
+  else { state = 'failed'; label = 'Could not check'; }
   const detail = state === 'failed' ? reason ?? 'WG has not completed an update check.' : stale ? reason : null;
   const wide = `${version} · ${label}`;
   return { state, label, wide, compact: state === 'available' ? 'Update' : version,

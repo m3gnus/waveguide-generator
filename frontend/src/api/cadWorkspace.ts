@@ -20,7 +20,7 @@ export async function getCadWorkspace(
   fetcher: typeof fetch = fetch,
 ): Promise<CadWorkspacePath> {
   const response = await deadlineFetch(fetcher, '/api/cad-workspace/path');
-  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WGLink folder request failed'));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not reach the WGLink folder. Choose it again in Settings → CAD Link.'));
   return response.json() as Promise<CadWorkspacePath>;
 }
 
@@ -41,7 +41,7 @@ export async function openCadWorkspace(
   fetcher: typeof fetch = fetch,
 ): Promise<CadWorkspacePath> {
   const response = await fetcher('/api/cad-workspace/open', { method: 'POST' });
-  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WGLink folder request failed'));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not reach the WGLink folder. Choose it again in Settings → CAD Link.'));
   return response.json() as Promise<CadWorkspacePath>;
 }
 
@@ -62,7 +62,7 @@ export async function setCaptureMode(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mode }),
   });
-  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WGLink folder request failed'));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not reach the WGLink folder. Choose it again in Settings → CAD Link.'));
   const saved = ((await response.json()) as { captureMode: CadCaptureMode | 'project' }).captureMode;
   return saved === 'off' ? 'off' : 'run';
 }

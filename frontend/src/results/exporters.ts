@@ -462,7 +462,7 @@ async function postGeometry(context: ExportContext, kind: 'step' | 'stl' | 'prof
 function requireArtifactJob(context: ExportContext): string {
   if (!context.jobId) throw new Error('This run has no saved results yet. Wait for it to finish, or choose a completed run.');
   if (context.hasRadiationImpedanceArtifact === false) {
-    throw new Error('This run has no retained radiation-impedance matrix.');
+    throw new Error('This run has no port data. Solve a passive cardioid design to export it.');
   }
   return context.jobId;
 }
@@ -477,7 +477,7 @@ async function radiationImpedancePresentation(
   const presentation = await fetchRadiationImpedancePresentation(
     requireArtifactJob(context), context.fetcher ?? fetch,
   );
-  if (!presentation) throw new Error('This run has no retained radiation-impedance matrix.');
+  if (!presentation) throw new Error('This run has no port data. Solve a passive cardioid design to export it.');
   return presentation;
 }
 
@@ -731,7 +731,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
       return [retained.filename];
     }
     if (context.archiveSnapshot) {
-      throw new Error('This archive snapshot has no retained pressure basis for the selected channel.');
+      throw new Error('This run did not keep the pressure for the selected channel. Solve it again to export this.');
     }
     if (!context.jobId) throw new Error('This run has no saved results yet. Wait for it to finish, or choose a completed run.');
     const query = context.channelId
@@ -1035,7 +1035,7 @@ export async function downloadMeshArtifact(
   saveBlob(await response.blob(), filename);
   if (regenerated) {
     const version = response.headers.get('X-WG2-Mesher-Version');
-    reportNotice(`${runDisplayName(job)}: the original mesh was no longer stored, so it was rebuilt with the current mesher${version ? ` (${version})` : ''} and may differ from the mesh that was solved.`);
+    reportNotice(`${runDisplayName(job)}: the original mesh is gone, so WG rebuilt it with the current version${version ? ` (${version})` : ''} and may differ from the mesh that was solved.`);
   }
   return filename;
 }

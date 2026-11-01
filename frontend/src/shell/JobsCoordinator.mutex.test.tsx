@@ -3041,7 +3041,7 @@ describe('solve invocation mutex', () => {
     await act(async () => { root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>); });
     const solve = host.querySelector<HTMLButtonElement>('button')!;
     expect(solve.disabled).toBe(true);
-    expect(solve.title).toContain('Choose units and surface roles');
+    expect(solve.title).toContain('Choose File units');
     expect(mocks.solveModel).not.toHaveBeenCalled();
   });
 

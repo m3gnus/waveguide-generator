@@ -369,7 +369,7 @@ export async function exportProfileCsv(
     method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
     body: JSON.stringify({ design: serializeDesign(design), designRevision, baseName }),
   });
-  if (!response.ok) throw new ProfileExportError(await httpErrorMessage(response, 'Profile export failed'));
+  if (!response.ok) throw new ProfileExportError(await httpErrorMessage(response, 'WG could not export this profile. Try again.'));
   return response.text();
 }
 

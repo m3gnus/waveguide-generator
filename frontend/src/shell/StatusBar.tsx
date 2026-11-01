@@ -61,7 +61,7 @@ export function cadSolveSummary(
       const first = compactFrequency(parsed.frequencies[0]);
       const last = compactFrequency(parsed.frequencies.at(-1)!);
       frequencies = `next CAD solve ${first}${parsed.frequencies.length > 1 ? ` – ${last}` : ''} · ${parsed.frequencies.length} f`;
-    } else frequencies = 'invalid CAD frequency list';
+    } else frequencies = 'frequency list needs fixing';
   }
   return `${frequencies} · smoothing ${options.smoothing ?? 'none'}`;
 }

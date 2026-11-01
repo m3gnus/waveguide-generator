@@ -582,12 +582,12 @@ export function DesignFileMenu() {
         onClick={() => meshInput.current?.click()}
       ><span>Import mesh…</span><kbd>msh</kbd></button>
       <button role="menuitem" className="design-menu-item" disabled={busy}
-        title="Open the retained mesh and exact solve settings in Imported mesh"
+        title="Open a saved mesh and its exact solve settings in Imported mesh"
         onClick={() => replayInput.current?.click()}><span>Open mesh replay…</span><kbd>wgreplay</kbd></button>
       <div className="design-menu-divider"/>
       <button role="menuitem" aria-expanded={exportsOpen} className="design-menu-item" disabled={busy} onClick={() => setExportsOpen((value) => !value)}><span>Export</span><span>{exportsOpen ? '⌄' : '›'}</span></button>
       {exportsOpen && <div role="menu" aria-label="Export design" className="design-menu-nested">
-        {geometryReason && <div className="design-menu-item" role="note">Geometry and profile exports are unavailable for imported models.</div>}
+        {geometryReason && <div className="design-menu-item" role="note">Imported models cannot export geometry or profiles. Open a parametric design to export them.</div>}
         {/* The .wglink bundle and its handoff are Fusion's transport; Onshape
             sends live in the CAD Link panel and go through its own adapter. */}
         {cadApplication === 'fusion360' && <button role="menuitem" className="design-menu-item" disabled={busy || Boolean(geometryReason) || Boolean(nativeCadLimitation(design.formula))} onClick={() => void sendToCad()} title={geometryReason ?? nativeCadLimitation(design.formula) ?? `Save this CAD model (.wglink) in the selected workspace.${omitsWoofers}`}><span>Send to CAD</span><span>.wglink</span></button>}

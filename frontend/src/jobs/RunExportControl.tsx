@@ -110,13 +110,13 @@ function unavailableFormatReason(
     return 'This run has no directivity data for a polar FRD set.';
   }
   if (item.needsRadiationArtifact && !job.has_radiation_impedance_artifact) {
-    return 'This run has no retained passive-cardioid radiation matrix.';
+    return 'This run has no port data. Solve a passive cardioid design to export it.';
   }
   if (item.needsResult && !job.has_results) return 'This run\'s results were removed by retention.';
   if (item.needsPressureBasis && !job.has_pressure_basis_artifact) {
     const cause = job.persistence_warnings?.filter((warning) => /pressure[- ]basis/i.test(warning)).join(' ');
-    return cause ? `This run has no retained complex pressure basis. ${cause}`
-      : 'This run has no retained complex pressure basis. Re-solve the imported model to create one.';
+    return cause ? `This run did not keep its complex pressure. ${cause}`
+      : 'This run did not keep its complex pressure. Solve the imported model again to get it.';
   }
   if (item.needsDesign && !designExportable) return designUnavailableReason;
   return undefined;

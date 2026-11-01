@@ -52,7 +52,7 @@ describe('LogDialog', () => {
     expect(host.querySelector('[role="dialog"]')).toBeNull();
     expect(document.querySelector('.log-dialog pre')?.textContent).toBe('first line\nsecond line\n');
     expect(document.querySelector('[role="dialog"]')?.getAttribute('aria-modal')).toBe('true');
-    expect(document.querySelector('.job-log-content')?.getAttribute('aria-label')).toBe('Job log preview');
+    expect(document.querySelector('.job-log-content')?.getAttribute('aria-label')).toBe('Run log preview');
   });
 
   it('caps a declared 50 MB log at 1 MB and cancels the remaining response body', async () => {

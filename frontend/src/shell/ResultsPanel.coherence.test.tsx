@@ -177,7 +177,7 @@ describe('results run coherence', () => {
     await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
     await vi.waitFor(() => expect(host.textContent).toContain('The mesh for #1 · old-mesh may differ'));
     await vi.waitFor(() => expect(host.textContent).toContain('The mesh for #2 · old-overlay may differ'));
-    expect(host.textContent).toContain('solve again to update these results');
+    expect(host.textContent).toContain('Solve again to update these results');
     expect(host.querySelector('[data-result-primary]')?.getAttribute('data-result-primary')).toBe(run.id);
   });
 

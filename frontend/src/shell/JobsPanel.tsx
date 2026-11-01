@@ -263,7 +263,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
       <button className={`job-compare${overlaid ? ' on' : ''}`} aria-label={`Compare ${displayName}`} aria-pressed={overlaid}
         disabled={!job.has_results || selected} title={selected ? 'This run is the one being shown' : overlaid ? 'Stop comparing this run' : 'Compare this run against the one on screen'}
         onClick={() => compareSelection.toggleOverlay(job.id)}>{overlaid ? 'Comparing' : 'Compare'}</button>
-      {!running && <button className="job-remove" aria-label={`Remove ${displayName}`} title="Remove this job" onClick={() => onRemove(job)}><Icon name="close"/></button>}
+      {!running && <button className="job-remove" aria-label={`Remove ${displayName}`} title="Remove this run" onClick={() => onRemove(job)}><Icon name="close"/></button>}
     </div>
     {renameError && <div className="job-error job-rename-error" role="alert">{renameError}</div>}
     {meshNotice && <Notice tone="warning" actions={<button type="button" className="btn" onClick={() => useRunExportStore.getState().dismissMeshNotice(job.id)}>Dismiss</button>}>{meshNotice}</Notice>}
@@ -431,7 +431,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
         <div className="settings-scroll">
           {coordinator.actionError && <Notice tone="error">{coordinator.actionError}</Notice>}
           <p id="delete-run-reason">{blockedDeletion.reason}</p>
-          <p id="delete-run-consequence">Delete anyway removes this run and its saved results from job history without protecting its Fusion model. No files on disk will be deleted.</p>
+          <p id="delete-run-consequence">Delete anyway removes this run and its saved results from the run list without protecting its Fusion model. No files on disk will be deleted.</p>
           <button className="btn" disabled={deletingAnyway} onClick={closeDeletion}>Cancel</button>
           <button className="btn" disabled={deletingAnyway} onClick={() => void deleteAnyway()}>{deletingAnyway ? 'Deleting…' : 'Delete anyway'}</button>
         </div>

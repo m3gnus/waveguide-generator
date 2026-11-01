@@ -15,7 +15,7 @@ export function relativeTime(value: string): string {
 
 export function fullTime(value: string): string {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? 'Time unavailable' : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? 'Time not recorded' : date.toLocaleString();
 }
 
 export function pluralized(count: number, singular: string, plural = `${singular}s`): string {

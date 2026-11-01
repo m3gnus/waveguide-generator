@@ -254,8 +254,8 @@ async function readOpened(source: Extract<ImportedSource, { kind: 'run' | 'model
   }
   if (source.kind === 'run') {
     const workspace = await readRunWorkspace(source.job.id, fetcher);
-    if (!workspace.prepared) throw new Error(workspace.refusal?.message ?? 'This run has no retained mesh. Import the geometry again.');
-    if (inputOf(workspace.prepared.producer) !== input) throw new Error('This run’s retained mesh is of another kind. Select the run again.');
+    if (!workspace.prepared) throw new Error(workspace.refusal?.message ?? 'This run did not keep its mesh. Import the model again.');
+    if (inputOf(workspace.prepared.producer) !== input) throw new Error('This run’s mesh is of another kind. Select the run again.');
     return {
       input, model: workspace.model ?? null, modelId: workspace.prepared.model_id || 'unfiled',
       prepared: workspace.prepared, originalAvailable: workspace.original_available,
@@ -269,7 +269,7 @@ async function readOpened(source: Extract<ImportedSource, { kind: 'run' | 'model
   const preparedId = source.preparedId ?? read.latest_prepared?.ingest_id ?? null;
   const prepared = read.prepared ?? (preparedId && !source.preparedId && read.model.producer === 'mesh-file'
     ? (await readImportedModel(source.modelId, preparedId, fetcher)).prepared : read.latest_prepared);
-  if (!prepared) throw new Error('This model has no retained preparation. Import it again.');
+  if (!prepared) throw new Error('This model’s preparation is gone. Import it again.');
   const saved = await readImportedSetup(source.modelId, prepared.ingest_id, fetcher);
   const engine = source.useEnginePreference ? enginePreference().engine : undefined;
   const changedEngine = saved.setup && engine !== undefined && engine !== saved.setup.options.engine;
@@ -282,7 +282,7 @@ async function readOpened(source: Extract<ImportedSource, { kind: 'run' | 'model
 }
 
 /** Wait words while a reopen is under way; the reason while it failed. */
-const LOADING_BLOCKER = 'Wait for this run’s retained setup to finish loading.';
+const LOADING_BLOCKER = 'Wait for this run’s setup to finish loading.';
 
 /**
  * Open an imported model: the only way the store is filled.
@@ -344,7 +344,7 @@ export async function openImported(source: ImportedSource, fetcher: typeof fetch
     if (!current()) return stopped();
     const prepared = await rail.fill(opened);
     if (!current()) return stopped();
-    if (!prepared) throw new Error('This run’s retained mesh artifacts are no longer available. Import the geometry again.');
+    if (!prepared) throw new Error('This run’s mesh is gone. Import the model again.');
     useImportedModelStore.setState({
       input, model: opened.model, modelId: opened.modelId, prepared, originalAvailable: opened.originalAvailable,
       // A setup that may not be the run's exactly fills the rail, but is not replayed.

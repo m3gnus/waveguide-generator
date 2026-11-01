@@ -136,7 +136,7 @@ export const cadImportedView: ImportedView = {
     return {
       current,
       async fill(opened) {
-        if (!opened.setup && source.kind === 'run') throw new Error('This run’s settings are no longer retained. Select the run again.');
+        if (!opened.setup && source.kind === 'run') throw new Error('This run’s settings are gone. Solve the model again.');
         const record = opened.cadRecord ?? await getIngest(opened.prepared.ingest_id, fetcher).catch((reason: unknown) => {
           throw reason instanceof CadLinkApiError && reason.status === 404
             ? new Error('The archived CAD model and mesh are no longer available.') : reason;
@@ -144,7 +144,7 @@ export const cadImportedView: ImportedView = {
         if (!current()) return null;
         if (record.ingest_id !== opened.prepared.ingest_id || record.manifest_sha256 !== opened.prepared.manifest_sha256
           || record.artifact_sha256 !== opened.prepared.artifact_sha256) {
-          throw new Error('This run’s saved request does not match its retained mesh. Select the run again.');
+          throw new Error('This run’s settings do not match its mesh. Select the run again.');
         }
         const name = job ? displayName : record.project?.document_name || opened.model?.display_name || displayName;
         const bundle: CadReturnBundle = {

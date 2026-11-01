@@ -133,7 +133,7 @@ export function LogDialog({ jobId, onClose }: { jobId: string; onClose: () => vo
 
   return createPortal(<div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
     <div ref={dialog} className="settings-dialog log-dialog" role="dialog" aria-modal="true" aria-labelledby="job-log-title">
-      <header><div><h2 id="job-log-title">Job log</h2><p>Preview of this run's output, up to 1.0 MB.</p></div><button className="dialog-close" aria-label="Close job log" onClick={close}><Icon name="close"/></button></header>
+      <header><div><h2 id="job-log-title">Job log</h2><p>Preview of this run's output, up to 1.0 MB.</p></div><button className="dialog-close" aria-label="Close run log" onClick={close}><Icon name="close"/></button></header>
       <div className="settings-scroll log-dialog-body">
         <div className="log-dialog-actions">
           <button className="btn" disabled={loading} onClick={() => void refresh()}>Refresh</button>
@@ -145,7 +145,7 @@ export function LogDialog({ jobId, onClose }: { jobId: string; onClose: () => vo
           {error && <Notice tone="error" role="alert">{error}</Notice>}
           {truncated && <p className="log-dialog-limit" role="status">Showing the first 1.0 MB only. Download the complete log to view the rest.</p>}
         </div>
-        <pre className="job-log-content" role="region" aria-label="Job log preview" aria-busy={loading} tabIndex={0}>{visibleContents}</pre>
+        <pre className="job-log-content" role="region" aria-label="Run log preview" aria-busy={loading} tabIndex={0}>{visibleContents}</pre>
       </div>
     </div>
   </div>, document.body);

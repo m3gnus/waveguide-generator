@@ -24,7 +24,7 @@ export interface ExportDestination {
 }
 
 async function read(response: Response): Promise<ExportDestination> {
-  if (!response.ok) throw new Error(await httpErrorMessage(response, 'Export destination request failed'));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not check the export folder. Choose the folder again.'));
   const payload = await response.json() as Record<string, unknown>;
   return {
     path: typeof payload.path === 'string' && payload.path ? payload.path : null,

@@ -590,7 +590,7 @@ export function CadModelDetails({ record, label, prepared, fetcher }: {
     <DeveloperDetails className="cad-model-provenance">
       <p
         className="cad-detail"
-        title="The snapshot is the returned model, named by its manifest hash. The preparation holds the mesh on screen that would be solved."
+        title="The snapshot is the model Fusion sent. The preparation holds the mesh on screen that would be solved."
       >Snapshot <code>{shortSha256(record.manifest_sha256)}</code> · Preparation <code>{record.ingest_id}</code></p>
     </DeveloperDetails>
   </CadDrawer>;

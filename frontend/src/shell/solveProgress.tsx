@@ -530,7 +530,7 @@ export function SolveProgressView({
       aria-valuemax={indeterminate ? undefined : 100}
       aria-valuenow={indeterminate ? undefined : percent}
       aria-valuetext={indeterminate
-        ? `${job.stage_message ?? job.stage ?? 'working'} -- progress not reported per frequency`
+        ? `${job.stage_message ?? job.stage ?? 'working'} · progress not reported per frequency`
         : `${percent}% -- ${job.stage_message ?? job.stage ?? 'waiting'}`}
     ><i style={indeterminate ? undefined : { width: `${Math.max(0, Math.min(100, job.progress * 100))}%` }}/></div>
     {detailLine && <p className="job-detail">{detailLine}</p>}

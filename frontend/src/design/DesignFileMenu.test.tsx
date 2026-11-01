@@ -153,7 +153,7 @@ describe('design file export menu', () => {
       expect(item.disabled, label).toBe(true);
       act(() => item.click());
     }
-    expect(container.textContent).toContain('imported models');
+    expect(container.textContent).toContain('Imported models');
     expect(container.querySelector('.file-chip')?.textContent).not.toContain('Parked A');
     expect(container.querySelector('.file-chip .cadlink-badge')).toBeNull();
     expect(fetcher).not.toHaveBeenCalled();
@@ -657,7 +657,7 @@ describe('design file export menu', () => {
 
     expect(sendRequests()).toEqual(['/api/cad-workspace/path', '/api/export/wglink']);
     expect(container.querySelector('[role="status"]')?.textContent).toContain(
-      'Sent to CAD · sequence 7 · /cad-library/wglink/tritonia_mk2.wglink',
+      'Sent to CAD · /cad-library/wglink/tritonia_mk2.wglink',
     );
   });
 

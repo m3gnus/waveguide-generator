@@ -120,7 +120,7 @@ export async function searchDrivers(
   if (z !== null && Number.isFinite(z)) params.set('z', String(z));
   if (complete) params.set('complete', 'true');
   const response = await deadlineFetch(fetcher, `/api/drivers?${params.toString()}`);
-  if (!response.ok) throw new Error(await httpErrorMessage(response, 'Driver library request failed'));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not read the driver library. Press Rescan in Settings, or enter the driver by hand.'));
   const body = await response.json() as {
     items?: DriverHit[];
     hidden_incomplete?: number;
@@ -149,7 +149,7 @@ export async function getDriver(
   fetcher: typeof fetch = fetch,
 ): Promise<DriverDetail> {
   const response = await deadlineFetch(fetcher, `/api/drivers/${encodeURIComponent(driverId)}?complete=true`);
-  if (!response.ok) throw new Error(await httpErrorMessage(response, 'Driver library request failed'));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not read the driver library. Press Rescan in Settings, or enter the driver by hand.'));
   return response.json() as Promise<DriverDetail>;
 }
 
@@ -157,7 +157,7 @@ export async function getDriverLibrary(
   fetcher: typeof fetch = fetch,
 ): Promise<DriverLibraryInfo> {
   const response = await deadlineFetch(fetcher, '/api/drivers/library');
-  if (!response.ok) throw new Error(await httpErrorMessage(response, 'Driver library request failed'));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not read the driver library. Press Rescan in Settings, or enter the driver by hand.'));
   return response.json() as Promise<DriverLibraryInfo>;
 }
 
@@ -165,6 +165,6 @@ export async function rescanDriverLibrary(
   fetcher: typeof fetch = fetch,
 ): Promise<DriverLibraryInfo> {
   const response = await fetcher('/api/drivers/library/rescan', { method: 'POST' });
-  if (!response.ok) throw new Error(await httpErrorMessage(response, 'Driver library request failed'));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not read the driver library. Press Rescan in Settings, or enter the driver by hand.'));
   return response.json() as Promise<DriverLibraryInfo>;
 }

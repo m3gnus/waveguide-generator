@@ -14,7 +14,7 @@ export interface WorkspaceFolder {
 }
 
 async function read(response: Response): Promise<WorkspaceFolder> {
-  if (!response.ok) throw new Error(await httpErrorMessage(response, 'Runs folder request failed'));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not read the Runs folder. Choose the WG folder in Settings.'));
   const payload = await response.json() as { path?: unknown; selected?: unknown };
   return {
     path: typeof payload.path === 'string' && payload.path ? payload.path : null,
@@ -86,7 +86,7 @@ export async function writeToOutputFolder(
     members.forEach(({ filename, blob }) => body.append('file', blob, filename));
     const response = await fetcher('/api/workspace/write-export', { method: 'POST', body });
     if (!response.ok) {
-      throw await collisionFrom(response) ?? new Error(await httpErrorMessage(response, 'Runs folder request failed'));
+      throw await collisionFrom(response) ?? new Error(await httpErrorMessage(response, 'WG could not read the Runs folder. Choose the WG folder in Settings.'));
     }
     const payload = await response.json() as {
       directory?: unknown; files?: unknown; replaced?: unknown;

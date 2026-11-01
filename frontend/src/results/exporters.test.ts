@@ -291,8 +291,8 @@ describe('result exporters', () => {
     expect(bundle).toEqual({
       files: [],
       failures: [
-        { format: 'radiation_impedance_npz', reason: 'This run has no retained radiation-impedance matrix.' },
-        { format: 'radiation_impedance_csv', reason: 'This run has no retained radiation-impedance matrix.' },
+        { format: 'radiation_impedance_npz', reason: 'This run has no port data. Solve a passive cardioid design to export it.' },
+        { format: 'radiation_impedance_csv', reason: 'This run has no port data. Solve a passive cardioid design to export it.' },
       ],
     });
   });
@@ -818,7 +818,7 @@ describe('result exporters', () => {
     expect(saveBlob).toHaveBeenCalledTimes(1);
     expect(saveBlob.mock.calls[0][1]).toBe(expectedName);
     expect(reportNotice).toHaveBeenCalledTimes(regenerated ? 1 : 0);
-    if (regenerated) expect(reportNotice).toHaveBeenCalledWith('#123 · asro68: the original mesh was no longer stored, so it was rebuilt with the current mesher (0.2.8) and may differ from the mesh that was solved.');
+    if (regenerated) expect(reportNotice).toHaveBeenCalledWith('#123 · asro68: the original mesh is gone, so WG rebuilt it with the current version (0.2.8) and may differ from the mesh that was solved.');
     expect(await (saveBlob.mock.calls[0][0] as Blob).text()).toBe('stored mesh bytes');
   });
 
@@ -1049,7 +1049,7 @@ describe('result exporters', () => {
     expect(payload.members[0].relative_path).toBe(expectedName);
     expect(await payload.members[0].blob.text()).toBe('mesh bytes');
     expect(reportNotice).toHaveBeenCalledTimes(regenerated ? 1 : 0);
-    if (regenerated) expect(reportNotice).toHaveBeenCalledWith('#123 · asro68: the original mesh was no longer stored, so it was rebuilt with the current mesher and may differ from the mesh that was solved.');
+    if (regenerated) expect(reportNotice).toHaveBeenCalledWith('#123 · asro68: the original mesh is gone, so WG rebuilt it with the current version and may differ from the mesh that was solved.');
     expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
       '/api/mesh-artifact/artifact-uuid', '/api/workspace/write-export',
     ]);

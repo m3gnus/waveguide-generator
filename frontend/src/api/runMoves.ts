@@ -18,7 +18,7 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(`/api/workspace/run-moves${path}`, body === undefined ? undefined : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
-  if (!response.ok) throw new Error(await httpErrorMessage(response, 'Could not move earlier runs'));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not move the earlier runs. Reopen this tool, then try again.'));
   return response.json() as Promise<T>;
 }
 export function previewRunMove(target: MoveTarget, options: { selected?: string[]; gather: boolean; rename: boolean }) {

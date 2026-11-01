@@ -1959,7 +1959,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
       const option = radiationImpedanceOption(presentation, tokens, density);
       return Array.isArray(option.series) && option.series.length
         ? <EChart option={option} label="Interactive HornLab engineering-convention passive-cardioid radiation load by frequency" live={live}/>
-        : <ChartStub reason="The retained radiation matrix has no finite reduced load curves."/>;
+        : <ChartStub reason="WG could not read the port data of this run. Solve it again."/>;
     }
     return null;
   }, [angled, beamShapeAction, chartType, density, live, measured, measurementSelection, normAngle, overlays, preferences.directivityGuideInterval, preferences.groupDelayUnit, preferences.impedanceDisplay, preferences.mapReference, preferences.showContourNames, preferences.smoothing, preferences.splPhase, radiationArtifact, result, tokens, unqualified, wrapper]);
@@ -2739,7 +2739,7 @@ export function ResultsPanel() {
     </div>}
     {preferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}
     {error && <Notice tone="error" actions={<button type="button" className="btn" onClick={() => { setFetchError(null); setFetchAttempt((value) => value + 1); }}>Retry</button>}>{error}</Notice>}
-    {staleMeshes.map(job => <Notice key={job.id} tone="warning">The mesh for {runDisplayName(job)} may differ from the one used to solve it. The mesher or resolved geometry has changed; solve again to update these results.</Notice>)}
+    {staleMeshes.map(job => <Notice key={job.id} tone="warning">The mesh for {runDisplayName(job)} may differ from the one used to solve it. WG or the geometry has changed since. Solve again to update these results.</Notice>)}
     {showingPrevious && <Notice tone="info" role="status" style={{ margin: 7 }}>Showing previous results while fetching the selected run…</Notice>}
     {/* Three different empty docks, said apart: a failed fetch, a fetch still
         in flight, and nothing selected at all. The last used to claim it was

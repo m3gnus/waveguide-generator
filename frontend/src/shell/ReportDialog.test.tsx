@@ -186,12 +186,12 @@ describe('ReportDialog', () => {
 
   it('reports a backend that cannot answer instead of showing an empty box', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
-      JSON.stringify({ detail: 'Problem report details are unavailable' }),
+      JSON.stringify({ detail: 'WG could not gather the report details. Try again.' }),
       { status: 500, headers: { 'Content-Type': 'application/json' } },
     )));
     await render();
     expect(document.querySelector('.report-dialog-body')?.textContent)
-      .toContain('Problem report details are unavailable');
+      .toContain('WG could not gather the report details. Try again.');
     // The report itself is still reachable: the summary is a convenience.
     expect(document.querySelector<HTMLAnchorElement>('.report-dialog-actions a.primary')).not.toBeNull();
   });

@@ -1464,7 +1464,7 @@ describe('solver-mesh refresh inputs and document loads', () => {
         expect(notices[0].textContent?.split(wallFold)).toHaveLength(2);
         if (condition === 'different preview error') expect(notices[0].textContent).toContain(previewError);
         if (condition === 'dismissed preview error') expect(notices[0].textContent).toContain('could not show the latest edit');
-        if (condition === 'reconnecting') expect(notices[0].textContent).toContain('Reconnecting to preview engine');
+        if (condition === 'reconnecting') expect(notices[0].textContent).toContain('Reconnecting to the preview');
         if (condition === 'stalled') expect(notices[0].textContent).toContain('still drawing this design');
         const refreshes = [...host.querySelectorAll<HTMLButtonElement>('button')].filter((button) => button.textContent === 'Refresh');
         expect(refreshes).toHaveLength(1);
@@ -1537,7 +1537,7 @@ describe('solver-mesh refresh inputs and document loads', () => {
       return new Response(JSON.stringify({ detail: 'build failed' }), { status: 422 });
     });
     await act(async () => root.render(<Viewport />));
-    expect(host.textContent).toContain('Solve unavailable: Turn off the ground plane');
+    expect(host.textContent).toContain('Cannot solve this yet: Turn off the ground plane');
     act(() => useSolveOptionsStore.getState().setEngine('bempp'));
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 550)); });
     expect(requests).toBe(2);
@@ -1606,7 +1606,7 @@ describe('solver-mesh refresh inputs and document loads', () => {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 550)); });
     expect(requests).toBe(2);
     expect(importedMeshStore.getSnapshot().solver).not.toBeNull();
-    expect(host.textContent).toContain('Solve unavailable: Turn off the ground plane');
+    expect(host.textContent).toContain('Cannot solve this yet: Turn off the ground plane');
     expect(host.querySelector('.solver-mesh-banner')).toBeNull();
   });
 
@@ -1667,7 +1667,7 @@ describe('camera refit', () => {
 
 it('offers a new UI solve for per-band results without referring to a missing control', () => {
   const text = fieldPlaneUnavailableTooltip([{ status: 'complete', unavailable_reason: 'unsupported_per_band_mesh_ladder' } as JobItem]);
-  expect(text).toContain('Load its design, enable Keep field plane data');
-  expect(text).toContain('submit a new solve from the UI');
+  expect(text).toContain('Open its design, turn on Keep field plane data');
+  expect(text).toContain('solve in WG');
   expect(text).not.toContain('turn the per-band mesh ladder off');
 });

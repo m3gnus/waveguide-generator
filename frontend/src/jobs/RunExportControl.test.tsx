@@ -381,7 +381,7 @@ describe('RunExportControl', () => {
     expect(mocks.fetchJobResults).not.toHaveBeenCalled();
     expect(mocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
     expect(host.querySelector('[role="status"]')?.textContent).toContain(
-      'Sent to CAD · sequence 7 · /cad-library/wglink/1_stored_horn_v07.wglink',
+      'Sent to CAD · /cad-library/wglink/1_stored_horn_v07.wglink',
     );
   });
 
@@ -462,7 +462,7 @@ describe('RunExportControl', () => {
     render();
     openMenu();
     expect(menuItem('Radiation matrix curves').getAttribute('aria-disabled')).toBe('true');
-    expect(menuItem('Lossless radiation matrix').textContent).toContain('no retained passive-cardioid');
+    expect(menuItem('Lossless radiation matrix').textContent).toContain('no port data');
 
     act(() => host.querySelector<HTMLButtonElement>('.action-menu-chevron')!.click());
     render(completeJob({

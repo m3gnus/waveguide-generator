@@ -128,16 +128,16 @@ describe('profile freshness', () => {
     expect(host.querySelector('[data-stale="true"]')).not.toBeNull();
     expect(host.textContent).toContain('Updating… — last valid');
     await tick(); await respond(1, JSON.stringify({ detail: 'Invalid corner radius' }), 422);
-    expect(host.textContent).toContain('Invalid: Invalid corner radius — last valid profile');
+    expect(host.textContent).toContain('Invalid corner radius The chart shows the last good profile.');
     render('a', 3); await tick(); await respond(2, fixtures[1].csv);
     expect(host.querySelector('[data-stale]')).toBeNull();
     render('a', 3, true);
-    expect(host.textContent).toContain('Invalid input — last valid');
+    expect(host.textContent).toContain('Fix the marked values. The chart shows the last good profile.');
   });
 
   it('shows an initial error without a curve and ignores results after unmount', async () => {
     render('a', 1); await tick(); await respond(0, JSON.stringify({ detail: 'Bad profile' }), 422);
-    expect(host.textContent).toContain('Invalid: Bad profile');
+    expect(host.textContent).toContain('Bad profile');
     expect(host.querySelector('[role="img"]')).toBeNull();
     render('a', 2); await tick();
     act(() => root.render(null));

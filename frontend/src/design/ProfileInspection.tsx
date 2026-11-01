@@ -88,8 +88,8 @@ export function ProfileInspection({ design, identity, revision, invalidDraft = f
     <SelectRow text="Choose which generated profile planes to inspect."><label htmlFor="freeform-profile-planes">Show</label><select id="freeform-profile-planes" aria-label="Profile planes" value={plane} onChange={(event) => setPlane(event.target.value as Plane)}>
       <option value="both">H and V</option><option value="H">Horizontal (H)</option><option value="V">Vertical (V)</option>
     </select></SelectRow>
-    <div role="status" aria-live="polite">{invalidDraft ? `Invalid input${visible ? ' — last valid profile' : ''}. Correct the marked values.`
-      : error ? `Invalid: ${error}${visible ? ' — last valid profile' : ''}`
+    <div role="status" aria-live="polite">{invalidDraft ? `Fix the marked values.${visible ? ' The chart shows the last good profile.' : ''}`
+      : error ? `${error}${visible ? ' The chart shows the last good profile.' : ''}`
         : visible?.key !== key ? `Updating…${visible ? ' — last valid profile' : ''}`
           : ''}</div>
     {option && <div className="profile-inspection-chart" data-stale={stale || undefined} style={{ height: 260, opacity: stale ? .45 : 1 }}>

@@ -504,7 +504,7 @@ describe('shared historical restoration transaction', () => {
     const status = vi.fn();
     expect(await restoreCadJobModel(job('wgi_bad'), { reportStatus: status }, (async input => isWorkspace(input)
       ? json(workspaceFor('wgi_bad')) : json({ ...record, ingest_id: 'wgi_bad', artifact_sha256: 'wrong' })) as typeof fetch)).toBe(false);
-    expect(status.mock.calls.at(-1)?.[0]).toContain('does not match');
+    expect(status.mock.calls.at(-1)?.[0]).toContain('do not match');
     expect(() => buildImportedSubmission()).toThrow();
   });
 });

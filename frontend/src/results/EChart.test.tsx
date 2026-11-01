@@ -15,7 +15,7 @@ describe('chart loading fallback', () => {
 
     act(() => root.render(<ChartErrorBoundary label="Directivity"><BrokenChart/></ChartErrorBoundary>));
 
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Interactive chart unavailable');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('WG could not draw this chart');
     expect(host.querySelector('[aria-label="Directivity unavailable"]')).not.toBeNull();
     act(() => root.unmount());
     consoleError.mockRestore();

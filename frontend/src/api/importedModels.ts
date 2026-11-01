@@ -76,7 +76,7 @@ export async function requestImportedModel<T>(path: string, fetcher: typeof fetc
   const response = await fetcher(path, init);
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: { message?: unknown; code?: unknown }; detail?: unknown } | null;
-    const message = typeof body?.error?.message === 'string' ? body.error.message : refusalText(body?.detail, what, `${what} could not be read. Try again.`);
+    const message = refusalText(typeof body?.error?.message === 'string' ? body.error.message : body?.detail, what, `${what} could not be read. Try again.`);
     throw new ImportedModelApiError(message, response.status,
       typeof body?.error?.code === 'string' ? body.error.code : null);
   }

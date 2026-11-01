@@ -19,7 +19,7 @@ export class ChartErrorBoundary extends Component<
   render() {
     if (this.state.failed) {
       return <div role="alert" aria-label={`${this.props.label} unavailable`} style={{ width: '100%', height: '100%', minHeight: 0 }}>
-        Interactive chart unavailable. Reload to retry.
+        WG could not draw this chart. Reload to try again.
       </div>;
     }
     return this.props.children;

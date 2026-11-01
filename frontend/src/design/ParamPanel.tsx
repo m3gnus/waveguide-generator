@@ -879,7 +879,7 @@ export function RealizedDimensionsSection({ snapshot, driftedParameters = [], fo
             <dd>{formatRealizedValue(parameter.value)}{parameter.unit && <small>{parameter.unit}</small>}</dd>
           </div>)}
         </dl>
-        : <div className="realized-dimensions-empty" role="status"><b>No interface-role dimensions</b><span>The manifest contains no dimensions marked for the cabinet-facing CAD interface.</span></div>}
+        : <div className="realized-dimensions-empty" role="status"><b>No interface-role dimensions</b><span>This model has no dimensions marked for the cabinet in CAD.</span></div>}
     </>}
   </Section>;
 }
@@ -1385,7 +1385,7 @@ export function ParamPanel({ tab, embedded = false }: { tab: ParameterTab; embed
   if (workspaceMode === 'cad' && workspaceModeStore.getSnapshot().importedInput === 'assembly') return <SolveOptionsStoreProvider mode="cad">
     <div className={`param-panel${embedded ? '' : ' panel-scroll'}`} data-param-tab={tab}>
       {tab === 'simulation' ? <CadSimulationSections searching={false} matches={() => true}/>
-        : <p className="section-note">This run shows its retained assembly mesh. To change the assembly, return to Parametric with its design open.</p>}
+        : <p className="section-note">This run shows its saved assembly mesh. To change the assembly, open its design in Parametric.</p>}
     </div>
   </SolveOptionsStoreProvider>;
 

@@ -63,7 +63,7 @@ describe('job completion automation', () => {
     expect(dependencies.markMeshDownloaded).toHaveBeenCalledExactlyOnceWith(job, savedPath);
     expect(reportError).not.toHaveBeenCalled();
     expect(reportMeshNotice).toHaveBeenCalledTimes(regenerated ? 1 : 0);
-    if (regenerated) expect(reportMeshNotice).toHaveBeenCalledWith(job.id, 'Run #1: the original mesh was no longer stored, so it was rebuilt with the current mesher and may differ from the mesh that was solved.');
+    if (regenerated) expect(reportMeshNotice).toHaveBeenCalledWith(job.id, 'Run #1: the original mesh is gone, so WG rebuilt it with the current version and may differ from the mesh that was solved.');
   });
 
   it('holds a partial export failure for the session and retries only failed formats after restart', async () => {

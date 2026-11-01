@@ -62,13 +62,13 @@ export interface DiagnosticsReport {
 
 export async function getDiagnosticsReport(fetcher: typeof fetch = fetch): Promise<DiagnosticsReport> {
   const response = await deadlineFetch(fetcher, '/api/diagnostics/summary');
-  if (!response.ok) throw new Error(await httpErrorMessage(response, 'Problem report details are unavailable'));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not gather the report details. Try again.'));
   return response.json() as Promise<DiagnosticsReport>;
 }
 
 export async function openLogsFolder(fetcher: typeof fetch = fetch): Promise<void> {
   const response = await fetcher('/api/diagnostics/open-logs', { method: 'POST' });
-  if (!response.ok) throw new Error(await httpErrorMessage(response, 'The logs folder could not be opened'));
+  if (!response.ok) throw new Error(await httpErrorMessage(response, 'WG could not open the logs folder. Download a problem report instead.'));
 }
 
 /** A plain URL, so the download can be an anchor rather than a fetch. */

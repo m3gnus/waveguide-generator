@@ -39,7 +39,7 @@ function errorText(detail: FreeformErrorWire['detail']): string {
   if (typeof detail === 'string') return detail;
   return detail.map((item) => {
     const location = Array.isArray(item.loc) ? item.loc.filter((part) => part !== 'body').join('.') : '';
-    const message = typeof item.msg === 'string' ? item.msg : 'Invalid value';
+    const message = typeof item.msg === 'string' ? item.msg : 'Enter a value WG can use here.';
     return location ? `${location}: ${message}` : message;
   }).join('; ');
 }

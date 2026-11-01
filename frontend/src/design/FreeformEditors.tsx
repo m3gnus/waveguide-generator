@@ -91,7 +91,7 @@ export function lookupRadiusWarning(radii: readonly number[], lines?: readonly n
   const bad = radii.map((radius, index) => (radius <= 0 ? (lines?.[index] ?? index + 1) : 0)).filter(Boolean);
   if (!bad.length) return undefined;
   const where = lines ? 'line' : 'point';
-  return `${bad.length === 1 ? `Radius at ${where} ${bad[0]} is` : `Radii at ${where}s ${bad.join(', ')} are`} zero or negative; the mesher accepts it, but the horn will not be a physical surface.`;
+  return `${bad.length === 1 ? `Radius at ${where} ${bad[0]} is` : `Radii at ${where}s ${bad.join(', ')} are`} zero or negative, so the horn will not be a physical surface. Enter a positive radius.`;
 }
 
 /** LOOKUP preserves authored order and mm; it has no spline endpoints or angle column. */

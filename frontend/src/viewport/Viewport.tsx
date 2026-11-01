@@ -316,20 +316,20 @@ export function femFieldJob(
 
 export function fieldPlaneUnavailableTooltip(jobs: readonly JobItem[]): string {
   const completed = jobs.find((job) => job.status === 'complete');
-  if (!completed) return 'Field plane unavailable — complete a full-3D solve first';
+  if (!completed) return 'No field plane yet. Solve this design first.';
   switch (completed.unavailable_reason) {
-    case 'solve_predates_traces': return 'Field plane unavailable — re-solve this design to retain field traces';
-    case 'artifact_pruned': return 'Field plane unavailable — retained traces expired; re-solve the design';
-    case 'artifact_persistence_failed': return 'Field plane unavailable — the solve could not retain its field traces';
-    case 'size_cap_exceeded': return 'Field plane unavailable — reduce the mesh or sweep size, then re-solve';
-    case 'trace_output_missing': return 'Field plane unavailable — the solver returned no field traces; re-solve the design';
+    case 'solve_predates_traces': return 'This run has no field data. Solve the design again.';
+    case 'artifact_pruned': return 'This run’s field data was cleaned up. Solve the design again.';
+    case 'artifact_persistence_failed': return 'WG could not save this run’s field data. Check the disk has space, then solve again.';
+    case 'size_cap_exceeded': return 'This run’s field data was too large to keep. Reduce the mesh or the sweep, then solve again.';
+    case 'trace_output_missing': return 'The engine returned no field data. Solve the design again.';
     case 'unsupported_axisymmetric_formulation': return 'This historical Axisymmetric result has no field-plane traces. Re-solve with a field-plane-capable configuration.';
-    case 'unsupported_coupled_infinite_baffle': return 'Field plane unavailable — set Mounting to Bare shell, Thickened waveguide (freestanding), or Waveguide in enclosure and re-solve with Metal or BEMPP';
-    case 'unsupported_per_band_mesh_ladder': return 'Field plane unavailable — this run used multiple per-band meshes. Load its design, enable Keep field plane data, and submit a new solve from the UI';
-    case 'unsupported_ground_plane': return 'Field plane unavailable — the field carries no ground image; turn the ground plane off and re-solve. Polar and impedance results do include the ground';
-    case 'unsupported_solve_mode': return 'Field plane unavailable — use a supported full-3D solve';
-    case 'disabled_by_option': return 'Field plane unavailable — enable Keep field plane data and re-solve';
-    default: return 'Field plane unavailable — no completed run has retained field traces';
+    case 'unsupported_coupled_infinite_baffle': return 'This run has no field plane. Set Mounting to Bare shell, Thickened waveguide (freestanding), or Waveguide in enclosure and re-solve with Metal or BEMPP';
+    case 'unsupported_per_band_mesh_ladder': return 'This run used several meshes, so it has no field plane. Open its design, turn on Keep field plane data, and solve in WG';
+    case 'unsupported_ground_plane': return 'The field plane cannot show a ground plane. Turn the ground plane off and solve again. Polar and impedance results do include the ground';
+    case 'unsupported_solve_mode': return 'This solve has no field plane. Solve it in full 3D.';
+    case 'disabled_by_option': return 'This run has no field data. Turn on Keep field plane data, then solve again.';
+    default: return 'No completed run has field data. Turn on Keep field plane data, then solve.';
   }
 }
 
@@ -1062,7 +1062,7 @@ export function Viewport() {
             the model's status line lives in Results. */}
         <span title={importedMeshDetail ?? undefined}>{importedMesh
           ? cadMeshShown ? `${importedMesh.solvedTriangleCount.toLocaleString()} triangles` : importedMeshDetail
-          : assemblyInputActive ? 'Retained mesh of a run' : fileInputActive ? 'Mesh file · configure in Geometry' : workspaceMode === 'cad' ? null : viewportSubtitle(design, nativeOpening)}</span>
+          : assemblyInputActive ? 'Saved mesh of a run' : fileInputActive ? 'Mesh file · configure in Geometry' : workspaceMode === 'cad' ? null : viewportSubtitle(design, nativeOpening)}</span>
       </div>
       <div className="viewport-live">
         {workspaceMode === 'parametric' && <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>}
@@ -1091,7 +1091,7 @@ export function Viewport() {
       </div>
     </div>
 
-    {!activeScene && <EmptyState className="viewport-empty" aria-live="polite" title={<>{assemblyInputActive ? 'Opening this run’s model' : fileInputActive ? 'Import a mesh file' : workspaceMode === 'cad' ? cadEmpty.title : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</>} detail={<>{assemblyInputActive ? 'Its retained mesh appears here.' : fileInputActive ? 'Use Import mesh… above. WG reads ASCII Gmsh 2.2 surface meshes (.msh).' : workspaceMode === 'cad' ? cadEmpty.detail : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</>} action={workspaceMode === 'cad' && !fileInputActive && !workspaceNavigation.isVisible('results')
+    {!activeScene && <EmptyState className="viewport-empty" aria-live="polite" title={<>{assemblyInputActive ? 'Opening this run’s model' : fileInputActive ? 'Import a mesh file' : workspaceMode === 'cad' ? cadEmpty.title : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</>} detail={<>{assemblyInputActive ? 'Its saved mesh appears here.' : fileInputActive ? 'Use Import mesh… above. WG reads ASCII Gmsh 2.2 surface meshes (.msh).' : workspaceMode === 'cad' ? cadEmpty.detail : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</>} action={workspaceMode === 'cad' && !fileInputActive && !workspaceNavigation.isVisible('results')
         && <button type="button" className="btn viewport-retry" onClick={() => workspaceNavigation.navigate('results')}>Show Results</button> || undefined}>
       <i className="viewport-empty-mark" aria-hidden="true"><i /></i>
     </EmptyState>}
@@ -1116,9 +1116,9 @@ export function Viewport() {
           {showPreviewError && preview.errorDetail && <DeveloperDetails><pre>{preview.errorDetail}</pre></DeveloperDetails>}
           {showStalledPreview && <span>{staleReason(preferences.liveUpdate, preview.connection, preview.error)}</span>}
           {showConnectionNotice && <span>
-            {preview.connection === 'reconnecting' ? 'Reconnecting to preview engine' : 'Preview connection interrupted'}. Last valid geometry retained.
+            {preview.connection === 'reconnecting' ? 'Reconnecting to the preview' : 'Preview connection interrupted'}. The last good geometry stays on screen.
           </span>}
-          {showCadSolverError && <><span>Solve mesh unavailable</span><b>{cadSolverError}</b></>}
+          {showCadSolverError && <><span>WG could not load the solve mesh</span><b>{cadSolverError}</b></>}
         </div>
       </Notice>}
       {solverViewSelected && planAdjustments.flatMap((adjustment) => {
@@ -1128,7 +1128,7 @@ export function Viewport() {
         <div className="solver-plan-adjustment-note" role="note" key={notice}>{notice}</div>
       ))}
       {solverViewSelected && solverMeshRefusal && <div className="solver-plan-adjustment-note" role="note">
-        Solve unavailable: {solverMeshRefusal}
+        Cannot solve this yet: {solverMeshRefusal}
       </div>}
       {activeScene && domainLabel && <div className="viewport-domain-note" role="note" aria-label="Solved domain">
         Solve domain: {domainLabel}
@@ -1416,7 +1416,7 @@ export function Viewport() {
         <button
           type="button"
           className={fieldEnabled ? 'on' : ''}
-          title={!activeScene ? 'Field plane unavailable — waiting for viewport geometry' : availableFemJob ? 'Toggle FEM interior field' : 'Toggle acoustic field plane'}
+          title={!activeScene ? 'Waiting for the model to appear.' : availableFemJob ? 'Toggle FEM interior field' : 'Toggle acoustic field plane'}
           aria-label={availableFemJob ? 'FEM interior field overlay' : 'Acoustic field plane overlay'}
           aria-pressed={fieldEnabled}
           disabled={!fieldEnabled && !activeScene}

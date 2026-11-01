@@ -244,7 +244,7 @@ function ProjectOverflowMenu({ project, onNotice, onError }: {
       {project && <MoveRunsButton role="menuitem" target={{ key: `lineage:${project.lineageId}`, name: project.name }}/>}
       <button role="menuitem" disabled={!folder.path || folder.busy !== null} title="Open the Runs folder every CAD project is archived under. Its effective path is shown in Settings → WG folder." onClick={() => { setOpen(false); void folder.open(); }}><Icon name="folder"/>Open Runs folder</button>
       <button role="menuitem" disabled={folder.busy !== null} title="Choose the WG folder. Existing overrides and files are kept." onClick={() => { setOpen(false); void folder.select(); }}>Change WG folder…</button>
-      <div className="cad-overflow-path" title={folder.path ?? undefined}>{folder.path ?? (folder.loaded ? 'Runs folder unavailable' : 'Loading…')}</div>
+      <div className="cad-overflow-path" title={folder.path ?? undefined}>{folder.path ?? (folder.loaded ? 'WG cannot read the Runs folder. Choose the WG folder in Settings.' : 'Loading…')}</div>
       {folder.error && <div className="cad-projects-folder-error" role="status">{folder.error}</div>}
     </div>}
   </div>;

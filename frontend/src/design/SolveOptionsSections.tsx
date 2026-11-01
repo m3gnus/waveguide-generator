@@ -299,7 +299,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
     {includeSampling && <MeshValidationControl mode={mode} />}
     {mode === 'parametric' && <GroundPlaneControls />}
     {includeSampling && <FrequencySweepControls idPrefix={mode === 'cad' ? 'cad-solve' : 'design-solve'} context={mode === 'cad' ? 'imported' : 'design'} />}
-    {developer && <ToggleRow revealId="solve-verbose" id="solve-verbose" label="Verbose backend logging" help="Records the backend's own per-frequency diagnostics in the job log. Useful when a solve fails or looks wrong; it makes logs much longer." checked={store.verbose} onChange={store.setVerbose} />}
+    {developer && <ToggleRow revealId="solve-verbose" id="solve-verbose" label="Verbose backend logging" help="Records the engine's own per-frequency diagnostics in the run log. Useful when a solve fails or looks wrong; it makes logs much longer." checked={store.verbose} onChange={store.setVerbose} />}
     {error && <div className="field-error" role="alert">{error}</div>}
   </>;
 }
