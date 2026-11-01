@@ -37,7 +37,7 @@ export function Workspace<TDoc, S, C>({ adapter, state, session, slots, selectio
   const latest = useRef({ state, session }); latest.current = { state, session };
   const drag = useRef<{ ready: Promise<void>; origin: XY; points: { id: string; at: XY }[] } | undefined>(undefined);
   const viewState = { selection, hover: hoverId ?? hover };
-  const display = adapter.display(state, { ...viewState, scale: view.scale, view, viewport: size, names: viewOptions.names });
+  const display = adapter.display(state, { ...viewState, scale: view.scale, view, viewport: size, names: viewOptions.names, dimensions: viewOptions.dimensions });
   const status = session?.status ?? adapter.status(state), solver = session?.solver;
   const problems = status.kind === 'invalid' ? status.problems : [];
   const activeTool = adapter.tools.find(t => t.id === tool && (solver || t.group !== 'Constraints'));
@@ -166,13 +166,13 @@ export function Workspace<TDoc, S, C>({ adapter, state, session, slots, selectio
     svgProps={{ className: tool === 'hand' || panActive ? `sketch-pan${panActive ? ' grabbing' : ''}` : undefined,
       onPointerEnter: () => { hovered.current = true; }, onPointerLeave: () => { hovered.current = false; setContextPointer(undefined); setHover(undefined); onHoverChange?.(undefined); },
       onPointerDown: pointerDown, onPointerMove: pointerMove, onPointerUp: event => pointerUp(false, event), onPointerCancel: () => pointerUp(true), onLostPointerCapture: () => pointerUp(true) }}
-    toolbar={<WorkspaceToolbar label={adapter.labels?.tools} tool={tool} enabled={!!session} historyKind={session?.historyKind} solver={!!solver} navigation={<NavigateTools tool={tool} choose={choose}/>} viewOptions={viewOptions}
+    toolbar={<WorkspaceToolbar label={adapter.labels?.tools} tool={tool} enabled={!!session} historyKind={session?.historyKind} solver={!!solver} controls={adapter.viewControls} navigation={<NavigateTools tool={tool} choose={choose}/>} viewOptions={viewOptions}
       toggle={key => setViewOptions(previous => { const next = { ...previous, [key]: !previous[key] }; saveSketchView(next); return next; })} undo={redo => void undo(redo)} zoom={zoom} fit={all => setView(displayView(display, size, all))}>
       {groups.map(group => <div key={group} className="sketch-toolbar-group" role="group" aria-label={group}><span className="sketch-group-caption">{group}</span><div className="sketch-tool-segment">{adapter.tools.filter(t => t.group === group).map(t => <button className="btn" type="button" key={t.id} aria-label={t.label} title={t.shortcut ? `${t.label} (${t.shortcut.toUpperCase()})` : t.label} aria-pressed={tool === t.id} disabled={!session} onClick={() => choose(t.id)}><svg aria-hidden="true" viewBox="0 0 16 16"><path d={t.icon}/></svg><span className="sketch-tool-label">{t.label}</span></button>)}</div></div>)}
     </WorkspaceToolbar>}
     banners={<>{solver && session?.rejection !== undefined && <div role="alert" className="sketch-conflict-banner">{String(session.rejection)}</div>}</>}
     properties={<>{tool !== 'select' && <p className="sketch-command-step" role="status">{hint}</p>}{properties.map(section => <section data-workspace-own-keys key={section.id} aria-label={section.title}>{section.render()}</section>)}</>}
-    status={<div role="status" className="sketch-status">{solver && <><span className="sketch-dof">{solver.diagnosis?.dof ?? '…'} DOF</span>{` · Solve: ${solver.diagnosis?.status ?? 'pending'} · `}</>}{status.kind}{problems.length > 0 && ` · ${problems.length} problems`} · {adapter.axes.x.label} {cursor.x.toFixed(2)}, {adapter.axes.y.label} {cursor.y.toFixed(2)} {adapter.axes.x.unit} · {message || (status.kind === 'unfinished' ? status.hint : hint)}</div>}
+    status={<div role="status" className="sketch-status">{adapter.statusLine ? adapter.statusLine(state, cursor, message) : <>{solver && <><span className="sketch-dof">{solver.diagnosis?.dof ?? '…'} DOF</span>{` · Solve: ${solver.diagnosis?.status ?? 'pending'} · `}</>}{status.kind}{problems.length > 0 && ` · ${problems.length} problems`} · {adapter.axes.x.label} {cursor.x.toFixed(2)}, {adapter.axes.y.label} {cursor.y.toFixed(2)} {adapter.axes.x.unit} · {message || (status.kind === 'unfinished' ? status.hint : hint)}</>}</div>}
     footer={<>{problems.map((problem, i) => <div key={`${problem.code}${i}`} className="sketch-domain-problem">{problem.message}</div>)}</>}>
     <ContextLayer items={display.context} names={viewOptions.names} cursor={contextPointer} contour={display.items.flatMap(item => item.kind === 'point' ? [worldToScreen(view, item.at)] : [])} viewport={size} reserved={[]} canPick={false} isPanning={() => space.current || tool === 'hand'} highlighted={new Set(selection)} stale={false} view={view} onPick={() => {}} onEditLimit={() => {}} canEditLimit={false}/>
     <WorkspaceItems items={[...display.items, ...preview]} view={view}/>

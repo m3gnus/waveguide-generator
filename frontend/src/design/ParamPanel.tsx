@@ -9,6 +9,7 @@ import { registerParameterPanel } from './parameterPanelValidity';
 import { nativeSymmetryLimitation } from './nativeFamilies';
 import { EnclosureResolutionField } from './EnclosureResolutionField';
 import { FrontWorkspaceLauncher } from './FrontWorkspace';
+import { outerBodyUpdates } from './outerBodyUpdates';
 import { ExteriorDriverFields, ExteriorDriverOptions } from './ExteriorDriverOptions';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
@@ -35,7 +36,7 @@ import {
 import { ExteriorDriverLibraryPicker, ChannelDriverPicker } from './DriverPicker';
 import { useWaveguideDefinitionApplies } from '../stores/waveguideLink';
 import { useCadModelStatusLine } from '../shell/CadModelStatusLine';
-import { defaultWallThickness, getAtPath, isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
+import { getAtPath, isNativeFamily, useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
 import { athControlError, lipRadiusWallError, lipUnavailableReason, opusClampNote, opusMountingReason, rosseMorphNote } from './athImportControls';
 import { namespaceStorage } from '../stores/durableSettings';
 import type { SymmetryMode } from '../stores/solveOptions';
@@ -296,29 +297,11 @@ function WallEnclosureModeControl({ design, mounting = false, serverError }: { d
   }, [design.enclosure.depth]);
 
   const chooseMode = (mode: OuterBodyMode) => {
-    if (mounting && mode === 'infinite-baffle') {
-      updateValues({ 'simulation.sim_type': 'infinite-baffle' });
+    if (mode === 'infinite-baffle') {
+      if (mounting) updateValues({ 'simulation.sim_type': 'infinite-baffle' });
       return;
     }
-    const updates = mode === 'bare'
-      ? { 'mesh.wall_thickness': 0, 'enclosure.depth': 0 }
-      : mode === 'freestanding'
-        ? { 'mesh.wall_thickness': lastWallThickness ?? defaultWallThickness(), 'enclosure.depth': 0 }
-        : { 'mesh.wall_thickness': 0, 'enclosure.depth': lastEnclosureDepth };
-    // Write only what changes. An import without Mesh.Enclosure keeps `enclosure`
-    // in _absent, and any write under it (even depth 0 over 0) would drop that
-    // marker and send a full object, which the mesher refuses with a lip or Opus.
-    // An unset wall is ATH's 5 mm (0 only while infinite baffle hides it), so a
-    // bare or enclosed body always needs an explicit 0, and a free-standing
-    // one keeps the unset wall. An unset enclosure stays unset at depth 0.
-    const wallUnset = Boolean(design._absent?.includes('mesh.wall_thickness'));
-    const enclosureUnset = Boolean(design._absent?.includes('enclosure'));
-    const changed: Record<string, number> = {};
-    const wall = updates['mesh.wall_thickness'];
-    if (wallUnset ? wall === 0 : design.mesh.wall_thickness !== wall) changed['mesh.wall_thickness'] = wall;
-    const depth = updates['enclosure.depth'];
-    if (enclosureUnset ? depth !== 0 : design.enclosure.depth !== depth) changed['enclosure.depth'] = depth;
-    updateValues({ ...changed, ...(mounting && design.simulation.sim_type === 'infinite-baffle' ? { 'simulation.sim_type': 'freestanding' } : {}) });
+    updateValues(outerBodyUpdates(design, mode, lastWallThickness, lastEnclosureDepth, mounting));
   };
 
   return <div className="outer-body-mode" data-parameter-id={mounting ? 'simulation.sim_type' : undefined} data-control-reveal-id={mounting ? PARAMETRIC_CONTROLS.mounting.reveal.id : undefined}>

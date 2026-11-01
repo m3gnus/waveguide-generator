@@ -9,7 +9,7 @@
  * label, and every consumer can tell whether it is the design on screen.
  */
 import { create } from 'zustand';
-import { compileAssembly, type AssemblyCompileResult, type CompiledAssembly } from '../api/assembly';
+import { assemblyProblemText, compileAssembly, type AssemblyCompileResult, type CompiledAssembly } from '../api/assembly';
 import type { ImportedModelSummary } from '../api/importedModels';
 import { currentDocumentLoad, isCurrentDocumentLoad, serializeDesign, subscribeRevision, useDesignStore, type DesignDocument } from './design';
 import { designContentKey } from './designContentKey';
@@ -27,9 +27,11 @@ export interface AssemblyBuildState {
   requested: { revision: number; contentKey: string | null; load: number } | null;
   published: PublishedAssembly | null;
   refusal: string | null;
+  /** The original failure, for the developer disclosure only. */
+  failureDetail: string | null;
 }
 
-const IDLE: AssemblyBuildState = { status: 'idle', requested: null, published: null, refusal: null };
+const IDLE: AssemblyBuildState = { status: 'idle', requested: null, published: null, refusal: null, failureDetail: null };
 /** This page's builds: the server orders revisions within one page and document only. */
 const PAGE_SESSION = globalThis.crypto?.randomUUID?.() ?? `page-${Date.now()}-${Math.random()}`;
 
@@ -69,7 +71,7 @@ export async function requestAssemblyBuild(fetcher: typeof fetch = fetch): Promi
   const { designUid, designName } = useDocumentStore.getState();
   const load = currentDocumentLoad();
   const requested = { revision: designRevision, contentKey: assemblyContentKey(design), load };
-  useAssemblyBuildStore.setState({ status: 'building', requested, refusal: null });
+  useAssemblyBuildStore.setState({ status: 'building', requested, refusal: null, failureDetail: null });
   const owns = () => {
     const current = useAssemblyBuildStore.getState().requested;
     return isCurrentDocumentLoad(load) && current?.revision === requested.revision && current.load === load;
@@ -87,7 +89,10 @@ export async function requestAssemblyBuild(fetcher: typeof fetch = fetch): Promi
     }
     return result;
   } catch (error) {
-    if (owns()) useAssemblyBuildStore.setState({ status: 'refused', refusal: error instanceof Error ? error.message : String(error) });
+    if (owns()) {
+      useAssemblyBuildStore.setState({ status: 'refused', failureDetail: error instanceof Error ? error.message : String(error),
+        refusal: assemblyProblemText(error, 'WG could not build this assembly and has recorded the problem. Try again.') });
+    }
     throw error;
   }
 }

@@ -18,7 +18,7 @@ export interface DimensionLayout {
   at: XY; path: string; arrows: string; rotation: number; placement: DimensionPlacement;
 }
 const segment = (p: XY, q: XY) => `M${p.x},${p.y} L${q.x},${q.y}`;
-const arrow = (p: XY, angle: number) => {
+export const arrow = (p: XY, angle: number) => {
   const wing = (offset: number) => ({ x: p.x + 6 * Math.cos(angle + offset), y: p.y + 6 * Math.sin(angle + offset) });
   return `${segment(wing(.45), p)} ${segment(p, wing(-.45))}`;
 };

@@ -3,7 +3,7 @@
  * view's solver-free context, and compiling one captured design revision into
  * its design model's immutable prepared mesh.
  */
-import { requestImportedModel, type ImportedModelSummary, type PreparedSummary } from './importedModels';
+import { ImportedModelApiError, requestImportedModel, type ImportedModelSummary, type PreparedSummary } from './importedModels';
 
 /** Live outlines and the design mesher's own woofer placement, in horn-throat mm. */
 export interface AssemblyFrontContext {
@@ -55,6 +55,14 @@ const post = <T>(path: string, body: unknown, fetcher: typeof fetch, what: strin
   requestImportedModel<T>(path, fetcher, what, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
+
+/**
+ * What to tell the user about a failed assembly request. A refusal the server
+ * words is about their design; anything else is ours, and `fallback` says so.
+ */
+export function assemblyProblemText(reason: unknown, fallback: string): string {
+  return reason instanceof ImportedModelApiError && reason.code !== null ? reason.message : fallback;
+}
 
 export const fetchAssemblyContext = (design: Record<string, unknown>, fetcher: typeof fetch = fetch) =>
   post<AssemblyFrontContext>('/api/models/assembly/context', { design }, fetcher, 'The front view');
