@@ -18,24 +18,26 @@ export interface AssemblySolvePress { modelId: string; press: ModelSolvePress; n
 /** Build the design's assembly if it is not current, then the press for its record. */
 export async function prepareAssemblySolve(fetcher: typeof fetch = fetch,
   newPressId: () => string = () => globalThis.crypto.randomUUID()): Promise<AssemblySolvePress> {
-  const { design } = useDesignStore.getState();
+  const { design, designRevision } = useDesignStore.getState();
   if (!design.assembly) throw new Error('This design has no Sources and baffle assembly.');
+  // Everything below answers for what was on screen at this press: the check,
+  // the build and the settings all belong to one revision, or none goes out.
+  const setupAtPress = assemblyImportedSetup();
+  const optionsAtPress = useSolveOptionsStore.getState().options() as ImportedSolveSubmission['options'];
+  const sameRevision = () => useDesignStore.getState().designRevision === designRevision;
+  const changed = () => new Error('The design changed while it was being prepared. Press Solve again.');
   if (!assemblyBuildCurrent(useAssemblyBuildStore.getState(), design)) {
     // A woofer that does not fit never reaches the build, wherever Solve was pressed.
     const context = await fetchAssemblyContext(serializeDesign(design), fetcher);
     const [problem] = [...placementProblems(design.assembly, { context, assembly: design.assembly }).values()].flat();
     if (problem) throw new Error(`${problem} Open Sources and baffle to fix it.`);
+    if (!sameRevision()) throw changed();
     const built = await requestAssemblyBuild(fetcher);
     if (built?.status !== 'published') throw new Error('A newer revision of this design is being built. Solve again when it is ready.');
   }
   const published = useAssemblyBuildStore.getState().published;
-  if (!published || !assemblyBuildCurrent(useAssemblyBuildStore.getState(), useDesignStore.getState().design)) {
-    throw new Error('The design changed while its assembly was built. Solve again.');
-  }
-  const { setup, notice } = resolveAssemblySetup(
-    assemblyImportedSetup(), design.assembly,
-    useSolveOptionsStore.getState().options() as ImportedSolveSubmission['options'], design.simulation,
-  );
+  if (!published || !sameRevision() || !assemblyBuildCurrent(useAssemblyBuildStore.getState(), design)) throw changed();
+  const { setup, notice } = resolveAssemblySetup(setupAtPress, design.assembly, optionsAtPress, design.simulation);
   return {
     modelId: published.model.model_id, notice,
     press: {

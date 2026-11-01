@@ -12,6 +12,24 @@ const ids = () => `00000000-0000-4000-8000-${String(counter += 1).padStart(12, '
 describe('assembly Solve press', () => {
   beforeEach(() => { counter = 0; resetDesignStore(); resetAssemblyBuild(); resetSolveOptionsStore(); });
 
+  it('binds the check, the build and the press to one revision', async () => {
+    const { assembly } = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
+    useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly });
+    const asked: string[] = [];
+    let answer!: (response: Response) => void;
+    const fetcher = ((url: string) => {
+      asked.push(url);
+      return url.endsWith('/context') ? new Promise<Response>(resolve => { answer = resolve; })
+        : Promise.resolve(new Response(JSON.stringify({ status: 'superseded' }), { status: 200 }));
+    }) as unknown as typeof fetch;
+    const pressed = prepareAssemblySolve(fetcher, () => 'p1');
+    // The user edits while the check is on its way.
+    useDesignStore.getState().updateValue('simulation.f1', 200);
+    answer(new Response(JSON.stringify({ minimum_clearance_mm: 0.1, clearances: {} }), { status: 200 }));
+    await expect(pressed).rejects.toThrow('The design changed while it was being prepared');
+    expect(asked).toEqual(['/api/models/assembly/context']);
+  });
+
   it('never builds a woofer that does not fit, wherever Solve was pressed', async () => {
     const { assembly, id } = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
     useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly });
