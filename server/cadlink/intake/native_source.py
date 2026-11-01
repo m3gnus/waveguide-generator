@@ -727,7 +727,7 @@ def _verify_recipe_faces(stage, gmsh):
     """Refuse valid-looking selectors rebound to another geometric patch."""
     import numpy as np
     from hornlab_mesher.step_mapping import advanced_face_order_for_surfaces
-    from server.mesh.imported import _parametric_trim_mask
+    from hornlab_mesher.tessellation import parametric_trim_mask
 
     manifest, contour, _, _ = read_native_source(stage)
     gmsh.option.setString("Geometry.OCCTargetUnit", "MM")
@@ -778,7 +778,7 @@ def _verify_recipe_faces(stage, gmsh):
             for x in (u, v)
         ]
         uv = np.asarray(uv).reshape(-1, 2)
-        uv = uv[_parametric_trim_mask(gmsh, face, uv.reshape(-1))]
+        uv = uv[parametric_trim_mask(gmsh, face, uv.reshape(-1))]
         if not len(uv):
             raise ValueError("native STEP patch has no valid trimmed samples")
         xyz = np.asarray(gmsh.model.getValue(2, face, uv.reshape(-1))).reshape(-1, 3)
@@ -811,7 +811,7 @@ def _verify_recipe_faces(stage, gmsh):
             uv = np.asarray(
                 [(u, v) for u in np.linspace(lo[0], hi[0], 7) for v in np.linspace(lo[1], hi[1], 7)]
             )
-            uv = uv[_parametric_trim_mask(gmsh, face, uv.reshape(-1))]
+            uv = uv[parametric_trim_mask(gmsh, face, uv.reshape(-1))]
             if not len(uv):
                 raise ValueError("native rigid STEP face has no valid trimmed samples")
             xyz = np.asarray(gmsh.model.getValue(2, face, uv.reshape(-1))).reshape(-1, 3)
@@ -843,7 +843,7 @@ def _verify_recipe_faces(stage, gmsh):
             for x in (u, v)
         ]
         uv = np.asarray(uv).reshape(-1, 2)
-        uv = uv[_parametric_trim_mask(gmsh, face, uv.reshape(-1))]
+        uv = uv[parametric_trim_mask(gmsh, face, uv.reshape(-1))]
         if not len(uv):
             raise ValueError("native rigid STEP face has no valid trimmed samples")
         xyz = np.asarray(gmsh.model.getValue(2, face, uv.reshape(-1))).reshape(-1, 3)

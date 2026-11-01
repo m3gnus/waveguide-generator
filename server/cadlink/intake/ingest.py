@@ -136,14 +136,15 @@ def meshing_semantics() -> dict[str, Any]:
     """The WG-internal constants that decide what a solver mesh is for given inputs."""
 
     from server.mesh import imported as meshing
+    from hornlab_mesher import tessellation
 
     semantics = {
         "surface_deviation_mm": meshing.IMPORTED_SURFACE_DEVIATION_MM,
         "surface_deviation_min_mm": meshing.IMPORTED_SURFACE_DEVIATION_MIN_MM,
         "surface_deviation_max_mm": meshing.IMPORTED_SURFACE_DEVIATION_MAX_MM,
-        "sagitta_flat_curvature": meshing._SAGITTA_FLAT_CURVATURE,
-        "sagitta_grid_samples": meshing._SAGITTA_GRID_SAMPLES,
-        "sagitta_quantise_log": meshing._SAGITTA_QUANTISE_LOG,
+        "sagitta_flat_curvature": tessellation._SAGITTA_FLAT_CURVATURE,
+        "sagitta_grid_samples": tessellation._SAGITTA_GRID_SAMPLES,
+        "sagitta_quantise_log": tessellation._SAGITTA_QUANTISE_LOG,
         # M1c-auto lets an already-cut open shell reduce on a second valid
         # plane. Older cached declared halves must not be reused as halves.
         "precut_reduction_contract": "smallest-domain-v1",

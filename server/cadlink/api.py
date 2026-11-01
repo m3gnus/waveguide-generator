@@ -1112,7 +1112,7 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
             # ``measure_deviation``, which are measurement scaffolding for
             # ``scripts/measure_imported_mesh_deviation.py``. ``sizing_rule``
             # would silently restore the superseded sizing rule and
-            # ``measure_deviation`` costs about half a build again. None of
+            # ``measure_deviation`` requests an exhaustive report. None of
             # them may become reachable from a request; keep this literal, and
             # never splat a payload into it.
             prep_options={

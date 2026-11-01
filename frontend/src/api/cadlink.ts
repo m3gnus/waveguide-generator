@@ -274,6 +274,7 @@ export interface CadReturnIngestRequest {
   };
   skippedSourceIds: string[];
   areaDriftOverrides: string[];
+  surfaceDeviationMm?: number | null;
   expectedDesignId: string | null;
   expectedInstanceId?: string | null;
   symmetryMode: 'auto' | 'full';

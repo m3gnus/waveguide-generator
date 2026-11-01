@@ -7,7 +7,7 @@ import { DRIVER_FIELD_KEYS, PASSIVE_CARDIOID_DEFAULTS, useCadReturnStore,
   type CadDriveChannel, type ChannelDriverForm, type DriverPreset, type PassiveCardioidForm } from './cadReturn';
 import type { ImportedSetup } from '../jobs/importedSetup';
 type CadHistorySetup = Pick<ReturnType<typeof useCadReturnStore.getState>,
-  'meshSizes' | 'symmetryMode' | 'skippedSourceIds'
+  'meshSizes' | 'symmetryMode' | 'surfaceDeviationMm' | 'skippedSourceIds'
   | 'driveChannels' | 'exteriorOnly' | 'combineEnabled' | 'combineSpec'
   | 'channelDrivers' | 'passiveCardioid'
   | 'driveVoltageV' | 'maxDriveVoltageV'
@@ -128,6 +128,7 @@ export function cadHistorySetup(saved: ImportedSetup, record: CadReturnIngestRec
   const fallbackRange = Array.isArray(range) && range.length === 2 ? range.map(Number) : [200, 20_000];
   const sourceSizes = finiteRecord(mesh?.source_size_mm) ?? { ...record.mesh_sizes.source_size_mm };
   return {
+    surfaceDeviationMm: (saved as unknown as CadSolveSetup).preparation?.surface_deviation_mm ?? record.preparation_options?.surface_deviation_mm ?? null,
     meshSizes: {
       ...record.mesh_sizes,
       ...(saved.geometry.mesh?.surface_groups != null ? { surface_groups: saved.geometry.mesh.surface_groups } : {}),

@@ -172,6 +172,7 @@ export interface CadReturnState {
   /** Fusion snapshot/setup replay, or WG-owned sizing for Onshape. */
   meshSizes: CadMeshSizes;
   symmetryMode: 'auto' | 'full';
+  surfaceDeviationMm: number | null;
   skippedSourceIds: string[];
   driveChannels: CadDriveChannel[];
   areaDriftOverrides: string[];
@@ -239,6 +240,7 @@ export interface CadReturnState {
   restoreIngest: (record: CadReturnIngestRecord, generation: number, restored: Partial<CadReturnState>) => boolean;
   setSourceSize: (sourceId: string, value: number) => void;
   setRigidSize: (value: number) => void;
+  setSurfaceDeviation: (value: number | null) => void;
   setTransition: (value: number) => void;
   setSymmetryMode: (mode: 'auto' | 'full') => void;
   setSkipped: (sourceId: string, skipped: boolean) => void;
@@ -291,6 +293,7 @@ function initialFromBundle(bundle: CadReturnBundle | null) {
       transition_mm: mesh?.transition_mm ?? DEFAULT_CAD_MESH.transitionMm,
     },
     symmetryMode: DEFAULT_CAD_PREPARATION_SYMMETRY,
+    surfaceDeviationMm: null,
     ...(snapshot ? snapshotMeshSettings(snapshot) : {}),
     skippedSourceIds: [] as string[],
     driveChannels: groupChannels(sources.map((source) => ({ sourceId: source.id, channelId: source.defaultDriveChannelId, motion: 'normal' as const }))),
@@ -320,13 +323,13 @@ export const LISTING_GONE_REASON = 'The prepared CAD model no longer appears in 
 
 /** Inputs shared by the preparation owner and the selected-model projection. */
 export type CadPreparationInputs = Pick<CadReturnState, 'selectedBundle'>
-  & Partial<Pick<CadReturnState, 'captureModelChoice' | 'meshSizes' | 'skippedSourceIds' | 'areaDriftOverrides' | 'symmetryMode'>>;
+  & Partial<Pick<CadReturnState, 'captureModelChoice' | 'meshSizes' | 'skippedSourceIds' | 'areaDriftOverrides' | 'symmetryMode' | 'surfaceDeviationMm'>>;
 
 /** Automatic work and explicit retries share this identity for their inputs. */
 export function cadPreparationKey(state: CadPreparationInputs, designId: string | null): string {
   return JSON.stringify([state.captureModelChoice?.(), state.selectedBundle?.bundleOrigin, state.selectedBundle?.bundlePath,
     state.selectedBundle?.returnId ?? (state.selectedBundle ? bundleIdentity(state.selectedBundle) : null), state.meshSizes, state.skippedSourceIds,
-    state.areaDriftOverrides, state.symmetryMode, designId]);
+    state.areaDriftOverrides, state.symmetryMode, state.surfaceDeviationMm, designId]);
 }
 
 /** Whether WG still owes automatic preparation (owner decision M1): a
@@ -542,7 +545,7 @@ function groupChannels(sourceChannels: Array<{ sourceId: string; channelId: stri
 /** The setters a person drives. Selections, ingestions and restores change the
  * same state without anyone choosing it, and say nothing. */
 const CAD_RETURN_EDITS: ReadonlyArray<keyof CadReturnState> = [
-  'setSourceSize', 'setRigidSize', 'setTransition', 'setSymmetryMode',
+  'setSourceSize', 'setRigidSize', 'setTransition', 'setSurfaceDeviation', 'setSymmetryMode',
   'setSkipped', 'setSourceChannel', 'setChannelMotion', 'setExteriorTransducer',
   'setAreaDriftOverride', 'setExteriorOnly', 'setCombineEnabled', 'setCombineSpec',
   'setChannelDriverField', 'setChannelDriverPreset',
@@ -606,6 +609,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       frequencyCount: DEFAULT_SWEEP.points,
       ingestRecord: null,
       areaDriftOverrides: [],
+      surfaceDeviationMm: null,
       areaDriftSourceIds: [],
       setupLoading: false,
       needsIngest: true,
@@ -643,6 +647,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
         frequencyCount: DEFAULT_SWEEP.points,
         ingestRecord: null,
         areaDriftOverrides: [],
+      surfaceDeviationMm: null,
         areaDriftSourceIds: [],
         setupLoading: false,
         needsIngest: true,
@@ -659,6 +664,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       // The new geometry needs its own ingest before its evidence is current.
       ingestRecord: null,
       areaDriftOverrides: [],
+      surfaceDeviationMm: null,
       areaDriftSourceIds: [],
       setupLoading: false,
       needsIngest: true,
@@ -738,6 +744,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       ...currentExteriorChoice(current, ingestRecord),
       projectLineageId: project,
       meshSizes: structuredClone(ingestRecord.mesh_sizes),
+      surfaceDeviationMm: ingestRecord.preparation_options?.surface_deviation_mm ?? null,
       ...(ingestRecord.mesh_snapshot ? { symmetryMode: snapshotMeshSettings(ingestRecord.mesh_snapshot).symmetryMode } : {}),
       skippedSourceIds: [...ingestRecord.skipped_source_ids],
       driveChannels: channels,
@@ -769,6 +776,11 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
     if (!cadMeshIsEditable(get().selectedBundle)) return;
     supersedeIngestIntent();
     set(state => ({ meshSizes: { ...state.meshSizes, transition_mm: value }, needsIngest: true }));
+  },
+  setSurfaceDeviation: (surfaceDeviationMm) => {
+    if (!cadMeshIsEditable(get().selectedBundle)) return;
+    supersedeIngestIntent();
+    set({ surfaceDeviationMm, needsIngest: true });
   },
   setSymmetryMode: (symmetryMode) => {
     if (!cadMeshIsEditable(get().selectedBundle)) return;

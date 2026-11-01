@@ -8,6 +8,10 @@ import { completeCadCutDisplay, expandImportedSymmetry } from './symmetryScene';
 let nextArtifactToken = 1;
 
 export interface ImportedMeshScene {
+  tessellation?: {
+    surface_deviation?: { peak_is_upper_bound?: boolean; peak_mm?: number | null; triangle_count?: number; sampled_triangle_count?: number } | null;
+    element_shape?: { p1_radius_ratio?: number | null; min_radius_ratio?: number | null } | null;
+  };
   name: string;
   source: 'cad' | 'file' | 'solver';
   /** Present for CAD-return scenes so the solve command can prove that the
@@ -25,6 +29,7 @@ export interface ImportedMeshScene {
 }
 
 export interface ImportedMeshSceneOptions {
+  tessellation?: ImportedMeshScene['tessellation'];
   /** File imports assign excitation by tag, independent of physical names. */
   drivenTags?: readonly number[];
   rolesByTag?: Readonly<Record<string, string | null>>;
@@ -315,6 +320,7 @@ export function createImportedMeshScene(
     solvedTriangleCount: options.solvedTriangleCount ?? mesh.indices.length / 3,
     physicalGroupCount: grouped.size,
     artifactToken: options.artifactToken ?? `imported-${nextArtifactToken++}`,
+    ...(options.tessellation ? { tessellation: options.tessellation } : {}),
   };
 }
 

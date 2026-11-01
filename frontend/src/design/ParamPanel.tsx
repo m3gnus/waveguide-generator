@@ -47,6 +47,7 @@ import { rememberUnseparatedVertical } from './customProfileEdit';
 import { CustomProfileLengthField, CustomProfilePaste, CustomProfileTable, EditableLookupTable, EditableStationTable, FREEFORM_POSITION_NOTE, freeformAngleDisabledReason, freeformAngleOverride } from './FreeformEditors';
 import { lambdaSixthHint } from './lambdaLimit';
 import { NumberField } from './NumberField';
+import { MeshTriangleEstimate } from './MeshTriangleEstimate';
 import { SelectRow } from './SelectRow';
 import { HelpTipRow } from './HelpTip';
 import { Icon } from '../shell/icons';
@@ -617,6 +618,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
     />
     {error && <div className="field-error">△ {error}</div>}
     {field.id === 'mesh.mouth_resolution' && <MouthResolutionHint design={design} value={value} />}
+    {field.id === 'mesh.surface_deviation_mm' && <MeshTriangleEstimate design={design} />}
     {disabledReason && <div className="disabled-reason">{disabledReason}</div>}
   </>;
 }
@@ -1141,6 +1143,7 @@ function CadMeshDetail() {
         state.setSymmetryMode(enabled ? 'full' : 'auto');
       }}/>
       <NumberField label={CAD_CONTROLS.rigidSize.label} revealId={CAD_CONTROLS.rigidSize.reveal.id} unit="mm" value={state.meshSizes.rigid_size_mm} min={0.01} step={0.5} precision={2} description="Mesh size for every surface that is not a source." onCommit={state.setRigidSize}/>
+      <NumberField label={CAD_CONTROLS.surfaceDeviation.label} revealId={CAD_CONTROLS.surfaceDeviation.reveal.id} unit="mm" value={state.surfaceDeviationMm ?? 0.15} min={0.1} max={0.35} step={0.05} precision={3} description="Target maximum distance between the solve mesh and the CAD surface. CAD defaults to 0.15 mm." onCommit={state.setSurfaceDeviation}/>
       <NumberField label={CAD_CONTROLS.transitionSize.label} revealId={CAD_CONTROLS.transitionSize.reveal.id} unit="mm" value={state.meshSizes.transition_mm} min={0.01} step={0.5} precision={2} description="Distance over which the mesh grows from each source's size to the wall size." onCommit={state.setTransition}/>
     </>}
     {hasFem && <ToggleRow id="cad-exterior-only" label={CAD_CONTROLS.exteriorOnly.label} revealId={CAD_CONTROLS.exteriorOnly.reveal.id} help="Explicitly exclude the returned FEM air volumes and FEM regions. This solves only the exterior free-space problem." checked={state.exteriorOnly} onChange={state.setExteriorOnly}/>}

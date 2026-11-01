@@ -62,6 +62,19 @@ Edits update the live preview. Viewer controls change the display, not the desig
 parameters. A solve always receives a revisioned design snapshot, so later editor changes
 cannot alter an existing run.
 
+### Optional solve surface deviation
+
+In **Simulation → Mesh**, **Max surface deviation** starts **Off** for every
+new horn design. Enter a value in millimetres to refine curved surfaces. Clearing
+it restores the existing resolution rule. The setting survives formula changes;
+the standalone source disk does not use it. CAD keeps its existing 0.15 mm rule.
+
+The live triangle estimate helps assess the cost before building. In the measured
+rollback examples, enabling 0.3 mm grew the mesh about seven to eight times.
+Explicit minimum mesh sizes still apply, so the achieved deviation can exceed
+the requested value. The viewport Mesh card reports the achieved sampled value
+or a labelled geometric bound; an unavailable observation stays unavailable.
+
 ### Mesh settings for Fusion models
 
 In Fusion, open **Waveguide Generator ▸ Sources & Mesh…**. Pick the driver

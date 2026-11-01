@@ -165,3 +165,17 @@ def test_orientation_warnings_tolerate_a_mesher_older_than_the_collar():
     assert _orientation_warnings(
         {"flipped_global": 3, "symmetry_volume_fallback_kept": 1}
     ) == []
+
+
+def test_failed_deviation_observation_stays_unavailable_on_the_cad_path(monkeypatch):
+    from hornlab_mesher import tessellation
+    from server.jobs.mesh_preview import SurfaceDeviationStats
+    from server.mesh import imported
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError('projection unavailable')
+
+    monkeypatch.setattr(tessellation, 'measure_surface_deviation', unavailable)
+    report = imported.measure_surface_deviation(None, triangle_budget=256)
+    assert report['available'] is False
+    assert SurfaceDeviationStats.model_validate(report).peak_mm is None

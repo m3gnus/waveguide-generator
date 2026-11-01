@@ -121,6 +121,7 @@ function cadProjectSetupControls(
       preparation: {
         area_drift_overrides: [...state.areaDriftOverrides],
         symmetry_mode: state.symmetryMode,
+        ...(state.surfaceDeviationMm != null ? { surface_deviation_mm: state.surfaceDeviationMm } : {}),
       },
       driver_references: driverReferences,
     },

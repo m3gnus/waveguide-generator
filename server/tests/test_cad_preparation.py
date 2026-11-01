@@ -724,6 +724,7 @@ def test_a_reloaded_ui_reads_the_same_stage(harness: Harness) -> None:
 
 def test_a_meshing_semantics_change_is_a_new_preparation_identity(monkeypatch) -> None:
     from server.mesh import imported as meshing
+    from hornlab_mesher import tessellation
 
     bundle = SimpleNamespace(artifact_sha256="sha256:" + "2" * 64, manifest_sha256="sha256:" + "1" * 64)
     manifest = {"sources": [{"id": "source-hf"}], "instances": []}
@@ -739,7 +740,7 @@ def test_a_meshing_semantics_change_is_a_new_preparation_identity(monkeypatch) -
 
     # A last-bit difference between platforms' maths libraries is not a change.
     monkeypatch.setattr(
-        meshing, "_SAGITTA_QUANTISE_LOG", math.nextafter(meshing._SAGITTA_QUANTISE_LOG, 1.0)
+        tessellation, "_SAGITTA_QUANTISE_LOG", math.nextafter(tessellation._SAGITTA_QUANTISE_LOG, 1.0)
     )
     assert ingest_module.meshing_semantics_fingerprint() != ingest_module._BASELINE_MESHING_SEMANTICS
     monkeypatch.undo()

@@ -6,7 +6,7 @@ import { parseMSH } from './mshParser';
  * The reduced solve domain keeps its `solvedDomain` mark; mirrored copies are
  * display-only, exactly as CAD-return artifacts are treated. */
 export function solverMeshScene(name: string, result: SolverMeshResult): ImportedMeshScene {
-  return createImportedMeshScene(
+  const scene = createImportedMeshScene(
     name,
     parseMSH(result.msh_text),
     'solver',
@@ -17,4 +17,9 @@ export function solverMeshScene(name: string, result: SolverMeshResult): Importe
       artifactToken: solverMeshArtifactToken(result.stats.mesh_cache_key),
     },
   );
+  scene.tessellation = {
+    surface_deviation: result.stats.surface_deviation,
+    element_shape: result.stats.element_shape,
+  };
+  return scene;
 }

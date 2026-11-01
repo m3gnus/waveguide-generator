@@ -4787,6 +4787,56 @@
         "title": "DriverVariantSummary",
         "type": "object"
       },
+      "ElementShapeStats": {
+        "properties": {
+          "min_angle_deg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Angle Deg"
+          },
+          "p1_angle_deg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P1 Angle Deg"
+          },
+          "p1_radius_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P1 Radius Ratio"
+          },
+          "sliver_fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sliver Fraction"
+          }
+        },
+        "title": "ElementShapeStats",
+        "type": "object"
+      },
       "EnclosureConfig": {
         "additionalProperties": false,
         "properties": {
@@ -9701,6 +9751,19 @@
             "description": "SOURCE-DISK uniform finished-mm mesh target, capped at source radius / 8",
             "title": "Size Mm"
           },
+          "surface_deviation_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Max surface deviation in finished mm; absent or null keeps the existing mesh rule",
+            "title": "Surface Deviation Mm"
+          },
           "throat_resolution": {
             "anyOf": [
               {
@@ -9764,6 +9827,43 @@
           }
         },
         "title": "MeshConfig",
+        "type": "object"
+      },
+      "MeshEstimateRequest": {
+        "properties": {
+          "design": {
+            "$ref": "#/components/schemas/DesignConfig"
+          }
+        },
+        "required": [
+          "design"
+        ],
+        "title": "MeshEstimateRequest",
+        "type": "object"
+      },
+      "MeshEstimateResponse": {
+        "properties": {
+          "surface_deviation_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Surface Deviation Mm"
+          },
+          "triangle_count": {
+            "title": "Triangle Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "triangle_count",
+          "surface_deviation_mm"
+        ],
+        "title": "MeshEstimateResponse",
         "type": "object"
       },
       "MeshFreshnessResponse": {
@@ -14182,6 +14282,16 @@
       },
       "SolverMeshStats": {
         "properties": {
+          "element_shape": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ElementShapeStats"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "mesh_cache_hit": {
             "title": "Mesh Cache Hit",
             "type": "boolean"
@@ -14189,6 +14299,27 @@
           "mesh_cache_key": {
             "title": "Mesh Cache Key",
             "type": "string"
+          },
+          "surface_deviation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SurfaceDeviationStats"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "surface_deviation_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Surface Deviation Mm"
           },
           "triangle_count": {
             "title": "Triangle Count",
@@ -14614,6 +14745,60 @@
           "status"
         ],
         "title": "StopResponse",
+        "type": "object"
+      },
+      "SurfaceDeviationStats": {
+        "properties": {
+          "p95_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Mm"
+          },
+          "peak_is_upper_bound": {
+            "default": false,
+            "title": "Peak Is Upper Bound",
+            "type": "boolean"
+          },
+          "peak_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peak Mm"
+          },
+          "rms_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rms Mm"
+          },
+          "sampled_triangle_count": {
+            "default": 0,
+            "title": "Sampled Triangle Count",
+            "type": "integer"
+          },
+          "triangle_count": {
+            "default": 0,
+            "title": "Triangle Count",
+            "type": "integer"
+          }
+        },
+        "title": "SurfaceDeviationStats",
         "type": "object"
       },
       "TerminatingArc": {
@@ -18630,6 +18815,44 @@
           }
         },
         "summary": "Mesh Artifact"
+      }
+    },
+    "/api/mesh-estimate": {
+      "post": {
+        "operationId": "mesh_estimate_api_mesh_estimate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeshEstimateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeshEstimateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mesh Estimate"
       }
     },
     "/api/mesh-replay": {

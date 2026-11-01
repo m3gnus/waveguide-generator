@@ -277,6 +277,10 @@ export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocu
     throw new Error(`Unsupported design formula: ${String(unwrapped.formula)}`);
   }
   const document = merge(designForFamily(formula), unwrapped);
+  // The accuracy default belongs to newly created designs only.
+  if ((wire.mesh as Record<string, unknown> | undefined)?.surface_deviation_mm == null) {
+    delete document.mesh.surface_deviation_mm;
+  }
   if (formula === 'OSSE-NATIVE') {
     // The composite template has active slots; an omitted wire slot is inactive.
     if (wire.axial_scale == null) delete document.axial_scale;

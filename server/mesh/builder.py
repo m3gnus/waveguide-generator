@@ -1158,6 +1158,27 @@ async def assembly_front_context(design: DesignConfig) -> dict[str, Any]:
     return await run_mesh_build(_assembly_front_context_sync, design.model_dump(mode="json"))
 
 
+def _estimate_design_sync(design_dump: dict[str, Any], cancel_cb: CancelCallback | None = None) -> dict[str, Any]:
+    from hornlab_mesher.config_builder import estimate_from_config
+
+    _check_cancel(cancel_cb)
+    design = DesignConfig.model_validate(design_dump)
+    config = assembly_mesher_config(design)[0] if design.root.assembly is not None else _solver_mesher_config(design)
+    metadata = estimate_from_config(config)
+    _check_cancel(cancel_cb)
+    count = metadata.get("meshTriangleEstimateFullDomain")
+    if count is None:
+        count = (metadata.get("sourceBody") or {}).get("triangleEstimate")
+    if count is None:
+        raise MesherEstimateUnavailable("Mesher did not supply its pre-mesh triangle estimate")
+    return {"triangle_count": int(math.ceil(count)), "surface_deviation_mm": design.root.mesh.surface_deviation_mm}
+
+
+async def estimate_solver_mesh(design: DesignConfig, cancel_cb: CancelCallback | None = None) -> dict[str, Any]:
+    """Use the ordinary density pass in the same isolated mesher child."""
+    return await run_mesh_build(_estimate_design_sync, design.model_dump(mode="json"), cancel_cb=cancel_cb)
+
+
 def _build_assembly_sync(
     design_dump: dict[str, Any],
     cancel_cb: CancelCallback | None = None,

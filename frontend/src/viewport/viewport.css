@@ -231,3 +231,9 @@
 .viewport-dimensions.stale { opacity: .45; }
 
 .viewport-notices > .viewport-domain-note { max-width: 100%; color: var(--fg2); font-size: var(--text-micro); }
+
+.wg2-viewport .mesh-quality-card {
+  top: auto; bottom: 16px; left: 16px; width: auto;
+  max-width: calc(100% - 32px); transform: none; pointer-events: none;
+}
+.wg2-viewport .mesh-quality-card dl { grid-template-columns: repeat(2, 1fr); margin-bottom: 0; }
