@@ -64,23 +64,25 @@ export function FrontWorkspaceDialog() {
   return open ? createPortal(<FrontWorkspace onClose={closeFrontWorkspace}/>, document.body) : null;
 }
 
-interface FrontContextState { resolved: FrontViewContext | undefined; failure: { text: string; detail: string } | null; retry(): void }
+interface FrontContextState { resolved: FrontViewContext | undefined; checkedRevision: number | null; failure: { text: string; detail: string } | null; retry(): void }
 
 /** The latest front context for the design on screen, refreshed when the design rests. */
 function useFrontContext(blank: DesignAssembly, fetcher: typeof fetch): FrontContextState {
   const design = useDesignStore(state => state.design);
   const dragging = useDesignStore(state => !!state.dragSnapshot);
   const [resolved, setResolved] = useState<FrontViewContext>();
+  const [checkedRevision, setCheckedRevision] = useState<number | null>(null);
   const [failure, setFailure] = useState<FrontContextState['failure']>(null);
   const [attempt, setAttempt] = useState(0);
   const latest = useRef(0);
   useEffect(() => {
     if (dragging) return;
     const ask = ++latest.current;
+    const revision = useDesignStore.getState().designRevision;
     const assembly = structuredClone(design.assembly ?? blank);
     const timer = setTimeout(() => {
       fetchAssemblyContext(serializeDesign({ ...design, assembly }), fetcher).then(context => {
-        if (ask === latest.current) { setResolved({ context, assembly }); setFailure(null); }
+        if (ask === latest.current) { setResolved({ context, assembly }); setCheckedRevision(revision); setFailure(null); }
       }, (reason: unknown) => {
         if (ask !== latest.current) return;
         setFailure({ text: assemblyProblemText(reason, 'WG could not update the front view and has recorded the problem.'),
@@ -89,7 +91,7 @@ function useFrontContext(blank: DesignAssembly, fetcher: typeof fetch): FrontCon
     }, FRONT_CONTEXT_DELAY_MS);
     return () => clearTimeout(timer);
   }, [design, dragging, fetcher, attempt]);
-  return { resolved, failure, retry: () => setAttempt(value => value + 1) };
+  return { resolved, checkedRevision, failure, retry: () => setAttempt(value => value + 1) };
 }
 
 function buildLine(hasAssembly: boolean, status: AssemblyBuildState['status'], published: boolean, current: boolean): string {
@@ -103,7 +105,7 @@ function buildLine(hasAssembly: boolean, status: AssemblyBuildState['status'], p
 export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => void; fetcher?: typeof fetch }) {
   const dialog = useModalDialogFocus<HTMLDivElement>({ open: true, onClose });
   const [blank] = useState(() => emptyAssembly());
-  const { resolved, failure, retry } = useFrontContext(blank, fetcher);
+  const { resolved, checkedRevision, failure, retry } = useFrontContext(blank, fetcher);
   const context = useRef(resolved); context.current = resolved;
   const adapter = useMemo(() => frontViewAdapter(() => context.current,
     frontViewProperties(() => context.current, () => !!useDesignStore.getState().design.assembly)), []);
@@ -145,6 +147,12 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
   const refusal = resolved?.context.refusal;
   const problems = [...placementProblems(shown, resolved).values()].flat();
   const doesNotFit = problems.length > 0;
+  // The fit is known only for the revision the server answered about. Until
+  // then nothing may build: no answer is not the same as a clean answer.
+  const revision = useDesignStore(store => store.designRevision);
+  const fitUnknown = !doesNotFit && (checkedRevision !== revision || !!refusal);
+  const held = doesNotFit || fitUnknown;
+  const heldWhy = doesNotFit ? problems[0] : refusal ?? (failure ? 'WG could not check the fit. Press Try again.' : 'Checking that everything fits…');
   return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Sources and baffle" className="front-workspace">
     <header className="front-header">
       <h2>Sources and baffle</h2><ExperimentalBadge/>
@@ -171,10 +179,10 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
       </aside>
     </div>
     <footer className="front-footer">
-      <p role="status">{doesNotFit ? 'Fix what does not fit to build or solve.' : buildLine(hasAssembly, build.status, !!build.published, assemblyBuildCurrent(build, design))}</p>
+      <p role="status">{doesNotFit ? 'Fix what does not fit to build or solve.' : hasAssembly && fitUnknown ? heldWhy : buildLine(hasAssembly, build.status, !!build.published, assemblyBuildCurrent(build, design))}</p>
       <div className="front-actions">
-        <button className="btn" type="button" disabled={!hasAssembly || building || doesNotFit} title={doesNotFit ? problems[0] : undefined} onClick={() => { void requestAssemblyBuild(fetcher).catch(() => {}); }}>Build</button>
-        <button className="btn-primary" type="button" disabled={!hasAssembly || building || doesNotFit || !solveControl?.solveAssembly || solveControl.submitting} title={doesNotFit ? problems[0] : undefined} onClick={solve}>Solve</button>
+        <button className="btn" type="button" disabled={!hasAssembly || building || held} title={held ? heldWhy : undefined} onClick={() => { void requestAssemblyBuild(fetcher).catch(() => {}); }}>Build</button>
+        <button className="btn-primary" type="button" disabled={!hasAssembly || building || held || !solveControl?.solveAssembly || solveControl.submitting} title={held ? heldWhy : undefined} onClick={solve}>Solve</button>
       </div>
     </footer>
   </div></div>;

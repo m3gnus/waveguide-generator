@@ -227,6 +227,28 @@ describe('front workspace status', () => {
     expect(button('Build').title).toContain('Reduce Radius');
   });
 
+  it('holds Build and Solve until the fit of what is on screen is known', async () => {
+    let answer!: (response: Response) => void;
+    const pending = (() => new Promise<Response>(resolve => { answer = resolve; })) as unknown as typeof fetch;
+    await act(async () => root.render(<FrontWorkspace onClose={vi.fn()} fetcher={pending}/>));
+    await act(() => new Promise(resolve => setTimeout(resolve, FRONT_CONTEXT_DELAY_MS + 50)));
+    expect(document.body.textContent).toContain('Checking that everything fits…');
+    expect(button('Build').disabled).toBe(true);
+    expect(button('Solve').disabled).toBe(true);
+    await act(async () => { answer(new Response(JSON.stringify(fixture.before.context), { status: 200 })); });
+    expect(button('Build').disabled).toBe(false);
+    // An edit makes that answer old at once, before the next one arrives.
+    act(() => useDesignStore.getState().updateValue('enclosure.space_b', 40));
+    expect(button('Build').disabled).toBe(true);
+    expect(document.body.textContent).toContain('Checking that everything fits…');
+  });
+
+  it('says so when the fit cannot be checked, and keeps Build and Solve held', async () => {
+    await mountWith((async () => new Response('', { status: 502 })) as unknown as typeof fetch);
+    expect(document.body.textContent).toContain('WG could not check the fit. Press Try again.');
+    expect(button('Build').disabled).toBe(true);
+  });
+
   it('offers the margin that makes room for a first woofer, and only applies it when asked', async () => {
     useDesignStore.getState().replaceDocument({ ...enclosed() });
     const context = { ...fixture.before.context, woofers: [], clearances: {}, minimum_clearance_mm: 0.1, mouth_top_mm: 140, mouth_bottom_mm: -140,
