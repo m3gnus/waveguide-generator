@@ -1,7 +1,9 @@
 # Dependency compatibility
 
-The mesher pin `38f12f6d` declares version 0.2.8 and includes later development
-changes. It retains the ICW mouth endpoint-intersection fix from `4ae1cfa6`
+The mesher pin `4e68f4ec` declares version 0.2.8 and includes later development
+changes, including version-gated ATH v3 controls and typed public refusals with
+a shipped, checked control-label catalog. Saved v1/v2 retain their prior geometry.
+It retains the ICW mouth endpoint-intersection fix from `4ae1cfa6`
 in `general_horn.radii_at_z`.
 `mesh_sizing.py` is unchanged, so CAD Link retains its earlier vendoring provenance.
 When it cuts a solid to its symmetry domain it keeps periodic (seam-closed) faces
