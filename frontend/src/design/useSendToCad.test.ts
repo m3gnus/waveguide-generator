@@ -16,12 +16,12 @@ describe('fusionDeliveryWords', () => {
     ['applied update', { operation: operation('applied', 'update_link') }, 'Updated in Fusion.'],
     ['closed', { fusion: { processRunning: false } }, 'Fusion is closed. Open Fusion and this model will arrive.'],
     ['busy', { waited: true, fusion: { processRunning: true, wgRequestPickup: 1 } },
-      'Fusion has not started on this model. Finish any open command in Fusion.'],
+      'Fusion has not confirmed this model yet. Finish any open command in Fusion.'],
     ['old add-in', { waited: true, fusion: { processRunning: true, addinDeliveryVersion: 3, wgRequestPickup: null } },
       'WGLink in Fusion cannot take this model. Restart Fusion to update WGLink, then send the model again.'],
     ['no report yet', { waited: true, fusion: { processRunning: true } },
-      'Fusion has not started on this model. Check that Fusion has finished starting and WGLink is running.'],
-    ['no status', { waited: true }, 'Fusion has not started on this model. Check that Fusion has finished starting and WGLink is running.'],
+      'Fusion has not confirmed this model yet. Check that Fusion has finished starting and WGLink is running.'],
+    ['no status', { waited: true }, 'Fusion has not confirmed this model yet. Check that Fusion has finished starting and WGLink is running.'],
     ['cancelled', { operation: operation('cancelled') }, 'This send was replaced or is no longer needed. Nothing changed in Fusion.'],
     ['remedy', { waitingRemedy: 'Restart Fusion to install the WGLink update.' }, 'Restart Fusion to install the WGLink update.'],
   ])('%s', (_name, facts, text) => {
@@ -65,7 +65,7 @@ describe('watchFusionDelivery', () => {
     useCadDeliveryHealthStore.setState({ outboundOperations: {} });
     expect(seen).toEqual([
       'Waiting for Fusion to open this model.',
-      'Fusion has not started on this model. Finish any open command in Fusion.',
+      'Fusion has not confirmed this model yet. Finish any open command in Fusion.',
       'Opened in Fusion.',
     ]);
   });
