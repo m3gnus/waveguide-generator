@@ -258,7 +258,8 @@ export class PreviewSocketManager {
     socket.binaryType = 'arraybuffer';
     socket.onopen = () => { if (this.socket === socket) this.armHeartbeat(); };
     socket.onmessage = (event) => this.onMessage(socket, event.data);
-    socket.onerror = () => this.update({ error: 'WG lost the preview connection and is reconnecting.', errorFields: null, errorRevision: null });
+    // A dropped socket is not a failed edit: onclose reconnects and the badge says so.
+    socket.onerror = () => undefined;
     socket.onclose = () => {
       if (this.socket !== socket) return;
       this.socket = null;

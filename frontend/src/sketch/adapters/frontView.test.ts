@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AssemblyFrontContext } from '../../api/assembly';
 import type { DesignAssembly } from '../../stores/assembly';
-import { addWooferCommand, anchoredPlacement, draggedPlacement, frontViewAdapter, frontWoofers, placementProblems, type FrontViewContext } from './frontView';
+import { addWooferCommand, anchoredPlacement, draggedPlacement, frontViewAdapter, frontWoofers, noRoomForWoofer, placementProblems, radiusProblem, type FrontViewContext } from './frontView';
 import fixture from './frontView.fixture.json';
 
 const before: FrontViewContext = { assembly: fixture.before.assembly as DesignAssembly, context: fixture.before.context as AssemblyFrontContext };
@@ -78,17 +78,48 @@ describe('front view edits', () => {
     } } };
     const problems = placementProblems(before.assembly, tight);
     expect([...problems.keys()]).toEqual([W1]);
-    expect(problems.get(W1)).toEqual(['Woofer 1 overlaps the mouth by 4.0 mm.', 'Woofer 1 is too close to the baffle edge.']);
+    expect(problems.get(W1)).toEqual(['Woofer 1 overlaps the mouth by 4 mm. Raise Gap to mouth, or move it.', 'Woofer 1 is too close to the edge of the baffle. Reduce Radius, move it, or raise the margins under Baffle.']);
     const display = frontViewAdapter(() => tight).display(before.assembly, { selection: [], scale: 1 });
     expect(display.items.find(item => item.id === `${W1}#aperture`)!.state).toContain('problem');
     expect(display.items.find(item => item.id === `${W2}#aperture`)!.state).not.toContain('problem');
+  });
+
+  it('says why a new woofer has no room, what to change, and never changes it', () => {
+    const roomy = { baffle: { x0_mm: -165, x1_mm: 165, y0_mm: -340, y1_mm: 165, edge_mm: 18 }, mouth_top_mm: 140, mouth_bottom_mm: -140, minimum_clearance_mm: 0.1 };
+    const tight: FrontViewContext = { ...before, context: { ...before.context, ...roomy, baffle: { ...roomy.baffle, y0_mm: -165 } } };
+    const margin = () => 25;
+    expect(noRoomForWoofer('below', { ...before, context: { ...before.context, ...roomy } }, margin)).toBeNull();
+    const full = noRoomForWoofer('below', tight, margin)!;
+    expect(full).toMatchObject({ field: 'enclosure.space_b', value: 189, action: 'Set Bottom margin to 189 mm' });
+    expect(full.reason).toBe('A 160 mm woofer needs 170.1 mm below the mouth, and this enclosure has 7 mm. Raise Bottom margin to 189 mm under Baffle.');
+    expect(noRoomForWoofer('above', tight, margin)).toMatchObject({ field: 'enclosure.space_t' });
+    expect(noRoomForWoofer('free', tight, margin)).toMatchObject({ field: 'enclosure.space_b' });
+    // Room above is enough for a free woofer, and it starts there.
+    const above: FrontViewContext = { ...tight, context: { ...tight.context, baffle: { ...roomy.baffle, y0_mm: -165, y1_mm: 340 } } };
+    expect(noRoomForWoofer('free', above, margin)).toBeNull();
+    expect(noRoomForWoofer('below', above, margin)).not.toBeNull();
+    expect(addWooferCommand('free', above).edit(before.assembly).woofers!.at(-1)!.placement).toMatchObject({ y_mm: 230 });
+    // With no baffle there is nothing to measure.
+    expect(noRoomForWoofer('below', undefined, margin)).toBeNull();
+  });
+
+  it('refuses a radius the enclosure cannot hold, and leaves free and spaced woofers to the clearances', () => {
+    const baffle = { x0_mm: -165, x1_mm: 165, y0_mm: -340, y1_mm: 165, edge_mm: 18 };
+    const fitted: FrontViewContext = { ...before, context: { ...before.context, baffle, mouth_top_mm: 140, mouth_bottom_mm: -140, minimum_clearance_mm: 0.1 } };
+    const below = before.assembly.woofers!.find(woofer => woofer.placement.anchor === 'below' && !woofer.placement.spacing_to)!;
+    const gap = below.placement.gap_mm ?? 0;
+    const longest = (182 - gap - 0.1) / 2;
+    expect(radiusProblem(before.assembly, below.id, longest, fitted)).toBeUndefined();
+    expect(radiusProblem(before.assembly, below.id, longest + 1, fitted)).toBe(`Too large for this enclosure: at most ${Number(longest.toFixed(1))} mm here. Reduce Radius, or raise Bottom margin under Baffle.`);
+    const free = before.assembly.woofers!.find(woofer => woofer.placement.anchor === 'free' || woofer.placement.spacing_to);
+    if (free) expect(radiusProblem(before.assembly, free.id, 500, fitted)).toBeUndefined();
   });
 
   it('names one overlap between two woofers once', () => {
     const tight: FrontViewContext = { ...before, context: { ...before.context, minimum_clearance_mm: 0.1, clearances: {
       [W1]: { mouth_mm: 10, woofers: { [W2]: -2 } }, [W2]: { mouth_mm: 10, woofers: { [W1]: -2 } },
     } } };
-    expect([...placementProblems(before.assembly, tight).values()].flat()).toEqual(['Woofer 1 overlaps Woofer 2 by 2.0 mm.']);
+    expect([...placementProblems(before.assembly, tight).values()].flat()).toEqual(['Woofer 1 overlaps Woofer 2 by 2 mm. Move one of them, or reduce Radius.']);
   });
 
   it('draws dimensions only when asked, from the same server context', () => {

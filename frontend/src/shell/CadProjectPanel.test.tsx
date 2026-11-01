@@ -241,14 +241,14 @@ describe('CAD project history', () => {
 
   it('keeps the run list when the archived models cannot be read', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
-      JSON.stringify({ detail: 'No run archive folder is available.' }), { status: 409 },
+      JSON.stringify({ detail: 'This run has no archive folder. Choose the WG folder in Settings, then solve again.' }), { status: 409 },
     )));
     setJobs([run({ id: 'a' })]);
 
     await render(<CadProjectHistory/>);
 
     expect(host.querySelectorAll('.job-card')).toHaveLength(1);
-    expect(host.textContent).toContain('No run archive folder is available.');
+    expect(host.textContent).toContain('This run has no archive folder. Choose the WG folder in Settings, then solve again.');
   });
 
   it('invites a first run rather than showing an empty list', async () => {

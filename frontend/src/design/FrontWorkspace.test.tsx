@@ -213,8 +213,29 @@ describe('front workspace status', () => {
   it('says what a clearance problem is and marks the woofer in the list', async () => {
     const context = { ...fixture.before.context, minimum_clearance_mm: 0.1, clearances: { [W1]: { mouth_mm: -3, woofers: {} } } };
     await mountWith((async () => new Response(JSON.stringify(context), { status: 200 })) as unknown as typeof fetch);
-    expect(document.body.textContent).toContain('Woofer 1 overlaps the mouth by 3.0 mm.');
+    expect(document.body.textContent).toContain('Woofer 1 overlaps the mouth by 3 mm. Raise Gap to mouth, or move it.');
     expect(document.querySelector('button.front-source.problem')?.textContent).toContain('Woofer 1');
+  });
+
+  it('keeps a woofer that does not fit away from Build and Solve', async () => {
+    const context = { ...fixture.before.context, minimum_clearance_mm: 0.1, clearances: { [W1]: { mouth_mm: 10, baffle_edge_mm: -30, woofers: {} } } };
+    await mountWith((async () => new Response(JSON.stringify(context), { status: 200 })) as unknown as typeof fetch);
+    expect(document.body.textContent).toContain('Does not fit');
+    expect(document.body.textContent).toContain('Fix what does not fit to build or solve.');
+    expect(button('Build').disabled).toBe(true);
+    expect(button('Solve').disabled).toBe(true);
+    expect(button('Build').title).toContain('Reduce Radius');
+  });
+
+  it('offers the margin that makes room for a first woofer, and only applies it when asked', async () => {
+    useDesignStore.getState().replaceDocument({ ...enclosed() });
+    const context = { ...fixture.before.context, woofers: [], clearances: {}, minimum_clearance_mm: 0.1, mouth_top_mm: 140, mouth_bottom_mm: -140,
+      baffle: { x0_mm: -165, x1_mm: 165, y0_mm: -165, y1_mm: 165, edge_mm: 18 } };
+    await mountWith((async () => new Response(JSON.stringify(context), { status: 200 })) as unknown as typeof fetch);
+    expect(document.body.textContent).toContain('No room for a woofer yet');
+    expect(useDesignStore.getState().design.enclosure.space_b).toBe(25);
+    await act(async () => { button('Set Bottom margin to 189 mm').click(); });
+    expect(useDesignStore.getState().design.enclosure.space_b).toBe(189);
   });
 
   it('survives a Strict Mode remount and keeps editing', async () => {

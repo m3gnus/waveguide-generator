@@ -12,6 +12,18 @@ const ids = () => `00000000-0000-4000-8000-${String(counter += 1).padStart(12, '
 describe('assembly Solve press', () => {
   beforeEach(() => { counter = 0; resetDesignStore(); resetAssemblyBuild(); resetSolveOptionsStore(); });
 
+  it('never builds a woofer that does not fit, wherever Solve was pressed', async () => {
+    const { assembly, id } = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
+    useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly });
+    const asked: string[] = [];
+    const fetcher = (async (url: string) => {
+      asked.push(url);
+      return new Response(JSON.stringify({ minimum_clearance_mm: 0.1, clearances: { [id]: { mouth_mm: 10, baffle_edge_mm: -30, woofers: {} } } }), { status: 200 });
+    }) as unknown as typeof fetch;
+    await expect(prepareAssemblySolve(fetcher, () => 'p1')).rejects.toThrow('Woofer 1 overlaps the edge of the baffle by 30 mm.');
+    expect(asked).toEqual(['/api/models/assembly/context']);
+  });
+
   it.each(['beat-cpu', 'beat-cuda', 'beat-rocm', 'bempp'])('presses the model Solve with the assembly setup and supported %s accuracy', async (engine) => {
     const { assembly, id } = addWoofer(emptyAssembly(ids), { anchor: 'below' }, ids);
     useDesignStore.getState().replaceDocument({ ...designForFamily('R-OSSE'), assembly });

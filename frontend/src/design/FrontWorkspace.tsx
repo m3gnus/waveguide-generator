@@ -144,6 +144,7 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
   const building = build.status === 'building';
   const refusal = resolved?.context.refusal;
   const problems = [...placementProblems(shown, resolved).values()].flat();
+  const doesNotFit = problems.length > 0;
   return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Sources and baffle" className="front-workspace">
     <header className="front-header">
       <h2>Sources and baffle</h2><ExperimentalBadge/>
@@ -160,7 +161,7 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
         <div className="front-messages">
           {resolved && failure && <Notice tone="warning" title="This view may be out of date" actions={<button className="btn" type="button" onClick={retry}>Try again</button>}>{failure.text}</Notice>}
           {refusal && <Notice tone="error">{refusal}</Notice>}
-          {!refusal && problems.length > 0 && <Notice tone="warning" title="Does not fit yet">{problems.map(problem => <div key={problem}>{problem}</div>)}</Notice>}
+          {!refusal && problems.length > 0 && <Notice tone="error" title="Does not fit">{problems.map(problem => <div key={problem}>{problem}</div>)}</Notice>}
           {build.refusal && <Notice tone="error" title="Could not build">{build.refusal}
             {build.failureDetail && <DeveloperDetails><pre>{build.failureDetail}</pre></DeveloperDetails>}</Notice>}
           {failure && <DeveloperDetails><pre>{failure.detail}</pre></DeveloperDetails>}
@@ -170,10 +171,10 @@ export function FrontWorkspace({ onClose, fetcher = fetch }: { onClose: () => vo
       </aside>
     </div>
     <footer className="front-footer">
-      <p role="status">{buildLine(hasAssembly, build.status, !!build.published, assemblyBuildCurrent(build, design))}</p>
+      <p role="status">{doesNotFit ? 'Fix what does not fit to build or solve.' : buildLine(hasAssembly, build.status, !!build.published, assemblyBuildCurrent(build, design))}</p>
       <div className="front-actions">
-        <button className="btn" type="button" disabled={!hasAssembly || building} onClick={() => { void requestAssemblyBuild(fetcher).catch(() => {}); }}>Build</button>
-        <button className="btn-primary" type="button" disabled={!hasAssembly || building || !solveControl?.solveAssembly || solveControl.submitting} onClick={solve}>Solve</button>
+        <button className="btn" type="button" disabled={!hasAssembly || building || doesNotFit} title={doesNotFit ? problems[0] : undefined} onClick={() => { void requestAssemblyBuild(fetcher).catch(() => {}); }}>Build</button>
+        <button className="btn-primary" type="button" disabled={!hasAssembly || building || doesNotFit || !solveControl?.solveAssembly || solveControl.submitting} title={doesNotFit ? problems[0] : undefined} onClick={solve}>Solve</button>
       </div>
     </footer>
   </div></div>;

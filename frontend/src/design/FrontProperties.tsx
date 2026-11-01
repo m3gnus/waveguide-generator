@@ -11,7 +11,7 @@ import {
   type AssemblyAnchor, type AssemblyPlacement, type AssemblyWoofer, type DesignAssembly,
 } from '../stores/assembly';
 import { isNativeFamily, useDesignStore, type DesignDocument } from '../stores/design';
-import { addWooferCommand, anchoredPlacement, placementProblems, type FrontCommand, type FrontViewContext } from '../sketch/adapters/frontView';
+import { addWooferCommand, anchoredPlacement, noRoomForWoofer, placementProblems, radiusProblem, type FrontCommand, type FrontViewContext } from '../sketch/adapters/frontView';
 import type { DomainAdapter, PropertiesSection, WorkspaceSession } from '../sketch/workspace/types';
 import { ActionMenu } from './ActionMenu';
 import { NumberField } from './NumberField';
@@ -66,6 +66,7 @@ function WooferProperties({ assembly, id, session, resolved, select }: { assembl
     <ToggleRow id="front-woofer-enabled" label="Enabled" help="A disabled woofer keeps its settings and is left out of the geometry and the solve." checked={woofer.enabled !== false}
       onChange={enabled => run(session, enabled ? 'Enable woofer' : 'Disable woofer', current => updateWoofer(current, id, { enabled }))}/>
     <NumberField label="Radius" unit="mm" value={woofer.radius_mm} min={0} exclusiveMin max={1000} precision={1}
+      validate={radius => radiusProblem(assembly, id, radius, resolved)}
       onCommit={radius_mm => run(session, 'Woofer radius', current => updateWoofer(current, id, { radius_mm }))}/>
     <SelectRow>
       <label htmlFor="front-woofer-diaphragm">Diaphragm</label>
@@ -144,14 +145,24 @@ function SourcesProperties({ assembly, session, resolved, selection, select, has
     void session.command(addWooferCommand(anchor, resolved, id => { added = id; })).then(() => { if (added) select([added]); }, () => {});
   };
   const woofers = assembly.woofers ?? [], problems = placementProblems(assembly, resolved);
-  const blocked = mountingBlock(useDesignStore(state => state.design));
-  const menu = <ActionMenu menuLabel="Where to add the woofer" triggerLabel="Add woofer" triggerTitle={blocked ? 'Woofers need an enclosure.' : 'Add a woofer below the mouth'} chevronLabel="Choose where to add it" onPrimary={() => add('below')} placement="below" disabled={!!blocked}
-    items={ANCHORS.map(([anchor, label]) => ({ id: anchor, label, onSelect: () => add(anchor) }))}/>;
+  const design = useDesignStore(state => state.design);
+  const updateValues = useDesignStore(state => state.updateValues);
+  const blocked = mountingBlock(design);
+  const noRoom = (anchor: AssemblyAnchor) => noRoomForWoofer(anchor, resolved, field => design.enclosure[field.split('.')[1] as 'space_b' | 'space_t']);
+  const full = noRoom('free');
+  const menu = <ActionMenu menuLabel="Where to add the woofer" triggerLabel="Add woofer" triggerTitle={blocked ? 'Woofers need an enclosure.' : full?.reason ?? 'Add a woofer below the mouth'} chevronLabel="Choose where to add it" onPrimary={() => add('below')} placement="below" disabled={!!blocked}
+    items={ANCHORS.map(([anchor, label]) => {
+      const room = noRoom(anchor);
+      return { id: anchor, label, disabled: !!room, disabledReason: room?.reason, onSelect: () => add(anchor) };
+    })}/>;
   return <>
     <div className="front-heading"><h3>Sources</h3>{woofers.length > 0 && menu}</div>
     <div className="front-source hf"><span className="front-swatch" aria-hidden="true"/><span>HF</span><small>Horn throat</small></div>
     {woofers.length === 0
-      ? <EmptyState title="No woofers yet" detail="Add one on the front baffle. It is solved together with the horn." action={menu}/>
+      ? full && !blocked
+        ? <Notice tone="info" role={null} title="No room for a woofer yet" actions={<button className="btn-primary" type="button"
+          onClick={() => updateValues({ [full.field]: full.value })}>{full.action}</button>}>{full.reason}</Notice>
+        : <EmptyState title="No woofers yet" detail="Add one on the front baffle. It is solved together with the horn." action={menu}/>
       : <ul className="front-sources">
         {woofers.map(woofer => <li key={woofer.id}>
           <button type="button" className={`front-source${problems.has(woofer.id) ? ' problem' : ''}`} aria-pressed={selection.includes(woofer.id)} onClick={() => select([woofer.id])}>
