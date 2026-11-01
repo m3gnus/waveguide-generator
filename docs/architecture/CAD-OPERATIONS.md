@@ -73,7 +73,7 @@ from importing job admission shims. Subpackage initializers contain only a docst
 | `receive_snapshot` | `{}` | `{bundle_path, manifest_sha256}` | No |
 | `prepare_and_solve` | `{}` | `{return_id, bundle_path, manifest_sha256}` | No |
 | `request_return` | `{document_id, design_id, instance_id, expected_baseline}` | `{}` | Yes |
-| `insert_link` | `{destination, export_id}` | `{}` | No; it can request a new document |
+| `insert_link` | `{destination, export_id}` | `{}` | No; it always requests a new document |
 | `update_link` | `{document_id, design_id, instance_id, expected_baseline}` | `{export_id}` | Yes |
 
 - **Fields.** Every field is a required string. All must be non-empty except
@@ -83,10 +83,12 @@ from importing job admission shims. Subpackage initializers contain only a docst
   `requestedAt` is refused rather than silently hashed.
 - **`expected_baseline`** is `{kind: "document_signature_hash", value}`: the
   document-wide signature the adapter reported when WG prepared the request.
-- **`destination`** is exactly `{kind, value}`. Its kind is `document`, whose
-  value is the active document ID from a fresh version-3 file heartbeat, or
-  `new_document`, whose value is the request ID. With no fresh file heartbeat WG
-  requests a new document rather than guessing a stale destination. After claiming
+- **`destination`** is exactly `{kind, value}`. Every new Insert uses
+  `new_document`, whose value is the request ID, regardless of the active document
+  or heartbeat age. The older `document` kind remains readable: its value names
+  the exact existing destination document, and WGLink applies that older request
+  only while that document is active. It does not mean the document active when
+  the request happens to be picked up. Exact-instance Update is unchanged. After claiming
   a `new_document` request, WGLink always creates a separate Design and inserts
   there, even when a document is open. The original document is untouched. A failed
   insert leaves the new document open for inspection: close it without saving if
@@ -2320,8 +2322,11 @@ without handoff intent also reports `failed`, with reason `not_published`.
 
 **Activation.** Pressing **Send to CAD** in WG is the deliberate command. WGLink
 applies it without a second click in Fusion, after startup completes and while
-`ui.activeCommand == "SelectCommand"`. Other Fusion commands are never ended for
-it. With automatic coordination off (the unchanged default), the owner uses a
+`ui.activeCommand == "SelectCommand"`. In an active Design,
+`Design.activeEditObject` must also equal its root component: a sketch, feature
+or component edit defers pickup even with no tool running. A non-Design product
+does not add an edit deferral. Other Fusion commands are never ended for it.
+With automatic coordination off (the unchanged default), the owner uses a
 two-second file-only poll of `.fusion-handoffs`: an empty folder reads no JSON,
 makes no Fusion call, raises no event and publishes no status. Work is coalesced
 through the existing follow-up event and runs under `command:wg-send`. With
