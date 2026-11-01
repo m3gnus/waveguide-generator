@@ -312,6 +312,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
    Auto adds a full-width resolution readout underneath the select. */
 .solve-domain-control { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 4px; }
 .solve-domain-control > .select-row, .solve-domain-control > .resolved-mode { margin: 0; }
+.solve-domain-control > small { color: var(--fg4); line-height: 1.35; }
 /* The domain names are the whole point of this select and none of them fit the
    fixed 132px every other select in the rail takes, so the label goes above it
    and the select gets the full width. */

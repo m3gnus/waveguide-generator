@@ -582,6 +582,16 @@ const PROFILE_GROUPS: readonly ParameterGroupDefinition[] = [
   { title: 'Generated profile', visibleWhen: freeformOnly, fieldOrder: ['control.freeformInspection'], description: 'Generated bore profile — scaling, morph and supported extensions applied. Inspection only.' },
 ];
 
+/** The Mesh section reads in the order a person works: how big the elements are,
+ * how closely they follow the surface, how the surface is sampled, what guards the result. */
+const MESH_GROUPS: readonly ParameterGroupDefinition[] = [
+  { title: 'Element size', description: 'Target triangle edge lengths, region by region.', fieldOrder: ['mesh.throat_resolution', 'mesh.mouth_resolution', 'mesh.rear_resolution', 'enclosure.front_resolution', 'enclosure.back_resolution', 'mesh.aperture_resolution_scale', 'native.source.size', 'native.mesh.throat', 'native.mesh.mouth', 'native.mesh.rear'] },
+  { title: 'Surface accuracy', description: 'An optional target for how far the solve mesh may sit from the surface, and what it costs.', fieldOrder: ['mesh.surface_deviation_mm'] },
+  { title: 'Surface sampling', description: 'How the horn surface is sampled before it is meshed.', fieldOrder: ['mesh.angular_segments', 'mesh.length_segments', 'mesh.corner_segments', 'mesh.sampling_mode', 'mesh.z_map_points'] },
+  { title: 'Limits and checks', description: 'What WG checks on the finished mesh.', fieldOrder: ['schema-gap.max_edge', 'mesh.max_triangles', 'mesh.allow_large_mesh', 'native.mesh.budget', 'native.mesh.allow_large', 'control.meshValidation', 'freeform.inflectionPolicy'] },
+];
+const meshGroups = Object.fromEntries(MESH_GROUPS.flatMap((group) => (group.fieldOrder ?? []).map((id) => [id, group.title])));
+
 const parametricFields: ParameterDefinition[] = LEGACY_PARAMETER_REGISTRY.map((field) => {
   let section = sectionMoves[field.section] ?? field.section;
   if (['common.s1', 'common.s2', 'source.shape', 'source.radius', 'source.curvature'].includes(field.id)) section = 'Throat';
@@ -592,6 +602,7 @@ const parametricFields: ParameterDefinition[] = LEGACY_PARAMETER_REGISTRY.map((f
   if (importedOnlyIds.has(field.id)) section = 'Imported ATH values';
   return { ...field, section,
     ...(freeformGroups[field.id] ? { group: freeformGroups[field.id] } : {}),
+    ...(meshGroups[field.id] ? { group: meshGroups[field.id] } : {}),
     ...(field.id === 'common.scale' ? { group: (design: DesignDocument) => freeformOnly(design) ? 'Throat and length' : undefined } : {}),
     ...(field.id === 'simulation.sim_type' ? { label: 'Mounting', description: 'How the horn is mounted. Bare shell, Thickened waveguide and Waveguide in enclosure solve the whole body in open air with that body. Infinite baffle mounts the mouth flush in an unbounded rigid wall, ignoring the wall and enclosure and removing all cabinet-edge diffraction; availability follows the solver capabilities reported by this host.' } : {}),
     ...(field.section === 'Frequency Sweep' ? { description: field.description?.replaceAll('Solve options', 'Frequency sweep') } : {}),
@@ -611,7 +622,7 @@ export const PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[
   { title: 'Directivity map', tab: 'simulation', description: 'Polar planes and angular sampling used for directivity exports and plots.', visibleWhen: parametricWorkspaceOnly },
   { title: 'Source excitation', fieldOrder: ['source.velocity_convention', 'source.velocity'], tab: 'simulation', description: 'Source velocity convention and legacy amplitude.', visibleWhen: parametricWorkspaceOnly },
   { title: 'Solver', tab: 'simulation', description: 'Solve accuracy, backend engine, ground plane and diagnostic logging.', visibleWhen: parametricWorkspaceOnly },
-  { title: 'Mesh', fieldOrder: ['control.solveDomain', 'mesh.angular_segments', 'mesh.length_segments', 'mesh.corner_segments', 'mesh.sampling_mode', 'mesh.z_map_points', 'mesh.throat_resolution', 'mesh.mouth_resolution', 'mesh.surface_deviation_mm', 'mesh.rear_resolution', 'enclosure.front_resolution', 'enclosure.back_resolution', 'mesh.aperture_resolution_scale', 'schema-gap.max_edge', 'mesh.max_triangles', 'mesh.allow_large_mesh', 'control.meshValidation', 'freeform.inflectionPolicy', 'native.source.size', 'native.mesh.throat', 'native.mesh.mouth', 'native.mesh.rear', 'native.mesh.budget', 'native.mesh.allow_large'], tab: 'simulation', description: CAD_PARAMETER_SECTION_DEFINITIONS.find((section) => section.title === 'Surface sampling')!.description, visibleWhen: parametricWorkspaceOnly },
+  { title: 'Mesh', groups: MESH_GROUPS, fieldOrder: ['control.solveDomain', ...MESH_GROUPS.flatMap((group) => group.fieldOrder ?? [])], tab: 'simulation', description: CAD_PARAMETER_SECTION_DEFINITIONS.find((section) => section.title === 'Surface sampling')!.description, visibleWhen: parametricWorkspaceOnly },
   { title: 'Export', fieldOrder: ['mesh.vertical_offset', 'native.mesh.offset', 'mesh.quadrants', 'mesh.throat_segments', 'mesh.throat_slice_density', 'output.stl', 'output.msh', 'passthrough.abec', 'passthrough.report', 'passthrough.extra', 'passthrough.keys'], tab: 'simulation', description: 'Export placement and imported-file round-trip values; none change the preview or the solve.', visibleWhen: parametricWorkspaceOnly },
 ];
 

@@ -10,6 +10,11 @@
 .resolved-mode { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; margin-top: 4px; padding: 4px 6px; border-radius: var(--r3); background: var(--ov1); color: var(--fg3); font-size: var(--text-micro); }
 .resolved-mode b { color: var(--green); font-weight: 560; }
 .resolved-mode small { grid-column: 1 / -1; color: var(--fg4); line-height: 1.35; }
+/* Quadrant lists stay on the rail's label and value columns, like the sizes above them. */
+.param-section[data-section="Element size"] .param-text-row { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; padding: 2px 0; }
+.param-section[data-section="Element size"] .param-text-row > label { flex: 1 1 0; min-width: 0; }
+.param-section[data-section="Element size"] .param-text-row > input { flex: none; width: 132px; text-align: right; }
+.param-section[data-section="Element size"] .param-text-row > small { flex-basis: 100%; }
 .resolved-mode.override { border: 1px solid rgba(var(--acc-rgb), .25); }
 .resolved-mode.override b, .resolved-mode.override small { color: var(--acc); }
 .parameter-entry + .parameter-entry { border-top: 1px solid transparent; }
