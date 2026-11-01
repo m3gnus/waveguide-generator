@@ -177,11 +177,11 @@ def test_worker_exception_keeps_its_presentation_category(kind):
         assert 'recorded' in words and 'try again' not in words.lower()
 
 
-def test_control_catalog_matches_the_ui_generated_copy():
+def test_control_catalog_comes_from_the_mesher_package():
+    from importlib.resources import files
     import json
-    from pathlib import Path
     from hornlab_mesher.controls import CONTROL_CATALOG, ALIASES, control_label
-    assert CONTROL_CATALOG == json.loads((Path(__file__).parents[1] / 'design/control_labels.json').read_text())
+    assert CONTROL_CATALOG == json.loads(files('hornlab_mesher').joinpath('control_labels.json').read_text())
     for key in ALIASES:
         assert control_label(key)
     with pytest.raises(KeyError):

@@ -211,7 +211,7 @@ def test_horn_profile_uses_shared_errors_without_sampling(client, monkeypatch):
     monkeypatch.setattr(GeneralHornWall, "from_config", invalid)
     response = client.post("/api/source-editor/assembly/horn-profile", json=design)
     assert response.status_code == 422, response.text
-    assert response.json()["detail"] == "WG could not finish this request and has recorded the problem."
+    assert response.json()["detail"] == "bad wall"
 
     original = builtins.__import__
 

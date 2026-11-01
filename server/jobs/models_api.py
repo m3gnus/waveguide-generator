@@ -108,7 +108,7 @@ class FilePreparation(JobModel):
     @model_validator(mode="after")
     def surface_roles(self) -> FilePreparation:
         if self.roles is None and not self.source_tags:
-            raise ValueError("Choose at least one driver surface.")
+            raise ValueError("The mesh has no driver surface. Choose at least one driver surface in Sources & Mesh….")
         if self.roles is not None:
             self.roles = {
                 tag: normalize_source_role(role, mode="protocol")
@@ -269,7 +269,7 @@ def _register_mesh(
         tags=mesh.tags,
     )
     if not roles:
-        raise ValueError("Choose at least one driver surface.")
+        raise ValueError("The mesh has no driver surface. Choose at least one driver surface in Sources & Mesh….")
     written_tags = solve_group_tags(mesh)
     filename = body.filename.replace("\\", "/").rsplit("/", 1)[-1]
     source_bytes = body.msh_text.encode("utf-8")
@@ -845,7 +845,7 @@ def mount_models_api(application: FastAPI) -> None:
             return await assembly_front_context(design)
         except AssemblyRefusal as exc:
             return _refusal(422, "assembly_refused", str(exc))
-        except ValidationError as exc:
+        except (ValidationError, ValueError, MesherChildError, MesherCrashError) as exc:
             return _refusal(422, "assembly_refused", user_error_message(exc))
         except Exception as exc:
             if public_error_message(exc) is not None:
@@ -875,7 +875,7 @@ def mount_models_api(application: FastAPI) -> None:
             return _refusal(422, "solver_memory_exceeded", SolverMemoryTooLarge.USER_MESSAGE)
         except AssemblyRefusal as exc:
             return _refusal(422, "assembly_refused", str(exc))
-        except ValidationError as exc:
+        except (ValidationError, ValueError, MesherChildError, MesherCrashError) as exc:
             return _refusal(422, "assembly_refused", user_error_message(exc))
         except Exception as exc:
             if public_error_message(exc) is not None:

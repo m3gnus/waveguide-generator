@@ -97,7 +97,7 @@ class AssemblyRequest(WireModel):
     @classmethod
     def exact_refinement(cls, value):
         if type(value) is not int or value not in (1, 2, 4):
-            raise ValueError("passage refinement must be the integer 1, 2 or 4")
+            raise ValueError("Passage refinement is unavailable. Choose Standard, 2× finer or 4× finer in Passage refinement.")
         return value
 
 
@@ -114,7 +114,7 @@ def native_assembly(body: AssemblyRequest):
         if body.horn_config is not None:
             dimensions = body.dimensions.model_dump()
             if dimensions.pop("horn_length_mm") is not None or dimensions.pop("mouth_radius_mm") is not None:
-                raise ValueError("general horn length and mouth radius derive from the resolved profile; omit both dimensions")
+                raise ValueError("The attached horn already sets its length and mouth radius. Clear the extra Horn length and Horn mouth radius values, or copy the current horn profile again.")
             model = SourceAssembly.attach(horn, body.horn_config, woofer=woofer,
                 **dimensions, phase_plugs=tuple(NativePlug(**p.model_dump()) for p in body.phase_plugs))
         elif body.phase_plugs:

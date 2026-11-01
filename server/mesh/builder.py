@@ -393,7 +393,8 @@ def _solver_mesher_config(
     if root.source.velocity_convention in {None, "legacy"} and velocity is not None:
         raw_velocity = _strict_scalar(velocity, 1.0, "source.velocity")
         if raw_velocity not in {1.0, 2.0}:
-            raise ValueError("source.velocity must be 1 (normal) or 2 (axial)")
+            from hornlab_mesher.errors import control_refusal
+            raise control_refusal("source.velocity must be 1 (normal) or 2 (axial)", "Velocity convention", "Choose Normal velocity or Axial rigid-piston velocity in Velocity convention, or set Source amplitude to 1 or 2 for Legacy config value.", message="The legacy source motion value is unavailable.")
 
     if root.enclosure is not None:
         # Reject a non-scalar depth here rather than letting the mesher decide
@@ -1068,7 +1069,7 @@ def assembly_mesher_config(design: DesignConfig) -> tuple[dict[str, Any], dict[s
     """
 
     from hornlab_mesher.config_builder import resolve_geometry
-    from hornlab_mesher.errors import UserRefusal
+    from hornlab_mesher.errors import UserRefusal, ConfigError
     from hornlab_mesher.enclosure_woofers import mouth_y_edges, resolve_woofer_placements
     from server.design.native import NATIVE_FORMULAS
 
@@ -1096,7 +1097,7 @@ def assembly_mesher_config(design: DesignConfig) -> tuple[dict[str, Any], dict[s
     try:
         geometry = resolve_geometry(probe).geometry
         bottom, top = mouth_y_edges(geometry.inner_points)
-    except UserRefusal as exc:
+    except (ValueError, ConfigError) as exc:
         from server.preview.errors import user_error_message
         raise AssemblyRefusal(user_error_message(exc)) from exc
     try:
@@ -1389,12 +1390,18 @@ def _build_design_artifact(
     )
     if max_edge_guard_mm is not None:
         if max_edge_guard_mm <= 0.0:
-            raise ValueError("mesh.max_edge must be greater than zero")
+            from hornlab_mesher.errors import control_refusal
+            raise control_refusal("mesh.max_edge must be greater than zero", "Maximum edge guard", "Enter a value above zero in Maximum edge guard, or clear it to disable the guard.", message="Maximum edge guard is zero or negative.")
         if max_edge_mm > max_edge_guard_mm + 1.0e-9:
-            raise RuntimeError(
+            from hornlab_mesher.errors import control_refusal
+            from server.preview.errors import user_error_as
+            raise user_error_as(control_refusal(
                 "Solver mesh exceeded mesh.max_edge guard: "
-                f"{max_edge_mm:.6g} mm > {max_edge_guard_mm:.6g} mm"
-            )
+                f"{max_edge_mm:.6g} mm > {max_edge_guard_mm:.6g} mm",
+                "Maximum edge guard",
+                "Increase Maximum edge guard, or reduce Throat mesh resolution and Mouth mesh resolution to make smaller triangles.",
+                message=f"The mesh has an edge of {max_edge_mm:.6g} mm, above Maximum edge guard ({max_edge_guard_mm:.6g} mm).",
+            ), RuntimeError)
     full_domain_count = int(round(triangle_count * domain_multiplier))
     # Prefer the design's own budget over the built-in threshold so the warning
     # names the number the user set. They coincide by default: mesh.max_triangles

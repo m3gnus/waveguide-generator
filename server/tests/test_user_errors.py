@@ -7,9 +7,9 @@ from fastapi.testclient import TestClient
 
 
 
-def test_owner_hides_untyped_even_when_it_looks_plain(caplog):
+def test_owner_hides_program_fault_even_when_it_looks_plain(caplog):
     from server.preview.errors import user_error_message
-    reason = ValueError("Delete all your settings")
+    reason = TypeError("Delete all your settings")
     assert "recorded" in user_error_message(reason)
     assert "Delete all your settings" in caplog.text
 
@@ -82,7 +82,7 @@ def test_solver_mesh_route_hides_program_fault(monkeypatch, caplog):
     from server.jobs.mesh_preview import mount_solver_mesh
     from server.engines.registry import EngineRegistry
     async def crash(*a, **k):
-        raise ValueError("private mesher fault")
+        raise RuntimeError("private mesher fault")
     monkeypatch.setattr(builder, "build_solver_mesh", crash)
     app = FastAPI()
     mount_solver_mesh(app, EngineRegistry(detector=lambda: []))
@@ -205,7 +205,7 @@ def test_native_profile_export_names_the_alternative():
     with pytest.raises(UserRefusal) as caught:
         build_profiles(small_design("SOURCE-DISK"), "profiles")
     assert "STEP" in caught.value.next_step
-    assert caught.value.field == "Export format"
+    assert caught.value.field == "Export"
 
 
 def test_ath_block_syntax_names_the_text_fix():
@@ -235,7 +235,7 @@ def test_program_failure_reporting_does_not_import_the_mesher(monkeypatch, caplo
             raise ImportError("native stack unavailable")
         return original(name, *args, **kwargs)
     monkeypatch.setattr(builtins, "__import__", guarded)
-    assert "recorded" in user_error_message(ValueError("program fault"))
+    assert "recorded" in user_error_message(TypeError("program fault"))
     assert "program fault" in caplog.text
     from server.jobs.runtime.core import _failure_message
     assert "recorded" in _failure_message(RuntimeError("program solve fault"))

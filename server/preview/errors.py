@@ -140,8 +140,10 @@ def _user_refusal(exc: BaseException):
     return None
 
 
-def public_error_message(exc: BaseException) -> str | None:
+def public_error_message(exc: BaseException, *, domain_values: bool = True) -> str | None:
     """Preserve the existing domain owners; arbitrary exceptions stay private."""
+    if isinstance(exc, (TypeError, KeyError, AttributeError, AssertionError, IndexError, OSError)):
+        return None
     refusal = _user_refusal(exc)
     if refusal is not None:
         return f"{refusal.user_message} {refusal.next_step}".strip()
@@ -188,12 +190,19 @@ def public_error_message(exc: BaseException) -> str | None:
     translated = mesher_error_message({"mode": "infinite-baffle"}, str(exc))
     if isinstance(translated, PublicMessage):
         return str(translated)
+    # Design validators historically use plain ValueError/ConfigError. Preserve
+    # their authored words; the client still rejects internal diagnostic text.
+    config_error = getattr(sys.modules.get("hornlab_mesher.errors"), "ConfigError", None)
+    if domain_values and (type(exc) is ValueError or (isinstance(config_error, type) and type(exc) is config_error)):
+        cause = exc.__cause__
+        if cause is None or isinstance(cause, ValueError):
+            return str(exc)
     return None
 
 
-def user_error_message(exc: BaseException, *, fallback: str = PROGRAM_FAILURE) -> str:
+def user_error_message(exc: BaseException, *, fallback: str = PROGRAM_FAILURE, domain_values: bool = True) -> str:
     """Show the domain owner's remedy, with original diagnostics in the log."""
-    words = public_error_message(exc)
+    words = public_error_message(exc, domain_values=domain_values)
     if words is not None:
         logger.warning("Public refusal (%s): %s", type(exc).__name__, getattr(exc, "diagnostic", str(exc)))
         return words

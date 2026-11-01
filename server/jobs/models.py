@@ -132,7 +132,8 @@ class SolveOptions(JobModel):
     def normalize_named_option(cls, value: str, info: Any) -> str:
         normalized = value.strip().lower()
         if not normalized:
-            raise ValueError(f"{dict(engine='Solver', solver_mode='Solver mode', symmetry='Symmetry')[info.field_name]} is empty. Choose a value in Solve options.")
+            from hornlab_mesher.controls import control_label
+            raise ValueError(f"{control_label('options.' + info.field_name)} is empty. Choose a value in Solve options.")
         if info.field_name == "symmetry" and normalized not in {
             "auto",
             "full",

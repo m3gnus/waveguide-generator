@@ -286,7 +286,7 @@ def test_ingest_refuses_repeated_design_without_exact_anchor_instance(
             tmp_path,
             expected_design_id="wgd_shared",
         )
-    with pytest.raises(IngestRefusal, match="not this CAD return’s solve anchor.*Choose the anchor instance"):
+    with pytest.raises(IngestRefusal, match="not the model’s solve anchor.*Choose the anchor instance"):
         ingest_bundle(
             tmp_path,
             {},

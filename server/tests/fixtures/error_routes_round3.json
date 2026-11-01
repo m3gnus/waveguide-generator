@@ -1,0 +1,310 @@
+[
+  {
+    "route": "/api/design/freeform/curves:freeform",
+    "status": 422,
+    "body": {
+      "content_key": "review",
+      "detail": [
+        {
+          "type": "value_error",
+          "loc": [
+            "body",
+            "design",
+            "FREEFORM"
+          ],
+          "msg": "Value error, FREEFORM requires cross_section exponent=2 and aspect_ratio=1; cross_sections stations own the outline",
+          "ctx": {
+            "error": {
+              "field": "Cross-section stations",
+              "user_message": "A Custom profile cannot use a separate base cross-section.",
+              "next_step": "Import the profile without a separate base cross-section, or start a new Custom profile design. Use Cross-section stations to shape its outline."
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "route": "/api/mesh-estimate:ath",
+    "status": 422,
+    "body": {
+      "detail": {
+        "field": "ATH text",
+        "user_message": "The ATH enclosure has zero or negative Depth.",
+        "next_step": "Set \u201cDepth\u201d above zero in \u201cMesh.Enclosure\u201d, or remove \u201cMesh.Enclosure\u201d from the ATH text."
+      }
+    }
+  },
+  {
+    "route": "/api/mesh-estimate:velocity",
+    "status": 422,
+    "body": {
+      "detail": {
+        "field": "Velocity convention",
+        "user_message": "The legacy source motion value is unavailable.",
+        "next_step": "Choose Normal velocity or Axial rigid-piston velocity in Velocity convention, or set Source amplitude to 1 or 2 for Legacy config value."
+      }
+    }
+  },
+  {
+    "route": "/api/models/assembly/compile",
+    "status": 422,
+    "body": {
+      "detail": "Woofer placement: The referenced woofer no longer exists. Choose a current woofer in Spacing from, or clear it."
+    }
+  },
+  {
+    "route": "/api/models/assembly/context",
+    "status": 422,
+    "body": {
+      "detail": "Woofer placement: The referenced woofer no longer exists. Choose a current woofer in Spacing from, or clear it."
+    }
+  },
+  {
+    "route": "/api/models/assembly/context:scale",
+    "status": 422,
+    "body": {
+      "detail": "The design scale is zero or negative. Enter a value above zero in Transverse / uniform scale.",
+      "error": {
+        "schema_version": 1,
+        "code": "assembly_refused",
+        "stage": "imported_model",
+        "message": "The design scale is zero or negative. Enter a value above zero in Transverse / uniform scale.",
+        "retryable": false,
+        "details": {},
+        "client_request_id": null
+      }
+    }
+  },
+  {
+    "route": "/api/models/assembly/context:segments",
+    "status": 200,
+    "body": {
+      "refusal": "Surface length samples is zero or negative. Enter a positive whole number in Surface length samples."
+    }
+  },
+  {
+    "route": "/api/models/files",
+    "status": 422,
+    "body": {
+      "detail": "The mesh is open on x = 0. Choose half or quarter symmetry in the settings, or close the mesh in the meshing tool."
+    }
+  },
+  {
+    "route": "/api/models/files/inspect",
+    "status": 422,
+    "body": {
+      "detail": "Import requires an ASCII Gmsh 2.2 mesh. Export ASCII Gmsh 2.2 format from your meshing tool, then import it again."
+    }
+  },
+  {
+    "route": "/api/models/files:roles",
+    "status": 422,
+    "body": {
+      "detail": "The mesh has no driver surface. Choose at least one driver surface in Sources & Mesh\u2026.",
+      "error": {
+        "schema_version": 1,
+        "code": "mesh_refused",
+        "stage": "imported_model",
+        "message": "The mesh has no driver surface. Choose at least one driver surface in Sources & Mesh\u2026.",
+        "retryable": false,
+        "details": {},
+        "client_request_id": null
+      }
+    }
+  },
+  {
+    "route": "/api/solve/plan: native validation",
+    "status": 422,
+    "body": {
+      "detail": "The source rim is too small or too large. Set Source body radius at least 0.1 mm above Source disk radius and no greater than 500 mm."
+    }
+  },
+  {
+    "route": "/api/solve: native validation",
+    "status": 422,
+    "body": {
+      "detail": "The source rim is too small or too large. Set Source body radius at least 0.1 mm above Source disk radius and no greater than 500 mm."
+    }
+  },
+  {
+    "route": "/api/solve:frequencies",
+    "status": 422,
+    "body": {
+      "detail": "Solver frequencies in Hz must increase without duplicates. Enter each frequency once, from lowest to highest, in Solve options.",
+      "error": {
+        "schema_version": 1,
+        "code": "invalid_request",
+        "stage": "input",
+        "message": "Solver frequencies in Hz must increase without duplicates. Enter each frequency once, from lowest to highest, in Solve options.",
+        "retryable": false,
+        "details": {
+          "validation_errors": [
+            {
+              "type": "value_error",
+              "loc": [
+                "body",
+                "options"
+              ],
+              "msg": "Value error, Solver frequencies in Hz must increase without duplicates. Enter each frequency once, from lowest to highest, in Solve options.",
+              "input": {
+                "frequencies_hz": [
+                  500,
+                  500
+                ]
+              },
+              "ctx": {
+                "error": {}
+              }
+            }
+          ]
+        },
+        "client_request_id": null
+      }
+    }
+  },
+  {
+    "route": "/api/solver-mesh:edge",
+    "status": 422,
+    "body": {
+      "detail": {
+        "field": "Maximum edge guard",
+        "user_message": "The mesh has an edge of 26.3501 mm, above Maximum edge guard (0.5 mm).",
+        "next_step": "Increase Maximum edge guard, or reduce Throat mesh resolution and Mouth mesh resolution to make smaller triangles."
+      }
+    }
+  },
+  {
+    "route": "/api/source-editor/assembly/horn-profile:horn",
+    "status": 422,
+    "body": {
+      "detail": "General horn attachment requires a rotational wall and circular coaxial rims; noncircular or azimuth-varying geometry is unsupported. Use circular cross-sections and constant profile values around the horn before attaching it."
+    }
+  },
+  {
+    "route": "/api/source-editor/assembly/validate:depth",
+    "status": 422,
+    "body": {
+      "detail": "Horn source must clear enclosure back by more than 0.1 mm. Increase Enclosure depth to leave more than 0.1 mm behind the horn source."
+    }
+  },
+  {
+    "route": "/api/source-editor/assembly/validate:overlap",
+    "status": 422,
+    "body": {
+      "detail": "Horn and woofer apertures must be separated by more than 0.1 mm. Move the woofer away from the horn to leave more than 0.1 mm between their openings."
+    }
+  },
+  {
+    "route": "/api/source-editor/assembly/validate:plug",
+    "status": 422,
+    "body": {
+      "detail": "Passive bodies must clear source and mouth by more than 0.1 mm. Increase Plug inlet Z or reduce Plug outlet Z to leave more than 0.1 mm at the source and mouth."
+    }
+  },
+  {
+    "route": "/api/source-editor/validate:arc",
+    "status": 422,
+    "body": {
+      "detail": "The arc endpoints are not on the same nonzero circle. Change Arc center radius and Arc center z so both endpoints lie on the same circle."
+    }
+  },
+  {
+    "route": "HTTP mesh preview: driver",
+    "status": 422,
+    "body": {
+      "detail": "A driver mesh size is zero, negative or not finite. Enter a positive size for each driver in Sources & Mesh\u2026."
+    }
+  },
+  {
+    "route": "HTTP mesh preview: file",
+    "status": 422,
+    "body": {
+      "detail": "Import requires an ASCII Gmsh 2.2 mesh. Export ASCII Gmsh 2.2 format from your meshing tool, then import it again."
+    }
+  },
+  {
+    "route": "HTTP mesh preview: native",
+    "status": 422,
+    "body": {
+      "detail": "The source rim is too small or too large. Set Source body radius at least 0.1 mm above Source disk radius and no greater than 500 mm."
+    }
+  },
+  {
+    "route": "HTTP mesh preview: stretch",
+    "status": 422,
+    "body": {
+      "detail": "Throat stretch with OSSE Straight slot length cannot be used in this combination. Set both Throat stretch amount and Throat stretch sharpness to 0 to disable stretch, or remove the conflicting profile feature, such as Straight slot length. For stretch alone, use numbers from 0 to 10."
+    }
+  },
+  {
+    "route": "HTTP mesh preview: surround",
+    "status": 422,
+    "body": {
+      "detail": "The surround or land dimensions are invalid. Set Surround width and Rigid land width to zero or more. Keep the absolute Surround depth at most half the Surround width; when width is zero, depth must be zero."
+    }
+  },
+  {
+    "route": "HTTP native validation",
+    "status": 422,
+    "body": {
+      "detail": "The source rim is too small or too large. Set Source body radius at least 0.1 mm above Source disk radius and no greater than 500 mm."
+    }
+  },
+  {
+    "route": "HTTP preview: real 2 mm sharp corner",
+    "status": 422,
+    "body": {
+      "detail": "The outer wall cannot fit around the sharp profile corner at 1 mm. Soften this profile corner, or choose Bare shell in Mounting."
+    }
+  },
+  {
+    "route": "WGLink projection",
+    "status": 422,
+    "body": {
+      "detail": "This model belongs to the WG design it was exported from (a design that is not in this workspace). Open its workspace and choose that design from File \u2192 CAD-linked designs before preparing it"
+    }
+  },
+  {
+    "route": "job record: driver",
+    "status": 422,
+    "body": {
+      "detail": "A driver mesh size is zero, negative or not finite. Enter a positive size for each driver in Sources & Mesh\u2026."
+    }
+  },
+  {
+    "route": "job record: file",
+    "status": 422,
+    "body": {
+      "detail": "Import requires an ASCII Gmsh 2.2 mesh. Export ASCII Gmsh 2.2 format from your meshing tool, then import it again."
+    }
+  },
+  {
+    "route": "job record: native",
+    "status": 422,
+    "body": {
+      "detail": "The source rim is too small or too large. Set Source body radius at least 0.1 mm above Source disk radius and no greater than 500 mm."
+    }
+  },
+  {
+    "route": "job record: stretch",
+    "status": 422,
+    "body": {
+      "detail": "Throat stretch with OSSE Straight slot length cannot be used in this combination. Set both Throat stretch amount and Throat stretch sharpness to 0 to disable stretch, or remove the conflicting profile feature, such as Straight slot length. For stretch alone, use numbers from 0 to 10."
+    }
+  },
+  {
+    "route": "job record: surround",
+    "status": 422,
+    "body": {
+      "detail": "The surround or land dimensions are invalid. Set Surround width and Rigid land width to zero or more. Keep the absolute Surround depth at most half the Surround width; when width is zero, depth must be zero."
+    }
+  },
+  {
+    "route": "solve plan",
+    "status": 422,
+    "body": {
+      "detail": "Throat stretch with OSSE Straight slot length cannot be used in this combination. Set both Throat stretch amount and Throat stretch sharpness to 0 to disable stretch, or remove the conflicting profile feature, such as Straight slot length. For stretch alone, use numbers from 0 to 10."
+    }
+  }
+]

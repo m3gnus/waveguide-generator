@@ -29,7 +29,7 @@ describe('Custom profile curve client', () => {
       .mockResolvedValueOnce(json({ content_key: null, detail: 'malformed' }, 422));
     const insert = insertFreeformAnchor(design, { plane: 'V', z_mm: 0, mode: 'exact' }, 'k1', undefined, fetcher);
     await expect(insert).rejects.toThrow('profileV insert z must be strictly inside a span');
-    await expect(queryFreeformCurves(design, 'k1', undefined, fetcher)).rejects.toThrow('design.FREEFORM.profile_h: Value error, the first FREEFORM profile point must have t = 0');
+    await expect(queryFreeformCurves(design, 'k1', undefined, fetcher)).rejects.toThrow('the first FREEFORM profile point must have t = 0');
     await expect(queryFreeformCurves(design, 'k1', undefined, fetcher)).rejects.toBeInstanceOf(StaleFreeformResponse);
     const malformed = queryFreeformCurves(design, 'k1', undefined, fetcher);
     await expect(malformed).rejects.toBeInstanceOf(FreeformRequestError);

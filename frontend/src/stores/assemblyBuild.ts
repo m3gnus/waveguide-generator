@@ -91,7 +91,7 @@ export async function requestAssemblyBuild(fetcher: typeof fetch = fetch): Promi
   } catch (error) {
     if (owns()) {
       useAssemblyBuildStore.setState({ status: 'refused', failureDetail: error instanceof Error ? error.message : String(error),
-        refusal: assemblyProblemText(error, 'WG could not build this assembly and has recorded the problem. Try again.') });
+        refusal: assemblyProblemText(error, 'WG could not build this assembly and has recorded the problem.') });
     }
     throw error;
   }

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from server.preview.errors import user_error_message
+
 import asyncio
 import functools
 import hashlib
@@ -962,9 +964,8 @@ def _ingest_error(exc: Exception, *, document_name: str | None = None) -> HTTPEx
         })
     code = preparation_failure_code(exc)
     if code is None:
-        assert isinstance(exc, IngestRefusal)
-        detail: str | dict[str, Any] = str(exc)
-        if exc.area_drift_sources:
+        detail: str | dict[str, Any] = user_error_message(exc)
+        if isinstance(exc, IngestRefusal) and exc.area_drift_sources:
             detail = {
                 "message": str(exc),
                 "area_drift_sources": list(exc.area_drift_sources),

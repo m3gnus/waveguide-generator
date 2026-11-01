@@ -41,7 +41,7 @@ class _ContentKeyRoute(APIRoute):
                 # Input may contain non-finite numbers, and need not be echoed
                 # in a validation error (nor repeated as a whole design).
                 detail = exc.detail if isinstance(exc, HTTPException) else jsonable_encoder([
-                    {name: value for name, value in error.items() if name not in {"input", "ctx"}}
+                    {name: value for name, value in error.items() if name != "input"}
                     for error in exc.errors()
                 ])
                 status = exc.status_code if isinstance(exc, HTTPException) else 422

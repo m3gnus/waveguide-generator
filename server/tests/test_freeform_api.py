@@ -386,7 +386,7 @@ def test_mesher_error_names_plane_span_and_z(client, design, plane):
     design['profile_' + plane.lower()]['points'][0]['handle_out'] = [-20, 5]
     response = client.post('/api/design/freeform/curves', json={'design': design, 'content_key': 'bad'})
     assert response.status_code == 422
-    assert ('Horizontal profile' if plane == 'H' else 'Vertical profile') in response.json()['detail']
+    assert ('Horizontal spline points' if plane == 'H' else 'Vertical spline points') in response.json()['detail']
     assert 'span 1 from 0 to 40 mm' in response.json()['detail']
 
 
@@ -394,7 +394,7 @@ def test_smooth_handle_collinearity_error_is_reported_by_mesher(client, design):
     design['profile_h']['points'][1].update(handle_in=[-3, -1], handle_out=[3, 2])
     response = client.post('/api/design/freeform/curves', json={'design': design, 'content_key': 'bad'})
     assert response.status_code == 422
-    assert 'Horizontal profile' in response.json()['detail']
+    assert 'Horizontal spline points' in response.json()['detail']
     assert 'collinear' in response.json()['detail']
     assert response.json()['content_key'] == 'bad'
 

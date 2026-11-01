@@ -147,7 +147,8 @@ def has_closed_outer_body(root: Any) -> bool:
 def _scale_factor(value: Expr | None) -> float:
     scale = _structural_number(value, "scale", 1.0)
     if scale <= 0:
-        raise ValueError("scale must be greater than zero")
+        from hornlab_mesher.errors import control_refusal
+        raise control_refusal("scale must be greater than zero", "Transverse / uniform scale", "Enter a value above zero in Transverse / uniform scale.", message="The design scale is zero or negative.")
     return scale
 
 

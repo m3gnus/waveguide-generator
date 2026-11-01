@@ -1332,7 +1332,7 @@ def _admit_return(
     if expected_instance_id is None and len(matching_design_instances) > 1:
         raise IngestRefusal(
             "stage 2 instance gate",
-            "The selected CAD return contains more than one instance of this "
+            "The selected model contains more than one instance of this "
             "design; choose the linked instance before preparing it",
             user_worded=True,
         )
@@ -1374,8 +1374,8 @@ def _admit_return(
             logger.warning("Selected CAD instance %r is not the return's solver anchor %r", resolved_instance_id, anchor_instance_id)
             raise IngestRefusal(
                 "stage 2 instance gate",
-                "The selected instance is not this CAD return’s solve anchor. "
-                "Choose the anchor instance in CAD Link, or send a return for this instance.",
+                "The selected instance is not the model’s solve anchor. "
+                "Choose the anchor instance in CAD Link, or send this instance again.",
                 user_worded=True,
             )
     return resolved_instance_id
@@ -2367,9 +2367,9 @@ def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], 
     if any(p not in {"x0", "y0"} for p in planes):
         raise IngestRefusal("stage 7 meshing", f"{labels}: FEM regions cannot use this symmetry cut. Send the whole model, or cut it only on the horizontal or vertical centre plane.", user_worded=True)
     if final_domain and set(planes) == {"y0"}:
-        raise IngestRefusal("stage 6 symmetry", f"{labels}: y0-only FEM returns cannot be solved "
-                            "by BEAT. Export without the y0 cut, or keep the x0 cut "
-                            "along with y0 when preparing the return.", symmetry_plane="y0", user_worded=True)
+        raise IngestRefusal("stage 6 symmetry", f"{labels}: This solve cannot use only a horizontal symmetry cut. "
+                            "Send the whole model, or include the vertical symmetry cut "
+                            "when preparing it.", symmetry_plane="y0", user_worded=True)
     return labels
 
 

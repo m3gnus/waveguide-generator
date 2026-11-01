@@ -1,3 +1,4 @@
+import { refusalText } from './httpError';
 import type { components } from './generated/openapi';
 import { hydrateDesignDocument } from './designIo';
 import { serializeDesign, type DesignDocument } from '../stores/design';
@@ -35,14 +36,6 @@ export class StaleFreeformResponse extends Error {
   override name = 'StaleFreeformResponse';
 }
 
-function errorText(detail: FreeformErrorWire['detail']): string {
-  if (typeof detail === 'string') return detail;
-  return detail.map((item) => {
-    const location = Array.isArray(item.loc) ? item.loc.filter((part) => part !== 'body').join('.') : '';
-    const message = typeof item.msg === 'string' ? item.msg : 'Enter a value WG can use here.';
-    return location ? `${location}: ${message}` : message;
-  }).join('; ');
-}
 
 async function post<T extends { content_key: string }>(
   path: string, body: Record<string, unknown>, contentKey: string, signal: AbortSignal | undefined, fetcher: typeof fetch,
@@ -58,11 +51,11 @@ async function post<T extends { content_key: string }>(
     // A refusal names its request; one for another (or no) request is stale.
     if (error?.content_key !== contentKey) {
       if (error?.content_key == null && error?.detail !== undefined && response.status === 422) {
-        throw new FreeformRequestError(errorText(error.detail), response.status);
+        throw new FreeformRequestError(refusalText(error.detail, 'profile edit'), response.status);
       }
       throw new StaleFreeformResponse(`Discarded a response for another profile request (${response.status}).`);
     }
-    throw new FreeformRequestError(error.detail !== undefined ? errorText(error.detail) : 'WG could not check this profile. Try again.', response.status);
+    throw new FreeformRequestError(error.detail !== undefined ? refusalText(error.detail, 'profile edit') : 'WG could not check this profile. Try again.', response.status);
   }
   const result = payload as T | undefined;
   if (!result || result.content_key !== contentKey) throw new StaleFreeformResponse('Discarded a response for another profile request.');

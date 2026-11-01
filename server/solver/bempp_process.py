@@ -111,7 +111,7 @@ def _exception_payload(exc: BaseException) -> dict[str, Any]:
     return {"type": type(exc).__name__, "message": str(exc),
             "traceback": traceback.format_exc(),
             "failure_code": "solver_memory_exhausted" if isinstance(exc, MemoryError) else "solver_failed",
-            "public_message": public_error_message(exc)}
+            "public_message": public_error_message(exc, domain_values=False)}
 
 
 def _worker_exception(value: dict[str, Any]) -> BemppWorkerError:

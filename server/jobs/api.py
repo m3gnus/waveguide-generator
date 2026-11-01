@@ -1133,7 +1133,7 @@ def create_jobs_router(
         except OSError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
-            raise HTTPException(status_code=422, detail=user_error_message(exc)) from exc
+            raise HTTPException(status_code=422, detail=user_error_message(exc, domain_values=False)) from exc
         return MetadataResponse(status="ok")
 
     @router.delete("/api/jobs/clear-failed", response_model=ClearFailedResponse)

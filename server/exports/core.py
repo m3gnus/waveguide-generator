@@ -721,7 +721,7 @@ def _refuse_ath_step(design: DesignConfig) -> None:
     mesh = design.root.mesh
     if mesh.ath_roundover is not None or mesh.ath_rear_shape == 3:
         from hornlab_mesher.errors import UserRefusal
-        raise UserRefusal("Export format", "STEP export of ATH “Mesh.Roundover” / “Mesh.RearShape = 3” imports is unavailable.", "Export STL to retain the imported shape, or remove those settings from the ATH text before importing again.", diagnostic=
+        raise UserRefusal("Export", "STEP export of ATH “Mesh.Roundover” / “Mesh.RearShape = 3” imports is unavailable.", "Export STL to retain the imported shape, or remove those settings from the ATH text before importing again.", diagnostic=
             "STEP export of Mesh.Roundover / Mesh.RearShape = 3 imports is unsupported: "
             "GEO spline/Coons patches cannot be exported by the OCC STEP writer; "
             "faithful OCC ring patches, rear fan and shared-seam solid sewing are not implemented"
@@ -1163,8 +1163,8 @@ def build_profiles(design: DesignConfig, kind: str) -> str:
 
     if design.formula in NATIVE_FORMULAS:
         from hornlab_mesher.errors import UserRefusal
-        raise UserRefusal("Export format", "Profile CSV cannot represent this horn's complete shape.",
-                          "Choose STEP in Export format.",
+        raise UserRefusal("Export", "Profile CSV cannot represent this horn's complete shape.",
+                          "Export STEP instead.",
                           diagnostic=f"{design.formula} cannot export profile CSVs: the ring-grid format cannot represent the complete native construction. Export STEP instead.")
     return profile_csv(
         _inner_grid(design, profile_sampling=True),

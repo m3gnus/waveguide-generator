@@ -136,11 +136,11 @@ def native_mesher_config(root: Any) -> dict[str, Any]:
     composite = root.formula == "OSSE-NATIVE"
     required_adapter = root.formula in {"OSSE-ADAPTER", "OSSE-ADAPTER-CONTROLS", "OSSE-ADAPTER-AXIAL"}
     if not composite and required_adapter != (root.throat_adapter is not None):
-        raise control_refusal(f"{root.formula} {'requires' if required_adapter else 'does not support'} throat_adapter", "Throat adapter", "Choose a matching Family and Throat adapter.", message=f"This horn family {'needs' if required_adapter else 'cannot use'} a throat adapter.")
+        raise control_refusal(f"{root.formula} {'requires' if required_adapter else 'does not support'} throat_adapter", 'Driver exit diameter', "Choose a matching Family and Throat adapter.", message=f"This horn family {'needs' if required_adapter else 'cannot use'} a throat adapter.")
     if root.throat_adapter is not None:
         expected = "controls" if root.formula == "OSSE-ADAPTER-CONTROLS" else "authored"
         if not composite and root.throat_adapter.mode != expected:
-            raise control_refusal(f"{root.formula} requires throat_adapter.mode = {expected}", "Throat adapter", "Choose a matching Family and Throat adapter mode.", message="The throat adapter mode does not match this horn family.")
+            raise control_refusal(f"{root.formula} requires throat_adapter.mode = {expected}", 'Driver exit diameter', "Choose a matching Family and Throat adapter mode.", message="The throat adapter mode does not match this horn family.")
         config["throat_adapter"] = root.throat_adapter.model_dump(mode="json")
     for field, required in (("axial_scale", root.formula in {"OSSE-AXIAL", "OSSE-ADAPTER-AXIAL"}), ("terminating_arc", root.formula == "OSSE-ARC")):
         value = getattr(root, field)
