@@ -1067,9 +1067,26 @@ def assembly_mesher_config(design: DesignConfig) -> tuple[dict[str, Any], dict[s
 
     from hornlab_mesher.config_builder import resolve_geometry
     from hornlab_mesher.enclosure_woofers import mouth_y_edges, resolve_woofer_placements
+    from server.design.native import NATIVE_FORMULAS
 
     if design.root.assembly is None:
         raise AssemblyRefusal("This design has no Sources and baffle assembly.")
+    if design.root.simulation.sim_type == "infinite-baffle":
+        raise AssemblyRefusal(
+            "Sources and baffle assemblies do not support infinite baffles. "
+            "Change Mounting to Bare shell or Thickened waveguide (freestanding) for a horn-only assembly, "
+            "or Waveguide in enclosure for woofers."
+        )
+    if design.root.formula == "SOURCE-DISK":
+        raise AssemblyRefusal(
+            "SOURCE-DISK is a standalone source and cannot be built as a Sources and baffle assembly."
+        )
+    rows = assembly_woofer_rows(design)
+    if design.root.formula in NATIVE_FORMULAS and any(row["enabled"] for row in rows):
+        raise AssemblyRefusal(
+            f"{design.root.formula} does not support an enclosure front baffle. "
+            "Disable the woofers, or choose a horn family that supports Mounting: Waveguide in enclosure."
+        )
     config = _solver_mesher_config(design)
     config.setdefault("mesh", {})["quadrants"] = FULL_DOMAIN_QUADRANTS
     probe = deepcopy(config)
@@ -1078,7 +1095,6 @@ def assembly_mesher_config(design: DesignConfig) -> tuple[dict[str, Any], dict[s
         bottom, top = mouth_y_edges(geometry.inner_points)
     except Exception as exc:
         raise AssemblyRefusal(f"WG cannot place woofers on this horn: {mesher_error_message(probe, str(exc))}") from exc
-    rows = assembly_woofer_rows(design)
     try:
         resolved = resolve_woofer_placements(rows, mouth_bottom_mm=bottom, mouth_top_mm=top)
     except ValueError as exc:
@@ -1086,7 +1102,8 @@ def assembly_mesher_config(design: DesignConfig) -> tuple[dict[str, Any], dict[s
     if resolved:
         if config.get("mode") != "enclosure" or not isinstance(config.get("enclosure"), Mapping):
             raise AssemblyRefusal(
-                "Woofers cut the enclosure's front baffle. Set an enclosure depth, or disable the woofers."
+                "Woofers cut the enclosure's front baffle. "
+                "Change Mounting to Waveguide in enclosure and set an enclosure depth, or disable the woofers."
             )
         config["enclosure"]["woofers"] = resolved
         if assembly_ath_envelope(design):

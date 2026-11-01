@@ -292,7 +292,7 @@ def test_the_fence_is_checked_inside_the_publishing_transaction(store, tmp_path,
 
 @pytest.mark.parametrize(("dump", "message"), [
     (HORN, "no Sources and baffle assembly"),
-    ({**HORN, "enclosure": {"depth": 0}, "assembly": assembly(woofer())}, "Set an enclosure depth"),
+    ({**HORN, "enclosure": {"depth": 0}, "assembly": assembly(woofer())}, "Mounting to Waveguide in enclosure"),
     ({**HORN, "assembly": assembly(woofer(gap=-200))}, "greater than or equal"),
 ])
 def test_unsupported_assemblies_are_refused_precisely(store, tmp_path, dump, message):
@@ -380,6 +380,29 @@ def test_the_models_api_compiles_and_draws_an_assembly(store, tmp_path):
             bad = await call(app, "POST", "/api/models/assembly/compile",
                              {**body, "design_revision": 3, "design": HORN}, expected=422)
             assert bad["error"]["code"] == "assembly_refused"
+        finally:
+            await runtime.shutdown()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("dump", [
+    design(assembly=assembly(), simulation={"sim_type": "infinite-baffle"}),
+    {"formula": "OSSE-ROUNDOVER", "mesh": {"mouth_roundover_radius_mm": 25}, "assembly": assembly(woofer())},
+    {"formula": "SOURCE-DISK", "assembly": assembly()},
+])
+def test_assembly_api_context_and_compile_share_the_refusal(store, tmp_path, dump):
+    from test_models_api import app_for, call
+
+    async def scenario():
+        app, runtime = app_for(tmp_path, store)
+        try:
+            context = await call(app, "POST", "/api/models/assembly/context", {"design": dump})
+            compiled = await call(app, "POST", "/api/models/assembly/compile", {
+                "design": dump, "design_uid": UID, "design_name": "Unsupported assembly", "design_revision": 1,
+            }, expected=422)
+            assert compiled["error"]["code"] == "assembly_refused"
+            assert compiled["error"]["message"] == context["refusal"]
+            assert store.list_model_ingests(design_model_id(UID)) == []
         finally:
             await runtime.shutdown()
     asyncio.run(scenario())
