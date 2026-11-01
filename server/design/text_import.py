@@ -1,6 +1,10 @@
 """Persisted counterpart of the mesher's bounded text geometry contract."""
 
+import logging
+import re
 from typing import Literal, get_args
+
+logger = logging.getLogger(__name__)
 
 TextImportVersion = Literal["ath-2026-08c-v1", "ath-2026-09a-v2", "ath-2026-09a-v3"]
 TEXT_IMPORT_V1, TEXT_IMPORT_V2, *_NEW_IMPORT_VERSIONS = get_args(TextImportVersion)
@@ -24,9 +28,44 @@ class AthImportError(ValueError):
     """A native ATH refusal with WG's next-step guidance."""
 
 
-def ath_import_failure(reason: Exception) -> str:
-    """Keep native detail intact; never select wording by matching its text."""
-    return f"{str(reason).rstrip('. ')}. Change or remove the named ATH setting, then try again."
+# Presentation hints only: native validation still decides what is accepted.
+# Only these authored names and sentences may cross the display boundary.
+_ATH_SETTING_FIXES = {
+    "Rot": "Rot must be a finite number or an expression of p that gives a finite number.",
+    "OSSE.Scale.Z": "Move Scale.Z out of the OSSE block and set it at the top level.",
+    "Scale.Z": "Scale.Z must be a positive finite constant and used with a supported horn shape.",
+    "Mesh.ThroatExtSegments": "Mesh.ThroatExtSegments must be an integer from 1 to 4096 and used with current ATH sampling.",
+    "Mesh.Roundover": "Mesh.Roundover must be used with a supported horn shape and scale.",
+    "Mesh.RearShape": "Mesh.RearShape must be used with a supported horn shape and scale.",
+    "Source.Contours": "Source.Contours cannot be imported. Use a single cap or disc throat source.",
+    "Scale": "Scale must be used with a supported horn shape.",
+    "Throat.Ext.Length": "Throat.Ext.Length must be used with a supported horn shape.",
+    "Throat.Ext.Angle": "Throat.Ext.Angle must be used with a supported horn shape.",
+    "Mesh.VerticalOffset": "Mesh.VerticalOffset must be used with a supported horn shape.",
+    "Source.Shape": "Source.Shape must be used with a supported horn shape.",
+    "ABEC.SimType": "ABEC.SimType must select a supported baffle or free-standing arrangement.",
+    "Mesh.Enclosure": "Mesh.Enclosure must be used with a supported horn shape.",
+    "Length": "The selected ATH profile must set Length in its profile block.",
+}
+
+
+def ath_import_failure(reason: Exception, *, setting: str | None = None) -> str:
+    """Log native diagnostics; display only authored setting names and remedies."""
+    logger.warning("ATH import could not use the configuration: %s", reason,
+                   exc_info=(type(reason), reason, reason.__traceback__))
+    if setting is None:
+        # Matching a known name affects guidance only, never acceptance. Unknown
+        # or reworded native diagnostics always receive a safe fallback.
+        settings = [key for key in _ATH_SETTING_FIXES
+                    if re.search(r"(?<![\w.])" + re.escape(key) + r"(?!\w)", str(reason))]
+    else:
+        settings = [setting] if setting in _ATH_SETTING_FIXES else []
+    if not settings:
+        return ("WG could not import this ATH configuration. Change or remove unsupported "
+                "ATH settings in the source file, then re-import it.")
+    fixes = " ".join(_ATH_SETTING_FIXES[key] for key in settings)
+    names = ", ".join(settings)
+    return f"{fixes} Change or remove {names} in the source file, then re-import it."
 
 
 def validate_ath_mesher_config(config: dict) -> None:
@@ -44,7 +83,9 @@ def validate_ath_mesher_config(config: dict) -> None:
             try:
                 calculate_rosse(0, 0, params)
             except (ValueError, ArithmeticError) as exc:
-                raise ValueError(f"The R-OSSE profile could not be evaluated with Rot: {exc}") from exc
+                raise AthImportError(ath_import_failure(exc, setting="Rot")) from exc
+    except AthImportError:
+        raise
     except (ValueError, ArithmeticError) as exc:
         raise AthImportError(ath_import_failure(exc)) from exc
 
@@ -56,4 +97,4 @@ def ath_extension_segments(value: object) -> int:
     try:
         return ath_throat_extension_segments({"athThroatExtSegments": value})
     except ValueError as exc:
-        raise ValueError(ath_import_failure(exc)) from exc
+        raise ValueError(ath_import_failure(exc, setting="Mesh.ThroatExtSegments")) from exc

@@ -413,7 +413,8 @@ def test_no_ath_corpus_file_is_refused_by_the_integrity_checks(path: Path) -> No
         parse(source)
         return
     # Every recognised fresh ATH design must agree with the mesher, including
-    # the exact refusal message. ConfigError must never escape WG's API.
+    # refusal; native detail is logged and WG supplies display guidance.
+    # ConfigError must never escape WG's API.
     from hornlab_mesher.config_parser import ConfigError, parse_text_config
 
     try:
@@ -461,7 +462,7 @@ def test_unrelated_configs_keep_legacy_refusal_without_mesher_validation(monkeyp
 
 
 @pytest.mark.parametrize("stage", ["text", "geometry"])
-def test_fresh_mesher_config_error_keeps_native_detail_and_adds_remedy(monkeypatch, stage: str) -> None:
+def test_fresh_mesher_config_error_keeps_native_cause_and_displays_remedy(monkeypatch, stage: str) -> None:
     from hornlab_mesher import config_builder, config_parser
 
     reason = config_parser.ConfigError("fresh import refused")
@@ -601,7 +602,7 @@ def test_every_gap_study_key_has_transport_or_a_named_refusal(family: str, base:
     # payloads here; the unsupported family composition still refuses by name.
     if key in {"NAC", "Mesh.RearShape", "Mesh.Roundover"}:
         if key == "Mesh.Roundover" and family == "R-OSSE":
-            with pytest.raises(TextConfigError, match="Mesh.Roundover with R-OSSE"):
+            with pytest.raises(TextConfigError, match="Mesh.Roundover must be used with a supported horn shape"):
                 parse(base + GAP_STUDY_KEYS[key])
             return
         config = design_to_mesher_config(parse(base + GAP_STUDY_KEYS[key]).design)

@@ -103,14 +103,14 @@ def test_unqualified_new_control_combinations_explain_the_fix(text, remedy):
 @pytest.mark.parametrize('rotation', ['foo', '1/0'])
 def test_invalid_rotation_expressions_are_refused_at_import(rotation):
     text = (ROOT / 'r-rot10.cfg').read_text().replace('Rot = 10', f'Rot = {rotation}')
-    with pytest.raises(TextConfigError, match='Rot:.*Change or remove'):
+    with pytest.raises(TextConfigError, match='Rot must be a finite number or an expression of p.*Change or remove'):
         parse(text)
 
 
 @pytest.mark.parametrize('rotation', ['1e309', 'nan', 'inf'])
 def test_nonfinite_rotation_explains_the_fix(rotation):
     text = (ROOT / 'r-rot10.cfg').read_text().replace('Rot = 10', f'Rot = {rotation}')
-    with pytest.raises(TextConfigError, match='Rot must be finite.*Change or remove'):
+    with pytest.raises(TextConfigError, match='Rot must be a finite number.*Change or remove'):
         parse(text)
 
 
@@ -192,7 +192,7 @@ def test_axial_scale_has_no_supported_block_override(block):
         parse(text)
 
 
-def test_mesher_refusal_wording_is_preserved_with_a_remedy(monkeypatch):
+def test_unknown_mesher_refusal_gets_safe_guidance_and_logs_detail(monkeypatch, caplog):
     import hornlab_mesher.config_builder as native
 
     def refuse(config):
@@ -200,8 +200,9 @@ def test_mesher_refusal_wording_is_preserved_with_a_remedy(monkeypatch):
 
     monkeypatch.setattr(native, 'build_geometry_params', refuse)
     design = DesignConfig.model_validate({'formula': 'OSSE', 'text_import_version': V3, 'ath_axial_scale': 2})
-    with pytest.raises(ValueError, match='A newly worded native refusal.*Change or remove'):
+    with pytest.raises(ValueError, match='WG could not import this ATH configuration.*Change or remove'):
         design_to_mesher_config(design)
+    assert 'A newly worded native refusal' in caplog.text
 
 
 @pytest.mark.parametrize('stamp', ['ath-2026-08c-v1', 'ath-2026-09a-v2'])
@@ -246,7 +247,7 @@ def test_saved_v3_keeps_inert_wg_metadata(kind):
 def test_saved_sampling_metadata_reaches_the_native_composition_check():
     text = ('; Parameter config\n; Waveguide Generator geometry-interpretation: ' + V3 + '\n'
             'OSSE = {\nL=80\n}\n_athAxialSamplingRule=ath-v2025-06\nMesh.ThroatExtSegments=4\n')
-    with pytest.raises(TextConfigError, match='Mesh.ThroatExtSegments requires the current.*Change or remove'):
+    with pytest.raises(TextConfigError, match='Mesh.ThroatExtSegments must be an integer.*Change or remove'):
         parse(text)
 
 
@@ -265,3 +266,40 @@ def test_explicit_unit_axial_scale_survives_before_a_transverse_scale_edit():
         actual_grid = build_point_grid_arrays(build_geometry_params(config)[0])['inner_grid']
         expected_grid = build_point_grid_arrays(build_geometry_params(expected)[0])['inner_grid']
         np.testing.assert_array_equal(actual_grid, expected_grid)
+
+
+@pytest.mark.parametrize('path', ['rotation', 'text', 'geometry', 'segments'])
+def test_native_refusal_detail_is_logged_but_never_displayed(path, monkeypatch, caplog):
+    from hornlab_mesher import config_builder, config_parser, text_import
+    from server.design.text_import import ath_extension_segments
+
+    detail = 'invalid parameter expression [1]: unsupported expression node List'
+    text = (ROOT / 'r-rot10.cfg').read_text().replace('Rot = 10', 'Rot = [1]')
+
+    def refuse(*args, **kwargs):
+        raise ValueError(detail)
+
+    if path == 'text':
+        monkeypatch.setattr(config_parser, 'parse_text_config', refuse)
+    elif path == 'geometry':
+        monkeypatch.setattr(config_builder, 'build_geometry_params', refuse)
+    elif path == 'segments':
+        monkeypatch.setattr(text_import, 'ath_throat_extension_segments', refuse)
+    with caplog.at_level('WARNING', logger='server.design.text_import'):
+        with pytest.raises(ValueError) as caught:
+            if path == 'segments':
+                ath_extension_segments('[1]')
+            else:
+                parse(text)
+    message = str(caught.value)
+    assert 'unsupported expression' not in message
+    assert '[1]' not in message
+    assert 'unsupported expression node List' in caplog.text
+    assert '[1]' in caplog.text
+    if path != 'rotation':
+        assert detail in caplog.text
+    if path == 'rotation':
+        assert 'Rot must be a finite number or an expression of p' in message
+    elif path == 'segments':
+        assert 'Mesh.ThroatExtSegments' in message
+    assert 're-import' in message
