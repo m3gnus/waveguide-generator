@@ -233,7 +233,24 @@
 .viewport-notices > .viewport-domain-note { max-width: 100%; color: var(--fg2); font-size: var(--text-micro); }
 
 .wg2-viewport .mesh-quality-card {
-  top: auto; bottom: 16px; left: 16px; width: auto;
-  max-width: calc(100% - 32px); transform: none; pointer-events: none;
+  top: 43px; left: 12px; width: 248px;
+  max-width: calc(100% - 24px); padding: 8px 10px; transform: none; pointer-events: none;
 }
-.wg2-viewport .mesh-quality-card dl { grid-template-columns: repeat(2, 1fr); margin-bottom: 0; }
+.parametric-viewport .mesh-quality-card { top: calc(var(--viewport-header-height, 34px) + 9px); }
+.mesh-quality-card header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.mesh-quality-card header b { color: var(--fg1); font-size: var(--text-micro); font-weight: 600; }
+.mesh-quality-card header span { color: var(--fg3); font-size: var(--text-micro); }
+.wg2-viewport .mesh-quality-card dl { display: block; margin: 6px 0 0; border: 0; border-radius: 0; background: none; }
+.wg2-viewport .mesh-quality-card dl div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 1px 0; background: none; }
+.wg2-viewport .mesh-quality-card dt { color: var(--fg3); text-transform: none; }
+.wg2-viewport .mesh-quality-card dd { margin: 0; color: var(--fg1); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mesh-quality-card p { margin: 6px 0 0; color: var(--fg3); font-size: var(--text-micro); line-height: 1.35; }
+.mesh-quality-card.stale dl, .mesh-quality-card.stale p { opacity: .45; }
+/* The report owns the top-left corner; notices carry a Refresh button and centre in what is left. */
+.wg2-viewport:has(.mesh-quality-card) .viewport-notices { left: 272px; }
+/* A narrow viewport keeps the numbers; their meaning is in the user guide and on a wider one. */
+@container viewport (max-width: 640px) {
+  .wg2-viewport .mesh-quality-card { width: 188px; }
+  .mesh-quality-card p { display: none; }
+  .wg2-viewport:has(.mesh-quality-card) .viewport-notices { left: 212px; }
+}
